@@ -15,7 +15,6 @@ const MAX_STOP_SEQUENCES: usize = 100;
 const MAX_STOP_SEQUENCE_LENGTH: usize = 1000;
 /// Text bytes in the system prompt (100 KB).
 const MAX_SYSTEM_PROMPT_LENGTH: usize = 100_000;
-const MAX_TOOLS_COUNT: usize = 100;
 /// Largest image the Messages API accepts (5 MB), compared against the decoded size.
 const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 /// Largest PDF the Messages API accepts (32 MB), compared against the decoded size.
@@ -480,16 +479,6 @@ impl MessageCreateParams {
                     Some("system".to_string()),
                 ));
             }
-        }
-
-        // Validate tools count
-        if let Some(ref tools) = self.tools
-            && tools.len() > MAX_TOOLS_COUNT
-        {
-            return Err(crate::Error::validation(
-                format!("Tools count {} exceeds limit of {}", tools.len(), MAX_TOOLS_COUNT),
-                Some("tools".to_string()),
-            ));
         }
 
         // Validate thinking config with security checks
@@ -959,6 +948,29 @@ mod tests {
             !params.requires_structured_outputs_beta(),
             "params with non-strict tool should not require structured outputs beta"
         );
+    }
+
+    #[test]
+    fn preserves_large_tool_rosters() {
+        let tools: Vec<_> = (0..101)
+            .map(|index| {
+                ToolUnionParam::new_custom_tool(
+                    format!("tool_{index}"),
+                    json!({"type": "object", "properties": {}}),
+                )
+            })
+            .collect();
+        let params = MessageCreateParams::simple("Hello", KnownModel::ClaudeSonnet46)
+            .with_tools(tools.clone());
+        params.validate().expect("tool count alone must not reject a request");
+        let encoded = serde_json::to_value(&params).unwrap();
+        let decoded: MessageCreateParams = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.tools, Some(tools));
+        assert_eq!(decoded.tools.unwrap().len(), 101);
+
+        let mut invalid = params;
+        invalid.max_tokens = 0;
+        assert!(invalid.validate().is_err(), "existing parameter validation is preserved");
     }
 
     #[test]

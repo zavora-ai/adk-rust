@@ -44,8 +44,8 @@
 //! [`create_app_with_a2a`] and [`ServerBuilder::with_a2a`] expose an agent over A2A:
 //!
 //! - `GET /.well-known/agent-card.json` (and `/.well-known/agent.json`) - Agent card
-//! - `POST /a2a` - JSON-RPC: `message/send`, `message/stream`, `tasks/get`, `tasks/cancel`
-//! - `POST /a2a/stream` - JSON-RPC streaming
+//! - `POST /a2a` - JSON-RPC: `message/send`, `tasks/get`, `tasks/cancel`
+//! - `POST /a2a/stream` - JSON-RPC streaming: `message/stream`, `message/send`
 #![allow(clippy::result_large_err)]
 
 pub mod a2a;

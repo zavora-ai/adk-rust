@@ -290,6 +290,16 @@ impl Llm for OllamaModel {
     ) -> Result<LlmResponseStream> {
         let usage_span = adk_telemetry::llm_generate_span("ollama", &self.model_name, stream);
         let model = self.model_name.clone();
+        crate::generation_config::reject_unsupported(
+            "ollama",
+            request.config.as_ref(),
+            crate::generation_config::Supports {
+                stop_sequences: true,
+                seed: true,
+                penalties: true,
+                top_logprobs: true,
+            },
+        )?;
         let options = self.build_options(&request);
 
         // Convert ADK contents to Ollama messages

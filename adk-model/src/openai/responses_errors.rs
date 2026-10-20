@@ -113,7 +113,7 @@ pub(super) fn mapped_http_error(error: &OpenAIError) -> Option<AdkError> {
         return None;
     };
     let error = error.downcast_ref::<HttpError>()?;
-    // A delay above `RetryConfig::max_delay` is capped by the retry loop.
+    // The retry owner bounds the wait while retaining the original server hint.
     let mut mapped = with_retry_after(map_api_error(&error.error), error.retry_after);
     // The body's `status`, and a `code` that is not a string, do not survive `ApiError`.
     if error.provider_code.is_some() {
@@ -133,7 +133,7 @@ pub(super) fn map_api_error(api_err: &ApiErrorResponse) -> AdkError {
         404 => (ErrorCategory::NotFound, "model.openai_responses.not_found"),
         408 => (ErrorCategory::Timeout, "model.openai_responses.timeout"),
         429 => (ErrorCategory::RateLimited, "model.openai_responses.rate_limited"),
-        500 | 502 | 503 | 504 | 529 => {
+        500 | 502 | 503 | 504 | 520..=524 | 529 => {
             (ErrorCategory::Unavailable, "model.openai_responses.unavailable")
         }
         400..=499 => (ErrorCategory::InvalidInput, "model.openai_responses.invalid_request"),

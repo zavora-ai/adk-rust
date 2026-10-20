@@ -67,10 +67,24 @@ against the stored checkout, so a cart changed after creation is judged as it wi
 | Deny | The backend is not reached | `payments.policy.denied` |
 
 `PaymentToolsetBuilder` governs its create and complete tools with the policies passed to
-`with_payment_policies`. An escalation goes through the run's tool confirmation flow: a
-static decision for the call ID in `RunConfig::tool_confirmation_decisions` answers first,
-then `RunConfig::tool_confirmation_handler`. Without either, the call fails with
-`payments.policy.approval_required` and its event carries `actions.tool_confirmation`.
+`with_payment_policies`. An escalation is decided by `adk_core::confirm_tool_call`, from
+the sources the governed path reads for any held call, for a request bound to the calling
+agent and the tool's origin:
+
+| Order | Source | Effect |
+|-------|--------|--------|
+| 1 | `RunConfig::tool_confirmation_decisions` (call ID, bound to the fingerprint) | Decides for the run |
+| 2 | `RunConfig::tool_approvals` (fingerprint, live) | Decides until it expires |
+| 3 | `RunConfig::approval_store` | Decides once; the payment consumes the approval |
+| 4 | `RunConfig::tool_confirmation_handler` | Decides within `tool_confirmation_timeout`, denying when it expires |
+
+Without a decision, the request is recorded as pending in the approval store and submitted
+to the approval service, the call fails with `payments.policy.approval_required`, and its
+event carries `actions.tool_confirmation`. The agent holds the call; once an approver
+decides it, the next run dispatches it again and the payment runs once. An approval that
+edits the call's arguments refuses the payment with `payments.policy.approval_denied`. An
+approver lists the held payment with `ApprovalStore::pending` and decides it with
+`ApprovalStore::decide`, as for any held tool call.
 
 ```rust
 use adk_payments::guardrail::{

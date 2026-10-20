@@ -403,7 +403,7 @@ adk-ui/          Dynamic UI generation (forms, cards, tables, charts) — extrac
 ### Examples and docs
 
 ```
-examples/              145 standalone example crates (each with own Cargo.toml) covering all major
+examples/              148 standalone example crates (each with own Cargo.toml) covering all major
                        features. More examples live in the adk-playground repo.
 docs/official_docs/    Comprehensive documentation site content
 ```

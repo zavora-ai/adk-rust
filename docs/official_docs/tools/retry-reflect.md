@@ -91,6 +91,7 @@ let plugin = RetryReflectPluginBuilder::new()
 | `template(text)` | built-in | Reflection text with `{tool_name}`, `{args}`, `{error}`, `{attempt}`, `{max_retries}` and `{guidance}` placeholders; `{guidance}` renders empty |
 | `priority(n)` | 200 | Enhanced-plugin order; lower values run first |
 | `enable_global_tracking(threshold)` | off | Circuit breaker across invocations; see below |
+| `record_payloads(enabled)` | off | Whether log lines carry the tool's error text; see [Observability](#observability) |
 
 ## Retry Counts
 
@@ -192,7 +193,11 @@ let agent = LlmAgentBuilder::new("agent")
 
 ## Observability
 
-The plugin emits `tracing` events with the tool name and the result's error text:
+The plugin emits `tracing` events with the tool name and the error's content-free
+diagnostics (`error`: component, category, and code). The error's text, which can quote
+arguments and credentials, is logged as `error.message` only under `record_payloads(true)`;
+the plugin's context does not carry the run config, so set it to the run's
+`RunConfig::record_payloads`:
 
 | Event | Level | When |
 |-------|-------|------|

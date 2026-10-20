@@ -264,9 +264,12 @@ Implement the `AuditSink` trait for custom destinations (database, external serv
 
 A protected or scoped tool refuses a call whose decision the sink fails to record
 (`AuditFailureMode::Block`, the default); `with_audit_failure_mode(AuditFailureMode::Warn)`
-logs the failure and continues instead. `FileAuditSink::with_chaining` and
-`with_hmac_chaining` write a hash chain that resumes after a restart, and
-`FileAuditSink::verify` reports the first line that was edited, inserted, or removed.
+logs the failure and continues instead. `SsoAccessControl` refuses such a grant with
+`SsoError::AuditFailed`, and its builder takes the same mode through `audit_failure_mode`.
+`FileAuditSink::with_chaining` and `with_hmac_chaining` write a hash chain that resumes
+after a restart, and `FileAuditSink::verify` reports the first line whose `prev_hash` does
+not match the line before it: an edit, insertion, or removal is caught at the next line,
+while a change to the newest line and lines cut from the end leave no broken link.
 
 Protected and scoped tools record the acting agent on every decision: `agent_id`,
 `on_behalf_of`, and the principal's tenant (`AuditEvent::with_acting_context`).
@@ -282,7 +285,9 @@ decision, approval, kill-switch change, payment, and unknown outcome of a run in
 Records live in an `AuditLogStore` (in memory, or `adk-session` SQLite, PostgreSQL, Redis,
 MongoDB, Neo4j, or Firestore), and
 `signed_audit::verify` or `adk-rust audit verify` detects flipped bytes, deletions,
-reorders, truncation, and forks. See the
+reorders, forks, and the truncation of records that a supplied checkpoint covers. An export
+cut together with its later checkpoints, or an empty one, verifies unless the anchored
+checkpoints are passed as well (`--checkpoints`). See the
 [Audit Log guide](../docs/official_docs/security/audit-log.md).
 
 ## Credential Brokers
@@ -319,7 +324,7 @@ See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.
 | `AuthError` | Role not found, audit sink failure |
 | `ScopeDenied` | Scope check fails (missing required scopes) |
 | `TokenError` | JWT validation failure (expired, bad signature, missing claims) |
-| `SsoError` | Token validation or access denied in SSO flow |
+| `SsoError` | Token validation, access denied, or a grant the audit sink failed to record in SSO flow |
 
 ## Examples
 

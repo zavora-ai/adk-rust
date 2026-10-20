@@ -26,7 +26,7 @@ All action nodes share a set of standard properties for error handling, tracing,
 | **Loop** | 🔄 | Iterate over arrays or repeat operations |
 | **Merge** | 🔗 | Combine multiple branches back into single flow |
 | **Wait** | ⏱️ | Pause workflow for duration or condition |
-| **Code** | 💻 | Execute authored Rust in a sandbox, or JavaScript transforms through embedded `boa_engine` |
+| **Code** | 💻 | Run authored Rust (in the `adk-code` sandbox in Studio, as a native function in generated code), or JavaScript and TypeScript transforms through `boa_engine` in generated code |
 | **Database** | 🗄️ | Database operations (PostgreSQL, MySQL, SQLite, MongoDB, Redis) |
 | **Email** | 📧 | Send emails via SMTP or monitor via IMAP |
 | **Notification** | 🔔 | Send to Slack, Discord, Teams, or webhooks |
@@ -238,7 +238,9 @@ Pauses workflow execution.
 
 ### Code Node 💻
 
-Executes authored Rust in a sandbox, the primary path, or JavaScript transforms in an embedded `boa_engine` runtime.
+Runs authored Rust, the primary path: Studio executes it in the `adk-code` sandbox, and generated
+code embeds it as a native function. JavaScript and TypeScript transforms run through an embedded
+`boa_engine` runtime in generated code; Studio's own runner refuses them.
 
 **Configuration:**
 
@@ -351,7 +353,7 @@ Action nodes compile to production Rust code alongside LLM agents. Dependencies 
 | HTTP | `reqwest` | Async HTTP requests with auth, headers, body, JSONPath extraction |
 | Database | `sqlx` / `mongodb` / `redis` | Connection pools, parameterized queries, Redis commands |
 | Email | `lettre` / `imap` | SMTP send with TLS; IMAP monitoring with search filters |
-| Code | `adk-code` | Rust sandbox execution; JavaScript transforms through `boa_engine`; container-backed Python and Node.js |
+| Code | `boa_engine` (JavaScript and TypeScript only) | Authored Rust embedded as a native function; JavaScript and TypeScript transforms through `boa_engine` |
 | Set | native | Variable assignment (literal, expression, secret) |
 | Transform | native | Map, filter, sort, reduce, flatten, group, pick, merge, template |
 | Merge | native | Branch combination (waitAll, waitAny, append) |

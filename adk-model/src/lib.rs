@@ -142,7 +142,8 @@ pub mod gemini;
     feature = "deepseek",
     feature = "azure-ai",
     feature = "gemini-interactions",
-    feature = "openrouter"
+    feature = "openrouter",
+    feature = "ollama"
 ))]
 mod generation_config;
 #[cfg(feature = "groq")]

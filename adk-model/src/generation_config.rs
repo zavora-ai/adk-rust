@@ -27,6 +27,7 @@ pub(crate) fn reject_unsupported(
         return Ok(());
     };
     let set = [
+        ("response_modalities", config.response_modalities.is_some()),
         ("stop_sequences", !supports.stop_sequences && !config.stop_sequences.is_empty()),
         ("seed", !supports.seed && config.seed.is_some()),
         ("frequency_penalty", !supports.penalties && config.frequency_penalty.is_some()),
@@ -68,6 +69,7 @@ mod tests {
     #[test]
     fn every_set_unsupported_field_is_named() {
         let config = GenerateContentConfig {
+            response_modalities: Some(vec!["IMAGE".into()]),
             seed: Some(7),
             top_logprobs: Some(2),
             stop_sequences: vec!["END".to_string()],
@@ -81,9 +83,9 @@ mod tests {
         .expect_err("seed and top_logprobs are unsupported");
         assert_eq!(error.code, "model.unsupported_config");
         assert_eq!(error.category, ErrorCategory::InvalidInput);
-        assert!(
-            error.message.contains("the anthropic client does not support `seed`, `top_logprobs`")
-        );
+        assert!(error.message.contains(
+            "the anthropic client does not support `response_modalities`, `seed`, `top_logprobs`"
+        ));
         assert!(!error.message.contains("stop_sequences"));
     }
 }

@@ -89,13 +89,35 @@ pub struct SecretAccessDecision<'a> {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use adk_auth::secrets::{AuthorizingSecretService, SecretGrant};
+/// ```rust
 /// use std::sync::Arc;
 ///
-/// let service = AuthorizingSecretService::new(inner)
+/// use adk_auth::secrets::{AuthorizingSecretService, SecretGrant};
+/// use adk_core::{SecretRequest, SecretService};
+///
+/// /// The backing store, such as a cloud secret manager.
+/// struct Vault;
+///
+/// #[async_trait::async_trait]
+/// impl SecretService for Vault {
+///     async fn get_secret(&self, name: &str) -> adk_core::Result<String> {
+///         Ok(format!("value of {name}"))
+///     }
+/// }
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> adk_core::Result<()> {
+/// let service = AuthorizingSecretService::new(Arc::new(Vault))
 ///     .grant("weather_lookup", SecretGrant::none().name("weather-api-key"))
 ///     .grant("charge_card", SecretGrant::none().prefix("billing/"));
+///
+/// let own_key = SecretRequest::new("weather-api-key").with_tool_name("weather_lookup");
+/// assert_eq!(service.get_secret_for(&own_key).await?, "value of weather-api-key");
+///
+/// let other_tools_key = SecretRequest::new("billing/card-key").with_tool_name("weather_lookup");
+/// assert!(service.get_secret_for(&other_tools_key).await.unwrap_err().is_unauthorized());
+/// # Ok(())
+/// # }
 /// ```
 pub struct AuthorizingSecretService {
     inner: Arc<dyn SecretService>,

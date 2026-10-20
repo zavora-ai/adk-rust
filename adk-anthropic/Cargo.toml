@@ -32,6 +32,7 @@ tracing = { workspace = true }
 hmac = "0.12"
 sha2 = { workspace = true }
 hex = { workspace = true }
+httpdate = "1"
 
 [features]
 default = []
@@ -46,6 +47,10 @@ futures = { workspace = true }
 [[example]]
 name = "basic"
 path = "examples/basic.rs"
+
+[[example]]
+name = "transport_timeouts"
+path = "examples/transport_timeouts.rs"
 
 [[example]]
 name = "anthropic_streaming"

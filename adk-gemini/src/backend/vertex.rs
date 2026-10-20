@@ -89,8 +89,13 @@ impl VertexBackend {
     async fn check_response(response: reqwest::Response) -> Result<reqwest::Response, Error> {
         let status = response.status();
         if !status.is_success() {
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
             let description = response.text().await.ok();
-            BadResponseSnafu { code: status.as_u16(), description }.fail()
+            BadResponseSnafu { code: status.as_u16(), description, retry_after }.fail()
         } else {
             Ok(response)
         }
@@ -511,6 +516,32 @@ impl GeminiBackend for VertexBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn preserves_raw_retry_after() {
+        for header in [Some("7"), Some("Wed, 21 Oct 2037 07:28:00 GMT"), Some("invalid"), None] {
+            let server = wiremock::MockServer::start().await;
+            let mut response = wiremock::ResponseTemplate::new(503).set_body_string("fixture");
+            if let Some(value) = header {
+                response = response.insert_header("retry-after", value);
+            }
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            let response = reqwest::get(server.uri()).await.unwrap();
+            let error = VertexBackend::check_response(response).await.unwrap_err();
+            match error {
+                Error::BadResponse { code, description, retry_after } => {
+                    assert_eq!(code, 503);
+                    assert_eq!(description.as_deref(), Some("fixture"));
+                    assert_eq!(retry_after.as_deref(), header);
+                }
+                other => panic!("expected an HTTP failure, got {other:?}"),
+            }
+        }
+    }
     use crate::models::Content;
     use serde_json::{Value, json};
     use wiremock::matchers::{body_partial_json, method, path, query_param};

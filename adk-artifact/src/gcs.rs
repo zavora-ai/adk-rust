@@ -22,7 +22,8 @@
 
 use crate::service::{
     ArtifactService, DeleteRequest, ListRequest, ListResponse, LoadRequest, LoadResponse,
-    SaveRequest, SaveResponse, VersionsRequest, VersionsResponse, check_session_id, version_exists,
+    SaveRequest, SaveResponse, VersionsRequest, VersionsResponse, artifact_not_found,
+    check_session_id, invalid_file_name, invalid_identifier, version_exists,
 };
 use adk_core::{AdkError, ErrorComponent, Part, Result};
 use adk_gcp::{GcpErrorCodes, GcpErrorContext, GcpHttpClient};
@@ -469,9 +470,12 @@ fn validate_session_id(session_id: &str) -> Result<()> {
 
 fn validate_path_segment(segment: &str, field: &str) -> Result<()> {
     if segment.is_empty() || segment.contains('/') || segment == "." || segment == ".." {
-        return Err(GcsArtifactService::invalid_input(format!(
-            "invalid {field} '{segment}': must be a non-empty path segment without '/'"
-        )));
+        return Err(invalid_identifier(
+            field,
+            segment,
+            "must be a non-empty path segment without '/' that is not '.' or '..'",
+        )
+        .with_provider("gcs"));
     }
     Ok(())
 }
@@ -487,9 +491,11 @@ fn validate_file_name(file_name: &str) -> Result<()> {
             .split('/')
             .all(|component| !component.is_empty() && component != "." && component != "..");
     if !valid {
-        return Err(GcsArtifactService::invalid_input(format!(
-            "invalid artifact file name '{file_name}': empty components, traversal patterns, and backslashes are not allowed"
-        )));
+        return Err(invalid_file_name(
+            file_name,
+            "empty components, traversal patterns, and backslashes are not allowed",
+        )
+        .with_provider("gcs"));
     }
     Ok(())
 }
@@ -728,14 +734,14 @@ impl ArtifactService for GcsArtifactService {
                 .list_versions(&req.app_name, &req.user_id, &req.session_id, &req.file_name)
                 .await?
                 .last()
-                .ok_or_else(|| Self::not_found_error("artifact not found"))?,
+                .ok_or_else(|| artifact_not_found(&req.file_name, None).with_provider("gcs"))?,
         };
         let blob_name =
             Self::blob_name(&req.app_name, &req.user_id, &req.session_id, &req.file_name, version)?;
         let object = self
             .get_object(&blob_name)
             .await?
-            .ok_or_else(|| Self::not_found_error("artifact not found"))?;
+            .ok_or_else(|| artifact_not_found(&req.file_name, req.version).with_provider("gcs"))?;
         let is_uri_reference = object.metadata.as_ref().is_some_and(|metadata| {
             metadata.contains_key(GCS_FILE_URI_METADATA_KEY) || metadata.contains_key("file_uri")
         });
@@ -795,7 +801,7 @@ impl ArtifactService for GcsArtifactService {
             .list_versions(&req.app_name, &req.user_id, &req.session_id, &req.file_name)
             .await?;
         if versions.is_empty() {
-            return Err(Self::not_found_error("artifact not found"));
+            return Err(artifact_not_found(&req.file_name, None).with_provider("gcs"));
         }
         Ok(VersionsResponse { versions })
     }

@@ -6,6 +6,7 @@
 //! test controls where the client sees a network boundary.
 #![cfg(any(
     feature = "openai",
+    feature = "gemini",
     feature = "deepseek",
     feature = "azure-ai",
     feature = "groq",
@@ -23,12 +24,23 @@ use tokio::net::TcpListener;
 /// Serves every request with `writes`, each as a separate HTTP chunk, then ends the
 /// response cleanly, as a proxy does when the upstream stopped early.
 async fn serve(content_type: &'static str, writes: Vec<Vec<u8>>) -> String {
+    serve_tail(content_type, writes, Some(b"0\r\n\r\n")).await.0
+}
+
+async fn serve_tail(
+    content_type: &'static str,
+    writes: Vec<Vec<u8>>,
+    ending: Option<&'static [u8]>,
+) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let base = format!("http://{}", listener.local_addr().expect("address"));
     let writes = Arc::new(writes);
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = calls.clone();
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
             let writes = writes.clone();
+            let calls = observed.clone();
             tokio::spawn(async move {
                 let mut received = Vec::new();
                 let mut buffer = [0_u8; 4096];
@@ -56,6 +68,7 @@ async fn serve(content_type: &'static str, writes: Vec<Vec<u8>>) -> String {
                     }
                     received.extend_from_slice(&buffer[..read]);
                 }
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let header = format!(
                     "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n"
                 );
@@ -71,12 +84,16 @@ async fn serve(content_type: &'static str, writes: Vec<Vec<u8>>) -> String {
                     }
                     tokio::time::sleep(Duration::from_millis(15)).await;
                 }
-                let _ = socket.write_all(b"0\r\n\r\n").await;
+                if let Some(ending) = ending {
+                    let _ = socket.write_all(ending).await;
+                } else {
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                }
                 let _ = socket.shutdown().await;
             });
         }
     });
-    base
+    (base, calls)
 }
 
 /// Splits `bytes` in the middle of the first occurrence of `needle`; a write without it
@@ -158,6 +175,7 @@ fn assert_fails(
 /// OpenRouter Chat wires.
 #[cfg(any(
     feature = "openai",
+    feature = "gemini",
     feature = "deepseek",
     feature = "azure-ai",
     feature = "groq",
@@ -921,5 +939,297 @@ mod unknown_finish_reason {
         let base = serve("text/event-stream", streamed(reason)).await;
         let outcome = collect(&client(base), request("m"), true).await;
         assert_eq!(finish_reason(outcome), Some(FinishReason::Other));
+    }
+}
+
+#[cfg(any(feature = "openai", feature = "deepseek", feature = "gemini"))]
+mod terminal_usage {
+    use super::*;
+    use serde_json::json;
+    use std::sync::atomic::Ordering;
+
+    #[derive(Clone, Copy, Debug)]
+    enum Wire {
+        #[cfg(feature = "openai")]
+        Chat,
+        #[cfg(feature = "openai")]
+        Azure,
+        #[cfg(feature = "deepseek")]
+        DeepSeek,
+        #[cfg(feature = "gemini")]
+        Gemini,
+    }
+
+    fn wires() -> Vec<Wire> {
+        vec![
+            #[cfg(feature = "openai")]
+            Wire::Chat,
+            #[cfg(feature = "openai")]
+            Wire::Azure,
+            #[cfg(feature = "deepseek")]
+            Wire::DeepSeek,
+            #[cfg(feature = "gemini")]
+            Wire::Gemini,
+        ]
+    }
+
+    impl Wire {
+        fn model(self, base: String) -> Box<dyn Llm> {
+            use adk_model::retry::RetryConfig;
+            match self {
+                #[cfg(feature = "openai")]
+                Self::Chat => Box::new(
+                    adk_model::openai::OpenAIClient::compatible("key", base, "scripted")
+                        .unwrap()
+                        .with_retry_config(RetryConfig::disabled()),
+                ),
+                #[cfg(feature = "openai")]
+                Self::Azure => Box::new(
+                    adk_model::openai::AzureOpenAIClient::new(adk_model::openai::AzureConfig::new(
+                        "key",
+                        base,
+                        "2024-12-01-preview",
+                        "scripted",
+                    ))
+                    .unwrap()
+                    .with_retry_config(RetryConfig::disabled()),
+                ),
+                #[cfg(feature = "deepseek")]
+                Self::DeepSeek => Box::new(
+                    adk_model::DeepSeekClient::new(
+                        adk_model::DeepSeekConfig::new("key", "scripted").with_base_url(base),
+                    )
+                    .unwrap()
+                    .with_retry_config(RetryConfig::disabled()),
+                ),
+                #[cfg(feature = "gemini")]
+                Self::Gemini => Box::new(
+                    adk_model::GeminiModel::new_with_base_url(
+                        "key",
+                        "scripted",
+                        format!("{base}/v1beta/"),
+                    )
+                    .unwrap()
+                    .with_retry_config(RetryConfig::disabled()),
+                ),
+            }
+        }
+
+        fn gemini(self) -> bool {
+            match self {
+                #[cfg(feature = "gemini")]
+                Self::Gemini => true,
+                #[cfg(feature = "openai")]
+                Self::Chat | Self::Azure => false,
+                #[cfg(feature = "deepseek")]
+                Self::DeepSeek => false,
+            }
+        }
+
+        fn finished(self, tool: bool) -> Vec<Vec<u8>> {
+            if self.gemini() {
+                let parts = if tool {
+                    json!([{"functionCall": {"id": "call_1", "name": "get_weather", "args": {"city": "Paris"}}}])
+                } else {
+                    json!([{"text": "Paris."}])
+                };
+                return chat::sse(&[
+                    json!({"candidates": [{"content": {"role": "model", "parts": parts}, "finishReason": "STOP"}]}),
+                ]);
+            }
+            if tool {
+                let mut chunks = chat::tool_call_chunks(&[r#"{"city":"Paris"}"#]);
+                chunks.push(chat::chunk(json!({}), Some("tool_calls")));
+                chat::sse(&chunks)
+            } else {
+                let mut writes = chat::finished_text(&["Paris."]);
+                writes.pop();
+                writes
+            }
+        }
+
+        fn usage(self) -> Vec<u8> {
+            let value = if self.gemini() {
+                json!({"candidates": [], "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 3, "totalTokenCount": 10}})
+            } else {
+                let mut value = chat::chunk(json!({}), None);
+                value["choices"] = json!([]);
+                value["usage"] =
+                    json!({"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10});
+                value
+            };
+            format!("data: {value}\n\n").into_bytes()
+        }
+    }
+
+    #[tokio::test]
+    async fn combines_trailing_usage_without_repeating_tools() {
+        for wire in wires() {
+            for tool in [false, true] {
+                let mut writes = wire.finished(tool);
+                writes.push(wire.usage());
+                if !wire.gemini() {
+                    writes.push(chat::done());
+                }
+                let (base, calls) =
+                    serve_tail("text/event-stream", writes, Some(b"0\r\n\r\n")).await;
+                let (responses, error) =
+                    collect(wire.model(base).as_ref(), request("scripted"), true).await;
+                assert!(error.is_none(), "{wire:?}: {error:?}");
+                assert_eq!(calls.load(Ordering::SeqCst), 1, "{wire:?}");
+                let finals: Vec<_> =
+                    responses.iter().filter(|response| !response.partial).collect();
+                assert_eq!(finals.len(), 1, "{wire:?}: {responses:?}");
+                let usage = finals[0].usage_metadata.as_ref().expect("trailing usage is retained");
+                assert_eq!(
+                    (
+                        usage.prompt_token_count,
+                        usage.candidates_token_count,
+                        usage.total_token_count
+                    ),
+                    (7, 3, 10),
+                    "{wire:?}"
+                );
+                assert_eq!(function_calls(&responses), usize::from(tool), "{wire:?}");
+                if !tool {
+                    let text: String = responses
+                        .iter()
+                        .filter_map(|r| r.content.as_ref())
+                        .flat_map(|c| &c.parts)
+                        .filter_map(Part::text)
+                        .collect();
+                    assert_eq!(text, "Paris.", "{wire:?}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn completed_answers_survive_transport_tail_failures() {
+        for wire in wires() {
+            let (base, calls) =
+                serve_tail("text/event-stream", wire.finished(false), Some(b"")).await;
+            let (responses, error) =
+                collect(wire.model(base).as_ref(), request("scripted"), true).await;
+            assert!(error.is_none(), "{wire:?}: {error:?}");
+            assert_eq!(responses.iter().filter(|r| !r.partial).count(), 1, "{wire:?}");
+            assert!(
+                responses.last().unwrap().usage_metadata.is_none(),
+                "missing usage stays unreported"
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 1, "{wire:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn reported_tail_failures_preserve_completion() {
+        for wire in wires() {
+            let mut writes = wire.finished(false);
+            let failure = if wire.gemini() {
+                json!({"error": {"code": 503, "status": "UNAVAILABLE", "message": "failed"}})
+            } else {
+                json!({"error": {"code": "server_error", "message": "failed"}})
+            };
+            writes.extend(chat::sse(&[failure]));
+            let base = serve("text/event-stream", writes).await;
+            let (responses, error) =
+                collect(wire.model(base).as_ref(), request("scripted"), true).await;
+            assert!(
+                error.is_none(),
+                "the runner's completed answer is authoritative: {wire:?}: {error:?}"
+            );
+            assert_eq!(
+                responses.iter().filter(|response| !response.partial).count(),
+                1,
+                "{wire:?}"
+            );
+            assert!(
+                responses.last().unwrap().usage_metadata.is_none(),
+                "a failed usage trailer is unreported: {wire:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "openai")]
+    #[tokio::test]
+    async fn retains_buffered_literal_prefixes() {
+        let mut writes =
+            chat::sse(&[chat::text_chunk("<tool"), chat::chunk(json!({}), Some("stop"))]);
+        writes.push(Wire::Chat.usage());
+        writes.push(chat::done());
+        let base = serve("text/event-stream", writes).await;
+        let mut input = request("scripted");
+        input.tools.insert("get_weather".into(), json!({"type": "object", "properties": {}}));
+        let (responses, error) = collect(Wire::Chat.model(base).as_ref(), input, true).await;
+        assert!(error.is_none(), "{error:?}");
+        let text: String = responses
+            .iter()
+            .filter_map(|response| response.content.as_ref())
+            .flat_map(|content| &content.parts)
+            .filter_map(Part::text)
+            .collect();
+        assert_eq!(text, "<tool");
+        assert_eq!(function_calls(&responses), 0);
+    }
+
+    #[tokio::test]
+    async fn partial_usage_is_not_final_usage() {
+        for wire in wires() {
+            let mut writes = vec![wire.usage()];
+            writes.extend(wire.finished(false));
+            let base = serve("text/event-stream", writes).await;
+            let (responses, error) =
+                collect(wire.model(base).as_ref(), request("scripted"), true).await;
+            assert!(error.is_none(), "{wire:?}: {error:?}");
+            assert!(
+                responses
+                    .iter()
+                    .any(|response| response.partial && response.usage_metadata.is_some()),
+                "{wire:?}"
+            );
+            let final_response = responses.iter().find(|response| !response.partial).unwrap();
+            assert!(
+                final_response.usage_metadata.is_none(),
+                "partial prompt/cache counts are not a final report: {wire:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn completion_bounds_socket_tail_wait() {
+        for wire in wires() {
+            for reported in [false, true] {
+                let mut writes = wire.finished(false);
+                if reported {
+                    writes.push(wire.usage());
+                }
+                if !wire.gemini() {
+                    writes.push(chat::done());
+                }
+                let (base, calls) = serve_tail("text/event-stream", writes, None).await;
+                let started = std::time::Instant::now();
+                let (responses, error) = tokio::time::timeout(
+                    Duration::from_secs(7),
+                    collect(wire.model(base).as_ref(), request("scripted"), true),
+                )
+                .await
+                .expect("tail grace must be bounded");
+                assert!(error.is_none(), "{wire:?}: {error:?}");
+                assert_eq!(responses.iter().filter(|r| !r.partial).count(), 1, "{wire:?}");
+                let usage = responses.last().unwrap().usage_metadata.as_ref();
+                assert_eq!(
+                    usage.map(|usage| usage.total_token_count),
+                    reported.then_some(10),
+                    "{wire:?}"
+                );
+                if reported || !wire.gemini() {
+                    assert!(
+                        started.elapsed() < Duration::from_secs(2),
+                        "usage or DONE must finish without waiting for socket EOF: {wire:?}"
+                    );
+                }
+                assert_eq!(calls.load(Ordering::SeqCst), 1, "{wire:?}");
+            }
+        }
     }
 }

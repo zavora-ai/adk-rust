@@ -139,8 +139,8 @@ Deploy flow:
 
 1. Load and validate `adk-deploy.toml`
 2. Authenticate with the control plane
-3. Upload secrets from `.env` (if present)
-4. Build the release binary
+3. Build the release binary (unless `--skip-build`)
+4. Upload secrets from `.env` (if present)
 5. Create a `.tar.gz` bundle (manifest and binary)
 6. Compute the SHA-256 checksum
 7. Push to the control plane

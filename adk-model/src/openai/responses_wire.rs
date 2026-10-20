@@ -71,6 +71,8 @@ struct Lifecycle {
 #[derive(Deserialize)]
 struct Failure {
     code: Option<String>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -104,19 +106,25 @@ pub(in crate::openai) fn event(value: Value) -> Result<Event, AdkError> {
             Ok(Event::Terminal(Box::new(projected)))
         }
         "response.failed" => {
-            let header: Header = decode(
-                value.get("response").cloned().unwrap_or(Value::Null),
+            // A failure is not a successful response: identity, output, and status
+            // fields are not needed to classify its error.
+            let failure: Option<Failure> = decode(
+                value.pointer("/response/error").cloned().unwrap_or(Value::Null),
                 &value,
                 parse::Layer::StreamEvent,
             )?;
-            Err(stream_error(header.error.as_ref().and_then(|error| error.code.as_deref())))
+            Err(stream_error(failure.as_ref()))
         }
         "response.cancelled" | "response.canceled" => {
             Err(invalid("cancelled", "OpenAI Responses generation was cancelled"))
         }
         "error" => {
-            let failure: Failure = decode(value.clone(), &value, parse::Layer::StreamEvent)?;
-            Err(stream_error(failure.code.as_deref()))
+            let failure: Failure = decode(
+                value.get("error").cloned().unwrap_or_else(|| value.clone()),
+                &value,
+                parse::Layer::StreamEvent,
+            )?;
+            Err(stream_error(Some(&failure)))
         }
         "response.output_item.added"
         | "response.output_item.done"
@@ -152,7 +160,7 @@ pub(in crate::openai) fn response(
 ) -> Result<Response, AdkError> {
     let header: Header = decode(value.clone(), body, layer)?;
     if header.status == Status::Failed {
-        return Err(stream_error(header.error.as_ref().and_then(|error| error.code.as_deref())));
+        return Err(stream_error(header.error.as_ref()));
     }
     let output_missing = value.get("output").is_none();
     if output_missing && !matches!(layer, parse::Layer::StreamEvent) {
@@ -268,8 +276,9 @@ pub(in crate::openai) fn missing_output() -> AdkError {
     invalid("invalid_terminal", "OpenAI Responses terminal output is missing")
 }
 
-/// OpenAI's documented `response.error.code` values. Only these leave this boundary: a
-/// compatible provider's code is free text and can echo request content.
+/// OpenAI's documented `response.error.code` values, also shared with WebSocket handling.
+/// Compatible generation failures are classified separately in `stream_error`; arbitrary
+/// provider codes are free text and can echo request content.
 pub(in crate::openai) const DOCUMENTED_ERROR_CODES: &[&str] = &[
     "server_error",
     "rate_limit_exceeded",
@@ -291,16 +300,33 @@ pub(in crate::openai) const DOCUMENTED_ERROR_CODES: &[&str] = &[
     "image_file_not_found",
 ];
 
-fn stream_error(code: Option<&str>) -> AdkError {
-    let code =
-        code.and_then(|code| DOCUMENTED_ERROR_CODES.iter().copied().find(|known| *known == code));
-    let category = match code {
-        Some("rate_limit_exceeded") => ErrorCategory::RateLimited,
-        Some("server_error") => ErrorCategory::Unavailable,
-        Some("vector_store_timeout") => ErrorCategory::Timeout,
-        Some(_) => ErrorCategory::InvalidInput,
-        None => ErrorCategory::Internal,
-    };
+fn stream_error(failure: Option<&Failure>) -> AdkError {
+    // Only recognized codes or types leave this boundary. An unknown failure is
+    // recoverable, but arbitrary provider text is never copied into diagnostics.
+    let recognized = failure
+        .into_iter()
+        .flat_map(|failure| [failure.code.as_deref(), failure.kind.as_deref()])
+        .flatten()
+        .find_map(|code| {
+            let category = match code {
+                "rate_limit_exceeded" => ErrorCategory::RateLimited,
+                "server_error" => ErrorCategory::Unavailable,
+                "vector_store_timeout" | "stream_timeout" => ErrorCategory::Timeout,
+                "invalid_api_key" | "authentication_error" => ErrorCategory::Unauthorized,
+                "permission_error" => ErrorCategory::Forbidden,
+                "insufficient_quota"
+                | "credit_balance_exhausted"
+                | "organization_spend_limit_exceeded"
+                | "project_spend_limit_exceeded"
+                | "context_length_exceeded"
+                | "content_policy_violation"
+                | "invalid_request_error" => ErrorCategory::InvalidInput,
+                known if DOCUMENTED_ERROR_CODES.contains(&known) => ErrorCategory::InvalidInput,
+                _ => return None,
+            };
+            Some((Some(code), category))
+        });
+    let (code, category) = recognized.unwrap_or((None, ErrorCategory::Unavailable));
     let message = match code {
         Some(code) => format!("OpenAI Responses generation failed: {code}"),
         None => "OpenAI Responses generation failed".to_string(),

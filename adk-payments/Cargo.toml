@@ -46,6 +46,7 @@ axum = { version = "0.8", features = ["macros"], optional = true }
 # Internal dev-deps are path-only (no version) so cargo strips them from the
 # published manifest — they can never block or reorder a crates.io publish.
 adk-agent = { path = "../adk-agent", default-features = false }
+adk-runner = { path = "../adk-runner", default-features = false }
 futures = { workspace = true }
 hmac = "0.12"
 http-body-util = "0.1"

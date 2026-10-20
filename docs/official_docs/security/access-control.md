@@ -320,6 +320,9 @@ let sso = SsoAccessControl::builder()
 let claims = sso.check_token(token, &Permission::Tool("search".into())).await?;
 ```
 
+A grant the audit sink fails to record is refused with `SsoError::AuditFailed`, and a denial
+stays `SsoError::AccessDenied`; see [When the Sink Fails](#when-the-sink-fails).
+
 ## Audit Logging
 
 ### FileAuditSink
@@ -333,13 +336,15 @@ let middleware = AuthMiddleware::with_audit(ac, audit);
 
 ### When the Sink Fails
 
-`ProtectedTool`, `ScopedTool`, and the guards that build them refuse a call whose
-access decision the audit sink fails to record. The call fails with `auth.audit_failed`
-and the tool does not run.
+`ProtectedTool`, `ScopedTool`, the guards that build them, and `SsoAccessControl` refuse
+access whose decision the audit sink fails to record. A tool call fails with
+`auth.audit_failed` and the tool does not run; `SsoAccessControl::check_token` fails with
+`SsoError::AuditFailed`. A denial is returned as a denial whether or not its record was
+written.
 
 | Mode | Effect when `AuditSink::log` fails |
 |------|------------------------------------|
-| `AuditFailureMode::Block` (default) | The call is refused |
+| `AuditFailureMode::Block` (default) | Access is refused |
 | `AuditFailureMode::Warn` | A warning is logged and the access decision applies without a record |
 
 ```rust
@@ -348,6 +353,18 @@ use adk_auth::{AuditFailureMode, AuthMiddleware, ContextScopeResolver, ScopeGuar
 let middleware = AuthMiddleware::with_audit(ac, audit).with_audit_failure_mode(AuditFailureMode::Warn);
 let guard = ScopeGuard::with_audit(ContextScopeResolver, audit_sink)
     .with_audit_failure_mode(AuditFailureMode::Warn);
+```
+
+```rust
+use adk_auth::AuditFailureMode;
+use adk_auth::sso::{GoogleProvider, SsoAccessControl};
+
+let sso = SsoAccessControl::builder()
+    .validator(GoogleProvider::new("client-id"))
+    .access_control(ac)
+    .audit_sink(audit)
+    .audit_failure_mode(AuditFailureMode::Warn)
+    .build()?;
 ```
 
 ### Tamper-Evident Chain
@@ -527,7 +544,7 @@ same tool asking for a payment credential. `AuthorizingSecretService` decides pe
 before the provider is consulted:
 
 ```rust
-use adk_auth::secrets::authorizing::{AuthorizingSecretService, SecretGrant};
+use adk_auth::secrets::{AuthorizingSecretService, SecretGrant};
 use std::sync::Arc;
 
 let service = Arc::new(

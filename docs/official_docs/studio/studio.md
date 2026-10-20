@@ -21,10 +21,10 @@ ADK Studio provides a low-code interface for designing, testing, and deploying A
 cargo install adk-studio
 ```
 
-To build from source, clone `zavora-ai/adk-studio` next to an `adk-rust` checkout
-(`../adk-rust`) and run `cargo build --release -p adk-studio` in it. Source builds need Node.js
-and npm, since the build compiles the embedded UI; set `ADK_STUDIO_SKIP_UI_BUILD=1` when
-`ui/dist` is already present.
+To build from source, clone `zavora-ai/adk-studio` at the release tag and run
+`cargo build --release` in it; it builds against the crates.io ADK-Rust 1.0.0 crates. Source
+builds need Node.js and npm, since the build compiles the embedded UI; set
+`ADK_STUDIO_SKIP_UI_BUILD=1` when `ui/dist` is already present.
 
 ## Quick Start
 
@@ -154,7 +154,7 @@ Non-LLM programmatic nodes for deterministic workflow operations; the project sc
 | **Loop** 🔄 | Iterate over arrays or repeat operations |
 | **Merge** 🔗 | Combine multiple branches back into single flow |
 | **Wait** ⏱️ | Pause workflow for duration or condition |
-| **Code** 💻 | Execute authored Rust in a sandbox, or JavaScript transforms through embedded `boa_engine` |
+| **Code** 💻 | Run authored Rust (in the `adk-code` sandbox in Studio, as a native function in generated code), or JavaScript and TypeScript transforms through `boa_engine` in generated code |
 | **Database** 🗄️ | Database operations (PostgreSQL, MySQL, SQLite, MongoDB, Redis) |
 | **Email** 📧 | Send via SMTP or monitor via IMAP |
 | **Notification** 🔔 | Send to Slack, Discord, Teams, or webhooks |
@@ -213,7 +213,7 @@ Action nodes compile to production Rust code alongside LLM agents. Dependencies 
 | **HTTP** | `reqwest` | Async HTTP requests with auth, headers, body, JSONPath extraction |
 | **Database** | `sqlx` / `mongodb` / `redis` | Connection pools, parameterized queries, Redis commands |
 | **Email** | `lettre` / `imap` | SMTP send with TLS/auth/CC/BCC; IMAP monitoring with search filters |
-| **Code** | `adk-code` | Rust sandbox execution; JavaScript transforms through `boa_engine`; container-backed Python and Node.js |
+| **Code** | `boa_engine` (JavaScript and TypeScript only) | Authored Rust embedded as a native function; JavaScript and TypeScript transforms through `boa_engine` |
 | **Set** | native | Variable assignment (literal, expression, secret) |
 | **Transform** | native | Map, filter, sort, reduce, flatten, group, pick, merge, template |
 | **Merge** | native | Branch combination (waitAll, waitAny, append) |
@@ -289,7 +289,6 @@ The 1.0.1 server mounts its API under `/api`:
 | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Gemini API key, for Gemini models |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GROQ_API_KEY`, ... | The API key of each other provider the project uses |
 | `OLLAMA_HOST` | Ollama server URL, for Ollama models |
-| `ADK_DEV_MODE` | Generate projects against local workspace dependencies |
 | `RUST_LOG` | Log level (default `info`) |
 
 You only need the API key for the provider(s) your agents use. Studio detects the provider from
@@ -317,9 +316,9 @@ the generated code.
 
 ## Templates
 
-Studio includes curated workflow templates:
+Studio 1.0.1 includes 14 curated workflow templates, among them:
 
-- **Simple Chat** - Basic conversational agent
+- **Simple Chat Agent** - Basic conversational agent
 - **Research Pipeline** - Sequential researcher → summarizer
 - **Content Refiner** - Loop agent for iterative improvement
 - **Support Router** - Route requests to specialized agents

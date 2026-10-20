@@ -491,14 +491,14 @@ async fn normalize_responses_response(
     // OpenAI's own stream framing needs no rewrite; the SDK's SSE parser handles it.
     let rewrite = uses_max_reasoning || open_responses_mode;
 
-    // Some compatible endpoints omit Content-Type even when a streaming
-    // request receives SSE. The adapted request is authoritative in that case.
+    // The adapted request selects SSE framing. Compatible endpoints can omit or
+    // mislabel Content-Type even when returning an incremental event stream.
     let content_type = response
         .headers()
         .get(reqwest_openai::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok());
-    let is_event_stream =
-        content_type.map_or(requested_streaming, |value| value.starts_with("text/event-stream"));
+    let is_event_stream = requested_streaming
+        || content_type.is_some_and(|value| value.starts_with("text/event-stream"));
     // An event stream is wrapped to report an idle timeout, even when it needs no rewrite.
     let watch_idle = is_event_stream && idle_timeout.is_some();
     if !(rewrite || watch_idle) {

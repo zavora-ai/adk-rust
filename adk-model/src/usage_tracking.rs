@@ -14,6 +14,62 @@ use futures::StreamExt;
 use std::pin::Pin;
 use tracing::Span;
 
+/// Keep one verified final response until its usage trailer or protocol end.
+/// The absolute grace starts at completion, not at the last heartbeat. Active
+/// generation remains governed by the transport's byte-idle timeout.
+#[cfg(any(feature = "openai", feature = "deepseek", feature = "gemini"))]
+pub(crate) fn with_terminal_usage(mut stream: LlmResponseStream) -> LlmResponseStream {
+    Box::pin(async_stream::stream! {
+        let mut final_response: Option<LlmResponse> = None;
+        let mut deadline = None;
+        loop {
+            let next = match deadline {
+                Some(deadline) => match tokio::time::timeout_at(deadline, stream.next()).await {
+                    Ok(next) => next,
+                    Err(_) => break,
+                },
+                None => stream.next().await,
+            };
+            match next {
+                Some(Ok(response)) => {
+                    if response.error_code.is_some() || response.error_message.is_some() || response.interrupted {
+                        if final_response.is_some() { break; }
+                        yield Ok(response);
+                        return;
+                    }
+                    if let Some(pending) = final_response.as_mut() {
+                        if response.usage_metadata.is_some() {
+                            pending.usage_metadata = response.usage_metadata;
+                            yield Ok(final_response.take().expect("pending final response"));
+                            return;
+                        }
+                    } else if !response.partial && response.finish_reason.is_some() {
+                        if response.usage_metadata.is_some() {
+                            yield Ok(response);
+                            return;
+                        }
+                        final_response = Some(response);
+                        deadline = Some(tokio::time::Instant::now() + std::time::Duration::from_secs(5));
+                    } else {
+                        yield Ok(response);
+                    }
+                }
+                Some(Err(error)) => {
+                    // The runner already stops at a completed response. Observing an
+                    // optional usage trailer must not turn that answer into a failure.
+                    if final_response.is_some() { break; }
+                    yield Err(error);
+                    return;
+                }
+                None => break,
+            }
+        }
+        if let Some(response) = final_response {
+            yield Ok(response);
+        }
+    })
+}
+
 /// Wrap an `LlmResponseStream` so that the last `UsageMetadata` seen is recorded
 /// on the provided tracing span when the stream yields it.
 ///

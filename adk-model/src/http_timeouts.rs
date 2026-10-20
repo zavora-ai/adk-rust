@@ -56,6 +56,7 @@ impl Default for HttpTimeouts {
 
 #[cfg(any(
     feature = "openai",
+    feature = "gemini",
     feature = "groq",
     feature = "deepseek",
     feature = "azure-ai",
@@ -73,6 +74,7 @@ impl HttpTimeouts {
 /// headers or between body chunks, otherwise `Unavailable`.
 #[cfg(any(
     feature = "openai",
+    feature = "gemini",
     feature = "groq",
     feature = "deepseek",
     feature = "azure-ai",

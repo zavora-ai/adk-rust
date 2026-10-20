@@ -10,10 +10,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use adk_core::{
-    AdkError, CallbackContext, Content, EventActions, InMemorySpendLedger, MemoryEntry,
-    ReadonlyContext, ReservationId, Result, RunConfig, SpendError, SpendKey, SpendLedger,
-    SpendLimits, SpendPeriod, Tool, ToolConfirmationDecision, ToolConfirmationHandler,
-    ToolConfirmationRequest, ToolContext,
+    AdkError, ApprovalScope, ApprovalStore, CallbackContext, Content, EventActions,
+    InMemoryApprovalStore, InMemorySpendLedger, MemoryEntry, ReadonlyContext, ReservationId,
+    Result, RunConfig, SpendError, SpendKey, SpendLedger, SpendLimits, SpendPeriod, Tool,
+    ToolApproval, ToolConfirmationDecision, ToolConfirmationHandler, ToolConfirmationRequest,
+    ToolContext,
 };
 use adk_payments::domain::{
     Cart, CartLine, CommerceActor, CommerceActorRole, CommerceMode, MerchantRef, Money,
@@ -442,6 +443,109 @@ async fn a_static_decision_for_the_call_approves_an_escalation() {
             .build(),
     );
     shop.create(&caller, "merchant-1", usd(7_500)).await.expect("the call was approved");
+}
+
+fn store_scope() -> ApprovalScope {
+    ApprovalScope::new("store", "alice", "session-1")
+}
+
+#[tokio::test]
+async fn an_escalation_without_a_decision_is_recorded_in_the_approval_store() {
+    let shop = Shop::new(MemoryKernel::default(), review_above_fifty_dollars());
+    let store = Arc::new(InMemoryApprovalStore::new());
+    let caller = Caller::new(RunConfig::builder().approval_store(store.clone()).build());
+
+    let error = shop.create(&caller, "merchant-1", usd(7_500)).await.unwrap_err();
+
+    assert_eq!(error.code, PAYMENT_APPROVAL_REQUIRED_CODE, "{error}");
+    let held = caller.actions().tool_confirmation.expect("the event asks for confirmation");
+    let pending = store.pending(&store_scope()).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].fingerprint, held.fingerprint());
+    assert_eq!(pending[0].request, held);
+    assert!(held.origin.is_some(), "the request names the tool's origin");
+}
+
+#[tokio::test]
+async fn an_approval_store_decision_approves_an_escalation_once() {
+    let shop = Shop::new(MemoryKernel::default(), review_above_fifty_dollars());
+    let store = Arc::new(InMemoryApprovalStore::new());
+    let caller = Caller::new(RunConfig::builder().approval_store(store.clone()).build());
+    shop.create(&caller, "merchant-1", usd(7_500)).await.unwrap_err();
+    let held = caller.actions().tool_confirmation.unwrap();
+
+    store.decide(&store_scope(), &held.fingerprint(), ToolApproval::approve()).await.unwrap();
+    shop.create(&caller, "merchant-1", usd(7_500)).await.expect("the approver approved");
+    assert_eq!(shop.kernel.records.lock().unwrap().len(), 1);
+    assert!(store.pending(&store_scope()).await.unwrap().is_empty());
+
+    // The approval was consumed, so the same payment again needs a new one.
+    let error = shop.create(&caller, "merchant-1", usd(7_500)).await.unwrap_err();
+    assert_eq!(error.code, PAYMENT_APPROVAL_REQUIRED_CODE, "{error}");
+}
+
+#[tokio::test]
+async fn an_approval_store_denial_refuses_an_escalation() {
+    let shop = Shop::new(MemoryKernel::default(), review_above_fifty_dollars());
+    let store = Arc::new(InMemoryApprovalStore::new());
+    let caller = Caller::new(RunConfig::builder().approval_store(store.clone()).build());
+    shop.create(&caller, "merchant-1", usd(7_500)).await.unwrap_err();
+    let held = caller.actions().tool_confirmation.unwrap();
+
+    store.decide(&store_scope(), &held.fingerprint(), ToolApproval::deny()).await.unwrap();
+    let error = shop.create(&caller, "merchant-1", usd(7_500)).await.unwrap_err();
+    assert_eq!(error.code, PAYMENT_APPROVAL_DENIED_CODE, "{error}");
+    assert!(shop.kernel.records.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_fingerprint_approval_approves_an_escalation() {
+    let shop = Shop::new(MemoryKernel::default(), review_above_fifty_dollars());
+    let probe = Caller::new(RunConfig::default());
+    shop.create(&probe, "merchant-1", usd(7_500)).await.unwrap_err();
+    let fingerprint = probe.actions().tool_confirmation.unwrap().fingerprint();
+
+    let caller = Caller::new(
+        RunConfig::builder().tool_approval(fingerprint, ToolApproval::approve()).build(),
+    );
+    shop.create(&caller, "merchant-1", usd(7_500)).await.expect("the fingerprint is approved");
+}
+
+#[tokio::test]
+async fn an_approval_for_another_agent_does_not_approve_an_escalation() {
+    let shop = Shop::new(MemoryKernel::default(), review_above_fifty_dollars());
+    let store = Arc::new(InMemoryApprovalStore::new());
+    let caller = Caller::new(RunConfig::builder().approval_store(store.clone()).build());
+    shop.create(&caller, "merchant-1", usd(7_500)).await.unwrap_err();
+    let held = caller.actions().tool_confirmation.unwrap();
+
+    let other_agent = held.clone().with_acting_context(adk_core::ActingContext::new(
+        adk_core::AgentPrincipal::derived("store", "another-agent"),
+    ));
+    store
+        .decide(&store_scope(), &other_agent.fingerprint(), ToolApproval::approve())
+        .await
+        .unwrap();
+
+    let error = shop.create(&caller, "merchant-1", usd(7_500)).await.unwrap_err();
+    assert_eq!(error.code, PAYMENT_APPROVAL_REQUIRED_CODE, "{error}");
+    assert!(shop.kernel.records.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_approval_that_edits_the_arguments_refuses_an_escalation() {
+    let shop = Shop::new(MemoryKernel::default(), review_above_fifty_dollars());
+    let store = Arc::new(InMemoryApprovalStore::new());
+    let caller = Caller::new(RunConfig::builder().approval_store(store.clone()).build());
+    shop.create(&caller, "merchant-1", usd(7_500)).await.unwrap_err();
+    let held = caller.actions().tool_confirmation.unwrap();
+
+    let mut edited = ToolApproval::approve();
+    edited.edited_args = Some(json!({ "merchantId": "merchant-2" }));
+    store.decide(&store_scope(), &held.fingerprint(), edited).await.unwrap();
+    let error = shop.create(&caller, "merchant-1", usd(7_500)).await.unwrap_err();
+    assert_eq!(error.code, PAYMENT_APPROVAL_DENIED_CODE, "{error}");
+    assert!(shop.kernel.records.lock().unwrap().is_empty());
 }
 
 // ---------------------------------------------------------------------------

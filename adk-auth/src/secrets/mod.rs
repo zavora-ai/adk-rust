@@ -30,6 +30,9 @@ pub mod azure;
 #[cfg(feature = "gcp-secrets")]
 pub mod gcp;
 
+pub use authorizing::{
+    AuthorizingSecretService, SecretAccessDecision, SecretAuditSink, SecretGrant,
+};
 pub use cached::CachedSecretProvider;
 pub use provider::{SecretProvider, SecretServiceAdapter};
 

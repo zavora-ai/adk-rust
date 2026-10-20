@@ -176,6 +176,31 @@ impl AnthropicClient {
         self
     }
 
+    /// Sets connection and HTTP byte-inactivity limits for generation requests.
+    ///
+    /// Active streams have no total duration limit. Retry configuration is unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::{HttpTimeouts, anthropic::{AnthropicClient, AnthropicConfig}};
+    /// use std::time::Duration;
+    /// let client = AnthropicClient::new(AnthropicConfig::new("test-key", "claude-sonnet-4-6"))?
+    ///     .with_timeouts(HttpTimeouts::new(Duration::from_secs(10), Duration::from_secs(300)))?;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an initialization error if the transport cannot be built.
+    pub fn with_timeouts(mut self, timeouts: crate::HttpTimeouts) -> Result<Self, AdkError> {
+        self.client = self
+            .client
+            .with_http_timeouts(timeouts.connect, timeouts.idle)
+            .map_err(convert_anthropic_error)?;
+        Ok(self)
+    }
+
     /// Access the current Anthropic configuration.
     pub fn anthropic_config(&self) -> &AnthropicConfig {
         &self.config
@@ -483,6 +508,24 @@ fn merge_consecutive_messages(messages: &mut Vec<adk_anthropic::MessageParam>) {
 /// request ID, when present, is also recorded on the current tracing span as
 /// `anthropic.request_id` (Requirement 4.2).
 pub(super) fn convert_anthropic_error(e: adk_anthropic::Error) -> AdkError {
+    if e.is_timeout() || e.is_connection() {
+        let (category, code) = if e.is_timeout() {
+            (adk_core::ErrorCategory::Timeout, "model.anthropic.timeout")
+        } else {
+            (adk_core::ErrorCategory::Unavailable, "model.anthropic.connection")
+        };
+        let mut error = AdkError::new(
+            adk_core::ErrorComponent::Model,
+            category,
+            code,
+            adk_core::upstream_excerpt(&e.to_string()),
+        )
+        .with_provider("anthropic");
+        if let Some(status) = e.status_code() {
+            error = error.with_upstream_status(status);
+        }
+        return error;
+    }
     let api_error = to_anthropic_api_error(&e);
     let retry_after = extract_retry_hint(&e).and_then(|hint| hint.retry_after);
 
@@ -505,7 +548,7 @@ pub(super) fn convert_anthropic_error(e: adk_anthropic::Error) -> AdkError {
 /// capture the request-id header value.
 pub(super) fn to_anthropic_api_error(e: &adk_anthropic::Error) -> AnthropicApiError {
     match e {
-        adk_anthropic::Error::Api { status_code, error_type, message, request_id } => {
+        adk_anthropic::Error::Api { status_code, error_type, message, request_id, .. } => {
             AnthropicApiError {
                 error_type: error_type.clone().unwrap_or_else(|| "api_error".to_string()),
                 message: message.clone(),
@@ -513,19 +556,24 @@ pub(super) fn to_anthropic_api_error(e: &adk_anthropic::Error) -> AnthropicApiEr
                 request_id: request_id.clone(),
             }
         }
-        adk_anthropic::Error::RateLimit { message, retry_after } => {
+        adk_anthropic::Error::RateLimit { status_code, message, retry_after } => {
             let msg = match retry_after {
                 Some(secs) => format!("{message} (retry-after: {secs}s)"),
                 None => message.clone(),
             };
             AnthropicApiError {
-                error_type: "rate_limit_error".to_string(),
+                error_type: if *status_code == 529 {
+                    "overloaded_error"
+                } else {
+                    "rate_limit_error"
+                }
+                .to_string(),
                 message: msg,
-                status_code: 429,
+                status_code: *status_code,
                 request_id: None,
             }
         }
-        adk_anthropic::Error::ServiceUnavailable { message, retry_after } => {
+        adk_anthropic::Error::ServiceUnavailable { status_code, message, retry_after } => {
             let msg = match retry_after {
                 Some(secs) => format!("{message} (retry-after: {secs}s)"),
                 None => message.clone(),
@@ -533,7 +581,7 @@ pub(super) fn to_anthropic_api_error(e: &adk_anthropic::Error) -> AnthropicApiEr
             AnthropicApiError {
                 error_type: "overloaded_error".to_string(),
                 message: msg,
-                status_code: 529,
+                status_code: *status_code,
                 request_id: None,
             }
         }
@@ -561,7 +609,7 @@ pub(super) fn to_anthropic_api_error(e: &adk_anthropic::Error) -> AnthropicApiEr
             status_code: 400,
             request_id: None,
         },
-        adk_anthropic::Error::InternalServer { message, request_id } => AnthropicApiError {
+        adk_anthropic::Error::InternalServer { message, request_id, .. } => AnthropicApiError {
             error_type: "api_error".to_string(),
             message: message.clone(),
             status_code: 500,
@@ -581,13 +629,9 @@ pub(super) fn to_anthropic_api_error(e: &adk_anthropic::Error) -> AnthropicApiEr
 /// Extract a [`ServerRetryHint`] from an `adk_anthropic::Error`, if the error
 /// contains a server-provided `retry_after` value.
 fn extract_retry_hint(e: &adk_anthropic::Error) -> Option<ServerRetryHint> {
-    match e {
-        adk_anthropic::Error::RateLimit { retry_after: Some(secs), .. }
-        | adk_anthropic::Error::ServiceUnavailable { retry_after: Some(secs), .. } => {
-            Some(ServerRetryHint { retry_after: Some(std::time::Duration::from_secs(*secs)) })
-        }
-        _ => None,
-    }
+    e.retry_after().map(|seconds| ServerRetryHint {
+        retry_after: Some(std::time::Duration::from_secs(seconds)),
+    })
 }
 
 #[async_trait]
@@ -1575,6 +1619,7 @@ mod tests {
             error_type: Some("invalid_request_error".to_string()),
             message: "Invalid model specified".to_string(),
             request_id: Some("req_abc123".to_string()),
+            retry_after: None,
         };
         let api_err = to_anthropic_api_error(&err);
         assert_eq!(api_err.error_type, "invalid_request_error");
@@ -1591,6 +1636,7 @@ mod tests {
             error_type: None,
             message: "Internal error".to_string(),
             request_id: None,
+            retry_after: None,
         };
         let api_err = to_anthropic_api_error(&err);
         assert_eq!(api_err.error_type, "api_error");
@@ -1604,6 +1650,7 @@ mod tests {
         let err = adk_anthropic::Error::RateLimit {
             message: "Too many requests".to_string(),
             retry_after: Some(30),
+            status_code: 429,
         };
         let api_err = to_anthropic_api_error(&err);
         assert_eq!(api_err.error_type, "rate_limit_error");
@@ -1611,16 +1658,17 @@ mod tests {
         assert!(api_err.message.contains("retry-after: 30s"));
     }
 
-    /// Requirement 4.4: ServiceUnavailable variant maps to status 529.
+    /// Requirement 4.4: ServiceUnavailable variant preserves its HTTP status.
     #[test]
     fn test_to_anthropic_api_error_service_unavailable() {
         let err = adk_anthropic::Error::ServiceUnavailable {
             message: "Overloaded".to_string(),
             retry_after: None,
+            status_code: 503,
         };
         let api_err = to_anthropic_api_error(&err);
         assert_eq!(api_err.error_type, "overloaded_error");
-        assert_eq!(api_err.status_code, 529);
+        assert_eq!(api_err.status_code, 503);
         assert_eq!(api_err.message, "Overloaded");
     }
 
@@ -1630,6 +1678,7 @@ mod tests {
         let err = adk_anthropic::Error::InternalServer {
             message: "Server error".to_string(),
             request_id: Some("req_xyz789".to_string()),
+            retry_after: None,
         };
         let api_err = to_anthropic_api_error(&err);
         assert_eq!(api_err.error_type, "api_error");
@@ -1654,6 +1703,7 @@ mod tests {
             error_type: Some("rate_limit_error".to_string()),
             message: "Rate limited".to_string(),
             request_id: Some("req_test".to_string()),
+            retry_after: None,
         };
         let adk_err = convert_anthropic_error(err);
         let msg = adk_err.to_string();

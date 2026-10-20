@@ -115,3 +115,35 @@ async fn unset_fields_are_left_out_and_logprobs_sit_beside_grounding() {
     assert_eq!(metadata["webSearchQueries"], json!(["greeting"]));
     assert_eq!(metadata["logprobs"]["chosenCandidates"][0]["token"], "Hi");
 }
+
+#[tokio::test]
+async fn response_modalities_reach_the_wire() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "candidates": [{"content": {"role": "model", "parts": [
+                {"text": "Here is the image"},
+                {"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}
+            ]}, "finishReason": "STOP"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let response = generate(
+        &server,
+        GenerateContentConfig {
+            response_modalities: Some(vec!["TEXT".into(), "IMAGE".into()]),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        sent_generation_config(&server).await["responseModalities"],
+        json!(["TEXT", "IMAGE"])
+    );
+    let parts = response.content.unwrap().parts;
+    assert!(matches!(&parts[0], adk_core::Part::Text { text, .. } if text == "Here is the image"));
+    assert!(
+        matches!(&parts[1], adk_core::Part::InlineData { mime_type, data, .. } if mime_type == "image/png" && data == b"image")
+    );
+}

@@ -353,28 +353,45 @@ impl Llm for DeepSeekClient {
                     std::collections::HashMap::new();
                 let mut reasoning_buffer = String::new();
 
-                while let Some(chunk_result) = byte_stream.next().await {
-                    let chunk = chunk_result.map_err(|error| {
-                        crate::stream_error::interrupted("deepseek", INCOMPLETE_STREAM, &error)
-                    })?;
+                'body: while let Some(chunk_result) = byte_stream.next().await {
+                    let chunk = match chunk_result {
+                        Ok(chunk) => chunk,
+                        Err(_) if finished => break,
+                        Err(error) => Err(crate::stream_error::interrupted("deepseek", INCOMPLETE_STREAM, &error))?,
+                    };
 
                     buffer.extend_from_slice(&chunk);
 
-                    while let Some(line) = crate::sse::take_line(&mut buffer)? {
+                    while let Some(line) = match crate::sse::take_line(&mut buffer) {
+                        Ok(line) => line,
+                        Err(_) if finished => break 'body,
+                        Err(error) => Err(error)?,
+                    } {
 
+                        if line == "data: [DONE]" && finished {
+                            break 'body;
+                        }
                         if line.is_empty() || line == "data: [DONE]" {
                             continue;
                         }
 
                         if let Some(data) = line.strip_prefix("data: ") {
-                            let value = serde_json::from_str::<serde_json::Value>(data).map_err(|error| {
-                                crate::stream_error::undecodable("deepseek", INVALID_CHUNK, &error)
-                            })?;
+                            let value = match serde_json::from_str::<serde_json::Value>(data) {
+                                Ok(value) => value,
+                                Err(_) if finished => continue,
+                                Err(error) => Err(crate::stream_error::undecodable("deepseek", INVALID_CHUNK, &error))?,
+                            };
                             if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
                                 Err(crate::stream_error::reported("deepseek", STREAM_ERROR, error))?;
                             }
                             match serde_json::from_value::<ChatCompletionResponse>(value) {
                                 Ok(chunk_response) => {
+                                    if chunk_response.choices.is_empty() {
+                                        if let Some(usage) = chunk_response.usage.as_ref().and_then(convert::usage) {
+                                            yield LlmResponse { usage_metadata: Some(usage), partial: true, ..Default::default() };
+                                        }
+                                        continue;
+                                    }
                                     if let Some(choice) = chunk_response.choices.first() {
                                         if let Some(delta) = &choice.delta {
                                             // Accumulate reasoning content
@@ -426,6 +443,9 @@ impl Llm for DeepSeekClient {
 
                                         // Check for finish
                                         if choice.finish_reason.is_some() {
+                                            if choice.finish_reason.as_deref() == Some("error") {
+                                                Err(crate::stream_error::reported("deepseek", STREAM_ERROR, &serde_json::Value::Null))?;
+                                            }
                                             finished = true;
                                             let finish_reason = choice.finish_reason.as_ref().map(|fr| {
                                                 match fr.as_str() {
@@ -513,6 +533,7 @@ impl Llm for DeepSeekClient {
                                         }
                                     }
                                 }
+                                Err(_) if finished => {},
                                 Err(error) => {
                                     Err(crate::stream_error::undecodable("deepseek", INVALID_CHUNK, &error))?;
                                 }
@@ -520,7 +541,7 @@ impl Llm for DeepSeekClient {
                         }
                     }
                 }
-                if !finished || buffer.iter().any(|byte| !byte.is_ascii_whitespace()) {
+                if !finished {
                     Err(crate::stream_error::incomplete(
                         "deepseek",
                         INCOMPLETE_STREAM,
@@ -546,8 +567,14 @@ impl Llm for DeepSeekClient {
             }
         };
 
+        let response_stream: LlmResponseStream = Box::pin(response_stream);
+        let response_stream = if stream {
+            crate::usage_tracking::with_terminal_usage(response_stream)
+        } else {
+            response_stream
+        };
         Ok(crate::usage_tracking::with_priced_usage_tracking(
-            Box::pin(response_stream),
+            response_stream,
             usage_span,
             "deepseek",
             &self.config.model,

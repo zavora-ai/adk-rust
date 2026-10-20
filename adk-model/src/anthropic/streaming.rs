@@ -129,6 +129,11 @@ where
                 _ => {}
             }
         }
-        Err(AdkError::model("Anthropic stream ended before message_stop"))?;
+        Err(AdkError::new(
+            adk_core::ErrorComponent::Model,
+            adk_core::ErrorCategory::Unavailable,
+            "model.anthropic.unfinished_stream",
+            "Anthropic stream ended before message_stop",
+        ).with_provider("anthropic"))?;
     })
 }

@@ -1,0 +1,1 @@
+- **BREAKING**: Add optional `GenerateContentConfig::response_modalities` for Gemini text-and-image generation. Existing struct literals must initialize it or use `..Default::default()`; unsupported clients reject the field instead of silently ignoring it.

@@ -182,10 +182,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-A router served this way carries no host or origin checks and no authentication. Mount it with
-`ServerBuilder::add_root_routes` to apply the server's
-[host and origin defaults](server.md#host-origin-and-bind-defaults) and its
-`RequestContextExtractor`.
+A router served this way carries no host or origin checks and no authentication. Mounted with
+`ServerBuilder::add_api_routes`, it is served under `/api` (`POST /api/jsonrpc`) behind the
+server's [host and origin defaults](server.md#host-origin-and-bind-defaults) and its
+`RequestContextExtractor`, so each operation runs for the authenticated caller.
+`ServerBuilder::add_root_routes` applies the host and origin checks but not the
+`RequestContextExtractor`: every request through a root route acts as an unauthenticated caller.
 
 This exposes:
 - `POST /jsonrpc` — JSON-RPC endpoint (all 11 v1 operations; see [Operation coverage](#operation-coverage))
@@ -313,7 +315,7 @@ Both headers can be set simultaneously. A failed delivery is retried with backof
 | `224.0.0.0/4`, `255.255.255.255`, `ff00::/8` | multicast and broadcast |
 | IPv4-mapped, IPv4-compatible, and NAT64 IPv6 | any IPv4 range above |
 
-`HttpPushNotificationSender::new()` does not follow redirects and bounds each delivery attempt with a request and a connect timeout. A client passed to `HttpPushNotificationSender::with_client` should do the same, since validation covers the registered URL only. Host names are not resolved during validation; route deliveries through an egress proxy when webhook hosts are untrusted.
+`HttpPushNotificationSender::new()` does not follow redirects and bounds each delivery attempt at 10 seconds (5 seconds to connect). A client passed to `HttpPushNotificationSender::with_client` should do the same, since validation covers the registered URL only. Host names are not resolved during validation; route deliveries through an egress proxy when webhook hosts are untrusted.
 
 ## Input Validation
 
@@ -438,7 +440,8 @@ error: `A2aClient::send_streaming_message` yields an `Err`, and `RemoteA2aAgent`
 
 The JSON-RPC endpoint answers HTTP `200` with the error's JSON-RPC code in the body; the REST
 routes answer with the HTTP status. Both carry a `google.rpc.ErrorInfo` detail with the error's
-`reason`:
+`reason`. An unsupported `A2A-Version` is refused by the version middleware before either handler
+runs, with HTTP `400` and the REST error body, on the JSON-RPC route as well:
 
 | Error | JSON-RPC Code | HTTP Status |
 |-------|--------------|-------------|

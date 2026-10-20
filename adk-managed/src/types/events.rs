@@ -1,8 +1,8 @@
 //! Event types for the managed agent runtime.
 //!
-//! Defines [`UserEvent`] (client → agent) and [`SessionEvent`] (agent → client),
-//! conforming to CANON §3.4 wire shapes. Both enums are `#[non_exhaustive]`
-//! for forward-compatible additive evolution.
+//! Defines [`UserEvent`] (client → agent) and [`SessionEvent`] (agent → client), each
+//! tagged on the wire by a dotted `type` such as `user.message` or `status.idle`. Both enums
+//! are `#[non_exhaustive]` for forward-compatible additive evolution.
 
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +12,7 @@ use super::content::ContentBlock;
 
 /// Client-to-agent event. Discriminated by `type` field for wire serialization.
 ///
-/// # Wire Shapes (CANON §3.4)
+/// # Wire Shapes
 ///
 /// ```json
 /// {"type": "user.message", "content": [{"type": "text", "text": "Hello"}]}
@@ -98,7 +98,7 @@ pub enum ConfirmationResult {
 
 /// Agent-to-client event. Each carries a monotonic `seq` per session.
 ///
-/// # Wire Shapes (CANON §3.4)
+/// # Wire Shapes
 ///
 /// ```json
 /// {"type": "agent.message", "content": [{"type": "text", "text": "Hi"}], "seq": 1}

@@ -1,7 +1,7 @@
 //! Content block types for managed agent messages.
 //!
 //! Defines [`ContentBlock`], the union type for message content within
-//! the managed agent runtime. Conforms to CANON §3.5 wire shapes.
+//! the managed agent runtime.
 
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// Each variant serializes with a `"type"` discriminator tag using snake_case
 /// naming. The enum is `#[non_exhaustive]` to allow additive evolution.
 ///
-/// # Wire Shapes (CANON §3.5)
+/// # Wire Shapes
 ///
 /// ```json
 /// {"type": "text", "text": "Hello, world!"}

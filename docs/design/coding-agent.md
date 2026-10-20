@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft / RFC |
+| **Status** | Draft / RFC — superseded by [`spec-3.1-harness-agent.md`](spec-3.1-harness-agent.md) for everything except `adk-devtools`, which shipped |
 | **Tracking issue** | [#380 — feat: implement Code Agents](https://github.com/zavora-ai/adk-rust/issues/380) |
 | **Author(s)** | ADK-Rust maintainers |
 | **Target** | `adk-rust` 1.2.x |

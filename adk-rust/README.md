@@ -187,12 +187,11 @@ fn voice(api_key: &str) -> Result<RealtimeAgent> {
 }
 ```
 
-`realtime` is in the `enterprise` tier and enables `adk-realtime` without a provider transport. The umbrella forwards `vertex-live`, `livekit`, and `openai-webrtc`; for the OpenAI or Gemini Live WebSocket transport, enable the `adk-realtime` feature beside it:
+`realtime` is in the `enterprise` tier and enables `adk-realtime` without a provider transport. Each transport is its own feature: `openai-realtime` (OpenAI WebSocket), `gemini-live` (Gemini Live WebSocket), `vertex-live`, `livekit`, and `openai-webrtc`:
 
 ```toml
 [dependencies]
-adk-rust = { version = "3.0.0", features = ["realtime"] }
-adk-realtime = { version = "3.0.0", features = ["openai"] }
+adk-rust = { version = "3.0.0", features = ["openai-realtime"] }
 ```
 
 See the [adk-realtime README](../adk-realtime/README.md).
@@ -260,7 +259,7 @@ Features outside the tiers, composable with any of them:
 | Server | `a2a`, `yaml-agent`, `agent-registry`, `agent-engine`, `vertex-remote-engine` |
 | Tools | `mcp`, `mcp-http`, `mcp-sampling`, `memory-tools`, `slack`, `bigquery`, `spanner`, `example-store`, `vertex-agent-registry`, `code-tools`, `code-embedded-js`, `code-embedded-python`, `code-docker`, `codeact`, `codeact-monty` |
 | Telemetry | `telemetry-otlp`, `telemetry-sqlite`, `gcp-telemetry`, `record-payloads` |
-| Realtime and audio | `vertex-live`, `livekit`, `openai-webrtc`, `video-avatar`, `audio-*`, `whisper-onnx`, `distil-whisper`, `moonshine`, `kokoro`, `chatterbox`, `qwen3-tts`, `all-onnx` |
+| Realtime and audio | `openai-realtime`, `gemini-live`, `vertex-live`, `livekit`, `openai-webrtc`, `video-avatar`, `audio-*`, `whisper-onnx`, `distil-whisper`, `moonshine`, `kokoro`, `chatterbox`, `qwen3-tts`, `all-onnx` |
 | Graph actions | `action`, `action-http`, `action-trigger`, `action-db`, `action-code`, `action-email`, `action-rss`, `action-full` |
 | Other | `acp`, `skills-progressive-disclosure`, `personas`, `sandbox-workspace`, `sandbox-docker`, `aws-secrets`, `azure-keyvault`, `gcp-secrets`, `gcs-artifacts`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-skill-registry`, `gcp-deploy` |
 

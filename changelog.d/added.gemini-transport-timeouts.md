@@ -1,0 +1,1 @@
+- Add `GeminiModel::new_with_base_url_and_timeouts` using the shared `HttpTimeouts` and existing SDK builder. Gemini SDK errors expose their typed request failure so read-idle timeouts remain retryable `Timeout` through SSE framing; existing constructors retain their defaults.

@@ -51,6 +51,12 @@ pub struct RetryReflectConfig {
     pub global_tracking: bool,
     /// Global failure threshold for circuit-breaker (default: 10).
     pub global_failure_threshold: u32,
+    /// Whether log lines carry the tool's error text (default: `false`).
+    ///
+    /// The text can quote arguments and credentials, so it follows the rule of
+    /// `RunConfig::record_payloads`: off, a log line carries the error's category and
+    /// code only. Set it to the value the runs use.
+    pub record_payloads: bool,
 }
 
 impl Default for RetryReflectConfig {
@@ -66,6 +72,7 @@ impl Default for RetryReflectConfig {
             priority: 200,
             global_tracking: false,
             global_failure_threshold: 10,
+            record_payloads: false,
         }
     }
 }

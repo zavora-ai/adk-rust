@@ -1013,6 +1013,7 @@ impl VertexAiSessionService {
 #[async_trait]
 impl SessionService for VertexAiSessionService {
     async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>> {
+        req.try_identity()?;
         if req.app_name.trim().is_empty() || req.user_id.trim().is_empty() {
             let app_name = truncate_for_error(&req.app_name);
             let user_id = truncate_for_error(&req.user_id);
@@ -1020,9 +1021,6 @@ impl SessionService for VertexAiSessionService {
                 "app_name and user_id are required, got app_name: '{app_name}' user_id: '{user_id}'",
             )));
         }
-        req.try_app_name()?;
-        req.try_user_id()?;
-        req.try_session_id()?;
         validate_vertex_user_id(&req.user_id)?;
 
         let session_id =
@@ -1241,13 +1239,13 @@ impl SessionService for VertexAiSessionService {
     }
 
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
+        req.try_app_name()?;
+        req.try_user_id()?;
         if req.app_name.trim().is_empty() || req.user_id.trim().is_empty() {
             return Err(Self::invalid_input(
                 "app_name and user_id are required and must be non-empty",
             ));
         }
-        req.try_app_name()?;
-        req.try_user_id()?;
         validate_vertex_user_id(&req.user_id)?;
         let parent = self.session_parent(&req.app_name)?;
         let mut sessions = Vec::new();
@@ -1498,10 +1496,10 @@ impl SessionService for VertexAiSessionService {
     }
 
     async fn append_event(&self, session_id: &str, mut event: Event) -> Result<()> {
+        SessionId::try_from(session_id)?;
         if session_id.trim().is_empty() {
             return Err(Self::invalid_input("session_id is required for append_event"));
         }
-        SessionId::try_from(session_id)?;
 
         event.actions.state_delta = sanitize_state_map(event.actions.state_delta);
         validate_no_vertex_identity_state_key(&event.actions.state_delta)?;

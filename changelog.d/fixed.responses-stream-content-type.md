@@ -1,0 +1,1 @@
+- **Preserve incremental Responses streams** (`adk-model`): streaming requests remain incremental when compatible servers omit or mislabel Content-Type. Non-streaming JSON responses are unchanged.
