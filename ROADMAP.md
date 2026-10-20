@@ -65,6 +65,7 @@ Autonomous agents that do vertically integrated tasks well, demonstrating:
 | First fully autonomous robot powered by ADK-Rust | 🔮 | Requires hardware integration layer |
 | 3D world automation (Unreal Engine) | 🔮 | `adk-spatial-os` concept defined, not implemented |
 | Mega Agent (all capabilities combined) | 🚧 | Core capabilities exist; the integration showcase is the HarnessAgent — see [`docs/design/spec-3.1-harness-agent.md`](docs/design/spec-3.1-harness-agent.md) |
+| Agent Kernel (always-on harness: process model, wake sources, proactivity, drivers, partitions) | 🚧 | Designed — see [`docs/design/spec-3.2-agent-kernel.md`](docs/design/spec-3.2-agent-kernel.md); builds on the HarnessAgent |
 
 ### What's Shipped in Q2 2026
 
