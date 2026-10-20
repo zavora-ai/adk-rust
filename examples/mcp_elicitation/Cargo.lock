@@ -13,6 +13,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-action"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "adk-agent"
 version = "3.0.0"
 dependencies = [
@@ -257,11 +268,13 @@ dependencies = [
 name = "adk-graph"
 version = "3.0.0"
 dependencies = [
+ "adk-action",
  "adk-core",
  "async-stream",
  "async-trait",
  "chrono",
  "futures",
+ "regex",
  "serde",
  "serde_json",
  "sqlx",
@@ -302,6 +315,7 @@ dependencies = [
  "adk-skill",
  "adk-telemetry",
  "adk-tool",
+ "async-stream",
  "async-trait",
  "chrono",
  "dirs",
