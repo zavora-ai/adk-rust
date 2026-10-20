@@ -45,14 +45,14 @@ cargo adk build --manifest-path /path/to/my-agent/Cargo.toml
 | **Authentication** | None | `--token` or `ADK_DEPLOY_TOKEN`, cached credentials, or an ephemeral login |
 | **Output** | Local binary in `target/` | Deployment bundle uploaded to platform |
 | **Build profile** | Release (or debug with `--debug`) | Always release (`--skip-build` uses the existing binary) |
-| **Secrets handling** | None | Uploads the secrets `adk-deploy.toml` declares, read from `.env` |
+| **Secrets handling** | None | Uploads the `.env` entries that match the secrets `adk-deploy.toml` declares; a key matches after lowercasing and replacing `_` with `-` (`MY_SECRET` matches `my-secret`) |
 | **Manifest required** | Only `Cargo.toml` | `Cargo.toml` + `adk-deploy.toml` |
 | **Use case** | Local dev, CI checks | Production deployment |
 
 ### When to use each
 
 - **`cargo adk build`** — Use during development to verify compilation, in CI pipelines as a gate before merge, or to check that dependency updates don't break your agent.
-- **`cargo adk deploy`** — Use when you're ready to ship your agent to the ADK platform. Deploy includes a build step internally (skippable with `--skip-build`). `--dry-run` validates without pushing, but still authenticates against the platform server.
+- **`cargo adk deploy`** — Use when you're ready to ship your agent to the ADK platform. Deploy includes a build step internally (skippable with `--skip-build`). `--dry-run` validates, uploads nothing, and builds the bundle without pushing it; without `--token`, `ADK_DEPLOY_TOKEN`, or cached credentials it still logs in to the platform server, so the server must be reachable.
 
 ## Usage Examples
 
