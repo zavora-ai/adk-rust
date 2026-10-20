@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use adk_core::audit_log::InMemoryAuditRecorder;
-use adk_core::{Content, Event, Llm, Part, SessionId, Tool, ToolContext, UserId};
+use adk_core::{ApprovalStore, Content, Event, Llm, Part, SessionId, Tool, ToolContext, UserId};
 use adk_harness::{
     ApprovalPrompt, ApprovalPrompter, Harness, HarnessAgent, HarnessAgentBuilder, HarnessDecision,
     HarnessMode, InMemoryStandingRuleStore, InstructionsConfig, PromptAnswer, StandingRuleStore,
@@ -510,6 +510,158 @@ async fn unsandboxed_retry_is_held(subject: Subject) -> Result<Checks> {
     Ok(checks)
 }
 
+/// Auto mode writes ordinary files unasked, but a write whose path reaches `AGENTS.md` or
+/// `.git/config` through a symlink inside the workspace is held (spec 3.1 §9.2 I11, I29).
+async fn protected_path_through_symlink(subject: Subject) -> Result<Checks> {
+    let mut checks = Checks::default();
+    let batch = ScriptedResponse::function_calls([
+        ("write_file", json!({ "path": "docs/notes.md", "content": "pwned via symlink\n" })),
+        ("write_file", json!({ "path": "settings.ini", "content": "[core]\n\tpwned = true\n" })),
+        ("write_file", json!({ "path": "docs/plain.md", "content": "fine\n" })),
+    ]);
+    let env = Env::in_dir(subject, tempfile::tempdir()?, scripted(vec![batch, done()]), |b| b.mode(HarnessMode::Auto), Vec::new(), false).await?;
+    let root = std::fs::canonicalize(env.dir.path())?;
+    std::fs::write(root.join("AGENTS.md"), "rules\n")?;
+    std::fs::create_dir_all(root.join(".git"))?;
+    std::fs::write(root.join(".git/config"), "[core]\n")?;
+    std::fs::create_dir(root.join("docs"))?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("../AGENTS.md", root.join("docs/notes.md"))?;
+        std::os::unix::fs::symlink(".git/config", root.join("settings.ini"))?;
+    }
+    env.session("alice", "s1").await?;
+    let events = env.send("alice", "s1", "edit").await?;
+    let got: Vec<Outcome> = responses(&events).iter().map(|(_, response)| match adk_core::is_confirmation_pending(response) {
+        true => Outcome::Held,
+        false if response.get("error").is_some() => Outcome::Denied,
+        false => Outcome::Executed,
+    }).collect();
+    checks.check(format!("links to protected files held, the plain file written {got:?}"), got == [Outcome::Held, Outcome::Held, Outcome::Executed]);
+    checks.check("AGENTS.md unchanged", std::fs::read_to_string(root.join("AGENTS.md"))? == "rules\n");
+    checks.check(".git/config unchanged", std::fs::read_to_string(root.join(".git/config"))? == "[core]\n");
+    Ok(checks)
+}
+
+/// An operator policy that requires approval for `read_file` puts the call to the person,
+/// even though the harness itself allows reads (spec 3.1 §7.2 `operator_policy`, §7.3).
+async fn operator_approval_prompts(subject: Subject) -> Result<Checks> {
+    let mut checks = Checks::default();
+    let operator: Arc<dyn adk_core::ToolPolicy> = Arc::new(
+        adk_core::DeclarativePolicy::builder().require_approval("read_file", "reads need the operator's approval").allow("*").name("ops").build(),
+    );
+    let env = Env::new(subject, scripted(vec![call("read_file", json!({ "path": "notes.txt" })), done()]), move |b| b.operator_policy(operator)).await?;
+    env.prompter.then(|_| PromptAnswer::ApproveOnce);
+    std::fs::write(env.path("notes.txt"), "operator approved")?;
+    env.session("alice", "s1").await?;
+    let events = env.send("alice", "s1", "read").await?;
+    let read = responses(&events).into_iter().find(|(name, _)| name == "read_file").map(|(_, response)| response.to_string()).unwrap_or_default();
+    checks.check(format!("one prompt for the operator's approval ({})", env.prompter.count()), env.prompter.count() == 1);
+    checks.check("the approved read ran", read.contains("operator approved"));
+    Ok(checks)
+}
+
+/// Sessions whose next save of a `bash` result fails once armed: the process stops after
+/// the command ran and before its result reached the session.
+struct CrashingSessions {
+    inner: InMemorySessionService,
+    armed: std::sync::atomic::AtomicBool,
+}
+
+impl CrashingSessions {
+    fn crashes(&self, event: &Event) -> bool {
+        let bash_result = event.llm_response.content.as_ref().is_some_and(|content| {
+            content.parts.iter().any(|part| matches!(part, Part::FunctionResponse { function_response, .. } if function_response.name == "bash"))
+        });
+        bash_result && self.armed.swap(false, std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionService for CrashingSessions {
+    async fn create(&self, req: CreateRequest) -> adk_core::Result<Box<dyn adk_session::Session>> {
+        self.inner.create(req).await
+    }
+    async fn get(&self, req: adk_session::GetRequest) -> adk_core::Result<Box<dyn adk_session::Session>> {
+        self.inner.get(req).await
+    }
+    async fn list(&self, req: adk_session::ListRequest) -> adk_core::Result<Vec<Box<dyn adk_session::Session>>> {
+        self.inner.list(req).await
+    }
+    async fn delete(&self, req: adk_session::DeleteRequest) -> adk_core::Result<()> {
+        self.inner.delete(req).await
+    }
+    async fn append_event(&self, session_id: &str, event: Event) -> adk_core::Result<()> {
+        if self.crashes(&event) {
+            return Err(adk_core::AdkError::session("simulated crash before the result is saved"));
+        }
+        self.inner.append_event(session_id, event).await
+    }
+    async fn append_event_for_identity(&self, req: adk_session::AppendEventRequest) -> adk_core::Result<()> {
+        if self.crashes(&req.event) {
+            return Err(adk_core::AdkError::session("simulated crash before the result is saved"));
+        }
+        self.inner.append_event_for_identity(req).await
+    }
+    async fn get_for_identity(&self, identity: &adk_core::AdkIdentity) -> adk_core::Result<Box<dyn adk_session::Session>> {
+        self.inner.get_for_identity(identity).await
+    }
+}
+
+/// A held `bash` is approved and runs; the process stops before the result is saved; after
+/// a restart a live prompter approves the resumed call again, and the action ledger answers
+/// it instead of running the command a second time (spec 3.1 §7.12, H1, I37).
+async fn ledger_prevents_double_bash(subject: Subject) -> Result<Checks> {
+    let mut checks = Checks::default();
+    let dir = tempfile::tempdir()?;
+    let sessions = Arc::new(CrashingSessions { inner: InMemorySessionService::new(), armed: Default::default() });
+    let approvals = Arc::new(adk_core::InMemoryApprovalStore::new());
+    let ledger: Arc<dyn adk_core::ActionLedger> = Arc::new(adk_core::InMemoryActionLedger::new());
+    let log = || std::fs::read_to_string(dir.path().join("log.txt")).unwrap_or_default();
+    let (user, session) = (UserId::new("alice")?, SessionId::new("s1")?);
+    let process = |script: Vec<ScriptedResponse>, prompter: Option<Arc<Prompter>>| -> Result<Runner> {
+        let workspace = adk_devtools::Workspace::new(dir.path()).allow_bash(true);
+        let sessions = sessions.clone() as Arc<dyn SessionService>;
+        Ok(match subject {
+            Subject::Harness => {
+                let mut builder = HarnessAgent::builder("harness").model(scripted(script)).workspace(workspace).project_instructions(no_user_file()).without_compaction().approval_store(approvals.clone()).action_ledger(ledger.clone());
+                if let Some(prompter) = prompter {
+                    builder = builder.prompter(prompter);
+                }
+                let agent = Arc::new(builder.build()?);
+                agent.configure_runner(Runner::builder().app_name(APP).agent(agent.clone()).session_service(sessions)).build()?
+            }
+            Subject::Baseline => {
+                let coding = adk_agent::coding::CodingAgent::builder().name("harness").model(scripted(script)).workspace(workspace).build()?;
+                Runner::builder().app_name(APP).agent(coding.agent()).session_service(sessions).action_ledger(ledger.clone()).build()?
+            }
+        })
+    };
+    let drain = |stream: adk_core::EventStream| async move { stream.collect::<Vec<_>>().await.into_iter().filter(Result::is_err).count() };
+    sessions.create(CreateRequest { app_name: APP.into(), user_id: "alice".into(), session_id: Some("s1".into()), state: Default::default() }).await?;
+
+    let first = process(vec![call("bash", json!({ "command": "echo once >> log.txt" })), ScriptedResponse::text("waiting")], None)?;
+    drain(first.run(user.clone(), session.clone(), Content::new("user").with_text("append once")).await?).await;
+    let pending = approvals.pending(&adk_core::ApprovalScope::new(APP, "alice", "s1")).await?;
+    checks.check("process 1: the host command is held for a decision", pending.len() == 1 && log().is_empty());
+    let Some(entry) = pending.first() else {
+        return Ok(checks);
+    };
+    approvals.decide(&adk_core::ApprovalScope::new(APP, "alice", "s1"), &entry.fingerprint, adk_core::ToolApproval::approve()).await?;
+    let second = process(vec![done()], None)?;
+    sessions.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    let errors = drain(second.run(user.clone(), session.clone(), Content::new("user")).await?).await;
+    checks.check("process 2: the command ran, then the process stopped before saving the result", log() == "once\n" && errors > 0);
+
+    let prompter = Arc::new(Prompter::default());
+    let third = process(vec![ScriptedResponse::text("it already ran"), done()], Some(prompter.clone()))?;
+    drain(third.run(user.clone(), session.clone(), Content::new("user").with_text("did it run?")).await?).await;
+    checks.check(format!("process 3: the command never ran twice (log {:?})", log()), log() == "once\n");
+    let events = sessions.inner.get(adk_session::GetRequest { app_name: APP.into(), user_id: "alice".into(), session_id: "s1".into(), num_recent_events: None, after: None }).await?.events().all();
+    checks.check("process 3: the call is answered, not stranded", adk_core::held_tool_calls(&events, "harness", "").is_empty());
+    Ok(checks)
+}
+
 // --- Live scenarios ----------------------------------------------------------------------
 
 fn live_model(provider: &str) -> Result<Option<(String, Arc<dyn Llm>)>> {
@@ -636,6 +788,9 @@ const SCRIPTED: &[&str] = &[
     "todos_isolated_per_session",
     "agents_md_and_skills_loaded",
     "unsandboxed_retry_is_held",
+    "protected_path_through_symlink",
+    "operator_approval_prompts",
+    "ledger_prevents_double_bash",
 ];
 
 async fn run_scripted(name: &str, subject: Subject) -> Result<Checks> {
@@ -648,6 +803,9 @@ async fn run_scripted(name: &str, subject: Subject) -> Result<Checks> {
         "todos_isolated_per_session" => todos_isolated_per_session(subject).await,
         "agents_md_and_skills_loaded" => agents_md_and_skills_loaded(subject).await,
         "unsandboxed_retry_is_held" => unsandboxed_retry_is_held(subject).await,
+        "protected_path_through_symlink" => protected_path_through_symlink(subject).await,
+        "operator_approval_prompts" => operator_approval_prompts(subject).await,
+        "ledger_prevents_double_bash" => ledger_prevents_double_bash(subject).await,
         other => bail!("unknown scenario {other}"),
     }
 }
