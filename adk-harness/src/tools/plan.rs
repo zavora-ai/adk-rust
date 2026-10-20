@@ -116,12 +116,26 @@ fn invalid(message: impl Into<String>) -> AdkError {
 pub struct ExitPlanModeTool {
     mode_store: Arc<dyn ModeStore>,
     default_mode: HarnessMode,
+    #[cfg(feature = "graph")]
+    plan_graph: Option<Arc<crate::plan_graph::PlanGraphs>>,
 }
 
 impl ExitPlanModeTool {
     /// A tool over `mode_store`, whose sessions start in `default_mode`.
     pub fn new(mode_store: Arc<dyn ModeStore>, default_mode: HarnessMode) -> Self {
-        Self { mode_store, default_mode }
+        Self {
+            mode_store,
+            default_mode,
+            #[cfg(feature = "graph")]
+            plan_graph: None,
+        }
+    }
+
+    /// Compiles approved plans with steps into `graphs` (spec 3.1 §7.11).
+    #[cfg(feature = "graph")]
+    pub(crate) fn with_plan_graph(mut self, graphs: Arc<crate::plan_graph::PlanGraphs>) -> Self {
+        self.plan_graph = Some(graphs);
+        self
     }
 }
 
@@ -211,6 +225,16 @@ impl Tool for ExitPlanModeTool {
                 "exit_plan_mode is only valid in plan mode; the session is in {mode} mode"
             )));
         }
+        let plan_hash = crate::fsutil::hex_digest(
+            json!({ "plan": plan, "steps": steps }).to_string().as_bytes(),
+        );
+        // A plan with steps compiles to the plan graph (spec 3.1 §7.11); an invalid one is
+        // refused before the mode changes.
+        #[cfg(feature = "graph")]
+        let graph = match (&self.plan_graph, steps.is_empty()) {
+            (Some(graphs), false) => Some((graphs, graphs.validate(&steps, &plan_hash)?)),
+            _ => None,
+        };
         let audit = HarnessAudit::for_tool(ctx.as_ref());
         let record = write_mode_change(
             self.mode_store.as_ref(),
@@ -223,10 +247,15 @@ impl Tool for ExitPlanModeTool {
             &[],
         )
         .await?;
-
-        let plan_hash = crate::fsutil::hex_digest(
-            json!({ "plan": plan, "steps": steps }).to_string().as_bytes(),
-        );
+        #[cfg(feature = "graph")]
+        let graph_nodes = match graph {
+            Some((graphs, _)) => {
+                Some(graphs.install(ctx.as_ref(), plan, &steps, &plan_hash).await?.nodes)
+            }
+            None => None,
+        };
+        #[cfg(not(feature = "graph"))]
+        let graph_nodes: Option<Vec<String>> = None;
         let mut actions = ctx.actions();
         actions.state_delta.insert(
             MODE_STATE_KEY.to_string(),
@@ -254,6 +283,7 @@ impl Tool for ExitPlanModeTool {
             "effective": "from the user's next turn",
             "steps": steps.len(),
             "planHash": plan_hash,
+            "planGraph": graph_nodes,
             "instruction": "The plan is approved. End your turn now; the user's next message starts the work.",
         }))
     }

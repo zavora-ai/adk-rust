@@ -27,6 +27,10 @@ agent tool — and the harness refuses to run without it.
 | Observability | `harness.run` and `harness.decide` spans with `harness.mode`, `harness.tool_kind`, `harness.isolation`, `harness.rule_id`, `harness.member`; spend metered per acting agent and subject (`Harness::spend`, `harness.spend`); `LoopGuard` tightens a looping session to ReadOnly and ends the turn; an `adk-eval` suite with a `BaselineStore` baseline |
 | Identity | `RbacMap` permissions per tool class through `ScopeGuard`/`ProtectedTool`; per-call, subject-scoped shell credentials through a `CredentialBroker` and a credential helper revoked after the call; `require_authenticated_identity` for served harnesses; every run audited in Block mode, to a signed `AuditLog` (`EphemeralAuditLog` by default) |
 | File memory | `FileMemory` topic files and a derived `MEMORY.md` per user, outside the workspace; `memory_read`, and `memory_write`/`memory_delete` behind a one-time approval; the index last in the instruction |
+| Team | Members (`explore` and `general` by default, local `LlmAgent`s, ACP-compatible coding agents, remote A2A agents, any `Agent`, or discovered in a `TeamAgentRegistry`) lowered to one `TeamSpec`: isolated context, a timeout and circuit breaker on every edge, delegation depth 1, the team budget, the parent's mode and policy; ACP permission requests decided on the governed path; `harness.member.*` records |
+| Plan graph | An approved plan with `steps` runs as a checkpointed graph: one node per step, `interrupt_before` on `approve` gates (a held `plan_step_gate` call bound to the plan hash and step), a reviewer after `review` gates, rewind through `TimeTravelHandle::fork_at` |
+| Goals | `Harness::start_goal` iterates until the operator's `until` command passes (`LoopAgent` or a checkpointed graph); goal state in a `GoalStore`; durable goals as `harness.goal` runs for a `DurableWorker`; ambient goals on cron, file-watch and webhook triggers |
+| Durability | A completed call never runs twice after a crash (the turn after one answers it from the action ledger), held approvals survive process loss, resumed runs follow the current mode |
 
 ## Mode table
 
@@ -88,15 +92,18 @@ live scenarios on OpenAI, Anthropic and Gemini.
 | `observe` | on | `adk-telemetry`, `adk-eval` |
 | `auth` | on | `adk-auth` |
 | `memory` | on | file memory |
-| `sqlite` | off | SQLite mode, rule and shell-ledger stores |
+| `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores |
+| `ambient` | off | `adk-agent/ambient`: goals started by triggers |
 | `skills-registry`, `team-acp`, `team-a2a`, `docker`, `memory-graph` | off | registry skills, ACP and A2A members, containers, graph memory |
 | `browser`, `computer-use`, `payments`, `voice`, `managed` | off | the packs |
 
 ## Status
 
-Beta (spec 3.1 phase 1). Team members (§7.10), the plan graph and goal engine (§7.11)
-and the packs (§7.16–§7.18) land over the 3.1.x line; until then the builder refuses them with
-`not yet implemented: spec 3.1 §…`. Container isolation for the shell (`docker`) is not
+Beta (spec 3.1 phases 1 and 3). The packs (§7.16–§7.18) land over the 3.1.x line; until then
+the builder refuses them with `not yet implemented: spec 3.1 §…`. The [team](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/team.md),
+[plans and goals](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/plan-and-goals.md)
+and [durability](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/durability.md)
+guides cover §7.10–§7.12. Container isolation for the shell (`docker`) is not
 implemented yet. [`examples/harness_redteam`](https://github.com/zavora-ai/adk-rust/tree/main/examples/harness_redteam)
 runs the shell red-team scenarios; the [shell and sandbox guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/shell-and-sandbox.md)
 covers the sandbox.

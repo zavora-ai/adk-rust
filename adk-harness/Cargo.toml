@@ -28,8 +28,10 @@ team = ["dep:adk-tool", "adk-agent/team-tools"]
 team-acp = ["team", "dep:adk-acp"]
 # Remote agents as members over A2A.
 team-a2a = ["team", "dep:adk-server"]
+# Goals started by cron, file-watch and webhook triggers (spec 3.1 §7.11).
+ambient = ["runner", "adk-agent/ambient"]
 # Plan graph and goal engine (spec 3.1 §7.11).
-graph = ["dep:adk-graph"]
+graph = ["dep:adk-graph", "adk-graph/time-travel", "adk-graph/action"]
 # OS sandbox for the shell (spec 3.1 §7.9).
 sandbox = ["dep:adk-sandbox", "adk-sandbox/sandbox-native"]
 # Container isolation for the shell.
@@ -72,6 +74,7 @@ adk-computer-use = { workspace = true, optional = true }
 adk-payments = { workspace = true, optional = true }
 adk-realtime = { workspace = true, optional = true }
 adk-managed = { workspace = true, optional = true }
+async-stream.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 dirs = "7"
@@ -87,6 +90,9 @@ uuid.workspace = true
 
 [dev-dependencies]
 adk-model = { path = "../adk-model", default-features = false }
+# SQLite sessions, approvals and ledger, and the durable worker, for the durability tests.
+adk-session = { path = "../adk-session", features = ["sqlite"] }
+adk-server = { path = "../adk-server", features = ["background"] }
 proptest = "1.5"
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }

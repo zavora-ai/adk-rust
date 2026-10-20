@@ -119,6 +119,11 @@ pub struct HarnessRuntime {
     pub(crate) spend: Arc<crate::observe::SpendAccounts>,
     #[cfg(feature = "observe")]
     pub(crate) run_trails: Arc<crate::observe::RunTrails>,
+    #[cfg(feature = "team")]
+    pub(crate) team: Option<Arc<crate::team::HarnessTeam>>,
+    #[cfg(feature = "graph")]
+    pub(crate) plan_graph: Option<Arc<crate::plan_graph::PlanGraphs>>,
+    pub(crate) goals: crate::goal::GoalRuntime,
 }
 
 /// The harness's audit trail, in Block mode: `recorder`, or with feature `auth` an
@@ -233,6 +238,23 @@ impl HarnessRuntime {
     /// The audit trail a run gets when it carries none (spec 3.1 §7.14, §9.2 I39).
     pub fn audit_trail(&self) -> Option<&adk_core::audit_log::AuditTrail> {
         self.audit.as_ref()
+    }
+
+    /// The compiled team, when the harness has members (spec 3.1 §7.10).
+    #[cfg(feature = "team")]
+    pub fn team(&self) -> Option<&crate::team::HarnessTeam> {
+        self.team.as_deref()
+    }
+
+    /// Where session goals are kept (spec 3.1 §7.11).
+    pub fn goal_store(&self) -> &Arc<dyn crate::goal::GoalStore> {
+        &self.goals.store
+    }
+
+    /// The plan graphs, when `plan_graph` is on (spec 3.1 §7.11).
+    #[cfg(feature = "graph")]
+    pub fn plan_graph(&self) -> Option<&Arc<crate::plan_graph::PlanGraphs>> {
+        self.plan_graph.as_ref()
     }
 }
 
@@ -508,8 +530,10 @@ impl HarnessAgent {
 
 #[async_trait]
 impl Agent for HarnessAgent {
+    // The builder name, with or without members: the acting principal, fingerprints and
+    // standing rules stay the same when a team is added (spec 3.1 §7.10).
     fn name(&self) -> &str {
-        self.root.name()
+        &self.info.name
     }
 
     fn description(&self) -> &str {
@@ -522,6 +546,12 @@ impl Agent for HarnessAgent {
 
     fn topology(&self) -> Option<AgentTopology> {
         self.root.topology()
+    }
+
+    // With members, every turn starts at the harness, never at a member the runner found
+    // in history: members run only as isolated delegations (spec 3.1 §7.10).
+    fn supports_agent_transfer(&self) -> bool {
+        self.info.members.is_empty() && self.root.supports_agent_transfer()
     }
 
     fn transfer_targets_for(&self, agent_name: &str) -> Option<Vec<String>> {
@@ -584,7 +614,8 @@ impl Agent for HarnessAgent {
                 )
                 .await?;
         }
-        let held = ctx.session().held_tool_calls(self.root.name(), ctx.branch());
+        // The coordinator authors the held calls; with members the root is the team, not it.
+        let held = ctx.session().held_tool_calls(self.name(), ctx.branch());
         self.runtime.ledgers.note_resumable(
             (ctx.app_name(), ctx.user_id(), ctx.session_id()),
             ctx.invocation_id(),
@@ -606,7 +637,7 @@ impl Agent for HarnessAgent {
             );
             let events = {
                 use tracing::Instrument as _;
-                self.root.run(ctx.clone()).instrument(span.clone()).await?
+                self.turn(ctx.clone()).instrument(span.clone()).await?
             };
             return Ok(crate::observe::observe_run(
                 events,
@@ -617,6 +648,30 @@ impl Agent for HarnessAgent {
             ));
         }
         #[cfg(not(feature = "observe"))]
+        self.turn(ctx).await
+    }
+}
+
+impl HarnessAgent {
+    /// One turn: the session's running goal, then its running plan, step by step, else the
+    /// harness agent (spec 3.1 §7.11).
+    async fn turn(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        let mode = self
+            .runtime
+            .policy
+            .mode_for(ctx.app_name(), ctx.user_id(), ctx.session_id(), ctx.invocation_id())
+            .await;
+        if let Some(stream) =
+            self.runtime.goals.route(mode, &self.info.name, self.root.clone(), ctx.clone()).await?
+        {
+            return Ok(stream);
+        }
+        #[cfg(feature = "graph")]
+        if let Some(graphs) = &self.runtime.plan_graph
+            && let Some(stream) = graphs.route(mode, self.root.clone(), ctx.clone()).await?
+        {
+            return Ok(stream);
+        }
         self.root.run(ctx).await
     }
 }

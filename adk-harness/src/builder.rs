@@ -135,14 +135,19 @@ pub struct HarnessAgentBuilder {
     #[cfg(feature = "team")]
     members: Vec<crate::team::MemberSpec>,
     #[cfg(feature = "team")]
-    member_registry: bool,
+    member_registry: Option<Arc<dyn adk_agent::TeamAgentRegistry>>,
     #[cfg(feature = "team")]
-    team_policy: bool,
+    team_policy: Option<adk_agent::TeamPolicy>,
     default_members: bool,
     member_model: Option<Arc<dyn Llm>>,
     plan_graph: bool,
     #[cfg(feature = "memory")]
     memory: Option<crate::memory::MemoryConfig>,
+    #[cfg(feature = "graph")]
+    plan_checkpointer: Option<Arc<dyn adk_graph::Checkpointer>>,
+    goal_store: Option<Arc<dyn crate::goal::GoalStore>>,
+    #[cfg(feature = "graph")]
+    goal_engine: Option<crate::goal::GoalEngine>,
     budget: Option<RunBudget>,
     spend_ledger: Option<Arc<dyn SpendLedger>>,
     audit_log: Option<Arc<dyn adk_core::audit_log::AuditRecorder>>,
@@ -194,14 +199,19 @@ impl HarnessAgentBuilder {
             #[cfg(feature = "team")]
             members: Vec::new(),
             #[cfg(feature = "team")]
-            member_registry: false,
+            member_registry: None,
             #[cfg(feature = "team")]
-            team_policy: false,
+            team_policy: None,
             default_members: true,
             member_model: None,
             plan_graph: cfg!(feature = "graph"),
             #[cfg(feature = "memory")]
             memory: None,
+            #[cfg(feature = "graph")]
+            plan_checkpointer: None,
+            goal_store: None,
+            #[cfg(feature = "graph")]
+            goal_engine: None,
             budget: None,
             spend_ledger: None,
             audit_log: None,
@@ -412,28 +422,33 @@ impl HarnessAgentBuilder {
         self
     }
 
-    /// Adds a team member (spec 3.1 §7.10; not yet implemented).
+    /// Adds a team member (spec 3.1 §7.10). A member named like a default member
+    /// replaces it.
     #[cfg(feature = "team")]
     pub fn member(mut self, spec: crate::team::MemberSpec) -> Self {
         self.members.push(spec);
         self
     }
 
-    /// Discovers members at runtime (spec 3.1 §7.10; not yet implemented).
+    /// Discovers members in `registry` (spec 3.1 §7.10): every candidate no other member
+    /// names becomes a member, resolved and authorized by the registry when the harness is
+    /// built.
     #[cfg(feature = "team")]
-    pub fn member_registry(mut self, _registry: Arc<dyn adk_agent::TeamAgentRegistry>) -> Self {
-        self.member_registry = true;
+    pub fn member_registry(mut self, registry: Arc<dyn adk_agent::TeamAgentRegistry>) -> Self {
+        self.member_registry = Some(registry);
         self
     }
 
-    /// The team policy (spec 3.1 §7.10; not yet implemented).
+    /// The team policy (spec 3.1 §7.10): its budget, termination, failure policy and
+    /// concurrency apply; the context is always isolated and the delegation depth 1
+    /// ([`harness_team_policy`](crate::harness_team_policy)).
     #[cfg(feature = "team")]
-    pub fn team_policy(mut self, _policy: adk_agent::TeamPolicy) -> Self {
-        self.team_policy = true;
+    pub fn team_policy(mut self, policy: adk_agent::TeamPolicy) -> Self {
+        self.team_policy = Some(policy);
         self
     }
 
-    /// Leaves out the default members.
+    /// Leaves out the default members (`explore` and `general`).
     pub fn without_default_members(mut self) -> Self {
         self.default_members = false;
         self
@@ -445,15 +460,22 @@ impl HarnessAgentBuilder {
         self
     }
 
-    /// The goal engine (spec 3.1 §7.11; not yet implemented).
+    /// The goal engine (spec 3.1 §7.11): `Loop` by default, `Graph` by default when a
+    /// plan checkpointer is configured.
     #[cfg(feature = "graph")]
-    pub fn goal_engine(mut self, _engine: crate::goal::GoalEngine) -> Self {
-        self.unimplemented.push("goal_engine (spec 3.1 §7.11)".to_string());
+    pub fn goal_engine(mut self, engine: crate::goal::GoalEngine) -> Self {
+        self.goal_engine = Some(engine);
         self
     }
 
-    /// Compiles approved plans with steps to a plan graph (default on with `graph`). The
-    /// compiler lands with spec 3.1 §7.11; until then steps are stored with the plan.
+    /// Where session goals are kept (spec 3.1 §7.11; default in memory).
+    pub fn goal_store(mut self, store: Arc<dyn crate::goal::GoalStore>) -> Self {
+        self.goal_store = Some(store);
+        self
+    }
+
+    /// Compiles approved plans with steps to a plan graph (spec 3.1 §7.11; default on with
+    /// `graph`). Off, or without `graph`, steps are stored with the plan only.
     pub fn plan_graph(mut self, yes: bool) -> Self {
         self.plan_graph = yes;
         self
@@ -464,6 +486,14 @@ impl HarnessAgentBuilder {
     #[cfg(feature = "memory")]
     pub fn memory(mut self, config: crate::memory::MemoryConfig) -> Self {
         self.memory = Some(config);
+        self
+    }
+
+    /// Where plan graphs are checkpointed (spec 3.1 §7.11; default in memory): SQLite
+    /// beside the harness stores in the CLI, the session's backend on a server.
+    #[cfg(feature = "graph")]
+    pub fn plan_checkpointer(mut self, checkpointer: Arc<dyn adk_graph::Checkpointer>) -> Self {
+        self.plan_checkpointer = Some(checkpointer);
         self
     }
 
@@ -610,14 +640,7 @@ impl HarnessAgentBuilder {
         let model = self.model.ok_or_else(|| AdkError::config("HarnessAgent requires a model"))?;
         let workspace =
             self.workspace.ok_or_else(|| AdkError::config("HarnessAgent requires a workspace"))?;
-        #[cfg_attr(not(feature = "team"), allow(unused_mut))]
-        let mut unimplemented = self.unimplemented;
-        #[cfg(feature = "team")]
-        {
-            if !self.members.is_empty() || self.member_registry || self.team_policy {
-                unimplemented.push("team members (spec 3.1 §7.10)".to_string());
-            }
-        }
+        let unimplemented = self.unimplemented;
         if let Some(first) = unimplemented.first() {
             return Err(AdkError::config(format!("not yet implemented: {first}")));
         }
@@ -656,7 +679,27 @@ impl HarnessAgentBuilder {
                 .unwrap_or_else(|| Arc::new(InMemoryWorkspaceTrustStore::new())),
             require_trust: self.instructions.require_trust,
         });
-        let registry = ToolClassRegistry::harness_defaults(&self.name);
+        #[cfg_attr(not(feature = "team"), allow(unused_mut))]
+        let mut registry = ToolClassRegistry::harness_defaults(&self.name);
+        // 4 (resolved here: member names register as harness classes, spec 3.1 §7.4).
+        #[cfg(feature = "team")]
+        let team_plan = {
+            let mut reserved: HashSet<String> =
+                HARNESS_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect();
+            reserved.extend(self.tools.iter().map(|tool| tool.name().to_string()));
+            let plan = crate::team::TeamPlan::prepare(
+                &self.name,
+                self.members,
+                self.default_members,
+                self.member_registry,
+                self.team_policy,
+                &reserved,
+            )?;
+            if let Some(plan) = &plan {
+                plan.register_classes(&mut registry);
+            }
+            plan
+        };
 
         let mode_store = self.mode_store.unwrap_or_else(|| Arc::new(InMemoryModeStore::new()));
         let rules =
@@ -708,7 +751,22 @@ impl HarnessAgentBuilder {
                 }
             }
         }
-        tools.push(Arc::new(ExitPlanModeTool::new(mode_store.clone(), self.mode)));
+        #[cfg(feature = "graph")]
+        let plan_graphs = self.plan_graph.then(|| {
+            Arc::new(crate::plan_graph::PlanGraphs::new(
+                self.plan_checkpointer
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(adk_graph::MemoryCheckpointer::new())),
+                &self.name,
+            ))
+        });
+        let plan_exit = ExitPlanModeTool::new(mode_store.clone(), self.mode);
+        #[cfg(feature = "graph")]
+        let plan_exit = match &plan_graphs {
+            Some(graphs) => plan_exit.with_plan_graph(graphs.clone()),
+            None => plan_exit,
+        };
+        tools.push(Arc::new(plan_exit));
         #[cfg(feature = "memory")]
         let memory_resolver = self.memory.clone().map(|config| {
             let resolver =
@@ -728,23 +786,26 @@ impl HarnessAgentBuilder {
                 Arc::new(crate::identity::IdentityGate::new(self.identity.require_authenticated)),
             )
         };
+        #[cfg(feature = "team")]
+        let member_tools = tools.clone();
+        // Members get the same request observers as the coordinator (spec 3.1 §7.10, §7.13).
         #[cfg_attr(not(any(feature = "auth", feature = "observe")), allow(unused_mut))]
-        let mut toolset = HarnessToolset::new(tools, mode_store.clone(), self.mode);
+        let mut observers: Vec<Arc<dyn crate::toolset::RequestObserver>> = Vec::new();
         #[cfg(feature = "auth")]
-        {
-            toolset = toolset.with_observer(identity_gate.clone());
-        }
+        observers.push(identity_gate.clone());
         #[cfg(feature = "observe")]
         let run_trails = Arc::new(crate::observe::RunTrails::default());
         #[cfg(feature = "observe")]
         if let Some(guard) = self.loop_guard {
-            toolset = toolset.with_observer(Arc::new(crate::observe::LoopGuardObserver::new(
+            observers.push(Arc::new(crate::observe::LoopGuardObserver::new(
                 guard,
                 mode_store.clone(),
                 self.mode,
                 run_trails.clone(),
             )));
         }
+        let toolset =
+            HarnessToolset::new(tools, mode_store.clone(), self.mode).with_observers(&observers);
         let toolset = Arc::new(toolset);
 
         // 5 (policy first: the handler re-checks against it).
@@ -863,7 +924,65 @@ impl HarnessAgentBuilder {
             ));
         }
         let agent = builder.build()?;
+        let coordinator: Arc<dyn adk_core::Agent> = Arc::new(agent);
+        // 4. Members lowered to one TeamSpec with the coordinator (spec 3.1 §7.10).
+        #[cfg(feature = "team")]
+        let team = match team_plan {
+            Some(plan) => Some(Arc::new(plan.compile(crate::team::TeamInputs {
+                harness: &self.name,
+                coordinator: coordinator.clone(),
+                model: self.member_model.clone().unwrap_or_else(|| model.clone()),
+                tools: &member_tools,
+                mode_store: mode_store.clone(),
+                default_mode: self.mode,
+                workspace: &workspace,
+                tool_timeout: self.tool_timeout,
+                #[cfg(feature = "skills")]
+                skills: &self.skills,
+                observers: &observers,
+            })?)),
+            None => None,
+        };
+        #[cfg(feature = "team")]
+        let root = team.as_ref().map_or_else(|| coordinator.clone(), |team| team.root().clone());
+        #[cfg(all(feature = "graph", feature = "team"))]
+        if let (Some(graphs), Some(team)) = (&plan_graphs, &team)
+            && let Some(reviewer) = team.reviewer()
+        {
+            graphs.set_reviewer(reviewer);
+        }
+        #[cfg(not(feature = "team"))]
+        let root = coordinator.clone();
 
+        let goal_store =
+            self.goal_store.unwrap_or_else(|| Arc::new(crate::goal::InMemoryGoalStore::new()));
+        // A goal's check runs through the launcher the harness bash uses (spec 3.1 §7.11).
+        let check_launcher: Arc<dyn adk_devtools::CommandLauncher> =
+            Arc::new(adk_devtools::HostLauncher);
+        #[cfg(feature = "sandbox")]
+        let check_launcher: Arc<dyn adk_devtools::CommandLauncher> = match shell.launcher.clone() {
+            Some(launcher) => Arc::new(launcher),
+            None => check_launcher,
+        };
+        let goals = crate::goal::GoalRuntime {
+            store: goal_store.clone(),
+            until: Arc::new(crate::goal::UntilCheckAgent::new(
+                goal_store,
+                workspace.clone(),
+                check_launcher,
+            )),
+            #[cfg(feature = "graph")]
+            engine: self.goal_engine.unwrap_or(if self.plan_checkpointer.is_some() {
+                crate::goal::GoalEngine::Graph
+            } else {
+                crate::goal::GoalEngine::Loop
+            }),
+            #[cfg(feature = "graph")]
+            checkpointer: self
+                .plan_checkpointer
+                .clone()
+                .unwrap_or_else(|| Arc::new(adk_graph::MemoryCheckpointer::new())),
+        };
         let compaction = if self.compaction_enabled {
             Some(self.compaction.unwrap_or_else(|| EventsCompactionConfig {
                 compaction_interval: 10,
@@ -882,13 +1001,16 @@ impl HarnessAgentBuilder {
             default_mode: self.mode,
             isolation: status,
             degraded_reason,
+            #[cfg(feature = "team")]
+            members: team.as_ref().map(|team| team.member_names()).unwrap_or_default(),
+            #[cfg(not(feature = "team"))]
             members: Vec::new(),
             packs: Vec::new(),
             tools: tool_names,
         };
         let _ = (self.default_members, self.member_model, self.plan_graph);
         Ok(HarnessAgent {
-            root: Arc::new(agent),
+            root,
             runtime: HarnessRuntime {
                 policy,
                 operator_policy: self.operator_policy,
@@ -923,6 +1045,11 @@ impl HarnessAgentBuilder {
                 spend: Arc::default(),
                 #[cfg(feature = "observe")]
                 run_trails,
+                #[cfg(feature = "team")]
+                team,
+                #[cfg(feature = "graph")]
+                plan_graph: plan_graphs,
+                goals,
             },
             info,
         })
