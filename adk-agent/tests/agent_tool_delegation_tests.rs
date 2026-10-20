@@ -413,6 +413,245 @@ async fn a_hold_three_agent_tools_deep_reaches_the_outermost_caller() {
     assert!(confirmation_requests(&second).is_empty());
 }
 
+// --- Several held calls (spec 3.1 §10 F4) ---
+
+/// A model turn that issues several calls at once.
+fn calls(issued: &[(&str, Value, &str)]) -> LlmResponse {
+    LlmResponse {
+        content: Some(Content {
+            role: "model".to_string(),
+            parts: issued
+                .iter()
+                .map(|(name, args, id)| Part::FunctionCall {
+                    name: (*name).to_string(),
+                    args: args.clone(),
+                    id: Some((*id).to_string()),
+                    thought_signature: None,
+                })
+                .collect(),
+        }),
+        turn_complete: true,
+        ..Default::default()
+    }
+}
+
+fn path(name: &str) -> Value {
+    json!({ "path": name })
+}
+
+/// `ops` delegates to `helper` through an `AgentTool`; `helper` deletes `a.txt` and `b.txt`
+/// in one turn, and must confirm each deletion.
+fn double_delegation() -> Delegation {
+    let helper_model = ScriptedModel::new(vec![
+        calls(&[
+            ("delete_file", path("a.txt"), "inner-1"),
+            ("delete_file", path("b.txt"), "inner-2"),
+        ]),
+        text_response("deleted both"),
+    ]);
+    let (delete_file, deletions) = RecordingTool::new("delete_file");
+    let helper = LlmAgentBuilder::new("helper")
+        .description("manages files")
+        .model(helper_model.clone())
+        .tool(delete_file)
+        .require_tool_confirmation("delete_file")
+        .build()
+        .unwrap();
+    let ops_model = ScriptedModel::new(vec![
+        call("helper", json!({ "request": "delete a.txt and b.txt" }), "call-1"),
+        text_response("all done"),
+    ]);
+    let root = LlmAgentBuilder::new("ops")
+        .model(ops_model.clone())
+        .tool(Arc::new(AgentTool::new(Arc::new(helper))))
+        .build()
+        .unwrap();
+    Delegation { ops_model, helper_model, deletions, root }
+}
+
+#[tokio::test]
+async fn every_call_a_delegate_holds_is_surfaced_under_the_callers_call() {
+    let Delegation { ops_model, deletions, root, .. } = double_delegation();
+    let harness = harness(root, RunConfig::default()).await;
+
+    let first = harness.run(Some("tidy up"), None).await;
+
+    let requests = confirmation_requests(&first);
+    let surfaced: Vec<_> = requests
+        .iter()
+        .map(|request| {
+            (request.tool_name.as_str(), request.args.clone(), request.function_call_id.as_deref())
+        })
+        .collect();
+    assert_eq!(
+        surfaced,
+        vec![
+            ("delete_file", path("a.txt"), Some("call-1")),
+            ("delete_file", path("b.txt"), Some("call-1")),
+        ],
+        "each held call is surfaced, re-keyed to the caller's call"
+    );
+    for request in &requests {
+        assert_eq!(
+            request.acting.as_ref().map(|acting| acting.agent.id.as_str()),
+            Some("urn:adk:agent:delegation/helper"),
+            "each request names the delegate that made the call"
+        );
+    }
+    let pending = harness.store.pending(&harness.scope()).await.unwrap();
+    let mut pending: Vec<_> = pending.into_iter().map(|entry| entry.fingerprint).collect();
+    let mut expected: Vec<_> = requests.iter().map(ToolConfirmationRequest::fingerprint).collect();
+    pending.sort();
+    expected.sort();
+    assert_eq!(pending, expected);
+    assert!(deletions.lock().unwrap().is_empty());
+    assert_eq!(ops_model.requests().len(), 1, "the caller's run ends on the holds");
+}
+
+#[tokio::test]
+async fn approving_both_surfaced_calls_runs_each_once() {
+    let Delegation { ops_model, helper_model, deletions, root } = double_delegation();
+    let harness = harness(root, RunConfig::default()).await;
+    let first = harness.run(Some("tidy up"), None).await;
+    for request in confirmation_requests(&first) {
+        harness
+            .store
+            .decide(&harness.scope(), &request.fingerprint(), ToolApproval::approve())
+            .await
+            .unwrap();
+    }
+
+    let second = harness.run(None, None).await;
+
+    assert!(confirmation_requests(&second).is_empty());
+    assert_eq!(*deletions.lock().unwrap(), vec![path("a.txt"), path("b.txt")]);
+    assert_eq!(helper_model.requests().len(), 2, "the delegate's model is not asked to reissue");
+    let delegated = function_responses(ops_model.requests().last().unwrap());
+    assert_eq!(delegated, vec![(Some("call-1".into()), json!({ "response": "deleted both" }))]);
+
+    harness.run(Some("anything else?"), None).await;
+    assert_eq!(deletions.lock().unwrap().len(), 2, "each approval authorizes one execution");
+}
+
+#[tokio::test]
+async fn a_call_left_undecided_stays_held_and_runs_once_it_is_approved() {
+    let Delegation { deletions, root, .. } = double_delegation();
+    let harness = harness(root, RunConfig::default()).await;
+    let first = harness.run(Some("tidy up"), None).await;
+    let requests = confirmation_requests(&first);
+    let (a, b) = (requests[0].clone(), requests[1].clone());
+
+    // Only the second card is approved.
+    harness
+        .store
+        .decide(&harness.scope(), &b.fingerprint(), ToolApproval::approve())
+        .await
+        .unwrap();
+    let second = harness.run(None, None).await;
+    assert_eq!(*deletions.lock().unwrap(), vec![path("b.txt")]);
+    let still_held = confirmation_requests(&second);
+    assert_eq!(still_held.len(), 1, "the undecided call is surfaced again: {still_held:?}");
+    assert_eq!(still_held[0].fingerprint(), a.fingerprint());
+    assert_eq!(still_held[0].function_call_id.as_deref(), Some("call-1"));
+
+    harness
+        .store
+        .decide(&harness.scope(), &a.fingerprint(), ToolApproval::approve())
+        .await
+        .unwrap();
+    let third = harness.run(None, None).await;
+    assert!(confirmation_requests(&third).is_empty());
+    assert_eq!(*deletions.lock().unwrap(), vec![path("b.txt"), path("a.txt")]);
+}
+
+#[tokio::test]
+async fn a_call_id_decision_reaches_only_the_request_it_is_bound_to() {
+    let Delegation { deletions, root, .. } = double_delegation();
+    let harness = harness(root, RunConfig::default()).await;
+    let first = harness.run(Some("tidy up"), None).await;
+    let requests = confirmation_requests(&first);
+    let call_id = requests[0].function_call_id.clone().unwrap();
+
+    // Unbound, the decision could mean either call, so it reaches neither.
+    let unbound = RunConfig::builder()
+        .tool_confirmation_decisions(HashMap::from([(
+            call_id.clone(),
+            ToolConfirmationDecision::Approve,
+        )]))
+        .build();
+    let second = harness.run(None, Some(unbound)).await;
+    assert!(deletions.lock().unwrap().is_empty());
+    assert_eq!(confirmation_requests(&second).len(), 2, "both calls stay held");
+
+    let bound = RunConfig::builder()
+        .tool_confirmation_decisions(HashMap::from([(
+            call_id.clone(),
+            ToolConfirmationDecision::Approve,
+        )]))
+        .tool_confirmation_fingerprints(HashMap::from([(call_id, requests[1].fingerprint())]))
+        .build();
+    let third = harness.run(None, Some(bound)).await;
+    assert_eq!(*deletions.lock().unwrap(), vec![path("b.txt")]);
+    let still_held = confirmation_requests(&third);
+    assert_eq!(still_held.len(), 1);
+    assert_eq!(still_held[0].fingerprint(), requests[0].fingerprint());
+}
+
+#[tokio::test]
+async fn every_hold_two_agent_tools_deep_reaches_the_outermost_caller() {
+    let (delete_file, deletions) = RecordingTool::new("delete_file");
+    let inner = LlmAgentBuilder::new("inner")
+        .description("deletes files")
+        .model(ScriptedModel::new(vec![
+            calls(&[
+                ("delete_file", path("a.txt"), "inner-1"),
+                ("delete_file", path("b.txt"), "inner-2"),
+            ]),
+            text_response("deleted both"),
+        ]))
+        .tool(delete_file)
+        .require_tool_confirmation("delete_file")
+        .build()
+        .unwrap();
+    let middle = LlmAgentBuilder::new("middle")
+        .description("delegates file work")
+        .model(ScriptedModel::new(vec![
+            call("inner", json!({ "request": "delete both" }), "middle-1"),
+            text_response("inner deleted both"),
+        ]))
+        .tool(Arc::new(AgentTool::new(Arc::new(inner))))
+        .build()
+        .unwrap();
+    let root = LlmAgentBuilder::new("ops")
+        .model(ScriptedModel::new(vec![
+            call("middle", json!({ "request": "clean up" }), "call-1"),
+            text_response("all done"),
+        ]))
+        .tool(Arc::new(AgentTool::new(Arc::new(middle))))
+        .build()
+        .unwrap();
+    let harness = harness(root, RunConfig::default()).await;
+
+    let first = harness.run(Some("tidy up"), None).await;
+    let requests = confirmation_requests(&first);
+    let surfaced: Vec<_> = requests
+        .iter()
+        .map(|request| (request.args.clone(), request.function_call_id.as_deref()))
+        .collect();
+    assert_eq!(surfaced, vec![(path("a.txt"), Some("call-1")), (path("b.txt"), Some("call-1"))]);
+
+    for request in &requests {
+        harness
+            .store
+            .decide(&harness.scope(), &request.fingerprint(), ToolApproval::approve())
+            .await
+            .unwrap();
+    }
+    let second = harness.run(None, None).await;
+    assert!(confirmation_requests(&second).is_empty());
+    assert_eq!(*deletions.lock().unwrap(), vec![path("a.txt"), path("b.txt")]);
+}
+
 // --- What the delegate inherits ---
 
 #[tokio::test]

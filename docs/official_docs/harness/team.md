@@ -75,7 +75,10 @@ back, and they never merge into the parent's state.
 
 Members share the parent's app, user and session, so the policy reads the same mode for
 them. In Plan, a `general` member's `write_file` and `bash` are refused; in Ask they are
-held for a person, and the delegation is held with them until the decision.
+held for a person, and the delegation is held with them until the decision. A member that
+holds several calls in one turn surfaces each as its own request under the delegation's call
+ID, so the person sees one card per call; the delegation stays held until every call has a
+decision, and each approved call runs once.
 
 ## ACP members
 

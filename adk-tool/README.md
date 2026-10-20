@@ -331,9 +331,10 @@ fn coordinator(model: Arc<dyn Llm>) -> adk_core::Result<adk_agent::LlmAgent> {
 - **Failure mode** — `ReturnErrorObject` (default) returns a failed delegation as an
   `{"error": ..., "agent": ...}` result; `Propagate` returns the delegate's error with its
   category and code.
-- **Held calls** — a call the delegate holds for confirmation holds the caller's `AgentTool`
-  call with a `ToolConfirmationRequest` for the delegate's call; once decided, the delegate
-  resumes it and the call runs once.
+- **Held calls** — every call the delegate holds for confirmation holds the caller's
+  `AgentTool` call, with one `ToolConfirmationRequest` per delegate call, each under the
+  caller's call ID; once decided, the delegate resumes each decided call and it runs once, and
+  a call still undecided keeps the delegation held.
 - **Result** — the delegate's final text is returned as `"response"`, and provider-side tool
   results such as Gemini's `codeExecutionResult` as `"server_tool_responses"`.
 

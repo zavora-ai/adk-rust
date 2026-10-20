@@ -154,6 +154,9 @@ struct HeldDelegation {
     agent: String,
     /// The delegate's request, under the delegate's own call ID.
     request: ToolConfirmationRequest,
+    /// The delegate's other held requests, when it holds more than one call.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    more: Vec<ToolConfirmationRequest>,
     /// The state the delegation started with.
     state: HashMap<String, Value>,
     /// The history the delegation started with.
@@ -162,6 +165,46 @@ struct HeldDelegation {
     user_content: Content,
     /// The delegate's events so far.
     events: Vec<Event>,
+}
+
+/// Every request the delegate's events still hold, in the order they were held.
+///
+/// A delegation's events can hold calls of several agents (a handoff target, a workflow's
+/// sub-agents), each on its own branch.
+fn delegate_held_requests(events: &[Event]) -> Vec<ToolConfirmationRequest> {
+    let mut holders = Vec::<(&str, &str)>::new();
+    for event in events {
+        if event.actions.tool_confirmation.is_some()
+            && !holders.contains(&(event.author.as_str(), event.branch.as_str()))
+        {
+            holders.push((event.author.as_str(), event.branch.as_str()));
+        }
+    }
+    let mut requests = Vec::<ToolConfirmationRequest>::new();
+    for (author, branch) in holders {
+        for held in adk_core::held_tool_calls(events, author, branch) {
+            let fingerprint = held.request.fingerprint();
+            if !requests.iter().any(|known| known.fingerprint() == fingerprint) {
+                requests.push(held.request);
+            }
+        }
+    }
+    requests
+}
+
+/// The event that surfaces one of a delegate's held requests as the caller's own hold, as
+/// the caller's agent surfaces the request it ends its run on.
+fn surfaced_confirmation_event(ctx: &dyn ToolContext, request: ToolConfirmationRequest) -> Event {
+    let mut event = Event::new(ctx.invocation_id());
+    event.author = ctx.agent_name().to_string();
+    event.llm_response.interrupted = true;
+    event.llm_response.turn_complete = true;
+    event.llm_response.content = Some(Content::new("model").with_text(format!(
+        "Tool confirmation required for '{}'. Provide approve/deny decision to continue.",
+        request.tool_name
+    )));
+    event.actions.tool_confirmation = Some(request);
+    event
 }
 
 /// Builds the run config of a delegated invocation from its caller's.
@@ -291,11 +334,13 @@ impl Default for AgentToolConfig {
 /// invocation toolsets or call-ID decisions; its own topology comes from
 /// [`Agent::configure_run`] and [`Agent::transfer_targets_for`].
 ///
-/// A call the delegate holds for confirmation holds this call too: the tool sets
-/// [`EventActions::tool_confirmation`](adk_core::EventActions::tool_confirmation) to the
-/// delegate's request under the caller's call ID and records the delegate's session in the
-/// caller's session state. When the caller resumes the call, the delegate resumes its held
-/// call from that session.
+/// Every call the delegate holds for confirmation holds this call too: the tool surfaces
+/// each of the delegate's requests under the caller's call ID — the last through
+/// [`EventActions::tool_confirmation`](adk_core::EventActions::tool_confirmation), the
+/// others before it through [`ToolContext::emit_event`] — and records the delegate's session
+/// in the caller's session state. When the caller resumes the call, the delegate resumes
+/// each held call that has a decision from that session; a call still undecided keeps this
+/// call held (spec 3.1 §10 F4).
 pub struct AgentTool {
     agent: Arc<dyn Agent>,
     config: AgentToolConfig,
@@ -919,23 +964,34 @@ impl Tool for AgentTool {
                 agent.map(|agent| (agent, held))
             });
 
+        let resumed_holder = resumed.as_ref().map(|(_, held)| held.agent.clone());
         let (start_agent, session, child_user_content, origin_user_content) = match resumed {
             Some((agent, held)) => {
                 // Whatever this run ends with replaces the record.
                 let mut actions = ctx.actions();
                 actions.state_delta.insert(held_key.clone(), Value::Null);
                 ctx.set_actions(actions);
-                if let Some((decision, bound)) = call_decision
-                    && let Some(held_call_id) = held.request.function_call_id.clone()
-                {
-                    let fingerprint = held.request.fingerprint();
-                    if bound.is_none_or(|bound| bound == fingerprint) {
-                        child_run_config
-                            .tool_confirmation_decisions
-                            .insert(held_call_id.clone(), decision);
-                        child_run_config
-                            .tool_confirmation_fingerprints
-                            .insert(held_call_id, fingerprint);
+                // With several held requests under this one call, a call-ID decision reaches
+                // only the request its fingerprint binding names.
+                if let Some((decision, bound)) = call_decision {
+                    let single = held.more.is_empty();
+                    for request in std::iter::once(&held.request).chain(&held.more) {
+                        let Some(held_call_id) = request.function_call_id.clone() else {
+                            continue;
+                        };
+                        let fingerprint = request.fingerprint();
+                        let applies = match &bound {
+                            Some(bound) => *bound == fingerprint,
+                            None => single,
+                        };
+                        if applies {
+                            child_run_config
+                                .tool_confirmation_decisions
+                                .insert(held_call_id.clone(), decision);
+                            child_run_config
+                                .tool_confirmation_fingerprints
+                                .insert(held_call_id, fingerprint);
+                        }
                     }
                 }
                 tracing::info!(
@@ -1012,7 +1068,8 @@ impl Tool for AgentTool {
             let mut events = Vec::new();
             let mut state_delta = HashMap::new();
             let mut artifact_delta = HashMap::new();
-            let mut hold = None;
+            // The agent whose run ended on the latest hold; the delegation resumes in it.
+            let mut holder = None;
 
             loop {
                 let mut event_stream = active_agent.run(active_ctx.clone()).await?;
@@ -1031,10 +1088,8 @@ impl Tool for AgentTool {
                                     transfer = Some(target.clone());
                                 }
                             }
-                            if hold.is_none()
-                                && let Some(request) = &event.actions.tool_confirmation
-                            {
-                                hold = Some((active_agent.name().to_string(), request.clone()));
+                            if event.actions.tool_confirmation.is_some() {
+                                holder = Some(active_agent.name().to_string());
                             }
                             // A delegation's own resume records are not the caller's state.
                             state_delta.extend(
@@ -1113,7 +1168,7 @@ impl Tool for AgentTool {
                 active_agent = target;
             }
 
-            Ok((events, state_delta, artifact_delta, hold))
+            Ok((events, state_delta, artifact_delta, holder))
         };
 
         // A delegation that runs out of time is a failed call, so retries, error hooks, the
@@ -1140,7 +1195,15 @@ impl Tool for AgentTool {
         };
 
         match result {
-            Ok((events, mut state_delta, artifact_delta, hold)) => {
+            Ok((events, mut state_delta, artifact_delta, holder)) => {
+                // Every call the delegate still holds, including one an earlier run held
+                // that this run's decisions did not reach, keeps the delegation held.
+                let held_requests = delegate_held_requests(&sub_ctx.session.events());
+                let hold = (!held_requests.is_empty()).then(|| {
+                    let agent =
+                        holder.or(resumed_holder).unwrap_or_else(|| self.agent.name().to_string());
+                    (agent, held_requests)
+                });
                 if let Some(allowed) = &self.runtime.output_state_keys {
                     if let Some(key) = state_delta.keys().find(|key| !allowed.contains(*key)) {
                         return self.state_policy_failure(format!(
@@ -1184,21 +1247,38 @@ impl Tool for AgentTool {
                     ctx.set_actions(parent_actions);
                 }
 
-                // The delegate held a call for confirmation: this call is held with it, under
-                // the delegate's request, and the delegation is recorded so it resumes.
-                if let Some((agent, request)) = hold {
-                    let surfaced = ToolConfirmationRequest {
+                // The delegate held calls for confirmation: this call is held with them, under
+                // each of the delegate's requests, and the delegation is recorded so it resumes.
+                if let Some((agent, mut requests)) = hold {
+                    let request = requests.remove(0);
+                    let more = requests;
+                    let rekeyed = |request: &ToolConfirmationRequest| ToolConfirmationRequest {
                         function_call_id: Some(ctx.function_call_id().to_string()),
                         ..request.clone()
                     };
-                    let reason = format!(
-                        "agent '{agent}' is waiting for a decision on tool '{}'",
-                        request.tool_name
-                    );
+                    let reason = match more.len() {
+                        0 => format!(
+                            "agent '{agent}' is waiting for a decision on tool '{}'",
+                            request.tool_name
+                        ),
+                        others => format!(
+                            "agent '{agent}' is waiting for decisions on {} tool calls",
+                            others + 1
+                        ),
+                    };
+                    // The caller ends its run on the last request; the others are surfaced
+                    // before it, in the order the delegate held them (spec 3.1 §10 F4).
+                    let mut surfaced: Vec<ToolConfirmationRequest> =
+                        std::iter::once(&request).chain(&more).map(rekeyed).collect();
+                    let last = surfaced.pop().expect("the delegate holds at least one call");
+                    for request in surfaced {
+                        ctx.emit_event(surfaced_confirmation_event(ctx.as_ref(), request)).await;
+                    }
                     let record = HeldDelegation {
                         call: call_fingerprint,
                         agent,
                         request,
+                        more,
                         state: sub_ctx.session.initial_state.clone(),
                         history: sub_ctx.session.initial_history.clone(),
                         user_content: origin_user_content,
@@ -1214,7 +1294,7 @@ impl Tool for AgentTool {
                     })?;
                     let mut parent_actions = ctx.actions();
                     parent_actions.state_delta.insert(held_key, record);
-                    parent_actions.tool_confirmation = Some(surfaced);
+                    parent_actions.tool_confirmation = Some(last);
                     ctx.set_actions(parent_actions);
                     tracing::info!(
                         agent_tool.name = %self.agent.name(),
@@ -2784,10 +2864,24 @@ mod tests {
             if !held.is_empty() {
                 *self.resumed.lock().unwrap() =
                     Some((held, ctx.user_content().clone(), ctx.run_config().clone()));
+                // The resumed call is answered, as `LlmAgent` answers it.
+                let mut answered = Event::new(ctx.invocation_id());
+                answered.author = "holder".to_string();
+                answered.llm_response.content = Some(Content {
+                    role: "function".to_string(),
+                    parts: vec![Part::FunctionResponse {
+                        function_response: adk_core::FunctionResponseData::new(
+                            "delete_file",
+                            json!({"deleted": true}),
+                        ),
+                        id: Some("inner-1".to_string()),
+                        annotations: None,
+                    }],
+                });
                 let mut done = Event::new(ctx.invocation_id());
                 done.author = "holder".to_string();
                 done.llm_response.content = Some(Content::new("model").with_text("deleted"));
-                return Ok(Box::pin(futures::stream::iter([Ok(done)])));
+                return Ok(Box::pin(futures::stream::iter([Ok(answered), Ok(done)])));
             }
             let args = json!({"path": "a.txt"});
             let mut issued = Event::new(ctx.invocation_id());
@@ -2890,5 +2984,122 @@ mod tests {
             config.tool_confirmation_fingerprints.get("inner-1"),
             Some(&surfaced.fingerprint())
         );
+    }
+
+    /// Holds two calls in one turn, as a model that issues both at once does.
+    struct DoubleHoldingAgent;
+
+    #[async_trait]
+    impl Agent for DoubleHoldingAgent {
+        fn name(&self) -> &str {
+            "holder"
+        }
+        fn description(&self) -> &str {
+            "holds two calls for confirmation"
+        }
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+        async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<adk_core::EventStream> {
+            let event = |content: Content| {
+                let mut event = Event::new(ctx.invocation_id());
+                event.author = "holder".to_string();
+                event.llm_response.content = Some(content);
+                event
+            };
+            let files = [("inner-1", "a.txt"), ("inner-2", "b.txt")];
+            let issued = event(Content {
+                role: "model".to_string(),
+                parts: files
+                    .iter()
+                    .map(|(id, file)| Part::FunctionCall {
+                        name: "delete_file".to_string(),
+                        args: json!({ "path": file }),
+                        id: Some((*id).to_string()),
+                        thought_signature: None,
+                    })
+                    .collect(),
+            });
+            let pending = event(Content {
+                role: "function".to_string(),
+                parts: files
+                    .iter()
+                    .map(|(id, _)| Part::FunctionResponse {
+                        function_response: adk_core::FunctionResponseData::new(
+                            "delete_file",
+                            adk_core::confirmation_pending_response("held"),
+                        ),
+                        id: Some((*id).to_string()),
+                        annotations: None,
+                    })
+                    .collect(),
+            });
+            let mut events = vec![Ok(issued), Ok(pending)];
+            for (id, file) in files {
+                let mut hold = event(Content::new("model").with_text("confirmation required"));
+                hold.actions.tool_confirmation = Some(
+                    ToolConfirmationRequest::new("delete_file", json!({ "path": file }))
+                        .with_function_call_id(id)
+                        .with_acting_context(ctx.acting_context()),
+                );
+                events.push(Ok(hold));
+            }
+            Ok(Box::pin(futures::stream::iter(events)))
+        }
+    }
+
+    #[tokio::test]
+    async fn every_call_a_delegate_holds_is_surfaced_under_the_callers_call() {
+        let tool = AgentTool::new(Arc::new(DoubleHoldingAgent));
+        let ctx = Arc::new(TestToolContext::new());
+
+        let response = tool.execute(ctx.clone(), json!({"request": "delete both"})).await.unwrap();
+
+        assert!(adk_core::is_confirmation_pending(&response), "{response}");
+        let emitted = ctx.emitted_events.lock().unwrap().clone();
+        assert_eq!(emitted.len(), 1, "the earlier request is surfaced before the last");
+        assert_eq!(emitted[0].author, "parent-agent");
+        assert_eq!(emitted[0].invocation_id, "parent-invocation");
+        let mut surfaced: Vec<ToolConfirmationRequest> =
+            emitted.iter().filter_map(|event| event.actions.tool_confirmation.clone()).collect();
+        surfaced.extend(ctx.actions().tool_confirmation);
+        let shown: Vec<_> = surfaced
+            .iter()
+            .map(|request| (request.args.clone(), request.function_call_id.as_deref()))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                (json!({"path": "a.txt"}), Some("call-1")),
+                (json!({"path": "b.txt"}), Some("call-1")),
+            ]
+        );
+        let record = ctx
+            .actions()
+            .state_delta
+            .into_iter()
+            .find(|(key, _)| key.starts_with(HELD_DELEGATION_STATE_PREFIX))
+            .map(|(_, record)| serde_json::from_value::<HeldDelegation>(record).unwrap())
+            .expect("the held delegation is recorded");
+        assert_eq!(record.request.function_call_id.as_deref(), Some("inner-1"));
+        assert_eq!(record.more.len(), 1);
+        assert_eq!(record.more[0].function_call_id.as_deref(), Some("inner-2"));
+    }
+
+    #[test]
+    fn a_record_without_further_requests_still_reads() {
+        let request = ToolConfirmationRequest::new("delete_file", json!({"path": "a.txt"}))
+            .with_function_call_id("inner-1");
+        let written = json!({
+            "call": "fingerprint",
+            "agent": "holder",
+            "request": request,
+            "state": {},
+            "history": [],
+            "userContent": Content::new("user").with_text("delete a.txt"),
+            "events": [],
+        });
+        let record: HeldDelegation = serde_json::from_value(written).unwrap();
+        assert!(record.more.is_empty());
     }
 }
