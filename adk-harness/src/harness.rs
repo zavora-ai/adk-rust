@@ -110,6 +110,8 @@ impl Harness {
             .agent(agent.clone())
             .session_service(sessions.clone());
         let runner = agent.configure_runner(builder).build()?;
+        #[cfg(feature = "memory")]
+        attach_facts(&agent, &runner, &sessions, &app_name);
         Ok(Self { runner: Arc::new(runner), agent, sessions, app_name, run_store: None })
     }
 
@@ -139,6 +141,8 @@ impl Harness {
         }
         let sessions = runner.session_service().clone();
         let app_name = runner.app_name().to_string();
+        #[cfg(feature = "memory")]
+        attach_facts(&agent, &runner, &sessions, &app_name);
         Ok(Self { runner: Arc::new(runner), agent, sessions, app_name, run_store: None })
     }
 
@@ -934,6 +938,124 @@ impl Harness {
 
     /// Closes the runner and the agent's toolsets.
     pub async fn close(&self) {
+        // Sessions with turns not yet distilled are distilled first (spec 3.1 §7.15.2).
+        #[cfg(feature = "memory")]
+        if let Some(facts) = self.agent.runtime().toolset().facts() {
+            facts.close().await;
+        }
         self.runner.close().await;
+    }
+
+    #[cfg(feature = "memory")]
+    fn facts_runtime(&self) -> Result<&Arc<crate::facts::runtime::FactsRuntime>> {
+        self.agent.runtime().toolset().facts().ok_or_else(|| {
+            AdkError::config(
+                "long-term memory is off for this harness; turn it on with \
+                 HarnessAgentBuilder::long_term_memory",
+            )
+        })
+    }
+
+    /// The long-term facts of `user` in this harness's project, with the user's
+    /// preferences, newest first and in every status (spec 3.1 §7.15.2).
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when long-term memory is off, or the store's error.
+    #[cfg(feature = "memory")]
+    pub async fn facts(&self, user: &UserId) -> Result<Vec<crate::facts::MemoryFact>> {
+        let facts = self.facts_runtime()?;
+        let scope = facts.scope(&self.app_name, user.as_ref());
+        let filter = crate::facts::FactFilter {
+            live_only: false,
+            ..crate::facts::FactFilter::recall(&scope)
+        };
+        facts.store.list(filter).await
+    }
+
+    /// Promotes `user`'s assumed fact `id` to `Known`, source `UserConfirmed`: a person's
+    /// confirmation (spec 3.1 §7.15.2, §9.2 I41). Records `harness.memory.fact.promoted`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.memory.fact_not_found` for a fact that is not the user's in this
+    /// project, `harness.memory.fact_not_live` for a superseded or forgotten one, or the
+    /// store's or audit trail's error.
+    #[cfg(feature = "memory")]
+    pub async fn accept_fact(&self, user: &UserId, id: &str) -> Result<crate::facts::MemoryFact> {
+        let facts = self.facts_runtime()?;
+        let fact = facts.owned(&self.app_name, user.as_ref(), id).await?;
+        if fact.status != crate::facts::FactStatus::Known {
+            let by = SubjectRef::human(user.to_string());
+            facts
+                .change_status(
+                    facts.audit_as(by.clone(), "").as_ref(),
+                    &fact,
+                    crate::facts::FactStatus::Known,
+                    &by,
+                )
+                .await?;
+        }
+        facts.owned(&self.app_name, user.as_ref(), id).await
+    }
+
+    /// Forgets `user`'s fact `id`: it is marked `Forgotten` at once, dropped from the index,
+    /// and never recalled from the next model call on (spec 3.1 §9.2 I44). Records
+    /// `harness.memory.fact.forgotten`.
+    ///
+    /// # Errors
+    ///
+    /// As [`accept_fact`](Self::accept_fact).
+    #[cfg(feature = "memory")]
+    pub async fn forget_fact(&self, user: &UserId, id: &str) -> Result<()> {
+        let facts = self.facts_runtime()?;
+        let fact = facts.owned(&self.app_name, user.as_ref(), id).await?;
+        let by = SubjectRef::human(user.to_string());
+        facts
+            .change_status(
+                facts.audit_as(by.clone(), "").as_ref(),
+                &fact,
+                crate::facts::FactStatus::Forgotten,
+                &by,
+            )
+            .await
+    }
+
+    /// Replaces `user`'s fact `id` with `text`, a person's correction: the new fact is
+    /// `Known` with source `UserConfirmed`, and the old one `Superseded` by it, its history
+    /// kept (spec 3.1 §7.15.2).
+    ///
+    /// # Errors
+    ///
+    /// As [`accept_fact`](Self::accept_fact), and `harness.memory.rejected` for a text that
+    /// is empty, too long or holds a secret.
+    #[cfg(feature = "memory")]
+    pub async fn correct_fact(
+        &self,
+        user: &UserId,
+        id: &str,
+        text: impl Into<String>,
+    ) -> Result<crate::facts::MemoryFact> {
+        let facts = self.facts_runtime()?;
+        let fact = facts.owned(&self.app_name, user.as_ref(), id).await?;
+        facts.correct(&SubjectRef::human(user.to_string()), &fact, &text.into()).await
+    }
+}
+
+/// Lets the agent's long-term memory distil the runner's sessions (spec 3.1 §7.15.2).
+#[cfg(feature = "memory")]
+fn attach_facts(
+    agent: &HarnessAgent,
+    runner: &Runner,
+    sessions: &Arc<dyn SessionService>,
+    app_name: &str,
+) {
+    if let Some(facts) = agent.runtime().toolset().facts() {
+        facts.attach(
+            sessions.clone(),
+            app_name.to_string(),
+            runner.governance().clone(),
+            runner.audit_trail().cloned(),
+        );
     }
 }

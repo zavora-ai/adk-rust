@@ -11,9 +11,10 @@ description = "Scripted and live scenarios for the adk-harness HarnessAgent (spe
 adk-core = { path = "../../adk-core" }
 adk-agent = { path = "../../adk-agent", features = ["coding"] }
 adk-devtools = { path = "../../adk-devtools" }
-adk-harness = { path = "../../adk-harness", default-features = false, features = ["runner", "skills", "sandbox", "team", "team-acp", "graph", "sqlite"] }
+adk-harness = { path = "../../adk-harness", default-features = false, features = ["runner", "skills", "sandbox", "memory", "team", "team-acp", "graph", "sqlite"] }
 adk-graph = { path = "../../adk-graph", features = ["sqlite"] }
 adk-server = { path = "../../adk-server", features = ["background"] }
+adk-memory = { path = "../../adk-memory", features = ["embedding-trait"] }
 adk-model = { path = "../../adk-model", features = ["gemini", "openai", "anthropic"] }
 adk-runner = { path = "../../adk-runner" }
 adk-session = { path = "../../adk-session", features = ["sqlite"] }

@@ -166,6 +166,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-guardrail"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "async-trait",
+ "futures",
+ "jsonschema",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "adk-harness"
 version = "3.0.0"
 dependencies = [
@@ -174,6 +189,8 @@ dependencies = [
  "adk-core",
  "adk-devtools",
  "adk-graph",
+ "adk-guardrail",
+ "adk-memory",
  "adk-runner",
  "adk-sandbox",
  "adk-session",
@@ -184,6 +201,7 @@ dependencies = [
  "chrono",
  "dirs",
  "futures",
+ "regex",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -192,6 +210,18 @@ dependencies = [
  "tracing",
  "unicode-normalization",
  "uuid",
+]
+
+[[package]]
+name = "adk-memory"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -1680,6 +1710,7 @@ dependencies = [
  "adk-devtools",
  "adk-graph",
  "adk-harness",
+ "adk-memory",
  "adk-model",
  "adk-runner",
  "adk-server",

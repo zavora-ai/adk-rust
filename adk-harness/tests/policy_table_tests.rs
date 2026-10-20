@@ -31,7 +31,7 @@ fn label(decision: TableDecision) -> &'static str {
 #[test]
 fn the_mode_table_is_the_spec_table() {
     let off = PolicySwitches::default();
-    let expected: [(TableRow, [&str; 4]); 12] = [
+    let expected: [(TableRow, [&str; 4]); 13] = [
         (TableRow::ReadTodoDelegate, [A, A, A, A]),
         (TableRow::PlanExit, [D, N, D, D]),
         (TableRow::Edit, [D, D, R, A]),
@@ -41,6 +41,7 @@ fn the_mode_table_is_the_spec_table() {
         (TableRow::ShellHost, [D, D, R, R]),
         (TableRow::ShellEscalation, [D, D, N, N]),
         (TableRow::MemoryWrite, [D, D, N, N]),
+        (TableRow::MemoryPropose, [D, D, A, A]),
         (TableRow::Payment, [D, D, N, N]),
         (TableRow::ExternalReadOnlyTrusted, [A, A, A, A]),
         (TableRow::ExternalOther, [D, D, R, R]),

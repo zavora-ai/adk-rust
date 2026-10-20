@@ -26,11 +26,12 @@ agent tool — and the harness refuses to run without it.
 | Skills | Progressive disclosure (`list_skills`, `load_skill`, `load_skill_resource`) without convention documents |
 | Observability | `harness.run` and `harness.decide` spans with `harness.mode`, `harness.tool_kind`, `harness.isolation`, `harness.rule_id`, `harness.member`; spend metered per acting agent and subject (`Harness::spend`, `harness.spend`); `LoopGuard` tightens a looping session to ReadOnly and ends the turn; an `adk-eval` suite with a `BaselineStore` baseline |
 | Identity | `RbacMap` permissions per tool class through `ScopeGuard`/`ProtectedTool`; per-call, subject-scoped shell credentials through a `CredentialBroker` and a credential helper revoked after the call; `require_authenticated_identity` for served harnesses; every run audited in Block mode, to a signed `AuditLog` (`EphemeralAuditLog` by default) |
-| File memory | `FileMemory` topic files and a derived `MEMORY.md` per user, outside the workspace; `memory_read`, and `memory_write`/`memory_delete` behind a one-time approval; the index last in the instruction |
+| Working notes | `FileMemory` topic files and a derived `MEMORY.md` per user, outside the workspace; `memory_read`, and `memory_write`/`memory_delete` behind a one-time approval; the index last in the instruction |
 | Team | Members (`explore` and `general` by default, local `LlmAgent`s, ACP-compatible coding agents, remote A2A agents, any `Agent`, or discovered in a `TeamAgentRegistry`) lowered to one `TeamSpec`: isolated context, a timeout and circuit breaker on every edge, delegation depth 1, the team budget, the parent's mode and policy; ACP permission requests decided on the governed path; `harness.member.*` records |
 | Plan graph | An approved plan with `steps` runs as a checkpointed graph: one node per step, `interrupt_before` on `approve` gates (a held `plan_step_gate` call bound to the plan hash and step), a reviewer after `review` gates, rewind through `TimeTravelHandle::fork_at` |
 | Goals | `Harness::start_goal` iterates until the operator's `until` command passes (`LoopAgent` or a checkpointed graph); goal state in a `GoalStore`; durable goals as `harness.goal` runs for a `DurableWorker`; ambient goals on cron, file-watch and webhook triggers |
 | Durability | A completed call never runs twice after a crash (the turn after one answers it from the action ledger), held approvals survive process loss, resumed runs follow the current mode |
+| Long-term facts | `MemoryFact`s with provenance in a `FactStore` (in-memory, file, SQLite), found by a `FactIndex` (`LocalFactIndex` by embedding or shared words, `MemoryServiceIndex` over any `adk-memory` backend) and recalled into a `<memory-facts>` block on each user turn; written by `memory_remember` (assumed only), by distilling a session on a cheaper model, and by a person; `Known` only from the user's own quoted words or a person's confirmation; redacted before storage; `Harness::{facts, accept_fact, forget_fact, correct_fact}` |
 
 ## Mode table
 
@@ -43,6 +44,8 @@ agent tool — and the harness refuses to run without it.
 | Sandboxed shell | Deny | Allow, read-only workspace (active enforcer only) | Approval (Allow with `auto_allow_sandboxed`) | Allow when protected paths hold; Approval otherwise |
 | Host shell (also a degraded sandbox) | Deny | Deny | Approval | Approval (Allow with `allow_host_shell_in_auto`) |
 | Unsandboxed retry | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
+| Memory write (`memory_write`, `memory_delete`) | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
+| Fact proposal (`memory_remember`, assumed facts only) | Deny | Deny | Allow | Allow |
 | External tool, read-only, trusted origin | Allow | Allow | Allow | Allow |
 | Any other external tool | Deny | Deny | Approval | Approval |
 
@@ -100,7 +103,8 @@ walk through the spec 3.1 §5 capabilities on one provider each, scripted or liv
 | `sandbox` | on | `adk-sandbox/sandbox-native` |
 | `observe` | on | `adk-telemetry`, `adk-eval` |
 | `auth` | on | `adk-auth` |
-| `memory` | on | file memory |
+| `memory` | on | working notes and long-term facts (`adk-memory`, `adk-guardrail`) |
+| `memory-embeddings` | off | `RagEmbedder`: `adk-rag`'s OpenAI and Gemini embedders for long-term facts |
 | `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores |
 | `ambient` | off | `adk-agent/ambient`: goals started by triggers |
 | `skills-registry`, `team-acp`, `team-a2a`, `docker`, `memory-graph` | off | registry skills, ACP and A2A members, containers, graph memory |
