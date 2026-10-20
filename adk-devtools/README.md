@@ -9,11 +9,11 @@ to work on a codebase, scoped to a sandboxed workspace.
 
 | Tool | Purpose |
 |------|---------|
-| `read_file` | Read a text file with line numbers (optional offset/limit). |
+| `read_file` | Read a text file with line numbers (optional offset/limit). Refuses excluded secret files. |
 | `write_file` | Create or overwrite a file (creates parent dirs). |
-| `edit_file` | Exact-string replacement; requires a prior `read_file`. |
-| `glob` | List files matching a pattern (e.g. `src/**/*.rs`). |
-| `grep` | Regex content search across the tree. |
+| `edit_file` | Exact-string replacement; requires a prior `read_file` by the same session and agent. |
+| `glob` | List files matching a pattern (e.g. `src/**/*.rs`). Skips excluded secret files. |
+| `grep` | Regex content search across the tree. Skips excluded secret files. |
 | `bash` | Run a shell command in the workspace root, with a timeout. Opt-in. Streams stdout/stderr line-by-line via `ToolContext::emit_progress`. |
 
 All operations are rooted at a `Workspace` and rejected if they escape it.
@@ -71,7 +71,10 @@ The toolset only exposes tools the workspace permits: a read-only workspace hide
 | `bash` | Off | `allow_bash` |
 | `bash` timeout | 120 s; a call's `timeout_secs` can shorten it but not extend it | `bash_timeout` |
 | `bash` environment | Cleared, then `DEFAULT_ENV_ALLOWLIST` (`PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `TERM`, `USER`, `SHELL`) | `env_allowlist`, `inherit_env` |
+| `bash` background processes | Killed when the shell exits | `bash_kill_group_on_exit` |
 | Output per stream | 1 MiB | `max_output_bytes` |
+| Secret files | `DEFAULT_EXCLUDE_GLOBS` (`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`) skipped by `grep`/`glob`, refused by `read_file`; `exclude_globs([])` turns exclusion off | `exclude_globs` |
+| Read-before-edit record | Per session and agent; clones of a workspace keep sessions apart | — |
 
 Containment is checked against resolved paths: a symlink pointing outside the root is refused,
 a dangling or looping symlink is refused wherever it points (a write would create its target),
@@ -80,11 +83,67 @@ leads outside. Writing a file with more than one hard link replaces it, keeping 
 instead of truncating it, so a link outside the workspace keeps its contents. A timed-out or
 cancelled `bash` call kills the command's whole process group.
 
+Exclusion patterns match, ignoring case, the path relative to the root or any one of its
+components, so `.env` also covers `config/.env`; `read_file` checks the path a symlink resolves
+to as well. A refused read is an error with category `Forbidden` and code
+`devtools.path_excluded`, so a harness can ask for approval and read the file through a workspace
+that does not exclude it.
+
 `bash` runs host-local (`sh -c`, cwd pinned to the root); it is not isolated, and a command can
 reach absolute paths and the network. The environment is cleared so a command cannot read
 provider API keys from the agent process with `env`; adding a credential to the allowlist, or
-`inherit_env(true)`, exposes it again. For strong isolation, run commands through a containerized
-`adk-code` executor or an `adk-sandbox` backend. The policy vocabulary aligns with `adk-code`'s
+`inherit_env(true)`, exposes it again. Standard input is `/dev/null`, and the command starts in a
+new session with no controlling terminal, leading its own process group. When the shell exits,
+the rest of the group is killed, so `sleep 300 &` or a server started in the background does not
+outlive the call; a process that starts its own session or group escapes this. Pass
+`bash_kill_group_on_exit(false)` to let background processes keep running.
+
+### Command launchers
+
+`BashTool::with_launcher` replaces how the process is built. A `CommandLauncher` returns the
+`tokio::process::Command` for a script — program, arguments, working directory and
+environment — and names its isolation; the tool keeps the timeout ceiling, output cap,
+streaming, standard input, session and group kill. `HostLauncher` (`sh -c`, the default)
+reproduces the built-in behaviour. A sandboxing launcher can wrap the script with an
+`adk-sandbox` enforcer.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::ToolContext;
+use adk_devtools::{BashTool, CommandLauncher, DevToolError, Workspace};
+
+/// Runs every script under `nice`, otherwise as the host launcher does.
+struct NiceLauncher;
+
+impl CommandLauncher for NiceLauncher {
+    fn command(
+        &self,
+        ws: &Workspace,
+        script: &str,
+        _ctx: &dyn ToolContext,
+    ) -> Result<tokio::process::Command, DevToolError> {
+        let mut cmd = tokio::process::Command::new("nice");
+        cmd.args(["sh", "-c", script]).current_dir(ws.root());
+        if !ws.inherits_env() {
+            cmd.env_clear().envs(ws.bash_env());
+        }
+        Ok(cmd)
+    }
+
+    fn isolation(&self) -> &str {
+        "host-nice"
+    }
+}
+
+fn bash_tool() -> BashTool {
+    let workspace = Workspace::new("./my-repo").allow_bash(true);
+    BashTool::new(workspace).with_launcher(Arc::new(NiceLauncher))
+}
+```
+
+For strong isolation, run commands through a sandboxing launcher, a containerized `adk-code`
+executor or an `adk-sandbox` backend. The policy vocabulary aligns with `adk-code`'s
 `SandboxPolicy`.
 
 See [`docs/design/coding-agent.md`](https://github.com/zavora-ai/adk-rust/blob/main/docs/design/coding-agent.md)

@@ -35,6 +35,18 @@ pub enum DevToolError {
         count: usize,
     },
 
+    /// The path matches one of the workspace's exclusion patterns, which by default
+    /// name secret files such as `.env` and private keys.
+    ///
+    /// Maps to an [`AdkError`](adk_core::AdkError) with category `Forbidden` and code
+    /// `devtools.path_excluded`, so a caller can ask for approval and read the file
+    /// through a workspace that does not exclude it. Implements spec 3.1 §10 D5.
+    #[error(
+        "'{0}' matches an excluded pattern (secret files such as .env and private keys are \
+         not read by default); ask the operator to approve reading it"
+    )]
+    Excluded(String),
+
     /// A bash command exceeded its timeout.
     #[error("command timed out after {0:?}")]
     Timeout(std::time::Duration),
@@ -50,6 +62,22 @@ pub enum DevToolError {
 
 impl From<DevToolError> for adk_core::AdkError {
     fn from(e: DevToolError) -> Self {
-        adk_core::AdkError::tool(e.to_string())
+        match e {
+            DevToolError::Excluded(_) => adk_core::AdkError::new(
+                adk_core::ErrorComponent::Tool,
+                adk_core::ErrorCategory::Forbidden,
+                "devtools.path_excluded",
+                e.to_string(),
+            ),
+            DevToolError::PathEscape(_)
+            | DevToolError::ReadOnly(_)
+            | DevToolError::BashDisabled
+            | DevToolError::NotRead(_)
+            | DevToolError::NoMatch(_)
+            | DevToolError::Ambiguous { .. }
+            | DevToolError::Timeout(_)
+            | DevToolError::Io(_)
+            | DevToolError::Other(_) => adk_core::AdkError::tool(e.to_string()),
+        }
     }
 }

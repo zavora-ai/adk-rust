@@ -18,13 +18,20 @@ any `LlmAgent` (the [`CodingAgent`](harness.md) harness wires it for you).
 | `grep` | `pattern`, `path?`, `glob?`, `case_insensitive?` | Regex content search |
 | `bash` | `command`, `timeout_secs?` | Run a shell command in the workspace root |
 
-Two safety behaviors worth knowing:
+Three safety behaviors worth knowing:
 
-- **`edit_file` requires a prior `read_file`** of that file in the session, and
-  by default the target string must occur **exactly once** (`replace_all` to
-  override). This guards against blind overwrites.
+- **`edit_file` requires a prior `read_file`** of that file by the same session
+  and agent, and by default the target string must occur **exactly once**
+  (`replace_all` to override). This guards against blind overwrites. The record of
+  reads is kept per (app, user, session, agent), taken from the tool call's
+  context, so clones of one `Workspace` shared by several sessions or team members
+  keep their reads apart; at most 1,024 records are kept, least recently used
+  first out. Calls whose context names no session share one record.
 - **`grep`** skips common build/VCS dirs (`target`, `.git`, `node_modules`, …)
   and binary/oversized files.
+- **Secret files are excluded.** `grep` and `glob` skip files matching the
+  workspace's exclusion patterns and `read_file` refuses them (see
+  [Secret files](#secret-files)).
 
 The `bash` tool **streams** its stdout/stderr line-by-line via
 `ToolContext::emit_progress` as the command runs, so UIs can show a live
@@ -47,7 +54,9 @@ let ws = Workspace::read_only("./my-repo");        // explore/plan: no writes, n
 let ws = Workspace::new("./my-repo")
     .allow_bash(true)                               // opt in to the shell
     .bash_timeout(Duration::from_secs(60))          // a call may ask for less, not more
-    .max_output_bytes(512 * 1024);
+    .max_output_bytes(512 * 1024)
+    .exclude_globs([".env".to_string(), "secrets/**".to_string()]) // replace the secret patterns
+    .bash_kill_group_on_exit(true);                 // default: no background survivors
 ```
 
 - **Path containment** — any path that resolves outside the root is rejected, so
@@ -91,6 +100,32 @@ let ws = Workspace::new("./my-repo")
   read; output past the cap is drained and discarded, so the command still runs to
   completion and reports its exit code, and the result sets `truncated: true`. The
   cut falls on a UTF-8 character boundary.
+- **`bash` leaves nothing behind** — the command's standard input is `/dev/null`, so
+  `read` sees end of file instead of the agent's terminal, and it starts in a new
+  session (`setsid`) with no controlling terminal, leading its own process group.
+  When the shell exits, the rest of the group is killed: `sleep 300 &` or a dev
+  server started in the background does not outlive the call, and the call does not
+  wait for it to close its output. A process that starts its own session or group
+  escapes the kill. `Workspace::bash_kill_group_on_exit(false)` lets background
+  processes keep running; a timeout or a cancelled call still kills the group.
+
+### Secret files
+
+A new workspace excludes `DEFAULT_EXCLUDE_GLOBS`: `.env`, `.env.*`, `*.pem`,
+`*.key`, `id_rsa*`, `id_ed25519*`, `*.p12` and `*.pfx`.
+
+| Tool | Behaviour on an excluded file |
+|------|-------------------------------|
+| `grep` | Skipped, including when named as the search path; an excluded directory is not descended |
+| `glob` | Not listed |
+| `read_file` | Refused with `DevToolError::Excluded` — an `AdkError` with category `Forbidden` and code `devtools.path_excluded` |
+
+A pattern matches, ignoring case, the path relative to the root or any one of its
+components, so `.env` also covers `config/.env` and `.ENV`. `read_file` checks the
+path a symlink resolves to as well, so a link named `settings.txt` pointing at
+`.env` is refused. `Workspace::exclude_globs` replaces the list and
+`exclude_globs([])` turns exclusion off; `Workspace::is_excluded` answers the same
+question for a path, so a harness can require approval before reading one.
 
 ## Using it directly
 
@@ -120,8 +155,55 @@ timeout and a cleared environment, and only when the workspace allows it
 |----------|--------------|
 | File tools cannot resolve outside the root, including through symlinks | `bash` can still use absolute paths — the working directory is not an OS boundary |
 | The command cannot read the agent's environment variables | The command can reach the network |
-| A timeout or a cancelled call kills the command and its descendants | Nothing limits the command's own memory or CPU |
-| Captured output is capped per stream as it is read | |
+| A timeout, a cancelled call or the shell's exit kills the command's process group | A descendant that calls `setsid` or `setpgid` leaves the group and survives |
+| The command has no controlling terminal and reads `/dev/null` | Nothing limits the command's own memory or CPU |
+| Captured output is capped per stream as it is read | `bash` can read excluded secret files; exclusion applies to the file tools |
+
+### Command launchers
+
+`BashTool::with_launcher` replaces how the process is built while the tool keeps
+the timeout ceiling, output cap, streaming, standard input, session and group
+kill. A `CommandLauncher` returns the `tokio::process::Command` for a script and
+names its isolation; `HostLauncher` (`sh -c` in the root, the workspace
+environment) is the default.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::ToolContext;
+use adk_devtools::{BashTool, CommandLauncher, DevToolError, Workspace};
+
+/// Runs every script under `nice`, otherwise as the host launcher does.
+struct NiceLauncher;
+
+impl CommandLauncher for NiceLauncher {
+    fn command(
+        &self,
+        ws: &Workspace,
+        script: &str,
+        _ctx: &dyn ToolContext,
+    ) -> Result<tokio::process::Command, DevToolError> {
+        let mut cmd = tokio::process::Command::new("nice");
+        cmd.args(["sh", "-c", script]).current_dir(ws.root());
+        if !ws.inherits_env() {
+            cmd.env_clear().envs(ws.bash_env());
+        }
+        Ok(cmd)
+    }
+
+    fn isolation(&self) -> &str {
+        "host-nice"
+    }
+}
+
+fn bash_tool() -> BashTool {
+    let workspace = Workspace::new("./my-repo").allow_bash(true);
+    BashTool::new(workspace).with_launcher(Arc::new(NiceLauncher))
+}
+```
+
+The launcher must not set a process group or session on the command: the tool
+starts it with `setsid`, which fails for a process that already leads a group.
 
 So it is path-contained, environment-isolated, and bounded, but **not** OS-isolated. The policy vocabulary aligns with `adk-code`'s `SandboxPolicy`; for
 strong isolation, run `bash` behind a containerized executor (see the
