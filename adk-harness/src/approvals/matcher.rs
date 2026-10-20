@@ -433,6 +433,80 @@ pub fn is_protected_path(path: &str) -> bool {
         .any(|pair| pair[0] == ".cargo" && (pair[1] == "config.toml" || pair[1] == "config"))
 }
 
+/// Whether `raw`, resolved against `root`, is a protected path as written or at the
+/// target a write would reach (spec 3.1 §9.2 I11, I29).
+///
+/// The deepest existing ancestor of the lexically normalized path is canonicalized,
+/// which resolves every symlink on the way, and the components that do not exist yet are
+/// appended to it: that is the file a write creates or truncates. The path is protected
+/// when either spelling is. A path that cannot be resolved — a NUL, a dangling or
+/// looping symlink on the way, or a target outside the root — counts as protected.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::approvals::matcher::is_protected_target;
+///
+/// let dir = tempfile::tempdir().unwrap();
+/// let root = std::fs::canonicalize(dir.path()).unwrap();
+/// std::fs::create_dir(root.join("docs")).unwrap();
+/// # #[cfg(unix)]
+/// std::os::unix::fs::symlink("../AGENTS.md", root.join("docs/notes.md")).unwrap();
+/// std::fs::write(root.join("AGENTS.md"), "rules").unwrap();
+/// assert!(is_protected_target(&root, "AGENTS.md"));
+/// # #[cfg(unix)]
+/// assert!(is_protected_target(&root, "docs/notes.md"));
+/// assert!(!is_protected_target(&root, "docs/other.md"));
+/// ```
+pub fn is_protected_target(root: &Path, raw: &str) -> bool {
+    if raw.is_empty() || raw.contains('\0') {
+        return true;
+    }
+    let requested = Path::new(raw);
+    let joined =
+        if requested.is_absolute() { requested.to_path_buf() } else { root.join(requested) };
+    let mut normalized = PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::CurDir => {}
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    let Ok(relative) = normalized.strip_prefix(root) else {
+        return true;
+    };
+    if is_protected_path(&relative.to_string_lossy()) {
+        return true;
+    }
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let mut existing = normalized.as_path();
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::canonicalize(existing) {
+            Ok(canonical) => {
+                let target = missing.iter().rev().fold(canonical, |path, name| path.join(name));
+                return match target.strip_prefix(&canonical_root) {
+                    Ok(relative) => is_protected_path(&relative.to_string_lossy()),
+                    Err(_) => true,
+                };
+            }
+            // An entry that exists but does not canonicalize is a dangling or looping
+            // symlink: a write through it creates a target this check cannot see.
+            Err(_) if std::fs::symlink_metadata(existing).is_ok() => return true,
+            Err(_) => match (existing.parent(), existing.file_name()) {
+                (Some(parent), Some(name)) if parent.starts_with(root) => {
+                    missing.push(name.to_os_string());
+                    existing = parent;
+                }
+                _ => return false,
+            },
+        }
+    }
+}
+
 /// Lexically normalizes `path`: drops `.` components and repeated separators. `..` is
 /// kept so callers can refuse it.
 fn lexical(path: &Path) -> PathBuf {
@@ -471,7 +545,8 @@ fn contained_after_symlinks(root: &Path, path: &Path) -> bool {
 /// (spec 3.1 §7.5 `PathWithin`, §9.2 I11).
 ///
 /// Refuses any `..` component, a NUL, a path outside the root lexically or through a
-/// symlink, and every protected path.
+/// symlink, and every path that is protected as written or at the target it resolves to
+/// ([`is_protected_target`]).
 ///
 /// # Example
 ///
@@ -505,7 +580,7 @@ pub fn path_within(root: &Path, raw: &str, dir: &str) -> bool {
     if relative.components().any(|c| matches!(c, Component::ParentDir)) {
         return false;
     }
-    if is_protected_path(&relative.to_string_lossy()) {
+    if is_protected_path(&relative.to_string_lossy()) || is_protected_target(&root, raw) {
         return false;
     }
     if !contained_after_symlinks(&root, &normalized) {
@@ -562,6 +637,43 @@ mod tests {
         assert!(is_protected_path("sub/.SKILLS/x/SKILL.md"));
         assert!(is_protected_path(".cargo\\config"));
         assert!(!is_protected_path("docs/agents.md.bak"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_a_protected_path_is_protected_and_never_within_a_rule() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "rules").unwrap();
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        std::fs::write(root.join(".git/config"), "[core]").unwrap();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        symlink("../AGENTS.md", root.join("docs/notes.md")).unwrap();
+        symlink(".git/config", root.join("settings.ini")).unwrap();
+        symlink(".git", root.join("cfg")).unwrap();
+        symlink("../CLAUDE.md", root.join("docs/dangling.md")).unwrap();
+        symlink("loop.md", root.join("loop.md")).unwrap();
+        symlink("docs", root.join("alias")).unwrap();
+
+        for path in [
+            "docs/notes.md",
+            "settings.ini",
+            "cfg/hooks/pre-commit",
+            "cfg/new-dir/file",
+            "docs/dangling.md",
+            "loop.md",
+            "alias/notes.md",
+            "./docs/../docs/notes.md",
+        ] {
+            assert!(is_protected_target(&root, path), "{path}");
+            assert!(!path_within(&root, path, "."), "{path}");
+        }
+        for path in ["docs/other.md", "alias/other.md", "src/new/lib.rs"] {
+            assert!(!is_protected_target(&root, path), "{path}");
+            assert!(path_within(&root, path, "."), "{path}");
+        }
+        assert!(is_protected_target(&root, "/etc/passwd"));
     }
 
     #[test]

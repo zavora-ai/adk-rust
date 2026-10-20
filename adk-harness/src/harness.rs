@@ -463,11 +463,9 @@ impl Harness {
                 false,
             );
             let protected = kind == ToolKind::Edit
-                && request
-                    .args
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .is_none_or(crate::approvals::matcher::is_protected_path);
+                && request.args.get("path").and_then(Value::as_str).is_none_or(|path| {
+                    crate::approvals::matcher::is_protected_target(runtime.workspace().root(), path)
+                });
             if !kind.rule_eligible() || TableRow::of(&kind, protected).is_non_waivable() {
                 return Err(store_error("no standing rule applies to this call; decide it once"));
             }

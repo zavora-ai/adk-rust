@@ -16,7 +16,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::approvals::StandingRuleStore;
-use crate::approvals::matcher::is_protected_path;
+use crate::approvals::matcher::is_protected_target;
 use crate::audit::HarnessAudit;
 use crate::instructions::{ProjectInstructions, WorkspaceTrustStore};
 use crate::mode::{HarnessMode, ModeStore};
@@ -252,8 +252,13 @@ pub struct HarnessLayer<'a> {
 }
 
 /// Whether the `tool_approvals` key `fingerprint` names a call no fingerprint approval may
-/// authorize (spec 3.1 §7.3, §9.2 I7). Anything that does not parse is removed too.
-pub(crate) fn names_non_waivable(fingerprint: &str, non_waivable: &BTreeSet<String>) -> bool {
+/// authorize (spec 3.1 §7.3, §9.2 I7). Anything that does not parse is removed too. An
+/// edit's path is judged at the target it resolves to under `root` (I11, I29).
+pub(crate) fn names_non_waivable(
+    fingerprint: &str,
+    non_waivable: &BTreeSet<String>,
+    root: &std::path::Path,
+) -> bool {
     let parts: Vec<&str> = fingerprint.splitn(5, '\u{1f}').collect();
     if parts.iter().any(|part| non_waivable.contains(*part)) {
         return true;
@@ -266,9 +271,10 @@ pub(crate) fn names_non_waivable(fingerprint: &str, non_waivable: &BTreeSet<Stri
     };
     match *tool {
         "bash" => args.get("unsandboxed").is_some_and(|value| *value != Value::Bool(false)),
-        "write_file" | "edit_file" => {
-            args.get("path").and_then(Value::as_str).is_none_or(is_protected_path)
-        }
+        "write_file" | "edit_file" => args
+            .get("path")
+            .and_then(Value::as_str)
+            .is_none_or(|path| is_protected_target(root, path)),
         _ => false,
     }
 }
@@ -324,9 +330,9 @@ impl HarnessLayer<'_> {
         }
 
         let before = config.tool_approvals.len();
-        config
-            .tool_approvals
-            .retain(|fingerprint, _| !names_non_waivable(fingerprint, &runtime.non_waivable_tools));
+        config.tool_approvals.retain(|fingerprint, _| {
+            !names_non_waivable(fingerprint, &runtime.non_waivable_tools, runtime.workspace.root())
+        });
         if config.tool_approvals.len() != before {
             tracing::warn!(
                 removed = before - config.tool_approvals.len(),
@@ -603,11 +609,31 @@ mod tests {
         let key = |tool: &str, args: &str| {
             format!("agent\u{1f}static\u{1f}sha256:x\u{1f}{tool}\u{1f}{args}")
         };
-        assert!(names_non_waivable(&key("exit_plan_mode", "{}"), &nw()));
-        assert!(names_non_waivable(&key("bash", r#"{"command":"ls","unsandboxed":true}"#), &nw()));
-        assert!(!names_non_waivable(&key("bash", r#"{"command":"ls"}"#), &nw()));
-        assert!(names_non_waivable(&key("write_file", r#"{"path":"AGENTS.md"}"#), &nw()));
-        assert!(!names_non_waivable(&key("write_file", r#"{"path":"src/a.rs"}"#), &nw()));
-        assert!(names_non_waivable("garbage", &nw()));
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let strip = |fingerprint: &str| names_non_waivable(fingerprint, &nw(), &root);
+        assert!(strip(&key("exit_plan_mode", "{}")));
+        assert!(strip(&key("bash", r#"{"command":"ls","unsandboxed":true}"#)));
+        assert!(!strip(&key("bash", r#"{"command":"ls"}"#)));
+        assert!(strip(&key("write_file", r#"{"path":"AGENTS.md"}"#)));
+        assert!(!strip(&key("write_file", r#"{"path":"src/a.rs"}"#)));
+        assert!(strip("garbage"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_approval_of_a_write_through_a_symlink_to_a_protected_file_is_stripped() {
+        let key =
+            |args: &str| format!("agent\u{1f}static\u{1f}sha256:x\u{1f}write_file\u{1f}{args}");
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "rules").unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        std::os::unix::fs::symlink("../AGENTS.md", root.join("docs/notes.md")).unwrap();
+        std::os::unix::fs::symlink(".git", root.join("cfg")).unwrap();
+        assert!(names_non_waivable(&key(r#"{"path":"docs/notes.md"}"#), &nw(), &root));
+        assert!(names_non_waivable(&key(r#"{"path":"cfg/hooks/pre-commit"}"#), &nw(), &root));
+        assert!(!names_non_waivable(&key(r#"{"path":"docs/other.md"}"#), &nw(), &root));
     }
 }

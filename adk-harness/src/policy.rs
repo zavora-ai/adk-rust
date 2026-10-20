@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use crate::approvals::StandingRuleStore;
 use crate::approvals::matcher::{
     RuleCall, RuleEvaluation, RuleOutcome, evaluate_standing_rules, is_protected_path,
+    is_protected_target,
 };
 use crate::audit::HarnessAudit;
 use crate::mode::{HarnessMode, ModeStore};
@@ -1018,20 +1019,11 @@ impl HarnessPolicy {
         let identity_inert = false;
         let mode =
             if identity_inert && mode == HarnessMode::Auto { HarnessMode::Ask } else { mode };
+        // Decided on the target the write reaches, so a symlink inside the workspace does not
+        // turn a protected file into an ordinary edit (I11, I29).
+        let path = request.args.get("path").and_then(Value::as_str);
         let protected = kind == ToolKind::Edit
-            && request.args.get("path").and_then(Value::as_str).is_some_and(|path| {
-                self.inner
-                    .workspace
-                    .resolve(path)
-                    .ok()
-                    .and_then(|resolved| {
-                        resolved
-                            .strip_prefix(self.inner.workspace.root())
-                            .ok()
-                            .map(|relative| is_protected_path(&relative.to_string_lossy()))
-                    })
-                    .unwrap_or(true)
-            });
+            && path.is_some_and(|path| is_protected_target(self.inner.workspace.root(), path));
         let row = TableRow::of(&kind, protected);
         let mut switches = self.inner.switches;
         // Unapproved sandboxed commands need every protected path in place at this call (I26).
@@ -1040,7 +1032,10 @@ impl HarnessPolicy {
                 crate::shell::protected_paths_hold(self.inner.workspace.root());
         }
         let base = decision_cell(mode, row).resolve(&switches);
-        let reason = describe(&request.tool_name, row, mode, base);
+        let mut reason = describe(&request.tool_name, row, mode, base);
+        if protected && path.is_some_and(|path| !is_protected_path(path)) {
+            reason.push_str(" (the path resolves through a symlink to a protected path)");
+        }
         if base == TableDecision::Deny {
             return deny(PolicyDecision::deny(reason), mode);
         }
