@@ -114,6 +114,7 @@ pub fn tool_kind_label(kind: &ToolKind) -> String {
         ToolKind::ShellEscalation => "shell_escalation".to_string(),
         ToolKind::Delegate => "delegate".to_string(),
         ToolKind::MemoryWrite => "memory_write".to_string(),
+        ToolKind::MemoryPropose => "memory_propose".to_string(),
         ToolKind::Payment => "payment".to_string(),
         ToolKind::External { effect, trusted_origin } => format!(
             "external:{}:{}",

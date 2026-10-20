@@ -309,6 +309,9 @@ dependencies = [
  "adk-devtools",
  "adk-eval",
  "adk-graph",
+ "adk-guardrail",
+ "adk-memory",
+ "adk-rag",
  "adk-runner",
  "adk-sandbox",
  "adk-session",
@@ -320,6 +323,7 @@ dependencies = [
  "chrono",
  "dirs",
  "futures",
+ "regex",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -400,6 +404,21 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "adk-rag"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "adk-gemini",
+ "async-trait",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror",
  "tokio",
  "tracing",
 ]

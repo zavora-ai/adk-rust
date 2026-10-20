@@ -368,6 +368,14 @@ impl HarnessLauncher {
         shared.turn(Some(text), self.echo).await
     }
 
+    /// Closes the harness after [`run_once`](Self::run_once) turns: a session with turns not
+    /// yet distilled is distilled into long-term memory first (spec 3.1 §7.15.2).
+    pub async fn close(&self) {
+        if let Some(shared) = &self.opened {
+            shared.harness().close().await;
+        }
+    }
+
     /// The todo list of the session [`run_once`](Self::run_once) works in (spec 3.1 §7.6);
     /// empty before the first turn.
     ///
@@ -442,6 +450,9 @@ impl HarnessLauncher {
             }
             println!();
             report(&shared.turn(Some(&trimmed), true).await?);
+        }
+        if memory_on(&shared.harness()) {
+            println!("Saving what this session taught to long-term memory…");
         }
         shared.harness().close().await;
         Ok(())
@@ -543,6 +554,11 @@ fn report(outcome: &TurnOutcome) {
     } else {
         println!("\n");
     }
+}
+
+/// Whether the harness keeps long-term facts (spec 3.1 §7.15.2).
+pub(crate) fn memory_on(harness: &Harness) -> bool {
+    harness.agent().info().tools.iter().any(|tool| tool == "memory_remember")
 }
 
 /// A `Harness` whose runner asks the agent's prompter and waits an hour for a person.
@@ -792,6 +808,9 @@ impl Shared {
         let members =
             if info.members.is_empty() { "none".to_string() } else { info.members.join(", ") };
         println!("  Members   : {}", terminal_safe(&members));
+        if memory_on(&harness) {
+            println!("  Memory    : long-term facts on (/memory)");
+        }
         println!("  Session   : {}", terminal_safe(self.session.as_ref()));
         for note in notes {
             println!("  Note      : {}", terminal_safe(note));

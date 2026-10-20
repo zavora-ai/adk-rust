@@ -676,6 +676,12 @@ impl HarnessAgent {
                 "the run's user is not the session's user",
             ));
         }
+        // Long-term memory reads the run's audit trail and budget, and counts user turns
+        // for distillation (spec 3.1 §7.15.2).
+        #[cfg(feature = "memory")]
+        if let Some(facts) = self.runtime.toolset.facts() {
+            facts.observe_invocation(ctx.as_ref());
+        }
         if let Some(trail) = config.audit.clone() {
             let state = &self.runtime.instructions;
             let trusted = state.trusted();

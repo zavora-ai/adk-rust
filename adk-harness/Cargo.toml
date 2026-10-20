@@ -40,8 +40,10 @@ docker = ["sandbox", "adk-sandbox/workspace-docker"]
 observe = ["dep:adk-telemetry", "dep:adk-eval"]
 # RBAC wrappers, credential broker and signed audit (spec 3.1 §7.14).
 auth = ["dep:adk-auth", "adk-auth/signed-audit"]
-# File-based memory (spec 3.1 §7.15).
-memory = []
+# Working notes and long-term facts (spec 3.1 §7.15); adk-memory for `MemoryServiceIndex`.
+memory = ["dep:adk-memory", "adk-memory/embedding-trait", "dep:adk-guardrail", "dep:regex"]
+# `RagEmbedder`: adk-rag's OpenAI and Gemini embedders for long-term facts (spec 3.1 §7.15.2).
+memory-embeddings = ["memory", "dep:adk-rag", "adk-rag/openai", "adk-rag/gemini"]
 # Graph memory tools from adk-memory.
 memory-graph = ["memory", "dep:adk-memory"]
 # SQLite backends for the mode, standing-rule and shell-ledger stores.
@@ -69,6 +71,8 @@ adk-telemetry = { workspace = true, optional = true }
 adk-eval = { workspace = true, optional = true }
 adk-auth = { workspace = true, optional = true }
 adk-memory = { workspace = true, optional = true }
+adk-guardrail = { workspace = true, optional = true }
+adk-rag = { workspace = true, optional = true }
 adk-browser = { workspace = true, optional = true }
 adk-computer-use = { workspace = true, optional = true }
 adk-payments = { workspace = true, optional = true }
@@ -79,6 +83,7 @@ async-trait.workspace = true
 chrono.workspace = true
 dirs = "7"
 futures.workspace = true
+regex = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -93,6 +98,9 @@ adk-model = { path = "../adk-model", default-features = false }
 # SQLite sessions, approvals and ledger, and the durable worker, for the durability tests.
 adk-session = { path = "../adk-session", features = ["sqlite"] }
 adk-server = { path = "../adk-server", features = ["background"] }
+# `MemoryServiceIndex` conformance over the SQLite FTS5 and PostgreSQL backends.
+adk-memory = { path = "../adk-memory", features = ["sqlite-memory", "database-memory"] }
+sqlx = { workspace = true, features = ["postgres", "sqlite"] }
 proptest = "1.5"
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }

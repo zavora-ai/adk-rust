@@ -205,6 +205,7 @@ fn kind_label(kind: &ToolKind) -> String {
         ToolKind::ShellEscalation => "unsandboxed retry".into(),
         ToolKind::Delegate => "delegation".into(),
         ToolKind::MemoryWrite => "memory write".into(),
+        ToolKind::MemoryPropose => "fact proposal".into(),
         ToolKind::Payment => "payment".into(),
         ToolKind::External { trusted_origin, .. } => {
             if *trusted_origin {

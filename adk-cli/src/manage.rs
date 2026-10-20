@@ -1,4 +1,4 @@
-//! `adk-rust sessions`, `rules` and `approvals` (spec 3.1 §8.1).
+//! `adk-rust sessions`, `rules`, `memory` and `approvals` (spec 3.1 §8.1, §7.15.2).
 
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::cli::{ApprovalsCommands, RulesCommands, SessionsCommands};
+use crate::cli::{ApprovalsCommands, MemoryCommands, RulesCommands, SessionsCommands};
 
 const APP_NAME: &str = "adk-rust";
 
@@ -126,6 +126,146 @@ async fn get(
         })
         .await
         .with_context(|| format!("no session {id}; `adk-rust sessions list` shows yours"))
+}
+
+/// `adk-rust memory …` (spec 3.1 §7.15.2, §10 L2).
+pub async fn memory(command: MemoryCommands) -> Result<()> {
+    use adk_harness::{
+        FactFilter, FactScope, FactSource, FactStatus, FactStore, MemoryFact, fact_digest,
+    };
+    let db = crate::sessions::open_harness_db().await?;
+    let user = crate::setup::os_user();
+    let store: Arc<dyn FactStore> = db.facts.clone();
+    let mine = || FactFilter::user(APP_NAME, user.clone());
+    let find = |facts: Vec<MemoryFact>, prefix: &str| -> Result<MemoryFact> {
+        let prefix = prefix.trim().to_ascii_uppercase();
+        let mut matches = facts.into_iter().filter(|fact| fact.id.starts_with(&prefix));
+        match (matches.next(), matches.next()) {
+            (Some(fact), None) => Ok(fact),
+            (None, _) => bail!("no fact {prefix}; `adk-rust memory list --all` shows yours"),
+            (Some(_), Some(_)) => bail!("{prefix} matches more than one fact; give more of the id"),
+        }
+    };
+    let by = adk_core::principal::SubjectRef::human(user.clone());
+    match command {
+        MemoryCommands::List { dir, all } => {
+            let filter = if all {
+                mine()
+            } else {
+                let dir = match dir {
+                    Some(dir) => dir,
+                    None => std::env::current_dir().context("no current directory")?,
+                };
+                let project = adk_harness::project_slug(&dir);
+                FactFilter {
+                    live_only: true,
+                    ..FactFilter::recall(&FactScope::new(APP_NAME, user.clone(), Some(project)))
+                }
+            };
+            let mut facts = store.list(filter).await?;
+            facts.sort_by_key(|fact| fact.status != FactStatus::Known);
+            if facts.is_empty() {
+                println!(
+                    "No facts yet. The harness learns them when a session ends; --all lists \
+                     every project."
+                );
+            }
+            for fact in &facts {
+                println!("{}", fact_line(fact));
+            }
+        }
+        MemoryCommands::Show { id } => {
+            let fact = find(store.list(mine()).await?, &id)?;
+            println!("{}", serde_json::to_string_pretty(&fact)?);
+        }
+        MemoryCommands::Forget { id } => {
+            let fact = find(store.list(mine()).await?, &id)?;
+            store.set_status(&fact.id, FactStatus::Forgotten, &by).await?;
+            println!("forgotten: {}", one_line(&fact.text, 200));
+        }
+        MemoryCommands::Accept { id } => {
+            let fact = find(store.list(mine()).await?, &id)?;
+            if fact.status != FactStatus::Known {
+                store.set_status(&fact.id, FactStatus::Known, &by).await?;
+            }
+            println!("known: {}", one_line(&fact.text, 200));
+        }
+        MemoryCommands::Export { out } => {
+            let mut text = String::new();
+            for fact in store.list(mine()).await? {
+                text.push_str(&serde_json::to_string(&fact)?);
+                text.push('\n');
+            }
+            match out {
+                Some(path) => {
+                    let mut options = std::fs::OpenOptions::new();
+                    options.write(true).create(true).truncate(true);
+                    #[cfg(unix)]
+                    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+                    std::io::Write::write_all(
+                        &mut options
+                            .open(&path)
+                            .with_context(|| format!("failed to create {}", path.display()))?,
+                        text.as_bytes(),
+                    )?;
+                    println!("{} facts written to {}", text.lines().count(), path.display());
+                }
+                None => print!("{text}"),
+            }
+        }
+        MemoryCommands::Import { file } => {
+            let text = std::fs::read_to_string(&file)
+                .with_context(|| format!("failed to read {}", file.display()))?;
+            let (mut imported, mut skipped) = (0, 0);
+            for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                let Ok(mut fact) = serde_json::from_str::<MemoryFact>(line) else {
+                    skipped += 1;
+                    continue;
+                };
+                // Imported facts are assumptions until a person confirms them (I41), and
+                // pass the same length, secret and redaction checks as any other (I43).
+                let text =
+                    adk_harness::redact_fact_text(&fact.text, adk_harness::FACT_TEXT_MAX_CHARS);
+                let (true, Ok(text)) = (fact.status.is_live(), text) else {
+                    skipped += 1;
+                    continue;
+                };
+                let original = fact.clone();
+                fact = MemoryFact::new(
+                    FactScope::new(APP_NAME, user.clone(), original.scope.project.clone()),
+                    original.kind,
+                    text,
+                    FactStatus::Assumed,
+                    adk_harness::Provenance { source: FactSource::Imported, ..original.provenance },
+                );
+                fact.valid_from = original.valid_from;
+                fact.digest = fact_digest(&fact.text);
+                store.put(fact).await?;
+                imported += 1;
+            }
+            println!(
+                "{imported} facts imported as assumed, {skipped} skipped; `adk-rust memory accept \
+                 ID` confirms one"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// One line describing `fact`: id, status, kind, date, source and session, then its text.
+fn fact_line(fact: &adk_harness::MemoryFact) -> String {
+    let scope = if fact.scope.project.is_some() { "project" } else { "all projects" };
+    let session = &fact.provenance.session_id;
+    format!(
+        "{} {} · {} · {} · {} in session {} · {scope}\n    {}",
+        fact.id,
+        fact.status.label(),
+        fact.kind,
+        fact.valid_from.format("%Y-%m-%d"),
+        fact.provenance.source.as_str(),
+        if session.is_empty() { "-" } else { session.as_str() },
+        one_line(&fact.text, 500)
+    )
 }
 
 /// `adk-rust rules …`.

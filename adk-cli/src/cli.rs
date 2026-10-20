@@ -221,6 +221,13 @@ pub enum Commands {
         command: RulesCommands,
     },
 
+    /// Long-term memory: the facts the harness learned about you and your projects
+    #[cfg(all(feature = "harness", feature = "persist"))]
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
+    },
+
     /// Calls waiting for a decision, here or on a served harness
     #[cfg(all(feature = "harness", feature = "persist"))]
     Approvals {
@@ -358,6 +365,47 @@ pub enum RulesCommands {
     Rm {
         /// Rule number or id
         rule: String,
+    },
+}
+
+/// `adk-rust memory` (spec 3.1 §7.15.2, §10 L2).
+#[cfg(all(feature = "harness", feature = "persist"))]
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum MemoryCommands {
+    /// List the facts of this project and your preferences, known first
+    List {
+        /// The workspace whose project to list (default: the current directory)
+        #[arg(long, value_name = "DIR")]
+        dir: Option<std::path::PathBuf>,
+        /// Every project, and superseded and forgotten facts too
+        #[arg(long)]
+        all: bool,
+    },
+    /// Show one fact with its provenance
+    Show {
+        /// Fact id, or a unique prefix of it
+        id: String,
+    },
+    /// Forget a fact: it is never recalled again
+    Forget {
+        /// Fact id, or a unique prefix of it
+        id: String,
+    },
+    /// Confirm an assumed fact: it becomes known
+    Accept {
+        /// Fact id, or a unique prefix of it
+        id: String,
+    },
+    /// Write every fact, with provenance and history, as JSON lines
+    Export {
+        /// File to write (default: standard output)
+        #[arg(long, value_name = "FILE")]
+        out: Option<std::path::PathBuf>,
+    },
+    /// Read facts from JSON lines `memory export` wrote; they arrive assumed
+    Import {
+        /// File to read
+        file: std::path::PathBuf,
     },
 }
 

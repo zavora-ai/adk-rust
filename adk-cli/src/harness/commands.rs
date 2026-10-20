@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use adk_core::Result;
 use adk_harness::{
-    HarnessMode, ModeChange, OriginPin, PLAN_STATE_KEY, RuleScope, SkillsConfig, StandingDecision,
-    StandingRule, TODOS_STATE_KEY,
+    FactStatus, FileMemory, HarnessMode, MemoryConfig, MemoryFact, MemoryLimits, ModeChange,
+    OriginPin, PLAN_STATE_KEY, RuleScope, SkillsConfig, StandingDecision, StandingRule,
+    TODOS_STATE_KEY, escape_control,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -41,7 +42,7 @@ const COMMANDS: &[(Kind, &str, &str)] = &[
     (Kind::Team, "team", "Team members the harness can delegate to"),
     (Kind::Session, "session", "This session: id, user, workspace, events"),
     (Kind::Skills, "skills", "Skills the agent can load"),
-    (Kind::Memory, "memory", "The harness's file memory"),
+    (Kind::Memory, "memory", "Working notes and long-term facts; /memory forget|accept ID"),
 ];
 
 /// One data-driven slash command over the REPL's shared state.
@@ -103,8 +104,7 @@ impl ConsoleCommand for HarnessCommand {
             }
             Kind::Session => session(shared).await,
             Kind::Skills => skills(shared),
-            // wave B: observe — file memory (spec 3.1 §7.15) shows its index here.
-            Kind::Memory => Ok("File memory is off in this build (spec 3.1 §7.15).".into()),
+            Kind::Memory => memory(shared, args).await,
         }
     }
 }
@@ -262,6 +262,97 @@ async fn approvals(shared: &Shared) -> Result<String> {
     }
     out.push_str("  decide with `adk-rust approvals approve|deny ID` in another terminal");
     Ok(out)
+}
+
+/// `/memory`: working notes and long-term facts; `/memory forget|accept ID` (spec 3.1
+/// §7.15, §10 L2).
+async fn memory(shared: &Shared, args: &str) -> Result<String> {
+    let harness = shared.harness();
+    let mut words = args.split_whitespace();
+    let (action, id) = (words.next(), words.next());
+    if action.is_none() {
+        return list_memory(shared, &harness).await;
+    }
+    if !super::launcher::memory_on(&harness) {
+        return Ok("Long-term memory is off (--no-memory or --ephemeral).".into());
+    }
+    let (Some(action @ ("forget" | "accept")), Some(prefix)) = (action, id) else {
+        return Ok("use /memory, /memory forget ID or /memory accept ID".into());
+    };
+    let facts = harness.facts(&shared.user).await?;
+    let matches: Vec<&MemoryFact> = facts
+        .iter()
+        .filter(|fact| fact.id.to_ascii_uppercase().starts_with(&prefix.to_ascii_uppercase()))
+        .collect();
+    let fact = match matches.as_slice() {
+        [fact] => *fact,
+        [] => return Ok(format!("no fact {prefix}; /memory lists them")),
+        _ => return Ok(format!("{prefix} matches {} facts; give more of the id", matches.len())),
+    };
+    Ok(if action == "forget" {
+        harness.forget_fact(&shared.user, &fact.id).await?;
+        format!("forgotten: {}", escape_control(&fact.text))
+    } else {
+        let accepted = harness.accept_fact(&shared.user, &fact.id).await?;
+        format!("known: {}", escape_control(&accepted.text))
+    })
+}
+
+async fn list_memory(shared: &Shared, harness: &adk_harness::Harness) -> Result<String> {
+    let mut out = String::from("Working notes:\n");
+    let root =
+        MemoryConfig::default().root_for(&shared.app_name, shared.user.as_ref(), &shared.workspace);
+    let topics = if root.is_dir() {
+        FileMemory::open(&root, MemoryLimits::default())?.topics().await?
+    } else {
+        Vec::new()
+    };
+    if topics.is_empty() {
+        out.push_str("  (none)\n");
+    }
+    for topic in topics {
+        let _ =
+            writeln!(out, "  {} — {}", escape_control(&topic.path), escape_control(&topic.summary));
+    }
+    out.push_str("Long-term facts (this project and your preferences):\n");
+    if !super::launcher::memory_on(harness) {
+        out.push_str("  off (--no-memory or --ephemeral)\n");
+        return Ok(out);
+    }
+    let mut facts = harness.facts(&shared.user).await?;
+    let history = facts.iter().filter(|fact| !fact.status.is_live()).count();
+    facts.retain(|fact| fact.status.is_live());
+    facts.sort_by_key(|fact| fact.status != FactStatus::Known);
+    if facts.is_empty() {
+        out.push_str("  (none yet; facts are learned when a session ends)\n");
+    }
+    for fact in &facts {
+        let _ = writeln!(out, "  {}", describe_fact(fact));
+    }
+    if history > 0 {
+        let _ = writeln!(out, "  ({history} superseded or forgotten, kept as history)");
+    }
+    out.push_str("  /memory forget ID removes one; /memory accept ID confirms an assumed one");
+    Ok(out)
+}
+
+/// One line describing `fact`: id, status, kind, date, source and session, text.
+pub(crate) fn describe_fact(fact: &MemoryFact) -> String {
+    let scope = if fact.scope.project.is_some() { "project" } else { "all projects" };
+    format!(
+        "{} {} · {} · {} · {} in session {} · {scope}\n      {}",
+        fact.id,
+        fact.status.label(),
+        fact.kind,
+        fact.valid_from.format("%Y-%m-%d"),
+        fact.provenance.source.as_str(),
+        if fact.provenance.session_id.is_empty() {
+            "-"
+        } else {
+            fact.provenance.session_id.as_str()
+        },
+        escape_control(&fact.text)
+    )
 }
 
 async fn session(shared: &Shared) -> Result<String> {

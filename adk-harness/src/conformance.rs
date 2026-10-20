@@ -17,6 +17,9 @@
 //! }
 //! ```
 
+#[cfg(feature = "memory")]
+pub use crate::facts::conformance::{fact_index, fact_store};
+
 /// [`ModeStore`](crate::ModeStore) cases.
 pub mod mode_store {
     use crate::{HarnessMode, ModeRecord, ModeSource, ModeStore};

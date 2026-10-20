@@ -148,6 +148,8 @@ pub struct HarnessAgentBuilder {
     goal_store: Option<Arc<dyn crate::goal::GoalStore>>,
     #[cfg(feature = "graph")]
     goal_engine: Option<crate::goal::GoalEngine>,
+    #[cfg(feature = "memory")]
+    long_term: LongTermOptions,
     budget: Option<RunBudget>,
     spend_ledger: Option<Arc<dyn SpendLedger>>,
     audit_log: Option<Arc<dyn adk_core::audit_log::AuditRecorder>>,
@@ -212,6 +214,8 @@ impl HarnessAgentBuilder {
             goal_store: None,
             #[cfg(feature = "graph")]
             goal_engine: None,
+            #[cfg(feature = "memory")]
+            long_term: LongTermOptions::default(),
             budget: None,
             spend_ledger: None,
             audit_log: None,
@@ -497,6 +501,40 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// Long-term facts (spec 3.1 §7.15.2; off until set): recall into each user turn,
+    /// `memory_search` and `memory_remember`, and session distillation.
+    #[cfg(feature = "memory")]
+    pub fn long_term_memory(mut self, config: crate::facts::LongTermMemoryConfig) -> Self {
+        self.long_term.config = Some(config);
+        self
+    }
+
+    /// Where long-term facts are kept (default in memory; SQLite in the CLI). Needs
+    /// [`long_term_memory`](Self::long_term_memory).
+    #[cfg(feature = "memory")]
+    pub fn fact_store(mut self, store: Arc<dyn crate::facts::FactStore>) -> Self {
+        self.long_term.store = Some(store);
+        self
+    }
+
+    /// How recall finds candidate facts (default a [`LocalFactIndex`](crate::LocalFactIndex)
+    /// over the fact store; a [`MemoryServiceIndex`](crate::MemoryServiceIndex) on servers).
+    /// Needs [`long_term_memory`](Self::long_term_memory).
+    #[cfg(feature = "memory")]
+    pub fn fact_index(mut self, index: Arc<dyn crate::facts::FactIndex>) -> Self {
+        self.long_term.index = Some(index);
+        self
+    }
+
+    /// Embeds facts for the default [`LocalFactIndex`](crate::LocalFactIndex), which then
+    /// recalls by cosine similarity instead of shared words (spec 3.1 §7.15.2). Needs
+    /// [`long_term_memory`](Self::long_term_memory).
+    #[cfg(feature = "memory")]
+    pub fn memory_embedder(mut self, embedder: Arc<dyn adk_memory::EmbeddingProvider>) -> Self {
+        self.long_term.embedder = Some(embedder);
+        self
+    }
+
     /// Resource limits for every run.
     pub fn budget(mut self, budget: RunBudget) -> Self {
         self.budget = Some(budget);
@@ -776,6 +814,28 @@ impl HarnessAgentBuilder {
             tools.push(Arc::new(crate::tools::MemoryDeleteTool::new(resolver.clone())));
             resolver
         });
+        let harness_audit = crate::agent::harness_audit_trail(self.audit_log)?;
+        #[cfg(feature = "memory")]
+        let facts = {
+            #[cfg(feature = "auth")]
+            let require_authenticated = self.identity.require_authenticated;
+            #[cfg(not(feature = "auth"))]
+            let require_authenticated = false;
+            self.long_term.build(
+                &self.name,
+                workspace.root(),
+                require_authenticated,
+                harness_audit.clone(),
+                self.member_model.clone().unwrap_or_else(|| model.clone()),
+                self.budget.clone(),
+                (mode_store.clone(), self.mode),
+            )?
+        };
+        #[cfg(feature = "memory")]
+        if let Some(facts) = &facts {
+            tools.push(Arc::new(crate::tools::MemorySearchTool::new(facts.clone())));
+            tools.push(Arc::new(crate::tools::MemoryRememberTool::new(facts.clone())));
+        }
         let tool_names: Vec<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
         #[cfg(feature = "auth")]
         let (tools, identity_gate) = {
@@ -804,8 +864,13 @@ impl HarnessAgentBuilder {
                 run_trails.clone(),
             )));
         }
-        let toolset =
+        #[cfg_attr(not(feature = "memory"), allow(unused_mut))]
+        let mut toolset =
             HarnessToolset::new(tools, mode_store.clone(), self.mode).with_observers(&observers);
+        #[cfg(feature = "memory")]
+        if let Some(facts) = facts {
+            toolset = toolset.with_facts(facts);
+        }
         let toolset = Arc::new(toolset);
 
         // 5 (policy first: the handler re-checks against it).
@@ -1038,7 +1103,7 @@ impl HarnessAgentBuilder {
                 instructions: instruction_state,
                 non_waivable_tools: non_waivable,
                 workspace,
-                audit: crate::agent::harness_audit_trail(self.audit_log)?,
+                audit: harness_audit,
                 #[cfg(feature = "auth")]
                 identity: identity_gate,
                 #[cfg(feature = "observe")]
@@ -1096,6 +1161,71 @@ impl PromptParts {
         ));
         out.push_str(&self.state.instructions.render(self.state.trusted()));
         out.trim_end().to_string()
+    }
+}
+
+/// The long-term memory configuration of a builder (spec 3.1 §7.15.2).
+#[cfg(feature = "memory")]
+#[derive(Default)]
+struct LongTermOptions {
+    config: Option<crate::facts::LongTermMemoryConfig>,
+    store: Option<Arc<dyn crate::facts::FactStore>>,
+    index: Option<Arc<dyn crate::facts::FactIndex>>,
+    embedder: Option<Arc<dyn adk_memory::EmbeddingProvider>>,
+}
+
+#[cfg(feature = "memory")]
+impl LongTermOptions {
+    /// The harness's long-term memory, or `None` when it is off.
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        &self,
+        agent: &str,
+        workspace_root: &std::path::Path,
+        require_authenticated: bool,
+        audit: Option<adk_core::audit_log::AuditTrail>,
+        member_model: Arc<dyn Llm>,
+        budget: Option<RunBudget>,
+        (mode_store, default_mode): (Arc<dyn ModeStore>, HarnessMode),
+    ) -> Result<Option<Arc<crate::facts::runtime::FactsRuntime>>> {
+        let Some(config) = self.config.clone() else {
+            if self.store.is_some() || self.index.is_some() || self.embedder.is_some() {
+                return Err(AdkError::config(
+                    "fact_store, fact_index and memory_embedder configure long-term memory; \
+                     turn it on with long_term_memory(LongTermMemoryConfig::default())",
+                ));
+            }
+            return Ok(None);
+        };
+        if self.index.is_some() && self.embedder.is_some() {
+            return Err(AdkError::config(
+                "memory_embedder configures the default LocalFactIndex; give your own index \
+                 its embedder instead, for example LocalFactIndex::with_embedder",
+            ));
+        }
+        let store =
+            self.store.clone().unwrap_or_else(|| Arc::new(crate::facts::InMemoryFactStore::new()));
+        let index = match (&self.index, &self.embedder) {
+            (Some(index), _) => index.clone(),
+            (None, Some(embedder)) => Arc::new(
+                crate::facts::LocalFactIndex::new(store.clone()).with_embedder(embedder.clone()),
+            ),
+            (None, None) => Arc::new(crate::facts::LocalFactIndex::new(store.clone())),
+        };
+        let distill_model = config.distill_model.clone().unwrap_or(member_model);
+        Ok(Some(Arc::new(crate::facts::runtime::FactsRuntime::new(
+            config,
+            store,
+            index,
+            crate::memory::project_slug(workspace_root),
+            agent.to_string(),
+            require_authenticated,
+            audit,
+            distill_model,
+            budget,
+            mode_store,
+            default_mode,
+        ))))
     }
 }
 

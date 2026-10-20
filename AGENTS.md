@@ -344,7 +344,8 @@ adk-harness/     Governed harness agent (spec 3.1): HarnessAgent over LlmAgent w
                  (read-only, plan, ask, auto) and standing approvals as one ToolPolicy,
                  interactive approval prompts, host or OS-sandboxed bash with a shell
                  ledger, session todos, AGENTS.md instructions with workspace trust,
-                 progressive skills, and the `coding` preset. Beta.
+                 progressive skills, working notes and long-term facts with provenance
+                 (FactStore, FactIndex, recall, distillation), and the `coding` preset. Beta.
 adk-bench/       Benchmarking framework: framework-level runtime performance with real LLM APIs
                  and cross-framework (Python ADK) comparison
 adk-sandbox/     Sandboxed execution environments — process/WASM backends, OS-level sandbox profiles

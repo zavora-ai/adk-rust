@@ -45,6 +45,8 @@ struct Setup {
     user: String,
     #[cfg(feature = "persist")]
     db: Option<Arc<crate::sessions::HarnessDb>>,
+    /// The embedder long-term memory recalls with, and its description.
+    embedder: Option<(Arc<adk_harness::RagEmbedder>, &'static str)>,
 }
 
 impl Setup {
@@ -68,7 +70,9 @@ impl Setup {
                  `--features persist`, or start without --session and --continue."
             );
         }
+        let embedder = if resolved.memory { memory_embedder(&model) } else { None };
         Ok(Self {
+            embedder,
             model: model.llm,
             model_id: model.id,
             instruction,
@@ -119,6 +123,15 @@ impl Setup {
                 .standing_rules(db.rules.clone())
                 .shell_ledger(db.ledger.clone())
                 .approval_store(db.approvals.clone());
+            // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2).
+            if self.resolved.memory && approval_service.is_none() {
+                builder = builder
+                    .long_term_memory(adk_harness::LongTermMemoryConfig::default())
+                    .fact_store(db.facts.clone());
+                if let Some((embedder, _)) = &self.embedder {
+                    builder = builder.memory_embedder(embedder.clone());
+                }
+            }
         }
         if sandbox {
             builder = builder.shell(ShellIsolation::OsSandbox(Default::default()));
@@ -200,6 +213,68 @@ impl Setup {
             println!("note: {note}");
         }
     }
+
+    /// Says once, on the first run with long-term memory, what is stored and where
+    /// (spec 3.1 §7.15.2).
+    fn memory_notice(&self) {
+        if !self.memory_on() {
+            return;
+        }
+        let Some(dir) = dirs::config_dir().map(|dir| dir.join("adk-rust")) else {
+            return;
+        };
+        let marker = dir.join("memory-notice");
+        if marker.exists() {
+            return;
+        }
+        let recall = match &self.embedder {
+            Some((_, name)) => format!("Facts are embedded with {name} so related ones are found."),
+            None => "Facts are found by shared words; nothing leaves this machine for it.".into(),
+        };
+        println!(
+            "Long-term memory is on. The harness keeps short facts from your sessions: the \
+             preferences you state, how a project builds and tests, what fixed a failure. They \
+             live in {} on this machine, with personal data redacted and secrets refused, and \
+             are recalled in later sessions. What you said is \"known\"; what the agent \
+             inferred is \"assumed\" until you confirm it. {recall}\n/memory lists them, \
+             /memory forget ID removes one, `adk-rust memory export` writes them out, and \
+             --no-memory turns memory off. This notice is shown once.\n",
+            dir.join("harness.db").display()
+        );
+        let _ = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&marker, "shown\n"));
+    }
+
+    fn memory_on(&self) -> bool {
+        #[cfg(feature = "persist")]
+        return self.resolved.memory && self.db.is_some();
+        #[cfg(not(feature = "persist"))]
+        false
+    }
+}
+
+/// The embedder long-term memory recalls with (spec 3.1 §7.15.2): the model's provider when
+/// it embeds (Gemini, OpenAI), else Gemini or OpenAI when its key is set; with none, recall
+/// matches shared words.
+fn memory_embedder(model: &ResolvedModel) -> Option<(Arc<adk_harness::RagEmbedder>, &'static str)> {
+    const GEMINI: &str = "Gemini (gemini-embedding-2)";
+    const OPENAI: &str = "OpenAI (text-embedding-3-small)";
+    let env = |names: &[&str]| {
+        names.iter().find_map(|name| std::env::var(name).ok().filter(|key| !key.trim().is_empty()))
+    };
+    let own = match (model.provider, model.api_key.clone()) {
+        (Some(adk_model::ModelProvider::Gemini), Some(key)) => Some((key, true)),
+        (Some(adk_model::ModelProvider::Openai), Some(key)) => Some((key, false)),
+        _ => None,
+    };
+    let (key, gemini) = own
+        .or_else(|| env(&["GOOGLE_API_KEY", "GEMINI_API_KEY"]).map(|key| (key, true)))
+        .or_else(|| env(&["OPENAI_API_KEY"]).map(|key| (key, false)))?;
+    let built = if gemini {
+        adk_harness::RagEmbedder::gemini(&key).map(|embedder| (embedder, GEMINI))
+    } else {
+        adk_harness::RagEmbedder::openai(&key).map(|embedder| (embedder, OPENAI))
+    };
+    built.ok().map(|(embedder, name)| (Arc::new(embedder), name))
 }
 
 const APP_NAME: &str = "adk-rust";
@@ -277,6 +352,7 @@ pub async fn repl(
     args: HarnessArgs,
 ) -> Result<()> {
     let setup = Arc::new(Setup::new(model, instruction, args, HarnessMode::Ask).await?);
+    setup.memory_notice();
     let console = ConsoleIo::terminal()?;
     let prompter = |console: &ConsoleIo| -> Arc<dyn ApprovalPrompter> {
         let prompter = ConsolePrompter::new(console.clone());
@@ -331,6 +407,7 @@ pub async fn code(
     }
     let setup = Setup::new(model, instruction, args, HarnessMode::Ask).await?;
     setup.print_notes();
+    setup.memory_notice();
     let console = ConsoleIo::terminal()?;
     let prompter = setup.unattended_prompter(&console);
     let agent =
@@ -346,6 +423,8 @@ pub async fn code(
     );
     let outcome = launcher.run_once(&task).await?;
     println!();
+    // The turn is distilled into long-term memory before the process ends (spec 3.1 §7.15.2).
+    launcher.close().await;
     let todos = launcher.todos().await?;
     if !todos.items.is_empty() {
         println!("todos:");
@@ -402,6 +481,7 @@ pub async fn goal(
 ) -> Result<i32> {
     let setup = Setup::new(model, instruction, args, HarnessMode::Ask).await?;
     setup.print_notes();
+    setup.memory_notice();
     if !matches!(setup.resolved.mode, HarnessMode::Ask | HarnessMode::Auto) {
         bail!(
             "a goal needs ask or auto mode, not {}: it edits files and runs commands",
@@ -497,12 +577,14 @@ pub async fn goal(
         if !outcome.held.is_empty() {
             save_goal(&mut launcher, sessions.as_ref(), &setup.user, &state, goal.state.as_deref())
                 .await?;
+            launcher.close().await;
             return Ok(held_exit(&outcome, persistent(&setup)));
         }
         if outcome.interrupted {
             save_goal(&mut launcher, sessions.as_ref(), &setup.user, &state, goal.state.as_deref())
                 .await?;
             println!("\ninterrupted; continue with --resume.");
+            launcher.close().await;
             return Ok(130);
         }
         let (code, output) = until_check(&state.until);
@@ -513,6 +595,7 @@ pub async fn goal(
             save_goal(&mut launcher, sessions.as_ref(), &setup.user, &state, goal.state.as_deref())
                 .await?;
             println!("\ngoal met after {iteration} iteration(s): `{}` passed.", state.until);
+            launcher.close().await;
             return Ok(0);
         }
         save_goal(&mut launcher, sessions.as_ref(), &setup.user, &state, goal.state.as_deref())
@@ -522,6 +605,7 @@ pub async fn goal(
     state.status = GoalStatus::Exhausted;
     save_goal(&mut launcher, sessions.as_ref(), &setup.user, &state, goal.state.as_deref()).await?;
     println!("\nbudget exhausted; `{}` still failing. Resume later with --resume.", state.until);
+    launcher.close().await;
     Ok(1)
 }
 

@@ -88,6 +88,10 @@ pub struct HarnessArgs {
     /// Add a team member: NAME=explore, NAME=general, NAME=acp:COMMAND or NAME=a2a:URL
     #[arg(long = "member", value_parser = parse_member, value_name = "NAME=KIND")]
     pub members: Vec<MemberArg>,
+
+    /// Turn long-term memory off: nothing is recalled or learned (spec 3.1 §7.15.2)
+    #[arg(long)]
+    pub no_memory: bool,
 }
 
 /// A `--member` flag value (spec 3.1 §8.1, §7.10).
@@ -286,6 +290,8 @@ pub struct ResolvedHarnessArgs {
     pub packs: Vec<Pack>,
     /// `--member`.
     pub members: Vec<MemberArg>,
+    /// Long-term memory: on unless `--no-memory` or `--ephemeral`.
+    pub memory: bool,
     /// Settings a config file made that were ignored, and why.
     pub notes: Vec<String>,
 }
@@ -429,6 +435,7 @@ impl HarnessArgs {
             trust,
             packs,
             members,
+            memory: !self.no_memory && !self.ephemeral,
             notes,
         })
     }
@@ -481,6 +488,7 @@ mod tests {
                 trust: false,
                 packs: vec![],
                 members: vec![],
+                memory: true,
                 notes: vec![],
             }
         );

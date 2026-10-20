@@ -58,8 +58,11 @@ suite "adk-memory" -p adk-memory --features sqlite-memory,database-memory \
     --test postgres_migrate_lock_tests \
     --test postgres_schema_detection_tests \
     --test postgres_memory_round_trip_tests \
+    --test memory_service_conformance_tests \
     --test sqlx_migration_inputs_postgres \
     --test upgrade_from_sqlx_0_8
+
+suite "adk-harness" -p adk-harness --features memory --test fact_conformance_tests
 
 suite "adk-graph" -p adk-graph --features postgres --test checkpointer_conformance_postgres
 

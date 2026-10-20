@@ -55,6 +55,8 @@ pub(crate) const HARNESS_TOOL_NAMES: &[&str] = &[
     "memory_read",
     "memory_write",
     "memory_delete",
+    "memory_search",
+    "memory_remember",
 ];
 
 /// Run policies a harness layer composed, each with the harness it belongs to.
@@ -155,7 +157,7 @@ pub enum Isolation {
 #[non_exhaustive]
 pub enum ToolKind {
     /// `read_file`, `glob`, `grep`, `list_skills`, `load_skill`, `load_skill_resource`,
-    /// `search_skills`, `memory_read`.
+    /// `search_skills`, `memory_read`, `memory_search`.
     Read,
     /// `write_todos`, `update_todo`.
     Todo,
@@ -171,6 +173,8 @@ pub enum ToolKind {
     Delegate,
     /// `memory_write`, `memory_delete`.
     MemoryWrite,
+    /// `memory_remember`: assumed long-term facts only (spec 3.1 §7.15.2).
+    MemoryPropose,
     /// Payments pack tools; never waivable.
     Payment,
     /// Any other tool: MCP, browser, extras, skill-activated.
@@ -250,6 +254,8 @@ impl ToolClassRegistry {
         registry.register("memory_read", ToolKind::Read);
         registry.register("memory_write", ToolKind::MemoryWrite);
         registry.register("memory_delete", ToolKind::MemoryWrite);
+        registry.register("memory_search", ToolKind::Read);
+        registry.register("memory_remember", ToolKind::MemoryPropose);
         registry
     }
 
@@ -340,6 +346,8 @@ pub enum TableRow {
     ShellEscalation,
     /// Memory writes.
     MemoryWrite,
+    /// Assumed long-term facts (spec 3.1 §7.15.2).
+    MemoryPropose,
     /// Payments.
     Payment,
     /// A read-only tool from a trusted origin.
@@ -350,7 +358,7 @@ pub enum TableRow {
 
 impl TableRow {
     /// Every row, in table order.
-    pub const ALL: [TableRow; 12] = [
+    pub const ALL: [TableRow; 13] = [
         Self::ReadTodoDelegate,
         Self::PlanExit,
         Self::Edit,
@@ -360,6 +368,7 @@ impl TableRow {
         Self::ShellHost,
         Self::ShellEscalation,
         Self::MemoryWrite,
+        Self::MemoryPropose,
         Self::Payment,
         Self::ExternalReadOnlyTrusted,
         Self::ExternalOther,
@@ -377,6 +386,7 @@ impl TableRow {
             ToolKind::Shell(Isolation::Host) => Self::ShellHost,
             ToolKind::ShellEscalation => Self::ShellEscalation,
             ToolKind::MemoryWrite => Self::MemoryWrite,
+            ToolKind::MemoryPropose => Self::MemoryPropose,
             ToolKind::Payment => Self::Payment,
             ToolKind::External { effect: ToolEffect::ReadOnly, trusted_origin: true } => {
                 Self::ExternalReadOnlyTrusted
@@ -537,7 +547,7 @@ impl ModeCell {
 /// assert_eq!(decision_cell(HarnessMode::Plan, TableRow::Edit), ModeCell::Deny);
 /// assert_eq!(decision_cell(HarnessMode::Auto, TableRow::Edit), ModeCell::Allow);
 /// ```
-pub const MODE_TABLE: [[ModeCell; 4]; 12] = {
+pub const MODE_TABLE: [[ModeCell; 4]; 13] = {
     use ModeCell::{
         Allow, AllowWithActiveEnforcer, AllowWithS3, Ask, AskNonWaivable, AskOrAutoAllowSandboxed,
         AskOrHostShellInAuto, Deny,
@@ -553,6 +563,7 @@ pub const MODE_TABLE: [[ModeCell; 4]; 12] = {
         [Deny, Deny, Ask, AskOrHostShellInAuto], // Shell, host
         [Deny, Deny, AskNonWaivable, AskNonWaivable], // ShellEscalation
         [Deny, Deny, AskNonWaivable, AskNonWaivable], // MemoryWrite
+        [Deny, Deny, Allow, Allow],         // MemoryPropose (assumed facts)
         [Deny, Deny, AskNonWaivable, AskNonWaivable], // Payment
         [Allow, Allow, Allow, Allow],       // External, read-only, trusted
         [Deny, Deny, Ask, Ask],             // External, other
@@ -1322,6 +1333,7 @@ fn describe(tool: &str, row: TableRow, mode: HarnessMode, base: TableDecision) -
         TableRow::ShellHost => "a host shell command (full user permissions, network)",
         TableRow::ShellEscalation => "an unsandboxed retry",
         TableRow::MemoryWrite => "a memory write",
+        TableRow::MemoryPropose => "a fact proposal",
         TableRow::Payment => "a payment",
         TableRow::ExternalReadOnlyTrusted => "a trusted read-only tool",
         TableRow::ExternalOther => "an external tool",

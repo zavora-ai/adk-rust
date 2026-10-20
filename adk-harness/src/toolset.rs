@@ -42,6 +42,8 @@ pub struct HarnessToolset {
     default_mode: HarnessMode,
     reminded: Mutex<HashMap<String, u64>>,
     observers: Vec<Arc<dyn RequestObserver>>,
+    #[cfg(feature = "memory")]
+    facts: Option<Arc<crate::facts::runtime::FactsRuntime>>,
 }
 
 impl HarnessToolset {
@@ -56,7 +58,22 @@ impl HarnessToolset {
             default_mode,
             reminded: Mutex::new(HashMap::new()),
             observers: Vec::new(),
+            #[cfg(feature = "memory")]
+            facts: None,
         }
+    }
+
+    /// Recalls long-term facts into each user turn (spec 3.1 §7.15.2).
+    #[cfg(feature = "memory")]
+    pub(crate) fn with_facts(mut self, facts: Arc<crate::facts::runtime::FactsRuntime>) -> Self {
+        self.facts = Some(facts);
+        self
+    }
+
+    /// The harness's long-term memory, when on.
+    #[cfg(feature = "memory")]
+    pub(crate) fn facts(&self) -> Option<&Arc<crate::facts::runtime::FactsRuntime>> {
+        self.facts.as_ref()
     }
 
     /// Adds work to run before each model request, in order; a team member gets its
@@ -67,8 +84,9 @@ impl HarnessToolset {
     }
 
     /// The toolset of a team member (spec 3.1 §7.10): `tools` without `exit_plan_mode`,
-    /// `memory_write`, `memory_delete` or any agent delegation, so a member can neither
-    /// change the mode nor delegate further. The member reads the parent's mode, because it
+    /// `memory_write`, `memory_delete`, `memory_search`, `memory_remember` or any agent
+    /// delegation, so a member can neither change the mode nor delegate further, and
+    /// neither recalls nor writes long-term facts (§9.2 I42). The member reads the parent's mode, because it
     /// shares the parent's (app, user, session).
     ///
     /// # Example
@@ -96,8 +114,14 @@ impl HarnessToolset {
         let tools = tools
             .into_iter()
             .filter(|tool| {
-                !matches!(tool.name(), "exit_plan_mode" | "memory_write" | "memory_delete")
-                    && !tool.is_agent_delegation()
+                !matches!(
+                    tool.name(),
+                    "exit_plan_mode"
+                        | "memory_write"
+                        | "memory_delete"
+                        | "memory_search"
+                        | "memory_remember"
+                ) && !tool.is_agent_delegation()
             })
             .collect();
         Self::new(tools, mode_store, default_mode)
@@ -169,6 +193,10 @@ impl Toolset for HarnessToolset {
     ) -> Result<()> {
         for observer in &self.observers {
             observer.before_request(&ctx, request).await?;
+        }
+        #[cfg(feature = "memory")]
+        if let Some(facts) = &self.facts {
+            facts.before_request(&ctx, request).await?;
         }
         let mode = match self.mode_store.get(ctx.app_name(), ctx.user_id(), ctx.session_id()).await
         {

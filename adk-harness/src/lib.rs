@@ -24,6 +24,7 @@
 //! | `MemoryConfig`, `FileMemory`, `memory_*` tools (feature `memory`) | §7.15 |
 //! | `MemberSpec`, `HarnessTeam` (feature `team`) | §7.10 |
 //! | `PlanGraphs`, `compile_plan` (feature `graph`), [`GoalSpec`], [`GoalStore`], [`UntilCheckAgent`] | §7.11 |
+//! | `MemoryFact`, `FactStore`, `FactIndex`, `LongTermMemoryConfig`, `memory_search`, `memory_remember` (feature `memory`) | §7.15.2 |
 //! | [`coding::CodingAgent`] | §7.19 |
 //!
 //! # Example
@@ -48,6 +49,8 @@
 mod agent;
 mod audit;
 mod builder;
+#[cfg(feature = "memory")]
+mod facts;
 mod fsutil;
 mod goal;
 #[cfg(feature = "runner")]
@@ -92,6 +95,17 @@ pub use approvals::{
 #[cfg(feature = "observe")]
 pub use builder::LoopGuard;
 pub use builder::{HarnessAgentBuilder, Pack};
+#[cfg(feature = "memory-embeddings")]
+pub use facts::RagEmbedder;
+#[cfg(all(feature = "memory", feature = "sqlite"))]
+pub use facts::SqliteFactStore;
+#[cfg(feature = "memory")]
+pub use facts::{
+    FACT_AUTHOR_PREFIX, FACT_TEXT_MAX_CHARS, FactFilter, FactIndex, FactKind, FactProjects,
+    FactScope, FactSource, FactStatus, FactStore, FileFactStore, InMemoryFactStore, LocalFactIndex,
+    LongTermMemoryConfig, MemoryFact, MemoryServiceIndex, Provenance, fact_digest,
+    redact_fact_text,
+};
 #[cfg(feature = "graph")]
 pub use goal::GoalEngine;
 #[cfg(feature = "sqlite")]
@@ -160,4 +174,6 @@ pub use tools::{
 };
 #[cfg(feature = "memory")]
 pub use tools::{MemoryDeleteTool, MemoryReadTool, MemoryWriteTool};
+#[cfg(feature = "memory")]
+pub use tools::{MemoryRememberTool, MemorySearchTool};
 pub use toolset::HarnessToolset;
