@@ -10,10 +10,12 @@
 //! call's arguments. Its default decision is **deny**: a tool that no rule permits
 //! does not run.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::ToolEffect;
+use crate::{ToolEffect, ToolOrigin};
 
 /// The outcome of evaluating a [`ToolPolicy`] for one tool call.
 ///
@@ -200,6 +202,60 @@ impl ToolPolicyRequest {
     }
 }
 
+/// Facts about one governed call that are not part of the [`ToolPolicyRequest`]: who
+/// publishes the called tool and the model's ID for the call.
+///
+/// The governed path ([`authorize_tool_call`](crate::authorize_tool_call)) passes one to
+/// [`ToolPolicy::evaluate_call`] for every call it evaluates, including arguments an
+/// approver edited. A policy reads [`origin`](Self::origin) to bind a decision to the tool's
+/// publisher and declaration, so a tool of the same name on another MCP server, or a tool
+/// redefined since, is not the tool the decision was made for.
+///
+/// Spec 3.1 §10, C1.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{PolicyCall, ToolOrigin};
+/// use serde_json::json;
+///
+/// let origin = ToolOrigin::new("mcp:github", &json!({ "name": "create_issue" }), None);
+/// let call = PolicyCall::new().with_origin(&origin).with_function_call_id("call-1");
+/// assert_eq!(call.origin.map(|origin| origin.source.as_str()), Some("mcp:github"));
+/// assert_eq!(call.function_call_id, Some("call-1"));
+/// assert_eq!(PolicyCall::new().origin, None);
+/// ```
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PolicyCall<'a> {
+    /// Who publishes the called tool and the digest of what it declares. `None` when the
+    /// governed path saw the call without its tool.
+    pub origin: Option<&'a ToolOrigin>,
+    /// The model's ID for the call, as the function response that answers it carries.
+    pub function_call_id: Option<&'a str>,
+}
+
+impl<'a> PolicyCall<'a> {
+    /// A call with no origin and no call ID.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the origin of the called tool.
+    #[must_use]
+    pub fn with_origin(mut self, origin: &'a ToolOrigin) -> Self {
+        self.origin = Some(origin);
+        self
+    }
+
+    /// Sets the model's ID for the call.
+    #[must_use]
+    pub fn with_function_call_id(mut self, function_call_id: &'a str) -> Self {
+        self.function_call_id = Some(function_call_id);
+        self
+    }
+}
+
 /// Decides whether a tool call may execute.
 ///
 /// Set one on a run with [`RunConfigBuilder::tool_policy`](crate::RunConfigBuilder::tool_policy)
@@ -229,6 +285,63 @@ impl ToolPolicyRequest {
 pub trait ToolPolicy: std::fmt::Debug + Send + Sync {
     /// Decides one call.
     async fn evaluate(&self, request: &ToolPolicyRequest) -> PolicyDecision;
+
+    /// Decides one call, given its [`PolicyCall`] facts as well as the request.
+    ///
+    /// The governed path calls this method, not [`evaluate`](Self::evaluate). The default
+    /// ignores `call` and returns `self.evaluate(request)`, so a policy that does not
+    /// override it decides exactly as before. Override it to decide on the tool's
+    /// [`ToolOrigin`] or the call's ID.
+    ///
+    /// Spec 3.1 §10, C1.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{PolicyCall, PolicyDecision, ToolOrigin, ToolPolicy, ToolPolicyRequest, async_trait};
+    /// use serde_json::json;
+    ///
+    /// /// Refuses every tool one MCP server publishes.
+    /// #[derive(Debug)]
+    /// struct BlockServer(&'static str);
+    ///
+    /// #[async_trait]
+    /// impl ToolPolicy for BlockServer {
+    ///     async fn evaluate(&self, _request: &ToolPolicyRequest) -> PolicyDecision {
+    ///         PolicyDecision::Allow
+    ///     }
+    ///
+    ///     async fn evaluate_call(
+    ///         &self,
+    ///         request: &ToolPolicyRequest,
+    ///         call: &PolicyCall<'_>,
+    ///     ) -> PolicyDecision {
+    ///         match call.origin {
+    ///             Some(origin) if origin.source == self.0 => {
+    ///                 PolicyDecision::deny(format!("tools from '{}' are blocked", origin.source))
+    ///             }
+    ///             _ => self.evaluate(request).await,
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// # futures::executor::block_on(async {
+    /// let policy = BlockServer("mcp:evil");
+    /// let request = ToolPolicyRequest::new("search", json!({}));
+    /// let evil = ToolOrigin::new("mcp:evil", &json!({ "name": "search" }), None);
+    /// let call = PolicyCall::new().with_origin(&evil);
+    /// assert!(matches!(policy.evaluate_call(&request, &call).await, PolicyDecision::Deny { .. }));
+    /// assert_eq!(policy.evaluate_call(&request, &PolicyCall::new()).await, PolicyDecision::Allow);
+    /// # });
+    /// ```
+    async fn evaluate_call(
+        &self,
+        request: &ToolPolicyRequest,
+        call: &PolicyCall<'_>,
+    ) -> PolicyDecision {
+        let _ = call;
+        self.evaluate(request).await
+    }
 
     /// A name or version for audit records, which cite the policy as
     /// `tool_policy:<name>`. The default is `None`, cited as `tool_policy`.
@@ -714,6 +827,142 @@ impl DeclarativePolicyBuilder {
     }
 }
 
+/// Several policies applied together: every layer decides each call, and the strictest
+/// decision wins.
+///
+/// `Deny` is stricter than `RequireApproval`, which is stricter than `Allow`
+/// ([`PolicyDecision::stricter`]); between equally strict decisions the earlier layer's
+/// reason is kept. Each layer is asked through [`ToolPolicy::evaluate_call`] with the
+/// call's [`PolicyCall`] facts. With no layers every call is allowed, as with no policy.
+///
+/// Use it to add a policy to a run that already has one without replacing it: an
+/// [`Agent::configure_run`](crate::Agent::configure_run) hook runs on every run, on
+/// transfer and for delegates, so it checks [`contains_ref`](Self::contains_ref) before
+/// adding its layer and never nests it twice.
+///
+/// Spec 3.1 §10, C2.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{
+///     DeclarativePolicy, PolicyDecision, RunConfig, StrictestPolicy, ToolPolicy,
+///     ToolPolicyRequest,
+/// };
+/// use serde_json::json;
+/// use std::sync::Arc;
+///
+/// let operator = DeclarativePolicy::builder().name("ops-v3").allow("*").build();
+/// let harness = DeclarativePolicy::builder()
+///     .name("adk-harness")
+///     .require_approval("bash", "shell commands need a person")
+///     .allow("*")
+///     .build();
+///
+/// /// Adds the harness layer to whatever policy the run already has, once.
+/// fn add_layer(config: &mut RunConfig, layer: Arc<dyn ToolPolicy>) {
+///     let Some(existing) = config.tool_policy.take() else {
+///         config.tool_policy = Some(layer);
+///         return;
+///     };
+///     let composed = StrictestPolicy::new(vec![existing.clone()]);
+///     config.tool_policy = Some(if composed.contains_ref("adk-harness") {
+///         existing
+///     } else {
+///         Arc::new(composed.layer(layer))
+///     });
+/// }
+///
+/// let mut config = RunConfig::builder().tool_policy(Arc::new(operator)).build();
+/// let harness: Arc<dyn ToolPolicy> = Arc::new(harness);
+/// for _ in 0..3 {
+///     add_layer(&mut config, harness.clone());
+/// }
+/// let policy = config.tool_policy.unwrap();
+/// assert_eq!(policy.policy_ref().as_deref(), Some("ops-v3+adk-harness"));
+///
+/// # futures::executor::block_on(async {
+/// let bash = ToolPolicyRequest::new("bash", json!({ "command": "ls" }));
+/// assert!(matches!(policy.evaluate(&bash).await, PolicyDecision::RequireApproval { .. }));
+/// # });
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct StrictestPolicy {
+    layers: Vec<Arc<dyn ToolPolicy>>,
+}
+
+impl StrictestPolicy {
+    /// A policy over `layers`, asked in order.
+    pub fn new(layers: Vec<Arc<dyn ToolPolicy>>) -> Self {
+        Self { layers }
+    }
+
+    /// Appends `policy` as the last layer.
+    #[must_use]
+    pub fn layer(mut self, policy: Arc<dyn ToolPolicy>) -> Self {
+        self.layers.push(policy);
+        self
+    }
+
+    /// The layers, in the order they are asked.
+    pub fn layers(&self) -> &[Arc<dyn ToolPolicy>] {
+        &self.layers
+    }
+
+    /// Whether a layer, or a layer of a nested `StrictestPolicy`, names itself
+    /// `policy_ref`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{DeclarativePolicy, StrictestPolicy};
+    /// use std::sync::Arc;
+    ///
+    /// let named = |name: &str| Arc::new(DeclarativePolicy::builder().name(name).build());
+    /// let inner = StrictestPolicy::new(vec![named("ops-v3"), named("adk-harness")]);
+    /// let outer = StrictestPolicy::new(vec![Arc::new(inner), named("tenant")]);
+    /// assert!(outer.contains_ref("adk-harness"));
+    /// assert!(!outer.contains_ref("adk"));
+    /// ```
+    pub fn contains_ref(&self, policy_ref: &str) -> bool {
+        self.layers.iter().filter_map(|layer| layer.policy_ref()).any(|layer_ref| {
+            layer_ref == policy_ref
+                || layer_ref.split(STRICTEST_REF_SEPARATOR).any(|part| part == policy_ref)
+        })
+    }
+}
+
+/// Joins the layer names in [`StrictestPolicy::policy_ref`].
+const STRICTEST_REF_SEPARATOR: char = '+';
+
+#[async_trait]
+impl ToolPolicy for StrictestPolicy {
+    async fn evaluate(&self, request: &ToolPolicyRequest) -> PolicyDecision {
+        self.evaluate_call(request, &PolicyCall::new()).await
+    }
+
+    async fn evaluate_call(
+        &self,
+        request: &ToolPolicyRequest,
+        call: &PolicyCall<'_>,
+    ) -> PolicyDecision {
+        let mut decision = PolicyDecision::Allow;
+        // Every layer is asked, so each one observes (and can audit) every call.
+        for layer in &self.layers {
+            decision = decision.stricter(layer.evaluate_call(request, call).await);
+        }
+        decision
+    }
+
+    /// The named layers' references joined with `+`, such as `ops-v3+adk-harness`;
+    /// unnamed layers are left out, and `None` when no layer is named.
+    fn policy_ref(&self) -> Option<String> {
+        let names: Vec<String> =
+            self.layers.iter().filter_map(|layer| layer.policy_ref()).collect();
+        (!names.is_empty()).then(|| names.join(&STRICTEST_REF_SEPARATOR.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -884,5 +1133,169 @@ mod tests {
         assert_eq!(allow.clone().stricter(approve.clone()), approve);
         assert_eq!(approve.clone().stricter(deny.clone()), deny);
         assert_eq!(deny.clone().stricter(allow), deny);
+    }
+
+    /// A policy with a fixed decision that counts how often it is asked.
+    #[derive(Debug)]
+    struct Fixed {
+        name: Option<&'static str>,
+        decision: PolicyDecision,
+        asked: std::sync::atomic::AtomicUsize,
+    }
+
+    fn fixed(name: Option<&'static str>, decision: PolicyDecision) -> Arc<Fixed> {
+        Arc::new(Fixed { name, decision, asked: std::sync::atomic::AtomicUsize::new(0) })
+    }
+
+    #[async_trait]
+    impl ToolPolicy for Fixed {
+        async fn evaluate(&self, _request: &ToolPolicyRequest) -> PolicyDecision {
+            self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.decision.clone()
+        }
+
+        fn policy_ref(&self) -> Option<String> {
+            self.name.map(str::to_string)
+        }
+    }
+
+    /// Denies the tools one publisher serves, and allows everything else.
+    #[derive(Debug)]
+    struct BlockSource(&'static str);
+
+    #[async_trait]
+    impl ToolPolicy for BlockSource {
+        async fn evaluate(&self, _request: &ToolPolicyRequest) -> PolicyDecision {
+            PolicyDecision::Allow
+        }
+
+        async fn evaluate_call(
+            &self,
+            _request: &ToolPolicyRequest,
+            call: &PolicyCall<'_>,
+        ) -> PolicyDecision {
+            match call.origin {
+                Some(origin) if origin.source == self.0 => PolicyDecision::deny("blocked source"),
+                _ => PolicyDecision::Allow,
+            }
+        }
+    }
+
+    fn request() -> ToolPolicyRequest {
+        ToolPolicyRequest::new("search", json!({ "q": "rust" }))
+    }
+
+    async fn strictest(layers: Vec<Arc<dyn ToolPolicy>>) -> PolicyDecision {
+        StrictestPolicy::new(layers).evaluate_call(&request(), &PolicyCall::new()).await
+    }
+
+    #[tokio::test]
+    async fn evaluate_call_defaults_to_evaluate() {
+        let origin = ToolOrigin::new("mcp:any", &json!({ "name": "search" }), None);
+        let call = PolicyCall::new().with_origin(&origin).with_function_call_id("c1");
+        let policy = DeclarativePolicy::builder().allow("search").build();
+        assert_eq!(policy.evaluate_call(&request(), &call).await, PolicyDecision::Allow);
+        let unlisted = ToolPolicyRequest::new("delete", json!({}));
+        assert_eq!(policy.evaluate_call(&unlisted, &call).await, policy.evaluate(&unlisted).await);
+    }
+
+    #[tokio::test]
+    async fn the_strictest_layer_decides() {
+        let allow = || fixed(None, PolicyDecision::Allow) as Arc<dyn ToolPolicy>;
+        let approve =
+            || fixed(None, PolicyDecision::require_approval("ask")) as Arc<dyn ToolPolicy>;
+        let deny = || fixed(None, PolicyDecision::deny("no")) as Arc<dyn ToolPolicy>;
+
+        assert_eq!(strictest(vec![allow(), deny()]).await, PolicyDecision::deny("no"));
+        assert_eq!(strictest(vec![deny(), allow()]).await, PolicyDecision::deny("no"));
+        assert_eq!(
+            strictest(vec![allow(), approve()]).await,
+            PolicyDecision::require_approval("ask")
+        );
+        assert_eq!(
+            strictest(vec![approve(), allow()]).await,
+            PolicyDecision::require_approval("ask")
+        );
+        assert_eq!(strictest(vec![approve(), deny()]).await, PolicyDecision::deny("no"));
+        assert_eq!(strictest(vec![allow(), allow()]).await, PolicyDecision::Allow);
+        assert_eq!(strictest(vec![]).await, PolicyDecision::Allow);
+
+        // Between equally strict layers the earlier reason is kept.
+        let first = fixed(None, PolicyDecision::deny("first"));
+        let second = fixed(None, PolicyDecision::deny("second"));
+        assert_eq!(strictest(vec![first, second]).await, PolicyDecision::deny("first"));
+    }
+
+    #[tokio::test]
+    async fn every_layer_is_asked_even_after_a_denial() {
+        let deny = fixed(None, PolicyDecision::deny("no"));
+        let allow = fixed(None, PolicyDecision::Allow);
+        let policy = StrictestPolicy::new(vec![deny.clone()]).layer(allow.clone());
+        assert_eq!(policy.evaluate(&request()).await, PolicyDecision::deny("no"));
+        assert_eq!(deny.asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(allow.asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(policy.layers().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn layers_receive_the_calls_facts() {
+        let evil = ToolOrigin::new("mcp:evil", &json!({ "name": "search" }), None);
+        let good = ToolOrigin::new("mcp:good", &json!({ "name": "search" }), None);
+        let policy = StrictestPolicy::new(vec![
+            fixed(Some("operator"), PolicyDecision::Allow) as Arc<dyn ToolPolicy>,
+            Arc::new(BlockSource("mcp:evil")),
+        ]);
+        let decide = |origin| {
+            let policy = &policy;
+            async move { policy.evaluate_call(&request(), &PolicyCall::new().with_origin(origin)).await }
+        };
+        assert_eq!(decide(&evil).await, PolicyDecision::deny("blocked source"));
+        assert_eq!(decide(&good).await, PolicyDecision::Allow);
+        // Without the facts, the origin-aware layer cannot tell the call apart.
+        assert_eq!(policy.evaluate(&request()).await, PolicyDecision::Allow);
+    }
+
+    #[test]
+    fn policy_ref_joins_the_named_layers() {
+        let named = |name| fixed(Some(name), PolicyDecision::Allow) as Arc<dyn ToolPolicy>;
+        let unnamed = || fixed(None, PolicyDecision::Allow) as Arc<dyn ToolPolicy>;
+        let policy = StrictestPolicy::new(vec![named("ops-v3"), unnamed(), named("adk-harness")]);
+        assert_eq!(policy.policy_ref().as_deref(), Some("ops-v3+adk-harness"));
+        assert_eq!(StrictestPolicy::new(vec![unnamed()]).policy_ref(), None);
+        assert_eq!(StrictestPolicy::default().policy_ref(), None);
+
+        let nested = StrictestPolicy::new(vec![Arc::new(policy), named("tenant")]);
+        assert_eq!(nested.policy_ref().as_deref(), Some("ops-v3+adk-harness+tenant"));
+        assert!(nested.contains_ref("adk-harness"));
+        assert!(nested.contains_ref("tenant"));
+        assert!(!nested.contains_ref("adk"));
+        assert!(!nested.contains_ref("ops-v3+adk"));
+    }
+
+    #[tokio::test]
+    async fn layering_guarded_by_contains_ref_is_idempotent() {
+        let harness: Arc<dyn ToolPolicy> =
+            fixed(Some("adk-harness"), PolicyDecision::require_approval("harness"));
+        let add_layer = |existing: Option<Arc<dyn ToolPolicy>>| -> Arc<dyn ToolPolicy> {
+            let Some(existing) = existing else {
+                return harness.clone();
+            };
+            let composed = StrictestPolicy::new(vec![existing.clone()]);
+            if composed.contains_ref("adk-harness") {
+                existing
+            } else {
+                Arc::new(composed.layer(harness.clone()))
+            }
+        };
+
+        let operator: Arc<dyn ToolPolicy> = fixed(Some("ops-v3"), PolicyDecision::Allow);
+        let once = add_layer(Some(operator));
+        let thrice = add_layer(Some(add_layer(Some(once.clone()))));
+        assert!(Arc::ptr_eq(&once, &thrice), "the layer is added once");
+        assert_eq!(thrice.policy_ref().as_deref(), Some("ops-v3+adk-harness"));
+        assert_eq!(thrice.evaluate(&request()).await, PolicyDecision::require_approval("harness"));
+
+        let alone = add_layer(None);
+        assert!(Arc::ptr_eq(&alone, &add_layer(Some(alone.clone()))));
     }
 }

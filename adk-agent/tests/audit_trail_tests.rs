@@ -14,7 +14,7 @@ use adk_core::principal::{AgentId, AgentPrincipal, SubjectKind, SubjectRef};
 use adk_core::{
     AdkError, Content, DeclarativePolicy, Event, InMemoryActionLedger, Llm, LlmRequest,
     LlmResponse, LlmResponseStream, Part, Result, RunConfig, SessionId, Tool, ToolApproval,
-    ToolContext, ToolEffect, UserId,
+    ToolContext, ToolEffect, ToolOrigin, UserId,
 };
 use adk_runner::Runner;
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
@@ -186,19 +186,27 @@ fn teller(invocation_id: Option<String>) -> AuditActor {
     }
 }
 
+/// The origin of the `RecordingTool` named `tool`.
+fn recording_origin(tool: &'static str) -> ToolOrigin {
+    ToolOrigin::of(RecordingTool::new(tool).0.as_ref())
+}
+
 /// The drafts the governed path writes for one call, given the record's invocation.
 fn tool_draft(
     recorder: &InMemoryAuditRecorder,
     invocation_id: Option<String>,
-    tool: &str,
+    tool: &'static str,
     call_id: &str,
     args: &Value,
 ) -> AuditRecordDraft {
+    let origin = recording_origin(tool);
     AuditRecordDraft::new(AuditRecordKind::ToolCall, tool)
         .actor(teller(invocation_id))
         .args_digest(recorder.digest(args))
         .ext("functionCallId", json!(call_id))
         .ext("effect", json!("non_idempotent"))
+        .ext("toolSource", json!(origin.source))
+        .ext("declarationDigest", json!(origin.declaration_digest))
         .ext("sessionId", json!("session"))
 }
 

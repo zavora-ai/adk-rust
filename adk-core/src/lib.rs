@@ -287,8 +287,8 @@ pub use model::{
     UsageMetadata, nullable_count,
 };
 pub use policy::{
-    ArgPredicate, DeclarativePolicy, DeclarativePolicyBuilder, PolicyDecision, PolicyRule,
-    ToolPolicy, ToolPolicyRequest,
+    ArgPredicate, DeclarativePolicy, DeclarativePolicyBuilder, PolicyCall, PolicyDecision,
+    PolicyRule, StrictestPolicy, ToolPolicy, ToolPolicyRequest,
 };
 pub use principal::{
     ActingContext, AgentId, AgentPrincipal, PrincipalError, SubjectKind, SubjectRef,
