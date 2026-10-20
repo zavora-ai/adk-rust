@@ -92,7 +92,7 @@ pub(crate) fn composed_layer_owner(policy: &dyn ToolPolicy) -> Option<usize> {
 /// ```rust
 /// use adk_core::{DeclarativePolicy, StrictestPolicy};
 /// use adk_harness::{HarnessAgent, InstructionsConfig};
-/// use adk_model::ScriptedLlm;
+/// use adk_model::{ScriptedLlm, ScriptedResponse};
 /// use std::sync::Arc;
 ///
 /// let named = DeclarativePolicy::builder().name("adk-harness").build();
@@ -102,7 +102,7 @@ pub(crate) fn composed_layer_owner(policy: &dyn ToolPolicy) -> Option<usize> {
 ///
 /// let dir = tempfile::tempdir().unwrap();
 /// let harness = HarnessAgent::builder("harness")
-///     .model(Arc::new(ScriptedLlm::new("scripted", Vec::new())))
+///     .model(Arc::new(ScriptedLlm::new("scripted", Vec::<ScriptedResponse>::new())))
 ///     .workspace(adk_devtools::Workspace::new(dir.path()))
 ///     .project_instructions(InstructionsConfig { user_file: None, ..InstructionsConfig::default() })
 ///     .build()

@@ -117,8 +117,15 @@ pub(crate) fn mode_banner(mode: HarnessMode) -> String {
             "plan: investigate with read-only tools, then present a plan with exit_plan_mode; \
              edits and commands are refused until the user approves the plan"
         }
-        HarnessMode::Ask => "ask: edits and commands run after the user approves them",
-        HarnessMode::Auto => "auto: edits run without asking; host commands still need approval",
+        HarnessMode::Ask => {
+            "ask: call the edit and command tools you need directly; the harness asks the user \
+             to approve each call before it runs, so do not ask for permission in your reply \
+             or wait for a go-ahead, and do not call exit_plan_mode"
+        }
+        HarnessMode::Auto => {
+            "auto: call tools directly; edits run without asking and the harness asks the \
+             user before host commands"
+        }
     };
     format!("Harness mode is {rule}.")
 }
