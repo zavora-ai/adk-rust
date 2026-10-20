@@ -631,6 +631,8 @@ pub(crate) struct PromptContext {
     pub(crate) harness_held: bool,
     /// The other layers of the run's policy, for the handler's re-check.
     pub(crate) peers: Option<Arc<dyn ToolPolicy>>,
+    /// The run's kill switches; a freeze abandons an open prompt (I20).
+    pub(crate) governance: Vec<adk_core::GovernanceControl>,
     pub(crate) app_name: String,
     pub(crate) user_id: String,
     pub(crate) session_id: String,
@@ -793,6 +795,7 @@ pub struct HarnessPolicy {
     pub(crate) inner: Arc<PolicyInner>,
     audit: Option<AuditTrail>,
     peers: Option<Arc<dyn ToolPolicy>>,
+    governance: Vec<adk_core::GovernanceControl>,
 }
 
 impl std::fmt::Debug for HarnessPolicy {
@@ -807,18 +810,30 @@ impl std::fmt::Debug for HarnessPolicy {
 
 impl HarnessPolicy {
     pub(crate) fn new(inner: PolicyInner) -> Self {
-        Self { inner: Arc::new(inner), audit: None, peers: None }
+        Self { inner: Arc::new(inner), audit: None, peers: None, governance: Vec::new() }
     }
 
     /// This policy, recording `harness.rule.*` evaluations through `audit`.
     pub(crate) fn with_audit(&self, audit: Option<AuditTrail>) -> Self {
-        Self { inner: self.inner.clone(), audit, peers: self.peers.clone() }
+        Self {
+            inner: self.inner.clone(),
+            audit,
+            peers: self.peers.clone(),
+            governance: self.governance.clone(),
+        }
     }
 
     /// This policy as one layer of a run's policy whose other layers are `peers`, which the
     /// confirmation handler re-checks a held call against (spec 3.1 §7.3 compose rule).
     pub(crate) fn with_peers(mut self, peers: Option<Arc<dyn ToolPolicy>>) -> Self {
         self.peers = peers;
+        self
+    }
+
+    /// This policy as a layer of a run whose kill switches are `governance`, which the
+    /// confirmation handler watches while a person decides (spec 3.1 §9.2 I20).
+    pub(crate) fn with_governance(mut self, governance: Vec<adk_core::GovernanceControl>) -> Self {
+        self.governance = governance;
         self
     }
 
@@ -1213,6 +1228,7 @@ impl HarnessPolicy {
                 PromptContext {
                     harness_held: matches!(decision, PolicyDecision::RequireApproval { .. }),
                     peers: self.peers.clone(),
+                    governance: self.governance.clone(),
                     app_name: request.app_name.clone(),
                     user_id: request.user_id.clone(),
                     session_id: request.session_id.clone(),

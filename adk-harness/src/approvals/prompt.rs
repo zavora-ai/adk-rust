@@ -457,7 +457,28 @@ impl PromptingConfirmationHandler {
             suggestions: suggestions.clone(),
             rendered: rendered.clone(),
         };
-        let answer = self.prompter.prompt(prompt).await?;
+        // A freeze resolves an open prompt: the call is not run and the turn ends with the
+        // freeze, as the governed path ends it when a freeze lands after an approval (I20).
+        let frozen = async {
+            if context.governance.is_empty() {
+                return std::future::pending::<adk_core::AdkError>().await;
+            }
+            loop {
+                if let Some(error) =
+                    context.governance.iter().find_map(|control| control.check().err())
+                {
+                    return error;
+                }
+                tokio::time::sleep(crate::tools::GOVERNANCE_POLL_INTERVAL).await;
+            }
+        };
+        let answer = tokio::select! {
+            answer = self.prompter.prompt(prompt) => answer?,
+            error = frozen => {
+                tracing::warn!(tool.name = %request.tool_name, "execution was frozen while a person was deciding; the call is not run");
+                return Err(error);
+            }
+        };
         let unexpanded = || refuse("the call was approved without showing its full arguments");
         Ok(match answer {
             PromptAnswer::ApproveOnce => {

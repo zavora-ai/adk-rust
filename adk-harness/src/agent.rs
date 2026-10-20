@@ -339,8 +339,13 @@ impl HarnessLayer<'_> {
             let peers = (!layers.is_empty()).then(|| {
                 Arc::new(adk_core::StrictestPolicy::new(layers.clone())) as Arc<dyn ToolPolicy>
             });
-            layers
-                .push(Arc::new(runtime.policy.with_audit(config.audit.clone()).with_peers(peers)));
+            layers.push(Arc::new(
+                runtime
+                    .policy
+                    .with_audit(config.audit.clone())
+                    .with_peers(peers)
+                    .with_governance(config.governance.clone()),
+            ));
             let composed: Arc<dyn ToolPolicy> = Arc::new(adk_core::StrictestPolicy::new(layers));
             register_composed_layer(owner, &composed);
             config.tool_policy = Some(composed);
