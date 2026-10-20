@@ -462,6 +462,8 @@ pub struct GoalArgs {
     pub goal: String,
     pub until: String,
     pub max_iters: u32,
+    /// How long one run of the check may take (`--check-timeout`).
+    pub check_timeout: std::time::Duration,
     pub state: Option<String>,
     pub resume: bool,
 }
@@ -491,8 +493,6 @@ pub async fn goal(
     let prompter = setup.unattended_prompter(&console);
     let agent =
         setup.agent(APP_NAME, setup.resolved.mode, setup.resolved.sandbox, prompter, None)?;
-    // The check runs through the harness shell, whose timeout is its ceiling.
-    let check_timeout = agent.runtime().workspace().bash_timeout_value();
     let sessions = setup.sessions();
     let workspace = setup.resolved.workspace.clone();
 
@@ -531,7 +531,7 @@ pub async fn goal(
             goal: goal.goal.clone(),
             until: goal.until.clone(),
             max_iterations: goal.max_iters,
-            check_timeout,
+            check_timeout: goal.check_timeout,
         };
         launcher.run_goal(spec).await?
     };

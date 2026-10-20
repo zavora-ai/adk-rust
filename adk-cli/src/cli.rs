@@ -173,6 +173,11 @@ pub enum Commands {
         #[arg(long, default_value_t = 8)]
         max_iters: u32,
 
+        /// Seconds one run of the `--until` check may take before it counts as failed
+        #[cfg(feature = "harness")]
+        #[arg(long, value_name = "SECS", default_value_t = 600)]
+        check_timeout: u64,
+
         /// Path of a JSON mirror of the goal state (default without the harness:
         /// `<dir>/.adk/goal.json`).
         #[arg(long, hide = cfg!(feature = "harness"))]

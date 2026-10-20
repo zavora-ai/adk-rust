@@ -649,7 +649,9 @@ impl HarnessAgentBuilder {
         self
     }
 
-    /// Loop detection (spec 3.1 §7.13; not yet implemented).
+    /// Loop detection (spec 3.1 §7.13; off until set): before each model request the guard
+    /// checks the invocation's tool calls, and a loop tightens the session to `ReadOnly` and
+    /// ends the turn.
     #[cfg(feature = "observe")]
     pub fn loop_guard(mut self, guard: LoopGuard) -> Self {
         self.loop_guard = Some(guard);

@@ -78,9 +78,11 @@ async fn main() -> Result<()> {
             legacy::run_code(model, options.instruction, dir, read_only, task).await
         }
         #[cfg(feature = "harness")]
-        Some(Commands::Goal { goal, until, harness, max_iters, state, resume }) => {
+        Some(Commands::Goal { goal, until, harness, max_iters, check_timeout, state, resume }) => {
             let model = resolve_model(&options)?;
-            let goal = harness_cli::GoalArgs { goal, until, max_iters, state, resume };
+            let check_timeout = std::time::Duration::from_secs(check_timeout);
+            let goal =
+                harness_cli::GoalArgs { goal, until, max_iters, check_timeout, state, resume };
             exit_with(harness_cli::goal(model, options.instruction.clone(), harness, goal).await?)
         }
         #[cfg(not(feature = "harness"))]

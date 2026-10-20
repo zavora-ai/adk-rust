@@ -20,6 +20,9 @@ use crate::approvals::{
 };
 use crate::audit::HarnessAudit;
 use crate::goal::{GOAL_STATE_KEY, GOAL_TARGET, GoalSpec, GoalState};
+
+/// The queue durable goals go to unless [`Harness::with_goal_queue`] names another.
+const DEFAULT_GOAL_QUEUE: &str = "default";
 use crate::instructions::{TrustDecision, WorkspaceTrust};
 use crate::mode::{HarnessMode, MODE_STATE_KEY, ModeChange, ModeSource, write_mode_change};
 use crate::policy::{TableRow, ToolKind};
@@ -79,6 +82,7 @@ pub struct Harness {
     sessions: Arc<dyn SessionService>,
     app_name: String,
     run_store: Option<Arc<dyn adk_core::DurableRunStore>>,
+    goal_queue: String,
 }
 
 impl std::fmt::Debug for Harness {
@@ -112,7 +116,14 @@ impl Harness {
         let runner = agent.configure_runner(builder).build()?;
         #[cfg(feature = "memory")]
         attach_facts(&agent, &runner, &sessions, &app_name);
-        Ok(Self { runner: Arc::new(runner), agent, sessions, app_name, run_store: None })
+        Ok(Self {
+            runner: Arc::new(runner),
+            agent,
+            sessions,
+            app_name,
+            run_store: None,
+            goal_queue: DEFAULT_GOAL_QUEUE.to_string(),
+        })
     }
 
     /// Wraps a runner built for `agent`, for callers that configure the runner themselves —
@@ -143,7 +154,14 @@ impl Harness {
         let app_name = runner.app_name().to_string();
         #[cfg(feature = "memory")]
         attach_facts(&agent, &runner, &sessions, &app_name);
-        Ok(Self { runner: Arc::new(runner), agent, sessions, app_name, run_store: None })
+        Ok(Self {
+            runner: Arc::new(runner),
+            agent,
+            sessions,
+            app_name,
+            run_store: None,
+            goal_queue: DEFAULT_GOAL_QUEUE.to_string(),
+        })
     }
 
     /// The harness agent.
@@ -214,6 +232,31 @@ impl Harness {
     pub fn with_run_store(mut self, store: Arc<dyn adk_core::DurableRunStore>) -> Self {
         self.run_store = Some(store);
         self
+    }
+
+    /// Enqueues durable goals on `queue` instead of `default` (spec 3.1 §7.11), so a
+    /// `DurableWorker` claiming from it runs goals only and the store's other runs stay
+    /// with their own workers — for example [`GOAL_QUEUE`](crate::GOAL_QUEUE) beside a
+    /// server's background runs on one store.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let harness = harness.with_run_store(runs.clone()).with_goal_queue(adk_harness::GOAL_QUEUE);
+    /// let (target, runner) = harness.goal_target();
+    /// let worker = DurableWorker::new(runs)
+    ///     .with_agent(target, runner)
+    ///     .with_config(DurableWorkerConfig::default().with_queue(harness.goal_queue()))
+    ///     .spawn();
+    /// ```
+    pub fn with_goal_queue(mut self, queue: impl Into<String>) -> Self {
+        self.goal_queue = queue.into();
+        self
+    }
+
+    /// The queue durable goals are enqueued on (default `default`).
+    pub fn goal_queue(&self) -> &str {
+        &self.goal_queue
     }
 
     /// Answers, from the action ledger, the calls a stopped process left without a response,
@@ -809,7 +852,7 @@ impl Harness {
                 .await;
         };
         let run = adk_core::NewRun::new(
-            "default",
+            self.goal_queue.clone(),
             self.app_name.clone(),
             user.to_string(),
             GOAL_TARGET,

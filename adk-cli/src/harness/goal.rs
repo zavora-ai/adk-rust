@@ -9,7 +9,7 @@ use adk_core::{
     AdkError, ApprovalScope, DurableRunStore, Enqueued, Event, EventStream, NewRun, OnConflict,
     Result, RunCheckpointRef, RunFilter, RunState,
 };
-use adk_harness::{GOAL_STATE_KEY, GOAL_TARGET, GoalSpec, GoalState, GoalStatus};
+use adk_harness::{GOAL_QUEUE, GOAL_STATE_KEY, GOAL_TARGET, GoalSpec, GoalState, GoalStatus};
 use adk_server::background::{DurableWorker, DurableWorkerConfig};
 use futures::StreamExt;
 use serde_json::json;
@@ -158,6 +158,7 @@ impl HarnessLauncher {
         let live = runs
             .list(
                 RunFilter::default()
+                    .queue(GOAL_QUEUE)
                     .app_name(app.clone())
                     .user_id(user.clone())
                     .session_id(session.clone())
@@ -223,7 +224,7 @@ async fn continue_goal(
     user: &str,
     session: &str,
 ) -> Result<String> {
-    let next = NewRun::new("default", app, user, GOAL_TARGET, json!({ "text": CONTINUE_GOAL }))
+    let next = NewRun::new(GOAL_QUEUE, app, user, GOAL_TARGET, json!({ "text": CONTINUE_GOAL }))
         .with_session_id(session)
         .with_concurrency_key(session, OnConflict::Enqueue);
     Ok(match runs.enqueue(next).await? {
@@ -278,6 +279,7 @@ async fn drive_durable(
         .with_agent(target, runner)
         .with_config(
             DurableWorkerConfig::default()
+                .with_queue(GOAL_QUEUE)
                 .with_poll_interval(TAIL_INTERVAL)
                 .with_lease_ttl(GOAL_LEASE)
                 .with_max_concurrent_runs(1),

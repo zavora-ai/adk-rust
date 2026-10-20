@@ -52,6 +52,16 @@ pub const GOAL_STATE_KEY: &str = "harness:goal";
 /// ```
 pub const GOAL_TARGET: &str = "harness.goal";
 
+/// A queue dedicated to durable goal runs, for [`Harness::with_goal_queue`](crate::Harness::with_goal_queue)
+/// and the `DurableWorker` that serves them (spec 3.1 §7.11).
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_harness::GOAL_QUEUE, "harness.goal");
+/// ```
+pub const GOAL_QUEUE: &str = "harness.goal";
+
 /// Name of the agent that runs a goal's `until` check.
 ///
 /// # Example
@@ -517,7 +527,9 @@ impl UntilCheckAgent {
                 )
                 .await?;
         }
-        let tool = BashTool::new(self.workspace.clone()).with_launcher(self.launcher.clone());
+        // The goal's check_timeout bounds the check, not the shell's own limit for the model.
+        let workspace = self.workspace.clone().bash_timeout(record.spec.check_timeout);
+        let tool = BashTool::new(workspace).with_launcher(self.launcher.clone());
         let tool_ctx = Arc::new(InvocationToolContext::new(ctx.clone(), call_id.clone()));
         let started = Instant::now();
         let outcome = tool.execute(tool_ctx, args).await;

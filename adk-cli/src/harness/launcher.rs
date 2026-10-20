@@ -598,8 +598,10 @@ pub(crate) fn harness_for(
         builder = builder.compaction_config(compaction.clone());
     }
     let harness = Harness::with_runner(agent, builder.build()?)?;
+    // Goals get their own queue, so this worker and a server's background worker on the
+    // same store never take each other's runs.
     Ok(match run_store {
-        Some(store) => harness.with_run_store(store),
+        Some(store) => harness.with_run_store(store).with_goal_queue(adk_harness::GOAL_QUEUE),
         None => harness,
     })
 }

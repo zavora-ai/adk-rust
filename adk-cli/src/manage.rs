@@ -531,12 +531,22 @@ async fn local(command: ApprovalsCommands) -> Result<()> {
         ApprovalsCommands::Approve { id } => {
             let (scope, entry) = find(&id)?;
             db.approvals.decide(&scope, &entry.fingerprint, ToolApproval::approve()).await?;
-            println!(
-                "approved {} once; it runs when session {} continues: `adk-rust --session {}`",
-                safe(&entry.request.tool_name),
-                safe(&scope.session_id),
-                safe(&scope.session_id)
-            );
+            match parked_goal(&db, &scope, &entry.fingerprint).await? {
+                Some(goal) => println!(
+                    "approved {} once; the goal in session {} waits for it. Continue it in its \
+                     workspace: `adk-rust goal {} --until {} --resume`",
+                    safe(&entry.request.tool_name),
+                    safe(&scope.session_id),
+                    safe(&shell_quote(&goal.goal)),
+                    safe(&shell_quote(&goal.until))
+                ),
+                None => println!(
+                    "approved {} once; it runs when session {} continues: `adk-rust --session {}`",
+                    safe(&entry.request.tool_name),
+                    safe(&scope.session_id),
+                    safe(&scope.session_id)
+                ),
+            }
         }
         ApprovalsCommands::Deny { id, reason } => {
             let (scope, entry) = find(&id)?;
@@ -552,6 +562,44 @@ async fn local(command: ApprovalsCommands) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The goal of a durable goal run parked on the call with `fingerprint`, if one is
+/// (spec 3.1 §7.11): such a call runs when `adk-rust goal --resume` continues the goal.
+async fn parked_goal(
+    db: &crate::sessions::HarnessDb,
+    scope: &ApprovalScope,
+    fingerprint: &str,
+) -> Result<Option<adk_harness::GoalSpec>> {
+    use adk_core::{DurableRunStore, RunCheckpointRef, RunFilter, RunState};
+    use adk_harness::GoalStore;
+
+    let parked = db
+        .runs
+        .list(
+            RunFilter::default()
+                .app_name(scope.app_name.clone())
+                .user_id(scope.user_id.clone())
+                .session_id(scope.session_id.clone())
+                .states([RunState::Waiting]),
+        )
+        .await?
+        .into_iter()
+        .any(|run| {
+            run.target == adk_harness::GOAL_TARGET
+                && matches!(&run.checkpoint, Some(RunCheckpointRef::AwaitingApproval { fingerprints, .. })
+                    if fingerprints.iter().any(|parked| parked == fingerprint))
+        });
+    if !parked {
+        return Ok(None);
+    }
+    let record = db.goals.get(&scope.app_name, &scope.user_id, &scope.session_id).await?;
+    Ok(record.map(|record| record.spec))
+}
+
+/// `text` as one single-quoted shell word.
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 async fn remote(command: ApprovalsCommands, server: &str, token: Option<String>) -> Result<()> {
