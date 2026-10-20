@@ -434,7 +434,9 @@ so an approval recorded in one run applies to the same call in the next, and a d
 
 Give each `McpToolset` a distinct name with `with_name`: the name is the server's identity in
 approvals. `McpServerManager` names each server's toolset after its server ID. A tool wrapper
-(`ProtectedTool`, `ScopeGuard`, `PrefixedToolset`) forwards the wrapped tool's origin.
+(`ProtectedTool`, `ScopeGuard`, `PrefixedToolset`) forwards the wrapped tool's origin, effect,
+and annotations, so a wrapped MCP tool keeps its `readOnlyHint`/`destructiveHint` hints and
+its declaration digest, and an approval recorded for the bare tool matches the wrapped one.
 
 To approve a call before any run makes it, build the request the governed path will record:
 

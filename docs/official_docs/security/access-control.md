@@ -195,7 +195,9 @@ ac.check("bob@company.com", &Permission::Tool("search".into()))?;
 
 Wraps a tool with automatic permission checking. The check runs inside `execute()` against
 `Permission::Tool(<tool name>)` for the context's user; a denial fails the call with a tool
-error and the wrapped tool does not run.
+error and the wrapped tool does not run. `ProtectedTool` and the `ScopeGuard` wrappers report
+the wrapped tool's name, schema, effect, origin, and annotations unchanged, so policy and
+approvals see an MCP tool's hints and declaration digest through the wrapper.
 
 ```rust
 use adk_auth::ToolExt;
