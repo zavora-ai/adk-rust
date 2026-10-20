@@ -49,8 +49,8 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--pack browser\|computer-use\|payments` | Adds a pack |
 | `--member NAME=explore\|general` | Adds a team member |
 
-> **Note:** packs, ACP and A2A members, `/cost` and `/memory` report themselves unavailable
-> until their parts of spec 3.1 land (§7.10, §7.13, §7.15, §7.16).
+> **Note:** packs, ACP and A2A members and `/memory` report themselves unavailable until
+> their parts of spec 3.1 land (§7.10, §7.15, §7.16).
 
 ### Configuration files
 
@@ -155,7 +155,8 @@ are listed to the model but not loaded.
 | `/team` | Team members |
 | `/session` | Session id, user, workspace, mode and event count |
 | `/skills` | Skills in the workspace's skill directories, `.adk/skills/` and `~/.adk/skills/` |
-| `/cost`, `/memory` | Spend and file memory, when available |
+| `/cost` | Your spend: model calls, tokens and cost per acting agent and vendor |
+| `/memory` | The harness's file memory, when available |
 | `/help`, `exit` | Lists the commands; leaves the REPL |
 
 Opening a session that has held calls with decisions resumes them first.

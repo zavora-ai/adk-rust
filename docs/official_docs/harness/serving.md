@@ -33,7 +33,8 @@ The server's routes need an authenticated caller; the harness mount always has o
 | Any other address | `Authorization: Bearer <token>` | `BearerTokenExtractor`: `--auth-token` or `ADK_SERVE_TOKEN`, compared in constant time |
 
 Without a token, `serve` refuses a non-loopback `--host`. `--mode auto` beyond loopback also
-needs `--sandbox`. The caller's identity replaces the `userId` a request body names, and
+needs `--sandbox`. The served harness applies standing rules and auto mode only to runs whose
+caller was authenticated (spec 3.1 §9.2 I6); every caller the mount admits is. The caller's identity replaces the `userId` a request body names, and
 held calls are routed to the `operator` group, so the operator approves the calls of their
 own runs.
 

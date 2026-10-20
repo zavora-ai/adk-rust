@@ -374,6 +374,8 @@ fn slash_commands_show_and_change_the_session() {
     terminal.send("/session\r");
     terminal.expect("session   slash");
     terminal.expect("mode      plan");
+    terminal.send("/cost\r");
+    terminal.expect("model calls");
     terminal.send("/help\r");
     terminal.expect("/approvals");
     terminal.finish();

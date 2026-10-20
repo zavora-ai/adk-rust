@@ -89,6 +89,9 @@ impl Setup {
     }
 
     /// The harness agent named `name` in `mode`, with the OS sandbox when `sandbox`.
+    ///
+    /// A served harness (`approval_service` set) applies standing rules and Auto only to
+    /// authenticated callers (spec 3.1 §9.2 I6).
     fn agent(
         &self,
         name: &str,
@@ -127,7 +130,7 @@ impl Setup {
             builder = builder.prompter(prompter);
         }
         if let Some(service) = approval_service {
-            builder = builder.approval_service(service);
+            builder = builder.approval_service(service).require_authenticated_identity();
         }
         for pack in &self.resolved.packs {
             builder = builder.pack(*pack);

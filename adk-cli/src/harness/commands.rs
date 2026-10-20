@@ -37,7 +37,7 @@ const COMMANDS: &[(Kind, &str, &str)] = &[
     (Kind::Rules, "rules", "List your standing rules; /rules rm N revokes one"),
     (Kind::Approvals, "approvals", "Calls in this session waiting for a decision"),
     (Kind::Plan, "plan", "Show the last approved plan"),
-    (Kind::Cost, "cost", "Spend of this session"),
+    (Kind::Cost, "cost", "Your spend: model calls, tokens and cost per agent"),
     (Kind::Team, "team", "Team members the harness can delegate to"),
     (Kind::Session, "session", "This session: id, user, workspace, events"),
     (Kind::Skills, "skills", "Skills the agent can load"),
@@ -90,10 +90,8 @@ impl ConsoleCommand for HarnessCommand {
                 Some(other) => other.to_string(),
                 None => "No plan approved in this session. /mode plan, then ask for one.".into(),
             }),
-            // wave B: observe — Harness::spend (spec 3.1 §7.13) reports this.
-            Kind::Cost => Ok("Spend reporting arrives with the harness's observe layer \
-                              (spec 3.1 §7.13); this build does not meter the session."
-                .into()),
+            // Spend per acting agent and vendor for this user (spec 3.1 §7.13).
+            Kind::Cost => Ok(shared.harness().spend(Some(&shared.user)).render()),
             Kind::Team => {
                 let harness = shared.harness();
                 let members = &harness.agent().info().members;
