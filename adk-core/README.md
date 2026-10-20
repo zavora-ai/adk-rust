@@ -538,7 +538,7 @@ Each alias boxes an async closure: `Box<dyn Fn(..) -> Pin<Box<dyn Future<Output 
 
 ## Context Compaction
 
-`EventsCompactionConfig` configures sliding-window compaction: `compaction_interval` (invocations between compactions), `overlap_size` (events carried into the next window), and a `summarizer` implementing `BaseEventsSummarizer`. Compaction never covers a call still held for confirmation (`held_call_compaction_limit`). `IntraCompactionConfig` triggers compaction within an invocation when the estimated token count passes a threshold.
+`EventsCompactionConfig` configures compaction: `compaction_interval` (compaction runs when the session's user-message count is a multiple of it), `overlap_size` (the most recent invocations left out of the summary), and a `summarizer` implementing `BaseEventsSummarizer`. Compaction never covers a call still held for confirmation (`held_call_compaction_limit`). `IntraCompactionConfig` triggers compaction within an invocation when the estimated token count passes a threshold.
 
 ## Streaming Modes
 

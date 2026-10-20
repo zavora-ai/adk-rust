@@ -104,10 +104,10 @@ fn configs(loader: Arc<dyn AgentLoader>, sessions: Arc<dyn SessionService>) -> V
         ServerConfig::new(loader.clone(), sessions.clone())
             .with_allowed_hosts(vec!["agents.example.com".to_string()])
             .with_allowed_origins(vec!["https://app.example.com".to_string()]),
-        // Development: loopback origins on any port, detailed errors, admin debug endpoints
+        // Development: loopback origins on any port, detailed A2A errors, admin debug endpoints
         ServerConfig::new(loader.clone(), sessions.clone())
             .with_security(SecurityConfig::development()),
-        // Production: CORS for the listed origins, sanitized errors
+        // Production: CORS for the listed origins, sanitized A2A errors
         ServerConfig::new(loader.clone(), sessions.clone())
             .with_security(SecurityConfig::production(vec!["https://myapp.com".to_string()])),
         // Individual settings
@@ -279,7 +279,7 @@ fn coordinator(model: Arc<dyn Llm>) -> Result<LlmAgent> {
 }
 ```
 
-The agent card's endpoint must be on `agent_url`'s origin, or on an origin added with `allow_endpoint_origin` (over `https` unless loopback); a card naming any other host is refused with `a2a.card_endpoint_refused`. `credential_broker` attaches a bearer token only to requests inside the token's audience. A stream that ends before its task reaches a final status is reported as an error event.
+The agent card's endpoint must be on `agent_url`'s origin, or on an origin added with `allow_endpoint_origin` (over `https` unless loopback). `A2aClient::resolve_agent_card` refuses a card naming any other host with `a2a.card_endpoint_refused`, and `RemoteA2aAgent` ends the run with an error event. `credential_broker` attaches a bearer token only to requests inside the token's audience. A stream that ends before its task reaches a final status is reported as an error event.
 
 ### Auth Bridge
 
@@ -543,7 +543,7 @@ The server applies these layers to every route:
 | Request timeout | 30 seconds (`request_timeout`; `SecurityConfig::development()` uses 60) |
 | Response headers | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 1; mode=block` |
 | Request ID | `x-request-id` |
-| Error details | Sanitized (`expose_error_details: false`) |
+| Error details | A2A internal errors read `Internal server error` (`expose_error_details: false`); REST errors carry their code, category, and message |
 | User authorization | Session, artifact, and debug endpoints enforce the authenticated user when an auth bridge is configured |
 
 ## Changes in 3.0

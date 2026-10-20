@@ -46,8 +46,10 @@ pub trait MemoryService: Send + Sync {
 }
 ```
 
-- **`add_session`** ingests a conversation's worth of entries. Nothing calls it for
-  you: call it from your application, for example when a conversation ends.
+- **`add_session`** ingests a conversation's worth of entries. The `Runner` never calls
+  it: call it from your application, for example when a conversation ends.
+  `IntegratedRealtimeRunner` calls it for each completed turn unless
+  `IntegrationConfig::store_to_memory` is off.
 - **`search`** is recall. Backends interpret the query differently — keyword,
   embedding similarity, or graph token-scoring — but the contract is the same.
 - **`list_recent`** lists a user's newest entries, global and project-scoped, with no

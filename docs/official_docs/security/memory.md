@@ -304,7 +304,8 @@ validate_project_id(&"x".repeat(257))?;   // Err: exceeds 256 bytes
 ```
 
 `SqliteMemoryService` matches entries that contain every query word; `PostgresMemoryService`
-ranks by vector similarity. See [Memory Backends](../memory/backends.md).
+ranks by vector similarity with an embedding provider, and by full-text rank without one. See
+[Memory Backends](../memory/backends.md).
 
 ## Custom Memory Backend
 
@@ -370,8 +371,9 @@ let runner = Runner::builder()
 
 A `MemoryServiceAdapter` is bound to one user, so a runner that serves several users should
 give its agents the memory tools, which take the app and user from each call, rather than one
-runner-wide adapter. Nothing is written to memory automatically: call `add_session` (or
-`add_entry`) when a conversation holds something worth keeping. See
+runner-wide adapter. The `Runner` writes nothing to memory: call `add_session` (or
+`add_entry`) when a conversation holds something worth keeping. `IntegratedRealtimeRunner`
+stores each completed turn unless `IntegrationConfig::store_to_memory` is off. See
 [Memory in Agents](../memory/tools-and-agents.md).
 
 ## Architecture

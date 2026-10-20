@@ -23,8 +23,9 @@ cargo install adk-cli
 # Just run it — interactive setup picks your provider on first run
 adk-rust
 
-# Or pre-configure a provider
-adk-rust --provider openai --api-key sk-...
+# Or pre-configure a provider (the default build compiles Gemini only;
+# `cargo install adk-cli --features all-providers` adds the others)
+adk-rust --provider gemini --api-key your-key
 
 # Equivalent to:
 adk-rust chat
@@ -32,7 +33,7 @@ adk-rust chat
 # Web server
 adk-rust serve --port 3000
 
-# Coding agent (sandboxed to the directory)
+# Coding agent: file tools are confined to the directory; `bash` runs on the host, not in an OS sandbox
 adk-rust code "make the failing test pass"
 adk-rust goal "all tests green" --until "cargo test" --resume   # autonomous, durable
 adk-rust ultracode "add input validation"                       # parallel ultra-review
@@ -54,7 +55,7 @@ See the [Coding Agent guide](../docs/official_docs/coding-agent/cli.md) for `cod
 | `vertex-agent-registry` | no | `adk-rust registry` |
 | `vertex-skill-registry` | no | Skill Registry lookups in `adk-rust skills` |
 | `telemetry-otlp` | no | OTLP export for `TelemetryConfig::Otlp` |
-| `optimize` | no | The `Launcher` CLI's `optimize` subcommand: instruction optimization against an evaluation set |
+| `optimize` | no | The `Launcher` CLI's `optimize` subcommand, which parses its arguments and logs that optimization is wired through `adk-eval`'s `PromptOptimizer`; it optimizes nothing itself |
 
 `cargo install adk-cli` builds the default features; add `--features all-providers` for every provider.
 
@@ -116,7 +117,8 @@ adk-rust registry     Agent Registry registration and search (`vertex-agent-regi
 | `--host` | `127.0.0.1` | Listen address; `0.0.0.0` listens on every interface |
 
 The server answers only loopback names and IP addresses, and allows no cross-origin browser
-access, unless `SecurityConfig` lists more hosts and origins.
+access. The binary has no flag for more hosts or origins; a custom binary lists them with
+`Launcher::with_security_config`.
 
 ### `adk-rust audit` subcommands
 

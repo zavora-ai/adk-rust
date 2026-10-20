@@ -195,7 +195,7 @@ fn validator() -> adk_guardrail::Result<SchemaValidator> {
 
 ## Execution
 
-- Guardrails whose `run_parallel()` is `true` (the default) run concurrently; the rest run in order afterwards, and a transform feeds the next guardrail.
+- Guardrails whose `run_parallel()` is `true` (the default) run concurrently on the same input; when more than one of them transforms it, only the last transform in set order is kept. The rest run in order afterwards, each on the previous guardrail's output (`PiiRedactor` runs in this group).
 - `LlmAgentBuilder::input_guardrails`, `output_guardrails`, and `tool_guardrails` attach sets to an agent (`adk-agent`'s `guardrails` feature).
 - Guardrail reasons reach the caller and the model; logs carry them only when `RunConfig::record_payloads` is set.
 
