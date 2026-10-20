@@ -51,6 +51,9 @@ pub(crate) const HARNESS_TOOL_NAMES: &[&str] = &[
     "load_skill",
     "load_skill_resource",
     "search_skills",
+    "memory_read",
+    "memory_write",
+    "memory_delete",
 ];
 
 /// Whether `policy` is, or composes, the harness policy (spec 3.1 §7.3).
@@ -225,6 +228,9 @@ impl ToolClassRegistry {
         registry.register("write_file", ToolKind::Edit);
         registry.register("edit_file", ToolKind::Edit);
         registry.register("bash", ToolKind::Shell(Isolation::Host));
+        registry.register("memory_read", ToolKind::Read);
+        registry.register("memory_write", ToolKind::MemoryWrite);
+        registry.register("memory_delete", ToolKind::MemoryWrite);
         registry
     }
 
@@ -713,6 +719,10 @@ pub(crate) struct PolicyInner {
     pub(crate) switches: PolicySwitches,
     pub(crate) trust_mcp_read_only_hints: bool,
     pub(crate) prompts: PromptContexts,
+    #[cfg(feature = "auth")]
+    pub(crate) identity: Arc<crate::identity::IdentityGate>,
+    #[cfg(feature = "observe")]
+    pub(crate) root_agent: String,
 }
 
 /// The harness [`ToolPolicy`] (spec 3.1 §7.4, §7.5).
@@ -929,7 +939,24 @@ impl HarnessPolicy {
         origin: Option<&ToolOrigin>,
         call_id: Option<&str>,
     ) -> PolicyDecision {
+        #[cfg(feature = "observe")]
+        let span = crate::observe::decision_span(&request.tool_name, &self.inner.shell.status);
+        #[cfg(feature = "observe")]
+        let evaluated = {
+            use tracing::Instrument as _;
+            self.evaluate_full(request, origin, call_id, true).instrument(span.clone()).await
+        };
+        #[cfg(not(feature = "observe"))]
         let evaluated = self.evaluate_full(request, origin, call_id, true).await;
+        #[cfg(feature = "observe")]
+        {
+            span.record("harness.tool_kind", crate::observe::tool_kind_label(&evaluated.kind));
+            span.record("harness.mode", evaluated.mode.as_str());
+            span.record("harness.decision", format!("{:?}", evaluated.decision).as_str());
+            if request.agent_name != self.inner.root_agent {
+                span.record("harness.member", request.agent_name.as_str());
+            }
+        }
         if evaluated.kind == ToolKind::ShellEscalation {
             crate::shell::record_retry_requested(
                 self.audit_for(request),
@@ -983,6 +1010,14 @@ impl HarnessPolicy {
                 mode,
             );
         }
+        // Without authenticated identity on a served harness, Auto decides as Ask and no
+        // standing rule applies (spec 3.1 §9.2 I6).
+        #[cfg(feature = "auth")]
+        let identity_inert = self.inner.identity.inert(&request.invocation_id);
+        #[cfg(not(feature = "auth"))]
+        let identity_inert = false;
+        let mode =
+            if identity_inert && mode == HarnessMode::Auto { HarnessMode::Ask } else { mode };
         let protected = kind == ToolKind::Edit
             && request.args.get("path").and_then(Value::as_str).is_some_and(|path| {
                 self.inner
@@ -1011,7 +1046,7 @@ impl HarnessPolicy {
         }
 
         let mut matched_rules = Vec::new();
-        let evaluation = if kind.rule_eligible() {
+        let evaluation = if kind.rule_eligible() && !identity_inert {
             match self
                 .inner
                 .rules
@@ -1058,6 +1093,7 @@ impl HarnessPolicy {
             (&decision, &evaluation.outcome)
             && base != TableDecision::Allow
         {
+            tracing::Span::current().record("harness.rule_id", rule_id.as_str());
             tracing::info!(
                 tool.name = %request.tool_name,
                 harness.rule_id = %rule_id,

@@ -367,6 +367,20 @@ impl Harness {
             .unwrap_or_default())
     }
 
+    /// The spend of `user`, or of every user, per acting agent and vendor: the report
+    /// behind the CLI's `/cost` and the web UI's `harness.spend` (spec 3.1 §7.13).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let report = harness.spend(Some(&user));
+    /// println!("{}", report.render());
+    /// ```
+    #[cfg(feature = "observe")]
+    pub fn spend(&self, user: Option<&UserId>) -> crate::observe::SpendReport {
+        self.agent.runtime().spend(user.map(UserId::as_ref))
+    }
+
     /// Calls of the session waiting for a decision.
     pub async fn pending_approvals(
         &self,

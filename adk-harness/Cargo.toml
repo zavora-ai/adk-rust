@@ -90,6 +90,8 @@ adk-model = { path = "../adk-model", default-features = false }
 proptest = "1.5"
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }
+# Captures the harness spans in the observability tests.
+tracing-subscriber = { workspace = true, features = ["registry"] }
 
 [package.metadata.docs.rs]
 all-features = true

@@ -1,0 +1,22 @@
+[package]
+name = "harness-eval-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "The adk-harness eval suite (spec 3.1 §7.13) on a scripted or a live model, against a BaselineStore baseline"
+
+[workspace]
+
+[dependencies]
+adk-core = { path = "../../adk-core" }
+adk-devtools = { path = "../../adk-devtools" }
+adk-eval = { path = "../../adk-eval" }
+adk-harness = { path = "../../adk-harness", default-features = false, features = ["runner", "observe"] }
+adk-model = { path = "../../adk-model", features = ["gemini", "openai", "anthropic"] }
+adk-session = { path = "../../adk-session" }
+anyhow = "1.0"
+dotenvy = "0.15"
+futures = "0.3"
+serde_json = "1.0"
+tempfile = "3"
+tokio = { version = "1.40", features = ["full"] }

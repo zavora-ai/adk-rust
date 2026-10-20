@@ -9,6 +9,18 @@ use async_trait::async_trait;
 use crate::mode::{HarnessMode, ModeStore};
 use crate::tools::TodoList;
 
+/// Harness work that runs before each model request, ahead of the reminders: identity
+/// observation (spec 3.1 §9.2 I6) and the loop guard (§7.13).
+#[async_trait]
+pub(crate) trait RequestObserver: Send + Sync {
+    /// Observes `ctx` before its next model request; an error ends the turn.
+    async fn before_request(
+        &self,
+        ctx: &Arc<dyn ReadonlyContext>,
+        request: &mut LlmRequest,
+    ) -> Result<()>;
+}
+
 /// The harness tools as one [`Toolset`] (spec 3.1 §7.1).
 ///
 /// The tool list is fixed for the agent's lifetime — `exit_plan_mode` is declared in
@@ -29,6 +41,7 @@ pub struct HarnessToolset {
     mode_store: Arc<dyn ModeStore>,
     default_mode: HarnessMode,
     reminded: Mutex<HashMap<String, u64>>,
+    observers: Vec<Arc<dyn RequestObserver>>,
 }
 
 impl HarnessToolset {
@@ -37,7 +50,20 @@ impl HarnessToolset {
         mode_store: Arc<dyn ModeStore>,
         default_mode: HarnessMode,
     ) -> Self {
-        Self { tools, mode_store, default_mode, reminded: Mutex::new(HashMap::new()) }
+        Self {
+            tools,
+            mode_store,
+            default_mode,
+            reminded: Mutex::new(HashMap::new()),
+            observers: Vec::new(),
+        }
+    }
+
+    /// Adds work to run before each model request.
+    #[cfg(any(feature = "auth", feature = "observe"))]
+    pub(crate) fn with_observer(mut self, observer: Arc<dyn RequestObserver>) -> Self {
+        self.observers.push(observer);
+        self
     }
 
     /// Names of the tools, in declaration order.
@@ -97,6 +123,9 @@ impl Toolset for HarnessToolset {
         ctx: Arc<dyn ReadonlyContext>,
         request: &mut LlmRequest,
     ) -> Result<()> {
+        for observer in &self.observers {
+            observer.before_request(&ctx, request).await?;
+        }
         let mode = match self.mode_store.get(ctx.app_name(), ctx.user_id(), ctx.session_id()).await
         {
             Ok(Some(record)) => record.mode_for_invocation(ctx.invocation_id()),

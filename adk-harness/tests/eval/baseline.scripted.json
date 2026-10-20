@@ -1,0 +1,21 @@
+{
+  "timestamp": "2026-10-20T15:08:19.987851Z",
+  "eval_set_id": "adk-harness",
+  "metrics": {
+    "trajectory": {
+      "fix_failing_test": 0.6,
+      "plan_mode_writes_nothing": 0.3333333333333333,
+      "goal_until": 0.6666666666666666
+    },
+    "efficiency": {
+      "fix_failing_test": 1.0,
+      "plan_mode_writes_nothing": 1.0,
+      "goal_until": 1.0
+    },
+    "passed": {
+      "plan_mode_writes_nothing": 1.0,
+      "fix_failing_test": 1.0,
+      "goal_until": 1.0
+    }
+  }
+}

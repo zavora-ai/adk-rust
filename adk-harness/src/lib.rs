@@ -19,6 +19,9 @@
 //! | [`InstructionsConfig`], [`ProjectInstructions`], [`WorkspaceTrustStore`] | §7.7 |
 //! | `SkillsConfig` (feature `skills`) | §7.8 |
 //! | [`ShellIsolation`], [`HarnessBashTool`], [`ShellLedger`] | §7.9 |
+//! | `SpendReport`, `LoopGuard`, `harness.*` span attributes (feature `observe`) | §7.13 |
+//! | `RbacMap`, `ShellCredential`, `EphemeralAuditLog` (feature `auth`) | §7.14 |
+//! | `MemoryConfig`, `FileMemory`, `memory_*` tools (feature `memory`) | §7.15 |
 //! | [`coding::CodingAgent`] | §7.19 |
 //!
 //! # Example
@@ -47,8 +50,14 @@ mod fsutil;
 mod goal;
 #[cfg(feature = "runner")]
 mod harness;
+#[cfg(feature = "auth")]
+mod identity;
 mod instructions;
+#[cfg(feature = "memory")]
+mod memory;
 mod mode;
+#[cfg(feature = "observe")]
+mod observe;
 mod policy;
 mod prompt;
 mod shell;
@@ -82,16 +91,29 @@ pub use goal::GoalEngine;
 pub use goal::{GoalSpec, GoalState, GoalStatus};
 #[cfg(feature = "runner")]
 pub use harness::{CANCELLED_BY_MODE_CHANGE_STATUS, Harness, HarnessDecision};
+#[cfg(feature = "auth")]
+pub use identity::{EphemeralAuditLog, HARNESS_AUDIT_REQUIRED_CODE, RbacMap, ShellCredential};
 pub use instructions::{
     FALLBACK_INSTRUCTION_FILES, FileWorkspaceTrustStore, InMemoryWorkspaceTrustStore,
     InstructionFile, InstructionScope, InstructionsConfig, ProjectInstructions, TrustDecision,
     WorkspaceTrust, WorkspaceTrustStore,
+};
+#[cfg(feature = "memory")]
+pub use memory::{
+    FileMemory, MEMORY_INDEX_FILE, MEMORY_INDEX_MARKER, MemoryChange, MemoryConfig, MemoryLayout,
+    MemoryLimits, MemoryTopic, MemoryWritePolicy, project_slug,
 };
 #[cfg(feature = "sqlite")]
 pub use mode::SqliteModeStore;
 pub use mode::{
     FileModeStore, HarnessMode, InMemoryModeStore, MODE_STATE_KEY, ModeChange, ModeRecord,
     ModeSource, ModeStore,
+};
+#[cfg(feature = "observe")]
+pub use observe::{
+    ATTR_GOAL_ITERATION, ATTR_ISOLATION, ATTR_MEMBER, ATTR_MODE, ATTR_RULE_ID, ATTR_TOOL_KIND,
+    LOOP_DETECTED_CODE, SpendEntry, SpendReport, goal_iteration_span, isolation_label, member_span,
+    run_span, tool_kind_label,
 };
 pub use policy::{
     HARNESS_POLICY_REF, HarnessPolicy, Isolation, MODE_TABLE, ModeCell, PolicySwitches,
@@ -117,4 +139,6 @@ pub use tools::{
     PLAN_STATE_KEY, PlanGate, PlanStep, TODOS_STATE_KEY, TodoItem, TodoList, TodoStatus,
     UpdateTodoTool, WriteTodosTool,
 };
+#[cfg(feature = "memory")]
+pub use tools::{MemoryDeleteTool, MemoryReadTool, MemoryWriteTool};
 pub use toolset::HarnessToolset;

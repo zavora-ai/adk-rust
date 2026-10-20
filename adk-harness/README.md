@@ -23,6 +23,9 @@ agent tool — and the harness refuses to run without it.
 | Todos | `write_todos` / `update_todo` in session state, one list per session |
 | Instructions | `AGENTS.md` from the git root down to the workspace, verbatim, hashed, delimited as untrusted, after a workspace trust decision; nested files listed, never inlined |
 | Skills | Progressive disclosure (`list_skills`, `load_skill`, `load_skill_resource`) without convention documents |
+| Observability | `harness.run` and `harness.decide` spans with `harness.mode`, `harness.tool_kind`, `harness.isolation`, `harness.rule_id`, `harness.member`; spend metered per acting agent and subject (`Harness::spend`, `harness.spend`); `LoopGuard` tightens a looping session to ReadOnly and ends the turn; an `adk-eval` suite with a `BaselineStore` baseline |
+| Identity | `RbacMap` permissions per tool class through `ScopeGuard`/`ProtectedTool`; per-call, subject-scoped shell credentials through a `CredentialBroker` and a credential helper revoked after the call; `require_authenticated_identity` for served harnesses; every run audited in Block mode, to a signed `AuditLog` (`EphemeralAuditLog` by default) |
+| File memory | `FileMemory` topic files and a derived `MEMORY.md` per user, outside the workspace; `memory_read`, and `memory_write`/`memory_delete` behind a one-time approval; the index last in the instruction |
 
 ## Mode table
 
@@ -89,9 +92,8 @@ live scenarios on OpenAI, Anthropic and Gemini.
 
 ## Status
 
-Beta (spec 3.1 phase 1). Team members (§7.10), the plan graph and goal engine (§7.11),
-observability (§7.13), identity (§7.14), file memory (§7.15) and the packs (§7.16–§7.18)
-land over the 3.1.x line; until then the builder refuses them with
+Beta (spec 3.1 phase 1). Team members (§7.10), the plan graph and goal engine (§7.11)
+and the packs (§7.16–§7.18) land over the 3.1.x line; until then the builder refuses them with
 `not yet implemented: spec 3.1 §…`. Container isolation for the shell (`docker`) is not
 implemented yet. [`examples/harness_redteam`](https://github.com/zavora-ai/adk-rust/tree/main/examples/harness_redteam)
 runs the shell red-team scenarios; the [shell and sandbox guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/shell-and-sandbox.md)
