@@ -73,6 +73,8 @@ pub struct HarnessDb {
     pub ledger: Arc<adk_harness::SqliteShellLedger>,
     pub approvals: Arc<adk_session::SqliteApprovalStore>,
     pub runs: Arc<adk_session::SqliteRunStore>,
+    /// Long-term facts (spec 3.1 §7.15.2).
+    pub facts: Arc<adk_harness::SqliteFactStore>,
 }
 
 /// Opens `harness.db` and migrates every store in it.
@@ -88,8 +90,10 @@ pub async fn open_harness_db() -> Result<HarnessDb> {
     ledger.migrate().await?;
     let approvals = adk_session::SqliteApprovalStore::from_pool(pool.clone());
     approvals.migrate().await?;
-    let runs = adk_session::SqliteRunStore::from_pool(pool);
+    let runs = adk_session::SqliteRunStore::from_pool(pool.clone());
     runs.migrate().await?;
+    let facts = adk_harness::SqliteFactStore::new(pool);
+    facts.migrate().await?;
     Ok(HarnessDb {
         sessions,
         modes: Arc::new(modes),
@@ -97,6 +101,7 @@ pub async fn open_harness_db() -> Result<HarnessDb> {
         ledger: Arc::new(ledger),
         approvals: Arc::new(approvals),
         runs: Arc::new(runs),
+        facts: Arc::new(facts),
     })
 }
 

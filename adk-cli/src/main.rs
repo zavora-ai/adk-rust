@@ -127,6 +127,8 @@ async fn main() -> Result<()> {
         #[cfg(all(feature = "harness", feature = "persist"))]
         Some(Commands::Rules { command }) => manage::rules(command).await,
         #[cfg(all(feature = "harness", feature = "persist"))]
+        Some(Commands::Memory { command }) => manage::memory(command).await,
+        #[cfg(all(feature = "harness", feature = "persist"))]
         Some(Commands::Approvals { command, server, token }) => {
             let token = token.or_else(|| std::env::var("ADK_SERVE_TOKEN").ok());
             manage::approvals(command, server, token).await
@@ -169,6 +171,9 @@ pub(crate) struct ResolvedModel {
     provider: Option<ModelProvider>,
     /// The chat instruction: `--instruction`, or the default one.
     instruction: String,
+    /// The provider key, for the long-term memory embedder (spec 3.1 §7.15.2).
+    #[cfg_attr(not(feature = "harness"), allow(dead_code))]
+    api_key: Option<String>,
 }
 
 /// Resolves the model from the flags, saved config, secure storage, or first-run setup
@@ -181,6 +186,7 @@ fn resolve_model(options: &AgentOptions) -> Result<ResolvedModel> {
             id: "scripted".to_string(),
             provider: None,
             instruction: options.instruction.clone().unwrap_or_else(setup::default_instruction),
+            api_key: None,
         });
     }
     let resolved = setup::resolve(
@@ -200,6 +206,7 @@ fn resolve_model(options: &AgentOptions) -> Result<ResolvedModel> {
         id: resolved.model,
         provider: Some(resolved.provider),
         instruction: resolved.instruction,
+        api_key: resolved.api_key,
     })
 }
 

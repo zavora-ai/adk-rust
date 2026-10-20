@@ -26,6 +26,7 @@ adk-rust                       # the harness REPL, ask mode
 | `adk-rust serve` | The harness in plan mode behind the HTTP server with the approval inbox; see [Serving the harness](serving.md) |
 | `adk-rust sessions list\|show\|rm` | Your harness sessions |
 | `adk-rust rules list\|add\|rm` | Your standing rules |
+| `adk-rust memory list\|show\|forget\|accept\|export\|import` | The long-term facts the harness learned; see [Long-term memory](#long-term-memory) |
 | `adk-rust approvals list\|approve\|deny` | Calls waiting for a decision, here or on a served harness with `--server URL --token T` |
 
 The model is chosen as for every command: `--provider`, `--model` and `--api-key`, the
@@ -48,9 +49,9 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--trust` | Trusts the workspace's instruction files without asking |
 | `--pack browser\|computer-use\|payments` | Adds a pack |
 | `--member NAME=explore\|general` | Adds a team member |
+| `--no-memory` | Turns long-term memory off: nothing is recalled or learned |
 
-> **Note:** packs, ACP and A2A members and `/memory` report themselves unavailable until
-> their parts of spec 3.1 land (§7.10, §7.15, §7.16).
+> **Note:** packs report themselves unavailable until their part of spec 3.1 lands (§7.16).
 
 ### Configuration files
 
@@ -159,14 +160,15 @@ asks again.
 | `/session` | Session id, user, workspace, mode and event count |
 | `/skills` | Skills in the workspace's skill directories, `.adk/skills/` and `~/.adk/skills/` |
 | `/cost` | Your spend: model calls, tokens and cost per acting agent and vendor |
-| `/memory` | The harness's file memory, when available |
+| `/memory` | Working notes and long-term facts with their status, kind, source and session; `/memory forget ID` and `/memory accept ID` act on one fact (a unique prefix of the id is enough) |
 | `/help`, `exit` | Lists the commands; leaves the REPL |
 
 Opening a session that has held calls with decisions resumes them first.
 
 ## Sessions and `harness.db`
 
-Sessions, held calls, durable runs, modes and standing rules live in one SQLite file,
+Sessions, held calls, durable runs, modes, standing rules and long-term facts live in one
+SQLite file,
 `<config dir>/adk-rust/harness.db`, created readable by you only. Sessions belong to the OS
 user and the app `adk-rust`. A session records the workspace it started in and refuses to
 continue from another `--dir`. `--ephemeral` keeps everything in memory.
@@ -182,6 +184,36 @@ adk-rust rules rm 2
 
 `rules add --operator --source mcp:github list_issues` pins any declaration of a publisher's
 tool rather than the current one, for tools you maintain yourself.
+
+## Long-term memory
+
+The REPL, `code` and `goal` keep long-term facts in `harness.db` (spec 3.1 §7.15.2): the
+preferences you state, how a project builds and tests, what fixed a failure. When a session
+ends — `exit` in the REPL, the end of `code` or `goal` — the session's model distils it into
+facts; later sessions in the same project recall them on each turn. The first run with
+memory says once what is stored and where. `serve` and `--ephemeral` keep no facts, and
+`--no-memory` turns memory off.
+
+| Status | Means |
+|---|---|
+| `known` | You said it (your own words are quoted in the fact's provenance), or you confirmed it |
+| `assumed` | The agent inferred it, or read it in a command's output or a file; a hint until you confirm it |
+| `superseded`, `forgotten` | History: replaced by a newer fact, or forgotten; never recalled |
+
+Recall finds related facts with an embedder when one is available — the model's provider
+when it embeds (Gemini, OpenAI), else Gemini or OpenAI when its key is set — and by shared
+words otherwise, with nothing leaving the machine for it. The banner shows
+`Memory : long-term facts on`.
+
+```bash
+adk-rust memory list                     # this project's facts and your preferences, known first
+adk-rust memory list --all               # every project, with superseded and forgotten facts
+adk-rust memory show 01M5D9              # one fact with its provenance, by id or a unique prefix
+adk-rust memory accept 01M5D9            # confirm an assumed fact: it becomes known
+adk-rust memory forget 01M5D9            # never recalled again; kept as history
+adk-rust memory export --out facts.jsonl # every fact, as JSON lines with provenance
+adk-rust memory import facts.jsonl       # imported facts arrive assumed
+```
 
 ## Goals
 
