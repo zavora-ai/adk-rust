@@ -14,8 +14,8 @@ Isolated code execution runtime for [ADK-Rust](https://github.com/zavora-ai/adk-
 [dependencies]
 adk-sandbox = "3.0"
 
-# OS-level enforcement and the WASM backend:
-adk-sandbox = { version = "3.0", features = ["sandbox-native", "wasm"] }
+# Or, with OS-level enforcement and the WASM backend:
+# adk-sandbox = { version = "3.0", features = ["sandbox-native", "wasm"] }
 ```
 
 Or use the meta-crate, where the `sandbox` feature (included in `full`) re-exports it:

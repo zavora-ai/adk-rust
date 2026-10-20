@@ -20,6 +20,7 @@ The plugin never re-runs the tool itself. The model reads the reflection and dec
 [dependencies]
 adk-retry-reflect = "3.0.0"
 adk-agent = { version = "3.0.0", features = ["enhanced-plugins"] }
+adk-plugin = "3.0.0"
 ```
 
 The umbrella crate does not re-export `adk-retry-reflect`; its `plugin` feature enables `adk-agent`'s `enhanced-plugins`, which `LlmAgentBuilder::enhanced_plugin` needs.
@@ -99,7 +100,7 @@ budget:
 
 | Event | Effect |
 |-------|--------|
-| A tool call fails | Its tool-and-arguments count in this invocation rises by one; a reflection is added while the count is under `max_retries` and the invocation's total is under `global_limit` |
+| A tool call fails | A reflection is added while fewer than `max_retries` reflections were added for that tool and argument set in this invocation, and fewer than `global_limit` across the invocation; each reflection raises both counts by one |
 | A tool call succeeds | That tool's counts in this invocation are cleared, so its next failure is reflected again |
 | More than 1,024 invocations are tracked | The oldest invocation's counts are forgotten |
 
@@ -200,7 +201,7 @@ The plugin emits `tracing` events with the tool name and the result's error text
 | `retry_reflect.global_limit_exhausted` | `warn` | The invocation reached `global_limit` |
 | `retry_reflect.circuit_broken` | `warn` | The tool's circuit is open |
 | `retry_reflect.skipped_authorization_denial` | `info` | A refusal passed through |
-| `retry_reflect.skipped_non_idempotent_timeout` | `warn` | A non-idempotent timeout passed through |
+| `retry_reflect.skipped_non_idempotent_timeout` | `warn` | A non-idempotent timeout reported as an `"error"` result passed through. `LlmAgent` answers such a timeout with an `outcome_unknown` response, which carries no `"error"` key, so it passes through without this event |
 
 ## Related
 

@@ -32,9 +32,10 @@ stateDiagram-v2
 
 The monitor checks whether the MCP connection has closed. It restarts a
 `Crashed` or `FailedToStart` server only when the server's configuration has a
-`restartPolicy` with attempts remaining, and marks it `FailedToStart` once they
-run out. `disable_server` moves a server in any state to `Disabled`, and
-`start_server` starts any server that is not disabled.
+`restartPolicy`. `maxRestartAttempts` bounds consecutive failed restarts: a
+successful restart resets the count, and the server is marked `FailedToStart`
+once that many restarts in a row fail. `disable_server` moves a server in any
+state to `Disabled`, and `start_server` starts any server that is not disabled.
 
 ## Configuration
 
