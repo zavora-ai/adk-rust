@@ -4,9 +4,10 @@
 //! `RunConfig::action_ledger` set the agent records each call before it executes and
 //! answers a re-issued call from its record. The agent keys a record by the call's
 //! idempotency key, `{app}/{user}/{session}/{invocation}/{call id}`, and a held call that a
-//! later run resumes executes under that later run's invocation. A resumed call's key is
-//! therefore mapped to one every resumption of the same held call shares, so a call that
-//! ran in a run that never saved its result is answered from its record, not run again.
+//! later run resumes by `adk_agent::held_call_ledger_key`, which every resumption of the
+//! same held call shares, so a call that ran in a run that never saved its result is
+//! answered from its record, not run again. The mapping below sends a resumed call's
+//! run-scoped key to that same key.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -20,7 +21,8 @@ const RESUMED_CAP: usize = 4096;
 /// Upper bound of wrappers kept for ledgers that runs carry.
 const WRAPPED_CAP: usize = 16;
 
-/// The ledger key every resumption of the held call `call_id` with `fingerprint` shares.
+/// The ledger key every resumption of the held call `call_id` with `fingerprint` shares:
+/// the key `LlmAgent` records a resumed call under.
 pub(crate) fn held_call_key(
     app: &str,
     user: &str,
@@ -28,8 +30,7 @@ pub(crate) fn held_call_key(
     call_id: &str,
     fingerprint: &str,
 ) -> String {
-    let digest = crate::fsutil::hex_digest(fingerprint.as_bytes());
-    format!("{app}/{user}/{session}/held/{call_id}/{digest}")
+    adk_agent::held_call_ledger_key(app, user, session, call_id, fingerprint)
 }
 
 /// The function response for a held call that ran but whose result was never saved,

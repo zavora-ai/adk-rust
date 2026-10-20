@@ -126,6 +126,7 @@ pub use team::{
     WorkflowArchitectureTemplate, analyze_team_execution, validate_team_replay,
 };
 pub use tool_call_markup::{normalize_content, normalize_option_content};
+pub use tool_ledger::held_call_ledger_key;
 pub use workflow::{
     ConditionalAgent, DEFAULT_LOOP_MAX_ITERATIONS, LlmConditionalAgent, LlmConditionalAgentBuilder,
     LoopAgent, ParallelAgent, SequentialAgent,

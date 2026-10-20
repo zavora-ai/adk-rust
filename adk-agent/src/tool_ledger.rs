@@ -10,6 +10,42 @@ use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind, AuditRe
 use adk_core::{ActionLedger, ActionOutcome, ActionRecord, InvocationContext, ToolEffect};
 use serde_json::Value;
 
+/// The action-ledger key of a held tool call that a later run resumes.
+///
+/// A call's ledger key is normally its
+/// [`ToolContext::idempotency_key`](adk_core::ToolContext::idempotency_key), which names
+/// the invocation that runs it. A held call resumes in a later run, under that run's
+/// invocation, so `LlmAgent` keys a resumed call by its original identity instead: the
+/// session, the call ID the call was issued under, and a digest of the
+/// [`ToolConfirmationRequest::fingerprint`](adk_core::ToolConfirmationRequest::fingerprint)
+/// it was held with. Every resumption of the same held call shares one record, so a call
+/// that ran in a run whose result was never saved is answered from its record instead of
+/// running again (spec 3.1 §7.12, §9.2 I37).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_agent::held_call_ledger_key;
+/// use adk_core::ToolConfirmationRequest;
+/// use serde_json::json;
+///
+/// let request = ToolConfirmationRequest::new("transfer", json!({ "amount": 40 }))
+///     .with_function_call_id("call-1");
+/// let key = held_call_ledger_key("app", "alice", "s1", "call-1", &request.fingerprint());
+/// assert!(key.starts_with("app/alice/s1/held/call-1/"));
+/// assert_eq!(key, held_call_ledger_key("app", "alice", "s1", "call-1", &request.fingerprint()));
+/// ```
+pub fn held_call_ledger_key(
+    app_name: &str,
+    user_id: &str,
+    session_id: &str,
+    function_call_id: &str,
+    fingerprint: &str,
+) -> String {
+    let digest = adk_core::json_digest(&Value::String(fingerprint.to_string()));
+    format!("{app_name}/{user_id}/{session_id}/held/{function_call_id}/{digest}")
+}
+
 /// A call begun in the action ledger, completed once the tool finishes.
 pub(crate) struct LedgeredCall {
     ledger: Arc<dyn ActionLedger>,

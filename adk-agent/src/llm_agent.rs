@@ -2579,6 +2579,17 @@ impl ToolExecutor<'_> {
 
     async fn execute_inner(&self, call: PendingToolCall) -> Result<ToolExecutionResult> {
         let PendingToolCall { index, name, args, id, function_call_id, resumes } = call;
+        // A resumed held call runs under a later invocation, so it is ledgered under its
+        // original identity, which every resumption of it shares (spec 3.1 §7.12, I37).
+        let resumed_ledger_key = resumes.as_ref().map(|held| {
+            crate::tool_ledger::held_call_ledger_key(
+                self.ctx.app_name(),
+                self.ctx.user_id(),
+                self.ctx.session_id(),
+                &function_call_id,
+                &held.fingerprint(),
+            )
+        });
         let mut tool_actions = EventActions::default();
         let mut response_content: Option<Content> = None;
         let mut run_after_tool_callbacks = true;
@@ -2854,7 +2865,7 @@ impl ToolExecutor<'_> {
                 let ledgered = match crate::tool_ledger::begin_ledgered_call(
                     self.ctx.as_ref(),
                     effect,
-                    tool_ctx.idempotency_key(),
+                    resumed_ledger_key.unwrap_or_else(|| tool_ctx.idempotency_key()),
                     &name,
                     &final_args,
                 )

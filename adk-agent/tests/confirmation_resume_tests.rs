@@ -398,6 +398,121 @@ async fn a_resumed_non_idempotent_call_goes_through_the_action_ledger_once() {
     assert_eq!(ledger.completed.load(Ordering::SeqCst), 1);
 }
 
+/// Stores events like its inner service, except while `losing` is set: then every event a
+/// run appends is lost, as when the process stops before the run's events are saved.
+struct LossySessions {
+    inner: InMemorySessionService,
+    losing: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait]
+impl SessionService for LossySessions {
+    async fn create(&self, req: CreateRequest) -> Result<Box<dyn adk_session::Session>> {
+        self.inner.create(req).await
+    }
+
+    async fn get(&self, req: GetRequest) -> Result<Box<dyn adk_session::Session>> {
+        self.inner.get(req).await
+    }
+
+    async fn list(
+        &self,
+        req: adk_session::ListRequest,
+    ) -> Result<Vec<Box<dyn adk_session::Session>>> {
+        self.inner.list(req).await
+    }
+
+    async fn delete(&self, req: adk_session::DeleteRequest) -> Result<()> {
+        self.inner.delete(req).await
+    }
+
+    async fn append_event(&self, session_id: &str, event: Event) -> Result<()> {
+        if self.losing.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.inner.append_event(session_id, event).await
+    }
+
+    async fn append_event_for_identity(&self, req: adk_session::AppendEventRequest) -> Result<()> {
+        if self.losing.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.inner.append_event_for_identity(req).await
+    }
+}
+
+#[tokio::test]
+async fn a_resumed_call_that_ran_before_its_result_was_saved_does_not_run_again() {
+    // spec 3.1 §7.12, §9.2 I37: the resumed call is ledgered under its original identity,
+    // not under the invocation of whichever run resumes it.
+    let model = ScriptedModel::new(vec![call("transfer", args(), "call-1")]);
+    let (tool, executions) = RecordingTool::new(ToolEffect::NonIdempotent);
+    let sessions = Arc::new(LossySessions {
+        inner: InMemorySessionService::new(),
+        losing: std::sync::atomic::AtomicBool::new(false),
+    });
+    sessions
+        .create(CreateRequest {
+            app_name: "governed".to_string(),
+            user_id: "user".to_string(),
+            session_id: Some("session".to_string()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let ledger: Arc<dyn ActionLedger> = Arc::new(InMemoryActionLedger::new());
+    let runner = Runner::builder()
+        .app_name("governed")
+        .agent(Arc::new(agent(model.clone(), tool)))
+        .session_service(sessions.clone() as Arc<dyn SessionService>)
+        .run_config(RunConfig::builder().action_ledger(ledger.clone()).build())
+        .build()
+        .unwrap();
+    let run = |text: &'static str, config: Option<RunConfig>| {
+        let runner = &runner;
+        async move {
+            let stream = runner
+                .run_with_config(
+                    UserId::new("user").unwrap(),
+                    SessionId::new("session").unwrap(),
+                    Content::new("user").with_text(text),
+                    config,
+                )
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(5), stream.collect::<Vec<_>>())
+                .await
+                .expect("the run must finish")
+        }
+    };
+    let request = confirmation_requests(&run("send 40", None).await).remove(0);
+    // The client resends its decision with every resume until it sees the result.
+    let call_id = request.function_call_id.clone().unwrap();
+    let decided = RunConfig::builder()
+        .action_ledger(ledger.clone())
+        .tool_confirmation_decisions(HashMap::from([(
+            call_id.clone(),
+            ToolConfirmationDecision::Approve,
+        )]))
+        .tool_confirmation_fingerprints(HashMap::from([(call_id, request.fingerprint())]))
+        .build();
+
+    sessions.losing.store(true, Ordering::SeqCst);
+    run("", Some(decided.clone())).await;
+    sessions.losing.store(false, Ordering::SeqCst);
+    assert_eq!(executions.lock().unwrap().len(), 1, "the approved call ran");
+
+    let resumed = ok_events(run("", Some(decided)).await);
+
+    assert_eq!(*executions.lock().unwrap(), vec![args()], "the call ran once across both runs");
+    let answered = responses_in(&resumed);
+    assert!(
+        answered.iter().any(|(id, response)| id.as_deref() == Some("call-1")
+            && response["status"] == "already_succeeded"),
+        "the call is answered from its ledger record: {answered:?}"
+    );
+}
+
 // --- Deny ---
 
 #[tokio::test]
