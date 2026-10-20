@@ -16,13 +16,20 @@
 //! 4. re-runs with `resume = true` to show a completed goal is a no-op,
 //! 5. independently verifies the result.
 //!
+//! The agent is the `CodingAgent` preset of `adk-harness` (spec 3.1 §7.19) in ask mode:
+//! every edit and command passes the harness policy, and this unattended example approves
+//! each one through `ApproveAndLog`. `adk-rust goal` is the CLI form.
+//!
 //! Requires `GOOGLE_API_KEY` (Gemini 3) — or `CODING_PROVIDER=openai` + `OPENAI_API_KEY`.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use adk_agent::coding::CodingAgent;
-use adk_core::{Content, Llm, Part, SessionId, UserId};
+use adk_core::{
+    Content, Llm, Part, RunConfig, SessionId, ToolConfirmationDecision, ToolConfirmationHandler,
+    ToolConfirmationRequest, UserId,
+};
+use adk_harness::coding::CodingAgent;
 use adk_devtools::Workspace;
 use adk_model::GeminiModel;
 use adk_runner::Runner;
@@ -212,6 +219,24 @@ fn first_lines(s: &str, n: usize) -> String {
     s.lines().take(n).collect::<Vec<_>>().join("\n")
 }
 
+/// Approves every call the harness holds for approval and prints it: the example runs
+/// unattended, the way `adk-rust goal --yes` does.
+#[derive(Debug)]
+struct ApproveAndLog;
+
+#[adk_core::async_trait]
+impl ToolConfirmationHandler for ApproveAndLog {
+    async fn decide(
+        &self,
+        request: &ToolConfirmationRequest,
+    ) -> adk_core::Result<ToolConfirmationDecision> {
+        let args = request.args.to_string();
+        let args: String = args.chars().take(120).collect();
+        println!("  ✅ approved {}({args})", request.tool_name);
+        Ok(ToolConfirmationDecision::Approve)
+    }
+}
+
 async fn make_runner(agent: Arc<dyn adk_core::Agent>) -> anyhow::Result<Runner> {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     sessions
@@ -222,7 +247,16 @@ async fn make_runner(agent: Arc<dyn adk_core::Agent>) -> anyhow::Result<Runner> 
             state: Default::default(),
         })
         .await?;
-    Ok(Runner::builder().app_name(APP).agent(agent).session_service(sessions).build()?)
+    let config = RunConfig {
+        tool_confirmation_handler: Some(Arc::new(ApproveAndLog)),
+        ..RunConfig::default()
+    };
+    Ok(Runner::builder()
+        .app_name(APP)
+        .agent(agent)
+        .session_service(sessions)
+        .run_config(config)
+        .build()?)
 }
 
 async fn run_turn(runner: &Runner, prompt: &str) -> anyhow::Result<()> {

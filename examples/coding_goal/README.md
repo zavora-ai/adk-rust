@@ -5,6 +5,12 @@ Codex/Hermes-style **goal mode** as an ADK-Rust example: set a goal + a
 agent loops **plan → act → verify**, self-correcting from the check's output,
 until the condition passes or the iteration budget is reached.
 
+The agent is the `CodingAgent` preset of [`adk-harness`](../../adk-harness) in ask mode:
+every edit and command passes the harness policy and waits for approval. The demo runs
+unattended, so an `ApproveAndLog` confirmation handler approves each call and prints it.
+`adk-rust goal "…" --until "…"` is the CLI form, with approvals at the terminal and the goal
+kept in `harness.db`.
+
 It's durable: after **every** iteration the goal state is atomically
 checkpointed to disk (`.adk/goal.json`), so a restart can `resume` from where it
 left off — and a completed goal is recognized as done.

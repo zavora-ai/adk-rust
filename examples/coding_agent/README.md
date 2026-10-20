@@ -1,10 +1,12 @@
 # Coding Agent example
 
-Runs the ADK-Rust **`CodingAgent`** — the [`adk-devtools`](../../adk-devtools)
-toolset (read/write/edit/glob/grep/bash) plus the harness in
-[`adk-agent`](../../adk-agent) (feature `coding`) — against real tasks. The agent
-plans with `write_todos`, edits files, and runs commands in a **sandboxed
-workspace**.
+Runs the ADK-Rust **`CodingAgent`** preset of [`adk-harness`](../../adk-harness)
+(spec 3.1 §7.19) — the [`adk-devtools`](../../adk-devtools) file tools, a governed
+`bash`, todos and `exit_plan_mode` — against real tasks. File tools are confined to the
+workspace; `bash` runs on the host. The preset runs in **ask** mode: every edit and
+command passes the harness policy and waits for approval. The example runs unattended,
+so a small `ApproveAndLog` confirmation handler approves each call and prints it
+(`✅ approved …`), the way `adk-rust code --yes` does.
 
 ## Run
 
@@ -79,12 +81,13 @@ with `OPENAI_API_KEY`. Override the model with `CODING_MODEL`.
 
 ## What you'll see
 
-For each task the agent streams its work — tool calls (`🔧`), tool results
-(`↩`), and final text (`🤖`) — then prints the completed plan:
+For each task the agent streams its work — tool calls (`🔧`), approvals (`✅`), tool
+results (`↩`), and final text (`🤖`) — then prints the plan the session holds:
 
 ```text
   🔧 write_todos({"todos":[{"content":"Create add.rs …","status":"in_progress"}, …]})
   🔧 write_file({"content":"fn add(a: i32, b: i32) -> i32 { a + b } …","path":"add.rs"})
+  ✅ approved write_file({"content":"fn add(a: i32, b: i32) -> i32 { a + b } …","path":"add.rs"})
   🔧 bash({"command":"rustc add.rs -o add"})
   🔧 bash({"command":"./add"})
   ↩  {"exit_code":0,"stdout":"5\n", …}
@@ -97,12 +100,13 @@ For each task the agent streams its work — tool calls (`🔧`), tool results
 
 ## CLI equivalent
 
-The same capability ships in the CLI:
+The same harness ships in the CLI, with approvals at the terminal:
 
 ```bash
-adk-rust code "make the failing test pass"          # current dir
+adk-rust code "make the failing test pass"            # current dir, ask mode
 adk-rust code --dir ./project "add a /health route"
-adk-rust code --read-only "explain how auth works"  # no writes / no shell
+adk-rust code --mode plan "explain how auth works"    # reads only; plans
+adk-rust code --yes "make the failing test pass"      # approve every held call
 ```
 
-See `docs/design/coding-agent.md` for the overall design.
+See `docs/design/spec-3.1-harness-agent.md` for the design.

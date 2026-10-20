@@ -3,13 +3,13 @@ name = "coding-agent-example"
 version = "0.0.1"
 edition = "2024"
 publish = false
-description = "Runs the ADK-Rust CodingAgent (adk-devtools + harness) against tasks in several languages"
+description = "Runs the ADK-Rust CodingAgent preset of adk-harness against tasks in several languages"
 
 [workspace]
 
 [dependencies]
 adk-core = { path = "../../adk-core" }
-adk-agent = { path = "../../adk-agent", features = ["coding"] }
+adk-harness = { path = "../../adk-harness", default-features = false }
 adk-devtools = { path = "../../adk-devtools" }
 adk-model = { path = "../../adk-model", features = ["gemini", "openai"] }
 adk-runner = { path = "../../adk-runner" }

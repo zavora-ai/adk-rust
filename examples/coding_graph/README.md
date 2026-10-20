@@ -18,10 +18,12 @@ they approve.**
                      revise ─▶ (back to the three reviewers)
 ```
 
-Every node is a **real agent** (no mocks): `implement`/`revise` are full
-[`CodingAgent`](../../adk-agent)s (read/write/bash), and each reviewer is a
-read-only `LlmAgent` that inspects the code and returns a `VERDICT: approve` or
-`VERDICT: changes` with notes.
+Every node is a **real agent** (no mocks): `implement`/`revise` are the
+[`CodingAgent`](../../adk-harness) preset of `adk-harness` (read/write/bash in ask mode;
+this unattended example approves each call through `ApproveAndLog` and prints it), and
+each reviewer is a harness agent in **read-only** mode that inspects the code and returns
+a `VERDICT: approve` or `VERDICT: changes` with notes. The CLI form is
+`adk-rust ultracode`.
 
 ## What it demonstrates in adk-graph
 

@@ -21,15 +21,23 @@
 //! The reviewers run **concurrently** (same graph super-step), and `synthesize`
 //! is a **deferred fan-in node** so it runs exactly once, after all three finish.
 //!
+//! Implementers are the `CodingAgent` preset of `adk-harness` (spec 3.1 §7.19) in ask mode,
+//! approved by `ApproveAndLog` since the example runs unattended; reviewers are harness
+//! agents in read-only mode, so they cannot change the workspace whatever they try.
+//! `adk-rust ultracode` is the CLI form.
+//!
 //! Requires `GOOGLE_API_KEY` (Gemini 3) — or `CODING_PROVIDER=openai` + `OPENAI_API_KEY`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use adk_agent::LlmAgentBuilder;
-use adk_agent::coding::CodingAgent;
-use adk_core::{Agent, Content, Llm, Part, SessionId, UserId};
-use adk_devtools::{DevToolset, Workspace};
+use adk_core::{
+    Agent, Content, Llm, Part, RunConfig, SessionId, ToolConfirmationDecision,
+    ToolConfirmationHandler, ToolConfirmationRequest, UserId,
+};
+use adk_devtools::Workspace;
+use adk_harness::coding::CodingAgent;
+use adk_harness::{HarnessAgent, HarnessMode};
 use adk_graph::edge::{END, START};
 use adk_graph::graph::StateGraph;
 use adk_graph::node::{ExecutionConfig, NodeOutput};
@@ -311,13 +319,33 @@ fn review_agent(
          followed by a short, specific bullet list of required changes. Do not request removing \
          any behavior the task requires (e.g. the __main__ demo). Do not modify files."
     );
-    let agent = LlmAgentBuilder::new(format!("review-{focus}"))
+    let agent = HarnessAgent::builder(format!("review-{focus}"))
         .model(model)
+        .workspace(Workspace::new(root))
+        .mode(HarnessMode::ReadOnly)
+        .without_shell()
         .instruction(instruction)
-        .toolset(Arc::new(DevToolset::new(Workspace::read_only(root))))
         .build()
         .expect("review agent");
     Arc::new(agent)
+}
+
+/// Approves every call the harness holds for approval and prints it: the example runs
+/// unattended, the way `adk-rust ultracode --yes` does.
+#[derive(Debug)]
+struct ApproveAndLog;
+
+#[adk_core::async_trait]
+impl ToolConfirmationHandler for ApproveAndLog {
+    async fn decide(
+        &self,
+        request: &ToolConfirmationRequest,
+    ) -> adk_core::Result<ToolConfirmationDecision> {
+        let args = request.args.to_string();
+        let args: String = args.chars().take(120).collect();
+        println!("  ✅ approved {}({args})", request.tool_name);
+        Ok(ToolConfirmationDecision::Approve)
+    }
 }
 
 /// Run one agent turn; optionally print its tool calls. Returns the final text.
@@ -336,8 +364,16 @@ async fn run_agent(
             state: Default::default(),
         })
         .await?;
-    let runner =
-        Runner::builder().app_name(APP_NAME).agent(agent).session_service(sessions).build()?;
+    let config = RunConfig {
+        tool_confirmation_handler: Some(Arc::new(ApproveAndLog)),
+        ..RunConfig::default()
+    };
+    let runner = Runner::builder()
+        .app_name(APP_NAME)
+        .agent(agent)
+        .session_service(sessions)
+        .run_config(config)
+        .build()?;
 
     let mut stream = runner
         .run(

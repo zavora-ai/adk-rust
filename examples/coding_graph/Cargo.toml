@@ -9,7 +9,7 @@ description = "An 'ultra-review' style coding workflow as an adk-graph: implemen
 
 [dependencies]
 adk-core = { path = "../../adk-core" }
-adk-agent = { path = "../../adk-agent", features = ["coding"] }
+adk-harness = { path = "../../adk-harness", default-features = false }
 adk-devtools = { path = "../../adk-devtools" }
 adk-graph = { path = "../../adk-graph" }
 adk-model = { path = "../../adk-model", features = ["gemini", "openai"] }

@@ -1,8 +1,10 @@
 //! # Coding Agent example
 //!
-//! Drives the ADK-Rust [`CodingAgent`] (the `adk-devtools` toolset + the harness
-//! in `adk-agent`) against real tasks. The agent reads/writes/edits files and
-//! runs commands in a **sandboxed workspace**.
+//! Drives the ADK-Rust [`CodingAgent`] preset of `adk-harness` (spec 3.1 §7.19) against
+//! real tasks. The agent reads, writes and edits files confined to the workspace and runs
+//! commands with `bash` on the host. Every edit and command passes the harness policy in
+//! ask mode; this example runs unattended, so [`ApproveAndLog`] approves each call and
+//! prints it (a terminal would use `adk_cli::harness::ConsolePrompter`).
 //!
 //! ## Run
 //!
@@ -21,12 +23,16 @@ mod scenarios;
 
 use std::sync::Arc;
 
-use adk_agent::coding::CodingAgent;
-use adk_core::{Agent, Content, Llm, Part, SessionId, UserId};
+use adk_core::{
+    Agent, Content, Llm, Part, RunConfig, SessionId, ToolConfirmationDecision,
+    ToolConfirmationHandler, ToolConfirmationRequest, UserId,
+};
 use adk_devtools::Workspace;
+use adk_harness::coding::CodingAgent;
+use adk_harness::{TODOS_STATE_KEY, TodoList, TodoStatus};
 use adk_model::GeminiModel;
 use adk_runner::Runner;
-use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+use adk_session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
 use futures::StreamExt;
 
 const APP_NAME: &str = "coding-agent-example";
@@ -133,6 +139,22 @@ fn build_model() -> anyhow::Result<Arc<dyn Llm>> {
     }
 }
 
+/// Approves every call the harness holds for approval and prints it: the example runs
+/// unattended, the way `adk-rust code --yes` does.
+#[derive(Debug)]
+struct ApproveAndLog;
+
+#[adk_core::async_trait]
+impl ToolConfirmationHandler for ApproveAndLog {
+    async fn decide(
+        &self,
+        request: &ToolConfirmationRequest,
+    ) -> adk_core::Result<ToolConfirmationDecision> {
+        println!("  ✅ approved {}({})", request.tool_name, compact(&request.args));
+        Ok(ToolConfirmationDecision::Approve)
+    }
+}
+
 /// Build a Runner over the agent with a fresh in-memory session.
 async fn make_runner(agent: Arc<dyn Agent>, session_id: &str) -> anyhow::Result<Runner> {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
@@ -144,7 +166,16 @@ async fn make_runner(agent: Arc<dyn Agent>, session_id: &str) -> anyhow::Result<
             state: Default::default(),
         })
         .await?;
-    Ok(Runner::builder().app_name(APP_NAME).agent(agent).session_service(sessions).build()?)
+    let config = RunConfig {
+        tool_confirmation_handler: Some(Arc::new(ApproveAndLog)),
+        ..RunConfig::default()
+    };
+    Ok(Runner::builder()
+        .app_name(APP_NAME)
+        .agent(agent)
+        .session_service(sessions)
+        .run_config(config)
+        .build()?)
 }
 
 /// Run one turn on an existing runner/session and stream the agent's work.
@@ -191,20 +222,36 @@ async fn run_turn(runner: &Runner, session_id: &str, prompt: &str) -> anyhow::Re
     Ok(())
 }
 
-/// Print the agent's current plan (todo list), if any.
-fn print_plan(coding: &CodingAgent) {
-    let todos = coding.todos();
-    if !todos.is_empty() {
+/// Print the session's plan (todo list), if any; todos live in session state.
+async fn print_plan(runner: &Runner, session_id: &str) -> anyhow::Result<()> {
+    let session = runner
+        .session_service()
+        .get(GetRequest {
+            app_name: APP_NAME.into(),
+            user_id: "user".into(),
+            session_id: session_id.into(),
+            num_recent_events: Some(1),
+            after: None,
+        })
+        .await?;
+    let todos = session
+        .state()
+        .get(TODOS_STATE_KEY)
+        .map(|value| TodoList::from_value(&value))
+        .unwrap_or_default();
+    if !todos.items.is_empty() {
         println!("  📋 plan:");
-        for t in todos {
-            let mark = match t.status.as_str() {
-                "completed" => "✓",
-                "in_progress" => "▶",
-                _ => "·",
+        for item in &todos.items {
+            let mark = match item.status {
+                TodoStatus::Completed => "✓",
+                TodoStatus::InProgress => "▶",
+                TodoStatus::Cancelled => "✗",
+                TodoStatus::Pending => "·",
             };
-            println!("     {mark} {}", t.content);
+            println!("     {mark} {}", item.content);
         }
     }
+    Ok(())
 }
 
 /// Run one task against a workspace directory in a fresh session.
@@ -217,8 +264,7 @@ async fn run_task(
     let coding = CodingAgent::builder().model(model).workspace(workspace).build()?;
     let runner = make_runner(coding.agent(), session_id).await?;
     run_turn(&runner, session_id, task).await?;
-    print_plan(&coding);
-    Ok(())
+    print_plan(&runner, session_id).await
 }
 
 /// Multi-language demo: one temp workspace, three tasks.
@@ -310,7 +356,7 @@ async fn multiturn() -> anyhow::Result<()> {
         run_turn(&runner, session_id, prompt).await?;
         println!();
     }
-    print_plan(&coding);
+    print_plan(&runner, session_id).await?;
 
     // ── Independent verification: the program the agent built must actually work.
     println!("\n══ verification ══");
