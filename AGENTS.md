@@ -340,6 +340,11 @@ adk-codeact-monty/ Python CodeRuntime for the CodeActAgent, backed by the Pydant
                  suspend/resume snapshots. EXPERIMENTAL.
 adk-devtools/    Developer tools for coding agents — inner-loop file/search/edit tools
                  (read_file, write_file, edit_file, glob, grep, ...) scoped to a sandboxed workspace
+adk-harness/     Governed harness agent (spec 3.1): HarnessAgent over LlmAgent with modes
+                 (read-only, plan, ask, auto) and standing approvals as one ToolPolicy,
+                 interactive approval prompts, host or OS-sandboxed bash with a shell
+                 ledger, session todos, AGENTS.md instructions with workspace trust,
+                 progressive skills, and the `coding` preset. Beta.
 adk-bench/       Benchmarking framework: framework-level runtime performance with real LLM APIs
                  and cross-framework (Python ADK) comparison
 adk-sandbox/     Sandboxed execution environments — process/WASM backends, OS-level sandbox profiles
@@ -974,7 +979,7 @@ Always verify builds during publish — never use `--no-verify`. Verification en
 Crates must be published in dependency order. `cargo xtask publish` (via
 `./publish.sh`) computes the order from the workspace graph, so this list is
 documentation rather than configuration — `scripts/check-publish-order.sh` is the
-gate that keeps it satisfiable. The current 9 tiers over 43 publishable crates:
+gate that keeps it satisfiable. The current 9 tiers over 44 publishable crates:
 
 ```
 Tier 1: adk-anthropic, adk-core, adk-enterprise, adk-rust-macros, adk-telemetry,
@@ -988,7 +993,7 @@ Tier 5: adk-acp, adk-agent, adk-audio, adk-eval
 Tier 6: adk-bench, adk-codeact-monty, adk-managed, adk-server
 Tier 7: adk-auth, adk-cli, cargo-adk
 Tier 8: adk-computer-use, adk-payments
-Tier 9: adk-rust (umbrella — always last)
+Tier 9: adk-harness, adk-rust (umbrella — always last)
 ```
 
 > **Note:** internal **dev**-dependencies are declared path-only (no version) so

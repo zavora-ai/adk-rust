@@ -44,7 +44,7 @@ impl Tool for WriteFileTool {
         }))
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         if !self.workspace.is_writable() {
             return Err(DevToolError::ReadOnly("write_file").into());
         }
@@ -57,7 +57,7 @@ impl Tool for WriteFileTool {
         }
         self.workspace.write_contained(&resolved, content.as_bytes()).await?;
         // A freshly-written file is considered "read" (its content is known).
-        self.workspace.mark_read(&resolved);
+        self.workspace.mark_read(ctx.as_ref(), &resolved);
 
         Ok(json!({
             "path": self.workspace.display(&resolved),

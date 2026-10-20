@@ -172,6 +172,76 @@ async fn run_confined(request: ExecRequest) -> Result<ExecResult, SandboxError> 
 }
 ```
 
+### Running a Command in a Workspace
+
+`sandbox::sandboxed_command` builds the `tokio::process::Command` for one program under an
+enforcer and a policy, starting in a directory the caller names — the shell of a coding
+harness runs in the user's workspace rather than in a scratch directory.
+
+| Aspect | Value |
+|--------|-------|
+| Program | The enforcer's wrapper (`sandbox-exec`, `bwrap`), resolved on the caller's `PATH` |
+| Arguments | The wrapper's arguments, then the program and its arguments |
+| Working directory | The `cwd` argument; it is not granted, so list it in the policy |
+| Environment | Cleared, then exactly `policy.env` |
+| Streams, process group, kill-on-drop | Left to the caller |
+
+```rust
+use std::ffi::{OsStr, OsString};
+use std::path::Path;
+
+use adk_sandbox::sandbox::{SandboxPolicyBuilder, get_enforcer, sandboxed_command};
+use adk_sandbox::SandboxError;
+
+async fn run_in_workspace(workspace: &Path, scratch: &Path) -> Result<String, SandboxError> {
+    let policy = SandboxPolicyBuilder::new()
+        .allow_read_write(workspace)
+        .allow_read(workspace.join(".git")) // read-only inside the writable workspace
+        .allow_read_write(scratch)
+        .allow_process_spawn() // `sh -c` forks
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", scratch.display().to_string())
+        .build();
+    let enforcer = get_enforcer()?;
+
+    let output = sandboxed_command(
+        enforcer.as_ref(),
+        OsStr::new("sh"),
+        &[OsString::from("-c"), OsString::from("cargo test --quiet")],
+        &policy,
+        workspace,
+    )?
+    .stdin(std::process::Stdio::null())
+    .output()
+    .await?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+```
+
+### Read-Only Paths Inside a Writable Path
+
+When allowed paths nest, the most specific entry decides, whatever order the policy lists
+them in; for the same path, read-write wins. A read-only entry inside a read-write entry
+refuses every write, creation, removal, rename, and hard or symbolic link beneath it, and
+the writable directories above it cannot be renamed or removed, so the entry cannot be
+carried away from its path. Both enforcers behave the same way, and
+`tests/nested_read_only_conformance_tests.rs` runs one script set under each.
+
+| | macOS Seatbelt | Linux bubblewrap |
+|---|---|---|
+| Mechanism | Rules emitted shallowest first; `(deny file-write* (subpath ...))` for the entry; `(deny file-write-unlink (literal ...))` for each writable directory above it | Mounts made shallowest first, so the read-only bind covers its parent's; each writable directory above it bound onto itself, which makes it a mount point |
+| A write beneath the entry | `Operation not permitted` | `Read-only file system` |
+| Renaming or removing the entry or a directory above it | `Operation not permitted` | `Resource busy` or `Invalid cross-device link`; GNU `mv` then copies, and the original stays in place |
+| A hard link to a file beneath it | `Operation not permitted` | `Invalid cross-device link` |
+
+The entry must exist when the command is built, as every allowed path must; a path that
+does not exist yet cannot be protected this way.
+
+> **Note:** bubblewrap mounts each allowed path at its resolved location. On a merged-`/usr`
+> distribution `/bin` and `/lib` are symbolic links into `/usr`, so a policy that lists them
+> does not mount the dynamic loader's `/lib` path and dynamically linked programs fail with
+> `execvp: No such file or directory`. Allow `/` read-only on such hosts.
+
 ### Platform Differences
 
 | Aspect | macOS Seatbelt | Linux bubblewrap | Windows AppContainer |
@@ -181,6 +251,7 @@ async fn run_confined(request: ExecRequest) -> Result<ExecResult, SandboxError> 
 | Writes | Only policy read-write paths (and `/dev/null`) | Only `--bind` paths writable | — |
 | Network | Denied unless `allow_network` | `--unshare-net` namespace | — |
 | Process spawning | `process-fork` granted only with `allow_process_spawn` | seccomp filter fails `fork`, `vfork`, and non-thread `clone` (x86-64, AArch64) | — |
+| Terminal | The caller's session | Always a new session (`--new-session`) with no controlling terminal | — |
 | Domain rules (`allow_domain`) | Not enforceable; all network blocked | Not enforceable; all network blocked | — |
 
 The Seatbelt system runtime covers `/bin`, `/sbin`, `/usr`, `/System`, `/Library/Apple`, `/Library/Frameworks`, `/opt/homebrew`, `/private/etc` (minus `master.passwd` and `sudoers`), the dyld cache, and time zone data. File metadata (existence, size, timestamps) is readable everywhere because path resolution needs it; file contents are not. Programs installed elsewhere — a rustup toolchain, a pyenv interpreter, Xcode — need their directories passed to `allow_read`.
@@ -201,6 +272,12 @@ The `workspace` feature provides the `provision → session → exec → snapsho
 | Environment | Cleared except `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR`, `TERM` | Image environment |
 | Output | 1 MiB per stream, read while the command runs | Unbounded |
 | Timeout | Kills the command's process group | Kills the command's process tree inside the container |
+| Host directories | The host filesystem | None by default; `with_bind_mount(host, container, read_only)` mounts one into every container |
+
+`DockerClient::with_bind_mount("/home/me/project", "/workspace", false)` gives commands in
+the container and file tools on the host one view of the workspace. A read-only mount
+refuses writes from inside the container, whose dropped capabilities keep it from being
+remounted. Content under a mount stays on the host, so `snapshot` does not capture it.
 
 Session paths are relative: an absolute path or a `..` that leaves the root fails with
 `SandboxError::PathTraversal`. Writing a file with more than one hard link replaces it, keeping

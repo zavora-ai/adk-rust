@@ -104,7 +104,7 @@ pub use scope::{
 pub use auth_bridge::{JwtRequestContextExtractor, JwtRequestContextExtractorBuilder};
 
 #[cfg(feature = "token-exchange")]
-pub use token_exchange::TokenExchangeBroker;
+pub use token_exchange::{SubjectToken, SubjectTokenSource, TokenExchangeBroker};
 
 #[cfg(feature = "otlp-audit")]
 pub use audit_otlp::OtlpAuditSink;

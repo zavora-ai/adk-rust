@@ -247,6 +247,31 @@ fn try_execution_identity_uses_auth_user_when_request_context_set() {
 }
 
 #[test]
+fn the_identity_is_authenticated_only_with_a_request_context() {
+    let plain = make_ctx("app", "body-user", "sess", "inv", "agent", "");
+    assert!(!plain.is_authenticated(), "a user id from the session is not authenticated");
+
+    let authenticated = make_ctx("app", "body-user", "sess", "inv", "agent", "")
+        .with_request_context(RequestContext {
+            user_id: "alice".to_string(),
+            scopes: vec![],
+            metadata: HashMap::new(),
+        });
+    assert!(authenticated.is_authenticated());
+    assert_eq!(authenticated.user_id(), "alice");
+
+    // The provided method reaches callers that hold the context as a trait object.
+    let as_trait: &dyn ReadonlyContext = &authenticated;
+    assert!(as_trait.is_authenticated());
+    let wrapped = adk_core::ToolCallbackContext::new(
+        Arc::new(authenticated),
+        "t".into(),
+        serde_json::Value::Null,
+    );
+    assert!(wrapped.is_authenticated(), "ToolCallbackContext forwards it");
+}
+
+#[test]
 fn without_request_context_user_id_is_original() {
     let ctx = make_ctx("app", "original-user", "sess", "inv", "agent", "");
 

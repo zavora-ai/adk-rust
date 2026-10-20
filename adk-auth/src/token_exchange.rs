@@ -2,7 +2,9 @@
 //!
 //! The broker presents the agent's own credential (from an [`IdentitySource`]) as the
 //! `subject_token` and asks the authorization server for a token bound to one resource
-//! (RFC 8707 `resource`) and a set of scopes.
+//! (RFC 8707 `resource`) and a set of scopes. In on-behalf-of mode
+//! ([`TokenExchangeBroker::on_behalf_of`]) the subject's token is the `subject_token` and the
+//! agent's credential is the `actor_token`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,7 +12,8 @@ use std::time::Duration;
 
 use adk_core::{
     ActingContext, AdkError, AgentId, CredentialBroker, CredentialKind, CredentialSecret,
-    ErrorCategory, ErrorComponent, IdentitySource, RevocationScope, ScopedToken, Url, async_trait,
+    ErrorCategory, ErrorComponent, IdentitySource, RevocationScope, ScopedToken, SubjectRef, Url,
+    async_trait,
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -19,6 +22,7 @@ use tokio::sync::RwLock;
 const GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
 const TOKEN_TYPE_JWT: &str = "urn:ietf:params:oauth:token-type:jwt";
 const TOKEN_TYPE_ACCESS: &str = "urn:ietf:params:oauth:token-type:access_token";
+const TOKEN_TYPE_ID: &str = "urn:ietf:params:oauth:token-type:id_token";
 
 /// Tokens are refreshed this long before the server says they expire.
 const EXPIRY_SKEW: Duration = Duration::from_secs(30);
@@ -26,7 +30,115 @@ const EXPIRY_SKEW: Duration = Duration::from_secs(30);
 /// Longest time one token or revocation request may take by default.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-type CacheKey = (AgentId, Url, Vec<String>);
+/// Who a cached token was issued for: the subject, the delegation chain, the agent, the
+/// resource, and the sorted scopes. A token is never served to a run that differs in any
+/// of them (spec 3.1 §10 F6).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CacheKey {
+    subject: Option<SubjectRef>,
+    delegation_chain: Vec<SubjectRef>,
+    agent: AgentId,
+    resource: Url,
+    scopes: Vec<String>,
+}
+
+/// A subject's token, presented as the RFC 8693 `subject_token` of an on-behalf-of exchange.
+///
+/// Implements spec 3.1 §10 F6.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_auth::SubjectToken;
+///
+/// let token = SubjectToken::access_token("alice-access-token");
+/// assert_eq!(token.token_type, "urn:ietf:params:oauth:token-type:access_token");
+/// assert_eq!(format!("{:?}", token.secret), "CredentialSecret([redacted])");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubjectToken {
+    /// The token value.
+    pub secret: CredentialSecret,
+    /// The RFC 8693 token type URI sent as `subject_token_type`.
+    pub token_type: String,
+}
+
+impl SubjectToken {
+    /// A token of `token_type`, an RFC 8693 token type URI.
+    pub fn new(secret: impl Into<String>, token_type: impl Into<String>) -> Self {
+        Self { secret: CredentialSecret::new(secret), token_type: token_type.into() }
+    }
+
+    /// An OAuth 2.0 access token (`urn:ietf:params:oauth:token-type:access_token`).
+    pub fn access_token(secret: impl Into<String>) -> Self {
+        Self::new(secret, TOKEN_TYPE_ACCESS)
+    }
+
+    /// A JWT (`urn:ietf:params:oauth:token-type:jwt`).
+    pub fn jwt(secret: impl Into<String>) -> Self {
+        Self::new(secret, TOKEN_TYPE_JWT)
+    }
+
+    /// An OpenID Connect ID token (`urn:ietf:params:oauth:token-type:id_token`).
+    pub fn id_token(secret: impl Into<String>) -> Self {
+        Self::new(secret, TOKEN_TYPE_ID)
+    }
+}
+
+/// Supplies the subject's token for an on-behalf-of exchange.
+///
+/// Implement it over wherever the authenticated caller's token lives, such as the token
+/// a server's `RequestContextExtractor` verified, kept per subject. The broker asks only
+/// for the subject the run acts for, [`ActingContext::on_behalf_of`].
+///
+/// Implements spec 3.1 §10 F6.
+///
+/// # Example
+///
+/// ```rust
+/// use std::collections::HashMap;
+///
+/// use adk_auth::{SubjectToken, SubjectTokenSource};
+/// use adk_core::{
+///     ActingContext, AdkError, ErrorCategory, ErrorComponent, SubjectRef, async_trait,
+/// };
+///
+/// /// Tokens captured when each user signed in.
+/// #[derive(Debug)]
+/// struct SignedInUsers(HashMap<String, String>);
+///
+/// #[async_trait]
+/// impl SubjectTokenSource for SignedInUsers {
+///     async fn subject_token(
+///         &self,
+///         subject: &SubjectRef,
+///         _acting: &ActingContext,
+///     ) -> adk_core::Result<SubjectToken> {
+///         self.0.get(&subject.id).map(SubjectToken::access_token).ok_or_else(|| {
+///             AdkError::new(
+///                 ErrorComponent::Auth,
+///                 ErrorCategory::Unauthorized,
+///                 "credential.subject_token_unavailable",
+///                 format!("'{}' has no token; sign in again", subject.id),
+///             )
+///         })
+///     }
+/// }
+/// ```
+#[async_trait]
+pub trait SubjectTokenSource: std::fmt::Debug + Send + Sync {
+    /// The token proving `subject`'s identity; `acting` is the run that asks for it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no token for `subject` is available; the exchange fails
+    /// with it.
+    async fn subject_token(
+        &self,
+        subject: &SubjectRef,
+        acting: &ActingContext,
+    ) -> adk_core::Result<SubjectToken>;
+}
 
 #[derive(Debug, Deserialize)]
 struct ExchangeResponse {
@@ -43,18 +155,20 @@ fn exchange_error(category: ErrorCategory, code: &'static str, message: String) 
 
 /// Exchanges the agent's credential for resource-scoped tokens (RFC 8693).
 ///
-/// | Request field | Value |
-/// |---------------|-------|
-/// | `grant_type` | `urn:ietf:params:oauth:grant-type:token-exchange` |
-/// | `resource`, `audience` | The requested resource |
-/// | `scope` | The requested scopes, space-separated (omitted when empty) |
-/// | `subject_token` | [`IdentitySource::credential`] |
-/// | `subject_token_type` | `…:token-type:jwt` for a JWT-SVID, `…:token-type:access_token` for an opaque credential |
+/// | Request field | Agent-only mode (default) | On-behalf-of mode |
+/// |---------------|---------------------------|-------------------|
+/// | `grant_type` | `urn:ietf:params:oauth:grant-type:token-exchange` | the same |
+/// | `resource`, `audience` | The requested resource | the same |
+/// | `scope` | The requested scopes, space-separated (omitted when empty) | the same |
+/// | `subject_token` | [`IdentitySource::credential`] | [`SubjectTokenSource::subject_token`] for [`ActingContext::on_behalf_of`] |
+/// | `subject_token_type` | `…:token-type:jwt` for a JWT-SVID, `…:token-type:access_token` for an opaque credential | [`SubjectToken::token_type`] |
+/// | `actor_token`, `actor_token_type` | Not sent | [`IdentitySource::credential`] and its type |
 ///
-/// Issued tokens are cached per agent, resource, and scope set until shortly before
-/// they expire. Concurrent requests for a token that is not cached send one exchange
-/// and share its result. [`revoke`](CredentialBroker::revoke) drops cached tokens and,
-/// when a revocation endpoint is configured, revokes each one there (RFC 7009).
+/// Issued tokens are cached per subject, delegation chain, agent, resource, and scope set
+/// until shortly before they expire, so a token minted for one subject is never served to
+/// a run acting for another. Concurrent requests for a token that is not cached send one
+/// exchange and share its result. [`revoke`](CredentialBroker::revoke) drops cached tokens
+/// and, when a revocation endpoint is configured, revokes each one there (RFC 7009).
 ///
 /// Requests give up after 30 seconds (connect timeout 5 seconds); pass a client with
 /// other timeouts to [`with_http_client`](Self::with_http_client).
@@ -86,6 +200,7 @@ pub struct TokenExchangeBroker {
     identity: Arc<dyn IdentitySource>,
     client: reqwest::Client,
     client_auth: Option<(String, CredentialSecret)>,
+    subjects: Option<Arc<dyn SubjectTokenSource>>,
     cache: RwLock<HashMap<CacheKey, ScopedToken>>,
     /// One gate per key with an exchange in flight; waiters reuse its result.
     exchanges: std::sync::Mutex<HashMap<CacheKey, Arc<tokio::sync::Mutex<()>>>>,
@@ -97,6 +212,7 @@ impl std::fmt::Debug for TokenExchangeBroker {
             .field("token_endpoint", &self.token_endpoint.as_str())
             .field("revocation_endpoint", &self.revocation_endpoint.as_ref().map(Url::as_str))
             .field("identity", &self.identity)
+            .field("on_behalf_of", &self.subjects)
             .finish_non_exhaustive()
     }
 }
@@ -110,6 +226,7 @@ impl TokenExchangeBroker {
             identity,
             client: crate::http::client(REQUEST_TIMEOUT),
             client_auth: None,
+            subjects: None,
             cache: RwLock::new(HashMap::new()),
             exchanges: std::sync::Mutex::new(HashMap::new()),
         }
@@ -130,6 +247,58 @@ impl TokenExchangeBroker {
     #[must_use]
     pub fn with_revocation_endpoint(mut self, endpoint: Url) -> Self {
         self.revocation_endpoint = Some(endpoint);
+        self
+    }
+
+    /// Exchanges on behalf of the subject each run acts for (RFC 8693 delegation).
+    ///
+    /// Every exchange sends the token `subjects` supplies for
+    /// [`ActingContext::on_behalf_of`] as the `subject_token` and the agent's credential
+    /// as the `actor_token`, so the issued token carries the subject's authority with the
+    /// agent recorded as the actor. A run acting for no subject fails with
+    /// `credential.subject_missing` and sends nothing. Without this call the broker
+    /// exchanges the agent's own credential.
+    ///
+    /// Implements spec 3.1 §10 F6.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    ///
+    /// use adk_auth::{SubjectToken, SubjectTokenSource, TokenExchangeBroker};
+    /// use adk_core::{
+    ///     ActingContext, AgentCredential, AgentId, AgentPrincipal, CredentialKind,
+    ///     StaticIdentitySource, SubjectRef, async_trait, resource_indicator,
+    /// };
+    ///
+    /// #[derive(Debug)]
+    /// struct SessionTokens;
+    ///
+    /// #[async_trait]
+    /// impl SubjectTokenSource for SessionTokens {
+    ///     async fn subject_token(
+    ///         &self,
+    ///         subject: &SubjectRef,
+    ///         _acting: &ActingContext,
+    ///     ) -> adk_core::Result<SubjectToken> {
+    ///         Ok(SubjectToken::access_token(format!("token-of-{}", subject.id)))
+    ///     }
+    /// }
+    ///
+    /// let id = AgentId::new("spiffe://example.org/agent/github")?;
+    /// let source = StaticIdentitySource::new(AgentPrincipal::new(id.clone()))
+    ///     .with_credential(AgentCredential::new(id, CredentialKind::JwtSvid, "eyJ..."));
+    /// let broker = TokenExchangeBroker::new(
+    ///     resource_indicator("https://sts.example.com/token")?,
+    ///     Arc::new(source),
+    /// )
+    /// .on_behalf_of(Arc::new(SessionTokens));
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    #[must_use]
+    pub fn on_behalf_of(mut self, subjects: Arc<dyn SubjectTokenSource>) -> Self {
+        self.subjects = Some(subjects);
         self
     }
 
@@ -171,7 +340,13 @@ impl CredentialBroker for TokenExchangeBroker {
         let mut sorted = scopes.to_vec();
         sorted.sort();
         sorted.dedup();
-        let key = (acting.agent.id.clone(), resource.clone(), sorted);
+        let key = CacheKey {
+            subject: acting.on_behalf_of.clone(),
+            delegation_chain: acting.delegation_chain.clone(),
+            agent: acting.agent.id.clone(),
+            resource: resource.clone(),
+            scopes: sorted,
+        };
         if let Some(cached) = self.cached(&key).await {
             return Ok(cached);
         }
@@ -208,6 +383,25 @@ impl TokenExchangeBroker {
         resource: &Url,
         key: &CacheKey,
     ) -> adk_core::Result<ScopedToken> {
+        // Resolved before the agent's credential, so a run acting for no subject sends nothing.
+        let subject_token = match &self.subjects {
+            Some(subjects) => {
+                let Some(subject) = &acting.on_behalf_of else {
+                    return Err(exchange_error(
+                        ErrorCategory::Forbidden,
+                        "credential.subject_missing",
+                        format!(
+                            "an on-behalf-of exchange needs the subject agent '{}' acts for, and \
+                             the run acts for none; set RunConfig::acting or use a broker \
+                             without on_behalf_of",
+                            acting.agent.id
+                        ),
+                    ));
+                };
+                Some(subjects.subject_token(subject, acting).await?)
+            }
+            None => None,
+        };
         let credential = self.identity.credential().await?;
         if credential.subject != acting.agent.id {
             return Err(exchange_error(
@@ -220,7 +414,7 @@ impl TokenExchangeBroker {
                 ),
             ));
         }
-        let subject_token_type = match credential.kind {
+        let credential_type = match credential.kind {
             CredentialKind::JwtSvid => TOKEN_TYPE_JWT,
             CredentialKind::Opaque => TOKEN_TYPE_ACCESS,
             other => {
@@ -228,22 +422,32 @@ impl TokenExchangeBroker {
                     ErrorCategory::Unsupported,
                     "credential.exchange_unsupported",
                     format!(
-                        "a {other:?} credential cannot be a token-exchange subject_token; use a \
-                         JWT-SVID or an opaque access token"
+                        "a {other:?} credential cannot be a token-exchange subject_token or \
+                         actor_token; use a JWT-SVID or an opaque access token"
                     ),
                 ));
             }
         };
 
-        let scope = key.2.join(" ");
+        let scope = key.scopes.join(" ");
         let mut form = vec![
             ("grant_type", GRANT_TYPE),
             ("resource", resource.as_str()),
             ("audience", resource.as_str()),
-            ("subject_token", credential.secret.expose()),
-            ("subject_token_type", subject_token_type),
-            ("requested_token_type", TOKEN_TYPE_ACCESS),
         ];
+        match &subject_token {
+            Some(subject) => form.extend([
+                ("subject_token", subject.secret.expose()),
+                ("subject_token_type", subject.token_type.as_str()),
+                ("actor_token", credential.secret.expose()),
+                ("actor_token_type", credential_type),
+            ]),
+            None => form.extend([
+                ("subject_token", credential.secret.expose()),
+                ("subject_token_type", credential_type),
+            ]),
+        }
+        form.push(("requested_token_type", TOKEN_TYPE_ACCESS));
         if !scope.is_empty() {
             form.push(("scope", scope.as_str()));
         }
@@ -287,7 +491,7 @@ impl TokenExchangeBroker {
 
         let granted = match issued.scope {
             Some(scope) => scope.split_whitespace().map(str::to_string).collect(),
-            None => key.2.clone(),
+            None => key.scopes.clone(),
         };
         let mut token = ScopedToken::new(
             acting.agent.id.clone(),
@@ -301,6 +505,7 @@ impl TokenExchangeBroker {
         tracing::debug!(
             agent.id = %acting.agent.id,
             credential.resource = %resource,
+            credential.on_behalf_of = subject_token.is_some(),
             "token exchanged"
         );
         self.cache.write().await.insert(key.clone(), token.clone());
@@ -312,7 +517,7 @@ impl TokenExchangeBroker {
             let mut cache = self.cache.write().await;
             let keys: Vec<CacheKey> = cache
                 .keys()
-                .filter(|(agent, resource, _)| scope.covers(agent, resource))
+                .filter(|key| scope.covers(&key.agent, &key.resource))
                 .cloned()
                 .collect();
             keys.iter().filter_map(|key| cache.remove(key)).collect()
@@ -517,6 +722,163 @@ mod tests {
             assert_eq!(call.await.unwrap().unwrap().secret.expose(), "shared");
         }
         assert!(broker.lock_exchanges().is_empty(), "finished exchanges leave no gate behind");
+    }
+
+    /// Answers every exchange with a fresh token, `token-1`, `token-2`, ...
+    struct Minting(std::sync::atomic::AtomicUsize);
+
+    impl wiremock::Respond for Minting {
+        fn respond(&self, _request: &wiremock::Request) -> ResponseTemplate {
+            let n = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"access_token": format!("token-{n}"), "expires_in": 3600}),
+            )
+        }
+    }
+
+    fn acting_for(subject: &str) -> ActingContext {
+        acting().on_behalf_of(SubjectRef::human(subject))
+    }
+
+    fn form(request: &wiremock::Request) -> HashMap<String, String> {
+        let body = String::from_utf8_lossy(&request.body);
+        Url::parse(&format!("http://form.invalid/?{body}"))
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn two_subjects_never_share_a_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(Minting(Default::default()))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let broker = broker(&server);
+        let resource = resource_indicator("https://api.github.com/").unwrap();
+        let scopes = vec!["repo".to_string()];
+
+        let alice = broker.token_for(&acting_for("alice"), &resource, &scopes).await.unwrap();
+        let bob = broker.token_for(&acting_for("bob"), &resource, &scopes).await.unwrap();
+        assert_ne!(alice.secret, bob.secret, "bob is never served alice's token");
+        let alice_again = broker.token_for(&acting_for("alice"), &resource, &scopes).await.unwrap();
+        assert_eq!(alice_again, alice, "each subject's token is still cached");
+
+        for request in server.received_requests().await.unwrap() {
+            let form = form(&request);
+            assert_eq!(form["subject_token"], "svid-jwt", "agent-only mode is unchanged");
+            assert!(!form.contains_key("actor_token"));
+        }
+    }
+
+    #[tokio::test]
+    async fn the_delegation_chain_is_part_of_the_cache_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(Minting(Default::default()))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let broker = broker(&server);
+        let resource = resource_indicator("https://api.github.com/").unwrap();
+        let orchestrator = AgentId::new("urn:adk:agent:orchestrator").unwrap();
+
+        let direct = broker.token_for(&acting_for("alice"), &resource, &[]).await.unwrap();
+        let delegated = broker
+            .token_for(
+                &acting_for("alice").delegated_by(SubjectRef::agent(&orchestrator)),
+                &resource,
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_ne!(direct.secret, delegated.secret);
+    }
+
+    #[derive(Debug)]
+    struct SignedIn;
+
+    #[async_trait]
+    impl SubjectTokenSource for SignedIn {
+        async fn subject_token(
+            &self,
+            subject: &SubjectRef,
+            acting: &ActingContext,
+        ) -> adk_core::Result<SubjectToken> {
+            assert_eq!(acting.on_behalf_of.as_ref(), Some(subject));
+            Ok(SubjectToken::access_token(format!("{}-access-token", subject.id)))
+        }
+    }
+
+    #[tokio::test]
+    async fn on_behalf_of_sends_the_subject_token_and_the_agent_as_actor() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(Minting(Default::default()))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let broker = broker(&server).on_behalf_of(Arc::new(SignedIn));
+        let resource = resource_indicator("https://api.github.com/").unwrap();
+        let scopes = vec!["repo".to_string()];
+
+        let alice = broker.token_for(&acting_for("alice"), &resource, &scopes).await.unwrap();
+        let bob = broker.token_for(&acting_for("bob"), &resource, &scopes).await.unwrap();
+        assert_ne!(alice.secret, bob.secret);
+        assert_eq!(alice.agent, agent());
+
+        let requests = server.received_requests().await.unwrap();
+        let sent: Vec<HashMap<String, String>> = requests.iter().map(form).collect();
+        let expected = |subject: &str| -> HashMap<String, String> {
+            [
+                ("grant_type", GRANT_TYPE),
+                ("resource", "https://api.github.com/"),
+                ("audience", "https://api.github.com/"),
+                ("subject_token", &format!("{subject}-access-token")),
+                ("subject_token_type", TOKEN_TYPE_ACCESS),
+                ("actor_token", "svid-jwt"),
+                ("actor_token_type", TOKEN_TYPE_JWT),
+                ("requested_token_type", TOKEN_TYPE_ACCESS),
+                ("scope", "repo"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+        };
+        assert_eq!(sent, vec![expected("alice"), expected("bob")]);
+    }
+
+    #[tokio::test]
+    async fn on_behalf_of_refuses_a_run_acting_for_no_subject() {
+        let server = MockServer::start().await;
+        let error = broker(&server)
+            .on_behalf_of(Arc::new(SignedIn))
+            .token_for(&acting(), &resource_indicator("https://api.github.com/").unwrap(), &[])
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "credential.subject_missing");
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn revocation_by_agent_withdraws_every_subjects_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(Minting(Default::default()))
+            .mount(&server)
+            .await;
+        let broker = broker(&server);
+        let resource = resource_indicator("https://api.github.com/").unwrap();
+        broker.token_for(&acting_for("alice"), &resource, &[]).await.unwrap();
+        broker.token_for(&acting_for("bob"), &resource, &[]).await.unwrap();
+        assert_eq!(broker.revoke(&RevocationScope::Agent(agent())).await.unwrap(), 2);
     }
 
     #[tokio::test(start_paused = true)]

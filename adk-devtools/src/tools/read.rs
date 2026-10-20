@@ -10,6 +10,10 @@ use crate::error::DevToolError;
 use crate::workspace::Workspace;
 
 /// Reads a UTF-8 text file from the workspace and returns it with line numbers.
+///
+/// A file matching the workspace's exclusion patterns ([`Workspace::exclude_globs`]),
+/// by its requested path or the path a symlink resolves to, is refused with
+/// [`DevToolError::Excluded`].
 pub struct ReadFileTool {
     workspace: Workspace,
 }
@@ -52,12 +56,20 @@ impl Tool for ReadFileTool {
         }))
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let path = require_str(&args, "path")?;
         let resolved = self.workspace.resolve(&path)?;
+        // A link inside the workspace can lead to an excluded file under another name.
+        let excluded = self.workspace.is_excluded(&resolved)
+            || tokio::fs::canonicalize(&resolved)
+                .await
+                .is_ok_and(|canonical| self.workspace.is_excluded(&canonical));
+        if excluded {
+            return Err(DevToolError::Excluded(self.workspace.display(&resolved)).into());
+        }
 
         let contents = tokio::fs::read_to_string(&resolved).await.map_err(DevToolError::from)?;
-        self.workspace.mark_read(&resolved);
+        self.workspace.mark_read(ctx.as_ref(), &resolved);
 
         let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
         let limit = args.get("limit").and_then(Value::as_u64).map(|v| v as usize);
