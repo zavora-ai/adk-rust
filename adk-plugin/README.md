@@ -175,7 +175,7 @@ fn metrics_plugin() -> Plugin {
 
 ## Enhanced Plugins
 
-`EnhancedPlugin` implements only the hooks it needs; `priority()` orders plugins (lower first, default 100). `before_tool_call` returns `BeforeToolCallResult::Continue(args)` (possibly rewritten) or `ShortCircuit(result)`, and `after_tool_call` may rewrite the result; `before_model_call` and `after_model_call` do the same for model calls. `PluginContext` holds typed state shared across hooks. `AdaptedPlugin` runs a run plugin's tool and model callbacks as an enhanced plugin; a `before_tool` that returns content short-circuits the call with it.
+`EnhancedPlugin` implements only the hooks it needs; `priority()` orders plugins (lower first, default 100). `before_tool_call` returns `BeforeToolCallResult::Continue(args)` (possibly rewritten) or `ShortCircuit(result)`, and `after_tool_call` may rewrite the result; `before_model_call` and `after_model_call` do the same for model calls. `PluginContext` holds typed state shared across the hooks of one invocation; `PluginContext::shared()` holds state every invocation of the agent shares. `AdaptedPlugin` runs a run plugin's tool and model callbacks as an enhanced plugin; a `before_tool` that returns content short-circuits the call with it.
 
 ```rust
 use std::sync::Arc;

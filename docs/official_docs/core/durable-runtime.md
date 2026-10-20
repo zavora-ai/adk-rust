@@ -431,7 +431,7 @@ fn config(
 
 | Entry point | Effect |
 |-------------|--------|
-| `DELETE /runs/{id}` | `request_cancel`: a queued or waiting run is cancelled at once; a running run is flagged |
+| `DELETE /runs/{id}` | `request_cancel`: a queued or waiting run is cancelled at once; a running run is flagged. With an authenticated server, only the run's owner may cancel it; another caller gets `404` |
 | `Runner::interrupt(session_id)` | Cancels local runs, and, when the runner has a durable run store (`RunnerConfig::durable_runs`, builder `durable_run_store`), requests cancellation of the session's unfinished durable runs on a spawned task |
 | `Runner::cancel_durable_runs(user_id, session_id).await` | The same store request, awaited; returns how many runs were asked to stop |
 

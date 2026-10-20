@@ -125,13 +125,14 @@ impl EnhancedPlugin for LoggingPlugin {
     ) -> Result<BeforeToolCallResult> {
         println!("  📋 [LoggingPlugin] before_tool_call: tool={}, args={}", tool.name(), args);
 
-        // Track call count in shared context
+        // Track call count across every run of the agent
         let mut stats = plugin_ctx
+            .shared()
             .get::<LoggingStats>()
             .await
             .unwrap_or(LoggingStats { tool_calls: 0, model_calls: 0 });
         stats.tool_calls += 1;
-        plugin_ctx.insert(stats).await;
+        plugin_ctx.shared().insert(stats).await;
 
         Ok(BeforeToolCallResult::Continue(args))
     }
@@ -165,11 +166,12 @@ impl EnhancedPlugin for LoggingPlugin {
         );
 
         let mut stats = plugin_ctx
+            .shared()
             .get::<LoggingStats>()
             .await
             .unwrap_or(LoggingStats { tool_calls: 0, model_calls: 0 });
         stats.model_calls += 1;
-        plugin_ctx.insert(stats).await;
+        plugin_ctx.shared().insert(stats).await;
 
         Ok(BeforeModelCallResult::Continue(request))
     }
@@ -291,10 +293,13 @@ impl EnhancedPlugin for CachingPlugin {
             );
 
             // Update stats in PluginContext
-            let mut stats =
-                plugin_ctx.get::<ToolCache>().await.unwrap_or(ToolCache { hits: 0, misses: 0 });
+            let mut stats = plugin_ctx
+                .shared()
+                .get::<ToolCache>()
+                .await
+                .unwrap_or(ToolCache { hits: 0, misses: 0 });
             stats.hits += 1;
-            plugin_ctx.insert(stats).await;
+            plugin_ctx.shared().insert(stats).await;
 
             return Ok(BeforeToolCallResult::ShortCircuit(cached_result.clone()));
         }
@@ -303,10 +308,13 @@ impl EnhancedPlugin for CachingPlugin {
         // Cache MISS
         println!("  ⚡ [CachingPlugin] CACHE MISS for {}. Proceeding with execution.", tool.name());
 
-        let mut stats =
-            plugin_ctx.get::<ToolCache>().await.unwrap_or(ToolCache { hits: 0, misses: 0 });
+        let mut stats = plugin_ctx
+            .shared()
+            .get::<ToolCache>()
+            .await
+            .unwrap_or(ToolCache { hits: 0, misses: 0 });
         stats.misses += 1;
-        plugin_ctx.insert(stats).await;
+        plugin_ctx.shared().insert(stats).await;
 
         Ok(BeforeToolCallResult::Continue(args))
     }

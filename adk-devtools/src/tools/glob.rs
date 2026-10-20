@@ -15,7 +15,8 @@ use crate::workspace::Workspace;
 const MAX_RESULTS: usize = 1000;
 
 /// Lists files matching a glob pattern (e.g. `src/**/*.rs`), relative to the
-/// workspace root or an optional sub-directory.
+/// workspace root or an optional sub-directory. Files matching the workspace's
+/// exclusion patterns ([`Workspace::exclude_globs`]) are not listed.
 pub struct GlobTool {
     workspace: Workspace,
 }
@@ -104,7 +105,9 @@ impl Tool for GlobTool {
             for entry in WalkDir::new(&start).sort_by_file_name().into_iter().flatten() {
                 let path = entry.path();
                 let Ok(relative) = path.strip_prefix(&base) else { continue };
-                if relative.as_os_str().is_empty() || !matcher.matches_path_with(relative, options)
+                if relative.as_os_str().is_empty()
+                    || !matcher.matches_path_with(relative, options)
+                    || self.workspace.is_excluded(path)
                 {
                     continue;
                 }

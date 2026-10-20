@@ -54,6 +54,11 @@ macro_rules! impl_protected_tool {
                 ($inner).effect()
             }
 
+            fn annotations(&self) -> Option<&Value> {
+                let $self_ident = self;
+                ($inner).annotations()
+            }
+
             fn origin(&self) -> &str {
                 let $self_ident = self;
                 ($inner).origin()
@@ -119,6 +124,11 @@ macro_rules! impl_protected_tool {
             fn effect(&self) -> adk_core::ToolEffect {
                 let $self_ident = self;
                 ($inner).effect()
+            }
+
+            fn annotations(&self) -> Option<&Value> {
+                let $self_ident = self;
+                ($inner).annotations()
             }
 
             fn origin(&self) -> &str {

@@ -180,7 +180,16 @@ impl EnhancedPlugin for SearchLimits {
 ```
 
 `PluginContext` is a typed store shared by every enhanced plugin of an agent: each Rust type
-is its own key (`insert`, `get`, `contains`, `remove`).
+is its own key (`insert`, `get`, `contains`, `remove`). Each invocation gets its own context,
+so the limit above counts one run's searches, and two users' concurrent runs never read or
+overwrite each other's plugin state. State meant for every invocation of the agent, such as an
+agent-wide quota, goes in `plugin_ctx.shared()`, the context `EnhancedPluginManager::context()`
+returns.
+
+| Context | Holds | Lifetime |
+|---------|-------|----------|
+| `plugin_ctx` (the hook argument) | One invocation's state, keyed by app, user, session, and invocation id | The invocation; the manager keeps the 1024 most recently used |
+| `plugin_ctx.shared()` | State every invocation of the agent shares | The agent |
 
 Register enhanced plugins on the agent:
 

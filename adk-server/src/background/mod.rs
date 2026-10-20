@@ -25,6 +25,15 @@
 //! - `PATCH /cron/{job_id}` — Pause or resume a schedule
 //! - `DELETE /cron/{job_id}` — Delete a schedule
 //!
+//! ## Ownership
+//!
+//! With a `RequestContextExtractor` on the server, a run belongs to the authenticated
+//! caller: `GET /runs` lists only the caller's runs, and `GET`, `DELETE`, and
+//! `POST .../wake` on another owner's run answer `404`. The caller's `idempotencyKey` and
+//! `concurrencyKey` are scoped to the caller, so one user's key never returns, rejects, or
+//! interrupts another user's run. Without an extractor there is no caller to check, every
+//! run is visible to every client, and the server logs a warning once.
+//!
 //! ## Usage
 //!
 //! > **Important:** these routers carry no authentication of their own. Prefer
@@ -164,10 +173,12 @@ pub struct SubmitRunRequest {
     /// The user the run belongs to, when the request is not authenticated.
     #[serde(default)]
     pub user_id: Option<String>,
-    /// Enqueueing an existing key returns the existing run.
+    /// Enqueueing an existing key returns the existing run. With an authenticated caller
+    /// the key is the caller's own, so only the caller's runs match it.
     #[serde(default)]
     pub idempotency_key: Option<String>,
-    /// Runs sharing a key run one at a time.
+    /// Runs sharing a key run one at a time. With an authenticated caller the key is the
+    /// caller's own, so it never holds back or interrupts another user's run.
     #[serde(default)]
     pub concurrency_key: Option<String>,
     /// What happens when an unfinished run holds `concurrencyKey` (double texting).
@@ -727,6 +738,38 @@ fn store_error(error: &AdkError) -> Response {
     problem(status, error.to_string())
 }
 
+/// The authenticated caller's user id, or `None` when the server authenticates no one.
+///
+/// The auth middleware inserts `Option<RequestContext>`: `Some` when a
+/// `RequestContextExtractor` authenticated the request, `None` when none is configured. A
+/// router mounted without the middleware has no extension at all. Owner checks need an
+/// authenticated caller (spec 3.1 §8.2), so the other two cases log a warning once.
+fn run_owner(caller: Option<Extension<Option<RequestContext>>>) -> Option<String> {
+    static UNAUTHENTICATED: std::sync::Once = std::sync::Once::new();
+    let owner = caller.and_then(|Extension(caller)| caller).map(|caller| caller.user_id);
+    if owner.is_none() {
+        UNAUTHENTICATED.call_once(|| {
+            tracing::warn!(
+                "background runs are served without an authenticated caller, so every client \
+                 can read, cancel, and wake every run; configure a RequestContextExtractor \
+                 (ServerConfig::with_request_context) to scope runs to their owner"
+            );
+        });
+    }
+    owner
+}
+
+/// The run `run_id` when `owner` may see it: any run without an authenticated caller, only
+/// the caller's own run with one. Another owner's run reads as missing.
+async fn visible_run(
+    state: &BackgroundState,
+    run_id: &str,
+    owner: Option<&str>,
+) -> std::result::Result<Option<RunRecord>, AdkError> {
+    let run = state.runs.get(run_id).await?;
+    Ok(run.filter(|run| owner.is_none_or(|owner| run.user_id == owner)))
+}
+
 /// POST /runs — Enqueue a run.
 async fn submit_run(
     State(state): State<BackgroundState>,
@@ -746,8 +789,15 @@ async fn submit_run(
         return problem(StatusCode::NOT_FOUND, format!("unknown agent or workflow '{target}'"));
     }
     let app_name = state.app_name_for(&target);
-    let authenticated = caller.and_then(|Extension(caller)| caller).map(|caller| caller.user_id);
-    let user_id = authenticated.or(request.user_id).unwrap_or_else(|| "anonymous".to_string());
+    let owner = run_owner(caller);
+    // The length prefix keeps ("a:b", "c") and ("a", "b:c") apart, and the leading digit
+    // keeps caller keys apart from the server's own `cron:` and `hook:` keys. An empty key
+    // stays empty so validation still refuses it.
+    let scoped = |key: String| match &owner {
+        Some(owner) if !key.is_empty() => format!("{}:{owner}:{key}", owner.len()),
+        _ => key,
+    };
+    let user_id = owner.clone().or(request.user_id).unwrap_or_else(|| "anonymous".to_string());
 
     let mut run = NewRun::new(state.worker.queue.clone(), app_name, user_id, target, request.input)
         .with_max_attempts(request.max_retries.unwrap_or(0).saturating_add(1));
@@ -755,10 +805,10 @@ async fn submit_run(
         run = run.with_session_id(session_id);
     }
     if let Some(key) = request.idempotency_key {
-        run = run.with_idempotency_key(key);
+        run = run.with_idempotency_key(scoped(key));
     }
     if let Some(key) = request.concurrency_key {
-        run = run.with_concurrency_key(key, request.on_conflict.unwrap_or_default());
+        run = run.with_concurrency_key(scoped(key), request.on_conflict.unwrap_or_default());
     }
     if let Some(at) = request.not_before {
         run = run.with_not_before(at);
@@ -808,13 +858,17 @@ pub struct ListRunsQuery {
     pub limit: Option<usize>,
 }
 
-/// GET /runs — List runs.
+/// GET /runs — List runs; with an authenticated caller, only the caller's.
 async fn list_runs(
     State(state): State<BackgroundState>,
+    caller: Option<Extension<Option<RequestContext>>>,
     Query(query): Query<ListRunsQuery>,
 ) -> Response {
     let mut filter =
         RunFilter::default().queue(state.worker.queue.clone()).limit(query.limit.unwrap_or(100));
+    if let Some(owner) = run_owner(caller) {
+        filter = filter.user_id(owner);
+    }
     if let Some(run_state) = query.state {
         filter = filter.states([run_state]);
     }
@@ -830,23 +884,33 @@ async fn list_runs(
     }
 }
 
-/// GET /runs/{run_id} — Get a run.
+/// GET /runs/{run_id} — Get a run; another owner's run is `404`.
 async fn get_run_status(
     State(state): State<BackgroundState>,
+    caller: Option<Extension<Option<RequestContext>>>,
     Path(run_id): Path<String>,
 ) -> Response {
-    match state.runs.get(&run_id).await {
+    match visible_run(&state, &run_id, run_owner(caller).as_deref()).await {
         Ok(Some(run)) => (StatusCode::OK, Json(RunStatusResponse::from(run))).into_response(),
         Ok(None) => problem(StatusCode::NOT_FOUND, "run not found"),
         Err(error) => store_error(&error),
     }
 }
 
-/// DELETE /runs/{run_id} — Cancel a run.
+/// DELETE /runs/{run_id} — Cancel a run; another owner's run is `404`.
 ///
 /// A queued or waiting run is cancelled at once; a running run is flagged and its
 /// worker, on whichever replica, stops it at its next heartbeat.
-async fn cancel_run(State(state): State<BackgroundState>, Path(run_id): Path<String>) -> Response {
+async fn cancel_run(
+    State(state): State<BackgroundState>,
+    caller: Option<Extension<Option<RequestContext>>>,
+    Path(run_id): Path<String>,
+) -> Response {
+    match visible_run(&state, &run_id, run_owner(caller).as_deref()).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return problem(StatusCode::NOT_FOUND, "run not found"),
+        Err(error) => return store_error(&error),
+    }
     if let Err(error) = state.runs.request_cancel(&run_id).await {
         return if error.is_not_found() {
             problem(StatusCode::NOT_FOUND, "run not found")
@@ -866,8 +930,17 @@ async fn cancel_run(State(state): State<BackgroundState>, Path(run_id): Path<Str
     }
 }
 
-/// POST /runs/{run_id}/wake — Make a parked run claimable now.
-async fn wake_run(State(state): State<BackgroundState>, Path(run_id): Path<String>) -> Response {
+/// POST /runs/{run_id}/wake — Make a parked run claimable now; another owner's run is `404`.
+async fn wake_run(
+    State(state): State<BackgroundState>,
+    caller: Option<Extension<Option<RequestContext>>>,
+    Path(run_id): Path<String>,
+) -> Response {
+    match visible_run(&state, &run_id, run_owner(caller).as_deref()).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return problem(StatusCode::NOT_FOUND, "run not found"),
+        Err(error) => return store_error(&error),
+    }
     if let Err(error) = state.wake_run(&run_id).await {
         return if error.is_not_found() {
             problem(StatusCode::NOT_FOUND, "run not found")
