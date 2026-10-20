@@ -232,7 +232,9 @@ async fn grep_and_glob_skip_secret_files() {
     let tools = tools(&Workspace::new(dir.path())).await;
 
     let found = run(find(&tools, "grep"), json!({"pattern": "API_KEY"})).await.unwrap();
-    assert_eq!(found["matches"], json!(["src/config.rs:1: let key = env(\"API_KEY\");"]));
+    // `Workspace::display` renders the platform separator, so Windows prints `src\config.rs`.
+    let config = std::path::Path::new("src").join("config.rs").display().to_string();
+    assert_eq!(found["matches"], json!([format!("{config}:1: let key = env(\"API_KEY\");")]));
 
     let direct = run(find(&tools, "grep"), json!({"pattern": "canary", "path": ".env"})).await;
     assert_eq!(direct.unwrap()["count"], 0, "naming the secret file as the search path read it");
