@@ -14,6 +14,10 @@ use crate::filter::is_tool_eligible;
 use crate::template::render_reflection;
 use crate::tracker::{GlobalRetryTracker, RetryTracker};
 
+/// What a log line carries in place of a tool's error text when payloads are not recorded.
+const PAYLOAD_OMITTED: &str =
+    "[omitted: set RetryReflectPluginBuilder::record_payloads to log error text]";
+
 /// The Retry & Reflect plugin.
 ///
 /// Intercepts tool call failures via the `after_tool_call` hook, tracks retry state,
@@ -146,14 +150,33 @@ impl EnhancedPlugin for RetryReflectPlugin {
         // markers match the full message the tool outcome keeps; the prompt and logs use the
         // response text, which is what the model already sees.
         let error_msg = Self::extract_error_message(&result);
-        let local_msg = ctx.tool_outcome().and_then(|outcome| outcome.error_message);
-        let failure = local_msg.as_deref().unwrap_or(&error_msg);
+        let outcome = ctx.tool_outcome();
+        let local_msg = outcome.as_ref().and_then(|outcome| outcome.error_message.as_deref());
+        let failure = local_msg.unwrap_or(&error_msg);
+        // Log lines name the error by its category and code; its text, which can quote
+        // arguments and credentials, only when payloads are recorded.
+        let diagnostics = outcome
+            .as_ref()
+            .and_then(|outcome| outcome.error.as_deref())
+            .map_or_else(|| "tool error".to_string(), |error| error.diagnostics().to_string());
+        let logged_msg =
+            if self.config.record_payloads { error_msg.as_str() } else { PAYLOAD_OMITTED };
         if is_authorization_denial(failure) {
-            tracing::info!(tool_name = %tool_name, error = %error_msg, "retry_reflect.skipped_authorization_denial");
+            tracing::info!(
+                tool_name = %tool_name,
+                error = %diagnostics,
+                error.message = %logged_msg,
+                "retry_reflect.skipped_authorization_denial"
+            );
             return Ok(AfterToolCallResult::Continue(result));
         }
         if tool.effect() == ToolEffect::NonIdempotent && is_timeout(failure) {
-            tracing::warn!(tool_name = %tool_name, error = %error_msg, "retry_reflect.skipped_non_idempotent_timeout");
+            tracing::warn!(
+                tool_name = %tool_name,
+                error = %diagnostics,
+                error.message = %logged_msg,
+                "retry_reflect.skipped_non_idempotent_timeout"
+            );
             return Ok(AfterToolCallResult::Continue(result));
         }
 
@@ -193,7 +216,8 @@ impl EnhancedPlugin for RetryReflectPlugin {
             tracing::warn!(
                 tool_name = %tool_name,
                 total_attempts = current_count,
-                error = %error_msg,
+                error = %diagnostics,
+                error.message = %logged_msg,
                 "retry_reflect.exhausted"
             );
             return Ok(AfterToolCallResult::Continue(result));
@@ -206,7 +230,8 @@ impl EnhancedPlugin for RetryReflectPlugin {
             tracing::warn!(
                 tool_name = %tool_name,
                 total_attempts = tracker.total(&invocation),
-                error = %error_msg,
+                error = %diagnostics,
+                error.message = %logged_msg,
                 "retry_reflect.global_limit_exhausted"
             );
             return Ok(AfterToolCallResult::Continue(result));
@@ -246,7 +271,8 @@ impl EnhancedPlugin for RetryReflectPlugin {
             attempt = attempt,
             max_retries = effective_limit,
             backoff_ms = backoff.as_millis() as u64,
-            error = %error_msg,
+            error = %diagnostics,
+            error.message = %logged_msg,
             "retry_reflect.retry"
         );
 

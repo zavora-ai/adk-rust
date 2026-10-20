@@ -207,6 +207,21 @@ Every backend keeps the same versioning contract:
 | **Concurrent saves each get a version** | Saves of one artifact that run at the same time without a version return distinct versions, and every one is stored. |
 | **Distinct names are distinct artifacts** | No two file names share storage, so `a:b` and `a__b` are different artifacts. |
 
+Every backend reports the same failures with the same category and code, so a caller can
+branch on `AdkError::is_not_found()` or on `code` whichever backend is configured:
+
+| Failure | Category | Code |
+|---------|----------|------|
+| `load` or `versions` of an artifact, or a version, that is not stored | `NotFound` | `artifact.not_found` |
+| A file name that is empty or contains a path separator or a `..` traversal | `InvalidInput` | `artifact.invalid_name` |
+| An app name, user ID, or session ID that cannot address storage | `InvalidInput` | `artifact.invalid_identifier` |
+| The session ID `user`, reserved for user-scoped artifacts | `InvalidInput` | `artifact.reserved_session_id` |
+| A save naming a version that already exists | `Conflict` | `artifact.version_exists` |
+
+Storage failures keep a backend-specific code: `artifact.file.io` for a filesystem error in
+`FileArtifactService`, and `artifact.gcs.*` for a GCS request that fails, carrying the
+upstream status.
+
 ```rust
 use adk_artifact::{ArtifactService, InMemoryArtifactService, LoadRequest, SaveRequest};
 use adk_core::{ErrorCategory, Part};

@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-/// Runtime errors aligned with CANON §5 error model.
+/// Runtime errors, one variant per failure a caller handles differently.
 ///
 /// Each variant represents a distinct failure mode with structured context
 /// for programmatic handling by the platform layer.

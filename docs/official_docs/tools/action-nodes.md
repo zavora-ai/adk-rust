@@ -44,8 +44,8 @@ adk-rust = { version = "3.0.0", features = ["action"] }
 | `set` | `set` writes each variable, `merge` deep-merges it into the existing value, `delete` writes `null`; `envVars` loads environment variables into state |
 | `transform` | `template` interpolates a string; `jsonpath` reads a dot path; `builtin` is not implemented and writes `null` with a warning. Optional coercion to string, number, boolean, or array |
 | `switch` | Evaluates `{field, operator, value}` conditions (`eq`, `neq`, `gt`, `lt`, `gte`, `lte`, `contains`, `startsWith`, `endsWith`, `matches`, `in`, `empty`, `exists`) and writes the matching output port, or every matching port in `all_match` mode; without a match and a `defaultBranch` the node fails |
-| `loop` | Records iterations and does not run other nodes: `forEach` writes the item and index variables (the last item wins) and `{"iterations": n}`; `while` evaluates its condition once (0 or 1 iterations); `times` counts |
-| `merge` | Collects the state keys prefixed `branch:` (`waitAll`, `waitAny`, `waitN`) and combines them as an array, object, first, or last value |
+| `loop` | Records iterations and does not run other nodes: `for_each` (configured under `forEach`) writes the item and index variables (the last item wins) and `{"iterations": n}`; `while` evaluates its condition once (0 or 1 iterations); `times` counts |
+| `merge` | Collects the state keys prefixed `branch:` (`wait_all`, `wait_any`, `wait_n`) and combines them as an array, object, first, or last value |
 | `wait` | Waits a fixed duration (`ms`, `s`, `m`, `h`), until an RFC 3339 time, or until a condition holds; the `webhook` wait type is not implemented and writes `null` with a warning |
 | `code` | `rust`: stores `code` parsed as JSON, or the interpolated text; it does not compile or run Rust. `javascript` and `typescript` are rejected |
 | `database` | Not implemented; rejected |

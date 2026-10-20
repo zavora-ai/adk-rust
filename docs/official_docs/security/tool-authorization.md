@@ -83,6 +83,91 @@ let policy = DeclarativePolicy::builder()
     .build();
 ```
 
+### Deciding on the Tool's Origin
+
+The governed path asks a policy through `ToolPolicy::evaluate_call`, which receives a
+`PolicyCall` beside the request:
+
+| Field | Value |
+|-------|-------|
+| `origin` | The called tool's `ToolOrigin`: `source` (`static` for a tool attached to the agent, `mcp:<toolset>` for one an MCP server publishes, `builtin` for a provider-executed tool declared without a `Tool` of its own) and `declaration_digest`, the SHA-256 of its declaration and annotations. `None` when the call was evaluated without its tool |
+| `function_call_id` | The model's ID for the call. `None` for a [built-in tool](#built-in-tools), which is decided before any call exists |
+
+The default `evaluate_call` returns `evaluate(request)`, so a policy that implements only
+`evaluate` decides as before. Override `evaluate_call` to bind a decision to the tool's
+publisher or declaration — a tool of the same name on another MCP server, or a tool redefined
+since the decision, has a different origin. Every evaluation passes the facts: the call as the
+model made it, a guardrail's rewrite of it, and arguments an approver edited.
+
+```rust
+use adk_core::{PolicyCall, PolicyDecision, ToolPolicy, ToolPolicyRequest, async_trait};
+
+/// Refuses every tool the `untrusted` MCP toolset publishes.
+#[derive(Debug)]
+struct BlockUntrustedServer;
+
+#[async_trait]
+impl ToolPolicy for BlockUntrustedServer {
+    async fn evaluate(&self, _request: &ToolPolicyRequest) -> PolicyDecision {
+        PolicyDecision::Allow
+    }
+
+    async fn evaluate_call(
+        &self,
+        request: &ToolPolicyRequest,
+        call: &PolicyCall<'_>,
+    ) -> PolicyDecision {
+        match call.origin {
+            Some(origin) if origin.source == "mcp:untrusted" => PolicyDecision::deny(format!(
+                "tools from '{}' are not permitted",
+                origin.source
+            )),
+            _ => self.evaluate(request).await,
+        }
+    }
+
+    fn policy_ref(&self) -> Option<String> {
+        Some("origin-guard".to_string())
+    }
+}
+```
+
+### Composing Policies
+
+`StrictestPolicy` asks every layer through `evaluate_call` and returns the strictest decision:
+`Deny` over `RequireApproval` over `Allow`, with the earlier layer's reason on a tie. Every
+layer is asked, even after one denies. With no layers it allows every call, as no policy does.
+
+| Item | Behaviour |
+|------|-----------|
+| `StrictestPolicy::new(layers)` | A policy over `Vec<Arc<dyn ToolPolicy>>`, asked in order |
+| `.layer(policy)` | Appends a layer |
+| `policy_ref()` | The named layers' references joined with `+`, such as `ops-v3+origin-guard`; audit records cite `tool_policy:ops-v3+origin-guard` |
+| `contains_ref(name)` | Whether a layer, or a layer of a nested `StrictestPolicy`, names itself `name` |
+
+Use it to add a layer to a run that already has a policy without replacing it. An
+`Agent::configure_run` hook runs again on transfer and for delegates, so it checks
+`contains_ref` before adding its layer:
+
+```rust
+use adk_core::{RunConfig, StrictestPolicy, ToolPolicy};
+use std::sync::Arc;
+
+/// Adds `layer`, named `origin-guard`, to the run's policy once.
+fn add_origin_guard(config: &mut RunConfig, layer: Arc<dyn ToolPolicy>) {
+    let Some(existing) = config.tool_policy.take() else {
+        config.tool_policy = Some(layer);
+        return;
+    };
+    let composed = StrictestPolicy::new(vec![existing.clone()]);
+    config.tool_policy = Some(if composed.contains_ref("origin-guard") {
+        existing
+    } else {
+        Arc::new(composed.layer(layer))
+    });
+}
+```
+
 ## Built-in Tools
 
 Provider-executed built-in tools — Gemini Google Search, OpenAI hosted web search, Anthropic
@@ -484,6 +569,47 @@ let config = RunConfig::builder()
     .build();
 ```
 
+### Editing a Call in the Handler
+
+The governed path asks a handler through `ToolConfirmationHandler::decide_approval`, which
+returns a `ToolApproval`. The default maps `decide`: `Approve` to `ToolApproval::approve()`,
+`Deny` to `ToolApproval::deny()`. Override it to answer with more than a decision:
+
+| `ToolApproval` | Effect |
+|----------------|--------|
+| `ToolApproval::approve().with_edited_args(args)` | `args` replace the call's arguments. They pass the `ToolPolicy` and the agent's guardrails again; a policy denial of the edit refuses the call with "Tool '<name>' with the approver's edited arguments denied by policy: <reason>" |
+| `ToolApproval::deny().with_message(text)` | The model is told "Tool '<name>' was not run; the approver declined it: <text>" |
+
+The approval's expiry is ignored: a handler decides one call.
+
+```rust
+use adk_core::{
+    Result, ToolApproval, ToolConfirmationDecision, ToolConfirmationHandler,
+    ToolConfirmationRequest, async_trait,
+};
+use serde_json::json;
+
+/// Approves transfers, capping the amount at 100.
+#[derive(Debug)]
+struct CapTransfers;
+
+#[async_trait]
+impl ToolConfirmationHandler for CapTransfers {
+    async fn decide(&self, _request: &ToolConfirmationRequest) -> Result<ToolConfirmationDecision> {
+        Ok(ToolConfirmationDecision::Approve)
+    }
+
+    async fn decide_approval(&self, request: &ToolConfirmationRequest) -> Result<ToolApproval> {
+        let amount = request.args["amount"].as_f64().unwrap_or(0.0);
+        Ok(if amount > 100.0 {
+            ToolApproval::approve().with_edited_args(json!({ "amount": 100 }))
+        } else {
+            ToolApproval::approve()
+        })
+    }
+}
+```
+
 ### CLI Example
 
 A terminal agent that asks for confirmation before running a tool. A
@@ -870,6 +996,12 @@ To apply the same gate to every agent in an application, register it as a `befor
 plugin on the runner's `PluginManager`. The runner's plugin callbacks run ahead of each
 agent's own callbacks, in every agent the run reaches.
 
+> **Note:** A call a callback, a run-wide `before_tool` plugin, or an enhanced plugin's
+> `ShortCircuit` answers never reaches the [Tool Policy](#tool-policy), guardrails, or
+> confirmation. With an [audit log](#audit-records) configured, `LlmAgent` records each such
+> answer as `tool.short_circuit`, naming the tool and which mechanism answered. Use a
+> `ToolPolicy` for decisions that must be governed.
+
 ## Access Control
 
 For enterprise RBAC with role-based permissions. See [Access Control](access-control.md) for full documentation.
@@ -1083,7 +1215,10 @@ it takes effect: a call allowed, denied (by the policy, a guardrail, a confirmat
 kill switch), or held for approval, and each approval decision with its source. A call whose
 record cannot be written is not executed under the default `AuditFailureMode::Block`.
 `freeze_recorded` and `unfreeze_recorded` record kill-switch changes with the acting
-administrator. See [Audit Log](audit-log.md#what-the-runtime-records).
+administrator. Each governed record carries the tool's `toolSource` and `declarationDigest`
+when the call's tool is known, and a call a callback or plugin answered before the governed
+path is recorded as `tool.short_circuit`. See
+[Audit Log](audit-log.md#what-the-runtime-records).
 
 ## Related
 

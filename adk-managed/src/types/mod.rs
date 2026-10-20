@@ -1,7 +1,8 @@
 //! Wire types for the managed agent runtime.
 //!
-//! All types in this module conform to CANON §3 wire shapes and are
-//! `#[non_exhaustive]` where polymorphic to allow additive evolution.
+//! The types serialize to the JSON a managed agent service sends and accepts: snake_case
+//! fields, and tagged unions discriminated by a `type` field. Polymorphic types are
+//! `#[non_exhaustive]` to allow additive evolution.
 
 pub mod agent_def;
 pub mod content;

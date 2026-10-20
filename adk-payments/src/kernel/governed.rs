@@ -45,9 +45,11 @@ pub enum PaymentApproval {
 
 /// Decides payments that a policy escalated.
 ///
-/// The payment tools supply an approver that consults the run's tool confirmation
-/// decisions and handler, so an escalation reaches the same approval flow as any tool
-/// that requires confirmation.
+/// The payment tools supply an approver that decides through
+/// [`adk_core::confirm_tool_call`] — call-ID decisions, fingerprint approvals, the
+/// approval store, and the confirmation handler — so an escalation reaches the same
+/// approval flow as any tool that requires confirmation, and a held escalation resumes
+/// once an approver decides it.
 #[async_trait]
 pub trait PaymentApprover: Send + Sync {
     /// Approves, refuses, or defers `record`, which the policies escalated with `findings`.

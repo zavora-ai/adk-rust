@@ -7,7 +7,9 @@
 //! 2. For a held call being resumed ([`GovernedCall::resuming`]), its binding: the acting
 //!    agent and the tool's [`ToolOrigin`](crate::ToolOrigin) must be the ones the call was
 //!    held for, or the call is refused as not run.
-//! 3. The run's [`ToolPolicy`](crate::ToolPolicy), on the final arguments.
+//! 3. The run's [`ToolPolicy`](crate::ToolPolicy), on the final arguments, through
+//!    [`ToolPolicy::evaluate_call`](crate::ToolPolicy::evaluate_call) with the tool's
+//!    [`ToolOrigin`](crate::ToolOrigin) and the call's ID.
 //! 4. The agent's tool screen (its guardrails), on the final arguments. A screen that
 //!    rewrites the arguments has the rewrite checked against the policy again.
 //! 5. Confirmation, when the agent or the policy asks for it. A decision binds to the
@@ -21,7 +23,8 @@
 //! Approval decisions come from, in order: a decision keyed by call ID
 //! ([`RunConfig::tool_confirmation_decisions`]), a decision keyed by fingerprint
 //! ([`RunConfig::tool_approvals`]), the run's [`ApprovalStore`], and the live
-//! [`ToolConfirmationHandler`](crate::ToolConfirmationHandler), which is bounded by
+//! [`ToolConfirmationHandler`](crate::ToolConfirmationHandler), asked through
+//! [`decide_approval`](crate::ToolConfirmationHandler::decide_approval), which is bounded by
 //! [`RunConfig::tool_confirmation_timeout`] and denies when it expires.
 //!
 //! A call held without a decision is answered with a [`confirmation_pending_response`]
@@ -57,8 +60,8 @@ use crate::governance_state::{GovernanceScope, GovernanceState, GovernanceStateS
 use crate::principal::SubjectRef;
 use crate::{
     AdkError, BUILTIN_TOOL_ORIGIN, ErrorCategory, ErrorComponent, Event, InvocationContext, Part,
-    PolicyDecision, Result, RunConfig, Tool, ToolConfirmationDecision, ToolConfirmationRequest,
-    ToolEffect, ToolOrigin, ToolPolicyRequest, tool_call_fingerprint,
+    PolicyCall, PolicyDecision, Result, RunConfig, Tool, ToolConfirmationDecision,
+    ToolConfirmationRequest, ToolEffect, ToolOrigin, ToolPolicyRequest, tool_call_fingerprint,
 };
 
 /// How long a [`ToolConfirmationHandler`](crate::ToolConfirmationHandler) may take to
@@ -1538,8 +1541,13 @@ pub async fn authorize_tool_call(
         origin,
         resumes,
     } = call;
-    let audited =
-        AuditedCall { gate, tool_name: &tool_name, function_call_id: &function_call_id, effect };
+    let audited = AuditedCall {
+        gate,
+        tool_name: &tool_name,
+        function_call_id: &function_call_id,
+        effect,
+        origin: origin.as_ref(),
+    };
     if let Err(frozen) = config.check_governance() {
         audited.decision(&args, AuditDecision::Denied, Some(POLICY_REF_GOVERNANCE), None).await?;
         return Err(frozen);
@@ -1575,7 +1583,7 @@ pub async fn authorize_tool_call(
         Some(name) => format!("{POLICY_REF_TOOL_POLICY}:{name}"),
         None => POLICY_REF_TOOL_POLICY.to_string(),
     });
-    let mut decision = evaluate_policy(gate, &tool_name, &args, effect).await;
+    let mut decision = audited.evaluate_policy(&args).await;
     if !matches!(decision, PolicyDecision::Deny { .. })
         && let Some(screen) = gate.screen
     {
@@ -1583,7 +1591,7 @@ pub async fn authorize_tool_call(
             Ok(screened) => {
                 if screened != args {
                     // The policy approved the arguments it saw, not the rewrite.
-                    let again = evaluate_policy(gate, &tool_name, &screened, effect).await;
+                    let again = audited.evaluate_policy(&screened).await;
                     decision = decision.stricter(again);
                     args = screened;
                 }
@@ -1633,7 +1641,7 @@ pub async fn authorize_tool_call(
         function_call_id: Some(function_call_id.clone()),
         args: args.clone(),
         acting: Some(Box::new(gate.acting.clone())),
-        origin,
+        origin: origin.clone(),
     };
     let Some((approval, source)) = resolve_confirmation(gate, &request).await? else {
         let held_by = if approval_reason.is_some() {
@@ -1644,25 +1652,11 @@ pub async fn authorize_tool_call(
         audited
             .decision(&args, AuditDecision::ApprovalRequired, held_by, approval_reason.as_deref())
             .await?;
-        if let Some(store) = &config.approval_store {
-            store.record_pending(&gate.scope, &request).await?;
-        }
         let reason = match approval_reason {
             Some(reason) => format!("Tool '{tool_name}' requires confirmation: {reason}"),
             None => format!("Tool '{tool_name}' requires confirmation"),
         };
-        if let Some(service) = &config.approval_service {
-            let call = crate::approval::ApprovalCall {
-                scope: gate.scope.clone(),
-                request: request.clone(),
-                reason: reason.clone(),
-                agent_name: gate.agent_name.to_string(),
-                invocation_id: gate.invocation_id.to_string(),
-                run_id: config.durable_run_id.clone(),
-                acting: Some(gate.acting.clone()),
-            };
-            service.submit_call(call).await?;
-        }
+        record_held_call(gate, &request, &reason).await?;
         return Ok(ToolAuthorization::Pending { request, reason });
     };
     match approval.decision {
@@ -1713,6 +1707,114 @@ pub async fn authorize_tool_call(
     }
 }
 
+/// Records `request` as waiting for a decision: pending in the run's [`ApprovalStore`]
+/// and submitted to its [`ApprovalService`](crate::ApprovalService), when it has them.
+async fn record_held_call(
+    gate: &ToolGate<'_>,
+    request: &ToolConfirmationRequest,
+    reason: &str,
+) -> Result<()> {
+    let config = gate.run_config;
+    if let Some(store) = &config.approval_store {
+        store.record_pending(&gate.scope, request).await?;
+    }
+    if let Some(service) = &config.approval_service {
+        let call = crate::approval::ApprovalCall {
+            scope: gate.scope.clone(),
+            request: request.clone(),
+            reason: reason.to_string(),
+            agent_name: gate.agent_name.to_string(),
+            invocation_id: gate.invocation_id.to_string(),
+            run_id: config.durable_run_id.clone(),
+            acting: Some(gate.acting.clone()),
+        };
+        service.submit_call(call).await?;
+    }
+    Ok(())
+}
+
+/// Decides a confirmation that a tool asks for while it executes, through the decision
+/// sources of the governed path.
+///
+/// A tool whose own checks escalate a call — a payment that a payment policy sends for
+/// review — asks here, so the escalation is answered like a call held before execution:
+/// by a decision for the call ID (bound to the request's fingerprint), a live approval
+/// keyed by fingerprint ([`RunConfig::tool_approvals`]), a decision in the run's
+/// [`ApprovalStore`], which this call consumes, or the confirmation handler, bounded by
+/// [`RunConfig::tool_confirmation_timeout`]. Build `request` with the acting context and
+/// the tool's [`ToolOrigin`], so the decision binds to the agent and the tool that asked.
+///
+/// Without a decision, `request` is recorded as pending in the approval store and
+/// submitted to the approval service, and `None` is returned. The tool then sets
+/// `request` as its event's
+/// [`tool_confirmation`](crate::EventActions::tool_confirmation) and does not act: the
+/// agent holds the call, and dispatches it again once a decision exists. The caller
+/// records its own outcome; this function writes no audit record.
+///
+/// # Errors
+///
+/// Returns an error when the run is frozen before or after the decision, or when the
+/// handler, the approval store, or the approval service fails.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{
+///     ApprovalScope, ApprovalStore, InMemoryApprovalStore, RunConfig, ToolApproval,
+///     ToolConfirmationDecision, ToolConfirmationRequest, ToolGate,
+/// };
+/// use serde_json::json;
+/// use std::sync::Arc;
+///
+/// # futures::executor::block_on(async {
+/// let store = Arc::new(InMemoryApprovalStore::new());
+/// let config = RunConfig::builder().approval_store(store.clone()).build();
+/// let scope = ApprovalScope::new("shop", "user-1", "session-1");
+/// let gate = ToolGate::new(&config, "buyer", "inv-1", scope.clone());
+/// let request = ToolConfirmationRequest::new("pay", json!({ "cents": 75_000 }))
+///     .with_function_call_id("call-1")
+///     .with_acting_context(gate.acting_context().clone());
+///
+/// // No decision yet: the request waits in the approval store.
+/// assert!(adk_core::confirm_tool_call(&gate, &request, "over $50").await?.is_none());
+/// assert_eq!(store.pending(&scope).await?.len(), 1);
+///
+/// // An approver decides it; the next attempt consumes the approval.
+/// store.decide(&scope, &request.fingerprint(), ToolApproval::approve()).await?;
+/// let approval = adk_core::confirm_tool_call(&gate, &request, "over $50").await?;
+/// assert_eq!(approval.map(|a| a.decision), Some(ToolConfirmationDecision::Approve));
+/// assert!(!store.has_decision(&scope, &request.fingerprint()).await?);
+/// # Ok::<(), adk_core::AdkError>(())
+/// # }).unwrap();
+/// ```
+pub async fn confirm_tool_call(
+    gate: &ToolGate<'_>,
+    request: &ToolConfirmationRequest,
+    reason: &str,
+) -> Result<Option<ToolApproval>> {
+    let config = gate.run_config;
+    config.check_governance()?;
+    let Some((approval, source)) = resolve_confirmation(gate, request).await? else {
+        tracing::info!(
+            tool.name = %request.tool_name,
+            agent.id = %gate.acting.agent.id,
+            "tool call held for confirmation during execution"
+        );
+        record_held_call(gate, request, reason).await?;
+        return Ok(None);
+    };
+    tracing::info!(
+        tool.name = %request.tool_name,
+        agent.id = %gate.acting.agent.id,
+        confirmation.source = source,
+        decision = ?approval.decision,
+        "confirmation decided during execution"
+    );
+    // A freeze can land while a person is deciding.
+    config.check_governance()?;
+    Ok(Some(approval))
+}
+
 /// Why `held` cannot resume as a call by `acting`'s agent to a tool with `origin`, or
 /// `None` when it can.
 fn resume_mismatch(
@@ -1757,12 +1859,12 @@ async fn authorize_edited_args(
     audited: &AuditedCall<'_, '_>,
     edited: Value,
 ) -> Result<ToolAuthorization> {
-    let (gate, tool_name, effect) = (audited.gate, audited.tool_name, audited.effect);
+    let (gate, tool_name) = (audited.gate, audited.tool_name);
     let policy_ref = gate.run_config.tool_policy.as_ref().map(|policy| match policy.policy_ref() {
         Some(name) => format!("{POLICY_REF_TOOL_POLICY}:{name}"),
         None => POLICY_REF_TOOL_POLICY.to_string(),
     });
-    let mut decision = evaluate_policy(gate, tool_name, &edited, effect).await;
+    let mut decision = audited.evaluate_policy(&edited).await;
     let mut args = edited;
     if !matches!(decision, PolicyDecision::Deny { .. })
         && let Some(screen) = gate.screen
@@ -1770,7 +1872,7 @@ async fn authorize_edited_args(
         match screen.screen(tool_name, &args).await {
             Ok(screened) => {
                 if screened != args {
-                    let again = evaluate_policy(gate, tool_name, &screened, effect).await;
+                    let again = audited.evaluate_policy(&screened).await;
                     decision = decision.stricter(again);
                     args = screened;
                 }
@@ -1813,23 +1915,37 @@ const POLICY_REF_GUARDRAIL: &str = "guardrail";
 /// `policy_ref` of a call decided by its confirmation.
 const POLICY_REF_CONFIRMATION: &str = "confirmation";
 
-/// One call on its way through [`authorize_tool_call`], for its audit records.
+/// One call on its way through [`authorize_tool_call`], for its policy evaluations and
+/// audit records.
 struct AuditedCall<'g, 'a> {
     gate: &'g ToolGate<'a>,
     tool_name: &'g str,
     function_call_id: &'g str,
     effect: ToolEffect,
+    origin: Option<&'g ToolOrigin>,
 }
 
 impl AuditedCall<'_, '_> {
     fn draft(&self, kind: AuditRecordKind, args: &Value) -> Option<AuditRecordDraft> {
         let trail = self.gate.run_config.audit.as_ref()?;
-        Some(
-            AuditRecordDraft::new(kind, self.tool_name)
-                .args_digest(trail.digest(args))
-                .ext("functionCallId", Value::String(self.function_call_id.to_string()))
-                .ext("effect", serde_json::to_value(self.effect).unwrap_or(Value::Null)),
-        )
+        let mut draft = AuditRecordDraft::new(kind, self.tool_name)
+            .args_digest(trail.digest(args))
+            .ext("functionCallId", Value::String(self.function_call_id.to_string()))
+            .ext("effect", serde_json::to_value(self.effect).unwrap_or(Value::Null));
+        // Which publisher's tool, as declared, the decision was for.
+        if let Some(origin) = self.origin {
+            draft = draft
+                .ext("toolSource", Value::String(origin.source.clone()))
+                .ext("declarationDigest", Value::String(origin.declaration_digest.clone()));
+        }
+        Some(draft)
+    }
+
+    /// Asks the run's policy about the call with `args`, passing its origin and ID.
+    async fn evaluate_policy(&self, args: &Value) -> PolicyDecision {
+        let call =
+            PolicyCall { origin: self.origin, function_call_id: Some(self.function_call_id) };
+        evaluate_policy(self.gate, self.tool_name, args, self.effect, call).await
     }
 
     /// Records the governed path's decision for the call.
@@ -1876,11 +1992,13 @@ impl AuditedCall<'_, '_> {
     }
 }
 
+/// Asks the run's policy about a call to `tool_name` with `args`, described by `call`.
 async fn evaluate_policy(
     gate: &ToolGate<'_>,
     tool_name: &str,
     args: &Value,
     effect: ToolEffect,
+    call: PolicyCall<'_>,
 ) -> PolicyDecision {
     let Some(policy) = gate.run_config.tool_policy.as_ref() else {
         return PolicyDecision::Allow;
@@ -1896,7 +2014,7 @@ async fn evaluate_policy(
         invocation_id: gate.invocation_id.to_string(),
         acting: Some(gate.acting.clone()),
     };
-    policy.evaluate(&request).await
+    policy.evaluate_call(&request, &call).await
 }
 
 /// Finds the decision for `request`, asking the live handler last.
@@ -1941,7 +2059,7 @@ async fn resolve_confirmation(
         return Ok(None);
     };
     let timeout = config.tool_confirmation_timeout;
-    let decide = Box::pin(tokio::time::timeout(timeout, handler.decide(request)));
+    let decide = Box::pin(tokio::time::timeout(timeout, handler.decide_approval(request)));
     let decided = match gate.abandon.clone() {
         Some(mut abandon) => {
             let abandoned = Box::pin(async move {
@@ -1964,7 +2082,7 @@ async fn resolve_confirmation(
         None => decide.await,
     };
     match decided {
-        Ok(Ok(decision)) => Ok(Some((bare(decision), "handler"))),
+        Ok(Ok(approval)) => Ok(Some((approval, "handler"))),
         Ok(Err(error)) => Err(error),
         Err(_) => {
             tracing::warn!(
@@ -2701,7 +2819,8 @@ impl BuiltinToolGovernor {
         effect: ToolEffect,
         origin: ToolOrigin,
     ) -> Result<Option<(BuiltinToolWithholding, String)>> {
-        let approval_reason = match evaluate_policy(gate, name, &args, effect).await {
+        let call = PolicyCall { origin: Some(&origin), function_call_id: None };
+        let approval_reason = match evaluate_policy(gate, name, &args, effect, call).await {
             PolicyDecision::Allow => return Ok(None),
             PolicyDecision::Deny { reason } => {
                 return Ok(Some((BuiltinToolWithholding::PolicyDenied, reason)));
@@ -3893,5 +4012,200 @@ mod tests {
             authorize_tool_call(&gate(&config), call()).await.unwrap(),
             ToolAuthorization::Execute { .. }
         ));
+    }
+
+    /// Records the facts each `evaluate_call` receives and denies every tool `mcp:evil`
+    /// publishes. `evaluate` alone would require approval, so a path that skips
+    /// `evaluate_call` shows up as a held call.
+    #[derive(Debug, Default)]
+    struct OriginPolicy {
+        seen: std::sync::Mutex<Vec<SeenCall>>,
+    }
+
+    /// The origin, call ID, and arguments one `evaluate_call` received.
+    type SeenCall = (Option<ToolOrigin>, Option<String>, Value);
+
+    #[async_trait]
+    impl crate::ToolPolicy for OriginPolicy {
+        async fn evaluate(&self, _request: &ToolPolicyRequest) -> PolicyDecision {
+            PolicyDecision::require_approval("evaluate_call was not used")
+        }
+
+        async fn evaluate_call(
+            &self,
+            request: &ToolPolicyRequest,
+            call: &PolicyCall<'_>,
+        ) -> PolicyDecision {
+            self.seen.lock().unwrap().push((
+                call.origin.cloned(),
+                call.function_call_id.map(str::to_string),
+                request.args.clone(),
+            ));
+            match call.origin {
+                Some(origin) if origin.source == "mcp:evil" => {
+                    PolicyDecision::deny("tools from mcp:evil are blocked")
+                }
+                _ => PolicyDecision::Allow,
+            }
+        }
+    }
+
+    /// Answers every request with a fixed approval through `decide_approval`; its `decide`
+    /// must never be consulted.
+    #[derive(Debug)]
+    struct ApprovalHandler(ToolApproval);
+
+    #[async_trait]
+    impl ToolConfirmationHandler for ApprovalHandler {
+        async fn decide(
+            &self,
+            _request: &ToolConfirmationRequest,
+        ) -> Result<ToolConfirmationDecision> {
+            Err(AdkError::tool("decide must not be called when decide_approval is overridden"))
+        }
+
+        async fn decide_approval(
+            &self,
+            _request: &ToolConfirmationRequest,
+        ) -> Result<ToolApproval> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn origin_call(source: &str, id: &str, args: Value) -> (GovernedCall, ToolOrigin) {
+        let origin = ToolOrigin::new(source, &json!({ "name": "search" }), None);
+        let mut call = GovernedCall::new("search", id, args);
+        call.origin = Some(origin.clone());
+        (call, origin)
+    }
+
+    #[tokio::test]
+    async fn the_policy_sees_the_calls_origin_and_id_on_every_evaluation() {
+        let policy = Arc::new(OriginPolicy::default());
+        let handler = ApprovalHandler(ToolApproval::approve().with_edited_args(json!({ "q": 2 })));
+        let config = RunConfig::builder()
+            .tool_policy(policy.clone())
+            .tool_confirmation_handler(Arc::new(handler))
+            .build();
+
+        let (evil_call, evil) = origin_call("mcp:evil", "c1", json!({ "q": 1 }));
+        assert_eq!(
+            authorize_tool_call(&gate(&config), evil_call).await.unwrap(),
+            ToolAuthorization::Refuse {
+                reason: "Tool 'search' denied by policy: tools from mcp:evil are blocked".into(),
+                confirmation: None,
+            }
+        );
+
+        // An approver's edit is a new evaluation of the same call, with the same facts.
+        let (good_call, good) = origin_call("mcp:good", "c2", json!({ "q": 1 }));
+        assert_eq!(
+            authorize_tool_call(&gate(&config), good_call.requiring_confirmation(true))
+                .await
+                .unwrap(),
+            ToolAuthorization::Execute {
+                args: json!({ "q": 2 }),
+                confirmation: Some(ToolConfirmationDecision::Approve),
+            }
+        );
+
+        // A built-in tool is evaluated before any call exists, so it has an origin but no ID.
+        let (mut declarations, tools) = native_tools();
+        BuiltinToolGovernor::new().govern(&gate(&config), &mut declarations, &tools).await.unwrap();
+
+        let seen = policy.seen.lock().unwrap().clone();
+        assert_eq!(
+            seen[..3],
+            [
+                (Some(evil), Some("c1".to_string()), json!({ "q": 1 })),
+                (Some(good.clone()), Some("c2".to_string()), json!({ "q": 1 })),
+                (Some(good), Some("c2".to_string()), json!({ "q": 2 })),
+            ]
+        );
+        let builtin: Vec<_> =
+            seen[3..].iter().map(|(origin, id, _)| (origin.is_some(), id)).collect();
+        assert_eq!(builtin, [(true, &None), (true, &None)], "{seen:?}");
+    }
+
+    #[tokio::test]
+    async fn the_default_decide_approval_maps_the_handlers_decision() {
+        #[derive(Debug)]
+        struct Fixed(ToolConfirmationDecision);
+        #[async_trait]
+        impl ToolConfirmationHandler for Fixed {
+            async fn decide(
+                &self,
+                _request: &ToolConfirmationRequest,
+            ) -> Result<ToolConfirmationDecision> {
+                Ok(self.0)
+            }
+        }
+        let request = ToolConfirmationRequest::new("pay", json!({}));
+        let approve = Fixed(ToolConfirmationDecision::Approve).decide_approval(&request);
+        assert_eq!(approve.await.unwrap(), ToolApproval::approve());
+        let deny = Fixed(ToolConfirmationDecision::Deny).decide_approval(&request);
+        assert_eq!(deny.await.unwrap(), ToolApproval::deny());
+    }
+
+    #[tokio::test]
+    async fn a_handlers_edited_arguments_are_checked_against_the_policy_again() {
+        let config = |approval: ToolApproval| {
+            RunConfig::builder()
+                .tool_policy(Arc::new(transfer_policy()))
+                .tool_confirmation_handler(Arc::new(ApprovalHandler(approval)))
+                .build()
+        };
+        let call = || GovernedCall::new("pay", "c1", json!({ "amount": 900 }));
+
+        let allowed = config(ToolApproval::approve().with_edited_args(json!({ "amount": 400 })));
+        assert_eq!(
+            authorize_tool_call(&gate(&allowed), call()).await.unwrap(),
+            ToolAuthorization::Execute {
+                args: json!({ "amount": 400 }),
+                confirmation: Some(ToolConfirmationDecision::Approve),
+            }
+        );
+
+        let over = config(ToolApproval::approve().with_edited_args(json!({ "amount": 5000 })));
+        let ToolAuthorization::Refuse { reason, confirmation } =
+            authorize_tool_call(&gate(&over), call()).await.unwrap()
+        else {
+            panic!("expected the edited call to be refused");
+        };
+        assert!(reason.contains("over the transfer limit"), "{reason}");
+        assert_eq!(confirmation, Some(ToolConfirmationDecision::Approve));
+
+        let declined = config(ToolApproval::deny().with_message("use the treasury account"));
+        assert_eq!(
+            authorize_tool_call(&gate(&declined), call()).await.unwrap(),
+            ToolAuthorization::Refuse {
+                reason:
+                    "Tool 'pay' was not run; the approver declined it: use the treasury account"
+                        .into(),
+                confirmation: Some(ToolConfirmationDecision::Deny),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_records_name_the_tools_origin() {
+        let recorder = crate::audit_log::InMemoryAuditRecorder::new();
+        let config =
+            RunConfig::builder().audit(AuditTrail::new(Arc::new(recorder.clone()))).build();
+        let (call, origin) = origin_call("mcp:good", "c1", json!({ "q": 1 }));
+        authorize_tool_call(&gate(&config), call).await.unwrap();
+        authorize_tool_call(&gate(&config), GovernedCall::new("search", "c2", json!({})))
+            .await
+            .unwrap();
+
+        let records = recorder.records();
+        assert_eq!(records.len(), 2, "{records:?}");
+        assert_eq!(records[0].ext.get("toolSource"), Some(&json!("mcp:good")));
+        assert_eq!(
+            records[0].ext.get("declarationDigest"),
+            Some(&json!(origin.declaration_digest))
+        );
+        assert!(!records[1].ext.contains_key("toolSource"), "{:?}", records[1]);
+        assert!(!records[1].ext.contains_key("declarationDigest"), "{:?}", records[1]);
     }
 }

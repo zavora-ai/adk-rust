@@ -21,8 +21,8 @@ Deployment manifest, bundling, and control-plane client for ADK-Rust agents.
 [dependencies]
 adk-deploy = "3.0"
 
-# With the Agent Engine (ReasoningEngine) deployment client:
-adk-deploy = { version = "3.0", features = ["gcp"] }
+# Or, with the Agent Engine (ReasoningEngine) deployment client:
+# adk-deploy = { version = "3.0", features = ["gcp"] }
 ```
 
 | Feature | Description |

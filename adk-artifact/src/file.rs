@@ -1,5 +1,5 @@
 use crate::service::*;
-use adk_core::{Part, Result};
+use adk_core::{AdkError, ErrorCategory, ErrorComponent, Part, Result};
 use async_trait::async_trait;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -24,6 +24,25 @@ const TEMP_PREFIX: &str = ".save-";
 const MAX_SAVE_ATTEMPTS: usize = 1024;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// The error for an artifact whose resolved path leaves the base directory.
+fn path_escapes() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Artifact,
+        ErrorCategory::InvalidInput,
+        "artifact.path_escapes",
+        "the artifact path resolves outside the configured base directory",
+    )
+}
+
+/// A filesystem failure under the base directory; `operation` names what failed.
+fn io_error(operation: &str, error: impl std::fmt::Display) -> AdkError {
+    AdkError::internal(
+        ErrorComponent::Artifact,
+        "artifact.file.io",
+        format!("{operation}: {error}"),
+    )
+}
 
 /// Encodes an artifact name as one directory name.
 ///
@@ -162,17 +181,15 @@ impl FileArtifactService {
     /// Returns an error if the directory cannot be created or canonicalized.
     pub fn new(base_dir: impl Into<PathBuf>) -> Result<Self> {
         let raw = base_dir.into();
-        std::fs::create_dir_all(&raw)
-            .map_err(|e| adk_core::AdkError::artifact(format!("create base dir failed: {e}")))?;
-        let canonical = raw.canonicalize().map_err(|e| {
-            adk_core::AdkError::artifact(format!("canonicalize base dir failed: {e}"))
-        })?;
+        std::fs::create_dir_all(&raw).map_err(|e| io_error("create base dir failed", e))?;
+        let canonical =
+            raw.canonicalize().map_err(|e| io_error("canonicalize base dir failed", e))?;
         Ok(Self { base_dir: canonical })
     }
 
     fn validate_file_name(file_name: &str) -> Result<()> {
         if file_name.is_empty() {
-            return Err(adk_core::AdkError::artifact("invalid artifact file name: empty name"));
+            return Err(invalid_file_name(file_name, "the name is empty"));
         }
 
         if file_name.contains('/')
@@ -181,10 +198,10 @@ impl FileArtifactService {
             || file_name == ".."
             || file_name.contains("..")
         {
-            return Err(adk_core::AdkError::artifact(format!(
-                "invalid artifact file name '{}': path separators and traversal patterns are not allowed",
-                file_name
-            )));
+            return Err(invalid_file_name(
+                file_name,
+                "path separators and traversal patterns are not allowed",
+            ));
         }
 
         Ok(())
@@ -195,9 +212,7 @@ impl FileArtifactService {
     /// Rejects empty values, directory separators, and traversal patterns.
     fn validate_path_component(component: &str, field: &str) -> Result<()> {
         if component.is_empty() {
-            return Err(adk_core::AdkError::artifact(format!(
-                "invalid artifact {field}: empty value"
-            )));
+            return Err(invalid_identifier(field, component, "the value is empty"));
         }
 
         if component.contains('/')
@@ -206,9 +221,11 @@ impl FileArtifactService {
             || component == ".."
             || component.contains("..")
         {
-            return Err(adk_core::AdkError::artifact(format!(
-                "invalid artifact {field} '{component}': path separators and traversal patterns are not allowed"
-            )));
+            return Err(invalid_identifier(
+                field,
+                component,
+                "path separators and traversal patterns are not allowed",
+            ));
         }
 
         Ok(())
@@ -225,9 +242,10 @@ impl FileArtifactService {
 
     /// Ensures the given path stays within the configured base directory.
     fn ensure_within_base_dir(&self, path: &Path) -> Result<()> {
-        let canonical_base = self.base_dir.canonicalize().map_err(|e| {
-            adk_core::AdkError::artifact(format!("canonicalize base dir failed: {e}"))
-        })?;
+        let canonical_base = self
+            .base_dir
+            .canonicalize()
+            .map_err(|e| io_error("canonicalize base dir failed", e))?;
 
         // For paths that may not exist yet, resolve relative to canonical base
         let canonical_path = match path.canonicalize() {
@@ -239,9 +257,7 @@ impl FileArtifactService {
         };
 
         if !canonical_path.starts_with(&canonical_base) {
-            return Err(adk_core::AdkError::artifact(
-                "artifact path escapes configured base directory",
-            ));
+            return Err(path_escapes());
         }
 
         Ok(())
@@ -283,15 +299,13 @@ impl FileArtifactService {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => {
-                return Err(adk_core::AdkError::artifact(format!("read dir failed: {error}")));
+                return Err(io_error("read dir failed", error));
             }
         };
 
         let mut versions = Vec::new();
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| adk_core::AdkError::artifact(format!("read dir entry failed: {e}")))?
+        while let Some(entry) =
+            entries.next_entry().await.map_err(|e| io_error("read dir entry failed", e))?
         {
             let Some(file_name) = entry.file_name().to_str().map(ToString::to_string) else {
                 continue;
@@ -335,20 +349,14 @@ impl FileArtifactService {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(names),
             Err(error) => {
-                return Err(adk_core::AdkError::artifact(format!("read dir failed: {error}")));
+                return Err(io_error("read dir failed", error));
             }
         };
 
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| adk_core::AdkError::artifact(format!("read dir entry failed: {e}")))?
+        while let Some(entry) =
+            entries.next_entry().await.map_err(|e| io_error("read dir entry failed", e))?
         {
-            if entry
-                .file_type()
-                .await
-                .map_err(|e| adk_core::AdkError::artifact(format!("file type check failed: {e}")))?
-                .is_dir()
+            if entry.file_type().await.map_err(|e| io_error("file type check failed", e))?.is_dir()
                 && let Some(dir_name) = entry.file_name().to_str()
             {
                 let name = decode_name(dir_name);
@@ -409,7 +417,7 @@ impl FileArtifactService {
             let target = dir.join(version_file_name(version));
             let published = Self::publish(temp, &target, payload)
                 .await
-                .map_err(|e| adk_core::AdkError::artifact(format!("write failed: {e}")))?;
+                .map_err(|e| io_error("write failed", e))?;
             if published {
                 return Ok(version);
             }
@@ -418,9 +426,9 @@ impl FileArtifactService {
             }
             version += 1;
         }
-        Err(adk_core::AdkError::new(
-            adk_core::ErrorComponent::Artifact,
-            adk_core::ErrorCategory::Conflict,
+        Err(AdkError::new(
+            ErrorComponent::Artifact,
+            ErrorCategory::Conflict,
             "artifact.save_contended",
             format!(
                 "artifact '{}' gained {MAX_SAVE_ATTEMPTS} versions while this save ran; retry the save",
@@ -447,20 +455,17 @@ impl ArtifactService for FileArtifactService {
         let dirs =
             self.artifact_dirs(&req.app_name, &req.user_id, &req.session_id, &req.file_name)?;
         let payload = serde_json::to_vec(&req.part)
-            .map_err(|error| adk_core::AdkError::artifact(error.to_string()))?;
+            .map_err(|error| io_error("encode artifact failed", error))?;
 
-        fs::create_dir_all(&dirs.primary)
-            .await
-            .map_err(|e| adk_core::AdkError::artifact(format!("create dir failed: {e}")))?;
+        fs::create_dir_all(&dirs.primary).await.map_err(|e| io_error("create dir failed", e))?;
 
         // Final canonicalization check after directory exists
-        let verified_dir = dirs.primary.canonicalize().map_err(|e| {
-            adk_core::AdkError::artifact(format!("canonicalize artifact dir failed: {e}"))
-        })?;
+        let verified_dir = dirs
+            .primary
+            .canonicalize()
+            .map_err(|e| io_error("canonicalize artifact dir failed", e))?;
         if !verified_dir.starts_with(&self.base_dir) {
-            return Err(adk_core::AdkError::artifact(
-                "artifact path escapes configured base directory",
-            ));
+            return Err(path_escapes());
         }
 
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
@@ -471,7 +476,7 @@ impl ArtifactService for FileArtifactService {
         ));
         if let Err(error) = Self::write_synced(&temp, &payload).await {
             let _ = fs::remove_file(&temp).await;
-            return Err(adk_core::AdkError::artifact(format!("write failed: {error}")));
+            return Err(io_error("write failed", error));
         }
         let claimed = Self::claim_version(&dirs, &verified_dir, &temp, &payload, &req).await;
         let _ = fs::remove_file(&temp).await;
@@ -489,22 +494,30 @@ impl ArtifactService for FileArtifactService {
             None => *Self::stored_versions(&dirs)
                 .await?
                 .last()
-                .ok_or_else(|| adk_core::AdkError::artifact("artifact not found"))?,
+                .ok_or_else(|| artifact_not_found(&req.file_name, None))?,
         };
 
         let path = Self::version_path(&dirs, version)
             .await
-            .ok_or_else(|| adk_core::AdkError::artifact("artifact not found"))?;
+            .ok_or_else(|| artifact_not_found(&req.file_name, req.version))?;
         let payload = fs::read(&path).await.map_err(|error| {
             if error.kind() == ErrorKind::NotFound {
-                adk_core::AdkError::artifact("artifact not found")
+                artifact_not_found(&req.file_name, req.version)
             } else {
-                adk_core::AdkError::artifact(format!("read failed: {error}"))
+                io_error("read failed", error)
             }
         })?;
 
-        let part = serde_json::from_slice::<Part>(&payload)
-            .map_err(|error| adk_core::AdkError::artifact(error.to_string()))?;
+        let part = serde_json::from_slice::<Part>(&payload).map_err(|error| {
+            AdkError::internal(
+                ErrorComponent::Artifact,
+                "artifact.file.corrupt",
+                format!(
+                    "artifact '{}' version {version} is not a stored artifact: {error}",
+                    req.file_name
+                ),
+            )
+        })?;
 
         Ok(LoadResponse { part })
     }
@@ -521,7 +534,7 @@ impl ArtifactService for FileArtifactService {
                 Ok(()) => {}
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
                 Err(error) => {
-                    return Err(adk_core::AdkError::artifact(format!("delete failed: {error}")));
+                    return Err(io_error("delete failed", error));
                 }
             }
         }
@@ -552,23 +565,17 @@ impl ArtifactService for FileArtifactService {
             self.artifact_dirs(&req.app_name, &req.user_id, &req.session_id, &req.file_name)?;
         let versions: Vec<i64> = Self::stored_versions(&dirs).await?.into_iter().rev().collect();
         if versions.is_empty() {
-            return Err(adk_core::AdkError::artifact("artifact not found"));
+            return Err(artifact_not_found(&req.file_name, None));
         }
         Ok(VersionsResponse { versions })
     }
 
     async fn health_check(&self) -> Result<()> {
-        fs::create_dir_all(&self.base_dir)
-            .await
-            .map_err(|e| adk_core::AdkError::artifact(format!("health check failed: {e}")))?;
+        fs::create_dir_all(&self.base_dir).await.map_err(|e| io_error("health check failed", e))?;
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
         let path = self.base_dir.join(format!(".healthcheck-{nonce}"));
-        fs::write(&path, b"ok")
-            .await
-            .map_err(|e| adk_core::AdkError::artifact(format!("health check failed: {e}")))?;
-        fs::remove_file(path)
-            .await
-            .map_err(|e| adk_core::AdkError::artifact(format!("health check failed: {e}")))?;
+        fs::write(&path, b"ok").await.map_err(|e| io_error("health check failed", e))?;
+        fs::remove_file(path).await.map_err(|e| io_error("health check failed", e))?;
         Ok(())
     }
 }

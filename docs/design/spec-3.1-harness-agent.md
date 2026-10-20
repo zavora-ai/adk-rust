@@ -8,6 +8,7 @@
 | **Grounding commit** | `origin/main` @ `a24ebd8d` — every `file:line` reference below is against this commit |
 | **Affected crates** | NEW `adk-harness`; additive changes in `adk-core`, `adk-devtools`, `adk-sandbox`, `adk-cli`, `cargo-adk`, `adk-rust`; deprecation in `adk-agent` |
 | **Stability** | `adk-harness` enters at **Beta** ([STABILITY.md](../../STABILITY.md)) |
+| **Extended by** | [`spec-3.2-agent-kernel.md`](spec-3.2-agent-kernel.md): the always-on form of the harness; `kernel` becomes a default feature of `adk-harness` |
 
 ---
 

@@ -1,4 +1,4 @@
-//! Deserialization tests for `SessionEvent` variants — validates CANON §3.4 type strings.
+//! Deserialization tests for `SessionEvent` variants — validates their dotted `type` strings.
 //!
 //! These tests ensure the SDK correctly deserializes all event types from the SSE stream,
 //! including the forward-compatible `Unknown` catch-all for unrecognized event types.

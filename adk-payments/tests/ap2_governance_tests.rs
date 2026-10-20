@@ -1092,7 +1092,7 @@ async fn the_mcp_payment_tool_is_governed_by_the_runs_spend_ledger() {
     assert_eq!(response["outcome"], "completed");
     assert_eq!(response["continuation"]["transactionId"], "tx-1");
     assert_eq!(
-        spent(&ledger, SpendKey::org(APP).with_agent(&shopper_agent_id()).with_vendor(MERCHANT_ID))
+        spent(&ledger, SpendKey::org(APP).with_agent(shopper_agent_id()).with_vendor(MERCHANT_ID))
             .await,
         CART_MICRO_USD
     );
