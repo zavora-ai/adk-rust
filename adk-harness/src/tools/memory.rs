@@ -113,7 +113,7 @@ async fn record_change(ctx: &dyn ToolContext, change: &MemoryChange) -> Result<(
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```text
 /// // memory_read {}                      → the index
 /// // memory_read { "path": "build.md" }  → the topic's content
 /// ```
@@ -173,7 +173,7 @@ impl Tool for MemoryReadTool {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```text
 /// // memory_write { "path": "build.md", "summary": "how to build", "content": "cargo build" }
 /// ```
 pub struct MemoryWriteTool {
@@ -233,7 +233,7 @@ impl Tool for MemoryWriteTool {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```text
 /// // memory_delete { "path": "build.md" }
 /// ```
 pub struct MemoryDeleteTool {
