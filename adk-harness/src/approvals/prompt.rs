@@ -274,10 +274,35 @@ struct TurnState {
     deny_all: bool,
 }
 
+/// Most sessions whose turn state is kept; the oldest is dropped first.
+const TURN_STATES_CAP: usize = 1024;
+
+/// Turn state per session, so one session's "deny all remaining" and prompt cap never
+/// reset or spend another's (threat I-3).
+#[derive(Debug, Default)]
+struct Turns {
+    states: std::collections::HashMap<String, TurnState>,
+    order: std::collections::VecDeque<String>,
+}
+
+impl Turns {
+    fn of(&mut self, key: String) -> &mut TurnState {
+        if !self.states.contains_key(&key) {
+            self.order.push_back(key.clone());
+            while self.order.len() > TURN_STATES_CAP {
+                if let Some(oldest) = self.order.pop_front() {
+                    self.states.remove(&oldest);
+                }
+            }
+        }
+        self.states.entry(key).or_default()
+    }
+}
+
 /// A [`ToolConfirmationHandler`] that asks an [`ApprovalPrompter`] (spec 3.1 §7.5).
 ///
 /// Prompts are serialized, because calls in a batch are decided concurrently, and capped
-/// per turn. Before prompting, the call is decided again by the run's whole policy — the
+/// per turn of each session. Before prompting, the call is decided again by the run's whole policy — the
 /// harness layer with the call's origin, made stricter by the run's and the operator's
 /// layers — so a rule granted for an earlier call in the same batch applies without a
 /// prompt when only the harness asked. A call another layer requires approval for, or the
@@ -298,7 +323,7 @@ pub struct PromptingConfirmationHandler {
     prompter: Arc<dyn ApprovalPrompter>,
     standing: Arc<dyn StandingRuleStore>,
     policy: HarnessPolicy,
-    serial: Mutex<TurnState>,
+    serial: Mutex<Turns>,
     per_turn_cap: usize,
 }
 
@@ -327,7 +352,7 @@ impl PromptingConfirmationHandler {
             prompter,
             standing,
             policy,
-            serial: Mutex::new(TurnState::default()),
+            serial: Mutex::new(Turns::default()),
             per_turn_cap: DEFAULT_PROMPTS_PER_TURN,
         }
     }
@@ -347,11 +372,15 @@ impl PromptingConfirmationHandler {
     /// Returns the prompter's error, or the rule store's when a remembered rule cannot be
     /// stored.
     async fn approval_for(&self, request: &ToolConfirmationRequest) -> Result<ToolApproval> {
-        let mut turn = self.serial.lock().await;
+        let mut turns = self.serial.lock().await;
         let Some(context) = self.policy.prompts().take(request) else {
             tracing::warn!(tool.name = %request.tool_name, "held call was not evaluated by the harness policy; not run");
             return Ok(refuse("the harness policy did not evaluate this call, so it is not run"));
         };
+        let turn = turns.of(format!(
+            "{}\u{1f}{}\u{1f}{}",
+            context.app_name, context.user_id, context.session_id
+        ));
         if turn.invocation_id != context.invocation_id {
             *turn =
                 TurnState { invocation_id: context.invocation_id.clone(), ..TurnState::default() };
