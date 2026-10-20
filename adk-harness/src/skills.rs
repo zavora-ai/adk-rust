@@ -4,8 +4,12 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use adk_core::{Result, Tool, ToolRegistry};
+use adk_core::{
+    LlmRequest, ReadonlyContext, Result, Tool, ToolContext, ToolEffect, ToolRegistry, Toolset,
+    async_trait,
+};
 use adk_skill::{SkillIndex, SkillToolset, SkillToolsetConfig};
+use serde_json::{Value, json};
 
 /// How skills reach the model (spec 3.1 §7.8).
 ///
@@ -122,8 +126,142 @@ pub(crate) fn load_index(root: &Path, config: &SkillsConfig) -> Result<SkillInde
 /// What the builder attaches for a skills configuration.
 pub(crate) enum SkillsWiring {
     None,
-    Toolset(Arc<SkillToolset>),
+    Toolset(Arc<AuditedSkillToolset>),
     Inject(SkillIndex),
+}
+
+/// The progressive skill toolset, with `load_skill` recording `harness.skill.activated`
+/// (spec 3.1 §9.3).
+pub(crate) struct AuditedSkillToolset {
+    inner: Arc<SkillToolset>,
+    index: Arc<SkillIndex>,
+    root: PathBuf,
+}
+
+#[async_trait]
+impl Toolset for AuditedSkillToolset {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    async fn tools(&self, ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
+        let tools = self.inner.tools(ctx).await?;
+        Ok(tools
+            .into_iter()
+            .map(|tool| {
+                if tool.name() == "load_skill" {
+                    Arc::new(AuditedLoadSkill {
+                        inner: tool,
+                        index: self.index.clone(),
+                        root: self.root.clone(),
+                    }) as Arc<dyn Tool>
+                } else {
+                    tool
+                }
+            })
+            .collect())
+    }
+
+    async fn process_llm_request(
+        &self,
+        ctx: Arc<dyn ReadonlyContext>,
+        request: &mut LlmRequest,
+    ) -> Result<()> {
+        self.inner.process_llm_request(ctx, request).await
+    }
+
+    async fn close(&self) {
+        self.inner.close().await;
+    }
+}
+
+/// `load_skill`, declared exactly as the skill toolset declares it, recording the
+/// activation after the skill loads.
+struct AuditedLoadSkill {
+    inner: Arc<dyn Tool>,
+    index: Arc<SkillIndex>,
+    root: PathBuf,
+}
+
+#[async_trait]
+impl Tool for AuditedLoadSkill {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+    fn declaration(&self) -> Value {
+        self.inner.declaration()
+    }
+    fn enhanced_description(&self) -> String {
+        self.inner.enhanced_description()
+    }
+    fn is_long_running(&self) -> bool {
+        self.inner.is_long_running()
+    }
+    fn is_builtin(&self) -> bool {
+        self.inner.is_builtin()
+    }
+    fn parameters_schema(&self) -> Option<Value> {
+        self.inner.parameters_schema()
+    }
+    fn response_schema(&self) -> Option<Value> {
+        self.inner.response_schema()
+    }
+    fn annotations(&self) -> Option<&Value> {
+        self.inner.annotations()
+    }
+    fn origin(&self) -> &str {
+        self.inner.origin()
+    }
+    fn required_scopes(&self) -> &[&str] {
+        self.inner.required_scopes()
+    }
+    fn is_read_only(&self) -> bool {
+        self.inner.is_read_only()
+    }
+    fn effect(&self) -> ToolEffect {
+        self.inner.effect()
+    }
+    fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
+        self.inner.timeout_override()
+    }
+    fn is_concurrency_safe(&self) -> bool {
+        self.inner.is_concurrency_safe()
+    }
+    fn is_agent_delegation(&self) -> bool {
+        self.inner.is_agent_delegation()
+    }
+
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        let loaded = self.inner.execute(ctx.clone(), args).await?;
+        if let Some(audit) = crate::audit::HarnessAudit::for_tool(ctx.as_ref()) {
+            let id = loaded.get("skillId").and_then(Value::as_str).unwrap_or_default();
+            let document = self.index.find_by_id(id);
+            let source = document.map(|document| {
+                document
+                    .path
+                    .strip_prefix(&self.root)
+                    .unwrap_or(&document.path)
+                    .display()
+                    .to_string()
+            });
+            audit
+                .record(
+                    "harness.skill.activated",
+                    json!({
+                        "skillId": id,
+                        "hash": loaded.get("hash"),
+                        "sourcePath": source,
+                        "allowedTools": document.map(|document| document.allowed_tools.clone()),
+                        "functionCallId": ctx.function_call_id(),
+                    }),
+                )
+                .await?;
+        }
+        Ok(loaded)
+    }
 }
 
 /// Builds the skills wiring of `config` over the workspace at `root` (spec 3.1 §7.8).
@@ -146,13 +284,18 @@ pub(crate) fn wire(root: &Path, config: &SkillsConfig) -> Result<SkillsWiring> {
             }
             let registry: Arc<dyn ToolRegistry> =
                 Arc::new(PoolRegistry { pool: config.pool.clone() });
+            let index = Arc::new(index);
             #[allow(unused_mut)]
-            let mut toolset = SkillToolset::new(Arc::new(index), registry, config.toolset.clone());
+            let mut toolset = SkillToolset::new(index.clone(), registry, config.toolset.clone());
             #[cfg(feature = "skills-registry")]
             if let Some(client) = &config.registry {
                 toolset = toolset.with_registry_client(client.clone());
             }
-            Ok(SkillsWiring::Toolset(Arc::new(toolset)))
+            Ok(SkillsWiring::Toolset(Arc::new(AuditedSkillToolset {
+                inner: Arc::new(toolset),
+                index,
+                root: root.to_path_buf(),
+            })))
         }
     }
 }
