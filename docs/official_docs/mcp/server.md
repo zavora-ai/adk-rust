@@ -61,8 +61,9 @@ let service = rmcp::ServiceExt::serve(
 service.waiting().await?;
 ```
 
-The deterministic `examples/mcp_manager` fixture uses this server shape and is
-compiled and executed by the MCP verification gates. `ServerConfig` is the name
+The deterministic `examples/mcp_manager` fixture uses this server shape. CI
+compiles it with the other standalone examples; run it with
+`cargo run --manifest-path examples/mcp_manager/Cargo.toml`. `ServerConfig` is the name
 rmcp 3.4 gives the initialize result; earlier releases call it `ServerInfo`,
 which rmcp 3.4 and later keep as a deprecated alias.
 

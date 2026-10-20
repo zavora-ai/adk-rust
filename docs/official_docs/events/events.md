@@ -129,7 +129,7 @@ The `state_delta` field contains key-value pairs representing changes to the ses
 State keys can use prefixes to control scope:
 - `app:key` - Application-scoped state (shared across all users)
 - `user:key` - User-scoped state (shared across all sessions for a user)
-- `temp:key` - Temporary state: visible to later tools, transferred agents and `{temp:key}` instructions for the rest of the invocation, and never persisted by the session service
+- `temp:key` - Temporary state: visible for the rest of the invocation to later tools (through `ToolContext::session`) and to agents that run later, such as a transfer target or the next workflow step, whose `{temp:key}` instructions resolve it; never persisted by the session service. An agent's own instruction is resolved once when it starts, so it does not see a value its tools set during that turn
 - No prefix - Session-scoped state (default)
 
 Example:

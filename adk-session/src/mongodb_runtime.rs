@@ -520,7 +520,7 @@ impl MongoRunStore {
                     .run_command(doc! { "hello": 1 })
                     .await
                     .map_err(|e| storage(format!("mongodb hello failed: {e}")))?;
-                Ok(hello.contains_key("setName") || hello.get_str("msg") == Ok("isdbgrid"))
+                Ok(crate::mongodb::hello_supports_transactions(&hello))
             })
             .await
             .copied()

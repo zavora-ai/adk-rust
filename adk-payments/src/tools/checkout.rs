@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use adk_core::{
-    AdkError, ErrorCategory, ErrorComponent, Result, Tool, ToolConfirmationDecision,
-    ToolConfirmationRequest, ToolContext, ToolEffect, ToolOrigin,
+    AdkError, ApprovalScope, ErrorCategory, ErrorComponent, Result, Tool, ToolConfirmationDecision,
+    ToolConfirmationRequest, ToolContext, ToolEffect, ToolGate, ToolOrigin,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -148,10 +148,12 @@ fn masked_response(summary: SafeTransactionSummary) -> Result<Value> {
 
 /// Routes a payment escalation through the run's tool confirmation flow.
 ///
-/// A static decision for this call ID (bound to the agent, tool, and arguments when a
-/// fingerprint is present) answers first, then the run's confirmation handler. Without
-/// either, the call's event carries a `tool_confirmation` request and the payment is
-/// deferred.
+/// The escalation is decided by [`adk_core::confirm_tool_call`] from the sources the
+/// governed path reads — a call-ID decision, a fingerprint approval, the approval store,
+/// then the confirmation handler — for a request bound to the calling agent and the
+/// tool's origin. Without a decision the request is recorded as pending, the call's event
+/// carries it as `tool_confirmation`, and the payment is deferred until the agent resumes
+/// the held call.
 struct ToolCallApprover {
     ctx: Arc<dyn ToolContext>,
     tool_name: String,
@@ -173,27 +175,49 @@ impl PaymentApprover for ToolCallApprover {
             findings = findings.len(),
             "payment escalated for approval"
         );
-        let approval = |decision: ToolConfirmationDecision| match decision {
-            ToolConfirmationDecision::Approve => PaymentApproval::Approved,
-            ToolConfirmationDecision::Deny => PaymentApproval::Denied,
-        };
+        let acting = self.ctx.acting_context();
         let request = ToolConfirmationRequest {
             tool_name: self.tool_name.clone(),
-            function_call_id: Some(call_id.clone()),
+            function_call_id: Some(call_id),
             args: self.args.clone(),
-            acting: Some(Box::new(self.ctx.acting_context())),
+            acting: Some(Box::new(acting.clone())),
             origin: Some(self.origin.clone()),
         };
+        // A caller outside a run has no decision sources; its event carries the request.
         if let Some(config) = self.ctx.run_config() {
-            let bound = config
-                .tool_confirmation_fingerprints
-                .get(&call_id)
-                .is_none_or(|expected| *expected == request.fingerprint());
-            if bound && let Some(decision) = config.tool_confirmation_decisions.get(&call_id) {
-                return Ok(approval(*decision));
-            }
-            if let Some(handler) = &config.tool_confirmation_handler {
-                return handler.decide(&request).await.map(approval);
+            let gate = ToolGate::new(
+                config,
+                self.ctx.agent_name(),
+                self.ctx.invocation_id(),
+                ApprovalScope::new(self.ctx.app_name(), self.ctx.user_id(), self.ctx.session_id()),
+            )
+            .with_acting_context(acting);
+            let reasons =
+                findings.iter().map(|finding| finding.reason.as_str()).collect::<Vec<_>>();
+            let reason = format!(
+                "Tool '{}' requires confirmation: payment escalated for review ({})",
+                self.tool_name,
+                reasons.join("; ")
+            );
+            if let Some(approval) = adk_core::confirm_tool_call(&gate, &request, &reason).await? {
+                return Ok(match approval.decision {
+                    // The payment is already being made with the call's own arguments, so
+                    // an approval for different ones does not authorize it.
+                    ToolConfirmationDecision::Approve
+                        if approval
+                            .edited_args
+                            .as_ref()
+                            .is_some_and(|edited| *edited != self.args) =>
+                    {
+                        tracing::warn!(
+                            tool.name = %self.tool_name,
+                            "escalated payment refused: the approval edited its arguments"
+                        );
+                        PaymentApproval::Denied
+                    }
+                    ToolConfirmationDecision::Approve => PaymentApproval::Approved,
+                    ToolConfirmationDecision::Deny => PaymentApproval::Denied,
+                });
             }
         }
         let mut actions = self.ctx.actions();

@@ -41,7 +41,7 @@ pub(crate) async fn handle_empty_response(response: Response) -> Result<()> {
     }
 }
 
-/// Parse the CANON §5 error envelope and map HTTP status to an `EnterpriseError` variant.
+/// Parse the service's error envelope and map HTTP status to an `EnterpriseError` variant.
 ///
 /// The API error envelope looks like:
 /// ```json
@@ -70,7 +70,7 @@ pub(crate) fn map_api_error(
     body: &str,
     retry_after: Option<Duration>,
 ) -> EnterpriseError {
-    // Try to parse the CANON §5 error envelope.
+    // A body that is not the error envelope still yields a message.
     let (message, param) = parse_error_envelope(body);
 
     match status.as_u16() {
@@ -114,7 +114,7 @@ pub(crate) fn map_api_error(
     }
 }
 
-/// Attempt to parse the CANON §5 error envelope from a response body.
+/// Attempt to parse the error envelope (`{"error": {"message", "param"}}`) from a response body.
 ///
 /// Returns `(message, param)`. If parsing fails, returns a fallback message
 /// derived from the raw body text.

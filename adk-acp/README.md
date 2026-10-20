@@ -32,8 +32,8 @@ not mean ACP protocol v3. Code that uses the re-export follows the SDK's
 [dependencies]
 adk-acp = "3.0"
 
-# Add the server feature only when exposing an ADK-Rust agent to a client.
-adk-acp = { version = "3.0", features = ["server"] }
+# Or, to also expose an ADK-Rust agent to a client:
+# adk-acp = { version = "3.0", features = ["server"] }
 ```
 
 | Feature | Description |

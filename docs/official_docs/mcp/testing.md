@@ -56,7 +56,7 @@ Each example is a standalone crate run with
 | `mcp_hardening` | `McpToolset` and `McpServerManager` against hostile servers, through `LlmAgent` and `Runner` | Nothing; one live scenario uses Gemini |
 | `mcp_protocol_revisions` | The default handshake, `server/discover`, and SEP-2663 tasks against a bundled server | `GOOGLE_API_KEY` for the agent section only |
 | `approval_scoping` | Approvals bound to the agent and the MCP server that held the call | Nothing; one live scenario uses OpenAI |
-| `tools_hardening` | Live-model scenarios for the tool, MCP, auth, and code-execution fixes | A model API key; the code scenarios use the `docker` CLI |
+| `tools_hardening` | Live-model scenarios for the tool, MCP, auth, and code-execution fixes | A model API key; the container scenario runs a shell script standing in for `docker` |
 | `mcp_resources` | Resources, prompts, and resource-update notifications (`--bin resources-client`) | `GOOGLE_API_KEY` |
 | `mcp_elicitation`, `mcp_sampling` | Elicitation and sampling client/server pairs | `GOOGLE_API_KEY` |
 

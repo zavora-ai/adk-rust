@@ -1,7 +1,7 @@
 //! Tool-related types for the managed agent runtime.
 //!
 //! Defines [`ToolConfig`], [`McpServerConfig`], [`SkillRef`], and
-//! [`PermissionPolicy`] types conforming to CANON §3.7, §3.8, §3.9 wire shapes.
+//! [`PermissionPolicy`], as a [`ManagedAgentDef`](super::ManagedAgentDef) carries them.
 
 use std::collections::HashMap;
 
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// client-executed — the runtime parks the loop until the client returns
 /// a result via `user.custom_tool_result`.
 ///
-/// # Wire Shapes (CANON §3.7)
+/// # Wire Shapes
 ///
 /// ```json
 /// {"type": "bash"}
@@ -70,7 +70,7 @@ pub enum ToolConfig {
 /// Declares an MCP server that the runtime should connect to for additional
 /// tool capabilities.
 ///
-/// # Wire Shape (CANON §3.8)
+/// # Wire Shape
 ///
 /// ```json
 /// {
@@ -129,7 +129,7 @@ pub struct McpServerConfig {
 /// Skills are pre-built capability packages that the runtime can load
 /// and attach to an agent.
 ///
-/// # Wire Shape (CANON §3.9)
+/// # Wire Shape
 ///
 /// ```json
 /// {"skill_id": "code-review-v2"}
@@ -155,7 +155,7 @@ pub struct SkillRef {
 /// Controls whether tools require confirmation before execution.
 /// A default mode applies to all tools unless overridden per-tool.
 ///
-/// # Wire Shape (CANON §3.9)
+/// # Wire Shape
 ///
 /// ```json
 /// {
@@ -557,11 +557,11 @@ mod tests {
         assert!(policy.tools.is_empty());
     }
 
-    // --- CANON wire shape conformance tests ---
+    // --- Wire shape conformance tests ---
 
     #[test]
-    fn test_canon_tool_config_wire_shape() {
-        // Verify that the wire shapes match CANON §3.7 exactly
+    fn test_tool_config_wire_shape() {
+        // Every tool variant has exactly this wire shape.
         let tools_json = json!([
             {"type": "bash"},
             {"type": "filesystem"},
@@ -585,8 +585,8 @@ mod tests {
     }
 
     #[test]
-    fn test_canon_mcp_server_wire_shape() {
-        // Verify CANON §3.8 wire shape
+    fn test_mcp_server_wire_shape() {
+        // An MCP server declaration has exactly this wire shape.
         let mcp_json = json!({
             "name": "my-mcp-server",
             "transport": "stdio",
@@ -602,8 +602,8 @@ mod tests {
     }
 
     #[test]
-    fn test_canon_permission_policy_wire_shape() {
-        // Verify CANON §3.9 wire shape
+    fn test_permission_policy_wire_shape() {
+        // A permission policy has exactly this wire shape.
         let policy_json = json!({
             "default": "prompt",
             "tools": {

@@ -322,7 +322,7 @@ through `adk_core::authorize_tool_call`, the path `LlmAgent` uses:
 
 | Control | `RealtimeAgent` | `RealtimeRunner` / `IntegratedRealtimeRunner` |
 |---------|-----------------|-----------------------------------------------|
-| Kill switch, `ToolPolicy`, confirmation | Read from the run's `RunConfig` | Set with `tool_governance(run_config, approval_scope)` on the builder |
+| Kill switch, `ToolPolicy`, confirmation | Read from the run's `RunConfig` | `RealtimeRunner`: `tool_governance(run_config, approval_scope)` on the builder. `IntegratedRealtimeRunner`: `tool_governance(run_config)`, with the approval scope from `identity(app, user, session)` |
 | Runner plugin agent and tool callbacks | Run ahead of the agent's own | — |
 | Per-call timeout | `tool_timeout` (default five minutes) | `tool_timeout` (default five minutes) |
 | Result screening | `tool_result_screen` | `tool_result_screen` |

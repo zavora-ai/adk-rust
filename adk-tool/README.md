@@ -37,11 +37,11 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 [dependencies]
 adk-tool = "3.0"
 
-# For local MCP servers via stdio:
-adk-tool = { version = "3.0", features = ["mcp"] }
+# Or, for local MCP servers via stdio:
+# adk-tool = { version = "3.0", features = ["mcp"] }
 
-# For remote MCP servers via HTTP (implies `mcp`):
-adk-tool = { version = "3.0", features = ["http-transport"] }
+# Or, for remote MCP servers via HTTP (implies `mcp`):
+# adk-tool = { version = "3.0", features = ["http-transport"] }
 ```
 
 Or use the meta-crate:
@@ -78,7 +78,7 @@ async fn get_weather(args: WeatherArgs) -> Result<Value, AdkError> {
     Ok(json!({ "city": args.city, "temperature": 22, "condition": "sunny" }))
 }
 
-// Generated: `pub struct GetWeather`, which implements `Tool`.
+// Generated: `struct GetWeather`, with the function's visibility, which implements `Tool`.
 fn weather_tool() -> GetWeather {
     GetWeather
 }
@@ -226,10 +226,11 @@ fn main() {
 ### Tool Metadata and Effects
 
 `ToolExecutionStrategy::Auto` runs a call concurrently only when its tool is both read-only and
-concurrency-safe. `Tool::effect()` decides retries: an agent retries a failed call only when the
-tool's effect is `ReadOnly` or `Idempotent` and the error is retryable or a timeout. A tool that
-declares nothing is `NonIdempotent` and runs once, and a configured `ActionLedger` records its
-calls.
+concurrency-safe. `Tool::effect()` decides retries: an agent with a `RetryBudget`
+(`LlmAgentBuilder::default_retry_budget` or `tool_retry_budget`) retries a failed call only when
+the tool's effect is `ReadOnly` or `Idempotent` and the error is retryable or a timeout; without
+a budget every call runs once. A tool that declares nothing is `NonIdempotent` and runs once, and
+a configured `ActionLedger` records its calls.
 
 ```rust
 use adk_tool::{FunctionTool, ToolEffect};
@@ -245,7 +246,7 @@ fn tools() -> (FunctionTool, FunctionTool) {
     let set_status = FunctionTool::new("set_status", "Set a ticket's status", |_ctx, args| async move {
         Ok(json!({ "status": args["status"] }))
     })
-    .with_effect(ToolEffect::Idempotent); // retried after a retryable error
+    .with_effect(ToolEffect::Idempotent); // retried under a RetryBudget
 
     (lookup, set_status)
 }
@@ -591,8 +592,11 @@ fn with_tasks(toolset: McpToolset) -> McpToolset {
 }
 ```
 
-Task mode is used only when the client config enables it and the server
-advertises the extension. The server decides per call whether to return a task.
+Task mode needs two settings: the client declares the extension during the
+handshake (`AdkClientHandler::with_tasks()`), and the toolset enables polling
+(`with_task_support`). The server, which must advertise the extension, decides
+per call whether to return a task; without the client declaration it answers
+inline.
 ADK-Rust polls `tasks/get`, fulfils paused `input_required` requests through the
 configured elicitation handler and `tasks/update`, and requests `tasks/cancel`
 when the local timeout or poll bound is reached.
@@ -847,16 +851,17 @@ including `McpToolset` and `BrowserToolset`. `PrefixedToolset` forwards each wra
 
 ## rmcp compatibility
 
-ADK-Rust 3 uses `rmcp 3.1`, the official Rust SDK. `McpToolset::new(client)`
+ADK-Rust 3 uses `rmcp` 3, the official Rust SDK (`adk-tool` requires `rmcp = "3.1"`; the
+workspace lockfile resolves 3.5.1). `McpToolset::new(client)`
 remains the primary adapter. Advanced server authoring, transports, protocol
 extensions, and SDK types are available through `adk_tool::mcp::rmcp`, keeping
 them on the same version used internally.
 
 ### Protocol revisions
 
-The default connection sends `initialize`. Since rmcp 3.5 that request advertises
-`2026-07-28`, and a server that predates it answers with the revision it supports,
-such as `2025-11-25`, so one client reaches both generations of server.
+The default connection sends `initialize` and advertises `2025-11-25`, the latest
+revision with an `initialize` handshake (rmcp's `ProtocolVersion::LATEST_WITH_INITIALIZE`).
+Servers of both generations answer it, so one client reaches both.
 
 `2026-07-28` also adds a stateless `server/discover` handshake. It is opt-in,
 because a server that predates it is free to refuse an unknown method with

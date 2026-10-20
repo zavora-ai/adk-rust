@@ -125,8 +125,9 @@ The generated server listens on `127.0.0.1:$PORT` (default `8080`) and on `$BIND
 
 ## REST API Endpoints
 
-Every route below is under `/api`. A route that names `user_id` answers `403` when an
-authenticated caller asks for another user; see [Authentication](#authentication).
+Every route below is under `/api`. When the caller is authenticated, a session or artifact route
+whose path names another user's `user_id` answers `403`, and the run routes run as the
+authenticated user; see [Authentication](#authentication).
 
 ### Health Check
 
@@ -364,10 +365,13 @@ the caller's identity from each request. With one configured:
 
 - A request the extractor rejects answers `401` (`MissingAuth`, `InvalidToken`) or `500`
   (`ExtractionFailed`).
-- Runs use the authenticated `user_id` in place of the request's `userId`.
-- Session and artifact routes refuse another user's `user_id` with `403`.
+- Runs use the authenticated `user_id` in place of the request's `userId`, including the `user_id`
+  in the path of `POST /api/run/{app_name}/{user_id}/{session_id}`.
+- Session and artifact routes whose path names another user's `user_id` answer `403`.
+  `POST /api/sessions` creates the session for the authenticated user.
 
-`GET /api/health` and the web UI routes are not authenticated. See
+`GET /api/health` and the web UI's static routes (`/`, `/ui/`, `/ui/assets/*`) are not
+authenticated; `/api/apps` and `/api/ui/*` are. See
 [Access control](../security/access-control.md) for extractors built on `adk-auth`.
 
 ## Web UI

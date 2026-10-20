@@ -4,7 +4,9 @@ use std::time::Duration;
 
 /// Errors from the Enterprise API client.
 ///
-/// Variants map to the CANON §5 error model for programmatic handling.
+/// Each variant is one HTTP status class of the service's error envelope
+/// (`{"error": {"type", "message", "param"}}`), so a caller can match on the failure
+/// rather than parse its message.
 #[derive(Debug, thiserror::Error)]
 pub enum EnterpriseError {
     /// 400 — invalid request parameters.

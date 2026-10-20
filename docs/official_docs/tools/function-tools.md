@@ -781,7 +781,8 @@ that tool. The origin is `Tool::origin()` — `"static"` (`adk_core::STATIC_TOOL
 tool compiled into the agent, `mcp:{toolset name}` for an MCP tool — plus a SHA-256 digest of
 the tool's declaration and `annotations()`. A held call that resumes against a tool with
 another origin or a changed declaration is answered as not run. A `Tool` that wraps another
-tool forwards `origin()` and `annotations()`. See
+tool should forward `origin()` and `annotations()`; `adk-auth`'s `ProtectedTool` and
+`ScopeGuard` forward `origin()` only. See
 [Tool Authorization](../security/tool-authorization.md#decisions-authorize-one-exact-call).
 
 ---
@@ -895,8 +896,8 @@ async fn generate_chart(
 ```
 
 `LlmAgent` reads the parts with `FunctionResponseData::from_tool_result()`: `response` becomes
-the JSON payload, or, without a `response` key, every other field does. How the parts reach
-the model depends on the provider:
+the JSON payload, or, without a `response` key, every field other than `inline_data`,
+`file_data`, and `name` does. How the parts reach the model depends on the provider:
 
 | Provider client | Where the parts go |
 |-----------------|--------------------|
@@ -951,7 +952,23 @@ let frd = FunctionResponseData::with_file_data(
 );
 
 // JSON + both
-let frd = FunctionResponseData::with_multimodal("tool", json, inline_parts, file_parts);
+let inline_parts = vec![InlineDataPart {
+    mime_type: "image/png".into(),
+    data: vec![0x89, 0x50, 0x4E, 0x47],
+    uri: None,
+    annotations: None,
+}];
+let file_parts = vec![FileDataPart {
+    mime_type: "application/pdf".into(),
+    file_uri: "gs://bucket/file.pdf".into(),
+    annotations: None,
+}];
+let frd = FunctionResponseData::with_multimodal(
+    "tool",
+    json!({"status": "ok"}),
+    inline_parts,
+    file_parts,
+);
 ```
 
 `with_inline_data` and `with_multimodal` panic when an inline part exceeds

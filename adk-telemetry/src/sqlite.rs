@@ -324,9 +324,12 @@ impl SqliteTraceReader {
             .map_err(sql_err)?;
         let rows = stmt
             .query_map([], |row| {
+                // SQLite integers are signed; COUNT(*) is never negative.
+                let span_count: i64 = row.get(1)?;
                 Ok(SessionSummary {
                     session_id: row.get(0)?,
-                    span_count: row.get(1)?,
+                    span_count: u64::try_from(span_count)
+                        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(1, span_count))?,
                     first_start_unix_nanos: row.get(2)?,
                     last_end_unix_nanos: row.get(3)?,
                 })
