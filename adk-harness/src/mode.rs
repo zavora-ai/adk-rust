@@ -19,7 +19,10 @@ use tokio::sync::RwLock;
 /// Session-state key of the mode's display mirror (spec 3.1 §7.4).
 ///
 /// The policy never reads it; it exists so UIs can show the mode from
-/// `event.actions.state_delta`.
+/// `event.actions.state_delta`. The mode itself is the [`ModeStore`]'s, which
+/// `Harness::mode` reads: a run re-asserts the mirror from the store when it starts, and
+/// any value an event of the run writes under this key is replaced with the store's
+/// (spec 3.1 §6 D-3).
 ///
 /// # Example
 ///
@@ -27,6 +30,25 @@ use tokio::sync::RwLock;
 /// assert_eq!(adk_harness::MODE_STATE_KEY, "harness:mode");
 /// ```
 pub const MODE_STATE_KEY: &str = "harness:mode";
+
+/// The mirror value the store's record of a session warrants: its mode, revision and
+/// source, or the default mode when there is no record. `None` when the store cannot be
+/// read, so nothing is written from a guess.
+pub(crate) async fn mode_mirror(
+    store: &dyn ModeStore,
+    default_mode: HarnessMode,
+    (app, user, session): (&str, &str, &str),
+) -> Option<Value> {
+    match store.get(app, user, session).await {
+        Ok(Some(record)) => Some(
+            serde_json::json!({ "mode": record.mode, "revision": record.revision, "setBy": record.set_by }),
+        ),
+        Ok(None) => Some(
+            serde_json::json!({ "mode": default_mode, "revision": 0, "setBy": ModeSource::Default }),
+        ),
+        Err(_) => None,
+    }
+}
 
 /// What the harness lets a session do without asking (spec 3.1 §7.4).
 ///

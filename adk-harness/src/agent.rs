@@ -578,6 +578,70 @@ impl Agent for HarnessAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        let events = self.run_governed(ctx.clone()).await?;
+        Ok(self.with_mode_mirror(&ctx, events).await)
+    }
+}
+
+impl HarnessAgent {
+    /// Keeps the `harness:mode` display mirror equal to the mode store (spec 3.1 §6 D-3):
+    /// re-asserts it when the run starts and replaces any value an event of the run writes,
+    /// so neither a client `stateDelta` nor a tool's `state_delta` misreports the mode.
+    async fn with_mode_mirror(
+        &self,
+        ctx: &Arc<dyn InvocationContext>,
+        events: EventStream,
+    ) -> EventStream {
+        use futures::StreamExt as _;
+        let store = self.runtime.mode_store.clone();
+        let default_mode = self.info.default_mode;
+        let identity =
+            (ctx.app_name().to_string(), ctx.user_id().to_string(), ctx.session_id().to_string());
+        let mirror = move || {
+            let store = store.clone();
+            let (app, user, session) = identity.clone();
+            async move {
+                crate::mode::mode_mirror(store.as_ref(), default_mode, (&app, &user, &session))
+                    .await
+            }
+        };
+        // A session that never had a mirror needs none; one that disagrees with the store
+        // was written by something other than the harness.
+        let shown = ctx.session().state().get(crate::mode::MODE_STATE_KEY);
+        let prelude = match (shown, mirror().await) {
+            (Some(shown), Some(value)) if shown != value => {
+                let mut event = adk_core::Event::new(ctx.invocation_id());
+                event.author = self.name().to_string();
+                event.branch = ctx.branch().to_string();
+                event.actions.state_delta.insert(crate::mode::MODE_STATE_KEY.to_string(), value);
+                Some(Ok(event))
+            }
+            _ => None,
+        };
+        let events = events.then(move |event| {
+            let mirror = mirror();
+            async move {
+                let mut event = event?;
+                if event.actions.state_delta.contains_key(crate::mode::MODE_STATE_KEY) {
+                    match mirror.await {
+                        Some(value) => {
+                            event
+                                .actions
+                                .state_delta
+                                .insert(crate::mode::MODE_STATE_KEY.to_string(), value);
+                        }
+                        None => {
+                            event.actions.state_delta.remove(crate::mode::MODE_STATE_KEY);
+                        }
+                    }
+                }
+                Ok(event)
+            }
+        });
+        Box::pin(futures::stream::iter(prelude).chain(events))
+    }
+
+    async fn run_governed(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
         let config = ctx.run_config();
         // Bound to this harness's own layer, not to a policy that names itself the harness.
         if config.tool_policy.as_deref().and_then(composed_layer_owner)
@@ -658,7 +722,7 @@ impl Agent for HarnessAgent {
             &held,
         );
         #[cfg(feature = "observe")]
-        {
+        let events = {
             let mode = crate::observe::run_mode(
                 self.runtime.mode_store.as_ref(),
                 self.info.default_mode,
@@ -675,16 +739,17 @@ impl Agent for HarnessAgent {
                 use tracing::Instrument as _;
                 self.turn(ctx.clone()).instrument(span.clone()).await?
             };
-            return Ok(crate::observe::observe_run(
+            crate::observe::observe_run(
                 events,
                 &ctx,
                 span,
                 self.runtime.spend.clone(),
                 self.runtime.run_trails.clone(),
-            ));
-        }
+            )
+        };
         #[cfg(not(feature = "observe"))]
-        self.turn(ctx).await
+        let events = self.turn(ctx).await?;
+        Ok(events)
     }
 }
 
