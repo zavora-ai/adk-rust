@@ -1,5 +1,8 @@
 # Coding Agent CLI
 
+> **Note:** these commands run on the [harness](../harness/index.md); [The harness in your
+> terminal](../harness/cli.md) is the full reference.
+
 The `adk-rust` CLI ships three native coding commands. All run the harness of spec 3.1 — the
 same agent as the `adk-rust` REPL — in a **confined workspace**, and resolve their model the way `chat` does: `--provider`, `--model`
 and `--api-key`, then the provider's environment variable (`GOOGLE_API_KEY`/`GEMINI_API_KEY`,
@@ -43,16 +46,19 @@ adk-rust goal "make all tests pass" --until "cargo test" --max-iters 8
 adk-rust goal "port utils.py to type hints" --until "mypy utils.py" --dir ./svc
 ```
 
-**Durable & resumable.** Every iteration is a harness turn in one session kept in
-`harness.db`, and the goal state is recorded in that session after every iteration. If a run
-is interrupted, continue the latest unfinished goal in the workspace, with its conversation:
+**Durable & resumable.** The goal runs on the harness goal engine (`Harness::start_goal`) as a
+durable run in `harness.db`: a turn toward the goal, then the check, until it passes. A call
+held without a terminal parks the run; after `adk-rust approvals approve`, `--resume`
+continues the run at that call:
 
 ```bash
 adk-rust goal "…" --until "cargo test" --resume
 ```
 
-`--resume` recognizes a completed goal as a no-op, and continues a `running` or
-budget-`exhausted` run from where it left off.
+`--resume` continues the latest unfinished goal in this workspace — running, parked, or
+budget-exhausted when `--max-iters` is above the iterations it used — in its session and with
+its conversation; with no unfinished goal it starts a new one. See
+[Goals](../harness/cli.md#goals) for the exit codes.
 
 | Flag | Meaning |
 |------|---------|

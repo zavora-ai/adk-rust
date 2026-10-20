@@ -1,5 +1,10 @@
 # Coding Agent
 
+> **Note:** the [harness](../harness/index.md) supersedes this section's `CodingAgent` in 3.1:
+> the same agent with modes, approvals, durable goals and team members on one governed path.
+> `adk_agent::coding` is frozen, deprecated from 3.2.0 and removed in 4.0.0; see
+> [Migrating from `CodingAgent`](../migration/coding-agent-to-harness.md).
+
 Build agents that **work on a codebase**: read and edit files, run commands and
 tests in a sandbox, plan multi-step work, iterate toward a goal autonomously, and
 orchestrate parallel reviewers — all native to ADK-Rust, on any model provider.

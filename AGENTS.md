@@ -344,8 +344,11 @@ adk-harness/     Governed harness agent (spec 3.1): HarnessAgent over LlmAgent w
                  (read-only, plan, ask, auto) and standing approvals as one ToolPolicy,
                  interactive approval prompts, host or OS-sandboxed bash with a shell
                  ledger, session todos, AGENTS.md instructions with workspace trust,
-                 progressive skills, working notes and long-term facts with provenance
-                 (FactStore, FactIndex, recall, distillation), and the `coding` preset. Beta.
+                 progressive skills, team members (local, ACP, A2A), the plan graph and
+                 durable goals, spend and loop guard, RBAC and shell credentials, working
+                 notes and long-term facts with provenance (FactStore, FactIndex, recall,
+                 distillation), `.adk/harness.toml` (HarnessConfig), and the `coding`
+                 preset. Umbrella feature `harness`. Beta.
 adk-bench/       Benchmarking framework: framework-level runtime performance with real LLM APIs
                  and cross-framework (Python ADK) comparison
 adk-sandbox/     Sandboxed execution environments — process/WASM backends, OS-level sandbox profiles
@@ -465,13 +468,17 @@ Four tiered presets control which crates are compiled:
 - `minimal` **(default)** — agents, models, gemini, runner, sessions. Fastest possible build for a single Gemini-powered agent.
 - `standard` — minimal + openai, anthropic, anthropic-client, tools, memory, telemetry, skills, graph, auth, server, eval, guardrail, plugin, artifacts, computer-use. Production deployment with server and auth.
 - `enterprise` — standard + realtime, browser, rag, payments, awp. Full-featured production.
-- `full` — enterprise + audio, code, sandbox, code-tools, graph-functional, graph-node-cache, graph-delta, graph-time-travel. Everything that needs no external infrastructure.
+- `full` — enterprise + audio, code, sandbox, code-tools, graph-functional, graph-node-cache, graph-delta, graph-time-travel, harness. Everything that needs no external infrastructure.
 
 Domain add-ons are composable with any tier: `features = ["minimal", "audio"]`.
 
 Platform meta-features (composable with any tier):
 - `gemini-agent-platform` — every Gemini Enterprise Agent Platform (Vertex/EAP) integration except realtime transports: `gemini-vertex`, `vertex-session`, `gcp-secrets`, `gcs-artifacts`, `gcp-telemetry`, `agent-engine`, `vertex-memory`, `example-store`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-agent-registry`, `vertex-skill-registry`, `vertex-remote-engine` (grows as later integrations land). The right default for ReasoningEngine BYOC deployments. Deploy-time tooling is host-side and excluded.
 - `gemini-agent-platform-full` — `gemini-agent-platform` + `vertex-live` (Vertex AI Live API, pulls in the adk-realtime stack)
+
+Harness features (spec 3.1 §8.4):
+- `harness` — `adk_rust::harness` (all of `adk-harness`) and `HarnessAgent`, `HarnessAgentBuilder`, `HarnessMode` in the prelude; with `cli` it also re-exports `HarnessLauncher`, `ConsolePrompter` and `ConsoleIo`. In `full`
+- `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed` — the packs, forwarded to `adk-harness`; the builder refuses them until they land
 
 Graph capability features (forwarded to `adk-graph`, which has no default features):
 - `graph-functional` — the functional API (`#[entrypoint]`/`#[task]`), in `full`

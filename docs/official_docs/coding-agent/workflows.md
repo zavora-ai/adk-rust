@@ -1,5 +1,8 @@
 # Graph Workflows (ultra-review)
 
+> **Note:** the [harness](../harness/index.md) supersedes `adk_agent::coding::CodingAgent` in 3.1;
+> see [Migrating from `CodingAgent`](../migration/coding-agent-to-harness.md).
+
 For anything beyond a single agent loop — parallel reviewers, adversarial checks,
 multi-stage pipelines — orchestrate coding agents as an [`adk-graph`](../agents/graph-agents.md)
 `StateGraph`. This is how the [`ultracode`](cli.md#ultracode--parallel-ultra-review)

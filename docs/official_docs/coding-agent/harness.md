@@ -1,5 +1,8 @@
 # The Coding Harness (`CodingAgent`)
 
+> **Note:** the [harness](../harness/index.md) supersedes `adk_agent::coding::CodingAgent` in 3.1;
+> see [Migrating from `CodingAgent`](../migration/coding-agent-to-harness.md).
+
 `CodingAgent` is a thin harness — shipped in `adk-agent` behind the `coding`
 feature — that wires the [dev tools](devtools.md), a planning `write_todos` tool,
 and a minimal coding system prompt onto a normal `LlmAgent`. It's *configuration

@@ -155,7 +155,7 @@ adk-rust = "3.0.0"                                        # Gemini, agents, runn
 | `minimal` (default) | Gemini provider, agents, runner, sessions | Fast starter agents |
 | `standard` | minimal + OpenAI, Anthropic, tools, memory, telemetry, server, auth, graph, eval, guardrail, plugins, artifacts, skills, computer use | Serving an agent over HTTP |
 | `enterprise` | standard + realtime, browser, RAG, payments, AWP | Voice, retrieval and payments |
-| `full` | enterprise + audio, code execution, sandbox, code tools, and the functional, node-cache, delta, and time-travel graph capabilities | Everything that needs no external infrastructure |
+| `full` | enterprise + audio, code execution, sandbox, code tools, the harness, and the functional, node-cache, delta, and time-travel graph capabilities | Everything that needs no external infrastructure |
 
 A tier is a starting point, not a ceiling. Add any single capability on top of one
 without moving to the next tier, so `features = ["minimal", "audio"]` gives you the
@@ -244,6 +244,7 @@ Each row links to its guide and a runnable example.
 | Workflow agents — sequential, parallel, loop | [agents](docs/official_docs/agents/workflow-agents.md) | [`examples/multi_perspective_analysis`](examples/multi_perspective_analysis) |
 | Portable teams — validated handoff, delegation, policies, receipts and shared state | [multi-agent](docs/official_docs/agents/multi-agent.md) | [`examples/team_architectures`](examples/team_architectures) |
 | Graph workflows — checkpoints, durable resume, human-in-the-loop, subgraphs | [graph-agents](docs/official_docs/agents/graph-agents.md) | [`examples/graph_subgraph_claims`](examples/graph_subgraph_claims) |
+| The harness — a governed coding agent: modes, approvals remembered per user, a sandboxed shell, team members, plan graphs and durable goals | [harness](docs/official_docs/harness/index.md) | [`examples/harness_openai`](examples/harness_openai), [`examples/harness_anthropic`](examples/harness_anthropic) |
 | Coding agents — read, edit and run code in a confined workspace | [coding-agent](docs/official_docs/coding-agent/index.md) | [`examples/coding_goal`](examples/coding_goal) |
 | Realtime voice and video — OpenAI Realtime, Gemini Live, Vertex, LiveKit, WebRTC | [realtime](docs/official_docs/agents/realtime-agents.md) | [`examples/realtime_voice`](examples/realtime_voice) |
 | Governed computer use — approval interrupts bound to a digest | [computer-use](docs/official_docs/computer-use/index.md) | — |
@@ -272,6 +273,7 @@ cargo adk new my-agent --template api        # REST server
 cargo adk new my-agent --template graph      # graph workflow with checkpoints
 cargo adk new my-agent --template realtime   # realtime voice agent
 cargo adk new my-agent --template agent-engine # Gemini Enterprise Agent Engine BYOC
+cargo adk new my-agent --template harness    # governed harness: REPL with approvals, AGENTS.md, skills
 
 # Compose addons with any template
 cargo adk new my-agent --template tools --addon telemetry --addon sessions
@@ -353,6 +355,7 @@ checks an agent definition without building. `cargo adk templates` and
 | `adk-rag` | RAG pipeline | Document chunking, embeddings, vector search, reranking, 6 backends |
 | `adk-runner` | Agent execution runtime | Event streaming, session persistence, transfer enforcement, plugins, run budgets, spend and action ledgers, durable cancellation, `Runner::close` |
 | `adk-server` | Production API servers | REST and SSE, A2A, loopback-first security defaults, durable background runs and cron, webhook wake-ups, approvals, governance endpoints, and Gemini Enterprise Agent Engine runtime dispatch |
+| `adk-harness` | Governed harness agent (Beta) | `HarnessAgent` over `LlmAgent`: modes, standing approvals, host or OS-sandboxed `bash`, todos, `AGENTS.md`, skills, team members, plan graphs, durable goals |
 | `adk-cli` | Run and inspect agents from a terminal | `adk-rust` binary: interactive REPL, web server, coding agent (`code`/`goal`/`ultracode`), skills, graph checkpoint inspection, signed audit log verification; embeddable `Launcher` |
 | `adk-realtime` | Real-time voice & multimodal agents | OpenAI Realtime + Gemini Live, bidirectional audio, video frames, VAD, affective dialogue, server-side tools via `IntegratedRealtimeRunner` |
 | `adk-graph` | Graph-based workflows | LangGraph-style orchestration, state reducers, checkpointing (memory, SQLite, delta), durable resume, human-in-the-loop interrupts, subgraphs, `with_goto` routing, per-node retry and timeouts, time travel |
@@ -374,7 +377,7 @@ checks an agent definition without building. `cargo adk templates` and
 | `adk-bench` | Benchmarking | Framework runtime performance against real LLM APIs, and cross-framework comparison with Python ADK |
 | `adk-deploy` | Deployment utilities | Targets, manifests, and Gemini Enterprise Agent Engine BYOC deployment |
 | `adk-rust-macros` | Procedural macros | `#[tool]` with `read_only`/`idempotent`/`concurrency_safe`/`long_running`/`lenient_args`, `#[entrypoint]` and `#[task]` for the functional API |
-| `cargo-adk` | Cargo subcommand | Project templates including Agent Engine BYOC, composable addons, eval runs, benchmarks, and deployment |
+| `cargo-adk` | Cargo subcommand | Project templates including the harness and Agent Engine BYOC, composable addons, eval runs, benchmarks, and deployment |
 | `adk-rust` | Umbrella crate | Re-exports every crate above behind tiered feature presets — the one dependency most projects need |
 
 > **Extracted to standalone repos:** [adk-ui](https://github.com/zavora-ai/adk-ui) (dynamic UI generation), [adk-studio](https://github.com/zavora-ai/adk-studio) (visual agent builder), [adk-playground](https://github.com/zavora-ai/adk-playground) (more examples).

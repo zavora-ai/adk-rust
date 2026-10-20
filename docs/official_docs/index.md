@@ -10,6 +10,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [Migrating 2.x → 3.0](migration/2.x-to-3.0.md) - Every breaking change since 2.3.0, with before/after code
 - [Migrating 1.0 → 2.0](migration/1.0-to-2.0.md) - Complete breaking-change list with before/after code
 - [SQLx 0.9 in ADK-Rust 3.0](migration/sqlx-0.9.md) - Sharing SQLx pools, TLS flags, and migration-runner inputs
+- [Migrating from `CodingAgent` to the harness](migration/coding-agent-to-harness.md) - `adk_agent::coding` to `adk_harness::coding`, approvals in unattended runs, todos, nesting
 
 ## Core
 
@@ -48,10 +49,27 @@ A native coding agent: read/edit/run code in a sandboxed workspace, autonomous g
 
 - [Overview](coding-agent/index.md) - Start here: the pieces, install, and a 60-second quick start
 - [Dev Tools](coding-agent/devtools.md) - `adk-devtools`: read/write/edit/glob/grep/bash + the sandboxed `Workspace`
-- [Harness](coding-agent/harness.md) - `CodingAgent` (the `coding` feature), the plan loop, `write_todos`
+- [Harness](coding-agent/harness.md) - `CodingAgent` (the `coding` feature), the plan loop, `write_todos`; superseded by the [harness](harness/index.md)
 - [CLI](coding-agent/cli.md) - `adk-rust code` / `goal` (durable, resumable) / `ultracode`
 - [Workflows](coding-agent/workflows.md) - Ultra-review on `adk-graph`: parallel reviewers + fan-in
 - [Examples](coding-agent/examples.md) - The three runnable example crates
+
+## Harness
+
+The governed, durable harness agent (`adk-harness`, spec 3.1): modes, approvals, a sandboxed shell, team members, plan graphs and durable goals on one governed path.
+
+- [Overview](harness/index.md) - Start here: what the harness is, how to use it, and a quick start
+- [Modes and Approvals](harness/modes-and-approvals.md) - The mode table, prompts, held calls and decisions, standing rules
+- [Configuration](harness/configuration.md) - Builder options and defaults, `.adk/harness.toml`, features, the `harness` template
+- [The Harness in Your Terminal](harness/cli.md) - `adk-rust`, `code`, `goal`, `ultracode`, slash commands, `harness.db`
+- [Serving the Harness](harness/serving.md) - `adk-rust serve`, request identity, the approval inbox, background runs
+- [Harness Shell and Sandbox](harness/shell-and-sandbox.md) - `bash` under Seatbelt or bubblewrap: isolation status, unsandboxed retry, `auto_allow_sandboxed`, audit records
+- [Harness Team](harness/team.md) - Members lowered to a `TeamSpec`: local, ACP and A2A members, isolation, budgets, discovery, review rounds
+- [Harness Plans and Goals](harness/plan-and-goals.md) - The plan graph with Approve and Review gates and rewind; loop-until goals, durable and ambient
+- [Harness Durability](harness/durability.md) - The durability invariants and the tests that prove them
+- [Harness Identity](harness/identity.md) - RBAC per tool class, per-call shell credentials, authenticated identity, audit
+- [Harness Observability](harness/observability.md) - Spans, spend per agent and subject, the loop guard, evaluation baselines
+- [Harness Memory](harness/memory.md) - Working notes behind approval, and long-term facts with provenance recalled into each turn
 
 ## Realtime & Multimodal
 
@@ -78,10 +96,6 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [Code Execution](tools/code-execution.md) - Code tools over `adk-code` and `adk-sandbox`
 - [Python Code Execution](tools/python-code-execution.md) - In-process Python through the Monty interpreter
 - [Sandboxed Code Execution](sandbox/index.md) - `adk-sandbox` process and WASM backends with OS-level profiles
-- [Harness Shell and Sandbox](harness/shell-and-sandbox.md) - `adk-harness` `bash` under Seatbelt or bubblewrap: isolation status, unsandboxed retry, `auto_allow_sandboxed`, audit records
-- [Harness Team](harness/team.md) - `adk-harness` members lowered to a `TeamSpec`: local, ACP and A2A members, isolation, budgets, discovery, review rounds
-- [Harness Plans and Goals](harness/plan-and-goals.md) - The plan graph with Approve and Review gates and rewind; loop-until goals, durable and ambient
-- [Harness Durability](harness/durability.md) - The `adk-harness` durability invariants and the tests that prove them
 - [MCP Tools](tools/mcp-tools.md) - Connecting MCP servers as agent tools
 - [MCP overview and architecture](mcp/index.md) - Where MCP fits and which ADK-Rust surface to use
 - [MCP client](mcp/client.md) - Tools, resources, prompts, completion, subscriptions, elicitation, tasks, and HTTP
