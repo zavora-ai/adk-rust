@@ -32,21 +32,25 @@
 //! cargo run -- serve --host 0.0.0.0
 //! ```
 
+use crate::console::{
+    ConsoleCommand, ConsoleCommandContext, ConsoleConfirmationHandler, ConsoleInput, ConsoleIo,
+};
 use adk_artifact::ArtifactService;
 use adk_core::{
-    Agent, CacheCapable, Content, ContextCacheConfig, Event, EventsCompactionConfig, Memory, Part,
-    Result, RunConfig, SessionId, StreamingMode, UserId,
+    AdkError, Agent, ApprovalService, CacheCapable, Content, ContextCacheConfig,
+    DEFAULT_TOOL_CONFIRMATION_TIMEOUT, Event, EventsCompactionConfig, Memory, Part, Result,
+    RunConfig, SessionId, StreamingMode, ToolConfirmationDecision, ToolConfirmationHandler,
+    ToolConfirmationRequest, ToolPolicy, UserId,
 };
 use adk_runner::Runner;
+use adk_server::background::BackgroundState;
 use adk_server::{
-    RequestContextExtractor, SecurityConfig, ServerConfig, create_app, create_app_with_a2a,
-    shutdown_signal,
+    RequestContextExtractor, SecurityConfig, ServerBuilder, ServerConfig, shutdown_signal,
 };
-use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+use adk_session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
 use axum::Router;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
-use rustyline::DefaultEditor;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -55,6 +59,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
+
+/// How long the console waits for a person to answer an approval prompt when the run
+/// configuration keeps [`DEFAULT_TOOL_CONFIRMATION_TIMEOUT`] (spec 3.1 §8.1).
+pub const CONSOLE_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+/// How often serve mode expires and escalates approval requests.
+const APPROVAL_TICK_INTERVAL: Duration = Duration::from_secs(30);
 
 /// CLI arguments for the launcher.
 #[derive(Parser)]
@@ -130,11 +141,15 @@ impl Default for TelemetryConfig {
 /// or `serve --host`. The server then answers only loopback names and IP addresses until
 /// its public host names are listed in [`SecurityConfig::allowed_hosts`].
 ///
-/// # Note on `with_streaming_mode`
+/// # Console runs and serve mode
 ///
-/// `with_streaming_mode` currently only affects console mode. `ServerConfig`
-/// does not accept a `RunConfig`, so the setting is not forwarded to the
-/// server. This will be addressed when `ServerConfig` gains that field.
+/// [`with_run_config`](Self::with_run_config), [`with_streaming_mode`](Self::with_streaming_mode),
+/// [`with_tool_policy`](Self::with_tool_policy) and
+/// [`with_confirmation_handler`](Self::with_confirmation_handler) configure console runs.
+/// `ServerConfig` does not accept a `RunConfig`, so serve mode does not apply them, and
+/// [`build_app`](Self::build_app) refuses to serve when a tool policy is set rather than
+/// serve without it. [`with_approval_service`](Self::with_approval_service) and
+/// [`with_background_runs`](Self::with_background_runs) configure serve mode.
 pub struct Launcher {
     agent: Arc<dyn Agent>,
     app_name: Option<String>,
@@ -150,6 +165,14 @@ pub struct Launcher {
     telemetry_config: TelemetryConfig,
     shutdown_grace_period: Duration,
     run_config: Option<RunConfig>,
+    streaming_mode: Option<StreamingMode>,
+    tool_policy: Option<Arc<dyn ToolPolicy>>,
+    confirmation_handler: Option<Arc<dyn ToolConfirmationHandler>>,
+    user_id: Option<String>,
+    session_id: Option<String>,
+    console_commands: Vec<Arc<dyn ConsoleCommand>>,
+    approval_service: Option<Arc<dyn ApprovalService>>,
+    background_runs: Option<BackgroundState>,
     thinking_mode: ThinkingDisplayMode,
     bind_address: IpAddr,
 }
@@ -172,6 +195,14 @@ impl Launcher {
             telemetry_config: TelemetryConfig::default(),
             shutdown_grace_period: Duration::from_secs(30),
             run_config: None,
+            streaming_mode: None,
+            tool_policy: None,
+            confirmation_handler: None,
+            user_id: None,
+            session_id: None,
+            console_commands: Vec::new(),
+            approval_service: None,
+            background_runs: None,
             thinking_mode: ThinkingDisplayMode::Auto,
             bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
         }
@@ -276,10 +307,187 @@ impl Launcher {
 
     /// Set streaming mode for console mode.
     ///
-    /// Note: this currently only affects console mode. The server does not
-    /// yet accept a `RunConfig`.
+    /// It takes precedence over the streaming mode of
+    /// [`with_run_config`](Self::with_run_config), whichever is called first. Note: this
+    /// currently only affects console mode. The server does not yet accept a `RunConfig`.
     pub fn with_streaming_mode(mut self, mode: StreamingMode) -> Self {
-        self.run_config = Some(RunConfig::builder().streaming_mode(mode).build());
+        self.streaming_mode = Some(mode);
+        self
+    }
+
+    /// Set the run configuration for console runs (spec 3.1 §8.1).
+    ///
+    /// The console merges it with its own settings: the streaming mode, tool policy and
+    /// confirmation handler set through [`with_streaming_mode`](Self::with_streaming_mode),
+    /// [`with_tool_policy`](Self::with_tool_policy) and
+    /// [`with_confirmation_handler`](Self::with_confirmation_handler) take precedence over
+    /// the same fields here, whichever is called first. A configuration without a
+    /// confirmation handler gets a [`ConsoleConfirmationHandler`], and the default
+    /// confirmation timeout is raised to [`CONSOLE_CONFIRMATION_TIMEOUT`]. Serve mode does
+    /// not apply it.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    ///
+    /// use adk_cli::Launcher;
+    /// use adk_core::{Agent, RunBudget, RunConfig, StreamingMode};
+    ///
+    /// async fn launch(agent: Arc<dyn Agent>) -> adk_core::Result<()> {
+    ///     Launcher::new(agent)
+    ///         .with_run_config(RunConfig::builder().budget(RunBudget::new().max_model_calls(50)).build())
+    ///         .with_streaming_mode(StreamingMode::None)
+    ///         .run_console_directly()
+    ///         .await
+    /// }
+    /// ```
+    pub fn with_run_config(mut self, config: RunConfig) -> Self {
+        self.run_config = Some(config);
+        self
+    }
+
+    /// Set the policy evaluated for every tool call of a console run (spec 3.1 §8.1).
+    ///
+    /// It replaces the policy of [`with_run_config`](Self::with_run_config). Serve mode
+    /// cannot apply it, so [`build_app`](Self::build_app) fails while one is set.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    ///
+    /// use adk_cli::Launcher;
+    /// use adk_core::{Agent, DeclarativePolicy};
+    ///
+    /// async fn launch(agent: Arc<dyn Agent>) -> adk_core::Result<()> {
+    ///     let policy = DeclarativePolicy::builder()
+    ///         .allow_read_only()
+    ///         .require_approval("*", "every other tool needs approval")
+    ///         .build();
+    ///     Launcher::new(agent).with_tool_policy(Arc::new(policy)).run_console_directly().await
+    /// }
+    /// ```
+    pub fn with_tool_policy(mut self, policy: Arc<dyn ToolPolicy>) -> Self {
+        self.tool_policy = Some(policy);
+        self
+    }
+
+    /// Set what decides tool calls held for confirmation in console runs
+    /// (spec 3.1 §8.1).
+    ///
+    /// Without one the console asks at the terminal through a
+    /// [`ConsoleConfirmationHandler`], unless [`with_run_config`](Self::with_run_config)
+    /// carries a handler.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    ///
+    /// use adk_cli::Launcher;
+    /// use adk_cli::console::{ConsoleConfirmationHandler, ConsoleIo};
+    /// use adk_core::Agent;
+    ///
+    /// async fn launch(agent: Arc<dyn Agent>) -> adk_core::Result<()> {
+    ///     let handler = ConsoleConfirmationHandler::new(ConsoleIo::terminal()?);
+    ///     Launcher::new(agent).with_confirmation_handler(Arc::new(handler)).run_console_directly().await
+    /// }
+    /// ```
+    pub fn with_confirmation_handler(mut self, handler: Arc<dyn ToolConfirmationHandler>) -> Self {
+        self.confirmation_handler = Some(handler);
+        self
+    }
+
+    /// Set the user console runs act for (spec 3.1 §8.1). Defaults to `"user"`.
+    pub fn with_user_id(mut self, user_id: impl Into<String>) -> Self {
+        self.user_id = Some(user_id.into());
+        self
+    }
+
+    /// Continue the console session `session_id`, creating it when it does not exist
+    /// (spec 3.1 §8.1).
+    ///
+    /// Without one the console starts a new session. Pair it with a persistent
+    /// [`with_session_service`](Self::with_session_service) to resume a conversation
+    /// across processes.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    ///
+    /// use adk_cli::Launcher;
+    /// use adk_core::Agent;
+    /// use adk_session::SessionService;
+    ///
+    /// async fn resume(agent: Arc<dyn Agent>, sessions: Arc<dyn SessionService>) -> adk_core::Result<()> {
+    ///     Launcher::new(agent)
+    ///         .with_session_service(sessions)
+    ///         .with_user_id("ana")
+    ///         .with_session_id("release-notes")
+    ///         .run_console_directly()
+    ///         .await
+    /// }
+    /// ```
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
+        self
+    }
+
+    /// Register a slash command for the console REPL (spec 3.1 §8.1).
+    ///
+    /// `/help` lists registered commands. See [`ConsoleCommand`].
+    pub fn with_console_command(mut self, command: Arc<dyn ConsoleCommand>) -> Self {
+        self.console_commands.push(command);
+        self
+    }
+
+    /// Serve the approval inbox for `service` under `/api/approvals` (spec 3.1 §8.2).
+    ///
+    /// Serve mode mounts the endpoints through
+    /// [`ServerBuilder::with_approval_service`] and runs the approval ticker every 30
+    /// seconds so requests expire and escalate. The endpoints answer `401` unless a
+    /// [`with_request_context_extractor`](Self::with_request_context_extractor)
+    /// authenticates the caller.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    ///
+    /// use adk_cli::Launcher;
+    /// use adk_core::{Agent, InMemoryApprovalStore, StoreApprovalService};
+    ///
+    /// async fn serve(agent: Arc<dyn Agent>) -> adk_core::Result<()> {
+    ///     let approvals = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()));
+    ///     Launcher::new(agent).with_approval_service(Arc::new(approvals)).run_serve_directly(8080).await
+    /// }
+    /// ```
+    pub fn with_approval_service(mut self, service: Arc<dyn ApprovalService>) -> Self {
+        self.approval_service = Some(service);
+        self
+    }
+
+    /// Serve background runs from `state` under `/api/runs` (spec 3.1 §8.2).
+    ///
+    /// Serve mode mounts them through [`ServerBuilder::with_background_runs`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    ///
+    /// use adk_cli::Launcher;
+    /// use adk_core::Agent;
+    /// use adk_server::background::BackgroundState;
+    ///
+    /// async fn serve(agent: Arc<dyn Agent>) -> adk_core::Result<()> {
+    ///     Launcher::new(agent).with_background_runs(BackgroundState::new()).run_serve_directly(8080).await
+    /// }
+    /// ```
+    pub fn with_background_runs(mut self, state: BackgroundState) -> Self {
+        self.background_runs = Some(state);
         self
     }
 
@@ -332,176 +540,214 @@ impl Launcher {
     /// Use this when you already know you want console mode (e.g. from
     /// your own CLI parser). [`run`](Self::run) calls this internally.
     pub async fn run_console_directly(self) -> Result<()> {
+        let console = ConsoleIo::terminal()?;
+        let run_config = self.console_run_config(&console);
         let app_name = self.app_name.unwrap_or_else(|| self.agent.name().to_string());
-        let user_id = "user".to_string();
+        let user_id = self.user_id.unwrap_or_else(|| "user".to_string());
         let thinking_mode = self.thinking_mode;
         let agent = self.agent;
         let artifact_service = self.artifact_service;
         let memory_service = self.memory_service;
-        let run_config = self.run_config;
+        let commands = self.console_commands;
 
         let session_service =
             self.session_service.unwrap_or_else(|| Arc::new(InMemorySessionService::new()));
+        let session_id =
+            open_console_session(session_service.as_ref(), &app_name, &user_id, self.session_id)
+                .await?;
+        let command_context = ConsoleCommandContext::new(
+            app_name.clone(),
+            user_id.clone(),
+            session_id.clone(),
+            session_service.clone(),
+            console.clone(),
+        );
 
-        let session = session_service
-            .create(CreateRequest {
-                app_name: app_name.clone(),
-                user_id: user_id.clone(),
-                session_id: None,
-                state: HashMap::new(),
-            })
-            .await?;
-
-        let session_id = session.id().to_string();
-
-        let mut rl = DefaultEditor::new()
-            .map_err(|e| adk_core::AdkError::config(format!("failed to init readline: {e}")))?;
-
-        print_banner(agent.name());
+        print_banner(agent.name(), &session_id);
 
         loop {
-            let readline = rl.readline("\x1b[36mYou >\x1b[0m ");
-            match readline {
-                Ok(line) => {
-                    let trimmed = line.trim().to_string();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    if is_exit_command(&trimmed) {
-                        println!("\nGoodbye.\n");
-                        break;
-                    }
-                    if trimmed == "/help" {
-                        print_help();
-                        continue;
-                    }
-                    if trimmed == "/clear" {
-                        println!("(conversation cleared — session state is unchanged)");
-                        continue;
-                    }
-
-                    let _ = rl.add_history_entry(&line);
-
-                    let user_content = Content::new("user").with_text(trimmed);
-                    println!();
-
-                    let cancellation_token = CancellationToken::new();
-                    let mut runner_builder = Runner::builder()
-                        .app_name(app_name.clone())
-                        .agent(agent.clone())
-                        .session_service(session_service.clone())
-                        .cancellation_token(cancellation_token.clone());
-                    if let Some(ref artifact_service) = artifact_service {
-                        runner_builder = runner_builder.artifact_service(artifact_service.clone());
-                    }
-                    if let Some(ref memory_service) = memory_service {
-                        runner_builder = runner_builder.memory_service(memory_service.clone());
-                    }
-                    if let Some(ref run_config) = run_config {
-                        runner_builder = runner_builder.run_config(run_config.clone());
-                    }
-                    let runner = runner_builder.build()?;
-                    let mut events = runner
-                        .run(
-                            UserId::new(user_id.clone())?,
-                            SessionId::new(session_id.clone())?,
-                            user_content,
-                        )
-                        .await?;
-                    let mut printer = StreamPrinter::new(thinking_mode);
-                    let mut text_deltas = adk_core::EventTextDeltas::default();
-                    let mut current_agent = String::new();
-                    let mut printed_header = false;
-                    let mut interrupted = false;
-
-                    loop {
-                        tokio::select! {
-                            event = events.next() => {
-                                let Some(event) = event else {
-                                    break;
-                                };
-
-                                match event {
-                                    Ok(evt) => {
-                                        let evt = text_deltas.push(&evt);
-                                        // Track agent switches in multi-agent workflows
-                                        if !evt.author.is_empty()
-                                            && evt.author != "user"
-                                            && evt.author != current_agent
-                                        {
-                                            if !current_agent.is_empty() {
-                                                println!();
-                                            }
-                                            current_agent = evt.author.clone();
-                                            // Only show agent label in multi-agent scenarios
-                                            if printed_header {
-                                                print!(
-                                                    "\x1b[33m[{}]\x1b[0m ",
-                                                    terminal_safe(&current_agent)
-                                                );
-                                                let _ = io::stdout().flush();
-                                            }
-                                            printed_header = true;
-                                        }
-
-                                        // Show agent transfer requests
-                                        if let Some(target) = &evt.actions.transfer_to_agent {
-                                            print!(
-                                                "\x1b[90m[transfer -> {}]\x1b[0m ",
-                                                terminal_safe(target)
-                                            );
-                                            let _ = io::stdout().flush();
-                                        }
-
-                                        printer.handle_event(&evt);
-                                    }
-                                    Err(e) => {
-                                        // The message is shown here, escaped; the log line
-                                        // stays content-free, since it can be exported.
-                                        eprintln!("\nError: {}", terminal_safe(&e.to_string()));
-                                        error!(error = %e.diagnostics(), "stream error");
-                                    }
-                                }
-                            }
-                            signal = tokio::signal::ctrl_c() => {
-                                match signal {
-                                    Ok(()) => {
-                                        cancellation_token.cancel();
-                                        interrupted = true;
-                                        break;
-                                    }
-                                    Err(err) => {
-                                        error!("failed to listen for Ctrl+C: {err}");
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    printer.finish();
-                    if interrupted {
-                        println!("\nInterrupted.\n");
-                        continue;
-                    }
-
-                    println!("\n");
-                }
-                Err(rustyline::error::ReadlineError::Interrupted) => {
+            let line = match console.read_line("\x1b[36mYou >\x1b[0m ").await {
+                ConsoleInput::Line(line) => line,
+                ConsoleInput::Interrupted => {
                     println!("\nInterrupted. Type exit to quit.\n");
                     continue;
                 }
-                Err(rustyline::error::ReadlineError::Eof) => {
+                ConsoleInput::Eof => {
                     println!("\nGoodbye.\n");
                     break;
                 }
-                Err(err) => {
-                    error!("readline error: {err}");
-                    break;
+            };
+            let trimmed = line.trim().to_string();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if is_exit_command(&trimmed) {
+                println!("\nGoodbye.\n");
+                break;
+            }
+            if trimmed == "/help" {
+                print!("{}", help_text(&commands));
+                continue;
+            }
+            if trimmed == "/clear" {
+                println!("(conversation cleared — session state is unchanged)");
+                continue;
+            }
+
+            console.add_history(&line);
+
+            if let Some((command, args)) = find_command(&commands, &trimmed) {
+                match command.run(args, &command_context).await {
+                    Ok(output) if output.is_empty() => {}
+                    Ok(output) => println!("{}", terminal_safe(output.trim_end())),
+                    Err(e) => eprintln!("Error: {}", terminal_safe(&e.to_string())),
+                }
+                continue;
+            }
+
+            let user_content = Content::new("user").with_text(trimmed);
+            println!();
+
+            let cancellation_token = CancellationToken::new();
+            let mut runner_builder = Runner::builder()
+                .app_name(app_name.clone())
+                .agent(agent.clone())
+                .session_service(session_service.clone())
+                .cancellation_token(cancellation_token.clone())
+                .run_config(run_config.clone());
+            if let Some(ref artifact_service) = artifact_service {
+                runner_builder = runner_builder.artifact_service(artifact_service.clone());
+            }
+            if let Some(ref memory_service) = memory_service {
+                runner_builder = runner_builder.memory_service(memory_service.clone());
+            }
+            let runner = runner_builder.build()?;
+            // Ctrl-C at an approval prompt cancels this run through the console.
+            console.set_run(Some(cancellation_token.clone()));
+            let started = runner
+                .run(
+                    UserId::new(user_id.clone())?,
+                    SessionId::new(session_id.clone())?,
+                    user_content,
+                )
+                .await;
+            let mut events = match started {
+                Ok(events) => events,
+                Err(error) => {
+                    console.set_run(None);
+                    return Err(error);
+                }
+            };
+            let mut printer = StreamPrinter::new(thinking_mode);
+            let mut text_deltas = adk_core::EventTextDeltas::default();
+            let mut current_agent = String::new();
+            let mut printed_header = false;
+            let mut interrupted = false;
+
+            loop {
+                tokio::select! {
+                    event = events.next() => {
+                        let Some(event) = event else {
+                            break;
+                        };
+
+                        match event {
+                            Ok(evt) => {
+                                let evt = text_deltas.push(&evt);
+                                // Track agent switches in multi-agent workflows
+                                if !evt.author.is_empty()
+                                    && evt.author != "user"
+                                    && evt.author != current_agent
+                                {
+                                    if !current_agent.is_empty() {
+                                        println!();
+                                    }
+                                    current_agent = evt.author.clone();
+                                    // Only show agent label in multi-agent scenarios
+                                    if printed_header {
+                                        print!(
+                                            "\x1b[33m[{}]\x1b[0m ",
+                                            terminal_safe(&current_agent)
+                                        );
+                                        let _ = io::stdout().flush();
+                                    }
+                                    printed_header = true;
+                                }
+
+                                // Show agent transfer requests
+                                if let Some(target) = &evt.actions.transfer_to_agent {
+                                    print!(
+                                        "\x1b[90m[transfer -> {}]\x1b[0m ",
+                                        terminal_safe(target)
+                                    );
+                                    let _ = io::stdout().flush();
+                                }
+
+                                printer.handle_event(&evt);
+                            }
+                            Err(e) => {
+                                // The message is shown here, escaped; the log line
+                                // stays content-free, since it can be exported.
+                                eprintln!("\nError: {}", terminal_safe(&e.to_string()));
+                                error!(error = %e.diagnostics(), "stream error");
+                            }
+                        }
+                    }
+                    () = cancellation_token.cancelled() => {
+                        interrupted = true;
+                        break;
+                    }
+                    signal = tokio::signal::ctrl_c() => {
+                        match signal {
+                            Ok(()) => {
+                                cancellation_token.cancel();
+                                interrupted = true;
+                                break;
+                            }
+                            Err(err) => {
+                                error!("failed to listen for Ctrl+C: {err}");
+                            }
+                        }
+                    }
                 }
             }
+
+            console.set_run(None);
+            printer.finish();
+            // The stream can end on its own once a prompt cancelled the run.
+            if interrupted || cancellation_token.is_cancelled() {
+                println!("\nInterrupted.\n");
+                continue;
+            }
+
+            println!("\n");
         }
 
         Ok(())
+    }
+
+    /// The run configuration of console runs: [`with_run_config`](Self::with_run_config)
+    /// with the console settings applied.
+    fn console_run_config(&self, console: &ConsoleIo) -> RunConfig {
+        let mut config = self.run_config.clone().unwrap_or_default();
+        if let Some(mode) = self.streaming_mode {
+            config.streaming_mode = mode;
+        }
+        if let Some(policy) = &self.tool_policy {
+            config.tool_policy = Some(policy.clone());
+        }
+        if let Some(handler) = &self.confirmation_handler {
+            config.tool_confirmation_handler = Some(handler.clone());
+        }
+        if config.tool_confirmation_handler.is_none() {
+            config.tool_confirmation_handler =
+                Some(Arc::new(ConsoleConfirmationHandler::new(console.clone())));
+        }
+        // A person reads and answers the prompt; the library default suits services.
+        if config.tool_confirmation_timeout == DEFAULT_TOOL_CONFIRMATION_TIMEOUT {
+            config.tool_confirmation_timeout = CONSOLE_CONFIRMATION_TIMEOUT;
+        }
+        config
     }
 
     fn init_telemetry(&self) -> Option<Arc<adk_telemetry::AdkSpanExporter>> {
@@ -575,16 +821,51 @@ impl Launcher {
     /// Build the Axum application without serving it.
     ///
     /// This is the production escape hatch for adding custom routes,
-    /// middleware, metrics, or owning the serve loop yourself.
+    /// middleware, metrics, or owning the serve loop yourself. The router comes from
+    /// [`ServerBuilder`], with A2A routes when [`with_a2a_base_url`](Self::with_a2a_base_url)
+    /// is set, the approval inbox and its ticker when
+    /// [`with_approval_service`](Self::with_approval_service) is set (the ticker starts only
+    /// inside a Tokio runtime), and background runs when
+    /// [`with_background_runs`](Self::with_background_runs) is set.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when a tool policy is set through
+    /// [`with_tool_policy`](Self::with_tool_policy) or [`with_run_config`](Self::with_run_config):
+    /// the server runs without the launcher's `RunConfig`, so serving would drop the policy.
     pub fn build_app(self) -> Result<Router> {
+        if self.tool_policy.is_some()
+            || self.run_config.as_ref().is_some_and(|config| config.tool_policy.is_some())
+        {
+            return Err(AdkError::config(
+                "the launcher's tool policy applies to console runs, and serve mode cannot \
+                 apply it: the server does not take the launcher's RunConfig. Apply the \
+                 policy in the agent through Agent::configure_run, or remove it before serving",
+            ));
+        }
         let span_exporter = self.init_telemetry();
         let a2a_base_url = self.a2a_base_url.clone();
+        let approval_service = self.approval_service.clone();
+        let background_runs = self.background_runs.clone();
         let config = self.into_server_config(span_exporter);
 
-        Ok(match a2a_base_url {
-            Some(base_url) => create_app_with_a2a(config, Some(&base_url)),
-            None => create_app(config),
-        })
+        let mut builder = ServerBuilder::new(config);
+        if let Some(base_url) = a2a_base_url {
+            builder = builder.with_a2a(base_url);
+        }
+        if let Some(service) = approval_service {
+            if tokio::runtime::Handle::try_current().is_ok() {
+                adk_server::approvals::spawn_approval_ticker(
+                    service.clone(),
+                    APPROVAL_TICK_INTERVAL,
+                );
+            }
+            builder = builder.with_approval_service(service);
+        }
+        if let Some(state) = background_runs {
+            builder = builder.with_background_runs(state);
+        }
+        Ok(builder.build())
     }
 
     /// Build the Axum application with A2A routes enabled.
@@ -625,8 +906,56 @@ impl Launcher {
     }
 }
 
+/// Opens the console's session: `requested` when it exists, otherwise a new session,
+/// named `requested` when one was asked for.
+async fn open_console_session(
+    sessions: &dyn SessionService,
+    app_name: &str,
+    user_id: &str,
+    requested: Option<String>,
+) -> Result<String> {
+    if let Some(session_id) = &requested {
+        let existing = sessions
+            .get(GetRequest {
+                app_name: app_name.to_string(),
+                user_id: user_id.to_string(),
+                session_id: session_id.clone(),
+                num_recent_events: Some(1),
+                after: None,
+            })
+            .await;
+        match existing {
+            Ok(session) => return Ok(session.id().to_string()),
+            Err(error) if error.is_not_found() => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let created = sessions
+        .create(CreateRequest {
+            app_name: app_name.to_string(),
+            user_id: user_id.to_string(),
+            session_id: requested,
+            state: HashMap::new(),
+        })
+        .await?;
+    Ok(created.id().to_string())
+}
+
+/// The registered command a slash line names, with the text after the name.
+fn find_command<'a>(
+    commands: &'a [Arc<dyn ConsoleCommand>],
+    line: &'a str,
+) -> Option<(&'a Arc<dyn ConsoleCommand>, &'a str)> {
+    let invocation = line.strip_prefix('/')?;
+    let (name, args) = invocation.split_once(char::is_whitespace).unwrap_or((invocation, ""));
+    commands
+        .iter()
+        .find(|command| command.name().trim_start_matches('/') == name)
+        .map(|command| (command, args.trim()))
+}
+
 /// Print the ADK-Rust welcome banner.
-fn print_banner(agent_name: &str) {
+fn print_banner(agent_name: &str, session_id: &str) {
     let version = env!("CARGO_PKG_VERSION");
     let title = format!("ADK-Rust  v{version}");
     let subtitle = "Rust Agent Development Kit";
@@ -654,6 +983,7 @@ fn print_banner(agent_name: &str) {
     println!("    ╚{:═<inner$}╝", "");
     println!();
     println!("  Agent    : {agent_name}");
+    println!("  Session  : {}", terminal_safe(session_id));
     println!("  Runtime  : Tokio async, streaming responses");
     println!("  Features : tool calling, multi-provider, multi-agent, think blocks");
     println!();
@@ -661,22 +991,33 @@ fn print_banner(agent_name: &str) {
     println!();
 }
 
-/// Print available REPL commands.
-fn print_help() {
-    println!();
-    println!("  Commands:");
-    println!("    /help   Show this help");
-    println!("    /clear  Clear display (session state is kept)");
-    println!("    quit    Exit the REPL");
-    println!("    exit    Exit the REPL");
-    println!("    /quit   Exit the REPL");
-    println!("    /exit   Exit the REPL");
-    println!();
-    println!("  Tips:");
-    println!("    - Up/Down arrows browse history");
-    println!("    - Ctrl+C interrupts the current operation");
-    println!("    - Multi-agent workflows show [agent_name] on handoff");
-    println!();
+/// The REPL commands, built-in and registered, for `/help`.
+fn help_text(commands: &[Arc<dyn ConsoleCommand>]) -> String {
+    let mut rows = vec![
+        ("/help".to_string(), "Show this help".to_string()),
+        ("/clear".to_string(), "Clear display (session state is kept)".to_string()),
+    ];
+    for command in commands {
+        let name = command.name().trim_start_matches('/');
+        if !matches!(name, "help" | "clear" | "quit" | "exit") {
+            rows.push((format!("/{name}"), command.description().to_string()));
+        }
+    }
+    for exit in ["quit", "exit", "/quit", "/exit"] {
+        rows.push((exit.to_string(), "Exit the REPL".to_string()));
+    }
+    let width = rows.iter().map(|(name, _)| name.chars().count()).max().unwrap_or(0);
+
+    let mut text = String::from("\n  Commands:\n");
+    for (name, description) in rows {
+        text.push_str(&format!("    {name:<width$}  {description}\n"));
+    }
+    text.push_str(
+        "\n  Tips:\n    - Up/Down arrows browse history\n    - Ctrl+C interrupts the current \
+         operation, and denies the call at an approval prompt\n    - Multi-agent workflows \
+         show [agent_name] on handoff\n\n",
+    );
+    terminal_safe(&text).into_owned()
 }
 
 fn is_exit_command(input: &str) -> bool {
@@ -709,11 +1050,18 @@ pub(crate) fn terminal_safe(text: &str) -> std::borrow::Cow<'_, str> {
 ///
 /// Model and tool text is printed with terminal control characters escaped, apart from
 /// newlines and tabs, so a response cannot inject escape sequences into the terminal.
+///
+/// A call held for confirmation is shown as `[approval needed] <tool> <args> — <reason>`,
+/// and the decision applied to a call as `[approved] <tool>` or `[denied] <tool>`
+/// (spec 3.1 §8.1).
 pub struct StreamPrinter<W: Write = io::Stdout> {
     thinking_mode: ThinkingDisplayMode,
     in_think_block: bool,
     in_thinking_part_stream: bool,
     think_buffer: String,
+    /// Why each held call is waiting, by function call id (tool name for calls without
+    /// one), from its pending response.
+    hold_reasons: HashMap<String, String>,
     out: W,
 }
 
@@ -743,6 +1091,7 @@ impl<W: Write> StreamPrinter<W> {
             in_think_block: false,
             in_thinking_part_stream: false,
             think_buffer: String::new(),
+            hold_reasons: HashMap::new(),
             out,
         }
     }
@@ -756,7 +1105,12 @@ impl<W: Write> StreamPrinter<W> {
     /// Render every part of `event`.
     ///
     /// A streamed function call arrives in a partial chunk and again in the complete event,
-    /// so a function call is rendered from the complete event only.
+    /// so a function call is rendered from the complete event only. An event that holds a
+    /// call for confirmation ([`EventActions::tool_confirmation`](adk_core::EventActions))
+    /// is rendered as `[approval needed] <tool> <args> — <reason>` in place of its text,
+    /// and an applied decision
+    /// ([`EventActions::tool_confirmation_decision`](adk_core::EventActions)) as
+    /// `[approved] <tool>` or `[denied] <tool>` ahead of the tool's response.
     ///
     /// # Example
     ///
@@ -771,13 +1125,54 @@ impl<W: Write> StreamPrinter<W> {
     /// printer.finish();
     /// ```
     pub fn handle_event(&mut self, event: &Event) {
-        let Some(content) = &event.llm_response.content else { return };
-        for part in &content.parts {
-            if event.llm_response.partial && matches!(part, Part::FunctionCall { .. }) {
-                continue;
+        let held = event.actions.tool_confirmation.as_ref();
+        let decision = event.actions.tool_confirmation_decision;
+        let parts = event.llm_response.content.as_ref().map_or(&[][..], |c| c.parts.as_slice());
+        for part in parts {
+            match part {
+                Part::FunctionCall { .. } if event.llm_response.partial => continue,
+                // The held call's line below says what the text says, with the call.
+                Part::Text { .. } if held.is_some() => continue,
+                Part::FunctionResponse { function_response, id, .. } => {
+                    if let Some(decision) = decision {
+                        self.flush_pending_thinking();
+                        let label = match decision {
+                            ToolConfirmationDecision::Approve => "approved",
+                            ToolConfirmationDecision::Deny => "denied",
+                        };
+                        self.emit(&format!("\n[{label}] {}\n", function_response.name));
+                    }
+                    if adk_core::is_confirmation_pending(&function_response.response)
+                        && let Some(reason) =
+                            function_response.response.get("error").and_then(Value::as_str)
+                    {
+                        let key = id.as_ref().unwrap_or(&function_response.name);
+                        self.hold_reasons.insert(key.clone(), reason.to_string());
+                    }
+                }
+                _ => {}
             }
             self.handle_part(part);
         }
+        if let Some(request) = held {
+            self.print_held_call(request);
+        }
+    }
+
+    fn print_held_call(&mut self, request: &ToolConfirmationRequest) {
+        self.flush_pending_thinking();
+        let reason = request
+            .function_call_id
+            .as_ref()
+            .and_then(|id| self.hold_reasons.remove(id))
+            .or_else(|| self.hold_reasons.remove(&request.tool_name));
+        let line = match reason {
+            Some(reason) => {
+                format!("\n[approval needed] {} {} — {reason}\n", request.tool_name, request.args)
+            }
+            None => format!("\n[approval needed] {} {}\n", request.tool_name, request.args),
+        };
+        self.emit(&line);
     }
 
     /// Process a single response part, rendering it to the printer's writer.
@@ -1350,6 +1745,287 @@ mod tests {
             .expect("agent card request should complete");
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    fn held_call_events() -> (Event, Event) {
+        let mut pending = Event::new("invocation");
+        pending.set_content(Content {
+            role: "user".into(),
+            parts: vec![Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData::new(
+                    "record_note",
+                    adk_core::confirmation_pending_response(
+                        "Tool 'record_note' requires confirmation: notes are permanent",
+                    ),
+                ),
+                id: Some("call-1".into()),
+                annotations: None,
+            }],
+        });
+        let mut held = Event::new("invocation");
+        held.set_content(
+            Content::new("model").with_text("Tool confirmation required for 'record_note'."),
+        );
+        held.actions.tool_confirmation = Some(
+            ToolConfirmationRequest::new("record_note", serde_json::json!({"note": "hi"}))
+                .with_function_call_id("call-1"),
+        );
+        (pending, held)
+    }
+
+    #[test]
+    fn stream_printer_renders_a_held_call_with_its_reason() {
+        let (pending, held) = held_call_events();
+        let captured = Captured::default();
+        let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, captured.clone());
+        printer.handle_event(&pending);
+        printer.handle_event(&held);
+        printer.finish();
+
+        let output = captured.text();
+        assert!(
+            output.contains(
+                "[approval needed] record_note {\"note\":\"hi\"} — Tool 'record_note' requires \
+                 confirmation: notes are permanent"
+            ),
+            "{output}"
+        );
+        assert!(!output.contains("Tool confirmation required"), "{output}");
+    }
+
+    #[test]
+    fn stream_printer_renders_a_held_call_without_a_known_reason() {
+        let (_, held) = held_call_events();
+        let captured = Captured::default();
+        let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, captured.clone());
+        printer.handle_event(&held);
+        assert_eq!(captured.text(), "\n[approval needed] record_note {\"note\":\"hi\"}\n");
+    }
+
+    #[test]
+    fn stream_printer_renders_the_decision_applied_to_a_call() {
+        let captured = Captured::default();
+        let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, captured.clone());
+        for (decision, response) in [
+            (ToolConfirmationDecision::Approve, serde_json::json!({"recorded": "hi"})),
+            (ToolConfirmationDecision::Deny, serde_json::json!({"error": "denied"})),
+        ] {
+            let mut event = Event::new("invocation");
+            event.set_content(Content {
+                role: "user".into(),
+                parts: vec![Part::FunctionResponse {
+                    function_response: adk_core::FunctionResponseData::new("record_note", response),
+                    id: Some("call-1".into()),
+                    annotations: None,
+                }],
+            });
+            event.actions.tool_confirmation_decision = Some(decision);
+            printer.handle_event(&event);
+        }
+        let output = captured.text();
+        let approved = output.find("[approved] record_note").expect(&output);
+        let ran = output.find("[tool-response] record_note {\"recorded\":\"hi\"}").expect(&output);
+        let denied = output.find("[denied] record_note").expect(&output);
+        assert!(approved < ran && ran < denied, "{output}");
+    }
+
+    #[test]
+    fn a_planted_tool_name_in_a_held_call_is_escaped() {
+        let mut held = Event::new("invocation");
+        held.actions.tool_confirmation =
+            Some(ToolConfirmationRequest::new(format!("tool{PLANTED}"), serde_json::json!({})));
+        let captured = Captured::default();
+        let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, captured.clone());
+        printer.handle_event(&held);
+        let output = captured.text();
+        assert!(!output.chars().any(|c| c.is_control() && c != '\n'), "{output:?}");
+        assert!(output.contains("[approval needed] tool\\u{1b}]52"), "{output:?}");
+    }
+
+    #[derive(Debug)]
+    struct AllowAll;
+
+    #[async_trait]
+    impl ToolPolicy for AllowAll {
+        async fn evaluate(
+            &self,
+            _request: &adk_core::ToolPolicyRequest,
+        ) -> adk_core::PolicyDecision {
+            adk_core::PolicyDecision::Allow
+        }
+    }
+
+    #[derive(Debug)]
+    struct Approves;
+
+    #[async_trait]
+    impl ToolConfirmationHandler for Approves {
+        async fn decide(
+            &self,
+            _request: &ToolConfirmationRequest,
+        ) -> AdkResult<ToolConfirmationDecision> {
+            Ok(ToolConfirmationDecision::Approve)
+        }
+    }
+
+    fn console() -> ConsoleIo {
+        ConsoleIo::scripted([], true)
+    }
+
+    #[test]
+    fn streaming_mode_and_run_config_merge_in_either_order() {
+        let base = || RunConfig::builder().history_max_events(Some(7)).build();
+        for launcher in [
+            test_launcher().with_streaming_mode(StreamingMode::None).with_run_config(base()),
+            test_launcher().with_run_config(base()).with_streaming_mode(StreamingMode::None),
+        ] {
+            let config = launcher.console_run_config(&console());
+            assert_eq!(config.streaming_mode, StreamingMode::None);
+            assert_eq!(config.history_max_events, Some(7));
+        }
+    }
+
+    #[test]
+    fn console_runs_always_have_a_handler_and_a_human_timeout() {
+        let config = test_launcher().console_run_config(&console());
+        assert!(config.tool_confirmation_handler.is_some());
+        assert_eq!(config.tool_confirmation_timeout, CONSOLE_CONFIRMATION_TIMEOUT);
+        assert!(config.tool_policy.is_none());
+
+        let chosen = Duration::from_secs(5);
+        let config = test_launcher()
+            .with_run_config(RunConfig::builder().tool_confirmation_timeout(chosen).build())
+            .console_run_config(&console());
+        assert_eq!(config.tool_confirmation_timeout, chosen);
+    }
+
+    #[tokio::test]
+    async fn the_launchers_policy_and_handler_take_precedence() {
+        let policy: Arc<dyn ToolPolicy> = Arc::new(AllowAll);
+        let handler: Arc<dyn ToolConfirmationHandler> = Arc::new(Approves);
+        let from_config = RunConfig::builder()
+            .tool_policy(Arc::new(adk_core::DeclarativePolicy::builder().build()))
+            .tool_confirmation_handler(Arc::new(ConsoleConfirmationHandler::new(console())))
+            .build();
+        let config = test_launcher()
+            .with_tool_policy(policy.clone())
+            .with_confirmation_handler(handler.clone())
+            .with_run_config(from_config)
+            .console_run_config(&console());
+        assert!(Arc::ptr_eq(config.tool_policy.as_ref().unwrap(), &policy));
+        assert!(Arc::ptr_eq(config.tool_confirmation_handler.as_ref().unwrap(), &handler));
+    }
+
+    #[tokio::test]
+    async fn a_session_id_resumes_the_session_or_creates_it() {
+        let sessions = InMemorySessionService::new();
+        let created =
+            open_console_session(&sessions, "app", "ana", Some("notes".into())).await.unwrap();
+        assert_eq!(created, "notes");
+        sessions
+            .append_event_for_identity(adk_session::AppendEventRequest {
+                identity: adk_core::AdkIdentity::new(
+                    adk_core::AppName::try_from("app").unwrap(),
+                    UserId::new("ana").unwrap(),
+                    SessionId::new("notes").unwrap(),
+                ),
+                event: Event::new("first-turn"),
+            })
+            .await
+            .unwrap();
+
+        let resumed =
+            open_console_session(&sessions, "app", "ana", Some("notes".into())).await.unwrap();
+        assert_eq!(resumed, "notes");
+        let session = sessions
+            .get(GetRequest {
+                app_name: "app".into(),
+                user_id: "ana".into(),
+                session_id: "notes".into(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(session.events().len(), 1, "resuming keeps the conversation");
+
+        let fresh = open_console_session(&sessions, "app", "ana", None).await.unwrap();
+        assert_ne!(fresh, "notes");
+    }
+
+    struct Echo;
+
+    #[async_trait]
+    impl ConsoleCommand for Echo {
+        fn name(&self) -> &str {
+            "echo"
+        }
+
+        fn description(&self) -> &str {
+            "Repeat the text after the command"
+        }
+
+        async fn run(&self, args: &str, ctx: &ConsoleCommandContext) -> AdkResult<String> {
+            Ok(format!("{args} ({})", ctx.session_id))
+        }
+    }
+
+    #[tokio::test]
+    async fn registered_commands_are_listed_and_dispatched() {
+        let commands: Vec<Arc<dyn ConsoleCommand>> = vec![Arc::new(Echo)];
+        let help = help_text(&commands);
+        assert!(help.contains("/echo"), "{help}");
+        assert!(help.contains("Repeat the text after the command"), "{help}");
+        assert!(help.contains("/help"), "{help}");
+
+        let (command, args) = find_command(&commands, "/echo  hello there ").unwrap();
+        let ctx = ConsoleCommandContext::new(
+            "app",
+            "ana",
+            "s1",
+            Arc::new(InMemorySessionService::new()),
+            console(),
+        );
+        assert_eq!(command.run(args, &ctx).await.unwrap(), "hello there (s1)");
+        assert!(find_command(&commands, "/echoes").is_none());
+        assert!(find_command(&commands, "echo hi").is_none());
+    }
+
+    async fn status(app: Router, method: &str, uri: &str) -> StatusCode {
+        app.oneshot(Request::builder().method(method).uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn build_app_mounts_the_approval_inbox_behind_authentication() {
+        let service = Arc::new(adk_core::StoreApprovalService::new(Arc::new(
+            adk_core::InMemoryApprovalStore::new(),
+        )));
+        let app = test_launcher().with_approval_service(service).build_app().unwrap();
+        assert_eq!(status(app, "GET", "/api/approvals").await, StatusCode::UNAUTHORIZED);
+
+        let app = test_launcher().build_app().unwrap();
+        assert_eq!(status(app, "GET", "/api/approvals").await, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn build_app_mounts_background_runs() {
+        let app = test_launcher().with_background_runs(BackgroundState::new()).build_app().unwrap();
+        assert_eq!(status(app, "GET", "/api/runs").await, StatusCode::OK);
+
+        let app = test_launcher().build_app().unwrap();
+        assert_eq!(status(app, "GET", "/api/runs").await, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn build_app_refuses_to_serve_without_the_launchers_tool_policy() {
+        let error = test_launcher().with_tool_policy(Arc::new(AllowAll)).build_app().unwrap_err();
+        assert!(error.to_string().contains("serve mode cannot apply it"), "{error}");
+
+        let in_config = RunConfig::builder().tool_policy(Arc::new(AllowAll)).build();
+        assert!(test_launcher().with_run_config(in_config).build_app().is_err());
     }
 
     #[tokio::test]

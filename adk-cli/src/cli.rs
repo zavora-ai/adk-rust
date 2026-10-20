@@ -15,6 +15,13 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
 
+    #[command(flatten)]
+    pub options: AgentOptions,
+}
+
+/// Model and rendering options shared by every agent command.
+#[derive(clap::Args, Debug, Clone)]
+pub struct AgentOptions {
     /// LLM provider
     #[arg(long, global = true)]
     pub provider: Option<ModelProvider>,
@@ -27,7 +34,8 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub api_key: Option<String>,
 
-    /// Agent instruction / system prompt
+    /// Agent instruction / system prompt. For `code`, `goal` and `ultracode` it is added
+    /// to the coding prompt as project guidance.
     #[arg(long, global = true)]
     pub instruction: Option<String>,
 
@@ -38,10 +46,37 @@ pub struct Cli {
     /// How the CLI should render emitted thinking/reasoning content.
     #[arg(long, global = true, value_enum, default_value_t = ThinkingMode::Auto)]
     pub thinking_mode: ThinkingMode,
+
+    /// Answer model calls from a JSON script instead of a provider (end-to-end tests).
+    ///
+    /// A JSON array, inline or in the named file, of `{"text": "..."}`,
+    /// `{"call": {"name": "...", "args": {...}}}` and `{"calls": [...]}` replies.
+    #[cfg(feature = "scripted-model")]
+    #[arg(long, global = true, hide = true)]
+    pub model_script: Option<String>,
+
+    /// Give the chat agent the `record_note` test tool, which needs approval.
+    #[cfg(feature = "scripted-model")]
+    #[arg(long, global = true, hide = true)]
+    pub approval_fixture: bool,
 }
 
-/// All providers in menu order.
-pub const ALL_PROVIDERS: &[ModelProvider] = ModelProvider::all();
+/// The providers compiled into this build, in menu order (spec 3.1 §8.1).
+pub fn compiled_providers() -> Vec<ModelProvider> {
+    ModelProvider::all().iter().copied().filter(|provider| is_compiled(*provider)).collect()
+}
+
+/// Whether this build can talk to `provider`: its Cargo feature is enabled.
+pub fn is_compiled(provider: ModelProvider) -> bool {
+    match provider {
+        ModelProvider::Gemini => cfg!(feature = "gemini"),
+        ModelProvider::Openai => cfg!(feature = "openai"),
+        ModelProvider::Anthropic => cfg!(feature = "anthropic"),
+        ModelProvider::Deepseek => cfg!(feature = "deepseek"),
+        ModelProvider::Groq => cfg!(feature = "groq"),
+        ModelProvider::Ollama => cfg!(feature = "ollama"),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ThinkingMode {
@@ -53,7 +88,7 @@ pub enum ThinkingMode {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Interactive REPL with an AI agent (this is the default)
-    Chat,
+    Chat(ChatArgs),
 
     /// Start web server with an AI agent, on 127.0.0.1 unless --host says otherwise
     Serve {
@@ -164,6 +199,24 @@ pub enum Commands {
         #[command(subcommand)]
         command: AuditCommands,
     },
+}
+
+/// Options for `adk-rust chat` (spec 3.1 §8.1).
+///
+/// With the `persist` feature, conversations are kept in `<config dir>/adk-rust/harness.db`.
+#[derive(clap::Args, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChatArgs {
+    /// Continue the session with this id, creating it when it does not exist
+    #[arg(long, conflicts_with_all = ["continue_session", "ephemeral"])]
+    pub session: Option<String>,
+
+    /// Continue the most recent session
+    #[arg(long = "continue", conflicts_with = "ephemeral")]
+    pub continue_session: bool,
+
+    /// Keep the conversation in memory only; nothing is written to disk
+    #[arg(long)]
+    pub ephemeral: bool,
 }
 
 #[cfg(feature = "audit")]
@@ -669,4 +722,88 @@ pub enum RegistrySearchType {
     Agent,
     /// Search MCP servers
     McpServer,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::try_parse_from(args).unwrap_or_else(|error| panic!("{args:?}: {error}"))
+    }
+
+    fn chat_args(args: &[&str]) -> ChatArgs {
+        match parse(args).command {
+            Some(Commands::Chat(chat)) => chat,
+            _ => panic!("{args:?} is not a chat command"),
+        }
+    }
+
+    #[test]
+    fn chat_selects_how_the_session_is_kept() {
+        assert_eq!(chat_args(&["adk-rust", "chat"]), ChatArgs::default());
+        assert_eq!(
+            chat_args(&["adk-rust", "chat", "--session", "release-notes"]),
+            ChatArgs { session: Some("release-notes".into()), ..ChatArgs::default() }
+        );
+        assert_eq!(
+            chat_args(&["adk-rust", "chat", "--continue"]),
+            ChatArgs { continue_session: true, ..ChatArgs::default() }
+        );
+        assert_eq!(
+            chat_args(&["adk-rust", "chat", "--ephemeral"]),
+            ChatArgs { ephemeral: true, ..ChatArgs::default() }
+        );
+        assert!(parse(&["adk-rust"]).command.is_none());
+    }
+
+    #[test]
+    fn session_flags_exclude_each_other() {
+        for args in [
+            &["adk-rust", "chat", "--session", "a", "--continue"][..],
+            &["adk-rust", "chat", "--session", "a", "--ephemeral"],
+            &["adk-rust", "chat", "--continue", "--ephemeral"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "{args:?} should not parse");
+        }
+    }
+
+    #[test]
+    fn instruction_reaches_the_coding_commands() {
+        for args in [
+            &["adk-rust", "code", "fix it", "--instruction", "use tabs"][..],
+            &["adk-rust", "goal", "green", "--until", "true", "--instruction", "use tabs"],
+            &["adk-rust", "--instruction", "use tabs", "ultracode", "fix it"],
+        ] {
+            assert_eq!(parse(args).options.instruction.as_deref(), Some("use tabs"), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn compiled_providers_are_exactly_the_enabled_features() {
+        let compiled = compiled_providers();
+        for (provider, enabled) in [
+            (ModelProvider::Gemini, cfg!(feature = "gemini")),
+            (ModelProvider::Openai, cfg!(feature = "openai")),
+            (ModelProvider::Anthropic, cfg!(feature = "anthropic")),
+            (ModelProvider::Deepseek, cfg!(feature = "deepseek")),
+            (ModelProvider::Groq, cfg!(feature = "groq")),
+            (ModelProvider::Ollama, cfg!(feature = "ollama")),
+        ] {
+            assert_eq!(compiled.contains(&provider), enabled, "{provider}");
+        }
+        let order: Vec<_> =
+            ModelProvider::all().iter().copied().filter(|p| compiled.contains(p)).collect();
+        assert_eq!(compiled, order, "menu order follows ModelProvider::all");
+    }
+
+    #[cfg(feature = "scripted-model")]
+    #[test]
+    fn test_hooks_parse_but_stay_hidden() {
+        let cli = parse(&["adk-rust", "chat", "--model-script", "[]", "--approval-fixture"]);
+        assert_eq!(cli.options.model_script.as_deref(), Some("[]"));
+        assert!(cli.options.approval_fixture);
+        let help = <Cli as clap::CommandFactory>::command().render_long_help().to_string();
+        assert!(!help.contains("model-script") && !help.contains("approval-fixture"), "{help}");
+    }
 }

@@ -91,6 +91,19 @@ To start from a generated server project instead, see the `api` template in
 | `with_a2a_base_url(url)` | — | serve mode | no A2A routes |
 | `with_telemetry(config)` | — | serve mode | in-memory ADK span exporter |
 | `with_streaming_mode(mode)`, `with_thinking_mode(mode)` | — | console mode | SSE streaming, thinking shown |
+| `with_run_config(config)` | — | console mode, merged with the console settings | `RunConfig::default()` |
+| `with_tool_policy(policy)` | — | console mode; `build_app` fails while one is set | none |
+| `with_confirmation_handler(handler)` | — | console mode | `ConsoleConfirmationHandler` at the terminal |
+| `with_user_id(id)` | — | console mode | `user` |
+| `with_session_id(id)` | — | console mode: continue the session, or create it under this id | a new session |
+| `with_console_command(command)` | — | console mode | none |
+| `with_approval_service(service)` | — | serve mode: `/api/approvals` and its expiry ticker | no approval inbox |
+| `with_background_runs(state)` | — | serve mode: `/api/runs` | no background runs |
+
+The console settings combine in any order: `with_streaming_mode`, `with_tool_policy` and
+`with_confirmation_handler` take precedence over the same fields of `with_run_config`. The
+server takes no `RunConfig`, so they do not reach serve mode, and `build_app` returns a
+configuration error while a tool policy is set rather than serve without it.
 
 ### Custom Application Name
 
@@ -124,7 +137,8 @@ Launcher::new(Arc::new(agent))
 In console mode, the Launcher:
 
 1. Uses the configured session service, or an in-memory one
-2. Creates a session for the user `user`
+2. Continues the `with_session_id` session for the `with_user_id` user (default `user`),
+   creating it when it does not exist, or creates a new session
 3. Starts an interactive read loop
 4. Streams agent responses in real time
 5. Shows text, thinking, and tool calls as they arrive
@@ -150,6 +164,100 @@ Goodbye.
 The `cli` launcher adds a banner, line editing with history, `/help`, and Ctrl+C to interrupt a
 response without leaving the session.
 
+### Approvals in the Console
+
+The `cli` launcher answers tool calls held for confirmation at the terminal. Without
+`with_confirmation_handler`, console runs use a `ConsoleConfirmationHandler`, which shows the
+call and asks:
+
+```
+[tool-call] delete_file {"path":"notes.txt"}
+
+[approval needed] delete_file {"path":"notes.txt"}
+  [y] allow once  [n] deny (reason)  [e] edit args  [?] details > y
+
+[approved] delete_file
+
+[tool-response] delete_file {"deleted":"notes.txt"}
+```
+
+| Answer | Effect |
+|--------|--------|
+| `y` | Runs the call once, with the edited arguments when `e` changed them |
+| `n` | Denies the call; a reason typed at the follow-up prompt is reported to the model |
+| `e` | Replaces the arguments with JSON from `$VISUAL`/`$EDITOR`, or typed on one line, then asks again; the policy checks the edited call again |
+| `?` | Shows the call id, the acting agent and subject, the tool's origin, and the full arguments |
+| Ctrl+C | Denies the call and cancels the run |
+
+Prompts for calls in one batch are asked one after another. When stdin is not a terminal,
+every held call is denied with a message, so an unattended run never waits. Console runs wait
+up to `CONSOLE_CONFIRMATION_TIMEOUT` (one hour) for an answer unless the run configuration
+sets another `tool_confirmation_timeout`. The handler answers the governed path through
+`ToolConfirmationHandler::decide_approval`, so edited arguments and the denial reason travel
+in the `ToolApproval`; a direct `decide` call offers only `[y] allow once  [n] deny  [?] details`.
+
+A held call that reaches the console without a decision, for example from a delegate, is
+printed as `[approval needed] <tool> <args> — <reason>`, and a decision applied to a call as
+`[approved] <tool>` or `[denied] <tool>`.
+
+The REPL and every prompt read through one `ConsoleIo` reader thread, so Ctrl+C at a prompt
+leaves no stdin read behind to swallow the next line. A custom handler that prompts at the
+terminal should read through `ConsoleIo::terminal()` as well.
+
+```rust
+use adk_rust::prelude::*;
+use adk_rust::{DeclarativePolicy, Launcher, RunBudget};
+use std::sync::Arc;
+
+async fn launch(agent: Arc<dyn Agent>) -> Result<()> {
+    // Every tool that is not read-only waits for an answer at the terminal.
+    let policy = DeclarativePolicy::builder()
+        .allow_read_only()
+        .require_approval("*", "this tool changes something")
+        .build();
+
+    Launcher::new(agent)
+        .with_tool_policy(Arc::new(policy))
+        .with_run_config(RunConfig::builder().budget(RunBudget::new().max_model_calls(50)).build())
+        .run()
+        .await
+}
+```
+
+### Slash Commands
+
+`with_console_command` registers a `ConsoleCommand`. The REPL runs `/name args` through the
+command with that name, prints what it returns, and lists it in `/help`. The built-in `/help`,
+`/clear`, `/quit` and `/exit` take precedence, and a slash line no command matches goes to
+the agent:
+
+```rust
+use adk_cli::{ConsoleCommand, ConsoleCommandContext, Launcher};
+use async_trait::async_trait;
+use std::sync::Arc;
+
+struct Session;
+
+#[async_trait]
+impl ConsoleCommand for Session {
+    fn name(&self) -> &str {
+        "session"
+    }
+
+    fn description(&self) -> &str {
+        "Show the session id"
+    }
+
+    async fn run(&self, _args: &str, ctx: &ConsoleCommandContext) -> adk_core::Result<String> {
+        Ok(format!("session {} for {}", ctx.session_id, ctx.user_id))
+    }
+}
+
+async fn launch(agent: Arc<dyn adk_core::Agent>) -> adk_core::Result<()> {
+    Launcher::new(agent).with_console_command(Arc::new(Session)).run_console_directly().await
+}
+```
+
 ### Multi-Agent Console
 
 The `cli` launcher shows tool calls and results as `[tool-call]` and `[tool-response]` lines, a
@@ -174,7 +282,12 @@ In server mode, the `cli` launcher:
 2. Uses the configured session service, or an in-memory one
 3. Starts an HTTP server with the REST API, on `127.0.0.1` by default
 4. Serves the web UI
-5. Stops on Ctrl+C or SIGTERM
+5. Mounts the approval inbox (`with_approval_service`) and background runs
+   (`with_background_runs`) when configured
+6. Stops on Ctrl+C or SIGTERM
+
+The app is built with `ServerBuilder`. The approval inbox answers `401` unless
+`with_request_context_extractor` authenticates the caller; see [Server API](server.md).
 
 ### Production Escape Hatch
 

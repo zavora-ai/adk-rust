@@ -31,7 +31,8 @@ adk-agent = { workspace = true, features = ["coding"] }
 adk-devtools.workspace = true
 adk-model.workspace = true
 adk-runner = { workspace = true, features = ["artifacts", "plugins"] }
-adk-server.workspace = true
+# Serve mode mounts the approval inbox and background runs (spec 3.1 §8.2)
+adk-server = { workspace = true, features = ["approvals", "background"] }
 adk-session.workspace = true
 adk-artifact.workspace = true
 adk-tool.workspace = true
@@ -43,6 +44,7 @@ clap = { version = "4.6", features = ["derive"] }
 rustyline = "18.0"
 tokio = { workspace = true, features = ["full"] }
 anyhow.workspace = true
+async-trait.workspace = true
 futures.workspace = true
 axum = "0.8"
 tracing.workspace = true
@@ -62,7 +64,7 @@ keyring = { version = "3.6.3", default-features = false, features = ["windows-na
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 
 [features]
-default = ["gemini", "audit"]
+default = ["gemini", "openai", "anthropic", "audit", "persist"]
 gemini = ["adk-model/gemini"]
 openai = ["adk-model/openai"]
 anthropic = ["adk-model/anthropic"]
@@ -88,9 +90,13 @@ graph-sqlite = ["adk-graph/sqlite"]
 audit = ["dep:adk-auth"]
 # `adk-rust audit export`: read signed audit logs from SQLite or PostgreSQL
 audit-sql = ["audit", "adk-session/sqlite", "adk-session/postgres"]
+# `adk-rust chat` keeps its sessions in SQLite at <config dir>/adk-rust/harness.db
+persist = ["adk-session/sqlite"]
+# Hidden `--model-script` and `--approval-fixture` flags for binary end-to-end tests:
+# a scripted model and a tool that needs approval, no provider key required
+scripted-model = []
 
 [dev-dependencies]
-async-trait.workspace = true
 tower = { version = "0.5", features = ["util"] }
 axum = "0.8"
 google-cloud-auth = { version = "1.8", default-features = false, features = ["default-rustls-provider"] }
@@ -98,3 +104,7 @@ tempfile = "3"
 zip = { workspace = true }
 base64 = "0.22"
 sha2 = "0.10"
+
+[target.'cfg(unix)'.dev-dependencies]
+# openpty for the console end-to-end tests, which drive the binary in a pseudo-terminal
+libc = "0.2"

@@ -2,12 +2,12 @@
 //!
 //! Config is stored at `~/.config/adk-rust/config.json`.
 
-use crate::cli::ALL_PROVIDERS;
+use crate::cli::{compiled_providers, is_compiled};
 use adk_model::ModelProvider as Provider;
 use anyhow::{Context, Result};
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
 const KEYRING_SERVICE: &str = "adk-rust";
@@ -94,6 +94,9 @@ fn migrate_legacy_api_key(saved: &CliConfig, provider: Provider) -> Result<()> {
 
 /// Resolve the provider, model, and API key from CLI flags, env vars,
 /// secure credential storage, saved config, or interactive setup.
+///
+/// Every agent command resolves its model here (spec 3.1 §8.1). Setup prompts only on a
+/// terminal, and only for providers compiled into this build.
 pub struct ResolvedConfig {
     pub provider: Provider,
     pub model: String,
@@ -108,6 +111,7 @@ pub fn resolve(
     cli_instruction: Option<String>,
 ) -> Result<ResolvedConfig> {
     let saved = load_config();
+    let terminal = io::stdin().is_terminal();
 
     if let Some(saved_provider) = saved
         .provider
@@ -126,8 +130,11 @@ pub fn resolve(
         name.parse::<Provider>().map_err(anyhow::Error::msg)?
     } else {
         // No provider anywhere — run interactive setup
-        return interactive_setup(cli_instruction);
+        return interactive_setup(cli_instruction, terminal);
     };
+    if !is_compiled(provider) {
+        return Err(not_compiled(provider));
+    }
 
     // 2. Determine model
     let model = cli_model.or(saved.model).unwrap_or_else(|| provider.default_model().to_string());
@@ -150,7 +157,7 @@ pub fn resolve(
             Some(k) if !k.trim().is_empty() => Some(k),
             _ => {
                 // Have a provider but no key — prompt for it
-                let k = prompt_api_key(provider)?;
+                let k = prompt_api_key(provider, terminal)?;
                 if let Err(err) = save_api_key_to_keyring(provider, &k) {
                     println!(
                         "  Warning: could not persist your API key securely ({err}).\n  \
@@ -203,35 +210,64 @@ where
     Ok(legacy_api_key)
 }
 
-/// Interactive first-run setup.
-fn interactive_setup(cli_instruction: Option<String>) -> Result<ResolvedConfig> {
+/// The error for a provider whose Cargo feature this build leaves out.
+pub fn not_compiled(provider: Provider) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} support is not compiled into this adk-cli build. Reinstall with `--features {}` or `--features all-providers`.",
+        provider.display_name(),
+        provider.as_str()
+    )
+}
+
+/// Interactive first-run setup, offering only the providers compiled into this build.
+fn interactive_setup(cli_instruction: Option<String>, terminal: bool) -> Result<ResolvedConfig> {
+    let providers = compiled_providers();
+    if providers.is_empty() {
+        anyhow::bail!(
+            "this adk-cli build has no model provider compiled in. Reinstall with \
+             `--features gemini` (or openai, anthropic, deepseek, groq, ollama)."
+        );
+    }
+    if !terminal {
+        let names: Vec<&str> = providers.iter().map(|p| p.as_str()).collect();
+        anyhow::bail!(
+            "no LLM provider is configured, and there is no terminal to set one up. Pass \
+             --provider ({}) with its API key in the provider's environment variable or \
+             --api-key, or run adk-rust once in a terminal to save a provider.",
+            names.join(", ")
+        );
+    }
+
     println!();
     println!("  Welcome to ADK-Rust! Let's set up your LLM provider.\n");
     println!("  Choose a provider:\n");
 
-    for (i, p) in ALL_PROVIDERS.iter().enumerate() {
+    for (i, p) in providers.iter().enumerate() {
         println!("    {}) {:<35} default: {}", i + 1, p.display_name(), p.default_model());
     }
     println!();
 
     let provider = loop {
-        print!("  Enter number (1-{}): ", ALL_PROVIDERS.len());
+        print!("  Enter number (1-{}): ", providers.len());
         let _ = io::stdout().flush();
         let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        if io::stdin().read_line(&mut input)? == 0 {
+            anyhow::bail!("input ended before a provider was chosen");
+        }
         let trimmed = input.trim();
         if let Ok(n) = trimmed.parse::<usize>()
             && n >= 1
-            && n <= ALL_PROVIDERS.len()
+            && n <= providers.len()
         {
-            break ALL_PROVIDERS[n - 1];
+            break providers[n - 1];
         }
         println!("  Invalid choice, try again.");
     };
 
     let model = provider.default_model().to_string();
 
-    let api_key = if provider.requires_key() { Some(prompt_api_key(provider)?) } else { None };
+    let api_key =
+        if provider.requires_key() { Some(prompt_api_key(provider, terminal)?) } else { None };
 
     // Save config
     let config = CliConfig {
@@ -256,9 +292,16 @@ Use {} in your environment or re-enter the key next run.\n",
     Ok(ResolvedConfig { provider, model, api_key, instruction })
 }
 
-/// Prompt the user for an API key.
-fn prompt_api_key(provider: Provider) -> Result<String> {
+/// Prompt the user for an API key, on a terminal only.
+fn prompt_api_key(provider: Provider, terminal: bool) -> Result<String> {
     let env_hint = provider.env_var();
+    if !terminal {
+        anyhow::bail!(
+            "{} requires an API key, and there is no terminal to ask for one. Set {env_hint} \
+             or pass --api-key.",
+            provider.display_name()
+        );
+    }
     println!();
     println!("  {} requires an API key.", provider.display_name());
     println!("  (You can also set {} in your environment.)", env_hint);
@@ -268,7 +311,9 @@ fn prompt_api_key(provider: Provider) -> Result<String> {
         print!("  API key: ");
         let _ = io::stdout().flush();
         let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        if io::stdin().read_line(&mut input)? == 0 {
+            anyhow::bail!("input ended before an API key was entered");
+        }
         let trimmed = input.trim().to_string();
         if !trimmed.is_empty() {
             return Ok(trimmed);
@@ -277,7 +322,7 @@ fn prompt_api_key(provider: Provider) -> Result<String> {
     }
 }
 
-fn default_instruction() -> String {
+pub fn default_instruction() -> String {
     "\
 You are a helpful AI assistant powered by ADK-Rust (Rust Agent Development Kit).
 
@@ -296,7 +341,10 @@ provides, and ground your answers in real sources."
 
 #[cfg(test)]
 mod tests {
-    use super::{CliConfig, resolve_api_key_sources};
+    use super::{
+        CliConfig, Provider, interactive_setup, not_compiled, prompt_api_key,
+        resolve_api_key_sources,
+    };
     use anyhow::Result;
     use std::sync::{
         Arc,
@@ -347,5 +395,23 @@ mod tests {
 
         assert_eq!(key.as_deref(), Some("cli-key"));
         assert!(!keyring_called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn setup_never_prompts_without_a_terminal() {
+        if !crate::cli::compiled_providers().is_empty() {
+            let error = interactive_setup(None, false).err().expect("setup needs a terminal");
+            assert!(error.to_string().contains("no terminal to set one up"), "{error}");
+        }
+
+        let error = prompt_api_key(Provider::Openai, false).expect_err("a key needs a terminal");
+        assert!(error.to_string().contains("Set OPENAI_API_KEY or pass --api-key"), "{error}");
+    }
+
+    #[test]
+    fn a_provider_left_out_of_the_build_gets_the_reinstall_hint() {
+        let error = not_compiled(Provider::Deepseek).to_string();
+        assert!(error.contains("not compiled into this adk-cli build"), "{error}");
+        assert!(error.contains("Reinstall with `--features deepseek`"), "{error}");
     }
 }

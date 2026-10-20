@@ -5,6 +5,10 @@ mod deploy;
 mod graph;
 #[cfg(feature = "vertex-agent-registry")]
 mod registry;
+#[cfg(feature = "scripted-model")]
+mod scripted;
+#[cfg(feature = "persist")]
+mod sessions;
 mod setup;
 mod skills;
 mod ultra;
@@ -20,38 +24,19 @@ use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use adk_tool::GoogleSearchTool;
 use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Commands, ThinkingMode};
+use cli::{AgentOptions, ChatArgs, Cli, Commands, ThinkingMode};
 use futures::StreamExt;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let Cli { command, options } = Cli::parse();
 
-    match cli.command {
-        None | Some(Commands::Chat) => {
-            let agent = build_agent(
-                cli.provider,
-                cli.model,
-                cli.api_key,
-                cli.instruction,
-                cli.thinking_budget,
-            )?;
-            Launcher::new(Arc::new(agent))
-                .app_name("adk-rust")
-                .with_thinking_mode(map_thinking_mode(cli.thinking_mode))
-                .run_console_directly()
-                .await
-                .map_err(Into::into)
-        }
+    match command {
+        None => run_chat(&options, ChatArgs::default()).await,
+        Some(Commands::Chat(args)) => run_chat(&options, args).await,
         Some(Commands::Serve { port, host }) => {
-            let agent = build_agent(
-                cli.provider,
-                cli.model,
-                cli.api_key,
-                cli.instruction,
-                cli.thinking_budget,
-            )?;
+            let agent = build_agent(&options)?;
             Launcher::new(Arc::new(agent))
                 .app_name("adk-rust")
                 .with_bind_address(host)
@@ -60,23 +45,14 @@ async fn main() -> Result<()> {
                 .map_err(Into::into)
         }
         Some(Commands::Code { task, dir, read_only }) => {
-            run_code(
-                cli.provider,
-                cli.model,
-                cli.api_key,
-                cli.thinking_budget,
-                dir,
-                read_only,
-                task,
-            )
-            .await
+            let model = resolve_model(&options)?;
+            run_code(model, options.instruction, dir, read_only, task).await
         }
         Some(Commands::Goal { goal, until, dir, max_iters, state, resume }) => {
+            let model = resolve_model(&options)?;
             run_goal(GoalArgs {
-                provider: cli.provider,
-                model: cli.model,
-                api_key: cli.api_key,
-                thinking_budget: cli.thinking_budget,
+                model,
+                instruction: options.instruction,
                 dir,
                 goal,
                 until,
@@ -87,16 +63,8 @@ async fn main() -> Result<()> {
             .await
         }
         Some(Commands::Ultracode { task, dir, max_rounds }) => {
-            ultra::run(
-                cli.provider,
-                cli.model,
-                cli.api_key,
-                cli.thinking_budget,
-                dir,
-                task,
-                max_rounds,
-            )
-            .await
+            let model = resolve_model(&options)?;
+            ultra::run(model.llm, &model.id, options.instruction, dir, task, max_rounds).await
         }
         Some(Commands::Skills { command }) => skills::run(command).await,
         Some(Commands::Deploy { command }) => deploy::run(command).await,
@@ -108,34 +76,92 @@ async fn main() -> Result<()> {
     }
 }
 
-/// Resolve the provider and its display model id from the CLI flags.
-///
-/// This is deliberately kept free of any credential handling: the returned
-/// `model_id` is derived only from `--provider` / `--model` (or the provider's
-/// default) and is therefore safe to echo to the console. Key material is
-/// resolved separately by [`build_model`], so no code path can conflate the
-/// two.
-fn resolve_model_id(
-    cli_provider: Option<ModelProvider>,
-    cli_model: Option<String>,
-) -> (ModelProvider, String) {
-    let provider = cli_provider.unwrap_or(ModelProvider::Gemini);
-    let model_id = cli_model.unwrap_or_else(|| provider.default_model().to_string());
-    (provider, model_id)
+/// The model an agent command runs on, resolved through [`setup::resolve`].
+struct ResolvedModel {
+    llm: Arc<dyn Llm>,
+    /// Display id, derived from the flags or saved config only, never from the key.
+    id: String,
+    provider: Option<ModelProvider>,
+    /// The chat instruction: `--instruction`, or the default one.
+    instruction: String,
 }
 
-/// Build the model for an already-resolved provider and model id.
-///
-/// The API key comes from `--api-key` or the provider's conventional
-/// environment variable. Nothing derived from the key is returned.
-fn build_model(
-    provider: ModelProvider,
-    model_id: &str,
-    cli_api_key: Option<String>,
-    thinking_budget: Option<u32>,
-) -> Result<Arc<dyn Llm>> {
-    let api_key = cli_api_key.or_else(|| env_api_key(provider));
-    create_model(provider, model_id, api_key.as_deref(), thinking_budget)
+/// Resolves the model from the flags, saved config, secure storage, or first-run setup
+/// (spec 3.1 §8.1).
+fn resolve_model(options: &AgentOptions) -> Result<ResolvedModel> {
+    #[cfg(feature = "scripted-model")]
+    if let Some(script) = &options.model_script {
+        return Ok(ResolvedModel {
+            llm: scripted::model(script)?,
+            id: "scripted".to_string(),
+            provider: None,
+            instruction: options.instruction.clone().unwrap_or_else(setup::default_instruction),
+        });
+    }
+    let resolved = setup::resolve(
+        options.provider,
+        options.model.clone(),
+        options.api_key.clone(),
+        options.instruction.clone(),
+    )?;
+    let llm = create_model(
+        resolved.provider,
+        &resolved.model,
+        resolved.api_key.as_deref(),
+        options.thinking_budget,
+    )?;
+    Ok(ResolvedModel {
+        llm,
+        id: resolved.model,
+        provider: Some(resolved.provider),
+        instruction: resolved.instruction,
+    })
+}
+
+/// The interactive console, with its conversation kept per [`ChatArgs`].
+async fn run_chat(options: &AgentOptions, args: ChatArgs) -> Result<()> {
+    let agent = build_agent(options)?;
+    let launcher = Launcher::new(Arc::new(agent))
+        .app_name("adk-rust")
+        .with_thinking_mode(map_thinking_mode(options.thinking_mode));
+    with_chat_sessions(launcher, args).await?.run_console_directly().await.map_err(Into::into)
+}
+
+/// Keeps the conversation in `harness.db` unless `--ephemeral` (spec 3.1 §8.1).
+#[cfg(feature = "persist")]
+async fn with_chat_sessions(launcher: Launcher, args: ChatArgs) -> Result<Launcher> {
+    if args.ephemeral {
+        return Ok(launcher);
+    }
+    let store = sessions::open().await?;
+    let user_id = sessions::os_user();
+    let session_id = match args.session {
+        Some(session_id) => Some(session_id),
+        None if args.continue_session => {
+            let latest = sessions::latest(store.as_ref(), &user_id).await?;
+            if latest.is_none() {
+                println!("No earlier session to continue; starting a new one.");
+            }
+            latest
+        }
+        None => None,
+    };
+    let launcher = launcher.with_session_service(store).with_user_id(user_id);
+    Ok(match session_id {
+        Some(session_id) => launcher.with_session_id(session_id),
+        None => launcher,
+    })
+}
+
+#[cfg(not(feature = "persist"))]
+async fn with_chat_sessions(launcher: Launcher, args: ChatArgs) -> Result<Launcher> {
+    if args.session.is_some() || args.continue_session {
+        anyhow::bail!(
+            "persistent sessions are not compiled into this adk-cli build. Reinstall with \
+             `--features persist`, or start without --session and --continue."
+        );
+    }
+    Ok(launcher)
 }
 
 /// Drive one agent turn on an existing runner/session, streaming the trace.
@@ -204,10 +230,8 @@ fn run_check(dir: &str, command: &str) -> (Option<i32>, String) {
 
 /// Arguments for [`run_goal`].
 struct GoalArgs {
-    provider: Option<ModelProvider>,
-    model: Option<String>,
-    api_key: Option<String>,
-    thinking_budget: Option<u32>,
+    model: ResolvedModel,
+    instruction: Option<String>,
     dir: String,
     goal: String,
     until: String,
@@ -230,25 +254,15 @@ struct GoalState {
 
 /// Autonomous goal mode: loop plan → act → verify until `until` passes or budget.
 async fn run_goal(args: GoalArgs) -> Result<()> {
-    let GoalArgs {
-        provider,
-        model,
-        api_key,
-        thinking_budget,
-        dir,
-        goal,
-        until,
-        max_iters,
-        state,
-        resume,
-    } = args;
+    let GoalArgs { model, instruction, dir, goal, until, max_iters, state, resume } = args;
 
-    let (provider, model_id) = resolve_model_id(provider, model);
-    let model = build_model(provider, &model_id, api_key, thinking_budget)?;
-    let coding = CodingAgent::builder()
-        .model(model)
-        .workspace(Workspace::new(&dir).allow_bash(true))
-        .build()?;
+    let model_id = model.id;
+    let mut coding =
+        CodingAgent::builder().model(model.llm).workspace(Workspace::new(&dir).allow_bash(true));
+    if let Some(instruction) = instruction {
+        coding = coding.instruction(instruction);
+    }
+    let coding = coding.build()?;
 
     let state_path = state.unwrap_or_else(|| format!("{dir}/.adk/goal.json"));
 
@@ -362,21 +376,21 @@ fn first_lines(s: &str, n: usize) -> String {
 }
 
 /// Run the coding agent on a single task in a workspace directory.
-#[allow(clippy::too_many_arguments)]
 async fn run_code(
-    cli_provider: Option<ModelProvider>,
-    cli_model: Option<String>,
-    cli_api_key: Option<String>,
-    thinking_budget: Option<u32>,
+    model: ResolvedModel,
+    instruction: Option<String>,
     dir: String,
     read_only: bool,
     task: String,
 ) -> Result<()> {
-    let (provider, model_id) = resolve_model_id(cli_provider, cli_model);
-    let model = build_model(provider, &model_id, cli_api_key, thinking_budget)?;
+    let model_id = model.id;
     let workspace =
         if read_only { Workspace::read_only(&dir) } else { Workspace::new(&dir).allow_bash(true) };
-    let coding = CodingAgent::builder().model(model).workspace(workspace).build()?;
+    let mut coding = CodingAgent::builder().model(model.llm).workspace(workspace);
+    if let Some(instruction) = instruction {
+        coding = coding.instruction(instruction);
+    }
+    let coding = coding.build()?;
 
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     sessions
@@ -411,19 +425,6 @@ async fn run_code(
     Ok(())
 }
 
-/// Read the API key for a provider from its conventional environment variable.
-fn env_api_key(provider: ModelProvider) -> Option<String> {
-    let try_vars: &[&str] = match provider {
-        ModelProvider::Gemini => &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-        ModelProvider::Openai => &["OPENAI_API_KEY"],
-        ModelProvider::Anthropic => &["ANTHROPIC_API_KEY"],
-        ModelProvider::Deepseek => &["DEEPSEEK_API_KEY"],
-        ModelProvider::Groq => &["GROQ_API_KEY"],
-        ModelProvider::Ollama => &[],
-    };
-    try_vars.iter().find_map(|v| std::env::var(v).ok())
-}
-
 fn flush_text(pending: &mut String) {
     let trimmed = pending.trim();
     if !trimmed.is_empty() {
@@ -437,29 +438,24 @@ fn first_line(s: &str) -> String {
     if line.len() > 160 { format!("{}…", &line[..160]) } else { line.to_string() }
 }
 
-fn build_agent(
-    cli_provider: Option<ModelProvider>,
-    cli_model: Option<String>,
-    cli_api_key: Option<String>,
-    cli_instruction: Option<String>,
-    thinking_budget: Option<u32>,
-) -> Result<adk_agent::LlmAgent> {
-    let resolved = setup::resolve(cli_provider, cli_model, cli_api_key, cli_instruction)?;
-    let model = create_model(
-        resolved.provider,
-        &resolved.model,
-        resolved.api_key.as_deref(),
-        thinking_budget,
-    )?;
+fn build_agent(options: &AgentOptions) -> Result<adk_agent::LlmAgent> {
+    let model = resolve_model(options)?;
 
     let mut builder = LlmAgentBuilder::new("adk_agent")
         .description("Default ADK-Rust CLI agent")
-        .instruction(resolved.instruction)
-        .model(model);
+        .instruction(model.instruction)
+        .model(model.llm);
 
     // Google Search grounding only works with Gemini
-    if resolved.provider == ModelProvider::Gemini {
+    if model.provider == Some(ModelProvider::Gemini) {
         builder = builder.tool(Arc::new(GoogleSearchTool::new()));
+    }
+
+    #[cfg(feature = "scripted-model")]
+    if options.approval_fixture {
+        builder = builder
+            .tool(Arc::new(scripted::RecordNote))
+            .require_tool_confirmation(scripted::RecordNote::NAME);
     }
 
     builder.build().map_err(Into::into)
@@ -480,7 +476,7 @@ fn create_model(
             Ok(Arc::new(m))
         }
         #[cfg(not(feature = "gemini"))]
-        ModelProvider::Gemini => provider_feature_disabled(provider, "gemini"),
+        ModelProvider::Gemini => Err(setup::not_compiled(provider)),
         #[cfg(feature = "openai")]
         ModelProvider::Openai => {
             reject_unsupported_thinking_budget(provider, thinking_budget)?;
@@ -490,7 +486,7 @@ fn create_model(
             Ok(Arc::new(m))
         }
         #[cfg(not(feature = "openai"))]
-        ModelProvider::Openai => provider_feature_disabled(provider, "openai"),
+        ModelProvider::Openai => Err(setup::not_compiled(provider)),
         #[cfg(feature = "anthropic")]
         ModelProvider::Anthropic => {
             let key = api_key.ok_or_else(|| anyhow::anyhow!("Anthropic requires an API key"))?;
@@ -505,7 +501,7 @@ fn create_model(
             Ok(Arc::new(m))
         }
         #[cfg(not(feature = "anthropic"))]
-        ModelProvider::Anthropic => provider_feature_disabled(provider, "anthropic"),
+        ModelProvider::Anthropic => Err(setup::not_compiled(provider)),
         #[cfg(feature = "deepseek")]
         ModelProvider::Deepseek => {
             reject_unsupported_thinking_budget(provider, thinking_budget)?;
@@ -515,7 +511,7 @@ fn create_model(
             Ok(Arc::new(m))
         }
         #[cfg(not(feature = "deepseek"))]
-        ModelProvider::Deepseek => provider_feature_disabled(provider, "deepseek"),
+        ModelProvider::Deepseek => Err(setup::not_compiled(provider)),
         #[cfg(feature = "groq")]
         ModelProvider::Groq => {
             reject_unsupported_thinking_budget(provider, thinking_budget)?;
@@ -525,7 +521,7 @@ fn create_model(
             Ok(Arc::new(m))
         }
         #[cfg(not(feature = "groq"))]
-        ModelProvider::Groq => provider_feature_disabled(provider, "groq"),
+        ModelProvider::Groq => Err(setup::not_compiled(provider)),
         #[cfg(feature = "ollama")]
         ModelProvider::Ollama => {
             reject_unsupported_thinking_budget(provider, thinking_budget)?;
@@ -534,26 +530,8 @@ fn create_model(
             Ok(Arc::new(m))
         }
         #[cfg(not(feature = "ollama"))]
-        ModelProvider::Ollama => provider_feature_disabled(provider, "ollama"),
+        ModelProvider::Ollama => Err(setup::not_compiled(provider)),
     }
-}
-
-// Only reachable from the `#[cfg(not(feature = ...))]` arms above; with every provider
-// compiled in there is no caller, and clippy's dead-code lint fails the build.
-#[cfg(not(all(
-    feature = "gemini",
-    feature = "openai",
-    feature = "anthropic",
-    feature = "deepseek",
-    feature = "groq",
-    feature = "ollama"
-)))]
-fn provider_feature_disabled(provider: ModelProvider, feature: &str) -> Result<Arc<dyn Llm>> {
-    Err(anyhow::anyhow!(
-        "{} support is not compiled into this adk-cli build. Reinstall with `--features {}` or `--features all-providers`.",
-        provider.display_name(),
-        feature
-    ))
 }
 
 fn reject_unsupported_thinking_budget(

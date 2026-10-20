@@ -342,6 +342,7 @@ dependencies = [
  "futures",
  "google-cloud-auth 1.15.0",
  "keyring",
+ "libc",
  "rustyline",
  "serde",
  "serde_json",
