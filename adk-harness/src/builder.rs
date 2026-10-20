@@ -377,6 +377,65 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// Applies `.adk/harness.toml` (spec 3.1 §8.3), read with [`HarnessConfig::discover`].
+    ///
+    /// The file may only tighten (spec 3.1 §9.2 I3): its mode applies when it is stricter
+    /// than the mode set so far, `sandbox = true` runs `bash` in the OS sandbox, and
+    /// `fail_if_unavailable = true` refuses a build without it. What the file asked for and
+    /// the harness ignored is logged as a warning.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::{HarnessAgent, HarnessConfig, HarnessMode, InstructionsConfig};
+    /// use adk_model::{ScriptedLlm, ScriptedResponse};
+    /// use std::sync::Arc;
+    ///
+    /// let dir = tempfile::tempdir().unwrap();
+    /// let config = HarnessConfig::from_toml("mode = \"plan\"")?;
+    /// let harness = HarnessAgent::builder("harness")
+    ///     .model(Arc::new(ScriptedLlm::new("scripted", vec![ScriptedResponse::text("done")])))
+    ///     .workspace(adk_devtools::Workspace::new(dir.path()))
+    ///     .project_instructions(InstructionsConfig { user_file: None, ..InstructionsConfig::default() })
+    ///     .config(config)
+    ///     .build()?;
+    /// assert_eq!(harness.info().default_mode, HarnessMode::Plan);
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    ///
+    /// [`HarnessConfig::discover`]: crate::HarnessConfig::discover
+    pub fn config(mut self, config: crate::config::HarnessConfig) -> Self {
+        if let Some(mode) = config.mode {
+            if mode.is_stricter_than(self.mode) {
+                self.mode = mode;
+            } else if mode != self.mode {
+                tracing::warn!(
+                    config.mode = %mode,
+                    harness.mode = %self.mode,
+                    "harness.toml mode ignored: it is looser than the harness's, and workspace files may only tighten"
+                );
+            }
+        }
+        if config.sandbox {
+            #[cfg(feature = "sandbox")]
+            if matches!(self.shell.isolation, ShellIsolation::Host) {
+                self.shell.isolation = ShellIsolation::OsSandbox(Default::default());
+            }
+            #[cfg(not(feature = "sandbox"))]
+            self.unimplemented.push(format!(
+                "the OS sandbox {} asks for: build adk-harness with feature `sandbox` (spec 3.1 §9.2 I24)",
+                crate::config::HARNESS_CONFIG_FILE
+            ));
+        }
+        if config.fail_if_unavailable {
+            self.shell.fail_if_unavailable = true;
+        }
+        for note in &config.notes {
+            tracing::warn!(note = %note, "harness.toml setting ignored");
+        }
+        self
+    }
+
     /// Runs sandboxed commands without approval in Ask (spec 3.1 §7.9, §9.2 I26).
     ///
     /// Turns on only under an active OS sandbox whose enforcer keeps protected paths

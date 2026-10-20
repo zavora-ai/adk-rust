@@ -31,7 +31,7 @@ pub struct TemplateRegistry {
 impl TemplateRegistry {
     /// Build the default registry with all built-in templates.
     ///
-    /// Populates 13 agent templates, 10 capability addons, 5 enterprise patterns,
+    /// Populates 14 agent templates, 10 capability addons, 5 enterprise patterns,
     /// and 2 legacy aliases.
     pub fn builtin() -> Self {
         Self {
@@ -173,7 +173,7 @@ fn parse_custom_template(content: &str) -> Result<AgentTemplate, String> {
 // Built-in data population
 // ---------------------------------------------------------------------------
 
-/// All 13 built-in agent templates.
+/// All 14 built-in agent templates.
 fn builtin_agent_templates() -> Vec<AgentTemplate> {
     vec![
         AgentTemplate {
@@ -694,8 +694,261 @@ pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
                 additional_files: vec![],
             },
         },
+        AgentTemplate {
+            name: "harness",
+            description: "Governed harness agent: modes, approvals, shell, todos, AGENTS.md and skills, at the console or served",
+            category: TemplateCategory::AgentType,
+            default_provider: "gemini",
+            required_features: vec!["minimal", "harness", "cli"],
+            // The launcher serves the harness itself (`cargo run -- serve`). A container
+            // would serve it beyond loopback, which the launcher refuses without an
+            // authenticating extractor, so `docker` is left out until it can pass one.
+            incompatible_addons: vec!["server", "docker"],
+            additional_deps: vec![
+                DependencySpec {
+                    crate_name: "adk-session",
+                    version: ADK_VERSION,
+                    features: vec!["sqlite"],
+                },
+                DependencySpec {
+                    crate_name: "adk-devtools",
+                    version: ADK_VERSION,
+                    features: vec![],
+                },
+            ],
+            code_fragments: AgentCodeFragments {
+                // `Arc` and `HarnessAgent` come from the prelude.
+                imports: vec![
+                    "use adk_rust::harness::{ConsoleIo, ConsolePrompter, HarnessConfig, HarnessLauncher};",
+                    "use adk_session::SqliteSessionService;",
+                ],
+                agent_construction: r#"// Conversations survive restarts in .adk/state.db.
+    let sessions = Arc::new(SqliteSessionService::new("sqlite://.adk/state.db?mode=rwc").await?);
+    sessions.migrate().await?;
+
+    // One terminal reader serves the REPL and the approval prompts.
+    let console = ConsoleIo::terminal()?;
+    let harness = HarnessAgent::builder("{name}")
+        .model(Arc::new(model))
+        .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
+        .prompter(Arc::new(ConsolePrompter::new(console.clone())))
+        .config(HarnessConfig::discover(".")?) // .adk/harness.toml
+        .build()?;
+
+    // `cargo run` is the REPL; `cargo run -- serve` serves the harness on 127.0.0.1:8080.
+    HarnessLauncher::new(harness)
+        .with_session_service(sessions)
+        .with_console(console)
+        .run()
+        .await?;"#,
+                additional_files: vec![
+                    FileFragment { path: "AGENTS.md", content: HARNESS_AGENTS_MD },
+                    FileFragment {
+                        path: ".skills/example/SKILL.md",
+                        content: HARNESS_EXAMPLE_SKILL,
+                    },
+                    FileFragment { path: ".adk/harness.toml", content: HARNESS_TOML },
+                    FileFragment { path: "tests/harness_smoke.rs", content: HARNESS_SMOKE_TEST },
+                    FileFragment { path: ".gitignore", content: HARNESS_GITIGNORE },
+                    // Replaces the generic README with the harness's modes, files and commands.
+                    FileFragment { path: "README.md", content: HARNESS_README },
+                ],
+            },
+        },
     ]
 }
+
+/// `AGENTS.md` skeleton for the `harness` template (spec 3.1 §7.7, §8.3).
+const HARNESS_AGENTS_MD: &str = r##"# {name}
+
+Instructions for the agent that works in this project. The harness loads this file once
+you trust the workspace (it asks the first time); the file shapes what the agent tries
+and cannot grant it any permission.
+
+## Project
+
+- What the project is, and where its code, tests and docs live.
+
+## Commands
+
+- Build: `cargo build`
+- Test: `cargo test`
+- Lint: `cargo clippy -- -D warnings`
+
+## Conventions
+
+- Run the tests after every change.
+"##;
+
+/// A skill valid for `adk-rust skills validate` (spec 3.1 §7.8, §8.3).
+const HARNESS_EXAMPLE_SKILL: &str = r##"---
+name: example
+description: Example procedure for this project. Replace it with one the agent should follow, such as cutting a release or running the integration tests.
+---
+
+# Example
+
+The harness lists this skill to the model by its name and description, and loads this
+body when the model asks for it with `load_skill`.
+
+1. Read `AGENTS.md` for the project's commands.
+2. Run `cargo test` and report the result.
+"##;
+
+/// `.adk/harness.toml` for the `harness` template (spec 3.1 §8.3, §8.5).
+const HARNESS_TOML: &str = r##"# Harness settings for this project, read by `HarnessConfig::discover` in src/main.rs.
+#
+# This file sits in the workspace the agent works in, so it can only tighten: a stricter
+# mode, the OS sandbox, and fail_if_unavailable. Team members and packs are set in
+# src/main.rs (`HarnessAgentBuilder::member`, `HarnessAgentBuilder::pack`).
+
+# read_only, plan, ask (the default) or auto; applied when stricter than the mode in code.
+mode = "ask"
+
+# Run bash in the OS sandbox (Seatbelt on macOS, bubblewrap on Linux).
+sandbox = false
+
+# Refuse to start when the sandbox is unavailable, instead of running bash on the host
+# behind approvals. Needs sandbox = true.
+# fail_if_unavailable = true
+
+# Read by deployment tooling, not by the harness: a deployed harness runs in plan mode and
+# denies calls no person can approve.
+[deploy]
+mode = "plan"
+yes_policy = "deny"
+"##;
+
+/// The `harness` template's smoke test: a scripted model in Plan mode, no API key
+/// (spec 3.1 §8.3).
+const HARNESS_SMOKE_TEST: &str = r##"//! The harness refuses a write in Plan mode. A scripted model plays the agent, so the
+//! test needs no API key: `cargo test`.
+
+use std::sync::Arc;
+
+use adk_rust::futures::StreamExt;
+use adk_rust::harness::{HarnessAgent, HarnessMode, InstructionsConfig};
+use adk_rust::model::{ScriptedLlm, ScriptedResponse};
+use adk_rust::serde_json::json;
+use adk_rust::session::InMemorySessionService;
+use adk_rust::{Part, UserId};
+
+#[tokio::test]
+async fn plan_mode_refuses_a_scripted_write() -> anyhow::Result<()> {
+    let dir = std::env::temp_dir().join(format!("{name}-smoke-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let model = ScriptedLlm::new(
+        "scripted",
+        vec![
+            ScriptedResponse::function_call(
+                "write_file",
+                json!({ "path": "notes.txt", "content": "hello" }),
+            ),
+            ScriptedResponse::text("Planned."),
+        ],
+    );
+    let harness = HarnessAgent::builder("{name}")
+        .model(Arc::new(model))
+        .workspace(adk_devtools::Workspace::new(&dir))
+        .project_instructions(InstructionsConfig { user_file: None, ..InstructionsConfig::default() })
+        .mode(HarnessMode::Plan)
+        .build()?
+        .into_harness("{name}", Arc::new(InMemorySessionService::new()))?;
+
+    let user = UserId::new("user")?;
+    let session = harness.open_session(&user, None).await?;
+    let mut events = harness.send(&user, &session, "write a note").await?;
+    let mut refused = None;
+    while let Some(event) = events.next().await {
+        for part in event?.llm_response.content.iter().flat_map(|content| &content.parts) {
+            if let Part::FunctionResponse { function_response, .. } = part
+                && function_response.name == "write_file"
+            {
+                refused = function_response.response.get("error").cloned();
+            }
+        }
+    }
+
+    assert!(!dir.join("notes.txt").exists(), "Plan mode wrote a file");
+    assert!(refused.is_some(), "write_file was not answered with an error");
+    std::fs::remove_dir_all(&dir).ok();
+    Ok(())
+}
+"##;
+
+/// `.gitignore` for the `harness` template: the base entries and the session database.
+const HARNESS_GITIGNORE: &str = r##"/target
+.env
+*.swp
+*.swo
+*~
+.DS_Store
+# Sessions of the harness (src/main.rs)
+.adk/state.db*
+"##;
+
+/// Project README for the `harness` template (spec 3.1 §8.3).
+const HARNESS_README: &str = r##"# {name}
+
+A governed harness agent built on `adk-rust`'s `harness` feature: file and shell tools,
+todos, plan mode, project instructions and skills, with every tool call passing one
+governed path of modes and approvals.
+
+## Quick start
+
+```bash
+cp .env.example .env    # add your API key
+cargo run               # the harness REPL in this directory
+cargo test              # the scripted smoke test, no API key needed
+```
+
+`cargo run` starts in the `ask` mode: reads run freely, and every edit and shell command
+asks first:
+
+```text
+[y] allow once  [a] always allow…  [n] deny (reason)  [e] edit args  [?] details
+```
+
+Type `/help` in the REPL for the slash commands (`/mode`, `/todos`, `/rules`,
+`/approvals`, `/plan`, `/session`, `/skills`, …).
+
+## Modes
+
+| Mode | What runs without asking |
+|------|--------------------------|
+| `read_only` | Reads and todos; nothing else runs |
+| `plan` | Reads, todos and `exit_plan_mode`, which proposes a plan for approval |
+| `ask` | Reads and todos; edits and shell commands ask first |
+| `auto` | Reads, todos and edits in the workspace; host shell commands still ask |
+
+`/mode` switches the session's mode. The model leaves plan mode only through
+`exit_plan_mode`, which a person approves.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `src/main.rs` | Builds the harness and runs it with `HarnessLauncher` |
+| `.adk/harness.toml` | Project settings: mode and sandbox; it can only tighten |
+| `AGENTS.md` | Project instructions, loaded once you trust the workspace |
+| `.skills/example/SKILL.md` | An example skill, loaded on demand |
+| `tests/harness_smoke.rs` | Asserts Plan mode refuses a scripted write |
+| `.adk/state.db` | The sessions, created on the first run (git-ignored) |
+
+## Serving
+
+```bash
+cargo run -- serve --port 8080
+```
+
+serves the harness on `127.0.0.1:8080`; approvals are asked in the terminal that runs
+the server.
+
+## Resources
+
+- [Harness documentation](https://github.com/zavora-ai/adk-rust/tree/main/docs/official_docs/harness)
+- [ADK-Rust documentation](https://docs.rs/adk-rust)
+"##;
 
 /// Multi-stage container build: `rust:1.95-slim` build stage, distroless
 /// runtime. Shared by the `docker` addon and the `agent-engine` template so
@@ -1276,6 +1529,44 @@ mod tests {
         // Aliases resolve to real targets.
         assert_eq!(registry.resolve_template("basic").unwrap().name, "llm");
         assert_eq!(registry.resolve_pattern("a2a").unwrap().name, "a2a-server");
+    }
+
+    #[test]
+    fn harness_template_is_registered_with_its_project_files() {
+        let registry = TemplateRegistry::builtin();
+        let template = registry.resolve_template("harness").expect("harness template registered");
+
+        assert_eq!(template.required_features, vec!["minimal", "harness", "cli"]);
+        // The launcher serves the harness; a container cannot authenticate it yet.
+        assert_eq!(template.incompatible_addons, vec!["server", "docker"]);
+        let deps: Vec<(&str, Vec<&str>)> = template
+            .additional_deps
+            .iter()
+            .map(|dep| (dep.crate_name, dep.features.clone()))
+            .collect();
+        assert_eq!(deps, vec![("adk-session", vec!["sqlite"]), ("adk-devtools", vec![])]);
+
+        let paths: Vec<&str> =
+            template.code_fragments.additional_files.iter().map(|f| f.path).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "AGENTS.md",
+                ".skills/example/SKILL.md",
+                ".adk/harness.toml",
+                "tests/harness_smoke.rs",
+                ".gitignore",
+                "README.md",
+            ]
+        );
+
+        // The project file is TOML a workspace may set: a mode, the sandbox, `[deploy]`.
+        let config: toml::Value = HARNESS_TOML.parse().expect(".adk/harness.toml parses");
+        let keys: Vec<&str> = config.as_table().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, vec!["deploy", "mode", "sandbox"]);
+        assert_eq!(config["mode"].as_str(), Some("ask"));
+        // The skill has the frontmatter `adk-rust skills validate` requires.
+        assert!(HARNESS_EXAMPLE_SKILL.starts_with("---\nname: example\ndescription: "));
     }
 
     #[test]

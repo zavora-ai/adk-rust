@@ -37,6 +37,7 @@ cargo adk new my-agent --template rag        # RAG with vector search
 cargo adk new my-agent --template api        # REST API server
 cargo adk new my-agent --template graph      # graph-based workflow
 cargo adk new my-agent --template realtime   # realtime voice/audio agent
+cargo adk new my-agent --template harness    # governed harness: REPL with approvals
 
 # Compose with addons
 cargo adk new my-agent --template tools --addon telemetry --addon auth
@@ -180,6 +181,7 @@ Responses are scored with `adk_eval::Evaluator` against `--criteria` (an `Evalua
 | `api` | REST API server exposing the agent over HTTP |
 | `agent-engine` | Gemini Enterprise Agent Engine BYOC container: `serve_agent_engine` binary, `Dockerfile`, and `deploy/terraform/` |
 | `openai` | OpenAI-powered LLM agent |
+| `harness` | The governed harness: `HarnessAgent` over SQLite sessions run by `HarnessLauncher` (`cargo run` is the REPL with approvals, `cargo run -- serve` serves it), `.adk/harness.toml`, an `AGENTS.md` skeleton, an example skill, and a scripted smoke test |
 | `managed-agents` | Anthropic Managed Agents session with SSE streaming |
 
 Each template generates `Cargo.toml` with the right dependencies and features, a `src/main.rs` that compiles and runs, `.env.example` with the required API key variables, `README.md`, and `.gitignore`.

@@ -32,6 +32,10 @@ templates=(
   "a2a:gemini"
   "tools:gemini:telemetry,sessions"
   "llm:gemini:server,sessions"
+  "harness:gemini"
+  "harness:openai"
+  "harness:anthropic"
+  "harness:gemini:telemetry,mcp"
 )
 
 for entry in "${templates[@]}"; do
@@ -73,8 +77,13 @@ adk-anthropic = { path = "$ROOT/adk-anthropic" }
 adk-rust-macros = { path = "$ROOT/adk-rust-macros" }
 adk-graph = { path = "$ROOT/adk-graph" }
 adk-realtime = { path = "$ROOT/adk-realtime" }
+adk-devtools = { path = "$ROOT/adk-devtools" }
 PATCH
 
     CARGO_TARGET_DIR="$CHECK_TARGET_DIR" cargo check --manifest-path "$name/Cargo.toml"
+    # The harness template ships a scripted smoke test that needs no API key.
+    if [[ "$template" == "harness" ]]; then
+      CARGO_TARGET_DIR="$CHECK_TARGET_DIR" cargo test --manifest-path "$name/Cargo.toml"
+    fi
   )
 done

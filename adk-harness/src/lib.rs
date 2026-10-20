@@ -12,6 +12,7 @@
 //! | Item | Spec |
 //! |---|---|
 //! | [`HarnessAgentBuilder`], [`HarnessAgent`], [`Harness`] | §7.2, §7.3 |
+//! | [`HarnessConfig`] (`.adk/harness.toml`) | §8.3 |
 //! | [`HarnessMode`], [`ModeStore`], [`ExitPlanModeTool`] | §7.4 |
 //! | [`StandingRule`], [`StandingRuleStore`], [`PromptingConfirmationHandler`] | §7.5 |
 //! | [`HarnessPolicy`], [`ToolKind`], [`MODE_TABLE`] | §7.4, §9 |
@@ -49,6 +50,7 @@
 mod agent;
 mod audit;
 mod builder;
+mod config;
 #[cfg(feature = "memory")]
 mod facts;
 mod fsutil;
@@ -95,6 +97,7 @@ pub use approvals::{
 #[cfg(feature = "observe")]
 pub use builder::LoopGuard;
 pub use builder::{HarnessAgentBuilder, Pack};
+pub use config::{HARNESS_CONFIG_FILE, HarnessConfig};
 #[cfg(feature = "memory-embeddings")]
 pub use facts::RagEmbedder;
 #[cfg(all(feature = "memory", feature = "sqlite"))]

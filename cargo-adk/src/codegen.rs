@@ -221,7 +221,7 @@ pub fn generate_main_rs_with_registry(
     // When nothing serves (no server addon, template doesn't start its own
     // server), run the agent in the interactive console so `cargo run` does
     // something useful out of the box.
-    const SELF_SERVING_TEMPLATES: &[&str] = &["api", "agent-engine", "realtime"];
+    const SELF_SERVING_TEMPLATES: &[&str] = &["api", "agent-engine", "realtime", "harness"];
     let has_server_addon = manifest.addons.iter().any(|a| a == "server");
     let interactive =
         !has_server_addon && !SELF_SERVING_TEMPLATES.contains(&manifest.template_name.as_str());
@@ -873,6 +873,71 @@ mod tests {
         assert!(readme.contains("terraform -chdir=deploy/terraform apply"));
         assert!(readme.contains("GOOGLE_CLOUD_AGENT_ENGINE_ID"));
         assert!(readme.contains("/.well-known/agent-card.json"), "README documents the A2A option");
+    }
+
+    #[test]
+    fn harness_template_generates_a_self_serving_harness_project() {
+        let manifest = resolve_composition(&registry(), "harness", &[], "gemini").unwrap();
+        let files = generate_project(&manifest, "demo");
+        let file = |path: &str| {
+            let matching: Vec<_> = files.iter().filter(|f| f.path == path).collect();
+            assert_eq!(matching.len(), 1, "expected exactly one '{path}'");
+            matching[0].content.as_str()
+        };
+
+        let main_rs = file("src/main.rs");
+        for expected in [
+            "use adk_rust::prelude::*;",
+            "use adk_rust::harness::{ConsoleIo, ConsolePrompter, HarnessConfig, HarnessLauncher};",
+            "SqliteSessionService::new(\"sqlite://.adk/state.db?mode=rwc\").await?",
+            "sessions.migrate().await?;",
+            "HarnessAgent::builder(\"demo\")",
+            ".workspace(adk_devtools::Workspace::new(\".\").allow_bash(true))",
+            ".prompter(Arc::new(ConsolePrompter::new(console.clone())))",
+            ".config(HarnessConfig::discover(\".\")?)",
+            "HarnessLauncher::new(harness)",
+            ".with_session_service(sessions)",
+            "GeminiModel::new(&api_key, \"gemini-3.7-flash\")?",
+        ] {
+            assert!(main_rs.contains(expected), "missing `{expected}` in:\n{main_rs}");
+        }
+        // The launcher is the console and the server; nothing else runs the agent.
+        assert!(!main_rs.contains("Launcher::new(agent)"), "{main_rs}");
+
+        let cargo_toml = file("Cargo.toml");
+        for feature in ["\"minimal\"", "\"harness\"", "\"cli\"", "\"gemini\""] {
+            assert!(cargo_toml.contains(feature), "missing {feature} in:\n{cargo_toml}");
+        }
+        assert!(cargo_toml.contains(&format!(
+            "adk-session = {{ version = \"{ADK_VERSION}\", features = [\"sqlite\"] }}"
+        )));
+        assert!(cargo_toml.contains(&format!("adk-devtools = \"{ADK_VERSION}\"")));
+
+        assert!(file(".gitignore").contains(".adk/state.db*"));
+        assert!(file(".gitignore").contains(".env"));
+        assert!(file("tests/harness_smoke.rs").contains("HarnessAgent::builder(\"demo\")"));
+        assert!(file("tests/harness_smoke.rs").contains(".mode(HarnessMode::Plan)"));
+        assert!(file("README.md").starts_with("# demo\n"));
+        assert!(file("AGENTS.md").starts_with("# demo\n"));
+        assert!(file(".adk/harness.toml").contains("[deploy]"));
+        assert!(file(".skills/example/SKILL.md").contains("name: example"));
+    }
+
+    #[test]
+    fn harness_template_composes_with_every_provider_and_refuses_a_second_server() {
+        for provider in ["gemini", "openai", "anthropic"] {
+            let manifest = resolve_composition(&registry(), "harness", &[], provider).unwrap();
+            assert!(manifest.feature_set.contains(provider), "{provider}");
+        }
+        let manifest =
+            resolve_composition(&registry(), "harness", &["telemetry", "mcp"], "gemini").unwrap();
+        assert!(manifest.feature_set.contains("mcp"));
+        for addon in ["server", "docker"] {
+            assert!(
+                resolve_composition(&registry(), "harness", &[addon], "gemini").is_err(),
+                "{addon} must be refused"
+            );
+        }
     }
 
     #[test]
