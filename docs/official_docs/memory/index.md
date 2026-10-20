@@ -51,8 +51,10 @@ transcript-style recall or a clean, queryable model of the user.
   actually calls.
 - The **Runner** holds the `Memory` and exposes it to the agent's tools
   (`ToolContext::search_memory`); **memory tools** let the agent search and curate
-  memory deliberately. Nothing is written to memory automatically: your code calls
+  memory deliberately. The `Runner` writes nothing to memory: your code calls
   `add_session` or `add_entry`, or the agent uses the graph tools.
+  `IntegratedRealtimeRunner` stores each completed turn unless
+  `IntegrationConfig::store_to_memory` is off.
 
 ## Install
 

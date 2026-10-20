@@ -183,6 +183,7 @@ fn main() -> Result<(), adk_anthropic::Error> {
 | Streaming request | `with_timeout` bounds the wait for response headers; the body has no total bound |
 | Stalled stream | The stream yields `Error::Timeout` and ends after 30 seconds without data |
 | Total stream bound | Opt in with `with_stream_timeout(Some(duration))` |
+| Byte-inactivity mode | `with_http_timeouts(connect, idle)` replaces the total request bound with connection and HTTP-byte inactivity limits; SSE comments count as activity |
 | Mid-stream `error` event | `AccumulatingStream` yields it as `Err` (`overloaded_error` → `Error::ServiceUnavailable`, `rate_limit_error` → `Error::RateLimit`) and sends the error, not the partial message, through its channel |
 | Unknown SSE event type | Logged at `debug` and surfaced as `MessageStreamEvent::Unknown` with its JSON payload |
 | Unknown content block, delta, or stop reason | Deserialized to `ContentBlock::Unknown`, `ContentBlockDelta::Unknown`, or `StopReason::Unknown` with the raw value; the message still parses |
@@ -204,6 +205,11 @@ fn main() -> Result<(), adk_anthropic::Error> {
 
 `Debug` output of `Anthropic`, `ManagedAgentsClient`, and `FilesClient` redacts
 the API key, and the `x-api-key` header is marked sensitive.
+
+`cargo run -p adk-anthropic --example transport_timeouts` configures a 10-second
+connection limit and a 300-second inactivity limit without sending a request.
+`Error::retry_after()` reads server delays, including HTTP-date headers. HTTP 529
+remains `Error::RateLimit`; `status_code()` preserves its original value.
 
 Run any example with `cargo run -p adk-anthropic --example <name>`:
 

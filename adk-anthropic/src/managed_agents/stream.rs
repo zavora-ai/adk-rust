@@ -130,6 +130,7 @@ where
                 Err(_elapsed) => {
                     // Timeout — yield timeout error, stream continues
                     let err = Error::Timeout {
+                        status_code: None,
                         message: format!(
                             "no data received on SSE stream within {} seconds",
                             state.timeout.as_secs()

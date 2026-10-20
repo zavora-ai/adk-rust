@@ -113,6 +113,7 @@ dependencies = [
  "chrono",
  "futures",
  "httpdate",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

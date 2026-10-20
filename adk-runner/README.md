@@ -206,8 +206,8 @@ fn compacting(
         .agent(agent)
         .session_service(sessions)
         .compaction_config(EventsCompactionConfig {
-            compaction_interval: 3, // compact every 3 invocations
-            overlap_size: 1,        // keep 1 event of overlap for continuity
+            compaction_interval: 3, // when the user-message count is a multiple of 3
+            overlap_size: 1,        // leave the latest invocation out of the summary
             summarizer: Arc::new(LlmEventSummarizer::new(summarizer_model)),
         })
         .build()

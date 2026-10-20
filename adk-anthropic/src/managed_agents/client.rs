@@ -1707,15 +1707,18 @@ fn map_api_error(status: reqwest::StatusCode, body: &str) -> Error {
         401 => Error::Authentication { message },
         403 => Error::Permission { message },
         404 => Error::NotFound { message, resource_type: None, resource_id: None },
-        408 => Error::Timeout { message, duration: None },
-        429 => Error::RateLimit { message, retry_after: None },
-        500 => Error::InternalServer { message, request_id: None },
-        502..=504 => Error::ServiceUnavailable { message, retry_after: None },
+        408 => Error::Timeout { status_code: Some(408), message, duration: None },
+        429 => Error::RateLimit { status_code: 429, message, retry_after: None },
+        500 => Error::InternalServer { message, request_id: None, retry_after: None },
+        502..=504 => {
+            Error::ServiceUnavailable { status_code: status.as_u16(), message, retry_after: None }
+        }
         _ => Error::Api {
             status_code: status.as_u16(),
             error_type: Some(error_type),
             message,
             request_id: None,
+            retry_after: None,
         },
     }
 }

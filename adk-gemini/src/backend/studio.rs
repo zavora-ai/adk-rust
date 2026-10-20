@@ -138,8 +138,13 @@ impl StudioBackend {
     async fn check_response(response: Response) -> Result<Response, Error> {
         let status = response.status();
         if !status.is_success() {
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
             let description = response.text().await.ok();
-            BadResponseSnafu { code: status.as_u16(), description }.fail()
+            BadResponseSnafu { code: status.as_u16(), description, retry_after }.fail()
         } else {
             Ok(response)
         }
@@ -194,6 +199,7 @@ impl StudioBackend {
                 v.to_str().map(str::to_string).map_err(|_| Error::BadResponse {
                     code: 500,
                     description: Some("Missing upload URL in response".to_string()),
+                    retry_after: None,
                 })
             })
             .and_then(|url| Url::parse(&url).context(UrlParseSnafu))
@@ -669,6 +675,32 @@ impl GeminiBackend for StudioBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn preserves_raw_retry_after() {
+        for header in [Some("7"), Some("Wed, 21 Oct 2037 07:28:00 GMT"), Some("invalid"), None] {
+            let server = wiremock::MockServer::start().await;
+            let mut response = wiremock::ResponseTemplate::new(503).set_body_string("fixture");
+            if let Some(value) = header {
+                response = response.insert_header("retry-after", value);
+            }
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            let response = reqwest::get(server.uri()).await.unwrap();
+            let error = StudioBackend::check_response(response).await.unwrap_err();
+            match error {
+                Error::BadResponse { code, description, retry_after } => {
+                    assert_eq!(code, 503);
+                    assert_eq!(description.as_deref(), Some("fixture"));
+                    assert_eq!(retry_after.as_deref(), header);
+                }
+                other => panic!("expected an HTTP failure, got {other:?}"),
+            }
+        }
+    }
 
     #[test]
     fn detect_vertex_url_regional() {

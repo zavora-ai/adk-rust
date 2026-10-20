@@ -316,8 +316,14 @@ fn map_api_error(status: reqwest::StatusCode, body: &str) -> Error {
         403 => Error::Permission { message },
         404 => Error::NotFound { message, resource_type: None, resource_id: None },
         413 => Error::BadRequest { message: format!("file too large: {message}"), param: None },
-        429 => Error::RateLimit { message, retry_after: None },
-        code => Error::Api { status_code: code, error_type, message, request_id: None },
+        429 => Error::RateLimit { status_code: 429, message, retry_after: None },
+        code => Error::Api {
+            status_code: code,
+            error_type,
+            message,
+            request_id: None,
+            retry_after: None,
+        },
     }
 }
 

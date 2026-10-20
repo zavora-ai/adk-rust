@@ -707,7 +707,7 @@ mod tests {
 
         let stream_error = items.last().expect("stream yields items").as_ref().unwrap_err();
         assert!(
-            matches!(stream_error, Error::ServiceUnavailable { message, retry_after: None } if message == "Overloaded"),
+            matches!(stream_error, Error::ServiceUnavailable { message, retry_after: None, .. } if message == "Overloaded"),
             "unexpected stream error: {stream_error:?}"
         );
         assert!(stream_error.is_retryable());

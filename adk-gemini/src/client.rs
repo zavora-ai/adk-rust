@@ -333,12 +333,27 @@ pub enum Error {
     },
 
     /// The server returned a non-success HTTP status code.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_gemini::ClientError;
+    ///
+    /// let error = ClientError::BadResponse {
+    ///     code: 503,
+    ///     description: None,
+    ///     retry_after: Some("7".into()),
+    /// };
+    /// assert!(matches!(error, ClientError::BadResponse { retry_after: Some(_), .. }));
+    /// ```
     #[snafu(display("bad response from server; code {code}; description: {}", description.as_deref().unwrap_or("none")))]
     BadResponse {
         /// The HTTP status code.
         code: u16,
         /// An optional error description from the server.
         description: Option<String>,
+        /// The unparsed Retry-After header, for the caller's retry policy.
+        retry_after: Option<String>,
     },
 
     /// A successful (2xx) response, or one event of a response stream, carried a
@@ -527,6 +542,31 @@ pub enum Error {
         /// Description of the validation failure.
         message: String,
     },
+}
+
+impl Error {
+    /// Returns the underlying HTTP transport failure, when present.
+    ///
+    /// API responses, JSON errors and SSE framing errors return `None`. This
+    /// preserves `reqwest::Error::is_timeout` through the SSE transport wrapper.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_gemini::ClientError;
+    ///
+    /// let error = ClientError::Validation { message: "invalid request".into() };
+    /// assert!(error.request_error().is_none());
+    /// ```
+    pub fn request_error(&self) -> Option<&reqwest::Error> {
+        match self {
+            Self::PerformRequestNew { source }
+            | Self::PerformRequest { source, .. }
+            | Self::BadPart { source: EventStreamError::Transport(source) } => Some(source),
+            Self::DecodeResponse { source } if source.is_timeout() => Some(source),
+            _ => None,
+        }
+    }
 }
 
 /// Logs a failed call by its kind and status.

@@ -22,6 +22,8 @@ pub enum Error {
         message: String,
         /// Request ID for debugging and support.
         request_id: Option<String>,
+        /// Server-suggested retry delay in seconds.
+        retry_after: Option<u64>,
     },
 
     /// Authentication error.
@@ -48,6 +50,8 @@ pub enum Error {
 
     /// Rate limit exceeded.
     RateLimit {
+        /// Actual HTTP status, including 529 overload responses.
+        status_code: u16,
         /// Human-readable error message.
         message: String,
         /// Time to wait before retrying, in seconds.
@@ -64,6 +68,8 @@ pub enum Error {
 
     /// API timeout error.
     Timeout {
+        /// HTTP status for a server timeout, absent for local transport timeouts.
+        status_code: Option<u16>,
         /// Human-readable error message.
         message: String,
         /// Duration of the timeout in seconds.
@@ -90,10 +96,14 @@ pub enum Error {
         message: String,
         /// Request ID for debugging and support.
         request_id: Option<String>,
+        /// Server-suggested retry delay in seconds.
+        retry_after: Option<u64>,
     },
 
     /// Server is overloaded or unavailable.
     ServiceUnavailable {
+        /// Actual HTTP status of the unavailable response.
+        status_code: u16,
         /// Human-readable error message.
         message: String,
         /// Time to wait before retrying, in seconds.
@@ -177,7 +187,7 @@ impl Error {
         message: String,
         request_id: Option<String>,
     ) -> Self {
-        Error::Api { status_code, error_type, message, request_id }
+        Error::Api { status_code, error_type, message, request_id, retry_after: None }
     }
 
     /// Creates a new authentication error.
@@ -201,7 +211,7 @@ impl Error {
 
     /// Creates a new rate limit error.
     pub fn rate_limit(message: impl Into<String>, retry_after: Option<u64>) -> Self {
-        Error::RateLimit { message: message.into(), retry_after }
+        Error::RateLimit { status_code: 429, message: message.into(), retry_after }
     }
 
     /// Creates a new bad request error.
@@ -211,7 +221,7 @@ impl Error {
 
     /// Creates a new timeout error.
     pub fn timeout(message: impl Into<String>, duration: Option<f64>) -> Self {
-        Error::Timeout { message: message.into(), duration }
+        Error::Timeout { status_code: None, message: message.into(), duration }
     }
 
     /// Creates a new abort error.
@@ -229,12 +239,12 @@ impl Error {
 
     /// Creates a new internal server error.
     pub fn internal_server(message: impl Into<String>, request_id: Option<String>) -> Self {
-        Error::InternalServer { message: message.into(), request_id }
+        Error::InternalServer { message: message.into(), request_id, retry_after: None }
     }
 
-    /// Creates a new service unavailable error.
+    /// Creates an Anthropic overloaded-service error (HTTP 529).
     pub fn service_unavailable(message: impl Into<String>, retry_after: Option<u64>) -> Self {
-        Error::ServiceUnavailable { message: message.into(), retry_after }
+        Error::ServiceUnavailable { status_code: 529, message: message.into(), retry_after }
     }
 
     /// Creates a new serialization error.
@@ -373,10 +383,36 @@ impl Error {
         }
     }
 
+    /// Returns the server-suggested retry delay in seconds.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// let error = adk_anthropic::Error::rate_limit("Busy", Some(7));
+    /// assert_eq!(error.retry_after(), Some(7));
+    /// ```
+    pub fn retry_after(&self) -> Option<u64> {
+        match self {
+            Self::Api { retry_after, .. }
+            | Self::RateLimit { retry_after, .. }
+            | Self::InternalServer { retry_after, .. }
+            | Self::ServiceUnavailable { retry_after, .. } => *retry_after,
+            _ => None,
+        }
+    }
+
     /// Returns the status code associated with this error, if any.
     pub fn status_code(&self) -> Option<u16> {
         match self {
-            Error::Api { status_code, .. } => Some(*status_code),
+            Error::Api { status_code, .. }
+            | Error::RateLimit { status_code, .. }
+            | Error::ServiceUnavailable { status_code, .. } => Some(*status_code),
+            Error::Timeout { status_code, .. } => *status_code,
+            Error::InternalServer { .. } => Some(500),
+            Error::Authentication { .. } => Some(401),
+            Error::Permission { .. } => Some(403),
+            Error::NotFound { .. } => Some(404),
+            Error::BadRequest { .. } => Some(400),
             _ => None,
         }
     }
@@ -419,7 +455,7 @@ impl fmt::Display for Error {
 
                 write!(f, "{prefix}: {message}{suffix}")
             }
-            Error::RateLimit { message, retry_after } => {
+            Error::RateLimit { message, retry_after, .. } => {
                 if let Some(retry_after) = retry_after {
                     write!(f, "Rate limit exceeded: {message} (retry after {retry_after} seconds)")
                 } else {
@@ -433,7 +469,7 @@ impl fmt::Display for Error {
                     write!(f, "Bad request: {message}")
                 }
             }
-            Error::Timeout { message, duration } => {
+            Error::Timeout { message, duration, .. } => {
                 if let Some(duration) = duration {
                     write!(f, "Timeout error: {message} ({duration} seconds)")
                 } else {
@@ -446,14 +482,14 @@ impl fmt::Display for Error {
             Error::Connection { message, .. } => {
                 write!(f, "Connection error: {message}")
             }
-            Error::InternalServer { message, request_id } => {
+            Error::InternalServer { message, request_id, .. } => {
                 if let Some(request_id) = request_id {
                     write!(f, "Internal server error: {message} (Request ID: {request_id})")
                 } else {
                     write!(f, "Internal server error: {message}")
                 }
             }
-            Error::ServiceUnavailable { message, retry_after } => {
+            Error::ServiceUnavailable { message, retry_after, .. } => {
                 if let Some(retry_after) = retry_after {
                     write!(f, "Service unavailable: {message} (retry after {retry_after} seconds)")
                 } else {

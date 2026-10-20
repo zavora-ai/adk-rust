@@ -307,8 +307,8 @@ async fn preserves_parallel_arguments_and_rejects_truncation() {
 }
 
 #[tokio::test]
-async fn rejects_failed_unknown_and_nonterminal_statuses() {
-    for status in ["failed", "cancelled", "queued", "in_progress", SECRET] {
+async fn rejects_unknown_and_nonterminal_statuses() {
+    for status in ["cancelled", "queued", "in_progress", SECRET] {
         let mut value = response(json!([]));
         value["status"] = json!(status);
         value["error"] = json!({"code":SECRET,"message":SECRET});
@@ -334,13 +334,22 @@ async fn rejects_failed_unknown_and_nonterminal_statuses() {
 }
 
 #[tokio::test]
-async fn failures_keep_documented_codes_and_their_categories() {
+async fn failures_keep_known_codes_and_their_categories() {
     use adk_core::ErrorCategory;
 
     for (code, category) in [
         ("rate_limit_exceeded", ErrorCategory::RateLimited),
         ("server_error", ErrorCategory::Unavailable),
         ("vector_store_timeout", ErrorCategory::Timeout),
+        ("stream_timeout", ErrorCategory::Timeout),
+        ("invalid_prompt", ErrorCategory::InvalidInput),
+        ("invalid_api_key", ErrorCategory::Unauthorized),
+        ("insufficient_quota", ErrorCategory::InvalidInput),
+        ("credit_balance_exhausted", ErrorCategory::InvalidInput),
+        ("organization_spend_limit_exceeded", ErrorCategory::InvalidInput),
+        ("project_spend_limit_exceeded", ErrorCategory::InvalidInput),
+        ("context_length_exceeded", ErrorCategory::InvalidInput),
+        ("content_policy_violation", ErrorCategory::InvalidInput),
         ("invalid_image_url", ErrorCategory::InvalidInput),
     ] {
         let mut failed = response(json!([]));
@@ -348,16 +357,101 @@ async fn failures_keep_documented_codes_and_their_categories() {
         failed["error"] = json!({"code":code, "message":SECRET});
         for error in [
             unary(&failed).await.unwrap_err(),
-            events(&[json!({"type":"response.failed", "response":failed})]).await.unwrap_err(),
-            events(&[json!({"type":"error", "code":code, "message":SECRET})]).await.unwrap_err(),
+            events(&[json!({"type":"response.failed", "response":failed.clone()})])
+                .await
+                .unwrap_err(),
+            events(&[json!({"type":"response.failed", "response":{"error":failed["error"]}})])
+                .await
+                .unwrap_err(),
+            events(&[json!({"type":"error", "error":{"code":code,"message":SECRET}})])
+                .await
+                .unwrap_err(),
+            generate(
+                format!(
+                    "event: error\ndata: {}\n\n",
+                    json!({"type":"error","sequence_number":0,
+                "code":code,"message":SECRET,"param":null})
+                ),
+                true,
+            )
+            .await
+            .unwrap_err(),
         ] {
             assert_eq!(error.code, "model.openai_responses.response_failed");
             assert_eq!(error.category, category, "{code}");
-            assert_eq!(error.is_retryable(), category != ErrorCategory::InvalidInput, "{code}");
+            assert_eq!(
+                error.is_retryable(),
+                matches!(
+                    category,
+                    ErrorCategory::RateLimited
+                        | ErrorCategory::Unavailable
+                        | ErrorCategory::Timeout
+                ),
+                "{code}"
+            );
             assert_eq!(error.message, format!("OpenAI Responses generation failed: {code}"));
             assert_eq!(error.details.metadata["provider_error_code"], json!(code));
             assert!(!format!("{error:?}").contains(SECRET));
+            assert!(std::error::Error::source(&error).is_none());
         }
+    }
+}
+
+#[tokio::test]
+async fn retries_failures_without_known_permanent_codes() {
+    for code in [None, Some(SECRET)] {
+        let mut failed = response(json!([]));
+        failed["status"] = json!("failed");
+        failed["error"] = json!({"code":code, "message":SECRET});
+        for error in [
+            unary(&failed).await.unwrap_err(),
+            events(&[json!({"type":"response.failed", "response":failed.clone()})])
+                .await
+                .unwrap_err(),
+            events(&[json!({"type":"response.failed", "response":{"error":failed["error"]}})])
+                .await
+                .unwrap_err(),
+            events(&[json!({"type":"error", "error":{"code":code,"message":SECRET}})])
+                .await
+                .unwrap_err(),
+            generate(
+                format!(
+                    "event: error\ndata: {}\n\n",
+                    json!({"type":"error","sequence_number":0,
+                "code":code,"message":SECRET,"param":null})
+                ),
+                true,
+            )
+            .await
+            .unwrap_err(),
+        ] {
+            assert_eq!(error.code, "model.openai_responses.response_failed");
+            assert_eq!(error.category, adk_core::ErrorCategory::Unavailable);
+            assert!(error.retry.should_retry);
+            assert!(adk_model::retry::is_retryable_model_error(&error));
+            assert_eq!(error.message, "OpenAI Responses generation failed");
+            assert!(!error.to_string().contains(SECRET));
+            assert!(!format!("{error:?}").contains(SECRET));
+            assert!(!serde_json::to_string(&error.details.metadata).unwrap().contains(SECRET));
+            assert!(std::error::Error::source(&error).is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn permanent_error_types_prevent_retry() {
+    for (kind, category) in [
+        ("authentication_error", adk_core::ErrorCategory::Unauthorized),
+        ("permission_error", adk_core::ErrorCategory::Forbidden),
+        ("invalid_request_error", adk_core::ErrorCategory::InvalidInput),
+    ] {
+        let error = events(&[json!({"type":"error","error":{
+            "code":SECRET,"type":kind,"message":SECRET}})])
+        .await
+        .unwrap_err();
+        assert_eq!(error.category, category);
+        assert_eq!(error.details.metadata["provider_error_code"], kind);
+        safe(&error);
     }
 }
 

@@ -667,6 +667,17 @@ pub(crate) fn build_request_json(
         request_builder.reasoning_effort(effort);
     }
 
+    crate::generation_config::reject_unsupported(
+        "openai-compatible",
+        request.config.as_ref(),
+        crate::generation_config::Supports {
+            stop_sequences: true,
+            seed: true,
+            penalties: true,
+            top_logprobs: true,
+        },
+    )?;
+
     if let Some(config) = &request.config {
         if let Some(temp) = config.temperature {
             request_builder.temperature(temp);
@@ -962,7 +973,6 @@ impl Llm for OpenAICompatible {
                     HashMap::new();
                 let mut text_tool_buffer =
                     crate::tool_call_parser::ToolCallBuffer::for_declared_tools(declared_tools);
-                let mut pending_final_response: Option<LlmResponse> = None;
                 // Token log probabilities from every chunk, reported on the final response.
                 let mut logprobs: Vec<serde_json::Value> = Vec::new();
                 // A finish reason or `[DONE]` marks a complete response; without one the
@@ -972,15 +982,13 @@ impl Llm for OpenAICompatible {
                 let mut refused = false;
                 let mut ended = false;
 
-                while !ended {
+                'body: while !ended {
                     match byte_stream.next().await {
-                        Some(chunk) => buffer.extend_from_slice(&chunk.map_err(|error| {
-                            crate::stream_error::interrupted(
-                                &provider_name,
-                                error_codes.incomplete_stream,
-                                &error,
-                            )
-                        })?),
+                        Some(Ok(chunk)) => buffer.extend_from_slice(&chunk),
+                        Some(Err(_)) if finished => break,
+                        Some(Err(error)) => Err(crate::stream_error::interrupted(
+                            &provider_name, error_codes.incomplete_stream, &error,
+                        ))?,
                         None => {
                             ended = true;
                             // The last line may arrive without its line ending.
@@ -989,7 +997,11 @@ impl Llm for OpenAICompatible {
                     }
 
                     // Process complete SSE lines.
-                    while let Some(line) = take_line(&mut buffer)? {
+                    while let Some(line) = match take_line(&mut buffer) {
+                        Ok(line) => line,
+                        Err(_) if finished => break 'body,
+                        Err(error) => Err(error)?,
+                    } {
                         let Some(data) = crate::sse::data(&line) else {
                             continue;
                         };
@@ -1003,16 +1015,14 @@ impl Llm for OpenAICompatible {
                                 ))?;
                             }
                             finished = true;
-                            if let Some(response) = pending_final_response.take() {
-                                yield response;
-                            }
-                            continue;
+                            ended = true;
+                            break;
                         }
 
                         {
                             let parsed = serde_json::from_str::<serde_json::Value>(data);
                             // A cut-off trailer after a finished response loses nothing.
-                            if parsed.is_err() && ended && finished {
+                            if parsed.is_err() && finished {
                                 continue;
                             }
                             let chunk_json = parsed.map_err(|error| {
@@ -1036,11 +1046,12 @@ impl Llm for OpenAICompatible {
                             let choice = match chunk_json.get("choices").and_then(|c| c.get(0)) {
                                 Some(c) => c,
                                 None => {
-                                    if let Some(usage_metadata) = usage_metadata
-                                        && let Some(mut response) = pending_final_response.take()
-                                    {
-                                        response.usage_metadata = Some(usage_metadata);
-                                        yield response;
+                                    if let Some(usage_metadata) = usage_metadata {
+                                        yield LlmResponse {
+                                            usage_metadata: Some(usage_metadata),
+                                            partial: true,
+                                            ..Default::default()
+                                        };
                                     }
                                     continue;
                                 }
@@ -1181,10 +1192,12 @@ impl Llm for OpenAICompatible {
                                         })
                                         .collect();
 
+                                    let mut buffered = text_tool_buffer.flush();
+                                    buffered.extend(parts);
                                     let response = LlmResponse {
                                         content: Some(Content {
                                             role: "model".to_string(),
-                                            parts,
+                                            parts: buffered,
                                         }),
                                         usage_metadata,
                                         finish_reason,
@@ -1201,16 +1214,12 @@ impl Llm for OpenAICompatible {
                                         model: None,
                                         provider: None,
                                     };
-                                    if response.usage_metadata.is_some() {
-                                        yield response;
-                                    } else {
-                                        pending_final_response = Some(response);
-                                    }
+                                    yield response;
                                     continue;
                                 }
 
-                                // Final response without tool calls.
-                                let mut parts = Vec::new();
+                                // Flush literal prefixes before the final becomes authoritative.
+                                let mut parts = text_tool_buffer.flush();
                                 if let Some(text) = delta.get("content").and_then(|v| v.as_str())
                                     && !text.is_empty() {
                                         parts.push(Part::Text { text: text.to_string() });
@@ -1236,11 +1245,7 @@ impl Llm for OpenAICompatible {
                                     model: None,
                                     provider: None,
                                 };
-                                if response.usage_metadata.is_some() {
-                                    yield response;
-                                } else {
-                                    pending_final_response = Some(response);
-                                }
+                                yield response;
                                 continue;
                             }
 
@@ -1294,10 +1299,6 @@ impl Llm for OpenAICompatible {
                     ))?;
                 }
 
-                if let Some(response) = pending_final_response.take() {
-                    yield response;
-                }
-
                 // Flush any remaining buffered content from the tool call buffer
                 for part in text_tool_buffer.flush() {
                     let is_tool = matches!(part, Part::FunctionCall { .. });
@@ -1323,7 +1324,7 @@ impl Llm for OpenAICompatible {
             };
 
             Ok(crate::usage_tracking::with_priced_usage_tracking(
-                Box::pin(response_stream),
+                crate::usage_tracking::with_terminal_usage(Box::pin(response_stream)),
                 usage_span,
                 attribution.0,
                 attribution.1,

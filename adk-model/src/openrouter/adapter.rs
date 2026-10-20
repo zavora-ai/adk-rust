@@ -602,6 +602,16 @@ fn build_chat_request(
     request_options: &OpenRouterRequestOptions,
     stream: bool,
 ) -> Result<OpenRouterChatRequest> {
+    crate::generation_config::reject_unsupported(
+        "openrouter",
+        request.config.as_ref(),
+        crate::generation_config::Supports {
+            stop_sequences: true,
+            seed: true,
+            penalties: true,
+            top_logprobs: true,
+        },
+    )?;
     let mut chat_request = OpenRouterChatRequest {
         model: effective_model_name(client, request),
         messages: adk_contents_to_chat_messages(&request.contents)?,

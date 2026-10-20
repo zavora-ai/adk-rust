@@ -1,0 +1,1 @@
+- Preserve verified Chat Completions, DeepSeek and Gemini answers while collecting trailing usage. Protocol end stops reads immediately; missing trailers have one absolute five-second grace. A failed optional trailer cannot invalidate or replay a completed answer; failures before completion still propagate.

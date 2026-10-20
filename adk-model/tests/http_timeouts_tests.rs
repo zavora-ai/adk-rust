@@ -3,6 +3,7 @@
 //! instead of holding the caller.
 #![cfg(any(
     feature = "openai",
+    feature = "gemini",
     feature = "groq",
     feature = "ollama",
     feature = "deepseek",
@@ -19,6 +20,7 @@ use futures::StreamExt;
 use tokio::io::AsyncReadExt;
 #[cfg(any(
     feature = "openai",
+    feature = "gemini",
     feature = "groq",
     feature = "deepseek",
     feature = "azure-ai",
@@ -31,6 +33,7 @@ use tokio::net::TcpListener;
 /// Answers every request with response headers and `first` as one chunk, then sends nothing.
 #[cfg(any(
     feature = "openai",
+    feature = "gemini",
     feature = "groq",
     feature = "deepseek",
     feature = "azure-ai",
@@ -38,20 +41,42 @@ use tokio::net::TcpListener;
     feature = "openrouter"
 ))]
 async fn stalling(content_type: &'static str, first: &'static str) -> String {
+    chunked(content_type, vec![first], Duration::ZERO, false).await
+}
+
+async fn chunked(
+    content_type: &'static str,
+    chunks: Vec<&'static str>,
+    gap: Duration,
+    complete: bool,
+) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let base = format!("http://{}", listener.local_addr().expect("address"));
+    let chunks = std::sync::Arc::new(chunks);
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
+            let chunks = chunks.clone();
             tokio::spawn(async move {
                 let mut buffer = [0_u8; 8192];
                 let _ = socket.read(&mut buffer).await;
                 let head = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ntransfer-encoding: chunked\r\n\r\n{:x}\r\n{first}\r\n",
-                    first.len()
+                    "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ntransfer-encoding: chunked\r\n\r\n"
                 );
                 let _ = socket.write_all(head.as_bytes()).await;
-                let _ = socket.flush().await;
-                tokio::time::sleep(Duration::from_secs(60)).await;
+                for chunk in chunks.iter() {
+                    let frame = format!("{:x}\r\n{chunk}\r\n", chunk.len());
+                    if socket.write_all(frame.as_bytes()).await.is_err()
+                        || socket.flush().await.is_err()
+                    {
+                        return;
+                    }
+                    tokio::time::sleep(gap).await;
+                }
+                if complete {
+                    let _ = socket.write_all(b"0\r\n\r\n").await;
+                } else {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                }
             });
         }
     });
@@ -160,6 +185,7 @@ const RESPONSE_CREATED: &str = "event: response.created\ndata: {\"type\":\"respo
 /// time out.
 #[cfg(any(
     feature = "openai",
+    feature = "gemini",
     feature = "groq",
     feature = "deepseek",
     feature = "azure-ai",
@@ -307,4 +333,75 @@ async fn bedrock_request_without_response_times_out() {
         assert_eq!(error.category, ErrorCategory::Timeout, "stream {stream}: {error}");
         assert_eq!(error.code, "model.bedrock.timeout");
     }
+}
+
+#[cfg(feature = "gemini")]
+#[tokio::test]
+async fn gemini_stalled_headers_bodies_and_streams_time_out() {
+    use adk_model::GeminiModel;
+    let cases = [
+        (silent().await, true),
+        (stalling("application/json", "{").await, false),
+        (stalling("text/event-stream", ": waiting\n\n").await, true),
+    ];
+    for (base, stream) in cases {
+        let model = GeminiModel::new_with_base_url_and_timeouts(
+            "key",
+            "m",
+            format!("{base}/v1beta/"),
+            timeouts(),
+        )
+        .unwrap()
+        .with_retry_config(adk_model::retry::RetryConfig::disabled());
+        let error = stalled_call(&model, "m", stream).await;
+        assert_eq!(error.category, ErrorCategory::Timeout, "{error:?}");
+        assert!(error.is_retryable());
+        assert_eq!(error.details.upstream_status_code, None);
+    }
+    let base = chunked("application/json", vec!["not-json"], Duration::ZERO, true).await;
+    let model = adk_model::GeminiModel::new_with_base_url_and_timeouts(
+        "key",
+        "m",
+        format!("{base}/v1beta/"),
+        timeouts(),
+    )
+    .unwrap()
+    .with_retry_config(adk_model::RetryConfig::disabled());
+    let request = LlmRequest::new("m", vec![Content::new("user").with_text("Hello")]);
+    let error = match model.generate_content(request, false).await {
+        Err(error) => error,
+        Ok(mut stream) => stream.next().await.unwrap().unwrap_err(),
+    };
+    assert_eq!(error.category, ErrorCategory::Internal);
+}
+
+#[cfg(feature = "gemini")]
+#[tokio::test]
+async fn gemini_comments_reset_byte_idle() {
+    use adk_model::GeminiModel;
+    let mut chunks = vec![": heartbeat\n\n"; 6];
+    chunks.push("data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"done\"}]},\"finishReason\":\"STOP\"}]}\n\n");
+    let base = chunked("text/event-stream", chunks, Duration::from_millis(75), true).await;
+    let model = GeminiModel::new_with_base_url_and_timeouts(
+        "key",
+        "m",
+        format!("{base}/v1beta/"),
+        timeouts(),
+    )
+    .unwrap()
+    .with_retry_config(adk_model::retry::RetryConfig::disabled());
+    let started = Instant::now();
+    let mut responses = model
+        .generate_content(LlmRequest::new("m", vec![Content::new("user").with_text("Hello")]), true)
+        .await
+        .unwrap();
+    let mut finished = false;
+    while let Some(response) = responses.next().await {
+        finished |= response.unwrap().turn_complete;
+    }
+    assert!(finished);
+    assert!(
+        started.elapsed() > timeouts().idle,
+        "no model chunk arrived for more than the byte-idle window"
+    );
 }

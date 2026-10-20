@@ -1,11 +1,11 @@
 //! Transient upstream failures (HTTP 500/502/503/504) are retryable for every
-//! HTTP provider client, carry the upstream status, and honour `Retry-After`
-//! up to `RetryConfig::max_delay`.
+//! HTTP provider client, carry the upstream status, and preserve `Retry-After`
+//! without shortening a server delay.
 #![cfg(any(feature = "openai", feature = "groq", feature = "deepseek", feature = "azure-ai"))]
 
 use std::time::Duration;
 
-use adk_core::{AdkError, Content, ErrorCategory, Llm, LlmRequest, Part};
+use adk_core::{AdkError, Content, ErrorCategory, Llm, LlmRequest};
 use adk_model::retry::RetryConfig;
 use futures::StreamExt;
 use wiremock::matchers::{method, path_regex};
@@ -15,22 +15,7 @@ fn request() -> LlmRequest {
     LlmRequest::new("model", vec![Content::new("user").with_text("Hello")])
 }
 
-fn success_body() -> serde_json::Value {
-    serde_json::json!({
-        "id": "chatcmpl-1",
-        "object": "chat.completion",
-        "created": 1_700_000_000,
-        "model": "model",
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": "ok"},
-            "finish_reason": "stop"
-        }],
-        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-    })
-}
-
-/// Retries once, immediately, and caps any server delay at 50 ms.
+/// Retries once with bounded exponential backoff. Server hints retain their own limit.
 fn fast_retry() -> RetryConfig {
     RetryConfig::default()
         .with_max_retries(1)
@@ -62,28 +47,24 @@ async fn assert_502_is_retryable(server: &MockServer, model: &dyn Llm) {
     assert_eq!(error.retry.retry_after(), Some(Duration::from_secs(7)));
 }
 
-/// A 503 with a one-hour `Retry-After` is retried after the capped delay and the
-/// second attempt succeeds.
-async fn assert_503_is_retried(server: &MockServer, model: &dyn Llm) {
+/// A one-hour server delay is refused without issuing a second request.
+async fn assert_503_delay_is_refused(server: &MockServer, model: &dyn Llm) {
     Mock::given(method("POST"))
         .and(path_regex("chat/completions$"))
         .respond_with(ResponseTemplate::new(503).insert_header("retry-after", "3600"))
-        .up_to_n_times(1)
+        .expect(1)
         .mount(server)
         .await;
-    Mock::given(method("POST"))
-        .and(path_regex("chat/completions$"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(success_body()))
-        .mount(server)
-        .await;
-
     let started = std::time::Instant::now();
-    let mut stream = model.generate_content(request(), false).await.expect("stream starts");
-    let response = stream.next().await.expect("stream yields an item").expect("retry succeeds");
-
-    assert!(started.elapsed() < Duration::from_secs(10), "Retry-After was not capped");
-    assert_eq!(server.received_requests().await.unwrap().len(), 2);
-    assert_eq!(response.content.unwrap().parts, vec![Part::Text { text: "ok".to_string() }]);
+    let error = first_error(model).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "server delay should be refused immediately"
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert_eq!(error.category, ErrorCategory::Unavailable);
+    assert_eq!(error.details.upstream_status_code, Some(503));
+    assert_eq!(error.retry.retry_after(), Some(Duration::from_secs(3600)));
 }
 
 #[cfg(feature = "openai")]
@@ -111,9 +92,9 @@ mod openai {
     }
 
     #[tokio::test]
-    async fn compatible_503_is_retried() {
+    async fn compatible_503_delay_is_refused() {
         let server = MockServer::start().await;
-        assert_503_is_retried(&server, &compatible(&server.uri(), fast_retry())).await;
+        assert_503_delay_is_refused(&server, &compatible(&server.uri(), fast_retry())).await;
     }
 
     #[tokio::test]
@@ -123,9 +104,9 @@ mod openai {
     }
 
     #[tokio::test]
-    async fn azure_openai_503_is_retried() {
+    async fn azure_openai_503_delay_is_refused() {
         let server = MockServer::start().await;
-        assert_503_is_retried(&server, &azure(&server.uri(), fast_retry())).await;
+        assert_503_delay_is_refused(&server, &azure(&server.uri(), fast_retry())).await;
     }
 }
 
@@ -147,9 +128,9 @@ mod groq {
     }
 
     #[tokio::test]
-    async fn groq_503_is_retried() {
+    async fn groq_503_delay_is_refused() {
         let server = MockServer::start().await;
-        assert_503_is_retried(&server, &client(&server.uri(), fast_retry())).await;
+        assert_503_delay_is_refused(&server, &client(&server.uri(), fast_retry())).await;
     }
 }
 
@@ -171,9 +152,9 @@ mod deepseek {
     }
 
     #[tokio::test]
-    async fn deepseek_503_is_retried() {
+    async fn deepseek_503_delay_is_refused() {
         let server = MockServer::start().await;
-        assert_503_is_retried(&server, &client(&server.uri(), fast_retry())).await;
+        assert_503_delay_is_refused(&server, &client(&server.uri(), fast_retry())).await;
     }
 }
 
@@ -195,8 +176,8 @@ mod azure_ai {
     }
 
     #[tokio::test]
-    async fn azure_ai_503_is_retried() {
+    async fn azure_ai_503_delay_is_refused() {
         let server = MockServer::start().await;
-        assert_503_is_retried(&server, &client(&server.uri(), fast_retry())).await;
+        assert_503_delay_is_refused(&server, &client(&server.uri(), fast_retry())).await;
     }
 }

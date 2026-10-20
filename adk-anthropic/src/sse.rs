@@ -61,19 +61,33 @@ struct SseState {
 ///   at `debug` level and surfaced as [`MessageStreamEvent::Unknown`] with its
 ///   JSON payload, so a new server-side event type never fails the stream
 /// - UTF-8 validation with partial byte handling
+#[cfg(test)]
 pub fn process_sse<S>(byte_stream: S) -> impl Stream<Item = Result<MessageStreamEvent>>
 where
     S: Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Unpin + 'static,
 {
-    process_sse_with(byte_stream, parse_standard_event, CHUNK_TIMEOUT)
+    process_sse_with_timeout(byte_stream, None)
 }
 
-pub(crate) fn process_json_sse<S, T>(byte_stream: S) -> impl Stream<Item = Result<T>>
+pub(crate) fn process_sse_with_timeout<S>(
+    byte_stream: S,
+    timeout: Option<Duration>,
+) -> impl Stream<Item = Result<MessageStreamEvent>>
+where
+    S: Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Unpin + 'static,
+{
+    process_sse_with(byte_stream, parse_standard_event, timeout.unwrap_or(CHUNK_TIMEOUT))
+}
+
+pub(crate) fn process_json_sse<S, T>(
+    byte_stream: S,
+    timeout: Option<Duration>,
+) -> impl Stream<Item = Result<T>>
 where
     S: Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Unpin + 'static,
     T: DeserializeOwned + 'static,
 {
-    process_sse_with(byte_stream, parse_json_event::<T>, CHUNK_TIMEOUT)
+    process_sse_with(byte_stream, parse_json_event::<T>, timeout.unwrap_or(CHUNK_TIMEOUT))
 }
 
 fn process_sse_with<S, T, P>(
@@ -88,8 +102,13 @@ where
 {
     // Convert reqwest errors to our error type
     let stream = byte_stream.map(|result| {
-        result
-            .map_err(|e| Error::streaming(format!("Error in HTTP stream: {e}"), Some(Box::new(e))))
+        result.map_err(|error| {
+            if error.is_timeout() {
+                Error::timeout("HTTP response inactivity timeout", None)
+            } else {
+                Error::connection(format!("Error in HTTP stream: {error}"), Some(Box::new(error)))
+            }
+        })
     });
 
     // Initialize state with production hardening
@@ -107,6 +126,15 @@ where
             return None;
         }
         loop {
+            // Comment-only keepalives have no event to deliver.
+            if let Some(end) = state.buffer.find("\n\n")
+                && end <= MAX_EVENT_SIZE
+                && state.buffer[..end].lines().any(|line| line.starts_with(':'))
+                && state.buffer[..end].lines().all(|line| line.is_empty() || line.starts_with(':'))
+            {
+                state.buffer.drain(..end + 2);
+                continue;
+            }
             // Check if we have a complete event in the buffer
             match extract_event(&state.buffer, parser) {
                 Ok(Some((event, remaining))) => {
@@ -258,6 +286,10 @@ where
             rest,
         )));
     }
+
+    let without_comments =
+        event_text.lines().filter(|line| !line.starts_with(':')).collect::<Vec<_>>().join("\n");
+    let event_text = without_comments.as_str();
 
     // Handle empty events (ping-like keepalives)
     if event_text.trim().is_empty() {

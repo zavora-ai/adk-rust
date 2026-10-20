@@ -112,6 +112,22 @@ pub struct GenerateContentConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<serde_json::Value>,
 
+    /// Output modalities requested from Gemini, such as `["TEXT", "IMAGE"]`.
+    /// Other clients reject this field rather than silently dropping it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::GenerateContentConfig;
+    /// let config = GenerateContentConfig {
+    ///     response_modalities: Some(vec!["TEXT".into(), "IMAGE".into()]),
+    ///     ..Default::default()
+    /// };
+    /// assert_eq!(config.response_modalities.as_ref().unwrap().len(), 2);
+    /// ```
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub response_modalities: Option<Vec<String>>,
+
     /// Optional cached content name for Gemini provider.
     /// When set, the Gemini provider attaches this to the generation request.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -635,6 +651,7 @@ mod tests {
                 "properties": { "answer": { "type": "string" } },
                 "required": ["answer"]
             })),
+            response_modalities: Some(vec!["TEXT".to_string(), "IMAGE".to_string()]),
             cached_content: Some("cachedContents/abc123".to_string()),
             extensions,
         };
@@ -654,6 +671,7 @@ mod tests {
         assert_eq!(decoded.response_schema, config.response_schema);
         assert_eq!(decoded.cached_content, config.cached_content);
         assert_eq!(decoded.extensions, config.extensions);
+        assert_eq!(decoded.response_modalities, config.response_modalities);
     }
 
     #[test]

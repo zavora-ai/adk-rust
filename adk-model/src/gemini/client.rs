@@ -257,7 +257,13 @@ pub(crate) fn gemini_error_to_adk(e: &adk_gemini::ClientError) -> adk_core::AdkE
         }
         _ => None,
     };
-    crate::error_metadata::with_code(err, provider_code.as_deref())
+    let err = crate::error_metadata::with_code(err, provider_code.as_deref());
+    match e {
+        adk_gemini::ClientError::BadResponse { retry_after: Some(header), .. } => {
+            crate::retry::with_retry_after(err, crate::retry::parse_retry_after(header))
+        }
+        _ => err,
+    }
 }
 
 /// Whether a google-cloud-gax error without a status is a failed connection or
@@ -271,6 +277,15 @@ fn is_gax_connection_failure(message: &str) -> bool {
 
 /// Classify failures with no HTTP response without inventing an upstream status.
 fn error_without_status(error: &adk_gemini::ClientError) -> (ErrorCategory, &'static str) {
+    if let Some(error) = error.request_error() {
+        let category = crate::http_timeouts::transport_category(error);
+        let code = if category == ErrorCategory::Timeout {
+            "model.gemini.timeout"
+        } else {
+            "model.gemini.unavailable"
+        };
+        return (category, code);
+    }
     match error {
         adk_gemini::ClientError::InvalidGenerationConfig { .. } => {
             (ErrorCategory::InvalidInput, "model.gemini.invalid_config")
@@ -280,18 +295,6 @@ fn error_without_status(error: &adk_gemini::ClientError) -> (ErrorCategory, &'st
         }
         adk_gemini::ClientError::InvalidApiKey { .. } => {
             (ErrorCategory::Unauthorized, "model.gemini.unauthorized")
-        }
-        adk_gemini::ClientError::PerformRequestNew { source }
-        | adk_gemini::ClientError::PerformRequest { source, .. }
-            if source.is_timeout() =>
-        {
-            (ErrorCategory::Timeout, "model.gemini.timeout")
-        }
-        adk_gemini::ClientError::PerformRequestNew { source }
-        | adk_gemini::ClientError::PerformRequest { source, .. }
-            if source.is_connect() =>
-        {
-            (ErrorCategory::Unavailable, "model.gemini.unavailable")
         }
         #[cfg(feature = "gemini-vertex")]
         adk_gemini::ClientError::GoogleCloudRequest { source } if source.is_timeout() => {
@@ -554,6 +557,43 @@ impl GeminiModel {
             .map_err(|_| adk_core::AdkError::model("Invalid Gemini base URL"))?;
         let client = Gemini::with_model_and_base_url(api_key.into(), model_name.clone(), base_url)
             .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
+        Ok(Self::from_client(client, model_name))
+    }
+
+    /// Create an API-key model with explicit connect and byte-idle timeouts.
+    ///
+    /// Existing constructors keep the standalone SDK's defaults. This constructor
+    /// uses the same SDK builder and adds no response-level or total-request timer.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_model::{GeminiModel, HttpTimeouts};
+    /// use std::time::Duration;
+    ///
+    /// let model = GeminiModel::new_with_base_url_and_timeouts(
+    ///     "api-key", "gemini-3.7-flash", "https://gateway.example.com/v1beta/",
+    ///     HttpTimeouts::new(Duration::from_secs(30), Duration::from_secs(300)),
+    /// )?;
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn new_with_base_url_and_timeouts(
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        base_url: impl AsRef<str>,
+        timeouts: crate::HttpTimeouts,
+    ) -> Result<Self> {
+        let model_name = model.into();
+        let base_url = base_url
+            .as_ref()
+            .parse()
+            .map_err(|_| adk_core::AdkError::model("Invalid Gemini base URL"))?;
+        let client = adk_gemini::GeminiBuilder::new(api_key.into())
+            .with_model(model_name.clone())
+            .with_base_url(base_url)
+            .with_http_client(timeouts.apply(reqwest::Client::builder()))
+            .build()
+            .map_err(|error| gemini_error_to_adk(&error))?;
         Ok(Self::from_client(client, model_name))
     }
 
@@ -1532,6 +1572,7 @@ impl GeminiModel {
                 response_logprobs: config.top_logprobs.map(|_| true),
                 logprobs: config.top_logprobs.map(i32::from),
                 response_schema: config.response_schema,
+                response_modalities: config.response_modalities,
                 response_mime_type: if has_schema {
                     Some("application/json".to_string())
                 } else {
@@ -1622,6 +1663,16 @@ impl GeminiModel {
                             }
                         }
                         Err(e) => {
+                            if finished && matches!(&e,
+                                adk_gemini::ClientError::PerformRequestNew { .. }
+                                | adk_gemini::ClientError::PerformRequest { .. }
+                                | adk_gemini::ClientError::BadPart { .. }
+                                | adk_gemini::ClientError::Deserialize { .. }
+                                | adk_gemini::ClientError::DecodeResponse { .. }
+                                | adk_gemini::ClientError::Io { .. }
+                            ) {
+                                return;
+                            }
                             let error = gemini_error_to_adk(&e);
                             adk_telemetry::error!(error = %error.diagnostics(), "stream error");
                             yield Err(error);
@@ -1640,7 +1691,7 @@ impl GeminiModel {
                 }
             };
 
-            Ok(Box::pin(mapped_stream))
+            Ok(crate::usage_tracking::with_terminal_usage(Box::pin(mapped_stream)))
         } else {
             adk_telemetry::debug!("Executing blocking request");
             let response = builder.execute().await.map_err(|e| {
@@ -2346,6 +2397,7 @@ mod tests {
             (529, ErrorCategory::Unavailable, "model.gemini.overloaded"),
         ] {
             let error = gemini_error_to_adk(&adk_gemini::ClientError::BadResponse {
+                retry_after: None,
                 code: status,
                 description: Some(
                     serde_json::json!({"error": {
@@ -2388,6 +2440,7 @@ mod tests {
             ),
         ] {
             let error = gemini_error_to_adk(&adk_gemini::ClientError::BadResponse {
+                retry_after: None,
                 code: 400,
                 description: Some(body),
             });
@@ -2413,6 +2466,7 @@ mod tests {
             }]
         }});
         let error = gemini_error_to_adk(&adk_gemini::ClientError::BadResponse {
+            retry_after: None,
             code: 429,
             description: Some(body.to_string()),
         });
@@ -2423,6 +2477,7 @@ mod tests {
             "status": "RESOURCE_EXHAUSTED"
         }});
         let error = gemini_error_to_adk(&adk_gemini::ClientError::BadResponse {
+            retry_after: None,
             code: 429,
             description: Some(without_reason.to_string()),
         });

@@ -246,3 +246,47 @@ mod interactions {
         assert_eq!((last.partial, last.finish_reason), (false, Some(FinishReason::Stop)));
     }
 }
+
+#[tokio::test]
+async fn preserves_http_retry_hints() {
+    use std::time::{Duration, SystemTime};
+
+    let date = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(90));
+    for stream in [false, true] {
+        for status in [400, 429, 503] {
+            for header in [Some("7"), Some("61"), Some(date.as_str()), Some("invalid"), None] {
+                let server = MockServer::start().await;
+                let mut reply = ResponseTemplate::new(status).set_body_json(json!({
+                    "error": {"code": status, "message": "Fixture error"}
+                }));
+                if let Some(value) = header {
+                    reply = reply.insert_header("retry-after", value);
+                }
+                Mock::given(method("POST")).respond_with(reply).expect(1).mount(&server).await;
+                let model = GeminiModel::new_with_base_url(
+                    "fixture-key",
+                    MODEL,
+                    format!("{}/v1beta/", server.uri()),
+                )
+                .unwrap()
+                .with_retry_config(adk_model::retry::RetryConfig::disabled());
+                let request = LlmRequest::new(MODEL, vec![Content::new("user").with_text("Hello")]);
+                let error = match model.generate_content(request, stream).await {
+                    Err(error) => error,
+                    Ok(mut responses) => responses.next().await.unwrap().unwrap_err(),
+                };
+                assert_eq!(error.details.upstream_status_code, Some(status));
+                if status == 400 || header.is_none() || header == Some("invalid") {
+                    assert_eq!(error.retry.retry_after(), None);
+                } else if header == Some(date.as_str()) {
+                    let delay = error.retry.retry_after().unwrap();
+                    assert!(delay > Duration::from_secs(60) && delay <= Duration::from_secs(90));
+                } else {
+                    let seconds = if header == Some("7") { 7 } else { 61 };
+                    assert_eq!(error.retry.retry_after(), Some(Duration::from_secs(seconds)));
+                }
+                assert_eq!(server.received_requests().await.unwrap().len(), 1);
+            }
+        }
+    }
+}

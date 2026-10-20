@@ -1,0 +1,1 @@
+- Remove the undocumented client-side 100-tool limit from Anthropic message validation without truncating tool rosters or changing existing parameter validation.

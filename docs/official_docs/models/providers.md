@@ -901,9 +901,10 @@ async fn stream_text(client: &GroqClient, request: LlmRequest) -> Result<String,
 
 ### Timeouts
 
-Every client except `GeminiModel` and `AnthropicClient` takes an `HttpTimeouts` that bounds its
+Every client except `GeminiModel` takes an `HttpTimeouts` that bounds its
 HTTP transport, so a stream that stops sending data fails the run instead of holding it.
-Anthropic has its own bounds (see [Request Defaults](#request-defaults)).
+Anthropic retains its request-timeout defaults unless `with_timeouts` selects byte-inactivity
+bounds (see [Request Defaults](#request-defaults)).
 
 | Bound | Default | Covers |
 |-------|---------|--------|
@@ -925,7 +926,7 @@ minutes before its first chunk stays within the 10-minute default.
 
 `with_timeouts` sets both bounds and returns `Result`, on `OpenAIClient` (Chat Completions and
 its Responses route), `OpenAICompatible`, `AzureOpenAIClient`, `OpenAIResponsesClient`,
-`AzureAIClient`, `GroqClient`, `DeepSeekClient`, `OpenRouterClient`, `OllamaModel`, and
+`AzureAIClient`, `GroqClient`, `DeepSeekClient`, `OpenRouterClient`, `OllamaModel`, `AnthropicClient`, and
 `BedrockClient`. `BedrockClient` sets them as the AWS SDK's connect and read timeouts and
 bounds each stream event by `idle`; an SDK client passed to `BedrockClient::from_client` keeps
 its own connect and read timeouts until `with_timeouts` replaces them.

@@ -33,6 +33,12 @@ const MAX_TOKENS_DELTA: &str = "event: message_delta\ndata: {\"type\":\"message_
 const TOOL_USE_DELTA: &str = "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":5}}\n\n";
 const MESSAGE_STOP: &str = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 
+fn text_message() -> String {
+    format!(
+        "{MESSAGE_START}event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\nevent: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"Answer\"}}}}\n\n{BLOCK_STOP}event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\",\"stop_sequence\":null}},\"usage\":{{\"output_tokens\":5}}}}\n\n"
+    )
+}
+
 async fn stream_items(sse_body: String) -> Vec<Result<LlmResponse, AdkError>> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -42,6 +48,7 @@ async fn stream_items(sse_body: String) -> Vec<Result<LlmResponse, AdkError>> {
                 .insert_header("content-type", "text/event-stream")
                 .set_body_string(sse_body),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -58,6 +65,36 @@ async fn stream_items(sse_body: String) -> Vec<Result<LlmResponse, AdkError>> {
     );
 
     client.generate_content(request, true).await.unwrap().collect().await
+}
+
+#[tokio::test]
+async fn incomplete_streams_remain_retryable() {
+    for body in [MESSAGE_START.to_owned(), text_message()] {
+        let items = stream_items(body).await;
+        let error =
+            items.last().expect("unfinished stream reports a failure").as_ref().unwrap_err();
+        assert_eq!(error.category, ErrorCategory::Unavailable);
+        assert_eq!(error.code, "model.anthropic.unfinished_stream");
+        assert!(error.is_retryable());
+        assert!(
+            items.iter().filter_map(|item| item.as_ref().ok()).all(|response| response.partial)
+        );
+    }
+}
+
+#[tokio::test]
+async fn completed_messages_keep_their_answer() {
+    let items = stream_items(format!("{}{MESSAGE_STOP}", text_message())).await;
+    let replies = items.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
+    let complete: Vec<_> = replies.iter().filter(|response| !response.partial).collect();
+    assert_eq!(complete.len(), 1);
+    let response = complete[0];
+    assert!(response.turn_complete);
+    assert_eq!(
+        response.content.as_ref().unwrap().parts,
+        vec![Part::Text { text: "Answer".into() }]
+    );
+    assert_eq!(response.usage_metadata.as_ref().unwrap().candidates_token_count, 5);
 }
 
 #[tokio::test]
