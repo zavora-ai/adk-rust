@@ -376,8 +376,9 @@ impl Harness {
     /// Sets the session's mode (spec 3.1 §7.4).
     ///
     /// Only outside a run. A loosening first answers every held call in the session with a
-    /// "cancelled by mode change" response, so no call a person has not seen under the
-    /// looser mode runs on the next resume (spec 3.1 §9.2 I14).
+    /// "cancelled by mode change" response and removes its pending entry and any decision
+    /// for it, so no call a person has not seen under the looser mode runs on the next
+    /// resume or on a later identical call (spec 3.1 §9.2 I14).
     ///
     /// # Errors
     ///
@@ -401,6 +402,7 @@ impl Harness {
         let current = self.mode(user, session).await?;
         let audit = self.audit(user, session);
         let mut cancelled = Vec::new();
+        let mut cancelled_fingerprints = Vec::new();
         if ModeChange::between(current, mode) == ModeChange::Loosen {
             let events = self.events(user, session).await?;
             let mut holders = Vec::<(String, String)>::new();
@@ -437,8 +439,11 @@ impl Harness {
                         .collect(),
                 });
                 cancelled.extend(held.iter().filter_map(|call| call.id.clone()));
+                cancelled_fingerprints.extend(held.iter().map(|call| call.request.fingerprint()));
                 self.sessions.append_event(session.as_ref(), event).await?;
             }
+            let reason = format!("cancelled by mode change to {mode}");
+            self.clear_inbox(user, session, &cancelled_fingerprints, &reason).await?;
             if let Some(audit) = &audit
                 && !cancelled.is_empty()
             {
@@ -468,6 +473,44 @@ impl Harness {
             json!({ "mode": record.mode, "revision": record.revision, "setBy": record.set_by }),
         );
         self.sessions.append_event(session.as_ref(), mirror).await?;
+        Ok(())
+    }
+
+    /// Removes the pending entries and any decisions of `fingerprints`, so no later call
+    /// with the same fingerprint is authorized by an entry its cancelled call left (I14).
+    async fn clear_inbox(
+        &self,
+        user: &UserId,
+        session: &SessionId,
+        fingerprints: &[String],
+        reason: &str,
+    ) -> Result<()> {
+        if fingerprints.is_empty() {
+            return Ok(());
+        }
+        let runtime = self.agent.runtime();
+        let scope =
+            ApprovalScope::new(self.app_name.clone(), user.to_string(), session.to_string());
+        let store = runtime.approval_store();
+        for fingerprint in fingerprints {
+            store.decide(&scope, fingerprint, ToolApproval::deny().with_message(reason)).await?;
+            store.take_approval(&scope, fingerprint).await?;
+        }
+        if let Some(service) = runtime.approval_service() {
+            let mut query = adk_core::InboxQuery::default().with_app_name(self.app_name.clone());
+            loop {
+                let page = service.inbox(query.clone()).await?;
+                for request in &page.items {
+                    if request.scope == scope && fingerprints.contains(&request.fingerprint) {
+                        service.cancel(&request.id, Some(reason.to_string())).await?;
+                    }
+                }
+                match page.next_cursor {
+                    Some(cursor) => query.cursor = Some(cursor),
+                    None => break,
+                }
+            }
+        }
         Ok(())
     }
 
@@ -544,8 +587,8 @@ impl Harness {
     ///
     /// # Errors
     ///
-    /// Returns `harness.decision.invalid` when a rule cannot be remembered for the call,
-    /// or the store's error.
+    /// Returns `harness.decision.invalid` when no pending call has `fingerprint` or a rule
+    /// cannot be remembered for the call, or the store's error.
     pub async fn decide(
         &self,
         user: &UserId,
@@ -557,10 +600,18 @@ impl Harness {
         let scope =
             ApprovalScope::new(self.app_name.clone(), user.to_string(), session.to_string());
         let pending = runtime.approval_store().pending(&scope).await?;
+        // A decision for a call that is not pending — decided, cancelled by a mode change, or
+        // never held — would authorize a later call with the same fingerprint unasked (I14).
         let request = pending
             .iter()
             .find(|entry| entry.fingerprint == fingerprint)
-            .map(|entry| entry.request.clone());
+            .map(|entry| entry.request.clone())
+            .ok_or_else(|| {
+                store_error(
+                    "no pending call has this fingerprint: it was decided, cancelled by a mode \
+                     change, or never held",
+                )
+            })?;
         let (approval, remember) = match decision {
             HarnessDecision::Approve => (ToolApproval::approve(), None),
             HarnessDecision::ApproveWithArgs(args) => {
@@ -585,8 +636,6 @@ impl Harness {
             ),
         };
         if let Some((suggestion, rule_decision)) = remember {
-            let request =
-                request.ok_or_else(|| store_error("no pending call has this fingerprint"))?;
             let origin = request
                 .origin
                 .as_ref()
