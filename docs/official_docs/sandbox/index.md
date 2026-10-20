@@ -201,6 +201,26 @@ must, so a path that does not exist yet cannot be protected from creation this w
 > does not mount the dynamic loader's `/lib` path, and dynamically linked programs fail to
 > start with `execvp: No such file or directory`. Allow `/` read-only on such hosts.
 
+### The Harness Shell
+
+`adk-harness` runs its `bash` tool under these enforcers when the harness is built with
+`ShellIsolation::OsSandbox`. Its `SandboxLauncher` is a devtools `CommandLauncher` over
+`sandboxed_command`:
+
+| Policy entry | Read-write (Ask, Auto) | Read-only (Plan, ReadOnly) |
+|---|---|---|
+| Workspace root | `ReadWrite`, with each existing protected path (`.git`, `AGENTS.md`, …) `ReadOnly` inside it | `ReadOnly` |
+| Per-session scratch directory, also `HOME` and `TMPDIR` | `ReadWrite` | `ReadWrite` |
+| Toolchain directories (`PATH`, Cargo, rustup, Homebrew, …) | `ReadOnly` | `ReadOnly` |
+
+On bubblewrap the launcher recreates a symbolically linked toolchain path such as `/bin` or
+`/lib64` with `--symlink` and mounts `/dev` and `/proc`, so a merged-`/usr` host needs no
+read-only `/`. On macOS it puts the active developer directory's tools first on `PATH`, since
+the Xcode shims cannot run under Seatbelt. The harness probes the enforcer when it is built
+and on every call, refuses rather than falling back to the host, and runs the nested
+read-only conformance script above before it lets sandboxed commands run unapproved. See
+[Harness Shell and Sandbox](../harness/shell-and-sandbox.md).
+
 ### Feature Flags
 
 ```toml
