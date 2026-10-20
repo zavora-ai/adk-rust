@@ -367,6 +367,9 @@ the caller's identity from each request. With one configured:
   (`ExtractionFailed`).
 - Runs use the authenticated `user_id` in place of the request's `userId`, including the `user_id`
   in the path of `POST /api/run/{app_name}/{user_id}/{session_id}`.
+- Background runs (`/api/runs`, feature `background`) belong to their caller: the list holds
+  only the caller's runs, another owner's run answers `404` to `GET`, `DELETE`, and
+  `POST .../wake`, and `idempotencyKey` and `concurrencyKey` are scoped to the caller.
 - Session and artifact routes whose path names another user's `user_id` answer `403`.
   `POST /api/sessions` creates the session for the authenticated user.
 
