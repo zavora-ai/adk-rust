@@ -17,7 +17,7 @@
 
 mod todo;
 
-pub use todo::{TodoItem, TodoTool};
+pub use todo::{TODOS_STATE_KEY, TodoItem, TodoTool};
 
 use std::sync::Arc;
 
@@ -43,8 +43,8 @@ Operating rules:
 - Never invent file contents — read first. Report what you actually did.
 - When the task is complete and verified, summarize the changes concisely.";
 
-/// A configured coding agent: an [`LlmAgent`] plus a shared handle to its todo
-/// list.
+/// A configured coding agent: an [`LlmAgent`] plus a handle to the last todo list
+/// it wrote.
 pub struct CodingAgent {
     agent: Arc<LlmAgent>,
     todos: TodoTool,
@@ -66,7 +66,12 @@ impl CodingAgent {
         self.agent
     }
 
-    /// A snapshot of the current todo list (as the model has set it).
+    /// The last todo list any session of this agent wrote in this process.
+    ///
+    /// Each session keeps its own list in session state under [`TODOS_STATE_KEY`];
+    /// this returns whichever session wrote last, which is that session's list only
+    /// when one session runs at a time. Read the key from a session's state for its
+    /// own list.
     pub fn todos(&self) -> Vec<TodoItem> {
         self.todos.items()
     }

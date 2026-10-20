@@ -1,0 +1,120 @@
+//! # adk-harness
+//!
+//! The governed, durable harness agent of ADK-Rust (spec 3.1,
+//! `docs/design/spec-3.1-harness-agent.md`).
+//!
+//! A harness is the ready-made agent a developer runs first: file and shell tools, a
+//! planning loop, skills, approvals and resumable sessions. `adk-harness` builds it as
+//! configuration and policy over an `LlmAgent` (spec 3.1 §6 D-1): every tool call passes
+//! the governed path, where [`HarnessPolicy`] applies the session's [`HarnessMode`] and the
+//! subject's [`StandingRule`]s.
+//!
+//! | Item | Spec |
+//! |---|---|
+//! | [`HarnessAgentBuilder`], [`HarnessAgent`], [`Harness`] | §7.2, §7.3 |
+//! | [`HarnessMode`], [`ModeStore`], [`ExitPlanModeTool`] | §7.4 |
+//! | [`StandingRule`], [`StandingRuleStore`], [`PromptingConfirmationHandler`] | §7.5 |
+//! | [`HarnessPolicy`], [`ToolKind`], [`MODE_TABLE`] | §7.4, §9 |
+//! | [`TodoList`], [`WriteTodosTool`], [`UpdateTodoTool`] | §7.6 |
+//! | [`InstructionsConfig`], [`ProjectInstructions`], [`WorkspaceTrustStore`] | §7.7 |
+//! | `SkillsConfig` (feature `skills`) | §7.8 |
+//! | [`ShellIsolation`], [`HarnessBashTool`], [`ShellLedger`] | §7.9 |
+//! | [`coding::CodingAgent`] | §7.19 |
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use std::sync::Arc;
+//! use adk_harness::{HarnessAgent, HarnessMode};
+//!
+//! let harness = HarnessAgent::builder("harness")
+//!     .model(model)
+//!     .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
+//!     .mode(HarnessMode::Ask)
+//!     .prompter(Arc::new(my_terminal_prompter))
+//!     .build()?
+//!     .into_harness("adk-rust", sessions)?;
+//! let session = harness.open_session(&user, None).await?;
+//! let events = harness.send(&user, &session, "make the failing test pass").await?;
+//! ```
+
+#![warn(missing_docs)]
+
+mod agent;
+mod audit;
+mod builder;
+mod fsutil;
+mod goal;
+#[cfg(feature = "runner")]
+mod harness;
+mod instructions;
+mod mode;
+mod policy;
+mod prompt;
+mod shell;
+#[cfg(feature = "skills")]
+mod skills;
+#[cfg(feature = "team")]
+mod team;
+mod tools;
+mod toolset;
+
+pub mod approvals;
+#[path = "presets/coding.rs"]
+pub mod coding;
+pub mod conformance;
+
+pub use agent::{HARNESS_UNGOVERNED_CODE, HarnessAgent, HarnessInfo, HarnessLayer, HarnessRuntime};
+#[cfg(feature = "sqlite")]
+pub use approvals::SqliteStandingRuleStore;
+pub use approvals::{
+    ApprovalPrompt, ApprovalPrompter, ArgSpec, DEFAULT_PROMPTS_PER_TURN, FileStandingRuleStore,
+    InMemoryStandingRuleStore, OriginPin, PromptAnswer, PromptingConfirmationHandler,
+    RENDERED_CALL_MAX_BYTES, RenderedCall, RuleOwner, RulePredicate, RuleScope, RuleSuggestion,
+    SHELL_PREFIX_SUGGESTION_DENYLIST, StandingDecision, StandingRule, StandingRuleStore,
+    SuggestedScope, escape_control,
+};
+#[cfg(feature = "observe")]
+pub use builder::LoopGuard;
+pub use builder::{HarnessAgentBuilder, Pack};
+#[cfg(feature = "graph")]
+pub use goal::GoalEngine;
+pub use goal::{GoalSpec, GoalState, GoalStatus};
+#[cfg(feature = "runner")]
+pub use harness::{CANCELLED_BY_MODE_CHANGE_STATUS, Harness, HarnessDecision};
+pub use instructions::{
+    FALLBACK_INSTRUCTION_FILES, FileWorkspaceTrustStore, InMemoryWorkspaceTrustStore,
+    InstructionFile, InstructionScope, InstructionsConfig, ProjectInstructions, TrustDecision,
+    WorkspaceTrust, WorkspaceTrustStore,
+};
+#[cfg(feature = "sqlite")]
+pub use mode::SqliteModeStore;
+pub use mode::{
+    FileModeStore, HarnessMode, InMemoryModeStore, MODE_STATE_KEY, ModeChange, ModeRecord,
+    ModeSource, ModeStore,
+};
+pub use policy::{
+    HARNESS_POLICY_REF, HarnessPolicy, Isolation, MODE_TABLE, ModeCell, PolicySwitches,
+    TableDecision, TableRow, ToolClassRegistry, ToolKind, apply_rule, decision_cell,
+    has_harness_layer,
+};
+pub use prompt::HARNESS_SYSTEM_PROMPT;
+#[cfg(feature = "sqlite")]
+pub use shell::SqliteShellLedger;
+pub use shell::{AUTO_ALLOW_UNAVAILABLE_CODE, SANDBOX_PROTECTED_PATHS};
+pub use shell::{
+    InMemoryShellLedger, IsolationStatus, SANDBOX_UNAVAILABLE_CODE, ShellConfig, ShellIsolation,
+    ShellLedger, ShellLedgerEntry,
+};
+#[cfg(feature = "sandbox")]
+pub use shell::{OsSandboxConfig, SandboxAccess, SandboxLauncher};
+#[cfg(feature = "skills")]
+pub use skills::{SkillsConfig, SkillsMode};
+#[cfg(feature = "team")]
+pub use team::{MemberKind, MemberSpec, MemberTools};
+pub use tools::{
+    ExitPlanModeTool, GOVERNANCE_POLL_INTERVAL, HarnessBashTool, MAX_TODO_CHARS, MAX_TODO_ITEMS,
+    PLAN_STATE_KEY, PlanGate, PlanStep, TODOS_STATE_KEY, TodoItem, TodoList, TodoStatus,
+    UpdateTodoTool, WriteTodosTool,
+};
+pub use toolset::HarnessToolset;

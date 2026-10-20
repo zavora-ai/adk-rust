@@ -8,6 +8,9 @@
 //! This crate provides:
 //!
 //! - [`Launcher`] — embeddable CLI that gives any agent a REPL and a web server
+//! - [`ConsoleConfirmationHandler`] — answers tool calls held for confirmation at the console
+//! - [`ConsoleIo`] — the single terminal reader the REPL and every prompt share
+//! - [`ConsoleCommand`] — slash commands registered with the REPL
 //! - [`console::run_console`] — quick one-call REPL for examples
 //! - [`serve::run_serve`] — quick one-call HTTP server for examples
 //!
@@ -27,7 +30,8 @@
 //!
 //! ## Modes
 //!
-//! - **Interactive**: rustyline REPL with history, streaming output, and think-block rendering
+//! - **Interactive**: rustyline REPL with history, streaming output, think-block rendering,
+//!   and approval prompts for tool calls held for confirmation
 //! - **Server**: HTTP server with web UI (`serve --port 8080`), listening on `127.0.0.1` by default
 
 pub mod console;
@@ -37,4 +41,7 @@ pub mod serve;
 #[cfg(feature = "optimize")]
 pub mod optimize;
 
+pub use console::{
+    ConsoleCommand, ConsoleCommandContext, ConsoleConfirmationHandler, ConsoleInput, ConsoleIo,
+};
 pub use launcher::Launcher;

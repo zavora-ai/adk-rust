@@ -578,7 +578,9 @@ impl ServerBuilder {
     /// router is built inside a Tokio runtime. The state obeys
     /// [`ServerConfig::governance`] unless it carries its own control. When a
     /// `RequestContextExtractor` is configured, every request must authenticate, and an
-    /// authenticated run belongs to the caller's user id. Mounting
+    /// authenticated run belongs to the caller's user id: the caller lists, reads, cancels,
+    /// and wakes only their own runs, another owner's run answers `404`, and the caller's
+    /// idempotency and concurrency keys are scoped to the caller. Mounting
     /// [`background_runs_router_with_state`](crate::background::background_runs_router_with_state)
     /// yourself skips that layer.
     ///

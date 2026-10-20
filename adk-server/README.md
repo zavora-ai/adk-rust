@@ -372,6 +372,17 @@ fn durable(
 
 `POST /runs` takes `target` (or `workflowId`), `input`, `sessionId`, `idempotencyKey`, `concurrencyKey`, `onConflict` (`reject`, `enqueue`, `interrupt`), `notBefore`, and `maxRetries`. An existing idempotency key returns the existing run with `200` and `"existing": true`; a `reject` conflict returns `409` with `blockingRunId`; an unknown target returns `404`; a frozen or stale kill switch returns `503`.
 
+**Who owns a run.** With a `RequestContextExtractor` (`ServerConfig::with_request_context`), a run belongs to the authenticated caller:
+
+| Request | Another owner's run |
+|---------|---------------------|
+| `GET /runs` | Not listed; the list holds only the caller's runs |
+| `GET`, `DELETE /runs/{id}`, `POST /runs/{id}/wake` | `404 run not found`, the answer for an unknown id |
+| `POST /runs` with an `idempotencyKey` | Never returned; the key is scoped to the caller, so another user's identical key creates its own run |
+| `POST /runs` with a `concurrencyKey` | Never rejects, queues behind, or interrupts it; the key is scoped to the caller |
+
+Runs the scheduler and webhook hooks enqueue belong to their service user (`cron`, or the hook's user). Without an extractor there is no caller to check: every client reads, lists, cancels, and wakes every run, keys are shared, and the server logs a warning once.
+
 A cron job is a schedule whose id is its name, evaluated in `timezone` (IANA, default `UTC`), with a `missedFirePolicy` for occurrences missed while the scheduler was behind. Creating a job with an existing name returns `409`.
 
 | `concurrencyPolicy` | Run template |
@@ -382,7 +393,7 @@ A cron job is a schedule whose id is its name, evaluated in `timezone` (IANA, de
 
 Each fire time is enqueued once however many replicas run the scheduler, and resuming a paused job skips the occurrences that fell inside the pause.
 
-> **Important:** the standalone routers (`background_runs_router`, `cron_jobs_router`) carry no authentication. `ServerBuilder::with_background_runs` and `ServerBuilder::with_cron_jobs` serve `/api/runs` and `/api/cron` behind the server's auth middleware; put a standalone mount behind your own authentication layer.
+> **Important:** the standalone routers (`background_runs_router`, `cron_jobs_router`) carry no authentication, so they apply no owner checks. `ServerBuilder::with_background_runs` and `ServerBuilder::with_cron_jobs` serve `/api/runs` and `/api/cron` behind the server's auth middleware; put a standalone mount behind your own authentication layer.
 
 **What survives a restart.** With a durable run store, everything: a run whose worker stopped is recovered by another worker once its lease expires and resumes from its checkpoint (see [Durable Runtime](../docs/official_docs/core/durable-runtime.md#crash-resume)). Finished runs are pruned after `DurableWorkerConfig::retain_finished` (24 hours by default). An agent run that ends holding a tool call for approval is parked (until woken, or until `DurableWorkerConfig::approval_timeout` when set) and resumes on the same session.
 

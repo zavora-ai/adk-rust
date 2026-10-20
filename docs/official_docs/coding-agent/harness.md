@@ -36,12 +36,36 @@ Builder options:
 
 - **The dev toolset** — read/write/edit/glob/grep/bash, scoped to the workspace.
 - **`write_todos`** — a planning tool the model uses to record and update a short
-  task list. Read it back from the harness:
+  task list. Each call replaces the list of the session it runs in, stored in
+  session state under `harness:todos` (`adk_agent::coding::TODOS_STATE_KEY`) as
+  `{ "items": [{ "id", "content", "status" }], "revision" }`, so sessions sharing one
+  agent keep separate plans. UIs see each write in
+  `event.actions.state_delta["harness:todos"]`. `coding.todos()` returns the last
+  list any session wrote in this process, which is the running session's list when
+  one session runs at a time:
 
   ```rust
   for todo in coding.todos() {
       println!("[{}] {}", todo.status, todo.content);  // pending | in_progress | completed
   }
+  ```
+
+  For a specific session, read the key from its state:
+
+  ```rust
+  use adk_agent::coding::TODOS_STATE_KEY;
+  use adk_session::GetRequest;
+
+  let session = sessions
+      .get(GetRequest {
+          app_name: "my-app".into(),
+          user_id: "user".into(),
+          session_id: "session-1".into(),
+          num_recent_events: None,
+          after: None,
+      })
+      .await?;
+  let todos = session.state().get(TODOS_STATE_KEY); // Some({"items": [...], "revision": n})
   ```
 
 - **A minimal prompt** — sub-1k-token base instructions ("explore before you

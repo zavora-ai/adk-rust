@@ -794,6 +794,11 @@ impl ReadonlyContext for InvocationContext {
         self.run_config.acting_context_for(self.app_name(), self.agent_name(), self.user_id())
     }
 
+    /// `true` when the run carries a [`RequestContext`] (spec 3.1 §10 F5).
+    fn is_authenticated(&self) -> bool {
+        self.request_context.is_some()
+    }
+
     fn state(&self) -> Option<&dyn adk_core::State> {
         // Expose the runner's mutable session view so a toolset can observe a
         // state delta emitted by an earlier tool result on the next model turn.

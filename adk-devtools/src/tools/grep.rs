@@ -17,7 +17,8 @@ const MAX_FILE_BYTES: u64 = 5 * 1_048_576;
 const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".venv", "dist", "build"];
 
 /// Searches file contents for a regular expression, returning `path:line: text`
-/// matches. Skips common build/VCS directories and binary/oversized files.
+/// matches. Skips common build/VCS directories, binary/oversized files and files
+/// matching the workspace's exclusion patterns ([`Workspace::exclude_globs`]).
 pub struct GrepTool {
     workspace: Workspace,
 }
@@ -100,9 +101,10 @@ fn search(
     ws: &Workspace,
 ) -> (Vec<String>, bool) {
     let mut out = Vec::new();
-    let walker = WalkDir::new(base)
-        .into_iter()
-        .filter_entry(|e| !e.file_name().to_str().map(|n| SKIP_DIRS.contains(&n)).unwrap_or(false));
+    let walker = WalkDir::new(base).into_iter().filter_entry(|e| {
+        !e.file_name().to_str().map(|n| SKIP_DIRS.contains(&n)).unwrap_or(false)
+            && !ws.is_excluded(e.path())
+    });
 
     for entry in walker.filter_map(std::result::Result::ok) {
         if !entry.file_type().is_file() {

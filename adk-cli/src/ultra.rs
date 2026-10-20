@@ -15,7 +15,6 @@ use adk_graph::graph::StateGraph;
 use adk_graph::node::{ExecutionConfig, NodeOutput};
 use adk_graph::state::State;
 use adk_graph::{DeferredNodeConfig, MergeStrategy};
-use adk_model::ModelProvider;
 use adk_runner::Runner;
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use anyhow::Result;
@@ -31,18 +30,16 @@ const REVIEWERS: &[(&str, &str)] = &[
 ];
 
 /// Run the ultracode workflow on `task` in `dir`.
-#[allow(clippy::too_many_arguments)]
+///
+/// `instruction` is project guidance added to the implementing and reviewing agents.
 pub async fn run(
-    cli_provider: Option<ModelProvider>,
-    cli_model: Option<String>,
-    cli_api_key: Option<String>,
-    thinking_budget: Option<u32>,
+    model: Arc<dyn Llm>,
+    model_id: &str,
+    instruction: Option<String>,
     dir: String,
     task: String,
     max_rounds: i64,
 ) -> Result<()> {
-    let (provider, model_id) = crate::resolve_model_id(cli_provider, cli_model);
-    let model = crate::build_model(provider, &model_id, cli_api_key, thinking_budget)?;
     let root = PathBuf::from(&dir);
 
     println!("ultracode ({model_id}) on {dir}");
@@ -52,7 +49,7 @@ pub async fn run(
         REVIEWERS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
     );
 
-    let graph = build_graph(model, root, max_rounds)?;
+    let graph = build_graph(model, root, instruction, max_rounds)?;
     let mut input = State::new();
     input.insert("task".into(), json!(task));
     input.insert("round".into(), json!(0));
@@ -67,6 +64,7 @@ pub async fn run(
 fn build_graph(
     model: Arc<dyn Llm>,
     root: PathBuf,
+    instruction: Option<String>,
     max_rounds: i64,
 ) -> Result<adk_graph::CompiledGraph> {
     let mut graph = StateGraph::with_channels(&[
@@ -82,13 +80,15 @@ fn build_graph(
     graph = graph.add_node_fn("implement", {
         let model = model.clone();
         let root = root.clone();
+        let instruction = instruction.clone();
         move |ctx| {
             let model = model.clone();
             let root = root.clone();
+            let instruction = instruction.clone();
             async move {
                 let task = ctx.get("task").and_then(Value::as_str).unwrap_or_default().to_string();
                 println!("━━ implement ━━");
-                let agent = coding_agent(model, &root);
+                let agent = coding_agent(model, &root, instruction);
                 run_agent(agent, "implement", &task, true).await.ok();
                 Ok(NodeOutput::new())
             }
@@ -100,18 +100,20 @@ fn build_graph(
         graph = graph.add_node_fn(&format!("review_{name}"), {
             let model = model.clone();
             let root = root.clone();
+            let instruction = instruction.clone();
             let name = name.to_string();
             let desc = desc.to_string();
             let key = key.clone();
             move |ctx| {
                 let model = model.clone();
                 let root = root.clone();
+                let instruction = instruction.clone();
                 let name = name.clone();
                 let desc = desc.clone();
                 let key = key.clone();
                 let task = ctx.get("task").and_then(Value::as_str).unwrap_or_default().to_string();
                 async move {
-                    let agent = review_agent(model, &root, &name, &desc);
+                    let agent = review_agent(model, &root, &name, &desc, instruction.as_deref());
                     let prompt = format!(
                         "The task being implemented is:\n{task}\n\nReview the code in the \
                          workspace against this task now."
@@ -179,6 +181,7 @@ fn build_graph(
         move |ctx| {
             let model = model.clone();
             let root = root.clone();
+            let instruction = instruction.clone();
             async move {
                 let notes = ctx.get("notes").and_then(Value::as_str).unwrap_or("").to_string();
                 println!("━━ revise ━━");
@@ -186,7 +189,7 @@ fn build_graph(
                     "Apply this review feedback, then verify it still works. Keep all behavior \
                      the task requires:\n{notes}"
                 );
-                let agent = coding_agent(model, &root);
+                let agent = coding_agent(model, &root, instruction);
                 run_agent(agent, "revise", &prompt, true).await.ok();
                 Ok(NodeOutput::new())
             }
@@ -222,23 +225,32 @@ fn build_graph(
     Ok(graph.compile()?.with_recursion_limit(steps.max(16)))
 }
 
-fn coding_agent(model: Arc<dyn Llm>, root: &Path) -> Arc<dyn Agent> {
-    CodingAgent::builder()
-        .model(model)
-        .workspace(Workspace::new(root).allow_bash(true))
-        .build()
-        .expect("coding agent")
-        .into_agent()
+fn coding_agent(model: Arc<dyn Llm>, root: &Path, instruction: Option<String>) -> Arc<dyn Agent> {
+    let mut builder =
+        CodingAgent::builder().model(model).workspace(Workspace::new(root).allow_bash(true));
+    if let Some(instruction) = instruction {
+        builder = builder.instruction(instruction);
+    }
+    builder.build().expect("coding agent").into_agent()
 }
 
-fn review_agent(model: Arc<dyn Llm>, root: &Path, focus: &str, desc: &str) -> Arc<dyn Agent> {
-    let instruction = format!(
+fn review_agent(
+    model: Arc<dyn Llm>,
+    root: &Path,
+    focus: &str,
+    desc: &str,
+    guidance: Option<&str>,
+) -> Arc<dyn Agent> {
+    let mut instruction = format!(
         "You are a strict but fair senior code reviewer. Focus ONLY on {focus}: {desc}. \
          Use read_file/glob/grep to inspect the code in the workspace. Reply with a single \
          final line 'VERDICT: approve' if it meets the bar, or 'VERDICT: changes' followed by \
          a short bullet list of required changes. Do not request removing behavior the task \
          requires. Do not modify files."
     );
+    if let Some(guidance) = guidance {
+        instruction.push_str(&format!("\n\nProject guidance the code must follow:\n{guidance}"));
+    }
     Arc::new(
         LlmAgentBuilder::new(format!("review-{focus}"))
             .model(model)

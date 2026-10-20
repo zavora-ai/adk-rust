@@ -1,0 +1,126 @@
+//! `HarnessToolset`: the harness tools and per-request reminders (spec 3.1 §7.6, §7.7).
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use adk_core::{Content, LlmRequest, ReadonlyContext, Result, Tool, Toolset};
+use async_trait::async_trait;
+
+use crate::mode::{HarnessMode, ModeStore};
+use crate::tools::TodoList;
+
+/// The harness tools as one [`Toolset`] (spec 3.1 §7.1).
+///
+/// The tool list is fixed for the agent's lifetime — `exit_plan_mode` is declared in
+/// every mode — so the tool surface and the provider's prompt cache stay stable; the
+/// policy decides what each mode allows. [`process_llm_request`](Toolset::process_llm_request)
+/// appends a one-line mode banner to every request and a reminder of the open todos when
+/// the list changed, at the end of the request, keeping the cached prefix stable
+/// (spec 3.1 §7.6, §7.7).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let names = harness.runtime().toolset().tool_names();
+/// assert!(names.contains(&"exit_plan_mode".to_string()));
+/// ```
+pub struct HarnessToolset {
+    tools: Vec<Arc<dyn Tool>>,
+    mode_store: Arc<dyn ModeStore>,
+    default_mode: HarnessMode,
+    reminded: Mutex<HashMap<String, u64>>,
+}
+
+impl HarnessToolset {
+    pub(crate) fn new(
+        tools: Vec<Arc<dyn Tool>>,
+        mode_store: Arc<dyn ModeStore>,
+        default_mode: HarnessMode,
+    ) -> Self {
+        Self { tools, mode_store, default_mode, reminded: Mutex::new(HashMap::new()) }
+    }
+
+    /// Names of the tools, in declaration order.
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tools.iter().map(|tool| tool.name().to_string()).collect()
+    }
+}
+
+/// The one-line banner describing what `mode` allows.
+pub(crate) fn mode_banner(mode: HarnessMode) -> String {
+    let rule = match mode {
+        HarnessMode::ReadOnly => "read-only: you may read and keep todos; nothing else runs",
+        HarnessMode::Plan => {
+            "plan: investigate with read-only tools, then present a plan with exit_plan_mode; \
+             edits and commands are refused until the user approves the plan"
+        }
+        HarnessMode::Ask => "ask: edits and commands run after the user approves them",
+        HarnessMode::Auto => "auto: edits run without asking; host commands still need approval",
+    };
+    format!("Harness mode is {rule}.")
+}
+
+fn todo_reminder(list: &TodoList) -> String {
+    let open: Vec<String> = list
+        .open_items()
+        .map(|item| {
+            format!(
+                "- [{}] {}: {}",
+                serde_json::to_value(item.status)
+                    .ok()
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_default(),
+                item.id,
+                item.content
+            )
+        })
+        .collect();
+    if open.is_empty() {
+        "All todos are complete.".to_string()
+    } else {
+        format!("Open todos (revision {}):\n{}", list.revision, open.join("\n"))
+    }
+}
+
+#[async_trait]
+impl Toolset for HarnessToolset {
+    fn name(&self) -> &str {
+        "harness"
+    }
+
+    async fn tools(&self, _ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
+        Ok(self.tools.clone())
+    }
+
+    async fn process_llm_request(
+        &self,
+        ctx: Arc<dyn ReadonlyContext>,
+        request: &mut LlmRequest,
+    ) -> Result<()> {
+        let mode = match self.mode_store.get(ctx.app_name(), ctx.user_id(), ctx.session_id()).await
+        {
+            Ok(Some(record)) => record.mode_for_invocation(ctx.invocation_id()),
+            Ok(None) => self.default_mode,
+            Err(_) => HarnessMode::ReadOnly,
+        };
+        let mut lines = vec![mode_banner(mode)];
+        if let Some(list) = ctx.state().map(TodoList::from_state)
+            && list.revision > 0
+        {
+            let key = format!("{}\u{1f}{}", ctx.session_id(), ctx.agent_name());
+            let mut reminded = self.reminded.lock().unwrap_or_else(|e| e.into_inner());
+            if reminded.len() > 4096 {
+                reminded.clear();
+            }
+            if reminded.get(&key) != Some(&list.revision) {
+                reminded.insert(key, list.revision);
+                lines.push(todo_reminder(&list));
+            }
+        }
+        request.contents.push(
+            Content::new("user")
+                .with_text(format!("<system-reminder>\n{}\n</system-reminder>", lines.join("\n"))),
+        );
+        Ok(())
+    }
+}

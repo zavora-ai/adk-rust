@@ -12,6 +12,10 @@
 //! `PluginContext` enables this by allowing plugins to insert and retrieve values
 //! keyed by their Rust type. Each unique type can have exactly one value stored.
 //!
+//! [`EnhancedPluginManager`](crate::EnhancedPluginManager) hands each invocation its own
+//! context, so state one user's run writes is never read by another's. State meant for every
+//! invocation of the agent goes in [`PluginContext::shared`].
+//!
 //! # Examples
 //!
 //! ```rust
@@ -49,6 +53,7 @@
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
@@ -91,6 +96,8 @@ use tokio::sync::RwLock;
 /// ```
 pub struct PluginContext {
     state: RwLock<HashMap<TypeId, Box<dyn Any + Send + Sync>>>,
+    /// The per-agent context this invocation's context reaches through `shared()`.
+    shared: Option<Arc<PluginContext>>,
 }
 
 impl PluginContext {
@@ -104,7 +111,65 @@ impl PluginContext {
     /// let ctx = PluginContext::new();
     /// ```
     pub fn new() -> Self {
-        Self { state: RwLock::new(HashMap::new()) }
+        Self { state: RwLock::new(HashMap::new()), shared: None }
+    }
+
+    /// Creates an empty context for one invocation whose [`shared`](Self::shared) context is
+    /// `shared`.
+    ///
+    /// [`EnhancedPluginManager`](crate::EnhancedPluginManager) creates one per invocation
+    /// over its per-agent context; build one directly to test a plugin outside a manager.
+    /// Implements spec 3.1 §12 phase 0 (`PluginContext` per invocation).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use adk_plugin::PluginContext;
+    ///
+    /// #[derive(Clone, Debug, PartialEq)]
+    /// struct Calls(u32);
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let agent_wide = Arc::new(PluginContext::new());
+    /// let invocation = PluginContext::with_shared(Arc::clone(&agent_wide));
+    ///
+    /// invocation.insert(Calls(1)).await;
+    /// invocation.shared().insert(Calls(7)).await;
+    /// assert_eq!(invocation.get::<Calls>().await, Some(Calls(1)));
+    /// assert_eq!(agent_wide.get::<Calls>().await, Some(Calls(7)));
+    /// # }
+    /// ```
+    pub fn with_shared(shared: Arc<PluginContext>) -> Self {
+        Self { state: RwLock::new(HashMap::new()), shared: Some(shared) }
+    }
+
+    /// Returns the context every invocation of the agent shares.
+    ///
+    /// Hooks receive their invocation's context; state that must outlive the invocation or
+    /// be seen by other users' invocations, such as an agent-wide rate limit, goes here. A
+    /// context created with [`new`](Self::new) has no separate shared context and returns
+    /// itself. Implements spec 3.1 §12 phase 0 (`PluginContext` per invocation).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use adk_plugin::PluginContext;
+    ///
+    /// #[derive(Clone, Debug, PartialEq)]
+    /// struct Limit(u32);
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let ctx = PluginContext::new();
+    /// ctx.shared().insert(Limit(10)).await;
+    /// assert_eq!(ctx.get::<Limit>().await, Some(Limit(10)));
+    /// # }
+    /// ```
+    pub fn shared(&self) -> &PluginContext {
+        self.shared.as_deref().unwrap_or(self)
     }
 
     /// Inserts a value into the context. The type itself is the key.
@@ -305,6 +370,20 @@ mod tests {
     async fn test_default_creates_empty_context() {
         let ctx = PluginContext::default();
         assert!(!ctx.contains::<Counter>().await);
+    }
+
+    #[tokio::test]
+    async fn an_invocation_context_keeps_its_state_apart_from_the_shared_one() {
+        let shared = Arc::new(PluginContext::new());
+        let first = PluginContext::with_shared(Arc::clone(&shared));
+        let second = PluginContext::with_shared(Arc::clone(&shared));
+
+        first.insert(Counter(1)).await;
+        assert_eq!(second.get::<Counter>().await, None);
+
+        first.shared().insert(Name("agent-wide".to_string())).await;
+        assert_eq!(second.shared().get::<Name>().await, Some(Name("agent-wide".to_string())));
+        assert_eq!(second.get::<Name>().await, None);
     }
 
     #[tokio::test]

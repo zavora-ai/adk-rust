@@ -1,10 +1,12 @@
 # Coding Agent CLI
 
 The `adk-rust` CLI ships three native coding commands. All run a real agent in a
-**confined workspace**, default to Gemini (`gemini-3.7-flash`), and resolve the API key
-non-interactively from `--api-key` or the environment
-(`GEMINI_API_KEY`/`GOOGLE_API_KEY`, `OPENAI_API_KEY`, …) — so they never block on
-a setup prompt.
+**confined workspace** and resolve their model the way `chat` does: `--provider`, `--model`
+and `--api-key`, then the provider's environment variable (`GOOGLE_API_KEY`/`GEMINI_API_KEY`,
+`OPENAI_API_KEY`, …), the OS credential store, and the provider saved by first-run setup.
+Setup prompts only on a terminal; without one, a command with no configured provider fails
+and names the flags to pass, so it never blocks on a prompt. `--instruction` adds project
+guidance to the coding prompt.
 
 > **Important:** `code` (unless `--read-only`), `goal`, and `ultracode` give the agent the
 > `bash` tool. It runs model-written commands on the host with a cleared environment; the

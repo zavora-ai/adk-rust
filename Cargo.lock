@@ -342,6 +342,7 @@ dependencies = [
  "futures",
  "google-cloud-auth 1.15.0",
  "keyring",
+ "libc",
  "rustyline",
  "serde",
  "serde_json",
@@ -666,6 +667,47 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "adk-harness"
+version = "3.0.0"
+dependencies = [
+ "adk-acp",
+ "adk-agent",
+ "adk-auth",
+ "adk-browser",
+ "adk-computer-use",
+ "adk-core",
+ "adk-devtools",
+ "adk-eval",
+ "adk-graph",
+ "adk-managed",
+ "adk-memory",
+ "adk-model",
+ "adk-payments",
+ "adk-realtime",
+ "adk-runner",
+ "adk-sandbox",
+ "adk-server",
+ "adk-session",
+ "adk-skill",
+ "adk-telemetry",
+ "adk-tool",
+ "async-trait",
+ "chrono",
+ "dirs 7.0.0",
+ "futures",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "unicode-normalization",
+ "uuid 1.25.0",
 ]
 
 [[package]]

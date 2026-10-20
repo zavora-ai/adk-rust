@@ -23,12 +23,16 @@ cargo install adk-cli
 # Just run it — interactive setup picks your provider on first run
 adk-rust
 
-# Or pre-configure a provider (the default build compiles Gemini only;
+# Or pre-configure a provider (the default build compiles Gemini, OpenAI and Anthropic;
 # `cargo install adk-cli --features all-providers` adds the others)
 adk-rust --provider gemini --api-key your-key
 
 # Equivalent to:
 adk-rust chat
+
+# Conversations are kept on disk: continue the last one, or a named one
+adk-rust chat --continue
+adk-rust chat --session release-notes
 
 # Web server
 adk-rust serve --port 3000
@@ -45,9 +49,10 @@ See the [Coding Agent guide](../docs/official_docs/coding-agent/cli.md) for `cod
 
 | Feature | Default | Enables |
 |---------|---------|---------|
-| `gemini` | yes | The Gemini provider |
+| `gemini`, `openai`, `anthropic` | yes | The Gemini, OpenAI and Anthropic providers |
 | `audit` | yes | `adk-rust audit verify` and `audit keygen` (through `adk-auth`'s `signed-audit`) |
-| `openai`, `anthropic`, `deepseek`, `groq`, `ollama` | no | The other providers |
+| `persist` | yes | `adk-rust chat` sessions in SQLite at `adk-rust/harness.db` (through `adk-session`'s `sqlite`) |
+| `deepseek`, `groq`, `ollama` | no | The other providers |
 | `all-providers` | no | Every provider |
 | `audit-sql` | no | `adk-rust audit export` from SQLite or PostgreSQL audit stores |
 | `graph-sqlite` | no | The SQLite checkpointer for `adk-rust graph` |
@@ -56,6 +61,7 @@ See the [Coding Agent guide](../docs/official_docs/coding-agent/cli.md) for `cod
 | `vertex-skill-registry` | no | Skill Registry lookups in `adk-rust skills` |
 | `telemetry-otlp` | no | OTLP export for `TelemetryConfig::Otlp` |
 | `optimize` | no | The `Launcher` CLI's `optimize` subcommand, which parses its arguments and logs that optimization is wired through `adk-eval`'s `PromptOptimizer`; it optimizes nothing itself |
+| `scripted-model` | no | Hidden `--model-script` and `--approval-fixture` flags for end-to-end tests: a scripted model and a `record_note` tool that needs approval |
 
 `cargo install adk-cli` builds the default features; add `--features all-providers` for every provider.
 
@@ -72,15 +78,21 @@ See the [Coding Agent guide](../docs/official_docs/coding-agent/cli.md) for `cod
 
 ## First-Run Setup
 
-If no provider is configured, `adk-rust` launches an interactive setup:
+If no provider is configured, every agent command (`chat`, `serve`, `code`, `goal`,
+`ultracode`) launches an interactive setup:
 
-1. Choose a provider from the menu
+1. Choose a provider from the menu, which lists only the providers compiled into this build
 2. Enter your API key (skipped for Ollama)
 3. Provider and model are saved to `adk-rust/config.json` in the platform config directory (`~/.config` on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows)
 4. API keys are stored in your OS credential store (Keychain, Credential Manager, Secret Service)
 
 On subsequent runs, the saved config is used automatically. CLI flags always
 take priority over environment variables, secure credential storage, and saved config.
+
+Setup prompts only on a terminal. Without one, a command with no configured provider, or
+with a provider that has no key, fails with the flags and environment variables to set. A
+saved or `--provider` choice that this build does not compile in fails with the
+`cargo install adk-cli --features <provider>` hint.
 
 ## Binary Commands
 
@@ -98,16 +110,28 @@ adk-rust deploy       Deployment commands
 adk-rust registry     Agent Registry registration and search (`vertex-agent-registry`)
 ```
 
-### Global options (apply to `chat` and `serve`)
+### Global options (apply to `chat`, `serve`, `code`, `goal` and `ultracode`)
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--provider` | saved config or interactive | LLM provider |
 | `--model` | provider default | Model name (provider-specific) |
 | `--api-key` | secure store / env var | API key (overrides all other sources) |
-| `--instruction` | built-in default | Agent system prompt |
+| `--instruction` | built-in default | Agent system prompt; for `code`, `goal` and `ultracode`, project guidance added to the coding prompt |
 | `--thinking-budget` | none | Enable provider-side thinking when supported |
 | `--thinking-mode` | `auto` | Render emitted thinking: `auto`, `show`, `hide` |
+
+### `adk-rust chat` options
+
+| Flag | Description |
+|------|-------------|
+| `--session <id>` | Continue the session with this id, creating it when it does not exist |
+| `--continue` | Continue the most recent session |
+| `--ephemeral` | Keep the conversation in memory only; nothing is written to disk |
+
+With the `persist` feature, conversations are kept in `adk-rust/harness.db` in the platform
+config directory, created readable by its owner only, under the OS user name. The banner
+shows the session id.
 
 ### `adk-rust serve` options
 
@@ -187,11 +211,42 @@ not the bearer token itself.
 | Input | Action |
 |-------|--------|
 | Any text | Send to agent |
-| `/help` | Show commands |
+| `/help` | Show commands, including those registered with `Launcher::with_console_command` |
 | `quit`, `exit`, `/quit`, or `/exit` | Exit |
 | `/clear` | Clear display |
-| Ctrl+C | Interrupt |
+| Ctrl+C | Interrupt; at an approval prompt, deny the call and cancel the run |
 | Up/Down arrows | History |
+
+### Approvals at the console
+
+A tool call held for confirmation (`require_tool_confirmation`, or a `ToolPolicy` that
+requires approval) is shown and asked about at the terminal:
+
+```text
+[tool-call] record_note {"note":"ship it"}
+
+[approval needed] record_note {"note":"ship it"}
+  [y] allow once  [n] deny (reason)  [e] edit args  [?] details > y
+
+[approved] record_note
+
+[tool-response] record_note {"recorded":"ship it"}
+```
+
+| Answer | Effect |
+|--------|--------|
+| `y` | Runs the call once, with the edited arguments when `e` changed them |
+| `n` | Denies the call; a reason typed at the follow-up prompt is reported to the model |
+| `e` | Replaces the arguments with JSON from `$VISUAL`/`$EDITOR`, or typed on one line, then asks again; the policy checks the edited call again |
+| `?` | Shows the call id, the acting agent and subject, the tool's origin and declaration digest, and the full arguments |
+| Ctrl+C | Denies the call and cancels the run |
+
+Prompts for calls in one batch are asked one after another. When stdin is not a terminal,
+every held call is denied with a message, so an unattended run never waits. A prompt waits
+up to an hour (`CONSOLE_CONFIRMATION_TIMEOUT`) unless the run configuration sets another
+`tool_confirmation_timeout`. The governed path asks through
+`ToolConfirmationHandler::decide_approval`; a direct `decide` call, which carries only
+approve or deny, offers `[y] allow once  [n] deny  [?] details`.
 
 ## Library: Launcher
 
@@ -255,8 +310,20 @@ Serve mode listens on `127.0.0.1`; `with_bind_address` listens elsewhere, togeth
 | `with_a2a_base_url(url)` | Enable A2A routes when building or serving |
 | `with_telemetry(config)` | Configure telemetry initialization for serve mode |
 | `with_shutdown_grace_period(dur)` | Maximum graceful shutdown window for the web server |
-| `with_streaming_mode(mode)` | Set streaming mode (currently affects console mode only) |
+| `with_streaming_mode(mode)` | Set streaming mode (currently affects console mode only); takes precedence over the run configuration's |
 | `with_thinking_mode(mode)` | Control how thinking content is rendered in console mode |
+| `with_run_config(config)` | `RunConfig` for console runs, merged with the console settings |
+| `with_tool_policy(policy)` | `ToolPolicy` for every tool call of a console run |
+| `with_confirmation_handler(handler)` | What decides held calls in console runs (default: `ConsoleConfirmationHandler`) |
+| `with_user_id(id)` | The user console runs act for (default `"user"`) |
+| `with_session_id(id)` | Continue this console session, creating it when it does not exist (default: a new session) |
+| `with_console_command(command)` | Register a `ConsoleCommand` slash command |
+| `with_approval_service(service)` | Serve the approval inbox at `/api/approvals`, with its expiry ticker |
+| `with_background_runs(state)` | Serve background runs at `/api/runs` |
+
+The console-run settings do not reach serve mode, which takes no `RunConfig`; `build_app`
+fails while a tool policy is set rather than serve without it. The approval inbox answers
+`401` unless `with_request_context_extractor` authenticates the caller.
 
 ### Execution methods
 
@@ -265,7 +332,7 @@ Serve mode listens on `127.0.0.1`; `with_bind_address` listens elsewhere, togeth
 | `run()` | Parse CLI args and dispatch to chat or serve |
 | `run_console_directly()` | Start the REPL without CLI parsing |
 | `run_serve_directly(port)` | Start the web server without CLI parsing |
-| `build_app()` | Build an `axum::Router` for custom composition |
+| `build_app()` | Build an `axum::Router` for custom composition, through `ServerBuilder` |
 | `build_app_with_a2a(base_url)` | Build an `axum::Router` with A2A routes enabled |
 
 ### Production server composition
@@ -298,7 +365,9 @@ async fn serve(agent: Arc<dyn Agent>) -> Result<(), Box<dyn std::error::Error>> 
 
 ### Telemetry modes
 
-`TelemetryConfig`, `ThinkingDisplayMode`, and `StreamPrinter` live in `adk_cli::launcher`.
+`TelemetryConfig`, `ThinkingDisplayMode`, `StreamPrinter`, and `CONSOLE_CONFIRMATION_TIMEOUT`
+live in `adk_cli::launcher`; `ConsoleIo`, `ConsoleConfirmationHandler`, and `ConsoleCommand`
+in `adk_cli::console`, re-exported at the crate root.
 
 | Variant | Description |
 |---------|-------------|
@@ -315,7 +384,9 @@ async fn serve(agent: Arc<dyn Agent>) -> Result<(), Box<dyn std::error::Error>> 
 | `ThinkingDisplayMode::Hide` | Suppress all thinking content (both `<think>` tags and `Thinking` parts) |
 
 The `StreamPrinter` type handles rendering of streamed response parts including
-text, thinking blocks, function calls/responses, inline data, and file data. It prints
+text, thinking blocks, function calls/responses, inline data, and file data, a held call as
+`[approval needed] <tool> <args> — <reason>`, and an applied decision as `[approved] <tool>`
+or `[denied] <tool>`. It prints
 terminal control characters other than newline and tab as `\u{..}` escapes, so model or
 tool output cannot inject escape sequences into the terminal; stream errors are printed the
 same way. `StreamPrinter::with_writer` renders to any `std::io::Write` instead of stdout.

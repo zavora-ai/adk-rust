@@ -14,7 +14,8 @@
 //! - Inspect and transform tool results after execution
 //! - Modify LLM requests before they are sent
 //! - Transform LLM responses after they are received
-//! - Access shared state via [`PluginContext`] across all hook invocations
+//! - Keep per-invocation state in [`PluginContext`] and agent-wide state in
+//!   [`PluginContext::shared`]
 //! - Define execution priority for deterministic ordering
 //!
 //! # Examples
@@ -72,7 +73,7 @@
 //! }
 //! ```
 //!
-//! ## Plugin using shared context for rate limiting
+//! ## Plugin using the agent-wide context for rate limiting
 //!
 //! ```rust,ignore
 //! use std::sync::Arc;
@@ -106,11 +107,13 @@
 //!         _ctx: Arc<dyn CallbackContext>,
 //!         plugin_ctx: &PluginContext,
 //!     ) -> Result<BeforeToolCallResult> {
-//!         let mut state = plugin_ctx.get::<RateLimitState>().await
+//!         // The limit spans every invocation of the agent, so it lives in the shared context.
+//!         let shared = plugin_ctx.shared();
+//!         let mut state = shared.get::<RateLimitState>().await
 //!             .unwrap_or(RateLimitState { call_count: 0 });
 //!
 //!         state.call_count += 1;
-//!         plugin_ctx.insert(state.clone()).await;
+//!         shared.insert(state.clone()).await;
 //!
 //!         if state.call_count > self.max_calls {
 //!             return Err(AdkError::plugin("rate limit exceeded"));
@@ -172,7 +175,8 @@ pub trait EnhancedPlugin: Send + Sync {
 
     /// Called before a tool is executed.
     ///
-    /// Receives the tool reference, call arguments, callback context, and shared plugin context.
+    /// Receives the tool reference, call arguments, callback context, and the invocation's
+    /// plugin context.
     ///
     /// # Returns
     ///
@@ -195,7 +199,7 @@ pub trait EnhancedPlugin: Send + Sync {
     ///
     /// Receives the tool reference, the arguments that were used for execution
     /// (after any modifications by before-hooks), the result, callback context,
-    /// and shared plugin context.
+    /// and the invocation's plugin context.
     ///
     /// # Returns
     ///
@@ -215,7 +219,7 @@ pub trait EnhancedPlugin: Send + Sync {
 
     /// Called before a model (LLM) call is made.
     ///
-    /// Receives the LLM request, callback context, and shared plugin context.
+    /// Receives the LLM request, callback context, and the invocation's plugin context.
     ///
     /// # Returns
     ///
@@ -235,7 +239,7 @@ pub trait EnhancedPlugin: Send + Sync {
 
     /// Called after a model (LLM) call completes.
     ///
-    /// Receives the LLM response, callback context, and shared plugin context.
+    /// Receives the LLM response, callback context, and the invocation's plugin context.
     ///
     /// # Returns
     ///

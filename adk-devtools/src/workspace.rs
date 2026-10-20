@@ -1,10 +1,11 @@
 //! The sandboxed workspace that scopes every developer-tool operation.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use adk_core::ToolContext;
 use tokio::io::AsyncWriteExt;
 
 use crate::error::DevToolError;
@@ -16,11 +17,14 @@ use crate::error::DevToolError;
 /// and rejected if they escape it. Mutating operations require
 /// [`is_writable`](Self::is_writable); `bash` requires [`bash_allowed`](Self::bash_allowed).
 ///
-/// The workspace also carries a small amount of shared session state — the set
-/// of files that have been read — so that `edit_file` can require a prior
-/// `read_file` (guarding against blind overwrites).
+/// The workspace also records which files have been read, so that `edit_file`
+/// can require a prior `read_file` (guarding against blind overwrites). The record
+/// is kept per session and agent, taken from the tool call's context, so one
+/// session or agent reading a file does not let another edit it.
 ///
-/// `Workspace` is cheap to clone; clones share the read-tracking state.
+/// `Workspace` is cheap to clone. Clones share the read record, which stays
+/// separated by session and agent; calls whose context names no session share one
+/// record.
 #[derive(Clone)]
 pub struct Workspace {
     root: PathBuf,
@@ -28,11 +32,15 @@ pub struct Workspace {
     allow_bash: bool,
     bash_timeout: Duration,
     max_output_bytes: usize,
-    read_tracker: Arc<Mutex<HashSet<PathBuf>>>,
+    read_tracker: Arc<Mutex<ReadTracker>>,
     /// Whether `bash` inherits the parent process environment.
     inherit_env: bool,
     /// Variables passed through when the environment is not inherited.
     env_allowlist: Vec<String>,
+    /// Whether `bash` kills the command's process group once the shell exits.
+    kill_group_on_exit: bool,
+    /// Files that `grep` and `glob` skip and `read_file` refuses.
+    exclude: Vec<glob::Pattern>,
 }
 
 /// Environment variables `bash` receives by default.
@@ -42,6 +50,37 @@ pub struct Workspace {
 /// need to function are passed through, and none of them is a credential.
 pub const DEFAULT_ENV_ALLOWLIST: &[&str] =
     &["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TERM", "USER", "SHELL"];
+
+/// File patterns a new [`Workspace`] excludes: environment files, private keys and
+/// certificate bundles.
+///
+/// `grep` and `glob` skip matching files and `read_file` refuses them with
+/// [`DevToolError::Excluded`]. A pattern matches a path relative to the root, or any
+/// one of its components, ignoring case. Implements spec 3.1 §10 D5.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_devtools::{DEFAULT_EXCLUDE_GLOBS, Workspace};
+///
+/// assert!(DEFAULT_EXCLUDE_GLOBS.contains(&".env"));
+/// let ws = Workspace::new("./my-repo");
+/// assert!(ws.is_excluded(std::path::Path::new("config/.env")));
+/// ```
+pub const DEFAULT_EXCLUDE_GLOBS: &[&str] =
+    &[".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*.p12", "*.pfx"];
+
+/// How many (session, agent) read records a workspace keeps before evicting the
+/// least recently used one.
+const READ_SCOPE_CAPACITY: usize = 1024;
+
+/// Exclusion patterns match regardless of case, since `.ENV` names `.env` on a
+/// case-insensitive file system, and `*` never crosses a `/`.
+const EXCLUDE_MATCH: glob::MatchOptions = glob::MatchOptions {
+    case_sensitive: false,
+    require_literal_separator: true,
+    require_literal_leading_dot: false,
+};
 
 impl Workspace {
     /// Create a read-write workspace rooted at `root`, with `bash` disabled.
@@ -70,9 +109,11 @@ impl Workspace {
             allow_bash: false,
             bash_timeout: Duration::from_secs(120),
             max_output_bytes: 1_048_576,
-            read_tracker: Arc::new(Mutex::new(HashSet::new())),
+            read_tracker: Arc::new(Mutex::new(ReadTracker::default())),
             inherit_env: false,
             env_allowlist: DEFAULT_ENV_ALLOWLIST.iter().map(|k| (*k).to_string()).collect(),
+            kill_group_on_exit: true,
+            exclude: compile_excludes(DEFAULT_EXCLUDE_GLOBS.iter().map(|glob| (*glob).to_string())),
         }
     }
 
@@ -136,6 +177,103 @@ impl Workspace {
     {
         self.env_allowlist = keys.into_iter().map(Into::into).collect();
         self
+    }
+
+    /// Set whether `bash` kills the rest of the command's process group once the
+    /// shell exits. On by default.
+    ///
+    /// With it on, a process the command leaves running in the background — `sleep 300 &`,
+    /// a dev server — is killed when the call returns, and the call does not wait for
+    /// it to close its output. Turn it off only when commands must leave processes
+    /// running; a timeout or a cancelled call still kills the group. Implements spec 3.1
+    /// §10 D3.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_devtools::Workspace;
+    ///
+    /// let ws = Workspace::new("./my-repo").allow_bash(true);
+    /// assert!(ws.kills_bash_group_on_exit());
+    ///
+    /// let keeps_servers = ws.bash_kill_group_on_exit(false);
+    /// assert!(!keeps_servers.kills_bash_group_on_exit());
+    /// ```
+    #[must_use]
+    pub fn bash_kill_group_on_exit(mut self, yes: bool) -> Self {
+        self.kill_group_on_exit = yes;
+        self
+    }
+
+    /// Whether `bash` kills the command's process group once the shell exits.
+    ///
+    /// Set with [`bash_kill_group_on_exit`](Self::bash_kill_group_on_exit); spec 3.1 §10 D3.
+    pub fn kills_bash_group_on_exit(&self) -> bool {
+        self.kill_group_on_exit
+    }
+
+    /// Replace the file patterns `grep` and `glob` skip and `read_file` refuses.
+    ///
+    /// Defaults to [`DEFAULT_EXCLUDE_GLOBS`]; an empty list turns exclusion off. Each
+    /// pattern is a glob matched, ignoring case, against the path relative to the
+    /// root and against each of its components, so `.env` also excludes
+    /// `config/.env` and `secrets/**` everything under `secrets/`. A pattern that is
+    /// not a valid glob matches its literal text. Implements spec 3.1 §10 D5.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::path::Path;
+    ///
+    /// use adk_devtools::Workspace;
+    ///
+    /// let ws = Workspace::new("./my-repo").exclude_globs(["secrets/**".to_string()]);
+    /// assert!(ws.is_excluded(Path::new("secrets/prod/token.txt")));
+    /// assert!(!ws.is_excluded(Path::new(".env")));
+    ///
+    /// let everything = Workspace::new("./my-repo").exclude_globs([]);
+    /// assert!(!everything.is_excluded(Path::new(".env")));
+    /// ```
+    #[must_use]
+    pub fn exclude_globs(mut self, globs: impl IntoIterator<Item = String>) -> Self {
+        self.exclude = compile_excludes(globs);
+        self
+    }
+
+    /// Whether `path` matches one of the exclusion patterns.
+    ///
+    /// `path` is relative to the root, or an absolute path inside it. The check is
+    /// lexical; `read_file` also checks the path a symlink resolves to. A harness
+    /// uses it to require approval before a read. Implements spec 3.1 §10 D5.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::path::Path;
+    ///
+    /// use adk_devtools::Workspace;
+    ///
+    /// let ws = Workspace::new("./my-repo");
+    /// assert!(ws.is_excluded(Path::new("deploy/server.KEY")));
+    /// assert!(!ws.is_excluded(Path::new("src/keys.rs")));
+    /// ```
+    pub fn is_excluded(&self, path: &Path) -> bool {
+        if self.exclude.is_empty() {
+            return false;
+        }
+        let relative = path.strip_prefix(&self.root).unwrap_or(path);
+        self.exclude.iter().any(|pattern| {
+            pattern.matches_path_with(relative, EXCLUDE_MATCH)
+                || relative.components().any(|component| match component {
+                    Component::Normal(name) => {
+                        pattern.matches_with(&name.to_string_lossy(), EXCLUDE_MATCH)
+                    }
+                    Component::Prefix(_)
+                    | Component::RootDir
+                    | Component::CurDir
+                    | Component::ParentDir => false,
+                })
+        })
     }
 
     /// Whether `bash` inherits the parent environment.
@@ -303,16 +441,98 @@ impl Workspace {
         path.strip_prefix(&self.root).unwrap_or(path).display().to_string()
     }
 
-    /// Record that a file has been read this session.
-    pub(crate) fn mark_read(&self, path: &Path) {
-        if let Ok(mut set) = self.read_tracker.lock() {
-            set.insert(path.to_path_buf());
+    /// Record that the session and agent behind `ctx` have read a file.
+    pub(crate) fn mark_read(&self, ctx: &dyn ToolContext, path: &Path) {
+        if let Ok(mut tracker) = self.read_tracker.lock() {
+            tracker.files(ReadScope::of(ctx)).insert(path.to_path_buf());
         }
     }
 
-    /// Whether a file has been read this session.
-    pub(crate) fn was_read(&self, path: &Path) -> bool {
-        self.read_tracker.lock().map(|set| set.contains(path)).unwrap_or(false)
+    /// Whether the session and agent behind `ctx` have read a file.
+    pub(crate) fn was_read(&self, ctx: &dyn ToolContext, path: &Path) -> bool {
+        self.read_tracker
+            .lock()
+            .map(|mut tracker| tracker.files(ReadScope::of(ctx)).contains(path))
+            .unwrap_or(false)
+    }
+}
+
+/// Compiles exclusion globs; a pattern that does not parse matches its literal text.
+fn compile_excludes(globs: impl IntoIterator<Item = String>) -> Vec<glob::Pattern> {
+    globs
+        .into_iter()
+        .map(|glob| {
+            glob::Pattern::new(&glob).unwrap_or_else(|error| {
+                tracing::warn!(
+                    exclude.pattern = %glob,
+                    error = %error,
+                    "exclusion pattern is not a valid glob; matching it literally"
+                );
+                glob::Pattern::new(&glob::Pattern::escape(&glob))
+                    .expect("an escaped pattern is a valid glob")
+            })
+        })
+        .collect()
+}
+
+/// The session and agent a read is recorded for.
+///
+/// Session ids are unique only within an app and user, so both are part of the key.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ReadScope {
+    app: String,
+    user: String,
+    session: String,
+    agent: String,
+}
+
+impl ReadScope {
+    /// The scope of the call behind `ctx`, or `None` when it names no session.
+    fn of(ctx: &dyn ToolContext) -> Option<Self> {
+        let session = ctx.session_id();
+        if session.is_empty() {
+            return None;
+        }
+        Some(Self {
+            app: ctx.app_name().to_string(),
+            user: ctx.user_id().to_string(),
+            session: session.to_string(),
+            agent: ctx.agent_name().to_string(),
+        })
+    }
+}
+
+/// Files read, per (session, agent) scope, with least-recently-used eviction.
+#[derive(Default)]
+struct ReadTracker {
+    /// Reads by calls that name no session.
+    unscoped: HashSet<PathBuf>,
+    /// Reads per scope, with the tick of the scope's last use.
+    scoped: HashMap<ReadScope, (u64, HashSet<PathBuf>)>,
+    tick: u64,
+}
+
+impl ReadTracker {
+    /// The read set of `scope`, created (evicting the least recently used scope at
+    /// capacity) if absent.
+    fn files(&mut self, scope: Option<ReadScope>) -> &mut HashSet<PathBuf> {
+        let Some(scope) = scope else {
+            return &mut self.unscoped;
+        };
+        self.tick += 1;
+        if !self.scoped.contains_key(&scope)
+            && self.scoped.len() >= READ_SCOPE_CAPACITY
+            && let Some(oldest) = self
+                .scoped
+                .iter()
+                .min_by_key(|(_, (used, _))| *used)
+                .map(|(oldest, _)| oldest.clone())
+        {
+            self.scoped.remove(&oldest);
+        }
+        let entry = self.scoped.entry(scope).or_default();
+        entry.0 = self.tick;
+        &mut entry.1
     }
 }
 
@@ -429,13 +649,163 @@ mod tests {
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1, "no temporary file is left");
     }
 
+    /// A tool context that names a session and an agent.
+    struct ScopeCtx {
+        session: String,
+        agent: String,
+    }
+
+    impl ScopeCtx {
+        fn new(session: &str, agent: &str) -> Self {
+            Self { session: session.to_string(), agent: agent.to_string() }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl adk_core::ReadonlyContext for ScopeCtx {
+        fn invocation_id(&self) -> &str {
+            "invocation"
+        }
+        fn agent_name(&self) -> &str {
+            &self.agent
+        }
+        fn user_id(&self) -> &str {
+            "user"
+        }
+        fn app_name(&self) -> &str {
+            "app"
+        }
+        fn session_id(&self) -> &str {
+            &self.session
+        }
+        fn branch(&self) -> &str {
+            ""
+        }
+        fn user_content(&self) -> &adk_core::Content {
+            static CONTENT: std::sync::OnceLock<adk_core::Content> = std::sync::OnceLock::new();
+            CONTENT.get_or_init(|| adk_core::Content::new("user").with_text("hi"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl adk_core::CallbackContext for ScopeCtx {
+        fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+            None
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ToolContext for ScopeCtx {
+        fn function_call_id(&self) -> &str {
+            "call"
+        }
+        fn actions(&self) -> adk_core::EventActions {
+            adk_core::EventActions::default()
+        }
+        fn set_actions(&self, _actions: adk_core::EventActions) {}
+        async fn search_memory(
+            &self,
+            _query: &str,
+        ) -> adk_core::Result<Vec<adk_core::MemoryEntry>> {
+            Ok(vec![])
+        }
+    }
+
     #[test]
     fn read_tracking() {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path());
+        let ctx = ScopeCtx::new("session", "agent");
         let p = ws.resolve("a.txt").unwrap();
-        assert!(!ws.was_read(&p));
-        ws.mark_read(&p);
-        assert!(ws.was_read(&p));
+        assert!(!ws.was_read(&ctx, &p));
+        ws.mark_read(&ctx, &p);
+        assert!(ws.was_read(&ctx, &p));
+    }
+
+    #[test]
+    fn clones_keep_reads_apart_by_session_and_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path());
+        let other = ws.clone();
+        let p = ws.resolve("a.txt").unwrap();
+
+        ws.mark_read(&ScopeCtx::new("one", "coder"), &p);
+
+        assert!(other.was_read(&ScopeCtx::new("one", "coder"), &p), "clones share a scope");
+        assert!(!other.was_read(&ScopeCtx::new("two", "coder"), &p), "another session read it");
+        assert!(!other.was_read(&ScopeCtx::new("one", "reviewer"), &p), "another agent read it");
+    }
+
+    #[test]
+    fn calls_without_a_session_share_one_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path());
+        let p = ws.resolve("a.txt").unwrap();
+
+        ws.mark_read(&ScopeCtx::new("", "first"), &p);
+
+        assert!(ws.clone().was_read(&ScopeCtx::new("", "second"), &p));
+        assert!(!ws.was_read(&ScopeCtx::new("session", "first"), &p));
+    }
+
+    #[test]
+    fn the_least_recently_used_scope_is_evicted_at_capacity() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path());
+        let p = ws.resolve("a.txt").unwrap();
+        for session in 0..READ_SCOPE_CAPACITY {
+            ws.mark_read(&ScopeCtx::new(&format!("s{session}"), "agent"), &p);
+        }
+        // Touch the oldest scope so the second oldest is the one evicted.
+        assert!(ws.was_read(&ScopeCtx::new("s0", "agent"), &p));
+
+        ws.mark_read(&ScopeCtx::new("newest", "agent"), &p);
+
+        assert!(
+            ws.was_read(&ScopeCtx::new("s0", "agent"), &p),
+            "a recently used scope was evicted"
+        );
+        assert!(!ws.was_read(&ScopeCtx::new("s1", "agent"), &p), "the oldest scope was kept");
+        let scopes = ws.read_tracker.lock().unwrap().scoped.len();
+        assert_eq!(scopes, READ_SCOPE_CAPACITY);
+    }
+
+    #[test]
+    fn secret_patterns_are_excluded_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path());
+        for secret in [
+            ".env",
+            "config/.env",
+            ".env.production",
+            "certs/server.pem",
+            "tls.KEY",
+            ".ssh/id_rsa",
+            "keys/id_rsa.pub",
+            "id_ed25519",
+            "bundle.p12",
+            "bundle.pfx",
+            ".ENV",
+        ] {
+            assert!(ws.is_excluded(Path::new(secret)), "{secret} was not excluded");
+            assert!(ws.is_excluded(&dir.path().join(secret)), "absolute {secret} was not excluded");
+        }
+        for ordinary in ["src/main.rs", "environment.md", "keys.rs", "README.md", ".envrc"] {
+            assert!(!ws.is_excluded(Path::new(ordinary)), "{ordinary} was excluded");
+        }
+    }
+
+    #[test]
+    fn exclusion_patterns_can_be_replaced_or_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let custom = Workspace::new(dir.path()).exclude_globs(["secrets/**".to_string()]);
+        assert!(custom.is_excluded(Path::new("secrets/prod/token.txt")));
+        assert!(!custom.is_excluded(Path::new(".env")));
+
+        let cleared = Workspace::new(dir.path()).exclude_globs([]);
+        assert!(!cleared.is_excluded(Path::new(".env")));
+
+        let literal = Workspace::new(dir.path()).exclude_globs(["[unclosed".to_string()]);
+        assert!(literal.is_excluded(Path::new("dir/[unclosed")));
     }
 }

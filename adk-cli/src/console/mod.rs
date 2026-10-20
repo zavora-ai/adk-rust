@@ -1,8 +1,20 @@
-//! Legacy console entry point.
+//! Console building blocks and the legacy console entry point.
 //!
-//! New code should use [`Launcher`](crate::Launcher) instead, which provides
-//! the same REPL with additional configuration options (memory, artifacts,
-//! streaming mode, etc.).
+//! - [`ConsoleIo`]: the single terminal reader the REPL and every prompt share
+//! - [`ConsoleConfirmationHandler`]: answers tool calls held for confirmation at the console
+//! - [`ConsoleCommand`]: slash commands registered with the REPL
+//!
+//! [`run_console`] is kept for existing examples. New code should use
+//! [`Launcher`](crate::Launcher) instead, which provides the same REPL with additional
+//! configuration options (memory, artifacts, streaming mode, approvals, etc.).
+
+mod command;
+mod confirm;
+mod io;
+
+pub use command::{ConsoleCommand, ConsoleCommandContext};
+pub use confirm::ConsoleConfirmationHandler;
+pub use io::{ConsoleInput, ConsoleIo};
 
 use adk_core::{Agent, SessionId, UserId};
 use adk_runner::Runner;

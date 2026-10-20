@@ -11,7 +11,8 @@ use crate::tools::read::require_str;
 use crate::workspace::Workspace;
 
 /// Replaces an exact substring in a file. Requires the file to have been read
-/// this session, and (unless `replace_all`) the target string to be unique.
+/// by the same session and agent, and (unless `replace_all`) the target string to
+/// be unique.
 pub struct EditFileTool {
     workspace: Workspace,
 }
@@ -48,7 +49,7 @@ impl Tool for EditFileTool {
         }))
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         if !self.workspace.is_writable() {
             return Err(DevToolError::ReadOnly("edit_file").into());
         }
@@ -58,7 +59,7 @@ impl Tool for EditFileTool {
         let replace_all = args.get("replace_all").and_then(Value::as_bool).unwrap_or(false);
 
         let resolved = self.workspace.resolve(&path)?;
-        if !self.workspace.was_read(&resolved) {
+        if !self.workspace.was_read(ctx.as_ref(), &resolved) {
             return Err(DevToolError::NotRead(self.workspace.display(&resolved)).into());
         }
 
