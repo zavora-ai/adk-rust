@@ -68,6 +68,7 @@ full = [
     "graph-node-cache",
     "graph-delta",
     "graph-time-travel",
+    "harness",
 ]
 
 # Gemini Enterprise Agent Platform — every Vertex/EAP integration except
@@ -146,6 +147,15 @@ payments = ["dep:adk-payments"]
 awp = ["dep:adk-awp"]
 acp = ["dep:adk-acp"]
 computer-use = ["dep:adk-computer-use", "graph", "auth", "mcp"]
+# The governed, durable harness agent (spec 3.1 §8.4). With `cli`, `adk_rust::harness`
+# also re-exports the CLI's `HarnessLauncher` and `ConsolePrompter`.
+harness = ["dep:adk-harness", "agents", "tools", "skills", "sandbox", "runner", "sessions", "graph", "adk-cli?/harness"]
+# Harness packs (forwarded to adk-harness): tools or a surface under the harness policy.
+harness-browser = ["harness", "adk-harness/browser"]
+harness-computer-use = ["harness", "adk-harness/computer-use"]
+harness-payments = ["harness", "adk-harness/payments"]
+harness-voice = ["harness", "adk-harness/voice"]
+harness-managed = ["harness", "adk-harness/managed"]
 
 # Managed agent runtime (feature-gated, experimental). The provider features below also
 # let its `DefaultModelResolver` construct that provider's models.
@@ -367,6 +377,7 @@ adk-awp = { workspace = true, optional = true }
 adk-acp = { workspace = true, optional = true }
 adk-managed = { workspace = true, optional = true }
 adk-enterprise = { workspace = true, optional = true }
+adk-harness = { workspace = true, optional = true }
 
 # Re-export common dependencies
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "signal", "fs", "process", "io-util"] }
@@ -379,6 +390,8 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "signal", "fs", "process", "io-util", "test-util"] }
+# The harness module example builds a `Workspace`.
+adk-devtools = { path = "../adk-devtools" }
 
 [[example]]
 name = "test_unified"

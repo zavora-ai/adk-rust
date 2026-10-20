@@ -306,3 +306,79 @@ mod skills {
         drop(builder);
     }
 }
+
+#[cfg(feature = "harness")]
+mod harness {
+    use adk_rust::futures::StreamExt;
+    use adk_rust::harness::InstructionsConfig;
+    use adk_rust::model::{ScriptedLlm, ScriptedResponse};
+    use adk_rust::prelude::*;
+    use adk_rust::serde_json::json;
+    use adk_rust::session::InMemorySessionService;
+    use adk_rust::{SessionId, UserId};
+
+    /// A fresh directory under the system temp dir; no `tempfile` dev-dependency here.
+    fn workspace() -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        let dir = std::env::temp_dir()
+            .join(format!("adk-rust-harness-wiring-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn agent(dir: &std::path::Path, script: Vec<ScriptedResponse>) -> HarnessAgent {
+        let builder: HarnessAgentBuilder = HarnessAgent::builder("harness");
+        builder
+            .model(Arc::new(ScriptedLlm::new("scripted", script)))
+            .workspace(adk_devtools::Workspace::new(dir))
+            .project_instructions(InstructionsConfig {
+                user_file: None,
+                ..InstructionsConfig::default()
+            })
+            .mode(HarnessMode::Plan)
+            .build()
+            .unwrap()
+    }
+
+    /// `harness` links `adk-harness` behind `adk_rust::harness` and the prelude
+    /// (spec 3.1 §8.4); a harness built through it governs its calls: Plan mode
+    /// refuses a write.
+    #[tokio::test]
+    async fn the_prelude_builds_a_governed_harness() {
+        let dir = workspace();
+        let script = vec![
+            ScriptedResponse::function_call(
+                "write_file",
+                json!({ "path": "notes.txt", "content": "hi" }),
+            ),
+            ScriptedResponse::text("Planned."),
+        ];
+        let harness = agent(&dir, script)
+            .into_harness("wiring", Arc::new(InMemorySessionService::new()))
+            .unwrap();
+        let user = UserId::new("alice").unwrap();
+        let session = harness.open_session(&user, Some(&SessionId::new("s1").unwrap())).await;
+        let session = session.unwrap();
+        let mut events = harness.send(&user, &session, "write a note").await.unwrap();
+        while let Some(event) = events.next().await {
+            event.unwrap();
+        }
+        assert!(!dir.join("notes.txt").exists(), "Plan mode wrote a file");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// With `cli`, the module also re-exports the CLI's launcher and prompter.
+    #[cfg(feature = "cli")]
+    #[test]
+    fn the_cli_launcher_is_re_exported() {
+        let dir = workspace();
+        let launcher = adk_rust::harness::HarnessLauncher::new(agent(&dir, vec![]));
+        assert_eq!(launcher.session_id(), None);
+        let console = adk_rust::harness::ConsoleIo::scripted([], false);
+        let _prompter = adk_rust::harness::ConsolePrompter::new(console);
+        std::fs::remove_dir_all(dir).ok();
+    }
+}

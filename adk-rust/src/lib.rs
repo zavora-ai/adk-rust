@@ -58,8 +58,8 @@
 //! # Enterprise — standard + realtime, browser, rag, payments, awp
 //! adk-rust = { version = "3.0.0", features = ["enterprise"] }
 //!
-//! # Full — enterprise + audio, code, sandbox, code-tools, and the graph-functional,
-//! # graph-node-cache, graph-delta, and graph-time-travel capabilities
+//! # Full — enterprise + audio, code, sandbox, code-tools, the harness, and the
+//! # graph-functional, graph-node-cache, graph-delta, and graph-time-travel capabilities
 //! adk-rust = { version = "3.0.0", features = ["full"] }
 //!
 //! # Custom — pick exactly what you need
@@ -441,6 +441,8 @@
 //! | `code`, `sandbox`, `code-tools` | Code execution and sandboxed execution | full |
 //! | `audio` | Audio processing | full |
 //! | `graph-functional`, `graph-node-cache`, `graph-delta`, `graph-time-travel` | Graph capabilities | full |
+//! | `harness` | The governed, durable harness agent (`adk-harness`) | full |
+//! | `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed` | Harness packs | opt-in |
 //! | `cli` | CLI launcher with serve mode | opt-in |
 //! | `managed-runtime` | Managed agent runtime (`adk-managed`) | opt-in |
 //! | `enterprise-client` | Enterprise client SDK (`adk-enterprise`) | opt-in |
@@ -1093,6 +1095,46 @@ pub mod managed {
     pub use adk_managed::*;
 }
 
+/// The governed, durable harness agent (spec 3.1 §8.4).
+///
+/// Everything `adk-harness` exports: [`HarnessAgent`](harness::HarnessAgent) and its
+/// builder, the modes, standing approvals, the shell, todos, instructions, skills, team
+/// members, plan graphs and goals. With the `cli` feature it also re-exports the CLI's
+/// `HarnessLauncher`, which runs a harness at the console or behind the server,
+/// `ConsolePrompter`, which asks for approvals at the terminal, and the `ConsoleIo` it
+/// reads from.
+///
+/// Available with feature: `harness` (included in `full`)
+///
+/// # Example
+///
+/// ```rust
+/// use adk_rust::harness::{HarnessAgent, HarnessMode, InstructionsConfig};
+/// use adk_rust::model::{ScriptedLlm, ScriptedResponse};
+/// use std::sync::Arc;
+///
+/// # fn main() -> adk_rust::Result<()> {
+/// let model = Arc::new(ScriptedLlm::new("scripted", vec![ScriptedResponse::text("done")]));
+/// let harness = HarnessAgent::builder("harness")
+///     .model(model)
+///     .workspace(adk_devtools::Workspace::new(std::env::temp_dir()))
+///     .project_instructions(InstructionsConfig { user_file: None, ..InstructionsConfig::default() })
+///     .mode(HarnessMode::Plan)
+///     .build()?;
+/// assert_eq!(harness.info().default_mode, HarnessMode::Plan);
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(feature = "harness")]
+#[cfg_attr(docsrs, doc(cfg(feature = "harness")))]
+pub mod harness {
+    #[cfg(feature = "cli")]
+    pub use adk_cli::console::ConsoleIo;
+    #[cfg(feature = "cli")]
+    pub use adk_cli::harness::{ConsolePrompter, HarnessLauncher};
+    pub use adk_harness::*;
+}
+
 // ============================================================================
 // Enterprise Client SDK (feature-gated, experimental)
 // ============================================================================
@@ -1355,6 +1397,7 @@ pub async fn run(instructions: &str, input: &str) -> Result<String> {
 /// - Tools: `FunctionTool`, `GoogleSearchTool`, `McpToolset`
 /// - Services: `InMemorySessionService`, `InMemoryArtifactService`
 /// - Runtime: `Runner`, `RunnerConfig`
+/// - Harness (feature `harness`): `HarnessAgent`, `HarnessAgentBuilder`, `HarnessMode`
 /// - Common types: `Arc`, `Result`, `Content`, `Event`
 pub mod prelude {
     // Core types (always available)
@@ -1448,6 +1491,10 @@ pub mod prelude {
     // Graph workflows
     #[cfg(feature = "graph")]
     pub use crate::graph::{END, GraphAgent, NodeOutput, Router, START, StateGraph};
+
+    // Harness
+    #[cfg(feature = "harness")]
+    pub use crate::harness::{HarnessAgent, HarnessAgentBuilder, HarnessMode};
 
     // Realtime
     #[cfg(feature = "realtime")]

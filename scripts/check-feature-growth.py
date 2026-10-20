@@ -137,6 +137,7 @@ AXES: dict[str, str] = {
     "qwen3": "media",
     "all-onnx": "media",
     "mcp": "mcp",
+    "harness": "harness",
 }
 
 TIERS = {

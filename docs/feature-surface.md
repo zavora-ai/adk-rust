@@ -1,7 +1,7 @@
 # The `adk-rust` feature surface
 
 `adk-rust` is both a re-export facade and a dependency menu. Every new capability
-arrives as a new top-level feature, so the menu has grown to **143 features**
+arrives as a new top-level feature, so the menu has grown to **157 features**
 across 44 crates. This records what the surface currently is, which parts of it
 are load-bearing, and the rule that keeps it from growing further.
 
@@ -24,10 +24,14 @@ everyone.
 
 | Bucket | Count | Disposition |
 |---|---:|---|
-| Advertised | 87 | What the docs tell users to write. Unchanged. |
+| Advertised | 101 | What the docs tell users to write. Unchanged. |
 | Unadvertised members | 41 | Keep working and keep their feature key. Folded into a bundle; documented as reachable through it. |
 | Deprecated no-ops | 19 | Kept for semver, scheduled for removal at the next major. |
-| **Total** | **143** | |
+| **Total** | **157** | |
+
+The four ONNX checkpoint features (`whisper-onnx`, `distil-whisper`, `moonshine`,
+`chatterbox`) are both unadvertised members of `audio-onnx` and deprecated, so the rows
+sum to four more than the total.
 
 Nothing is removed in a minor release. `STABILITY.md` (Deprecation Policy)
 requires an `#[deprecated]` announcement and an N+2 minor grace period before a
@@ -56,6 +60,7 @@ achievable reduction is the advertised surface, not the feature count.
 | media | 2 | `audio` / `audio-onnx` | 9 demoted |
 | graph | 1 | `graph` | 6 demoted to members |
 | mcp | 1 | `mcp` / `mcp-http` | 2 demoted |
+| harness | 1 | `harness` | the `harness-*` packs and add-ons are members (spec 3.1 §8.4) |
 | gcp | 0 | `gemini-agent-platform` | all 11 demoted; already bundled |
 | code | — | `code-tools` | 3 demoted |
 

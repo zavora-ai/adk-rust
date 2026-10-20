@@ -233,8 +233,8 @@ adk-rust = { version = "3.0.0", features = ["standard"] }
 # Enterprise — standard + realtime, browser, rag, payments, awp
 adk-rust = { version = "3.0.0", features = ["enterprise"] }
 
-# Full — enterprise + audio, code, sandbox, code-tools, and the graph-functional,
-# graph-node-cache, graph-delta, and graph-time-travel capabilities
+# Full — enterprise + audio, code, sandbox, code-tools, the harness, and the
+# graph-functional, graph-node-cache, graph-delta, and graph-time-travel capabilities
 adk-rust = { version = "3.0.0", features = ["full"] }
 
 # Gemini Enterprise Agent Platform — every Vertex/EAP integration except realtime
@@ -260,6 +260,7 @@ Features outside the tiers, composable with any of them:
 | Tools | `mcp`, `mcp-http`, `mcp-sampling`, `memory-tools`, `slack`, `bigquery`, `spanner`, `example-store`, `vertex-agent-registry`, `code-tools`, `code-embedded-js`, `code-embedded-python`, `code-docker`, `codeact`, `codeact-monty` |
 | Telemetry | `telemetry-otlp`, `telemetry-sqlite`, `gcp-telemetry`, `record-payloads` |
 | Realtime and audio | `openai-realtime`, `gemini-live`, `vertex-live`, `livekit`, `openai-webrtc`, `video-avatar`, `audio-*`, `whisper-onnx`, `distil-whisper`, `moonshine`, `kokoro`, `chatterbox`, `qwen3-tts`, `all-onnx` |
+| Harness packs | `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed` |
 | Graph actions | `action`, `action-http`, `action-trigger`, `action-db`, `action-code`, `action-email`, `action-rss`, `action-full` |
 | Other | `acp`, `skills-progressive-disclosure`, `personas`, `sandbox-workspace`, `sandbox-docker`, `aws-secrets`, `azure-keyvault`, `gcp-secrets`, `gcs-artifacts`, `vertex-sandbox`, `vertex-eval`, `vertex-rag`, `agent-retrieval`, `vertex-skill-registry`, `gcp-deploy` |
 
@@ -267,7 +268,7 @@ Features outside the tiers, composable with any of them:
 
 ## Modules
 
-Each enabled crate is re-exported as a module: `agent`, `model`, `tool`, `skill`, `session`, `artifact`, `memory`, `runner`, `server`, `telemetry`, `graph`, `realtime`, `browser`, `eval`, `guardrail`, `auth`, `payment`, `plugin`, `audio`, `rag`, `code`, `sandbox`, `computer_use`, `managed`, `anthropic_client`, `deploy`, and others. `adk_core` is re-exported at the crate root, and `adk_rust::prelude` brings the common types into scope.
+Each enabled crate is re-exported as a module: `agent`, `model`, `tool`, `skill`, `session`, `artifact`, `memory`, `runner`, `server`, `telemetry`, `graph`, `realtime`, `browser`, `eval`, `guardrail`, `auth`, `payment`, `plugin`, `audio`, `rag`, `code`, `sandbox`, `computer_use`, `managed`, `harness`, `anthropic_client`, `deploy`, and others. `adk_core` is re-exported at the crate root, and `adk_rust::prelude` brings the common types into scope.
 
 ## Changes in 3.0
 
