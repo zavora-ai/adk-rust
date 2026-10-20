@@ -101,12 +101,13 @@ pub use policy::{
 pub use prompt::HARNESS_SYSTEM_PROMPT;
 #[cfg(feature = "sqlite")]
 pub use shell::SqliteShellLedger;
+pub use shell::{AUTO_ALLOW_UNAVAILABLE_CODE, SANDBOX_PROTECTED_PATHS};
 pub use shell::{
     InMemoryShellLedger, IsolationStatus, SANDBOX_UNAVAILABLE_CODE, ShellConfig, ShellIsolation,
     ShellLedger, ShellLedgerEntry,
 };
 #[cfg(feature = "sandbox")]
-pub use shell::{OsSandboxConfig, SandboxLauncher};
+pub use shell::{OsSandboxConfig, SandboxAccess, SandboxLauncher};
 #[cfg(feature = "skills")]
 pub use skills::{SkillsConfig, SkillsMode};
 #[cfg(feature = "team")]

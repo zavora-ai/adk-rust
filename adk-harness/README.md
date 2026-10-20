@@ -19,7 +19,7 @@ agent tool — and the harness refuses to run without it.
 | Tool classes | A call's class comes from its origin and name in the harness registry, never from an MCP `readOnlyHint` alone |
 | Standing approvals | "Always allow `cargo test`" as a `StandingRule` bound to the subject and to the tool's declaration digest; `ShellPrefix` matches plain words only; a redeclared tool records `harness.rule.stale` and asks again |
 | Prompts | `PromptingConfirmationHandler` serializes prompts, caps them per turn, escapes control characters, refuses a truncated call approved unexpanded, and returns edited arguments for the policy to check again |
-| Shell | `bash` on the host behind approval (OS sandbox opt-in), a 250 ms kill-switch poll, a per-session shell ledger for unsandboxed retries, `harness.bash.*` audit records |
+| Shell | `bash` on the host behind approval, or opt-in under the OS sandbox (Seatbelt, bubblewrap) through `SandboxLauncher`: workspace read-write with protected paths read-only (read-only in Plan), scratch `HOME`, no network, the enforcer probed at build and per call (`Degraded` or `harness.sandbox_unavailable`, never a host fallback); a failure hint and a once-only, non-waivable unsandboxed retry; `auto_allow_sandboxed` gated on the S3 conformance probe and the protected paths; a 250 ms kill-switch poll; `harness.bash.*` audit records |
 | Todos | `write_todos` / `update_todo` in session state, one list per session |
 | Instructions | `AGENTS.md` from the git root down to the workspace, verbatim, hashed, delimited as untrusted, after a workspace trust decision; nested files listed, never inlined |
 | Skills | Progressive disclosure (`list_skills`, `load_skill`, `load_skill_resource`) without convention documents |
@@ -32,7 +32,8 @@ agent tool — and the harness refuses to run without it.
 | `exit_plan_mode` | Deny | Approval, non-waivable | Deny | Deny |
 | Edit | Deny | Deny | Approval | Allow |
 | Edit of a protected path | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
-| Host shell | Deny | Deny | Approval | Approval (Allow with `allow_host_shell_in_auto`) |
+| Sandboxed shell | Deny | Allow, read-only workspace (active enforcer only) | Approval (Allow with `auto_allow_sandboxed`) | Allow when protected paths hold; Approval otherwise |
+| Host shell (also a degraded sandbox) | Deny | Deny | Approval | Approval (Allow with `allow_host_shell_in_auto`) |
 | Unsandboxed retry | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
 | External tool, read-only, trusted origin | Allow | Allow | Allow | Allow |
 | Any other external tool | Deny | Deny | Approval | Approval |
@@ -91,5 +92,7 @@ live scenarios on OpenAI, Anthropic and Gemini.
 Beta (spec 3.1 phase 1). Team members (§7.10), the plan graph and goal engine (§7.11),
 observability (§7.13), identity (§7.14), file memory (§7.15) and the packs (§7.16–§7.18)
 land over the 3.1.x line; until then the builder refuses them with
-`not yet implemented: spec 3.1 §…`. The OS-sandbox shell reports itself degraded until
-`adk_sandbox::sandbox::sandboxed_command` and the devtools `CommandLauncher` land.
+`not yet implemented: spec 3.1 §…`. Container isolation for the shell (`docker`) is not
+implemented yet. [`examples/harness_redteam`](https://github.com/zavora-ai/adk-rust/tree/main/examples/harness_redteam)
+runs the shell red-team scenarios; the [shell and sandbox guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/shell-and-sandbox.md)
+covers the sandbox.

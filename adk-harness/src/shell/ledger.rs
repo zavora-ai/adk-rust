@@ -68,6 +68,30 @@ impl ShellLedgerEntry {
     pub fn failed(&self) -> bool {
         self.exit_code != Some(0)
     }
+
+    /// Digest of the failed call an unsandboxed retry names: call ID, command, enforcer and
+    /// exit code, as `sha256:<hex>` (spec 3.1 §9.3 `failureDigest`).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::ShellLedgerEntry;
+    ///
+    /// let one = ShellLedgerEntry::new("c1", "make", true, Some(2));
+    /// let other = ShellLedgerEntry::new("c1", "make", true, Some(1));
+    /// assert_ne!(one.digest(), other.digest());
+    /// ```
+    pub fn digest(&self) -> String {
+        let failure = serde_json::json!({
+            "functionCallId": self.function_call_id,
+            "command": self.command,
+            "sandboxed": self.sandboxed,
+            "enforcer": self.enforcer,
+            "exitCode": self.exit_code,
+            "denialSuspected": self.denial_suspected,
+        });
+        format!("sha256:{}", crate::fsutil::sha256_hex(&failure.to_string()))
+    }
 }
 
 /// Where the harness records each session's `bash` calls (spec 3.1 §7.9).

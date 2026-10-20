@@ -319,8 +319,13 @@ impl HarnessAgentBuilder {
         self
     }
 
-    /// Runs sandboxed commands without approval in Ask. Refuses to turn on until
-    /// adk-sandbox S3 (spec 3.1 §10): the build fails while it is set.
+    /// Runs sandboxed commands without approval in Ask (spec 3.1 §7.9, §9.2 I26).
+    ///
+    /// Turns on only under an active OS sandbox whose enforcer keeps protected paths
+    /// read-only (adk-sandbox S3, checked by a conformance probe), with the network denied
+    /// and every root-level protected path present; otherwise `build()` fails with
+    /// `harness.auto_allow_sandboxed_unavailable` naming the reason. No effect on the host
+    /// or a degraded shell.
     pub fn auto_allow_sandboxed(mut self) -> Self {
         self.shell.auto_allow_sandboxed = true;
         self
@@ -540,11 +545,12 @@ impl HarnessAgentBuilder {
         }
 
         // 1. Shell runtime.
-        let status = if self.shell_enabled {
-            resolve_isolation(&self.shell)?
+        let shell = if self.shell_enabled {
+            resolve_isolation(&self.shell, workspace.root())?
         } else {
-            IsolationStatus::Host
+            resolve_isolation(&ShellConfig::default(), workspace.root())?
         };
+        let status = shell.status.clone();
 
         // 2. Instructions and the class registry.
         let instructions = ProjectInstructions::load(workspace.root(), &self.instructions)?;
@@ -576,12 +582,20 @@ impl HarnessAgentBuilder {
             tools.push(Arc::new(EditFileTool::new(workspace.clone())));
         }
         if self.shell_enabled && workspace.bash_allowed() {
-            tools.push(Arc::new(HarnessBashTool::new(
+            let bash = HarnessBashTool::new(
                 workspace.clone(),
                 status.clone(),
                 self.shell.fail_if_unavailable,
                 ledger.clone(),
-            )));
+            )
+            .with_mode_store(mode_store.clone(), self.mode)
+            .allow_unsandboxed_retry(self.shell.allow_unsandboxed_retry);
+            #[cfg(feature = "sandbox")]
+            let bash = match shell.launcher.clone() {
+                Some(launcher) => bash.with_sandbox(launcher),
+                None => bash,
+            };
+            tools.push(Arc::new(bash));
         }
         if self.todos {
             match &self.last_todos {
@@ -601,10 +615,10 @@ impl HarnessAgentBuilder {
 
         // 5 (policy first: the handler re-checks against it).
         let switches = PolicySwitches {
-            auto_allow_sandboxed: false,
+            auto_allow_sandboxed: shell.auto_allow_sandboxed,
             allow_host_shell_in_auto: self.shell.allow_host_shell_in_auto,
             enforcer_active: matches!(status, IsolationStatus::OsSandbox { .. }),
-            sandbox_protects_paths: false,
+            sandbox_protects_paths: shell.protects_paths,
         };
         let policy = HarnessPolicy::new(PolicyInner {
             registry,

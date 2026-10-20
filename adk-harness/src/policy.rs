@@ -929,7 +929,18 @@ impl HarnessPolicy {
         origin: Option<&ToolOrigin>,
         call_id: Option<&str>,
     ) -> PolicyDecision {
-        self.evaluate_full(request, origin, call_id, true).await.decision
+        let evaluated = self.evaluate_full(request, origin, call_id, true).await;
+        if evaluated.kind == ToolKind::ShellEscalation {
+            crate::shell::record_retry_requested(
+                self.audit_for(request),
+                self.inner.ledger.as_ref(),
+                request,
+                call_id,
+                &evaluated.decision,
+            )
+            .await;
+        }
+        evaluated.decision
     }
 
     /// The decision function with the class, mode and table decision it reached.
@@ -987,7 +998,13 @@ impl HarnessPolicy {
                     .unwrap_or(true)
             });
         let row = TableRow::of(&kind, protected);
-        let base = decision_cell(mode, row).resolve(&self.inner.switches);
+        let mut switches = self.inner.switches;
+        // Unapproved sandboxed commands need every protected path in place at this call (I26).
+        if row == TableRow::ShellOsSandbox && switches.sandbox_protects_paths {
+            switches.sandbox_protects_paths =
+                crate::shell::protected_paths_hold(self.inner.workspace.root());
+        }
+        let base = decision_cell(mode, row).resolve(&switches);
         let reason = describe(&request.tool_name, row, mode, base);
         if base == TableDecision::Deny {
             return deny(PolicyDecision::deny(reason), mode);

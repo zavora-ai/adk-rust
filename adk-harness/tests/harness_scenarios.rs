@@ -371,6 +371,28 @@ async fn an_unsandboxed_retry_on_the_host_is_refused() {
 #[cfg(feature = "sandbox")]
 #[tokio::test]
 async fn an_unavailable_sandbox_degrades_or_fails_the_build() {
+    /// An enforcer whose probe fails, as a missing `bwrap` does.
+    struct Unavailable;
+    impl adk_sandbox::sandbox::SandboxEnforcer for Unavailable {
+        fn name(&self) -> &str {
+            "unavailable"
+        }
+        fn probe(&self) -> std::result::Result<(), adk_sandbox::SandboxError> {
+            Err(adk_sandbox::SandboxError::EnforcerUnavailable {
+                enforcer: "unavailable".into(),
+                message: "not installed".into(),
+            })
+        }
+        fn wrap_command(
+            &self,
+            _program: &std::ffi::OsStr,
+            _args: &[std::ffi::OsString],
+            _policy: &adk_sandbox::sandbox::SandboxPolicy,
+        ) -> std::result::Result<adk_sandbox::sandbox::WrappedCommand, adk_sandbox::SandboxError>
+        {
+            Err(adk_sandbox::SandboxError::PolicyViolation("unavailable".into()))
+        }
+    }
     let dir = tempfile::tempdir().unwrap();
     let model = Arc::new(adk_model::ScriptedLlm::new("scripted", Vec::<ScriptedResponse>::new()));
     let build = |strict: bool| {
@@ -378,7 +400,10 @@ async fn an_unavailable_sandbox_degrades_or_fails_the_build() {
             .model(model.clone())
             .workspace(adk_devtools::Workspace::new(dir.path()).allow_bash(true))
             .project_instructions(common::no_user_file())
-            .shell(adk_harness::ShellIsolation::OsSandbox(adk_harness::OsSandboxConfig::default()));
+            .shell(adk_harness::ShellIsolation::OsSandbox(adk_harness::OsSandboxConfig {
+                enforcer: Some(Arc::new(Unavailable)),
+                ..adk_harness::OsSandboxConfig::default()
+            }));
         if strict {
             builder = builder.fail_if_unavailable();
         }

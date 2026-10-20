@@ -7,6 +7,7 @@
 mod ledger;
 #[cfg(feature = "sandbox")]
 mod os_sandbox;
+mod protect;
 
 use std::fmt;
 
@@ -17,7 +18,9 @@ use serde::{Deserialize, Serialize};
 pub use ledger::SqliteShellLedger;
 pub use ledger::{InMemoryShellLedger, ShellLedger, ShellLedgerEntry};
 #[cfg(feature = "sandbox")]
-pub use os_sandbox::{OsSandboxConfig, SandboxLauncher};
+pub use os_sandbox::{OsSandboxConfig, SandboxAccess, SandboxLauncher};
+pub use protect::SANDBOX_PROTECTED_PATHS;
+pub(crate) use protect::protected_paths;
 
 use crate::policy::Isolation;
 
@@ -79,8 +82,10 @@ pub struct ShellConfig {
     pub isolation: ShellIsolation,
     /// Refuse to build, and refuse each call, when the requested sandbox is unavailable.
     pub fail_if_unavailable: bool,
-    /// Run sandboxed commands without approval in Ask. Refuses to turn on until
-    /// protected paths are read-only inside the sandbox (adk-sandbox S3).
+    /// Run sandboxed commands without approval in Ask (spec 3.1 §9.2 I26). Turns on only
+    /// when the enforcer passes the nested read-only conformance probe (adk-sandbox S3),
+    /// the sandbox denies the network and every root-level protected path exists; the
+    /// build fails otherwise, naming the reason. No effect on the host or a degraded shell.
     pub auto_allow_sandboxed: bool,
     /// Offer an unsandboxed retry of a failed sandboxed command, behind a one-time
     /// approval. `true` for host and OS sandbox, `false` for containers.
@@ -175,23 +180,79 @@ impl fmt::Display for IsolationStatus {
     }
 }
 
+/// Error code of an `auto_allow_sandboxed` the sandbox cannot honour (spec 3.1 §7.9, I26).
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_harness::AUTO_ALLOW_UNAVAILABLE_CODE, "harness.auto_allow_sandboxed_unavailable");
+/// ```
+pub const AUTO_ALLOW_UNAVAILABLE_CODE: &str = "harness.auto_allow_sandboxed_unavailable";
+
+/// The shell as `build()` resolved it (spec 3.1 §7.2 step 1).
+#[derive(Debug, Clone)]
+pub(crate) struct ShellRuntime {
+    /// The isolation `bash` runs under.
+    pub(crate) status: IsolationStatus,
+    /// The launcher of an active OS sandbox.
+    #[cfg(feature = "sandbox")]
+    pub(crate) launcher: Option<SandboxLauncher>,
+    /// The sandbox denies the network, keeps protected paths read-only (adk-sandbox S3, proven
+    /// by the enforcer conformance probe) and every root-level protected path exists, so
+    /// sandboxed commands may run without approval where the mode table allows it (I26).
+    pub(crate) protects_paths: bool,
+    /// `auto_allow_sandboxed` is in effect.
+    pub(crate) auto_allow_sandboxed: bool,
+}
+
 /// Resolves the shell runtime at build time (spec 3.1 §7.2 step 1, §7.9 "Availability").
-pub(crate) fn resolve_isolation(config: &ShellConfig) -> Result<IsolationStatus> {
-    if config.auto_allow_sandboxed {
-        return Err(AdkError::new(
-            ErrorComponent::Agent,
-            ErrorCategory::InvalidInput,
-            "harness.auto_allow_sandboxed_unavailable",
-            "auto_allow_sandboxed needs protected paths to be read-only inside the sandbox \
-             (adk-sandbox S3, spec 3.1 §10); it refuses to turn on until then",
-        ));
-    }
-    let status = match &config.isolation {
-        ShellIsolation::Host => IsolationStatus::Host,
+///
+/// Probes the enforcer of a requested OS sandbox. An unavailable one fails the build under
+/// `fail_if_unavailable` and is otherwise `Degraded`: the host shell behind approvals, with
+/// `auto_allow_sandboxed` of no effect. An active one is checked for S3 semantics; an
+/// `auto_allow_sandboxed` it cannot honour fails the build with the reason.
+pub(crate) fn resolve_isolation(
+    config: &ShellConfig,
+    root: &std::path::Path,
+) -> Result<ShellRuntime> {
+    #[cfg(not(feature = "sandbox"))]
+    let _ = root;
+    let runtime = match &config.isolation {
+        ShellIsolation::Host => ShellRuntime {
+            status: IsolationStatus::Host,
+            #[cfg(feature = "sandbox")]
+            launcher: None,
+            protects_paths: false,
+            auto_allow_sandboxed: false,
+        },
         #[cfg(feature = "sandbox")]
-        ShellIsolation::OsSandbox(sandbox) => os_sandbox::probe(sandbox),
+        ShellIsolation::OsSandbox(sandbox) => {
+            let launcher = SandboxLauncher::new(sandbox.clone());
+            let status = launcher.status();
+            let active = matches!(status, IsolationStatus::OsSandbox { .. });
+            let refusal = if active { auto_allow_refusal(&launcher, root) } else { None };
+            if config.auto_allow_sandboxed
+                && let Some(reason) = &refusal
+            {
+                return Err(AdkError::new(
+                    ErrorComponent::Agent,
+                    ErrorCategory::InvalidInput,
+                    AUTO_ALLOW_UNAVAILABLE_CODE,
+                    format!(
+                        "auto_allow_sandboxed cannot turn on: {reason} (spec 3.1 §9.2 I26); \
+                         drop auto_allow_sandboxed to approve sandboxed commands one by one"
+                    ),
+                ));
+            }
+            ShellRuntime {
+                protects_paths: active && refusal.is_none(),
+                auto_allow_sandboxed: config.auto_allow_sandboxed && active && refusal.is_none(),
+                launcher: active.then_some(launcher),
+                status,
+            }
+        }
     };
-    if let IsolationStatus::Degraded { requested, reason } = &status {
+    if let IsolationStatus::Degraded { requested, reason } = &runtime.status {
         if config.fail_if_unavailable {
             return Err(sandbox_unavailable(requested, reason));
         }
@@ -201,7 +262,81 @@ pub(crate) fn resolve_isolation(config: &ShellConfig) -> Result<IsolationStatus>
             "requested shell sandbox is unavailable; bash runs on the host and every command needs approval in ask mode"
         );
     }
-    Ok(status)
+    if config.auto_allow_sandboxed && !runtime.auto_allow_sandboxed {
+        tracing::warn!(
+            shell.isolation = %runtime.status,
+            "auto_allow_sandboxed has no effect: no OS sandbox is active"
+        );
+    }
+    Ok(runtime)
+}
+
+/// Why sandboxed commands cannot run unapproved, or `None` when they can (I26).
+#[cfg(feature = "sandbox")]
+fn auto_allow_refusal(launcher: &SandboxLauncher, root: &std::path::Path) -> Option<String> {
+    if launcher.config().network {
+        return Some("the sandbox allows the network".to_string());
+    }
+    if let Err(reason) = launcher.nested_read_only_conformance() {
+        return Some(reason);
+    }
+    let protected = protected_paths(root);
+    (!protected.unprotectable.is_empty()).then(|| {
+        format!(
+            "these protected paths cannot be kept read-only inside the sandbox: {}; create them \
+             (a protected path that does not exist cannot be protected from creation) or \
+             replace the symlinks",
+            protected.describe_unprotectable()
+        )
+    })
+}
+
+/// Whether every root-level protected path of `root` still exists and can be kept
+/// read-only, re-checked per call while sandboxed commands run unapproved (I26).
+pub(crate) fn protected_paths_hold(root: &std::path::Path) -> bool {
+    protected_paths(root).unprotectable.is_empty()
+}
+
+/// Records `harness.bash.retry_unsandboxed` for an unsandboxed retry the policy decided
+/// (spec 3.1 §9.3, `source: "policy"`); the tool records the consumption.
+pub(crate) async fn record_retry_requested(
+    audit: Option<crate::audit::HarnessAudit>,
+    ledger: &dyn ShellLedger,
+    request: &adk_core::ToolPolicyRequest,
+    call_id: Option<&str>,
+    decision: &adk_core::PolicyDecision,
+) {
+    let Some(audit) = audit else { return };
+    let retry_of = request.args.get("retry_of").and_then(serde_json::Value::as_str);
+    let failed = match retry_of {
+        Some(retry_of) => ledger
+            .get(&request.app_name, &request.user_id, &request.session_id, retry_of)
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    let decision = match decision {
+        adk_core::PolicyDecision::Allow => "allow",
+        adk_core::PolicyDecision::Deny { .. } => "deny",
+        adk_core::PolicyDecision::RequireApproval { .. } => "require_approval",
+    };
+    let record = audit
+        .record(
+            "harness.bash.retry_unsandboxed",
+            serde_json::json!({
+                "functionCallId": call_id,
+                "retryOf": retry_of,
+                "failedEnforcer": failed.as_ref().and_then(|entry| entry.enforcer.clone()),
+                "failureDigest": failed.as_ref().map(ShellLedgerEntry::digest),
+                "decision": decision,
+                "source": "policy",
+            }),
+        )
+        .await;
+    if let Err(error) = record {
+        tracing::warn!(error = %error, "could not record harness.bash.retry_unsandboxed");
+    }
 }
 
 pub(crate) fn sandbox_unavailable(requested: &str, reason: &str) -> AdkError {
