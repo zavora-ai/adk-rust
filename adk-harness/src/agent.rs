@@ -75,7 +75,7 @@ impl InstructionState {
             return true;
         }
         match self.trust_store.get(self.instructions.root_digest()) {
-            Ok(Some(trust)) => trust.is_trusted(),
+            Ok(Some(trust)) => trust.covers(&self.instructions.instructions_digest()),
             Ok(None) => false,
             Err(error) => {
                 tracing::warn!(error = %error, "workspace trust store unavailable; treating the workspace as untrusted");
@@ -610,7 +610,30 @@ impl Agent for HarnessAgent {
         if let Some(trail) = config.audit.clone() {
             let state = &self.runtime.instructions;
             let trusted = state.trusted();
-            HarnessAudit::new(trail, AuditActor::for_context(ctx.as_ref()), ctx.session_id())
+            let audit =
+                HarnessAudit::new(trail, AuditActor::for_context(ctx.as_ref()), ctx.session_id());
+            // A trust decision made on other files than these no longer applies (spec 3.4 P2).
+            if let Ok(Some(trust)) = state.trust_store.get(state.instructions.root_digest())
+                && trust.is_trusted()
+                && !trusted
+            {
+                tracing::warn!(
+                    "the workspace's instruction files changed since they were trusted; they are not loaded"
+                );
+                audit
+                    .record(
+                        "harness.instructions.changed",
+                        json!({
+                            "files": state.instructions.audit_files(false),
+                            "rootDigest": state.instructions.root_digest(),
+                            "trustedDigest": trust.instructions_digest,
+                            "currentDigest": state.instructions.instructions_digest(),
+                            "by": trust.by,
+                        }),
+                    )
+                    .await?;
+            }
+            audit
                 .record(
                     "harness.instructions.loaded",
                     json!({

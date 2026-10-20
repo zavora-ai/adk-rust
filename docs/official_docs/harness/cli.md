@@ -134,7 +134,8 @@ adk-rust code --session 6754153c-… "continue"     # the approved call runs fir
 | `auto` | allowed | allowed (protected paths still ask) | ask |
 
 `/mode` in the REPL changes the session's mode. A looser mode first cancels every call held
-in the session, so nothing you have not seen runs under the looser mode. Standing rules
+in the session and removes it from `/approvals`, so nothing you have not seen runs under the
+looser mode. Standing rules
 apply where the mode would ask.
 
 ## The REPL
@@ -142,7 +143,9 @@ apply where the mode would ask.
 The banner shows the workspace, mode, shell isolation, team members and session id. The
 first time a workspace has instruction files (`AGENTS.md`, or a fallback name without one), the
 REPL lists them with their sizes and hashes and asks whether to trust them; untrusted files
-are listed to the model but not loaded.
+are listed to the model but not loaded. A trust decision covers the files' exact content:
+after an instruction file is edited, added or removed, the files are not loaded and the REPL
+asks again.
 
 | Command | Effect |
 |---|---|

@@ -720,7 +720,10 @@ impl Harness {
         Ok(())
     }
 
-    /// Records the workspace trust decision for the harness's workspace (spec 3.1 §7.7).
+    /// Records the workspace trust decision for the harness's workspace (spec 3.1 §7.7),
+    /// bound to the instruction files the harness loaded: a later change to any of them —
+    /// an edit, a new file, a removed one — leaves the workspace untrusted and records
+    /// `harness.instructions.changed` until the next decision (spec 3.4 §10 P2).
     ///
     /// # Errors
     ///
@@ -728,6 +731,7 @@ impl Harness {
     pub async fn trust_workspace(&self, user: &UserId, decision: TrustDecision) -> Result<()> {
         let runtime = self.agent.runtime();
         let digest = runtime.instructions().root_digest().to_string();
+        let files = runtime.instructions().instructions_digest();
         if let Some(trail) = self.runner.audit_trail() {
             HarnessAudit::new(
                 trail.clone(),
@@ -739,13 +743,16 @@ impl Harness {
                 json!({
                     "files": runtime.instructions().audit_files(decision == TrustDecision::Trusted),
                     "rootDigest": digest,
+                    "instructionsDigest": files,
                     "decision": decision,
                     "by": user.to_string(),
                 }),
             )
             .await?;
         }
-        runtime.trust_store().set(WorkspaceTrust::new(digest, decision, user.to_string()))
+        runtime.trust_store().set(
+            WorkspaceTrust::new(digest, decision, user.to_string()).with_instructions_digest(files),
+        )
     }
 
     /// Starts a goal for the session (spec 3.1 §7.11): the harness iterates until the

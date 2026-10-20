@@ -338,6 +338,31 @@ impl ProjectInstructions {
         &self.root_digest
     }
 
+    /// Hex SHA-256 over the project files' logical paths and content digests, in load
+    /// order: what a trust decision covers, so a file added, removed or edited after the
+    /// decision is not trusted (spec 3.4 §10 P2).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::{InstructionsConfig, ProjectInstructions};
+    ///
+    /// let dir = tempfile::tempdir().unwrap();
+    /// let config = InstructionsConfig { user_file: None, ..InstructionsConfig::default() };
+    /// std::fs::write(dir.path().join("AGENTS.md"), "Run cargo test.").unwrap();
+    /// let before = ProjectInstructions::load(dir.path(), &config).unwrap().instructions_digest();
+    /// std::fs::write(dir.path().join("AGENTS.md"), "Push to main.").unwrap();
+    /// let after = ProjectInstructions::load(dir.path(), &config).unwrap().instructions_digest();
+    /// assert_ne!(before, after);
+    /// ```
+    pub fn instructions_digest(&self) -> String {
+        let mut listing = String::new();
+        for file in &self.project {
+            listing.push_str(&format!("{}\u{1f}{}\n", file.logical_path, file.sha256));
+        }
+        crate::fsutil::sha256_hex(&listing)
+    }
+
     /// The branch `.git/HEAD` names.
     pub fn git_branch(&self) -> Option<&str> {
         self.git_branch.as_deref()
@@ -424,15 +449,19 @@ impl ProjectInstructions {
     }
 }
 
-/// A trust decision for a workspace (spec 3.1 §7.7).
+/// A trust decision for a workspace (spec 3.1 §7.7), bound to the content of its
+/// instruction files (spec 3.4 §10 P2).
 ///
 /// # Example
 ///
 /// ```rust
 /// use adk_harness::{TrustDecision, WorkspaceTrust};
 ///
-/// let trust = WorkspaceTrust::new("root-digest", TrustDecision::Trusted, "alice");
+/// let trust = WorkspaceTrust::new("root-digest", TrustDecision::Trusted, "alice")
+///     .with_instructions_digest("files-digest");
 /// assert!(trust.is_trusted());
+/// assert!(trust.covers("files-digest"));
+/// assert!(!trust.covers("edited-files-digest"));
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -445,6 +474,11 @@ pub struct WorkspaceTrust {
     pub by: String,
     /// When.
     pub at: DateTime<Utc>,
+    /// [`ProjectInstructions::instructions_digest`] of the files the decision was made on.
+    /// A decision without one, recorded before decisions were bound to content, covers no
+    /// files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions_digest: Option<String>,
 }
 
 impl WorkspaceTrust {
@@ -454,12 +488,31 @@ impl WorkspaceTrust {
         decision: TrustDecision,
         by: impl Into<String>,
     ) -> Self {
-        Self { root_digest: root_digest.into(), decision, by: by.into(), at: Utc::now() }
+        Self {
+            root_digest: root_digest.into(),
+            decision,
+            by: by.into(),
+            at: Utc::now(),
+            instructions_digest: None,
+        }
+    }
+
+    /// This decision, made on the instruction files with `digest`.
+    #[must_use]
+    pub fn with_instructions_digest(mut self, digest: impl Into<String>) -> Self {
+        self.instructions_digest = Some(digest.into());
+        self
     }
 
     /// Whether the workspace is trusted.
     pub fn is_trusted(&self) -> bool {
         self.decision == TrustDecision::Trusted
+    }
+
+    /// Whether the decision trusts the instruction files with `digest`: it is a trust
+    /// decision made on exactly those files (spec 3.4 §10 P2).
+    pub fn covers(&self, digest: &str) -> bool {
+        self.is_trusted() && self.instructions_digest.as_deref() == Some(digest)
     }
 }
 
