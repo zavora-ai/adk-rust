@@ -53,6 +53,7 @@ mod harness;
 #[cfg(feature = "auth")]
 mod identity;
 mod instructions;
+mod ledger;
 #[cfg(feature = "memory")]
 mod memory;
 mod mode;

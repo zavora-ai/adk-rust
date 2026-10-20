@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use adk_agent::{LlmAgentBuilder, LlmEventSummarizer};
 use adk_core::{
-    AdkError, ApprovalService, ApprovalStore, EventsCompactionConfig, InMemoryApprovalStore,
-    InstructionProvider, Llm, ReadonlyContext, Result, RunBudget, SpendLedger, Tool,
-    ToolConfirmationHandler, ToolConfirmationPolicy, ToolPolicy, Toolset,
+    ActionLedger, AdkError, ApprovalService, ApprovalStore, EventsCompactionConfig,
+    InMemoryActionLedger, InMemoryApprovalStore, InstructionProvider, Llm, ReadonlyContext, Result,
+    RunBudget, SpendLedger, Tool, ToolConfirmationHandler, ToolConfirmationPolicy, ToolPolicy,
+    Toolset,
 };
 use adk_devtools::{EditFileTool, GlobTool, GrepTool, ReadFileTool, Workspace, WriteFileTool};
 
@@ -123,6 +124,7 @@ pub struct HarnessAgentBuilder {
     confirmation_handler: Option<Arc<dyn ToolConfirmationHandler>>,
     approval_store: Option<Arc<dyn ApprovalStore>>,
     approval_service: Option<Arc<dyn ApprovalService>>,
+    action_ledger: Option<Arc<dyn ActionLedger>>,
     confirmation_timeout: Duration,
     shell: ShellConfig,
     shell_enabled: bool,
@@ -181,6 +183,7 @@ impl HarnessAgentBuilder {
             confirmation_handler: None,
             approval_store: None,
             approval_service: None,
+            action_ledger: None,
             confirmation_timeout: Duration::from_secs(300),
             shell: ShellConfig::default(),
             shell_enabled: true,
@@ -308,6 +311,31 @@ impl HarnessAgentBuilder {
     /// Where held calls and decisions are kept (default in memory).
     pub fn approval_store(mut self, store: Arc<dyn ApprovalStore>) -> Self {
         self.approval_store = Some(store);
+        self
+    }
+
+    /// Where `bash`, `write_file`, `edit_file` and other non-idempotent calls are recorded
+    /// before they execute, so a call re-issued after a crash, retry or resume is answered
+    /// from its record instead of running twice (spec 3.1 §7.12, §9.2 I37).
+    ///
+    /// The default keeps records in memory, which covers retries and resumes within one
+    /// process; pass a durable ledger, such as one of `adk-session`'s, on the backend the
+    /// sessions and approvals use so the guarantee survives process loss. A run that already
+    /// carries a ledger, for example from `RunnerConfigBuilder::action_ledger`, keeps storing
+    /// in it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::InMemoryActionLedger;
+    /// use std::sync::Arc;
+    ///
+    /// let builder = adk_harness::HarnessAgent::builder("harness")
+    ///     .action_ledger(Arc::new(InMemoryActionLedger::new()));
+    /// # let _ = builder;
+    /// ```
+    pub fn action_ledger(mut self, ledger: Arc<dyn ActionLedger>) -> Self {
+        self.action_ledger = Some(ledger);
         self
     }
 
@@ -869,6 +897,9 @@ impl HarnessAgentBuilder {
                 ledger,
                 approval_store,
                 approval_service: self.approval_service,
+                ledgers: crate::ledger::HarnessLedgers::new(
+                    self.action_ledger.unwrap_or_else(|| Arc::new(InMemoryActionLedger::new())),
+                ),
                 handler,
                 confirmation_timeout: self.confirmation_timeout,
                 budget: self.budget,

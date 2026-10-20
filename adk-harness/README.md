@@ -18,7 +18,8 @@ agent tool — and the harness refuses to run without it.
 | Modes | `ReadOnly`, `Plan`, `Ask` (default), `Auto` in a harness-owned `ModeStore` (in-memory, file, SQLite). Tightening applies at the next call; loosening only through `Harness::set_mode`, which cancels held calls first, or an approved `exit_plan_mode` |
 | Tool classes | A call's class comes from its origin and name in the harness registry, never from an MCP `readOnlyHint` alone |
 | Standing approvals | "Always allow `cargo test`" as a `StandingRule` bound to the subject and to the tool's declaration digest; `ShellPrefix` matches plain words only; a redeclared tool records `harness.rule.stale` and asks again |
-| Prompts | `PromptingConfirmationHandler` serializes prompts, caps them per turn, escapes control characters, refuses a truncated call approved unexpanded, and returns edited arguments for the policy to check again |
+| Prompts | `PromptingConfirmationHandler` serializes prompts, caps them per turn, escapes control characters, refuses a truncated call approved unexpanded, and returns edited arguments for the policy to check again. It re-checks a held call against the run's whole policy, so an operator policy's approval always reaches the person and a standing rule answers only the harness's own |
+| Durability | An action ledger on every run (in memory by default, `HarnessAgentBuilder::action_ledger` for a durable one, or the run's own): `bash`, `write_file` and `edit_file` are recorded before they execute and a re-issued or resumed call is answered from its record, never run twice. `Harness::send` and `Harness::resume` first settle a held call whose process stopped before saving its result: answered from the ledger, or held again |
 | Shell | `bash` on the host behind approval, or opt-in under the OS sandbox (Seatbelt, bubblewrap) through `SandboxLauncher`: workspace read-write with protected paths read-only (read-only in Plan), scratch `HOME`, no network, the enforcer probed at build and per call (`Degraded` or `harness.sandbox_unavailable`, never a host fallback); a failure hint and a once-only, non-waivable unsandboxed retry; `auto_allow_sandboxed` gated on the S3 conformance probe and the protected paths; a 250 ms kill-switch poll; `harness.bash.*` audit records |
 | Todos | `write_todos` / `update_todo` in session state, one list per session |
 | Instructions | `AGENTS.md` from the git root down to the workspace, verbatim, hashed, delimited as untrusted, after a workspace trust decision; nested files listed, never inlined |
@@ -42,7 +43,8 @@ agent tool — and the harness refuses to run without it.
 | Any other external tool | Deny | Deny | Approval | Approval |
 
 A standing rule turns an approval into Allow; it never applies to a non-waivable row, and a
-Deny rule always wins.
+Deny rule always wins. A path is protected as written or at the target it resolves to, so a
+symlink inside the workspace to `AGENTS.md` or into `.git` is an edit of a protected path.
 
 ## Example
 

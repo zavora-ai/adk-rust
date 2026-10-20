@@ -192,15 +192,20 @@ impl Harness {
 
     /// Sends a user message and returns the turn's events.
     ///
+    /// Held calls stranded by a run that ended before saving their result are settled
+    /// first (see [`resume`](Self::resume)).
+    ///
     /// # Errors
     ///
-    /// Returns an error when the run cannot start.
+    /// Returns an error when the run cannot start, or the approval store's or the action
+    /// ledger's error.
     pub async fn send(
         &self,
         user: &UserId,
         session: &SessionId,
         text: impl Into<String>,
     ) -> Result<EventStream> {
+        self.settle_stranded_calls(user, session).await?;
         self.runner
             .run(user.clone(), session.clone(), Content::new("user").with_text(text.into()))
             .await
@@ -208,11 +213,106 @@ impl Harness {
 
     /// Runs an empty turn, which resumes held calls that now have a decision.
     ///
+    /// A held call whose approval a run consumed but whose result that run never saved —
+    /// the process stopped in between — has no decision and no pending entry, so no run
+    /// would resume it. It is settled first (spec 3.1 §7.12, §9.2 I37): when the action
+    /// ledger records it, it ran, and its record answers it as the agent answers a
+    /// re-issued call, without running it again; otherwise it never began, and without a
+    /// live confirmation handler it is held again for [`pending_approvals`](Self::pending_approvals).
+    ///
     /// # Errors
     ///
-    /// Returns an error when the run cannot start.
+    /// Returns an error when the run cannot start, or the approval store's or the action
+    /// ledger's error.
     pub async fn resume(&self, user: &UserId, session: &SessionId) -> Result<EventStream> {
+        self.settle_stranded_calls(user, session).await?;
         self.runner.run(user.clone(), session.clone(), Content::new("user")).await
+    }
+
+    /// Answers from the action ledger, or holds again, the session's held calls that have
+    /// neither a decision nor a pending entry (spec 3.1 §7.12).
+    async fn settle_stranded_calls(&self, user: &UserId, session: &SessionId) -> Result<()> {
+        // An active run may have taken a decision and not yet begun the call.
+        if self.runner.active_session_ids().iter().any(|active| active == session.as_ref()) {
+            return Ok(());
+        }
+        let runtime = self.agent.runtime();
+        let store = runtime.approval_store();
+        let scope =
+            ApprovalScope::new(self.app_name.clone(), user.to_string(), session.to_string());
+        let events = self.events(user, session).await?;
+        let mut holders = Vec::<(String, String)>::new();
+        for event in &events {
+            if event.actions.tool_confirmation.is_some()
+                && !holders.iter().any(|(a, b)| *a == event.author && *b == event.branch)
+            {
+                holders.push((event.author.clone(), event.branch.clone()));
+            }
+        }
+        if holders.is_empty() {
+            return Ok(());
+        }
+        let pending: Vec<String> =
+            store.pending(&scope).await?.into_iter().map(|entry| entry.fingerprint).collect();
+        let ledger = runtime.ledgers.for_run(self.runner.run_config().action_ledger.as_ref());
+        for (author, branch) in holders {
+            let mut answers = Vec::new();
+            for call in held_tool_calls(&events, &author, &branch) {
+                let Some(call_id) = call.id.as_deref() else {
+                    continue;
+                };
+                let fingerprint = call.request.fingerprint();
+                if pending.contains(&fingerprint)
+                    || store.has_decision(&scope, &fingerprint).await?
+                {
+                    continue;
+                }
+                let key = crate::ledger::held_call_key(
+                    &self.app_name,
+                    user.as_ref(),
+                    session.as_ref(),
+                    call_id,
+                    &fingerprint,
+                );
+                match ledger.get(&key).await? {
+                    Some(record) => {
+                        tracing::warn!(
+                            tool.name = %call.name,
+                            function_call.id = %call_id,
+                            "held call ran without its result being saved; answering it from the action ledger"
+                        );
+                        answers.push(Part::FunctionResponse {
+                            function_response: FunctionResponseData::new(
+                                call.name.clone(),
+                                crate::ledger::recorded_answer(&call.name, &record),
+                            ),
+                            id: call.id.clone(),
+                            annotations: None,
+                        });
+                    }
+                    None if runtime.confirmation_handler().is_none() => {
+                        tracing::warn!(
+                            tool.name = %call.name,
+                            function_call.id = %call_id,
+                            "held call lost its decision before it began; holding it again"
+                        );
+                        store.record_pending(&scope, &call.request).await?;
+                    }
+                    // A live handler asks the person when the next run resumes the call.
+                    None => {}
+                }
+            }
+            if answers.is_empty() {
+                continue;
+            }
+            let mut event = Event::new(format!("harness-ledger-{}", uuid::Uuid::new_v4()));
+            event.author = author;
+            event.branch = branch;
+            event.llm_response.content =
+                Some(Content { role: "function".to_string(), parts: answers });
+            self.sessions.append_event(session.as_ref(), event).await?;
+        }
+        Ok(())
     }
 
     /// The session's current mode.

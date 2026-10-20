@@ -101,6 +101,7 @@ pub struct HarnessRuntime {
     pub(crate) ledger: Arc<dyn ShellLedger>,
     pub(crate) approval_store: Arc<dyn ApprovalStore>,
     pub(crate) approval_service: Option<Arc<dyn ApprovalService>>,
+    pub(crate) ledgers: crate::ledger::HarnessLedgers,
     pub(crate) handler: Option<Arc<dyn ToolConfirmationHandler>>,
     pub(crate) confirmation_timeout: Duration,
     pub(crate) budget: Option<RunBudget>,
@@ -180,6 +181,12 @@ impl HarnessRuntime {
         self.approval_service.as_ref()
     }
 
+    /// Where non-idempotent calls are recorded when a run carries no ledger of its own
+    /// (spec 3.1 §7.12).
+    pub fn action_ledger(&self) -> &Arc<dyn adk_core::ActionLedger> {
+        self.ledgers.store()
+    }
+
     /// The live confirmation handler: the configured one, or the prompting handler over
     /// the configured prompter.
     pub fn confirmation_handler(&self) -> Option<&Arc<dyn ToolConfirmationHandler>> {
@@ -236,6 +243,7 @@ impl HarnessRuntime {
 /// | Compose, never replace | the run's policy and the operator policy are kept; the strictest decision wins |
 /// | Idempotent | a config that already carries the harness policy is left as it is |
 /// | Approvals | the approval service and store are filled only when empty or identical; otherwise the run's own are kept with a warning |
+/// | Action ledger | the harness's ledger when the run carries none; a run's own keeps the records, with resumed held calls keyed alike (spec 3.1 §7.12) |
 /// | Non-waivable | `tool_approvals` entries naming non-waivable calls are removed |
 /// | Run-owned fields | `durable_run_id`, the confirmation handler and call-ID decisions are never touched |
 ///
@@ -331,6 +339,13 @@ impl HarnessLayer<'_> {
                 tracing::debug!("the run carries its own approval store; keeping it");
             }
             Some(_) => {}
+        }
+
+        // Non-idempotent harness calls run at most once across crashes, retries and resumes
+        // (§7.12, I37); a ledger the run carries keeps the records. Per run only, like the
+        // policy: a runner installs its own ledger on a run config that carries none.
+        if compose_policy {
+            config.action_ledger = Some(runtime.ledgers.for_run(config.action_ledger.as_ref()));
         }
 
         let before = config.tool_approvals.len();
@@ -569,6 +584,12 @@ impl Agent for HarnessAgent {
                 )
                 .await?;
         }
+        let held = ctx.session().held_tool_calls(self.root.name(), ctx.branch());
+        self.runtime.ledgers.note_resumable(
+            (ctx.app_name(), ctx.user_id(), ctx.session_id()),
+            ctx.invocation_id(),
+            &held,
+        );
         #[cfg(feature = "observe")]
         {
             let mode = crate::observe::run_mode(
