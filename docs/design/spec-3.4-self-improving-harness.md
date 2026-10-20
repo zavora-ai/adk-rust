@@ -272,7 +272,7 @@ The tick is spec 3.2's `Maintenance` process (3.2 §7.5): it runs in quiet hours
 | Output | Where | Promotion |
 |---|---|---|
 | Defect records | `DefectStore` | the loop's own pipeline |
-| Memory proposals | the harness file memory (3.1 §7.15) and the graph memory ([`adk-memory/src/graph.rs:1-26`](../../adk-memory/src/graph.rs)) as entries marked `assumed`, never `known` | a human promotes through the 3.3 memory view or `adk-rust improve memory accept <id>` (non-waivable `memory_write`) |
+| Memory proposals | long-term facts in the harness `FactStore` (3.1 §7.15.2) with status `Assumed` and source `AgentInferred`, never `Known` | a human promotes with `adk-rust memory accept <id>` or the 3.3 memory view (`Harness::accept_fact`) |
 | Skill drafts | `<workspace>/.adk/selfimprove/quarantine/skills/<name>/SKILL.md`, written with `SkillWriter` ([`adk-skill/src/writer.rs:318`](../../adk-skill/src/writer.rs)) into quarantine, not into `.skills/` | a human moves it into `.skills/` (a protected path) |
 | Agenda items | `Proposed` items via `propose_followup` (3.2 §7.5) | the partition's mode or a human |
 | Self-review of past work | a scoring pass over the day's sessions that files defects for loops, retries, denials and long tool chains; it never edits sessions, scores or baselines | — |
@@ -403,7 +403,7 @@ Kind `Other`, actions `harness.selfimprove.*`, actor the self-improver principal
 | A1 (required) | adk-auth | `GitHubAppBroker` over `CredentialBroker` ([`credential.rs:522`](../../adk-core/src/credential.rs)): App JWT → installation token scoped to one repository and branch namespace, minted per call, never persisted | identity without a personal credential |
 | K1 (3.4.x, needs 3.2) | adk-kernel | `UpgradePolicy` and the supervisor sequence ([§7.10](#710-upgrade-a-supervisors-job)); `KernelEvent::SelfImprove` | the install cut |
 | S1 (required) | adk-session | SQLite and file backends for `DefectStore`; conformance macro | the archive |
-| M1 (should) | adk-memory | A provenance field (`known` / `assumed`) and a promotion API on graph and semantic memory ([`graph.rs:770-790`](../../adk-memory/src/graph.rs)) | consolidation proposals |
+| M1 (done in 3.1 §7.15.2) | adk-harness | Provenance (`Known` / `Assumed`, source, verified quote) and promotion live in the harness `FactStore`; no adk-memory change is needed | consolidation proposals |
 | K2 (3.4.x) | adk-skill | A skill draft can carry a signature and a provenance record; promotion verifies both ([`injector.rs:39-97`](../../adk-skill/src/injector.rs)) | skill proposals |
 
 No change to `Event`, `RunConfig`, the approval types or the audit record shape: the loop is a consumer of them.
