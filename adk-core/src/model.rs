@@ -82,6 +82,66 @@ pub struct LlmRequest {
     pub previous_response_id: Option<String>,
 }
 
+/// How much reasoning effort a model spends (spec 3.1 §7.23, §10 C4).
+///
+/// Each provider maps a level to its own control: Anthropic `output_config.effort` with
+/// adaptive thinking, OpenAI `reasoning_effort`, Gemini `thinking_level`. Levels above
+/// `High` (`xhigh`, `max`) and below `Low` (`minimal`, `none`) are reachable only through a
+/// provider's own configuration.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::Effort;
+///
+/// assert_eq!("high".parse::<Effort>(), Ok(Effort::High));
+/// assert_eq!(Effort::Low.to_string(), "low");
+/// assert!(Effort::Low < Effort::High);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    /// The least reasoning a provider offers short of none.
+    Low,
+    /// Balanced reasoning.
+    Medium,
+    /// Thorough reasoning.
+    High,
+}
+
+impl Effort {
+    /// Every level, lowest first.
+    pub const ALL: [Effort; 3] = [Effort::Low, Effort::Medium, Effort::High];
+
+    /// The level's name as flags and configuration files spell it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+        }
+    }
+}
+
+impl std::fmt::Display for Effort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Effort {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "low" => Ok(Effort::Low),
+            "medium" => Ok(Effort::Medium),
+            "high" => Ok(Effort::High),
+            other => Err(format!("unknown effort '{other}'; use low, medium or high")),
+        }
+    }
+}
+
 /// Configuration for LLM content generation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GenerateContentConfig {

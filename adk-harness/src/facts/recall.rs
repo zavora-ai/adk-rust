@@ -1,5 +1,5 @@
-//! Recall: the facts a user turn needs, as a `<memory-facts>` block inside the untrusted
-//! delimited section (spec 3.1 §7.15.2, §9.2 I40, I44).
+//! Recall: the facts a user turn needs, as a delimited `<memory-facts>` block appended
+//! after the conversation (spec 3.1 §7.15.2, §7.23, §9.2 I40, I44, I56).
 
 use std::sync::Arc;
 
@@ -99,11 +99,12 @@ fn current_plan_step(plan: &Value) -> Option<String> {
     ))
 }
 
-/// Inserts `block` after the leading system contents, the end of the instruction where the
-/// working-notes index sits (spec 3.1 §7.7 item 6).
-fn insert_after_instruction(request: &mut LlmRequest, block: &str) {
-    let at = request.contents.iter().take_while(|content| content.role == "system").count();
-    request.contents.insert(at, Content::new("system").with_text(block));
+/// Appends `block` after the conversation, as per-turn text: the system instruction and
+/// the tool declarations stay byte-stable across the model calls of a run, and a provider
+/// that hoists system contents into its cached system prompt never sees the block there
+/// (spec 3.1 §7.23, §9.2 I56).
+fn append_after_conversation(request: &mut LlmRequest, block: &str) {
+    request.contents.push(Content::new("user").with_text(block));
 }
 
 impl FactsRuntime {
@@ -151,6 +152,7 @@ impl FactsRuntime {
                 .cmp(&rank(b))
                 .then_with(|| sb.total_cmp(sa))
                 .then_with(|| b.valid_from.cmp(&a.valid_from))
+                .then_with(|| a.id.cmp(&b.id))
         });
         let mut recalled = Recalled::default();
         for (fact, score) in facts {
@@ -283,7 +285,7 @@ impl FactsRuntime {
             }
         };
         if let Some(block) = block {
-            insert_after_instruction(request, &block);
+            append_after_conversation(request, &block);
         }
         Ok(())
     }
@@ -313,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn the_block_goes_after_the_instruction() {
+    fn the_block_goes_after_the_conversation_never_into_the_prefix() {
         let mut request = LlmRequest::new(
             "m",
             vec![
@@ -322,9 +324,9 @@ mod tests {
                 Content::new("user").with_text("hi"),
             ],
         );
-        insert_after_instruction(&mut request, "<memory-facts>x</memory-facts>");
+        append_after_conversation(&mut request, "<memory-facts>x</memory-facts>");
         let roles: Vec<&str> = request.contents.iter().map(|c| c.role.as_str()).collect();
-        assert_eq!(roles, ["system", "system", "system", "user"]);
-        assert_eq!(request.contents[2].parts[0].text(), Some("<memory-facts>x</memory-facts>"));
+        assert_eq!(roles, ["system", "system", "user", "user"]);
+        assert_eq!(request.contents[3].parts[0].text(), Some("<memory-facts>x</memory-facts>"));
     }
 }

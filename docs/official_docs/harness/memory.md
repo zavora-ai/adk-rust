@@ -158,8 +158,10 @@ fn with_long_term_memory(model: Arc<dyn adk_core::Llm>) -> adk_core::Result<Harn
 On the first model call of each user turn, and again only when the todo list or the
 current plan step changes, the harness searches the facts of the user in this project and
 the user's preferences with the user's message, the open todos and the plan step. Tool
-rounds of the same turn reuse the same block, so the request prefix stays cacheable. The
-block follows the instruction, inside the untrusted section:
+rounds of the same turn reuse the same block. The block is appended after the
+conversation, before the mode reminder, never into the system instruction, so the request
+prefix — instruction and tool declarations — stays byte-stable and cacheable (spec 3.1
+§7.23, I56):
 
 ```text
 <memory-facts>

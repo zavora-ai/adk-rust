@@ -43,6 +43,33 @@ pub enum OpenAIReasoningEffort {
     Max,
 }
 
+/// The harness effort levels (spec 3.1 §7.23) as `reasoning_effort` values.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_model::openai::ReasoningEffort;
+///
+/// assert_eq!(ReasoningEffort::from(adk_core::Effort::Low), ReasoningEffort::Low);
+/// ```
+impl From<adk_core::Effort> for ReasoningEffort {
+    fn from(effort: adk_core::Effort) -> Self {
+        match effort {
+            adk_core::Effort::Low => Self::Low,
+            adk_core::Effort::Medium => Self::Medium,
+            adk_core::Effort::High => Self::High,
+        }
+    }
+}
+
+/// The harness effort levels (spec 3.1 §7.23); `None`, `Minimal`, `XHigh` and `Max` stay
+/// reachable only through the client's own configuration.
+impl From<adk_core::Effort> for OpenAIReasoningEffort {
+    fn from(effort: adk_core::Effort) -> Self {
+        ReasoningEffort::from(effort).into()
+    }
+}
+
 impl From<ReasoningEffort> for OpenAIReasoningEffort {
     fn from(value: ReasoningEffort) -> Self {
         match value {
@@ -378,5 +405,23 @@ impl OpenAIResponsesConfig {
     pub fn with_open_responses_mode(mut self, enabled: bool) -> Self {
         self.open_responses_mode = Some(enabled);
         self
+    }
+}
+
+#[cfg(test)]
+mod effort_tests {
+    use super::{OpenAIReasoningEffort, ReasoningEffort};
+
+    /// The harness levels map to their namesakes on both effort vocabularies.
+    #[test]
+    fn every_harness_effort_maps_to_its_namesake() {
+        for (core, provider) in [
+            (adk_core::Effort::Low, ReasoningEffort::Low),
+            (adk_core::Effort::Medium, ReasoningEffort::Medium),
+            (adk_core::Effort::High, ReasoningEffort::High),
+        ] {
+            assert_eq!(ReasoningEffort::from(core), provider);
+            assert_eq!(OpenAIReasoningEffort::from(core), OpenAIReasoningEffort::from(provider));
+        }
     }
 }

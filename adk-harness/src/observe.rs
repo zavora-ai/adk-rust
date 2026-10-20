@@ -273,9 +273,48 @@ pub struct SpendReport {
     pub model_calls: u64,
     /// Tokens the models reported for the finished runs.
     pub total_tokens: u64,
+    /// Prompt tokens of the finished runs' model calls (spec 3.1 §7.23).
+    #[serde(default)]
+    pub prompt_tokens: u64,
+    /// Prompt tokens the providers served from their prompt cache (spec 3.1 §7.23).
+    #[serde(default)]
+    pub cached_prompt_tokens: u64,
+    /// The most recent runs' prompt tokens, oldest first, at most [`SpendReport::TURNS_KEPT`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<TurnTokens>,
+}
+
+/// One run's prompt tokens, cached against uncached (spec 3.1 §7.23): what `/cost` lists
+/// per turn.
+///
+/// # Example
+///
+/// ```rust
+/// let turn = adk_harness::TurnTokens { model_calls: 2, prompt_tokens: 9_000, cached_prompt_tokens: 8_000 };
+/// assert_eq!(turn.uncached_prompt_tokens(), 1_000);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnTokens {
+    /// Model calls in the run.
+    pub model_calls: u64,
+    /// Prompt tokens over those calls.
+    pub prompt_tokens: u64,
+    /// Of them, tokens the provider read from its prompt cache.
+    pub cached_prompt_tokens: u64,
+}
+
+impl TurnTokens {
+    /// Prompt tokens the provider processed afresh.
+    pub fn uncached_prompt_tokens(&self) -> u64 {
+        self.prompt_tokens.saturating_sub(self.cached_prompt_tokens)
+    }
 }
 
 impl SpendReport {
+    /// How many recent runs [`turns`](Self::turns) keeps.
+    pub const TURNS_KEPT: usize = 20;
+
     /// The total cost in US dollars.
     pub fn cost_usd(&self) -> f64 {
         self.cost_micro_usd as f64 / 1_000_000.0
@@ -291,6 +330,22 @@ impl SpendReport {
             self.model_calls,
             self.total_tokens
         );
+        out.push_str(&format!(
+            "prompt tokens: {} ({} cached, {} uncached)\n",
+            self.prompt_tokens,
+            self.cached_prompt_tokens,
+            self.prompt_tokens.saturating_sub(self.cached_prompt_tokens)
+        ));
+        for (i, turn) in self.turns.iter().enumerate() {
+            out.push_str(&format!(
+                "  turn {}: {} model calls, {} prompt tokens ({} cached, {} uncached)\n",
+                i + 1,
+                turn.model_calls,
+                turn.prompt_tokens,
+                turn.cached_prompt_tokens,
+                turn.uncached_prompt_tokens()
+            ));
+        }
         for entry in &self.entries {
             out.push_str(&format!(
                 "  {} {} {}: {} charges, {}\n",
@@ -310,6 +365,9 @@ struct RunTotals {
     runs: u64,
     model_calls: u64,
     total_tokens: u64,
+    prompt_tokens: u64,
+    cached_prompt_tokens: u64,
+    turns: Vec<TurnTokens>,
 }
 
 /// Charges and cost per (key, subject).
@@ -379,12 +437,18 @@ impl SpendAccounts {
         entry.1 = entry.1.saturating_add(amount);
     }
 
-    fn finish_run(&self, subject: Option<SubjectRef>, usage: &BudgetUsage) {
+    fn finish_run(&self, subject: Option<SubjectRef>, usage: &BudgetUsage, turn: TurnTokens) {
         let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
         let totals = runs.entry(subject).or_default();
         totals.runs += 1;
         totals.model_calls += usage.model_calls;
         totals.total_tokens += usage.total_tokens;
+        totals.prompt_tokens += turn.prompt_tokens;
+        totals.cached_prompt_tokens += turn.cached_prompt_tokens;
+        if totals.turns.len() >= SpendReport::TURNS_KEPT {
+            totals.turns.remove(0);
+        }
+        totals.turns.push(turn);
     }
 
     /// The report of `subject`, or of every subject.
@@ -420,8 +484,13 @@ impl SpendAccounts {
                 report.runs += totals.runs;
                 report.model_calls += totals.model_calls;
                 report.total_tokens += totals.total_tokens;
+                report.prompt_tokens += totals.prompt_tokens;
+                report.cached_prompt_tokens += totals.cached_prompt_tokens;
+                report.turns.extend(totals.turns.iter().copied());
             }
         }
+        let excess = report.turns.len().saturating_sub(SpendReport::TURNS_KEPT);
+        report.turns.drain(..excess);
         report
     }
 }
@@ -498,6 +567,7 @@ pub(crate) fn observe_run(
     span: Span,
     accounts: Arc<SpendAccounts>,
     trails: Arc<RunTrails>,
+    effort: crate::posture::Effort,
 ) -> EventStream {
     let config = ctx.run_config();
     let acting = ctx.acting_context();
@@ -519,12 +589,27 @@ pub(crate) fn observe_run(
         session_key: (String, String, String),
         spend_key: SpendKey,
         subject: Option<SubjectRef>,
+        effort: crate::posture::Effort,
+        tokens: TurnTokens,
     }
     impl Finish {
+        /// Counts a model response's prompt tokens, cached and not (spec 3.1 §7.23).
+        fn observe(&mut self, event: &adk_core::Event) {
+            if event.llm_response.partial {
+                return;
+            }
+            if let Some(usage) = &event.llm_response.usage_metadata {
+                self.tokens.model_calls += 1;
+                self.tokens.prompt_tokens += u64::try_from(usage.prompt_token_count).unwrap_or(0);
+                self.tokens.cached_prompt_tokens +=
+                    u64::try_from(usage.cache_read_input_token_count.unwrap_or(0)).unwrap_or(0);
+            }
+        }
+
         async fn run(self) -> Result<()> {
             self.trails.clear(&self.session_key);
             let usage = self.tracker.as_ref().map(|tracker| tracker.usage()).unwrap_or_default();
-            self.accounts.finish_run(self.subject.clone(), &usage);
+            self.accounts.finish_run(self.subject.clone(), &usage, self.tokens);
             let Some(audit) = &self.audit else {
                 return Ok(());
             };
@@ -544,6 +629,9 @@ pub(crate) fn observe_run(
                         "spendKey": { "org": self.spend_key.org, "agent": self.spend_key.agent, "subject": self.subject },
                         "modelCalls": usage.model_calls,
                         "tokens": usage.total_tokens,
+                        "promptTokens": self.tokens.prompt_tokens,
+                        "cachedTokens": self.tokens.cached_prompt_tokens,
+                        "effort": self.effort,
                         "cost": usage.cost_micro_usd,
                         "toolCalls": usage.tool_calls,
                         "budgetRemaining": remaining,
@@ -560,12 +648,19 @@ pub(crate) fn observe_run(
         session_key,
         spend_key,
         subject: acting.on_behalf_of,
+        effort,
+        tokens: TurnTokens::default(),
     };
     let state = (events, Some(finish), span);
-    Box::pin(futures::stream::unfold(state, |(mut events, finish, span)| async move {
+    Box::pin(futures::stream::unfold(state, |(mut events, mut finish, span)| async move {
         let next = events.next().instrument(span.clone()).await;
         match next {
-            Some(Ok(event)) => Some((Ok(event), (events, finish, span))),
+            Some(Ok(event)) => {
+                if let Some(finish) = finish.as_mut() {
+                    finish.observe(&event);
+                }
+                Some((Ok(event), (events, finish, span)))
+            }
             Some(Err(error)) => {
                 if let Some(finish) = finish
                     && let Err(audit_error) = finish.run().instrument(span.clone()).await

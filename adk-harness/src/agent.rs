@@ -59,6 +59,10 @@ pub struct HarnessInfo {
     pub packs: Vec<String>,
     /// The harness tools.
     pub tools: Vec<String>,
+    /// The reasoning effort of each mode and role (spec 3.1 §7.23).
+    pub effort: crate::posture::EffortPolicy,
+    /// Whether a `cache_capable` model gets the runner's explicit context cache.
+    pub context_caching: bool,
 }
 
 /// Project instructions with the trust they load under.
@@ -132,6 +136,9 @@ pub struct HarnessRuntime {
     pub(crate) mcp: Option<Arc<crate::mcp::McpInteractionRuntime>>,
     #[cfg(feature = "hooks")]
     pub(crate) hooks: Option<Arc<crate::hooks::HookRunner>>,
+    pub(crate) effort: crate::posture::EffortPolicy,
+    /// The model whose context the runner caches explicitly, when caching is on.
+    pub(crate) cache_capable: Option<Arc<dyn adk_core::CacheCapable>>,
 }
 
 /// The harness's audit trail, in Block mode: `recorder`, or with feature `auth` an
@@ -568,7 +575,18 @@ impl HarnessAgent {
         if let Some(compaction) = &self.runtime.compaction {
             builder = builder.compaction_config(compaction.clone());
         }
+        // Explicit context caching for a model that supports it (spec 3.1 §7.23).
+        if let Some(model) = &self.runtime.cache_capable {
+            builder = builder
+                .cache_capable(model.clone())
+                .context_cache_config(adk_core::ContextCacheConfig::default());
+        }
         builder
+    }
+
+    /// The reasoning effort of each mode and model role (spec 3.1 §7.23).
+    pub fn effort(&self) -> &crate::posture::EffortPolicy {
+        &self.runtime.effort
     }
 
     /// The todo list of `session` (spec 3.1 §7.6).
@@ -832,6 +850,7 @@ impl HarnessAgent {
                 span,
                 self.runtime.spend.clone(),
                 self.runtime.run_trails.clone(),
+                self.runtime.effort.for_mode(mode),
             )
         };
         #[cfg(not(feature = "observe"))]

@@ -30,6 +30,7 @@
 //! | [`coding::CodingAgent`] | §7.19 |
 //! | [`WebConfig`], [`SearchProvider`], [`ProviderWebTools`], `web_fetch`, `web_search` (feature `web`) | §7.20 |
 //! | [`McpInteractionConfig`], `HarnessElicitationHandler`, `HarnessSamplingHandler`, `mcp_*_resource` (feature `mcp`) | §7.21 |
+//! | [`EffortPolicy`], [`Effort`] | §7.23 |
 //!
 //! # Example
 //!
@@ -73,6 +74,7 @@ mod observe;
 #[cfg(feature = "graph")]
 mod plan_graph;
 mod policy;
+mod posture;
 mod prompt;
 mod run_context;
 mod shell;
@@ -153,8 +155,8 @@ pub use mode::{
 #[cfg(feature = "observe")]
 pub use observe::{
     ATTR_GOAL_ITERATION, ATTR_ISOLATION, ATTR_MEMBER, ATTR_MODE, ATTR_RULE_ID, ATTR_TOOL_KIND,
-    LOOP_DETECTED_CODE, SpendEntry, SpendReport, goal_iteration_span, isolation_label, member_span,
-    run_span, tool_kind_label,
+    LOOP_DETECTED_CODE, SpendEntry, SpendReport, TurnTokens, goal_iteration_span, isolation_label,
+    member_span, run_span, tool_kind_label,
 };
 #[cfg(feature = "graph")]
 pub use plan_graph::{
@@ -166,6 +168,7 @@ pub use policy::{
     TableDecision, TableRow, ToolClassRegistry, ToolKind, apply_rule, decision_cell,
     has_harness_layer,
 };
+pub use posture::{Effort, EffortPolicy};
 pub use prompt::HARNESS_SYSTEM_PROMPT;
 #[cfg(feature = "sqlite")]
 pub use shell::SqliteShellLedger;

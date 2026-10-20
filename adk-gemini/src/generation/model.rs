@@ -762,6 +762,27 @@ pub enum ThinkingLevel {
     High,
 }
 
+/// The harness effort levels (spec 3.1 §7.23): `Low`, `Medium` and `High` map to the
+/// thinking level of the same name; `Minimal` stays reachable only through
+/// [`ThinkingConfig::with_thinking_level`].
+///
+/// # Example
+///
+/// ```rust
+/// use adk_gemini::ThinkingLevel;
+///
+/// assert_eq!(ThinkingLevel::from(adk_core::Effort::Medium), ThinkingLevel::Medium);
+/// ```
+impl From<adk_core::Effort> for ThinkingLevel {
+    fn from(effort: adk_core::Effort) -> Self {
+        match effort {
+            adk_core::Effort::Low => Self::Low,
+            adk_core::Effort::Medium => Self::Medium,
+            adk_core::Effort::High => Self::High,
+        }
+    }
+}
+
 /// Configuration for thinking (Gemini 2.5 and 3 series)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1070,6 +1091,23 @@ impl SpeakerVoiceConfig {
             voice_config: VoiceConfig {
                 prebuilt_voice_config: Some(PrebuiltVoiceConfig { voice_name: voice_name.into() }),
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod effort_tests {
+    use super::ThinkingLevel;
+
+    /// The harness levels map to their namesakes; `Minimal` is never produced.
+    #[test]
+    fn every_harness_effort_maps_to_its_namesake() {
+        for (core, level) in [
+            (adk_core::Effort::Low, ThinkingLevel::Low),
+            (adk_core::Effort::Medium, ThinkingLevel::Medium),
+            (adk_core::Effort::High, ThinkingLevel::High),
+        ] {
+            assert_eq!(ThinkingLevel::from(core), level);
         }
     }
 }

@@ -283,7 +283,7 @@ pub use metering::{
     generate_metered, vendor_for_model,
 };
 pub use model::{
-    BuiltinToolUse, CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig,
+    BuiltinToolUse, CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig, Effort,
     FinishReason, GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream,
     UsageMetadata, nullable_count,
 };

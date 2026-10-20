@@ -38,6 +38,27 @@ pub enum Effort {
     Max,
 }
 
+/// The harness effort levels (spec 3.1 §7.23): `Low`, `Medium` and `High` map to the
+/// Anthropic levels of the same name; `XHigh` and `Max` stay reachable only through
+/// [`AnthropicConfig::with_effort`].
+///
+/// # Example
+///
+/// ```rust
+/// use adk_model::anthropic::Effort;
+///
+/// assert_eq!(Effort::from(adk_core::Effort::High), Effort::High);
+/// ```
+impl From<adk_core::Effort> for Effort {
+    fn from(effort: adk_core::Effort) -> Self {
+        match effort {
+            adk_core::Effort::Low => Self::Low,
+            adk_core::Effort::Medium => Self::Medium,
+            adk_core::Effort::High => Self::High,
+        }
+    }
+}
+
 /// Configuration for Anthropic API.
 ///
 /// # Example
@@ -414,5 +435,22 @@ impl AnthropicConfig {
     pub fn with_tool_search(mut self, config: ToolSearchConfig) -> Self {
         self.tool_search = Some(config);
         self
+    }
+}
+
+#[cfg(test)]
+mod effort_tests {
+    use super::Effort;
+
+    /// The harness levels map to their namesakes; `XHigh` and `Max` are never produced.
+    #[test]
+    fn every_harness_effort_maps_to_its_namesake() {
+        for (core, provider) in [
+            (adk_core::Effort::Low, Effort::Low),
+            (adk_core::Effort::Medium, Effort::Medium),
+            (adk_core::Effort::High, Effort::High),
+        ] {
+            assert_eq!(Effort::from(core), provider);
+        }
     }
 }

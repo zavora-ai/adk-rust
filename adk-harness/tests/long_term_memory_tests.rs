@@ -152,7 +152,6 @@ fn facts_block(request: &LlmRequest) -> Option<String> {
     request
         .contents
         .iter()
-        .filter(|content| content.role == "system")
         .flat_map(|content| content.parts.iter())
         .filter_map(Part::text)
         .find(|text| text.starts_with("<memory-facts>"))

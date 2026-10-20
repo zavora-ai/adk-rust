@@ -1,7 +1,7 @@
 //! `HarnessAgentBuilder` (spec 3.1 §7.2).
 
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -177,6 +177,9 @@ pub struct HarnessAgentBuilder {
     hooks: Option<crate::hooks::HookSet>,
     #[cfg(feature = "hooks")]
     hooks_enabled: bool,
+    effort: crate::posture::EffortPolicy,
+    cache_capable: Option<Arc<dyn adk_core::CacheCapable>>,
+    context_caching: bool,
 }
 
 impl HarnessAgentBuilder {
@@ -253,6 +256,9 @@ impl HarnessAgentBuilder {
             hooks: None,
             #[cfg(feature = "hooks")]
             hooks_enabled: true,
+            effort: crate::posture::EffortPolicy::default(),
+            cache_capable: None,
+            context_caching: true,
         }
     }
 
@@ -796,6 +802,33 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// The reasoning effort of each mode and model role (spec 3.1 §7.23); the defaults
+    /// are the spec's table (plan high, members low).
+    ///
+    /// Until §10 C4 lands, providers read effort when their client is built, so the policy
+    /// applies where clients are built: `HarnessAgent::effort` reports it and a surface
+    /// builds the harness model at the session mode's level, the member model at `members`
+    /// and the distiller at `distiller`.
+    pub fn effort(mut self, policy: crate::posture::EffortPolicy) -> Self {
+        self.effort = policy;
+        self
+    }
+
+    /// A model that caches its context explicitly (a `GeminiModel`): the runner gets it
+    /// with `ContextCacheConfig::default()` (4,096 tokens, 600 s, 3 intervals) so the
+    /// prompt prefix is cached (spec 3.1 §7.23).
+    pub fn cache_capable(mut self, model: Arc<dyn adk_core::CacheCapable>) -> Self {
+        self.cache_capable = Some(model);
+        self
+    }
+
+    /// Turns explicit context caching off: the runner gets no cache even with
+    /// [`cache_capable`](Self::cache_capable) (spec 3.1 §7.23).
+    pub fn without_context_caching(mut self) -> Self {
+        self.context_caching = false;
+        self
+    }
+
     /// Edits the underlying `LlmAgentBuilder` before it is built.
     ///
     /// This is the escape hatch, with two caveats: a `before_tool_callback` or an enhanced
@@ -1217,13 +1250,24 @@ impl HarnessAgentBuilder {
         let provider_memory = memory_resolver.clone();
         #[cfg(feature = "hooks")]
         let provider_hooks = hook_runner.clone();
+        // Assembled once per run and reused by every model call of it, so the request
+        // prefix stays byte-stable while tools write memory or trust changes (spec 3.1
+        // §7.7, §9.2 I56).
+        let assembled: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
         let provider: InstructionProvider = Box::new(move |ctx: Arc<dyn ReadonlyContext>| {
             let parts = parts.clone();
             #[cfg(feature = "hooks")]
             let hooks = provider_hooks.clone();
+            let assembled = assembled.clone();
             #[cfg(feature = "memory")]
             let memory = provider_memory.clone();
             Box::pin(async move {
+                let key = format!("{}\u{1f}{}", ctx.session_id(), ctx.invocation_id());
+                if let Some(instruction) =
+                    assembled.lock().unwrap_or_else(|e| e.into_inner()).get(&key)
+                {
+                    return Ok(instruction.clone());
+                }
                 let instruction = parts.assemble();
                 // The session's OnSessionStart notes join the <environment> block; they are
                 // cached per session, so the prefix stays stable within a run (I56).
@@ -1242,7 +1286,11 @@ impl HarnessAgentBuilder {
                     Some(memory) => memory.append_index(instruction, ctx.as_ref()).await,
                     None => instruction,
                 };
-                let _ = &ctx;
+                let mut cache = assembled.lock().unwrap_or_else(|e| e.into_inner());
+                if cache.len() >= 64 {
+                    cache.clear();
+                }
+                cache.insert(key, instruction.clone());
                 Ok(instruction)
             })
         });
@@ -1384,6 +1432,8 @@ impl HarnessAgentBuilder {
             members: Vec::new(),
             packs: Vec::new(),
             tools: tool_names,
+            effort: self.effort,
+            context_caching: self.context_caching,
         };
         let _ = (self.default_members, self.member_model, self.plan_graph);
         Ok(HarnessAgent {
@@ -1433,6 +1483,8 @@ impl HarnessAgentBuilder {
                 mcp,
                 #[cfg(feature = "hooks")]
                 hooks: hook_runner,
+                effort: self.effort,
+                cache_capable: self.context_caching.then_some(self.cache_capable).flatten(),
             },
             info,
         })
