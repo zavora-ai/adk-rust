@@ -7,9 +7,9 @@ description = "LlmAgent with a REPL-mode MontyPythonCodeTool: OS grants, host fu
 
 # Standalone example crate with its own workspace, like the other examples. It
 # depends (through adk-code's `embedded-python` feature) on `monty` from
-# crates.io, which requires rustc 1.95+. The committed Cargo.lock pins
-# `get-size2` to 0.10.1 for monty's `ruff_python_ast 0.0.3` dependency — see
-# the comment in adk-codeact-monty/Cargo.toml.
+# crates.io, which requires rustc 1.95+. adk-code pins `get-size2` to 0.10.1
+# for monty's `ruff_python_ast 0.0.3` dependency — see the comment in
+# adk-code/Cargo.toml.
 [workspace]
 
 [dependencies]

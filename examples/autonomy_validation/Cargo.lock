@@ -83,6 +83,7 @@ dependencies = [
  "adk-sandbox",
  "async-trait",
  "chrono",
+ "get-size2",
  "monty",
  "monty-fs",
  "monty-types",

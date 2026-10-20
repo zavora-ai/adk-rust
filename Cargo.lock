@@ -368,6 +368,7 @@ dependencies = [
  "bollard",
  "chrono",
  "futures",
+ "get-size2",
  "google-cloud-auth 1.15.0",
  "monty",
  "monty-fs",

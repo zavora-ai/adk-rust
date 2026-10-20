@@ -19,7 +19,7 @@ adk-agent = { workspace = true, features = ["codeact"] }
 # servicing, `PathAccess`, and re-exports of the `monty`/`monty-types`/
 # `monty-fs` crates — so the Monty release is pinned exactly once, by
 # adk-code, and this crate cannot drift from it. See adk-code/Cargo.toml for
-# the pin rationale (including the `get-size2` lockfile pin).
+# the pin rationale (including the `get-size2` pin).
 adk-code = { workspace = true, features = ["embedded-python"] }
 serde_json = { workspace = true }
 
