@@ -177,6 +177,32 @@ impl Tool for WhoAmI {
 A wrapper context that implements `ReadonlyContext` must forward `acting_context()` to the
 context it wraps.
 
+### Authenticated identity
+
+`ReadonlyContext::is_authenticated()` says whether `user_id()` comes from an authenticated
+`RequestContext` rather than from the request body:
+
+| Run | `is_authenticated()` |
+|-----|----------------------|
+| `adk-server` with a `RequestContextExtractor` that authenticated the request | `true` |
+| `adk-server` without an extractor, where the client names the user | `false` |
+| A runner built with `RunnerConfig::request_context` / `RunnerConfigBuilder::request_context` | `true` |
+| Any other runner, and any context that does not forward it | `false` |
+
+The runner's invocation context and `adk_core::ToolCallbackContext` answer it; other wrapper
+contexts should forward it to the context they wrap, and a context that does not answers
+`false`. Gate per-user privileges, such as standing approvals, on it so they stay inert when
+the server does not authenticate its callers.
+
+```rust
+use adk_core::ReadonlyContext;
+
+/// Standing approvals apply only to a user the server authenticated.
+fn standing_rules_apply(ctx: &dyn ReadonlyContext) -> bool {
+    ctx.is_authenticated()
+}
+```
+
 ## Delegation
 
 An `AgentTool` runs its agent as a delegate. The delegate acts for the caller's subject, its
