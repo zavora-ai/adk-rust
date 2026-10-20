@@ -431,3 +431,45 @@ async fn test_live_gcs_round_trip() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn test_missing_artifacts_and_invalid_names_share_the_local_codes() {
+    let (endpoint, store) = spawn_mock_gcs().await;
+    let service = mock_service(&endpoint);
+    service.save(save_request("my-app", "kept.png", inline_part(b"x"))).await.unwrap();
+
+    for (operation, result) in [
+        ("load", service.load(load_request("my-app", "absent.png", None)).await.map(|_| ())),
+        (
+            "load version",
+            service.load(load_request("my-app", "kept.png", Some(9))).await.map(|_| ()),
+        ),
+        (
+            "versions",
+            service
+                .versions(VersionsRequest {
+                    app_name: "my-app".to_string(),
+                    user_id: "user123".to_string(),
+                    session_id: "session456".to_string(),
+                    file_name: "absent.png".to_string(),
+                })
+                .await
+                .map(|_| ()),
+        ),
+    ] {
+        let error = result.unwrap_err();
+        assert!(error.is_not_found(), "{operation}: {error}");
+        assert_eq!(error.code, "artifact.not_found", "{operation}: {error}");
+    }
+
+    for name in ["../escape.png", "a/../b.png", "/rooted.png", ""] {
+        let error = service.load(load_request("my-app", name, None)).await.unwrap_err();
+        assert_eq!(error.category, adk_core::ErrorCategory::InvalidInput, "{name:?}: {error}");
+        assert_eq!(error.code, "artifact.invalid_name", "{name:?}: {error}");
+    }
+    let mut bad_session = load_request("my-app", "kept.png", None);
+    bad_session.session_id = "../other".to_string();
+    let error = service.load(bad_session).await.unwrap_err();
+    assert_eq!(error.code, "artifact.invalid_identifier", "{error}");
+    assert_eq!(store.lock().unwrap().len(), 1);
+}

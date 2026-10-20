@@ -101,6 +101,10 @@ deploy. Enable the `sqlite` feature (`adk-rust` forwards it as
 adk-telemetry = { version = "3.0.0", features = ["sqlite"] }
 ```
 
+The exporter links the same `libsqlite3-sys` as SQLx's SQLite driver, so it shares a
+lockfile with `SqliteSessionService`, `SqliteMemoryService`, and the SQLite graph
+checkpointer.
+
 ```rust
 use adk_telemetry::init_with_sqlite;
 

@@ -6,7 +6,7 @@ use adk_artifact::{
     ArtifactService, DeleteRequest, FileArtifactService, InMemoryArtifactService, ListRequest,
     LoadRequest, SaveRequest, VersionsRequest,
 };
-use adk_core::{ErrorCategory, Part};
+use adk_core::{ErrorCategory, ErrorComponent, Part};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -158,5 +158,48 @@ async fn names_that_differ_only_in_colons_and_underscores_are_distinct() {
         let listed: BTreeSet<String> =
             service.list(list("s1")).await.unwrap().file_names.into_iter().collect();
         assert_eq!(listed, names.iter().map(ToString::to_string).collect(), "{label}");
+    }
+}
+
+#[tokio::test]
+async fn a_missing_artifact_or_version_is_not_found() {
+    for (label, service, _dir) in backends() {
+        service.save(save("s1", "kept.txt", "v1", None)).await.unwrap();
+        let failures = [
+            ("load", service.load(load("s1", "absent.txt", None)).await.map(|_| ())),
+            ("load version", service.load(load("s1", "kept.txt", Some(9))).await.map(|_| ())),
+            ("versions", service.versions(versions("s1", "absent.txt")).await.map(|_| ())),
+        ];
+        for (operation, result) in failures {
+            let error = result.unwrap_err();
+            assert_eq!(
+                (error.category, error.code, error.component),
+                (ErrorCategory::NotFound, "artifact.not_found", ErrorComponent::Artifact),
+                "{label} {operation}: {error}"
+            );
+            assert!(error.is_not_found(), "{label} {operation}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn traversal_and_empty_names_are_invalid_input() {
+    for (label, service, _dir) in backends() {
+        for name in ["../escape.txt", "a/b.txt", "..", "", "back\\slash.txt"] {
+            let results = [
+                ("save", service.save(save("s1", name, "x", None)).await.map(|_| ())),
+                ("load", service.load(load("s1", name, None)).await.map(|_| ())),
+                ("versions", service.versions(versions("s1", name)).await.map(|_| ())),
+            ];
+            for (operation, result) in results {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    (error.category, error.code),
+                    (ErrorCategory::InvalidInput, "artifact.invalid_name"),
+                    "{label} {operation} {name:?}: {error}"
+                );
+            }
+        }
+        assert!(service.list(list("s1")).await.unwrap().file_names.is_empty(), "{label}");
     }
 }

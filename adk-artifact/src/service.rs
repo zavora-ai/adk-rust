@@ -23,6 +23,39 @@ pub(crate) fn check_session_id(session_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// The error for a load or version listing of an artifact, or a version of one, that is
+/// not stored. Every backend returns it, so `AdkError::is_not_found` holds for each.
+pub(crate) fn artifact_not_found(file_name: &str, version: Option<i64>) -> AdkError {
+    let message = match version {
+        Some(version) => format!(
+            "artifact '{file_name}' has no version {version}; list its versions to see which exist"
+        ),
+        None => format!("artifact '{file_name}' was not found; save it before loading it"),
+    };
+    AdkError::not_found(ErrorComponent::Artifact, "artifact.not_found", message)
+}
+
+/// The error for an artifact file name the backend cannot store, such as one with a path
+/// separator or a `..` traversal.
+pub(crate) fn invalid_file_name(file_name: &str, rule: &str) -> AdkError {
+    AdkError::new(
+        ErrorComponent::Artifact,
+        ErrorCategory::InvalidInput,
+        "artifact.invalid_name",
+        format!("invalid artifact file name '{file_name}': {rule}"),
+    )
+}
+
+/// The error for an app name, user ID, or session ID that cannot address artifact storage.
+pub(crate) fn invalid_identifier(field: &str, value: &str, rule: &str) -> AdkError {
+    AdkError::new(
+        ErrorComponent::Artifact,
+        ErrorCategory::InvalidInput,
+        "artifact.invalid_identifier",
+        format!("invalid artifact {field} '{value}': {rule}"),
+    )
+}
+
 /// The error for a save naming a version that already exists.
 pub(crate) fn version_exists(file_name: &str, version: i64) -> AdkError {
     AdkError::new(

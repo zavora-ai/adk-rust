@@ -43,7 +43,7 @@ impl InMemoryArtifactService {
 
     fn validate_file_name(file_name: &str) -> Result<()> {
         if file_name.is_empty() {
-            return Err(adk_core::AdkError::artifact("invalid artifact file name: empty name"));
+            return Err(invalid_file_name(file_name, "the name is empty"));
         }
 
         // Prevent path traversal and path-like names; artifacts are logical keys, not paths.
@@ -53,10 +53,10 @@ impl InMemoryArtifactService {
             || file_name == ".."
             || file_name.contains("..")
         {
-            return Err(adk_core::AdkError::artifact(format!(
-                "invalid artifact file name '{}': path separators and traversal patterns are not allowed",
-                file_name
-            )));
+            return Err(invalid_file_name(
+                file_name,
+                "path separators and traversal patterns are not allowed",
+            ));
         }
 
         Ok(())
@@ -145,7 +145,7 @@ impl ArtifactService for InMemoryArtifactService {
             let artifacts = self.artifacts.read().unwrap();
             let part = artifacts
                 .get(&key)
-                .ok_or_else(|| adk_core::AdkError::artifact("artifact not found"))?;
+                .ok_or_else(|| artifact_not_found(&key.file_name, Some(version)))?;
 
             Ok(LoadResponse { part: part.clone() })
         } else {
@@ -157,7 +157,7 @@ impl ArtifactService for InMemoryArtifactService {
                 &session_id,
                 &req.file_name,
             )
-            .ok_or_else(|| adk_core::AdkError::artifact("artifact not found"))?;
+            .ok_or_else(|| artifact_not_found(&req.file_name, None))?;
 
             Ok(LoadResponse { part })
         }
@@ -229,7 +229,7 @@ impl ArtifactService for InMemoryArtifactService {
             .collect();
 
         if versions.is_empty() {
-            return Err(adk_core::AdkError::artifact("artifact not found"));
+            return Err(artifact_not_found(&req.file_name, None));
         }
 
         versions.sort_by(|a, b| b.cmp(a));

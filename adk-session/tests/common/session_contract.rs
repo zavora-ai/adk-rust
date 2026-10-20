@@ -17,17 +17,20 @@ pub async fn assert_session_contract(
 }
 
 /// Checks that every method rejects an invalid app name, user ID, or session ID (empty, over
-/// [`MAX_ID_LEN`] bytes, or containing NUL) with an `InvalidInput` error.
+/// [`MAX_ID_LEN`] bytes, or containing NUL) with `session.invalid_identifier`
+/// (`InvalidInput`).
 ///
 /// The contract names only identifiers no call can store, so it runs against a live backend
 /// without leaving data behind, and against an unreachable one: a backend that validates
-/// before its first network call returns `InvalidInput`, one that does not returns the
-/// connection error instead.
+/// before its first network call returns `session.invalid_identifier`, one that does not
+/// returns the connection error instead.
 pub async fn assert_identifier_validation_contract(service: &dyn SessionService) {
     let too_long = "x".repeat(MAX_ID_LEN + 1);
     let mut accepted = Vec::new();
     let mut check = |operation: &str, outcome: adk_core::Result<()>| match outcome {
-        Err(error) if error.category == ErrorCategory::InvalidInput => {}
+        Err(error)
+            if error.category == ErrorCategory::InvalidInput
+                && error.code == "session.invalid_identifier" => {}
         other => accepted.push(format!("{operation}: {other:?}")),
     };
 
@@ -141,6 +144,7 @@ pub async fn assert_session_contract_with_users(
         .err()
         .expect("an invalid session identity must return an error");
     assert_eq!(invalid.category, adk_core::ErrorCategory::InvalidInput);
+    assert_eq!(invalid.code, "session.invalid_identifier");
 
     let mut initial_state = HashMap::new();
     initial_state.insert("app:locale".to_string(), json!("en-US"));

@@ -264,9 +264,10 @@ pub use governance::{
     GOVERNANCE_FROZEN_CODE, GOVERNANCE_STALE_CODE, GovernanceControl, GovernanceMirrorConfig,
     GovernanceWatch, GovernedCall, HeldToolCall, InMemoryApprovalStore, PendingApproval,
     ToolApproval, ToolAuthorization, ToolCallScreen, ToolGate, WithheldBuiltinTool,
-    authorize_tool_call, builtin_tool_configuration, confirmation_decision_available,
-    confirmation_pending_response, held_call_compaction_limit, held_tool_calls,
-    is_confirmation_pending, supersede_pending_responses, workflow_resume_positions,
+    authorize_tool_call, builtin_tool_configuration, confirm_tool_call,
+    confirmation_decision_available, confirmation_pending_response, held_call_compaction_limit,
+    held_tool_calls, is_confirmation_pending, supersede_pending_responses,
+    workflow_resume_positions,
 };
 pub use governance_state::{
     GovernanceScope, GovernanceState, GovernanceStateStore, InMemoryGovernanceStateStore,

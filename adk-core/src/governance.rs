@@ -1652,25 +1652,11 @@ pub async fn authorize_tool_call(
         audited
             .decision(&args, AuditDecision::ApprovalRequired, held_by, approval_reason.as_deref())
             .await?;
-        if let Some(store) = &config.approval_store {
-            store.record_pending(&gate.scope, &request).await?;
-        }
         let reason = match approval_reason {
             Some(reason) => format!("Tool '{tool_name}' requires confirmation: {reason}"),
             None => format!("Tool '{tool_name}' requires confirmation"),
         };
-        if let Some(service) = &config.approval_service {
-            let call = crate::approval::ApprovalCall {
-                scope: gate.scope.clone(),
-                request: request.clone(),
-                reason: reason.clone(),
-                agent_name: gate.agent_name.to_string(),
-                invocation_id: gate.invocation_id.to_string(),
-                run_id: config.durable_run_id.clone(),
-                acting: Some(gate.acting.clone()),
-            };
-            service.submit_call(call).await?;
-        }
+        record_held_call(gate, &request, &reason).await?;
         return Ok(ToolAuthorization::Pending { request, reason });
     };
     match approval.decision {
@@ -1719,6 +1705,114 @@ pub async fn authorize_tool_call(
             })
         }
     }
+}
+
+/// Records `request` as waiting for a decision: pending in the run's [`ApprovalStore`]
+/// and submitted to its [`ApprovalService`](crate::ApprovalService), when it has them.
+async fn record_held_call(
+    gate: &ToolGate<'_>,
+    request: &ToolConfirmationRequest,
+    reason: &str,
+) -> Result<()> {
+    let config = gate.run_config;
+    if let Some(store) = &config.approval_store {
+        store.record_pending(&gate.scope, request).await?;
+    }
+    if let Some(service) = &config.approval_service {
+        let call = crate::approval::ApprovalCall {
+            scope: gate.scope.clone(),
+            request: request.clone(),
+            reason: reason.to_string(),
+            agent_name: gate.agent_name.to_string(),
+            invocation_id: gate.invocation_id.to_string(),
+            run_id: config.durable_run_id.clone(),
+            acting: Some(gate.acting.clone()),
+        };
+        service.submit_call(call).await?;
+    }
+    Ok(())
+}
+
+/// Decides a confirmation that a tool asks for while it executes, through the decision
+/// sources of the governed path.
+///
+/// A tool whose own checks escalate a call — a payment that a payment policy sends for
+/// review — asks here, so the escalation is answered like a call held before execution:
+/// by a decision for the call ID (bound to the request's fingerprint), a live approval
+/// keyed by fingerprint ([`RunConfig::tool_approvals`]), a decision in the run's
+/// [`ApprovalStore`], which this call consumes, or the confirmation handler, bounded by
+/// [`RunConfig::tool_confirmation_timeout`]. Build `request` with the acting context and
+/// the tool's [`ToolOrigin`], so the decision binds to the agent and the tool that asked.
+///
+/// Without a decision, `request` is recorded as pending in the approval store and
+/// submitted to the approval service, and `None` is returned. The tool then sets
+/// `request` as its event's
+/// [`tool_confirmation`](crate::EventActions::tool_confirmation) and does not act: the
+/// agent holds the call, and dispatches it again once a decision exists. The caller
+/// records its own outcome; this function writes no audit record.
+///
+/// # Errors
+///
+/// Returns an error when the run is frozen before or after the decision, or when the
+/// handler, the approval store, or the approval service fails.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{
+///     ApprovalScope, ApprovalStore, InMemoryApprovalStore, RunConfig, ToolApproval,
+///     ToolConfirmationDecision, ToolConfirmationRequest, ToolGate,
+/// };
+/// use serde_json::json;
+/// use std::sync::Arc;
+///
+/// # futures::executor::block_on(async {
+/// let store = Arc::new(InMemoryApprovalStore::new());
+/// let config = RunConfig::builder().approval_store(store.clone()).build();
+/// let scope = ApprovalScope::new("shop", "user-1", "session-1");
+/// let gate = ToolGate::new(&config, "buyer", "inv-1", scope.clone());
+/// let request = ToolConfirmationRequest::new("pay", json!({ "cents": 75_000 }))
+///     .with_function_call_id("call-1")
+///     .with_acting_context(gate.acting_context().clone());
+///
+/// // No decision yet: the request waits in the approval store.
+/// assert!(adk_core::confirm_tool_call(&gate, &request, "over $50").await?.is_none());
+/// assert_eq!(store.pending(&scope).await?.len(), 1);
+///
+/// // An approver decides it; the next attempt consumes the approval.
+/// store.decide(&scope, &request.fingerprint(), ToolApproval::approve()).await?;
+/// let approval = adk_core::confirm_tool_call(&gate, &request, "over $50").await?;
+/// assert_eq!(approval.map(|a| a.decision), Some(ToolConfirmationDecision::Approve));
+/// assert!(!store.has_decision(&scope, &request.fingerprint()).await?);
+/// # Ok::<(), adk_core::AdkError>(())
+/// # }).unwrap();
+/// ```
+pub async fn confirm_tool_call(
+    gate: &ToolGate<'_>,
+    request: &ToolConfirmationRequest,
+    reason: &str,
+) -> Result<Option<ToolApproval>> {
+    let config = gate.run_config;
+    config.check_governance()?;
+    let Some((approval, source)) = resolve_confirmation(gate, request).await? else {
+        tracing::info!(
+            tool.name = %request.tool_name,
+            agent.id = %gate.acting.agent.id,
+            "tool call held for confirmation during execution"
+        );
+        record_held_call(gate, request, reason).await?;
+        return Ok(None);
+    };
+    tracing::info!(
+        tool.name = %request.tool_name,
+        agent.id = %gate.acting.agent.id,
+        confirmation.source = source,
+        decision = ?approval.decision,
+        "confirmation decided during execution"
+    );
+    // A freeze can land while a person is deciding.
+    config.check_governance()?;
+    Ok(Some(approval))
 }
 
 /// Why `held` cannot resume as a call by `acting`'s agent to a tool with `origin`, or

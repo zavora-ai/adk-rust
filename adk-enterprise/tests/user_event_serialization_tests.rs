@@ -1,4 +1,4 @@
-//! Serialization tests for `UserEvent` variants — validates CANON §3.4 type strings.
+//! Serialization tests for `UserEvent` variants — validates their dotted `type` strings.
 
 use adk_enterprise::{ConfirmationResult, ContentBlock, UserEvent};
 

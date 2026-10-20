@@ -20,6 +20,7 @@ The plugin never re-runs the tool itself. The model reads the reflection and dec
 [dependencies]
 adk-retry-reflect = "3.0.0"
 adk-agent = { version = "3.0.0", features = ["enhanced-plugins"] }
+adk-plugin = "3.0.0"
 ```
 
 The umbrella crate does not re-export `adk-retry-reflect`; its `plugin` feature enables `adk-agent`'s `enhanced-plugins`, which `LlmAgentBuilder::enhanced_plugin` needs.
@@ -90,6 +91,7 @@ let plugin = RetryReflectPluginBuilder::new()
 | `template(text)` | built-in | Reflection text with `{tool_name}`, `{args}`, `{error}`, `{attempt}`, `{max_retries}` and `{guidance}` placeholders; `{guidance}` renders empty |
 | `priority(n)` | 200 | Enhanced-plugin order; lower values run first |
 | `enable_global_tracking(threshold)` | off | Circuit breaker across invocations; see below |
+| `record_payloads(enabled)` | off | Whether log lines carry the tool's error text; see [Observability](#observability) |
 
 ## Retry Counts
 
@@ -99,7 +101,7 @@ budget:
 
 | Event | Effect |
 |-------|--------|
-| A tool call fails | Its tool-and-arguments count in this invocation rises by one; a reflection is added while the count is under `max_retries` and the invocation's total is under `global_limit` |
+| A tool call fails | A reflection is added while fewer than `max_retries` reflections were added for that tool and argument set in this invocation, and fewer than `global_limit` across the invocation; each reflection raises both counts by one |
 | A tool call succeeds | That tool's counts in this invocation are cleared, so its next failure is reflected again |
 | More than 1,024 invocations are tracked | The oldest invocation's counts are forgotten |
 
@@ -191,7 +193,11 @@ let agent = LlmAgentBuilder::new("agent")
 
 ## Observability
 
-The plugin emits `tracing` events with the tool name and the result's error text:
+The plugin emits `tracing` events with the tool name and the error's content-free
+diagnostics (`error`: component, category, and code). The error's text, which can quote
+arguments and credentials, is logged as `error.message` only under `record_payloads(true)`;
+the plugin's context does not carry the run config, so set it to the run's
+`RunConfig::record_payloads`:
 
 | Event | Level | When |
 |-------|-------|------|
@@ -200,7 +206,7 @@ The plugin emits `tracing` events with the tool name and the result's error text
 | `retry_reflect.global_limit_exhausted` | `warn` | The invocation reached `global_limit` |
 | `retry_reflect.circuit_broken` | `warn` | The tool's circuit is open |
 | `retry_reflect.skipped_authorization_denial` | `info` | A refusal passed through |
-| `retry_reflect.skipped_non_idempotent_timeout` | `warn` | A non-idempotent timeout passed through |
+| `retry_reflect.skipped_non_idempotent_timeout` | `warn` | A non-idempotent timeout reported as an `"error"` result passed through. `LlmAgent` answers such a timeout with an `outcome_unknown` response, which carries no `"error"` key, so it passes through without this event |
 
 ## Related
 

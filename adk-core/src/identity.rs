@@ -418,9 +418,32 @@ pub struct ExecutionIdentity {
 // IdentityError -> AdkError conversion
 // ---------------------------------------------------------------------------
 
+/// An identifier that fails validation becomes `session.invalid_identifier`
+/// ([`ErrorCategory::InvalidInput`](crate::ErrorCategory::InvalidInput), HTTP 400) in the
+/// [`Session`](crate::ErrorComponent::Session) component, the error every session backend
+/// and the runner return for an invalid app name, user ID, or session ID.
+///
+/// # Example
+///
+/// ```
+/// use adk_core::identity::UserId;
+/// use adk_core::{AdkError, ErrorCategory};
+///
+/// let error: AdkError = UserId::try_from("").unwrap_err().into();
+/// assert_eq!(error.code, "session.invalid_identifier");
+/// assert_eq!(error.category, ErrorCategory::InvalidInput);
+/// ```
 impl From<IdentityError> for crate::AdkError {
     fn from(err: IdentityError) -> Self {
-        crate::AdkError::config(err.to_string())
+        crate::AdkError::new(
+            crate::ErrorComponent::Session,
+            crate::ErrorCategory::InvalidInput,
+            "session.invalid_identifier",
+            format!(
+                "{err}; identifiers must be non-empty, at most {MAX_ID_LEN} bytes, and free of NUL \
+                 characters"
+            ),
+        )
     }
 }
 
@@ -643,9 +666,23 @@ mod tests {
 
     #[test]
     fn test_identity_error_to_adk_error() {
-        let err = IdentityError::Empty { kind: "AppName" };
-        let adk_err: crate::AdkError = err.into();
-        assert!(adk_err.is_config());
-        assert!(adk_err.to_string().contains("AppName must not be empty"));
+        for err in [
+            IdentityError::Empty { kind: "AppName" },
+            IdentityError::TooLong { kind: "UserId", max: MAX_ID_LEN },
+            IdentityError::ContainsNull { kind: "SessionId" },
+        ] {
+            let message = err.to_string();
+            let adk_err: crate::AdkError = err.into();
+            assert_eq!(
+                (adk_err.component, adk_err.category, adk_err.code),
+                (
+                    crate::ErrorComponent::Session,
+                    crate::ErrorCategory::InvalidInput,
+                    "session.invalid_identifier"
+                )
+            );
+            assert!(adk_err.message.starts_with(&message), "{}", adk_err.message);
+            assert_eq!(adk_err.http_status_code(), 400);
+        }
     }
 }
