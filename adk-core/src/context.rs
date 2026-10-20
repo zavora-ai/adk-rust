@@ -1,5 +1,5 @@
 use crate::identity::{AdkIdentity, AppName, ExecutionIdentity, InvocationId, SessionId, UserId};
-use crate::{AdkError, Agent, Result, Toolset, types::Content};
+use crate::{AdkError, Agent, Result, ToolApproval, Toolset, types::Content};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1320,14 +1320,78 @@ impl ToolConfirmationRequest {
 /// Agents ask for each call as it is dispatched, with the call's final arguments,
 /// while calls that need no approval keep running. Calls in one batch are decided
 /// concurrently, so a handler that prompts on a shared device such as a terminal
-/// serializes its own prompts. A `decide` that takes longer than
-/// [`RunConfig::tool_confirmation_timeout`] denies the call. An error from `decide`
-/// ends the turn after running tools finish; `decide` calls still waiting in the same
+/// serializes its own prompts. The governed path asks through
+/// [`decide_approval`](Self::decide_approval), which calls `decide` unless overridden. A
+/// decision that takes longer than [`RunConfig::tool_confirmation_timeout`] denies the call.
+/// An error ends the turn after running tools finish; decisions still waiting in the same
 /// batch are dropped.
 #[async_trait]
 pub trait ToolConfirmationHandler: std::fmt::Debug + Send + Sync {
     /// Approve or deny one pending tool call.
     async fn decide(&self, request: &ToolConfirmationRequest) -> Result<ToolConfirmationDecision>;
+
+    /// Decides one pending tool call, optionally with arguments that replace the call's own
+    /// and a message.
+    ///
+    /// The governed path calls this method, not [`decide`](Self::decide). The default
+    /// returns [`ToolApproval::approve`](crate::ToolApproval::approve) or
+    /// [`ToolApproval::deny`](crate::ToolApproval::deny) for `decide`'s answer, so a
+    /// handler that does not override it decides exactly as before.
+    ///
+    /// An approval with [`edited_args`](crate::ToolApproval::edited_args) executes the call
+    /// with them only after they pass the run's [`ToolPolicy`](crate::ToolPolicy) and the
+    /// agent's tool screen again; a denial's [`message`](crate::ToolApproval::message) is
+    /// reported to the model. The approval's expiry is ignored, since it decides this call
+    /// only.
+    ///
+    /// Spec 3.1 §10, C3.
+    ///
+    /// # Errors
+    ///
+    /// An error ends the turn, as an error from `decide` does.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{
+    ///     Result, ToolApproval, ToolConfirmationDecision, ToolConfirmationHandler,
+    ///     ToolConfirmationRequest, async_trait,
+    /// };
+    /// use serde_json::json;
+    ///
+    /// /// Approves transfers, capping the amount at 100.
+    /// #[derive(Debug)]
+    /// struct CapTransfers;
+    ///
+    /// #[async_trait]
+    /// impl ToolConfirmationHandler for CapTransfers {
+    ///     async fn decide(&self, _request: &ToolConfirmationRequest) -> Result<ToolConfirmationDecision> {
+    ///         Ok(ToolConfirmationDecision::Approve)
+    ///     }
+    ///
+    ///     async fn decide_approval(&self, request: &ToolConfirmationRequest) -> Result<ToolApproval> {
+    ///         let amount = request.args["amount"].as_f64().unwrap_or(0.0);
+    ///         Ok(if amount > 100.0 {
+    ///             ToolApproval::approve().with_edited_args(json!({ "amount": 100 }))
+    ///         } else {
+    ///             ToolApproval::approve()
+    ///         })
+    ///     }
+    /// }
+    ///
+    /// # futures::executor::block_on(async {
+    /// let request = ToolConfirmationRequest::new("transfer", json!({ "amount": 250 }));
+    /// let approval = CapTransfers.decide_approval(&request).await?;
+    /// assert_eq!(approval.edited_args, Some(json!({ "amount": 100 })));
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// # }).unwrap();
+    /// ```
+    async fn decide_approval(&self, request: &ToolConfirmationRequest) -> Result<ToolApproval> {
+        Ok(match self.decide(request).await? {
+            ToolConfirmationDecision::Approve => ToolApproval::approve(),
+            ToolConfirmationDecision::Deny => ToolApproval::deny(),
+        })
+    }
 }
 
 /// A toolset attached to one runner invocation rather than compiled into the

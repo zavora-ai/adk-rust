@@ -130,13 +130,17 @@ drafts in memory for tests. The runner installs the trail on each run's `RunConf
 | Payment decision | Payment tools (ACP checkout, AP2 mandate) | `payment` | `payment.create_checkout`, `payment.complete_checkout`, `payment.execute_payment` | `allowed`, `approved`, `denied`, `approval_required`, `rejected` | `payment_policy` |
 | Payment outcome | Payment tools, after the backend returns | `payment` | As above | `succeeded` or `failed` | `payment_policy` |
 | Outcome unknown | Agents (timeout, panic, replay of a begun call), runner (cancelled run) | `tool_call` | Tool name | `outcome_unknown` | — |
+| Tool call answered before authorization | `LlmAgent`, when a `BeforeToolCallback`, a run-wide `before_tool` plugin, or an enhanced plugin's `ShortCircuit` answers the call | `tool_call` | `tool.short_circuit` | — / `not_run` | — |
 
 Every record names the acting agent and the subject it acts for in `actor`: the agent id
 `urn:adk:agent:<app>/<agent>`, `onBehalfOf` the session's user, and the invocation id.
 Records never carry arguments: `argsDigest` is `sha256:<hex>` of the call's final arguments
 (the cart for a payment). `ext` holds the call ID, the tool's declared effect, the session
-ID, the policy's reason for a denial or hold, an approval's `source` (`call_id`,
-`fingerprint`, `approval_store`, `handler`, `handler_timeout`), an unknown outcome's `cause`
+ID, the tool's `toolSource` and `declarationDigest` (its `ToolOrigin`, on governed records and
+short-circuit records whose tool is known), the policy's reason for a denial or hold, an
+approval's `source` (`call_id`, `fingerprint`, `approval_store`, `handler`,
+`handler_timeout`), a short-circuited call's `toolName`, `agentName`, and `answeredBy`
+(`before_tool_callback`, `invocation_hook`, `enhanced_plugin`), an unknown outcome's `cause`
 (`interrupted`, `began_without_outcome`, `cancelled`), and a payment's transaction ID,
 merchant, total, and the guardrails that spoke. A guardrail screen's refusal text can quote
 the arguments, so it stays out of the record.
@@ -148,7 +152,7 @@ overriding `policy_ref`; records then cite it as `tool_policy:<name>`.
 
 | `AuditFailureMode` | A record cannot be written |
 |--------------------|----------------------------|
-| `Block` (default) | The action does not happen: the governed call is not executed and the run ends with `audit.record_failed`; an allowed payment is refused before the backend is reached; `unfreeze_recorded` leaves execution frozen |
+| `Block` (default) | The action does not happen: the governed call is not executed and the run ends with `audit.record_failed`, as it does when a call a callback or plugin answered cannot be recorded; an allowed payment is refused before the backend is reached; `unfreeze_recorded` leaves execution frozen |
 | `Warn` | The failure is logged and the action proceeds without a record |
 
 A record that follows an action that already happened cannot refuse it: a freeze holds even
