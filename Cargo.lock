@@ -698,6 +698,7 @@ dependencies = [
  "adk-skill",
  "adk-telemetry",
  "adk-tool",
+ "async-stream",
  "async-trait",
  "chrono",
  "dirs 7.0.0",

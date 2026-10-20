@@ -99,6 +99,7 @@ dependencies = [
  "adk-agent",
  "adk-core",
  "adk-devtools",
+ "async-stream",
  "async-trait",
  "chrono",
  "dirs",

@@ -31,6 +31,8 @@ use anyhow::{Result, bail};
 use futures::StreamExt;
 use serde_json::{Value, json};
 
+mod team_graph;
+
 const APP: &str = "harness-example";
 
 // --- Prompter -------------------------------------------------------------------------
@@ -806,7 +808,10 @@ async fn run_scripted(name: &str, subject: Subject) -> Result<Checks> {
         "protected_path_through_symlink" => protected_path_through_symlink(subject).await,
         "operator_approval_prompts" => operator_approval_prompts(subject).await,
         "ledger_prevents_double_bash" => ledger_prevents_double_bash(subject).await,
-        other => bail!("unknown scenario {other}"),
+        other => match team_graph::run_scripted(other, subject).await {
+            Some(result) => result,
+            None => bail!("unknown scenario {other}"),
+        },
     }
 }
 
@@ -839,14 +844,15 @@ async fn main() -> Result<()> {
                 println!("| — | {provider} | — | skipped: no key |");
                 continue;
             };
-            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"] {
+            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).copied() {
                 if !selected.is_empty() && !selected.contains(&scenario) {
                     continue;
                 }
                 println!("  running {scenario} on {model_name}");
                 let checks = match scenario {
                     "live_plan_mode_writes_nothing" => live_plan_mode_writes_nothing(model.clone()).await,
-                    _ => live_standing_rule(model.clone()).await,
+                    "live_standing_rule" => live_standing_rule(model.clone()).await,
+                    other => team_graph::run_live(other, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
                 };
                 let result = match &checks {
                     Ok(checks) if checks.passed() => "PASS".to_string(),
@@ -859,7 +865,7 @@ async fn main() -> Result<()> {
         }
     } else {
         let mut rows = Vec::new();
-        for name in SCRIPTED {
+        for name in SCRIPTED.iter().chain(team_graph::SCRIPTED) {
             if !selected.is_empty() && !selected.contains(name) {
                 continue;
             }

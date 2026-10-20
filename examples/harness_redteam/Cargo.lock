@@ -125,6 +125,7 @@ dependencies = [
  "adk-runner",
  "adk-sandbox",
  "adk-session",
+ "async-stream",
  "async-trait",
  "chrono",
  "dirs",

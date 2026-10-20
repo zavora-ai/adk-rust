@@ -227,3 +227,54 @@ pub fn last_system_text(model: &ScriptedLlm) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+/// Records every span opened while it is the thread's default subscriber, as
+/// `"<name> <field>=<value> ..."`.
+#[derive(Clone, Default)]
+pub struct SpanLog(pub Arc<Mutex<Vec<String>>>);
+
+struct Fields(String);
+
+impl tracing::field::Visit for Fields {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0.push_str(&format!(" {}={value:?}", field.name()));
+    }
+}
+
+impl<S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>>
+    tracing_subscriber::Layer<S> for SpanLog
+{
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _id: &tracing::span::Id,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut fields = Fields(String::new());
+        attrs.record(&mut fields);
+        self.0.lock().unwrap().push(format!("{}{}", attrs.metadata().name(), fields.0));
+    }
+
+    fn on_record(
+        &self,
+        _id: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut fields = Fields(String::new());
+        values.record(&mut fields);
+        self.0.lock().unwrap().push(format!("record{}", fields.0));
+    }
+}
+
+impl SpanLog {
+    /// Installs the log for this thread until the guard drops.
+    pub fn install(&self) -> tracing::subscriber::DefaultGuard {
+        use tracing_subscriber::layer::SubscriberExt;
+        tracing::subscriber::set_default(tracing_subscriber::registry().with(self.clone()))
+    }
+
+    pub fn lines(&self) -> Vec<String> {
+        self.0.lock().unwrap().clone()
+    }
+}

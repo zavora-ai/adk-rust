@@ -79,6 +79,9 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 - [Python Code Execution](tools/python-code-execution.md) - In-process Python through the Monty interpreter
 - [Sandboxed Code Execution](sandbox/index.md) - `adk-sandbox` process and WASM backends with OS-level profiles
 - [Harness Shell and Sandbox](harness/shell-and-sandbox.md) - `adk-harness` `bash` under Seatbelt or bubblewrap: isolation status, unsandboxed retry, `auto_allow_sandboxed`, audit records
+- [Harness Team](harness/team.md) - `adk-harness` members lowered to a `TeamSpec`: local, ACP and A2A members, isolation, budgets, discovery, review rounds
+- [Harness Plans and Goals](harness/plan-and-goals.md) - The plan graph with Approve and Review gates and rewind; loop-until goals, durable and ambient
+- [Harness Durability](harness/durability.md) - The `adk-harness` durability invariants and the tests that prove them
 - [MCP Tools](tools/mcp-tools.md) - Connecting MCP servers as agent tools
 - [MCP overview and architecture](mcp/index.md) - Where MCP fits and which ADK-Rust surface to use
 - [MCP client](mcp/client.md) - Tools, resources, prompts, completion, subscriptions, elicitation, tasks, and HTTP

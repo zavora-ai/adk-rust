@@ -59,11 +59,48 @@ impl HarnessToolset {
         }
     }
 
-    /// Adds work to run before each model request.
-    #[cfg(any(feature = "auth", feature = "observe"))]
-    pub(crate) fn with_observer(mut self, observer: Arc<dyn RequestObserver>) -> Self {
-        self.observers.push(observer);
+    /// Adds work to run before each model request, in order; a team member gets its
+    /// coordinator's (spec 3.1 §7.10).
+    pub(crate) fn with_observers(mut self, observers: &[Arc<dyn RequestObserver>]) -> Self {
+        self.observers.extend(observers.iter().cloned());
         self
+    }
+
+    /// The toolset of a team member (spec 3.1 §7.10): `tools` without `exit_plan_mode`,
+    /// `memory_write`, `memory_delete` or any agent delegation, so a member can neither
+    /// change the mode nor delegate further. The member reads the parent's mode, because it
+    /// shares the parent's (app, user, session).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::{HarnessMode, HarnessToolset, InMemoryModeStore};
+    /// use std::sync::Arc;
+    ///
+    /// let plan_exit = Arc::new(adk_harness::ExitPlanModeTool::new(
+    ///     Arc::new(InMemoryModeStore::new()),
+    ///     HarnessMode::Ask,
+    /// ));
+    /// let toolset = HarnessToolset::member(
+    ///     vec![plan_exit],
+    ///     Arc::new(InMemoryModeStore::new()),
+    ///     HarnessMode::Ask,
+    /// );
+    /// assert!(toolset.tool_names().is_empty());
+    /// ```
+    pub fn member(
+        tools: Vec<Arc<dyn Tool>>,
+        mode_store: Arc<dyn ModeStore>,
+        default_mode: HarnessMode,
+    ) -> Self {
+        let tools = tools
+            .into_iter()
+            .filter(|tool| {
+                !matches!(tool.name(), "exit_plan_mode" | "memory_write" | "memory_delete")
+                    && !tool.is_agent_delegation()
+            })
+            .collect();
+        Self::new(tools, mode_store, default_mode)
     }
 
     /// Names of the tools, in declaration order.

@@ -19,7 +19,7 @@ use crate::approvals::{
     RuleOwner, RuleSuggestion, StandingDecision, StandingRule, StandingRuleStore, rule_audit_fields,
 };
 use crate::audit::HarnessAudit;
-use crate::goal::{GoalSpec, GoalState};
+use crate::goal::{GOAL_STATE_KEY, GOAL_TARGET, GoalSpec, GoalState};
 use crate::instructions::{TrustDecision, WorkspaceTrust};
 use crate::mode::{HarnessMode, MODE_STATE_KEY, ModeChange, ModeSource, write_mode_change};
 use crate::policy::{TableRow, ToolKind};
@@ -78,6 +78,7 @@ pub struct Harness {
     agent: Arc<HarnessAgent>,
     sessions: Arc<dyn SessionService>,
     app_name: String,
+    run_store: Option<Arc<dyn adk_core::DurableRunStore>>,
 }
 
 impl std::fmt::Debug for Harness {
@@ -109,7 +110,7 @@ impl Harness {
             .agent(agent.clone())
             .session_service(sessions.clone());
         let runner = agent.configure_runner(builder).build()?;
-        Ok(Self { runner: Arc::new(runner), agent, sessions, app_name })
+        Ok(Self { runner: Arc::new(runner), agent, sessions, app_name, run_store: None })
     }
 
     /// Wraps a runner built for `agent`, for callers that configure the runner themselves —
@@ -138,7 +139,7 @@ impl Harness {
         }
         let sessions = runner.session_service().clone();
         let app_name = runner.app_name().to_string();
-        Ok(Self { runner: Arc::new(runner), agent, sessions, app_name })
+        Ok(Self { runner: Arc::new(runner), agent, sessions, app_name, run_store: None })
     }
 
     /// The harness agent.
@@ -190,6 +191,41 @@ impl Harness {
         Ok(SessionId::try_from(created.id().to_string())?)
     }
 
+    /// Enqueues goals as durable runs in `store` (spec 3.1 §7.11): [`start_goal`] then
+    /// writes the goal state and enqueues a run of target [`GOAL_TARGET`] for a
+    /// `DurableWorker` serving [`goal_target`]; a held call parks the run until a decision
+    /// wakes it.
+    ///
+    /// [`start_goal`]: Self::start_goal
+    /// [`goal_target`]: Self::goal_target
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let runs: Arc<dyn adk_core::DurableRunStore> = Arc::new(adk_core::InMemoryRunStore::new());
+    /// let harness = harness.with_run_store(runs.clone());
+    /// let (target, runner) = harness.goal_target();
+    /// let worker = adk_server::background::DurableWorker::new(runs).with_agent(target, runner).spawn();
+    /// ```
+    pub fn with_run_store(mut self, store: Arc<dyn adk_core::DurableRunStore>) -> Self {
+        self.run_store = Some(store);
+        self
+    }
+
+    /// Answers, from the action ledger, the calls a stopped process left without a response,
+    /// so a turn after a crash never runs a completed call again (spec 3.1 §7.12, I37).
+    async fn recover(&self, user: &UserId, session: &SessionId) -> Result<()> {
+        if self.runner.active_session_ids().iter().any(|active| active == session.as_ref()) {
+            return Ok(());
+        }
+        let answered =
+            self.runner.recover_unanswered_calls(user.as_ref(), session.as_ref()).await?;
+        if answered > 0 {
+            tracing::info!(session.id = %session, calls.answered = answered, "recovered calls a stopped run left unanswered");
+        }
+        Ok(())
+    }
+
     /// Sends a user message and returns the turn's events.
     ///
     /// Held calls stranded by a run that ended before saving their result are settled
@@ -206,6 +242,7 @@ impl Harness {
         text: impl Into<String>,
     ) -> Result<EventStream> {
         self.settle_stranded_calls(user, session).await?;
+        self.recover(user, session).await?;
         self.runner
             .run(user.clone(), session.clone(), Content::new("user").with_text(text.into()))
             .await
@@ -226,6 +263,7 @@ impl Harness {
     /// ledger's error.
     pub async fn resume(&self, user: &UserId, session: &SessionId) -> Result<EventStream> {
         self.settle_stranded_calls(user, session).await?;
+        self.recover(user, session).await?;
         self.runner.run(user.clone(), session.clone(), Content::new("user")).await
     }
 
@@ -597,7 +635,40 @@ impl Harness {
             }
             runtime.standing_rules().grant(rule).await?;
         }
-        runtime.approval_store().decide(&scope, fingerprint, approval).await
+        runtime.approval_store().decide(&scope, fingerprint, approval).await?;
+        self.wake_parked(user, session, fingerprint).await
+    }
+
+    /// Wakes the session's durable runs parked on the call with `fingerprint`, as the
+    /// approval service does, so a durable goal resumes once it is decided (spec 3.1 §7.11).
+    async fn wake_parked(
+        &self,
+        user: &UserId,
+        session: &SessionId,
+        fingerprint: &str,
+    ) -> Result<()> {
+        let Some(runs) = &self.run_store else {
+            return Ok(());
+        };
+        let parked = runs
+            .list(
+                adk_core::RunFilter::default()
+                    .app_name(self.app_name.clone())
+                    .user_id(user.to_string())
+                    .session_id(session.to_string())
+                    .states([adk_core::RunState::Waiting]),
+            )
+            .await?;
+        for run in parked {
+            if let Some(adk_core::RunCheckpointRef::AwaitingApproval { fingerprints, .. }) =
+                &run.checkpoint
+                && fingerprints.iter().any(|parked| parked == fingerprint)
+            {
+                runs.wake(&run.run_id).await?;
+                tracing::info!(run.id = %run.run_id, "woke the durable run waiting for this decision");
+            }
+        }
+        Ok(())
     }
 
     /// Records the workspace trust decision for the harness's workspace (spec 3.1 §7.7).
@@ -628,23 +699,166 @@ impl Harness {
         runtime.trust_store().set(WorkspaceTrust::new(digest, decision, user.to_string()))
     }
 
-    /// Starts a durable goal (spec 3.1 §7.11; not yet implemented).
+    /// Starts a goal for the session (spec 3.1 §7.11): the harness iterates until the
+    /// goal's `until` command exits 0 or its iterations run out.
+    ///
+    /// Goals run only in Ask or Auto. The goal state is written to the goal store and
+    /// mirrored to `harness:goal`. With a run store ([`with_run_store`](Self::with_run_store))
+    /// the goal is enqueued as a durable run — `NewRun { target: "harness.goal",
+    /// session_id, concurrency_key: session, idempotency_key: "goal:<session>:<digest>" }` —
+    /// and the returned stream holds one event naming the run; otherwise the goal's first
+    /// turn runs here and the stream is its events. While the goal runs, every turn of the
+    /// session continues it.
     ///
     /// # Errors
     ///
-    /// Always returns `not yet implemented: spec 3.1 §7.11`.
+    /// Returns `harness.goal.invalid` for an incomplete spec, `harness.goal.mode` outside
+    /// Ask and Auto, `harness.goal.duplicate` when the same goal already ran in the session
+    /// as a durable run, or the store's or runner's error.
     pub async fn start_goal(
         &self,
-        _user: &UserId,
-        _session: &SessionId,
-        _spec: GoalSpec,
+        user: &UserId,
+        session: &SessionId,
+        spec: GoalSpec,
     ) -> Result<EventStream> {
-        Err(AdkError::config("not yet implemented: spec 3.1 §7.11 (goal engine)"))
+        let mode = self.mode(user, session).await?;
+        let store = self.agent.runtime().goal_store().clone();
+        let record = crate::goal::begin(
+            store.as_ref(),
+            mode,
+            (&self.app_name, user.as_ref(), session.as_ref()),
+            spec,
+        )
+        .await?;
+        let mut mirror = Event::new(format!("harness-goal-{}", uuid::Uuid::new_v4()));
+        mirror.author = self.agent.info().name.clone();
+        mirror.actions.state_delta.insert(
+            GOAL_STATE_KEY.to_string(),
+            serde_json::to_value(&record.state).unwrap_or(Value::Null),
+        );
+        self.sessions.append_event(session.as_ref(), mirror).await?;
+        tracing::info!(session.id = %session, goal.max_iterations = record.spec.max_iterations, "goal started");
+        let Some(runs) = &self.run_store else {
+            return self
+                .runner
+                .run(
+                    user.clone(),
+                    session.clone(),
+                    Content::new("user").with_text(record.spec.prompt()),
+                )
+                .await;
+        };
+        let run = adk_core::NewRun::new(
+            "default",
+            self.app_name.clone(),
+            user.to_string(),
+            GOAL_TARGET,
+            json!({ "text": record.spec.prompt() }),
+        )
+        .with_session_id(session.to_string())
+        .with_idempotency_key(format!("goal:{session}:{}", record.spec.digest()))
+        .with_concurrency_key(session.to_string(), adk_core::OnConflict::Enqueue);
+        let (run, note) = match runs.enqueue(run).await? {
+            adk_core::Enqueued::Created(run) => (run, "enqueued"),
+            adk_core::Enqueued::Existing(run) if !run.state.is_terminal() => {
+                (run, "already enqueued")
+            }
+            adk_core::Enqueued::Existing(run) => {
+                let mut cancelled = record.clone();
+                cancelled.state.status = crate::goal::GoalStatus::Cancelled;
+                store.set(&self.app_name, user.as_ref(), session.as_ref(), cancelled).await?;
+                return Err(AdkError::new(
+                    ErrorComponent::Agent,
+                    ErrorCategory::Conflict,
+                    "harness.goal.duplicate",
+                    format!(
+                        "this goal already ran in the session as durable run {}; change the goal or use another session",
+                        run.run_id
+                    ),
+                ));
+            }
+            adk_core::Enqueued::Rejected { blocking_run_id } => {
+                return Err(AdkError::new(
+                    ErrorComponent::Agent,
+                    ErrorCategory::Conflict,
+                    "harness.goal.rejected",
+                    format!("run {blocking_run_id} holds the session"),
+                ));
+            }
+        };
+        let mut event = Event::new(format!("harness-goal-{}", uuid::Uuid::new_v4()));
+        event.author = self.agent.info().name.clone();
+        event.llm_response.content = Some(
+            Content::new("model")
+                .with_text(format!("The goal runs as durable run {} ({note}).", run.run_id)),
+        );
+        event.provider_metadata.insert("harness.goal.run_id".to_string(), run.run_id.clone());
+        Ok(Box::pin(futures::stream::iter(vec![Ok(event)])))
     }
 
-    /// The session's goal; `None` until the goal engine of spec 3.1 §7.11 lands.
-    pub async fn goal(&self, _user: &UserId, _session: &SessionId) -> Result<Option<GoalState>> {
-        Ok(None)
+    /// The session's goal (spec 3.1 §7.11), read from the goal store.
+    ///
+    /// # Errors
+    ///
+    /// Returns the store's error.
+    pub async fn goal(&self, user: &UserId, session: &SessionId) -> Result<Option<GoalState>> {
+        Ok(self
+            .agent
+            .runtime()
+            .goal_store()
+            .get(&self.app_name, user.as_ref(), session.as_ref())
+            .await?
+            .map(|record| record.state))
+    }
+
+    /// The durable-run target and runner a `DurableWorker` runs goals with
+    /// (`DurableWorker::with_agent`, spec 3.1 §7.11): [`GOAL_TARGET`] and this harness's
+    /// runner, whose harness continues a session's running goal on every turn.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let (target, runner) = harness.goal_target();
+    /// assert_eq!(target, "harness.goal");
+    /// ```
+    pub fn goal_target(&self) -> (String, Arc<Runner>) {
+        (GOAL_TARGET.to_string(), self.runner.clone())
+    }
+
+    /// An ambient goal (spec 3.1 §7.11, feature `ambient`): every event of `source` — a
+    /// `CronTrigger`, `FileWatchTrigger` or `WebhookTrigger` — starts `spec` for `user` in
+    /// `session`, or in a new session per trigger when `session` is `None`, under the same
+    /// policy and budget as any goal. Start it with `AmbientAgent::start`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let nightly = harness.clone().ambient_goal(
+    ///     Arc::new(adk_agent::CronTrigger::new("0 0 2 * * *")?),
+    ///     UserId::new("ops")?,
+    ///     None,
+    ///     GoalSpec { goal: "make main green".into(), until: "cargo test".into(), max_iterations: 5, check_timeout: Duration::from_secs(900) },
+    /// );
+    /// ```
+    #[cfg(feature = "ambient")]
+    pub fn ambient_goal(
+        self: Arc<Self>,
+        source: Arc<dyn adk_agent::EventSource>,
+        user: UserId,
+        session: Option<SessionId>,
+        spec: GoalSpec,
+    ) -> adk_agent::AmbientAgent {
+        let agent: Arc<dyn adk_core::Agent> = self.agent.clone();
+        let handler: adk_agent::ambient::TriggerHandler = Arc::new(move |event, _agent| {
+            let harness = self.clone();
+            let (user, session, spec) = (user.clone(), session.clone(), spec.clone());
+            Box::pin(async move {
+                let session = harness.open_session(&user, session.as_ref()).await?;
+                tracing::info!(trigger.source = %event.source, session.id = %session, "ambient goal triggered");
+                harness.start_goal(&user, &session, spec).await
+            })
+        });
+        adk_agent::AmbientAgent::new(agent, source).with_trigger_handler(handler)
     }
 
     /// Where standing rules are kept.

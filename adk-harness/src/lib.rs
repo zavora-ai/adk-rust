@@ -22,6 +22,8 @@
 //! | `SpendReport`, `LoopGuard`, `harness.*` span attributes (feature `observe`) | §7.13 |
 //! | `RbacMap`, `ShellCredential`, `EphemeralAuditLog` (feature `auth`) | §7.14 |
 //! | `MemoryConfig`, `FileMemory`, `memory_*` tools (feature `memory`) | §7.15 |
+//! | `MemberSpec`, `HarnessTeam` (feature `team`) | §7.10 |
+//! | `PlanGraphs`, `compile_plan` (feature `graph`), [`GoalSpec`], [`GoalStore`], [`UntilCheckAgent`] | §7.11 |
 //! | [`coding::CodingAgent`] | §7.19 |
 //!
 //! # Example
@@ -59,8 +61,11 @@ mod memory;
 mod mode;
 #[cfg(feature = "observe")]
 mod observe;
+#[cfg(feature = "graph")]
+mod plan_graph;
 mod policy;
 mod prompt;
+mod run_context;
 mod shell;
 #[cfg(feature = "skills")]
 mod skills;
@@ -89,7 +94,12 @@ pub use builder::LoopGuard;
 pub use builder::{HarnessAgentBuilder, Pack};
 #[cfg(feature = "graph")]
 pub use goal::GoalEngine;
-pub use goal::{GoalSpec, GoalState, GoalStatus};
+#[cfg(feature = "sqlite")]
+pub use goal::SqliteGoalStore;
+pub use goal::{
+    GOAL_STATE_KEY, GOAL_TARGET, GoalRecord, GoalSpec, GoalState, GoalStatus, GoalStore,
+    InMemoryGoalStore, UNTIL_CHECK_AGENT, UntilCheckAgent,
+};
 #[cfg(feature = "runner")]
 pub use harness::{CANCELLED_BY_MODE_CHANGE_STATUS, Harness, HarnessDecision};
 #[cfg(feature = "auth")]
@@ -116,6 +126,11 @@ pub use observe::{
     LOOP_DETECTED_CODE, SpendEntry, SpendReport, goal_iteration_span, isolation_label, member_span,
     run_span, tool_kind_label,
 };
+#[cfg(feature = "graph")]
+pub use plan_graph::{
+    ActivePlan, PLAN_GATE_TOOL, PlanGraphShape, PlanGraphs, PlanRunStatus, compile_plan,
+    plan_review_node, plan_step_node,
+};
 pub use policy::{
     HARNESS_POLICY_REF, HarnessPolicy, Isolation, MODE_TABLE, ModeCell, PolicySwitches,
     TableDecision, TableRow, ToolClassRegistry, ToolKind, apply_rule, decision_cell,
@@ -134,7 +149,10 @@ pub use shell::{OsSandboxConfig, SandboxAccess, SandboxLauncher};
 #[cfg(feature = "skills")]
 pub use skills::{SkillsConfig, SkillsMode};
 #[cfg(feature = "team")]
-pub use team::{MemberKind, MemberSpec, MemberTools};
+pub use team::{
+    HarnessTeam, MEMBER_CIRCUIT_BREAKER, MEMBER_MAX_ITERATIONS, MEMBER_TIMEOUT, MemberKind,
+    MemberSpec, MemberTools, harness_team_policy,
+};
 pub use tools::{
     ExitPlanModeTool, GOVERNANCE_POLL_INTERVAL, HarnessBashTool, MAX_TODO_CHARS, MAX_TODO_ITEMS,
     PLAN_STATE_KEY, PlanGate, PlanStep, TODOS_STATE_KEY, TodoItem, TodoList, TodoStatus,
