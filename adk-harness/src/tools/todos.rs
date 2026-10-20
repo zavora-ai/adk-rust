@@ -4,7 +4,7 @@
 //! each session has its own list, unlike the 3.0 `TodoTool`, whose list was shared by
 //! every session of the process.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use adk_core::{
@@ -140,32 +140,66 @@ fn invalid(message: impl Into<String>) -> AdkError {
     )
 }
 
-fn current(ctx: &dyn ToolContext) -> TodoList {
-    ctx.session().map(|session| TodoList::from_state(session.state())).unwrap_or_default()
+/// Most invocations whose written lists are kept; the oldest is dropped first.
+const WRITTEN_CAP: usize = 1024;
+
+/// Lists the todo tools wrote, by invocation. Session state shows a call's write only once
+/// its batch ends, so a later call in the same batch reads the list from here.
+#[derive(Default)]
+struct Written {
+    lists: HashMap<String, TodoList>,
+    order: VecDeque<String>,
 }
 
-fn write(
+static WRITTEN: Mutex<Option<Written>> = Mutex::new(None);
+
+/// Reads the session's latest list, applies `change`, and writes the result, as one step
+/// per invocation, so no call in a batch overwrites another's update (spec 3.1 §7.6).
+fn update(
     ctx: &dyn ToolContext,
-    list: &TodoList,
     last: &Option<Arc<Mutex<TodoList>>>,
-) -> Result<()> {
+    change: impl FnOnce(TodoList) -> Result<TodoList>,
+) -> Result<TodoList> {
+    let key = format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        ctx.app_name(),
+        ctx.user_id(),
+        ctx.session_id(),
+        ctx.invocation_id()
+    );
+    let mut written = WRITTEN.lock().unwrap_or_else(|e| e.into_inner());
+    let written = written.get_or_insert_with(Written::default);
+    let stored =
+        ctx.session().map(|session| TodoList::from_state(session.state())).unwrap_or_default();
+    let current = match written.lists.get(&key) {
+        Some(list) if list.revision > stored.revision => list.clone(),
+        _ => stored,
+    };
+    let list = change(current)?;
     let mut actions = ctx.actions();
     actions.state_delta.insert(
         TODOS_STATE_KEY.to_string(),
-        serde_json::to_value(list).map_err(|error| invalid(format!("serialize todos: {error}")))?,
+        serde_json::to_value(&list)
+            .map_err(|error| invalid(format!("serialize todos: {error}")))?,
     );
     ctx.set_actions(actions);
+    if written.lists.insert(key.clone(), list.clone()).is_none() {
+        written.order.push_back(key);
+        while written.order.len() > WRITTEN_CAP {
+            if let Some(oldest) = written.order.pop_front() {
+                written.lists.remove(&oldest);
+            }
+        }
+    }
     if let Some(last) = last {
         *last.lock().unwrap_or_else(|e| e.into_inner()) = list.clone();
     }
-    Ok(())
+    Ok(list)
 }
 
+/// The tool response: the stored list's shape (spec 3.1 §7.6).
 fn summary(list: &TodoList) -> Value {
-    json!({
-        "revision": list.revision,
-        "todos": list.items.iter().map(|item| json!({ "id": item.id, "content": item.content, "status": item.status })).collect::<Vec<_>>(),
-    })
+    json!({ "revision": list.revision, "todos": list.items })
 }
 
 #[derive(Deserialize)]
@@ -173,7 +207,7 @@ struct TodoArg {
     #[serde(default)]
     id: Option<String>,
     content: String,
-    #[serde(default)]
+    #[serde(default, rename = "activeForm", alias = "active_form")]
     active_form: Option<String>,
     #[serde(default)]
     status: TodoStatus,
@@ -230,7 +264,7 @@ impl Tool for WriteTodosTool {
                         "properties": {
                             "id": { "type": "string", "description": "Stable id; defaults to the position." },
                             "content": { "type": "string", "description": "What to do." },
-                            "active_form": { "type": "string", "description": "Shown while in progress, e.g. 'Running the tests'." },
+                            "activeForm": { "type": "string", "description": "Shown while in progress, e.g. 'Running the tests'." },
                             "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"] }
                         },
                         "required": ["content"]
@@ -264,7 +298,7 @@ impl Tool for WriteTodosTool {
                 )));
             }
             if todo.active_form.as_ref().is_some_and(|form| form.chars().count() > MAX_TODO_CHARS) {
-                return Err(invalid(format!("todo {} active_form is too long", index + 1)));
+                return Err(invalid(format!("todo {} activeForm is too long", index + 1)));
             }
             let id = todo
                 .id
@@ -280,8 +314,9 @@ impl Tool for WriteTodosTool {
                 status: todo.status,
             });
         }
-        let list = TodoList { items, revision: current(ctx.as_ref()).revision + 1 };
-        write(ctx.as_ref(), &list, &self.last)?;
+        let list = update(ctx.as_ref(), &self.last, |current| {
+            Ok(TodoList { items, revision: current.revision + 1 })
+        })?;
         Ok(summary(&list))
     }
 }
@@ -342,14 +377,14 @@ impl Tool for UpdateTodoTool {
             args.get("status").cloned().unwrap_or(Value::Null),
         )
         .map_err(|_| invalid("status must be pending, in_progress, completed or cancelled"))?;
-        let mut list = current(ctx.as_ref());
-        let item =
-            list.items.iter_mut().find(|item| item.id == id).ok_or_else(|| {
+        let list = update(ctx.as_ref(), &self.last, |mut list| {
+            let item = list.items.iter_mut().find(|item| item.id == id).ok_or_else(|| {
                 invalid(format!("no todo with id '{id}'; call write_todos first"))
             })?;
-        item.status = status;
-        list.revision += 1;
-        write(ctx.as_ref(), &list, &self.last)?;
+            item.status = status;
+            list.revision += 1;
+            Ok(list)
+        })?;
         Ok(summary(&list))
     }
 }
