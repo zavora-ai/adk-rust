@@ -22,7 +22,7 @@ nothing else.
 one. It loads full checkpoints but lists the stored diffs, so it is not run against
 the suite's round-trip cases.
 
-The backends live in `adk-graph`, which depends only on `adk-core`. Their database
+The backends live in `adk-graph`, which does not depend on `adk-session`. Their database
 drivers are the versions `adk-session` uses, so an application with both holds one copy
 of each driver.
 

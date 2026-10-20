@@ -18,7 +18,7 @@ adk-rust = { version = "3.0.0", features = ["minimal", "gcp-telemetry"] }
 
 ## Direct Export to Google Cloud
 
-`init_with_gcp` exports spans to `https://telemetry.googleapis.com` over gRPC, authenticating each request with a Bearer token minted from Application Default Credentials (ADC) plus an `x-goog-user-project` header. A background task re-mints the token periodically, so long-running agents keep exporting across token expiry.
+`init_with_gcp` exports spans to `https://telemetry.googleapis.com` over gRPC, authenticating each request with a Bearer token minted from Application Default Credentials (ADC) plus an `x-goog-user-project` header. A background task refreshes the credentials every five minutes (the token itself is re-minted near expiry), so long-running agents keep exporting across token expiry.
 
 ```rust
 use adk_telemetry::init_with_gcp;

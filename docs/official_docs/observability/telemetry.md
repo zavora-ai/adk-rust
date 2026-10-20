@@ -527,7 +527,8 @@ See the [adk-playground](https://github.com/zavora-ai/adk-playground) repo for a
 
 ## Custom Telemetry in Tools
 
-Add telemetry to custom tools:
+Add telemetry to custom tools. `#[instrument]` expands to `tracing::` paths, so the crate needs
+`tracing` as a dependency alongside `adk-telemetry`, `schemars`, `serde`, and `serde_json`:
 
 ```rust
 use adk_rust::prelude::*;
