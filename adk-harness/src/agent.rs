@@ -20,7 +20,7 @@ use crate::approvals::matcher::is_protected_target;
 use crate::audit::HarnessAudit;
 use crate::instructions::{ProjectInstructions, WorkspaceTrustStore};
 use crate::mode::{HarnessMode, ModeStore};
-use crate::policy::{HarnessPolicy, has_harness_layer};
+use crate::policy::{HarnessPolicy, composed_layer_owner, register_composed_layer};
 use crate::shell::{IsolationStatus, ShellLedger};
 use crate::tools::TodoList;
 use crate::toolset::HarnessToolset;
@@ -263,7 +263,7 @@ impl HarnessRuntime {
 /// | Rule | Effect |
 /// |---|---|
 /// | Compose, never replace | the run's policy and the operator policy are kept; the strictest decision wins |
-/// | Idempotent | a config that already carries the harness policy is left as it is |
+/// | Idempotent | a config that already carries this harness's layer is left as it is; a policy that only names itself `adk-harness` is composed with it |
 /// | Approvals | the approval service and store are filled only when empty or identical; otherwise the run's own are kept with a warning |
 /// | Action ledger | the harness's ledger when the run carries none; a run's own keeps the records, with resumed held calls keyed alike (spec 3.1 §7.12) |
 /// | Non-waivable | `tool_approvals` entries naming non-waivable calls are removed |
@@ -325,7 +325,10 @@ impl HarnessLayer<'_> {
         if compose_policy && config.audit.is_none() {
             config.audit = runtime.audit.clone();
         }
-        if compose_policy && !config.tool_policy.as_deref().is_some_and(has_harness_layer) {
+        let owner = runtime.policy.owner_id();
+        if compose_policy
+            && config.tool_policy.as_deref().and_then(composed_layer_owner) != Some(owner)
+        {
             let mut layers: Vec<Arc<dyn ToolPolicy>> = Vec::new();
             if let Some(existing) = config.tool_policy.take() {
                 layers.push(existing);
@@ -338,7 +341,9 @@ impl HarnessLayer<'_> {
             });
             layers
                 .push(Arc::new(runtime.policy.with_audit(config.audit.clone()).with_peers(peers)));
-            config.tool_policy = Some(Arc::new(adk_core::StrictestPolicy::new(layers)));
+            let composed: Arc<dyn ToolPolicy> = Arc::new(adk_core::StrictestPolicy::new(layers));
+            register_composed_layer(owner, &composed);
+            config.tool_policy = Some(composed);
         }
 
         match (&config.approval_service, &runtime.approval_service) {
@@ -569,7 +574,10 @@ impl Agent for HarnessAgent {
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
         let config = ctx.run_config();
-        if !config.tool_policy.as_deref().is_some_and(has_harness_layer) {
+        // Bound to this harness's own layer, not to a policy that names itself the harness.
+        if config.tool_policy.as_deref().and_then(composed_layer_owner)
+            != Some(self.runtime.policy.owner_id())
+        {
             return Err(AdkError::new(
                 ErrorComponent::Agent,
                 ErrorCategory::Forbidden,
