@@ -85,6 +85,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 The [`harness_agent`](https://github.com/zavora-ai/adk-rust/tree/main/examples/harness_agent)
 example runs the scripted scenarios against the harness and the 3.0 `CodingAgent`, and the
 live scenarios on OpenAI, Anthropic and Gemini.
+[`harness_openai`](https://github.com/zavora-ai/adk-rust/tree/main/examples/harness_openai) and
+[`harness_anthropic`](https://github.com/zavora-ai/adk-rust/tree/main/examples/harness_anthropic)
+walk through the spec 3.1 §5 capabilities on one provider each, scripted or live.
 
 ## Features
 
