@@ -11,6 +11,7 @@ dependencies = [
  "futures",
  "hex",
  "hmac",
+ "httpdate",
  "regex",
  "reqwest",
  "serde",
