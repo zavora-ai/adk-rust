@@ -83,29 +83,50 @@ H1, H2, H5, H8 and H9 have no equivalent in any shipping harness. H3, H4, H6 and
 
 ## 6. Architecture
 
-```text
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│ SURFACES   adk-rust REPL · adk-rust serve (REST/SSE, approvals inbox) · Agent     │ §8
-│            Engine BYOC · managed runtime · voice (realtime) · ACP (IDE) · A2A      │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│ HARNESS (adk-harness)                                                            │ §7
-│   HarnessAgent = LlmAgent + HarnessToolset + instruction provider                 │
-│   HarnessPolicy (modes · standing rules · tool classes)   ← one governed path     │
-│   Team (TeamSpec: members, ACP/A2A members, discovery)  · Plan graph · Goal engine │
-│   Shell (host | OS sandbox | container) · Skills · Todos · File memory             │
-│   Packs: browser · computer use · payments · voice · managed form                  │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│ GOVERNANCE (adk-core)  kill switch → policy → guardrails → confirmation → ledger    │
-│   ApprovalStore / ApprovalService · ActingContext · SpendLedger · RunBudget · audit │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│ DURABILITY  DurableRunStore · leases · parked approvals · sessions (6 backends)     │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│ SUBSTRATE   adk-devtools · adk-sandbox · adk-code · adk-skill · adk-memory ·        │
-│             adk-graph · adk-agent teams · adk-realtime · adk-payments · adk-auth    │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│ MODELS      adk-model (Gemini, OpenAI, Anthropic, Ollama, mistral.rs, …)           │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  subgraph SURF["Surfaces (§8)"]
+    direction LR
+    S1["adk-rust REPL<br/>console prompter"] ~~~ S2["adk-rust serve<br/>REST, SSE, approvals inbox"] ~~~ S3["Agent Engine BYOC,<br/>managed runtime"] ~~~ S4["ACP for IDEs,<br/>A2A peers"] ~~~ S5["voice<br/>(realtime)"]
+  end
+
+  RUN["Runner (adk-runner)<br/>calls configure_run on the root agent: installs the harness policy, approvals and budget into RunConfig"]
+
+  subgraph HARN["Harness: adk-harness (§7.1 to §7.8)"]
+    direction LR
+    H1["HarnessAgent<br/>LlmAgent + HarnessToolset<br/>+ instruction provider"] ~~~ H2["HarnessPolicy<br/>modes, standing rules,<br/>tool classes"] ~~~ H3[("ModeStore,<br/>StandingRuleStore,<br/>workspace trust")] ~~~ H4["AGENTS.md, skills index<br/>trusted, delimited<br/>as untrusted text"]
+  end
+
+  subgraph GOV["Governed path: adk-core authorize_tool_call, on every tool call"]
+    direction LR
+    G1["kill switch"] --> G2["StrictestPolicy<br/>operator and harness"] --> G3["guardrails"] --> G4["confirmation<br/>decision, approval,<br/>prompt or hold"] --> G5["action ledger"]
+  end
+
+  subgraph TOOLS["Harness tools (§7.6, §7.9 to §7.11, §7.15)"]
+    direction LR
+    T1["read, edit,<br/>grep, glob"] ~~~ T2["bash: host,<br/>OS sandbox, container"] ~~~ T3["todos,<br/>exit_plan_mode"] ~~~ T4["team members:<br/>local, ACP, A2A"] ~~~ T5["plan graph,<br/>goal engine"] ~~~ T6["file memory,<br/>packs"]
+  end
+
+  subgraph BASE["Foundations"]
+    direction LR
+    B1["Models: adk-model<br/>Gemini, OpenAI, Anthropic,<br/>Ollama, mistral.rs"] ~~~ B2["Substrate: devtools, sandbox, skill,<br/>memory, graph, teams, realtime,<br/>payments, auth"] ~~~ B3[("Durability (§7.12)<br/>DurableRunStore, ApprovalStore,<br/>sessions, signed audit log")]
+  end
+
+  SURF --> RUN
+  RUN --> HARN
+  HARN -- "every tool call" --> GOV
+  GOV -- "execute" --> TOOLS
+  TOOLS --> BASE
+  HARN -. "model calls" .-> BASE
+  GOV -. "held call parks in the inbox;<br/>a decision resumes it exactly once" .-> BASE
+
+  classDef store fill:#e0f2fe,stroke:#0369a1,color:#0c4a6e
+  classDef gate fill:#fef3c7,stroke:#b45309,color:#451a03
+  class H3,B3 store
+  class G1,G2,G3,G4,G5 gate
 ```
+
+Amber nodes are the governed path every tool call takes; cylinders are stores. Dotted edges are model calls and the park-and-resume path for held calls.
 
 **Decisions**
 

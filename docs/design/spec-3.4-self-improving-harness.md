@@ -79,26 +79,42 @@ S3, S4, S5 and S6 together, a caged proposer, reviewers that fail closed, a seal
 
 ## 6. Architecture
 
-```text
-┌───────────────────────────────────────────────────────────────────────────────┐
-│ HUMANS      opt-in · sponsor · approve each held PR call · code-owner merge     │
-│             · cut the release · promote memory/skills · admit cases to the suite│
-├───────────────────────────────────────────────────────────────────────────────┤
-│ FIXED       frozen suite + baselines + detectors (code-owned, outside the       │
-│ MACHINERY   profile) · AcceptanceGate · CI (pr-gate, semver) · release.yml      │
-│             (trusted publishing + attestation) · the supervisor's upgrade path  │
-├───────────────────────────────────────────────────────────────────────────────┤
-│ AGENT       sleep-time tick: mine → DefectStore → reproduce (quarantine)        │ §7.2–7.4, 7.9
-│ (Service    → propose in an isolated worktree under SelfImproveProfile          │ §7.5
-│  subject,   → ReadOnly reviewers (fail closed) → gate → held open_pull_request  │ §7.6–7.8
-│  class      → consolidation proposals (assumed memory, Proposed agenda, skill   │
-│  maintenance)  drafts)                                                          │
-├───────────────────────────────────────────────────────────────────────────────┤
-│ 3.1 / 3.2 / 3.3   governed path · protected paths · audit · ledgers · kill      │
-│                   switch · budgets · tick · agenda · supervisor · decision cards │
-└───────────────────────────────────────────────────────────────────────────────┘
-          the four cuts: evaluator ─ merge ─ publish ─ install  (none writable by the agent)
+```mermaid
+flowchart TB
+  subgraph AG["1. Agent, during idle time: self-improver principal, Service subject (§7.2 to §7.6, §7.9)"]
+    direction LR
+    A1["Mine own operation<br/>audit, ledgers,<br/>spans, failed runs"] --> A2[("DefectStore<br/>fingerprints,<br/>lineage")] --> A3["Reproduce<br/>quarantined case<br/>that fails today"] --> A4["Propose fix<br/>isolated worktree;<br/>SelfImproveProfile denies<br/>evaluator, CI, release,<br/>governance paths"] --> A5["ReadOnly reviewers<br/>fail closed,<br/>advisory only"]
+    C1["Consolidation tick"] --> C2["assumed memory,<br/>skill drafts,<br/>Proposed agenda"] --> C3["promoted only<br/>by a human"]
+  end
+
+  subgraph GT["2. Fixed machinery (§7.7)"]
+    direction LR
+    G1{{"Cut 1: AcceptanceGate<br/>reproduction passes, frozen suite holds,<br/>paired test, activation check, diff limits;<br/>on failure the defect stays open in step 1"}}
+  end
+
+  subgraph HU["3. Humans and CI (§7.8)"]
+    direction LR
+    H1["approve the held<br/>open_pull_request call"] --> H2["Pull request<br/>GitHub App, self-improve/ branch,<br/>labels, run id, signed audit note"] --> H3["CI<br/>pr-gate, semver"] --> H4{{"Cut 2: code-owner merge<br/>CODEOWNERS on<br/>protected paths"}} --> H5["release tag<br/>cut by a human"]
+  end
+
+  subgraph RL["4. Release and install (§7.10, §7.11)"]
+    direction LR
+    P1{{"Cut 3: release.yml<br/>trusted publishing,<br/>attestation"}} --> P2[("crates.io")] --> P3{{"Cut 4: supervisor upgrade<br/>newer patch of same minor,<br/>locked, snapshot, rollback"}} --> P4["Verify on the new version<br/>re-run the reproduction; mark the defect<br/>fixed in X.Y.Z, or reopen it in step 1"]
+  end
+
+  AG -- "reviewed proposal" --> GT
+  GT -- "pass" --> HU
+  HU --> RL
+
+  classDef cut fill:#fef3c7,stroke:#b45309,stroke-width:3px,color:#451a03
+  classDef store fill:#e0f2fe,stroke:#0369a1,color:#0c4a6e
+  classDef human fill:#dcfce7,stroke:#15803d,color:#14532d
+  class G1,H4,P1,P3 cut
+  class A2,P2 store
+  class H1,H5,C3 human
 ```
+
+Hexagons are the four cuts the agent cannot write: the evaluator, the merge, the publish and the install. Green nodes are human actions; cylinders are stores.
 
 **Decisions**
 
