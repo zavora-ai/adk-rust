@@ -332,3 +332,83 @@ async fn glob_treats_metacharacters_in_the_root_literally() {
     let result = run_tool(&workspace, "glob", json!({"pattern": "*.rs"})).await.unwrap();
     assert_eq!(matches(&result), vec!["a.rs".to_string()]);
 }
+
+// ── Swaps after the check (spec 3.1 §10 D4) ───────────────────────────
+//
+// The containment check resolved the path, and the read then opened it again by name,
+// following whatever link stood there by then. A second process that keeps swapping a
+// workspace file for a symlink to a host file made some reads return the host file.
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_file_never_follows_a_symlink_swapped_in_after_the_check() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let f = fixture();
+    let notes = f.root.join("notes.md");
+    fs::write(&notes, "inside").unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let swapper = {
+        let (stop, root, secret) = (stop.clone(), f.root.clone(), f.outside.join("secret.txt"));
+        std::thread::spawn(move || {
+            let (link, file) = (root.join(".swap-link"), root.join(".swap-file"));
+            while !stop.load(Ordering::Relaxed) {
+                let _ = fs::remove_file(&link);
+                symlink(&secret, &link).unwrap();
+                fs::rename(&link, root.join("notes.md")).unwrap();
+                fs::write(&file, "inside").unwrap();
+                fs::rename(&file, root.join("notes.md")).unwrap();
+            }
+        })
+    };
+    let workspace = Workspace::new(&f.root);
+
+    let (mut leaked, mut read) = (0, 0);
+    for _ in 0..3000 {
+        if let Ok(result) = run_tool(&workspace, "read_file", json!({"path": "notes.md"})).await {
+            let content = result["content"].as_str().unwrap_or_default().to_string();
+            if content.contains("host secret") {
+                leaked += 1;
+            } else {
+                read += 1;
+            }
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    swapper.join().unwrap();
+
+    assert_eq!(leaked, 0, "{leaked} reads followed a link swapped in after the check");
+    assert!(read > 0, "no read saw the workspace file");
+}
+
+#[tokio::test]
+async fn read_file_refuses_a_file_with_more_than_one_hard_link() {
+    let f = fixture();
+    fs::hard_link(f.outside.join("secret.txt"), f.root.join("linked.txt")).unwrap();
+    let workspace = Workspace::new(&f.root);
+
+    let read = run_tool(&workspace, "read_file", json!({"path": "linked.txt"})).await;
+    let err = read.expect_err("a hard-linked file was read");
+    assert!(err.to_string().contains("hard links"), "unexpected error: {err}");
+
+    // An edit reads the file too, and its match count would reveal the contents.
+    let edit = run_tool(
+        &workspace,
+        "edit_file",
+        json!({"path": "linked.txt", "old_string": "host", "new_string": "x"}),
+    )
+    .await;
+    assert!(edit.is_err(), "a hard-linked file was edited: {:?}", edit.ok());
+    assert_eq!(fs::read_to_string(f.outside.join("secret.txt")).unwrap(), "host secret");
+}
+
+#[tokio::test]
+async fn write_file_creates_missing_directories_beneath_the_root() {
+    let f = fixture();
+    let workspace = Workspace::new(&f.root);
+
+    run_tool(&workspace, "write_file", json!({"path": "a/b/c.txt", "content": "deep"}))
+        .await
+        .expect("a nested write must create its directories");
+
+    assert_eq!(fs::read_to_string(f.root.join("a/b/c.txt")).unwrap(), "deep");
+}

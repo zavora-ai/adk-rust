@@ -11,6 +11,10 @@ use crate::tools::read::require_str;
 use crate::workspace::Workspace;
 
 /// Creates or overwrites a file (creating parent directories as needed).
+///
+/// On Unix the parent directory is opened by descriptor and the file relative to it,
+/// without following a symlink on any component of the target the containment check
+/// resolved (spec 3.1 §10 D4).
 pub struct WriteFileTool {
     workspace: Workspace,
 }
@@ -50,12 +54,8 @@ impl Tool for WriteFileTool {
         }
         let path = require_str(&args, "path")?;
         let content = require_str(&args, "content")?;
-        let resolved = self.workspace.resolve(&path)?;
-
-        if let Some(parent) = resolved.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(DevToolError::from)?;
-        }
-        self.workspace.write_contained(&resolved, content.as_bytes()).await?;
+        let (resolved, target) = self.workspace.resolve_target(&path)?;
+        self.workspace.write_contained(&target, content.as_bytes()).await?;
         // A freshly-written file is considered "read" (its content is known).
         self.workspace.mark_read(ctx.as_ref(), &resolved);
 

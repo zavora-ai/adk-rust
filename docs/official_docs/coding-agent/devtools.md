@@ -76,17 +76,37 @@ let ws = Workspace::new("./my-repo")
   match whose resolved path lies outside the root, so a symlinked directory
   pointing elsewhere is not listed.
 
-  The check is not a lock. `write_file` and `edit_file` re-check the canonical
-  parent immediately before the open and, on Unix, open the final component with
-  `O_NOFOLLOW`, so a symlink planted in that position after the check fails the
-  open. A directory swapped for a symlink in the remaining window is still
-  followed; closing it needs descriptor-relative traversal. Treat the file tools
-  as containment against an agent that wanders, not as isolation against an
-  adversary that can write into the workspace concurrently.
+  The check resolves each path once, to its canonical target, and on Unix
+  `read_file`, `edit_file` and `write_file` open that target without following a
+  symlink on any component: Linux uses `openat2` with `RESOLVE_BENEATH |
+  RESOLVE_NO_SYMLINKS`, and other systems, or a Linux kernel without `openat2`,
+  open one component at a time with `O_NOFOLLOW` relative to the parent's
+  descriptor. `write_file` opens the parent directory by descriptor, creating
+  missing directories the same way, and the file relative to it. A file or
+  directory swapped for a symlink after the check — by a concurrent `bash`
+  command, say — fails the call with the escape error instead of redirecting it,
+  whether the link leads outside the root or to another file inside it.
 
-  A file with more than one hard link is replaced on write, keeping its
-  permissions, rather than truncated, so a link from outside the workspace keeps
-  its contents.
+  | Swap after the check | Result |
+  |----------------------|--------|
+  | A file replaced by a symlink to a host file | `read_file` fails; the host file is not read |
+  | A file replaced by a symlink to another workspace file | `write_file` and `edit_file` fail; the other file is unchanged |
+  | A directory on the path replaced by a symlink | Every file tool fails; nothing is read or created through it |
+
+  A symlink that already exists when the check runs and stays inside the root is
+  followed. The guarantee covers the window from the tool's check to its open: a
+  link changed between a harness's approval decision and the tool's check still
+  redirects the call, within the root.
+
+  A file with more than one hard link is not read: `read_file` and `edit_file`
+  refuse it, since another link to the same file can lie outside the workspace and
+  the workspace cannot tell. `write_file` replaces it, keeping its permissions,
+  rather than truncating it, so a link from outside the workspace keeps its
+  contents.
+
+  On Windows the file tools re-check the canonical parent before the open and do
+  not refuse hard-linked files; neither the descriptor-relative opens nor the
+  link count are available there.
 - **Read-only mode** — `Workspace::read_only(..)` hides the mutating tools
   entirely (the model only ever sees `read_file`/`glob`/`grep`).
 - **`bash` environment is cleared** — the command receives only `PATH`, `HOME`, `LANG`,
@@ -153,7 +173,7 @@ timeout and a cleared environment, and only when the workspace allows it
 
 | Enforced | Not enforced |
 |----------|--------------|
-| File tools cannot resolve outside the root, including through symlinks | `bash` can still use absolute paths — the working directory is not an OS boundary |
+| File tools cannot resolve outside the root, including through symlinks and, on Unix, symlinks swapped in after the check; they do not read hard-linked files | `bash` can still use absolute paths — the working directory is not an OS boundary |
 | The command cannot read the agent's environment variables | The command can reach the network |
 | A timeout, a cancelled call or the shell's exit kills the command's process group | A descendant that calls `setsid` or `setpgid` leaves the group and survives |
 | The command has no controlling terminal and reads `/dev/null` | Nothing limits the command's own memory or CPU |

@@ -13,7 +13,9 @@ use crate::workspace::Workspace;
 ///
 /// A file matching the workspace's exclusion patterns ([`Workspace::exclude_globs`]),
 /// by its requested path or the path a symlink resolves to, is refused with
-/// [`DevToolError::Excluded`].
+/// [`DevToolError::Excluded`]. On Unix the file is opened without following a symlink on
+/// any component of the target the containment check resolved, and a file with more
+/// than one hard link is refused (spec 3.1 §10 D4).
 pub struct ReadFileTool {
     workspace: Workspace,
 }
@@ -58,17 +60,13 @@ impl Tool for ReadFileTool {
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let path = require_str(&args, "path")?;
-        let resolved = self.workspace.resolve(&path)?;
+        let (resolved, target) = self.workspace.resolve_target(&path)?;
         // A link inside the workspace can lead to an excluded file under another name.
-        let excluded = self.workspace.is_excluded(&resolved)
-            || tokio::fs::canonicalize(&resolved)
-                .await
-                .is_ok_and(|canonical| self.workspace.is_excluded(&canonical));
-        if excluded {
+        if self.workspace.is_excluded(&resolved) || self.workspace.is_excluded(&target) {
             return Err(DevToolError::Excluded(self.workspace.display(&resolved)).into());
         }
 
-        let contents = tokio::fs::read_to_string(&resolved).await.map_err(DevToolError::from)?;
+        let contents = self.workspace.read_contained(&target).await?;
         self.workspace.mark_read(ctx.as_ref(), &resolved);
 
         let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;

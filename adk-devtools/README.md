@@ -79,8 +79,13 @@ The toolset only exposes tools the workspace permits: a read-only workspace hide
 Containment is checked against resolved paths: a symlink pointing outside the root is refused,
 a dangling or looping symlink is refused wherever it points (a write would create its target),
 and `glob` refuses `..` and absolute patterns and never lists through a symlinked directory that
-leads outside. Writing a file with more than one hard link replaces it, keeping its permissions,
-instead of truncating it, so a link outside the workspace keeps its contents. A timed-out or
+leads outside. On Unix, `read_file`, `edit_file` and `write_file` open the canonical target the
+check found without following a symlink on any component (`openat2` with `RESOLVE_BENEATH |
+RESOLVE_NO_SYMLINKS` on Linux, a component-by-component `O_NOFOLLOW` walk elsewhere), so a file
+or directory swapped for a symlink after the check fails the call. `read_file` and `edit_file`
+refuse a file with more than one hard link; writing one replaces it, keeping its permissions,
+instead of truncating it, so a link outside the workspace keeps its contents. Windows keeps the
+path checks without the descriptor-relative opens or the link-count refusal. A timed-out or
 cancelled `bash` call kills the command's whole process group.
 
 Exclusion patterns match, ignoring case, the path relative to the root or any one of its

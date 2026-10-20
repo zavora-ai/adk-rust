@@ -13,6 +13,10 @@ use crate::workspace::Workspace;
 /// Replaces an exact substring in a file. Requires the file to have been read
 /// by the same session and agent, and (unless `replace_all`) the target string to
 /// be unique.
+///
+/// On Unix the file is read and written without following a symlink on any component
+/// of the target the containment check resolved, and a file with more than one hard
+/// link is refused (spec 3.1 §10 D4).
 pub struct EditFileTool {
     workspace: Workspace,
 }
@@ -58,12 +62,12 @@ impl Tool for EditFileTool {
         let new_string = require_str(&args, "new_string")?;
         let replace_all = args.get("replace_all").and_then(Value::as_bool).unwrap_or(false);
 
-        let resolved = self.workspace.resolve(&path)?;
+        let (resolved, target) = self.workspace.resolve_target(&path)?;
         if !self.workspace.was_read(ctx.as_ref(), &resolved) {
             return Err(DevToolError::NotRead(self.workspace.display(&resolved)).into());
         }
 
-        let original = tokio::fs::read_to_string(&resolved).await.map_err(DevToolError::from)?;
+        let original = self.workspace.read_contained(&target).await?;
         let count = original.matches(&old_string).count();
         let display = self.workspace.display(&resolved);
         if count == 0 {
@@ -78,7 +82,7 @@ impl Tool for EditFileTool {
         } else {
             original.replacen(&old_string, &new_string, 1)
         };
-        self.workspace.write_contained(&resolved, updated.as_bytes()).await?;
+        self.workspace.write_contained(&target, updated.as_bytes()).await?;
 
         Ok(json!({
             "path": self.workspace.display(&resolved),
