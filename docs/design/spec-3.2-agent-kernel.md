@@ -64,7 +64,7 @@ Agentrix OS ([`zavora-ai/agentrix-os`](https://github.com/zavora-ai/agentrix-os)
 | Agent contract `agents/<world>/<agent>.toml` with `[tools]` effect classes (§6.1) | Driver manifest ([§7.7](#77-drivers)) | The declarative half of an integration |
 | Activity ledger, content-free (§7.1) and personal baseline (§8) | `/proc` self-observation ([§7.10](#710-proc-self-observation)) | Median/MAD, 14-day warm-up, cooldowns, neutral language |
 | Recipes ("when X, do Y") (§2.5) | Standing rules (3.1 §7.5) plus plan graphs (3.1 §7.11) on a wake set | A recipe is an approved automation bound to a trigger |
-| Memory items `known` / `assumed` / `recommended` with provenance (§11) | Memory with provenance in 3.1 §7.15 and the 3.x memory work | Proactive consolidation writes only `assumed` |
+| Memory items `known` / `assumed` / `recommended` with provenance (§11) | Long-term facts in the harness `FactStore` (3.1 §7.15.2): `Known` / `Assumed` status, source, verified quote, supersession | Proactive consolidation writes only `Assumed` facts |
 | Pending actions, approvals inbox, audit, undo | 3.1 approvals, the approvals inbox, the signed audit log | Undo is a 3.2.x item |
 | Ten design principles (§1.3) | Carried into [§9](#9-security-invariants-and-audit-records): least privilege, human in control, honest data, memory is the user's, health and money stay conservative | |
 
@@ -332,7 +332,7 @@ pub struct ProactivityPolicy {
 - The harness gains one tool, `propose_followup { title, rationale, when?: Wake, steps?: [PlanStep] }`, class `Todo` in 3.1 terms (allowed in every mode), whose only effect is an `AgendaItem` in state `Proposed`. Proposing is free; running is governed.
 - `ProactiveApproval::FollowMode` maps to the partition's `HarnessMode`: in ReadOnly and Plan a proposal stays `Proposed`; in Ask it needs an approval from the inbox (same `ApprovalService`, kind `agenda`); in Auto the kernel schedules it. Agentrix's Observe / Suggest / Automate is this mapping.
 - A scheduled item becomes a process when its wake fires, under the daily budget (the kernel admits it only if the partition's proactive `SpendLedger` total leaves room) and outside quiet hours; it carries `ProcessKind::Proposed` and its parent is the proposing run.
-- **Consolidation tick** (Letta's sleep-time agents, [sources](#references)): a `Maintenance` process on a cheaper model runs every N completed interactive runs or on a schedule, reads the recent sessions of its partition, and writes memory proposals marked `assumed` and agenda items marked `Proposed`. It has no tools other than memory and agenda, so it cannot act in the world.
+- **Consolidation tick** (Letta's sleep-time agents, [sources](#references)): a `Maintenance` process on a cheaper model runs every N completed interactive runs or on a schedule, reads the recent sessions of its partition, and writes long-term facts marked `Assumed` through the harness `FactStore` (3.1 §7.15.2) and agenda items marked `Proposed`. It has no tools other than memory and agenda, so it cannot act in the world.
 - Everything proactive is visible: `adk-rust agenda` lists items; the inbox shows those awaiting approval; the event bus carries every state change; the audit records the proposer.
 
 ### 7.6 Event bus
@@ -399,7 +399,7 @@ pub struct Partition {
     pub class: String,                      // AgentPrincipal.class for every agent in it
     pub tenant: Option<String>,             // AgentPrincipal.tenant on multi-tenant hosts
     pub default_mode: HarnessMode,          // spec 3.1 §7.4
-    pub memory_scope: String,               // project id for project-scoped memory
+    pub memory_scope: String,               // the project of the partition's long-term facts (3.1 §7.15.2) and project-scoped memory
     pub drivers: Vec<String>,
     pub quotas: Quotas,                     // §7.9
     pub quiet_hours: Option<QuietHours>,

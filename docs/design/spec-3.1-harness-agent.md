@@ -8,6 +8,7 @@
 | **Grounding commit** | `origin/main` @ `a24ebd8d` — every `file:line` reference below is against this commit |
 | **Affected crates** | NEW `adk-harness`; additive changes in `adk-core`, `adk-devtools`, `adk-sandbox`, `adk-cli`, `cargo-adk`, `adk-rust`; deprecation in `adk-agent` |
 | **Stability** | `adk-harness` enters at **Beta** ([STABILITY.md](../../STABILITY.md)) |
+| **Amended** | 2026-10-20: §7.15 long-term memory (working notes plus long-term facts with provenance), grounded at `origin/main` @ `3884d9e8` |
 | **Extended by** | [`spec-3.2-agent-kernel.md`](spec-3.2-agent-kernel.md): the always-on form of the harness; `kernel` becomes a default feature of `adk-harness` |
 | **Surfaces** | [`spec-3.3-harness-ui.md`](spec-3.3-harness-ui.md): what each surface shows and how it answers (the console, web client, ACP, AG-UI and notifiers); it changes two statements here, recorded in its §10: a confirmation that times out parks the call when an approval store exists (§7.5), and the bundled web UI is authenticated and answers approvals (§8.2) |
 | **Self-improvement** | [`spec-3.4-self-improving-harness.md`](spec-3.4-self-improving-harness.md): the opt-in maintenance loop; it widens the protected-path list of §9.2 I29 to the evaluator, CI, release and governance paths, keys workspace trust (§7.7) to file content, and corrects §7.13's claim that spend is keyed per subject |
@@ -78,6 +79,7 @@ Each capability names the machinery it runs on and the scenario that proves it. 
 | H8 | **It can spend money, safely.** A purchase under an AP2 mandate, within budget, with approval and a receipt | "Register the domain if it costs under $20" against a payments test harness | The payment is made once, after approval, within the mandate; the ledger shows the spend; a receipt is in the journal | `adk-payments` (`kernel`, `journal`, `guardrail`, `tools`; [`lib.rs:47-54`](../../adk-payments/src/lib.rs)) — gated, [§7.16](#716-payments-pack-feature-payments) |
 | H9 | **One harness, every deployment.** CLI → served to a team with an approvals inbox → Agent Engine container → managed runtime | The same `HarnessAgent` value behind `Launcher`, `ServerBuilder`, `serve_agent_engine` and a `ManagedAgentDef` | The held-call → approve → resume round trip works on each surface | `Launcher`, `ServerBuilder::with_approval_service` ([`rest/mod.rs:718`](../../adk-server/src/rest/mod.rs)), `serve_agent_engine` ([`entrypoint.rs:268`](../../adk-server/src/agent_engine/entrypoint.rs)), `ManagedAgentDef` ([`agent_def.rs:36`](../../adk-managed/src/types/agent_def.rs)) |
 | H10 | **Any model, any tools, any surface.** Local mistral.rs or any cloud model; MCP, OpenAPI, browser and governed computer use as packs; skills from a registry; graph memory | `--provider` swap; `--pack browser` | The same scenarios pass on three providers; browser tools appear under the same modes | Provider facade, `McpToolset`, `BrowserToolset` ([`toolset.rs:82`](../../adk-browser/src/toolset.rs)), `build_reference_graph_with_checkpointer` ([`adk-computer-use/src/graph.rs:203`](../../adk-computer-use/src/graph.rs)), `adk-skill` registry, `adk-memory` |
+| H11 | **It remembers what matters, and only what it should.** Long-term facts with provenance: preferences and lessons recalled across sessions; nothing the user did not say becomes "known" | Session 1: the user says "use pnpm, not npm"; a test fails until `--features sqlite` is added. Session 2, new session in the same project: "add a dependency and run the tests" | Session 2 uses pnpm and runs the tests with `--features sqlite` without being told; `/memory` shows the first fact `known` (quoted) and the second `assumed` (inferred), each with its source session; a fact planted through tool output is `assumed` at most; `/memory forget` removes a fact from the next turn | `FactStore`, `FactIndex`, distiller, `PiiRedactor`, any `MemoryService` backend (§7.15.2) |
 
 H1, H2, H5, H8 and H9 have no equivalent in any shipping harness. H3, H4, H6 and H7 exist in pieces elsewhere, never together under one governance path.
 
@@ -184,7 +186,8 @@ adk-harness/src/
 | `docker` | off | `adk-sandbox/workspace-docker` |
 | `observe` | on | `adk-telemetry`, `adk-eval` (trace analyzer, baselines) |
 | `auth` | on | `adk-auth` (RBAC wrappers, credential broker, signed audit) |
-| `memory` | on | file memory; `memory-graph` adds `adk-memory` graph tools |
+| `memory` | on | working notes and long-term facts (§7.15; `adk-memory` for `MemoryServiceIndex`); `memory-graph` adds `adk-memory`'s graph tools |
+| `memory-embeddings` | off | `adk-rag` OpenAI and Gemini embedders through `RagEmbedder` (§7.15.2) |
 | `sqlite` | off | SQLite backends for the mode, rule and shell-ledger stores |
 | `browser`, `computer-use`, `payments`, `voice`, `managed` | off | the packs of §7.15–§7.18 |
 
@@ -230,7 +233,11 @@ impl HarnessAgentBuilder {
     pub fn member_model(self, m: Arc<dyn Llm>) -> Self;                   // model tiering
     pub fn goal_engine(self, e: GoalEngine) -> Self;                      // LoopAgent | Graph (§7.11)
     pub fn plan_graph(self, yes: bool) -> Self;                           // true when `graph`
-    pub fn memory(self, cfg: MemoryConfig) -> Self;                       // §7.15
+    pub fn memory(self, cfg: MemoryConfig) -> Self;                       // §7.15.1 working notes
+    pub fn long_term_memory(self, cfg: LongTermMemoryConfig) -> Self;     // §7.15.2 recall and distillation
+    pub fn fact_store(self, s: Arc<dyn FactStore>) -> Self;               // in-memory; SQLite in the CLI
+    pub fn fact_index(self, i: Arc<dyn FactIndex>) -> Self;               // LocalFactIndex; MemoryServiceIndex on servers
+    pub fn memory_embedder(self, e: Arc<dyn adk_memory::EmbeddingProvider>) -> Self;
     pub fn budget(self, b: RunBudget) -> Self;
     pub fn spend_ledger(self, l: Arc<dyn SpendLedger>) -> Self;           // §7.13
     pub fn loop_guard(self, g: LoopGuard) -> Self;                        // §7.13
@@ -352,7 +359,7 @@ pub const MODE_STATE_KEY: &str = "harness:mode";   // display mirror; never read
 
 ```rust
 pub enum ToolKind {
-    Read,            // read_file, glob, grep, list_skills, load_skill, load_skill_resource, search_skills, memory_read
+    Read,            // read_file, glob, grep, list_skills, load_skill, load_skill_resource, search_skills, memory_read, memory_search
     Todo,            // write_todos, update_todo
     PlanExit,        // exit_plan_mode
     Edit,            // write_file, edit_file (protected-path variant, §9)
@@ -360,6 +367,7 @@ pub enum ToolKind {
     ShellEscalation, // bash with unsandboxed: true
     Delegate,        // team member tools
     MemoryWrite,     // memory_write, memory_delete
+    MemoryPropose,   // memory_remember: assumed long-term facts only (§7.15.2)
     Payment,         // payments pack tools (never waivable)
     External { effect: ToolEffect, trusted_origin: bool },   // MCP, browser, extras, skill-activated
 }
@@ -392,6 +400,7 @@ decide(call):
 | Shell, host (incl. degraded) | Deny | Deny | RA | RA; Allow only with `allow_host_shell_in_auto` |
 | ShellEscalation | Deny | Deny | RA (NW) | RA (NW) |
 | MemoryWrite | Deny | Deny | RA (NW) | RA (NW) |
+| MemoryPropose (assumed facts) | Deny | Deny | Allow | Allow |
 | Payment | Deny | Deny | RA (NW) | RA (NW) |
 | External, ReadOnly, trusted origin | Allow | Allow | Allow | Allow |
 | External, other | Deny | Deny | RA | RA unless operator-allowlisted |
@@ -487,7 +496,7 @@ Assembly, as one `system` content through `instruction_provider` ([`callbacks.rs
 3. User-global `AGENTS.md`.
 4. Project `AGENTS.md` files, outermost first, each inside `<project-instructions path="…" sha256="…">` and delimited as untrusted.
 5. Nested-file index.
-6. `<memory>` index ([§7.15](#715-file-based-memory-feature-memory)).
+6. `<memory>` index ([§7.15](#715-long-term-memory-feature-memory)).
 
 Files are deduplicated by canonical path and hash (`CLAUDE.md` is often a symlink to `AGENTS.md`); a truncated file ends with `[truncated — read_file <path> for the rest]`. The prompt states that instructions cannot grant permissions; the policy enforces that in code. Dynamic parts (mode banner, todos, goal status) are not in the instruction, which is built once per run ([`llm_agent.rs:3361`](../../adk-agent/src/llm_agent.rs)); they come from `Toolset::process_llm_request`, which runs for every request (3615).
 
@@ -585,6 +594,7 @@ What the team gives that the old `SpawnSubagentTool` design did not:
 | State leakage | `state_write_keys: []`; delegate state writes are rejected ([`agent_tool.rs:1149-1157`](../../adk-tool/src/agent_tool.rs)) |
 | Group work | `BlackboardSpec` with round-robin or model-selected speakers ([`team/blackboard.rs:42-51`](../../adk-agent/src/team/blackboard.rs)) for review rounds |
 | Observability | The team publishes its topology; the embedded UI renders it live |
+| Memory (at `3884d9e8`) | `MemoryService` [`service.rs:51`](../../adk-memory/src/service.rs) (`search` 59, `add_entry_to_project` 145, `delete_entries_in_project` 162), `SearchRequest` 13, `MemoryEntry` 6; `EmbeddingProvider` [`embedding.rs:11`](../../adk-memory/src/embedding.rs); lexical scoring [`inmemory.rs:25-27`](../../adk-memory/src/inmemory.rs); SQLite FTS5 [`sqlite.rs:83-89`](../../adk-memory/src/sqlite.rs); graph memory validity [`graph.rs:23-25`](../../adk-memory/src/graph.rs); `PreloadMemoryTool` [`preload_memory.rs:43, 116`](../../adk-tool/src/memory/preload_memory.rs), `LoadMemoryTool` [`load_memory.rs:35`](../../adk-tool/src/memory/load_memory.rs); `adk-rag` embedders [`openai.rs:129`](../../adk-rag/src/openai.rs), [`gemini.rs:101`](../../adk-rag/src/gemini.rs), trait [`embedding.rs:24`](../../adk-rag/src/embedding.rs); `PiiRedactor` [`pii.rs:39-58`](../../adk-guardrail/src/pii.rs); `FileMemory` [`adk-harness/src/memory.rs:311`](../../adk-harness/src/memory.rs), `project_slug` 220; memory tools [`tools/memory.rs:120, 179`](../../adk-harness/src/tools/memory.rs) |
 
 **External harnesses as members.** An ACP member wraps `adk-acp`'s client (`AcpAgentTool`, [`adk-acp/src/tool.rs:59`](../../adk-acp/src/tool.rs); `AcpToolset`, [`adk-acp/src/toolset.rs:27`](../../adk-acp/src/toolset.rs)) so Claude Code, Codex or Kiro run as isolated members whose tool calls surface through the ACP permission bridge and are decided by the same `HarnessPolicy`; an A2A member wraps `RemoteA2aAgent` ([`remote_agent.rs:47-52`](../../adk-server/src/a2a/remote_agent.rs)) so a remote ADK agent, or any A2A agent, runs under the team budget. Both appear in the delegation chain and the audit trail like any member.
 
@@ -647,9 +657,107 @@ The CLI stores everything in `~/.config/adk-rust/harness.db` ([§8.1](#81-adk-cl
 | Provider keys and secrets | `adk-auth` secret providers (AWS Secrets Manager, Azure Key Vault, GCP Secret Manager) through the model resolver; the CLI keyring for local use |
 | Tamper-evident record | `adk_auth::signed_audit::AuditLog` through `Runner::builder().audit_log` ([`adk-runner/src/builder.rs:481`](../../adk-runner/src/builder.rs)), not `FileAuditSink` ([§9.3](#93-audit-records)) |
 
-### 7.15 File-based memory (feature `memory`)
+### 7.15 Long-term memory (feature `memory`)
 
-Off by default. `MemoryConfig { layout, limits, write_policy }`; `MemoryLayout::PerUser { base: ~/.adk/memory }` is the default (`<base>/<app>/<sha256(user)>/<project-slug>`, outside the workspace so no shell command can write it); `Project` (`<ws>/.adk/memory`) is opt-in and a protected path. `FileMemory` is a devtools `Workspace` over the memory root with `index()` (a derived `MEMORY.md` from each topic file's `summary:` front matter plus a preserved header, so concurrent writers never conflict), `read`, `write(path, content, summary)` (atomic, reindex), `delete`, and `as_core_memory()` for `PreloadMemoryTool`-style callers ([`preload_memory.rs:116`](../../adk-tool/src/memory/preload_memory.rs); the core `Memory` trait takes no user, [`context.rs:710-778`](../../adk-core/src/context.rs), so this is single-user). Tools: `memory_read` (Read), `memory_write`/`memory_delete` (`MemoryWrite`, non-waivable). The index is injected last in the instruction inside the untrusted block. Feature `memory-graph` adds `adk-memory`'s `remember`/`relate` graph tools under the same class. Long-term consolidation with revisions and provenance is spec 3.2 material.
+The harness remembers in two tiers. References in this section cite `origin/main` @ `3884d9e8`, the amendment's grounding commit.
+
+| Tier | Holds | Written by | Read by | Store |
+|---|---|---|---|---|
+| Working notes (§7.15.1) | Topic files the agent keeps deliberately, readable and editable by a person | `memory_write`, non-waivable | `memory_read`; the index in the untrusted block | `FileMemory` |
+| Long-term facts (§7.15.2) | Distilled facts with provenance: preferences, project facts, procedures, outcomes, decisions, corrections | `memory_remember` (assumed only), session distillation, verified user quotes, human promotion | Recall into the untrusted block on each user turn; `memory_search` | `FactStore` (system of record) and `FactIndex` (recall) |
+
+#### 7.15.1 Working notes
+
+`MemoryConfig { layout, limits, write_policy }` ([`adk-harness/src/memory.rs:153`](../../adk-harness/src/memory.rs)); `MemoryLayout::PerUser { base: ~/.adk/memory }` is the default (`<base>/<app>/<sha256(user)>/<project-slug>`, [`memory.rs:59-220`](../../adk-harness/src/memory.rs), outside the workspace so no shell command can write it); `Project` (`<ws>/.adk/memory`) is opt-in and a protected path. `FileMemory` ([`memory.rs:311`](../../adk-harness/src/memory.rs)) is a devtools `Workspace` over the memory root with `index()` (a derived `MEMORY.md` from each topic file's `summary:` front matter plus a preserved header, so concurrent writers never conflict; [`memory.rs:428`](../../adk-harness/src/memory.rs)), `read`, `write(path, content, summary)` (atomic, reindex; 515), `delete` (547), and `as_core_memory()` (630) for `PreloadMemoryTool`-style callers ([`adk-tool/src/memory/preload_memory.rs:43, 116`](../../adk-tool/src/memory/preload_memory.rs)). Tools: `memory_read` (Read; [`tools/memory.rs:120`](../../adk-harness/src/tools/memory.rs)), `memory_write`/`memory_delete` (`MemoryWrite`, non-waivable; 179). The index is injected last in the instruction inside the untrusted block. Off by default.
+
+#### 7.15.2 Long-term facts
+
+Working notes are what the agent chooses to write down. Long-term facts are what the harness learns: what the user prefers, how this project builds and tests, what fixed a past failure, which decisions were taken and why. They make the harness stop re-asking, stop repeating a failure it already solved, and carry context across sessions and surfaces. Every fact carries its provenance, so the harness, the user and the specs built on it (3.2 §7.5, 3.4 §7.9) can tell a fact the user stated from one the agent inferred.
+
+```rust
+pub struct MemoryFact {
+    pub id: String,                          // ULID
+    pub scope: FactScope,                    // { app, user, project: Option<String> }; project = project_slug(workspace)
+                                             // (memory.rs:220) or the spec 3.2 partition's memory_scope
+    pub kind: FactKind,                      // Preference | ProjectFact | Procedure | Outcome | Decision | Correction
+    pub text: String,                        // one fact, at most 500 characters, redacted before storage
+    pub status: FactStatus,                  // Known | Assumed | Superseded { by: String } | Forgotten
+    pub provenance: Provenance,              // { source: FactSource, session_id, invocation_id, run_id: Option, quote: Option<String>, at }
+    pub confidence: Option<f32>,             // agent-inferred facts only
+    pub valid_from: DateTime<Utc>,
+    pub valid_to: Option<DateTime<Utc>>,     // set when superseded or forgotten; history is kept
+    pub digest: String,                      // sha256 of the normalised text; the dedup key within a scope
+    pub uses: u32,
+    pub last_recalled: Option<DateTime<Utc>>,
+}
+pub enum FactSource { UserStated, UserConfirmed, AgentInferred, ToolObserved, Imported }
+
+#[async_trait]
+pub trait FactStore: Send + Sync {          // InMemoryFactStore, FileFactStore, SqliteFactStore [sqlite] (harness.db in the CLI)
+    async fn put(&self, fact: MemoryFact) -> Result<MemoryFact>;          // same (scope, digest): bumps `uses`, returns the existing fact
+    async fn get(&self, id: &str) -> Result<Option<MemoryFact>>;
+    async fn list(&self, filter: FactFilter) -> Result<Vec<MemoryFact>>; // by scope, kind, status, since
+    async fn set_status(&self, id: &str, status: FactStatus, by: &SubjectRef) -> Result<()>;
+    async fn put_embedding(&self, id: &str, vector: Vec<f32>) -> Result<()>;
+    async fn embeddings(&self, scope: &FactScope) -> Result<Vec<(String, Vec<f32>)>>;
+}
+
+#[async_trait]
+pub trait FactIndex: Send + Sync {          // LocalFactIndex (default), MemoryServiceIndex
+    async fn upsert(&self, fact: &MemoryFact) -> Result<()>;
+    async fn remove(&self, fact: &MemoryFact) -> Result<()>;
+    async fn search(&self, scope: &FactScope, query: &str, limit: usize) -> Result<Vec<(String /* fact id */, f32 /* score */)>>;
+}
+```
+
+The `FactStore` is the system of record and the `FactIndex` only finds candidates, so status, provenance, scope and forgetting are enforced at read time whatever an index still holds.
+
+| Index | Recall | Use | Grounding |
+|---|---|---|---|
+| `LocalFactIndex` with an embedder | Cosine similarity over the embeddings stored with each fact, computed per scope in process (a user's facts number in the hundreds to low thousands) | Default when an embedder is configured; CLI and single node | `adk_memory::EmbeddingProvider` ([`adk-memory/src/embedding.rs:11-16`](../../adk-memory/src/embedding.rs)) |
+| `LocalFactIndex` without an embedder | Lexical: the share of query words a fact contains, as `InMemoryMemoryService` scores | Default with no network | [`adk-memory/src/inmemory.rs:25-27`](../../adk-memory/src/inmemory.rs) |
+| `MemoryServiceIndex` | Whatever the backend offers: vector search on Postgres (pgvector), MongoDB and Neo4j; Vertex AI Memory Bank; FTS5 keyword search on SQLite; Redis | Servers and many users | `MemoryService` ([`service.rs:51-175`](../../adk-memory/src/service.rs)): `search(SearchRequest { query, user_id, app_name, limit, min_score, project_id })` (13, 59), `add_entry_to_project` (145), `delete_entries_in_project` (162); SQLite FTS5 ([`sqlite.rs:83-89`](../../adk-memory/src/sqlite.rs)) |
+
+`MemoryServiceIndex` writes each fact as a `MemoryEntry` ([`service.rs:6-11`](../../adk-memory/src/service.rs)) whose content is the fact text and whose `author` is `adk-harness:fact:<id>`, in the fact's project scope, and maps search results back to the `FactStore` by that id; `adk_memory::MemoryEntry` and `adk_core::Memory` are unchanged. Embedders are set with `memory_embedder(Arc<dyn adk_memory::EmbeddingProvider>)`; feature `memory-embeddings` adds `RagEmbedder`, an adapter from `adk-rag`'s OpenAI and Gemini providers ([`adk-rag/src/openai.rs:129`](../../adk-rag/src/openai.rs), [`gemini.rs:101`](../../adk-rag/src/gemini.rs); that trait embeds one text at a time, [`adk-rag/src/embedding.rs:24-33`](../../adk-rag/src/embedding.rs)) to adk-memory's batch trait.
+
+**Recall.**
+
+| Aspect | Rule |
+|---|---|
+| When | On the first model call of each user turn, and again only when the todo list or the current plan step changes; never on every tool round, so the request prefix stays cacheable (as the todo reminder, §7.6) |
+| Query | The user's message plus the open todo items and the current plan step |
+| What | The top `recall_limit` (default 8) facts above `min_score` (default 0.35) in the scope (the project's facts and the user's cross-project preferences), `Known` before `Assumed`, at most `recall_tokens` (default 1,500) |
+| Where | A `<memory-facts>` block inside the untrusted delimited section, after the working-notes index (I32), one line per fact: `- [known|assumed · kind · yyyy-mm-dd] text (id)`; assumed facts are hints, not instructions |
+| On demand | `memory_search { query, kind?, limit? }`, class Read |
+| Recorded | `harness.memory.recalled` with fact ids and a query digest, never the text |
+
+**Writing.**
+
+| Path | Writes | Gate |
+|---|---|---|
+| `memory_remember { text, kind, supersedes?: id }`, called by the model | `Assumed`, source `AgentInferred`, with confidence | Class `MemoryPropose` (§7.4): Deny in ReadOnly and Plan; Allow in Ask and Auto, because it writes only labelled, assumed facts, never instructions, files or permissions |
+| Session distillation | `Assumed`, or `Known` when the quote verifies | Runs when a session has been idle for `distill_idle` (default 10 minutes), on `Harness::close`, or every `distill_every` turns (default 20); a governed run on the distiller model (the member model by default) with no tools and structured output (`{ text, kind, source, quote?, confidence, supersedes? }`), given the session's user messages, tool outcomes and the facts already recalled; bounded by `RunBudget`; off with `distill: false` |
+| Verified quote | `Known`, source `UserStated` | A candidate whose `quote` appears verbatim (whitespace-normalised) in one of the user's own messages in the source session; text from the model, tools, files or other agents never qualifies |
+| Human promotion | `Known`, source `UserConfirmed` | `Harness::accept_fact`, `/memory accept <id>`, `adk-rust memory accept <id>` |
+| Correction | the earlier fact `Superseded { by }`, the new one `Known` when quoted | A candidate that names `supersedes`, or whose kind matches and whose similarity to an existing fact is above `supersede_score` (default 0.85), replaces it; history is kept through `valid_to` |
+
+Before storage every candidate passes `adk_guardrail::PiiRedactor` ([`adk-guardrail/src/pii.rs:39-58`](../../adk-guardrail/src/pii.rs)) and the harness's secret patterns (keys, tokens, private keys, connection strings); a candidate longer than 500 characters, or one the redactor flagged as a secret, is rejected with the reason in `harness.memory.distilled`. A scope keeps at most `max_facts` (default 2,000); when full, the least-used `Assumed` facts are evicted first and `Known` facts are never evicted silently.
+
+**Scope.** `Preference` facts are user-wide unless the user ties them to the project; every other kind is scoped to (user, project). Facts never cross users or apps. Team members (§7.10) neither recall nor write facts: they run isolated, and the coordinator passes what a member needs in the delegation. On a served harness facts are per authenticated user, and long-term memory is inert when identity is not authenticated (as I6 for rules and Auto).
+
+**Listing, forgetting, export.** `Harness::{facts, accept_fact, forget_fact, correct_fact}`; the console's `/memory` lists working notes and facts with their status and source, and `/memory forget|accept <id>` acts on one; `adk-rust memory list|show|forget|accept|export|import` (JSON lines with provenance). Forgetting marks the fact `Forgotten` at once and removes its index entry; it is never recalled from the next model call on (I44).
+
+**Configuration.** `long_term_memory(LongTermMemoryConfig { recall_limit, recall_tokens, min_score, distill, distill_model, distill_idle, distill_every, supersede_score, max_facts, max_fact_chars })`, `fact_store(..)`, `fact_index(..)`, `memory_embedder(..)`. Off by default in the library and on servers; the CLI turns it on with a local SQLite `FactStore` in `harness.db`, a one-time notice saying what is stored and where, and `--no-memory` to opt out.
+
+**What it enables.**
+
+| Behaviour | Mechanism |
+|---|---|
+| Does not re-ask the user's preferences | `Preference` facts recalled on each turn |
+| Does not repeat a failure it already solved | `Procedure` and `Outcome` facts distilled from a failed tool call followed by the call that fixed it ("the tests need `--features sqlite`") |
+| Plans with the project's history | Plan mode recalls `Decision` and `ProjectFact` facts before it writes a plan |
+| Continuity across sessions and surfaces | Facts are per user and project, not per session; every surface of spec 3.3 recalls the same facts |
+| A substrate for the kernel and self-improvement | Spec 3.2's consolidation tick and spec 3.4's sleep-time tick run the same distiller and write only `Assumed` facts |
 
 ### 7.16 Payments pack (feature `payments`)
 
@@ -778,6 +886,8 @@ Secrets come from `adk-auth` secret providers; nothing in the image. A served ha
 
 **Audit.** I39 The harness requires `RunConfig::audit` in Block mode; every §9.3 event is recorded write-ahead and its outcome recorded afterwards; records carry digests, with raw payloads in a payload store behind `payload_ref`.
 
+**Long-term memory.** I40 Recalled facts appear only inside the untrusted delimited block, labelled with status and kind; they never change mode, rules, policy or tool availability. I41 A fact is `Known` only when its quote appears verbatim in one of the user's own messages in the source session, or a human promoted it; model output, tool output, files and other agents' messages produce `Assumed` facts at most. I42 Facts never cross apps or users; project facts never cross projects; team members neither recall nor write facts; without authenticated identity on a server long-term memory is inert. I43 Text is redacted before storage and before indexing; nothing the redactor flags as a secret is stored; facts are capped in length and count. I44 A forgotten or superseded fact is never recalled from the next model call on, whatever an external index still holds; the `FactStore` is authoritative. I45 ReadOnly and Plan write no facts; recall and distillation run under the run's budget and are audited by fact id, never by text.
+
 ### 9.3 Audit records
 
 Actor from `AuditActor::new(acting, invocation_id)` ([`audit_log.rs:288`](../../adk-core/src/audit_log.rs)); `ext.sessionId` as `ToolGate::record` sets it ([`governance.rs:1421-1432`](../../adk-core/src/governance.rs)); kind `Other` for `harness.*` actions ([`audit_log.rs:138-158`](../../adk-core/src/audit_log.rs)); written through `ctx.run_config().audit` ([`tool.rs:371`](../../adk-core/src/tool.rs)).
@@ -796,6 +906,10 @@ Actor from `AuditActor::new(acting, invocation_id)` ([`audit_log.rs:288`](../../
 | Spend | `harness.spend` | spendKey, modelCalls, tokens, cost, budgetRemaining | end of run |
 | Payment | `harness.payment` | mandateId, amount, currency, journalReceiptRef, decision | payments pack |
 | Memory write | `harness.memory.written` | logicalPath, beforeSha256, afterSha256, bytes, functionCallId | memory tool, write-ahead |
+| Fact stored | `harness.memory.fact.stored` | factId, kind, status, source, project, digest, sessionId | `FactStore::put`, write-ahead |
+| Fact status changed | `harness.memory.fact.promoted` / `.superseded` / `.forgotten` | factId, from, to, by, supersededBy | `FactStore::set_status` |
+| Facts recalled | `harness.memory.recalled` | factIds, queryDigest, tokens | each recall |
+| Session distilled | `harness.memory.distilled` | sessionId, candidates, stored, rejected (with reasons), modelCalls, cost | the distiller |
 | Instruction files loaded / changed; workspace trust | `harness.instructions.*`, `harness.workspace.trust` | files [{logicalPath, sha256, bytes, scope, trusted}], rootDigest, decision, by | instruction provider; trust prompt |
 | Skill activated | `harness.skill.activated` | skillId, hash, sourcePath, allowedTools | `load_skill` wrapper |
 | Sandbox unavailable; held calls cancelled | `harness.sandbox.unavailable`, `harness.held.cancelled` | requested, error; callIds, reason | build and per call; mode loosening, freeze |
@@ -826,6 +940,8 @@ Records go to `adk_auth::signed_audit::AuditLog` (hash chain, Merkle tree, signe
 | F5 (should) | adk-runner | `InvocationContext` accessor reporting whether identity was authenticated ([`adk-runner/src/context.rs:768-775`](../../adk-runner/src/context.rs)) | I6 |
 | F6 (required for OBO) | adk-auth | `TokenExchangeBroker` cache keyed by subject and delegation chain, not by agent ([`token_exchange.rs`](../../adk-auth/src/token_exchange.rs)) | §7.14 |
 | K1 (optional) | adk-skill | `load_skill_index_from_dirs(dirs)` that skips the convention-file tree walk ([`discovery.rs:96-106`](../../adk-skill/src/discovery.rs)) | Performance |
+| M2 (should) | adk-memory | A conformance test that every `MemoryService` backend round-trips `author` and honours `project_id` in `add_entry_to_project`, `search` and `delete_entries_in_project` ([`service.rs:59-175`](../../adk-memory/src/service.rs)) | `MemoryServiceIndex` links facts by `author` and scopes them by project (§7.15.2) |
+| L2 | adk-cli | `/memory` lists working notes and facts; `adk-rust memory list|show|forget|accept|export|import`; `--no-memory`; the first-run notice; a SQLite `FactStore` in `harness.db` | §7.15.2 |
 | U1 | adk-rust | `harness` feature, module, prelude, pack features | §8.4 |
 | L1, G1 | adk-cli, cargo-adk | §8.1, §8.3 | Surfaces |
 
@@ -853,6 +969,7 @@ The 3.0 defects the harness must not inherit, and how the design avoids them:
 | Property (`proptest`) | adk-harness | P1 `ShellPrefix`: a match implies no metacharacter and token prefix equality (alphabet weighted to `; & \| $ \` < > ( ) { } * ? [ ] ~ ! \n \\ ' "`, `${IFS}`, NUL, Unicode lookalikes); P2 `PathWithin`: a match implies resolvable, under the prefix, not protected (`..`, `//`, `./`, case and NFC/NFD variants); P3 mode lattice monotone: ReadOnly ⪰ Plan ⪰ Ask ⪰ Auto, Allow rules never change Deny or NW; P4 subject isolation; P5 any declaration mutation stops a rule matching; P6 expiry; P7 fingerprint separators (U+001F) cannot forge; P8 arbitrary JSON parses to ReadOnly or "rule ignored", never Allow or Auto |
 | Conformance | adk-harness | `mode_store_conformance_tests!`, `standing_rule_store_conformance_tests!` over in-memory, file and SQLite (pattern [`adk-core/src/conformance/mod.rs:202`](../../adk-core/src/conformance/mod.rs)) |
 | Integration | adk-harness/tests | `ScriptedLlm` + Runner on InMemory and SQLite sessions: member inherits the stricter mode; per-session todos; held `rm` in Ask → Auto executes zero times; `[exit_plan_mode, write_file]` batch denies the write; goal resumes after a simulated crash; plan graph rewind re-executes nothing; loop guard tightens the mode; payment never auto-allowed |
+| Long-term memory | adk-harness | Unit: quote verification (a verbatim, whitespace-normalised substring of a user message; tool output and model text rejected), redaction and rejection, digest dedup, supersession, scope routing, recall token cap and rendering. Property: no recall across users or projects; a forgotten fact is never recalled; no fact is `Known` without a verified quote or a human promotion; recall never exceeds its token cap. Conformance: `fact_store_conformance_tests!` over in-memory, file and SQLite; `fact_index_conformance_tests!` over `LocalFactIndex` (lexical and embedded) and `MemoryServiceIndex` on in-memory, SQLite FTS5 and Postgres pgvector (CI's postgres job). Integration: H11 scripted; a fact planted through tool output is `Assumed`; forget takes effect on the next turn; ReadOnly and Plan write nothing. Live: H11 on three providers |
 | adk-cli | unit + binary tests with `--features scripted-model` | clap parsing and aliases; `compiled_providers`; `ConsolePrompter` over scripted `ConsoleIo` (once, always, deny with reason, edit, Ctrl-C, no TTY); `StreamPrinter` renders held calls; `code --mode plan` writes nothing; exit 3 on held calls; `goal --resume` restores history; `build_app`: 401 without extractor, loopback admitted, held → decide → resume executes once |
 | Templates | cargo-adk + CI script | §8.3 |
 
@@ -867,7 +984,7 @@ The 3.0 defects the harness must not inherit, and how the design avoids them:
 | Phase | Release | Contents | Size (engineer-weeks) | Demonstrates |
 |---|---|---|---|---|
 | 0 Prerequisites | 3.0.x fixes; 3.1.0 additive APIs | A1 todos; plugin short-circuit audited (F1); `PluginContext` per invocation; `/runs` owner checks; first-run setup; console held-call rendering; C1–C3; D1–D3; S1–S2; F2, F6 | 4–5 | Existing `code` and `serve` safe to build on |
-| 1 Core | 3.1.0 | `adk-harness`: builder, `HarnessAgent`/`configure_run`/`Harness`, modes and `ModeStore`, standing rules and stores, `HarnessPolicy`, todos, instructions and trust, skills, shell (host + OS sandbox), team lowering with local members, durability wiring, observability (spans, spend, loop guard), identity (RBAC map, broker), file memory, `coding` preset; scripted scenarios | 9–11 | H1, H2, H6, H7 scripted; `features = ["harness"]` |
+| 1 Core | 3.1.0 | `adk-harness`: builder, `HarnessAgent`/`configure_run`/`Harness`, modes and `ModeStore`, standing rules and stores, `HarnessPolicy`, todos, instructions and trust, skills, shell (host + OS sandbox), team lowering with local members, durability wiring, observability (spans, spend, loop guard), identity (RBAC map, broker), working notes and long-term facts (§7.15), `coding` preset; scripted scenarios | 11–14 | H1, H2, H6, H7 scripted; `features = ["harness"]` |
 | 2 CLI | 3.1.0 | §8.1; examples migrated; live scenarios 1–5 | 4–5 | `cargo install adk-cli` → REPL with approvals, `/mode`, `--session`, `goal` |
 | 3 Server, graph, team | 3.1.0 | `serve` via `ServerBuilder` + approvals + background; plan graph and `Graph` goal engine; ACP and A2A members; `approvals` subcommand | 4–5 | H3, H4, H9 (CLI, server, Agent Engine) |
 | 4 Scaffold, docs, eval | 3.1.0 | `harness` template; docs pages; eval suite and baselines; changelog fragments | 3 | `cargo adk new x --template harness && cargo run` |
