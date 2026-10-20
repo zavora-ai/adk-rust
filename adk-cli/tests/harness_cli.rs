@@ -211,7 +211,7 @@ fn goal_resume_continues_the_same_conversation() {
         ws.path(),
     );
     assert_eq!(first.status.code(), Some(1), "{}", text(&first));
-    assert!(text(&first).contains("budget exhausted"), "{}", text(&first));
+    assert!(text(&first).contains("budget exhausted after 1 iteration(s)"), "{}", text(&first));
 
     let second = run(
         &[
@@ -240,8 +240,143 @@ fn goal_resume_continues_the_same_conversation() {
         shown.split("resuming goal in session ").nth(1).unwrap().split_whitespace().next().unwrap();
     let history = text(&run(&["sessions", "show", session], home.path(), ws.path()));
     assert!(history.contains("Goal: create done.txt"), "first iteration missing:\n{history}");
-    assert!(history.contains("is not passing yet"), "second iteration missing:\n{history}");
+    assert!(history.contains("Goal check `test -f done.txt` failed"), "check missing:\n{history}");
     assert!(history.contains("Thinking about it."), "{history}");
+    assert!(history.contains("Created."), "second iteration missing:\n{history}");
+}
+
+/// A goal is a durable run (spec 3.1 §7.11, §8.1): a call held without a terminal parks it,
+/// and after the call is approved `--resume` continues the same run at that call, which
+/// runs once.
+#[test]
+fn a_held_goal_parks_and_resumes_at_the_held_call_after_approval() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let dir = dir_arg(ws.path());
+    let until = "test -f done.txt";
+    let write =
+        r#"[{"call": {"name": "write_file", "args": {"path": "done.txt", "content": "ok"}}}]"#;
+
+    let held = run(
+        &["goal", "create done.txt", "--until", until, "--dir", &dir, "--model-script", write],
+        home.path(),
+        ws.path(),
+    );
+    let shown = text(&held);
+    assert_eq!(held.status.code(), Some(3), "{shown}");
+    assert!(shown.contains("goal run "), "{shown}");
+    assert!(shown.contains("adk-rust goal --resume"), "{shown}");
+    assert!(!ws.path().join("done.txt").exists(), "a held call ran:\n{shown}");
+    let session = held_session(&shown);
+
+    // Resuming before the decision runs nothing and reports the call again.
+    let early = run(
+        &[
+            "goal",
+            "create done.txt",
+            "--until",
+            until,
+            "--dir",
+            &dir,
+            "--resume",
+            "--model-script",
+            "[]",
+        ],
+        home.path(),
+        ws.path(),
+    );
+    assert_eq!(early.status.code(), Some(3), "{}", text(&early));
+    assert!(!ws.path().join("done.txt").exists());
+
+    let listing = text(&run(&["approvals", "list"], home.path(), ws.path()));
+    let line = listing.lines().find(|line| line.contains("write_file")).expect(&listing);
+    assert!(line.contains(&session), "{listing}");
+    let id = line.split_whitespace().next().unwrap().to_string();
+    let approved = run(&["approvals", "approve", &id], home.path(), ws.path());
+    assert!(approved.status.success(), "{}", text(&approved));
+
+    let resumed = run(
+        &[
+            "goal",
+            "create done.txt",
+            "--until",
+            until,
+            "--dir",
+            &dir,
+            "--resume",
+            "--model-script",
+            r#"[{"text": "Created."}]"#,
+        ],
+        home.path(),
+        ws.path(),
+    );
+    let shown = text(&resumed);
+    assert_eq!(resumed.status.code(), Some(0), "{shown}");
+    assert!(shown.contains(&format!("resuming goal in session {session}")), "{shown}");
+    assert!(shown.contains("goal met after 1 iteration(s)"), "{shown}");
+    assert_eq!(std::fs::read_to_string(ws.path().join("done.txt")).unwrap(), "ok");
+}
+
+/// A goal whose process dies mid-check resumes in its session (spec 3.1 §7.11, §7.12): the
+/// run the dead process held is reclaimed when its lease lapses, and the goal runs on.
+#[test]
+fn a_goal_killed_mid_check_resumes_in_its_session() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let dir = dir_arg(ws.path());
+    let until = "touch checking; test -f stop || (sleep 20; false)";
+
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_adk-rust"));
+    command
+        .args([
+            "goal",
+            "wait for stop",
+            "--until",
+            until,
+            "--dir",
+            &dir,
+            "--yes",
+            "--no-memory",
+            "--model-script",
+            r#"[{"text": "Working on it."}]"#,
+        ])
+        .current_dir(ws.path())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    common::isolate(&mut command, home.path());
+    let mut child = command.spawn().unwrap();
+    let started = std::time::Instant::now();
+    while !ws.path().join("checking").exists() {
+        assert!(started.elapsed() < common::TIMEOUT, "the goal never reached its check");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    // The process dies during the check, as a crash would.
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    std::fs::write(ws.path().join("stop"), "").unwrap();
+    let resumed = run(
+        &[
+            "goal",
+            "wait for stop",
+            "--until",
+            until,
+            "--dir",
+            &dir,
+            "--yes",
+            "--no-memory",
+            "--resume",
+            "--model-script",
+            r#"[{"text": "Resumed."}]"#,
+        ],
+        home.path(),
+        ws.path(),
+    );
+    let shown = text(&resumed);
+    assert_eq!(resumed.status.code(), Some(0), "{shown}");
+    assert!(shown.contains("resuming goal in session"), "{shown}");
+    assert!(shown.contains("goal met after 1 iteration(s)"), "{shown}");
 }
 
 #[test]

@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use adk_core::{
-    AdkError, Agent, ApprovalService, Event, Result, RunConfig, SessionId, ToolConfirmationRequest,
-    UserId, held_tool_calls,
+    AdkError, Agent, ApprovalService, DurableRunStore, Event, Result, RunConfig, SessionId,
+    ToolConfirmationRequest, UserId, held_tool_calls,
 };
 use adk_harness::{Harness, HarnessAgent, HarnessMode, TrustDecision};
 use adk_runner::Runner;
@@ -116,6 +116,7 @@ pub struct HarnessLauncher {
     background_runs: Option<BackgroundState>,
     security_config: Option<SecurityConfig>,
     bind_address: IpAddr,
+    run_store: Option<Arc<dyn DurableRunStore>>,
     opened: Option<Arc<Shared>>,
 }
 
@@ -152,6 +153,7 @@ impl HarnessLauncher {
             background_runs: None,
             security_config: None,
             bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            run_store: None,
             opened: None,
         }
     }
@@ -268,6 +270,14 @@ impl HarnessLauncher {
         self
     }
 
+    /// Runs goals as durable runs in `store` (spec 3.1 §7.11, §8.1): a goal survives the
+    /// process, parks on a held call and resumes at that call once it is decided. Without a
+    /// run store a goal runs in this process only.
+    pub fn with_run_store(mut self, store: Arc<dyn DurableRunStore>) -> Self {
+        self.run_store = Some(store);
+        self
+    }
+
     /// The session the launcher works in, once a turn or the REPL has opened it.
     pub fn session_id(&self) -> Option<&str> {
         self.opened.as_ref().map(|shared| shared.session.as_ref())
@@ -310,7 +320,7 @@ impl HarnessLauncher {
         }
     }
 
-    async fn open(&mut self) -> Result<Arc<Shared>> {
+    pub(super) async fn open(&mut self) -> Result<Arc<Shared>> {
         if let Some(shared) = &self.opened {
             return Ok(shared.clone());
         }
@@ -330,7 +340,8 @@ impl HarnessLauncher {
             &workspace,
         )
         .await?;
-        let harness = harness_for(self.agent.clone(), &app_name, sessions.clone())?;
+        let harness =
+            harness_for(self.agent.clone(), &app_name, sessions.clone(), self.run_store.clone())?;
         let user = UserId::new(self.user_id.clone())?;
         let session = SessionId::new(session)?;
         if let Some(mode) = self.mode
@@ -348,6 +359,7 @@ impl HarnessLauncher {
             console,
             thinking_mode: self.thinking_mode,
             rebuild: self.rebuild.clone(),
+            run_store: self.run_store.clone(),
         });
         shared.decide_trust(self.trust).await?;
         self.opened = Some(shared.clone());
@@ -561,11 +573,13 @@ pub(crate) fn memory_on(harness: &Harness) -> bool {
     harness.agent().info().tools.iter().any(|tool| tool == "memory_remember")
 }
 
-/// A `Harness` whose runner asks the agent's prompter and waits an hour for a person.
+/// A `Harness` whose runner asks the agent's prompter and waits an hour for a person, and
+/// that runs goals as durable runs in `run_store` when one is given.
 pub(crate) fn harness_for(
     agent: Arc<HarnessAgent>,
     app_name: &str,
     sessions: Arc<dyn SessionService>,
+    run_store: Option<Arc<dyn DurableRunStore>>,
 ) -> Result<Harness> {
     let runtime = agent.runtime();
     let config = RunConfig {
@@ -583,7 +597,11 @@ pub(crate) fn harness_for(
     if let Some(compaction) = runtime.compaction() {
         builder = builder.compaction_config(compaction.clone());
     }
-    Harness::with_runner(agent, builder.build()?)
+    let harness = Harness::with_runner(agent, builder.build()?)?;
+    Ok(match run_store {
+        Some(store) => harness.with_run_store(store),
+        None => harness,
+    })
 }
 
 fn canonical_root(agent: &HarnessAgent) -> PathBuf {
@@ -650,6 +668,7 @@ pub(crate) struct Shared {
     pub(crate) console: ConsoleIo,
     thinking_mode: ThinkingDisplayMode,
     rebuild: Option<HarnessRebuild>,
+    pub(crate) run_store: Option<Arc<dyn DurableRunStore>>,
 }
 
 impl Shared {
@@ -664,7 +683,12 @@ impl Shared {
             return Ok(None);
         };
         let agent = Arc::new(rebuild(sandbox)?);
-        let harness = Arc::new(harness_for(agent, &self.app_name, self.sessions.clone())?);
+        let harness = Arc::new(harness_for(
+            agent,
+            &self.app_name,
+            self.sessions.clone(),
+            self.run_store.clone(),
+        )?);
         *self.harness.write().unwrap_or_else(std::sync::PoisonError::into_inner) = harness.clone();
         Ok(Some(harness))
     }
@@ -724,6 +748,18 @@ impl Shared {
             Some(text) => harness.send(&self.user, &self.session, text).await,
             None => harness.resume(&self.user, &self.session).await,
         };
+        self.drive(started, token, echo).await
+    }
+
+    /// Prints a started run's events until it ends; Ctrl-C and a person's denial cancel
+    /// `token`, which interrupts the session's run.
+    pub(crate) async fn drive(
+        &self,
+        started: Result<adk_core::EventStream>,
+        token: CancellationToken,
+        echo: bool,
+    ) -> Result<TurnOutcome> {
+        let harness = self.harness();
         let events = match started {
             Ok(events) => events,
             Err(error) => {

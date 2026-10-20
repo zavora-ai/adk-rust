@@ -13,8 +13,8 @@ use adk_cli::harness::{
 use adk_core::{ApprovalPolicy, ApprovalService, ApproverSelector, Llm, StoreApprovalService};
 use adk_devtools::Workspace;
 use adk_harness::{
-    ApprovalPrompter, FileWorkspaceTrustStore, GoalState, GoalStatus, HarnessAgent, HarnessMode,
-    ShellIsolation,
+    ApprovalPrompter, FileWorkspaceTrustStore, GOAL_STATE_KEY, GoalSpec, GoalState, GoalStatus,
+    HarnessAgent, HarnessMode, ShellIsolation,
 };
 use adk_session::{InMemorySessionService, SessionService};
 use anyhow::{Context, Result, bail};
@@ -26,9 +26,6 @@ use crate::ultra::{self, UltraAgents};
 
 /// Exit code of a run that left calls held for a decision (spec 3.1 §8.1).
 pub const EXIT_HELD: i32 = 3;
-
-/// Session-state key mirroring the goal's state (spec 3.1 §7.11).
-const GOAL_STATE_KEY: &str = "harness:goal";
 
 /// The user's harness config file.
 fn user_config() -> Option<std::path::PathBuf> {
@@ -122,7 +119,8 @@ impl Setup {
                 .mode_store(db.modes.clone())
                 .standing_rules(db.rules.clone())
                 .shell_ledger(db.ledger.clone())
-                .approval_store(db.approvals.clone());
+                .approval_store(db.approvals.clone())
+                .goal_store(db.goals.clone());
             // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2).
             if self.resolved.memory && approval_service.is_none() {
                 builder = builder
@@ -468,11 +466,12 @@ pub struct GoalArgs {
     pub resume: bool,
 }
 
-/// `adk-rust goal`: iterate harness turns until `until` passes (spec 3.1 §8.1, §7.11).
+/// `adk-rust goal`: the harness goal engine, iterating until `until` passes
+/// (spec 3.1 §8.1, §7.11).
 ///
-/// wave B: team-graph — `Harness::start_goal` / `Harness::goal` and the durable goal store
-/// (spec 3.1 §7.11) replace this loop and its `harness:goal` mirror once the goal engine
-/// lands; the session already carries the conversation and the mirror.
+/// `Harness::start_goal` starts the goal; with `harness.db` it is a durable run that parks
+/// on a held call and continues with `--resume` once the call is decided, in the same
+/// session and iteration.
 pub async fn goal(
     model: ResolvedModel,
     instruction: Option<String>,
@@ -492,6 +491,8 @@ pub async fn goal(
     let prompter = setup.unattended_prompter(&console);
     let agent =
         setup.agent(APP_NAME, setup.resolved.mode, setup.resolved.sandbox, prompter, None)?;
+    // The check runs through the harness shell, whose timeout is its ceiling.
+    let check_timeout = agent.runtime().workspace().bash_timeout_value();
     let sessions = setup.sessions();
     let workspace = setup.resolved.workspace.clone();
 
@@ -507,202 +508,120 @@ pub async fn goal(
         None
     };
     let mut launcher = setup.launcher(agent).await?.with_console(console);
+    #[cfg(feature = "persist")]
+    if let Some(db) = &setup.db {
+        launcher = launcher.with_run_store(db.runs.clone());
+    }
     if let Some(session) = &resumed {
         launcher = launcher.with_session_id(session.clone());
     }
 
-    let until_check = |command: &str| run_check(&workspace, command);
-    let mut state = GoalState {
-        goal: goal.goal.clone(),
-        until: goal.until.clone(),
-        iteration: 0,
-        max_iterations: goal.max_iters,
-        status: GoalStatus::Running,
-        last_check: None,
-        updated_at: chrono::Utc::now(),
-    };
-    let mut last_output = String::new();
-    if goal.resume {
-        match &resumed {
-            Some(session) => {
-                let saved = read_goal(sessions.as_ref(), &setup.user, session).await?;
-                if let Some(saved) = saved {
-                    println!("resuming goal in session {session} (iteration {})", saved.iteration);
-                    state = saved;
-                    state.max_iterations = goal.max_iters;
-                }
-                let (code, output) = until_check(&state.until);
-                if code == Some(0) {
-                    state.status = GoalStatus::Done;
-                    state.last_check = code;
-                    save_goal(
-                        &mut launcher,
-                        sessions.as_ref(),
-                        &setup.user,
-                        &state,
-                        goal.state.as_deref(),
-                    )
-                    .await?;
-                    println!("goal already met: `{}` passes.", state.until);
-                    return Ok(0);
-                }
-                last_output = first_lines(&output, 40);
-            }
-            None => println!("no unfinished goal in this workspace; starting fresh."),
-        }
-    }
-
     println!("goal mode ({}) on {}", setup.model_id, workspace.display());
-    println!("goal:  {}", state.goal);
-    println!("until: {}  (budget: {} iterations)\n", state.until, state.max_iterations);
-
-    let start = state.iteration + 1;
-    for iteration in start..=state.max_iterations {
-        println!("━━ iteration {iteration}/{} ━━", state.max_iterations);
-        let prompt = if iteration == 1 && last_output.is_empty() {
-            format!(
-                "Goal: {}\n\nWhen you believe the goal is met, the command `{}` must succeed \
-                 (exit 0). Work toward that now.",
-                state.goal, state.until
-            )
-        } else {
-            format!(
-                "The success check `{}` is not passing yet. Its latest output was:\n---\n{}\n---\n\
-                 Diagnose and fix this, continuing toward the goal: {}",
-                state.until, last_output, state.goal
-            )
+    let outcome = if goal.resume && (resumed.is_some() || setup.args.session.is_some()) {
+        let session = resumed.as_deref().or(setup.args.session.as_deref()).unwrap_or_default();
+        println!("resuming goal in session {session}");
+        launcher.resume_goal(Some(goal.max_iters)).await?
+    } else {
+        if goal.resume {
+            println!("no unfinished goal in this workspace; starting fresh.");
+        }
+        println!("goal:  {}", goal.goal);
+        println!("until: {}  (budget: {} iterations)\n", goal.until, goal.max_iters);
+        let spec = GoalSpec {
+            goal: goal.goal.clone(),
+            until: goal.until.clone(),
+            max_iterations: goal.max_iters,
+            check_timeout,
         };
-        let outcome = launcher.run_once(&prompt).await?;
-        state.iteration = iteration;
-        if !outcome.held.is_empty() {
-            save_goal(&mut launcher, sessions.as_ref(), &setup.user, &state, goal.state.as_deref())
-                .await?;
-            launcher.close().await;
-            return Ok(held_exit(&outcome, persistent(&setup)));
-        }
-        if outcome.interrupted {
-            save_goal(&mut launcher, sessions.as_ref(), &setup.user, &state, goal.state.as_deref())
-                .await?;
-            println!("\ninterrupted; continue with --resume.");
-            launcher.close().await;
-            return Ok(130);
-        }
-        let (code, output) = until_check(&state.until);
-        state.last_check = code;
-        last_output = first_lines(&output, 40);
-        if code == Some(0) {
-            state.status = GoalStatus::Done;
-            save_goal(&mut launcher, sessions.as_ref(), &setup.user, &state, goal.state.as_deref())
-                .await?;
-            println!("\ngoal met after {iteration} iteration(s): `{}` passed.", state.until);
-            launcher.close().await;
-            return Ok(0);
-        }
-        save_goal(&mut launcher, sessions.as_ref(), &setup.user, &state, goal.state.as_deref())
-            .await?;
-        println!("  check `{}` exited {code:?}; iterating.\n", state.until);
-    }
-    state.status = GoalStatus::Exhausted;
-    save_goal(&mut launcher, sessions.as_ref(), &setup.user, &state, goal.state.as_deref()).await?;
-    println!("\nbudget exhausted; `{}` still failing. Resume later with --resume.", state.until);
-    launcher.close().await;
-    Ok(1)
-}
-
-async fn read_goal(
-    sessions: &dyn SessionService,
-    user: &str,
-    session: &str,
-) -> Result<Option<GoalState>> {
-    let session = sessions
-        .get(adk_session::GetRequest {
-            app_name: APP_NAME.to_string(),
-            user_id: user.to_string(),
-            session_id: session.to_string(),
-            num_recent_events: Some(1),
-            after: None,
-        })
-        .await?;
-    Ok(session
-        .state()
-        .get(GOAL_STATE_KEY)
-        .and_then(|value| serde_json::from_value::<GoalState>(value).ok()))
-}
-
-/// Mirrors `state` into the session and, with `--state`, into a JSON file.
-async fn save_goal(
-    launcher: &mut HarnessLauncher,
-    sessions: &dyn SessionService,
-    user: &str,
-    state: &GoalState,
-    mirror: Option<&str>,
-) -> Result<()> {
-    let mut state = state.clone();
-    state.updated_at = chrono::Utc::now();
-    let Some(session) = launcher.session_id().map(str::to_string) else {
-        return Ok(());
+        launcher.run_goal(spec).await?
     };
-    let mut event = adk_core::Event::new(format!("harness-goal-{}", uuid::Uuid::new_v4()));
-    event.author = APP_NAME.to_string();
-    event.actions.state_delta.insert(GOAL_STATE_KEY.to_string(), serde_json::to_value(&state)?);
-    // The session service checks the session belongs to the user before appending.
-    sessions
-        .get(adk_session::GetRequest {
-            app_name: APP_NAME.to_string(),
-            user_id: user.to_string(),
-            session_id: session.clone(),
-            num_recent_events: Some(1),
-            after: None,
-        })
-        .await?;
-    sessions.append_event(&session, event).await?;
-    if let Some(path) = mirror {
-        let path = Path::new(path);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(
-            &tmp,
-            serde_json::to_string_pretty(&json!({
-                "goal": state.goal,
-                "until": state.until,
-                "iteration": state.iteration,
-                "status": serde_json::to_value(state.status)?,
-                "lastCheck": state.last_check,
-            }))?,
-        )
-        .with_context(|| format!("failed to write {}", tmp.display()))?;
-        std::fs::rename(&tmp, path)?;
+    let state = launcher.goal().await?;
+    if let (Some(path), Some(state)) = (goal.state.as_deref(), &state) {
+        write_goal_mirror(Path::new(path), state)?;
     }
+    let code = if !outcome.held.is_empty() {
+        goal_held_exit(&outcome, persistent(&setup))
+    } else if outcome.interrupted {
+        println!("\ninterrupted; continue with --resume.");
+        130
+    } else {
+        goal_exit(state.as_ref(), &outcome)
+    };
+    launcher.close().await;
+    Ok(code)
+}
+
+/// Reports how a goal stands and returns the exit code: `0` met, `1` otherwise.
+fn goal_exit(state: Option<&GoalState>, outcome: &TurnOutcome) -> i32 {
+    match state {
+        Some(state) if state.status == GoalStatus::Done => {
+            println!(
+                "\ngoal met after {} iteration(s): `{}` passed.",
+                state.iteration, state.until
+            );
+            0
+        }
+        Some(state) if state.status == GoalStatus::Exhausted => {
+            println!(
+                "\nbudget exhausted after {} iteration(s); `{}` still failing. Resume later \
+                 with --resume and a higher --max-iters.",
+                state.iteration, state.until
+            );
+            1
+        }
+        Some(state) => {
+            if outcome.ended_by_denial {
+                println!("\nThe turn ended after a denial.");
+            }
+            println!(
+                "\nthe goal is {:?} at iteration {}; continue with --resume.",
+                state.status, state.iteration
+            );
+            1
+        }
+        None => 1,
+    }
+}
+
+/// Prints what to do about calls a goal holds and returns [`EXIT_HELD`].
+fn goal_held_exit(outcome: &TurnOutcome, persistent: bool) -> i32 {
+    if !persistent {
+        return held_exit(outcome, persistent);
+    }
+    println!(
+        "\n{} call(s) are held for a decision in session {}.",
+        outcome.held.len(),
+        outcome.session_id
+    );
+    for request in &outcome.held {
+        println!("  {} {}", request.tool_name, first_line(&request.args.to_string()));
+    }
+    println!(
+        "The goal waits for them. Decide with `adk-rust approvals list` and `adk-rust \
+         approvals approve ID`, then continue with `adk-rust goal --resume`."
+    );
+    EXIT_HELD
+}
+
+/// Writes the `--state` JSON mirror of the goal.
+fn write_goal_mirror(path: &Path, state: &GoalState) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(
+        &tmp,
+        serde_json::to_string_pretty(&json!({
+            "goal": state.goal,
+            "until": state.until,
+            "iteration": state.iteration,
+            "status": serde_json::to_value(state.status)?,
+            "lastCheck": state.last_check,
+        }))?,
+    )
+    .with_context(|| format!("failed to write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path)?;
     Ok(())
-}
-
-/// Runs the goal's success check in the workspace with the agent's shell environment.
-///
-/// The command comes from the person, not the model, so it is not a governed tool call.
-fn run_check(dir: &Path, command: &str) -> (Option<i32>, String) {
-    let mut cmd = std::process::Command::new("sh");
-    cmd.arg("-c").arg(command).current_dir(dir).stdin(std::process::Stdio::null());
-    let workspace = Workspace::new(dir);
-    if !workspace.inherits_env() {
-        cmd.env_clear();
-        for (key, value) in workspace.bash_env() {
-            cmd.env(key, value);
-        }
-    }
-    match cmd.output() {
-        Ok(output) => {
-            let mut text = String::from_utf8_lossy(&output.stdout).to_string();
-            text.push_str(&String::from_utf8_lossy(&output.stderr));
-            (output.status.code(), text)
-        }
-        Err(error) => (None, error.to_string()),
-    }
-}
-
-fn first_lines(text: &str, n: usize) -> String {
-    text.lines().take(n).collect::<Vec<_>>().join("\n")
 }
 
 /// `adk-rust ultracode` on the harness (spec 3.1 §8.1).
@@ -854,12 +773,14 @@ pub async fn serve(
         .session_service(setup.sessions())
         .approval_store(agent.runtime().approval_store().clone())
         .build()?;
-    // wave B: team-graph — add `.with_agent(target, runner)` from `Harness::goal_target()`
-    // (spec 3.1 §7.11) so durable goals run here too.
+    // The runner's root is the harness agent, which runs a session's goal while one runs, so
+    // it also serves the durable goal target (spec 3.1 §7.11).
+    let runner = Arc::new(runner);
     let background = adk_server::background::BackgroundState::new()
         .with_run_store(run_store)
         .with_app_name(APP_NAME)
-        .with_agent(APP_NAME, Arc::new(runner));
+        .with_agent(APP_NAME, runner.clone())
+        .with_agent(adk_harness::GOAL_TARGET, runner);
 
     let mut launcher = HarnessLauncher::new(agent)
         .app_name(APP_NAME)

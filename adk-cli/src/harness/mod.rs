@@ -5,7 +5,7 @@
 //! |---|---|
 //! | [`HarnessArgs`], [`ResolvedHarnessArgs`] | §8.1 shared flags and their precedence |
 //! | [`ConsolePrompter`] | §8.1, §7.5 approvals at the terminal, `[a] always allow` |
-//! | [`HarnessLauncher`], [`TurnOutcome`] | §8.1 REPL, slash commands, one-turn runs; §8.2 serve |
+//! | [`HarnessLauncher`], [`TurnOutcome`] | §8.1 REPL, slash commands, one-turn runs, goals; §8.2 serve |
 //! | [`LoopbackOperatorExtractor`], [`BearerTokenExtractor`] | §8.2 request identity |
 //!
 //! # Example
@@ -29,6 +29,7 @@
 
 mod args;
 mod commands;
+mod goal;
 mod launcher;
 mod prompter;
 mod serve;
