@@ -1,3 +1,4 @@
+use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind, AuditRecordOutcome};
 use adk_core::{
     AfterAgentCallback, AfterModelCallback, AfterToolCallback, AfterToolCallbackFull, Agent,
     BeforeAgentCallback, BeforeModelCallback, BeforeModelResult, BeforeToolCallback,
@@ -83,6 +84,17 @@ fn trace_json_payload<T: serde::Serialize>(
 fn traced_message(run_config: &adk_core::RunConfig, message: &str) -> String {
     trace_json_payload(&message, run_config.record_payloads, run_config.trace_payload_max_bytes)
 }
+
+/// The audit action of a tool call a hook, callback, or plugin answered before the governed
+/// path saw it (spec 3.1 §10, F1).
+const SHORT_CIRCUIT_ACTION: &str = "tool.short_circuit";
+/// `answeredBy` of an enhanced plugin's `ShortCircuit`.
+#[cfg(feature = "enhanced-plugins")]
+const SHORT_CIRCUIT_BY_ENHANCED_PLUGIN: &str = "enhanced_plugin";
+/// `answeredBy` of a run-wide `InvocationHooks::before_tool` answer.
+const SHORT_CIRCUIT_BY_INVOCATION_HOOK: &str = "invocation_hook";
+/// `answeredBy` of the agent's own `BeforeToolCallback` answer.
+const SHORT_CIRCUIT_BY_BEFORE_TOOL_CALLBACK: &str = "before_tool_callback";
 
 #[derive(Debug, Clone)]
 struct PendingToolCall {
@@ -2513,6 +2525,50 @@ impl ToolExecutor<'_> {
         traced_message(self.ctx.run_config(), message)
     }
 
+    /// Records, through the run's audit trail, a call that `answered_by` answered before
+    /// the governed path saw it, so the trail shows every call that skipped authorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns `audit.record_failed`, which ends the turn, when the record cannot be
+    /// written under [`AuditFailureMode::Block`](adk_core::audit_log::AuditFailureMode::Block).
+    async fn record_short_circuit(
+        &self,
+        name: &str,
+        function_call_id: &str,
+        args: &serde_json::Value,
+        answered_by: &str,
+    ) -> Result<()> {
+        tracing::debug!(
+            tool.name = %name,
+            tool.answered_by = %answered_by,
+            "tool call answered before authorization; the tool was not run"
+        );
+        let Some(trail) = &self.ctx.run_config().audit else {
+            return Ok(());
+        };
+        let mut draft = AuditRecordDraft::new(AuditRecordKind::ToolCall, SHORT_CIRCUIT_ACTION)
+            .actor(AuditActor::for_context(self.ctx.as_ref()))
+            .args_digest(trail.digest(args))
+            .outcome(AuditRecordOutcome::NotRun)
+            .ext("toolName", serde_json::Value::String(name.to_string()))
+            .ext("agentName", serde_json::Value::String(self.agent_name.to_string()))
+            .ext("answeredBy", serde_json::Value::String(answered_by.to_string()))
+            .ext("functionCallId", serde_json::Value::String(function_call_id.to_string()))
+            .ext("sessionId", serde_json::Value::String(self.ctx.session_id().to_string()));
+        if let Some(tool) = self.tool_map.get(name) {
+            let origin = adk_core::ToolOrigin::of(tool.as_ref());
+            draft = draft
+                .ext("toolSource", serde_json::Value::String(origin.source))
+                .ext("declarationDigest", serde_json::Value::String(origin.declaration_digest));
+        }
+        if let Err(error) = trail.record(draft).await {
+            self.approval_failed.send_replace(true);
+            return Err(error);
+        }
+        Ok(())
+    }
+
     async fn execute_inner(&self, call: PendingToolCall) -> Result<ToolExecutionResult> {
         let PendingToolCall { index, name, args, id, function_call_id, resumes } = call;
         let mut tool_actions = EventActions::default();
@@ -2580,6 +2636,13 @@ impl ToolExecutor<'_> {
                 }
                 Ok(BeforeToolCallResult::ShortCircuit(synthetic_result)) => {
                     // Short-circuit: use synthetic result, skip tool execution
+                    self.record_short_circuit(
+                        &name,
+                        &function_call_id,
+                        &final_args,
+                        SHORT_CIRCUIT_BY_ENHANCED_PLUGIN,
+                    )
+                    .await?;
                     response_content = Some(Content {
                         role: "function".to_string(),
                         parts: vec![Part::FunctionResponse {
@@ -2616,11 +2679,28 @@ impl ToolExecutor<'_> {
                 name.clone(),
                 final_args.clone(),
             ));
-            for callback in
-                self.hook_callbacks.before_tool.iter().chain(self.before_tool_callbacks.iter())
+            let hooks = self.hook_callbacks.before_tool.len();
+            for (position, callback) in self
+                .hook_callbacks
+                .before_tool
+                .iter()
+                .chain(self.before_tool_callbacks.iter())
+                .enumerate()
             {
                 match callback(tool_ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(c)) => {
+                        let answered_by = if position < hooks {
+                            SHORT_CIRCUIT_BY_INVOCATION_HOOK
+                        } else {
+                            SHORT_CIRCUIT_BY_BEFORE_TOOL_CALLBACK
+                        };
+                        self.record_short_circuit(
+                            &name,
+                            &function_call_id,
+                            &final_args,
+                            answered_by,
+                        )
+                        .await?;
                         // The tool did not run, so text is reported as the call's error.
                         response_content = Some(callback_tool_response(
                             c,

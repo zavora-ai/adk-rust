@@ -562,3 +562,187 @@ async fn a_timed_out_non_idempotent_call_records_an_unknown_outcome() {
             .ext("sessionId", json!("session"))
     );
 }
+
+// --- Short-circuited calls (spec 3.1 §10, F1) ---
+
+/// Answers every `before_tool` with `answer`, as a cache or a mock layer does.
+fn answering_callback(answer: &'static str) -> adk_core::BeforeToolCallback {
+    Box::new(move |_ctx| Box::pin(async move { Ok(Some(Content::new("tool").with_text(answer))) }))
+}
+
+/// The record of a call to `search` answered by `answered_by` before authorization.
+fn short_circuit_draft(
+    recorder: &InMemoryAuditRecorder,
+    invocation_id: Option<String>,
+    answered_by: &str,
+    args: &Value,
+) -> AuditRecordDraft {
+    let origin = recording_origin("search");
+    AuditRecordDraft::new(AuditRecordKind::ToolCall, "tool.short_circuit")
+        .actor(teller(invocation_id))
+        .args_digest(recorder.digest(args))
+        .outcome(AuditRecordOutcome::NotRun)
+        .ext("toolName", json!("search"))
+        .ext("agentName", json!("teller"))
+        .ext("answeredBy", json!(answered_by))
+        .ext("functionCallId", json!("c1"))
+        .ext("sessionId", json!("session"))
+        .ext("toolSource", json!(origin.source))
+        .ext("declarationDigest", json!(origin.declaration_digest))
+}
+
+#[tokio::test]
+async fn a_before_tool_callback_answer_is_recorded() {
+    let args = json!({ "q": "balance" });
+    let model = ScriptedModel::new(vec![calls(&[("search", args.clone(), "c1")])]);
+    let (search, searches) = RecordingTool::new("search");
+    let agent = LlmAgentBuilder::new("teller")
+        .model(model)
+        .tool(search)
+        .before_tool_callback(answering_callback("cached: 42"))
+        .build()
+        .unwrap();
+    let recorder = InMemoryAuditRecorder::new();
+    let audit = recorder.clone();
+    let runner =
+        runner(agent, move |builder| builder.tool_policy(bank_policy()).audit_log(Arc::new(audit)))
+            .await;
+
+    let events = run(&runner, None).await;
+
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    assert!(searches.lock().unwrap().is_empty(), "the callback answered the call");
+    let records = recorder.records();
+    let invocation = records[0].actor.invocation_id.clone();
+    assert_eq!(
+        records,
+        vec![short_circuit_draft(&recorder, invocation, "before_tool_callback", &args)],
+        "the answer is recorded, and the governed path never saw the call"
+    );
+}
+
+#[tokio::test]
+async fn an_invocation_hook_answer_is_recorded() {
+    use adk_plugin::{Plugin, PluginConfig, PluginManager};
+
+    let args = json!({ "q": "balance" });
+    let model = ScriptedModel::new(vec![calls(&[("search", args.clone(), "c1")])]);
+    let (search, searches) = RecordingTool::new("search");
+    let recorder = InMemoryAuditRecorder::new();
+    let audit = recorder.clone();
+    let plugin = Plugin::new(PluginConfig {
+        name: "mock".to_string(),
+        before_tool: Some(answering_callback("mocked")),
+        ..Default::default()
+    });
+    let runner = runner(bank_agent(model, vec![search]), move |builder| {
+        builder
+            .tool_policy(bank_policy())
+            .audit_log(Arc::new(audit))
+            .plugin_manager(Arc::new(PluginManager::new(vec![plugin])))
+    })
+    .await;
+
+    let events = run(&runner, None).await;
+
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    assert!(searches.lock().unwrap().is_empty(), "the hook answered the call");
+    let records = recorder.records();
+    let invocation = records[0].actor.invocation_id.clone();
+    assert_eq!(records, vec![short_circuit_draft(&recorder, invocation, "invocation_hook", &args)]);
+}
+
+#[cfg(feature = "enhanced-plugins")]
+#[tokio::test]
+async fn an_enhanced_plugin_short_circuit_is_recorded() {
+    use adk_core::CallbackContext;
+    use adk_plugin::{BeforeToolCallResult, EnhancedPlugin, PluginContext};
+
+    struct Mock;
+
+    #[async_trait]
+    impl EnhancedPlugin for Mock {
+        fn name(&self) -> &str {
+            "mock"
+        }
+
+        async fn before_tool_call(
+            &self,
+            _tool: Arc<dyn Tool>,
+            _args: Value,
+            _ctx: Arc<dyn CallbackContext>,
+            _plugin_ctx: &PluginContext,
+        ) -> Result<BeforeToolCallResult> {
+            Ok(BeforeToolCallResult::ShortCircuit(json!({ "balance": 42 })))
+        }
+    }
+
+    let args = json!({ "q": "balance" });
+    let model = ScriptedModel::new(vec![calls(&[("search", args.clone(), "c1")])]);
+    let (search, searches) = RecordingTool::new("search");
+    let agent = LlmAgentBuilder::new("teller")
+        .model(model)
+        .tool(search)
+        .enhanced_plugin(Arc::new(Mock))
+        .build()
+        .unwrap();
+    let recorder = InMemoryAuditRecorder::new();
+    let audit = recorder.clone();
+    let runner =
+        runner(agent, move |builder| builder.tool_policy(bank_policy()).audit_log(Arc::new(audit)))
+            .await;
+
+    let events = run(&runner, None).await;
+
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    assert!(searches.lock().unwrap().is_empty(), "the plugin answered the call");
+    let records = recorder.records();
+    let invocation = records[0].actor.invocation_id.clone();
+    assert_eq!(records, vec![short_circuit_draft(&recorder, invocation, "enhanced_plugin", &args)]);
+}
+
+#[tokio::test]
+async fn an_unrecordable_short_circuit_ends_the_run() {
+    let model = ScriptedModel::new(vec![calls(&[("search", json!({ "q": "x" }), "c1")])]);
+    let (search, searches) = RecordingTool::new("search");
+    let agent = LlmAgentBuilder::new("teller")
+        .model(model)
+        .tool(search)
+        .before_tool_callback(answering_callback("cached"))
+        .build()
+        .unwrap();
+    let runner = runner(agent, |builder| builder.audit_log(Arc::new(BrokenRecorder))).await;
+
+    let events = run(&runner, None).await;
+
+    assert!(searches.lock().unwrap().is_empty());
+    let error = events.iter().find_map(|event| event.as_ref().err()).expect("the run fails");
+    assert_eq!(error.code, "audit.record_failed", "{error}");
+}
+
+#[tokio::test]
+async fn a_short_circuit_without_an_audit_trail_records_nothing_and_answers_the_call() {
+    let model = ScriptedModel::new(vec![calls(&[("search", json!({ "q": "x" }), "c1")])]);
+    let (search, searches) = RecordingTool::new("search");
+    let agent = LlmAgentBuilder::new("teller")
+        .model(model)
+        .tool(search)
+        .before_tool_callback(answering_callback("cached"))
+        .build()
+        .unwrap();
+    let runner = runner(agent, |builder| builder).await;
+
+    let events = run(&runner, None).await;
+
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    assert!(searches.lock().unwrap().is_empty());
+    let answered = events.iter().filter_map(|event| event.as_ref().ok()).any(|event| {
+        event.llm_response.content.as_ref().is_some_and(|content| {
+            content.parts.iter().any(|part| {
+                matches!(part, Part::FunctionResponse { function_response, .. }
+                    if function_response.response == json!({ "error": "cached" }))
+            })
+        })
+    });
+    assert!(answered, "{events:?}");
+}
