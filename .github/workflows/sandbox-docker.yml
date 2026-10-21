@@ -1,0 +1,85 @@
+name: Sandbox Docker
+
+# Proves the container shell and `DockerClient` against a real Docker daemon (spec 3.1
+# §7.9 "Container", §10 S4). The tests that need a daemon are `#[ignore]`d, since the PR
+# tier's runners and contributors' machines may have none; GitHub's ubuntu runners ship
+# Docker, so this job runs them there. It runs on every push to main, on a pull request
+# that touches the Docker client, the harness shell, or this file, and on demand.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'adk-sandbox/src/workspace/**'
+      - 'adk-sandbox/tests/docker_bind_mount_tests.rs'
+      - 'adk-harness/src/shell/**'
+      - 'adk-harness/tests/container_shell_tests.rs'
+      - 'examples/harness_agent/src/sandbox.rs'
+      - '.github/workflows/sandbox-docker.yml'
+      - '.github/actions/setup-rust/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+concurrency:
+  group: sandbox-docker-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  docker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        neutralize-wild: 'true'
+        cache-key: sandbox-docker
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+      with:
+        tool: cargo-nextest
+
+    # The tests create containers from this image and never pull it themselves.
+    - name: Pull the test image
+      timeout-minutes: 5
+      run: |
+        docker version
+        docker pull alpine:3.20
+
+    - name: DockerClient against the daemon (adk-sandbox)
+      run: |
+        cargo nextest run -p adk-sandbox --features workspace-docker \
+          --test docker_bind_mount_tests --run-ignored all --no-fail-fast
+
+    - name: Container shell against the daemon (adk-harness)
+      run: |
+        cargo nextest run -p adk-harness --features docker,hooks \
+          --test container_shell_tests --run-ignored all --no-fail-fast
+
+    - name: Container scenario (examples/harness_agent)
+      run: cargo run --manifest-path examples/harness_agent/Cargo.toml -- container_shell_shares_workspace
+
+    - name: No container outlives the tests
+      if: always()
+      run: |
+        left="$(docker ps -aq --filter ancestor=alpine:3.20)"
+        if [[ -n "$left" ]]; then
+          docker ps -a --filter ancestor=alpine:3.20
+          echo "::error::containers from the tests are still present"
+          exit 1
+        fi
+
+    - name: Summary
+      if: always()
+      run: echo "### 🐳 Container shell and DockerClient proven against a Docker daemon" >> "$GITHUB_STEP_SUMMARY"
