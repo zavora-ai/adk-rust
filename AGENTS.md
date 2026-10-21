@@ -746,7 +746,8 @@ Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`
    answered from its record without executing (`CodeActAgent` raises the answer into the
    script). Shared helper: `adk-agent/src/tool_ledger.rs`.
 7. `execute()` under the tool's timeout — `adk-auth` wrappers (`ProtectedTool`, `ScopeGuard`)
-   check RBAC and scopes here, so a denial is a tool error. Only `ReadOnly` and `Idempotent`
+   check RBAC and scopes here, so a denial is a tool error (`tool.permission_denied`, category
+   `Forbidden`, naming the missing scope or permission to the model). Only `ReadOnly` and `Idempotent`
    tools are retried (retryable error or timeout, with backoff).
 8. Action ledger complete — a `NonIdempotent` call that timed out or panicked stays begun and is
    answered `outcome_unknown`.

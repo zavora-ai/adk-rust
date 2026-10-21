@@ -267,6 +267,33 @@ async fn test_scope_guard_denies_when_scopes_missing() {
 }
 
 #[tokio::test]
+async fn a_scope_denial_is_a_structured_permission_error_naming_the_missing_scopes() {
+    // spec 3.1 §7.14: the denial names the scopes and is not `tool.internal (tool.legacy)`.
+    let protected = ScopeGuard::new(ContextScopeResolver).protect(TransferFundsTool);
+    let ctx = ScopedMockContext::create("bob", vec!["finance:write"]);
+
+    let error = protected.execute(ctx, json!({"amount": 100})).await.unwrap_err();
+
+    assert_eq!(
+        (error.component, error.category, error.code),
+        (
+            adk_core::ErrorComponent::Tool,
+            adk_core::ErrorCategory::Forbidden,
+            adk_core::TOOL_PERMISSION_DENIED_CODE
+        )
+    );
+    assert_eq!(error.details.metadata["missingScopes"], json!(["verified"]));
+    assert_eq!(error.details.metadata["requiredScopes"], json!(["finance:write", "verified"]));
+    assert_eq!(
+        adk_core::tool_error_response("transfer_funds", &error, false),
+        json!({
+            "error": "tool.forbidden: missing required scopes: [verified] (tool requires: \
+                      [finance:write, verified])"
+        })
+    );
+}
+
+#[tokio::test]
 async fn test_scope_guard_denies_with_no_scopes() {
     let guard = ScopeGuard::new(ContextScopeResolver);
     let protected = guard.protect(AdminPanelTool);

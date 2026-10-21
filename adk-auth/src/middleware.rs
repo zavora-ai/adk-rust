@@ -205,7 +205,18 @@ async fn authorize_tool_access(
         None => Ok(()),
     };
 
-    check_result.map_err(|err| adk_core::AdkError::tool(err.to_string()))?;
+    check_result.map_err(|err| {
+        // The model is told the call was refused and which permission it needed.
+        let mut details = adk_core::ErrorDetails::default();
+        details.metadata.insert("permission".to_string(), Value::String(err.permission.clone()));
+        adk_core::AdkError::new(
+            adk_core::ErrorComponent::Tool,
+            adk_core::ErrorCategory::Forbidden,
+            adk_core::TOOL_PERMISSION_DENIED_CODE,
+            err.to_string(),
+        )
+        .with_details(details)
+    })?;
     recorded
 }
 

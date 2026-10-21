@@ -273,6 +273,37 @@ impl std::fmt::Display for ScopeDenied {
 
 impl std::error::Error for ScopeDenied {}
 
+/// A scope denial as the tool error a scope-guarded call fails with: component `Tool`,
+/// category `Forbidden`, code [`TOOL_PERMISSION_DENIED_CODE`](adk_core::TOOL_PERMISSION_DENIED_CODE),
+/// and the missing and required scopes in the details' `missingScopes` and `requiredScopes`.
+/// The model is told the call was refused and which scopes were missing (spec 3.1 §7.14).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_auth::check_scopes;
+/// use adk_core::{AdkError, ErrorCategory, TOOL_PERMISSION_DENIED_CODE};
+///
+/// let denied = check_scopes(&["finance:write"], &[]).unwrap_err();
+/// let error = AdkError::from(denied);
+/// assert_eq!((error.category, error.code), (ErrorCategory::Forbidden, TOOL_PERMISSION_DENIED_CODE));
+/// assert_eq!(error.details.metadata["missingScopes"], serde_json::json!(["finance:write"]));
+/// ```
+impl From<ScopeDenied> for adk_core::AdkError {
+    fn from(denied: ScopeDenied) -> Self {
+        let mut details = adk_core::ErrorDetails::default();
+        details.metadata.insert("missingScopes".to_string(), Value::from(denied.missing.clone()));
+        details.metadata.insert("requiredScopes".to_string(), Value::from(denied.required.clone()));
+        adk_core::AdkError::new(
+            adk_core::ErrorComponent::Tool,
+            adk_core::ErrorCategory::Forbidden,
+            adk_core::TOOL_PERMISSION_DENIED_CODE,
+            denied.to_string(),
+        )
+        .with_details(details)
+    }
+}
+
 /// Declarative scope enforcement for tools.
 ///
 /// Wraps tools and automatically checks that the user has all scopes
@@ -411,7 +442,7 @@ async fn authorize_tool_scopes(
             missing_scopes = ?denied.missing,
             "scope check failed"
         );
-        return Err(adk_core::AdkError::tool(denied.to_string()));
+        return Err(denied.into());
     }
 
     recorded
