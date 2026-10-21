@@ -7,7 +7,8 @@
 use std::sync::{Arc, Mutex};
 
 use adk_core::{
-    Artifacts, CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, ToolContext,
+    Artifacts, CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext,
+    RequestContext, ToolContext,
 };
 use adk_memory::MemoryService;
 use async_trait::async_trait;
@@ -38,6 +39,8 @@ pub struct RealtimeToolContext {
     memory_service: Option<Arc<dyn MemoryService>>,
     actions: Mutex<EventActions>,
     user_content: Content,
+    /// The identity the server authenticated for the session, if any.
+    request_context: Option<RequestContext>,
 }
 
 impl RealtimeToolContext {
@@ -65,7 +68,41 @@ impl RealtimeToolContext {
             memory_service,
             actions: Mutex::new(EventActions::default()),
             user_content: Content::new("user"),
+            request_context: None,
         }
+    }
+
+    /// Marks the context as acting for the identity the server authenticated (spec 3.1
+    /// §7.17): [`is_authenticated`](ReadonlyContext::is_authenticated) answers `true` and
+    /// [`user_scopes`](ToolContext::user_scopes) answers the context's scopes. The caller
+    /// keeps the context's `user_id` equal to this context's user.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{ReadonlyContext, RequestContext, ToolContext};
+    /// use adk_realtime::integration::RealtimeToolContext;
+    ///
+    /// let identity = RequestContext {
+    ///     user_id: "user-1".to_string(),
+    ///     scopes: vec!["orders:read".to_string()],
+    ///     metadata: Default::default(),
+    /// };
+    /// let ctx = RealtimeToolContext::new(
+    ///     "voice".to_string(),
+    ///     "user-1".to_string(),
+    ///     "session-1".to_string(),
+    ///     "call-1".to_string(),
+    ///     None,
+    /// )
+    /// .with_request_context(identity);
+    /// assert!(ctx.is_authenticated());
+    /// assert_eq!(ctx.user_scopes(), ["orders:read"]);
+    /// ```
+    #[must_use]
+    pub fn with_request_context(mut self, request_context: RequestContext) -> Self {
+        self.request_context = Some(request_context);
+        self
     }
 }
 
@@ -98,6 +135,10 @@ impl ReadonlyContext for RealtimeToolContext {
     fn user_content(&self) -> &Content {
         &self.user_content
     }
+
+    fn is_authenticated(&self) -> bool {
+        self.request_context.is_some()
+    }
 }
 
 #[async_trait]
@@ -119,6 +160,10 @@ impl ToolContext for RealtimeToolContext {
 
     fn set_actions(&self, actions: EventActions) {
         *self.actions.lock().unwrap() = actions;
+    }
+
+    fn user_scopes(&self) -> Vec<String> {
+        self.request_context.as_ref().map(|context| context.scopes.clone()).unwrap_or_default()
     }
 
     async fn search_memory(&self, query: &str) -> adk_core::Result<Vec<MemoryEntry>> {
@@ -207,5 +252,29 @@ impl ToolContextFactory for DefaultToolContextFactory {
             function_call_id.to_string(),
             self.memory_service.clone(),
         ))
+    }
+}
+
+/// The factory the integrated runner's builder bridges ADK tools with: the session identity,
+/// the memory service, and the authenticated request context when one was given.
+pub(crate) struct IdentityToolContextFactory {
+    pub(crate) identity: SessionIdentity,
+    pub(crate) memory_service: Option<Arc<dyn MemoryService>>,
+    pub(crate) request_context: Option<RequestContext>,
+}
+
+impl ToolContextFactory for IdentityToolContextFactory {
+    fn create_context(&self, function_call_id: &str) -> Arc<dyn ToolContext> {
+        let ctx = RealtimeToolContext::new(
+            self.identity.app_name.clone(),
+            self.identity.user_id.clone(),
+            self.identity.session_id.clone(),
+            function_call_id.to_string(),
+            self.memory_service.clone(),
+        );
+        Arc::new(match &self.request_context {
+            Some(request_context) => ctx.with_request_context(request_context.clone()),
+            None => ctx,
+        })
     }
 }

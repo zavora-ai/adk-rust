@@ -27,7 +27,6 @@ use tower::ServiceBuilder;
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     set_header::SetResponseHeaderLayer,
-    timeout::TimeoutLayer,
     trace::TraceLayer,
 };
 
@@ -138,6 +137,31 @@ fn forbidden(error: &str, hint: &str) -> Response {
 ///
 /// A page on a DNS-rebinding domain reaches a loopback server as a same-origin request,
 /// so CORS never applies; the `Host` header still names the attacker's domain.
+/// Whether `path` names a route that runs an agent, which takes
+/// [`SecurityConfig::run_timeout`] instead of the request timeout.
+fn runs_an_agent(path: &str) -> bool {
+    matches!(path, "/api/run" | "/api/run_sse" | "/a2a" | "/a2a/stream")
+        || path.starts_with("/api/run/")
+}
+
+/// Answers `408` when the response has not started within the route's timeout: the run
+/// timeout for a route that runs an agent, the request timeout for any other.
+async fn request_timeout(
+    State(security): State<Arc<SecurityConfig>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let limit = if runs_an_agent(request.uri().path()) {
+        security.run_timeout
+    } else {
+        security.request_timeout
+    };
+    match tokio::time::timeout(limit, next.run(request)).await {
+        Ok(response) => response,
+        Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
+    }
+}
+
 async fn host_guard(
     State(security): State<Arc<SecurityConfig>>,
     request: Request<Body>,
@@ -828,9 +852,12 @@ impl ServerBuilder {
             .layer(auth_layer.clone());
 
         let runtime_router = Router::new()
-            .route("/run", post(controllers::runtime::run_collect))
-            .route("/run/{app_name}/{user_id}/{session_id}", post(controllers::runtime::run_sse))
-            .route("/run_sse", post(controllers::runtime::run_sse_compat))
+            .route("/run", post(controllers::runtime::run_collect_for_request))
+            .route(
+                "/run/{app_name}/{user_id}/{session_id}",
+                post(controllers::runtime::run_sse_for_request),
+            )
+            .route("/run_sse", post(controllers::runtime::run_sse_compat_for_request))
             .with_state(runtime_controller);
 
         let artifacts_router = Router::new()
@@ -1035,10 +1062,7 @@ impl ServerBuilder {
                 ServiceBuilder::new()
                     .layer(middleware::from_fn(request_id_middleware))
                     .layer(trace_layer)
-                    .layer(TimeoutLayer::with_status_code(
-                        StatusCode::REQUEST_TIMEOUT,
-                        config.security.request_timeout,
-                    ))
+                    .layer(middleware::from_fn_with_state(Arc::clone(&security), request_timeout))
                     .layer(DefaultBodyLimit::max(config.security.max_body_size))
                     .layer(cors_layer)
                     .layer(middleware::from_fn_with_state(Arc::clone(&security), origin_guard))

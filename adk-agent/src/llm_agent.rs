@@ -1790,6 +1790,9 @@ struct AgentToolContext {
     /// The tool this context was built for, recorded by the dispatcher so secret
     /// requests carry an identity the tool cannot choose.
     tool_name: Option<String>,
+    /// The key of the held call this context resumes, shared by every run that resumes
+    /// it; `None` for a call made in this invocation (spec 3.1 §7.12).
+    idempotency_key: Option<String>,
     actions: Mutex<EventActions>,
     progress_tx: Option<tokio::sync::mpsc::Sender<Event>>,
     /// Where a marker goes when the progress queue is full.
@@ -1829,6 +1832,7 @@ impl AgentToolContext {
             parent_ctx,
             function_call_id,
             tool_name: None,
+            idempotency_key: None,
             actions: Mutex::new(EventActions::default()),
             progress_tx: None,
             progress_overflow: ProgressOverflow::default(),
@@ -1842,6 +1846,12 @@ impl AgentToolContext {
     /// Record which tool this context serves.
     fn with_tool_name(mut self, tool_name: impl Into<String>) -> Self {
         self.tool_name = Some(tool_name.into());
+        self
+    }
+
+    /// Keys the call by `key` instead of this invocation and its call ID.
+    fn with_idempotency_key(mut self, key: Option<String>) -> Self {
+        self.idempotency_key = key;
         self
     }
 
@@ -2023,6 +2033,22 @@ impl CallbackContext for AgentToolContext {
 impl ToolContext for AgentToolContext {
     fn function_call_id(&self) -> &str {
         &self.function_call_id
+    }
+
+    /// A resumed held call keeps the key it was first dispatched under, so a payment or
+    /// another downstream idempotency key is the same in every run that resumes it
+    /// (spec 3.1 §7.12). Any other call uses the trait's default form.
+    fn idempotency_key(&self) -> String {
+        self.idempotency_key.clone().unwrap_or_else(|| {
+            format!(
+                "{}/{}/{}/{}/{}",
+                self.app_name(),
+                self.user_id(),
+                self.session_id(),
+                self.invocation_id(),
+                self.function_call_id
+            )
+        })
     }
 
     fn actions(&self) -> EventActions {
@@ -2850,6 +2876,7 @@ impl ToolExecutor<'_> {
                     Arc::new(
                         AgentToolContext::new(self.ctx.clone(), function_call_id.clone())
                             .with_tool_name(tool.name())
+                            .with_idempotency_key(resumed_ledger_key.clone())
                             .with_progress(
                                 self.progress_tx.clone(),
                                 self.progress_overflow.clone(),
@@ -2865,7 +2892,8 @@ impl ToolExecutor<'_> {
                 let ledgered = match crate::tool_ledger::begin_ledgered_call(
                     self.ctx.as_ref(),
                     effect,
-                    resumed_ledger_key.unwrap_or_else(|| tool_ctx.idempotency_key()),
+                    // A resumed call's context answers its held call's key.
+                    tool_ctx.idempotency_key(),
                     &name,
                     &final_args,
                 )

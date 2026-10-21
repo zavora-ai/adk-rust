@@ -50,6 +50,19 @@ impl Tool for ContinueInterventionTool {
         "Resume or complete a payment intervention such as 3DS or buyer reconfirmation. The continuation token is required for safe resumption."
     }
 
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "transactionId": { "type": "string" },
+                "interventionId": { "type": "string" },
+                "continuationToken": { "type": "string" },
+                "resultSummary": { "type": "string" }
+            },
+            "required": ["transactionId", "interventionId"]
+        }))
+    }
+
     fn is_long_running(&self) -> bool {
         true
     }

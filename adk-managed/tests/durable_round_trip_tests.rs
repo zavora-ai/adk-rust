@@ -285,9 +285,10 @@ async fn turn(
 ) -> (Vec<&'static str>, Option<StopReason>) {
     let mut kinds = Vec::new();
     loop {
-        let event = tokio::time::timeout(Duration::from_secs(10), stream.next())
+        // Generous for SQLite on a loaded Windows runner; see the replica test.
+        let event = tokio::time::timeout(Duration::from_secs(30), stream.next())
             .await
-            .unwrap_or_else(|_| panic!("no status.idle within 10 s; saw {kinds:?}"))
+            .unwrap_or_else(|_| panic!("no status.idle within 30 s; saw {kinds:?}"))
             .expect("stream ended");
         kinds.push(kind(&event));
         if let SessionEvent::Error { message, .. } = &event {
@@ -304,16 +305,6 @@ fn requires_action(stop: Option<StopReason>) -> Vec<String> {
         Some(StopReason::RequiresAction { event_ids }) => event_ids,
         other => panic!("expected requires_action, got {other:?}"),
     }
-}
-
-async fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
-    for _ in 0..400 {
-        if done() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!("timed out waiting for {what}");
 }
 
 async fn start(
@@ -550,8 +541,35 @@ async fn a_result_sent_to_another_replica_wakes_the_run(backend: &dyn Backend) {
     turn(&mut stream).await;
 
     replica_b.send_event(&session, deploy_result()).await.unwrap();
-    wait_for("the resumed turn", || llm.calls() == 2).await;
     let (sessions, stores) = backend.open().await;
+    // On SQLite every write creates and deletes a rollback journal, which is slow on Windows:
+    // this round trip takes 0.2 s on macOS, 1.5 s on a Windows runner alone, and 4 to 15 s
+    // under the parallel workspace run. The budget stays far below the 5-minute answer expiry,
+    // so only the wake can resume the run in time.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut resumed = false;
+    while tokio::time::Instant::now() < deadline {
+        if llm.calls() == 2 {
+            resumed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    if !resumed {
+        // What the stores hold tells which step stalled: the park, the wake, or the claim.
+        let state = stores.state.load(&session.0).await;
+        let run = match &state {
+            Ok(Some(state)) => match &state.durable_run_id {
+                Some(run_id) => stores.runs.get(run_id).await,
+                None => Ok(None),
+            },
+            _ => Ok(None),
+        };
+        panic!(
+            "timed out waiting for the resumed turn: {} model calls; state {state:?}; run {run:?}",
+            llm.calls()
+        );
+    }
     let identity = adk_session::GetRequest {
         app_name: "ops-console".into(),
         user_id: "user-7".into(),
@@ -560,7 +578,7 @@ async fn a_result_sent_to_another_replica_wakes_the_run(backend: &dyn Backend) {
         after: None,
     };
     let mut finished = false;
-    for _ in 0..200 {
+    while tokio::time::Instant::now() < deadline {
         let state = stores.state.load(&session.0).await.unwrap().unwrap();
         if state.durable_run_id.is_none() && state.pending.is_empty() {
             finished = true;

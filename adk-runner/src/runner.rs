@@ -952,7 +952,25 @@ impl Runner {
         let context_cache_config = self.context_cache_config.clone();
         let cache_capable = self.cache_capable.clone();
         let cache_manager_ref = self.cache_manager.clone();
-        let request_context = self.request_context.clone();
+        // A run's own request context replaces the runner's, and authenticates only the run's
+        // user (spec 3.1 §9.2 I6).
+        let request_context = match run_config.request_context.clone() {
+            Some(context) if context.user_id != user_id.as_str() => {
+                return Err(adk_core::AdkError::new(
+                    adk_core::ErrorComponent::Auth,
+                    adk_core::ErrorCategory::Forbidden,
+                    adk_core::SUBJECT_MISMATCH_CODE,
+                    format!(
+                        "the run's request context authenticates user '{}' but the run is for \
+                         user '{}'; a run's request context must name the run's own user",
+                        context.user_id,
+                        user_id.as_str()
+                    ),
+                ));
+            }
+            Some(context) => Some(context),
+            None => self.request_context.clone(),
+        };
         let intra_compactor = self.intra_compactor.clone();
         #[cfg(feature = "context-compaction")]
         let context_compaction = self.context_compaction.clone();

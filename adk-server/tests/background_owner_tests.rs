@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use adk_core::{Agent, EventStream, InvocationContext, Result as AdkResult, SingleAgentLoader};
 use adk_server::auth_bridge::{RequestContextError, RequestContextExtractor};
-use adk_server::background::{BackgroundState, WorkflowRegistry};
+use adk_server::background::{BackgroundState, CronState, WorkflowRegistry};
 use adk_server::{ServerBuilder, ServerConfig};
 use async_trait::async_trait;
 use axum::Router;
@@ -63,6 +63,11 @@ impl RequestContextExtractor for HeaderUser {
 /// A server whose runs stay queued: no worker claims them, so each test sees the state its
 /// own requests leave.
 fn app(authenticated: bool) -> Router {
+    app_with_state(authenticated).0
+}
+
+/// [`app`] with cron jobs, and the stores behind it.
+fn app_with_state(authenticated: bool) -> (Router, BackgroundState, CronState) {
     let loader = Arc::new(SingleAgentLoader::new(Arc::new(IdleAgent)));
     let mut config =
         ServerConfig::new(loader, Arc::new(adk_session::InMemorySessionService::new()));
@@ -73,7 +78,12 @@ fn app(authenticated: bool) -> Router {
         WorkflowRegistry::new().register("report", |_input, _cancel| async { Ok(json!({})) });
     let background =
         BackgroundState::new().with_executor(Arc::new(workflows)).with_embedded_worker(false);
-    ServerBuilder::new(config).with_background_runs(background).build()
+    let cron = CronState::new(background.clone());
+    let app = ServerBuilder::new(config)
+        .with_background_runs(background.clone())
+        .with_cron_jobs(cron.clone())
+        .build();
+    (app, background, cron)
 }
 
 async fn send(
@@ -234,4 +244,86 @@ async fn without_an_extractor_runs_keep_todays_open_behaviour() {
     )
     .await;
     assert_eq!((status, run_id(&again)), (StatusCode::OK, id), "keys stay global, as before");
+}
+
+// ─── Authenticated runs and cron owners (spec 3.1 §8.2, §9.2 I6) ──────────────
+
+#[tokio::test]
+async fn a_run_an_authenticated_caller_submits_is_stored_as_authenticated() {
+    let (app, background, _) = app_with_state(true);
+    let (_, created) = submit(&app, "alice", json!({})).await;
+    let stored = background.run_store().get(&run_id(&created)).await.unwrap().unwrap();
+    assert_eq!((stored.user_id.as_str(), stored.authenticated), ("alice", true));
+
+    let (app, background, _) = app_with_state(false);
+    let body = json!({ "target": "report", "input": {}, "userId": "mallory" });
+    let (_, created) = send(&app, "POST", "/api/runs", None, Some(body)).await;
+    let stored = background.run_store().get(&run_id(&created)).await.unwrap().unwrap();
+    assert_eq!((stored.user_id.as_str(), stored.authenticated), ("mallory", false));
+}
+
+fn nightly() -> Value {
+    json!({ "name": "nightly", "workflowId": "report", "cronExpression": "0 0 3 * * *" })
+}
+
+#[tokio::test]
+async fn another_owners_cron_job_cannot_be_listed_read_changed_or_deleted() {
+    let (app, _, cron) = app_with_state(true);
+    let (status, created) = send(&app, "POST", "/api/cron", Some("alice"), Some(nightly())).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(
+        (created["jobId"].as_str(), created["name"].as_str()),
+        (Some("nightly"), Some("nightly"))
+    );
+
+    let (status, listed) = send(&app, "GET", "/api/cron", Some("bob"), None).await;
+    assert_eq!((status, listed), (StatusCode::OK, json!([])), "bob lists none of alice's jobs");
+    let pause = json!({ "status": "paused" });
+    for (method, body) in [("GET", None), ("PATCH", Some(pause.clone())), ("DELETE", None)] {
+        let (status, _) = send(&app, method, "/api/cron/nightly", Some("bob"), body).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "bob's {method} must look like an unknown job");
+    }
+    let (status, job) = send(&app, "GET", "/api/cron/nightly", Some("alice"), None).await;
+    assert_eq!((status, job["status"].as_str()), (StatusCode::OK, Some("active")), "untouched");
+
+    // The job runs for alice, as the identity the server authenticated.
+    let schedules = cron.schedules.list().await.unwrap();
+    assert_eq!(schedules.len(), 1);
+    assert_eq!(
+        (schedules[0].run.user_id.as_str(), schedules[0].run.authenticated),
+        ("alice", true)
+    );
+
+    let (status, _) = send(&app, "PATCH", "/api/cron/nightly", Some("alice"), Some(pause)).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(&app, "DELETE", "/api/cron/nightly", Some("alice"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn two_owners_may_each_have_a_cron_job_of_the_same_name() {
+    let (app, _, cron) = app_with_state(true);
+    for owner in ["alice", "bob"] {
+        let (status, job) = send(&app, "POST", "/api/cron", Some(owner), Some(nightly())).await;
+        assert_eq!(status, StatusCode::CREATED, "{owner}: {job}");
+    }
+    let (status, _) = send(&app, "POST", "/api/cron", Some("alice"), Some(nightly())).await;
+    assert_eq!(status, StatusCode::CONFLICT, "an owner's own name is still unique");
+
+    let (_, listed) = send(&app, "GET", "/api/cron", Some("bob"), None).await;
+    assert_eq!(listed.as_array().map(Vec::len), Some(1));
+    assert_eq!(listed[0]["name"], "nightly");
+    let mut owners: Vec<String> =
+        cron.schedules.list().await.unwrap().into_iter().map(|s| s.run.user_id).collect();
+    owners.sort();
+    assert_eq!(owners, ["alice", "bob"]);
+}
+
+#[tokio::test]
+async fn without_an_extractor_cron_jobs_keep_their_names_and_run_for_cron() {
+    let (app, _, cron) = app_with_state(false);
+    let (status, _) = send(&app, "POST", "/api/cron", None, Some(nightly())).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let schedule = cron.schedules.get("nightly").await.unwrap().expect("stored under its name");
+    assert_eq!((schedule.run.user_id.as_str(), schedule.run.authenticated), ("cron", false));
 }

@@ -1588,6 +1588,13 @@ pub struct RunConfig {
     /// any. Approval requests submitted during the run carry it, so a decision wakes the
     /// run instead of waiting for the next one.
     pub durable_run_id: Option<String>,
+    /// The identity a server authenticated for this run, which replaces the runner's
+    /// `request_context` for it (spec 3.1 §9.2 I6). The run's contexts then answer
+    /// [`is_authenticated`](crate::ReadonlyContext::is_authenticated) with `true` and
+    /// `user_scopes` with its scopes. Its `user_id` must be the run's user; the runner
+    /// refuses a run whose request context names anyone else. `DurableWorker` sets it for
+    /// a run enqueued by an authenticated caller ([`NewRun::authenticated`](crate::NewRun::authenticated)).
+    pub request_context: Option<crate::RequestContext>,
     /// How long the [`tool_confirmation_handler`](Self::tool_confirmation_handler) may take
     /// to decide one call before it is denied. Defaults to
     /// [`DEFAULT_TOOL_CONFIRMATION_TIMEOUT`](crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT).
@@ -1659,6 +1666,7 @@ impl Default for RunConfig {
             approval_store: None,
             approval_service: None,
             durable_run_id: None,
+            request_context: None,
             tool_confirmation_timeout: crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
             spend_ledger: None,
             llm_spend_estimate: None,
@@ -1929,6 +1937,27 @@ impl RunConfigBuilder {
     /// Records the durable run this invocation executes. See [`RunConfig::durable_run_id`].
     pub fn durable_run_id(mut self, run_id: impl Into<String>) -> Self {
         self.config.durable_run_id = Some(run_id.into());
+        self
+    }
+
+    /// Runs as the identity a server authenticated. See [`RunConfig::request_context`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{RequestContext, RunConfig};
+    ///
+    /// let config = RunConfig::builder()
+    ///     .request_context(RequestContext {
+    ///         user_id: "alice".to_string(),
+    ///         scopes: vec![],
+    ///         metadata: Default::default(),
+    ///     })
+    ///     .build();
+    /// assert_eq!(config.request_context.map(|context| context.user_id).as_deref(), Some("alice"));
+    /// ```
+    pub fn request_context(mut self, request_context: crate::RequestContext) -> Self {
+        self.config.request_context = Some(request_context);
         self
     }
 

@@ -320,8 +320,9 @@ pub use tool::{
 pub use tool_concurrency::{ConcurrencyPermit, ToolConcurrencyManager};
 pub use tool_response::{
     INVALID_TOOL_ARGUMENTS_KEY, RESULT_WITHHELD_STATUS, TOOL_INVALID_ARGUMENTS_CODE,
-    ToolResultScreen, invalid_tool_arguments, invalid_tool_arguments_reason,
-    result_blocked_response, result_withheld_response, screen_tool_result, tool_error_response,
+    TOOL_PERMISSION_DENIED_CODE, ToolResultScreen, invalid_tool_arguments,
+    invalid_tool_arguments_reason, result_blocked_response, result_withheld_response,
+    screen_tool_result, tool_error_response,
 };
 pub use types::{
     BlobResourceContents, Content, EmbeddedResource, FileDataPart, FunctionResponseData,

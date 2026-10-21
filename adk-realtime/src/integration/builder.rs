@@ -17,7 +17,7 @@ use crate::error::RealtimeError;
 use crate::model::BoxedModel;
 use crate::runner::{EventHandler, RealtimeRunner, RunnerConfig, ToolHandler};
 
-use super::context::DefaultToolContextFactory;
+use super::context::IdentityToolContextFactory;
 use super::tool_bridge::ToolBridgeAdapter;
 use super::{IntegrationConfig, SessionIdentity};
 
@@ -74,6 +74,8 @@ pub struct IntegratedRealtimeRunnerBuilder {
     pub(crate) tool_result_screen: Option<Arc<dyn adk_core::ToolResultScreen>>,
     /// Whether tool and plugin error messages reach the model.
     pub(crate) expose_tool_error_messages: bool,
+    /// The identity the server authenticated for the session, if any.
+    pub(crate) request_context: Option<adk_core::RequestContext>,
 }
 
 impl Default for IntegratedRealtimeRunnerBuilder {
@@ -104,6 +106,7 @@ impl IntegratedRealtimeRunnerBuilder {
             tool_timeout: crate::runner::DEFAULT_REALTIME_TOOL_TIMEOUT,
             tool_result_screen: None,
             expose_tool_error_messages: false,
+            request_context: None,
         }
     }
 
@@ -310,6 +313,29 @@ impl IntegratedRealtimeRunnerBuilder {
         self
     }
 
+    /// Runs every tool call as the identity the server authenticated for this session (spec
+    /// 3.1 §7.17): tool contexts answer
+    /// [`is_authenticated`](adk_core::ReadonlyContext::is_authenticated) with `true` and
+    /// [`user_scopes`](adk_core::ToolContext::user_scopes) with the context's scopes, so a
+    /// policy that trusts only authenticated users (such as a harness's standing approvals)
+    /// treats a voice session as the server does. Without it, tool contexts report an
+    /// unauthenticated user. The context's `user_id` must be the [`identity`](Self::identity)
+    /// user; [`build`](Self::build) refuses a mismatch.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let runner = IntegratedRealtimeRunner::builder()
+    ///     .model(model)
+    ///     .identity("voice", "user-1", "session-1")
+    ///     .request_context(authenticated) // from the server's RequestContextExtractor
+    ///     .build()?;
+    /// ```
+    pub fn request_context(mut self, request_context: adk_core::RequestContext) -> Self {
+        self.request_context = Some(request_context);
+        self
+    }
+
     /// Builds the [`IntegratedRealtimeRunner`](super::IntegratedRealtimeRunner).
     ///
     /// Validates required fields, bridges ADK tools via
@@ -322,6 +348,7 @@ impl IntegratedRealtimeRunnerBuilder {
     /// Returns a [`ConfigError`](crate::error::RealtimeError::ConfigError) if:
     /// - `model` was not set
     /// - `identity` was not set
+    /// - a [`request_context`](Self::request_context) names a user other than the identity's
     /// - two tools, native or bridged, share a name
     ///
     /// Also propagates any errors from the underlying `RealtimeRunner::builder().build()`.
@@ -340,10 +367,21 @@ impl IntegratedRealtimeRunnerBuilder {
             RealtimeError::config("Identity (app_name, user_id, session_id) is required")
         })?;
 
+        if let Some(request_context) = &self.request_context
+            && request_context.user_id != identity.user_id
+        {
+            return Err(RealtimeError::config(format!(
+                "the request context authenticates user '{}' but the session identity is user \
+                 '{}'; pass the authenticated user to identity()",
+                request_context.user_id, identity.user_id
+            )));
+        }
+
         // Create context factory for ADK tools
-        let context_factory = Arc::new(DefaultToolContextFactory {
+        let context_factory = Arc::new(IdentityToolContextFactory {
             identity: identity.clone(),
             memory_service: self.memory_service.clone(),
+            request_context: self.request_context.clone(),
         });
 
         // Bridge ADK tools via ToolBridgeAdapter
@@ -410,6 +448,7 @@ impl IntegratedRealtimeRunnerBuilder {
             identity,
             config: self.integration_config,
             adk_tools: adk_tools_by_name,
+            request_context: self.request_context,
         })
     }
 }

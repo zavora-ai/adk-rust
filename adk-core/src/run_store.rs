@@ -217,6 +217,11 @@ pub struct NewRun {
     /// The agent identity the run acts under.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<ActingContext>,
+    /// Whether `user_id` is an identity a server authenticated when the run was enqueued, so
+    /// the run executes as an authenticated user (spec 3.1 §9.2 I6). Set it with
+    /// [`with_authenticated_user`](Self::with_authenticated_user).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub authenticated: bool,
 }
 
 impl NewRun {
@@ -245,6 +250,7 @@ impl NewRun {
             not_before: None,
             max_attempts: Self::DEFAULT_MAX_ATTEMPTS,
             principal: None,
+            authenticated: false,
         }
     }
 
@@ -329,6 +335,28 @@ impl NewRun {
         self
     }
 
+    /// Marks `user_id` as an identity a server authenticated when it enqueued the run, so a
+    /// worker runs it as an authenticated user: its tools see
+    /// [`is_authenticated`](crate::ReadonlyContext::is_authenticated) answer `true`, as an
+    /// interactive run on that server does (spec 3.1 §9.2 I6). `adk-server` marks the runs and
+    /// cron jobs an authenticated caller submits; only code that authenticated the user
+    /// should call it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::NewRun;
+    /// use serde_json::json;
+    ///
+    /// let run = NewRun::new("default", "ops", "alice", "closer", json!({})).with_authenticated_user();
+    /// assert!(run.authenticated);
+    /// ```
+    #[must_use]
+    pub fn with_authenticated_user(mut self) -> Self {
+        self.authenticated = true;
+        self
+    }
+
     /// Checks the fields every store requires.
     ///
     /// # Errors
@@ -390,6 +418,10 @@ pub struct RunRecord {
     /// The agent identity the run acts under.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<ActingContext>,
+    /// Whether `user_id` was authenticated when the run was enqueued; see
+    /// [`NewRun::authenticated`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub authenticated: bool,
     /// Where the run is in its lifecycle.
     pub state: RunState,
     /// Attempts started so far, counting recoveries; 0 until first claimed.
@@ -455,6 +487,7 @@ impl RunRecord {
             not_before: run.not_before,
             max_attempts: run.max_attempts,
             principal: run.principal,
+            authenticated: run.authenticated,
             state: RunState::Queued,
             attempt: 0,
             lease_owner: None,

@@ -407,12 +407,21 @@ default `UTC`). A second job with an existing name returns **409**.
 
 | Policy | Run template | Effect |
 |--------|--------------|--------|
-| `skip` (default) | Concurrency key `cron:{name}`, `OnConflict::Reject` | An occurrence that arrives while a run is active is skipped |
-| `queue` | Concurrency key `cron:{name}`, `OnConflict::Enqueue` | The occurrence queues behind the active run |
+| `skip` (default) | Concurrency key `cron:{id}`, `OnConflict::Reject` | An occurrence that arrives while a run is active is skipped |
+| `queue` | Concurrency key `cron:{id}`, `OnConflict::Enqueue` | The occurrence queues behind the active run |
 | `allow` | No concurrency key | Runs alongside the active run |
 
 `missedFirePolicy` (`skip`, `fireOnce`, or `{"catchUp": n}`) decides which occurrences fire
 after the scheduler fell behind.
+
+### Owners
+
+With a `RequestContextExtractor` on the server, a job belongs to the authenticated caller who
+created it: its runs act for that caller, marked authenticated, and only that caller lists,
+reads, pauses, resumes, or deletes it — another owner's job answers `404`. The schedule id is
+the name behind the owner (`{len}:{owner}:{name}`), so two owners may each have a job named
+`nightly`; responses report the name the owner gave. Without an extractor the schedule id is the
+job's name, every client sees every job, and its runs act for the user `cron`.
 
 ### Pause and Resume
 

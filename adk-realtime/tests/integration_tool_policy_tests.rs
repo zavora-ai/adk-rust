@@ -402,3 +402,84 @@ async fn the_run_policy_governs_integrated_tool_calls() {
     let message = result["error"].as_str().unwrap_or_default();
     assert!(message.contains("denied by policy"), "{message}");
 }
+
+/// Whether each call was authenticated, and the scopes it reported.
+type SeenIdentities = Arc<std::sync::Mutex<Vec<(bool, Vec<String>)>>>;
+
+/// Records what each call's context says about its user.
+struct IdentityProbe {
+    seen: SeenIdentities,
+}
+
+#[async_trait]
+impl Tool for IdentityProbe {
+    fn name(&self) -> &str {
+        "probe"
+    }
+    fn description(&self) -> &str {
+        "records the caller's identity"
+    }
+    async fn execute(
+        &self,
+        ctx: Arc<dyn ToolContext>,
+        _args: serde_json::Value,
+    ) -> adk_core::Result<serde_json::Value> {
+        self.seen.lock().unwrap().push((ctx.is_authenticated(), ctx.user_scopes()));
+        Ok(serde_json::json!({ "ok": true }))
+    }
+}
+
+fn probe_call() -> adk_realtime::events::ToolCall {
+    adk_realtime::events::ToolCall {
+        call_id: "call-probe".to_string(),
+        name: "probe".to_string(),
+        arguments: serde_json::json!({}),
+    }
+}
+
+fn operator() -> adk_core::RequestContext {
+    adk_core::RequestContext {
+        user_id: "user-1".to_string(),
+        scopes: vec!["operator".to_string()],
+        metadata: Default::default(),
+    }
+}
+
+#[tokio::test]
+async fn a_voice_session_reports_the_identity_the_server_authenticated() {
+    // spec 3.1 §7.17: the integration's tool context forwards the run's identity flag.
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let tool: Arc<dyn Tool> = Arc::new(IdentityProbe { seen: Arc::clone(&seen) });
+    let authenticated = IntegratedRealtimeRunnerBuilder::new()
+        .model(Arc::new(MockModel))
+        .identity("voice", "user-1", "session-1")
+        .request_context(operator())
+        .adk_tool(Arc::clone(&tool))
+        .build()
+        .expect("builder should succeed");
+    let anonymous = IntegratedRealtimeRunnerBuilder::new()
+        .model(Arc::new(MockModel))
+        .identity("voice", "user-1", "session-1")
+        .adk_tool(Arc::clone(&tool))
+        .build()
+        .expect("builder should succeed");
+
+    authenticated.execute_tool_with_plugins_for_test(&tool, &probe_call()).await.unwrap();
+    anonymous.execute_tool_with_plugins_for_test(&tool, &probe_call()).await.unwrap();
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![(true, vec!["operator".to_string()]), (false, Vec::new())]
+    );
+}
+
+#[test]
+fn a_request_context_for_another_user_is_refused() {
+    let result = IntegratedRealtimeRunnerBuilder::new()
+        .model(Arc::new(MockModel))
+        .identity("voice", "user-2", "session-1")
+        .request_context(operator())
+        .build();
+    let error = result.err().expect("a mismatched identity must not build");
+    assert!(error.to_string().contains("authenticates user 'user-1'"), "{error}");
+}

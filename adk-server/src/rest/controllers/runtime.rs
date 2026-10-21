@@ -12,7 +12,7 @@ use adk_core::{RequestContext, SessionId, UserId};
 use axum::{
     Json,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, request::Parts},
     response::sse::{Event, KeepAlive, Sse},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -985,32 +985,38 @@ fn translate_ag_ui_event(
     translated
 }
 
+/// Minimal request [`Parts`] carrying only `headers`, for a handler called without the
+/// request it serves. Such parts have no extensions, so an extractor that reads the peer
+/// address (`ConnectInfo`) cannot see it.
+fn parts_from_headers(headers: &HeaderMap) -> Result<Parts, RuntimeError> {
+    let mut builder = axum::http::Request::builder();
+    for (name, value) in headers {
+        builder = builder.header(name, value);
+    }
+    Ok(builder
+        .body(())
+        .map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to build request parts: {e}"))
+        })?
+        .into_parts()
+        .0)
+}
+
 /// Extract [`RequestContext`] from the configured extractor, if present.
 ///
-/// Constructs minimal HTTP request [`Parts`] from the provided headers so the
-/// extractor can inspect `Authorization` and other headers. Returns `None`
-/// when no extractor is configured (fall-through to existing behavior).
+/// The extractor sees the request's own parts — its headers and its extensions, such as the
+/// peer address a server records with `ConnectInfo` — as the auth middleware does on every
+/// other route. Returns `None` when no extractor is configured (fall-through to existing
+/// behavior).
 async fn extract_request_context(
     extractor: Option<&dyn RequestContextExtractor>,
-    headers: &HeaderMap,
+    parts: &Parts,
 ) -> Result<Option<RequestContext>, RuntimeError> {
     let Some(extractor) = extractor else {
         return Ok(None);
     };
 
-    // Build minimal Parts from the headers
-    let mut builder = axum::http::Request::builder();
-    for (name, value) in headers {
-        builder = builder.header(name, value);
-    }
-    let (parts, _) = builder
-        .body(())
-        .map_err(|e| {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to build request parts: {e}"))
-        })?
-        .into_parts();
-
-    match extractor.extract(&parts).await {
+    match extractor.extract(parts).await {
         Ok(ctx) => Ok(Some(ctx)),
         Err(RequestContextError::MissingAuth) => {
             Err((StatusCode::UNAUTHORIZED, "missing authorization".to_string()))
@@ -1297,10 +1303,23 @@ where
 
 pub async fn run_sse(
     State(controller): State<RuntimeController>,
-    Path((app_name, user_id, session_id)): Path<(String, String, String)>,
+    path: Path<(String, String, String)>,
     headers: HeaderMap,
     Json(req): Json<RunRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, RuntimeError> {
+    run_sse_for_request(State(controller), path, parts_from_headers(&headers)?, Json(req)).await
+}
+
+/// `POST /run/{app_name}/{user_id}/{session_id}` as the server routes it: the request
+/// context extractor sees the whole request, including its peer address, rather than only
+/// its headers.
+pub(crate) async fn run_sse_for_request(
+    State(controller): State<RuntimeController>,
+    Path((app_name, user_id, session_id)): Path<(String, String, String)>,
+    parts: Parts,
+    Json(req): Json<RunRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, RuntimeError> {
+    let headers = parts.headers.clone();
     let ui_profile = resolve_ui_profile(&headers, infer_run_request_protocol(&req))?;
     let transport = resolve_ui_transport(&headers, req.ui_transport.as_deref())?;
     validate_transport_support(ui_profile, transport)?;
@@ -1317,11 +1336,9 @@ pub async fn run_sse(
         // Extract request context from auth middleware bridge if configured.
         // This returns Err (401/500) when the extractor is present but auth
         // fails, ensuring authorization checks are never bypassed.
-        let request_context = extract_request_context(
-            controller.config.request_context_extractor.as_deref(),
-            &headers,
-        )
-        .await?;
+        let request_context =
+            extract_request_context(controller.config.request_context_extractor.as_deref(), &parts)
+                .await?;
 
         // Explicit authenticated user override: when an auth extractor is
         // configured and succeeds, the authenticated user_id takes precedence
@@ -1413,6 +1430,17 @@ pub async fn run_sse_compat(
     headers: HeaderMap,
     Json(req): Json<RunSseRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, RuntimeError> {
+    run_sse_compat_for_request(State(controller), parts_from_headers(&headers)?, Json(req)).await
+}
+
+/// `POST /run_sse` as the server routes it: the request context extractor sees the whole
+/// request, including its peer address, rather than only its headers.
+pub(crate) async fn run_sse_compat_for_request(
+    State(controller): State<RuntimeController>,
+    parts: Parts,
+    Json(req): Json<RunSseRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, RuntimeError> {
+    let headers = parts.headers.clone();
     let ui_profile = resolve_ui_profile(&headers, infer_sse_request_protocol(&req))?;
     let transport = resolve_ui_transport(&headers, req.ui_transport.as_deref())?;
     validate_transport_support(ui_profile, transport)?;
@@ -1437,7 +1465,7 @@ pub async fn run_sse_compat(
     // This returns Err (401/500) when the extractor is present but auth
     // fails, ensuring authorization checks are never bypassed.
     let request_context =
-        extract_request_context(controller.config.request_context_extractor.as_deref(), &headers)
+        extract_request_context(controller.config.request_context_extractor.as_deref(), &parts)
             .await?;
 
     // Explicit authenticated user override: when an auth extractor is
@@ -1574,6 +1602,16 @@ pub async fn run_collect(
     headers: HeaderMap,
     Json(req): Json<RunSseRequest>,
 ) -> Result<Json<Vec<adk_core::Event>>, RuntimeError> {
+    run_collect_for_request(State(controller), parts_from_headers(&headers)?, Json(req)).await
+}
+
+/// `POST /run` as the server routes it: the request context extractor sees the whole
+/// request, including its peer address, rather than only its headers.
+pub(crate) async fn run_collect_for_request(
+    State(controller): State<RuntimeController>,
+    parts: Parts,
+    Json(req): Json<RunSseRequest>,
+) -> Result<Json<Vec<adk_core::Event>>, RuntimeError> {
     let app_name = req.app_name.clone();
     let user_id = req.user_id.clone();
     let session_id = req.session_id.clone();
@@ -1589,7 +1627,7 @@ pub async fn run_collect(
     // This returns Err (401/500) when the extractor is present but auth
     // fails, ensuring authorization checks are never bypassed.
     let request_context =
-        extract_request_context(controller.config.request_context_extractor.as_deref(), &headers)
+        extract_request_context(controller.config.request_context_extractor.as_deref(), &parts)
             .await?;
 
     // Explicit authenticated user override: when an auth extractor is

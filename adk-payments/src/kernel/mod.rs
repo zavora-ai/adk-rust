@@ -23,8 +23,9 @@ pub use correlator::{
 };
 pub use errors::PaymentsKernelError;
 pub use governed::{
-    GovernedCheckoutService, PAYMENT_APPROVAL_DENIED_CODE, PAYMENT_APPROVAL_REQUIRED_CODE,
-    PAYMENT_POLICY_DENIED_CODE, PaymentApproval, PaymentApprover, PaymentCaller,
+    GovernedCheckoutService, PAYMENT_APPROVAL_DENIED_CODE, PAYMENT_APPROVAL_EDITED_CODE,
+    PAYMENT_APPROVAL_REQUIRED_CODE, PAYMENT_POLICY_DENIED_CODE, PaymentApproval, PaymentApprover,
+    PaymentCaller, PaymentDecision,
 };
 pub use service::{
     DelegatedPaymentService, EvidenceStore, InterventionService, MerchantCheckoutService,

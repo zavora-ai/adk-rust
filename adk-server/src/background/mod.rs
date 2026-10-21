@@ -801,6 +801,10 @@ async fn submit_run(
 
     let mut run = NewRun::new(state.worker.queue.clone(), app_name, user_id, target, request.input)
         .with_max_attempts(request.max_retries.unwrap_or(0).saturating_add(1));
+    // The worker runs it as the identity the server authenticated (spec 3.1 §9.2 I6).
+    if owner.is_some() {
+        run = run.with_authenticated_user();
+    }
     if let Some(session_id) = request.session_id {
         run = run.with_session_id(session_id);
     }
