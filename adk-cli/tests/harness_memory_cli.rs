@@ -81,7 +81,7 @@ fn a_session_is_distilled_and_its_facts_are_managed_from_the_command_line() {
     let known = id_of(&listed, "known · preference");
     let assumed = id_of(&listed, "assumed · procedure");
 
-    let shown = memory(&["show", &known[..10]], home.path(), ws.path());
+    let shown = memory(&["show", &known[..16]], home.path(), ws.path());
     assert!(shown.contains("\"quote\": \"use pnpm, not npm\""), "{shown}");
 
     memory(&["accept", &assumed], home.path(), ws.path());
@@ -173,7 +173,7 @@ fn the_repl_lists_and_forgets_facts() {
     terminal.expect("Long-term facts");
     terminal.expect(&format!("{known} known · preference"));
     terminal.expect("Use pnpm, not npm, to add dependencies");
-    terminal.send(&format!("/memory forget {}\r", &known[..12]));
+    terminal.send(&format!("/memory forget {}\r", &known[..16]));
     terminal.expect("forgotten: Use pnpm, not npm");
     terminal.send("/memory\r");
     terminal.expect("superseded or forgotten, kept as history");
