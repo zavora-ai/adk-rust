@@ -35,6 +35,7 @@ mod hooks;
 mod local;
 mod payments;
 mod sandbox;
+mod surfaces;
 mod team_graph;
 mod web_mcp;
 
@@ -996,7 +997,10 @@ async fn run_scripted(name: &str, subject: Subject) -> Result<Checks> {
                             Some(result) => result,
                             None => match sandbox::run_scripted(other, subject).await {
                                 Some(result) => result,
-                                None => bail!("unknown scenario {other}"),
+                                None => match surfaces::run_scripted(other, subject).await {
+                                    Some(result) => result,
+                                    None => bail!("unknown scenario {other}"),
+                                },
                             },
                         },
                     },
@@ -1039,7 +1043,7 @@ async fn main() -> Result<()> {
                 println!("| — | {provider} | — | skipped: no key |");
                 continue;
             };
-            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).chain(web_mcp::LIVE).chain(hooks::LIVE).chain(payments::LIVE).chain(sandbox::LIVE).copied() {
+            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).chain(web_mcp::LIVE).chain(hooks::LIVE).chain(payments::LIVE).chain(sandbox::LIVE).chain(surfaces::LIVE).copied() {
                 if !selected.is_empty() && !selected.contains(&scenario) {
                     continue;
                 }
@@ -1059,7 +1063,10 @@ async fn main() -> Result<()> {
                                 Some(result) => result,
                                 None => match payments::run_live(other, model.clone()).await {
                                     Some(result) => result,
-                                    None => sandbox::run_live(other, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                                    None => match sandbox::run_live(other, model.clone()).await {
+                                        Some(result) => result,
+                                        None => surfaces::run_live(other, &model_name, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                                    },
                                 },
                             },
                         },
@@ -1084,6 +1091,7 @@ async fn main() -> Result<()> {
             .chain(local::SCRIPTED)
             .chain(payments::SCRIPTED)
             .chain(sandbox::SCRIPTED)
+            .chain(surfaces::SCRIPTED)
         {
             if !selected.is_empty() && !selected.contains(name) {
                 continue;

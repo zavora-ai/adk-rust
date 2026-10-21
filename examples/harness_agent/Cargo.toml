@@ -11,7 +11,7 @@ description = "Scripted and live scenarios for the adk-harness HarnessAgent (spe
 adk-core = { path = "../../adk-core" }
 adk-agent = { path = "../../adk-agent", features = ["coding"] }
 adk-devtools = { path = "../../adk-devtools" }
-adk-harness = { path = "../../adk-harness", default-features = false, features = ["runner", "skills", "sandbox", "memory", "team", "team-acp", "graph", "sqlite", "web", "web-fixture", "mcp", "hooks", "payments", "docker"] }
+adk-harness = { path = "../../adk-harness", default-features = false, features = ["runner", "skills", "sandbox", "memory", "team", "team-acp", "graph", "sqlite", "web", "web-fixture", "mcp", "hooks", "payments", "docker", "managed"] }
 # A test enforcer for the S3 scenario implements the sandbox's `SandboxEnforcer`.
 adk-sandbox = { path = "../../adk-sandbox" }
 adk-tool = { path = "../../adk-tool", features = ["mcp", "mcp-sampling"] }
@@ -22,7 +22,12 @@ adk-auth = { path = "../../adk-auth" }
 rmcp = { version = "3.1", features = ["server", "client", "elicitation"] }
 chrono = "0.4"
 adk-graph = { path = "../../adk-graph", features = ["sqlite"] }
-adk-server = { path = "../../adk-server", features = ["background"] }
+adk-server = { path = "../../adk-server", features = ["background", "approvals", "agent-engine"] }
+# H9: the same harness behind Launcher, ServerBuilder, serve_agent_engine and the managed runtime.
+adk-cli = { path = "../../adk-cli", default-features = false, features = ["harness"] }
+adk-managed = { path = "../../adk-managed", features = ["gemini", "openai", "anthropic"] }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 adk-memory = { path = "../../adk-memory", features = ["embedding-trait"] }
 adk-model = { path = "../../adk-model", features = ["gemini", "openai", "anthropic", "ollama"] }
 adk-runner = { path = "../../adk-runner" }
