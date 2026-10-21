@@ -13,6 +13,8 @@
 mod common;
 
 use std::collections::HashSet;
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -35,6 +37,7 @@ use adk_sandbox::workspace::{
 use adk_session::{InMemorySessionService, SessionService};
 use async_trait::async_trait;
 use common::{APP, Outcome, fixture_in, outcome, response_of, responses, session_id};
+use futures::FutureExt;
 use serde_json::{Value, json};
 
 // ----- A container runtime that runs on the host -----
@@ -926,6 +929,16 @@ fn inherit_hooks_are_refused_under_the_container_shell() {
 
 const IMAGE: &str = "alpine:3.20";
 
+/// Runs `body`, then closes the harness even when `body` panicked, so a failing test never
+/// leaves its session container on the daemon; the panic is raised again afterwards.
+async fn closing(harness: &Harness, body: impl Future<Output = ()>) {
+    let outcome = AssertUnwindSafe(body).catch_unwind().await;
+    harness.close().await;
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 /// The host workspace, the container and the host file tools share one view (S4), the
 /// protected paths are read-only inside, the network is off, and the container runs as
 /// the host user.
@@ -956,50 +969,55 @@ async fn the_container_shares_the_workspace_with_the_host_file_tools() {
         |b| b.shell(ShellIsolation::Container(config)).mode(HarnessMode::Auto),
     )
     .await;
-    assert_eq!(
-        f.harness.agent().info().isolation,
-        IsolationStatus::Container { image: IMAGE.into() }
-    );
-    let events = f.send("go").await;
-    let results: Vec<Value> =
-        responses(&events).into_iter().filter(|(name, _)| name == "bash").map(|(_, r)| r).collect();
-    assert_eq!(results.len(), 5, "{results:#?}");
+    closing(&f.harness, async {
+        assert_eq!(
+            f.harness.agent().info().isolation,
+            IsolationStatus::Container { image: IMAGE.into() }
+        );
+        let events = f.send("go").await;
+        let results: Vec<Value> = responses(&events)
+            .into_iter()
+            .filter(|(name, _)| name == "bash")
+            .map(|(_, r)| r)
+            .collect();
+        assert_eq!(results.len(), 5, "{results:#?}");
 
-    assert_eq!(results[0]["exit_code"], 0, "{}", results[0]);
-    assert_eq!(results[0]["stdout"], format!("written on the host\n{uid}\n/workspace\n"));
-    assert_eq!(results[1]["exit_code"], 0, "{}", results[1]);
-    assert_eq!(
-        std::fs::read_to_string(root.join("from-container.txt")).unwrap(),
-        "written in the container\n",
-        "the host sees the container's write"
-    );
-    let owned = std::fs::metadata(root.join("from-container.txt")).unwrap();
-    assert_eq!(owned.uid(), uid, "the file belongs to the host user");
-    let read = response_of(&events, "read_file");
-    assert!(read.to_string().contains("written in the container"), "{read}");
+        assert_eq!(results[0]["exit_code"], 0, "{}", results[0]);
+        assert_eq!(results[0]["stdout"], format!("written on the host\n{uid}\n/workspace\n"));
+        assert_eq!(results[1]["exit_code"], 0, "{}", results[1]);
+        assert_eq!(
+            std::fs::read_to_string(root.join("from-container.txt")).unwrap(),
+            "written in the container\n",
+            "the host sees the container's write"
+        );
+        let owned = std::fs::metadata(root.join("from-container.txt")).unwrap();
+        assert_eq!(owned.uid(), uid, "the file belongs to the host user");
+        let read = response_of(&events, "read_file");
+        assert!(read.to_string().contains("written in the container"), "{read}");
 
-    for (result, path) in [(&results[2], ".git/config"), (&results[3], ".git/hooks/pre-commit")] {
-        assert_ne!(result["exit_code"], 0, "{result}");
-        assert_eq!(result["sandbox"]["enforcer"], "container");
-        assert_eq!(result["sandbox"]["denialSuspected"], true, "{result}");
-        assert!(result["stderr"].as_str().unwrap().contains("Read-only file system"), "{result}");
-        assert!(result["sandbox"]["hint"].as_str().unwrap().contains("protected paths"));
-        let _ = path;
-    }
-    assert_eq!(std::fs::read_to_string(root.join(".git/config")).unwrap(), "config\n");
-    assert!(
-        !root.join(".git/hooks/pre-commit").exists(),
-        "a git hook was planted from the container"
-    );
-    assert_ne!(results[4]["exit_code"], 0, "the network was reachable: {}", results[4]);
+        for result in [&results[2], &results[3]] {
+            assert_ne!(result["exit_code"], 0, "{result}");
+            assert_eq!(result["sandbox"]["enforcer"], "container");
+            assert_eq!(result["sandbox"]["denialSuspected"], true, "{result}");
+            assert!(
+                result["stderr"].as_str().unwrap().contains("Read-only file system"),
+                "{result}"
+            );
+            assert!(result["sandbox"]["hint"].as_str().unwrap().contains("protected paths"));
+        }
+        assert_eq!(std::fs::read_to_string(root.join(".git/config")).unwrap(), "config\n");
+        assert!(
+            !root.join(".git/hooks/pre-commit").exists(),
+            "a git hook was planted from the container"
+        );
+        assert_ne!(results[4]["exit_code"], 0, "the network was reachable: {}", results[4]);
 
-    let begin = f.records("harness.bash.begin");
-    assert!(
-        begin
-            .iter()
-            .all(|record| record.ext["enforcer"] == "container" && record.ext["network"] == false)
-    );
-    f.harness.close().await;
+        let begin = f.records("harness.bash.begin");
+        assert!(begin.iter().all(|record| {
+            record.ext["enforcer"] == "container" && record.ext["network"] == false
+        }));
+    })
+    .await;
 }
 
 /// A process a command leaves running in the session's container is ended when the command
@@ -1020,22 +1038,29 @@ async fn no_process_a_container_command_starts_outlives_it() {
         |b| b.shell(ShellIsolation::Container(config)).mode(HarnessMode::Auto),
     )
     .await;
-    let events = f.send("go").await;
-    let results: Vec<Value> =
-        responses(&events).into_iter().filter(|(name, _)| name == "bash").map(|(_, r)| r).collect();
-    assert_eq!(results.len(), 2, "{results:#?}");
-    assert_eq!(results[0]["stdout"], "started\n", "{}", results[0]);
-    assert_eq!(
-        results[1]["stdout"].as_str().unwrap().trim(),
-        "0",
-        "a background process survived: {}",
-        results[1]
-    );
-    f.harness.close().await;
+    closing(&f.harness, async {
+        let events = f.send("go").await;
+        let results: Vec<Value> = responses(&events)
+            .into_iter()
+            .filter(|(name, _)| name == "bash")
+            .map(|(_, r)| r)
+            .collect();
+        assert_eq!(results.len(), 2, "{results:#?}");
+        assert_eq!(results[0]["stdout"], "started\n", "{}", results[0]);
+        assert_eq!(
+            results[1]["stdout"].as_str().unwrap().trim(),
+            "0",
+            "a background process survived: {}",
+            results[1]
+        );
+    })
+    .await;
 }
 
 /// A client given to the harness is used as it is: one container per session, kept across
-/// runs, stopped by `Harness::close`.
+/// runs, stopped by `Harness::close`. It runs its container as the workspace's owner, as the
+/// harness's own client does: root without capabilities cannot write a host directory only
+/// that owner may write.
 struct Counting {
     inner: DockerClient,
     provisioned: AtomicUsize,
@@ -1066,12 +1091,16 @@ impl SandboxClient for Counting {
 #[tokio::test]
 #[ignore = "needs a Docker daemon and the alpine:3.20 image"]
 async fn a_docker_container_is_kept_across_runs_and_stopped_on_close() {
+    use std::os::unix::fs::MetadataExt;
+
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
+    let owner = std::fs::metadata(&root).unwrap();
     let docker = DockerClient::with_image(IMAGE)
         .await
         .expect("a Docker daemon is running")
-        .with_bind_mount(&root, "/workspace", false);
+        .with_bind_mount(&root, "/workspace", false)
+        .with_user(format!("{}:{}", owner.uid(), owner.gid()));
     let client = Arc::new(Counting {
         inner: docker,
         provisioned: AtomicUsize::new(0),
@@ -1093,11 +1122,23 @@ async fn a_docker_container_is_kept_across_runs_and_stopped_on_close() {
         |b| b.shell(ShellIsolation::Container(config)).mode(HarnessMode::Auto),
     )
     .await;
-    f.send("one").await;
-    f.send("two").await;
-    assert!(root.join("again.txt").exists());
-    assert_eq!(client.provisioned.load(Ordering::SeqCst), 1, "one container across two runs");
-    assert_eq!(client.stopped.load(Ordering::SeqCst), 0);
-    f.harness.close().await;
+    closing(&f.harness, async {
+        let one = f.send("one").await;
+        let two = f.send("two").await;
+        let results: Vec<Value> = responses(&one)
+            .into_iter()
+            .chain(responses(&two))
+            .filter(|(name, _)| name == "bash")
+            .map(|(_, r)| r)
+            .collect();
+        assert_eq!(results.len(), 2, "{results:#?}");
+        for result in &results {
+            assert_eq!(result["exit_code"], 0, "{result}");
+        }
+        assert_eq!(std::fs::read_to_string(root.join("again.txt")).unwrap(), "again\n");
+        assert_eq!(client.provisioned.load(Ordering::SeqCst), 1, "one container across two runs");
+        assert_eq!(client.stopped.load(Ordering::SeqCst), 0);
+    })
+    .await;
     assert_eq!(client.stopped.load(Ordering::SeqCst), 1, "close stopped the container");
 }

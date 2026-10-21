@@ -54,8 +54,10 @@ const DEFAULT_DOCKER_HOST: &str = "unix:///var/run/docker.sock";
 /// Without a `client`, the harness builds a `DockerClient` for each session's container
 /// with the host workspace mounted read-write at `/workspace`, every protected path that
 /// exists mounted read-only over it, no network, and the current user's `uid:gid`. A
-/// `client` of your own is used as it is: it must mount the workspace at its root itself,
-/// and its containers are still checked for read-only protected paths before a command runs.
+/// `client` of your own is used as it is: it must mount the workspace at its root itself
+/// and run its containers as a user that may write it (`DockerClient::with_user`; root
+/// without capabilities cannot write a directory only the host user may write), and its
+/// containers are still checked for read-only protected paths before a command runs.
 ///
 /// # Example
 ///

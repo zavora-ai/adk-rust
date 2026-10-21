@@ -136,7 +136,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `user` | `None` | The user commands run as; `None` is the current `uid:gid`, so files the container writes into the workspace belong to you |
 | `memory_limit_bytes`, `cpu_limit` | `None` | Container resource limits |
 | `idle_ttl` | 15 minutes | How long a session's container stays up after its last command |
-| `client` | `None` | A `SandboxClient` of your own; it must mount the workspace at its root itself |
+| `client` | `None` | A `SandboxClient` of your own; it must mount the workspace at its root itself and run as a user that may write it (`DockerClient::with_user`) |
 
 | Lifecycle | Behaviour |
 |---|---|

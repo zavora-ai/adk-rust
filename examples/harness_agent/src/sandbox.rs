@@ -232,8 +232,16 @@ async fn container_shell_shares_workspace(subject: Subject) -> Result<Checks> {
         true,
     )
     .await?;
-    env.session("alice", "s1").await?;
-    let events = env.send("alice", "s1", "share a file").await?;
+    let sent = async {
+        env.session("alice", "s1").await?;
+        env.send("alice", "s1", "share a file").await
+    }
+    .await;
+    // The session's container is stopped whether or not the run went through.
+    if let Some(harness) = &env.harness {
+        harness.close().await;
+    }
+    let events = sent?;
     let bash = bash_results(&events);
     let read = responses(&events).into_iter().find(|(name, _)| name == "read_file").map(|(_, response)| response);
     let mut checks = Checks::default();
@@ -247,9 +255,6 @@ async fn container_shell_shares_workspace(subject: Subject) -> Result<Checks> {
         "read_file on the host read the container's file",
         read.is_some_and(|response| response.to_string().contains("written in the container")),
     );
-    if let Some(harness) = &env.harness {
-        harness.close().await;
-    }
     Ok(checks)
 }
 
