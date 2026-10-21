@@ -287,6 +287,7 @@ The `workspace` feature adds a `provision → session → exec → snapshot → 
 | Environment | Cleared except `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR`, `TERM` | Image environment |
 | Timeout | Kills the command's process group | Kills the command's process tree inside the container |
 | Host directories | The host filesystem | None by default; `with_bind_mount(host, container, read_only)` mounts one into every container |
+| User | Host user | The image's default (usually `root`, which without capabilities cannot write a host directory only its owner may write); `with_user("1000:1000")` runs commands as that user, so a bind-mounted workspace is writable and what the container writes belongs to the host user |
 
 `DockerClient::with_bind_mount` gives commands in the container and file tools on the host
 one view of a workspace:

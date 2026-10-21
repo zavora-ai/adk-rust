@@ -15,6 +15,7 @@
 //! | Process count | [`DEFAULT_PIDS_LIMIT`] | [`DockerClient::with_pids_limit`] |
 //! | Memory, CPU | Unlimited | [`DockerClient::with_resource_limits`] |
 //! | Host directories | None mounted | [`DockerClient::with_bind_mount`] |
+//! | User | The image's default (usually `root`) | [`DockerClient::with_user`] |
 //!
 //! `GitRepo` manifest entries clone from inside the container, so they need a network mode
 //! other than `none`.
@@ -106,6 +107,9 @@ pub struct DockerClient {
     /// Maximum number of processes per container; `None` removes the limit.
     /// Default: [`DEFAULT_PIDS_LIMIT`].
     pub pids_limit: Option<i64>,
+    /// The user commands run as inside new containers (`uid`, `uid:gid`, or a name the
+    /// image knows); `None` keeps the image's default.
+    pub user: Option<String>,
     /// Host paths mounted into every new container, in the order they were added.
     bind_mounts: Vec<BindMount>,
     /// Bollard Docker client for API communication.
@@ -142,6 +146,7 @@ impl DockerClient {
             cpu_limit: None,
             network_mode: DEFAULT_NETWORK_MODE.to_string(),
             pids_limit: Some(DEFAULT_PIDS_LIMIT),
+            user: None,
             bind_mounts: Vec::new(),
             client: docker,
             sessions: RwLock::new(HashMap::new()),
@@ -199,6 +204,31 @@ impl DockerClient {
     /// `None` removes the limit. The default is [`DEFAULT_PIDS_LIMIT`].
     pub fn with_pids_limit(mut self, pids_limit: Option<i64>) -> Self {
         self.pids_limit = pids_limit;
+        self
+    }
+
+    /// Runs commands in every new container as `user` (`uid`, `uid:gid`, or a name the
+    /// image knows), returning the modified client.
+    ///
+    /// A workspace mounted with [`with_bind_mount`](Self::with_bind_mount) keeps the host's
+    /// ownership rules. The container's capabilities are dropped, so its root user cannot
+    /// write a directory that only the host user may write, and files a root container does
+    /// create belong to root on the host, where that user can neither change nor remove them.
+    /// Running the container as the host user's `uid:gid` keeps both sides of the mount
+    /// writable by the same person (spec 3.1 §10 S4).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_sandbox::workspace::DockerClient;
+    ///
+    /// # async fn run() -> Result<(), adk_sandbox::SandboxError> {
+    /// let client = DockerClient::new().await?.with_user("1000:1000");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_user(mut self, user: impl Into<String>) -> Self {
+        self.user = Some(user.into());
         self
     }
 
@@ -337,6 +367,19 @@ fn host_config(
     })
 }
 
+/// The configuration of a sandbox container from `image`: kept alive by `sleep infinity`,
+/// started in the workspace root, running as `user` when one is set.
+fn container_config(image: &str, user: Option<&str>, host_config: HostConfig) -> Config<String> {
+    Config {
+        image: Some(image.to_string()),
+        cmd: Some(vec!["sleep".to_string(), "infinity".to_string()]),
+        working_dir: Some(CONTAINER_WORKSPACE_ROOT.to_string()),
+        user: user.map(str::to_string),
+        host_config: Some(host_config),
+        ..Default::default()
+    }
+}
+
 /// Command that writes its stdin to `path` with the path passed as `$1`, so no character
 /// in it is interpreted by the shell.
 fn write_file_command(path: &str) -> Vec<String> {
@@ -452,14 +495,7 @@ impl SandboxClient for DockerClient {
         // Create container from base image with resource limits
         let host_config = self.build_host_config()?;
 
-        let config = Config {
-            image: Some(self.base_image.clone()),
-            // Keep container running with a long-lived process
-            cmd: Some(vec!["sleep".to_string(), "infinity".to_string()]),
-            working_dir: Some(CONTAINER_WORKSPACE_ROOT.to_string()),
-            host_config: Some(host_config),
-            ..Default::default()
-        };
+        let config = container_config(&self.base_image, self.user.as_deref(), host_config);
 
         let container = self
             .client
@@ -674,13 +710,7 @@ impl SandboxClient for DockerClient {
         // Create a new container from the committed image
         let host_config = self.build_host_config()?;
 
-        let config = Config {
-            image: Some(image_ref.to_string()),
-            cmd: Some(vec!["sleep".to_string(), "infinity".to_string()]),
-            working_dir: Some(CONTAINER_WORKSPACE_ROOT.to_string()),
-            host_config: Some(host_config),
-            ..Default::default()
-        };
+        let config = container_config(image_ref, self.user.as_deref(), host_config);
 
         let container = self
             .client
@@ -936,6 +966,7 @@ impl std::fmt::Debug for DockerClient {
             .field("base_image", &self.base_image)
             .field("memory_limit_bytes", &self.memory_limit_bytes)
             .field("cpu_limit", &self.cpu_limit)
+            .field("user", &self.user)
             .field("bind_mounts", &self.bind_mounts)
             .finish_non_exhaustive()
     }
@@ -967,6 +998,21 @@ mod tests {
     fn debug_session_does_not_expose_client() {
         let _: fn(&DockerSession, &mut std::fmt::Formatter<'_>) -> std::fmt::Result =
             <DockerSession as Debug>::fmt;
+    }
+
+    #[test]
+    fn container_config_runs_as_the_configured_user_in_the_workspace() {
+        let host = host_config(None, None, DEFAULT_NETWORK_MODE, None, &[]).unwrap();
+        let as_user = container_config("alpine:3.20", Some("1000:1000"), host.clone());
+        let as_image = container_config("alpine:3.20", None, host);
+
+        assert_eq!(as_user.user.as_deref(), Some("1000:1000"));
+        assert_eq!(as_image.user, None, "without a user the image's default applies");
+        for config in [&as_user, &as_image] {
+            assert_eq!(config.image.as_deref(), Some("alpine:3.20"));
+            assert_eq!(config.working_dir.as_deref(), Some(CONTAINER_WORKSPACE_ROOT));
+            assert_eq!(config.cmd, Some(owned(&["sleep", "infinity"])));
+        }
     }
 
     #[test]

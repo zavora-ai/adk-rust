@@ -10,7 +10,8 @@
 //! entries in.
 //!
 //! Each case skips when the enforcer cannot run on the host (a sandboxed test runner, a
-//! missing `bwrap`, user namespaces disabled).
+//! missing `bwrap`, user namespaces disabled), and fails instead when
+//! `ADK_SANDBOX_REQUIRE_ENFORCER` is set, as the bubblewrap CI job sets it.
 
 #![cfg(any(
     all(feature = "sandbox-macos", target_os = "macos"),

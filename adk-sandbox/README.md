@@ -273,6 +273,7 @@ The `workspace` feature provides the `provision → session → exec → snapsho
 | Output | 1 MiB per stream, read while the command runs | Unbounded |
 | Timeout | Kills the command's process group | Kills the command's process tree inside the container |
 | Host directories | The host filesystem | None by default; `with_bind_mount(host, container, read_only)` mounts one into every container |
+| User | Host user | The image's default (usually `root`, which without capabilities cannot write a host directory only its owner may write); `with_user("1000:1000")` runs commands as that user, so a bind-mounted workspace is writable and what the container writes belongs to the host user |
 
 `DockerClient::with_bind_mount("/home/me/project", "/workspace", false)` gives commands in
 the container and file tools on the host one view of the workspace. A read-only mount
