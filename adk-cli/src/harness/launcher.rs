@@ -108,7 +108,7 @@ pub struct HarnessLauncher {
     trust: bool,
     console: Option<ConsoleIo>,
     thinking_mode: ThinkingDisplayMode,
-    echo: bool,
+    pub(super) echo: bool,
     rebuild: Option<HarnessRebuild>,
     banner_notes: Vec<String>,
     request_context_extractor: Option<Arc<dyn RequestContextExtractor>>,

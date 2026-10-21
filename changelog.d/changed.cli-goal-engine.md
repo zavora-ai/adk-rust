@@ -4,7 +4,7 @@
   terminal parks the run; after `adk-rust approvals approve`, `adk-rust goal --resume`
   continues it at the held call, in the same session and iteration; after Ctrl-C or a crash
   it reclaims the run once its 10-second lease lapses. The `--until` check runs
-  through the harness shell, so the shell's timeout (120 seconds by default) caps it. The
+  through the harness shell for up to `--check-timeout` seconds (600 by default). The
   check summary in the conversation reads "Goal check `CMD` failed (exit N) on iteration I
   of M". `HarnessLauncher` gains `with_run_store`, `run_goal`, `resume_goal` and `goal`, and
   `adk-rust serve` serves the `harness.goal` durable-run target.

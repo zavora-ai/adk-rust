@@ -294,6 +294,13 @@ fn a_held_goal_parks_and_resumes_at_the_held_call_after_approval() {
     let id = line.split_whitespace().next().unwrap().to_string();
     let approved = run(&["approvals", "approve", &id], home.path(), ws.path());
     assert!(approved.status.success(), "{}", text(&approved));
+    // The call belongs to a parked goal, so approving it points to `goal --resume`.
+    assert!(
+        text(&approved)
+            .contains("`adk-rust goal 'create done.txt' --until 'test -f done.txt' --resume`"),
+        "{}",
+        text(&approved)
+    );
 
     let resumed = run(
         &[
@@ -377,6 +384,37 @@ fn a_goal_killed_mid_check_resumes_in_its_session() {
     assert_eq!(resumed.status.code(), Some(0), "{shown}");
     assert!(shown.contains("resuming goal in session"), "{shown}");
     assert!(shown.contains("goal met after 1 iteration(s)"), "{shown}");
+}
+
+/// `--check-timeout` bounds each run of the check (spec 3.1 §7.11): a check that runs out
+/// of time fails the iteration.
+#[test]
+fn the_check_timeout_flag_bounds_the_check() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let output = run(
+        &[
+            "goal",
+            "wait",
+            "--until",
+            "sleep 5",
+            "--check-timeout",
+            "1",
+            "--max-iters",
+            "1",
+            "--yes",
+            "--no-memory",
+            "--dir",
+            &dir_arg(ws.path()),
+            "--model-script",
+            r#"[{"text": "Waiting."}]"#,
+        ],
+        home.path(),
+        ws.path(),
+    );
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{shown}");
+    assert!(shown.contains("budget exhausted after 1 iteration(s)"), "{shown}");
 }
 
 #[test]
