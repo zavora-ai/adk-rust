@@ -173,7 +173,8 @@ On `adk-harness`:
 | `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores |
 | `ambient` | off | Goals started by cron, file-watch and webhook triggers |
 | `team-acp`, `team-a2a` | off | ACP-compatible coding agents and remote A2A agents as members |
-| `skills-registry`, `docker`, `memory-graph` | off | Registry skills, containers, graph memory |
+| `docker` | off | The container shell, `ShellIsolation::Container` (see [Shell and sandbox](shell-and-sandbox.md#the-container-shell)) |
+| `skills-registry`, `memory-graph` | off | Registry skills, graph memory |
 
 ## The harness template
 

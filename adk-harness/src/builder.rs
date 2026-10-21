@@ -128,6 +128,8 @@ pub struct HarnessAgentBuilder {
     confirmation_timeout: Duration,
     shell: ShellConfig,
     shell_enabled: bool,
+    /// `allow_unsandboxed_retry` was set explicitly, so a container shell keeps it.
+    retry_explicit: bool,
     trust_mcp_read_only_hints: bool,
     todos: bool,
     #[cfg(feature = "skills")]
@@ -210,6 +212,7 @@ impl HarnessAgentBuilder {
             confirmation_timeout: Duration::from_secs(300),
             shell: ShellConfig::default(),
             shell_enabled: true,
+            retry_explicit: false,
             trust_mcp_read_only_hints: false,
             todos: true,
             #[cfg(feature = "skills")]
@@ -466,7 +469,17 @@ impl HarnessAgentBuilder {
     }
 
     /// Where `bash` runs (default host, spec 3.1 §7.9).
+    ///
+    /// Unless [`allow_unsandboxed_retry`](Self::allow_unsandboxed_retry) was called, the
+    /// unsandboxed retry is on for the host and the OS sandbox and off for a container.
     pub fn shell(mut self, isolation: ShellIsolation) -> Self {
+        #[cfg(feature = "docker")]
+        let container = matches!(isolation, ShellIsolation::Container(_));
+        #[cfg(not(feature = "docker"))]
+        let container = false;
+        if !self.retry_explicit {
+            self.shell.allow_unsandboxed_retry = !container;
+        }
         self.shell.isolation = isolation;
         self
     }
@@ -539,18 +552,20 @@ impl HarnessAgentBuilder {
     /// Runs sandboxed commands without approval in Ask (spec 3.1 §7.9, §9.2 I26).
     ///
     /// Turns on only under an active OS sandbox whose enforcer keeps protected paths
-    /// read-only (adk-sandbox S3, checked by a conformance probe), with the network denied
-    /// and every root-level protected path present; otherwise `build()` fails with
-    /// `harness.auto_allow_sandboxed_unavailable` naming the reason. No effect on the host
-    /// or a degraded shell.
+    /// read-only (adk-sandbox S3, checked by a conformance probe) or a container shell that
+    /// mounts them read-only, with the network denied and every root-level protected path
+    /// present; otherwise `build()` fails with `harness.auto_allow_sandboxed_unavailable`
+    /// naming the reason. No effect on the host or a degraded shell.
     pub fn auto_allow_sandboxed(mut self) -> Self {
         self.shell.auto_allow_sandboxed = true;
         self
     }
 
-    /// Offers an unsandboxed retry of a failed sandboxed command (default on).
+    /// Offers an unsandboxed retry of a failed sandboxed command (default on for the host
+    /// and the OS sandbox, off for a container).
     pub fn allow_unsandboxed_retry(mut self, yes: bool) -> Self {
         self.shell.allow_unsandboxed_retry = yes;
+        self.retry_explicit = true;
         self
     }
 
@@ -1070,7 +1085,43 @@ impl HarnessAgentBuilder {
             tools.push(Arc::new(WriteFileTool::new(workspace.clone())));
             tools.push(Arc::new(EditFileTool::new(workspace.clone())));
         }
-        if self.shell_enabled && workspace.bash_allowed() {
+        // While sandboxed commands run unapproved, no host file tool overlaps one (I26).
+        let file_gate = shell.auto_allow_sandboxed.then(crate::shell::FileToolGate::default);
+        if let Some(gate) = &file_gate {
+            tools = tools.into_iter().map(|tool| gate.wrap(tool)).collect();
+        }
+        // The container shell (spec 3.1 §7.9 "Container"): its containers close with the
+        // toolset.
+        // Shell credentials reach `bash` through a launcher layer, which the container shell
+        // does not have; refusing beats commands that silently run without them.
+        #[cfg(all(feature = "docker", feature = "auth"))]
+        if shell.container.is_some() && !self.identity.shell_credentials.is_empty() {
+            return Err(AdkError::config(
+                "shell credentials cannot be delivered to the container shell yet; use the host \
+                 shell or the OS sandbox with shell_credential (spec 3.1 §7.14)",
+            ));
+        }
+        #[cfg(feature = "docker")]
+        let container_pool = match &shell.container {
+            Some(config) if self.shell_enabled && workspace.bash_allowed() => {
+                let bash = crate::shell::ContainerBashTool::new(
+                    workspace.clone(),
+                    config.clone(),
+                    ledger.clone(),
+                )
+                .allow_unsandboxed_retry(self.shell.allow_unsandboxed_retry)
+                .with_file_gate(file_gate.clone());
+                let pool = bash.pool();
+                tools.push(Arc::new(bash));
+                Some(pool)
+            }
+            _ => None,
+        };
+        #[cfg(feature = "docker")]
+        let container_shell = container_pool.is_some();
+        #[cfg(not(feature = "docker"))]
+        let container_shell = false;
+        if self.shell_enabled && workspace.bash_allowed() && !container_shell {
             let bash = HarnessBashTool::new(
                 workspace.clone(),
                 status.clone(),
@@ -1078,7 +1129,8 @@ impl HarnessAgentBuilder {
                 ledger.clone(),
             )
             .with_mode_store(mode_store.clone(), self.mode)
-            .allow_unsandboxed_retry(self.shell.allow_unsandboxed_retry);
+            .allow_unsandboxed_retry(self.shell.allow_unsandboxed_retry)
+            .with_file_gate(file_gate.clone());
             #[cfg(feature = "sandbox")]
             let bash = match shell.launcher.clone() {
                 Some(launcher) => bash.with_sandbox(launcher),
@@ -1242,6 +1294,10 @@ impl HarnessAgentBuilder {
         #[cfg_attr(not(feature = "memory"), allow(unused_mut))]
         let mut toolset =
             HarnessToolset::new(tools, mode_store.clone(), self.mode).with_observers(&observers);
+        #[cfg(feature = "docker")]
+        if let Some(pool) = container_pool {
+            toolset = toolset.with_containers(pool);
+        }
         #[cfg(feature = "memory")]
         if let Some(facts) = facts {
             toolset = toolset.with_facts(facts);
@@ -1509,6 +1565,12 @@ impl HarnessAgentBuilder {
             Some(launcher) => Arc::new(launcher),
             None => check_launcher,
         };
+        // The container shell has no launcher; a check never falls back to the host (I24).
+        #[cfg(feature = "docker")]
+        let check_launcher: Arc<dyn adk_devtools::CommandLauncher> = match shell.container {
+            Some(_) => Arc::new(crate::shell::ContainerCheckRefusal),
+            None => check_launcher,
+        };
         let goals = crate::goal::GoalRuntime {
             store: goal_store.clone(),
             until: Arc::new(crate::goal::UntilCheckAgent::new(
@@ -1678,6 +1740,20 @@ fn build_hook_runner(
     set.validate()?;
     if set.is_empty() {
         return Ok(None);
+    }
+    // A hook runs through the shell's launcher (spec 3.1 §9.2 I54); the container shell has
+    // none, and running `inherit` hooks on the host instead would escape the isolation.
+    if matches!(status, IsolationStatus::Container { .. })
+        && set.hooks.iter().any(|hook| hook.isolation == crate::hooks::HookIsolation::Inherit)
+    {
+        return Err(AdkError::new(
+            adk_core::ErrorComponent::Agent,
+            adk_core::ErrorCategory::InvalidInput,
+            crate::hooks::HOOK_CONFIG_CODE,
+            "hooks with `inherit` isolation cannot run inside the container shell yet; give them \
+             `isolation = \"host\"`, run the harness with the OS sandbox, or disable hooks \
+             (spec 3.1 §9.2 I54)",
+        ));
     }
     #[cfg_attr(not(feature = "sandbox"), allow(unused_mut))]
     let mut runner = crate::hooks::HookRunner::new(set, workspace.clone(), status.clone());

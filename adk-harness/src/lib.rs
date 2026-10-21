@@ -19,7 +19,7 @@
 //! | [`TodoList`], [`WriteTodosTool`], [`UpdateTodoTool`] | §7.6 |
 //! | [`InstructionsConfig`], [`ProjectInstructions`], [`WorkspaceTrustStore`] | §7.7 |
 //! | `SkillsConfig` (feature `skills`) | §7.8 |
-//! | [`ShellIsolation`], [`HarnessBashTool`], [`ShellLedger`] | §7.9 |
+//! | [`ShellIsolation`], [`HarnessBashTool`], [`ShellLedger`]; `ContainerBashTool`, `ContainerConfig` (feature `docker`) | §7.9 |
 //! | `SpendReport`, `LoopGuard`, `harness.*` span attributes (feature `observe`) | §7.13 |
 //! | `RbacMap`, `ShellCredential`, `EphemeralAuditLog` (feature `auth`) | §7.14 |
 //! | `MemoryConfig`, `FileMemory`, `memory_*` tools (feature `memory`) | §7.15 |
@@ -180,6 +180,8 @@ pub use prompt::HARNESS_SYSTEM_PROMPT;
 #[cfg(feature = "sqlite")]
 pub use shell::SqliteShellLedger;
 pub use shell::{AUTO_ALLOW_UNAVAILABLE_CODE, SANDBOX_PROTECTED_PATHS};
+#[cfg(feature = "docker")]
+pub use shell::{ContainerBashTool, ContainerConfig, DEFAULT_CONTAINER_IMAGE};
 pub use shell::{
     InMemoryShellLedger, IsolationStatus, SANDBOX_UNAVAILABLE_CODE, ShellConfig, ShellIsolation,
     ShellLedger, ShellLedgerEntry,

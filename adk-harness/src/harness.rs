@@ -1009,7 +1009,8 @@ impl Harness {
         &self.runner
     }
 
-    /// Closes the runner and the agent's toolsets.
+    /// Closes the runner and the agent's toolsets, stopping the container shell's session
+    /// containers (spec 3.1 §7.9).
     ///
     /// Sessions with turns not yet distilled are distilled first (spec 3.1 §7.15.2); a
     /// distillation that fails is logged at `warn`. [`close_with_report`](Self::close_with_report)
@@ -1043,6 +1044,9 @@ impl Harness {
                 .collect();
         }
         self.runner.close().await;
+        // A compiled team root does not forward `close` to its coordinator, so the harness
+        // toolset is closed here as well; closing it twice is harmless.
+        adk_core::Toolset::close(self.agent.runtime().toolset().as_ref()).await;
         report
     }
 

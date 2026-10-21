@@ -20,7 +20,7 @@ agent tool — and the harness refuses to run without it.
 | Standing approvals | "Always allow `cargo test`" as a `StandingRule` bound to the subject and to the tool's declaration digest; `ShellPrefix` matches plain words only; a redeclared tool records `harness.rule.stale` and asks again |
 | Prompts | `PromptingConfirmationHandler` serializes prompts, caps them per turn of each session, escapes control characters, refuses a truncated call approved unexpanded, and returns edited arguments for the policy to check again. It re-checks a held call against the run's whole policy, so an operator policy's approval always reaches the person and a standing rule answers only the harness's own |
 | Durability | An action ledger on every run (in memory by default, `HarnessAgentBuilder::action_ledger` for a durable one, or the run's own): `bash`, `write_file` and `edit_file` are recorded before they execute and a re-issued or resumed call is answered from its record, never run twice. `Harness::send` and `Harness::resume` first settle a held call whose process stopped before saving its result: answered from the ledger, or held again |
-| Shell | `bash` on the host behind approval, or opt-in under the OS sandbox (Seatbelt, bubblewrap) through `SandboxLauncher`: workspace read-write with protected paths read-only (read-only in Plan), scratch `HOME`, no network, the enforcer probed at build and per call (`Degraded` or `harness.sandbox_unavailable`, never a host fallback); a failure hint and a once-only, non-waivable unsandboxed retry; `auto_allow_sandboxed` gated on the S3 conformance probe and the protected paths; a 250 ms kill-switch poll; `harness.bash.*` audit records |
+| Shell | `bash` on the host behind approval, or opt-in under the OS sandbox (Seatbelt, bubblewrap) through `SandboxLauncher`: workspace read-write with protected paths read-only (read-only in Plan), scratch `HOME`, no network, the enforcer probed at build and per call (`Degraded` or `harness.sandbox_unavailable`, never a host fallback); a failure hint and a once-only, non-waivable unsandboxed retry; `auto_allow_sandboxed` gated on the S3 conformance probe and the protected paths, with no host file tool running beside an unapproved command; a 250 ms kill-switch poll; `harness.bash.*` audit records. With `docker`, a container per session through `ContainerBashTool`: the workspace bind-mounted at `/workspace` with protected paths read-only, kept across runs, stopped on idle TTL or `Harness::close` |
 | Todos | `write_todos` / `update_todo` in session state, one list per session |
 | Instructions | `AGENTS.md` from the git root down to the workspace, verbatim, hashed, delimited as untrusted, after a workspace trust decision bound to the files' content (an edited file asks again and records `harness.instructions.changed`); nested files listed, never inlined |
 | Skills | Progressive disclosure (`list_skills`, `load_skill`, `load_skill_resource`) without convention documents |
@@ -125,7 +125,8 @@ See `docs/official_docs/harness/hooks.md`.
 | `encrypted` | off | The store envelope of spec 3.1 §7.12: `StoreKeyring`, `StoreKeySource` (secret provider, OS keychain, environment), sessions, approvals and the SQLite stores sealed at rest, key rotation |
 | `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores |
 | `ambient` | off | `adk-agent/ambient`: goals started by triggers |
-| `skills-registry`, `team-acp`, `team-a2a`, `docker`, `memory-graph` | off | registry skills, ACP and A2A members, containers, graph memory |
+| `docker` | off | `adk-sandbox/workspace-docker`: the container shell (`ShellIsolation::Container`, `ContainerBashTool`) |
+| `skills-registry`, `team-acp`, `team-a2a`, `memory-graph` | off | registry skills, ACP and A2A members, graph memory |
 | `payments` | off | the payments pack (spec 3.1 §7.16): `adk-payments` tools as class `Payment` under a `PaymentMandate`, `harness.payment` with the journal receipt |
 | `browser`, `computer-use`, `voice`, `managed` | off | the other packs |
 
@@ -136,7 +137,8 @@ Beta (spec 3.1 phases 1 and 3). The payments pack (§7.16) is implemented
 the other packs (§7.17–§7.18) are refused by the builder with `not yet implemented: spec 3.1 §…`. The [team](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/team.md),
 [plans and goals](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/plan-and-goals.md)
 and [durability](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/durability.md)
-guides cover §7.10–§7.12. Container isolation for the shell (`docker`) is not
-implemented yet. [`examples/harness_redteam`](https://github.com/zavora-ai/adk-rust/tree/main/examples/harness_redteam)
+guides cover §7.10–§7.12. Under the container shell (`docker`), hooks with `inherit`
+isolation, goal checks and shell credentials are refused rather than run on the host.
+[`examples/harness_redteam`](https://github.com/zavora-ai/adk-rust/tree/main/examples/harness_redteam)
 runs the shell red-team scenarios; the [shell and sandbox guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/shell-and-sandbox.md)
-covers the sandbox.
+covers the sandbox and the container shell.

@@ -587,6 +587,50 @@ async fn auto_allow_sandboxed_needs_every_protected_path_and_rechecks_per_call()
     assert_eq!(outcome(&bash_responses(&events)[0]), Outcome::Denied);
 }
 
+/// While a sandboxed command runs unapproved, a host file tool in another session waits for
+/// it rather than reading the workspace mid-command (I26).
+#[tokio::test(flavor = "multi_thread")]
+async fn no_host_file_tool_runs_while_an_auto_allowed_command_does() {
+    let Some(sandbox) = platform_sandbox() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    for path in SANDBOX_PROTECTED_PATHS {
+        if [".git", ".adk", ".skills", ".claude", ".cargo"].contains(path) {
+            std::fs::create_dir_all(dir.path().join(path)).unwrap();
+        } else {
+            std::fs::write(dir.path().join(path), "").unwrap();
+        }
+    }
+    std::fs::write(dir.path().join("probe.txt"), "before\n").unwrap();
+    let f = fixture_in(
+        dir,
+        vec![
+            call(json!({ "command": "touch started && sleep 0.8 && echo after > probe.txt" })),
+            ScriptedResponse::function_call("read_file", json!({ "path": "probe.txt" })),
+            done(),
+            done(),
+        ],
+        |b| {
+            b.shell(ShellIsolation::OsSandbox(sandbox))
+                .auto_allow_sandboxed()
+                .prompter(common::ScriptedPrompter::new())
+        },
+    )
+    .await;
+    let other = f.harness.open_session(&f.user, Some(&common::session_id("s2"))).await.unwrap();
+    let started = f.path("started");
+    let command = common::collect(f.harness.send(&f.user, &f.session, "run it").await.unwrap());
+    let read = async {
+        while !started.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        common::collect(f.harness.send(&f.user, &other, "read it").await.unwrap()).await
+    };
+    let (ran, read) = tokio::join!(command, read);
+    assert_eq!(response_of(&ran, "bash")["exit_code"], 0, "{ran:#?}");
+    let response = response_of(&read, "read_file");
+    assert!(response.to_string().contains("after"), "read mid-command: {response}");
+}
+
 // ----- Process lifetime and governance (I20, I22, I23) -----
 
 #[tokio::test(flavor = "multi_thread")]

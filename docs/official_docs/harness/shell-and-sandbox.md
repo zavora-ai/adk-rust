@@ -2,9 +2,9 @@
 
 The `HarnessAgent` (`adk-harness`) runs model-written shell commands through one `bash`
 tool. By default the command runs on the host behind a per-command approval; the OS sandbox
-is opt-in, and a strict deployment can refuse to start without it. This page covers the
-sandboxed shell: what it can reach, how a failed command is retried outside it, and what
-the harness records.
+and the container shell are opt-in, and a strict deployment can refuse to start without
+them. This page covers the sandboxed and container shells: what they can reach, how a failed
+command is retried outside them, and what the harness records.
 
 ## Isolation
 
@@ -13,14 +13,18 @@ the harness records.
 | `Host` (default) | `sh -c` on the host, with the user's permissions and network | `Host` |
 | `OsSandbox(OsSandboxConfig)` | `sh -c` under Seatbelt (macOS) or bubblewrap (Linux) | `OsSandbox { enforcer }` |
 | `OsSandbox(..)` with no working enforcer | the host, as `Host` | `Degraded { requested, reason }` |
+| `Container(ContainerConfig)` (feature `docker`) | `sh -c` in a container per session, the workspace mounted at `/workspace` | `Container { image }` |
+| `Container(..)` with no reachable Docker daemon | the host, as `Host` | `Degraded { requested: "container", reason }` |
 
-The enforcer is probed when the harness is built and again on every call:
+The enforcer — for a container, the Docker daemon — is probed when the harness is built,
+and the sandbox again on every call:
 
 | Situation | Result |
 |---|---|
 | Enforcer unavailable at build, `fail_if_unavailable` set | `build()` fails with `harness.sandbox_unavailable` |
 | Enforcer unavailable at build, no `fail_if_unavailable` | A warning; the shell is `Degraded`: it declares and behaves as the host shell, every command needs approval in Ask, and `auto_allow_sandboxed` has no effect |
 | Enforcer available at build, unavailable at a call | The call is refused with `harness.sandbox_unavailable` and a `harness.sandbox.unavailable` record; it never falls back to the host |
+| A session's container cannot be provisioned or started, or lets a protected path be written | The same refusal, with the reason in the record |
 
 The Windows AppContainer enforcer is not implemented, so on Windows the shell is `Host`, or
 `Degraded` when a sandbox is requested.
@@ -92,14 +96,78 @@ out, since it would expose other projects' files.
 `read_toolchains`, `CARGO_HOME`, `RUSTUP_HOME`, `PYENV_ROOT` and `NVM_DIR` point at the real
 toolchain directories, since `HOME` moved.
 
+## The container shell
+
+With feature `docker`, `ShellIsolation::Container` runs each session's commands in its own
+container. The host workspace is bind-mounted at `/workspace`, so a file `bash` writes there
+is the file `read_file` reads, and every protected path that exists is mounted read-only over
+it.
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_harness::{ContainerConfig, HarnessAgent, HarnessMode, IsolationStatus, ShellIsolation};
+use adk_model::gemini::GeminiModel;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?);
+    let harness = HarnessAgent::builder("harness")
+        .model(model)
+        .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
+        .mode(HarnessMode::Ask)
+        .shell(ShellIsolation::Container(ContainerConfig {
+            image: "rust:1.95-slim".to_string(),
+            ..ContainerConfig::default()
+        }))
+        .fail_if_unavailable()
+        .build()?;
+    assert!(matches!(harness.info().isolation, IsolationStatus::Container { .. }));
+    Ok(())
+}
+```
+
+`ContainerConfig` fields:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `image` | `ubuntu:22.04` (`DEFAULT_CONTAINER_IMAGE`) | The image of every session's container; it must be present on the daemon |
+| `network` | `false` | Docker's `bridge` network; `false` leaves only loopback |
+| `extra_read`, `extra_write` | empty | Extra host paths mounted read-only or read-write, as (host path, container path) |
+| `user` | `None` | The user commands run as; `None` is the current `uid:gid`, so files the container writes into the workspace belong to you |
+| `memory_limit_bytes`, `cpu_limit` | `None` | Container resource limits |
+| `idle_ttl` | 15 minutes | How long a session's container stays up after its last command |
+| `client` | `None` | A `SandboxClient` of your own; it must mount the workspace at its root itself |
+
+| Lifecycle | Behaviour |
+|---|---|
+| First command of a session | `SandboxClient::provision` and `start` create the session's container; a probe then tries to write each protected path inside it and refuses the container if one write succeeds |
+| Later commands, later runs | The same container, one per (app, user, session) |
+| Idle for `idle_ttl` | The container is stopped; the next command provisions a new one |
+| A command times out, or a freeze stops it | The container is stopped, which ends the command and everything it started |
+| `Harness::close` | Every session's container is stopped |
+
+A command runs through `SandboxSession::exec_command` with the workspace's timeout ceiling,
+and its output is capped at the workspace's `max_output_bytes` after it finishes. Commands in
+one session's container run one at a time; when one exits, every process it left in the
+container is killed. The container drops every capability, sets `no-new-privileges` and
+limits processes to 512.
+
+| Differs from the OS sandbox | Container shell |
+|---|---|
+| Unsandboxed retry | Off unless `allow_unsandboxed_retry(true)`; when on, it is the same once-only, non-waivable host retry |
+| Hooks with `isolation = "inherit"` | Refused at build with `harness.hooks.config`; hooks with `isolation = "host"` run |
+| A goal's `until` check | Refused, never run on the host in the container's place; the goal ends `exhausted` |
+| Shell credentials (`shell_credential`) | Refused at build |
+| Plan mode | Deny: the container has no read-only workspace mount |
+
 ## Modes and approvals
 
-| Mode | Sandboxed `bash` | Unsandboxed retry |
-|---|---|---|
-| ReadOnly | Deny | Deny |
-| Plan | Allow, read-only workspace, under an active enforcer only | Deny |
-| Ask (default) | Approval; Allow with `auto_allow_sandboxed` | Approval, non-waivable |
-| Auto | Allow when sandboxed commands may run unapproved (below); Approval otherwise | Approval, non-waivable |
+| Mode | Sandboxed `bash` | Container `bash` | Unsandboxed retry |
+|---|---|---|---|
+| ReadOnly | Deny | Deny | Deny |
+| Plan | Allow, read-only workspace, under an active enforcer only | Deny | Deny |
+| Ask (default) | Approval; Allow with `auto_allow_sandboxed` | Approval; Allow with `auto_allow_sandboxed` | Approval, non-waivable |
+| Auto | Allow when sandboxed commands may run unapproved (below); Approval otherwise | Allow | Approval, non-waivable |
 
 The `bash` declaration's annotations are `{enforcer, profileDigest, network}`, where
 `profileDigest` covers the enforcer, network, process spawning, toolchain reads and extra
@@ -113,10 +181,16 @@ when every condition holds:
 
 | Condition | Checked |
 |---|---|
-| An OS sandbox is active (not `Host`, not `Degraded`) | At build; refused per call if it goes away |
+| An OS sandbox or a container shell is active (not `Host`, not `Degraded`) | At build; refused per call if it goes away |
 | `network` is `false` | At build |
-| The enforcer keeps a read-only path inside a read-write path read-only: a conformance script tries to write, create, remove, rename and link beneath one | At build |
+| The enforcer keeps a read-only path inside a read-write path read-only: a conformance script tries to write, create, remove, rename and link beneath one. For a container, each protected path is mounted read-only and a probe in the container tries to write it | At build; for a container, when its container starts |
 | Every root-level protected path exists and is not a symbolic link | At build and on every call |
+
+While `auto_allow_sandboxed` is in effect, no host file tool (`read_file`, `glob`, `grep`,
+`write_file`, `edit_file`) runs at the same time as a sandboxed or container command, in any
+session or team member of the harness: the file tools wait for the command to finish, and a
+command waits for running file tools. A command cannot rearrange the workspace under a host
+file tool that is resolving a path in it.
 
 A protected path that does not exist cannot be protected from creation, and a symbolic link
 can be replaced, so `build()` fails with `harness.auto_allow_sandboxed_unavailable` naming
@@ -154,12 +228,12 @@ replay of it is refused without a prompt.
 
 ## Process lifetime and the kill switch
 
-| Guarantee | Host | Seatbelt | bubblewrap |
-|---|---|---|---|
-| Standard input is `/dev/null` | yes | yes | yes |
-| New session, no controlling terminal | `setsid` | `setsid` | `setsid` and `--new-session` |
-| Background processes die when the command exits | process-group kill | process-group kill | the PID namespace ends with `bwrap` |
-| A freeze kills the running command | within 250 ms of the poll | within 250 ms of the poll | within 250 ms of the poll |
+| Guarantee | Host | Seatbelt | bubblewrap | Container |
+|---|---|---|---|---|
+| Standard input is `/dev/null` | yes | yes | yes | no standard input |
+| New session, no controlling terminal | `setsid` | `setsid` | `setsid` and `--new-session` | no terminal is attached |
+| Background processes die when the command exits | process-group kill | process-group kill | the PID namespace ends with `bwrap` | every process but the container's own is killed when the command exits |
+| A freeze kills the running command | within 250 ms of the poll | within 250 ms of the poll | within 250 ms of the poll | the container is stopped within 250 ms of the poll |
 
 A process that starts its own session (`setsid`) leaves the process group and survives the
 group kill on the host and under Seatbelt; bubblewrap's PID namespace still ends it.
@@ -181,6 +255,8 @@ group kill on the host and under Seatbelt; bubblewrap's PID namespace still ends
 | A protected name that does not exist below the root (a new nested `AGENTS.md`, `.envrc` or `.git`) can be created by a sandboxed command | Root-level names gate `auto_allow_sandboxed`; nested files are listed, never inlined, by the instruction loader |
 | On a case-sensitive file system a differently cased protected name (`agents.md`) is a different file | File tools match protected names case-folded; the sandbox protects names that exist |
 | Network access is all or nothing | `network: false` is required for unapproved sandboxed commands |
+| A protected name created inside the container after it started is not mounted read-only | The container's protected mounts are fixed when it starts; root-level names must exist for `auto_allow_sandboxed`, and the next container mounts new ones |
+| A container from a `client` of your own keeps a background process a command leaves, since the harness cannot tell that its sessions are isolated from the host | Containers the harness builds end them after each command; stop them in your client's `exec_command` |
 | A sandboxed command can read the workspace's secret files (`.env`) | `grep` and `glob` skip them and `read_file` refuses them; `bash` needs approval unless `auto_allow_sandboxed` is on |
 
 ## Red-team scenarios

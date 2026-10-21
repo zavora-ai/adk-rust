@@ -21,6 +21,8 @@ pub(crate) use memory::MemoryResolver;
 #[cfg(feature = "memory")]
 pub use memory::{MemoryDeleteTool, MemoryReadTool, MemoryWriteTool};
 pub use plan::{ExitPlanModeTool, PLAN_STATE_KEY, PlanGate, PlanStep};
+#[cfg(feature = "docker")]
+pub(crate) use shell::denial_suspected;
 pub use shell::{GOVERNANCE_POLL_INTERVAL, HarnessBashTool};
 pub use todos::{
     MAX_TODO_CHARS, MAX_TODO_ITEMS, TODOS_STATE_KEY, TodoItem, TodoList, TodoStatus,

@@ -4,6 +4,9 @@
 //! host commands run behind per-command approval, the sandbox is opt-in, and a strict
 //! deployment can fail at startup when it is unavailable.
 
+#[cfg(feature = "docker")]
+mod container;
+mod gate;
 mod ledger;
 #[cfg(feature = "sandbox")]
 mod os_sandbox;
@@ -14,6 +17,11 @@ use std::fmt;
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "docker")]
+pub use container::{ContainerBashTool, ContainerConfig, DEFAULT_CONTAINER_IMAGE};
+#[cfg(feature = "docker")]
+pub(crate) use container::{ContainerCheckRefusal, ContainerPool};
+pub(crate) use gate::FileToolGate;
 #[cfg(feature = "sqlite")]
 pub use ledger::SqliteShellLedger;
 pub use ledger::{InMemoryShellLedger, ShellLedger, ShellLedgerEntry};
@@ -51,6 +59,9 @@ pub enum ShellIsolation {
     /// The OS sandbox (Seatbelt on macOS, bubblewrap on Linux).
     #[cfg(feature = "sandbox")]
     OsSandbox(OsSandboxConfig),
+    /// A container per session, with the workspace mounted at `/workspace`.
+    #[cfg(feature = "docker")]
+    Container(ContainerConfig),
 }
 
 impl ShellIsolation {
@@ -61,6 +72,8 @@ impl ShellIsolation {
             Self::Host => "host",
             #[cfg(feature = "sandbox")]
             Self::OsSandbox(_) => "os_sandbox",
+            #[cfg(feature = "docker")]
+            Self::Container(_) => "container",
         }
     }
 }
@@ -83,9 +96,10 @@ pub struct ShellConfig {
     /// Refuse to build, and refuse each call, when the requested sandbox is unavailable.
     pub fail_if_unavailable: bool,
     /// Run sandboxed commands without approval in Ask (spec 3.1 §9.2 I26). Turns on only
-    /// when the enforcer passes the nested read-only conformance probe (adk-sandbox S3),
-    /// the sandbox denies the network and every root-level protected path exists; the
-    /// build fails otherwise, naming the reason. No effect on the host or a degraded shell.
+    /// when the enforcer passes the nested read-only conformance probe (adk-sandbox S3) —
+    /// for a container, when its protected paths are mounted read-only — the sandbox
+    /// denies the network and every root-level protected path exists; the build fails
+    /// otherwise, naming the reason. No effect on the host or a degraded shell.
     pub auto_allow_sandboxed: bool,
     /// Offer an unsandboxed retry of a failed sandboxed command, behind a one-time
     /// approval. `true` for host and OS sandbox, `false` for containers.
@@ -197,6 +211,9 @@ pub(crate) struct ShellRuntime {
     /// The launcher of an active OS sandbox.
     #[cfg(feature = "sandbox")]
     pub(crate) launcher: Option<SandboxLauncher>,
+    /// The configuration of an active container shell.
+    #[cfg(feature = "docker")]
+    pub(crate) container: Option<ContainerConfig>,
     /// The sandbox denies the network, keeps protected paths read-only (adk-sandbox S3, proven
     /// by the enforcer conformance probe) and every root-level protected path exists, so
     /// sandboxed commands may run without approval where the mode table allows it (I26).
@@ -207,10 +224,11 @@ pub(crate) struct ShellRuntime {
 
 /// Resolves the shell runtime at build time (spec 3.1 §7.2 step 1, §7.9 "Availability").
 ///
-/// Probes the enforcer of a requested OS sandbox. An unavailable one fails the build under
-/// `fail_if_unavailable` and is otherwise `Degraded`: the host shell behind approvals, with
-/// `auto_allow_sandboxed` of no effect. An active one is checked for S3 semantics; an
-/// `auto_allow_sandboxed` it cannot honour fails the build with the reason.
+/// Probes the enforcer of a requested OS sandbox, or the container runtime of a requested
+/// container shell. An unavailable one fails the build under `fail_if_unavailable` and is
+/// otherwise `Degraded`: the host shell behind approvals, with `auto_allow_sandboxed` of no
+/// effect. An active one is checked for S3 semantics; an `auto_allow_sandboxed` it cannot
+/// honour fails the build with the reason.
 pub(crate) fn resolve_isolation(
     config: &ShellConfig,
     root: &std::path::Path,
@@ -222,6 +240,8 @@ pub(crate) fn resolve_isolation(
             status: IsolationStatus::Host,
             #[cfg(feature = "sandbox")]
             launcher: None,
+            #[cfg(feature = "docker")]
+            container: None,
             protects_paths: false,
             auto_allow_sandboxed: false,
         },
@@ -248,6 +268,41 @@ pub(crate) fn resolve_isolation(
                 protects_paths: active && refusal.is_none(),
                 auto_allow_sandboxed: config.auto_allow_sandboxed && active && refusal.is_none(),
                 launcher: active.then_some(launcher),
+                #[cfg(feature = "docker")]
+                container: None,
+                status,
+            }
+        }
+        #[cfg(feature = "docker")]
+        ShellIsolation::Container(container) => {
+            let status = match container::probe(container) {
+                Ok(()) => IsolationStatus::Container { image: container.image.clone() },
+                Err(reason) => {
+                    IsolationStatus::Degraded { requested: "container".to_string(), reason }
+                }
+            };
+            let active = matches!(status, IsolationStatus::Container { .. });
+            let refusal =
+                if active { container::auto_allow_refusal(container, root) } else { None };
+            if config.auto_allow_sandboxed
+                && let Some(reason) = &refusal
+            {
+                return Err(AdkError::new(
+                    ErrorComponent::Agent,
+                    ErrorCategory::InvalidInput,
+                    AUTO_ALLOW_UNAVAILABLE_CODE,
+                    format!(
+                        "auto_allow_sandboxed cannot turn on: {reason} (spec 3.1 §9.2 I26); \
+                         drop auto_allow_sandboxed to approve container commands one by one"
+                    ),
+                ));
+            }
+            ShellRuntime {
+                protects_paths: active && refusal.is_none(),
+                auto_allow_sandboxed: config.auto_allow_sandboxed && active && refusal.is_none(),
+                #[cfg(feature = "sandbox")]
+                launcher: None,
+                container: active.then(|| container.clone()),
                 status,
             }
         }
@@ -265,7 +320,7 @@ pub(crate) fn resolve_isolation(
     if config.auto_allow_sandboxed && !runtime.auto_allow_sandboxed {
         tracing::warn!(
             shell.isolation = %runtime.status,
-            "auto_allow_sandboxed has no effect: no OS sandbox is active"
+            "auto_allow_sandboxed has no effect: no sandbox or container is active"
         );
     }
     Ok(runtime)

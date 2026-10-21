@@ -1213,7 +1213,9 @@ impl HarnessPolicy {
         let row = TableRow::of(&kind, protected);
         let mut switches = self.inner.switches;
         // Unapproved sandboxed commands need every protected path in place at this call (I26).
-        if row == TableRow::ShellOsSandbox && switches.sandbox_protects_paths {
+        if matches!(row, TableRow::ShellOsSandbox | TableRow::ShellContainer)
+            && switches.sandbox_protects_paths
+        {
             switches.sandbox_protects_paths =
                 crate::shell::protected_paths_hold(self.inner.workspace.root());
         }

@@ -44,6 +44,10 @@ pub struct HarnessToolset {
     observers: Vec<Arc<dyn RequestObserver>>,
     #[cfg(feature = "memory")]
     facts: Option<Arc<crate::facts::runtime::FactsRuntime>>,
+    /// The session containers of the container shell, stopped when the toolset closes
+    /// (spec 3.1 §7.9 "Container").
+    #[cfg(feature = "docker")]
+    containers: Option<Arc<crate::shell::ContainerPool>>,
 }
 
 impl HarnessToolset {
@@ -60,7 +64,16 @@ impl HarnessToolset {
             observers: Vec::new(),
             #[cfg(feature = "memory")]
             facts: None,
+            #[cfg(feature = "docker")]
+            containers: None,
         }
+    }
+
+    /// Stops the container shell's session containers when the toolset closes.
+    #[cfg(feature = "docker")]
+    pub(crate) fn with_containers(mut self, containers: Arc<crate::shell::ContainerPool>) -> Self {
+        self.containers = Some(containers);
+        self
     }
 
     /// Recalls long-term facts into each user turn (spec 3.1 §7.15.2).
@@ -184,6 +197,15 @@ impl Toolset for HarnessToolset {
 
     async fn tools(&self, _ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
         Ok(self.tools.clone())
+    }
+
+    /// Stops every session container of the container shell (`Harness::close` reaches it
+    /// through `Runner::close`, spec 3.1 §7.9).
+    async fn close(&self) {
+        #[cfg(feature = "docker")]
+        if let Some(containers) = &self.containers {
+            containers.close().await;
+        }
     }
 
     async fn process_llm_request(

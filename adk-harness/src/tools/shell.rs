@@ -14,7 +14,9 @@ use crate::mode::{HarnessMode, ModeStore};
 use crate::policy::has_harness_layer;
 #[cfg(feature = "sandbox")]
 use crate::shell::SandboxLauncher;
-use crate::shell::{IsolationStatus, ShellLedger, ShellLedgerEntry, sandbox_unavailable};
+use crate::shell::{
+    FileToolGate, IsolationStatus, ShellLedger, ShellLedgerEntry, sandbox_unavailable,
+};
 
 /// How often a running command checks the run's kill switch (spec 3.1 §7.9).
 ///
@@ -40,7 +42,7 @@ const DENIAL_MARKERS: &[&str] = &[
 ];
 
 /// Whether command output suggests the sandbox refused something (spec 3.1 §7.9).
-fn denial_suspected(output: &str) -> bool {
+pub(crate) fn denial_suspected(output: &str) -> bool {
     DENIAL_MARKERS.iter().any(|marker| output.contains(marker))
 }
 
@@ -109,6 +111,8 @@ pub struct HarnessBashTool {
     modes: Option<(Arc<dyn ModeStore>, HarnessMode)>,
     annotations: Value,
     description: String,
+    /// Held exclusive while a sandboxed command runs unapproved (spec 3.1 §9.2 I26).
+    file_gate: Option<FileToolGate>,
 }
 
 impl HarnessBashTool {
@@ -136,9 +140,17 @@ impl HarnessBashTool {
             modes: None,
             annotations: Value::Null,
             description: String::new(),
+            file_gate: None,
         };
         tool.declare();
         tool
+    }
+
+    /// Runs each sandboxed command while no host file tool runs (spec 3.1 §9.2 I26).
+    #[must_use]
+    pub(crate) fn with_file_gate(mut self, gate: Option<FileToolGate>) -> Self {
+        self.file_gate = gate;
+        self
     }
 
     /// Runs sandboxed commands through `launcher` (spec 3.1 §7.9): a read-write copy in Ask
@@ -451,6 +463,11 @@ impl Tool for HarnessBashTool {
             }
         };
         let enforcer = if selected.sandboxed { self.status.enforcer() } else { "host" };
+        // No host file tool runs while a sandboxed command does (I26).
+        let _exclusive = match (&self.file_gate, selected.sandboxed) {
+            (Some(gate), true) => Some(gate.exclusive(config).await?),
+            _ => None,
+        };
 
         if let Some(audit) = &audit {
             let draft = AuditRecordDraft::new(
