@@ -59,7 +59,8 @@ encrypted = ["dep:adk-session", "adk-session/encrypted-session", "dep:keyring"]
 # Packs (spec 3.1 §7.16–§7.18).
 browser = ["dep:adk-browser"]
 computer-use = ["dep:adk-computer-use"]
-payments = ["dep:adk-payments"]
+# The payments pack (spec 3.1 §7.16): `adk-auth` for the scope guard its tools run under.
+payments = ["dep:adk-payments", "dep:adk-auth"]
 voice = ["dep:adk-realtime"]
 managed = ["dep:adk-managed"]
 # Governed web access: web_fetch, web_search, screening (spec 3.1 §7.20).

@@ -22,7 +22,7 @@ use crate::instructions::{
     InMemoryWorkspaceTrustStore, InstructionsConfig, ProjectInstructions, WorkspaceTrustStore,
 };
 use crate::mode::{HarnessMode, InMemoryModeStore, ModeStore};
-#[cfg(feature = "auth")]
+#[cfg(any(feature = "auth", feature = "payments"))]
 use crate::policy::ToolKind;
 use crate::policy::{
     HARNESS_TOOL_NAMES, HarnessPolicy, PolicyInner, PolicySwitches, PromptContexts, ShellView,
@@ -180,6 +180,9 @@ pub struct HarnessAgentBuilder {
     effort: crate::posture::EffortPolicy,
     cache_capable: Option<Arc<dyn adk_core::CacheCapable>>,
     context_caching: bool,
+    #[cfg(feature = "payments")]
+    payments: Option<crate::packs::payments::PaymentsPack>,
+    payments_requested: bool,
 }
 
 impl HarnessAgentBuilder {
@@ -259,6 +262,9 @@ impl HarnessAgentBuilder {
             effort: crate::posture::EffortPolicy::default(),
             cache_capable: None,
             context_caching: true,
+            #[cfg(feature = "payments")]
+            payments: None,
+            payments_requested: false,
         }
     }
 
@@ -752,9 +758,38 @@ impl HarnessAgentBuilder {
         self
     }
 
-    /// Adds a pack (spec 3.1 §7.16–§7.18; not yet implemented).
+    /// Adds a pack (spec 3.1 §7.16–§7.18). `Pack::Payments` needs the services
+    /// `pack_payments` carries, so on its own it fails at `build`;
+    /// the other packs are not yet implemented.
     pub fn pack(mut self, pack: Pack) -> Self {
-        self.unimplemented.push(format!("pack {pack:?} (spec 3.1 §7.16–§7.18)"));
+        match pack {
+            Pack::Payments => self.payments_requested = true,
+            Pack::Browser | Pack::ComputerUse | Pack::Voice | Pack::Managed => {
+                self.unimplemented.push(format!("pack {pack:?} (spec 3.1 §7.17–§7.18)"));
+            }
+        }
+        self
+    }
+
+    /// The payments pack (spec 3.1 §7.16, feature `payments`): the `adk-payments` tools as
+    /// class `Payment` — denied in ReadOnly and Plan, held for a non-waivable approval in
+    /// Ask and Auto, never covered by a standing rule — under the run budget, the mandate's
+    /// guardrails and the spend ledger, with the journal receipt linked from
+    /// `harness.payment`. Every model request names the mandate and the remaining budget.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let harness = HarnessAgent::builder("harness")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .pack_payments(PaymentsPack::new(merchant.clone(), merchant, mandate))
+    ///     .build()?;
+    /// ```
+    #[cfg(feature = "payments")]
+    pub fn pack_payments(mut self, pack: crate::packs::payments::PaymentsPack) -> Self {
+        self.payments = Some(pack);
+        self.payments_requested = true;
         self
     }
 
@@ -892,11 +927,32 @@ impl HarnessAgentBuilder {
         if let Some(first) = unimplemented.first() {
             return Err(AdkError::config(format!("not yet implemented: {first}")));
         }
+        if self.payments_requested {
+            #[cfg(feature = "payments")]
+            let configured = self.payments.is_some();
+            #[cfg(not(feature = "payments"))]
+            let configured = false;
+            if !configured {
+                return Err(AdkError::config(
+                    "the payments pack needs a merchant checkout service, a transaction store \
+                     and a mandate, which only the library API takes: \
+                     HarnessAgentBuilder::pack_payments(PaymentsPack) with adk-harness feature \
+                     `payments` (spec 3.1 §7.16)",
+                ));
+            }
+        }
         let harness_names: HashSet<&str> = HARNESS_TOOL_NAMES.iter().copied().collect();
         for tool in &self.tools {
             if harness_names.contains(tool.name()) {
                 return Err(AdkError::config(format!(
                     "tool '{}' collides with a harness tool of the same name",
+                    tool.name()
+                )));
+            }
+            #[cfg(feature = "payments")]
+            if self.payments.is_some() && crate::packs::payments::is_payment_tool(tool.name()) {
+                return Err(AdkError::config(format!(
+                    "tool '{}' collides with a payments pack tool of the same name",
                     tool.name()
                 )));
             }
@@ -958,12 +1014,30 @@ impl HarnessAgentBuilder {
         let mut registry = ToolClassRegistry::harness_defaults(&self.name).with_web_allowlist(
             self.web.as_ref().map(|web| web.allowed_domains.clone()).unwrap_or_default(),
         );
+        // The payments pack (spec 3.1 §7.16): every payment tool name is class Payment,
+        // declared or not, so a lookalike attached as an extra never classes as External.
+        #[cfg(feature = "payments")]
+        let payments = self.payments.map(|pack| pack.into_runtime(&self.name));
+        #[cfg(feature = "payments")]
+        if payments.is_some() {
+            for name in crate::packs::payments::PAYMENT_TOOL_NAMES {
+                registry.register(*name, ToolKind::Payment);
+            }
+        }
         // 4 (resolved here: member names register as harness classes, spec 3.1 §7.4).
         #[cfg(feature = "team")]
         let team_plan = {
             let mut reserved: HashSet<String> =
                 HARNESS_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect();
             reserved.extend(self.tools.iter().map(|tool| tool.name().to_string()));
+            #[cfg(feature = "payments")]
+            if payments.is_some() {
+                reserved.extend(
+                    crate::packs::payments::PAYMENT_TOOL_NAMES
+                        .iter()
+                        .map(|name| (*name).to_string()),
+                );
+            }
             let plan = crate::team::TeamPlan::prepare(
                 &self.name,
                 self.members,
@@ -1102,6 +1176,12 @@ impl HarnessAgentBuilder {
             tools.push(Arc::new(crate::tools::McpListResourcesTool::new(mcp.clone())));
             tools.push(Arc::new(crate::tools::McpReadResourceTool::new(mcp.clone())));
         }
+        // The payment tools join the harness tools, so RBAC, hooks and the class registry
+        // cover them like any other (spec 3.1 §7.16).
+        #[cfg(feature = "payments")]
+        if let Some(payments) = &payments {
+            tools.extend(payments.tools.iter().cloned());
+        }
         let tool_names: Vec<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
         #[cfg(feature = "auth")]
         let (tools, identity_gate) = {
@@ -1128,6 +1208,13 @@ impl HarnessAgentBuilder {
         };
         #[cfg(feature = "team")]
         let member_tools = tools.clone();
+        // A purchase is the coordinator's call to put to the person; members never pay
+        // (spec 3.1 §7.16, §9.2 I38).
+        #[cfg(all(feature = "team", feature = "payments"))]
+        let member_tools: Vec<Arc<dyn Tool>> = member_tools
+            .into_iter()
+            .filter(|tool| !crate::packs::payments::is_payment_tool(tool.name()))
+            .collect();
         // Members get the same request observers as the coordinator (spec 3.1 §7.10, §7.13).
         #[cfg_attr(not(any(feature = "auth", feature = "observe")), allow(unused_mut))]
         let mut observers: Vec<Arc<dyn crate::toolset::RequestObserver>> = Vec::new();
@@ -1143,6 +1230,11 @@ impl HarnessAgentBuilder {
                 self.mode,
                 run_trails.clone(),
             )));
+        }
+        // Every request names the mandate and the remaining budget (spec 3.1 §7.16).
+        #[cfg(feature = "payments")]
+        if let Some(payments) = &payments {
+            observers.push(payments.reminder.clone());
         }
         #[cfg_attr(not(feature = "memory"), allow(unused_mut))]
         let mut toolset =
@@ -1233,12 +1325,17 @@ impl HarnessAgentBuilder {
         let _ = &prompting;
 
         // 3. The LlmAgent.
+        #[cfg(feature = "payments")]
+        let packs: Vec<String> =
+            payments.as_ref().map(|_| vec!["payments".to_string()]).unwrap_or_default();
+        #[cfg(not(feature = "payments"))]
+        let packs: Vec<String> = Vec::new();
         let environment = Environment {
             root: workspace.root().display().to_string(),
             branch: instruction_state.instructions.git_branch().map(str::to_string),
             isolation: status.to_string(),
             default_mode: self.mode,
-            packs: Vec::new(),
+            packs: packs.clone(),
         };
         let parts = Arc::new(PromptParts {
             base: self.base_prompt,
@@ -1298,6 +1395,20 @@ impl HarnessAgentBuilder {
             .into_iter()
             .map(str::to_string)
             .collect();
+        // A payment is never covered by a `tool_approvals` entry (spec 3.1 §7.16, §9.2 I38).
+        #[cfg(feature = "payments")]
+        let non_waivable: BTreeSet<String> = if payments.is_some() {
+            non_waivable
+                .into_iter()
+                .chain(
+                    crate::packs::payments::PAYMENT_TOOL_NAMES
+                        .iter()
+                        .map(|name| (*name).to_string()),
+                )
+                .collect()
+        } else {
+            non_waivable
+        };
         let mut builder = LlmAgentBuilder::new(self.name.clone())
             .model(model.clone())
             .description(self.description.unwrap_or_else(|| {
@@ -1347,6 +1458,12 @@ impl HarnessAgentBuilder {
                     .map(str::to_string)
                     .collect(),
             ));
+        }
+        // Payments are non-waivable: per-tool confirmation as defence in depth (spec 3.1 §7.2).
+        #[cfg(feature = "payments")]
+        if payments.is_some() {
+            builder = builder
+                .tool_confirmation_policy(ToolConfirmationPolicy::PerTool(non_waivable.clone()));
         }
         let agent = builder.build()?;
         let coordinator: Arc<dyn adk_core::Agent> = Arc::new(agent);
@@ -1430,7 +1547,7 @@ impl HarnessAgentBuilder {
             members: team.as_ref().map(|team| team.member_names()).unwrap_or_default(),
             #[cfg(not(feature = "team"))]
             members: Vec::new(),
-            packs: Vec::new(),
+            packs,
             tools: tool_names,
             effort: self.effort,
             context_caching: self.context_caching,
@@ -1485,6 +1602,8 @@ impl HarnessAgentBuilder {
                 hooks: hook_runner,
                 effort: self.effort,
                 cache_capable: self.context_caching.then_some(self.cache_capable).flatten(),
+                #[cfg(feature = "payments")]
+                payments: payments.map(|payments| payments.reminder),
             },
             info,
         })

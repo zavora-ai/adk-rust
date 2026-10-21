@@ -32,6 +32,7 @@
 //! | [`McpInteractionConfig`], `HarnessElicitationHandler`, `HarnessSamplingHandler`, `mcp_*_resource` (feature `mcp`) | §7.21 |
 //! | [`EffortPolicy`], [`Effort`] | §7.23 |
 //! | `encrypted::{StoreKeySource, StoreKeyring, StoreEnvelope, StoreRotation}` (feature `encrypted`) | §7.12 |
+//! | `packs::payments::{PaymentsPack, PaymentMandate}` (feature `payments`) | §7.16 |
 //!
 //! # Example
 //!
@@ -74,6 +75,7 @@ mod memory;
 mod mode;
 #[cfg(feature = "observe")]
 mod observe;
+pub mod packs;
 #[cfg(feature = "graph")]
 mod plan_graph;
 mod policy;
@@ -161,6 +163,8 @@ pub use observe::{
     LOOP_DETECTED_CODE, SpendEntry, SpendReport, TurnTokens, goal_iteration_span, isolation_label,
     member_span, run_span, tool_kind_label,
 };
+#[cfg(feature = "payments")]
+pub use packs::payments::{PAYMENT_AUDIT_ACTION, PAYMENT_TOOL_NAMES, PaymentMandate, PaymentsPack};
 #[cfg(feature = "graph")]
 pub use plan_graph::{
     ActivePlan, PLAN_GATE_TOOL, PlanGraphShape, PlanGraphs, PlanRunStatus, compile_plan,

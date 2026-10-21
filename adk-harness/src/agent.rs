@@ -139,6 +139,9 @@ pub struct HarnessRuntime {
     pub(crate) effort: crate::posture::EffortPolicy,
     /// The model whose context the runner caches explicitly, when caching is on.
     pub(crate) cache_capable: Option<Arc<dyn adk_core::CacheCapable>>,
+    /// The payments pack's per-request reminder (spec 3.1 §7.16).
+    #[cfg(feature = "payments")]
+    pub(crate) payments: Option<Arc<crate::packs::payments::PaymentsReminder>>,
 }
 
 /// The harness's audit trail, in Block mode: `recorder`, or with feature `auth` an
@@ -765,6 +768,11 @@ impl HarnessAgent {
         #[cfg(feature = "memory")]
         if let Some(facts) = self.runtime.toolset.facts() {
             facts.observe_invocation(ctx.as_ref());
+        }
+        // The payments reminder names the run's remaining budget (spec 3.1 §7.16).
+        #[cfg(feature = "payments")]
+        if let Some(payments) = &self.runtime.payments {
+            payments.observe_invocation(ctx.as_ref());
         }
         if let Some(trail) = config.audit.clone() {
             let state = &self.runtime.instructions;

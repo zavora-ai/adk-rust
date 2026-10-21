@@ -145,7 +145,8 @@ On the umbrella crate:
 |---|---|
 | `harness` | `adk_rust::harness` (everything `adk-harness` exports) and `HarnessAgent`, `HarnessAgentBuilder`, `HarnessMode` in the prelude; turns on `agents`, `tools`, `skills`, `sandbox`, `runner`, `sessions` and `graph`. In `full` |
 | `harness` with `cli` | `adk_rust::harness` also re-exports `HarnessLauncher`, `ConsolePrompter` and `ConsoleIo` from `adk-cli` |
-| `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed` | The packs; the builder refuses them with `not yet implemented` until they land |
+| `harness-payments` | The payments pack: `HarnessAgentBuilder::pack_payments`; see [Payments](payments.md) |
+| `harness-browser`, `harness-computer-use`, `harness-voice`, `harness-managed` | The other packs; the builder refuses them with `not yet implemented` until they land |
 | `harness-encrypted`, `harness-memory-local` | The encrypted store and the local ONNX embedder (spec 3.1 §7.12, §7.15.2) |
 | `mistralrs`, `cli-mistralrs` | `adk-mistralrs` in the umbrella, and `adk-rust --provider mistralrs`; a heavy build, in no tier |
 
