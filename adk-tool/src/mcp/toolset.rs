@@ -97,6 +97,9 @@ where
     /// connection's [`AdkClientHandler`](super::AdkClientHandler).
     #[cfg(feature = "mcp-sampling")]
     sampling_scopes: Arc<crate::sampling::SamplingScopes>,
+    /// The tool calls in flight, which an elicitation is attributed to, shared with
+    /// every connection's handler (spec 3.1 §10 T1).
+    elicitation_scopes: Arc<super::elicitation::ElicitationScopes>,
 }
 
 impl<S> SharedClient<S>
@@ -108,12 +111,16 @@ where
         let sampling_scopes = adk_client_handler(&client)
             .map(super::elicitation::AdkClientHandler::sampling_scopes)
             .unwrap_or_default();
+        let elicitation_scopes = adk_client_handler(&client)
+            .map(super::elicitation::AdkClientHandler::elicitation_scopes)
+            .unwrap_or_default();
         Self {
             current: RwLock::new((Arc::new(client), 0)),
             refresh: Mutex::new(()),
             closed: AtomicBool::new(false),
             #[cfg(feature = "mcp-sampling")]
             sampling_scopes,
+            elicitation_scopes,
         }
     }
 
@@ -188,9 +195,10 @@ where
             .await
             .map_err(|e| AdkError::tool(format!("Failed to refresh MCP connection: {e}")))?;
         restore_subscriptions(&new_client, subscriptions).await?;
-        #[cfg(feature = "mcp-sampling")]
         if let Some(handler) = adk_client_handler(&new_client) {
+            #[cfg(feature = "mcp-sampling")]
             handler.share_sampling_scopes(Arc::clone(&self.sampling_scopes));
+            handler.share_elicitation_scopes(Arc::clone(&self.elicitation_scopes));
         }
 
         let mut current = self.current.write().await;
@@ -733,6 +741,28 @@ where
     #[cfg(feature = "mcp-sampling")]
     pub fn with_sampling_scope(self, scope: adk_core::ModelCallScope) -> Self {
         self.client.sampling_scopes.set_fallback(Some(scope));
+        self
+    }
+
+    /// Attributes elicitations that arrive outside any tool call of this toolset to
+    /// `scope` (spec 3.1 §10 T1).
+    ///
+    /// Elicitations that arrive while one of this toolset's tool calls is in flight belong
+    /// to that call: the connection's handler answers them inside
+    /// [`ElicitationScope::for_call`](super::ElicitationScope::for_call) of the call, which
+    /// a handler reads with [`ElicitationScope::current`](super::ElicitationScope::current).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_tool::mcp::ElicitationScope;
+    ///
+    /// let toolset = McpToolset::with_elicitation_handler(transport, handler)
+    ///     .await?
+    ///     .with_elicitation_scope(ElicitationScope::new("app", "operator", "console"));
+    /// ```
+    pub fn with_elicitation_scope(self, scope: super::elicitation::ElicitationScope) -> Self {
+        self.client.elicitation_scopes.set_fallback(Some(scope));
         self
     }
 
@@ -2357,8 +2387,12 @@ where
             })
             .filter(|scope| !scope.is_unmetered())
             .map(|scope| self.client.sampling_scopes.enter(scope));
-        #[cfg(not(feature = "mcp-sampling"))]
-        let _ = ctx;
+        // Elicitations the server sends while this call is in flight belong to it
+        // (spec 3.1 §10 T1).
+        let _elicitation_scope = self
+            .client
+            .elicitation_scopes
+            .enter(super::elicitation::ElicitationScope::for_call(ctx.as_ref()));
         self.execute_value(args).await
     }
 }

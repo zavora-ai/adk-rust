@@ -197,6 +197,10 @@ enum Remembered {
 
 fn kind_label(kind: &ToolKind) -> String {
     match kind {
+        ToolKind::Web { allowlisted: true } => "web fetch of an allowlisted host".to_string(),
+        ToolKind::Web { allowlisted: false } => {
+            "web fetch of a host outside the allowlist".to_string()
+        }
         ToolKind::Read => "read".into(),
         ToolKind::Todo => "todo".into(),
         ToolKind::PlanExit => "plan exit".into(),

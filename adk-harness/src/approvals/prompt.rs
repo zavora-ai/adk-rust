@@ -207,9 +207,32 @@ impl RenderedCall {
         } else {
             tool.to_string()
         };
+        let web_url = match request.tool_name.as_str() {
+            "web_fetch" => request.args.get("url").and_then(Value::as_str),
+            "web_search" => request.args.get("site").and_then(Value::as_str),
+            _ => None,
+        };
         let mut full_body = if shell {
             let command = request.args.get("command").and_then(Value::as_str).unwrap_or_default();
             format!("$ {}", escape_control(command))
+        } else if let Some(url) = web_url {
+            // Host, path and query shown separately, so a credential or a look-alike host
+            // in the URL is visible as such (spec 3.1 §7.20 "Prompt").
+            let parsed = crate::web::ParsedUrl::parse(url)
+                .or_else(|_| crate::web::ParsedUrl::parse(&format!("https://{url}/")));
+            let mut body = match parsed {
+                Ok(parsed) => format!(
+                    "host: {}\npath: {}\nquery: {}",
+                    escape_control(&parsed.host),
+                    escape_control(&parsed.path),
+                    parsed.query.as_deref().map_or_else(|| "(none)".to_string(), escape_control),
+                ),
+                Err(refusal) => format!("url: {} (refused: {refusal})", escape_control(url)),
+            };
+            if let Some(query) = request.args.get("query").and_then(Value::as_str) {
+                body.push_str(&format!("\nsearch: {}", escape_control(query)));
+            }
+            body
         } else {
             escape_control(&request.args.to_string())
         };
@@ -355,6 +378,38 @@ impl PromptingConfirmationHandler {
             serial: Mutex::new(Turns::default()),
             per_turn_cap: DEFAULT_PROMPTS_PER_TURN,
         }
+    }
+
+    /// Shows `prompt` under this handler's serial mutex and per-turn cap, for a request
+    /// that is not a held tool call: an MCP server's elicitation (spec 3.1 §7.21).
+    ///
+    /// `turn` is the (app, user, session, invocation) the request belongs to. Returns
+    /// `Ok(None)` when the turn reached its prompt cap or a person denied its remaining
+    /// calls, so the caller declines.
+    ///
+    /// # Errors
+    ///
+    /// Returns the prompter's error.
+    pub async fn prompt_elicitation(
+        &self,
+        turn: (&str, &str, &str, &str),
+        prompt: ApprovalPrompt,
+    ) -> Result<Option<PromptAnswer>> {
+        let (app, user, session, invocation) = turn;
+        let mut turns = self.serial.lock().await;
+        let state = turns.of(format!("{app}\u{1f}{user}\u{1f}{session}"));
+        if state.invocation_id != invocation {
+            *state = TurnState { invocation_id: invocation.to_string(), ..TurnState::default() };
+        }
+        if state.deny_all || state.prompts >= self.per_turn_cap {
+            return Ok(None);
+        }
+        state.prompts += 1;
+        let answer = self.prompter.prompt(prompt).await?;
+        if matches!(answer, PromptAnswer::DenyAllRemaining) {
+            state.deny_all = true;
+        }
+        Ok(Some(answer))
     }
 
     /// Sets the most prompts one turn may show (default [`DEFAULT_PROMPTS_PER_TURN`]).

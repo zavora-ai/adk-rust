@@ -14,9 +14,11 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{
     Row,
-    sqlite::{SqliteConnection, SqlitePool, SqliteRow},
+    sqlite::{SqliteConnectOptions, SqliteConnection, SqlitePool, SqliteRow},
 };
 use std::collections::HashMap;
+use std::str::FromStr;
+use std::time::Duration;
 use uuid::Uuid;
 
 /// Decodes a stored event row, logging and skipping a row that no longer deserializes
@@ -72,11 +74,16 @@ pub struct SqliteSessionService {
 impl SqliteSessionService {
     /// Connect to SQLite and create a connection pool.
     ///
-    /// Enables foreign keys via `PRAGMA foreign_keys = ON`.
+    /// Enables foreign keys via `PRAGMA foreign_keys = ON`. A writer waits up to 30 seconds
+    /// for the database lock, so concurrent appends to a file database queue behind
+    /// `BEGIN IMMEDIATE` instead of failing with `database is locked`.
     pub async fn new(database_url: &str) -> Result<Self> {
-        let pool = SqlitePool::connect(database_url).await.map_err(|e| {
-            adk_core::AdkError::session(format!("database connection failed: {}", e))
-        })?;
+        let options = SqliteConnectOptions::from_str(database_url)
+            .map_err(|e| adk_core::AdkError::session(format!("invalid sqlite url: {e}")))?
+            .busy_timeout(BUSY_TIMEOUT);
+        let pool = SqlitePool::connect_with(options)
+            .await
+            .map_err(|e| adk_core::AdkError::session(format!("database connection failed: {e}")))?;
         sqlx::query("PRAGMA foreign_keys = ON").execute(&pool).await.map_err(|e| {
             adk_core::AdkError::session(format!("failed to enable sqlite foreign keys: {}", e))
         })?;
@@ -196,6 +203,12 @@ CREATE TABLE IF NOT EXISTS user_states (\
         crate::migration::sqlite_runner::sql_schema_version(&self.pool, Self::REGISTRY_TABLE).await
     }
 }
+
+/// How long a connection waits for the database lock before `database is locked`.
+///
+/// Concurrent appends to a file database queue behind [`BEGIN_WRITE`]; sqlx's default of
+/// five seconds is shorter than that queue on a slow disk.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Statement that opens every transaction which reads state and writes it back.
 ///

@@ -4,6 +4,7 @@
 //! whole manager let one user's run read and overwrite another's plugin state.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use adk_core::{
     CallbackContext, Content, LlmRequest, ReadonlyContext, Result, Tool, ToolContext, async_trait,
@@ -79,9 +80,11 @@ impl Tool for Lookup {
 #[derive(Clone, Debug, PartialEq)]
 struct Calls(u32);
 
-/// Calls made by every invocation of the agent.
-#[derive(Clone, Debug, PartialEq)]
-struct AgentCalls(u32);
+/// Calls made by every invocation of the agent. The test installs the counter in the
+/// manager's context before the runs: `get` and `insert` are two steps, so two invocations
+/// counting with them at once would lose calls.
+#[derive(Clone, Debug)]
+struct AgentCalls(Arc<AtomicU32>);
 
 /// The user whose run wrote the invocation's state.
 #[derive(Clone, Debug, PartialEq)]
@@ -110,9 +113,9 @@ impl EnhancedPlugin for Counting {
         if plugin_ctx.get::<Owner>().await.is_none() {
             plugin_ctx.insert(Owner(ctx.user_id().to_string())).await;
         }
-        let shared = plugin_ctx.shared();
-        let total = shared.get::<AgentCalls>().await.map_or(1, |AgentCalls(n)| n + 1);
-        shared.insert(AgentCalls(total)).await;
+        if let Some(AgentCalls(total)) = plugin_ctx.shared().get::<AgentCalls>().await {
+            total.fetch_add(1, Ordering::SeqCst);
+        }
 
         args["calls"] = json!(calls);
         args["owner"] = json!(plugin_ctx.get::<Owner>().await.map(|Owner(user)| user));
@@ -154,6 +157,8 @@ async fn call(manager: &EnhancedPluginManager, ctx: Arc<dyn CallbackContext>) ->
 async fn concurrent_invocations_never_share_plugin_state() {
     const CALLS: u32 = 25;
     let manager = Arc::new(EnhancedPluginManager::new(vec![Arc::new(Counting)]));
+    let total = Arc::new(AtomicU32::new(0));
+    manager.context().insert(AgentCalls(Arc::clone(&total))).await;
 
     let runs: Vec<_> = [("alice", "inv-alice"), ("bob", "inv-bob")]
         .into_iter()
@@ -181,11 +186,7 @@ async fn concurrent_invocations_never_share_plugin_state() {
         ],
         "each invocation counts only its own calls and keeps its own owner"
     );
-    assert_eq!(
-        manager.context().get::<AgentCalls>().await,
-        Some(AgentCalls(2 * CALLS)),
-        "the shared context sees every invocation"
-    );
+    assert_eq!(total.load(Ordering::SeqCst), 2 * CALLS, "the shared context sees every invocation");
 }
 
 #[tokio::test]

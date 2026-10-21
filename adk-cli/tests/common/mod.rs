@@ -62,14 +62,15 @@ impl Terminal {
     pub fn spawn_in(args: &[&str], home: &Path, cwd: &Path) -> Self {
         let (mut master_fd, mut slave_fd) = (0, 0);
         let mut size = libc::winsize { ws_row: 50, ws_col: 220, ws_xpixel: 0, ws_ypixel: 0 };
-        // SAFETY: openpty writes two descriptors into the provided integers.
+        // SAFETY: openpty writes two descriptors into the provided integers. glibc declares
+        // `winp` as `*const winsize` and Apple's libc as `*mut`; a raw pointer fits both.
         let opened = unsafe {
             libc::openpty(
                 &mut master_fd,
                 &mut slave_fd,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                &mut size,
+                &raw mut size,
             )
         };
         assert_eq!(opened, 0, "openpty: {}", std::io::Error::last_os_error());

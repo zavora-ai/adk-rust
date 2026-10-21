@@ -666,9 +666,12 @@ mod tests {
         let instructions = ProjectInstructions::load(&repo.join("crates/app"), &config()).unwrap();
         let paths: Vec<_> =
             instructions.project_files().iter().map(|f| f.logical_path.as_str()).collect();
-        assert_eq!(paths, ["AGENTS.md", "crates/app/AGENTS.md"]);
+        // Logical paths render the platform separator, like `Workspace::display`.
+        let app = Path::new("crates").join("app").join("AGENTS.md").display().to_string();
+        assert_eq!(paths, ["AGENTS.md", app.as_str()]);
         assert_eq!(instructions.readable(), [false, true]);
-        assert_eq!(instructions.nested(), ["src/deep/AGENTS.md"]);
+        let deep = Path::new("src").join("deep").join("AGENTS.md").display().to_string();
+        assert_eq!(instructions.nested(), [deep.as_str()]);
         assert_eq!(instructions.git_branch(), Some("feature-x"));
         let rendered = instructions.render(true);
         assert!(rendered.find("root rules").unwrap() < rendered.find("app rules").unwrap());

@@ -241,7 +241,7 @@ Each scope receives only the keys in the delta, applied atomically by the backen
 | Backend | How a delta is applied |
 |---------|------------------------|
 | PostgreSQL | `state \|\| delta` in SQL under the row lock |
-| SQLite | Read and write inside `BEGIN IMMEDIATE` |
+| SQLite | Read and write inside `BEGIN IMMEDIATE`; a writer waits up to 30 seconds for the lock |
 | Redis | `HSET` of the delta's fields; session scope replaced by a compare-and-set script |
 | MongoDB | `$mergeObjects` update pipeline |
 | Firestore | Merge inside the commit transaction |

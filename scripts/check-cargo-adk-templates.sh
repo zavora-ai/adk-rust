@@ -2,9 +2,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMPDIR="$(mktemp -d)"
-CHECK_TARGET_DIR="$TMPDIR/target"
-trap 'rm -rf "$TMPDIR"' EXIT
+# The generated projects and their one shared target directory live on the runner's
+# main disk (RUNNER_TEMP on GitHub Actions): /tmp there carries a quota that the
+# projects' builds overflow.
+SCRATCH="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/adk-templates.XXXXXX")"
+CHECK_TARGET_DIR="$SCRATCH/target"
+trap 'rm -rf "$SCRATCH"' EXIT
 
 # The generated projects are checked from TMPDIR, outside the repository where
 # rustup would otherwise stop seeing rust-toolchain.toml and use a global
@@ -57,7 +60,7 @@ for entry in "${templates[@]}"; do
   fi
 
   (
-    cd "$TMPDIR"
+    cd "$SCRATCH"
     cargo run --manifest-path "$ROOT/Cargo.toml" -p cargo-adk -- "${args[@]}"
 
     cat >> "$name/Cargo.toml" <<PATCH
@@ -80,10 +83,13 @@ adk-realtime = { path = "$ROOT/adk-realtime" }
 adk-devtools = { path = "$ROOT/adk-devtools" }
 PATCH
 
-    CARGO_TARGET_DIR="$CHECK_TARGET_DIR" cargo check --manifest-path "$name/Cargo.toml"
+    # Every generated project builds into the shared target directory without debug
+    # info, so the dependencies compile once and the build stays within the disk.
+    export CARGO_TARGET_DIR="$CHECK_TARGET_DIR" CARGO_PROFILE_DEV_DEBUG=0
+    cargo check --manifest-path "$name/Cargo.toml"
     # The harness template ships a scripted smoke test that needs no API key.
     if [[ "$template" == "harness" ]]; then
-      CARGO_TARGET_DIR="$CHECK_TARGET_DIR" cargo test --manifest-path "$name/Cargo.toml"
+      cargo test --manifest-path "$name/Cargo.toml"
     fi
   )
 done

@@ -70,6 +70,7 @@ The governed, durable harness agent (`adk-harness`, spec 3.1): modes, approvals,
 - [Harness Identity](harness/identity.md) - RBAC per tool class, per-call shell credentials, authenticated identity, audit
 - [Harness Observability](harness/observability.md) - Spans, spend per agent and subject, the loop guard, evaluation baselines
 - [Harness Memory](harness/memory.md) - Working notes behind approval, and long-term facts with provenance recalled into each turn
+- [Harness Web Access and MCP Interaction](harness/web-and-mcp.md) - `web_fetch` and `web_search` under the domain allowlist, screened and delimited; MCP elicitation through the prompter or inbox, sampling under the budget, resources as untrusted blocks
 
 ## Realtime & Multimodal
 

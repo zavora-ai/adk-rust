@@ -156,6 +156,9 @@ harness-computer-use = ["harness", "adk-harness/computer-use"]
 harness-payments = ["harness", "adk-harness/payments"]
 harness-voice = ["harness", "adk-harness/voice"]
 harness-managed = ["harness", "adk-harness/managed"]
+# Governed web access and MCP interaction (spec 3.1 §7.20, §7.21).
+harness-web = ["harness", "adk-harness/web"]
+harness-mcp = ["harness", "adk-harness/mcp"]
 
 # Managed agent runtime (feature-gated, experimental). The provider features below also
 # let its `DefaultModelResolver` construct that provider's models.

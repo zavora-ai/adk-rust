@@ -57,6 +57,10 @@ pub(crate) const HARNESS_TOOL_NAMES: &[&str] = &[
     "memory_delete",
     "memory_search",
     "memory_remember",
+    "web_fetch",
+    "web_search",
+    "mcp_list_resources",
+    "mcp_read_resource",
 ];
 
 /// Run policies a harness layer composed, each with the harness it belongs to.
@@ -157,7 +161,8 @@ pub enum Isolation {
 #[non_exhaustive]
 pub enum ToolKind {
     /// `read_file`, `glob`, `grep`, `list_skills`, `load_skill`, `load_skill_resource`,
-    /// `search_skills`, `memory_read`, `memory_search`.
+    /// `search_skills`, `memory_read`, `memory_search`, `mcp_list_resources`,
+    /// `mcp_read_resource` (spec 3.1 §7.21).
     Read,
     /// `write_todos`, `update_todo`.
     Todo,
@@ -175,6 +180,12 @@ pub enum ToolKind {
     MemoryWrite,
     /// `memory_remember`: assumed long-term facts only (spec 3.1 §7.15.2).
     MemoryPropose,
+    /// `web_fetch`, `web_search`: whether the URL's host is in the allowlist
+    /// (spec 3.1 §7.20).
+    Web {
+        /// Whether the call's host is in `WebConfig::allowed_domains`.
+        allowlisted: bool,
+    },
     /// Payments pack tools; never waivable.
     Payment,
     /// Any other tool: MCP, browser, extras, skill-activated.
@@ -223,6 +234,8 @@ impl ToolKind {
 pub struct ToolClassRegistry {
     agents: BTreeSet<String>,
     classes: BTreeMap<String, ToolKind>,
+    /// Hosts the web tools reach without approval (spec 3.1 §7.20).
+    web_allowlist: Vec<String>,
 }
 
 impl ToolClassRegistry {
@@ -256,7 +269,60 @@ impl ToolClassRegistry {
         registry.register("memory_delete", ToolKind::MemoryWrite);
         registry.register("memory_search", ToolKind::Read);
         registry.register("memory_remember", ToolKind::MemoryPropose);
+        // The allowlist decision is made per call from the URL's host (spec 3.1 §7.20).
+        registry.register("web_fetch", ToolKind::Web { allowlisted: false });
+        registry.register("web_search", ToolKind::Web { allowlisted: false });
+        registry.register("mcp_list_resources", ToolKind::Read);
+        registry.register("mcp_read_resource", ToolKind::Read);
         registry
+    }
+
+    /// Sets the hosts `web_fetch` and `web_search` reach without approval
+    /// (spec 3.1 §7.20): exact hosts or `*.example.com`, the `DomainIn` grammar.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::ToolEffect;
+    /// use adk_harness::{Isolation, ToolClassRegistry, ToolKind};
+    /// use serde_json::json;
+    ///
+    /// let registry = ToolClassRegistry::harness_defaults("harness")
+    ///     .with_web_allowlist(["docs.rs", "*.rust-lang.org"]);
+    /// let classify = |args| registry.classify("harness", "web_fetch", None, &args, ToolEffect::ReadOnly, Isolation::Host, false);
+    /// assert_eq!(classify(json!({ "url": "https://docs.rs/x" })), ToolKind::Web { allowlisted: true });
+    /// assert_eq!(classify(json!({ "url": "https://rust-lang.org/" })), ToolKind::Web { allowlisted: false });
+    /// assert_eq!(classify(json!({ "url": "https://user@docs.rs/" })), ToolKind::Web { allowlisted: false });
+    /// ```
+    #[must_use]
+    pub fn with_web_allowlist(
+        mut self,
+        domains: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.web_allowlist = domains.into_iter().map(|d| d.into().to_ascii_lowercase()).collect();
+        self
+    }
+
+    /// The hosts the web tools reach without approval.
+    pub fn web_allowlist(&self) -> &[String] {
+        &self.web_allowlist
+    }
+
+    /// Whether the web call `tool` with `args` names an allowlisted host: `web_fetch` by
+    /// its `url`, `web_search` by its `site` (absent: not allowlisted).
+    fn web_allowlisted(&self, tool: &str, args: &Value) -> bool {
+        match tool {
+            "web_fetch" => args
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| crate::web::url_allowlisted(url, &self.web_allowlist)),
+            "web_search" => args.get("site").and_then(Value::as_str).is_some_and(|site| {
+                crate::web::ParsedUrl::parse(&format!("https://{site}/")).is_ok_and(|parsed| {
+                    crate::web::host_allowlisted(&parsed.host, &self.web_allowlist)
+                })
+            }),
+            _ => false,
+        }
     }
 
     /// Adds one of the harness's own agents.
@@ -303,6 +369,9 @@ impl ToolClassRegistry {
                         ToolKind::Shell(isolation)
                     };
                 }
+                Some(ToolKind::Web { .. }) => {
+                    return ToolKind::Web { allowlisted: self.web_allowlisted(tool, args) };
+                }
                 Some(kind) => return *kind,
                 None => {}
             }
@@ -348,6 +417,10 @@ pub enum TableRow {
     MemoryWrite,
     /// Assumed long-term facts (spec 3.1 §7.15.2).
     MemoryPropose,
+    /// A web call whose host is in the allowlist (spec 3.1 §7.20).
+    WebAllowlisted,
+    /// A web call to any other host.
+    WebOther,
     /// Payments.
     Payment,
     /// A read-only tool from a trusted origin.
@@ -358,7 +431,7 @@ pub enum TableRow {
 
 impl TableRow {
     /// Every row, in table order.
-    pub const ALL: [TableRow; 13] = [
+    pub const ALL: [TableRow; 15] = [
         Self::ReadTodoDelegate,
         Self::PlanExit,
         Self::Edit,
@@ -369,6 +442,8 @@ impl TableRow {
         Self::ShellEscalation,
         Self::MemoryWrite,
         Self::MemoryPropose,
+        Self::WebAllowlisted,
+        Self::WebOther,
         Self::Payment,
         Self::ExternalReadOnlyTrusted,
         Self::ExternalOther,
@@ -387,6 +462,8 @@ impl TableRow {
             ToolKind::ShellEscalation => Self::ShellEscalation,
             ToolKind::MemoryWrite => Self::MemoryWrite,
             ToolKind::MemoryPropose => Self::MemoryPropose,
+            ToolKind::Web { allowlisted: true } => Self::WebAllowlisted,
+            ToolKind::Web { allowlisted: false } => Self::WebOther,
             ToolKind::Payment => Self::Payment,
             ToolKind::External { effect: ToolEffect::ReadOnly, trusted_origin: true } => {
                 Self::ExternalReadOnlyTrusted
@@ -547,7 +624,7 @@ impl ModeCell {
 /// assert_eq!(decision_cell(HarnessMode::Plan, TableRow::Edit), ModeCell::Deny);
 /// assert_eq!(decision_cell(HarnessMode::Auto, TableRow::Edit), ModeCell::Allow);
 /// ```
-pub const MODE_TABLE: [[ModeCell; 4]; 13] = {
+pub const MODE_TABLE: [[ModeCell; 4]; 15] = {
     use ModeCell::{
         Allow, AllowWithActiveEnforcer, AllowWithS3, Ask, AskNonWaivable, AskOrAutoAllowSandboxed,
         AskOrHostShellInAuto, Deny,
@@ -564,6 +641,8 @@ pub const MODE_TABLE: [[ModeCell; 4]; 13] = {
         [Deny, Deny, AskNonWaivable, AskNonWaivable], // ShellEscalation
         [Deny, Deny, AskNonWaivable, AskNonWaivable], // MemoryWrite
         [Deny, Deny, Allow, Allow],         // MemoryPropose (assumed facts)
+        [Allow, Allow, Allow, Allow],       // Web, allowlisted host
+        [Deny, Deny, Ask, Ask],             // Web, other host
         [Deny, Deny, AskNonWaivable, AskNonWaivable], // Payment
         [Allow, Allow, Allow, Allow],       // External, read-only, trusted
         [Deny, Deny, Ask, Ask],             // External, other
@@ -781,6 +860,8 @@ pub(crate) struct PolicyInner {
     pub(crate) switches: PolicySwitches,
     pub(crate) trust_mcp_read_only_hints: bool,
     pub(crate) prompts: PromptContexts,
+    /// Provider-executed web tools the operator enabled (spec 3.1 §7.20, I49).
+    pub(crate) provider_web_tools: BTreeSet<String>,
     #[cfg(feature = "auth")]
     pub(crate) identity: Arc<crate::identity::IdentityGate>,
     #[cfg(feature = "observe")]
@@ -907,6 +988,11 @@ impl HarnessPolicy {
 
     /// The class of the call `request` describes.
     pub fn classify(&self, request: &ToolPolicyRequest, origin: Option<&ToolOrigin>) -> ToolKind {
+        // A provider-executed web tool the operator enabled is decided as an allowlisted web
+        // call: enabling it is the allow decision, recorded per run (spec 3.1 §7.20, I49).
+        if self.inner.provider_web_tools.contains(&request.tool_name) {
+            return ToolKind::Web { allowlisted: true };
+        }
         self.inner.registry.classify(
             &request.agent_name,
             &request.tool_name,
@@ -961,6 +1047,17 @@ impl HarnessPolicy {
         }
         if *kind == ToolKind::ShellEscalation {
             return self.retry_refusal(request).await;
+        }
+        // A web URL naming a loopback, link-local or private literal, or a `.local` /
+        // `.internal` name, is denied before the tool runs (spec 3.1 §7.20, §9.2 I46).
+        if matches!(kind, ToolKind::Web { .. })
+            && let Some(url) = request.args.get("url").and_then(Value::as_str)
+            && crate::web::url_names_private_target(url)
+        {
+            return Some(format!(
+                "harness.web.private_target: '{}' is a private or local target the harness never fetches",
+                crate::web::url_host(url).unwrap_or_default()
+            ));
         }
         None
     }
@@ -1334,6 +1431,8 @@ fn describe(tool: &str, row: TableRow, mode: HarnessMode, base: TableDecision) -
         TableRow::ShellEscalation => "an unsandboxed retry",
         TableRow::MemoryWrite => "a memory write",
         TableRow::MemoryPropose => "a fact proposal",
+        TableRow::WebAllowlisted => "a web request to an allowlisted host",
+        TableRow::WebOther => "a web request to a host outside the allowlist",
         TableRow::Payment => "a payment",
         TableRow::ExternalReadOnlyTrusted => "a trusted read-only tool",
         TableRow::ExternalOther => "an external tool",

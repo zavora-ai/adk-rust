@@ -13,7 +13,7 @@
 //! | Backend | Feature | How a decision is consumed once | How a request changes once per version |
 //! |---------|---------|---------------------------------|----------------------------------------|
 //! | [`SqliteApprovalStore`](crate::SqliteApprovalStore) | `sqlite` | `DELETE ... RETURNING` under SQLite's single writer | `UPDATE ... WHERE version = $expected` under the single writer |
-//! | [`PostgresApprovalStore`](crate::PostgresApprovalStore) | `postgres` | `DELETE ... RETURNING`; a concurrent delete of the same row waits and then finds it gone | `UPDATE ... WHERE version = $expected`; a concurrent update waits for the row lock and re-checks the version |
+//! | `PostgresApprovalStore` | `postgres` | `DELETE ... RETURNING`; a concurrent delete of the same row waits and then finds it gone | `UPDATE ... WHERE version = $expected`; a concurrent update waits for the row lock and re-checks the version |
 
 use adk_core::principal::SubjectRef;
 use adk_core::{

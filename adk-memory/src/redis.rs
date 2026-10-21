@@ -115,7 +115,7 @@ struct StoredEntry {
 /// `(app_name, user_id, session_id)`. Search uses word-overlap matching
 /// across all sessions for a given app and user.
 ///
-/// For vector similarity search, use [`PostgresMemoryService`](crate::PostgresMemoryService)
+/// For vector similarity search, use `PostgresMemoryService`
 /// or [`Neo4jMemoryService`](crate::Neo4jMemoryService) instead.
 ///
 /// # Example

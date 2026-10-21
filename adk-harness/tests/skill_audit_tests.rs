@@ -34,6 +34,8 @@ async fn loading_a_skill_records_its_activation() {
     let ext = &records[0].ext;
     assert_eq!(ext["skillId"], loaded["skillId"]);
     assert_eq!(ext["hash"], loaded["hash"]);
-    assert_eq!(ext["sourcePath"], ".skills/release/SKILL.md");
+    // The source path renders the platform separator, like `Workspace::display`.
+    let source = std::path::Path::new(".skills").join("release").join("SKILL.md");
+    assert_eq!(ext["sourcePath"], source.display().to_string());
     assert_eq!(ext["allowedTools"], json!([]));
 }

@@ -242,7 +242,7 @@ async fn grep_and_glob_skip_secret_files() {
     let listed = run(find(&tools, "glob"), json!({"pattern": "**/*"})).await.unwrap();
     let listed: Vec<&str> =
         listed["matches"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-    assert_eq!(listed, ["certs", "src", "src/config.rs"]);
+    assert_eq!(listed, ["certs", "src", config.as_str()]);
 }
 
 #[tokio::test]

@@ -734,19 +734,24 @@ mod tests {
         );
     }
 
+    /// The paths are absolute on the host: `/Users/me` on Unix, `C:/Users/me` on Windows,
+    /// where a path without a drive is not absolute.
     #[test]
     fn path_directories_that_hold_home_or_the_workspace_are_not_granted() {
-        let home = Path::new("/Users/me");
-        let root = Path::new("/Users/me/Developer/project");
-        assert!(path_dir_is_grantable(Path::new("/Users/me/.cargo/bin"), Some(home), root));
-        assert!(path_dir_is_grantable(Path::new("/opt/homebrew/bin"), Some(home), root));
-        assert!(!path_dir_is_grantable(Path::new("/Users/me/Developer"), Some(home), root));
-        assert!(!path_dir_is_grantable(Path::new("/Users/me"), Some(home), root));
-        assert!(!path_dir_is_grantable(Path::new("/Users"), Some(home), root));
-        assert!(!path_dir_is_grantable(Path::new("/"), Some(home), root));
-        assert!(!path_dir_is_grantable(Path::new("bin"), Some(home), root));
-        assert!(!path_dir_is_grantable(root, Some(home), root));
-        assert!(!path_dir_is_grantable(&root.join("node_modules/.bin"), Some(home), root));
+        let drive = if cfg!(windows) { "C:" } else { "" };
+        let absolute = |path: &str| PathBuf::from(format!("{drive}{path}"));
+        let home = absolute("/Users/me");
+        let root = absolute("/Users/me/Developer/project");
+        let grantable = |dir: &Path| path_dir_is_grantable(dir, Some(&home), &root);
+        assert!(grantable(&absolute("/Users/me/.cargo/bin")));
+        assert!(grantable(&absolute("/opt/homebrew/bin")));
+        assert!(!grantable(&absolute("/Users/me/Developer")));
+        assert!(!grantable(&absolute("/Users/me")));
+        assert!(!grantable(&absolute("/Users")));
+        assert!(!grantable(&absolute("/")));
+        assert!(!grantable(Path::new("bin")));
+        assert!(!grantable(&root));
+        assert!(!grantable(&root.join("node_modules/.bin")));
     }
 
     #[test]

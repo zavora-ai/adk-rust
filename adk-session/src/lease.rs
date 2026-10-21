@@ -12,7 +12,7 @@
 //! | Backend | Feature | Serialization |
 //! |---------|---------|---------------|
 //! | [`SqliteLeaseStore`](crate::SqliteLeaseStore) | `sqlite` | SQLite's single writer |
-//! | [`PostgresLeaseStore`](crate::PostgresLeaseStore) | `postgres` | The row lock the upsert takes; a waiting upsert re-checks its `WHERE` against the committed row |
+//! | `PostgresLeaseStore` | `postgres` | The row lock the upsert takes; a waiting upsert re-checks its `WHERE` against the committed row |
 
 use std::sync::Arc;
 use std::time::Duration;

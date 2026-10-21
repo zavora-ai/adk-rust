@@ -7,7 +7,7 @@
 //! | Backend | Feature | How reservations serialize |
 //! |---------|---------|----------------------------|
 //! | [`SqliteSpendLedger`] | `sqlite` | `BEGIN IMMEDIATE` takes the write lock before the limit check |
-//! | [`PostgresSpendLedger`] | `postgres` | `SELECT ... FOR UPDATE` on the organization's row in `adk_spend_orgs` |
+//! | `PostgresSpendLedger` | `postgres` | `SELECT ... FOR UPDATE` on the organization's row in `adk_spend_orgs` |
 //!
 //! A reservation that is neither committed nor released stops counting once its
 //! `expires_at` passes; its row stays for audit.

@@ -54,6 +54,12 @@ computer-use = ["dep:adk-computer-use"]
 payments = ["dep:adk-payments"]
 voice = ["dep:adk-realtime"]
 managed = ["dep:adk-managed"]
+# Governed web access: web_fetch, web_search, screening (spec 3.1 §7.20).
+web = ["dep:reqwest", "dep:adk-guardrail", "dep:regex", "dep:adk-tool"]
+# MCP interaction: elicitation, sampling and resource bridges (spec 3.1 §7.21).
+mcp = ["dep:adk-tool", "adk-tool/mcp", "adk-tool/mcp-sampling"]
+# Test fixtures only: lets a loopback HTTP server stand in for the web (never on in adk-cli).
+web-fixture = ["web"]
 
 [dependencies]
 adk-core.workspace = true
@@ -84,6 +90,7 @@ chrono.workspace = true
 dirs = "7"
 futures.workspace = true
 regex = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -104,6 +111,8 @@ adk-server = { path = "../adk-server", features = ["background"] }
 adk-memory = { path = "../adk-memory", features = ["sqlite-memory", "database-memory"] }
 sqlx = { workspace = true, features = ["postgres", "sqlite"] }
 proptest = "1.5"
+# Scripted MCP servers for the elicitation, sampling and resource tests.
+rmcp = { version = "3.1", features = ["server", "client", "elicitation"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }
 # Captures the harness spans in the observability tests.

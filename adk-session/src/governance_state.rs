@@ -13,7 +13,7 @@
 //! | Backend | Feature | Serialization |
 //! |---------|---------|---------------|
 //! | [`SqliteGovernanceStateStore`](crate::SqliteGovernanceStateStore) | `sqlite` | SQLite's single writer |
-//! | [`PostgresGovernanceStateStore`](crate::PostgresGovernanceStateStore) | `postgres` | The row lock the update takes; a waiting update re-checks the epoch against the committed row |
+//! | `PostgresGovernanceStateStore` | `postgres` | The row lock the update takes; a waiting update re-checks the epoch against the committed row |
 
 use std::sync::Arc;
 

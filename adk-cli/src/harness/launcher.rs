@@ -461,7 +461,8 @@ impl HarnessLauncher {
                 continue;
             }
             println!();
-            report(&shared.turn(Some(&trimmed), true).await?);
+            let text = shared.expand_mentions(&trimmed).await;
+            report(&shared.turn(Some(&text), true).await?);
         }
         if memory_on(&shared.harness()) {
             println!("Saving what this session taught to long-term memory…");
@@ -693,6 +694,47 @@ impl Shared {
         )?);
         *self.harness.write().unwrap_or_else(std::sync::PoisonError::into_inner) = harness.clone();
         Ok(Some(harness))
+    }
+
+    /// Expands `@server:uri` mentions: each resource the harness can read is appended to
+    /// the turn inside its untrusted block, so a human hands a resource to the model without
+    /// a tool round (spec 3.1 §7.21, I52). A mention that cannot be read is reported and left
+    /// as typed.
+    pub(crate) async fn expand_mentions(&self, text: &str) -> String {
+        let harness = self.harness();
+        let runtime = harness.agent().runtime();
+        if runtime.mcp().is_none() {
+            return text.to_string();
+        }
+        let mut out = text.to_string();
+        for word in text.split_whitespace() {
+            let Some(mention) = word.strip_prefix('@') else { continue };
+            let Some((server, uri)) = mention.split_once(':') else { continue };
+            if server.is_empty() || uri.is_empty() {
+                continue;
+            }
+            match runtime
+                .mcp_resource_mention(
+                    &self.app_name,
+                    self.user.as_str(),
+                    self.session.as_str(),
+                    server,
+                    uri,
+                )
+                .await
+            {
+                Ok(resource) => {
+                    if let Some(block) = resource["content"].as_str() {
+                        out.push_str("\n\n");
+                        out.push_str(block);
+                    }
+                }
+                Err(error) => {
+                    println!("(@{server}:{uri} not read: {})", terminal_safe(&error.to_string()))
+                }
+            }
+        }
+        out
     }
 
     /// The session's state value at `key`.

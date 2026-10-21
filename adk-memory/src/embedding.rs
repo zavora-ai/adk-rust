@@ -1,7 +1,7 @@
 //! Embedding provider trait for vector-based memory search.
 //!
 //! Provides [`EmbeddingProvider`], a trait for pluggable embedding models
-//! used by [`PostgresMemoryService`](super::postgres::PostgresMemoryService).
+//! used by `PostgresMemoryService`.
 
 use adk_core::Result;
 use async_trait::async_trait;

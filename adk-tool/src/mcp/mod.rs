@@ -12,7 +12,10 @@ mod toolset;
 
 pub use auth::{AuthError, McpAuth, OAuth2Config};
 pub use discovery::McpDiscoveryLimits;
-pub use elicitation::{AdkClientHandler, AutoDeclineElicitationHandler, ElicitationHandler};
+pub use elicitation::{
+    AdkClientHandler, AutoDeclineElicitationHandler, ElicitationHandler, ElicitationScope,
+    ElicitationScopeGuard, ElicitationScopes,
+};
 pub use http::McpHttpClientBuilder;
 pub use manager::{McpServerConfig, McpServerManager, RestartPolicy, ServerStatus};
 pub use reconnect::{

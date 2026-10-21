@@ -149,6 +149,19 @@ impl Setup {
         for member in &self.resolved.members {
             builder = builder.member(member.to_spec()?);
         }
+        if self.resolved.web {
+            builder = builder.web(adk_harness::WebConfig {
+                allowed_domains: self.resolved.allow_domains.clone(),
+                ..adk_harness::WebConfig::default()
+            });
+        }
+        // Servers the workspace declares in `.mcp.json` start once the workspace is trusted
+        // (spec 3.1 §7.21, I3).
+        if let Some(servers) = workspace_mcp_servers(&self.resolved.workspace)? {
+            builder = builder
+                .mcp_servers(adk_harness::McpServerSet::workspace(servers))
+                .mcp_interaction(adk_harness::McpInteractionConfig::default());
+        }
         Ok(builder.build()?)
     }
 
@@ -796,4 +809,26 @@ pub async fn serve(
         )));
     }
     launcher.run_serve_directly(port).await.map_err(Into::into)
+}
+
+/// The servers `.mcp.json` in `workspace` declares (the Kiro `mcpServers` format
+/// `McpServerManager::from_json` reads), or `None` without the file.
+fn workspace_mcp_servers(
+    workspace: &Path,
+) -> Result<Option<std::collections::HashMap<String, adk_tool::mcp::McpServerConfig>>> {
+    #[derive(serde::Deserialize)]
+    struct McpFile {
+        #[serde(rename = "mcpServers", default)]
+        mcp_servers: std::collections::HashMap<String, adk_tool::mcp::McpServerConfig>,
+    }
+    let path = workspace.join(".mcp.json");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => bail!("failed to read {}: {error}", path.display()),
+    };
+    let file: McpFile = serde_json::from_str(&text).map_err(|error| {
+        anyhow::anyhow!("{} is not valid MCP configuration: {error}", path.display())
+    })?;
+    Ok(Some(file.mcp_servers))
 }

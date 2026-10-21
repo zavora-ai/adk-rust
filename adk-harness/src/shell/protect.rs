@@ -119,6 +119,8 @@ pub(crate) fn protected_paths(root: &Path) -> ProtectedPaths {
 mod tests {
     use super::*;
 
+    /// The symlink cases are Unix-only: creating a symlink on Windows needs a privilege the
+    /// test runner does not hold.
     #[test]
     fn missing_and_symlinked_root_paths_are_unprotectable_and_nested_ones_are_found() {
         let dir = tempfile::tempdir().unwrap();
@@ -134,23 +136,26 @@ mod tests {
 
         let found = protected_paths(&root);
 
-        let mut present: Vec<String> = found
+        let mut present: Vec<PathBuf> = found
             .present
             .iter()
-            .map(|path| path.strip_prefix(&root).unwrap().display().to_string())
+            .map(|path| path.strip_prefix(&root).unwrap().to_path_buf())
             .collect();
         present.sort();
-        let mut expected = vec![
+        let mut expected: Vec<PathBuf> = [
             ".git",
             "AGENTS.md",
             "crates/a/.cargo/config.toml",
             "crates/a/.git",
             "crates/a/AGENTS.md",
-        ];
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
         if cfg!(unix) {
-            expected.push("CLAUDE.md");
+            expected.push(PathBuf::from("CLAUDE.md"));
         }
-        expected.sort_unstable();
+        expected.sort();
         assert_eq!(present, expected);
         let unprotectable: Vec<&str> =
             found.unprotectable.iter().map(|(name, _)| name.as_str()).collect();

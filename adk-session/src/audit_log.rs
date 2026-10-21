@@ -10,7 +10,7 @@
 //! | Backend | Feature | How two writers on one log are serialized |
 //! |---------|---------|------------------------------------------|
 //! | [`SqliteAuditLogStore`](crate::SqliteAuditLogStore) | `sqlite` | `BEGIN IMMEDIATE` takes the write lock before the size is read |
-//! | [`PostgresAuditLogStore`](crate::PostgresAuditLogStore) | `postgres` | `SELECT ... FOR UPDATE` on the log's size row |
+//! | `PostgresAuditLogStore` | `postgres` | `SELECT ... FOR UPDATE` on the log's size row |
 
 use std::ops::Range;
 
