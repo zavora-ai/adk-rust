@@ -12,7 +12,7 @@
 
 use std::path::PathBuf;
 
-use adk_sandbox::workspace::{DockerClient, Manifest, SandboxClient};
+use adk_sandbox::workspace::{DockerClient, Manifest, ManifestEntry, SandboxClient};
 
 const IMAGE: &str = "alpine:3.20";
 
@@ -117,4 +117,44 @@ async fn a_missing_host_path_fails_provisioning() {
     let result = client.provision(&Manifest { entries: vec![] }).await;
 
     assert!(matches!(result, Err(adk_sandbox::SandboxError::ProvisionFailed { .. })), "{result:?}");
+}
+
+/// A provisioning that fails after its container was created removes that container, so
+/// nothing is left running on the daemon with no handle to stop it.
+#[tokio::test]
+#[ignore = "needs a Docker daemon and the alpine:3.20 image"]
+async fn a_failed_provisioning_leaves_no_container() {
+    use bollard::container::ListContainersOptions;
+
+    let (_guard, workspace) = canonical_tempdir();
+    let client = DockerClient::with_image(IMAGE)
+        .await
+        .expect("a Docker daemon is running")
+        .with_bind_mount(&workspace, "/workspace", false);
+    // Manifest paths are checked once the container is up, so this entry fails a
+    // provisioning whose container already exists.
+    let manifest = Manifest {
+        entries: vec![ManifestEntry::File { path: "../escape.txt".into(), content: b"x".to_vec() }],
+    };
+
+    let result = client.provision(&manifest).await;
+
+    assert!(result.is_err(), "{result:?}");
+    // Only this provisioning's container mounts this workspace; the containers of tests
+    // running beside this one mount their own.
+    let docker =
+        bollard::Docker::connect_with_local_defaults().expect("a Docker daemon is running");
+    let containers = docker
+        .list_containers(Some(ListContainersOptions::<String> { all: true, ..Default::default() }))
+        .await
+        .expect("list containers");
+    let source = workspace.to_str().unwrap();
+    let left: Vec<String> = containers
+        .iter()
+        .filter(|container| {
+            container.mounts.iter().flatten().any(|mount| mount.source.as_deref() == Some(source))
+        })
+        .filter_map(|container| container.id.clone())
+        .collect();
+    assert!(left.is_empty(), "containers left by a failed provisioning: {left:?}");
 }

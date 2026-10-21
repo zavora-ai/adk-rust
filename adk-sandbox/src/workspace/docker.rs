@@ -509,108 +509,89 @@ impl SandboxClient for DockerClient {
 
         let container_id = container.id;
 
-        // Start the container so we can exec into it
-        self.client.start_container::<String>(&container_id, None).await.map_err(|e| {
-            SandboxError::ProvisionFailed {
-                resource: container_id.clone(),
-                reason: format!("failed to start container: {e}"),
-                suggestion: "Check Docker daemon status and resource availability.".to_string(),
+        // A failure past this point would leave the created container running with no
+        // handle to stop it, so the container is removed before the error is returned.
+        let populated = async {
+            // Start the container so we can exec into it
+            self.client.start_container::<String>(&container_id, None).await.map_err(|e| {
+                SandboxError::ProvisionFailed {
+                    resource: container_id.clone(),
+                    reason: format!("failed to start container: {e}"),
+                    suggestion: "Check Docker daemon status and resource availability.".to_string(),
+                }
+            })?;
+
+            // Create the workspace directory inside the container
+            let (_, stderr, exit_code) = self
+                .exec_in_container(
+                    &container_id,
+                    vec!["mkdir", "-p", CONTAINER_WORKSPACE_ROOT],
+                    None,
+                    None,
+                )
+                .await?;
+
+            if exit_code != 0 {
+                return Err(SandboxError::ProvisionFailed {
+                    resource: CONTAINER_WORKSPACE_ROOT.to_string(),
+                    reason: format!("failed to create workspace dir: {stderr}"),
+                    suggestion: "Check container filesystem permissions.".to_string(),
+                });
             }
-        })?;
 
-        // Create the workspace directory inside the container
-        let (_, stderr, exit_code) = self
-            .exec_in_container(
-                &container_id,
-                vec!["mkdir", "-p", CONTAINER_WORKSPACE_ROOT],
-                None,
-                None,
-            )
-            .await?;
+            // Process each manifest entry
+            for entry in &manifest.entries {
+                match entry {
+                    ManifestEntry::File { path, content } => {
+                        validate_relative_path(path)?;
+                        let full_path = format!("{CONTAINER_WORKSPACE_ROOT}/{path}");
 
-        if exit_code != 0 {
-            return Err(SandboxError::ProvisionFailed {
-                resource: CONTAINER_WORKSPACE_ROOT.to_string(),
-                reason: format!("failed to create workspace dir: {stderr}"),
-                suggestion: "Check container filesystem permissions.".to_string(),
-            });
-        }
+                        // Create parent directories
+                        if let Some(parent_idx) = full_path.rfind('/') {
+                            let parent = &full_path[..parent_idx];
+                            let (_, _, code) = self
+                                .exec_in_container(
+                                    &container_id,
+                                    vec!["mkdir", "-p", parent],
+                                    None,
+                                    None,
+                                )
+                                .await?;
+                            if code != 0 {
+                                return Err(SandboxError::ProvisionFailed {
+                                    resource: path.clone(),
+                                    reason: "failed to create parent directories".to_string(),
+                                    suggestion: "Check container filesystem permissions.".to_string(),
+                                });
+                            }
+                        }
 
-        // Process each manifest entry
-        for entry in &manifest.entries {
-            match entry {
-                ManifestEntry::File { path, content } => {
-                    validate_relative_path(path)?;
-                    let full_path = format!("{CONTAINER_WORKSPACE_ROOT}/{path}");
-
-                    // Create parent directories
-                    if let Some(parent_idx) = full_path.rfind('/') {
-                        let parent = &full_path[..parent_idx];
-                        let (_, _, code) = self
+                        // Write file content from stdin; the path is an argument, never shell text.
+                        let write_cmd = write_file_command(&full_path);
+                        let (_, stderr, code) = self
                             .exec_in_container(
                                 &container_id,
-                                vec!["mkdir", "-p", parent],
+                                write_cmd.iter().map(String::as_str).collect(),
                                 None,
-                                None,
+                                Some(content),
                             )
                             .await?;
                         if code != 0 {
                             return Err(SandboxError::ProvisionFailed {
                                 resource: path.clone(),
-                                reason: "failed to create parent directories".to_string(),
+                                reason: format!("failed to write file: {stderr}"),
                                 suggestion: "Check container filesystem permissions.".to_string(),
                             });
                         }
                     }
 
-                    // Write file content from stdin; the path is an argument, never shell text.
-                    let write_cmd = write_file_command(&full_path);
-                    let (_, stderr, code) = self
-                        .exec_in_container(
-                            &container_id,
-                            write_cmd.iter().map(String::as_str).collect(),
-                            None,
-                            Some(content),
-                        )
-                        .await?;
-                    if code != 0 {
-                        return Err(SandboxError::ProvisionFailed {
-                            resource: path.clone(),
-                            reason: format!("failed to write file: {stderr}"),
-                            suggestion: "Check container filesystem permissions.".to_string(),
-                        });
-                    }
-                }
-
-                ManifestEntry::Directory { path } => {
-                    validate_relative_path(path)?;
-                    let full_path = format!("{CONTAINER_WORKSPACE_ROOT}/{path}");
-                    let (_, stderr, code) = self
-                        .exec_in_container(
-                            &container_id,
-                            vec!["mkdir", "-p", &full_path],
-                            None,
-                            None,
-                        )
-                        .await?;
-                    if code != 0 {
-                        return Err(SandboxError::ProvisionFailed {
-                            resource: path.clone(),
-                            reason: format!("failed to create directory: {stderr}"),
-                            suggestion: "Check container filesystem permissions.".to_string(),
-                        });
-                    }
-                }
-
-                ManifestEntry::GitRepo { url, branch, path } => {
-                    validate_relative_path(path)?;
-                    let full_path = format!("{CONTAINER_WORKSPACE_ROOT}/{path}");
-
-                    for git_cmd in git_clone_commands(url, branch.as_deref(), &full_path)? {
+                    ManifestEntry::Directory { path } => {
+                        validate_relative_path(path)?;
+                        let full_path = format!("{CONTAINER_WORKSPACE_ROOT}/{path}");
                         let (_, stderr, code) = self
                             .exec_in_container(
                                 &container_id,
-                                git_cmd.iter().map(String::as_str).collect(),
+                                vec!["mkdir", "-p", &full_path],
                                 None,
                                 None,
                             )
@@ -618,17 +599,55 @@ impl SandboxClient for DockerClient {
                         if code != 0 {
                             return Err(SandboxError::ProvisionFailed {
                                 resource: path.clone(),
-                                reason: format!("`{}` failed: {stderr}", git_cmd.join(" ")),
-                                suggestion: "Check the repository URL and branch, ensure git is \
-                                             installed in the image, and enable network access \
-                                             with `DockerClient::with_network_mode` — the default \
-                                             mode is `none`."
-                                    .to_string(),
+                                reason: format!("failed to create directory: {stderr}"),
+                                suggestion: "Check container filesystem permissions.".to_string(),
                             });
+                        }
+                    }
+
+                    ManifestEntry::GitRepo { url, branch, path } => {
+                        validate_relative_path(path)?;
+                        let full_path = format!("{CONTAINER_WORKSPACE_ROOT}/{path}");
+
+                        for git_cmd in git_clone_commands(url, branch.as_deref(), &full_path)? {
+                            let (_, stderr, code) = self
+                                .exec_in_container(
+                                    &container_id,
+                                    git_cmd.iter().map(String::as_str).collect(),
+                                    None,
+                                    None,
+                                )
+                                .await?;
+                            if code != 0 {
+                                return Err(SandboxError::ProvisionFailed {
+                                    resource: path.clone(),
+                                    reason: format!("`{}` failed: {stderr}", git_cmd.join(" ")),
+                                    suggestion: "Check the repository URL and branch, ensure git is \
+                                                 installed in the image, and enable network access \
+                                                 with `DockerClient::with_network_mode` — the default \
+                                                 mode is `none`."
+                                        .to_string(),
+                                });
+                            }
                         }
                     }
                 }
             }
+            Ok::<(), SandboxError>(())
+        }
+        .await;
+        if let Err(error) = populated {
+            let remove_options = RemoveContainerOptions { force: true, ..Default::default() };
+            if let Err(remove_error) =
+                self.client.remove_container(&container_id, Some(remove_options)).await
+            {
+                tracing::warn!(
+                    container.id = %container_id,
+                    error = %remove_error,
+                    "could not remove a container whose provisioning failed"
+                );
+            }
+            return Err(error);
         }
 
         // Generate session handle and store the mapping

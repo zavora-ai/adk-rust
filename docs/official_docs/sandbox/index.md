@@ -316,7 +316,9 @@ remounted. Content under a mount stays on the host, so `snapshot` does not captu
 `resume` mounts the same host paths again.
 
 `LocalUnixClient` is not an isolation boundary; use `DockerClient` for untrusted commands.
-`GitRepo` manifest entries need a `DockerClient` network mode other than `none`.
+`GitRepo` manifest entries need a `DockerClient` network mode other than `none`. A
+provisioning that fails after its container was created removes that container before the
+error is returned.
 
 A `LocalUnixSession` file operation fails with `SandboxError::PathTraversal` when its
 path leaves the workspace: an absolute path, a `..` that escapes, a symlink that resolves
