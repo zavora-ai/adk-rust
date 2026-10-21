@@ -433,9 +433,7 @@ impl FactsRuntime {
             .model(self.distill_model.clone())
             .description("Distils durable facts from a harness session.")
             .instruction_provider(provider)
-            // The model's adapter fits the schema to its provider: Gemini's response schema
-            // rejects `additionalProperties`, which OpenAI's strict output requires.
-            .output_schema(self.distill_model.schema_adapter().normalize_schema(distill_schema()))
+            .output_schema(distill_schema())
             .max_iterations(3)
             .build()?;
         let sessions = Arc::new(InMemorySessionService::new());

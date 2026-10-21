@@ -1294,19 +1294,45 @@ impl GeminiModel {
         Ok((gemini_tools, tool_config))
     }
 
+    /// Splits one streamed Gemini response into the chunks the stream yields.
+    ///
+    /// A response without `finishReason` is a partial chunk. Its function calls go to
+    /// `deferred_calls` and reach the stream once, ahead of the final chunk's own parts:
+    /// the agent repeats every partial chunk's content in the terminal event it persists,
+    /// so a call yielded mid-stream would appear twice to anything counting calls over
+    /// events (spec 3.1 §7.13).
     fn stream_chunks_from_response(
         mut response: LlmResponse,
         saw_partial_chunk: bool,
+        deferred_calls: &mut Vec<Part>,
     ) -> (Vec<LlmResponse>, bool) {
         let is_final = response.finish_reason.is_some();
 
         if !is_final {
             response.partial = true;
             response.turn_complete = false;
+            if let Some(content) = response.content.as_mut() {
+                let (calls, rest): (Vec<Part>, Vec<Part>) = std::mem::take(&mut content.parts)
+                    .into_iter()
+                    .partition(|part| matches!(part, Part::FunctionCall { .. }));
+                deferred_calls.extend(calls);
+                content.parts = rest;
+            }
+            if response.content.as_ref().is_some_and(|content| content.parts.is_empty()) {
+                response.content = None;
+            }
             return (vec![response], true);
         }
 
         response.partial = false;
+        if !deferred_calls.is_empty() {
+            let content = response
+                .content
+                .get_or_insert_with(|| Content { role: "model".to_string(), parts: Vec::new() });
+            let mut parts = std::mem::take(deferred_calls);
+            parts.append(&mut content.parts);
+            content.parts = parts;
+        }
         response.turn_complete =
             response.content.as_ref().is_none_or(|content| !content.has_function_calls());
 
@@ -1571,7 +1597,12 @@ impl GeminiModel {
                 frequency_penalty: config.frequency_penalty,
                 response_logprobs: config.top_logprobs.map(|_| true),
                 logprobs: config.top_logprobs.map(i32::from),
-                response_schema: config.response_schema,
+                // The response schema takes the same OpenAPI subset as tool parameters:
+                // Gemini rejects `additionalProperties` and the other JSON Schema
+                // keywords there with HTTP 400.
+                response_schema: config
+                    .response_schema
+                    .map(|schema| self.schema_adapter().normalize_schema(schema)),
                 response_modalities: config.response_modalities,
                 response_mime_type: if has_schema {
                     Some("application/json".to_string())
@@ -1634,6 +1665,8 @@ impl GeminiModel {
             let mapped_stream = async_stream::stream! {
                 let mut stream = response_stream;
                 let mut saw_partial_chunk = false;
+                // Function calls from partial chunks, yielded once on the final chunk.
+                let mut deferred_calls: Vec<Part> = Vec::new();
                 // Only a chunk with `finishReason` (or a prompt block) ends a Gemini turn.
                 let mut finished = false;
                 // Gemini reports usage cumulatively per chunk; built-in tool uses follow suit.
@@ -1649,7 +1682,11 @@ impl GeminiModel {
                                     }
                                     finished |= llm_resp.finish_reason.is_some();
                                     let (chunks, next_saw_partial) =
-                                        Self::stream_chunks_from_response(llm_resp, saw_partial_chunk);
+                                        Self::stream_chunks_from_response(
+                                            llm_resp,
+                                            saw_partial_chunk,
+                                            &mut deferred_calls,
+                                        );
                                     saw_partial_chunk = next_saw_partial;
                                     for chunk in chunks {
                                         yield Ok(chunk);
@@ -2534,7 +2571,8 @@ mod tests {
             provider: None,
         };
 
-        let (chunks, saw_partial) = GeminiModel::stream_chunks_from_response(response, false);
+        let (chunks, saw_partial) =
+            GeminiModel::stream_chunks_from_response(response, false, &mut Vec::new());
         assert!(saw_partial);
         assert_eq!(chunks.len(), 2);
         assert!(chunks[0].partial);
@@ -2562,7 +2600,8 @@ mod tests {
             provider: None,
         };
 
-        let (chunks, saw_partial) = GeminiModel::stream_chunks_from_response(response, true);
+        let (chunks, saw_partial) =
+            GeminiModel::stream_chunks_from_response(response, true, &mut Vec::new());
         assert!(saw_partial);
         assert_eq!(chunks.len(), 1);
         assert!(!chunks[0].partial);
@@ -2586,11 +2625,66 @@ mod tests {
             ..Default::default()
         };
 
-        let (chunks, _) = GeminiModel::stream_chunks_from_response(response, true);
+        let (chunks, _) = GeminiModel::stream_chunks_from_response(response, true, &mut Vec::new());
 
         assert_eq!(chunks.len(), 1);
         assert!(!chunks[0].partial);
         assert!(!chunks[0].turn_complete);
+    }
+
+    #[test]
+    fn stream_chunks_from_response_yields_a_partial_chunks_function_calls_on_the_final_chunk() {
+        let call = |id: &str| Part::FunctionCall {
+            name: "read_file".to_string(),
+            args: serde_json::json!({ "path": id }),
+            id: Some(id.to_string()),
+            thought_signature: Some(format!("sig-{id}")),
+        };
+        let partial = LlmResponse {
+            content: Some(Content {
+                role: "model".to_string(),
+                parts: vec![Part::Text { text: "Reading".to_string() }, call("a")],
+            }),
+            ..Default::default()
+        };
+        let last = LlmResponse {
+            content: Some(Content { role: "model".to_string(), parts: vec![call("b")] }),
+            finish_reason: Some(FinishReason::Stop),
+            ..Default::default()
+        };
+
+        let mut deferred = Vec::new();
+        let (first, saw_partial) =
+            GeminiModel::stream_chunks_from_response(partial, false, &mut deferred);
+        assert!(saw_partial);
+        assert_eq!(first.len(), 1);
+        assert!(first[0].partial);
+        assert_eq!(
+            serde_json::to_value(&first[0].content).unwrap(),
+            serde_json::to_value(Some(Content {
+                role: "model".to_string(),
+                parts: vec![Part::Text { text: "Reading".to_string() }],
+            }))
+            .unwrap(),
+            "the partial chunk keeps its text and loses its call"
+        );
+        assert_eq!(deferred.len(), 1);
+
+        let (chunks, _) =
+            GeminiModel::stream_chunks_from_response(last, saw_partial, &mut deferred);
+        assert!(deferred.is_empty());
+        assert_eq!(chunks.len(), 1);
+        assert!(!chunks[0].partial);
+        assert!(!chunks[0].turn_complete);
+        assert_eq!(
+            serde_json::to_value(&chunks[0].content).unwrap(),
+            serde_json::to_value(Some(Content {
+                role: "model".to_string(),
+                parts: vec![call("a"), call("b")],
+            }))
+            .unwrap(),
+            "the final chunk carries every call once, in stream order, with its signature"
+        );
     }
 
     #[tokio::test]

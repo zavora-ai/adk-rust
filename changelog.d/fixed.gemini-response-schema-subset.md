@@ -1,0 +1,1 @@
+`GeminiModel` passes an `LlmAgent` output schema (`GenerateContentConfig::response_schema`) through its `SchemaAdapter`, as it does tool parameters, so `additionalProperties`, `$schema` and the other keywords Gemini's `responseSchema` rejects with HTTP 400 are stripped. The harness distiller no longer normalizes its schema itself.

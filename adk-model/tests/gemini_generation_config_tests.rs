@@ -147,3 +147,70 @@ async fn response_modalities_reach_the_wire() {
         matches!(&parts[1], adk_core::Part::InlineData { mime_type, data, .. } if mime_type == "image/png" && data == b"image")
     );
 }
+
+/// Every `additionalProperties` at any depth of `schema`.
+fn additional_properties(schema: &Value) -> Vec<&Value> {
+    let mut found = Vec::new();
+    match schema {
+        Value::Object(map) => {
+            for (key, value) in map {
+                if key == "additionalProperties" {
+                    found.push(value);
+                }
+                found.extend(additional_properties(value));
+            }
+        }
+        Value::Array(items) => found.extend(items.iter().flat_map(additional_properties)),
+        _ => {}
+    }
+    found
+}
+
+#[tokio::test]
+async fn response_schema_takes_the_same_subset_as_tool_parameters() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "{\"facts\": []}"}]},
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 4, "totalTokenCount": 7}
+        })))
+        .mount(&server)
+        .await;
+
+    // An `LlmAgent` output schema as strict structured output wants it: closed objects.
+    let schema = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "facts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": { "text": { "type": "string" } },
+                    "required": ["text"]
+                }
+            }
+        },
+        "required": ["facts"]
+    });
+    generate(
+        &server,
+        GenerateContentConfig { response_schema: Some(schema), ..Default::default() },
+    )
+    .await;
+
+    let sent = sent_generation_config(&server).await;
+    assert_eq!(sent["responseMimeType"], "application/json");
+    let response_schema = &sent["responseSchema"];
+    assert!(
+        additional_properties(response_schema).is_empty(),
+        "Gemini rejects additionalProperties in responseSchema: {response_schema}"
+    );
+    assert!(response_schema.get("$schema").is_none(), "{response_schema}");
+    assert_eq!(response_schema["properties"]["facts"]["items"]["required"], json!(["text"]));
+}

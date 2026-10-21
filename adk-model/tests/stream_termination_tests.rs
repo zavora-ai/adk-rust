@@ -134,6 +134,15 @@ async fn collect(
     (responses, None)
 }
 
+// Used by every wire but the Gemini one, which has its own stream outcome tests.
+#[cfg(any(
+    feature = "openai",
+    feature = "deepseek",
+    feature = "azure-ai",
+    feature = "groq",
+    feature = "ollama",
+    feature = "openrouter"
+))]
 fn text(responses: &[LlmResponse]) -> String {
     responses
         .iter()
@@ -155,6 +164,15 @@ fn function_calls(responses: &[LlmResponse]) -> usize {
 
 /// Asserts the stream failed with `code` and yielded neither a tool call nor a final
 /// response, and returns what it yielded before failing.
+// Used by every wire but the Gemini one, which has its own stream outcome tests.
+#[cfg(any(
+    feature = "openai",
+    feature = "deepseek",
+    feature = "azure-ai",
+    feature = "groq",
+    feature = "ollama",
+    feature = "openrouter"
+))]
 #[track_caller]
 fn assert_fails(
     outcome: (Vec<LlmResponse>, Option<AdkError>),

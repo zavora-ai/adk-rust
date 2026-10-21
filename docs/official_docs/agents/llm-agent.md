@@ -491,7 +491,7 @@ way:
 
 | Provider | Native enforcement |
 |----------|--------------------|
-| Gemini | Full schema, sent as the response schema |
+| Gemini | The schema, sent as the response schema in the same OpenAPI subset as tool parameters: the Gemini `SchemaAdapter` strips `additionalProperties`, `$schema` and the other keywords Gemini rejects with HTTP 400 |
 | OpenAI and OpenAI-compatible | Full schema, sent as a strict `json_schema` response format |
 | OpenRouter | Full schema |
 | Ollama | Full schema, sent as the request's `format` |
