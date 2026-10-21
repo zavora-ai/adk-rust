@@ -481,7 +481,9 @@ The backward-compatible shorthand `AdkError::tool("...")` builds an `Internal` e
 An error's message can quote credentials, internal hosts, or upstream response bodies, and
 the function response is sent to the model provider and stored in the session. `LlmAgent`
 therefore answers a failed call with the error's component, category, and code, not its
-message:
+message — unless the category is a rejection (`ErrorCategory::is_rejection`: the tool refused
+the call or could not use it as made), whose message is the guidance the model needs and is
+sent, cut at `TOOL_ERROR_MESSAGE_LIMIT` (500) characters:
 
 | The tool | The model receives |
 |----------|--------------------|

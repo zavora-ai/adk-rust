@@ -17,30 +17,8 @@ use crate::AdkError;
 /// arguments do not deserialize.
 pub const TOOL_INVALID_ARGUMENTS_CODE: &str = "tool.invalid_arguments";
 
-/// The error code for a call the caller may not make: a scope or role it needs is missing.
-///
-/// A tool, or a wrapper that authorizes it, returns an error with this code (category
-/// [`Forbidden`](crate::ErrorCategory::Forbidden)) so the model learns the call was refused
-/// and which permission was missing, rather than that the tool failed. [`tool_error_response`]
-/// always shows its message, so the message names the missing permission and nothing
-/// secret. `adk-auth`'s `ScopeGuard` and `ProtectedTool` use it (spec 3.1 §7.14).
-///
-/// # Example
-///
-/// ```rust
-/// use adk_core::{
-///     AdkError, ErrorCategory, ErrorComponent, TOOL_PERMISSION_DENIED_CODE, tool_error_response,
-/// };
-///
-/// let denied = AdkError::new(
-///     ErrorComponent::Tool,
-///     ErrorCategory::Forbidden,
-///     TOOL_PERMISSION_DENIED_CODE,
-///     "missing required scopes: [finance:write] (tool requires: [finance:write])",
-/// );
-/// let response = tool_error_response("transfer", &denied, false);
-/// assert!(response["error"].as_str().unwrap().contains("finance:write"));
-/// ```
+/// The code adk-auth's scope and RBAC guards put on a denial; a rejection, so its message
+/// (the missing scopes or roles) reaches the model (spec 3.1 §7.14).
 pub const TOOL_PERMISSION_DENIED_CODE: &str = "tool.permission_denied";
 
 /// The `status` value of the function response for a call that ran but whose result is withheld.
@@ -53,13 +31,19 @@ pub const INVALID_TOOL_ARGUMENTS_KEY: &str = "adk_invalid_tool_arguments";
 /// The most bytes of the model's undecodable arguments kept in [`invalid_tool_arguments`].
 const RAW_ARGUMENTS_MAX_BYTES: usize = 1024;
 
+/// The most characters of a rejection's message a function response carries.
+pub const TOOL_ERROR_MESSAGE_LIMIT: usize = 500;
+
 /// Builds the function response for a tool call that failed with `error`.
 ///
 /// The response names the error's component, category, and code
-/// ([`AdkError::redacted`]); its message stays out unless `expose_message` is set or the code is
-/// [`TOOL_INVALID_ARGUMENTS_CODE`] or [`TOOL_PERMISSION_DENIED_CODE`]. A message can quote
-/// credentials, internal hosts, or upstream bodies, and the function response is sent to the
-/// model provider and stored in the session.
+/// ([`AdkError::redacted`]). A rejection ([`ErrorCategory::is_rejection`]) — the tool
+/// refused the call or could not use it as made — also carries its message, cut at
+/// [`TOOL_ERROR_MESSAGE_LIMIT`] characters, since that message is the reason the model
+/// needs to act on. The message of an upstream or internal failure stays out unless
+/// `expose_message` is set or the code is [`TOOL_INVALID_ARGUMENTS_CODE`]: it can quote
+/// credentials, internal hosts, or upstream bodies, and the function response is sent to
+/// the model provider and stored in the session.
 ///
 /// # Example
 ///
@@ -81,17 +65,38 @@ const RAW_ARGUMENTS_MAX_BYTES: usize = 1024;
 ///     .as_str()
 ///     .unwrap()
 ///     .contains("db.internal"));
+///
+/// let refused = AdkError::new(
+///     ErrorComponent::Tool,
+///     ErrorCategory::Forbidden,
+///     "harness.shell.protected",
+///     ".git/hooks is a protected path",
+/// );
+/// assert_eq!(
+///     tool_error_response("bash", &refused, false)["error"],
+///     "tool 'bash' failed: tool.forbidden (harness.shell.protected): .git/hooks is a protected path"
+/// );
 /// ```
 pub fn tool_error_response(tool_name: &str, error: &AdkError, expose_message: bool) -> Value {
-    let text = if expose_message
-        || error.code == TOOL_INVALID_ARGUMENTS_CODE
-        || error.code == TOOL_PERMISSION_DENIED_CODE
-    {
+    let text = if expose_message || error.code == TOOL_INVALID_ARGUMENTS_CODE {
         error.to_string()
+    } else if error.category.is_rejection() {
+        format!(
+            "tool '{tool_name}' failed: {}: {}",
+            error.redacted(),
+            bounded_message(&error.message)
+        )
     } else {
         format!("tool '{tool_name}' failed: {}", error.redacted())
     };
     json!({ "error": text })
+}
+
+/// `message` cut at [`TOOL_ERROR_MESSAGE_LIMIT`] characters, marked when cut.
+fn bounded_message(message: &str) -> String {
+    let mut chars = message.chars();
+    let head: String = chars.by_ref().take(TOOL_ERROR_MESSAGE_LIMIT).collect();
+    if chars.next().is_some() { format!("{head}… (truncated)") } else { head }
 }
 
 /// Builds the function response for a call that ran but whose after-tool pipeline failed.
@@ -292,11 +297,58 @@ mod tests {
             "missing required scopes: [verified] (tool requires: [verified])",
         );
         assert_eq!(
-            tool_error_response("transfer", &err, false),
-            json!({
-                "error": "tool.forbidden: missing required scopes: [verified] (tool requires: [verified])"
-            })
+            tool_error_response("transfer", &err, false)["error"],
+            "tool 'transfer' failed: tool.forbidden (tool.permission_denied): missing required \
+             scopes: [verified] (tool requires: [verified])"
         );
+    }
+
+    #[test]
+    fn a_rejection_keeps_its_message_bounded_and_a_failure_does_not() {
+        let refused = AdkError::new(
+            ErrorComponent::Tool,
+            ErrorCategory::Forbidden,
+            "harness.shell.protected",
+            ".git/hooks is a protected path; ask for approval",
+        );
+        assert_eq!(
+            tool_error_response("bash", &refused, false)["error"],
+            "tool 'bash' failed: tool.forbidden (harness.shell.protected): .git/hooks is a \
+             protected path; ask for approval"
+        );
+
+        let long = AdkError::new(
+            ErrorComponent::Tool,
+            ErrorCategory::InvalidInput,
+            "tool.path.outside_workspace",
+            "é".repeat(TOOL_ERROR_MESSAGE_LIMIT + 7),
+        );
+        let text =
+            tool_error_response("read_file", &long, false)["error"].as_str().unwrap().to_string();
+        let expected_head = "é".repeat(TOOL_ERROR_MESSAGE_LIMIT);
+        assert_eq!(
+            text,
+            format!(
+                "tool 'read_file' failed: tool.invalid_input (tool.path.outside_workspace): \
+                 {expected_head}… (truncated)"
+            )
+        );
+
+        for category in [
+            ErrorCategory::Unauthorized,
+            ErrorCategory::RateLimited,
+            ErrorCategory::Timeout,
+            ErrorCategory::Unavailable,
+            ErrorCategory::Cancelled,
+            ErrorCategory::Internal,
+        ] {
+            let failed = AdkError::new(ErrorComponent::Tool, category, "tool.x", "secret body");
+            assert_eq!(
+                tool_error_response("x", &failed, false)["error"],
+                format!("tool 'x' failed: tool.{category} (tool.x)"),
+                "{category} withholds its message"
+            );
+        }
     }
 
     #[test]

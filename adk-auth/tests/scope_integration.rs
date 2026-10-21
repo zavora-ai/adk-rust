@@ -287,8 +287,8 @@ async fn a_scope_denial_is_a_structured_permission_error_naming_the_missing_scop
     assert_eq!(
         adk_core::tool_error_response("transfer_funds", &error, false),
         json!({
-            "error": "tool.forbidden: missing required scopes: [verified] (tool requires: \
-                      [finance:write, verified])"
+            "error": "tool 'transfer_funds' failed: tool.forbidden (tool.permission_denied): \
+                      missing required scopes: [verified] (tool requires: [finance:write, verified])"
         })
     );
 }

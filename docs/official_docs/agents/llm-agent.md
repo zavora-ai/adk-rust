@@ -641,7 +641,7 @@ Intercept agent behavior. See [Callbacks](../callbacks/callbacks.md) for every c
 | `tool_retry_budget(name, RetryBudget)` | Per-tool retry override |
 | `circuit_breaker_threshold(u32)` | Disable tool after N consecutive failures |
 | `on_tool_error(callback)` | Register fallback handler for tool failures |
-| `expose_tool_error_messages(bool)` | Send tool and tool-callback error messages to the model (default: component, category, and code only) |
+| `expose_tool_error_messages(bool)` | Send every tool and tool-callback error message to the model (default: component, category, and code, plus the message of a rejection) |
 | `after_tool_callback_full(callback)` | V2 rich after-tool callback with tool, args, and response |
 | `build()` | Creates the agent |
 
@@ -808,11 +808,15 @@ A retry budget applies only to tools whose `effect()` is `ReadOnly` or `Idempote
 Every function call gets exactly one function response, which is sent to the model provider and
 stored in the session. An error message can quote credentials, internal hosts, or upstream bodies,
 so by default the model sees an error's component, category, and code
-(`AdkError::redacted()`), not its message:
+(`AdkError::redacted()`), not its message. A rejection — a tool that refused the call or could
+not use it as made (`ErrorCategory::is_rejection`: `InvalidInput`, `Forbidden`, `NotFound`,
+`Unsupported`, `Conflict`, `ResourceExhausted`) — keeps its message, cut at
+`TOOL_ERROR_MESSAGE_LIMIT` (500) characters, since that message is what the model acts on:
 
 | Outcome | Function response |
 |---------|-------------------|
-| Tool returns `Err(AdkError)` | `{"error": "tool 'lookup_order' failed: tool.unavailable (tool.orders_db.unavailable)"}` |
+| Tool returns `Err(AdkError)` with an upstream or internal category | `{"error": "tool 'lookup_order' failed: tool.unavailable (tool.orders_db.unavailable)"}` |
+| Tool returns `Err(AdkError)` with a rejection category | `{"error": "tool 'bash' failed: tool.forbidden (harness.shell.protected): .git/hooks is a protected path"}` — the message, cut at 500 characters |
 | Error with code `adk_core::TOOL_INVALID_ARGUMENTS_CODE` (the `#[tool]` macro's argument errors) | `{"error": "tool.invalid_input: invalid arguments for 'lookup_order': missing field `id`"}` — the message tells the model what to fix |
 | Timeout | `{"error": "Tool 'slow_report' timed out after 50ms"}`; a `NonIdempotent` call gets `{"status": "outcome_unknown", ...}` |
 | Before-tool callback or plugin returns `Err` | `{"error": "tool 'lookup_order' was not run: a before-tool callback failed with agent.internal (agent.legacy)"}` |

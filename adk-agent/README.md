@@ -141,7 +141,7 @@ The example needs `adk-agent`, `adk-core`, `adk-model`, `adk-runner`, `adk-sessi
 | `sub_agent(agent)` | Add a sub-agent for transfers |
 | `max_iterations(n)` | Set the maximum model round-trips (default 100, `DEFAULT_MAX_ITERATIONS`) |
 | `tool_timeout(duration)` | Set the per-tool timeout (default five minutes, `DEFAULT_TOOL_TIMEOUT`) |
-| `expose_tool_error_messages(bool)` | Send a failed tool's error message to the model instead of its component, category, and code |
+| `expose_tool_error_messages(bool)` | Send every failed tool's error message to the model; by default only a rejection's message (`ErrorCategory::is_rejection`) joins its component, category, and code |
 | `default_retry_budget(budget)` | Set the retry budget for every tool |
 | `tool_retry_budget(name, budget)` | Set the retry budget for one tool |
 | `circuit_breaker_threshold(n)` | Disable a tool after `n` consecutive failures in an invocation |

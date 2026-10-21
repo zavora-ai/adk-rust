@@ -121,6 +121,35 @@ pub enum ErrorCategory {
     Conflict,
 }
 
+impl ErrorCategory {
+    /// Whether the category describes the call rather than what happened upstream.
+    ///
+    /// `InvalidInput`, `Forbidden`, `NotFound`, `Unsupported`, `Conflict` and
+    /// `ResourceExhausted` say what the call asked for and why it was not done, so their
+    /// messages are the guidance the caller needs. The others report an upstream or
+    /// internal failure, whose message can quote credentials, hosts or response bodies.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::ErrorCategory;
+    ///
+    /// assert!(ErrorCategory::Forbidden.is_rejection());
+    /// assert!(!ErrorCategory::Unavailable.is_rejection());
+    /// ```
+    pub fn is_rejection(self) -> bool {
+        matches!(
+            self,
+            Self::InvalidInput
+                | Self::Forbidden
+                | Self::NotFound
+                | Self::Unsupported
+                | Self::Conflict
+                | Self::ResourceExhausted
+        )
+    }
+}
+
 impl fmt::Display for ErrorCategory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {

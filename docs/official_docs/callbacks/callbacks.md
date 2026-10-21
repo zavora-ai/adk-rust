@@ -149,7 +149,8 @@ Callbacks use different return values to control execution flow:
 | `Err(e)` | Agent callbacks: abort execution with error. Tool callbacks: answer the call with an error and continue (see below) |
 
 A tool callback's error never ends the run. `LlmAgent` answers the call, by default naming the
-error's component, category, and code but not its message
+error's component, category, and code but not its message, except for a rejection
+(`ErrorCategory::is_rejection`), whose message is sent cut at 500 characters
 (see [What the model is told](../agents/llm-agent.md#what-the-model-is-told)):
 
 | Callback | Function response on `Err(e)` |

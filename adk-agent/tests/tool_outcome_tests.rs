@@ -11,8 +11,8 @@ use adk_agent::LlmAgentBuilder;
 use adk_core::{
     ActionLedger, ActionOutcome, AdkError, Content, ErrorCategory, ErrorComponent, Event,
     InMemoryActionLedger, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part,
-    RESULT_WITHHELD_STATUS, Result, RunConfig, SessionId, TOOL_INVALID_ARGUMENTS_CODE, Tool,
-    ToolContext, ToolEffect, UserId,
+    RESULT_WITHHELD_STATUS, Result, RunConfig, SessionId, TOOL_ERROR_MESSAGE_LIMIT,
+    TOOL_INVALID_ARGUMENTS_CODE, Tool, ToolContext, ToolEffect, UserId,
 };
 use adk_plugin::{Plugin, PluginConfig, PluginManager};
 use adk_runner::Runner;
@@ -484,41 +484,40 @@ async fn exposing_error_messages_sends_the_tool_error_message() {
 }
 
 #[tokio::test]
-async fn a_scope_guard_denial_reaches_the_model_as_a_denial_naming_the_scope() {
-    // spec 3.1 §7.14: an adk-auth denial is reported as a refusal naming the missing scope,
-    // not as `tool.internal (tool.legacy)`.
-    struct Transfer;
-
-    #[async_trait]
-    impl Tool for Transfer {
-        fn name(&self) -> &str {
-            "transfer"
-        }
-        fn description(&self) -> &str {
-            "moves money"
-        }
-        fn required_scopes(&self) -> &[&str] {
-            &["finance:write"]
-        }
-        async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
-            Ok(json!({ "status": "sent" }))
-        }
-    }
-
-    let model = ScriptedModel::new(vec![call("transfer", json!({ "amount": 5 }))]);
-    let guarded = adk_auth::ScopeGuard::new(adk_auth::StaticScopeResolver::new(vec![
-        "finance:read".to_string(),
-    ]))
-    .protect(Transfer);
-    let agent =
-        LlmAgentBuilder::new("support").model(model).tool(Arc::new(guarded)).build().unwrap();
+async fn a_tool_rejection_keeps_its_message_bounded() {
+    let model = ScriptedModel::new(vec![call("bash", json!({"command": "rm -rf .git/hooks"}))]);
+    let (tool, runs) = CountingTool::failing(
+        "bash",
+        ErrorCategory::Forbidden,
+        "harness.shell.protected",
+        ".git/hooks is a protected path; ask for approval",
+    );
+    let agent = LlmAgentBuilder::new("harness").model(model).tool(Arc::new(tool)).build().unwrap();
     let outcome = run(agent, None, RunConfig::default()).await;
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
     assert_eq!(
         outcome.answer(),
-        json!({
-            "error": "tool.forbidden: missing required scopes: [finance:write] (tool requires: \
-                      [finance:write])"
-        })
+        json!({"error": "tool 'bash' failed: tool.forbidden (harness.shell.protected): \
+                         .git/hooks is a protected path; ask for approval"})
+    );
+
+    let model = ScriptedModel::new(vec![call("read_file", json!({"path": "../x"}))]);
+    let (tool, _) = CountingTool::failing(
+        "read_file",
+        ErrorCategory::InvalidInput,
+        "devtools.path.outside_workspace",
+        &"x".repeat(TOOL_ERROR_MESSAGE_LIMIT + 1),
+    );
+    let agent = LlmAgentBuilder::new("harness").model(model).tool(Arc::new(tool)).build().unwrap();
+    let outcome = run(agent, None, RunConfig::default()).await;
+    let text = outcome.answer()["error"].as_str().unwrap().to_string();
+    assert_eq!(
+        text,
+        format!(
+            "tool 'read_file' failed: tool.invalid_input (devtools.path.outside_workspace): {}… \
+             (truncated)",
+            "x".repeat(TOOL_ERROR_MESSAGE_LIMIT)
+        )
     );
 }
 
@@ -611,4 +610,43 @@ async fn a_call_with_undecodable_arguments_is_answered_without_executing() {
     assert!(answer.starts_with("tool 'get_weather' was not run: arguments are not valid JSON"));
     // The run continues: the model is asked again with the call answered.
     assert_eq!(model.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn a_scope_guard_denial_reaches_the_model_as_a_denial_naming_the_scope() {
+    // spec 3.1 §7.14: an adk-auth denial is reported as a refusal naming the missing scope,
+    // not as `tool.internal (tool.legacy)`.
+    struct Transfer;
+
+    #[async_trait]
+    impl Tool for Transfer {
+        fn name(&self) -> &str {
+            "transfer"
+        }
+        fn description(&self) -> &str {
+            "moves money"
+        }
+        fn required_scopes(&self) -> &[&str] {
+            &["finance:write"]
+        }
+        async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+            Ok(json!({ "status": "sent" }))
+        }
+    }
+
+    let model = ScriptedModel::new(vec![call("transfer", json!({ "amount": 5 }))]);
+    let guarded = adk_auth::ScopeGuard::new(adk_auth::StaticScopeResolver::new(vec![
+        "finance:read".to_string(),
+    ]))
+    .protect(Transfer);
+    let agent =
+        LlmAgentBuilder::new("support").model(model).tool(Arc::new(guarded)).build().unwrap();
+    let outcome = run(agent, None, RunConfig::default()).await;
+    assert_eq!(
+        outcome.answer(),
+        json!({
+            "error": "tool 'transfer' failed: tool.forbidden (tool.permission_denied): missing \
+                      required scopes: [finance:write] (tool requires: [finance:write])"
+        })
+    );
 }

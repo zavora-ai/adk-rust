@@ -1240,7 +1240,9 @@ impl LlmAgentBuilder {
     /// model provider and stored in the session. The message is logged when
     /// [`RunConfig::record_payloads`](adk_core::RunConfig::record_payloads) is set. Errors with
     /// code [`TOOL_INVALID_ARGUMENTS_CODE`](adk_core::TOOL_INVALID_ARGUMENTS_CODE) always keep
-    /// their message, as do timeouts and the agent's own refusals.
+    /// their message, as do timeouts, the agent's own refusals, and a tool's rejections
+    /// ([`ErrorCategory::is_rejection`](adk_core::ErrorCategory::is_rejection)), cut at
+    /// [`TOOL_ERROR_MESSAGE_LIMIT`](adk_core::TOOL_ERROR_MESSAGE_LIMIT) characters.
     ///
     /// Enable this only when every tool's error messages are safe to send to the provider. An
     /// [`on_tool_error`](Self::on_tool_error) callback chooses the text for one failure instead.
