@@ -11,7 +11,9 @@ description = "Scripted and live scenarios for the adk-harness HarnessAgent (spe
 adk-core = { path = "../../adk-core" }
 adk-agent = { path = "../../adk-agent", features = ["coding"] }
 adk-devtools = { path = "../../adk-devtools" }
-adk-harness = { path = "../../adk-harness", default-features = false, features = ["runner", "skills", "sandbox", "memory", "team", "team-acp", "graph", "sqlite", "web", "web-fixture", "mcp", "hooks", "payments"] }
+adk-harness = { path = "../../adk-harness", default-features = false, features = ["runner", "skills", "sandbox", "memory", "team", "team-acp", "graph", "sqlite", "web", "web-fixture", "mcp", "hooks", "payments", "docker"] }
+# A test enforcer for the S3 scenario implements the sandbox's `SandboxEnforcer`.
+adk-sandbox = { path = "../../adk-sandbox" }
 adk-tool = { path = "../../adk-tool", features = ["mcp", "mcp-sampling"] }
 # The H8 scenario: adk-payments' tools, journal and guardrails, and their scope guard.
 adk-payments = { path = "../../adk-payments" }

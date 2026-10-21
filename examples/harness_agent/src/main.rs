@@ -34,6 +34,7 @@ use serde_json::{Value, json};
 mod hooks;
 mod local;
 mod payments;
+mod sandbox;
 mod team_graph;
 mod web_mcp;
 
@@ -993,7 +994,10 @@ async fn run_scripted(name: &str, subject: Subject) -> Result<Checks> {
                         Some(result) => result,
                         None => match payments::run_scripted(other, subject).await {
                             Some(result) => result,
-                            None => bail!("unknown scenario {other}"),
+                            None => match sandbox::run_scripted(other, subject).await {
+                                Some(result) => result,
+                                None => bail!("unknown scenario {other}"),
+                            },
                         },
                     },
                 },
@@ -1035,8 +1039,12 @@ async fn main() -> Result<()> {
                 println!("| — | {provider} | — | skipped: no key |");
                 continue;
             };
-            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).chain(web_mcp::LIVE).chain(hooks::LIVE).chain(payments::LIVE).copied() {
+            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).chain(web_mcp::LIVE).chain(hooks::LIVE).chain(payments::LIVE).chain(sandbox::LIVE).copied() {
                 if !selected.is_empty() && !selected.contains(&scenario) {
+                    continue;
+                }
+                if let Some(reason) = sandbox::skip_reason(scenario) {
+                    println!("| {scenario} | {provider} | {model_name} | skipped: {reason} |");
                     continue;
                 }
                 println!("  running {scenario} on {model_name}");
@@ -1049,7 +1057,10 @@ async fn main() -> Result<()> {
                             Some(result) => result,
                             None => match hooks::run_live(other, model.clone()).await {
                                 Some(result) => result,
-                                None => payments::run_live(other, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                                None => match payments::run_live(other, model.clone()).await {
+                                    Some(result) => result,
+                                    None => sandbox::run_live(other, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                                },
                             },
                         },
                     },
@@ -1072,8 +1083,14 @@ async fn main() -> Result<()> {
             .chain(hooks::SCRIPTED)
             .chain(local::SCRIPTED)
             .chain(payments::SCRIPTED)
+            .chain(sandbox::SCRIPTED)
         {
             if !selected.is_empty() && !selected.contains(name) {
+                continue;
+            }
+            if let Some(reason) = sandbox::skip_reason(name) {
+                println!("  {name}: skipped, {reason}");
+                rows.push(format!("| `{name}` | skipped | skipped: {reason} |"));
                 continue;
             }
             println!("  {name}");

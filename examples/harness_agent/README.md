@@ -32,6 +32,13 @@ cargo run -- mode_matrix       # one scenario
 | `hooks_cannot_grant` (H13) | A workspace `.adk/harness.toml` hook that prints `{"decision":"allow"}` for `bash` is ignored and audited as `ignored_grant`; a hook denies writes under `migrations/` in Auto; a hook's stdout reaches the model only inside `<hook-note>`; an `on_stop` note is an event for the user with no content; the same hooks in an untrusted workspace do not run and are never recorded. The 3.0 `CodingAgent` has no hooks |
 | `read_file_image_inline` (D6) | `read_file` returns a PNG and a PDF as inline data parts with a stub naming the type and size, and a text file named `.png` as text. The tool is devtools', so both agents pass |
 | `goal_resumes_after_crash` (H1) | A durable goal parks on a held write; the worker is killed; a new process approves the call and the run completes at the same iteration with the write done once |
+| `sandbox_protects_git_hooks_and_envrc` (S3) | Under the platform enforcer, with the workspace read-write and every command approved, a sandboxed command writes `notes.txt` but cannot plant `.git/hooks/pre-commit` or change `.envrc`; both results carry the sandbox hint |
+| `auto_allow_sandboxed_needs_s3` (I26) | An enforcer that keeps nothing read-only makes `build()` refuse `auto_allow_sandboxed`; under the platform enforcer a sandboxed `cargo test` runs in Ask with zero prompts and the network off |
+| `container_shell_shares_workspace` (S4) | Against a Docker daemon: a file the container writes in `/workspace` is read by `read_file` on the host, and a file the host wrote is read in the container |
+
+The sandbox scenarios need the platform enforcer (Seatbelt on macOS, bubblewrap on Linux)
+and `container_shell_shares_workspace` a Docker daemon with the `alpine:3.20` image; on a
+host without them they print `skipped` with the reason.
 
 ## Live scenarios
 
@@ -51,6 +58,7 @@ cargo run -- --live --provider anthropic
 | `live_plan_graph` | A three-step plan with an Approve gate on step 3: steps 1 and 2 run, the gate waits, `Harness::decide` approves it, step 3 runs, the plan is done |
 | `live_screenshot_and_format_hook` | The model reads `screenshot.png` through `read_file` (an inline `image/png` part) and describes it; it writes `src/lib.rs`, a workspace `post_edit` hook runs `rustfmt` on it, the result carries the hook's note and `harness.hook.ran` records the run |
 | `live_durable_goal` | `make the failing test pass` until `cargo test --quiet` as a durable run on SQLite: the run parks on a held edit, the worker is killed, a new process approves the calls, the run completes, the goal is done and the tests pass |
+| `live_sandboxed_cargo_test_auto_allow` | Under `auto_allow_sandboxed`, the model runs `cargo test --quiet` in the OS sandbox with no prompt and it passes; its `bash` write to `.git/hooks/pre-commit` is refused with the sandbox hint; every prompt is denied, so no hook is planted |
 
 `HARNESS_ACP_CMD` is the command of an installed ACP-compatible coding agent, for example
 `my-agent --acp`; `live_team_review` reports an error without it. An agent that requires the
