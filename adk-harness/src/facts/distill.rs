@@ -7,8 +7,8 @@ use std::sync::Arc;
 use adk_agent::LlmAgentBuilder;
 use adk_core::audit_log::AuditActor;
 use adk_core::{
-    Content, Event, GovernanceControl, InstructionProvider, Part, ReadonlyContext, Result,
-    RunBudget, RunConfig,
+    AdkError, Content, Event, GovernanceControl, InstructionProvider, Part, ReadonlyContext,
+    Result, RunBudget, RunConfig,
 };
 use adk_runner::Runner;
 use adk_session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
@@ -233,8 +233,9 @@ impl FactsRuntime {
     }
 
     /// Distils every session with turns not yet distilled, then stops scheduling
-    /// (`Harness::close`).
-    pub(crate) async fn close(&self) {
+    /// (`Harness::close`). Returns the sessions whose distillation failed, with the error,
+    /// each also logged at `warn`.
+    pub(crate) async fn close(&self) -> Vec<(SessionKey, AdkError)> {
         let pending: Vec<SessionKey> = self
             .sessions
             .lock()
@@ -244,14 +245,17 @@ impl FactsRuntime {
             .map(|(key, _)| key.clone())
             .collect();
         self.mark_closed();
+        let mut failed = Vec::new();
         if !self.config.distill {
-            return;
+            return failed;
         }
         for key in pending {
             if let Err(error) = self.distill_session(&key).await {
-                tracing::warn!(error = %error, "session distillation at close failed");
+                tracing::warn!(error = %error, session.id = %key.2, "session distillation at close failed");
+                failed.push((key, error));
             }
         }
+        failed
     }
 
     /// Distils the session `key`: a governed run on the distiller model with no tools and
@@ -433,7 +437,9 @@ impl FactsRuntime {
             .model(self.distill_model.clone())
             .description("Distils durable facts from a harness session.")
             .instruction_provider(provider)
-            .output_schema(distill_schema())
+            // The model's adapter fits the schema to its provider: Gemini's response schema
+            // rejects `additionalProperties`, which OpenAI's strict output requires.
+            .output_schema(self.distill_model.schema_adapter().normalize_schema(distill_schema()))
             .max_iterations(3)
             .build()?;
         let sessions = Arc::new(InMemorySessionService::new());

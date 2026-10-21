@@ -417,10 +417,11 @@ impl HarnessLauncher {
     }
 
     /// Closes the harness after [`run_once`](Self::run_once) turns: a session with turns not
-    /// yet distilled is distilled into long-term memory first (spec 3.1 §7.15.2).
+    /// yet distilled is distilled into long-term memory first (spec 3.1 §7.15.2). A
+    /// distillation that fails is reported on the console in one line.
     pub async fn close(&self) {
         if let Some(shared) = &self.opened {
-            shared.harness().close().await;
+            report_close(&shared.console, shared.harness().close_with_report().await);
         }
     }
 
@@ -503,7 +504,7 @@ impl HarnessLauncher {
         if memory_on(&shared.harness()) {
             println!("Saving what this session taught to long-term memory…");
         }
-        shared.harness().close().await;
+        report_close(&shared.console, shared.harness().close_with_report().await);
         Ok(())
     }
 
@@ -602,6 +603,17 @@ fn report(outcome: &TurnOutcome) {
         );
     } else {
         println!("\n");
+    }
+}
+
+/// Prints one line per session whose turns were not distilled into long-term memory
+/// (spec 3.1 §7.15.2), so a failed distillation is not silent.
+fn report_close(console: &ConsoleIo, report: adk_harness::CloseReport) {
+    for (session, error) in &report.distillation_failures {
+        console.print(&format!(
+            "note: long-term memory was not updated for session {}: {error}\n",
+            adk_harness::escape_control(session)
+        ));
     }
 }
 

@@ -80,6 +80,21 @@ impl Models {
     }
 }
 
+/// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
+/// harness — a failed session-end distillation, a stale rule, a refused sandbox — reaches
+/// stderr. `RUST_LOG` sets the filter; the default is `warn`.
+fn install_tracing() {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    // A second harness command in one process keeps the first subscriber.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .without_time()
+        .try_init();
+}
+
 impl Setup {
     async fn new(
         model: ResolvedModel,
@@ -87,6 +102,7 @@ impl Setup {
         args: HarnessArgs,
         default_mode: HarnessMode,
     ) -> Result<Self> {
+        install_tracing();
         let resolved = args.resolve(default_mode, user_config().as_deref())?;
         #[cfg(feature = "persist")]
         let (db, store_note) = if args.ephemeral {

@@ -132,7 +132,7 @@ pub use goal::{
     GoalStore, InMemoryGoalStore, UNTIL_CHECK_AGENT, UntilCheckAgent,
 };
 #[cfg(feature = "runner")]
-pub use harness::{CANCELLED_BY_MODE_CHANGE_STATUS, Harness, HarnessDecision};
+pub use harness::{CANCELLED_BY_MODE_CHANGE_STATUS, CloseReport, Harness, HarnessDecision};
 #[cfg(feature = "auth")]
 pub use identity::{EphemeralAuditLog, HARNESS_AUDIT_REQUIRED_CODE, RbacMap, ShellCredential};
 pub use instructions::{

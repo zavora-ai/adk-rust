@@ -341,6 +341,19 @@ async fn run(model: Arc<dyn adk_core::Llm>) -> adk_core::Result<()> {
 `HarnessLauncher::run_once` runs one turn and returns the calls held for a decision, for
 scripts and tests.
 
+## Logging
+
+Every harness command installs a `tracing` subscriber on stderr. `RUST_LOG` sets the filter
+(`RUST_LOG=adk_harness=debug adk-rust code "..."`); without it only `warn` and `error` events
+print, so a failed session-end distillation, a stale standing rule or a refused sandbox is seen.
+A failed distillation is also reported in one line when the command ends:
+
+```text
+note: long-term memory was not updated for session s-01: model.openai.unavailable (...)
+```
+
+`Harness::close_with_report` returns the same failures to an embedding program.
+
 ## Related
 
 - [Serving the harness](serving.md)

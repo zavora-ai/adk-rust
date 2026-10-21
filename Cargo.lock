@@ -358,6 +358,7 @@ dependencies = [
  "toml 0.8.23",
  "tower 0.5.3",
  "tracing",
+ "tracing-subscriber",
  "uuid 1.25.0",
  "zip 9.0.4",
 ]

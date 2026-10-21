@@ -560,3 +560,29 @@ async fn proposals_are_redacted_capped_and_cannot_replace_known_facts() {
     let all = world.store.list(adk_harness::FactFilter::user(APP, "alice")).await.unwrap();
     assert!(!all.iter().any(|fact| fact.text.contains("hunter2")), "no secret is stored");
 }
+
+#[tokio::test]
+async fn a_failed_distillation_is_reported_at_close() {
+    let world = World::new();
+    let model = Arc::new(ScriptedLlm::new("model", vec![ScriptedResponse::text("noted")]));
+    let down = || {
+        ScriptedResponse::error(adk_core::AdkError::new(
+            adk_core::ErrorComponent::Model,
+            adk_core::ErrorCategory::Unavailable,
+            "model.test.unavailable",
+            "distiller down",
+        ))
+    };
+    let distiller = Arc::new(ScriptedLlm::new("distiller", vec![down(), down(), down()]));
+    let harness = world.harness(&model, &distiller, |b| b);
+    send(&harness, "s-fail", "I prefer tabs over spaces.").await;
+
+    let report = harness.close_with_report().await;
+    assert_eq!(report.distillation_failures.len(), 1, "{report:?}");
+    let (session, error) = &report.distillation_failures[0];
+    assert_eq!(session, "s-fail");
+    assert_eq!(error.code, "model.test.unavailable", "{error}");
+    assert!(!distiller.requests().is_empty(), "the distiller was called");
+    let facts = world.store.list(adk_harness::FactFilter::user(APP, "alice")).await.unwrap();
+    assert!(facts.is_empty(), "nothing was written: {facts:?}");
+}
