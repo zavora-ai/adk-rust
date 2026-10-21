@@ -69,6 +69,31 @@ macro_rules! impl_protected_tool {
                 ($inner).timeout_override()
             }
 
+            fn declaration(&self) -> Value {
+                let $self_ident = self;
+                ($inner).declaration()
+            }
+
+            fn is_builtin(&self) -> bool {
+                let $self_ident = self;
+                ($inner).is_builtin()
+            }
+
+            fn is_read_only(&self) -> bool {
+                let $self_ident = self;
+                ($inner).is_read_only()
+            }
+
+            fn is_concurrency_safe(&self) -> bool {
+                let $self_ident = self;
+                ($inner).is_concurrency_safe()
+            }
+
+            fn is_agent_delegation(&self) -> bool {
+                let $self_ident = self;
+                ($inner).is_agent_delegation()
+            }
+
             async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
                 let $self_ident = self;
                 execute_protected_tool(
@@ -139,6 +164,31 @@ macro_rules! impl_protected_tool {
             fn timeout_override(&self) -> Option<Option<std::time::Duration>> {
                 let $self_ident = self;
                 ($inner).timeout_override()
+            }
+
+            fn declaration(&self) -> Value {
+                let $self_ident = self;
+                ($inner).declaration()
+            }
+
+            fn is_builtin(&self) -> bool {
+                let $self_ident = self;
+                ($inner).is_builtin()
+            }
+
+            fn is_read_only(&self) -> bool {
+                let $self_ident = self;
+                ($inner).is_read_only()
+            }
+
+            fn is_concurrency_safe(&self) -> bool {
+                let $self_ident = self;
+                ($inner).is_concurrency_safe()
+            }
+
+            fn is_agent_delegation(&self) -> bool {
+                let $self_ident = self;
+                ($inner).is_agent_delegation()
             }
 
             async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {

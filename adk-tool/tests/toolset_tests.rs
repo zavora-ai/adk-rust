@@ -149,6 +149,12 @@ async fn prefixed_tools_keep_the_safety_signals_and_annotations_of_the_tool_they
             )
         })
         .collect();
+    let bare = HintedTool { annotations: described[0].4.clone().unwrap() };
+    assert_eq!(tools[0].origin(), bare.origin(), "a prefix is not a new publisher");
+    assert_eq!(
+        adk_core::ToolOrigin::of(tools[0].as_ref()).source,
+        adk_core::ToolOrigin::of(&bare).source
+    );
     assert_eq!(
         described,
         vec![(

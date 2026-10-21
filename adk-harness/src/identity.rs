@@ -799,6 +799,97 @@ pub(crate) fn resolve_credentials(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adk_core::ToolOrigin;
+    use serde_json::json;
+
+    /// A tool with its own origin, annotations and declaration, as an MCP tool has.
+    #[derive(Debug)]
+    struct Declared;
+
+    #[async_trait]
+    impl Tool for Declared {
+        fn name(&self) -> &str {
+            "read"
+        }
+
+        fn description(&self) -> &str {
+            "reads"
+        }
+
+        fn declaration(&self) -> Value {
+            json!({
+                "name": "read",
+                "description": "reads",
+                "parameters": { "type": "object", "properties": { "path": { "type": "string" } } },
+                "x-server": "fs"
+            })
+        }
+
+        fn annotations(&self) -> Option<&Value> {
+            static HINTS: OnceLock<Value> = OnceLock::new();
+            Some(HINTS.get_or_init(|| json!({ "readOnlyHint": true })))
+        }
+
+        fn origin(&self) -> &str {
+            "mcp:fs"
+        }
+
+        fn effect(&self) -> ToolEffect {
+            ToolEffect::ReadOnly
+        }
+
+        async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+            Ok(Value::Null)
+        }
+    }
+
+    /// A broker that mints nothing.
+    #[derive(Debug)]
+    struct NoBroker;
+
+    #[async_trait]
+    impl CredentialBroker for NoBroker {
+        async fn token_for(
+            &self,
+            _acting: &adk_core::ActingContext,
+            resource: &Url,
+            _scopes: &[String],
+        ) -> Result<adk_core::ScopedToken> {
+            Err(AdkError::new(
+                ErrorComponent::Auth,
+                ErrorCategory::Unavailable,
+                "test.broker.none",
+                format!("no credential for {resource}"),
+            ))
+        }
+
+        async fn revoke(&self, _scope: &RevocationScope) -> Result<u64> {
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn the_wrappers_keep_the_wrapped_tools_origin_and_declaration_digest() {
+        let inner: Arc<dyn Tool> = Arc::new(Declared);
+        let expected = ToolOrigin::of(inner.as_ref());
+        assert_eq!(expected.source, "mcp:fs");
+
+        let permission = PermissionTool {
+            inner: inner.clone(),
+            role: PermissionRole::Explain { code: "harness.rbac.denied:harness:shell" },
+        };
+        assert_eq!(ToolOrigin::of(&permission), expected, "PermissionTool");
+        assert_eq!(permission.annotations(), inner.annotations());
+
+        let credentialed = CredentialedTool::new(
+            inner.clone(),
+            Arc::new(NoBroker),
+            Vec::new(),
+            Arc::new(CallEnvironment::default()),
+        );
+        assert_eq!(ToolOrigin::of(&credentialed), expected, "CredentialedTool");
+        assert_eq!(credentialed.effect(), ToolEffect::ReadOnly);
+    }
 
     #[test]
     fn https_remotes_become_credentials_once_per_host() {

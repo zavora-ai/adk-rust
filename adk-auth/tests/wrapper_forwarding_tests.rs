@@ -130,3 +130,65 @@ fn a_wrapper_over_a_tool_without_hints_reports_none() {
     assert_eq!(protected.annotations(), None);
     assert_eq!(ToolOrigin::of(&protected), ToolOrigin::of(&Plain));
 }
+
+/// A tool that builds its own declaration, as MCP tools and prefixed tools do.
+#[derive(Debug)]
+struct DeclaringTool;
+
+#[async_trait]
+impl Tool for DeclaringTool {
+    fn name(&self) -> &str {
+        "read_file"
+    }
+
+    fn description(&self) -> &str {
+        "reads a file"
+    }
+
+    fn declaration(&self) -> Value {
+        json!({
+            "name": "read_file",
+            "description": "reads a file",
+            "parameters": { "type": "object", "properties": { "path": { "type": "string" } } },
+            "x-server": "filesystem"
+        })
+    }
+
+    fn origin(&self) -> &str {
+        "mcp:filesystem"
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        true
+    }
+
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> adk_core::Result<Value> {
+        Ok(Value::Null)
+    }
+}
+
+#[test]
+fn every_auth_wrapper_keeps_a_tools_own_declaration() {
+    let bare = ToolOrigin::of(&DeclaringTool);
+    let wrapped: Vec<(&str, Arc<dyn Tool>)> = vec![
+        ("ProtectedTool", Arc::new(ProtectedTool::new(DeclaringTool, access_control()))),
+        (
+            "ProtectedToolDyn",
+            AuthMiddleware::new(AccessControl::builder().build().unwrap())
+                .protect_all(vec![Arc::new(DeclaringTool)])
+                .remove(0),
+        ),
+        ("ScopedTool", Arc::new(ScopeGuard::new(ContextScopeResolver).protect(DeclaringTool))),
+        (
+            "ScopedToolDyn",
+            ScopeGuard::new(ContextScopeResolver)
+                .protect_all(vec![Arc::new(DeclaringTool)])
+                .remove(0),
+        ),
+    ];
+    for (wrapper, tool) in wrapped {
+        assert_eq!(tool.declaration(), DeclaringTool.declaration(), "{wrapper}");
+        assert_eq!(ToolOrigin::of(tool.as_ref()), bare, "{wrapper} changes the declaration digest");
+        assert!(tool.is_concurrency_safe(), "{wrapper} drops the dispatch flags");
+    }
+}

@@ -299,3 +299,65 @@ pub(crate) fn wire(root: &Path, config: &SkillsConfig) -> Result<SkillsWiring> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use adk_core::{ToolContext, ToolEffect, ToolOrigin};
+
+    /// `load_skill` as the skill toolset declares it: its own declaration and annotations.
+    #[derive(Debug)]
+    struct Declared;
+
+    #[async_trait]
+    impl Tool for Declared {
+        fn name(&self) -> &str {
+            "load_skill"
+        }
+
+        fn description(&self) -> &str {
+            "loads a skill"
+        }
+
+        fn declaration(&self) -> Value {
+            json!({
+                "name": "load_skill",
+                "description": "loads a skill",
+                "parameters": { "type": "object", "properties": { "name": { "type": "string" } } },
+                "x-skills": 3
+            })
+        }
+
+        fn annotations(&self) -> Option<&Value> {
+            static HINTS: std::sync::LazyLock<Value> =
+                std::sync::LazyLock::new(|| json!({ "readOnlyHint": true }));
+            Some(&HINTS)
+        }
+
+        fn origin(&self) -> &str {
+            "skills:project"
+        }
+
+        fn effect(&self) -> ToolEffect {
+            ToolEffect::ReadOnly
+        }
+
+        async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+            Ok(Value::Null)
+        }
+    }
+
+    #[test]
+    fn the_audited_load_skill_keeps_the_wrapped_tools_origin_and_declaration_digest() {
+        let inner: Arc<dyn Tool> = Arc::new(Declared);
+        let audited = AuditedLoadSkill {
+            inner: inner.clone(),
+            index: Arc::new(SkillIndex::new(Vec::new())),
+            root: PathBuf::new(),
+        };
+        assert_eq!(ToolOrigin::of(&audited), ToolOrigin::of(inner.as_ref()));
+        assert_eq!(audited.origin(), "skills:project");
+        assert_eq!(audited.annotations(), inner.annotations());
+        assert_eq!(audited.effect(), ToolEffect::ReadOnly);
+    }
+}

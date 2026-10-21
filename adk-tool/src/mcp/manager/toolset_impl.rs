@@ -452,5 +452,6 @@ mod tests {
         assert!(prefixed.is_read_only() && prefixed.is_concurrency_safe());
         assert_eq!(prefixed.effect(), adk_core::ToolEffect::ReadOnly);
         assert_eq!(prefixed.origin(), "mcp:server", "approvals bind to the server, not the prefix");
+        assert_eq!(adk_core::ToolOrigin::of(&prefixed).source, "mcp:server");
     }
 }
