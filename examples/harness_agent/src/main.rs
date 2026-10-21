@@ -33,6 +33,7 @@ use serde_json::{Value, json};
 
 mod hooks;
 mod local;
+mod packs;
 mod payments;
 mod sandbox;
 mod surfaces;
@@ -694,8 +695,8 @@ fn live_model(provider: &str) -> Result<Option<(String, Arc<dyn Llm>)>> {
         },
         "anthropic" => match key("ANTHROPIC_API_KEY") {
             Some(key) => Some((
-                "claude-sonnet-4-6".into(),
-                Arc::new(adk_model::anthropic::AnthropicClient::new(adk_model::anthropic::AnthropicConfig::new(key, "claude-sonnet-4-6"))?),
+                "claude-sonnet-5-5".into(),
+                Arc::new(adk_model::anthropic::AnthropicClient::new(adk_model::anthropic::AnthropicConfig::new(key, "claude-sonnet-5-5"))?),
             )),
             None => None,
         },
@@ -999,7 +1000,10 @@ async fn run_scripted(name: &str, subject: Subject) -> Result<Checks> {
                                 Some(result) => result,
                                 None => match surfaces::run_scripted(other, subject).await {
                                     Some(result) => result,
-                                    None => bail!("unknown scenario {other}"),
+                                    None => match packs::run_scripted(other, subject).await {
+                                        Some(result) => result,
+                                        None => bail!("unknown scenario {other}"),
+                                    },
                                 },
                             },
                         },
@@ -1043,7 +1047,7 @@ async fn main() -> Result<()> {
                 println!("| — | {provider} | — | skipped: no key |");
                 continue;
             };
-            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).chain(web_mcp::LIVE).chain(hooks::LIVE).chain(payments::LIVE).chain(sandbox::LIVE).chain(surfaces::LIVE).copied() {
+            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).chain(web_mcp::LIVE).chain(hooks::LIVE).chain(payments::LIVE).chain(sandbox::LIVE).chain(surfaces::LIVE).chain(packs::LIVE).copied() {
                 if !selected.is_empty() && !selected.contains(&scenario) {
                     continue;
                 }
@@ -1065,7 +1069,10 @@ async fn main() -> Result<()> {
                                     Some(result) => result,
                                     None => match sandbox::run_live(other, model.clone()).await {
                                         Some(result) => result,
-                                        None => surfaces::run_live(other, &model_name, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                                        None => match packs::run_live(other, model.clone()).await {
+                                            Some(result) => result,
+                                            None => surfaces::run_live(other, &model_name, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                                        },
                                     },
                                 },
                             },
@@ -1092,6 +1099,7 @@ async fn main() -> Result<()> {
             .chain(payments::SCRIPTED)
             .chain(sandbox::SCRIPTED)
             .chain(surfaces::SCRIPTED)
+            .chain(packs::SCRIPTED)
         {
             if !selected.is_empty() && !selected.contains(name) {
                 continue;
