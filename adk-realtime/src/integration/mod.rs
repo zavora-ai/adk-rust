@@ -172,6 +172,9 @@ pub struct IntegratedRealtimeRunner {
     /// dropped the originals, which is why the active path could only reach the adapter — and
     /// the adapter applies no confirmation, callbacks, or plugins.
     pub(crate) adk_tools: HashMap<String, Arc<dyn adk_core::Tool>>,
+    /// The identity the server authenticated for the session; tool contexts report it
+    /// (spec 3.1 §7.17).
+    pub(crate) request_context: Option<adk_core::RequestContext>,
 }
 
 /// Renders the most recent `limit` turns as bounded `role: text` lines.
@@ -848,13 +851,17 @@ impl IntegratedRealtimeRunner {
     /// execution alike.
     #[allow(dead_code)] // Used by execute_tool_with_plugins
     fn create_tool_context(&self, function_call_id: &str) -> Arc<context::RealtimeToolContext> {
-        Arc::new(context::RealtimeToolContext::new(
+        let ctx = context::RealtimeToolContext::new(
             self.identity.app_name.clone(),
             self.identity.user_id.clone(),
             self.identity.session_id.clone(),
             function_call_id.to_string(),
             self.memory_service.clone(),
-        ))
+        );
+        Arc::new(match &self.request_context {
+            Some(request_context) => ctx.with_request_context(request_context.clone()),
+            None => ctx,
+        })
     }
 }
 
@@ -1271,6 +1278,7 @@ mod session_persistence_tests {
             },
             config: IntegrationConfig::default(),
             adk_tools: HashMap::new(),
+            request_context: None,
         }
     }
 
@@ -1412,6 +1420,7 @@ mod session_persistence_tests {
                 max_memory_injection: 0,
             },
             adk_tools: HashMap::new(),
+            request_context: None,
         };
 
         // 5. Start a turn in the aggregator so record_tool_call has somewhere to attach
@@ -1702,6 +1711,7 @@ mod graceful_degradation_tests {
                         max_history_injection: 20,
                     },
                     adk_tools: HashMap::new(),
+                    request_context: None,
                 };
 
                 // Process events through the aggregator — this is the path that
@@ -1754,6 +1764,7 @@ mod graceful_degradation_tests {
                 max_memory_injection: 0,
             },
             adk_tools: HashMap::new(),
+            request_context: None,
         };
 
         // Process a UserUtteranceComplete event — should not panic even
