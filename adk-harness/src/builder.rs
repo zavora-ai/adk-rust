@@ -187,6 +187,12 @@ pub struct HarnessAgentBuilder {
     payments: Option<crate::packs::payments::PaymentsPack>,
     payments_requested: bool,
     managed_requested: bool,
+    #[cfg(feature = "browser")]
+    browser: Option<crate::packs::browser::BrowserPack>,
+    browser_requested: bool,
+    #[cfg(feature = "computer-use")]
+    computer_use: Option<crate::packs::computer_use::ComputerUsePack>,
+    computer_use_requested: bool,
 }
 
 impl HarnessAgentBuilder {
@@ -271,6 +277,12 @@ impl HarnessAgentBuilder {
             payments: None,
             payments_requested: false,
             managed_requested: false,
+            #[cfg(feature = "browser")]
+            browser: None,
+            browser_requested: false,
+            #[cfg(feature = "computer-use")]
+            computer_use: None,
+            computer_use_requested: false,
         }
     }
 
@@ -776,16 +788,21 @@ impl HarnessAgentBuilder {
         self
     }
 
-    /// Adds a pack (spec 3.1 §7.16–§7.18). `Pack::Payments` needs the services
+    /// Adds a pack (spec 3.1 §7.16–§7.18, §7.24). `Pack::Payments` needs the services
     /// `pack_payments` carries, so on its own it fails at `build`; `Pack::Managed` marks the
     /// harness for the managed runtime (`info().packs` and the prompt name `managed`;
     /// `packs::managed::HarnessResolver` serves it) and fails at `build` without feature
-    /// `managed`; the other packs are not yet implemented.
+    /// `managed`; `Pack::Browser` installs the browser pack over `BrowserConfig::default()`
+    /// (Chrome, headless, WebDriver at `localhost:4444`) and fails at `build` without feature
+    /// `browser`; `Pack::ComputerUse` needs the runtime `pack_computer_use` carries, so on its
+    /// own it fails at `build`; `Pack::Voice` is not yet implemented.
     pub fn pack(mut self, pack: Pack) -> Self {
         match pack {
             Pack::Payments => self.payments_requested = true,
             Pack::Managed => self.managed_requested = true,
-            Pack::Browser | Pack::ComputerUse | Pack::Voice => {
+            Pack::Browser => self.browser_requested = true,
+            Pack::ComputerUse => self.computer_use_requested = true,
+            Pack::Voice => {
                 self.unimplemented.push(format!("pack {pack:?} (spec 3.1 §7.17)"));
             }
         }
@@ -811,6 +828,52 @@ impl HarnessAgentBuilder {
     pub fn pack_payments(mut self, pack: crate::packs::payments::PaymentsPack) -> Self {
         self.payments = Some(pack);
         self.payments_requested = true;
+        self
+    }
+
+    /// The browser pack (spec 3.1 §7.24, feature `browser`): `adk-browser`'s tools under the
+    /// harness policy — observation as `Read`, navigation as `Web` decided by the URL's host
+    /// under the harness's `WebConfig::allowed_domains`, actions as `External` held for
+    /// approval in Ask and Auto and denied in ReadOnly and Plan — with the §7.20 URL checks
+    /// before the browser moves and every result screened and delivered as untrusted text.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let harness = HarnessAgent::builder("harness")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .web(WebConfig { allowed_domains: vec!["docs.rs".into()], ..WebConfig::default() })
+    ///     .pack_browser(BrowserPack::new(session))
+    ///     .build()?;
+    /// ```
+    #[cfg(feature = "browser")]
+    pub fn pack_browser(mut self, pack: crate::packs::browser::BrowserPack) -> Self {
+        self.browser = Some(pack);
+        self.browser_requested = true;
+        self
+    }
+
+    /// The computer-use pack (spec 3.1 §7.24, feature `computer-use`): `computer_use_observe`
+    /// and `computer_use_preview` as `Read`, and `computer_use_execute` as class
+    /// `ComputerUse` — denied in ReadOnly and Plan, held for a non-waivable one-shot approval
+    /// bound to the runtime's action and policy digests in Ask and Auto — through
+    /// adk-computer-use's reference graph, whose approval interrupt the harness approval
+    /// answers.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let harness = HarnessAgent::builder("harness")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .pack_computer_use(ComputerUsePack::new(runtime, authorizer))
+    ///     .build()?;
+    /// ```
+    #[cfg(feature = "computer-use")]
+    pub fn pack_computer_use(mut self, pack: crate::packs::computer_use::ComputerUsePack) -> Self {
+        self.computer_use = Some(pack);
+        self.computer_use_requested = true;
         self
     }
 
@@ -969,6 +1032,38 @@ impl HarnessAgentBuilder {
                  (spec 3.1 §7.18)",
             ));
         }
+        // The browser pack (spec 3.1 §7.24): `Pack::Browser` alone is the default session.
+        #[cfg(feature = "browser")]
+        let browser = match (self.browser, self.browser_requested) {
+            (Some(pack), _) => Some(pack),
+            (None, true) => Some(crate::packs::browser::BrowserPack::default()),
+            (None, false) => None,
+        };
+        #[cfg(not(feature = "browser"))]
+        if self.browser_requested {
+            return Err(AdkError::config(
+                "the browser pack needs adk-harness feature `browser`: Pack::Browser or \
+                 HarnessAgentBuilder::pack_browser(BrowserPack) (spec 3.1 §7.24)",
+            ));
+        }
+        // The computer-use pack (spec 3.1 §7.24): a runtime is a connection to a server, so
+        // `Pack::ComputerUse` alone cannot build.
+        #[cfg(feature = "computer-use")]
+        let computer_use = self.computer_use;
+        if self.computer_use_requested {
+            #[cfg(feature = "computer-use")]
+            let configured = computer_use.is_some();
+            #[cfg(not(feature = "computer-use"))]
+            let configured = false;
+            if !configured {
+                return Err(AdkError::config(
+                    "the computer-use pack needs a ComputerUseRuntime and a ScopeAuthorizer, \
+                     which only the library API takes: \
+                     HarnessAgentBuilder::pack_computer_use(ComputerUsePack) with adk-harness \
+                     feature `computer-use` (spec 3.1 §7.24)",
+                ));
+            }
+        }
         let harness_names: HashSet<&str> = HARNESS_TOOL_NAMES.iter().copied().collect();
         for tool in &self.tools {
             if harness_names.contains(tool.name()) {
@@ -981,6 +1076,22 @@ impl HarnessAgentBuilder {
             if self.payments.is_some() && crate::packs::payments::is_payment_tool(tool.name()) {
                 return Err(AdkError::config(format!(
                     "tool '{}' collides with a payments pack tool of the same name",
+                    tool.name()
+                )));
+            }
+            #[cfg(feature = "browser")]
+            if browser.is_some() && crate::packs::browser::is_browser_tool(tool.name()) {
+                return Err(AdkError::config(format!(
+                    "tool '{}' collides with a browser pack tool of the same name (spec 3.1 §7.24)",
+                    tool.name()
+                )));
+            }
+            #[cfg(feature = "computer-use")]
+            if computer_use.is_some()
+                && crate::packs::computer_use::is_computer_use_tool(tool.name())
+            {
+                return Err(AdkError::config(format!(
+                    "tool '{}' collides with a computer-use pack tool of the same name (spec 3.1 §7.24)",
                     tool.name()
                 )));
             }
@@ -1052,6 +1163,23 @@ impl HarnessAgentBuilder {
                 registry.register(*name, ToolKind::Payment);
             }
         }
+        // The browser pack (spec 3.1 §7.24): every browser tool name is classed, attached
+        // or not, so a lookalike never classes as a plain External.
+        #[cfg(feature = "browser")]
+        if browser.is_some() {
+            for (name, kind) in crate::packs::browser::browser_classes() {
+                registry.register(name, kind);
+            }
+        }
+        // The computer-use pack (spec 3.1 §7.24): observation and preview read; execution is
+        // the never-waivable desktop action.
+        #[cfg(feature = "computer-use")]
+        if computer_use.is_some() {
+            registry.register(crate::packs::computer_use::COMPUTER_USE_OBSERVE, ToolKind::Read);
+            registry.register(crate::packs::computer_use::COMPUTER_USE_PREVIEW, ToolKind::Read);
+            registry
+                .register(crate::packs::computer_use::COMPUTER_USE_EXECUTE, ToolKind::ComputerUse);
+        }
         // 4 (resolved here: member names register as harness classes, spec 3.1 §7.4).
         #[cfg(feature = "team")]
         let team_plan = {
@@ -1062,6 +1190,20 @@ impl HarnessAgentBuilder {
             if payments.is_some() {
                 reserved.extend(
                     crate::packs::payments::PAYMENT_TOOL_NAMES
+                        .iter()
+                        .map(|name| (*name).to_string()),
+                );
+            }
+            #[cfg(feature = "browser")]
+            if browser.is_some() {
+                reserved.extend(
+                    crate::packs::browser::browser_classes().map(|(name, _)| name.to_string()),
+                );
+            }
+            #[cfg(feature = "computer-use")]
+            if computer_use.is_some() {
+                reserved.extend(
+                    crate::packs::computer_use::COMPUTER_USE_TOOL_NAMES
                         .iter()
                         .map(|name| (*name).to_string()),
                 );
@@ -1247,6 +1389,20 @@ impl HarnessAgentBuilder {
         if let Some(payments) = &payments {
             tools.extend(payments.tools.iter().cloned());
         }
+        // The browser pack's tools join the harness tools under the harness's web
+        // configuration (spec 3.1 §7.24).
+        #[cfg(feature = "browser")]
+        let browser = browser.map(|pack| pack.into_runtime(self.web.clone().unwrap_or_default()));
+        #[cfg(feature = "browser")]
+        if let Some(browser) = &browser {
+            tools.extend(browser.tools.iter().cloned());
+        }
+        #[cfg(feature = "computer-use")]
+        let computer_use = computer_use.map(|pack| pack.into_runtime());
+        #[cfg(feature = "computer-use")]
+        if let Some(computer_use) = &computer_use {
+            tools.extend(computer_use.tools.iter().cloned());
+        }
         let tool_names: Vec<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
         #[cfg(feature = "auth")]
         let (tools, identity_gate) = {
@@ -1279,6 +1435,19 @@ impl HarnessAgentBuilder {
         let member_tools: Vec<Arc<dyn Tool>> = member_tools
             .into_iter()
             .filter(|tool| !crate::packs::payments::is_payment_tool(tool.name()))
+            .collect();
+        // A member keeps the browser's observation tools and never navigates or acts
+        // (spec 3.1 §7.24 "Members", §9.2 I60).
+        #[cfg(all(feature = "team", feature = "browser"))]
+        let member_tools: Vec<Arc<dyn Tool>> = member_tools
+            .into_iter()
+            .filter(|tool| !crate::packs::browser::browser_member_excluded(tool.name()))
+            .collect();
+        // A desktop action is the coordinator's to put to the person (spec 3.1 §7.24).
+        #[cfg(all(feature = "team", feature = "computer-use"))]
+        let member_tools: Vec<Arc<dyn Tool>> = member_tools
+            .into_iter()
+            .filter(|tool| !crate::packs::computer_use::is_computer_use_tool(tool.name()))
             .collect();
         // Members get the same request observers as the coordinator (spec 3.1 §7.10, §7.13).
         #[cfg_attr(not(feature = "observe"), allow(unused_mut))]
@@ -1402,6 +1571,14 @@ impl HarnessAgentBuilder {
             payments.as_ref().map(|_| vec!["payments".to_string()]).unwrap_or_default();
         #[cfg(not(feature = "payments"))]
         let mut packs: Vec<String> = Vec::new();
+        #[cfg(feature = "browser")]
+        if browser.is_some() {
+            packs.push("browser".to_string());
+        }
+        #[cfg(feature = "computer-use")]
+        if computer_use.is_some() {
+            packs.push("computer-use".to_string());
+        }
         if self.managed_requested {
             packs.push("managed".to_string());
         }
@@ -1480,6 +1657,18 @@ impl HarnessAgentBuilder {
                         .iter()
                         .map(|name| (*name).to_string()),
                 )
+                .collect()
+        } else {
+            non_waivable
+        };
+        // A desktop action is never covered by a `tool_approvals` entry (spec 3.1 §7.24, I59).
+        #[cfg(feature = "computer-use")]
+        let non_waivable: BTreeSet<String> = if computer_use.is_some() {
+            non_waivable
+                .into_iter()
+                .chain(std::iter::once(
+                    crate::packs::computer_use::COMPUTER_USE_EXECUTE.to_string(),
+                ))
                 .collect()
         } else {
             non_waivable

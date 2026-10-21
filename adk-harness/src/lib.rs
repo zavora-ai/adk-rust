@@ -34,6 +34,8 @@
 //! | [`EffortPolicy`], [`Effort`] | §7.23 |
 //! | `encrypted::{StoreKeySource, StoreKeyring, StoreEnvelope, StoreRotation}` (feature `encrypted`) | §7.12 |
 //! | `packs::payments::{PaymentsPack, PaymentMandate}` (feature `payments`) | §7.16 |
+//! | `packs::browser::BrowserPack` (feature `browser`) | §7.24 |
+//! | `packs::computer_use::ComputerUsePack` (feature `computer-use`) | §7.24 |
 //!
 //! # Example
 //!
@@ -164,6 +166,13 @@ pub use observe::{
     LOOP_DETECTED_CODE, SpendEntry, SpendReport, TurnTokens, goal_iteration_span, isolation_label,
     member_span, run_span, tool_kind_label,
 };
+#[cfg(feature = "browser")]
+pub use packs::browser::{
+    BROWSER_ACTION_TOOLS, BROWSER_HISTORY_TOOLS, BROWSER_NAVIGATION_TOOLS, BROWSER_READ_TOOLS,
+    BrowserPack,
+};
+#[cfg(feature = "computer-use")]
+pub use packs::computer_use::{COMPUTER_USE_TOOL_NAMES, ComputerUsePack};
 #[cfg(feature = "payments")]
 pub use packs::payments::{PAYMENT_AUDIT_ACTION, PAYMENT_TOOL_NAMES, PaymentMandate, PaymentsPack};
 #[cfg(feature = "graph")]
