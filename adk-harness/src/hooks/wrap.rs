@@ -106,6 +106,7 @@ pub(crate) fn class_label(kind: &ToolKind) -> String {
         ToolKind::MemoryWrite => "memory_write".to_string(),
         ToolKind::MemoryPropose => "memory_propose".to_string(),
         ToolKind::Payment => "payment".to_string(),
+        ToolKind::ComputerUse => "computer_use".to_string(),
         ToolKind::Web { allowlisted } => {
             format!("web_{}", if *allowlisted { "allowlisted" } else { "other" })
         }

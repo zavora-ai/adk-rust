@@ -56,9 +56,11 @@ sqlite = ["dep:sqlx", "sqlx/sqlite", "adk-graph?/sqlite", "adk-session?/sqlite"]
 # The store envelope of spec 3.1 §7.12: sessions, approvals and the SQLite stores sealed
 # under one keyring from a secret provider, the OS keychain or an environment variable.
 encrypted = ["dep:adk-session", "adk-session/encrypted-session", "dep:keyring"]
-# Packs (spec 3.1 §7.16–§7.18).
-browser = ["dep:adk-browser"]
-computer-use = ["dep:adk-computer-use"]
+# Packs (spec 3.1 §7.16–§7.18, §7.24).
+# The browser pack (spec 3.1 §7.24): `web` for the §7.20 allowlist, URL checks and screening.
+browser = ["dep:adk-browser", "web"]
+# The computer-use pack (spec 3.1 §7.24): `graph` for the reference graph's checkpointer.
+computer-use = ["dep:adk-computer-use", "graph"]
 # The payments pack (spec 3.1 §7.16): `adk-auth` for the scope guard its tools run under.
 payments = ["dep:adk-payments", "dep:adk-auth"]
 voice = ["dep:adk-realtime"]

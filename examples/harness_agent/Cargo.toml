@@ -11,7 +11,11 @@ description = "Scripted and live scenarios for the adk-harness HarnessAgent (spe
 adk-core = { path = "../../adk-core" }
 adk-agent = { path = "../../adk-agent", features = ["coding"] }
 adk-devtools = { path = "../../adk-devtools" }
-adk-harness = { path = "../../adk-harness", default-features = false, features = ["runner", "skills", "sandbox", "memory", "team", "team-acp", "graph", "sqlite", "web", "web-fixture", "mcp", "hooks", "payments", "docker", "managed"] }
+adk-harness = { path = "../../adk-harness", default-features = false, features = ["runner", "skills", "sandbox", "memory", "team", "team-acp", "graph", "sqlite", "web", "web-fixture", "mcp", "hooks", "payments", "docker", "managed", "browser", "computer-use"] }
+# The H10 pack scenarios: adk-browser's toolset for the baseline, adk-computer-use's contracts
+# for the in-process desktop runtime.
+adk-browser = { path = "../../adk-browser" }
+adk-computer-use = { path = "../../adk-computer-use" }
 # A test enforcer for the S3 scenario implements the sandbox's `SandboxEnforcer`.
 adk-sandbox = { path = "../../adk-sandbox" }
 adk-tool = { path = "../../adk-tool", features = ["mcp", "mcp-sampling"] }

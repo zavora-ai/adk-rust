@@ -131,7 +131,9 @@ effective set, and `on_hold` and `on_stop` notes are shown at the console. See
 | `skills-registry`, `team-acp`, `team-a2a`, `memory-graph` | off | registry skills, ACP and A2A members, graph memory |
 | `payments` | off | the payments pack (spec 3.1 §7.16): `adk-payments` tools as class `Payment` under a `PaymentMandate`, `harness.payment` with the journal receipt |
 | `managed` | off | the managed form (spec 3.1 §7.18): `HarnessDef`, `HarnessResolver` on the managed runtime, `Pack::Managed` |
-| `browser`, `computer-use`, `voice` | off | the other packs |
+| `browser` | off | the browser pack (spec 3.1 §7.24): `adk-browser`'s tools as `Read`, `Web` and `External` classes under the web rules, `BrowserPack`, `harness.browser.*` |
+| `computer-use` | off | the computer-use pack (spec 3.1 §7.24): `computer_use_observe`, `computer_use_preview` and the never-waivable `computer_use_execute` through `adk-computer-use`'s reference graph, `ComputerUsePack` |
+| `voice` | off | the voice pack |
 
 ## Status
 
@@ -141,7 +143,9 @@ the managed form (§7.18, feature `managed`) is Experimental, as `adk-managed` i
 `packs::managed::HarnessDef` declares a harness as a managed agent definition and
 `HarnessResolver` builds it on the managed runtime
 ([guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/serving.md#on-the-managed-runtime)).
-The other packs (§7.17) are refused by the builder with `not yet implemented: spec 3.1 §…`. The [team](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/team.md),
+The browser and computer-use packs (§7.24) are implemented
+([guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/packs.md));
+the voice pack (§7.17) is refused by the builder with `not yet implemented: spec 3.1 §…`. The [team](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/team.md),
 [plans and goals](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/plan-and-goals.md)
 and [durability](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/durability.md)
 guides cover §7.10–§7.12. Under the container shell (`docker`), hooks with `inherit`

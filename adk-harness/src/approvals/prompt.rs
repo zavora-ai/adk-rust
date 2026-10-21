@@ -208,7 +208,10 @@ impl RenderedCall {
             tool.to_string()
         };
         let web_url = match request.tool_name.as_str() {
-            "web_fetch" => request.args.get("url").and_then(Value::as_str),
+            // The browser pack's navigation is a web call too (spec 3.1 §7.24).
+            "web_fetch" | "browser_navigate" | "browser_new_tab" | "browser_new_window" => {
+                request.args.get("url").and_then(Value::as_str)
+            }
             "web_search" => request.args.get("site").and_then(Value::as_str),
             _ => None,
         };

@@ -322,6 +322,7 @@ dependencies = [
  "adk-agent",
  "adk-artifact",
  "adk-auth",
+ "adk-browser",
  "adk-core",
  "adk-deploy",
  "adk-devtools",

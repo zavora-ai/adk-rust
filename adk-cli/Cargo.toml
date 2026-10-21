@@ -42,6 +42,7 @@ adk-deploy.workspace = true
 adk-graph = { workspace = true, features = ["time-travel"] }
 # The harness REPL, `code`, `goal`, `ultracode` and `serve` (spec 3.1 §8.1)
 adk-harness = { workspace = true, optional = true }
+adk-browser = { workspace = true, optional = true }
 # `--provider mistralrs`: local inference in process (spec 3.1 §8.1); a heavy build
 adk-mistralrs = { workspace = true, optional = true }
 # `adk-rust approvals --server` talks to a served harness's approval inbox
@@ -115,6 +116,11 @@ harness = ["dep:adk-harness", "adk-harness?/memory-embeddings", "adk-harness?/we
 # `--store-key`, `[store] key`, `adk-rust store status|rotate-key`: harness.db sealed under
 # one keyring from the OS keychain, a secret provider or the environment (spec 3.1 §7.12)
 encrypted = ["adk-harness?/encrypted", "adk-session/encrypted-session", "dep:sqlx"]
+# `--pack browser` and `--pack computer-use` (spec 3.1 §7.24): the browser pack over the
+# WebDriver at ADK_WEBDRIVER_URL (default http://localhost:4444); the computer-use pack is
+# library-only, so its feature compiles the classes for a harness built in code.
+browser = ["harness", "adk-harness/browser", "dep:adk-browser"]
+computer-use = ["harness", "adk-harness/computer-use"]
 # The in-process ONNX embedder for long-term memory, the default of a local provider
 # (spec 3.1 §7.15.2, H10); `ort` downloads the onnxruntime binary at build time
 memory-local = ["adk-harness?/memory-embeddings-local"]

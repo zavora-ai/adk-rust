@@ -1,6 +1,6 @@
 //! `Pack::Managed` on the builder (spec 3.1 §7.18): with feature `managed` it marks the
-//! harness for the managed runtime; without it the build names the feature. The other
-//! packs of §7.17 are still refused as not yet implemented.
+//! harness for the managed runtime; without it the build names the feature. The voice pack
+//! of §7.17 is still refused as not yet implemented.
 
 use std::sync::Arc;
 
@@ -34,8 +34,8 @@ fn pack_managed_needs_the_feature() {
 }
 
 #[test]
-fn the_other_packs_are_still_not_implemented() {
+fn the_voice_pack_is_still_not_implemented() {
     let workspace = tempfile::tempdir().unwrap();
-    let error = builder(workspace.path()).pack(Pack::Browser).build().unwrap_err();
+    let error = builder(workspace.path()).pack(Pack::Voice).build().unwrap_err();
     assert!(error.to_string().contains("not yet implemented"), "{error}");
 }
