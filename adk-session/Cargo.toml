@@ -37,6 +37,7 @@ firestore = { version = "0.48", optional = true }
 gcloud-sdk = { version = "0.29", optional = true, default-features = false }
 neo4rs = { version = "0.8", optional = true }
 aes-gcm = { version = "0.10", optional = true }
+hmac = { version = "0.12", optional = true }
 rand = { version = "0.9", optional = true }
 base64 = { version = "0.22", optional = true }
 
@@ -47,6 +48,7 @@ axum = "0.8"
 futures.workspace = true
 http = "1"
 proptest = "1.5"
+tempfile = "3"
 tracing-subscriber = { workspace = true, features = ["fmt"] }
 
 [features]
@@ -59,4 +61,4 @@ mongodb = ["dep:mongodb", "tokio"]
 firestore = ["dep:firestore", "dep:gcloud-sdk", "sha2", "tokio"]
 neo4j = ["dep:neo4rs", "tokio"]
 vertex-session = ["adk-gcp", "base64", "google-cloud-auth", "reqwest", "sha2", "tokio"]
-encrypted-session = ["aes-gcm", "rand", "base64"]
+encrypted-session = ["aes-gcm", "rand", "base64", "sha2", "hmac"]

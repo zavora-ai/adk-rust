@@ -86,28 +86,21 @@ use crate::session::{KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER, Session};
 use crate::state::State;
 use crate::{Event, Events};
 
+use crate::envelope::{self, ENVELOPE_PREFIX};
 use adk_core::identity::{AdkIdentity, AppName, SessionId, UserId};
 use adk_core::{AdkError, Content, ErrorCategory, ErrorComponent, Part, Result};
-use aes_gcm::aead::{Aead, Payload};
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use async_trait::async_trait;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Utc};
-use rand::RngCore;
 use serde_json::Value;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// Prefix of every envelope written by this wrapper.
-const ENVELOPE_PREFIX: &str = "adk-enc:v1:";
 /// State key that held the whole encrypted state in earlier releases.
 const LEGACY_STATE_KEY: &str = "__encrypted_state";
 /// Author of the state-only events that carry re-encrypted values.
 const ROTATION_AUTHOR: &str = "__adk_session_key_rotation__";
 /// Domain separator prepended to all associated data.
 const AAD_DOMAIN: &[u8] = b"adk-session/encrypted-session/v1";
-const NONCE_LEN: usize = 12;
 
 /// Transparent encryption wrapper for any [`SessionService`].
 ///
@@ -171,12 +164,7 @@ struct OpenedState {
 
 /// Builds length-prefixed associated data so distinct component lists never collide.
 fn associated_data(parts: &[&str]) -> Vec<u8> {
-    let mut aad = AAD_DOMAIN.to_vec();
-    for part in parts {
-        aad.extend_from_slice(&(part.len() as u64).to_be_bytes());
-        aad.extend_from_slice(part.as_bytes());
-    }
-    aad
+    envelope::associated_data(AAD_DOMAIN, parts)
 }
 
 /// Associated data for a state value, scoped by the tier its key prefix selects.
@@ -321,45 +309,18 @@ impl<S: SessionService> EncryptedSession<S> {
 
     /// Encrypts `plaintext` with the current key and returns the envelope string.
     fn seal(&self, plaintext: &[u8], aad: &[u8]) -> Result<String> {
-        let cipher = Aes256Gcm::new_from_slice(self.current_key.as_bytes()).map_err(|e| {
-            encryption_error("session.encryption.encrypt_failed", format!("invalid key: {e}"))
-        })?;
-        let mut nonce = [0u8; NONCE_LEN];
-        rand::rng().fill_bytes(&mut nonce);
-        let ciphertext = cipher
-            .encrypt(Nonce::from_slice(&nonce), Payload { msg: plaintext, aad })
-            .map_err(|_| {
-                encryption_error(
-                    "session.encryption.encrypt_failed",
-                    "AES-256-GCM encryption failed",
-                )
-            })?;
-
-        let mut bytes = Vec::with_capacity(NONCE_LEN + ciphertext.len());
-        bytes.extend_from_slice(&nonce);
-        bytes.extend_from_slice(&ciphertext);
-        Ok(format!("{ENVELOPE_PREFIX}{}", BASE64.encode(bytes)))
+        envelope::seal(&self.current_key, plaintext, aad)
     }
 
-    /// Decrypts base64 `[nonce][ciphertext]` with the first configured key that
-    /// authenticates it.
+    /// Decrypts the envelope body `encoded` (without its prefix) with the first configured
+    /// key that authenticates it.
     fn open(&self, encoded: &str, aad: &[u8]) -> Option<(Vec<u8>, KeyUsed)> {
-        let bytes = BASE64.decode(encoded).ok()?;
-        if bytes.len() < NONCE_LEN {
-            return None;
-        }
-        let (nonce, ciphertext) = bytes.split_at(NONCE_LEN);
-        let decrypt = |key: &EncryptionKey| {
-            Aes256Gcm::new_from_slice(key.as_bytes())
-                .ok()?
-                .decrypt(Nonce::from_slice(nonce), Payload { msg: ciphertext, aad })
-                .ok()
-        };
-
-        if let Some(plaintext) = decrypt(&self.current_key) {
-            return Some((plaintext, KeyUsed::Current));
-        }
-        self.previous_keys.iter().find_map(decrypt).map(|plaintext| (plaintext, KeyUsed::Previous))
+        let keys = std::iter::once(&self.current_key).chain(&self.previous_keys);
+        envelope::open(keys, &format!("{ENVELOPE_PREFIX}{encoded}"), aad).map(
+            |(plaintext, index)| {
+                (plaintext, if index == 0 { KeyUsed::Current } else { KeyUsed::Previous })
+            },
+        )
     }
 
     /// Encrypts every non-`temp:` value of `state`, keeping the key names.
@@ -533,6 +494,224 @@ impl<S: SessionService> EncryptedSession<S> {
             "re-encrypted session state with the current key"
         );
         Ok(())
+    }
+}
+
+/// Key rotation over the SQLite backend (spec 3.1 §7.12): the trait cannot rewrite stored
+/// events, so the rows are re-sealed in place.
+#[cfg(feature = "sqlite")]
+impl EncryptedSession<crate::sqlite::SqliteSessionService> {
+    /// Re-seals every state value and event a previous key sealed with the current key, in
+    /// every session, app and user tier of the database, and returns how many rows changed.
+    ///
+    /// Build the wrapper with the new key as `current_key` and the retired keys as
+    /// `previous_keys`; after this returns, the previous keys open nothing in the database
+    /// and can be dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns `session.encryption.decrypt_failed` when a value opens under none of the
+    /// keys, `session.encryption.unencrypted_data` when a row holds plaintext (unless
+    /// legacy migration is on, which leaves it as stored), or the database error.
+    pub async fn rewrap_sqlite(&self) -> Result<u64> {
+        use sqlx::Row;
+        let pool = self.inner.pool().clone();
+        let db = |e: sqlx::Error| {
+            encryption_error(
+                "session.encryption.storage",
+                format!("re-sealing the session store failed: {e}"),
+            )
+        };
+        let mut rewritten = 0u64;
+
+        let rows =
+            sqlx::query("SELECT app_name, user_id, session_id, state, initial_state FROM sessions")
+                .fetch_all(&pool)
+                .await
+                .map_err(db)?;
+        for row in rows {
+            let (app, user, session): (String, String, String) =
+                (row.get("app_name"), row.get("user_id"), row.get("session_id"));
+            let id = SessionIdentity { app_name: &app, user_id: &user, session_id: &session };
+            let state: String = row.get("state");
+            let initial: Option<String> = row.get("initial_state");
+            let (state, changed_state) = self.rewrap_state_json(&id, &state, "")?;
+            let (initial, changed_initial) = match initial {
+                Some(initial) => {
+                    let (text, changed) = self.rewrap_state_json(&id, &initial, "")?;
+                    (Some(text), changed)
+                }
+                None => (None, false),
+            };
+            if changed_state || changed_initial {
+                sqlx::query(
+                    "UPDATE sessions SET state = ?, initial_state = ? \
+                     WHERE app_name = ? AND user_id = ? AND session_id = ?",
+                )
+                .bind(state)
+                .bind(initial)
+                .bind(&app)
+                .bind(&user)
+                .bind(&session)
+                .execute(&pool)
+                .await
+                .map_err(db)?;
+                rewritten += 1;
+            }
+        }
+
+        let rows = sqlx::query(
+            "SELECT id, app_name, user_id, session_id, llm_response, actions FROM events",
+        )
+        .fetch_all(&pool)
+        .await
+        .map_err(db)?;
+        for row in rows {
+            let (event_id, app, user, session): (String, String, String, String) =
+                (row.get("id"), row.get("app_name"), row.get("user_id"), row.get("session_id"));
+            let id = SessionIdentity { app_name: &app, user_id: &user, session_id: &session };
+            let response: String = row.get("llm_response");
+            let actions: String = row.get("actions");
+            let mut response: Value =
+                serde_json::from_str(&response).map_err(serialization_error)?;
+            let mut changed = false;
+            let text = response
+                .pointer_mut("/content/parts/0/text")
+                .and_then(|text| text.as_str().map(str::to_string).map(|t| (text, t)));
+            match text {
+                Some((slot, text)) if text.starts_with(ENVELOPE_PREFIX) => {
+                    let aad = event_aad(&id, &event_id);
+                    if let Some(resealed) =
+                        self.reseal(&text, &aad, &format!("event '{event_id}'"))?
+                    {
+                        *slot = Value::String(resealed);
+                        changed = true;
+                    }
+                }
+                _ if self.legacy_migration => {}
+                _ => return Err(unencrypted_error(&format!("event '{event_id}'"))),
+            }
+            let mut actions: Value = serde_json::from_str(&actions).map_err(serialization_error)?;
+            if let Some(delta) = actions.get_mut("state_delta").and_then(Value::as_object_mut)
+                && self.rewrap_state_map(&id, delta, "")?
+            {
+                changed = true;
+            }
+            if changed {
+                sqlx::query(
+                    "UPDATE events SET llm_response = ?, actions = ? \
+                     WHERE id = ? AND app_name = ? AND user_id = ? AND session_id = ?",
+                )
+                .bind(serde_json::to_string(&response).map_err(serialization_error)?)
+                .bind(serde_json::to_string(&actions).map_err(serialization_error)?)
+                .bind(&event_id)
+                .bind(&app)
+                .bind(&user)
+                .bind(&session)
+                .execute(&pool)
+                .await
+                .map_err(db)?;
+                rewritten += 1;
+            }
+        }
+
+        let rows = sqlx::query("SELECT app_name, state FROM app_states")
+            .fetch_all(&pool)
+            .await
+            .map_err(db)?;
+        for row in rows {
+            let app: String = row.get("app_name");
+            let id = SessionIdentity { app_name: &app, user_id: "", session_id: "" };
+            let state: String = row.get("state");
+            let (state, changed) = self.rewrap_state_json(&id, &state, KEY_PREFIX_APP)?;
+            if changed {
+                sqlx::query("UPDATE app_states SET state = ? WHERE app_name = ?")
+                    .bind(state)
+                    .bind(&app)
+                    .execute(&pool)
+                    .await
+                    .map_err(db)?;
+                rewritten += 1;
+            }
+        }
+
+        let rows = sqlx::query("SELECT app_name, user_id, state FROM user_states")
+            .fetch_all(&pool)
+            .await
+            .map_err(db)?;
+        for row in rows {
+            let (app, user): (String, String) = (row.get("app_name"), row.get("user_id"));
+            let id = SessionIdentity { app_name: &app, user_id: &user, session_id: "" };
+            let state: String = row.get("state");
+            let (state, changed) = self.rewrap_state_json(&id, &state, KEY_PREFIX_USER)?;
+            if changed {
+                sqlx::query("UPDATE user_states SET state = ? WHERE app_name = ? AND user_id = ?")
+                    .bind(state)
+                    .bind(&app)
+                    .bind(&user)
+                    .execute(&pool)
+                    .await
+                    .map_err(db)?;
+                rewritten += 1;
+            }
+        }
+        Ok(rewritten)
+    }
+
+    /// Re-seals the envelopes of a stored JSON state map whose keys the backend stored
+    /// without `prefix` (the app and user tiers); returns the text and whether any value
+    /// changed.
+    fn rewrap_state_json(
+        &self,
+        id: &SessionIdentity<'_>,
+        json: &str,
+        prefix: &str,
+    ) -> Result<(String, bool)> {
+        let mut state: Value = serde_json::from_str(json).map_err(serialization_error)?;
+        let changed = match state.as_object_mut() {
+            Some(map) => self.rewrap_state_map(id, map, prefix)?,
+            None => false,
+        };
+        Ok((serde_json::to_string(&state).map_err(serialization_error)?, changed))
+    }
+
+    fn rewrap_state_map(
+        &self,
+        id: &SessionIdentity<'_>,
+        map: &mut serde_json::Map<String, Value>,
+        prefix: &str,
+    ) -> Result<bool> {
+        let mut changed = false;
+        for (key, value) in map.iter_mut() {
+            if key == LEGACY_STATE_KEY || value.is_null() {
+                continue;
+            }
+            match value.as_str() {
+                Some(text) if text.starts_with(ENVELOPE_PREFIX) => {
+                    let aad = state_aad(id, &format!("{prefix}{key}"));
+                    if let Some(resealed) =
+                        self.reseal(text, &aad, &format!("state value '{key}'"))?
+                    {
+                        *value = Value::String(resealed);
+                        changed = true;
+                    }
+                }
+                _ if self.legacy_migration => {}
+                _ => return Err(unencrypted_error(&format!("state value '{key}'"))),
+            }
+        }
+        Ok(changed)
+    }
+
+    /// The envelope `text` sealed again with the current key when a previous key sealed it;
+    /// `None` when the current key already did.
+    fn reseal(&self, text: &str, aad: &[u8], what: &str) -> Result<Option<String>> {
+        let encoded = text.strip_prefix(ENVELOPE_PREFIX).unwrap_or(text);
+        let (plaintext, used) = self.open(encoded, aad).ok_or_else(|| decrypt_error(what))?;
+        match used {
+            KeyUsed::Current => Ok(None),
+            KeyUsed::Previous => Ok(Some(self.seal(&plaintext, aad)?)),
+        }
     }
 }
 

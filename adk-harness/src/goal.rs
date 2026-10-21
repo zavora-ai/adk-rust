@@ -344,13 +344,81 @@ impl GoalStore for InMemoryGoalStore {
 #[derive(Debug, Clone)]
 pub struct SqliteGoalStore {
     pool: sqlx::SqlitePool,
+    #[cfg(feature = "encrypted")]
+    envelope: Option<crate::encrypted::StoreEnvelope>,
 }
 
 #[cfg(feature = "sqlite")]
 impl SqliteGoalStore {
     /// A store over `pool`.
     pub fn new(pool: sqlx::SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            #[cfg(feature = "encrypted")]
+            envelope: None,
+        }
+    }
+
+    /// Seals every record under `keyring` (spec 3.1 §7.12).
+    #[cfg(feature = "encrypted")]
+    #[must_use]
+    pub fn with_keyring(mut self, keyring: crate::encrypted::StoreKeyring) -> Self {
+        self.envelope = Some(crate::encrypted::StoreEnvelope::new(keyring, "goals"));
+        self
+    }
+
+    /// Re-seals every record a previous key sealed with the current key and returns how
+    /// many rows changed (spec 3.1 §7.12). Without a keyring, nothing changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.store.decrypt_failed` when a row opens under no key the keyring
+    /// holds, or the database error.
+    #[cfg(feature = "encrypted")]
+    pub async fn rewrap(&self) -> Result<u64> {
+        let Some(envelope) = &self.envelope else {
+            return Ok(0);
+        };
+        let rows: Vec<(String, String, String, String)> =
+            sqlx::query_as("SELECT app_name, user_id, session_id, record FROM adk_harness_goals")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(crate::fsutil::db_error)?;
+        let mut changed = 0;
+        for (app, user, session, text) in rows {
+            if let Some(resealed) = envelope.reseal(&[&app, &user, &session], &text)? {
+                sqlx::query("UPDATE adk_harness_goals SET record = ? WHERE app_name = ? AND user_id = ? AND session_id = ?")
+                    .bind(resealed)
+                    .bind(&app)
+                    .bind(&user)
+                    .bind(&session)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(crate::fsutil::db_error)?;
+                changed += 1;
+            }
+        }
+        Ok(changed)
+    }
+
+    #[cfg(feature = "encrypted")]
+    fn encode(&self, address: &[&str], text: String) -> Result<String> {
+        crate::encrypted::encode_row(self.envelope.as_ref(), address, text)
+    }
+
+    #[cfg(not(feature = "encrypted"))]
+    fn encode(&self, _address: &[&str], text: String) -> Result<String> {
+        Ok(text)
+    }
+
+    #[cfg(feature = "encrypted")]
+    fn decode(&self, address: &[&str], text: String) -> Result<String> {
+        crate::encrypted::decode_row(self.envelope.as_ref(), "goals", address, text)
+    }
+
+    #[cfg(not(feature = "encrypted"))]
+    fn decode(&self, _address: &[&str], text: String) -> Result<String> {
+        Ok(text)
     }
 
     /// Creates the store's table if it does not exist.
@@ -384,13 +452,18 @@ impl GoalStore for SqliteGoalStore {
         .fetch_optional(&self.pool)
         .await
         .map_err(crate::fsutil::db_error)?;
+        let Some((text,)) = row else {
+            return Ok(None);
+        };
+        let text = self.decode(&[app, user, session], text)?;
         // A record that does not parse is no goal: nothing runs on it.
-        Ok(row.and_then(|(text,)| serde_json::from_str(&text).ok()))
+        Ok(serde_json::from_str(&text).ok())
     }
 
     async fn set(&self, app: &str, user: &str, session: &str, record: GoalRecord) -> Result<()> {
         let text = serde_json::to_string(&record)
             .map_err(|error| crate::fsutil::serialize_error("goal record", &error))?;
+        let text = self.encode(&[app, user, session], text)?;
         sqlx::query(
             "INSERT INTO adk_harness_goals (app_name, user_id, session_id, record) VALUES (?, ?, ?, ?) \
              ON CONFLICT (app_name, user_id, session_id) DO UPDATE SET record = excluded.record",

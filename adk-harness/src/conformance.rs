@@ -256,3 +256,493 @@ macro_rules! standing_rule_store_conformance_tests {
         }
     };
 }
+
+/// Encrypted store cases (spec 3.1 §7.12, §9.2 I57, §11): every wrapped store of one
+/// `harness.db` file behind one [`StoreKeyring`](crate::encrypted::StoreKeyring).
+///
+/// [`write_fixture`](encrypted_store::write_fixture) plants a row carrying one of
+/// [`SENTINELS`](encrypted_store::SENTINELS) through each store — sessions, approvals,
+/// modes, rules, the shell ledger, goals, facts — and the cases check that every store
+/// reads its row back, that no sentinel reaches the file, that a rotation re-seals every
+/// row so the retired key opens nothing, and that the database refuses to open without
+/// the key.
+#[cfg(all(feature = "encrypted", feature = "sqlite", feature = "memory", feature = "runner"))]
+pub mod encrypted_store {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    use adk_core::identity::{AdkIdentity, AppName, SessionId, UserId};
+    use adk_core::principal::{SubjectKind, SubjectRef};
+    use adk_core::{ApprovalScope, ApprovalStore, Content, ToolApproval, ToolConfirmationRequest};
+    use adk_session::{
+        AppendEventRequest, CreateRequest, EncryptedApprovalStore, EncryptedSession, Event,
+        GetRequest, SessionService, SqliteApprovalStore, SqliteSessionService,
+    };
+    use chrono::Utc;
+    use serde_json::{Value, json};
+
+    use crate::encrypted::{SqliteStoreMarker, StoreKeyring};
+    use crate::{
+        FactKind, FactScope, FactSource, FactStatus, FactStore, GoalRecord, GoalSpec, GoalStore,
+        HarnessMode, MemoryFact, ModeRecord, ModeSource, ModeStore, OriginPin, Provenance,
+        RulePredicate, RuleScope, ShellLedger, ShellLedgerEntry, SqliteFactStore, SqliteGoalStore,
+        SqliteModeStore, SqliteShellLedger, SqliteStandingRuleStore, StandingDecision,
+        StandingRule, StandingRuleStore,
+    };
+
+    /// The app of every fixture row.
+    pub const APP: &str = "conformance-app";
+    /// The user of every fixture row.
+    pub const USER: &str = "alice";
+    /// The session of every fixture row.
+    pub const SESSION: &str = "s1";
+    /// The texts the fixture plants, one per payload; none may reach the file.
+    pub const SENTINELS: &[&str] = &[
+        "sentinel-state-value",
+        "sentinel-event-text",
+        "sentinel-approval-argument",
+        "sentinel-decision-message",
+        "sentinel-rule-label",
+        "sentinel-rule-token",
+        "sentinel-shell-command",
+        "sentinel-goal-text",
+        "sentinel-goal-until",
+        "sentinel-fact-text",
+    ];
+
+    /// Every store of a `harness.db` file behind one keyring.
+    pub struct SealedDb {
+        /// The database file.
+        pub path: PathBuf,
+        /// The pool every store shares.
+        pub pool: sqlx::SqlitePool,
+        /// The id of the keyring's current key.
+        pub key_id: String,
+        /// Sessions.
+        pub sessions: EncryptedSession<SqliteSessionService>,
+        /// Held calls and decisions.
+        pub approvals: EncryptedApprovalStore<SqliteApprovalStore>,
+        /// Modes.
+        pub modes: SqliteModeStore,
+        /// Standing rules.
+        pub rules: SqliteStandingRuleStore,
+        /// The shell ledger.
+        pub ledger: SqliteShellLedger,
+        /// Goals.
+        pub goals: SqliteGoalStore,
+        /// Long-term facts.
+        pub facts: SqliteFactStore,
+        /// The key marker.
+        pub marker: SqliteStoreMarker,
+    }
+
+    /// Opens (creating and migrating) every store of the file at `path` behind `keyring`.
+    pub async fn open(path: &Path, keyring: &StoreKeyring) -> SealedDb {
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+        let base = SqliteSessionService::new(&url).await.unwrap();
+        base.migrate().await.unwrap();
+        let pool = base.pool().clone();
+        let sessions = EncryptedSession::new(base, keyring.current_key(), keyring.previous_keys());
+        let approvals = SqliteApprovalStore::from_pool(pool.clone());
+        approvals.migrate().await.unwrap();
+        let approvals =
+            EncryptedApprovalStore::new(approvals, keyring.current_key(), keyring.previous_keys());
+        let modes = SqliteModeStore::new(pool.clone()).with_keyring(keyring.clone());
+        modes.migrate().await.unwrap();
+        let rules = SqliteStandingRuleStore::new(pool.clone()).with_keyring(keyring.clone());
+        rules.migrate().await.unwrap();
+        let ledger = SqliteShellLedger::new(pool.clone()).with_keyring(keyring.clone());
+        ledger.migrate().await.unwrap();
+        let goals = SqliteGoalStore::new(pool.clone()).with_keyring(keyring.clone());
+        goals.migrate().await.unwrap();
+        let facts = SqliteFactStore::new(pool.clone()).with_keyring(keyring.clone());
+        facts.migrate().await.unwrap();
+        let marker = SqliteStoreMarker::new(pool.clone());
+        marker.migrate().await.unwrap();
+        SealedDb {
+            path: path.to_path_buf(),
+            pool,
+            key_id: keyring.key_id(),
+            sessions,
+            approvals,
+            modes,
+            rules,
+            ledger,
+            goals,
+            facts,
+            marker,
+        }
+    }
+
+    fn identity() -> AdkIdentity {
+        AdkIdentity::new(
+            AppName::try_from(APP).unwrap(),
+            UserId::try_from(USER).unwrap(),
+            SessionId::try_from(SESSION).unwrap(),
+        )
+    }
+
+    fn scope() -> ApprovalScope {
+        ApprovalScope::new(APP, USER, SESSION)
+    }
+
+    /// The call the fixture holds for approval.
+    pub fn held_call() -> ToolConfirmationRequest {
+        ToolConfirmationRequest::new("bash", json!({ "command": "sentinel-approval-argument" }))
+            .with_function_call_id("call-held")
+    }
+
+    /// The call the fixture decides.
+    pub fn decided_call() -> ToolConfirmationRequest {
+        ToolConfirmationRequest::new("write_file", json!({ "path": "a.txt", "content": "x" }))
+            .with_function_call_id("call-decided")
+    }
+
+    fn rule() -> StandingRule {
+        StandingRule {
+            id: "rule-1".into(),
+            scope: RuleScope::User {
+                app_name: APP.into(),
+                user_id: USER.into(),
+                subject_kind: SubjectKind::Human,
+            },
+            tool: "bash".into(),
+            origin: OriginPin::Exact {
+                source: "static".into(),
+                declaration_digest: "sha256:abc".into(),
+            },
+            agent: None,
+            predicates: vec![RulePredicate::ShellPrefix {
+                pointer: "/command".into(),
+                tokens: vec!["sentinel-rule-token".into()],
+            }],
+            decision: StandingDecision::Allow,
+            created_by: SubjectRef::human(USER),
+            created_at: Utc::now(),
+            expires_at: None,
+            label: "sentinel-rule-label".into(),
+            source_fingerprint: None,
+        }
+    }
+
+    fn goal() -> GoalRecord {
+        GoalRecord::start(GoalSpec {
+            goal: "sentinel-goal-text".into(),
+            until: "sentinel-goal-until".into(),
+            max_iterations: 3,
+            check_timeout: Duration::from_secs(5),
+        })
+    }
+
+    fn fact() -> MemoryFact {
+        MemoryFact::new(
+            FactScope::new(APP, USER, Some("project-1".into())),
+            FactKind::Preference,
+            "sentinel-fact-text",
+            FactStatus::Known,
+            Provenance::new(FactSource::UserStated, SESSION, "inv-1"),
+        )
+    }
+
+    /// Writes one sentinel-carrying row through every store and records the key marker;
+    /// returns the fact's id.
+    pub async fn write_fixture(db: &SealedDb) -> String {
+        db.marker.set_key_id(&db.key_id).await.unwrap();
+        let mut state: HashMap<String, Value> = HashMap::new();
+        state.insert("plan".into(), json!("sentinel-state-value"));
+        db.sessions
+            .create(CreateRequest {
+                app_name: APP.into(),
+                user_id: USER.into(),
+                session_id: Some(SESSION.into()),
+                state,
+            })
+            .await
+            .unwrap();
+        let mut event = Event::new("inv-1");
+        event.author = "model".into();
+        event.llm_response.content = Some(Content::new("model").with_text("sentinel-event-text"));
+        db.sessions
+            .append_event_for_identity(AppendEventRequest { identity: identity(), event })
+            .await
+            .unwrap();
+        db.approvals.record_pending(&scope(), &held_call()).await.unwrap();
+        db.approvals
+            .decide(
+                &scope(),
+                &decided_call().fingerprint(),
+                ToolApproval {
+                    message: Some("sentinel-decision-message".into()),
+                    ..ToolApproval::approve()
+                },
+            )
+            .await
+            .unwrap();
+        db.modes
+            .set(APP, USER, SESSION, ModeRecord::new(HarnessMode::Auto, ModeSource::User))
+            .await
+            .unwrap();
+        db.rules.grant(rule()).await.unwrap();
+        db.ledger
+            .record(
+                APP,
+                USER,
+                SESSION,
+                ShellLedgerEntry::new("c1", "sentinel-shell-command", true, Some(0)),
+            )
+            .await
+            .unwrap();
+        db.goals.set(APP, USER, SESSION, goal()).await.unwrap();
+        db.facts.put(fact()).await.unwrap().id
+    }
+
+    /// Reads every fixture row back through its store and checks it is the fixture.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first store's error: with the wrong keyring, `decrypt_failed`.
+    pub async fn read_fixture(db: &SealedDb, fact_id: &str) -> adk_core::Result<()> {
+        let session = db
+            .sessions
+            .get(GetRequest {
+                app_name: APP.into(),
+                user_id: USER.into(),
+                session_id: SESSION.into(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await?;
+        assert_eq!(session.state().get("plan"), Some(json!("sentinel-state-value")));
+        let events = session.events().all();
+        assert_eq!(events.len(), 1);
+        let text = events[0].llm_response.content.as_ref().unwrap().parts[0].text().unwrap();
+        assert_eq!(text, "sentinel-event-text");
+        let pending = db.approvals.pending(&scope()).await?;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].request, held_call());
+        assert_eq!(pending[0].fingerprint, held_call().fingerprint());
+        assert!(db.approvals.has_decision(&scope(), &decided_call().fingerprint()).await?);
+        assert_eq!(
+            db.modes.get(APP, USER, SESSION).await?.map(|r| r.mode),
+            Some(HarnessMode::Auto)
+        );
+        let rules = db.rules.list(APP, USER).await?;
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            (rules[0].id.as_str(), rules[0].label.as_str()),
+            ("rule-1", "sentinel-rule-label")
+        );
+        assert_eq!(rules[0].predicates, rule().predicates);
+        let entry = db.ledger.get(APP, USER, SESSION, "c1").await?.expect("the ledger entry");
+        assert_eq!(entry.command, "sentinel-shell-command");
+        let goal = db.goals.get(APP, USER, SESSION).await?.expect("the goal");
+        assert_eq!(goal.spec.goal, "sentinel-goal-text");
+        let fact = db.facts.get(fact_id).await?.expect("the fact");
+        assert_eq!(fact.text, "sentinel-fact-text");
+        Ok(())
+    }
+
+    /// Re-seals every store under the keyring's current key and records it in the marker;
+    /// returns the rows changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first store's error.
+    pub async fn rewrap_all(db: &SealedDb) -> adk_core::Result<u64> {
+        let mut rows = db.sessions.rewrap_sqlite().await?;
+        rows += db.approvals.rewrap_sqlite().await?;
+        rows += db.modes.rewrap().await?;
+        rows += db.rules.rewrap().await?;
+        rows += db.ledger.rewrap().await?;
+        rows += db.goals.rewrap().await?;
+        rows += db.facts.rewrap().await?;
+        db.marker.set_key_id(&db.key_id).await?;
+        Ok(rows)
+    }
+
+    /// The database file and its write-ahead log.
+    pub fn file_bytes(path: &Path) -> Vec<u8> {
+        let mut bytes = std::fs::read(path).unwrap();
+        let mut wal = path.as_os_str().to_owned();
+        wal.push("-wal");
+        if let Ok(more) = std::fs::read(&wal) {
+            bytes.extend(more);
+        }
+        bytes
+    }
+
+    fn contains(haystack: &[u8], needle: &str) -> bool {
+        haystack.windows(needle.len()).any(|window| window == needle.as_bytes())
+    }
+
+    /// Every store reads back what it sealed, and the payload columns hold envelopes.
+    pub async fn every_store_reads_back_what_it_sealed(dir: &Path, keyring: StoreKeyring) {
+        let db = open(&dir.join("harness.db"), &keyring).await;
+        let fact_id = write_fixture(&db).await;
+        read_fixture(&db, &fact_id).await.unwrap();
+        for (table, statement) in [
+            ("adk_harness_modes", "SELECT record FROM adk_harness_modes"),
+            ("adk_harness_rules", "SELECT rule FROM adk_harness_rules"),
+            ("adk_harness_shell_ledger", "SELECT entry FROM adk_harness_shell_ledger"),
+            ("adk_harness_goals", "SELECT record FROM adk_harness_goals"),
+            ("adk_harness_facts", "SELECT record FROM adk_harness_facts"),
+            ("adk_approval_pending", "SELECT request FROM adk_approval_pending"),
+            ("adk_approval_decisions", "SELECT approval FROM adk_approval_decisions"),
+            ("events", "SELECT llm_response FROM events"),
+            ("sessions", "SELECT state FROM sessions"),
+        ] {
+            let rows: Vec<(String,)> = sqlx::query_as(statement).fetch_all(&db.pool).await.unwrap();
+            assert!(!rows.is_empty(), "{table} has a row");
+            for (text,) in rows {
+                assert!(text.contains("adk-enc:v1:"), "{table} holds an envelope: {text}");
+                for sentinel in SENTINELS {
+                    assert!(!text.contains(sentinel), "{table} holds {sentinel}");
+                }
+            }
+        }
+        db.pool.close().await;
+    }
+
+    /// No sentinel reaches the database file or its write-ahead log.
+    pub async fn no_sentinel_reaches_the_file(dir: &Path, keyring: StoreKeyring) {
+        let path = dir.join("harness.db");
+        let db = open(&path, &keyring).await;
+        write_fixture(&db).await;
+        db.pool.close().await;
+        let bytes = file_bytes(&path);
+        for sentinel in SENTINELS {
+            assert!(!contains(&bytes, sentinel), "{sentinel} reached the file in plaintext");
+        }
+        assert!(contains(&bytes, "adk-enc:v1:"), "the file holds envelopes");
+    }
+
+    /// A rotation re-seals every row under the new key; afterwards the new key alone
+    /// opens everything and the retired key alone opens nothing.
+    pub async fn rotation_reseals_every_row_and_the_old_key_opens_nothing(
+        dir: &Path,
+        keyring: StoreKeyring,
+    ) {
+        let path = dir.join("harness.db");
+        let db = open(&path, &keyring).await;
+        let fact_id = write_fixture(&db).await;
+        db.pool.close().await;
+
+        let rotated = keyring.rotated(adk_session::EncryptionKey::generate());
+        let db = open(&path, &rotated).await;
+        assert_eq!(db.marker.key_id().await.unwrap(), Some(keyring.key_id()));
+        db.marker.check(Some(&rotated)).await.unwrap();
+        let rows = rewrap_all(&db).await.unwrap();
+        assert_eq!(
+            rows, 9,
+            "the session, its event, a held call, a decision, a mode, a rule, a ledger entry, a goal and a fact"
+        );
+        assert_eq!(rewrap_all(&db).await.unwrap(), 0, "nothing is left under the old key");
+        assert_eq!(db.marker.key_id().await.unwrap(), Some(rotated.key_id()));
+        read_fixture(&db, &fact_id).await.unwrap();
+        db.pool.close().await;
+
+        let only_new = StoreKeyring::new(rotated.current_key(), Vec::new());
+        let db = open(&path, &only_new).await;
+        db.marker.check(Some(&only_new)).await.unwrap();
+        read_fixture(&db, &fact_id).await.unwrap();
+        let approval =
+            db.approvals.take_approval(&scope(), &decided_call().fingerprint()).await.unwrap();
+        assert_eq!(approval.and_then(|a| a.message).as_deref(), Some("sentinel-decision-message"));
+        db.pool.close().await;
+
+        let db = open(&path, &keyring).await;
+        assert_eq!(
+            db.marker.check(Some(&keyring)).await.unwrap_err().code,
+            "harness.store.wrong_key"
+        );
+        let error = read_fixture(&db, &fact_id).await.unwrap_err();
+        assert!(error.code.ends_with("decrypt_failed"), "{error}");
+        for code in [
+            db.modes.get(APP, USER, SESSION).await.unwrap_err().code,
+            db.rules.list(APP, USER).await.unwrap_err().code,
+            db.ledger.get(APP, USER, SESSION, "c1").await.unwrap_err().code,
+            db.goals.get(APP, USER, SESSION).await.unwrap_err().code,
+            db.facts.get(&fact_id).await.unwrap_err().code,
+            db.approvals.pending(&scope()).await.unwrap_err().code,
+        ] {
+            assert!(code.ends_with("decrypt_failed"), "{code}");
+        }
+        db.pool.close().await;
+    }
+
+    /// A database written under a key refuses to open without one: the marker says so,
+    /// and every store refuses an envelope it has no key for.
+    pub async fn a_database_written_under_a_key_refuses_to_open_without_it(
+        dir: &Path,
+        keyring: StoreKeyring,
+    ) {
+        let path = dir.join("harness.db");
+        let db = open(&path, &keyring).await;
+        let fact_id = write_fixture(&db).await;
+        db.pool.close().await;
+
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+        let base = SqliteSessionService::new(&url).await.unwrap();
+        let pool = base.pool().clone();
+        let marker = SqliteStoreMarker::new(pool.clone());
+        assert_eq!(marker.check(None).await.unwrap_err().code, "harness.store.key_required");
+        for code in [
+            SqliteModeStore::new(pool.clone()).get(APP, USER, SESSION).await.unwrap_err().code,
+            SqliteStandingRuleStore::new(pool.clone()).list(APP, USER).await.unwrap_err().code,
+            SqliteShellLedger::new(pool.clone())
+                .get(APP, USER, SESSION, "c1")
+                .await
+                .unwrap_err()
+                .code,
+            SqliteGoalStore::new(pool.clone()).get(APP, USER, SESSION).await.unwrap_err().code,
+            SqliteFactStore::new(pool.clone()).get(&fact_id).await.unwrap_err().code,
+        ] {
+            assert_eq!(code, "harness.store.key_required");
+        }
+        pool.close().await;
+    }
+}
+
+/// Generates one `#[tokio::test]` per
+/// [`conformance::encrypted_store`](crate::conformance::encrypted_store) case over a fresh
+/// temporary `harness.db` and the keyring `keyring` evaluates to (spec 3.1 §11). The
+/// invoking crate needs `tempfile` as a dev-dependency.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// adk_harness::encrypted_store_conformance_tests!(
+///     keyring = adk_harness::encrypted::StoreKeyring::generate()
+/// );
+/// ```
+#[cfg(all(feature = "encrypted", feature = "sqlite", feature = "memory", feature = "runner"))]
+#[macro_export]
+macro_rules! encrypted_store_conformance_tests {
+    ($(#[$attr:meta])* keyring = $keyring:expr $(,)?) => {
+        $(#[$attr])*
+        #[::tokio::test]
+        async fn encrypted_store_every_store_reads_back_what_it_sealed() {
+            let dir = ::tempfile::tempdir().unwrap();
+            $crate::conformance::encrypted_store::every_store_reads_back_what_it_sealed(dir.path(), $keyring).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test]
+        async fn encrypted_store_no_sentinel_reaches_the_file() {
+            let dir = ::tempfile::tempdir().unwrap();
+            $crate::conformance::encrypted_store::no_sentinel_reaches_the_file(dir.path(), $keyring).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test]
+        async fn encrypted_store_rotation_reseals_every_row_and_the_old_key_opens_nothing() {
+            let dir = ::tempfile::tempdir().unwrap();
+            $crate::conformance::encrypted_store::rotation_reseals_every_row_and_the_old_key_opens_nothing(dir.path(), $keyring).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test]
+        async fn encrypted_store_a_database_written_under_a_key_refuses_to_open_without_it() {
+            let dir = ::tempfile::tempdir().unwrap();
+            $crate::conformance::encrypted_store::a_database_written_under_a_key_refuses_to_open_without_it(dir.path(), $keyring).await;
+        }
+    };
+}

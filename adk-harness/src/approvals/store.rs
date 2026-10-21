@@ -274,13 +274,80 @@ impl StandingRuleStore for FileStandingRuleStore {
 #[derive(Debug, Clone)]
 pub struct SqliteStandingRuleStore {
     pool: sqlx::SqlitePool,
+    #[cfg(feature = "encrypted")]
+    envelope: Option<crate::encrypted::StoreEnvelope>,
 }
 
 #[cfg(feature = "sqlite")]
 impl SqliteStandingRuleStore {
     /// A store over `pool`.
     pub fn new(pool: sqlx::SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            #[cfg(feature = "encrypted")]
+            envelope: None,
+        }
+    }
+
+    /// Seals every record under `keyring` (spec 3.1 §7.12).
+    #[cfg(feature = "encrypted")]
+    #[must_use]
+    pub fn with_keyring(mut self, keyring: crate::encrypted::StoreKeyring) -> Self {
+        self.envelope = Some(crate::encrypted::StoreEnvelope::new(keyring, "rules"));
+        self
+    }
+
+    /// Re-seals every record a previous key sealed with the current key and returns how
+    /// many rows changed (spec 3.1 §7.12). Without a keyring, nothing changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.store.decrypt_failed` when a row opens under no key the keyring
+    /// holds, or the database error.
+    #[cfg(feature = "encrypted")]
+    pub async fn rewrap(&self) -> Result<u64> {
+        let Some(envelope) = &self.envelope else {
+            return Ok(0);
+        };
+        let rows: Vec<(String, String, String)> =
+            sqlx::query_as("SELECT app_name, id, rule FROM adk_harness_rules")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(crate::fsutil::db_error)?;
+        let mut changed = 0;
+        for (app, id, text) in rows {
+            if let Some(resealed) = envelope.reseal(&[&app, &id], &text)? {
+                sqlx::query("UPDATE adk_harness_rules SET rule = ? WHERE app_name = ? AND id = ?")
+                    .bind(resealed)
+                    .bind(&app)
+                    .bind(&id)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(crate::fsutil::db_error)?;
+                changed += 1;
+            }
+        }
+        Ok(changed)
+    }
+
+    #[cfg(feature = "encrypted")]
+    fn encode(&self, address: &[&str], text: String) -> Result<String> {
+        crate::encrypted::encode_row(self.envelope.as_ref(), address, text)
+    }
+
+    #[cfg(not(feature = "encrypted"))]
+    fn encode(&self, _address: &[&str], text: String) -> Result<String> {
+        Ok(text)
+    }
+
+    #[cfg(feature = "encrypted")]
+    fn decode(&self, address: &[&str], text: String) -> Result<String> {
+        crate::encrypted::decode_row(self.envelope.as_ref(), "rules", address, text)
+    }
+
+    #[cfg(not(feature = "encrypted"))]
+    fn decode(&self, _address: &[&str], text: String) -> Result<String> {
+        Ok(text)
     }
 
     /// Creates the store's table if it does not exist.
@@ -300,16 +367,18 @@ impl SqliteStandingRuleStore {
         Ok(())
     }
 
-    fn parse(rows: Vec<(String,)>) -> Vec<StandingRule> {
-        rows.into_iter()
-            .filter_map(|(text,)| match serde_json::from_str::<StandingRule>(&text) {
-                Ok(rule) => Some(rule),
+    fn parse(&self, app: &str, rows: Vec<(String, String)>) -> Result<Vec<StandingRule>> {
+        let mut rules = Vec::with_capacity(rows.len());
+        for (id, text) in rows {
+            let text = self.decode(&[app, &id], text)?;
+            match serde_json::from_str::<StandingRule>(&text) {
+                Ok(rule) => rules.push(rule),
                 Err(error) => {
                     tracing::warn!(error = %error, "ignoring a standing rule this release cannot parse");
-                    None
                 }
-            })
-            .collect()
+            }
+        }
+        Ok(rules)
     }
 }
 
@@ -317,8 +386,8 @@ impl SqliteStandingRuleStore {
 #[async_trait]
 impl StandingRuleStore for SqliteStandingRuleStore {
     async fn rules_for(&self, app: &str, user: &str, session: &str) -> Result<Vec<StandingRule>> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT rule FROM adk_harness_rules WHERE app_name = ? AND user_id = ? \
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, rule FROM adk_harness_rules WHERE app_name = ? AND user_id = ? \
              AND (session_id IS NULL OR session_id = ?) ORDER BY rowid",
         )
         .bind(app)
@@ -327,7 +396,8 @@ impl StandingRuleStore for SqliteStandingRuleStore {
         .fetch_all(&self.pool)
         .await
         .map_err(crate::fsutil::db_error)?;
-        Ok(Self::parse(rows)
+        Ok(self
+            .parse(app, rows)?
             .into_iter()
             .filter(|rule| applies_to_session(rule, app, user, session))
             .collect())
@@ -337,6 +407,7 @@ impl StandingRuleStore for SqliteStandingRuleStore {
         validate(&rule)?;
         let text = serde_json::to_string(&rule)
             .map_err(|error| crate::fsutil::serialize_error("standing rule", &error))?;
+        let text = self.encode(&[rule.scope.app_name(), &rule.id], text)?;
         sqlx::query(
             "INSERT INTO adk_harness_rules (app_name, id, user_id, session_id, rule) VALUES (?, ?, ?, ?, ?) \
              ON CONFLICT (app_name, id) DO UPDATE SET user_id = excluded.user_id, \
@@ -364,14 +435,14 @@ impl StandingRuleStore for SqliteStandingRuleStore {
     }
 
     async fn list(&self, app: &str, user: &str) -> Result<Vec<StandingRule>> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT rule FROM adk_harness_rules WHERE app_name = ? AND user_id = ? ORDER BY rowid",
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, rule FROM adk_harness_rules WHERE app_name = ? AND user_id = ? ORDER BY rowid",
         )
         .bind(app)
         .bind(user)
         .fetch_all(&self.pool)
         .await
         .map_err(crate::fsutil::db_error)?;
-        Ok(Self::parse(rows))
+        self.parse(app, rows)
     }
 }

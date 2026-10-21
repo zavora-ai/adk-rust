@@ -402,13 +402,79 @@ impl FactStore for FileFactStore {
 #[derive(Debug, Clone)]
 pub struct SqliteFactStore {
     pool: sqlx::SqlitePool,
+    #[cfg(feature = "encrypted")]
+    envelope: Option<crate::encrypted::StoreEnvelope>,
 }
 
 #[cfg(feature = "sqlite")]
 impl SqliteFactStore {
     /// A store over `pool`.
     pub fn new(pool: sqlx::SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            #[cfg(feature = "encrypted")]
+            envelope: None,
+        }
+    }
+
+    /// Seals every record under `keyring` (spec 3.1 §7.12).
+    #[cfg(feature = "encrypted")]
+    #[must_use]
+    pub fn with_keyring(mut self, keyring: crate::encrypted::StoreKeyring) -> Self {
+        self.envelope = Some(crate::encrypted::StoreEnvelope::new(keyring, "facts"));
+        self
+    }
+
+    /// Re-seals every record a previous key sealed with the current key and returns how
+    /// many rows changed (spec 3.1 §7.12). Without a keyring, nothing changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.store.decrypt_failed` when a row opens under no key the keyring
+    /// holds, or the database error.
+    #[cfg(feature = "encrypted")]
+    pub async fn rewrap(&self) -> Result<u64> {
+        let Some(envelope) = &self.envelope else {
+            return Ok(0);
+        };
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, record FROM adk_harness_facts")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(crate::fsutil::db_error)?;
+        let mut changed = 0;
+        for (id, text) in rows {
+            if let Some(resealed) = envelope.reseal(&[&id], &text)? {
+                sqlx::query("UPDATE adk_harness_facts SET record = ? WHERE id = ?")
+                    .bind(resealed)
+                    .bind(&id)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(crate::fsutil::db_error)?;
+                changed += 1;
+            }
+        }
+        Ok(changed)
+    }
+
+    #[cfg(feature = "encrypted")]
+    fn encode(&self, address: &[&str], text: String) -> Result<String> {
+        crate::encrypted::encode_row(self.envelope.as_ref(), address, text)
+    }
+
+    #[cfg(not(feature = "encrypted"))]
+    fn encode(&self, _address: &[&str], text: String) -> Result<String> {
+        Ok(text)
+    }
+
+    #[cfg(feature = "encrypted")]
+    fn decode(&self, address: &[&str], text: String) -> Result<String> {
+        crate::encrypted::decode_row(self.envelope.as_ref(), "facts", address, text)
+    }
+
+    #[cfg(not(feature = "encrypted"))]
+    fn decode(&self, _address: &[&str], text: String) -> Result<String> {
+        Ok(text)
     }
 
     /// Creates the store's tables if they do not exist.
@@ -432,8 +498,9 @@ impl SqliteFactStore {
         Ok(())
     }
 
-    fn decode(text: &str) -> Result<MemoryFact> {
-        serde_json::from_str(text).map_err(|error| {
+    fn decode_fact(&self, id: &str, text: String) -> Result<MemoryFact> {
+        let text = self.decode(&[id], text)?;
+        serde_json::from_str(&text).map_err(|error| {
             AdkError::new(
                 ErrorComponent::Agent,
                 ErrorCategory::Internal,
@@ -444,11 +511,13 @@ impl SqliteFactStore {
     }
 
     async fn write(
+        &self,
         executor: impl sqlx::Executor<'_, Database = sqlx::Sqlite>,
         fact: &MemoryFact,
     ) -> Result<()> {
         let record = serde_json::to_string(fact)
             .map_err(|error| crate::fsutil::serialize_error("fact", &error))?;
+        let record = self.encode(&[&fact.id], record)?;
         sqlx::query(
             "INSERT INTO adk_harness_facts (id, app_name, user_id, project, digest, live, valid_from, record) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
@@ -474,8 +543,8 @@ impl SqliteFactStore {
 impl FactStore for SqliteFactStore {
     async fn put(&self, fact: MemoryFact) -> Result<MemoryFact> {
         let mut tx = self.pool.begin().await.map_err(crate::fsutil::db_error)?;
-        let existing: Option<(String,)> = sqlx::query_as(
-            "SELECT record FROM adk_harness_facts WHERE app_name = ? AND user_id = ? \
+        let existing: Option<(String, String)> = sqlx::query_as(
+            "SELECT id, record FROM adk_harness_facts WHERE app_name = ? AND user_id = ? \
              AND project IS ? AND digest = ? AND live = 1 LIMIT 1",
         )
         .bind(&fact.scope.app)
@@ -486,14 +555,14 @@ impl FactStore for SqliteFactStore {
         .await
         .map_err(crate::fsutil::db_error)?;
         let stored = match existing {
-            Some((record,)) => {
-                let mut existing = Self::decode(&record)?;
+            Some((id, record)) => {
+                let mut existing = self.decode_fact(&id, record)?;
                 existing.uses = existing.uses.saturating_add(1);
                 existing
             }
             None => fact,
         };
-        Self::write(&mut *tx, &stored).await?;
+        self.write(&mut *tx, &stored).await?;
         tx.commit().await.map_err(crate::fsutil::db_error)?;
         Ok(stored)
     }
@@ -505,12 +574,12 @@ impl FactStore for SqliteFactStore {
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(crate::fsutil::db_error)?;
-        row.map(|(record,)| Self::decode(&record)).transpose()
+        row.map(|(record,)| self.decode_fact(id, record)).transpose()
     }
 
     async fn list(&self, filter: FactFilter) -> Result<Vec<MemoryFact>> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT record FROM adk_harness_facts WHERE app_name = ? AND user_id = ? \
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, record FROM adk_harness_facts WHERE app_name = ? AND user_id = ? \
              AND (? = 0 OR live = 1)",
         )
         .bind(&filter.app)
@@ -520,8 +589,8 @@ impl FactStore for SqliteFactStore {
         .await
         .map_err(crate::fsutil::db_error)?;
         let mut facts = Vec::with_capacity(rows.len());
-        for (record,) in rows {
-            let fact = Self::decode(&record)?;
+        for (id, record) in rows {
+            let fact = self.decode_fact(&id, record)?;
             if filter.matches(&fact) {
                 facts.push(fact);
             }
@@ -538,9 +607,9 @@ impl FactStore for SqliteFactStore {
                 .fetch_optional(&mut *tx)
                 .await
                 .map_err(crate::fsutil::db_error)?;
-        let mut fact = Self::decode(&row.ok_or_else(|| not_found(id))?.0)?;
+        let mut fact = self.decode_fact(id, row.ok_or_else(|| not_found(id))?.0)?;
         apply_status(&mut fact, status)?;
-        Self::write(&mut *tx, &fact).await?;
+        self.write(&mut *tx, &fact).await?;
         tx.commit().await.map_err(crate::fsutil::db_error)
     }
 
@@ -593,10 +662,10 @@ impl FactStore for SqliteFactStore {
                     .await
                     .map_err(crate::fsutil::db_error)?;
             if let Some((record,)) = row {
-                let mut fact = Self::decode(&record)?;
+                let mut fact = self.decode_fact(id, record)?;
                 fact.last_recalled = Some(at);
                 fact.uses = fact.uses.saturating_add(1);
-                Self::write(&mut *tx, &fact).await?;
+                self.write(&mut *tx, &fact).await?;
             }
             tx.commit().await.map_err(crate::fsutil::db_error)?;
         }

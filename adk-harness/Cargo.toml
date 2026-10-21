@@ -49,7 +49,10 @@ memory-graph = ["memory", "dep:adk-memory"]
 # Hooks on tool events from `.adk/harness.toml`, the user config and the builder (spec 3.1 §7.22).
 hooks = []
 # SQLite backends for the mode, standing-rule and shell-ledger stores.
-sqlite = ["dep:sqlx", "sqlx/sqlite", "adk-graph?/sqlite"]
+sqlite = ["dep:sqlx", "sqlx/sqlite", "adk-graph?/sqlite", "adk-session?/sqlite"]
+# The store envelope of spec 3.1 §7.12: sessions, approvals and the SQLite stores sealed
+# under one keyring from a secret provider, the OS keychain or an environment variable.
+encrypted = ["dep:adk-session", "adk-session/encrypted-session", "dep:keyring"]
 # Packs (spec 3.1 §7.16–§7.18).
 browser = ["dep:adk-browser"]
 computer-use = ["dep:adk-computer-use"]
@@ -109,10 +112,22 @@ uuid.workspace = true
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# The OS keychain behind `StoreKeySource::Keychain` (feature `encrypted`), the same
+# configuration adk-cli uses.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native"], optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["windows-native"], optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"], optional = true }
+
 [dev-dependencies]
 adk-model = { path = "../adk-model", default-features = false }
-# SQLite sessions, approvals and ledger, and the durable worker, for the durability tests.
-adk-session = { path = "../adk-session", features = ["sqlite"] }
+# SQLite sessions, approvals and ledger, and the durable worker, for the durability tests;
+# `encrypted-session` for the encrypted store conformance suite.
+adk-session = { path = "../adk-session", features = ["sqlite", "encrypted-session"] }
 adk-server = { path = "../adk-server", features = ["background"] }
 # `MemoryServiceIndex` conformance over the SQLite FTS5 and PostgreSQL backends.
 adk-memory = { path = "../adk-memory", features = ["sqlite-memory", "database-memory"] }

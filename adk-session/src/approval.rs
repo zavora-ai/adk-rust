@@ -265,6 +265,11 @@ macro_rules! sql_approval_store {
                 Self { pool }
             }
 
+            /// The pool the store writes through.
+            pub fn pool(&self) -> &$pool {
+                &self.pool
+            }
+
             /// Creates or upgrades the approval tables.
             ///
             /// # Errors
@@ -283,11 +288,20 @@ macro_rules! sql_approval_store {
                 scope: &ApprovalScope,
                 request: &ToolConfirmationRequest,
             ) -> Result<()> {
+                self.record_pending_keyed(scope, &request.fingerprint(), request).await
+            }
+
+            async fn record_pending_keyed(
+                &self,
+                scope: &ApprovalScope,
+                fingerprint: &str,
+                request: &ToolConfirmationRequest,
+            ) -> Result<()> {
                 sqlx::query(RECORD_PENDING)
                     .bind(&scope.app_name)
                     .bind(&scope.user_id)
                     .bind(&scope.session_id)
-                    .bind(request.fingerprint())
+                    .bind(fingerprint)
                     .bind(to_json(request)?)
                     .bind(Utc::now().timestamp_micros())
                     .execute(&self.pool)

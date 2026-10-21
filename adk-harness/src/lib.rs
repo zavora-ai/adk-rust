@@ -31,6 +31,7 @@
 //! | [`WebConfig`], [`SearchProvider`], [`ProviderWebTools`], `web_fetch`, `web_search` (feature `web`) | §7.20 |
 //! | [`McpInteractionConfig`], `HarnessElicitationHandler`, `HarnessSamplingHandler`, `mcp_*_resource` (feature `mcp`) | §7.21 |
 //! | [`EffortPolicy`], [`Effort`] | §7.23 |
+//! | `encrypted::{StoreKeySource, StoreKeyring, StoreEnvelope, StoreRotation}` (feature `encrypted`) | §7.12 |
 //!
 //! # Example
 //!
@@ -55,6 +56,8 @@ mod agent;
 mod audit;
 mod builder;
 mod config;
+#[cfg(feature = "encrypted")]
+pub mod encrypted;
 #[cfg(feature = "memory")]
 mod facts;
 mod fsutil;

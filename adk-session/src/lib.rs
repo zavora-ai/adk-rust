@@ -96,8 +96,14 @@ mod durable_transitions;
 /// AES-256-GCM encrypted session wrapper with key rotation.
 pub mod encrypted;
 #[cfg(feature = "encrypted-session")]
+/// Approval arguments and decisions sealed at rest (spec 3.1 §7.12, §10 S5).
+pub mod encrypted_approval;
+#[cfg(feature = "encrypted-session")]
 /// Encryption key management for encrypted sessions.
 pub mod encryption_key;
+#[cfg(feature = "encrypted-session")]
+/// The `adk-enc:v1:` envelope other stores wrap their payloads with (spec 3.1 §10 S5).
+pub mod envelope;
 #[cfg(feature = "firestore")]
 /// Google Cloud Firestore session backend.
 pub mod firestore;
@@ -243,6 +249,8 @@ pub use sqlite_action_ledger::SqliteActionLedger;
 
 #[cfg(feature = "encrypted-session")]
 pub use encrypted::EncryptedSession;
+#[cfg(feature = "encrypted-session")]
+pub use encrypted_approval::EncryptedApprovalStore;
 #[cfg(feature = "encrypted-session")]
 pub use encryption_key::EncryptionKey;
 #[cfg(feature = "firestore")]

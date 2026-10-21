@@ -226,13 +226,81 @@ impl ShellLedger for InMemoryShellLedger {
 #[derive(Debug, Clone)]
 pub struct SqliteShellLedger {
     pool: sqlx::SqlitePool,
+    #[cfg(feature = "encrypted")]
+    envelope: Option<crate::encrypted::StoreEnvelope>,
 }
 
 #[cfg(feature = "sqlite")]
 impl SqliteShellLedger {
     /// A ledger over `pool`.
     pub fn new(pool: sqlx::SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            #[cfg(feature = "encrypted")]
+            envelope: None,
+        }
+    }
+
+    /// Seals every record under `keyring` (spec 3.1 §7.12).
+    #[cfg(feature = "encrypted")]
+    #[must_use]
+    pub fn with_keyring(mut self, keyring: crate::encrypted::StoreKeyring) -> Self {
+        self.envelope = Some(crate::encrypted::StoreEnvelope::new(keyring, "shell-ledger"));
+        self
+    }
+
+    /// Re-seals every record a previous key sealed with the current key and returns how
+    /// many rows changed (spec 3.1 §7.12). Without a keyring, nothing changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.store.decrypt_failed` when a row opens under no key the keyring
+    /// holds, or the database error.
+    #[cfg(feature = "encrypted")]
+    pub async fn rewrap(&self) -> Result<u64> {
+        let Some(envelope) = &self.envelope else {
+            return Ok(0);
+        };
+        let rows: Vec<(String, String, String, String, String)> = sqlx::query_as("SELECT app_name, user_id, session_id, function_call_id, entry FROM adk_harness_shell_ledger")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(crate::fsutil::db_error)?;
+        let mut changed = 0;
+        for (app, user, session, call, text) in rows {
+            if let Some(resealed) = envelope.reseal(&[&app, &user, &session, &call], &text)? {
+                sqlx::query("UPDATE adk_harness_shell_ledger SET entry = ? WHERE app_name = ? AND user_id = ? AND session_id = ? AND function_call_id = ?")
+                    .bind(resealed)
+                    .bind(&app)
+                    .bind(&user)
+                    .bind(&session)
+                    .bind(&call)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(crate::fsutil::db_error)?;
+                changed += 1;
+            }
+        }
+        Ok(changed)
+    }
+
+    #[cfg(feature = "encrypted")]
+    fn encode(&self, address: &[&str], text: String) -> Result<String> {
+        crate::encrypted::encode_row(self.envelope.as_ref(), address, text)
+    }
+
+    #[cfg(not(feature = "encrypted"))]
+    fn encode(&self, _address: &[&str], text: String) -> Result<String> {
+        Ok(text)
+    }
+
+    #[cfg(feature = "encrypted")]
+    fn decode(&self, address: &[&str], text: String) -> Result<String> {
+        crate::encrypted::decode_row(self.envelope.as_ref(), "shell-ledger", address, text)
+    }
+
+    #[cfg(not(feature = "encrypted"))]
+    fn decode(&self, _address: &[&str], text: String) -> Result<String> {
+        Ok(text)
     }
 
     /// Creates the ledger's table if it does not exist.
@@ -266,6 +334,7 @@ impl ShellLedger for SqliteShellLedger {
     ) -> Result<()> {
         let text = serde_json::to_string(&entry)
             .map_err(|error| crate::fsutil::serialize_error("shell ledger entry", &error))?;
+        let text = self.encode(&[app, user, session, &entry.function_call_id], text)?;
         sqlx::query(
             "INSERT INTO adk_harness_shell_ledger \
              (app_name, user_id, session_id, function_call_id, entry, retried_by) VALUES (?, ?, ?, ?, ?, ?) \
@@ -302,10 +371,13 @@ impl ShellLedger for SqliteShellLedger {
         .fetch_optional(&self.pool)
         .await
         .map_err(crate::fsutil::db_error)?;
-        Ok(row.and_then(|(text, retried_by)| {
-            let mut entry = serde_json::from_str::<ShellLedgerEntry>(&text).ok()?;
+        let Some((text, retried_by)) = row else {
+            return Ok(None);
+        };
+        let text = self.decode(&[app, user, session, function_call_id], text)?;
+        Ok(serde_json::from_str::<ShellLedgerEntry>(&text).ok().map(|mut entry| {
             entry.retried_by = retried_by;
-            Some(entry)
+            entry
         }))
     }
 

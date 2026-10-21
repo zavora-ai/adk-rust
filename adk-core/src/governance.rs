@@ -973,6 +973,24 @@ pub trait ApprovalStore: std::fmt::Debug + Send + Sync {
         Ok(!self.pending(scope).await?.iter().any(|entry| entry.fingerprint == fingerprint))
     }
 
+    /// Records a call waiting for a decision under `fingerprint` instead of the one
+    /// `request` computes.
+    ///
+    /// A wrapper that stores the request with its arguments sealed (`adk-session`'s
+    /// `EncryptedApprovalStore`, spec 3.1 §10 S5) passes the fingerprint of the call as
+    /// the model made it, so the decision the governed path records later is found. The
+    /// default reports `approval.store_unsupported`; the stores in adk-core and adk-session
+    /// implement it.
+    async fn record_pending_keyed(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+        request: &ToolConfirmationRequest,
+    ) -> Result<()> {
+        let _ = (scope, fingerprint, request);
+        Err(crate::approval::store_unsupported("record_pending_keyed"))
+    }
+
     /// Takes the live decision for `fingerprint` with what the approver attached to it —
     /// edited arguments or a message — consuming it.
     ///
@@ -1088,7 +1106,16 @@ impl ApprovalStore for InMemoryApprovalStore {
         scope: &ApprovalScope,
         request: &ToolConfirmationRequest,
     ) -> Result<()> {
-        let fingerprint = request.fingerprint();
+        self.record_pending_keyed(scope, &request.fingerprint(), request).await
+    }
+
+    async fn record_pending_keyed(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+        request: &ToolConfirmationRequest,
+    ) -> Result<()> {
+        let fingerprint = fingerprint.to_string();
         let mut scopes = self.scopes.write().await;
         scopes.entry(scope.clone()).or_default().pending.entry(fingerprint.clone()).or_insert_with(
             || PendingApproval { fingerprint, request: request.clone(), requested_at: Utc::now() },
