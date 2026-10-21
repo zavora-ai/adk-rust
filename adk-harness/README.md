@@ -121,6 +121,8 @@ See `docs/official_docs/harness/hooks.md`.
 | `mcp` | off | MCP elicitation, sampling and resource bridges (`adk-tool/mcp`, `adk-tool/mcp-sampling`); on in `adk-rust` |
 | `web-fixture` | off | a loopback HTTP server stands in for the web in tests; never on in `adk-rust` |
 | `hooks` | off | `toml`; `[[hooks]]` from `.adk/harness.toml`, the user config and the builder, run through the shell's launcher (spec 3.1 §7.22) |
+| `memory-embeddings-local` | off | `RagEmbedder::onnx`: `adk-rag`'s in-process ONNX embedder (`BAAI/bge-small-en-v1.5`), no network and no key; `ort` downloads the onnxruntime binary at build time |
+| `encrypted` | off | The store envelope of spec 3.1 §7.12: `StoreKeyring`, `StoreKeySource` (secret provider, OS keychain, environment), sessions, approvals and the SQLite stores sealed at rest, key rotation |
 | `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores |
 | `ambient` | off | `adk-agent/ambient`: goals started by triggers |
 | `skills-registry`, `team-acp`, `team-a2a`, `docker`, `memory-graph` | off | registry skills, ACP and A2A members, containers, graph memory |

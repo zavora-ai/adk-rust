@@ -75,6 +75,8 @@ See [Shell and sandbox](shell-and-sandbox.md) and [Durability](durability.md).
 | `goal_store(store)`, `goal_engine(GoalEngine)` | in memory; `Loop`, or `Graph` with a plan checkpointer | Where goals are kept and how they iterate |
 | `memory(MemoryConfig)` | off | Working notes (feature `memory`) |
 | `long_term_memory(config)`, `fact_store(store)`, `fact_index(index)`, `memory_embedder(embedder)` | off; in memory; a local lexical index; none | Long-term facts with provenance (feature `memory`) |
+| `effort(EffortPolicy)` | plan high, members low, else medium | The reasoning effort per mode and role (spec 3.1 §7.23); surfaces build clients at it, `HarnessAgent::effort` reads it |
+| `cache_capable(model)` / `without_context_caching()` | none; on | A Gemini model the runner caches explicitly with `ContextCacheConfig::default()` (spec 3.1 §7.23) |
 
 See [Team](team.md), [Plans and goals](plan-and-goals.md) and [Memory](memory.md).
 
@@ -144,6 +146,8 @@ On the umbrella crate:
 | `harness` | `adk_rust::harness` (everything `adk-harness` exports) and `HarnessAgent`, `HarnessAgentBuilder`, `HarnessMode` in the prelude; turns on `agents`, `tools`, `skills`, `sandbox`, `runner`, `sessions` and `graph`. In `full` |
 | `harness` with `cli` | `adk_rust::harness` also re-exports `HarnessLauncher`, `ConsolePrompter` and `ConsoleIo` from `adk-cli` |
 | `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed` | The packs; the builder refuses them with `not yet implemented` until they land |
+| `harness-encrypted`, `harness-memory-local` | The encrypted store and the local ONNX embedder (spec 3.1 §7.12, §7.15.2) |
+| `mistralrs`, `cli-mistralrs` | `adk-mistralrs` in the umbrella, and `adk-rust --provider mistralrs`; a heavy build, in no tier |
 
 ```toml
 [dependencies]
@@ -163,6 +167,8 @@ On `adk-harness`:
 | `auth` | on | RBAC, credentials and the signed audit log |
 | `memory` | on | Working notes and long-term facts |
 | `memory-embeddings` | off | OpenAI and Gemini embedders for the fact index |
+| `memory-embeddings-local` | off | `RagEmbedder::local()`: an in-process ONNX embedder (`BAAI/bge-small-en-v1.5`); `ort` downloads the onnxruntime binary at build time |
+| `encrypted` | off | The store envelope: `StoreKeyring`, `StoreKeySource`, sealed sessions, approvals and SQLite stores, key rotation (spec 3.1 §7.12) |
 | `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores |
 | `ambient` | off | Goals started by cron, file-watch and webhook triggers |
 | `team-acp`, `team-a2a` | off | ACP-compatible coding agents and remote A2A agents as members |

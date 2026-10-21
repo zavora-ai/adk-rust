@@ -2,12 +2,14 @@
 //! (spec 3.1 §8.1, §8.2).
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, RwLock};
 
 use adk_core::{
-    AdkError, Agent, ApprovalService, DurableRunStore, Event, Result, RunConfig, SessionId,
+    AdkError, Agent, ApprovalService, DurableRunStore, Effort, Event, Result, RunConfig, SessionId,
     ToolConfirmationRequest, UserId, held_tool_calls,
 };
 use adk_harness::{Harness, HarnessAgent, HarnessMode, TrustDecision};
@@ -37,6 +39,12 @@ const SERVE_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 
 /// Rebuilds the harness with the OS sandbox on (`true`) or off, for `/sandbox on|off`.
 pub type HarnessRebuild = Arc<dyn Fn(bool) -> Result<HarnessAgent> + Send + Sync>;
+
+/// Rebuilds the harness with its model clients at another effort, for
+/// `/effort low|medium|high` (spec 3.1 §7.23): the providers read effort when a client
+/// is built, so the session's clients are restarted.
+pub type HarnessEffortRebuild =
+    Arc<dyn Fn(Effort) -> Pin<Box<dyn Future<Output = Result<HarnessAgent>> + Send>> + Send + Sync>;
 
 /// How one [`HarnessLauncher::run_once`] turn ended (spec 3.1 §8.1).
 ///
@@ -110,6 +118,9 @@ pub struct HarnessLauncher {
     thinking_mode: ThinkingDisplayMode,
     pub(super) echo: bool,
     rebuild: Option<HarnessRebuild>,
+    effort_rebuild: Option<HarnessEffortRebuild>,
+    effort: Option<Effort>,
+    status_lines: Vec<(String, String)>,
     banner_notes: Vec<String>,
     request_context_extractor: Option<Arc<dyn RequestContextExtractor>>,
     approval_service: Option<Arc<dyn ApprovalService>>,
@@ -147,6 +158,9 @@ impl HarnessLauncher {
             thinking_mode: ThinkingDisplayMode::Auto,
             echo: true,
             rebuild: None,
+            effort_rebuild: None,
+            effort: None,
+            status_lines: Vec::new(),
             banner_notes: Vec::new(),
             request_context_extractor: None,
             approval_service: None,
@@ -225,6 +239,25 @@ impl HarnessLauncher {
     /// Lets `/sandbox on|off` rebuild the harness with the OS sandbox on or off.
     pub fn with_rebuild(mut self, rebuild: HarnessRebuild) -> Self {
         self.rebuild = Some(rebuild);
+        self
+    }
+
+    /// Lets `/effort low|medium|high` rebuild the harness with its model clients at that
+    /// level (spec 3.1 §7.23).
+    pub fn with_effort_rebuild(mut self, rebuild: HarnessEffortRebuild) -> Self {
+        self.effort_rebuild = Some(rebuild);
+        self
+    }
+
+    /// The effort the session's clients were built at, shown by `/effort`.
+    pub fn with_effort(mut self, effort: Effort) -> Self {
+        self.effort = Some(effort);
+        self
+    }
+
+    /// Adds a labelled line to the banner, such as the store or the effort.
+    pub fn with_status_line(mut self, label: impl Into<String>, text: impl Into<String>) -> Self {
+        self.status_lines.push((label.into(), text.into()));
         self
     }
 
@@ -359,6 +392,9 @@ impl HarnessLauncher {
             console,
             thinking_mode: self.thinking_mode,
             rebuild: self.rebuild.clone(),
+            effort_rebuild: self.effort_rebuild.clone(),
+            effort: Mutex::new(self.effort),
+            status_lines: self.status_lines.clone(),
             run_store: self.run_store.clone(),
         });
         shared.decide_trust(self.trust).await?;
@@ -671,6 +707,9 @@ pub(crate) struct Shared {
     pub(crate) console: ConsoleIo,
     thinking_mode: ThinkingDisplayMode,
     rebuild: Option<HarnessRebuild>,
+    effort_rebuild: Option<HarnessEffortRebuild>,
+    effort: Mutex<Option<Effort>>,
+    status_lines: Vec<(String, String)>,
     pub(crate) run_store: Option<Arc<dyn DurableRunStore>>,
 }
 
@@ -735,6 +774,29 @@ impl Shared {
             }
         }
         out
+    }
+
+    /// Replaces the harness with one whose model clients run at `effort`
+    /// (spec 3.1 §7.23).
+    pub(crate) async fn rebuild_effort(&self, effort: Effort) -> Result<Option<Arc<Harness>>> {
+        let Some(rebuild) = &self.effort_rebuild else {
+            return Ok(None);
+        };
+        let agent = Arc::new(rebuild(effort).await?);
+        let harness = Arc::new(harness_for(
+            agent,
+            &self.app_name,
+            self.sessions.clone(),
+            self.run_store.clone(),
+        )?);
+        *self.harness.write().unwrap_or_else(std::sync::PoisonError::into_inner) = harness.clone();
+        *self.effort.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(effort);
+        Ok(Some(harness))
+    }
+
+    /// The effort the session's clients run at, when the surface told the launcher.
+    pub(crate) fn current_effort(&self) -> Option<Effort> {
+        *self.effort.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// The session's state value at `key`.
@@ -888,6 +950,9 @@ impl Shared {
         let members =
             if info.members.is_empty() { "none".to_string() } else { info.members.join(", ") };
         println!("  Members   : {}", terminal_safe(&members));
+        for (label, text) in &self.status_lines {
+            println!("  {:<10}: {}", terminal_safe(label), terminal_safe(text));
+        }
         if memory_on(&harness) {
             println!("  Memory    : long-term facts on (/memory)");
         }

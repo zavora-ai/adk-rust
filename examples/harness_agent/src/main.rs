@@ -32,6 +32,7 @@ use futures::StreamExt;
 use serde_json::{Value, json};
 
 mod hooks;
+mod local;
 mod team_graph;
 mod web_mcp;
 
@@ -251,6 +252,16 @@ struct Checks(Vec<(String, bool)>);
 impl Checks {
     fn check(&mut self, name: impl Into<String>, ok: bool) {
         self.0.push((name.into(), ok));
+    }
+    /// A scenario that could not run here, with the reason.
+    fn skipped(reason: &str) -> Self {
+        Self(vec![(format!("SKIPPED: {reason}"), true)])
+    }
+    fn skipped_reason(&self) -> Option<&str> {
+        match self.0.as_slice() {
+            [(name, true)] => name.strip_prefix("SKIPPED: "),
+            _ => None,
+        }
     }
     fn passed(&self) -> bool {
         !self.0.is_empty() && self.0.iter().all(|(_, ok)| *ok)
@@ -977,7 +988,10 @@ async fn run_scripted(name: &str, subject: Subject) -> Result<Checks> {
                 Some(result) => result,
                 None => match hooks::run_scripted(other, subject).await {
                     Some(result) => result,
-                    None => bail!("unknown scenario {other}"),
+                    None => match local::run_scripted(other, subject).await {
+                        Some(result) => result,
+                        None => bail!("unknown scenario {other}"),
+                    },
                 },
             },
         },
@@ -1044,7 +1058,13 @@ async fn main() -> Result<()> {
         }
     } else {
         let mut rows = Vec::new();
-        for name in SCRIPTED.iter().chain(team_graph::SCRIPTED).chain(web_mcp::SCRIPTED).chain(hooks::SCRIPTED) {
+        for name in SCRIPTED
+            .iter()
+            .chain(team_graph::SCRIPTED)
+            .chain(web_mcp::SCRIPTED)
+            .chain(hooks::SCRIPTED)
+            .chain(local::SCRIPTED)
+        {
             if !selected.is_empty() && !selected.contains(name) {
                 continue;
             }
@@ -1052,12 +1072,15 @@ async fn main() -> Result<()> {
             let harness = run_scripted(name, Subject::Harness).await;
             let baseline = run_scripted(name, Subject::Baseline).await;
             let verdict = |result: &Result<Checks>| match result {
+                Ok(checks) if checks.skipped_reason().is_some() => {
+                    format!("SKIPPED ({})", checks.skipped_reason().unwrap_or_default())
+                }
                 Ok(checks) if checks.passed() => "PASS".to_string(),
                 Ok(checks) => format!("FAIL ({})", checks.failures().join("; ")),
                 Err(error) => format!("ERROR ({error})"),
             };
             let (h, b) = (verdict(&harness), verdict(&baseline));
-            failed |= !h.starts_with("PASS");
+            failed |= !(h.starts_with("PASS") || h.starts_with("SKIPPED"));
             rows.push(format!("| `{name}` | {b} | {h} |"));
         }
         println!("\n| Scenario | main (`adk_agent::coding::CodingAgent`) | branch (`HarnessAgent`) |\n|---|---|---|");

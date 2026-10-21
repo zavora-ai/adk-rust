@@ -111,6 +111,8 @@ cli-anthropic = ["cli", "adk-cli/anthropic"]
 cli-deepseek = ["cli", "adk-cli/deepseek"]
 cli-groq = ["cli", "adk-cli/groq"]
 cli-ollama = ["cli", "adk-cli/ollama"]
+# mistral.rs in process behind `adk-rust --provider mistralrs` (spec 3.1 §8.1); a heavy build
+cli-mistralrs = ["cli", "adk-cli/mistralrs"]
 cli-all-providers = ["cli", "adk-cli/all-providers"]
 cli-telemetry-otlp = ["cli", "adk-cli/telemetry-otlp"]
 
@@ -161,6 +163,9 @@ harness-web = ["harness", "adk-harness/web"]
 harness-mcp = ["harness", "adk-harness/mcp"]
 # Hooks on tool events from `.adk/harness.toml`, the user config and the builder (spec 3.1 §7.22).
 harness-hooks = ["harness", "adk-harness/hooks"]
+# The encrypted store of spec 3.1 §7.12 and the local ONNX embedder of §7.15.2.
+harness-encrypted = ["harness", "adk-harness/encrypted"]
+harness-memory-local = ["harness", "adk-harness/memory-embeddings-local"]
 
 # Managed agent runtime (feature-gated, experimental). The provider features below also
 # let its `DefaultModelResolver` construct that provider's models.
@@ -183,6 +188,9 @@ anthropic = ["models", "adk-model/anthropic", "adk-managed?/anthropic"]
 deepseek = ["models", "adk-model/deepseek"]
 groq = ["models", "adk-model/groq"]
 ollama = ["models", "adk-model/ollama", "adk-managed?/ollama"]
+# Local inference in process through mistral.rs 0.8 (spec 3.1 §8.1, §8.4); GPU through
+# adk-mistralrs's own `cuda` and `metal` features. A heavy build: not in any tier.
+mistralrs = ["models", "dep:adk-mistralrs"]
 fireworks = ["models", "adk-model/fireworks"]
 together = ["models", "adk-model/together"]
 mistral = ["models", "adk-model/mistral"]
@@ -383,6 +391,7 @@ adk-acp = { workspace = true, optional = true }
 adk-managed = { workspace = true, optional = true }
 adk-enterprise = { workspace = true, optional = true }
 adk-harness = { workspace = true, optional = true }
+adk-mistralrs = { workspace = true, optional = true }
 
 # Re-export common dependencies
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "signal", "fs", "process", "io-util"] }

@@ -65,3 +65,47 @@ async fn open(model: Arc<dyn Llm>, url: &str) -> Result<Harness, Box<dyn std::er
 > **Note:** `adk-devtools` keeps its read-before-edit record in process memory, so an
 > `edit_file` call approved after a restart fails with "must be read with read_file before
 > it can be edited" until the model reads the file again in the new process.
+
+## The encrypted store
+
+Feature `encrypted` seals every payload of the harness's stores at rest (spec 3.1 §7.12,
+§9.2 I57). One `StoreKeyring { current, previous }` is resolved once at startup from a
+`StoreKeySource`: `Secret { provider, name }` (an `adk-auth` secret provider), `Keychain {
+service, account }` (the OS keychain) or `Env(var)`. Sessions wrap in
+`adk_session::EncryptedSession`, held calls and decisions in
+`adk_session::EncryptedApprovalStore`, and the SQLite mode, rule, shell-ledger, goal and
+fact stores take the keyring through `with_keyring`; each payload column holds an
+`adk-enc:v1:` AES-256-GCM envelope bound to its row, and identifiers, timestamps and status
+columns stay plaintext for indexing.
+
+| Invariant | Mechanism | Test |
+|---|---|---|
+| No payload reaches disk in plaintext | Every store seals before the write; the conformance suite scans the database file for planted sentinels | `encrypted_store_no_sentinel_reaches_the_file` |
+| A wrong or missing key fails the open, never a plaintext fallback | `SqliteStoreMarker` records the key id; each store refuses an envelope it has no key for and a plaintext row while a key is configured | `encrypted_store_a_database_written_under_a_key_refuses_to_open_without_it` |
+| Rotation retires the old key | `rewrap` on each store re-seals rows under the new key; `compact` vacuums the file so freed pages carry no plaintext; afterwards the old key opens nothing | `encrypted_store_rotation_reseals_every_row_and_the_old_key_opens_nothing` |
+| A store can be encrypted in place | `rewrap` seals rows written before any key (sessions and approvals with legacy migration on) | `encrypted_store_rotation_seals_rows_written_before_the_key` |
+
+`encrypted_store_conformance_tests!(keyring = …)` generates the four cases over a temporary
+`harness.db`. `StoreRotation` describes a rotation and produces the
+`harness.store.key_rotated` audit record (key ids, stores, rows, duration); the CLI's
+`adk-rust store rotate-key` is the operator's entry point (see
+[The harness in your terminal](cli.md#the-encrypted-store)).
+
+```rust,no_run
+use adk_harness::encrypted::{StoreKeySource, StoreKeyring};
+use adk_harness::{SqliteFactStore, SqliteModeStore};
+use adk_session::{EncryptedSession, SqliteSessionService};
+
+async fn sealed(pool: sqlx::SqlitePool) -> adk_core::Result<()> {
+    let keyring = StoreKeyring::resolve(&StoreKeySource::Env("ADK_STORE_KEY".into())).await?;
+    let sessions = EncryptedSession::new(
+        SqliteSessionService::from_pool(pool.clone()),
+        keyring.current_key(),
+        keyring.previous_keys(),
+    );
+    let modes = SqliteModeStore::new(pool.clone()).with_keyring(keyring.clone());
+    let facts = SqliteFactStore::new(pool).with_keyring(keyring);
+    let _ = (sessions, modes, facts);
+    Ok(())
+}
+```

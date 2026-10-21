@@ -93,6 +93,8 @@ pub mod agent_retrieval;
 pub mod gemini;
 #[cfg(feature = "lancedb")]
 pub mod lancedb;
+#[cfg(feature = "onnx")]
+pub mod onnx;
 #[cfg(feature = "openai")]
 pub mod openai;
 #[cfg(feature = "pgvector")]
@@ -121,6 +123,8 @@ pub use vectorstore::VectorStore;
 pub use gemini::GeminiEmbeddingProvider;
 #[cfg(feature = "lancedb")]
 pub use lancedb::LanceDBVectorStore;
+#[cfg(feature = "onnx")]
+pub use onnx::{OnnxEmbeddingConfig, OnnxEmbeddingProvider, OnnxPooling};
 #[cfg(feature = "openai")]
 pub use openai::OpenAIEmbeddingProvider;
 #[cfg(feature = "pgvector")]

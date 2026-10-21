@@ -339,39 +339,57 @@ pub mod encrypted_store {
 
     /// Opens (creating and migrating) every store of the file at `path` behind `keyring`.
     pub async fn open(path: &Path, keyring: &StoreKeyring) -> SealedDb {
-        let url = format!("sqlite://{}?mode=rwc", path.display());
-        let base = SqliteSessionService::new(&url).await.unwrap();
-        base.migrate().await.unwrap();
-        let pool = base.pool().clone();
-        let sessions = EncryptedSession::new(base, keyring.current_key(), keyring.previous_keys());
-        let approvals = SqliteApprovalStore::from_pool(pool.clone());
-        approvals.migrate().await.unwrap();
-        let approvals =
-            EncryptedApprovalStore::new(approvals, keyring.current_key(), keyring.previous_keys());
-        let modes = SqliteModeStore::new(pool.clone()).with_keyring(keyring.clone());
-        modes.migrate().await.unwrap();
-        let rules = SqliteStandingRuleStore::new(pool.clone()).with_keyring(keyring.clone());
-        rules.migrate().await.unwrap();
-        let ledger = SqliteShellLedger::new(pool.clone()).with_keyring(keyring.clone());
-        ledger.migrate().await.unwrap();
-        let goals = SqliteGoalStore::new(pool.clone()).with_keyring(keyring.clone());
-        goals.migrate().await.unwrap();
-        let facts = SqliteFactStore::new(pool.clone()).with_keyring(keyring.clone());
-        facts.migrate().await.unwrap();
-        let marker = SqliteStoreMarker::new(pool.clone());
-        marker.migrate().await.unwrap();
-        SealedDb {
-            path: path.to_path_buf(),
-            pool,
-            key_id: keyring.key_id(),
-            sessions,
-            approvals,
-            modes,
-            rules,
-            ledger,
-            goals,
-            facts,
-            marker,
+        SealedDb::open_with_legacy(path, keyring, false).await
+    }
+
+    impl SealedDb {
+        /// [`open`], with legacy migration on the session and approval stores when
+        /// `legacy`: what a rotation over a database written before the key uses.
+        pub async fn open_with_legacy(
+            path: &Path,
+            keyring: &StoreKeyring,
+            legacy: bool,
+        ) -> SealedDb {
+            let url = format!("sqlite://{}?mode=rwc", path.display());
+            let base = SqliteSessionService::new(&url).await.unwrap();
+            base.migrate().await.unwrap();
+            let pool = base.pool().clone();
+            let sessions =
+                EncryptedSession::new(base, keyring.current_key(), keyring.previous_keys())
+                    .with_legacy_migration(legacy);
+            let approvals = SqliteApprovalStore::from_pool(pool.clone());
+            approvals.migrate().await.unwrap();
+            let approvals = EncryptedApprovalStore::new(
+                approvals,
+                keyring.current_key(),
+                keyring.previous_keys(),
+            )
+            .with_legacy_migration(legacy);
+            let modes = SqliteModeStore::new(pool.clone()).with_keyring(keyring.clone());
+            modes.migrate().await.unwrap();
+            let rules = SqliteStandingRuleStore::new(pool.clone()).with_keyring(keyring.clone());
+            rules.migrate().await.unwrap();
+            let ledger = SqliteShellLedger::new(pool.clone()).with_keyring(keyring.clone());
+            ledger.migrate().await.unwrap();
+            let goals = SqliteGoalStore::new(pool.clone()).with_keyring(keyring.clone());
+            goals.migrate().await.unwrap();
+            let facts = SqliteFactStore::new(pool.clone()).with_keyring(keyring.clone());
+            facts.migrate().await.unwrap();
+            let marker = SqliteStoreMarker::new(pool.clone());
+            marker.migrate().await.unwrap();
+            SealedDb {
+                path: path.to_path_buf(),
+                pool,
+                key_id: keyring.key_id(),
+                sessions,
+                approvals,
+                modes,
+                rules,
+                ledger,
+                goals,
+                facts,
+                marker,
+            }
         }
     }
 
@@ -558,6 +576,7 @@ pub mod encrypted_store {
         rows += db.goals.rewrap().await?;
         rows += db.facts.rewrap().await?;
         db.marker.set_key_id(&db.key_id).await?;
+        crate::encrypted::compact(&db.pool).await?;
         Ok(rows)
     }
 
@@ -671,6 +690,93 @@ pub mod encrypted_store {
         db.pool.close().await;
     }
 
+    /// A rotation over a database written before any key seals every plaintext row, so the
+    /// store is encrypted in place and reads back through the keyring.
+    pub async fn rotation_seals_rows_written_before_the_key(dir: &Path, keyring: StoreKeyring) {
+        let path = dir.join("harness.db");
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+        let base = SqliteSessionService::new(&url).await.unwrap();
+        base.migrate().await.unwrap();
+        let pool = base.pool().clone();
+        let mut state: HashMap<String, Value> = HashMap::new();
+        state.insert("plan".into(), json!("sentinel-state-value"));
+        base.create(CreateRequest {
+            app_name: APP.into(),
+            user_id: USER.into(),
+            session_id: Some(SESSION.into()),
+            state,
+        })
+        .await
+        .unwrap();
+        let mut event = Event::new("inv-1");
+        event.author = "model".into();
+        event.llm_response.content = Some(Content::new("model").with_text("sentinel-event-text"));
+        base.append_event_for_identity(AppendEventRequest { identity: identity(), event })
+            .await
+            .unwrap();
+        let approvals = SqliteApprovalStore::from_pool(pool.clone());
+        approvals.migrate().await.unwrap();
+        approvals.record_pending(&scope(), &held_call()).await.unwrap();
+        approvals
+            .decide(
+                &scope(),
+                &decided_call().fingerprint(),
+                ToolApproval {
+                    message: Some("sentinel-decision-message".into()),
+                    ..ToolApproval::approve()
+                },
+            )
+            .await
+            .unwrap();
+        let modes = SqliteModeStore::new(pool.clone());
+        modes.migrate().await.unwrap();
+        modes
+            .set(APP, USER, SESSION, ModeRecord::new(HarnessMode::Auto, ModeSource::User))
+            .await
+            .unwrap();
+        let rules = SqliteStandingRuleStore::new(pool.clone());
+        rules.migrate().await.unwrap();
+        rules.grant(rule()).await.unwrap();
+        let ledger = SqliteShellLedger::new(pool.clone());
+        ledger.migrate().await.unwrap();
+        ledger
+            .record(
+                APP,
+                USER,
+                SESSION,
+                ShellLedgerEntry::new("c1", "sentinel-shell-command", true, Some(0)),
+            )
+            .await
+            .unwrap();
+        let goals = SqliteGoalStore::new(pool.clone());
+        goals.migrate().await.unwrap();
+        goals.set(APP, USER, SESSION, goal()).await.unwrap();
+        let facts = SqliteFactStore::new(pool.clone());
+        facts.migrate().await.unwrap();
+        let fact_id = facts.put(fact()).await.unwrap().id;
+        pool.close().await;
+        assert!(contains(&file_bytes(&path), "sentinel-fact-text"), "written in plaintext");
+
+        let db = SealedDb::open_with_legacy(&path, &keyring, true).await;
+        assert!(
+            read_fixture(&db, &fact_id).await.is_err(),
+            "plaintext rows do not read through a key"
+        );
+        let rows = rewrap_all(&db).await.unwrap();
+        assert_eq!(rows, 9, "every plaintext row is sealed");
+        assert_eq!(rewrap_all(&db).await.unwrap(), 0);
+        read_fixture(&db, &fact_id).await.unwrap();
+        assert_eq!(db.marker.key_id().await.unwrap(), Some(keyring.key_id()));
+        db.pool.close().await;
+        let bytes = file_bytes(&path);
+        for sentinel in SENTINELS {
+            assert!(!contains(&bytes, sentinel), "{sentinel} is still in the file");
+        }
+        let db = open(&path, &keyring).await;
+        read_fixture(&db, &fact_id).await.unwrap();
+        db.pool.close().await;
+    }
+
     /// A database written under a key refuses to open without one: the marker says so,
     /// and every store refuses an envelope it has no key for.
     pub async fn a_database_written_under_a_key_refuses_to_open_without_it(
@@ -737,6 +843,12 @@ macro_rules! encrypted_store_conformance_tests {
         async fn encrypted_store_rotation_reseals_every_row_and_the_old_key_opens_nothing() {
             let dir = ::tempfile::tempdir().unwrap();
             $crate::conformance::encrypted_store::rotation_reseals_every_row_and_the_old_key_opens_nothing(dir.path(), $keyring).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test]
+        async fn encrypted_store_rotation_seals_rows_written_before_the_key() {
+            let dir = ::tempfile::tempdir().unwrap();
+            $crate::conformance::encrypted_store::rotation_seals_rows_written_before_the_key(dir.path(), $keyring).await;
         }
         $(#[$attr])*
         #[::tokio::test]

@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use adk_core::Result;
+use adk_core::{Effort, Result};
 use adk_harness::{
     FactStatus, FileMemory, HarnessMode, MemoryConfig, MemoryFact, MemoryLimits, ModeChange,
     OriginPin, PLAN_STATE_KEY, RuleScope, SkillsConfig, StandingDecision, StandingRule,
@@ -31,6 +31,7 @@ enum Kind {
     Memory,
     Web,
     Mcp,
+    Effort,
 }
 
 const COMMANDS: &[(Kind, &str, &str)] = &[
@@ -47,6 +48,7 @@ const COMMANDS: &[(Kind, &str, &str)] = &[
     (Kind::Memory, "memory", "Working notes and long-term facts; /memory forget|accept ID"),
     (Kind::Web, "web", "The web allowlist; /web allow HOST adds a standing rule for web_fetch"),
     (Kind::Mcp, "mcp", "MCP servers; /mcp resources SERVER lists what a server publishes"),
+    (Kind::Effort, "effort", "Reasoning effort; /effort low|medium|high rebuilds the clients"),
 ];
 
 /// One data-driven slash command over the REPL's shared state.
@@ -111,7 +113,30 @@ impl ConsoleCommand for HarnessCommand {
             Kind::Memory => memory(shared, args).await,
             Kind::Web => web(shared, args).await,
             Kind::Mcp => mcp(shared, args).await,
+            Kind::Effort => effort(shared, args).await,
         }
+    }
+}
+
+/// `/effort`: the session's reasoning effort; `/effort low|medium|high` rebuilds the
+/// session's model clients at that level (spec 3.1 §7.23).
+async fn effort(shared: &Shared, args: &str) -> Result<String> {
+    let policy = *shared.harness().agent().effort();
+    let current = shared.current_effort().map_or_else(|| "per mode".to_string(), |e| e.to_string());
+    if args.trim().is_empty() {
+        return Ok(format!(
+            "effort: {current}\n  policy: {}\n  /effort low|medium|high restarts this session's \
+             model clients at that level",
+            policy.describe()
+        ));
+    }
+    let level: Effort = match args.trim().parse() {
+        Ok(level) => level,
+        Err(error) => return Ok(error),
+    };
+    match shared.rebuild_effort(level).await? {
+        Some(_) => Ok(format!("effort: {level}; the session's model clients were restarted")),
+        None => Ok("this console cannot change the effort; restart with --effort".into()),
     }
 }
 

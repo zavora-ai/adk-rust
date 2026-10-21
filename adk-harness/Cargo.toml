@@ -44,6 +44,9 @@ auth = ["dep:adk-auth", "adk-auth/signed-audit"]
 memory = ["dep:adk-memory", "adk-memory/embedding-trait", "dep:adk-guardrail", "dep:regex"]
 # `RagEmbedder`: adk-rag's OpenAI and Gemini embedders for long-term facts (spec 3.1 §7.15.2).
 memory-embeddings = ["memory", "dep:adk-rag", "adk-rag/openai", "adk-rag/gemini"]
+# `RagEmbedder::onnx`: adk-rag's `OnnxEmbeddingProvider`, a sentence-transformer run in
+# process, so recall needs no network and no provider key (spec 3.1 §7.15.2, §10 R1).
+memory-embeddings-local = ["memory", "dep:adk-rag", "adk-rag/onnx"]
 # Graph memory tools from adk-memory.
 memory-graph = ["memory", "dep:adk-memory"]
 # Hooks on tool events from `.adk/harness.toml`, the user config and the builder (spec 3.1 §7.22).

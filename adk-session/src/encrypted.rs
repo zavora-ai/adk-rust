@@ -506,13 +506,15 @@ impl EncryptedSession<crate::sqlite::SqliteSessionService> {
     ///
     /// Build the wrapper with the new key as `current_key` and the retired keys as
     /// `previous_keys`; after this returns, the previous keys open nothing in the database
-    /// and can be dropped.
+    /// and can be dropped. With [`with_legacy_migration`](Self::with_legacy_migration), a
+    /// row written in plaintext before a key was configured is sealed too, so a store can
+    /// be encrypted in place.
     ///
     /// # Errors
     ///
     /// Returns `session.encryption.decrypt_failed` when a value opens under none of the
-    /// keys, `session.encryption.unencrypted_data` when a row holds plaintext (unless
-    /// legacy migration is on, which leaves it as stored), or the database error.
+    /// keys, `session.encryption.unencrypted_data` when a row holds plaintext and legacy
+    /// migration is off, or the database error.
     pub async fn rewrap_sqlite(&self) -> Result<u64> {
         use sqlx::Row;
         let pool = self.inner.pool().clone();
@@ -561,7 +563,8 @@ impl EncryptedSession<crate::sqlite::SqliteSessionService> {
         }
 
         let rows = sqlx::query(
-            "SELECT id, app_name, user_id, session_id, llm_response, actions FROM events",
+            "SELECT id, app_name, user_id, session_id, invocation_id, branch, author, timestamp, \
+             llm_response, actions, long_running_tool_ids FROM events",
         )
         .fetch_all(&pool)
         .await
@@ -574,6 +577,7 @@ impl EncryptedSession<crate::sqlite::SqliteSessionService> {
             let actions: String = row.get("actions");
             let mut response: Value =
                 serde_json::from_str(&response).map_err(serialization_error)?;
+            let mut actions: Value = serde_json::from_str(&actions).map_err(serialization_error)?;
             let mut changed = false;
             let text = response
                 .pointer_mut("/content/parts/0/text")
@@ -588,10 +592,36 @@ impl EncryptedSession<crate::sqlite::SqliteSessionService> {
                         changed = true;
                     }
                 }
-                _ if self.legacy_migration => {}
+                _ if self.legacy_migration => {
+                    // A plaintext event written before the key: stored as `seal_event`
+                    // stores one, with its payload in the envelope.
+                    let timestamp: String = row.get("timestamp");
+                    let tool_ids: String = row.get("long_running_tool_ids");
+                    let event = Event {
+                        id: event_id.clone(),
+                        timestamp: DateTime::parse_from_rfc3339(&timestamp)
+                            .map(|t| t.with_timezone(&Utc))
+                            .unwrap_or_else(|_| Utc::now()),
+                        invocation_id: row.get("invocation_id"),
+                        branch: row.get("branch"),
+                        author: row.get("author"),
+                        llm_request: None,
+                        llm_response: serde_json::from_value(response.clone())
+                            .map_err(serialization_error)?,
+                        actions: serde_json::from_value(actions.clone())
+                            .map_err(serialization_error)?,
+                        long_running_tool_ids: serde_json::from_str(&tool_ids)
+                            .map_err(serialization_error)?,
+                        provider_metadata: HashMap::new(),
+                    };
+                    let sealed = self.seal_event(&id, &event)?;
+                    response =
+                        serde_json::to_value(&sealed.llm_response).map_err(serialization_error)?;
+                    actions = serde_json::to_value(&sealed.actions).map_err(serialization_error)?;
+                    changed = true;
+                }
                 _ => return Err(unencrypted_error(&format!("event '{event_id}'"))),
             }
-            let mut actions: Value = serde_json::from_str(&actions).map_err(serialization_error)?;
             if let Some(delta) = actions.get_mut("state_delta").and_then(Value::as_object_mut)
                 && self.rewrap_state_map(&id, delta, "")?
             {
@@ -696,7 +726,13 @@ impl EncryptedSession<crate::sqlite::SqliteSessionService> {
                         changed = true;
                     }
                 }
-                _ if self.legacy_migration => {}
+                _ if self.legacy_migration => {
+                    // A plaintext value written before the key, sealed as `seal_state` would.
+                    let plaintext = serde_json::to_vec(value).map_err(serialization_error)?;
+                    let aad = state_aad(id, &format!("{prefix}{key}"));
+                    *value = Value::String(self.seal(&plaintext, &aad)?);
+                    changed = true;
+                }
                 _ => return Err(unencrypted_error(&format!("state value '{key}'"))),
             }
         }

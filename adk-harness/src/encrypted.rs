@@ -545,6 +545,21 @@ impl StoreEnvelope {
         let (plaintext, current) = self.open(address, text)?;
         if current { Ok(None) } else { Ok(Some(self.seal(address, &plaintext)?)) }
     }
+
+    /// [`reseal`](Self::reseal), and a row still in plaintext — written before the key was
+    /// configured — sealed under the current key: what a rotation does to encrypt a store
+    /// in place.
+    ///
+    /// # Errors
+    ///
+    /// See [`StoreKeyring::open`].
+    pub fn reseal_or_seal(&self, address: &[&str], text: &str) -> Result<Option<String>> {
+        if envelope::is_envelope(text) {
+            self.reseal(address, text)
+        } else {
+            self.seal_str(address, text).map(Some)
+        }
+    }
 }
 
 /// Seals a SQLite store's payload row, or passes it through without a keyring.
@@ -581,6 +596,23 @@ pub(crate) fn decode_row(
         )),
         None => Ok(text),
     }
+}
+
+/// Compacts a SQLite database after a rotation: `VACUUM` rewrites the file so pages the
+/// re-sealed rows freed carry no plaintext, and the write-ahead log is checkpointed and
+/// truncated (spec 3.1 §7.12, I57).
+///
+/// # Errors
+///
+/// Returns the database error.
+#[cfg(feature = "sqlite")]
+pub async fn compact(pool: &sqlx::SqlitePool) -> Result<()> {
+    sqlx::query("VACUUM").execute(pool).await.map_err(crate::fsutil::db_error)?;
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+    Ok(())
 }
 
 /// The marker row in `harness.db` naming the key the stores are sealed under

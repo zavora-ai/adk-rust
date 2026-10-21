@@ -110,7 +110,7 @@ pub use approvals::{
 pub use builder::LoopGuard;
 pub use builder::{HarnessAgentBuilder, Pack};
 pub use config::{HARNESS_CONFIG_FILE, HarnessConfig};
-#[cfg(feature = "memory-embeddings")]
+#[cfg(any(feature = "memory-embeddings", feature = "memory-embeddings-local"))]
 pub use facts::RagEmbedder;
 #[cfg(all(feature = "memory", feature = "sqlite"))]
 pub use facts::SqliteFactStore;

@@ -2,8 +2,7 @@
 //!
 //! Config is stored at `~/.config/adk-rust/config.json`.
 
-use crate::cli::{compiled_providers, is_compiled};
-use adk_model::ModelProvider as Provider;
+use crate::cli::{Provider, compiled_providers, is_compiled};
 use anyhow::{Context, Result};
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
@@ -148,6 +147,12 @@ pub fn resolve(
 
     // 2. Determine model
     let model = cli_model.or(saved.model).unwrap_or_else(|| provider.default_model().to_string());
+    if model.is_empty() {
+        anyhow::bail!(
+            "{} has no default model: pass --model <Hugging Face id or .gguf path>",
+            provider.display_name()
+        );
+    }
 
     // 3. Determine API key
     let api_key = if !provider.requires_key() {
@@ -253,7 +258,9 @@ fn interactive_setup(cli_instruction: Option<String>, terminal: bool) -> Result<
     println!("  Choose a provider:\n");
 
     for (i, p) in providers.iter().enumerate() {
-        println!("    {}) {:<35} default: {}", i + 1, p.display_name(), p.default_model());
+        let default =
+            if p.default_model().is_empty() { "--model required" } else { p.default_model() };
+        println!("    {}) {:<35} default: {}", i + 1, p.display_name(), default);
     }
     println!();
 
@@ -274,7 +281,11 @@ fn interactive_setup(cli_instruction: Option<String>, terminal: bool) -> Result<
         println!("  Invalid choice, try again.");
     };
 
-    let model = provider.default_model().to_string();
+    let model = if provider.default_model().is_empty() {
+        prompt_model(provider)?
+    } else {
+        provider.default_model().to_string()
+    };
 
     let api_key =
         if provider.requires_key() { Some(prompt_api_key(provider, terminal)?) } else { None };
@@ -286,6 +297,8 @@ fn interactive_setup(cli_instruction: Option<String>, terminal: bool) -> Result<
         legacy_api_key: None,
     };
     let _ = save_config(&config);
+    #[cfg(all(feature = "harness", feature = "persist", feature = "encrypted"))]
+    crate::store::offer_keychain_key();
 
     if let Some(api_key) = api_key.as_deref()
         && let Err(err) = save_api_key_to_keyring(provider, api_key)
@@ -300,6 +313,25 @@ Use {} in your environment or re-enter the key next run.\n",
     let instruction = cli_instruction.unwrap_or_else(default_instruction);
 
     Ok(ResolvedConfig { provider, model, api_key, instruction })
+}
+
+/// Prompts for the model id of a provider without a default, on a terminal.
+fn prompt_model(provider: Provider) -> Result<String> {
+    println!();
+    println!("  {} needs a model: a Hugging Face id or a .gguf path.", provider.display_name());
+    loop {
+        print!("  Model: ");
+        let _ = io::stdout().flush();
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input)? == 0 {
+            anyhow::bail!("input ended before a model was entered");
+        }
+        let trimmed = input.trim().to_string();
+        if !trimmed.is_empty() {
+            return Ok(trimmed);
+        }
+        println!("  The model cannot be empty.");
+    }
 }
 
 /// Prompt the user for an API key, on a terminal only.
@@ -414,13 +446,14 @@ mod tests {
             assert!(error.to_string().contains("no terminal to set one up"), "{error}");
         }
 
-        let error = prompt_api_key(Provider::Openai, false).expect_err("a key needs a terminal");
+        let error = prompt_api_key(Provider::Model(adk_model::ModelProvider::Openai), false)
+            .expect_err("a key needs a terminal");
         assert!(error.to_string().contains("Set OPENAI_API_KEY or pass --api-key"), "{error}");
     }
 
     #[test]
     fn a_provider_left_out_of_the_build_gets_the_reinstall_hint() {
-        let error = not_compiled(Provider::Deepseek).to_string();
+        let error = not_compiled(Provider::Model(adk_model::ModelProvider::Deepseek)).to_string();
         assert!(error.contains("not compiled into this adk-cli build"), "{error}");
         assert!(error.contains("Reinstall with `--features deepseek`"), "{error}");
     }

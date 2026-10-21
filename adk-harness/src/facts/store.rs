@@ -425,8 +425,9 @@ impl SqliteFactStore {
         self
     }
 
-    /// Re-seals every record a previous key sealed with the current key and returns how
-    /// many rows changed (spec 3.1 §7.12). Without a keyring, nothing changes.
+    /// Re-seals every record a previous key sealed with the current key, seals records
+    /// written before a key was configured, and returns how many rows changed (spec 3.1
+    /// §7.12). Without a keyring, nothing changes.
     ///
     /// # Errors
     ///
@@ -444,7 +445,7 @@ impl SqliteFactStore {
                 .map_err(crate::fsutil::db_error)?;
         let mut changed = 0;
         for (id, text) in rows {
-            if let Some(resealed) = envelope.reseal(&[&id], &text)? {
+            if let Some(resealed) = envelope.reseal_or_seal(&[&id], &text)? {
                 sqlx::query("UPDATE adk_harness_facts SET record = ? WHERE id = ?")
                     .bind(resealed)
                     .bind(&id)

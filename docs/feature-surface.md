@@ -54,13 +54,13 @@ achievable reduction is the advertised surface, not the feature count.
 |---|---:|---|---|
 | tier | 7 | — | `minimal` (default), `standard`, `enterprise`, `full`, `gemini-agent-platform{,-full}` |
 | capability | 45 | — | `agents`, `models`, `tools`, `server`, `runner`, `eval`, … |
-| choose-one | 24 | — | providers, database backends, realtime transports |
-| cli | 4 | `cli` | 2 more collapse, 2 stay |
+| choose-one | 24 | — | providers, database backends, realtime transports; `mistralrs` links `adk-mistralrs`, in-process local inference (spec 3.1 §8.4) |
+| cli | 4 | `cli` | 2 more collapse, 2 stay; `cli-mistralrs` links `adk-mistralrs` through the CLI (spec 3.1 §8.1) |
 | action | 3 | `action` / `action-full` | 5 collapse into `action-full` |
 | media | 2 | `audio` / `audio-onnx` | 9 demoted |
 | graph | 1 | `graph` | 6 demoted to members |
 | mcp | 1 | `mcp` / `mcp-http` | 2 demoted |
-| harness | 1 | `harness` | the `harness-*` packs and add-ons are members (spec 3.1 §8.4) |
+| harness | 1 | `harness` | the `harness-*` packs and add-ons are members (spec 3.1 §8.4); `harness-encrypted` links `adk-session`'s envelope and the OS keychain, `harness-memory-local` links the `ort` runtime (spec 3.1 §7.12, §7.15.2) |
 | gcp | 0 | `gemini-agent-platform` | all 11 demoted; already bundled |
 | code | — | `code-tools` | 3 demoted |
 

@@ -580,6 +580,7 @@ adk-rag = { version = "3.0.0", features = ["full"] }
 | *(default)* | Core traits, `InMemoryVectorStore`, all chunkers | none |
 | `gemini` | `GeminiEmbeddingProvider` | `adk-gemini` |
 | `openai` | `OpenAIEmbeddingProvider` | `reqwest` |
+| `onnx` | `OnnxEmbeddingProvider`: a sentence-transformer ONNX model (default `BAAI/bge-small-en-v1.5`, 384 dimensions) run in process, fetched once into the Hugging Face hub cache; `ort` downloads the onnxruntime binary at build time | `ort`, `tokenizers`, `hf-hub` |
 | `qdrant` | `QdrantVectorStore` | `qdrant-client` |
 | `lancedb` | `LanceDBVectorStore` | `lancedb`, `arrow` |
 | `pgvector` | `PgVectorStore` | `sqlx` |

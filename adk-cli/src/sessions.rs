@@ -67,20 +67,115 @@ pub use crate::setup::os_user;
 /// own migration table (spec 3.1 §8.1).
 #[cfg(feature = "harness")]
 pub struct HarnessDb {
-    pub sessions: Arc<SqliteSessionService>,
+    /// Sessions; `EncryptedSession` over SQLite under a store key (spec 3.1 §7.12).
+    pub sessions: Arc<dyn SessionService>,
     pub modes: Arc<adk_harness::SqliteModeStore>,
     pub rules: Arc<adk_harness::SqliteStandingRuleStore>,
     pub ledger: Arc<adk_harness::SqliteShellLedger>,
-    pub approvals: Arc<adk_session::SqliteApprovalStore>,
+    /// Held calls and decisions; `EncryptedApprovalStore` under a store key.
+    pub approvals: Arc<dyn adk_core::ApprovalStore>,
     pub runs: Arc<adk_session::SqliteRunStore>,
     /// Long-term facts (spec 3.1 §7.15.2).
     pub facts: Arc<adk_harness::SqliteFactStore>,
     /// Goals (spec 3.1 §7.11).
     pub goals: Arc<adk_harness::SqliteGoalStore>,
+    /// The id of the key the stores are sealed under, if any.
+    pub key_id: Option<String>,
+}
+
+/// Opens `harness.db` with the keyring the user config names, if any (spec 3.1 §7.12).
+#[cfg(all(feature = "harness", feature = "encrypted"))]
+pub async fn open_default_db() -> Result<HarnessDb> {
+    let (keyring, _) = crate::store::resolve_keyring(None).await?;
+    open_harness_db(keyring.as_ref()).await
+}
+
+/// Opens `harness.db` as it is.
+#[cfg(all(feature = "harness", not(feature = "encrypted")))]
+pub async fn open_default_db() -> Result<HarnessDb> {
+    open_harness_db().await
+}
+
+/// Opens `harness.db` and migrates every store in it, sealed under `keyring` when one is
+/// given (spec 3.1 §7.12, I57): a database sealed under a key refuses to open without it or
+/// with another, and one holding plaintext rows refuses a key until `adk-rust store
+/// rotate-key` seals them.
+#[cfg(all(feature = "harness", feature = "encrypted"))]
+pub async fn open_harness_db(
+    keyring: Option<&adk_harness::encrypted::StoreKeyring>,
+) -> Result<HarnessDb> {
+    let base = open().await?;
+    let pool = base.pool().clone();
+    let marker = adk_harness::encrypted::SqliteStoreMarker::new(pool.clone());
+    marker.migrate().await?;
+    marker.check(keyring).await?;
+    let modes = adk_harness::SqliteModeStore::new(pool.clone());
+    modes.migrate().await?;
+    let rules = adk_harness::SqliteStandingRuleStore::new(pool.clone());
+    rules.migrate().await?;
+    let ledger = adk_harness::SqliteShellLedger::new(pool.clone());
+    ledger.migrate().await?;
+    let approvals = adk_session::SqliteApprovalStore::from_pool(pool.clone());
+    approvals.migrate().await?;
+    let runs = adk_session::SqliteRunStore::from_pool(pool.clone());
+    runs.migrate().await?;
+    let facts = adk_harness::SqliteFactStore::new(pool.clone());
+    facts.migrate().await?;
+    let goals = adk_harness::SqliteGoalStore::new(pool.clone());
+    goals.migrate().await?;
+    let Some(keyring) = keyring else {
+        return Ok(HarnessDb {
+            sessions: base,
+            modes: Arc::new(modes),
+            rules: Arc::new(rules),
+            ledger: Arc::new(ledger),
+            approvals: Arc::new(approvals),
+            runs: Arc::new(runs),
+            facts: Arc::new(facts),
+            goals: Arc::new(goals),
+            key_id: None,
+        });
+    };
+    if marker.key_id().await?.is_none() {
+        let (rows,): (i64,) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM sessions) + (SELECT count(*) FROM adk_harness_rules) \
+             + (SELECT count(*) FROM adk_harness_facts) + (SELECT count(*) FROM adk_approval_pending)",
+        )
+        .fetch_one(&pool)
+        .await?;
+        if rows > 0 {
+            anyhow::bail!(
+                "harness.db holds {rows} rows written before a store key was configured; run \
+                 `adk-rust store rotate-key` to seal them under the key, or drop --store-key"
+            );
+        }
+        marker.set_key_id(&keyring.key_id()).await?;
+    }
+    let sessions = adk_session::EncryptedSession::new(
+        SqliteSessionService::from_pool(pool.clone()),
+        keyring.current_key(),
+        keyring.previous_keys(),
+    );
+    let approvals = adk_session::EncryptedApprovalStore::new(
+        approvals,
+        keyring.current_key(),
+        keyring.previous_keys(),
+    );
+    Ok(HarnessDb {
+        sessions: Arc::new(sessions),
+        modes: Arc::new(modes.with_keyring(keyring.clone())),
+        rules: Arc::new(rules.with_keyring(keyring.clone())),
+        ledger: Arc::new(ledger.with_keyring(keyring.clone())),
+        approvals: Arc::new(approvals),
+        runs: Arc::new(runs),
+        facts: Arc::new(facts.with_keyring(keyring.clone())),
+        goals: Arc::new(goals.with_keyring(keyring.clone())),
+        key_id: Some(keyring.key_id()),
+    })
 }
 
 /// Opens `harness.db` and migrates every store in it.
-#[cfg(feature = "harness")]
+#[cfg(all(feature = "harness", not(feature = "encrypted")))]
 pub async fn open_harness_db() -> Result<HarnessDb> {
     let sessions = open().await?;
     let pool = sessions.pool().clone();
@@ -107,6 +202,7 @@ pub async fn open_harness_db() -> Result<HarnessDb> {
         runs: Arc::new(runs),
         facts: Arc::new(facts),
         goals: Arc::new(goals),
+        key_id: None,
     })
 }
 

@@ -378,9 +378,11 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "hmac",
  "rand 0.9.4",
  "serde",
  "serde_json",
+ "sha2",
  "tracing",
  "uuid",
 ]

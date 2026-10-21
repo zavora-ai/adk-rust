@@ -42,9 +42,13 @@ adk-deploy.workspace = true
 adk-graph = { workspace = true, features = ["time-travel"] }
 # The harness REPL, `code`, `goal`, `ultracode` and `serve` (spec 3.1 §8.1)
 adk-harness = { workspace = true, optional = true }
+# `--provider mistralrs`: local inference in process (spec 3.1 §8.1); a heavy build
+adk-mistralrs = { workspace = true, optional = true }
 # `adk-rust approvals --server` talks to a served harness's approval inbox
 reqwest = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
+# `adk-rust store status|rotate-key` reads harness.db's tables directly
+sqlx = { workspace = true, optional = true, features = ["runtime-tokio", "sqlite"] }
 uuid = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 clap = { version = "4.6", features = ["derive"] }
@@ -71,13 +75,17 @@ keyring = { version = "3.6.3", default-features = false, features = ["windows-na
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 
 [features]
-default = ["gemini", "openai", "anthropic", "audit", "persist", "harness"]
+default = ["gemini", "openai", "anthropic", "ollama", "audit", "persist", "harness", "encrypted", "memory-local"]
 gemini = ["adk-model/gemini"]
 openai = ["adk-model/openai"]
 anthropic = ["adk-model/anthropic"]
 deepseek = ["adk-model/deepseek"]
 groq = ["adk-model/groq"]
 ollama = ["adk-model/ollama"]
+# `--provider mistralrs --model <hf id or .gguf path>`: mistral.rs in process (spec 3.1
+# §8.1). Opt-in: mistral.rs 0.8 with its model loaders is a heavy build; GPU through
+# adk-mistralrs's `cuda` or `metal`.
+mistralrs = ["dep:adk-mistralrs"]
 all-providers = ["gemini", "openai", "anthropic", "deepseek", "groq", "ollama"]
 # `adk-rust deploy agent-engine`: deploy a BYOC container as a Gemini
 # Enterprise Agent Platform engine (host-side tooling)
@@ -103,6 +111,15 @@ persist = ["adk-session/sqlite", "adk-harness?/sqlite"]
 # `adk-rust` with no subcommand is the harness REPL; `code`, `goal`, `ultracode` and
 # `serve` run on the harness; `sessions`, `rules` and `approvals` manage it (spec 3.1 §8.1)
 harness = ["dep:adk-harness", "adk-harness?/memory-embeddings", "adk-harness?/web", "adk-harness?/mcp", "dep:reqwest", "dep:sha2", "dep:uuid", "dep:chrono"]
+# `--store-key`, `[store] key`, `adk-rust store status|rotate-key`: harness.db sealed under
+# one keyring from the OS keychain, a secret provider or the environment (spec 3.1 §7.12)
+encrypted = ["adk-harness?/encrypted", "adk-session/encrypted-session", "dep:sqlx"]
+# The in-process ONNX embedder for long-term memory, the default of a local provider
+# (spec 3.1 §7.15.2, H10); `ort` downloads the onnxruntime binary at build time
+memory-local = ["adk-harness?/memory-embeddings-local"]
+# `--store-key secret:<provider>/<name>` through adk-auth's secret providers
+secrets-gcp = ["dep:adk-auth", "adk-auth/gcp-secrets"]
+secrets-aws = ["dep:adk-auth", "adk-auth/aws-secrets"]
 # Hidden `--model-script` and `--approval-fixture` flags for binary end-to-end tests:
 # a scripted model and a tool that needs approval, no provider key required
 scripted-model = []

@@ -28,6 +28,7 @@ adk-rust                       # the harness REPL, ask mode
 | `adk-rust rules list\|add\|rm` | Your standing rules |
 | `adk-rust memory list\|show\|forget\|accept\|export\|import` | The long-term facts the harness learned; see [Long-term memory](#long-term-memory) |
 | `adk-rust approvals list\|approve\|deny` | Calls waiting for a decision, here or on a served harness with `--server URL --token T` |
+| `adk-rust store status\|rotate-key` | The key `harness.db` is sealed under and which stores are wrapped; rotation to a new key (spec 3.1 §7.12); see [The encrypted store](#the-encrypted-store) |
 
 The model is chosen as for every command: `--provider`, `--model` and `--api-key`, the
 provider's environment variable, secure storage, the saved config, or first-run setup on a
@@ -50,6 +51,8 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--pack browser\|computer-use\|payments` | Adds a pack |
 | `--member NAME=explore\|general` | Adds a team member |
 | `--no-memory` | Turns long-term memory off: nothing is recalled or learned |
+| `--effort low\|medium\|high` | The reasoning effort of this session's model clients (spec 3.1 §7.23); without it the `[effort]` policy applies per mode: plan high, everything else medium |
+| `--store-key keychain:<entry>\|secret:<provider>/<name>\|env:<VAR>` | Where the key sealing `harness.db` is kept (spec 3.1 §7.12); without it `[store] key` in the user config, else the store is plaintext |
 
 > **Note:** packs report themselves unavailable until their part of spec 3.1 lands (§7.16).
 
@@ -74,7 +77,21 @@ allow_unsandboxed = false
 trust = false
 packs = []
 members = ["scout=explore"]
+
+[effort]                     # spec 3.1 §7.23; every key optional
+plan = "high"
+ask = "medium"
+members = "low"
+distiller = "low"
+
+[store]                      # the user config only (spec 3.1 §7.12)
+key = "keychain:adk-rust"
 ```
+
+`[effort]` names a level per mode (`read_only`, `plan`, `ask`, `auto`) and per role
+(`members`, `distiller`, `sampling`); a project file may set it, since effort costs money,
+not permissions. `[store]` names where the store key lives and is read from the user config
+only; a project file setting it is ignored with a note.
 
 A workspace file can only tighten (spec 3.1 §9.2 I3): it may choose a stricter mode than
 your config, turn the sandbox on, or require it. `yes`, `trust`, `allow_unsandboxed`,
@@ -161,6 +178,7 @@ asks again.
 | `/skills` | Skills in the workspace's skill directories, `.adk/skills/` and `~/.adk/skills/` |
 | `/cost` | Your spend: model calls, tokens and cost per acting agent and vendor |
 | `/memory` | Working notes and long-term facts with their status, kind, source and session; `/memory forget ID` and `/memory accept ID` act on one fact (a unique prefix of the id is enough) |
+| `/effort [low\|medium\|high]` | Shows the session's reasoning effort and the policy; with a level, restarts the session's model clients at it (spec 3.1 §7.23) |
 | `/help`, `exit` | Lists the commands; leaves the REPL |
 
 Opening a session that has held calls with decisions resumes them first.
@@ -184,6 +202,62 @@ adk-rust rules rm 2
 
 `rules add --operator --source mcp:github list_issues` pins any declaration of a publisher's
 tool rather than the current one, for tools you maintain yourself.
+
+## The encrypted store
+
+With a store key, every payload in `harness.db` is sealed before it reaches the file
+(spec 3.1 §7.12, §9.2 I57): session state and events through `EncryptedSession`, held calls
+and decisions through `EncryptedApprovalStore`, and the mode, rule, shell-ledger, goal and
+fact stores through the same `adk-enc:v1:` AES-256-GCM envelope, each ciphertext bound to
+its row. Identifiers, timestamps and status columns stay plaintext for indexing. A database
+written under a key refuses to open without it or with another, and never falls back to
+plaintext; the key never enters a prompt, a session or the audit log.
+
+| Source | Form | Rotation |
+|---|---|---|
+| OS keychain | `keychain:<entry>` (`keychain:adk-rust`) | `rotate-key` stores the new keyring in the entry |
+| Secret provider | `secret:gcp/<name>` (`GOOGLE_CLOUD_PROJECT` set), `secret:aws/<name>` (features `secrets-gcp`, `secrets-aws`) | `rotate-key` prints the new keyring document to store in the secret |
+| Environment | `env:<VAR>`, holding a base64 32-byte key or a keyring document | `rotate-key` prints the new keyring document to export |
+
+The first run offers to create a key in the OS keychain and keeps the choice as
+`[store] key = "keychain:adk-rust"` in the user config. `adk-rust store status` reports the
+key source, the key the database is sealed under, and per store how many rows are
+envelopes. `adk-rust store rotate-key` re-seals every store under a new key, retires the
+current one, seals rows written before any key was configured, vacuums the file so freed
+pages carry no plaintext, and reports the `harness.store.key_rotated` record (key ids,
+stores, rows, duration).
+
+```bash
+adk-rust --store-key keychain:adk-rust       # creates the key on first use
+adk-rust store status
+adk-rust store rotate-key                    # a generated key; --key <base64> for your own
+ADK_STORE_KEY=$(openssl rand -base64 32) adk-rust --store-key env:ADK_STORE_KEY
+```
+
+## Model posture
+
+Each session's model clients are built at the reasoning effort of its mode (spec 3.1
+§7.23): Gemini `thinking_level`, OpenAI `reasoning_effort`, Anthropic `output_config.effort`
+with adaptive thinking; Ollama and mistral.rs have no such control and run unchanged. The
+member model is built at `members` and the distiller at `distiller`. Until the request-level
+effort of spec 3.1 §10 C4 lands, effort changes per session, not per mode switch: `--effort`
+and `[effort]` set it, and `/effort` restarts the session's clients. The banner shows the
+level. Caching is on where the provider supports it — Anthropic and OpenAI cache the prefix
+on their own, a Gemini model gets the runner's explicit context cache — and `/cost` shows
+cached against uncached prompt tokens per turn.
+
+## Local posture
+
+`--provider ollama` (compiled in by default) and `--provider mistralrs --model <Hugging Face
+id or .gguf path>` (feature `mistralrs`, a heavy build; GPU through `adk-mistralrs`'s `cuda`
+or `metal`) run the model on this machine (spec 3.1 §8.1, H10). With a local provider,
+long-term memory recalls with a local ONNX embedder (`BAAI/bge-small-en-v1.5`, fetched
+once into the Hugging Face hub cache, feature `memory-local`), so with `--sandbox` and
+`--store-key` nothing leaves the machine but the local model endpoint.
+
+```bash
+adk-rust --provider ollama --model qwen3.5 --sandbox --store-key keychain:adk-rust
+```
 
 ## Long-term memory
 

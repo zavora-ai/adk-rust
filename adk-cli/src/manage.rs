@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use adk_core::{ApprovalScope, ApprovalStore, Part, ToolApproval, ToolOrigin};
+use adk_core::{ApprovalScope, Part, ToolApproval, ToolOrigin};
 use adk_harness::{
     HarnessAgent, HarnessMode, OriginPin, RulePredicate, RuleScope,
     SHELL_PREFIX_SUGGESTION_DENYLIST, ShellIsolation, StandingDecision, StandingRule,
@@ -30,7 +30,7 @@ fn one_line(text: &str, max: usize) -> String {
 
 /// `adk-rust sessions …`.
 pub async fn sessions(command: SessionsCommands) -> Result<()> {
-    let db = crate::sessions::open_harness_db().await?;
+    let db = crate::sessions::open_default_db().await?;
     let user = crate::setup::os_user();
     let store = db.sessions.as_ref();
     match command {
@@ -133,7 +133,7 @@ pub async fn memory(command: MemoryCommands) -> Result<()> {
     use adk_harness::{
         FactFilter, FactScope, FactSource, FactStatus, FactStore, MemoryFact, fact_digest,
     };
-    let db = crate::sessions::open_harness_db().await?;
+    let db = crate::sessions::open_default_db().await?;
     let user = crate::setup::os_user();
     let store: Arc<dyn FactStore> = db.facts.clone();
     let mine = || FactFilter::user(APP_NAME, user.clone());
@@ -270,7 +270,7 @@ fn fact_line(fact: &adk_harness::MemoryFact) -> String {
 
 /// `adk-rust rules …`.
 pub async fn rules(command: RulesCommands) -> Result<()> {
-    let db = crate::sessions::open_harness_db().await?;
+    let db = crate::sessions::open_default_db().await?;
     let user = crate::setup::os_user();
     let store: Arc<dyn StandingRuleStore> = db.rules.clone();
     let mut listed = store.list(APP_NAME, &user).await?;
@@ -486,7 +486,7 @@ pub async fn approvals(
 }
 
 async fn local(command: ApprovalsCommands) -> Result<()> {
-    let db = crate::sessions::open_harness_db().await?;
+    let db = crate::sessions::open_default_db().await?;
     let user = crate::setup::os_user();
     let mut sessions = db
         .sessions

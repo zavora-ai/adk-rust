@@ -297,8 +297,9 @@ impl SqliteStandingRuleStore {
         self
     }
 
-    /// Re-seals every record a previous key sealed with the current key and returns how
-    /// many rows changed (spec 3.1 §7.12). Without a keyring, nothing changes.
+    /// Re-seals every record a previous key sealed with the current key, seals records
+    /// written before a key was configured, and returns how many rows changed (spec 3.1
+    /// §7.12). Without a keyring, nothing changes.
     ///
     /// # Errors
     ///
@@ -316,7 +317,7 @@ impl SqliteStandingRuleStore {
                 .map_err(crate::fsutil::db_error)?;
         let mut changed = 0;
         for (app, id, text) in rows {
-            if let Some(resealed) = envelope.reseal(&[&app, &id], &text)? {
+            if let Some(resealed) = envelope.reseal_or_seal(&[&app, &id], &text)? {
                 sqlx::query("UPDATE adk_harness_rules SET rule = ? WHERE app_name = ? AND id = ?")
                     .bind(resealed)
                     .bind(&app)

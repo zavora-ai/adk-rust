@@ -470,8 +470,9 @@ impl SqliteModeStore {
         self
     }
 
-    /// Re-seals every record a previous key sealed with the current key and returns how
-    /// many rows changed (spec 3.1 §7.12). Without a keyring, nothing changes.
+    /// Re-seals every record a previous key sealed with the current key, seals records
+    /// written before a key was configured, and returns how many rows changed (spec 3.1
+    /// §7.12). Without a keyring, nothing changes.
     ///
     /// # Errors
     ///
@@ -489,7 +490,7 @@ impl SqliteModeStore {
                 .map_err(crate::fsutil::db_error)?;
         let mut changed = 0;
         for (app, user, session, text) in rows {
-            if let Some(resealed) = envelope.reseal(&[&app, &user, &session], &text)? {
+            if let Some(resealed) = envelope.reseal_or_seal(&[&app, &user, &session], &text)? {
                 sqlx::query("UPDATE adk_harness_modes SET record = ? WHERE app_name = ? AND user_id = ? AND session_id = ?")
                     .bind(resealed)
                     .bind(&app)

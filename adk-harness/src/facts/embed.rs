@@ -1,5 +1,5 @@
 //! `RagEmbedder`: adk-rag's embedders as adk-memory's batch trait (spec 3.1 §7.15.2,
-//! feature `memory-embeddings`).
+//! features `memory-embeddings` and `memory-embeddings-local`).
 
 use std::sync::Arc;
 
@@ -11,8 +11,8 @@ use async_trait::async_trait;
 /// (spec 3.1 §7.15.2).
 ///
 /// adk-rag embeds one text at a time or a batch of `&str`; adk-memory embeds a batch of
-/// `String`. [`openai`](Self::openai) and [`gemini`](Self::gemini) build the two
-/// providers adk-rag ships.
+/// `String`. `openai` and `gemini` (feature `memory-embeddings`) build the two providers
+/// adk-rag ships; `onnx` and `local` (feature `memory-embeddings-local`) its in-process one.
 ///
 /// # Example
 ///
@@ -20,6 +20,7 @@ use async_trait::async_trait;
 /// use std::sync::Arc;
 /// use adk_harness::{HarnessAgent, LongTermMemoryConfig, RagEmbedder};
 ///
+/// # #[cfg(feature = "memory-embeddings")]
 /// # fn build(model: Arc<dyn adk_core::Llm>) -> adk_core::Result<HarnessAgent> {
 /// let embedder = RagEmbedder::gemini(&std::env::var("GOOGLE_API_KEY").unwrap_or_default())?;
 /// HarnessAgent::builder("harness")
@@ -60,6 +61,7 @@ impl RagEmbedder {
     /// # Errors
     ///
     /// Returns an error when the client cannot be built.
+    #[cfg(feature = "memory-embeddings")]
     pub fn openai(api_key: &str) -> Result<Self> {
         Ok(Self::new(Arc::new(
             adk_rag::openai::OpenAIEmbeddingProvider::new(api_key).map_err(embedding_error)?,
@@ -71,10 +73,36 @@ impl RagEmbedder {
     /// # Errors
     ///
     /// Returns an error when the client cannot be built.
+    #[cfg(feature = "memory-embeddings")]
     pub fn gemini(api_key: &str) -> Result<Self> {
         Ok(Self::new(Arc::new(
             adk_rag::GeminiEmbeddingProvider::new(api_key).map_err(embedding_error)?,
         )))
+    }
+
+    /// A sentence-transformer ONNX model run in process (feature `memory-embeddings-local`;
+    /// spec 3.1 §7.15.2, §10 R1): `BAAI/bge-small-en-v1.5` by default, fetched once into
+    /// the Hugging Face hub cache, so recall needs no network and no provider key. The
+    /// default of the fully local harness (spec 3.1 §5 H10).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the model files cannot be fetched or loaded.
+    #[cfg(feature = "memory-embeddings-local")]
+    pub fn onnx(config: adk_rag::OnnxEmbeddingConfig) -> Result<Self> {
+        Ok(Self::new(Arc::new(
+            adk_rag::OnnxEmbeddingProvider::new(config).map_err(embedding_error)?,
+        )))
+    }
+
+    /// [`onnx`](Self::onnx) with the default model, `BAAI/bge-small-en-v1.5`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the model files cannot be fetched or loaded.
+    #[cfg(feature = "memory-embeddings-local")]
+    pub fn local() -> Result<Self> {
+        Self::onnx(adk_rag::OnnxEmbeddingConfig::default())
     }
 }
 

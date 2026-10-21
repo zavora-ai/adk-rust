@@ -15,7 +15,7 @@
 
 #[cfg(feature = "runner")]
 pub(crate) mod distill;
-#[cfg(feature = "memory-embeddings")]
+#[cfg(any(feature = "memory-embeddings", feature = "memory-embeddings-local"))]
 mod embed;
 mod index;
 pub(crate) mod recall;
@@ -27,7 +27,7 @@ pub(crate) mod writer;
 
 pub mod conformance;
 
-#[cfg(feature = "memory-embeddings")]
+#[cfg(any(feature = "memory-embeddings", feature = "memory-embeddings-local"))]
 pub use embed::RagEmbedder;
 pub use index::{FactIndex, LocalFactIndex, MemoryServiceIndex};
 pub use redact::redact_fact_text;

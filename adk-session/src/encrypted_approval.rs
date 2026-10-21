@@ -88,6 +88,7 @@ pub struct EncryptedApprovalStore<S: ApprovalStore> {
     inner: S,
     current_key: EncryptionKey,
     previous_keys: Vec<EncryptionKey>,
+    legacy_migration: bool,
 }
 
 impl<S: ApprovalStore> std::fmt::Debug for EncryptedApprovalStore<S> {
@@ -171,7 +172,15 @@ impl<S: ApprovalStore> EncryptedApprovalStore<S> {
     /// Wraps `inner`: writes seal with `current_key`; reads open with it, then with each
     /// of `previous_keys`.
     pub fn new(inner: S, current_key: EncryptionKey, previous_keys: Vec<EncryptionKey>) -> Self {
-        Self { inner, current_key, previous_keys }
+        Self { inner, current_key, previous_keys, legacy_migration: false }
+    }
+
+    /// Lets `rewrap_sqlite` seal rows written in plaintext before a key was configured,
+    /// so a store can be encrypted in place. Reads stay strict: a plaintext row is an error.
+    #[must_use]
+    pub fn with_legacy_migration(mut self, enabled: bool) -> Self {
+        self.legacy_migration = enabled;
+        self
     }
 
     /// The wrapped store. Reads through it return envelopes; writes bypass sealing.
@@ -538,13 +547,14 @@ impl EncryptedApprovalStore<crate::SqliteApprovalStore> {
             let stored: ToolConfirmationRequest =
                 serde_json::from_str(&row.get::<String, _>("request"))
                     .map_err(serialization_error)?;
-            let Some(text) = stored.args.as_str() else {
-                return Err(unencrypted_error("held call arguments"));
+            let sealed_args = stored.args.as_str().filter(|text| text.starts_with(ENVELOPE_PREFIX));
+            let (opened, fingerprint) = match sealed_args {
+                Some(text) if under_current(text, &pending_aad(&scope, &old_row_key)) => continue,
+                Some(_) => self.open_call(&stored, &scope, &old_row_key)?,
+                // A plaintext row written before the key: its row key is the fingerprint.
+                None if self.legacy_migration => (stored.clone(), old_row_key.clone()),
+                None => return Err(unencrypted_error("held call arguments")),
             };
-            if under_current(text, &pending_aad(&scope, &old_row_key)) {
-                continue;
-            }
-            let (opened, fingerprint) = self.open_call(&stored, &scope, &old_row_key)?;
             let new_row_key = row_key(&self.current_key, &scope, &fingerprint);
             let sealed = self.seal_call(&opened, &fingerprint, &scope, &new_row_key)?;
             sqlx::query(
@@ -578,13 +588,14 @@ impl EncryptedApprovalStore<crate::SqliteApprovalStore> {
             let old_row_key: String = row.get("fingerprint");
             let stored: ToolApproval = serde_json::from_str(&row.get::<String, _>("approval"))
                 .map_err(serialization_error)?;
-            let Some(blob) = &stored.message else {
-                return Err(unencrypted_error("decision"));
+            let sealed_blob =
+                stored.message.as_deref().filter(|text| text.starts_with(ENVELOPE_PREFIX));
+            let (opened, fingerprint) = match sealed_blob {
+                Some(blob) if under_current(blob, &decision_aad(&scope, &old_row_key)) => continue,
+                Some(_) => self.open_approval(stored, &scope, &old_row_key)?,
+                None if self.legacy_migration => (stored, old_row_key.clone()),
+                None => return Err(unencrypted_error("decision")),
             };
-            if under_current(blob, &decision_aad(&scope, &old_row_key)) {
-                continue;
-            }
-            let (opened, fingerprint) = self.open_approval(stored, &scope, &old_row_key)?;
             let new_row_key = row_key(&self.current_key, &scope, &fingerprint);
             let sealed = self.seal_approval(opened, &fingerprint, &scope, &new_row_key)?;
             sqlx::query(
@@ -611,10 +622,17 @@ impl EncryptedApprovalStore<crate::SqliteApprovalStore> {
             let id: String = row.get("id");
             let stored: ApprovalRequest = serde_json::from_str(&row.get::<String, _>("record"))
                 .map_err(serialization_error)?;
-            if under_current(&stored.summary, &request_aad(&stored.scope, &stored.id)) {
-                continue;
-            }
-            let resealed = self.seal_approval_request(&self.open_approval_request(&stored)?)?;
+            let opened = if stored.summary.starts_with(ENVELOPE_PREFIX) {
+                if under_current(&stored.summary, &request_aad(&stored.scope, &stored.id)) {
+                    continue;
+                }
+                self.open_approval_request(&stored)?
+            } else if self.legacy_migration {
+                stored
+            } else {
+                return Err(unencrypted_error("request summary"));
+            };
+            let resealed = self.seal_approval_request(&opened)?;
             sqlx::query("UPDATE adk_approval_requests SET record = ? WHERE id = ?")
                 .bind(serde_json::to_string(&resealed).map_err(serialization_error)?)
                 .bind(&id)

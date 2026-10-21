@@ -10,7 +10,9 @@ use adk_cli::harness::{
     BearerTokenExtractor, ConsolePrompter, HarnessArgs, HarnessLauncher, OPERATOR_SCOPE,
     ResolvedHarnessArgs, TurnOutcome,
 };
-use adk_core::{ApprovalPolicy, ApprovalService, ApproverSelector, Llm, StoreApprovalService};
+use adk_core::{
+    ApprovalPolicy, ApprovalService, ApproverSelector, Effort, Llm, StoreApprovalService,
+};
 use adk_devtools::Workspace;
 use adk_harness::{
     ApprovalPrompter, FileWorkspaceTrustStore, GOAL_STATE_KEY, GoalSpec, GoalState, GoalStatus,
@@ -21,8 +23,8 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::ResolvedModel;
 use crate::ultra::{self, UltraAgents};
+use crate::{BuiltModel, ResolvedModel};
 
 /// Exit code of a run that left calls held for a decision (spec 3.1 §8.1).
 pub const EXIT_HELD: i32 = 3;
@@ -34,7 +36,10 @@ fn user_config() -> Option<std::path::PathBuf> {
 
 /// Everything a harness command needs to build its agent and launcher.
 struct Setup {
-    model: Arc<dyn Llm>,
+    /// The resolved model, rebuilt at another effort by `/effort` (spec 3.1 §7.23).
+    model: ResolvedModel,
+    /// The session's clients, built at its mode's effort.
+    models: Models,
     model_id: String,
     instruction: Option<String>,
     args: HarnessArgs,
@@ -43,7 +48,36 @@ struct Setup {
     #[cfg(feature = "persist")]
     db: Option<Arc<crate::sessions::HarnessDb>>,
     /// The embedder long-term memory recalls with, and its description.
-    embedder: Option<(Arc<adk_harness::RagEmbedder>, &'static str)>,
+    embedder: Option<(Arc<adk_harness::RagEmbedder>, String)>,
+    /// How `harness.db` is sealed, for the banner (spec 3.1 §7.12).
+    #[cfg(feature = "persist")]
+    store_note: Option<String>,
+}
+
+/// The clients of one session, built where the providers read their effort
+/// (spec 3.1 §7.23): the harness model at the mode's level, the member model at
+/// `members`, the distiller at `distiller`.
+#[derive(Clone)]
+struct Models {
+    harness: BuiltModel,
+    member: Arc<dyn Llm>,
+    distill: Arc<dyn Llm>,
+    effort: Effort,
+}
+
+impl Models {
+    async fn build(
+        model: &ResolvedModel,
+        policy: &adk_harness::EffortPolicy,
+        effort: Effort,
+    ) -> Result<Self> {
+        Ok(Self {
+            harness: model.at_effort(effort).await?,
+            member: model.at_effort(policy.members).await?.llm,
+            distill: model.at_effort(policy.distiller).await?.llm,
+            effort,
+        })
+    }
 }
 
 impl Setup {
@@ -55,10 +89,17 @@ impl Setup {
     ) -> Result<Self> {
         let resolved = args.resolve(default_mode, user_config().as_deref())?;
         #[cfg(feature = "persist")]
-        let db = if args.ephemeral {
-            None
+        let (db, store_note) = if args.ephemeral {
+            (None, None)
         } else {
-            Some(Arc::new(crate::sessions::open_harness_db().await?))
+            #[cfg(feature = "encrypted")]
+            let (keyring, store_note) =
+                crate::store::resolve_keyring(resolved.store_key.as_deref()).await?;
+            #[cfg(feature = "encrypted")]
+            let db = crate::sessions::open_harness_db(keyring.as_ref()).await?;
+            #[cfg(not(feature = "encrypted"))]
+            let (db, store_note) = (crate::sessions::open_harness_db().await?, None::<String>);
+            (Some(Arc::new(db)), store_note)
         };
         #[cfg(not(feature = "persist"))]
         if args.session.is_some() || args.continue_session {
@@ -67,17 +108,23 @@ impl Setup {
                  `--features persist`, or start without --session and --continue."
             );
         }
+        let models =
+            Models::build(&model, &resolved.effort, resolved.effort.for_mode(resolved.mode))
+                .await?;
         let embedder = if resolved.memory { memory_embedder(&model) } else { None };
         Ok(Self {
             embedder,
-            model: model.llm,
-            model_id: model.id,
+            model_id: model.id.clone(),
+            model,
+            models,
             instruction,
             args,
             resolved,
             user: crate::setup::os_user(),
             #[cfg(feature = "persist")]
             db,
+            #[cfg(feature = "persist")]
+            store_note,
         })
     }
 
@@ -101,12 +148,31 @@ impl Setup {
         prompter: Option<Arc<dyn ApprovalPrompter>>,
         approval_service: Option<Arc<dyn ApprovalService>>,
     ) -> Result<HarnessAgent> {
+        self.agent_with(&self.models, name, mode, sandbox, prompter, approval_service)
+    }
+
+    /// [`agent`](Self::agent) over `models`, which `/effort` rebuilds at another level.
+    fn agent_with(
+        &self,
+        models: &Models,
+        name: &str,
+        mode: HarnessMode,
+        sandbox: bool,
+        prompter: Option<Arc<dyn ApprovalPrompter>>,
+        approval_service: Option<Arc<dyn ApprovalService>>,
+    ) -> Result<HarnessAgent> {
         let workspace = Workspace::new(&self.resolved.workspace).allow_bash(true);
         let mut builder = HarnessAgent::builder(name)
-            .model(self.model.clone())
+            .model(models.harness.llm.clone())
+            .member_model(models.member.clone())
+            .effort(self.resolved.effort)
             .workspace(workspace)
             .mode(mode)
             .confirmation_timeout(adk_cli::launcher::CONSOLE_CONFIRMATION_TIMEOUT);
+        // Explicit context caching for a model that supports it (spec 3.1 §7.23).
+        if let Some(cache) = &models.harness.cache_capable {
+            builder = builder.cache_capable(cache.clone());
+        }
         if let Ok(trust) = FileWorkspaceTrustStore::in_home() {
             builder = builder.workspace_trust(Arc::new(trust));
         }
@@ -124,7 +190,10 @@ impl Setup {
             // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2).
             if self.resolved.memory && approval_service.is_none() {
                 builder = builder
-                    .long_term_memory(adk_harness::LongTermMemoryConfig::default())
+                    .long_term_memory(adk_harness::LongTermMemoryConfig {
+                        distill_model: Some(models.distill.clone()),
+                        ..adk_harness::LongTermMemoryConfig::default()
+                    })
                     .fact_store(db.facts.clone());
                 if let Some((embedder, _)) = &self.embedder {
                     builder = builder.memory_embedder(embedder.clone());
@@ -199,6 +268,21 @@ impl Setup {
         if let Some(session) = self.session_id().await? {
             launcher = launcher.with_session_id(session);
         }
+        launcher = launcher.with_effort(self.models.effort).with_status_line(
+            "Effort",
+            format!("{} ({})", self.models.effort, self.resolved.effort.describe()),
+        );
+        #[cfg(feature = "persist")]
+        if let Some(db) = &self.db {
+            let store = match (&self.store_note, &db.key_id) {
+                (Some(note), _) => note.clone(),
+                (None, Some(id)) => format!("encrypted under key {id}"),
+                (None, None) => {
+                    "harness.db in plaintext (--store-key keychain:adk-rust seals it)".into()
+                }
+            };
+            launcher = launcher.with_status_line("Store", store);
+        }
         for note in &self.resolved.notes {
             launcher = launcher.with_banner_note(note.clone());
         }
@@ -263,18 +347,34 @@ impl Setup {
     }
 }
 
-/// The embedder long-term memory recalls with (spec 3.1 §7.15.2): the model's provider when
-/// it embeds (Gemini, OpenAI), else Gemini or OpenAI when its key is set; with none, recall
+/// The embedder long-term memory recalls with (spec 3.1 §7.15.2): the local ONNX model for
+/// a local provider (nothing leaves the machine, H10), else the model's provider when it
+/// embeds (Gemini, OpenAI), else Gemini or OpenAI when its key is set; with none, recall
 /// matches shared words.
-fn memory_embedder(model: &ResolvedModel) -> Option<(Arc<adk_harness::RagEmbedder>, &'static str)> {
+fn memory_embedder(model: &ResolvedModel) -> Option<(Arc<adk_harness::RagEmbedder>, String)> {
+    use crate::cli::Provider;
+    use adk_model::ModelProvider;
     const GEMINI: &str = "Gemini (gemini-embedding-2)";
     const OPENAI: &str = "OpenAI (text-embedding-3-small)";
+    const LOCAL: &str = "a local ONNX model (BAAI/bge-small-en-v1.5); nothing leaves this machine";
+    if model.provider().is_some_and(Provider::is_local) {
+        #[cfg(feature = "memory-local")]
+        match adk_harness::RagEmbedder::local() {
+            Ok(embedder) => return Some((Arc::new(embedder), LOCAL.into())),
+            Err(error) => println!(
+                "note: the local embedding model is unavailable ({error}); facts are found by \
+                 shared words"
+            ),
+        }
+        let _ = LOCAL;
+        return None;
+    }
     let env = |names: &[&str]| {
         names.iter().find_map(|name| std::env::var(name).ok().filter(|key| !key.trim().is_empty()))
     };
-    let own = match (model.provider, model.api_key.clone()) {
-        (Some(adk_model::ModelProvider::Gemini), Some(key)) => Some((key, true)),
-        (Some(adk_model::ModelProvider::Openai), Some(key)) => Some((key, false)),
+    let own = match (model.provider(), model.api_key.clone()) {
+        (Some(Provider::Model(ModelProvider::Gemini)), Some(key)) => Some((key, true)),
+        (Some(Provider::Model(ModelProvider::Openai)), Some(key)) => Some((key, false)),
         _ => None,
     };
     let (key, gemini) = own
@@ -285,7 +385,7 @@ fn memory_embedder(model: &ResolvedModel) -> Option<(Arc<adk_harness::RagEmbedde
     } else {
         adk_harness::RagEmbedder::openai(&key).map(|embedder| (embedder, OPENAI))
     };
-    built.ok().map(|(embedder, name)| (Arc::new(embedder), name))
+    built.ok().map(|(embedder, name)| (Arc::new(embedder), name.to_string()))
 }
 
 const APP_NAME: &str = "adk-rust";
@@ -395,11 +495,46 @@ pub async fn repl(
                 .map_err(|error| adk_core::AdkError::config(error.to_string()))
         })
     };
+    // `/effort` restarts the session's clients at the level (spec 3.1 §7.23).
+    let effort_rebuild: adk_cli::harness::HarnessEffortRebuild = {
+        let setup = setup.clone();
+        let console = console.clone();
+        Arc::new(move |effort: Effort| {
+            let setup = setup.clone();
+            let console = console.clone();
+            Box::pin(async move {
+                let prompter = ConsolePrompter::new(console.clone());
+                let prompter: Arc<dyn ApprovalPrompter> = Arc::new(if setup.resolved.yes {
+                    prompter.approve_all(setup.resolved.allow_unsandboxed)
+                } else {
+                    prompter
+                });
+                let models = Models::build(
+                    &setup.model,
+                    &adk_harness::EffortPolicy::uniform(effort),
+                    effort,
+                )
+                .await
+                .map_err(|error| adk_core::AdkError::config(error.to_string()))?;
+                setup
+                    .agent_with(
+                        &models,
+                        APP_NAME,
+                        setup.resolved.mode,
+                        setup.resolved.sandbox,
+                        Some(prompter),
+                        None,
+                    )
+                    .map_err(|error| adk_core::AdkError::config(error.to_string()))
+            })
+        })
+    };
     setup
         .launcher(agent)
         .await?
         .with_console(console)
         .with_rebuild(rebuild)
+        .with_effort_rebuild(effort_rebuild)
         .run_console_directly()
         .await
         .map_err(Into::into)
@@ -700,7 +835,7 @@ impl UltraAgents for HarnessUltra {
                 ultra::review_instruction(focus, desc, self.setup.instruction.as_deref());
             let workspace = Workspace::new(&self.setup.resolved.workspace);
             let agent = HarnessAgent::builder(format!("review-{focus}"))
-                .model(self.setup.model.clone())
+                .model(self.setup.models.harness.llm.clone())
                 .workspace(workspace)
                 .mode(HarnessMode::ReadOnly)
                 .without_shell()

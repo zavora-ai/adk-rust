@@ -14,6 +14,11 @@
 0 adk-rag pgvector
 0 adk-rag vertex-rag
 0 adk-rag agent-retrieval
+# The in-process ONNX embedder downloads the onnxruntime binary at build time (R1).
+0 adk-rag onnx
+# The encrypted store, its SQLite backends and the local embedder (spec 3.1 §7.12, §7.15.2);
+# the workspace build reaches adk-harness only through adk-cli's feature set.
+0 adk-harness encrypted,sqlite,memory-embeddings-local
 
 # Shard 1 — the adk-rust umbrella. `graph` alone gives adk-graph its default (empty)
 # features, so the umbrella forwards are built explicitly.
@@ -114,6 +119,8 @@
 # Durable stores on every backend: compiles them and runs the SQLite conformance suites;
 # the live-server suites run in the nightly `durable-stores` job.
 5 adk-session sqlite,redis,mongodb,neo4j,firestore
+# The envelope, the encrypted approval store and SQLite key rotation (spec 3.1 §10 S5).
+5 adk-session encrypted-session,sqlite
 # Memory Bank backend; its mock contract tests need the feature.
 5 adk-memory vertex-memory
 # `adk-memory --features database-memory` once stopped compiling entirely while every

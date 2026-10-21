@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use adk_core::{AdkError, Result};
-use adk_harness::{HarnessMode, MemberSpec, Pack};
+use adk_core::{AdkError, Effort, Result};
+use adk_harness::{EffortPolicy, HarnessMode, MemberSpec, Pack};
 use serde::Deserialize;
 
 /// The project file, relative to the workspace root.
@@ -104,6 +104,15 @@ pub struct HarnessArgs {
     /// Host fetched without approval: exact, or *.example.com (repeatable)
     #[arg(long = "allow-domain", value_name = "HOST")]
     pub allow_domains: Vec<String>,
+    /// Reasoning effort of this session's model clients: low, medium or high
+    /// (default: the `[effort]` policy, medium in ask; spec 3.1 §7.23)
+    #[arg(long, value_parser = parse_effort, value_name = "LEVEL")]
+    pub effort: Option<Effort>,
+
+    /// Where the key sealing harness.db is kept: `keychain:<entry>`, `secret:<provider>/<name>`
+    /// or `env:<VAR>` (default: `[store] key` in the user config; spec 3.1 §7.12)
+    #[arg(long, value_name = "SOURCE")]
+    pub store_key: Option<String>,
 }
 
 /// A `--member` flag value (spec 3.1 §8.1, §7.10).
@@ -212,6 +221,10 @@ fn parse_mode(value: &str) -> std::result::Result<HarnessMode, String> {
     }
 }
 
+fn parse_effort(value: &str) -> std::result::Result<Effort, String> {
+    value.parse()
+}
+
 fn parse_pack(value: &str) -> std::result::Result<Pack, String> {
     match value.trim() {
         "browser" => Ok(Pack::Browser),
@@ -239,8 +252,19 @@ struct ConfigFile {
     members: Option<Vec<String>>,
     web: Option<bool>,
     allow_domains: Option<Vec<String>>,
+    /// `[effort]`: the reasoning effort per mode and role (spec 3.1 §7.23).
+    effort: Option<EffortPolicy>,
+    /// `[store]`: where the store key is kept (spec 3.1 §7.12); the user config only.
+    store: Option<StoreTable>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
+}
+
+/// The `[store]` table.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct StoreTable {
+    key: Option<String>,
 }
 
 /// The `[deploy]` table is read by deployment tooling (spec 3.1 §8.5), not by the CLI.
@@ -310,6 +334,14 @@ pub struct ResolvedHarnessArgs {
     pub allow_domains: Vec<String>,
     /// Long-term memory: on unless `--no-memory` or `--ephemeral`.
     pub memory: bool,
+    /// The reasoning effort per mode and role (spec 3.1 §7.23): `--effort` sets every
+    /// level, else the `[effort]` tables, else the defaults.
+    pub effort: EffortPolicy,
+    /// Whether `--effort` or an `[effort]` table chose the policy.
+    pub effort_explicit: bool,
+    /// Where the store key is kept, from `--store-key` or the user config's `[store] key`
+    /// (spec 3.1 §7.12).
+    pub store_key: Option<String>,
     /// Settings a config file made that were ignored, and why.
     pub notes: Vec<String>,
 }
@@ -367,6 +399,9 @@ impl HarnessArgs {
         let mut members = Vec::new();
         let mut web = true;
         let mut allow_domains: Vec<String> = Vec::new();
+        let mut effort = EffortPolicy::default();
+        let mut effort_explicit = false;
+        let mut store_key = None;
         if let Some(user) = &user {
             let origin = user_config.map_or_else(String::new, |path| path.display().to_string());
             if let Some(value) = &user.mode {
@@ -388,6 +423,11 @@ impl HarnessArgs {
                 web = value;
             }
             allow_domains.extend(user.allow_domains.iter().flatten().cloned());
+            if let Some(policy) = user.effort {
+                effort = policy;
+                effort_explicit = true;
+            }
+            store_key = user.store.as_ref().and_then(|store| store.key.clone());
             for key in user.unknown.keys().filter(|key| *key != DEPLOY_TABLE) {
                 notes.push(format!("{origin}: unknown key `{key}` ignored"));
             }
@@ -416,6 +456,17 @@ impl HarnessArgs {
             }
             if project.web == Some(false) {
                 web = false;
+            }
+            // Effort costs money, not permissions: a project may set it; flags win.
+            if let Some(policy) = project.effort {
+                effort = policy;
+                effort_explicit = true;
+            }
+            if project.store.is_some() {
+                notes.push(format!(
+                    "{origin}: `store` ignored — where your store key lives is yours to choose; \
+                     set [store] key in your user config or pass --store-key"
+                ));
             }
             for (key, set) in [
                 ("yes", project.yes == Some(true)),
@@ -455,6 +506,13 @@ impl HarnessArgs {
             web = true;
         }
         allow_domains.extend(self.allow_domains.iter().cloned());
+        if let Some(level) = self.effort {
+            effort = EffortPolicy::uniform(level);
+            effort_explicit = true;
+        }
+        if let Some(source) = &self.store_key {
+            store_key = Some(source.clone());
+        }
         if fail_if_unavailable && !sandbox {
             return Err(AdkError::config(
                 "fail_if_unavailable needs the sandbox: pass --sandbox or set sandbox = true",
@@ -475,6 +533,9 @@ impl HarnessArgs {
             memory: !self.no_memory && !self.ephemeral,
             web,
             allow_domains,
+            effort,
+            effort_explicit,
+            store_key,
             notes,
         })
     }
@@ -530,9 +591,38 @@ mod tests {
                 memory: true,
                 web: true,
                 allow_domains: vec![],
+                effort: EffortPolicy::default(),
+                effort_explicit: false,
+                store_key: None,
                 notes: vec![],
             }
         );
+    }
+
+    #[test]
+    fn effort_and_store_come_from_flags_then_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("user.toml");
+        write(&user, "[effort]\nplan = \"low\"\n\n[store]\nkey = \"keychain:adk-rust\"\n");
+        write(
+            &dir.path().join(PROJECT_CONFIG_FILE),
+            "[effort]\nask = \"high\"\n\n[store]\nkey = \"env:EVIL\"\n",
+        );
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap();
+        assert_eq!(resolved.effort, EffortPolicy { ask: Effort::High, ..EffortPolicy::default() });
+        assert!(resolved.effort_explicit);
+        assert_eq!(resolved.store_key.as_deref(), Some("keychain:adk-rust"));
+        assert!(resolved.notes.iter().any(|note| note.contains("`store`")), "{:?}", resolved.notes);
+
+        let flagged = HarnessArgs {
+            effort: Some(Effort::Low),
+            store_key: Some("env:ADK_STORE_KEY".into()),
+            ..args_in(dir.path())
+        }
+        .resolve(HarnessMode::Ask, Some(&user))
+        .unwrap();
+        assert_eq!(flagged.effort, EffortPolicy::uniform(Effort::Low));
+        assert_eq!(flagged.store_key.as_deref(), Some("env:ADK_STORE_KEY"));
     }
 
     #[test]

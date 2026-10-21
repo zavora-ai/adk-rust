@@ -1,6 +1,106 @@
 use adk_model::ModelProvider;
 use clap::{Parser, Subcommand, ValueEnum};
 
+/// A provider this binary runs on: one adk-model talks to, or mistral.rs in process
+/// (spec 3.1 §8.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Provider {
+    /// A provider adk-model talks to.
+    Model(ModelProvider),
+    /// mistral.rs in this process (feature `mistralrs`): `--model` names a Hugging Face
+    /// model id or a `.gguf` path.
+    MistralRs,
+}
+
+impl Provider {
+    /// Every provider in menu order: adk-model's, then mistral.rs.
+    pub const ALL: [Provider; 7] = [
+        Provider::Model(ModelProvider::Gemini),
+        Provider::Model(ModelProvider::Openai),
+        Provider::Model(ModelProvider::Anthropic),
+        Provider::Model(ModelProvider::Deepseek),
+        Provider::Model(ModelProvider::Groq),
+        Provider::Model(ModelProvider::Ollama),
+        Provider::MistralRs,
+    ];
+
+    /// Every provider in menu order.
+    pub const fn all() -> &'static [Provider] {
+        &Self::ALL
+    }
+
+    /// The identifier `--provider` and the saved config use.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Model(provider) => provider.as_str(),
+            Self::MistralRs => "mistralrs",
+        }
+    }
+
+    /// The default model; empty for mistral.rs, which needs `--model`.
+    pub const fn default_model(self) -> &'static str {
+        match self {
+            Self::Model(provider) => provider.default_model(),
+            Self::MistralRs => "",
+        }
+    }
+
+    /// The environment variable holding the API key; empty for local providers.
+    pub const fn env_var(self) -> &'static str {
+        match self {
+            Self::Model(provider) => provider.env_var(),
+            Self::MistralRs => "",
+        }
+    }
+
+    /// An alternate environment variable for the API key.
+    pub const fn alt_env_var(self) -> Option<&'static str> {
+        match self {
+            Self::Model(provider) => provider.alt_env_var(),
+            Self::MistralRs => None,
+        }
+    }
+
+    /// Whether the provider needs an API key.
+    pub const fn requires_key(self) -> bool {
+        match self {
+            Self::Model(provider) => provider.requires_key(),
+            Self::MistralRs => false,
+        }
+    }
+
+    /// Whether the provider runs on this machine, so nothing leaves it but the model
+    /// endpoint (spec 3.1 §8.1, H10).
+    pub const fn is_local(self) -> bool {
+        matches!(self, Self::Model(ModelProvider::Ollama) | Self::MistralRs)
+    }
+
+    /// The name shown in prompts and help.
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Model(provider) => provider.display_name(),
+            Self::MistralRs => "mistral.rs (local, in process; --model <hf id or .gguf path>)",
+        }
+    }
+}
+
+impl std::fmt::Display for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Provider {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "mistralrs" | "mistral-rs" | "mistral.rs" => Ok(Self::MistralRs),
+            other => other.parse::<ModelProvider>().map(Self::Model),
+        }
+    }
+}
+
 /// ADK-Rust CLI — the governed harness in your terminal, a web server, and agent tooling.
 ///
 /// Running `adk-rust` with no subcommand starts the harness REPL in the current directory:
@@ -30,9 +130,9 @@ pub struct Cli {
 /// Model and rendering options shared by every agent command.
 #[derive(clap::Args, Debug, Clone)]
 pub struct AgentOptions {
-    /// LLM provider
+    /// LLM provider: gemini, openai, anthropic, deepseek, groq, ollama or mistralrs
     #[arg(long, global = true)]
-    pub provider: Option<ModelProvider>,
+    pub provider: Option<Provider>,
 
     /// Model name (provider-specific, uses sensible default if omitted)
     #[arg(long, global = true)]
@@ -70,19 +170,20 @@ pub struct AgentOptions {
 }
 
 /// The providers compiled into this build, in menu order (spec 3.1 §8.1).
-pub fn compiled_providers() -> Vec<ModelProvider> {
-    ModelProvider::all().iter().copied().filter(|provider| is_compiled(*provider)).collect()
+pub fn compiled_providers() -> Vec<Provider> {
+    Provider::all().iter().copied().filter(|provider| is_compiled(*provider)).collect()
 }
 
 /// Whether this build can talk to `provider`: its Cargo feature is enabled.
-pub fn is_compiled(provider: ModelProvider) -> bool {
+pub fn is_compiled(provider: Provider) -> bool {
     match provider {
-        ModelProvider::Gemini => cfg!(feature = "gemini"),
-        ModelProvider::Openai => cfg!(feature = "openai"),
-        ModelProvider::Anthropic => cfg!(feature = "anthropic"),
-        ModelProvider::Deepseek => cfg!(feature = "deepseek"),
-        ModelProvider::Groq => cfg!(feature = "groq"),
-        ModelProvider::Ollama => cfg!(feature = "ollama"),
+        Provider::Model(ModelProvider::Gemini) => cfg!(feature = "gemini"),
+        Provider::Model(ModelProvider::Openai) => cfg!(feature = "openai"),
+        Provider::Model(ModelProvider::Anthropic) => cfg!(feature = "anthropic"),
+        Provider::Model(ModelProvider::Deepseek) => cfg!(feature = "deepseek"),
+        Provider::Model(ModelProvider::Groq) => cfg!(feature = "groq"),
+        Provider::Model(ModelProvider::Ollama) => cfg!(feature = "ollama"),
+        Provider::MistralRs => cfg!(feature = "mistralrs"),
     }
 }
 
@@ -231,6 +332,18 @@ pub enum Commands {
     Memory {
         #[command(subcommand)]
         command: MemoryCommands,
+    },
+
+    /// The encrypted store: which key harness.db is sealed under, and key rotation
+    #[cfg(all(feature = "harness", feature = "persist", feature = "encrypted"))]
+    Store {
+        #[command(subcommand)]
+        command: StoreCommands,
+
+        /// Where the store key is: `keychain:<entry>`, `secret:<provider>/<name>` or `env:<VAR>`
+        /// (default: `[store] key` in the user config)
+        #[arg(long, global = true, value_name = "SOURCE")]
+        store_key: Option<String>,
     },
 
     /// Calls waiting for a decision, here or on a served harness
@@ -411,6 +524,21 @@ pub enum MemoryCommands {
     Import {
         /// File to read
         file: std::path::PathBuf,
+    },
+}
+
+/// `adk-rust store` (spec 3.1 §7.12, §8.1).
+#[cfg(all(feature = "harness", feature = "persist", feature = "encrypted"))]
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum StoreCommands {
+    /// Report the key source, the key harness.db is sealed under, and which stores are wrapped
+    Status,
+    /// Re-seal every store under a new key and retire the current one; seals rows written
+    /// before a key was configured
+    RotateKey {
+        /// The new key, base64 of 32 bytes (default: a generated one)
+        #[arg(long, value_name = "BASE64")]
+        key: Option<String>,
     },
 }
 
@@ -999,17 +1127,18 @@ mod tests {
     fn compiled_providers_are_exactly_the_enabled_features() {
         let compiled = compiled_providers();
         for (provider, enabled) in [
-            (ModelProvider::Gemini, cfg!(feature = "gemini")),
-            (ModelProvider::Openai, cfg!(feature = "openai")),
-            (ModelProvider::Anthropic, cfg!(feature = "anthropic")),
-            (ModelProvider::Deepseek, cfg!(feature = "deepseek")),
-            (ModelProvider::Groq, cfg!(feature = "groq")),
-            (ModelProvider::Ollama, cfg!(feature = "ollama")),
+            (Provider::Model(ModelProvider::Gemini), cfg!(feature = "gemini")),
+            (Provider::Model(ModelProvider::Openai), cfg!(feature = "openai")),
+            (Provider::Model(ModelProvider::Anthropic), cfg!(feature = "anthropic")),
+            (Provider::Model(ModelProvider::Deepseek), cfg!(feature = "deepseek")),
+            (Provider::Model(ModelProvider::Groq), cfg!(feature = "groq")),
+            (Provider::Model(ModelProvider::Ollama), cfg!(feature = "ollama")),
+            (Provider::MistralRs, cfg!(feature = "mistralrs")),
         ] {
             assert_eq!(compiled.contains(&provider), enabled, "{provider}");
         }
         let order: Vec<_> =
-            ModelProvider::all().iter().copied().filter(|p| compiled.contains(p)).collect();
+            Provider::all().iter().copied().filter(|p| compiled.contains(p)).collect();
         assert_eq!(compiled, order, "menu order follows ModelProvider::all");
     }
 

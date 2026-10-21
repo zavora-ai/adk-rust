@@ -35,6 +35,6 @@ mod prompter;
 mod serve;
 
 pub use args::{HarnessArgs, MemberArg, MemberKindArg, PROJECT_CONFIG_FILE, ResolvedHarnessArgs};
-pub use launcher::{HarnessLauncher, HarnessRebuild, TurnOutcome};
+pub use launcher::{HarnessEffortRebuild, HarnessLauncher, HarnessRebuild, TurnOutcome};
 pub use prompter::ConsolePrompter;
 pub use serve::{BearerTokenExtractor, LoopbackOperatorExtractor, OPERATOR_SCOPE};
