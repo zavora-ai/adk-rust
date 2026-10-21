@@ -249,6 +249,19 @@ impl Setup {
         for pack in &self.resolved.packs {
             builder = builder.pack(*pack);
         }
+        // `--pack browser` (spec 3.1 §7.24): the WebDriver endpoint from ADK_WEBDRIVER_URL, else
+        // adk-browser's default `http://localhost:4444`; `--allow-domain` is the allowlist.
+        #[cfg(feature = "browser")]
+        if self.resolved.packs.contains(&adk_harness::Pack::Browser) {
+            let mut config = adk_browser::BrowserConfig::default();
+            if let Ok(url) = std::env::var("ADK_WEBDRIVER_URL")
+                && !url.trim().is_empty()
+            {
+                config = config.webdriver_url(url.trim());
+            }
+            let session = Arc::new(adk_browser::BrowserSession::new(config));
+            builder = builder.pack_browser(adk_harness::BrowserPack::new(session));
+        }
         for member in &self.resolved.members {
             builder = builder.member(member.to_spec()?);
         }
