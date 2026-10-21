@@ -1216,10 +1216,13 @@ impl HarnessAgentBuilder {
             .filter(|tool| !crate::packs::payments::is_payment_tool(tool.name()))
             .collect();
         // Members get the same request observers as the coordinator (spec 3.1 §7.10, §7.13).
-        #[cfg_attr(not(any(feature = "auth", feature = "observe")), allow(unused_mut))]
-        let mut observers: Vec<Arc<dyn crate::toolset::RequestObserver>> = Vec::new();
+        #[cfg_attr(not(feature = "observe"), allow(unused_mut))]
         #[cfg(feature = "auth")]
-        observers.push(identity_gate.clone());
+        let mut observers: Vec<Arc<dyn crate::toolset::RequestObserver>> =
+            vec![identity_gate.clone()];
+        #[cfg_attr(not(feature = "observe"), allow(unused_mut))]
+        #[cfg(not(feature = "auth"))]
+        let mut observers: Vec<Arc<dyn crate::toolset::RequestObserver>> = Vec::new();
         #[cfg(feature = "observe")]
         let run_trails = Arc::new(crate::observe::RunTrails::default());
         #[cfg(feature = "observe")]

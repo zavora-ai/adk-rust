@@ -13,7 +13,7 @@ use adk_agent::{
     TeamAgentHealth, TeamBudget, TeamContextPolicy, TeamHistoryPolicy, TeamMemberSpec, TeamPolicy,
     TeamRelationship, TeamResumePolicy, TeamStateMergePolicy, TeamTerminationPolicy,
 };
-use adk_core::{Agent, Content, Event, EventStream, InvocationContext};
+use adk_core::{Agent, Content, Event, EventStream, InvocationContext, Part};
 use adk_harness::{HarnessMode, MemberKind, MemberSpec, MemberTools};
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use common::*;
@@ -171,6 +171,54 @@ async fn a_member_inherits_the_parents_stricter_mode() {
     let delegated = response_of(&events, "general");
     assert_eq!(outcome(&delegated), Outcome::Held, "{delegated}");
     assert!(!f.path("notes.txt").exists());
+}
+
+#[tokio::test]
+async fn a_delegation_holding_two_calls_is_answered_once_when_the_mode_loosens() {
+    // Ask holds both member writes under the one `general` call (spec 3.1 §10 F4), and the
+    // loosening that cancels them answers that call exactly once (spec 3.1 §7.4).
+    let (f, _members) = team_fixture(
+        vec![call("general", json!({ "request": "write a.txt and b.txt" })), text("ok")],
+        vec![
+            ScriptedResponse::function_calls([
+                ("write_file", json!({ "path": "a.txt", "content": "a" })),
+                ("write_file", json!({ "path": "b.txt", "content": "b" })),
+            ]),
+            text("waiting"),
+        ],
+        HarnessMode::Ask,
+    )
+    .await;
+    let events = f.send("delegate it").await;
+    let delegated = response_of(&events, "general");
+    assert_eq!(outcome(&delegated), Outcome::Held, "{delegated}");
+    assert_eq!(
+        f.harness.pending_approvals(&f.user, &f.session).await.unwrap().len(),
+        2,
+        "both member calls wait under the one delegation"
+    );
+
+    f.harness.set_mode(&f.user, &f.session, HarnessMode::Auto).await.unwrap();
+    let cancelled = f.records("harness.held.cancelled");
+    assert_eq!(cancelled.len(), 1);
+    let ids = cancelled[0].ext["callIds"].as_array().unwrap().clone();
+    assert_eq!(ids.len(), 1, "the delegation's call id, once: {ids:?}");
+    let changed = f.records("harness.mode.changed");
+    assert_eq!(changed[0].ext["cancelledHeldCallIds"], json!(ids));
+
+    // The next run's history answers the delegation once.
+    f.resume().await;
+    let request = f.model.last_request().unwrap();
+    let answers = request
+        .contents
+        .iter()
+        .flat_map(|content| content.parts.iter())
+        .filter(|part| {
+            matches!(part, Part::FunctionResponse { function_response, .. } if function_response.name == "general")
+        })
+        .count();
+    assert_eq!(answers, 1, "{request:?}");
+    assert!(!f.path("a.txt").exists() && !f.path("b.txt").exists());
 }
 
 #[tokio::test]

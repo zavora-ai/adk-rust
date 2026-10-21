@@ -6,23 +6,19 @@
 //! idempotency key, `{app}/{user}/{session}/{invocation}/{call id}`, and a held call that a
 //! later run resumes by `adk_agent::held_call_ledger_key`, which every resumption of the
 //! same held call shares, so a call that ran in a run that never saved its result is
-//! answered from its record, not run again. The mapping below sends a resumed call's
-//! run-scoped key to that same key.
+//! answered from its record, not run again.
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use adk_core::{ActionLedger, ActionOutcome, ActionRecord, HeldToolCall, Result, async_trait};
+use adk_core::ActionLedger;
+#[cfg(feature = "runner")]
+use adk_core::{ActionOutcome, ActionRecord};
 #[cfg(feature = "runner")]
 use serde_json::{Value, json};
 
-/// Upper bound of remembered resumed-call keys; the oldest are dropped first.
-const RESUMED_CAP: usize = 4096;
-/// Upper bound of wrappers kept for ledgers that runs carry.
-const WRAPPED_CAP: usize = 16;
-
 /// The ledger key every resumption of the held call `call_id` with `fingerprint` shares:
 /// the key `LlmAgent` records a resumed call under.
+#[cfg(feature = "runner")]
 pub(crate) fn held_call_key(
     app: &str,
     user: &str,
@@ -55,79 +51,15 @@ pub(crate) fn recorded_answer(name: &str, record: &ActionRecord) -> Value {
     }
 }
 
-/// Idempotency keys of resumed held calls, mapped to their shared key.
-#[derive(Debug, Default)]
-struct ResumedKeys {
-    keys: HashMap<String, String>,
-    order: VecDeque<String>,
-}
-
-impl ResumedKeys {
-    fn insert(&mut self, run_key: String, shared: String) {
-        if self.keys.insert(run_key.clone(), shared).is_none() {
-            self.order.push_back(run_key);
-        }
-        while self.order.len() > RESUMED_CAP {
-            if let Some(oldest) = self.order.pop_front() {
-                self.keys.remove(&oldest);
-            }
-        }
-    }
-}
-
-/// An [`ActionLedger`] that stores in `inner` under the shared key of a resumed call.
-#[derive(Debug)]
-struct HarnessLedger {
-    inner: Arc<dyn ActionLedger>,
-    resumed: Arc<Mutex<ResumedKeys>>,
-}
-
-impl HarnessLedger {
-    fn key(&self, key: &str) -> String {
-        let resumed = self.resumed.lock().unwrap_or_else(|e| e.into_inner());
-        resumed.keys.get(key).cloned().unwrap_or_else(|| key.to_string())
-    }
-}
-
-#[async_trait]
-impl ActionLedger for HarnessLedger {
-    async fn begin(&self, record: &ActionRecord) -> Result<()> {
-        let key = self.key(&record.key);
-        if key == record.key {
-            return self.inner.begin(record).await;
-        }
-        let mut record = record.clone();
-        record.key = key;
-        self.inner.begin(&record).await
-    }
-
-    async fn complete(&self, key: &str, outcome: ActionOutcome) -> Result<()> {
-        self.inner.complete(&self.key(key), outcome).await
-    }
-
-    async fn get(&self, key: &str) -> Result<Option<ActionRecord>> {
-        self.inner.get(&self.key(key)).await
-    }
-}
-
-/// Ledgers runs carried, each with the wrapper the harness puts on those runs.
-type Wrapped = Vec<(Arc<dyn ActionLedger>, Arc<dyn ActionLedger>)>;
-
-/// The harness's action ledger and the wrappers it puts on runs (spec 3.1 §7.12).
+/// The harness's action ledger and the one each run records in (spec 3.1 §7.12).
 #[derive(Clone, Debug)]
 pub(crate) struct HarnessLedgers {
     store: Arc<dyn ActionLedger>,
-    own: Arc<dyn ActionLedger>,
-    resumed: Arc<Mutex<ResumedKeys>>,
-    wrapped: Arc<Mutex<Wrapped>>,
 }
 
 impl HarnessLedgers {
     pub(crate) fn new(store: Arc<dyn ActionLedger>) -> Self {
-        let resumed = Arc::new(Mutex::new(ResumedKeys::default()));
-        let own: Arc<dyn ActionLedger> =
-            Arc::new(HarnessLedger { inner: store.clone(), resumed: resumed.clone() });
-        Self { store, own, resumed, wrapped: Arc::new(Mutex::new(Vec::new())) }
+        Self { store }
     }
 
     /// The ledger records are kept in.
@@ -135,64 +67,22 @@ impl HarnessLedgers {
         &self.store
     }
 
-    /// The ledger for a run that carries `existing`: the harness's own when it carries
-    /// none, otherwise the run's own, still storing in it, with resumed calls keyed alike.
+    /// The ledger for a run that carries `existing`: the run's own, else the harness's.
     pub(crate) fn for_run(
         &self,
         existing: Option<&Arc<dyn ActionLedger>>,
     ) -> Arc<dyn ActionLedger> {
-        let Some(existing) = existing else {
-            return self.own.clone();
-        };
-        if Arc::ptr_eq(existing, &self.own) {
-            return existing.clone();
-        }
-        let mut wrapped = self.wrapped.lock().unwrap_or_else(|e| e.into_inner());
-        for (inner, wrapper) in wrapped.iter() {
-            if Arc::ptr_eq(existing, wrapper) {
-                return existing.clone();
-            }
-            if Arc::ptr_eq(existing, inner) {
-                return wrapper.clone();
-            }
-        }
-        let wrapper: Arc<dyn ActionLedger> =
-            Arc::new(HarnessLedger { inner: existing.clone(), resumed: self.resumed.clone() });
-        wrapped.push((existing.clone(), wrapper.clone()));
-        if wrapped.len() > WRAPPED_CAP {
-            wrapped.remove(0);
-        }
-        wrapper
-    }
-
-    /// Notes the calls a run of `invocation` may resume, so each is ledgered under its
-    /// held call's shared key.
-    pub(crate) fn note_resumable(
-        &self,
-        (app, user, session): (&str, &str, &str),
-        invocation: &str,
-        held: &[HeldToolCall],
-    ) {
-        if held.is_empty() {
-            return;
-        }
-        let mut resumed = self.resumed.lock().unwrap_or_else(|e| e.into_inner());
-        for call in held {
-            let Some(call_id) = call.id.as_deref() else {
-                continue;
-            };
-            resumed.insert(
-                format!("{app}/{user}/{session}/{invocation}/{call_id}"),
-                held_call_key(app, user, session, call_id, &call.request.fingerprint()),
-            );
-        }
+        existing.cloned().unwrap_or_else(|| self.store.clone())
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "runner"))]
 mod tests {
     use super::*;
-    use adk_core::{InMemoryActionLedger, ToolConfirmationRequest, ToolEffect};
+    use adk_core::{
+        ActionOutcome, ActionRecord, HeldToolCall, InMemoryActionLedger, ToolConfirmationRequest,
+        ToolEffect,
+    };
     use serde_json::json;
 
     fn held(call_id: &str) -> HeldToolCall {
@@ -206,40 +96,47 @@ mod tests {
         }
     }
 
+    /// The agent keys a resumed call by `adk_agent::held_call_ledger_key`, so the record of
+    /// one resumption answers the next without any key rewriting by the harness.
     #[tokio::test]
     async fn every_resumption_of_a_held_call_shares_one_record() {
         let store: Arc<dyn ActionLedger> = Arc::new(InMemoryActionLedger::new());
-        let ledgers = HarnessLedgers::new(store.clone());
-        let ledger = ledgers.for_run(None);
-        let identity = ("app", "alice", "s1");
+        let ledger = HarnessLedgers::new(store.clone()).for_run(None);
         let call = held("call-1");
+        let fingerprint = call.request.fingerprint();
 
-        ledgers.note_resumable(identity, "inv-2", std::slice::from_ref(&call));
-        let key = "app/alice/s1/inv-2/call-1";
+        let first_run = held_call_key("app", "alice", "s1", "call-1", &fingerprint);
         ledger
-            .begin(&ActionRecord::new(key, "bash", &call.args, ToolEffect::NonIdempotent))
+            .begin(&ActionRecord::new(&first_run, "bash", &call.args, ToolEffect::NonIdempotent))
             .await
             .unwrap();
-        ledger.complete(key, ActionOutcome::Succeeded { result_digest: "d".into() }).await.unwrap();
+        ledger
+            .complete(&first_run, ActionOutcome::Succeeded { result_digest: "d".into() })
+            .await
+            .unwrap();
 
-        ledgers.note_resumable(identity, "inv-3", std::slice::from_ref(&call));
-        let again = ledger.get("app/alice/s1/inv-3/call-1").await.unwrap().unwrap();
+        let next_run =
+            adk_agent::held_call_ledger_key("app", "alice", "s1", "call-1", &fingerprint);
+        assert_eq!(next_run, first_run, "every resumption computes the same key");
+        let again = ledger.get(&next_run).await.unwrap().unwrap();
         assert!(again.is_completed());
-        let shared = held_call_key("app", "alice", "s1", "call-1", &call.request.fingerprint());
-        assert_eq!(again.key, shared);
-        assert!(store.get(key).await.unwrap().is_none(), "stored under the shared key only");
-        assert!(ledger.get("app/alice/s1/inv-3/call-2").await.unwrap().is_none());
+        assert_eq!(again.key, first_run);
+        assert!(!next_run.contains("/inv-"), "the key names no invocation: {next_run}");
+
+        let other =
+            held_call_key("app", "alice", "s1", "call-1", &held("call-2").request.fingerprint());
+        assert_eq!(other, first_run, "the fingerprint ignores the call id");
+        let rewritten = held_call_key("app", "alice", "s1", "call-2", &fingerprint);
+        assert!(ledger.get(&rewritten).await.unwrap().is_none(), "another call has its own record");
     }
 
     #[test]
-    fn a_runs_own_ledger_is_wrapped_once_and_kept_as_the_store() {
-        let ledgers = HarnessLedgers::new(Arc::new(InMemoryActionLedger::new()));
-        let own = ledgers.for_run(None);
-        assert!(Arc::ptr_eq(&ledgers.for_run(Some(&own)), &own));
+    fn a_run_records_in_its_own_ledger_else_in_the_store() {
+        let store: Arc<dyn ActionLedger> = Arc::new(InMemoryActionLedger::new());
+        let ledgers = HarnessLedgers::new(store.clone());
+        assert!(Arc::ptr_eq(&ledgers.for_run(None), &store));
         let runs: Arc<dyn ActionLedger> = Arc::new(InMemoryActionLedger::new());
-        let wrapped = ledgers.for_run(Some(&runs));
-        assert!(!Arc::ptr_eq(&wrapped, &runs));
-        assert!(Arc::ptr_eq(&ledgers.for_run(Some(&wrapped)), &wrapped));
-        assert!(Arc::ptr_eq(&ledgers.for_run(Some(&runs)), &wrapped));
+        assert!(Arc::ptr_eq(&ledgers.for_run(Some(&runs)), &runs));
+        assert!(Arc::ptr_eq(ledgers.store(), &store));
     }
 }

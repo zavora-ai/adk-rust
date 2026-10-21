@@ -827,13 +827,6 @@ impl HarnessAgent {
             });
             hooks.on_session_start(mode, &scope, audit.as_ref()).await;
         }
-        // The coordinator authors the held calls; with members the root is the team, not it.
-        let held = ctx.session().held_tool_calls(self.name(), ctx.branch());
-        self.runtime.ledgers.note_resumable(
-            (ctx.app_name(), ctx.user_id(), ctx.session_id()),
-            ctx.invocation_id(),
-            &held,
-        );
         #[cfg(feature = "observe")]
         let events = {
             let mode = crate::observe::run_mode(
