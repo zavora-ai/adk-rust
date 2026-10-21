@@ -256,3 +256,31 @@ mod ambient {
         assert!(dir.path().join("done.txt").exists());
     }
 }
+
+/// The goal's `check_timeout` bounds its check (spec 3.1 §7.11), even above the workspace's
+/// shell limit for the model's own commands.
+#[tokio::test]
+async fn the_check_runs_for_its_check_timeout_beyond_the_shell_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let f = fixture_in(dir, vec![text("waiting")], move |b| {
+        b.workspace(
+            adk_devtools::Workspace::new(&root)
+                .allow_bash(true)
+                .bash_timeout(Duration::from_secs(1)),
+        )
+        .mode(HarnessMode::Auto)
+        .without_default_members()
+    })
+    .await;
+    let spec = GoalSpec {
+        goal: "wait for the slow check".into(),
+        until: "sleep 2 && touch checked".into(),
+        max_iterations: 1,
+        check_timeout: Duration::from_secs(20),
+    };
+    run_goal(&f, spec).await;
+    let state = f.harness.goal(&f.user, &f.session).await.unwrap().unwrap();
+    assert_eq!((state.status, state.last_check), (GoalStatus::Done, Some(0)));
+    assert!(f.dir.path().join("checked").exists());
+}

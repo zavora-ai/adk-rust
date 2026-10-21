@@ -118,8 +118,9 @@ async fn start(harness: &Harness, user: &UserId, session: &SessionId) -> adk_cor
 | `GoalEngine::Graph` | a checkpointed graph: `iterate` → `check` → (`__end__` \| `iterate`) | with `plan_checkpointer(..)` |
 
 `UntilCheckAgent` checks the kill switch, runs `until` through the harness bash tool's
-launcher (the OS sandbox when one is active), updates the goal state and stops the loop on
-exit 0 (`Done`) or at the cap (`Exhausted`). The next iteration reads the check's output.
+launcher (the OS sandbox when one is active) for up to the goal's `check_timeout`, which may
+exceed the workspace's limit for the model's own commands, updates the goal state and stops
+the loop on exit 0 (`Done`) or at the cap (`Exhausted`). The next iteration reads the check's output.
 The command is the operator's, so it is not a governed call; it is audited.
 
 Goal state lives in a harness-owned `GoalStore` — `goal_store(..)`, in memory by default,
@@ -151,7 +152,11 @@ fn serve_goals(harness: Harness, runs: Arc<dyn DurableRunStore>) -> adk_server::
 ```
 
 `start_goal` then enqueues `NewRun { target: "harness.goal", session_id, concurrency_key:
-session, idempotency_key: "goal:<session>:<digest>" }`. A held call parks the run as
+session, idempotency_key: "goal:<session>:<digest>" }` on the `default` queue.
+`Harness::with_goal_queue(adk_harness::GOAL_QUEUE)` puts goals on a queue of their own; serve
+it with `DurableWorkerConfig::with_queue(harness.goal_queue())`, so the goal worker and a
+server's background worker over one store never take each other's runs, as `adk-rust goal`
+does. A held call parks the run as
 `AwaitingApproval`; `Harness::decide` from any process over the same stores wakes it, and the
 run resumes at the same iteration. The same goal on the same session is the same run.
 

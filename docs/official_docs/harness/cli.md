@@ -218,19 +218,21 @@ adk-rust memory import facts.jsonl       # imported facts arrive assumed
 ## Goals
 
 ```bash
-adk-rust goal "migrate to edition 2024" --until "cargo test" --max-iters 8
+adk-rust goal "migrate to edition 2024" --until "cargo test" --max-iters 8 --check-timeout 900
 adk-rust goal "migrate to edition 2024" --until "cargo test" --resume
 ```
 
 `adk-rust goal` starts the goal with `Harness::start_goal` ([Plan mode and goals](plan-and-goals.md)).
 Each iteration is a harness turn followed by `--until`, which runs through the harness shell
-in the workspace; the shell's timeout (120 seconds by default) caps the check. The goal is a
-durable run in `harness.db`, executed by a worker inside the command, and its state lives in
-the harness goal store, mirrored to the session as `harness:goal`.
+in the workspace for up to `--check-timeout` seconds (600 by default); a check that runs out
+of time counts as failed. The goal is a durable run in `harness.db` on its own queue
+(`harness.goal`), executed by a worker inside the command that claims nothing else, so
+`adk-rust serve` can keep background runs in the same file. The goal's state lives in the
+harness goal store, mirrored to the session as `harness:goal`.
 
 | Situation | What happens |
 |---|---|
-| A call is held (no terminal and no `--yes`) | The run parks and the command exits `3`. Approve with `adk-rust approvals approve ID`, then `--resume` continues the run at the held call, which runs once |
+| A call is held (no terminal and no `--yes`) | The run parks and the command exits `3`. Approve with `adk-rust approvals approve ID`, which prints the `goal … --resume` command; `--resume` continues the run at the held call, which runs once |
 | `--resume` before the call is decided | Nothing runs; the command lists the held call and exits `3` again |
 | The budget runs out | Exit `1`; `--resume --max-iters N`, with `N` above the iterations used, continues the goal |
 | Ctrl-C, or the process stops | Exit `130` on Ctrl-C; `--resume` continues the goal in its session, reclaiming the stopped process's run once its 10-second lease lapses |

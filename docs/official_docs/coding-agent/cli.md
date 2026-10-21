@@ -65,6 +65,7 @@ its conversation; with no unfinished goal it starts a new one. See
 | `--until <cmd>` | Success condition: exit 0 = goal met (**required**). |
 | `--dir <path>` | Workspace directory (default `.`). |
 | `--max-iters <n>` | Iteration budget (default 8). |
+| `--check-timeout <secs>` | How long one run of `--until` may take before it counts as failed (default 600). |
 | `--resume` | Resume the latest unfinished goal in this workspace. |
 | `--yes`, `--mode`, `--session` | The harness flags; goals need `ask` or `auto` mode. |
 

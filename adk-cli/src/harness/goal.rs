@@ -59,13 +59,14 @@ impl HarnessLauncher {
     /// `harness.goal.duplicate` for a goal that already ran as a durable run in the
     /// session), the run store's error, or `harness.goal.failed` when the durable run fails.
     pub async fn run_goal(&mut self, spec: GoalSpec) -> Result<TurnOutcome> {
+        let echo = self.echo;
         let shared = self.open().await?;
         let harness = shared.harness();
         let token = CancellationToken::new();
         shared.console.set_run(Some(token.clone()));
         let started = harness.start_goal(&shared.user, &shared.session, spec).await;
         let Some(runs) = shared.run_store.clone() else {
-            return shared.drive(started, token, true).await;
+            return shared.drive(started, token, echo).await;
         };
         let mut started = match started {
             Ok(events) => events,
@@ -87,7 +88,7 @@ impl HarnessLauncher {
             return Err(AdkError::config("the goal was not enqueued as a durable run"));
         };
         shared.console.print(&format!("goal run {run_id}\n"));
-        drive_durable(&shared, runs, run_id, token).await
+        drive_durable(&shared, runs, run_id, token, echo).await
     }
 
     /// Continues the session's goal (spec 3.1 §7.11, §8.1): in the same session, at the
@@ -106,6 +107,7 @@ impl HarnessLauncher {
     /// cancelled, or the cap is not above the iterations an exhausted goal used; or the
     /// store's error.
     pub async fn resume_goal(&mut self, max_iterations: Option<u32>) -> Result<TurnOutcome> {
+        let echo = self.echo;
         let shared = self.open().await?;
         let harness = shared.harness();
         let goals = harness.agent().runtime().goal_store().clone();
@@ -153,7 +155,7 @@ impl HarnessLauncher {
         shared.console.set_run(Some(token.clone()));
         let Some(runs) = shared.run_store.clone() else {
             let started = harness.resume(&shared.user, &shared.session).await;
-            return shared.drive(started, token, true).await;
+            return shared.drive(started, token, echo).await;
         };
         let live = runs
             .list(
@@ -186,7 +188,7 @@ impl HarnessLauncher {
             None => (continue_goal(runs.as_ref(), &app, &user, &session).await?, false),
         };
         shared.console.print(&format!("goal run {run_id}\n"));
-        let outcome = drive_durable(&shared, runs.clone(), run_id.clone(), token).await?;
+        let outcome = drive_durable(&shared, runs.clone(), run_id.clone(), token, echo).await?;
         // A run a stopped process left can finish without running the goal on: its turn had
         // answered before the check was cut short. The goal then gets a new run.
         let unfinished = !outcome.held.is_empty() || outcome.interrupted || outcome.ended_by_denial;
@@ -202,7 +204,7 @@ impl HarnessLauncher {
         shared.console.print(&format!("goal run {run_id}\n"));
         let token = CancellationToken::new();
         shared.console.set_run(Some(token.clone()));
-        drive_durable(&shared, runs, run_id, token).await
+        drive_durable(&shared, runs, run_id, token, echo).await
     }
 
     /// The goal of the session the launcher works in (spec 3.1 §7.11), read from the
@@ -273,6 +275,7 @@ async fn drive_durable(
     runs: Arc<dyn DurableRunStore>,
     run_id: String,
     token: CancellationToken,
+    echo: bool,
 ) -> Result<TurnOutcome> {
     let (target, runner) = shared.harness().goal_target();
     let worker = DurableWorker::new(runs.clone())
@@ -294,7 +297,7 @@ async fn drive_durable(
         }
     };
     let events = tail(shared.clone(), runs.clone(), run_id.clone(), seen);
-    let outcome = shared.drive(Ok(events), token, true).await;
+    let outcome = shared.drive(Ok(events), token, echo).await;
     if outcome.as_ref().is_ok_and(|outcome| outcome.interrupted) {
         // As a crash would: the run's lease lapses and `resume_goal` reclaims it.
         worker.abort();
