@@ -82,7 +82,8 @@ impl Tool for Lookup {
         "looks up a ledger entry"
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        AUTHENTICATED.lock().unwrap().push((ctx.user_id().to_string(), ctx.is_authenticated()));
         Ok(json!({ "balance": 10 }))
     }
 }
@@ -100,6 +101,9 @@ impl ToolPolicy for RecordingPolicy {
         PolicyDecision::Allow
     }
 }
+
+/// Records whether each call's user was authenticated.
+static AUTHENTICATED: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
 
 struct Fixture {
     runs: Arc<dyn DurableRunStore>,
@@ -282,4 +286,26 @@ async fn interactive_runs_act_for_a_human_by_default() {
     assert_eq!(finished.state, RunState::Completed, "{finished:?}");
     let records = tool_records(&fixture.audit);
     assert_eq!(records[0].actor.on_behalf_of, Some(SubjectRef::human("alice")));
+}
+
+#[tokio::test]
+async fn a_run_an_authenticated_caller_enqueued_runs_as_authenticated() {
+    // spec 3.1 §9.2 I6: `require_authenticated_identity` holds in a durable run whose user the
+    // server authenticated, and only in one.
+    let authenticated = run_one(
+        &fixture(DurableWorkerConfig::default(), None),
+        new_run("dora").with_authenticated_user(),
+    )
+    .await;
+    let anonymous = run_one(&fixture(DurableWorkerConfig::default(), None), new_run("eve")).await;
+
+    assert_eq!((authenticated.state, anonymous.state), (RunState::Completed, RunState::Completed));
+    let seen: Vec<_> = AUTHENTICATED
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(user, _)| user == "dora" || user == "eve")
+        .cloned()
+        .collect();
+    assert_eq!(seen, vec![("dora".to_string(), true), ("eve".to_string(), false)]);
 }

@@ -513,8 +513,12 @@ jobs:
     # adk-code spawns rustc from a cleared environment and adk-devtools resolves
     # workspace paths; both carry Windows-only behaviour that the compile-only build
     # cannot exercise and that the merge tier otherwise reports only after landing.
+    # adk-managed's durable round trips drive two runtime replicas over one set of
+    # SQLite files, whose rollback journals make every write slow on Windows.
     - name: Run the Windows-sensitive crate tests
-      run: cargo test -p adk-code -p adk-devtools
+      run: |
+        cargo test -p adk-code -p adk-devtools
+        cargo test -p adk-managed --test durable_round_trip_tests
 
     - name: Build summary
       if: always()

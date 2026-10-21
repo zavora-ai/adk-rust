@@ -373,7 +373,7 @@ expensive axes just move to a later tier.
 | Tier | Trigger | Checks | Blocks merge? |
 |------|---------|--------|---------------|
 | **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), `postgres` (the `#[ignore]`d PostgreSQL suites against a pgvector server, including TLS), docs and doctests, standalone examples (4 shards), `templates`, a compile-only macOS build, a Windows workspace build with a targeted sandbox portability smoke, and `semver` (stable strict against `SEMVER_RELEASE_TYPE` in `semver.yml`: `minor` fails breakage, `major` during a major release candidate accepts it, and `breaking` changelog fragments record it; beta warn-only) | Yes — aggregated by `pr-gate`, plus `semver` |
-| **Merge** | `push: main` (`ci-merge.yml`) | cross-platform `nextest --workspace` on macOS/Windows, doc-example compilation | No — runs post-merge |
+| **Merge** | `push: main` (`ci-merge.yml`, `sandbox-linux.yml`) | cross-platform `nextest --workspace` on macOS/Windows, doc-example compilation; bubblewrap enforcement proven on `ubuntu-24.04` (`sandbox-linux.yml`, also on a pull request that touches the sandbox or the harness shell, and on demand) | No — runs post-merge |
 | **Nightly** | `schedule` (`ci-nightly.yml`) | feature-combination matrix, `cargo-audit`/`cargo-deny` supply-chain, `#[ignore]` integration tests gated on secrets | No — runs on a schedule |
 
 Only the **PR tier** gates merges. The merge and nightly tiers run after a change
@@ -455,7 +455,8 @@ These run post-merge or on a schedule and MUST NOT be branch-protection-required
 
 - **Merge tier** (`ci-merge.yml`, `on: push: branches:[main]`):
   `cross-platform-test (macos-latest)`, `cross-platform-test (windows-latest)`,
-  `doc-examples`.
+  `doc-examples`; `sandbox-linux.yml` (`push: main`, path-filtered pull requests,
+  `workflow_dispatch`): `bubblewrap`.
 - **Nightly tier** (`ci-nightly.yml`, `on: schedule`): the `features (…)`
   feature-combination matrix jobs, `supply-chain`, `durable-stores`, `integration-tests`.
 - **Code scanning** (`codeql.yml`, `on: push: branches:[main]` and weekly): the

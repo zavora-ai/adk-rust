@@ -11,8 +11,11 @@ description = "Scripted and live scenarios for the adk-harness HarnessAgent (spe
 adk-core = { path = "../../adk-core" }
 adk-agent = { path = "../../adk-agent", features = ["coding"] }
 adk-devtools = { path = "../../adk-devtools" }
-adk-harness = { path = "../../adk-harness", default-features = false, features = ["runner", "skills", "sandbox", "memory", "team", "team-acp", "graph", "sqlite", "web", "web-fixture", "mcp", "hooks"] }
+adk-harness = { path = "../../adk-harness", default-features = false, features = ["runner", "skills", "sandbox", "memory", "team", "team-acp", "graph", "sqlite", "web", "web-fixture", "mcp", "hooks", "payments"] }
 adk-tool = { path = "../../adk-tool", features = ["mcp", "mcp-sampling"] }
+# The H8 scenario: adk-payments' tools, journal and guardrails, and their scope guard.
+adk-payments = { path = "../../adk-payments" }
+adk-auth = { path = "../../adk-auth" }
 # The scripted MCP server of the H12 scenarios runs on rmcp's server side.
 rmcp = { version = "3.1", features = ["server", "client", "elicitation"] }
 chrono = "0.4"

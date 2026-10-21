@@ -367,9 +367,18 @@ the caller's identity from each request. With one configured:
   (`ExtractionFailed`).
 - Runs use the authenticated `user_id` in place of the request's `userId`, including the `user_id`
   in the path of `POST /api/run/{app_name}/{user_id}/{session_id}`.
+- The extractor sees the whole request on every route, the run routes included — its headers and
+  its extensions, such as the peer address `ConnectInfo<SocketAddr>` records when the router is
+  served with `into_make_service_with_connect_info`.
 - Background runs (`/api/runs`, feature `background`) belong to their caller: the list holds
   only the caller's runs, another owner's run answers `404` to `GET`, `DELETE`, and
-  `POST .../wake`, and `idempotencyKey` and `concurrencyKey` are scoped to the caller.
+  `POST .../wake`, and `idempotencyKey` and `concurrencyKey` are scoped to the caller. The
+  worker runs them as the authenticated user (`NewRun::authenticated`), so their tools see
+  `is_authenticated()` answer `true`, as an interactive run's do.
+- Cron jobs (`/api/cron`) belong to their caller the same way: the list holds only the
+  caller's jobs, another owner's job answers `404` to `GET`, `PATCH`, and `DELETE`, two owners
+  may each have a job of the same name, and a job's runs act for its owner as an authenticated
+  user. Without an extractor a job's runs act for the user `cron`.
 - Session and artifact routes whose path names another user's `user_id` answer `403`.
   `POST /api/sessions` creates the session for the authenticated user.
 

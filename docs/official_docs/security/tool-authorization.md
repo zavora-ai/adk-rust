@@ -1157,7 +1157,11 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
    call is answered from its record without executing (`CodeActAgent` raises the answer into
    the script); otherwise the call is begun under its `ToolContext::idempotency_key()`
 7. Tool executes under its timeout — the RBAC (`ProtectedTool`) and scope (`ScopeGuard`) wrappers
-   check here, inside `execute()`, so a denial is a tool error. Only `ReadOnly` and `Idempotent`
+   check here, inside `execute()`, so a denial is a tool error: component `Tool`, category
+   `Forbidden`, code `tool.permission_denied` (`adk_core::TOOL_PERMISSION_DENIED_CODE`), with
+   the missing scopes (`missingScopes`, `requiredScopes`) or the RBAC permission (`permission`)
+   in its details. The model is told the call was refused and which permission was missing,
+   since `tool_error_response` always shows that code's message. Only `ReadOnly` and `Idempotent`
    tools are retried, after a retryable error or a timeout, with backoff
 8. Action ledger completion — the outcome is recorded; a non-idempotent call that timed out or
    panicked keeps its begun record and is answered with an `outcome_unknown` response

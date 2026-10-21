@@ -126,12 +126,14 @@ See `docs/official_docs/harness/hooks.md`.
 | `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores |
 | `ambient` | off | `adk-agent/ambient`: goals started by triggers |
 | `skills-registry`, `team-acp`, `team-a2a`, `docker`, `memory-graph` | off | registry skills, ACP and A2A members, containers, graph memory |
-| `browser`, `computer-use`, `payments`, `voice`, `managed` | off | the packs |
+| `payments` | off | the payments pack (spec 3.1 §7.16): `adk-payments` tools as class `Payment` under a `PaymentMandate`, `harness.payment` with the journal receipt |
+| `browser`, `computer-use`, `voice`, `managed` | off | the other packs |
 
 ## Status
 
-Beta (spec 3.1 phases 1 and 3). The packs (§7.16–§7.18) land over the 3.1.x line; until then
-the builder refuses them with `not yet implemented: spec 3.1 §…`. The [team](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/team.md),
+Beta (spec 3.1 phases 1 and 3). The payments pack (§7.16) is implemented
+([guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/payments.md));
+the other packs (§7.17–§7.18) are refused by the builder with `not yet implemented: spec 3.1 §…`. The [team](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/team.md),
 [plans and goals](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/plan-and-goals.md)
 and [durability](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/durability.md)
 guides cover §7.10–§7.12. Container isolation for the shell (`docker`) is not

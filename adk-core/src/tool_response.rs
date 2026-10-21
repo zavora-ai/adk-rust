@@ -17,6 +17,32 @@ use crate::AdkError;
 /// arguments do not deserialize.
 pub const TOOL_INVALID_ARGUMENTS_CODE: &str = "tool.invalid_arguments";
 
+/// The error code for a call the caller may not make: a scope or role it needs is missing.
+///
+/// A tool, or a wrapper that authorizes it, returns an error with this code (category
+/// [`Forbidden`](crate::ErrorCategory::Forbidden)) so the model learns the call was refused
+/// and which permission was missing, rather than that the tool failed. [`tool_error_response`]
+/// always shows its message, so the message names the missing permission and nothing
+/// secret. `adk-auth`'s `ScopeGuard` and `ProtectedTool` use it (spec 3.1 §7.14).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{
+///     AdkError, ErrorCategory, ErrorComponent, TOOL_PERMISSION_DENIED_CODE, tool_error_response,
+/// };
+///
+/// let denied = AdkError::new(
+///     ErrorComponent::Tool,
+///     ErrorCategory::Forbidden,
+///     TOOL_PERMISSION_DENIED_CODE,
+///     "missing required scopes: [finance:write] (tool requires: [finance:write])",
+/// );
+/// let response = tool_error_response("transfer", &denied, false);
+/// assert!(response["error"].as_str().unwrap().contains("finance:write"));
+/// ```
+pub const TOOL_PERMISSION_DENIED_CODE: &str = "tool.permission_denied";
+
 /// The `status` value of the function response for a call that ran but whose result is withheld.
 pub const RESULT_WITHHELD_STATUS: &str = "result_withheld";
 
@@ -31,8 +57,9 @@ const RAW_ARGUMENTS_MAX_BYTES: usize = 1024;
 ///
 /// The response names the error's component, category, and code
 /// ([`AdkError::redacted`]); its message stays out unless `expose_message` is set or the code is
-/// [`TOOL_INVALID_ARGUMENTS_CODE`]. A message can quote credentials, internal hosts, or upstream
-/// bodies, and the function response is sent to the model provider and stored in the session.
+/// [`TOOL_INVALID_ARGUMENTS_CODE`] or [`TOOL_PERMISSION_DENIED_CODE`]. A message can quote
+/// credentials, internal hosts, or upstream bodies, and the function response is sent to the
+/// model provider and stored in the session.
 ///
 /// # Example
 ///
@@ -56,7 +83,10 @@ const RAW_ARGUMENTS_MAX_BYTES: usize = 1024;
 ///     .contains("db.internal"));
 /// ```
 pub fn tool_error_response(tool_name: &str, error: &AdkError, expose_message: bool) -> Value {
-    let text = if expose_message || error.code == TOOL_INVALID_ARGUMENTS_CODE {
+    let text = if expose_message
+        || error.code == TOOL_INVALID_ARGUMENTS_CODE
+        || error.code == TOOL_PERMISSION_DENIED_CODE
+    {
         error.to_string()
     } else {
         format!("tool '{tool_name}' failed: {}", error.redacted())
@@ -252,6 +282,22 @@ pub fn invalid_tool_arguments_reason(args: &Value) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::{ErrorCategory, ErrorComponent};
+
+    #[test]
+    fn permission_denials_keep_their_message() {
+        let err = AdkError::new(
+            ErrorComponent::Tool,
+            ErrorCategory::Forbidden,
+            TOOL_PERMISSION_DENIED_CODE,
+            "missing required scopes: [verified] (tool requires: [verified])",
+        );
+        assert_eq!(
+            tool_error_response("transfer", &err, false),
+            json!({
+                "error": "tool.forbidden: missing required scopes: [verified] (tool requires: [verified])"
+            })
+        );
+    }
 
     #[test]
     fn invalid_arguments_errors_keep_their_message() {

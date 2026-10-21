@@ -89,12 +89,13 @@ turn runs it once (see [Modes and approvals](modes-and-approvals.md)).
 | [Identity](identity.md) | RBAC, credentials, authenticated identity, audit |
 | [Observability](observability.md) | Spans, spend, the loop guard, evaluation baselines |
 | [Memory](memory.md) | Working notes and long-term facts |
+| [Payments](payments.md) | The payments pack: purchases under a mandate, approved once each, metered and receipted |
 | [Migrating from `CodingAgent`](../migration/coding-agent-to-harness.md) | Moving from `adk_agent::coding` to the harness |
 
 ## Status
 
 `adk-harness` is Beta ([STABILITY.md](https://github.com/zavora-ai/adk-rust/blob/main/STABILITY.md)).
-The packs (`harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`,
-`harness-managed`) compile, and the builder refuses them with `not yet implemented` until
-they land over the 3.1.x line. The design is
+The payments pack (`harness-payments`) is in [Payments](payments.md). The other packs
+(`harness-browser`, `harness-computer-use`, `harness-voice`, `harness-managed`) compile, and
+the builder refuses them with `not yet implemented` until they land. The design is
 [spec 3.1](https://github.com/zavora-ai/adk-rust/blob/main/docs/design/spec-3.1-harness-agent.md).

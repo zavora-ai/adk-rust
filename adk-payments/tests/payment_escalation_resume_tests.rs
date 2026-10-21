@@ -34,10 +34,11 @@ const USER: &str = "alice";
 const SESSION: &str = "session-1";
 const CHECKOUT: &str = "payments_checkout_create";
 
-/// Counts the checkouts that reach the merchant.
+/// Counts the checkouts that reach the merchant, and records their totals in cents.
 #[derive(Default)]
 struct Merchant {
     created: AtomicUsize,
+    totals: Mutex<Vec<i64>>,
 }
 
 fn unused<T>() -> Result<T> {
@@ -48,6 +49,7 @@ fn unused<T>() -> Result<T> {
 impl MerchantCheckoutService for Merchant {
     async fn create_checkout(&self, command: CreateCheckoutCommand) -> Result<TransactionRecord> {
         self.created.fetch_add(1, Ordering::SeqCst);
+        self.totals.lock().unwrap().push(command.cart.total.amount_minor);
         let context = command.context;
         Ok(TransactionRecord::new(
             context.transaction_id,
@@ -244,5 +246,62 @@ async fn an_escalated_payment_resumes_from_the_approval_store_and_pays_once() {
     // Run 3: nothing is paid again.
     run(&runner, "Thanks.").await;
     assert_eq!(merchant.created.load(Ordering::SeqCst), 1);
+    assert!(store.pending(&scope).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_approval_that_edits_the_cart_resumes_the_held_call_and_pays_the_edited_cart() {
+    // spec 3.1 §10 C3: the approver's edited arguments reach the payment.
+    let merchant = Arc::new(Merchant::default());
+    let review_above_fifty = PaymentPolicySet::new()
+        .with(AmountThresholdGuardrail::new(Some(5_000), None).with_currency("USD", 2));
+    let checkout = PaymentToolsetBuilder::new(merchant.clone(), merchant.clone())
+        .with_payment_policies(review_above_fifty)
+        .with_scope_guard(adk_auth::ScopeGuard::new(adk_auth::StaticScopeResolver::new(
+            ALL_PAYMENT_SCOPES.to_vec(),
+        )))
+        .build()
+        .tools()
+        .into_iter()
+        .find(|tool| tool.name() == CHECKOUT)
+        .unwrap();
+    let agent =
+        LlmAgentBuilder::new("shopper").model(buying_model()).tool(checkout).build().unwrap();
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: APP.to_string(),
+            user_id: USER.to_string(),
+            session_id: Some(SESSION.to_string()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let store = Arc::new(InMemoryApprovalStore::new());
+    let runner = Runner::builder()
+        .app_name(APP)
+        .agent(Arc::new(agent) as Arc<dyn Agent>)
+        .session_service(sessions)
+        .run_config(RunConfig::builder().approval_store(store.clone()).build())
+        .build()
+        .unwrap();
+    let scope = ApprovalScope::new(APP, USER, SESSION);
+
+    run(&runner, "Buy the desk.").await;
+    let pending = store.pending(&scope).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(merchant.created.load(Ordering::SeqCst), 0);
+
+    // The approver brings the desk down to 40 USD.
+    let edited = ToolApproval::approve()
+        .with_edited_args(desk_for(4_000))
+        .with_message("approved at 40 USD");
+    store.decide(&scope, &pending[0].fingerprint, edited).await.unwrap();
+    let events = run(&runner, "Approved.").await;
+
+    assert_eq!(merchant.created.load(Ordering::SeqCst), 1, "paid once");
+    assert_eq!(*merchant.totals.lock().unwrap(), vec![4_000], "paid as edited");
+    let answer = answer_to(&events, "call-desk").expect("the held call is answered");
+    assert_eq!(answer["status"], "ok", "{answer}");
     assert!(store.pending(&scope).await.unwrap().is_empty());
 }

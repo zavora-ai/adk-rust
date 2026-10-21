@@ -484,6 +484,45 @@ async fn exposing_error_messages_sends_the_tool_error_message() {
 }
 
 #[tokio::test]
+async fn a_scope_guard_denial_reaches_the_model_as_a_denial_naming_the_scope() {
+    // spec 3.1 §7.14: an adk-auth denial is reported as a refusal naming the missing scope,
+    // not as `tool.internal (tool.legacy)`.
+    struct Transfer;
+
+    #[async_trait]
+    impl Tool for Transfer {
+        fn name(&self) -> &str {
+            "transfer"
+        }
+        fn description(&self) -> &str {
+            "moves money"
+        }
+        fn required_scopes(&self) -> &[&str] {
+            &["finance:write"]
+        }
+        async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+            Ok(json!({ "status": "sent" }))
+        }
+    }
+
+    let model = ScriptedModel::new(vec![call("transfer", json!({ "amount": 5 }))]);
+    let guarded = adk_auth::ScopeGuard::new(adk_auth::StaticScopeResolver::new(vec![
+        "finance:read".to_string(),
+    ]))
+    .protect(Transfer);
+    let agent =
+        LlmAgentBuilder::new("support").model(model).tool(Arc::new(guarded)).build().unwrap();
+    let outcome = run(agent, None, RunConfig::default()).await;
+    assert_eq!(
+        outcome.answer(),
+        json!({
+            "error": "tool.forbidden: missing required scopes: [finance:write] (tool requires: \
+                      [finance:write])"
+        })
+    );
+}
+
+#[tokio::test]
 async fn an_invalid_arguments_error_keeps_its_message() {
     let model = ScriptedModel::new(vec![call("lookup_order", json!({}))]);
     let (tool, _) = CountingTool::failing(

@@ -6,7 +6,7 @@
 //! issue the call again. Every test drives a real `LlmAgent` through a `Runner` with a
 //! scripted model and asserts on what the tool received and what the model was sent.
 
-use adk_agent::{LlmAgent, LlmAgentBuilder};
+use adk_agent::{LlmAgent, LlmAgentBuilder, held_call_ledger_key};
 use adk_core::{
     ActionLedger, ActionOutcome, ActionRecord, ApprovalScope, ApprovalStore, Content, Event,
     InMemoryActionLedger, InMemoryApprovalStore, Llm, LlmRequest, LlmResponse, LlmResponseStream,
@@ -510,6 +510,106 @@ async fn a_resumed_call_that_ran_before_its_result_was_saved_does_not_run_again(
         answered.iter().any(|(id, response)| id.as_deref() == Some("call-1")
             && response["status"] == "already_succeeded"),
         "the call is answered from its ledger record: {answered:?}"
+    );
+}
+
+/// Records the idempotency key of every execution.
+struct KeyRecordingTool {
+    keys: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl Tool for KeyRecordingTool {
+    fn name(&self) -> &str {
+        "transfer"
+    }
+
+    fn description(&self) -> &str {
+        "moves money"
+    }
+
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
+    }
+
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        self.keys.lock().unwrap().push(ctx.idempotency_key());
+        Ok(json!({ "status": "sent" }))
+    }
+}
+
+#[tokio::test]
+async fn a_resumed_held_call_keeps_one_idempotency_key_across_the_runs_that_resume_it() {
+    // spec 3.1 §7.12: a tool that forwards `ToolContext::idempotency_key` downstream must
+    // not hand out a new key each time a later run resumes the same held call.
+    let model = ScriptedModel::new(vec![call("transfer", args(), "call-1")]);
+    let keys = Arc::new(Mutex::new(Vec::new()));
+    let sessions = Arc::new(LossySessions {
+        inner: InMemorySessionService::new(),
+        losing: std::sync::atomic::AtomicBool::new(false),
+    });
+    sessions
+        .create(CreateRequest {
+            app_name: "governed".to_string(),
+            user_id: "user".to_string(),
+            session_id: Some("session".to_string()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let agent = LlmAgentBuilder::new("ops")
+        .model(model)
+        .tool(Arc::new(KeyRecordingTool { keys: keys.clone() }))
+        .require_tool_confirmation("transfer")
+        .build()
+        .unwrap();
+    let runner = Runner::builder()
+        .app_name("governed")
+        .agent(Arc::new(agent))
+        .session_service(sessions.clone() as Arc<dyn SessionService>)
+        .build()
+        .unwrap();
+    let run = |text: &'static str, config: Option<RunConfig>| {
+        let runner = &runner;
+        async move {
+            let stream = runner
+                .run_with_config(
+                    UserId::new("user").unwrap(),
+                    SessionId::new("session").unwrap(),
+                    Content::new("user").with_text(text),
+                    config,
+                )
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(5), stream.collect::<Vec<_>>())
+                .await
+                .expect("the run must finish")
+        }
+    };
+    let request = confirmation_requests(&run("send 40", None).await).remove(0);
+    let call_id = request.function_call_id.clone().unwrap();
+    let decided = RunConfig::builder()
+        .tool_confirmation_decisions(HashMap::from([(
+            call_id.clone(),
+            ToolConfirmationDecision::Approve,
+        )]))
+        .tool_confirmation_fingerprints(HashMap::from([(call_id, request.fingerprint())]))
+        .build();
+
+    // Run 2 executes the call but its events are lost, so run 3 resumes the same held call
+    // and, with no action ledger, executes it again.
+    sessions.losing.store(true, Ordering::SeqCst);
+    run("", Some(decided.clone())).await;
+    sessions.losing.store(false, Ordering::SeqCst);
+    run("", Some(decided)).await;
+
+    let keys = keys.lock().unwrap().clone();
+    assert_eq!(keys.len(), 2, "the call ran in both resuming runs: {keys:?}");
+    assert_eq!(keys[0], keys[1], "every resumption shares one key");
+    assert_eq!(
+        keys[0],
+        held_call_ledger_key("governed", "user", "session", "call-1", &request.fingerprint()),
+        "the key is the held call's own, not the resuming run's"
     );
 }
 

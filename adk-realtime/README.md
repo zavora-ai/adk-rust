@@ -297,6 +297,7 @@ the runners take them from `tool_governance` on their builders.
 | Tool and callback errors | The model receives the error's component, category, and code; `expose_tool_error_messages(true)` sends the full message |
 | After-tool failure | An after-tool callback or plugin error withholds the result (`result_withheld`) |
 | Result screening | `tool_result_screen(screen)` rewrites or withholds each result before the model sees it; a screen that cannot decide withholds the result |
+| Authenticated identity | `IntegratedRealtimeRunnerBuilder::request_context(ctx)` runs every tool call as the identity the server authenticated: tool contexts answer `is_authenticated()` with `true` and `user_scopes()` with its scopes. Without it they report an unauthenticated user; a context for a user other than `identity`'s fails `build` |
 
 ## RealtimeAgent builder
 

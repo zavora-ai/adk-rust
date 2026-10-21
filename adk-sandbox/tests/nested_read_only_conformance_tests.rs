@@ -32,6 +32,10 @@ fn enforcer() -> Option<Box<dyn SandboxEnforcer>> {
     match enforcer.probe() {
         Ok(()) => Some(Box::new(enforcer)),
         Err(error) => {
+            assert!(
+                std::env::var_os("ADK_SANDBOX_REQUIRE_ENFORCER").is_none(),
+                "ADK_SANDBOX_REQUIRE_ENFORCER is set and seatbelt is unavailable: {error}"
+            );
             eprintln!("seatbelt unavailable on this host, skipping: {error}");
             None
         }
@@ -44,6 +48,10 @@ fn enforcer() -> Option<Box<dyn SandboxEnforcer>> {
     match enforcer.probe() {
         Ok(()) => Some(Box::new(enforcer)),
         Err(error) => {
+            assert!(
+                std::env::var_os("ADK_SANDBOX_REQUIRE_ENFORCER").is_none(),
+                "ADK_SANDBOX_REQUIRE_ENFORCER is set and bubblewrap is unavailable: {error}"
+            );
             eprintln!("bubblewrap unavailable on this host, skipping: {error}");
             None
         }

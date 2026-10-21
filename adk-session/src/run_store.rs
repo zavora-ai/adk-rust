@@ -102,7 +102,8 @@ macro_rules! run_columns {
         "run_id, queue, app_name, user_id, session_id, target, input, idempotency_key, \
          concurrency_key, on_conflict, not_before_us, max_attempts, principal, state, attempt, \
          lease_owner, lease_epoch, lease_expires_at_us, heartbeat_at_us, checkpoint, \
-         cancel_requested, wake_pending, result, error, created_at_us, updated_at_us, revision"
+         cancel_requested, wake_pending, result, error, created_at_us, updated_at_us, revision, \
+         authenticated"
     };
 }
 
@@ -112,7 +113,7 @@ const INSERT: &str = concat!(
     "INSERT INTO adk_runs (",
     run_columns!(),
     ") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, \
-     $19, $20, $21, $22, $23, $24, $25, $26, $27) \
+     $19, $20, $21, $22, $23, $24, $25, $26, $27, $28) \
      ON CONFLICT (queue, idempotency_key) DO NOTHING"
 );
 
@@ -330,6 +331,7 @@ macro_rules! decode_run {
             created_at: from_micros(CODE, "created_at_us", created_at_us)?,
             updated_at: from_micros(CODE, "updated_at_us", updated_at_us)?,
             revision: to_u64(CODE, "revision", revision)?,
+            authenticated: get!("authenticated"),
         });
         record
     }};
@@ -498,6 +500,7 @@ macro_rules! sql_run_store {
                         .bind(row.created_at_us)
                         .bind(row.created_at_us)
                         .bind(1_i64)
+                        .bind(record.authenticated)
                         .execute(&mut *tx)
                         .await
                         .map_err(failed)?;
@@ -757,9 +760,16 @@ macro_rules! sql_run_store {
     };
 }
 
+/// Adds `authenticated` (spec 3.1 §9.2 I6); rows written before it read as unauthenticated.
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+const ADD_AUTHENTICATED: &str =
+    "ALTER TABLE adk_runs ADD COLUMN authenticated BOOLEAN NOT NULL DEFAULT FALSE";
+
 #[cfg(feature = "sqlite")]
-const SQLITE_MIGRATIONS: &[(i64, &str, &str)] =
-    &[(1, "create run table", run_table!("seq INTEGER PRIMARY KEY AUTOINCREMENT"))];
+const SQLITE_MIGRATIONS: &[(i64, &str, &str)] = &[
+    (1, "create run table", run_table!("seq INTEGER PRIMARY KEY AUTOINCREMENT")),
+    (2, "add authenticated", ADD_AUTHENTICATED),
+];
 
 #[cfg(feature = "sqlite")]
 sql_run_store! {
@@ -808,8 +818,10 @@ sql_run_store! {
 }
 
 #[cfg(feature = "postgres")]
-const POSTGRES_MIGRATIONS: &[(i64, &str, &str)] =
-    &[(1, "create run table", run_table!("seq BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY"))];
+const POSTGRES_MIGRATIONS: &[(i64, &str, &str)] = &[
+    (1, "create run table", run_table!("seq BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY")),
+    (2, "add authenticated", ADD_AUTHENTICATED),
+];
 
 #[cfg(feature = "postgres")]
 sql_run_store! {

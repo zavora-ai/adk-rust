@@ -1,8 +1,10 @@
-use std::sync::Arc;
+use std::future::Future;
+use std::sync::{Arc, Mutex};
 
 use adk_core::{
-    AdkError, ApprovalScope, ErrorCategory, ErrorComponent, Result, Tool, ToolConfirmationDecision,
-    ToolConfirmationRequest, ToolContext, ToolEffect, ToolGate, ToolOrigin,
+    AdkError, ApprovalScope, ErrorCategory, ErrorComponent, PolicyCall, PolicyDecision, Result,
+    Tool, ToolApproval, ToolConfirmationDecision, ToolConfirmationRequest, ToolContext, ToolEffect,
+    ToolGate, ToolOrigin, ToolPolicyRequest,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -25,7 +27,10 @@ use crate::kernel::commands::{
     UpdateCheckoutCommand,
 };
 use crate::kernel::service::MerchantCheckoutService;
-use crate::kernel::{GovernedCheckoutService, PaymentApproval, PaymentApprover, PaymentCaller};
+use crate::kernel::{
+    GovernedCheckoutService, PAYMENT_APPROVAL_EDITED_CODE, PaymentApproval, PaymentApprover,
+    PaymentCaller, PaymentDecision,
+};
 use adk_core::audit_log::AuditActor;
 
 use super::{caller_identity, calling_agent};
@@ -78,6 +83,65 @@ struct CancelParams {
 struct ToolResponse {
     status: &'static str,
     summary: SafeTransactionSummary,
+}
+
+/// The JSON schema of a [`Money`](crate::domain::Money) amount.
+fn money_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "currency": { "type": "string", "description": "ISO 4217 code, such as USD" },
+            "amountMinor": { "type": "integer", "description": "The amount in minor units, such as cents" },
+            "scale": { "type": "integer", "description": "Digits after the decimal point: 2 for USD" }
+        },
+        "required": ["currency", "amountMinor", "scale"]
+    })
+}
+
+/// The JSON schema of a [`Cart`].
+fn cart_schema() -> Value {
+    let line = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "lineId": { "type": "string" },
+            "merchantSku": { "type": "string" },
+            "title": { "type": "string" },
+            "quantity": { "type": "integer", "minimum": 1 },
+            "unitPrice": money_schema(),
+            "totalPrice": money_schema()
+        },
+        "required": ["lineId", "title", "quantity", "unitPrice", "totalPrice"]
+    });
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "cartId": { "type": "string" },
+            "lines": { "type": "array", "items": line },
+            "subtotal": money_schema(),
+            "total": money_schema()
+        },
+        "required": ["lines", "total"]
+    })
+}
+
+/// The JSON schema of a [`FulfillmentSelection`].
+fn fulfillment_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "description": "The fulfillment option the buyer chose, as the merchant's checkout offers it",
+        "properties": {
+            "fulfillmentId": { "type": "string" },
+            "kind": {
+                "type": "string",
+                "enum": ["shipping", "pickup", "delivery", "digital", "service"]
+            },
+            "label": { "type": "string" },
+            "amount": money_schema(),
+            "destination": { "type": "object", "description": "Where the order is fulfilled" },
+            "requiresUserSelection": { "type": "boolean" }
+        },
+        "required": ["fulfillmentId", "kind", "label"]
+    })
 }
 
 pub(super) fn parse_args<T: serde::de::DeserializeOwned>(
@@ -150,25 +214,66 @@ fn masked_response(summary: SafeTransactionSummary) -> Result<Value> {
 ///
 /// The escalation is decided by [`adk_core::confirm_tool_call`] from the sources the
 /// governed path reads — a call-ID decision, a fingerprint approval, the approval store,
-/// then the confirmation handler — for a request bound to the calling agent and the
-/// tool's origin. Without a decision the request is recorded as pending, the call's event
-/// carries it as `tool_confirmation`, and the payment is deferred until the agent resumes
-/// the held call.
+/// then the confirmation handler's `decide_approval` — for a request bound to the calling
+/// agent and the tool's origin. Without a decision the request is recorded as pending, the
+/// call's event carries it as `tool_confirmation`, and the payment is deferred until the
+/// agent resumes the held call. An approval that edits the call's arguments, and what the
+/// approver said, reach the payment as a [`PaymentDecision`] (spec 3.1 §10 C3).
 struct ToolCallApprover {
     ctx: Arc<dyn ToolContext>,
     tool_name: String,
     origin: ToolOrigin,
     args: Value,
+    /// An approval already obtained for `args`, answering the next escalation without
+    /// consulting the decision sources again: the approval that edited a call's arguments,
+    /// carried into the call re-issued with them.
+    preapproved: Mutex<Option<ToolApproval>>,
+    /// The approval the sources last gave, read by the tool after an edited approval.
+    decided: Mutex<Option<ToolApproval>>,
+}
+
+/// What `approval` decides for a call made with `args`.
+fn payment_decision(approval: &ToolApproval, args: &Value) -> PaymentDecision {
+    let mut decision = match approval.decision {
+        ToolConfirmationDecision::Approve => PaymentDecision::new(PaymentApproval::Approved),
+        ToolConfirmationDecision::Deny => PaymentDecision::new(PaymentApproval::Denied),
+    };
+    if approval.decision == ToolConfirmationDecision::Approve
+        && let Some(edited) = &approval.edited_args
+        && edited != args
+    {
+        decision = decision.with_edited_args(edited.clone());
+    }
+    if let Some(message) = &approval.message {
+        decision = decision.with_message(message.clone());
+    }
+    decision
 }
 
 #[async_trait]
 impl PaymentApprover for ToolCallApprover {
     async fn approve(
         &self,
-        _record: &TransactionRecord,
+        record: &TransactionRecord,
         findings: &[PaymentPolicyFinding],
     ) -> Result<PaymentApproval> {
+        Ok(self.decide(record, findings).await?.approval)
+    }
+
+    async fn decide(
+        &self,
+        _record: &TransactionRecord,
+        findings: &[PaymentPolicyFinding],
+    ) -> Result<PaymentDecision> {
         let call_id = self.ctx.function_call_id().to_string();
+        if let Some(approval) = self.preapproved.lock().unwrap().take() {
+            tracing::info!(
+                tool.name = %self.tool_name,
+                call.id = %call_id,
+                "payment escalated again with the approver's edited arguments; already approved"
+            );
+            return Ok(payment_decision(&approval, &self.args));
+        }
         tracing::info!(
             tool.name = %self.tool_name,
             call.id = %call_id,
@@ -200,56 +305,117 @@ impl PaymentApprover for ToolCallApprover {
                 reasons.join("; ")
             );
             if let Some(approval) = adk_core::confirm_tool_call(&gate, &request, &reason).await? {
-                return Ok(match approval.decision {
-                    // The payment is already being made with the call's own arguments, so
-                    // an approval for different ones does not authorize it.
-                    ToolConfirmationDecision::Approve
-                        if approval
-                            .edited_args
-                            .as_ref()
-                            .is_some_and(|edited| *edited != self.args) =>
-                    {
-                        tracing::warn!(
-                            tool.name = %self.tool_name,
-                            "escalated payment refused: the approval edited its arguments"
-                        );
-                        PaymentApproval::Denied
-                    }
-                    ToolConfirmationDecision::Approve => PaymentApproval::Approved,
-                    ToolConfirmationDecision::Deny => PaymentApproval::Denied,
-                });
+                let decision = payment_decision(&approval, &self.args);
+                if decision.edited_args.is_some() {
+                    tracing::info!(
+                        tool.name = %self.tool_name,
+                        "the approval edited the payment's arguments; re-issuing the call with them"
+                    );
+                }
+                *self.decided.lock().unwrap() = Some(approval);
+                return Ok(decision);
             }
         }
         let mut actions = self.ctx.actions();
         actions.tool_confirmation = Some(request);
         self.ctx.set_actions(actions);
-        Ok(PaymentApproval::Pending)
+        Ok(PaymentDecision::new(PaymentApproval::Pending))
     }
 }
 
 /// The paying caller for a tool call: the app, the agent, the run's spend ledger, and
 /// the confirmation flow for escalations.
+#[cfg(feature = "ap2")]
 pub(super) fn tool_caller(
     ctx: &Arc<dyn ToolContext>,
     tool: &dyn Tool,
     args: Value,
 ) -> PaymentCaller {
+    tool_caller_with(ctx, tool, args, None).0
+}
+
+/// [`tool_caller`] with its approver, which answers the first escalation with
+/// `preapproved` when one is given.
+fn tool_caller_with(
+    ctx: &Arc<dyn ToolContext>,
+    tool: &dyn Tool,
+    args: Value,
+    preapproved: Option<ToolApproval>,
+) -> (PaymentCaller, Arc<ToolCallApprover>) {
+    let approver = Arc::new(ToolCallApprover {
+        ctx: ctx.clone(),
+        tool_name: tool.name().to_string(),
+        origin: ToolOrigin::of(tool),
+        args,
+        preapproved: Mutex::new(preapproved),
+        decided: Mutex::new(None),
+    });
     let mut caller = PaymentCaller::new()
         .with_org(ctx.app_name())
         .with_agent(ctx.acting_context().agent.id.as_str())
-        .with_approver(Arc::new(ToolCallApprover {
-            ctx: ctx.clone(),
-            tool_name: tool.name().to_string(),
-            origin: ToolOrigin::of(tool),
-            args,
-        }));
+        .with_approver(approver.clone());
     if let Some(ledger) = ctx.run_config().and_then(|config| config.spend_ledger.clone()) {
         caller = caller.with_spend_ledger(ledger);
     }
     if let Some(trail) = ctx.run_config().and_then(|config| config.audit.clone()) {
         caller = caller.with_audit(trail, AuditActor::for_context(ctx.as_ref()));
     }
-    caller
+    (caller, approver)
+}
+
+/// Runs a governed payment operation for a tool call: once with the call's arguments, and
+/// once more with the arguments an approver substituted (spec 3.1 §10 C3).
+///
+/// The edited arguments are checked against the run's [`ToolPolicy`](adk_core::ToolPolicy)
+/// first, as the governed path checks an edited approval for any tool, and the payment
+/// policies judge them again when the operation is re-issued; the approval that edited them
+/// answers that escalation.
+async fn run_with_edits<F, Fut>(
+    ctx: &Arc<dyn ToolContext>,
+    tool: &dyn Tool,
+    args: Value,
+    operation: F,
+) -> Result<TransactionRecord>
+where
+    F: Fn(Value, PaymentCaller) -> Fut,
+    Fut: Future<Output = Result<TransactionRecord>>,
+{
+    let (caller, approver) = tool_caller_with(ctx, tool, args.clone(), None);
+    let error = match operation(args, caller).await {
+        Err(error) if error.code == PAYMENT_APPROVAL_EDITED_CODE => error,
+        result => return result,
+    };
+    let approval = approver.decided.lock().unwrap().take();
+    let Some(edited) = approval.as_ref().and_then(|approval| approval.edited_args.clone()) else {
+        return Err(error);
+    };
+    if let Some(policy) = ctx.run_config().and_then(|config| config.tool_policy.clone()) {
+        let request = ToolPolicyRequest::new(tool.name(), edited.clone())
+            .with_effect(tool.effect())
+            .with_agent_name(ctx.agent_name())
+            .with_identity(ctx.app_name(), ctx.user_id(), ctx.session_id())
+            .with_invocation_id(ctx.invocation_id())
+            .with_acting_context(ctx.acting_context());
+        let origin = ToolOrigin::of(tool);
+        let call =
+            PolicyCall::new().with_origin(&origin).with_function_call_id(ctx.function_call_id());
+        match policy.evaluate_call(&request, &call).await {
+            PolicyDecision::Deny { reason } => {
+                return Err(AdkError::new(
+                    ErrorComponent::Tool,
+                    ErrorCategory::Forbidden,
+                    "payments.policy.edited_args_denied",
+                    format!(
+                        "the approver's edited arguments for '{}' are denied by policy: {reason}",
+                        tool.name()
+                    ),
+                ));
+            }
+            PolicyDecision::Allow | PolicyDecision::RequireApproval { .. } => {}
+        }
+    }
+    let (caller, _) = tool_caller_with(ctx, tool, edited.clone(), approval);
+    operation(edited, caller).await
 }
 
 /// Governs a bare checkout service with only the spend guardrail, which reserves when the
@@ -281,6 +447,20 @@ impl Tool for CreateCheckoutTool {
         "Create a new merchant-backed checkout session. Returns a masked transaction summary."
     }
 
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "merchantId": { "type": "string" },
+                "merchantName": { "type": "string" },
+                "cart": cart_schema(),
+                "fulfillment": fulfillment_schema(),
+                "mode": { "type": "string", "enum": ["human_present", "human_not_present"] }
+            },
+            "required": ["merchantId", "merchantName", "cart"]
+        }))
+    }
+
     fn required_scopes(&self) -> &[&str] {
         CHECKOUT_CREATE_SCOPES
     }
@@ -291,8 +471,6 @@ impl Tool for CreateCheckoutTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let caller = tool_caller(&ctx, self, args.clone());
-        let params: CreateParams = parse_args("checkout_create", args)?;
         // Derived from the idempotency key, so a replayed call names the same transaction
         // instead of opening a second one.
         let key_digest = adk_core::json_digest(&Value::String(ctx.idempotency_key()));
@@ -300,16 +478,24 @@ impl Tool for CreateCheckoutTool {
             "tool_tx_{}",
             key_digest.split_once(':').map_or(key_digest.as_str(), |(_, hex)| hex)
         );
-        let context = tool_context(
-            ctx.as_ref(),
-            &tx_id,
-            &params.merchant_id,
-            &params.merchant_name,
-            params.mode,
-        );
-        let command =
-            CreateCheckoutCommand { context, cart: params.cart, fulfillment: params.fulfillment };
-        let record = self.checkout.create_checkout_as(command, &caller).await?;
+        let (ctx, tx_id) = (&ctx, &tx_id);
+        let record = run_with_edits(ctx, self, args, |args, caller| async move {
+            let params: CreateParams = parse_args("checkout_create", args)?;
+            let context = tool_context(
+                ctx.as_ref(),
+                tx_id,
+                &params.merchant_id,
+                &params.merchant_name,
+                params.mode,
+            );
+            let command = CreateCheckoutCommand {
+                context,
+                cart: params.cart,
+                fulfillment: params.fulfillment,
+            };
+            self.checkout.create_checkout_as(command, &caller).await
+        })
+        .await?;
         masked_response(record.safe_summary)
     }
 }
@@ -343,6 +529,18 @@ impl Tool for UpdateCheckoutTool {
 
     fn description(&self) -> &str {
         "Update cart or fulfillment details on an existing checkout session."
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "transactionId": { "type": "string" },
+                "cart": cart_schema(),
+                "fulfillment": fulfillment_schema()
+            },
+            "required": ["transactionId"]
+        }))
     }
 
     fn required_scopes(&self) -> &[&str] {
@@ -382,6 +580,25 @@ impl Tool for CompleteCheckoutTool {
         "Finalize a checkout session and produce an order. The continuation identifier is returned explicitly for follow-up."
     }
 
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "transactionId": { "type": "string" },
+                "selectedPaymentMethod": {
+                    "type": "object",
+                    "properties": {
+                        "selectionKind": { "type": "string" },
+                        "reference": { "type": "string" },
+                        "displayHint": { "type": "string" }
+                    },
+                    "required": ["selectionKind"]
+                }
+            },
+            "required": ["transactionId"]
+        }))
+    }
+
     fn required_scopes(&self) -> &[&str] {
         CHECKOUT_COMPLETE_SCOPES
     }
@@ -392,15 +609,18 @@ impl Tool for CompleteCheckoutTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let caller = tool_caller(&ctx, self, args.clone());
-        let params: CompleteParams = parse_args("checkout_complete", args)?;
-        let context = tool_context(ctx.as_ref(), &params.transaction_id, "", "unknown", None);
-        let command = CompleteCheckoutCommand {
-            context,
-            selected_payment_method: params.selected_payment_method,
-            extensions: ProtocolExtensions::default(),
-        };
-        let record = self.checkout.complete_checkout_as(command, &caller).await?;
+        let ctx = &ctx;
+        let record = run_with_edits(ctx, self, args, |args, caller| async move {
+            let params: CompleteParams = parse_args("checkout_complete", args)?;
+            let context = tool_context(ctx.as_ref(), &params.transaction_id, "", "unknown", None);
+            let command = CompleteCheckoutCommand {
+                context,
+                selected_payment_method: params.selected_payment_method,
+                extensions: ProtocolExtensions::default(),
+            };
+            self.checkout.complete_checkout_as(command, &caller).await
+        })
+        .await?;
         masked_response(record.safe_summary)
     }
 }
@@ -433,6 +653,17 @@ impl Tool for CancelCheckoutTool {
 
     fn description(&self) -> &str {
         "Cancel an active checkout session or transaction."
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "transactionId": { "type": "string" },
+                "reason": { "type": "string" }
+            },
+            "required": ["transactionId"]
+        }))
     }
 
     fn required_scopes(&self) -> &[&str] {

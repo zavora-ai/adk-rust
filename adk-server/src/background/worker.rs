@@ -809,6 +809,14 @@ impl DurableWorker {
         };
         let mut config = runner.run_config().clone();
         config.acting = acting;
+        // A run an authenticated caller enqueued runs as that authenticated user (I6).
+        if record.authenticated {
+            config.request_context = Some(adk_core::RequestContext {
+                user_id: record.user_id.clone(),
+                scopes: Vec::new(),
+                metadata: std::collections::HashMap::new(),
+            });
+        }
         config.invocation_hooks.push(Arc::new(LeaseFence(Arc::clone(lease))));
         // Approval requests for calls this run holds carry its id, so their decision
         // wakes exactly this run.

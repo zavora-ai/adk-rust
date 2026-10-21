@@ -15,14 +15,22 @@ use adk_sandbox::sandbox::linux::LinuxEnforcer;
 use adk_sandbox::{ProcessBackend, SandboxBackend, SandboxEnforcer, SandboxPolicyBuilder};
 
 /// Whether this host can create user namespaces at all, checked independently of the probe.
+///
+/// With `ADK_SANDBOX_REQUIRE_ENFORCER` set, a host that cannot fails the test instead of
+/// leaving it nothing to assert.
 fn user_namespaces_work() -> bool {
-    std::process::Command::new("bwrap")
+    let works = std::process::Command::new("bwrap")
         .args(["--ro-bind", "/", "/", "--unshare-user", "--", "/bin/true"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
         .map(|s| s.success())
-        .unwrap_or(false)
+        .unwrap_or(false);
+    assert!(
+        works || std::env::var_os("ADK_SANDBOX_REQUIRE_ENFORCER").is_none(),
+        "ADK_SANDBOX_REQUIRE_ENFORCER is set and bubblewrap cannot create a user namespace"
+    );
+    works
 }
 
 #[test]

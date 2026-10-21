@@ -218,6 +218,31 @@ async fn test_protected_tool_denies_unauthorized() {
     assert!(result.is_err());
 }
 
+#[tokio::test]
+async fn a_protected_tool_denial_is_a_structured_permission_error() {
+    // spec 3.1 §7.14: the denial names the permission and is not an internal tool failure.
+    let role = Role::new("user").allow(Permission::Tool("other".into()));
+    let ac = AccessControl::builder().role(role).assign("alice", "user").build().unwrap();
+    let protected = MockTool::new("search").with_access_control(Arc::new(ac));
+
+    let error = protected.execute(MockContext::create("alice"), json!({})).await.unwrap_err();
+
+    assert_eq!(
+        (error.component, error.category, error.code),
+        (
+            adk_core::ErrorComponent::Tool,
+            adk_core::ErrorCategory::Forbidden,
+            adk_core::TOOL_PERMISSION_DENIED_CODE
+        )
+    );
+    assert_eq!(error.details.metadata["permission"], json!("tool:search"));
+    let response = adk_core::tool_error_response("search", &error, false);
+    assert!(
+        response["error"].as_str().unwrap().contains("cannot access tool:search"),
+        "the model is told which permission was missing: {response}"
+    );
+}
+
 // =============================================================================
 // AuthMiddleware Tests
 // =============================================================================

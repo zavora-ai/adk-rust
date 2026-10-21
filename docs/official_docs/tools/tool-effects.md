@@ -143,9 +143,12 @@ A call held for confirmation and resumed by a later run executes under that run'
 invocation, so `LlmAgent` records it under its original identity instead:
 `adk_agent::held_call_ledger_key` — `{app}/{user}/{session}/held/{function_call_id}/{digest}`,
 where `digest` is the `json_digest` of the request's `ToolConfirmationRequest::fingerprint()`.
-Every resumption of the same held call shares that record, so a call that ran in a run whose
-result was never saved — the process stopped first — is answered from its record when a later
-run resumes it with the same decision, instead of running a second time:
+The resumed call's `ToolContext::idempotency_key()` answers the same key, so a tool that passes
+it to a downstream API (a payment provider's idempotency header, for example) sends one key
+however many runs resume the call. Every resumption of the same held call shares that record,
+so a call that ran in a run whose result was never saved — the process stopped first — is
+answered from its record when a later run resumes it with the same decision, instead of
+running a second time:
 
 | Ledger state | Behaviour | Function response |
 |--------------|-----------|-------------------|
