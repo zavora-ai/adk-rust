@@ -7,14 +7,14 @@ an agent loop, from approvals bound to the tool to goals that survive the proces
 The scenarios live in [`examples/harness_walkthrough`](../harness_walkthrough) and are shared with
 [`examples/harness_openai`](../harness_openai); this crate supplies the Anthropic model. Each scenario
 runs the same code scripted and live: a scripted run replays, through `adk_model::ScriptedLlm`,
-what a model that follows the prompt does; a live run sends the same prompts to `claude-sonnet-4-6`.
+what a model that follows the prompt does; a live run sends the same prompts to `claude-sonnet-5-5`.
 
 ## Run
 
 ```bash
 cargo run                                # every scenario, scripted: no key
 cp .env.example .env                     # then set ANTHROPIC_API_KEY
-cargo run -- --live                      # every scenario on claude-sonnet-4-6
+cargo run -- --live                      # every scenario on claude-sonnet-5-5
 cargo run -- --live approvals sandbox    # selected scenarios
 cargo run -- --live --model <model-id>   # another Anthropic model (ANTHROPIC_MODEL works too)
 ```
@@ -43,7 +43,7 @@ small crate, so `cargo` must be on `PATH`. The run exits with status 1 when a sc
 
 macOS with Seatbelt, `adk-harness` at `5846e20c`:
 
-| Scenario | Scripted (`ScriptedLlm`) | Live (`claude-sonnet-4-6`) |
+| Scenario | Scripted (`ScriptedLlm`) | Live (`claude-sonnet-5-5`) |
 |---|---|---|
 | `approvals` | PASS (9/9 checks) | PASS (9/9 checks) |
 | `plan_mode` | PASS (9/9 checks) | PASS (9/9 checks) |

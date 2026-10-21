@@ -64,5 +64,5 @@ cargo run -- --live --provider anthropic
 `my-agent --acp`; `live_team_review` reports an error without it. An agent that requires the
 ACP `authenticate` step cannot be a member yet.
 
-Models: `gpt-5.6-terra` (OpenAI), `claude-sonnet-4-6` (Anthropic), `gemini-3.5-flash-lite`
+Models: `gpt-5.6-terra` (OpenAI), `claude-sonnet-5-5` (Anthropic), `gemini-3.5-flash-lite`
 (Gemini).

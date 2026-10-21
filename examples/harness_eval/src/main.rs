@@ -3,7 +3,7 @@
 //! ```bash
 //! cargo run                         # scripted model, checked against the adk-harness baseline
 //! cargo run -- --live openai        # gpt-5.6-terra
-//! cargo run -- --live anthropic     # claude-sonnet-4-6
+//! cargo run -- --live anthropic     # claude-sonnet-5-5
 //! cargo run -- --live gemini        # gemini-3.5-flash-lite
 //! cargo run -- --live openai --save-baseline
 //! ```
@@ -29,7 +29,7 @@ fn live_model(provider: &str) -> anyhow::Result<Arc<dyn Llm>> {
             adk_model::openai::OpenAIConfig::new(key("OPENAI_API_KEY")?, "gpt-5.6-terra"),
         )?),
         "anthropic" => Arc::new(adk_model::anthropic::AnthropicClient::new(
-            adk_model::anthropic::AnthropicConfig::new(key("ANTHROPIC_API_KEY")?, "claude-sonnet-4-6"),
+            adk_model::anthropic::AnthropicConfig::new(key("ANTHROPIC_API_KEY")?, "claude-sonnet-5-5"),
         )?),
         "gemini" => Arc::new(adk_model::gemini::GeminiModel::new(
             key("GOOGLE_API_KEY")?,

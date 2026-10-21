@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! cargo run                         # every scenario, scripted, no key
-//! cargo run -- --live               # every scenario on claude-sonnet-4-6 (ANTHROPIC_API_KEY)
+//! cargo run -- --live               # every scenario on claude-sonnet-5-5 (ANTHROPIC_API_KEY)
 //! cargo run -- --live approvals     # one scenario
 //! ```
 
@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
         name: "anthropic",
         key_var: "ANTHROPIC_API_KEY",
         model_var: "ANTHROPIC_MODEL",
-        default_model: "claude-sonnet-4-6",
+        default_model: "claude-sonnet-5-5",
         build: |key, model| {
             Ok(Arc::new(AnthropicClient::new(AnthropicConfig::new(key, model))?) as Arc<dyn Llm>)
         },

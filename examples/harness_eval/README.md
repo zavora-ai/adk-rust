@@ -19,7 +19,7 @@ cargo run --manifest-path examples/harness_eval/Cargo.toml
 
 # Live models, against baseline.live.<provider>.json (the `passed` metric)
 cargo run --manifest-path examples/harness_eval/Cargo.toml -- --live openai      # gpt-5.6-terra
-cargo run --manifest-path examples/harness_eval/Cargo.toml -- --live anthropic   # claude-sonnet-4-6
+cargo run --manifest-path examples/harness_eval/Cargo.toml -- --live anthropic   # claude-sonnet-5-5
 cargo run --manifest-path examples/harness_eval/Cargo.toml -- --live gemini      # gemini-3.5-flash-lite
 
 # Refresh a live baseline

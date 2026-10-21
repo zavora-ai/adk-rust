@@ -511,7 +511,7 @@ async fn provider_web_tools_are_declared_only_to_ask_or_auto_runs_with_the_allow
     for (mode, declared) in
         [(HarnessMode::Ask, true), (HarnessMode::ReadOnly, false), (HarnessMode::Plan, false)]
     {
-        let f = common::fixture_named("claude-sonnet-4-6", vec![done()], |b| {
+        let f = common::fixture_named("claude-sonnet-5-5", vec![done()], |b| {
             b.mode(mode).web(web(&["docs.rs", "*.rust-lang.org"])).provider_web_tools(
                 ProviderWebTools { anthropic_web_search: true, ..ProviderWebTools::default() },
             )
@@ -555,7 +555,7 @@ async fn provider_web_tools_are_declared_only_to_ask_or_auto_runs_with_the_allow
         }
     }
     // Off by default: no provider tool is declared without the operator's flag.
-    let f = common::fixture_named("claude-sonnet-4-6", vec![done()], |b| b.web(web(&["docs.rs"])))
+    let f = common::fixture_named("claude-sonnet-5-5", vec![done()], |b| b.web(web(&["docs.rs"])))
         .await;
     f.send("hello").await;
     assert!(!f.model.requests()[0].tools.contains_key("web_search"));

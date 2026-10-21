@@ -730,9 +730,9 @@ fn live_model(provider: &str) -> Result<Option<(String, Arc<dyn Llm>)>> {
         },
         "anthropic" => match key("ANTHROPIC_API_KEY") {
             Some(key) => Some((
-                "claude-sonnet-4-6".into(),
+                "claude-sonnet-5-5".into(),
                 Arc::new(adk_model::anthropic::AnthropicClient::new(
-                    adk_model::anthropic::AnthropicConfig::new(key, "claude-sonnet-4-6"),
+                    adk_model::anthropic::AnthropicConfig::new(key, "claude-sonnet-5-5"),
                 )?),
             )),
             None => None,
