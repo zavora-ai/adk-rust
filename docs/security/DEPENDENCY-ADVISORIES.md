@@ -8,7 +8,7 @@ The purpose of this file is to provide transparency to consumers about the secur
 
 These accepted advisories are also configured in [`.cargo/audit.toml`](../../.cargo/audit.toml) so that `cargo audit` passes in CI while still surfacing new, unreviewed advisories.
 
-**Last reviewed:** 2026-10-17 (3.0.0 release candidate)
+**Last reviewed:** 2026-10-22 (3.0.0 release candidate)
 
 ---
 
@@ -50,6 +50,9 @@ These accepted advisories are also configured in [`.cargo/audit.toml`](../../.ca
 | RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348, RUSTSEC-2026-0349 | `rustls` | Workspace and example lockfiles updated from 0.23.45 to 0.23.46. |
 | RUSTSEC-2026-0352 through RUSTSEC-2026-0359, RUSTSEC-2026-0361 through RUSTSEC-2026-0364 | `wasmtime`, `wasmtime-wasi` | Lockfile updated from 48.0.5 to 48.0.6, with the matching Cranelift 0.135.6 crates. Wasmtime 49.0.3 requires Rust 1.96. |
 | RUSTSEC-2026-0367, RUSTSEC-2026-0368, RUSTSEC-2026-0369 | `zip` (declared) | The workspace `zip` dependency (`adk-skill`, `adk-cli` tests) now requires zip 9. The transitive zip 0.6, 6, and 7 copies are covered below. |
+| RUSTSEC-2026-0378, RUSTSEC-2026-0379 | `wasmtime`, `wasmtime-wasi` | Lockfile updated from 48.0.6 to 48.0.7, with the matching Cranelift 0.135.7 crates. Wasmtime 49 requires Rust 1.96. |
+| RUSTSEC-2026-0381, RUSTSEC-2026-0383 | `webpki-roots`, `webpki-root-certs` | Workspace and example lockfiles updated to 1.0.10. |
+| RUSTSEC-2026-0382 | `rustls-webpki` | Workspace and example lockfiles updated to 0.103.16. |
 
 ---
 
