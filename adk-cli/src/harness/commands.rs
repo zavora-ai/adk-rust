@@ -29,6 +29,8 @@ enum Kind {
     Session,
     Skills,
     Memory,
+    Web,
+    Mcp,
 }
 
 const COMMANDS: &[(Kind, &str, &str)] = &[
@@ -43,6 +45,8 @@ const COMMANDS: &[(Kind, &str, &str)] = &[
     (Kind::Session, "session", "This session: id, user, workspace, events"),
     (Kind::Skills, "skills", "Skills the agent can load"),
     (Kind::Memory, "memory", "Working notes and long-term facts; /memory forget|accept ID"),
+    (Kind::Web, "web", "The web allowlist; /web allow HOST adds a standing rule for web_fetch"),
+    (Kind::Mcp, "mcp", "MCP servers; /mcp resources SERVER lists what a server publishes"),
 ];
 
 /// One data-driven slash command over the REPL's shared state.
@@ -105,6 +109,8 @@ impl ConsoleCommand for HarnessCommand {
             Kind::Session => session(shared).await,
             Kind::Skills => skills(shared),
             Kind::Memory => memory(shared, args).await,
+            Kind::Web => web(shared, args).await,
+            Kind::Mcp => mcp(shared, args).await,
         }
     }
 }
@@ -395,6 +401,128 @@ fn skills(shared: &Shared) -> Result<String> {
     } else {
         skills.join("\n")
     })
+}
+
+/// `/web`: the allowlist; `/web allow HOST` grants a `DomainIn` rule for `web_fetch`
+/// to this user, as a human action outside any prompt (spec 3.1 §7.5, §7.20).
+async fn web(shared: &Shared, args: &str) -> Result<String> {
+    let harness = shared.harness();
+    let runtime = harness.agent().runtime();
+    let declared = harness.agent().info().tools.iter().any(|tool| tool == "web_fetch");
+    let allowlist = runtime.policy().registry().web_allowlist().to_vec();
+    let mut words = args.split_whitespace();
+    match (words.next(), words.next()) {
+        (None, _) => {
+            let mut out = String::new();
+            if !declared {
+                out.push_str("web_fetch is off (start with --web to declare it).\n");
+            }
+            if allowlist.is_empty() {
+                out.push_str("Allowlist: none; every fetch asks in Ask mode. /web allow HOST remembers one host.");
+            } else {
+                out.push_str(&format!("Allowlist (no prompt): {}", allowlist.join(", ")));
+            }
+            Ok(out)
+        }
+        (Some("allow"), Some(host)) => {
+            let Some(host) = adk_harness::web::url_host(&format!("https://{host}/")) else {
+                return Ok(format!(
+                    "'{host}' is not a host name the harness fetches; use a public host such as docs.rs"
+                ));
+            };
+            if adk_harness::web::is_private_host(&host) {
+                return Ok(format!(
+                    "'{host}' is a private or local target the harness never fetches"
+                ));
+            }
+            let now = chrono::Utc::now();
+            let created_by = adk_core::principal::SubjectRef::human(shared.user.to_string());
+            let rule = StandingRule {
+                id: uuid::Uuid::new_v4().to_string(),
+                scope: RuleScope::User {
+                    app_name: shared.app_name.clone(),
+                    user_id: shared.user.to_string(),
+                    subject_kind: adk_core::principal::SubjectKind::Human,
+                },
+                tool: "web_fetch".into(),
+                // A console command is the operator's own action, so the rule survives a
+                // redeclaration of web_fetch; a prompt's suggestion pins the exact declaration.
+                origin: OriginPin::AnyDeclaration {
+                    source: adk_core::STATIC_TOOL_ORIGIN.to_string(),
+                },
+                agent: None,
+                predicates: vec![adk_harness::RulePredicate::Arg(adk_harness::ArgSpec::DomainIn {
+                    pointer: "/url".into(),
+                    domains: vec![host.clone()],
+                })],
+                decision: StandingDecision::Allow,
+                created_by,
+                created_at: now,
+                expires_at: None,
+                label: format!("web_fetch: any page on {host}"),
+                source_fingerprint: None,
+            };
+            harness.standing_rules().grant(rule).await?;
+            Ok(format!("web_fetch on {host} no longer asks; /rules lists the rule"))
+        }
+        _ => Ok("use /web, or /web allow HOST".into()),
+    }
+}
+
+/// `/mcp`: the declared servers; `/mcp resources SERVER` lists what one publishes, the
+/// names a `@SERVER:URI` mention takes (spec 3.1 §7.21).
+async fn mcp(shared: &Shared, args: &str) -> Result<String> {
+    let harness = shared.harness();
+    let runtime = harness.agent().runtime();
+    let Some(mcp) = runtime.mcp() else {
+        return Ok("No MCP servers: declare them in .mcp.json in the workspace.".into());
+    };
+    let mut words = args.split_whitespace();
+    match (words.next(), words.next()) {
+        (None, _) => {
+            let manager = mcp.manager();
+            let mut out = String::new();
+            for (id, trusted) in mcp.servers() {
+                let status =
+                    manager.server_status(&id).await.map(|s| format!("{s:?}")).unwrap_or_default();
+                let _ = writeln!(
+                    out,
+                    "{id}: {status}{}",
+                    if trusted {
+                        ""
+                    } else {
+                        " (workspace-declared; starts under workspace trust)"
+                    }
+                );
+            }
+            out.push_str("Mention a resource as @SERVER:URI to hand it to the model; /mcp resources SERVER lists them.");
+            Ok(out)
+        }
+        (Some("resources"), Some(server)) => {
+            let listed = mcp.list_resources(server).await?;
+            let mut out = String::new();
+            for resource in listed["resources"].as_array().into_iter().flatten() {
+                let _ = writeln!(
+                    out,
+                    "@{server}:{}  {}",
+                    resource["uri"].as_str().unwrap_or_default(),
+                    resource["name"].as_str().unwrap_or_default()
+                );
+            }
+            for template in listed["templates"].as_array().into_iter().flatten() {
+                let _ = writeln!(
+                    out,
+                    "@{server}:{}  (template)",
+                    template["uriTemplate"].as_str().unwrap_or_default()
+                );
+            }
+            if out.is_empty() {
+                out.push_str("no resources");
+            }
+            Ok(out)
+        }
+        _ => Ok("use /mcp, or /mcp resources SERVER".into()),
+    }
 }
 
 #[cfg(test)]
