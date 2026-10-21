@@ -111,7 +111,10 @@ pub enum SessionEvent {
     #[serde(rename = "agent.mcp_tool_use")]
     McpToolUse {
         seq: u64,
+        // A self-hosted `adk-managed` runtime names the ID `tool_use_id` and sends no server.
+        #[serde(alias = "tool_use_id")]
         mcp_tool_use_id: String,
+        #[serde(default)]
         server_name: String,
         name: String,
         input: serde_json::Value,
@@ -132,7 +135,7 @@ pub enum SessionEvent {
     StatusRunning { seq: u64 },
 
     /// An error occurred during the session.
-    #[serde(rename = "agent.error")]
+    #[serde(rename = "agent.error", alias = "error")]
     Error { seq: u64, message: String, code: Option<String> },
 
     /// Unknown event type (forward-compatible catch-all).
@@ -141,7 +144,10 @@ pub enum SessionEvent {
 }
 
 /// Why a turn ended.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// Serialized with a `type` tag. Both `type` and `reason` tags are read, so the events
+/// of a self-hosted `adk-managed` runtime parse as the service's do.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum StopReason {
@@ -151,6 +157,29 @@ pub enum StopReason {
     RequiresAction { event_ids: Vec<String> },
     /// The agent hit the maximum token limit.
     MaxTokens,
+}
+
+impl<'de> Deserialize<'de> for StopReason {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Tagged {
+            #[serde(rename = "type", alias = "reason")]
+            kind: String,
+            #[serde(default)]
+            event_ids: Option<Vec<String>>,
+        }
+        let tagged = Tagged::deserialize(deserializer)?;
+        match (tagged.kind.as_str(), tagged.event_ids) {
+            ("end_turn", _) => Ok(Self::EndTurn),
+            ("max_tokens", _) => Ok(Self::MaxTokens),
+            ("requires_action", Some(event_ids)) => Ok(Self::RequiresAction { event_ids }),
+            ("requires_action", None) => Err(serde::de::Error::missing_field("event_ids")),
+            (other, _) => Err(serde::de::Error::unknown_variant(
+                other,
+                &["end_turn", "requires_action", "max_tokens"],
+            )),
+        }
+    }
 }
 
 /// A content block within a message.
