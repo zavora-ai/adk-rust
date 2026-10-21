@@ -187,6 +187,9 @@ context it wraps.
 | `adk-server` with a `RequestContextExtractor` that authenticated the request | `true` |
 | `adk-server` without an extractor, where the client names the user | `false` |
 | A runner built with `RunnerConfig::request_context` / `RunnerConfigBuilder::request_context` | `true` |
+| A run started with `RunConfig::request_context` naming the run's user (another user fails the run with `identity.subject_mismatch`) | `true` |
+| A `DurableWorker` run enqueued with `NewRun::with_authenticated_user` — every background run and cron job an authenticated `adk-server` caller submits | `true` |
+| An `IntegratedRealtimeRunner` built with `request_context` | `true` |
 | Any other runner, and any context that does not forward it | `false` |
 
 The runner's invocation context and `adk_core::ToolCallbackContext` answer it; other wrapper

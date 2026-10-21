@@ -45,13 +45,24 @@ pub struct SecurityConfig {
     pub allowed_hosts: Vec<String>,
     /// Maximum request body size in bytes (default: 10MB)
     pub max_body_size: usize,
-    /// Request timeout duration (default: 30 seconds)
+    /// Request timeout duration (default: 30 seconds). Agent runs take
+    /// [`run_timeout`](Self::run_timeout) instead.
     pub request_timeout: Duration,
+    /// How long a request that runs an agent may take before it is answered `408`: `POST
+    /// /api/run`, `/api/run/{app}/{user}/{session}`, `/api/run_sse`, `/a2a`, and `/a2a/stream`
+    /// (default: [`DEFAULT_RUN_TIMEOUT`], 15 minutes). A model turn with tool calls routinely
+    /// outlasts [`request_timeout`](Self::request_timeout), so agent runs have their own
+    /// limit. A streamed run is bounded until its response starts.
+    pub run_timeout: Duration,
     /// Whether to include detailed error messages in responses (default: false for production)
     pub expose_error_details: bool,
     /// Whether to expose admin-only debug endpoints when auth is configured.
     pub expose_admin_debug: bool,
 }
+
+/// The [`SecurityConfig::run_timeout`] of every preset: 15 minutes, long enough for an agent
+/// turn with several model and tool calls.
+pub const DEFAULT_RUN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 impl Default for SecurityConfig {
     fn default() -> Self {
@@ -60,6 +71,7 @@ impl Default for SecurityConfig {
             allowed_hosts: Vec::new(),
             max_body_size: 10 * 1024 * 1024, // 10MB
             request_timeout: Duration::from_secs(30),
+            run_timeout: DEFAULT_RUN_TIMEOUT,
             expose_error_details: false,
             expose_admin_debug: false,
         }
@@ -86,6 +98,7 @@ impl SecurityConfig {
             allowed_hosts: Vec::new(),
             max_body_size: 10 * 1024 * 1024,
             request_timeout: Duration::from_secs(60),
+            run_timeout: DEFAULT_RUN_TIMEOUT,
             expose_error_details: true,
             expose_admin_debug: true,
         }
@@ -98,6 +111,7 @@ impl SecurityConfig {
             allowed_hosts: Vec::new(),
             max_body_size: 10 * 1024 * 1024,
             request_timeout: Duration::from_secs(30),
+            run_timeout: DEFAULT_RUN_TIMEOUT,
             expose_error_details: false,
             expose_admin_debug: false,
         }
@@ -395,6 +409,20 @@ impl ServerConfig {
     /// Configure request timeout
     pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
         self.security.request_timeout = timeout;
+        self
+    }
+
+    /// Sets how long a request that runs an agent may take; see
+    /// [`SecurityConfig::run_timeout`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let config = ServerConfig::new(agent_loader, session_service)
+    ///     .with_run_timeout(std::time::Duration::from_secs(30 * 60));
+    /// ```
+    pub fn with_run_timeout(mut self, timeout: Duration) -> Self {
+        self.security.run_timeout = timeout;
         self
     }
 

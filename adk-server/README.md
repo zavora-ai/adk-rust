@@ -552,6 +552,7 @@ The server applies these layers to every route:
 | Origin check and CORS | No cross-origin access; `allowed_origins` admits origins |
 | Request body limit | 10 MB (`max_body_size`) |
 | Request timeout | 30 seconds (`request_timeout`; `SecurityConfig::development()` uses 60) |
+| Agent run timeout | 15 minutes for `/api/run`, `/api/run/{app}/{user}/{session}`, `/api/run_sse`, `/a2a`, and `/a2a/stream` (`run_timeout`, `ServerConfig::with_run_timeout`; `DEFAULT_RUN_TIMEOUT`) |
 | Response headers | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 1; mode=block` |
 | Request ID | `x-request-id` |
 | Error details | A2A internal errors read `Internal server error` (`expose_error_details: false`); REST errors carry their code, category, and message |

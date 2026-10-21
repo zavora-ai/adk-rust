@@ -1,15 +1,21 @@
 //! Cron jobs: REST endpoints over a [`ScheduleStore`] and the scheduling loop.
 //!
 //! A cron job is a [`Schedule`] with a [`ScheduleSpec::Cron`] spec whose run template
-//! targets a workflow or agent. The job's name is its schedule id. The scheduler started
-//! by [`start_cron_scheduler`] is a [`DurableScheduler`]; run it on every replica.
+//! targets a workflow or agent. The scheduler started by [`start_cron_scheduler`] is a
+//! [`DurableScheduler`]; run it on every replica.
+//!
+//! With a `RequestContextExtractor` on the server, a job belongs to the authenticated caller
+//! who created it (spec 3.1 §8.2): its runs act for that caller, and only that caller lists,
+//! reads, pauses, resumes, or deletes it — another owner's job answers `404`, and two owners
+//! may each have a job of the same name. Without an extractor every client sees every job,
+//! the job's name is its schedule id, and its runs act for the user `cron`.
 
 use std::sync::Arc;
 
 use adk_core::schedule::{MissedFirePolicy, Schedule, ScheduleSpec};
-use adk_core::{InMemoryScheduleStore, NewRun, OnConflict, ScheduleStore};
+use adk_core::{InMemoryScheduleStore, NewRun, OnConflict, RequestContext, ScheduleStore};
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -19,7 +25,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{BackgroundState, DurableScheduler, WorkflowState};
+use super::{BackgroundState, DurableScheduler, WorkflowState, run_owner};
 
 /// Checks that `expression` parses as a cron expression (five, six, or seven fields).
 ///
@@ -222,11 +228,54 @@ fn store_error(error: &adk_core::AdkError) -> Response {
     problem(status, error.to_string())
 }
 
+/// The schedule id of `owner`'s job `name`: the name itself without an authenticated caller,
+/// and the name behind the owner with one. The length prefix keeps ("a:b", "c") and ("a",
+/// "b:c") apart, as the run routes' scoped keys do.
+fn schedule_id(owner: Option<&str>, name: &str) -> String {
+    match owner {
+        Some(owner) => format!("{}:{owner}:{name}", owner.len()),
+        None => name.to_string(),
+    }
+}
+
+/// Whether `owner` may see `schedule`: any schedule without an authenticated caller, only the
+/// caller's own with one.
+fn visible_to(schedule: &Schedule, owner: Option<&str>) -> bool {
+    owner.is_none_or(|owner| {
+        schedule.run.user_id == owner && schedule.id.starts_with(&schedule_id(Some(owner), ""))
+    })
+}
+
+/// The job as `owner` sees it, named as its owner named it.
+fn job_for(schedule: Schedule, owner: Option<&str>) -> CronJobResponse {
+    let prefix = schedule_id(owner, "");
+    let name = owner.and_then(|_| schedule.id.strip_prefix(&prefix)).map(str::to_string);
+    let mut job = CronJobResponse::from(schedule);
+    if let Some(name) = name {
+        job.job_id.clone_from(&name);
+        job.name = name;
+    }
+    job
+}
+
+/// `owner`'s job `name`, or `None` when it does not exist or belongs to another owner.
+async fn visible_job(
+    state: &CronState,
+    owner: Option<&str>,
+    name: &str,
+) -> std::result::Result<Option<Schedule>, adk_core::AdkError> {
+    let schedule = state.schedules.get(&schedule_id(owner, name)).await?;
+    Ok(schedule.filter(|schedule| visible_to(schedule, owner)))
+}
+
 /// POST /cron — Create a cron job.
 async fn create_cron_job(
     State(state): State<CronState>,
+    caller: Option<Extension<Option<RequestContext>>>,
     Json(request): Json<CreateCronJobRequest>,
 ) -> Response {
+    let owner = run_owner(caller);
+    let id = schedule_id(owner.as_deref(), &request.name);
     let spec = cron_spec(&request.cron_expression, &request.timezone);
     let first = match spec.next_after(Utc::now()) {
         Ok(first) => first,
@@ -242,7 +291,7 @@ async fn create_cron_job(
                 .into_response();
         }
     };
-    match state.schedules.get(&request.name).await {
+    match state.schedules.get(&id).await {
         Ok(Some(_)) => {
             return problem(
                 StatusCode::CONFLICT,
@@ -256,66 +305,92 @@ async fn create_cron_job(
     let input = request.input.map_or(Value::Object(Default::default()), |input| {
         Value::Object(input.into_iter().collect())
     });
+    // An authenticated owner's job runs for that owner, as the identity the server
+    // authenticated when the job was created.
     let mut run = NewRun::new(
         background.worker.queue.clone(),
         background.app_name_for(&request.workflow_id),
-        "cron",
+        owner.clone().unwrap_or_else(|| "cron".to_string()),
         request.workflow_id,
         input,
     );
-    let concurrency_key = format!("cron:{}", request.name);
+    if owner.is_some() {
+        run = run.with_authenticated_user();
+    }
+    let concurrency_key = format!("cron:{id}");
     run = match request.concurrency_policy {
         ConcurrencyPolicy::Skip => run.with_concurrency_key(concurrency_key, OnConflict::Reject),
         ConcurrencyPolicy::Queue => run.with_concurrency_key(concurrency_key, OnConflict::Enqueue),
         ConcurrencyPolicy::Allow => run,
     };
-    let mut schedule = Schedule::new(request.name, spec, run, request.missed_fire_policy);
+    let mut schedule = Schedule::new(id, spec, run, request.missed_fire_policy);
     if let Some(first) = first {
         schedule = schedule.with_next_fire_at(first);
     }
     match state.schedules.upsert(schedule).await {
         Ok(stored) => {
             tracing::info!(schedule.id = %stored.id, "cron job created");
-            (StatusCode::CREATED, Json(CronJobResponse::from(stored))).into_response()
+            (StatusCode::CREATED, Json(job_for(stored, owner.as_deref()))).into_response()
         }
         Err(error) => problem(StatusCode::BAD_REQUEST, error.to_string()),
     }
 }
 
-/// GET /cron — List cron jobs.
-async fn list_cron_jobs(State(state): State<CronState>) -> Response {
+/// GET /cron — List cron jobs; with an authenticated caller, only the caller's.
+async fn list_cron_jobs(
+    State(state): State<CronState>,
+    caller: Option<Extension<Option<RequestContext>>>,
+) -> Response {
+    let owner = run_owner(caller);
     match state.schedules.list().await {
         Ok(schedules) => {
-            let jobs: Vec<CronJobResponse> = schedules.into_iter().map(Into::into).collect();
+            let jobs: Vec<CronJobResponse> = schedules
+                .into_iter()
+                .filter(|schedule| visible_to(schedule, owner.as_deref()))
+                .map(|schedule| job_for(schedule, owner.as_deref()))
+                .collect();
             (StatusCode::OK, Json(jobs)).into_response()
         }
         Err(error) => store_error(&error),
     }
 }
 
-/// GET /cron/{job_id} — Get a cron job.
-async fn get_cron_job(State(state): State<CronState>, Path(job_id): Path<String>) -> Response {
-    match state.schedules.get(&job_id).await {
+/// GET /cron/{job_id} — Get a cron job; another owner's job is `404`.
+async fn get_cron_job(
+    State(state): State<CronState>,
+    caller: Option<Extension<Option<RequestContext>>>,
+    Path(job_id): Path<String>,
+) -> Response {
+    let owner = run_owner(caller);
+    match visible_job(&state, owner.as_deref(), &job_id).await {
         Ok(Some(schedule)) => {
-            (StatusCode::OK, Json(CronJobResponse::from(schedule))).into_response()
+            (StatusCode::OK, Json(job_for(schedule, owner.as_deref()))).into_response()
         }
         Ok(None) => problem(StatusCode::NOT_FOUND, format!("cron job '{job_id}' not found")),
         Err(error) => store_error(&error),
     }
 }
 
-/// PATCH /cron/{job_id} — Pause or resume a cron job.
+/// PATCH /cron/{job_id} — Pause or resume a cron job; another owner's job is `404`.
 ///
 /// Resuming moves the next fire time to the first occurrence after now, so occurrences
 /// that fell inside the pause are skipped rather than replayed.
 async fn patch_cron_job(
     State(state): State<CronState>,
+    caller: Option<Extension<Option<RequestContext>>>,
     Path(job_id): Path<String>,
     Json(request): Json<PatchCronJobRequest>,
 ) -> Response {
+    let owner = run_owner(caller);
+    let id = schedule_id(owner.as_deref(), &job_id);
+    match visible_job(&state, owner.as_deref(), &job_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return problem(StatusCode::NOT_FOUND, "cron job not found"),
+        Err(error) => return store_error(&error),
+    }
     let result = match request.status {
-        CronJobStatus::Paused => state.schedules.set_paused(&job_id, true).await,
-        CronJobStatus::Active => match state.schedules.get(&job_id).await {
+        CronJobStatus::Paused => state.schedules.set_paused(&id, true).await,
+        CronJobStatus::Active => match state.schedules.get(&id).await {
             Ok(Some(schedule)) if schedule.paused => {
                 let next = match schedule.spec.next_after(Utc::now()) {
                     Ok(next) => next,
@@ -331,15 +406,24 @@ async fn patch_cron_job(
         },
     };
     match result {
-        Ok(schedule) => (StatusCode::OK, Json(CronJobResponse::from(schedule))).into_response(),
+        Ok(schedule) => (StatusCode::OK, Json(job_for(schedule, owner.as_deref()))).into_response(),
         Err(error) => store_error(&error),
     }
 }
 
-/// DELETE /cron/{job_id} — Delete a cron job.
-async fn delete_cron_job(State(state): State<CronState>, Path(job_id): Path<String>) -> Response {
-    match state.schedules.delete(&job_id).await {
-        Ok(()) => (StatusCode::NO_CONTENT, ()).into_response(),
+/// DELETE /cron/{job_id} — Delete a cron job; another owner's job is `404`.
+async fn delete_cron_job(
+    State(state): State<CronState>,
+    caller: Option<Extension<Option<RequestContext>>>,
+    Path(job_id): Path<String>,
+) -> Response {
+    let owner = run_owner(caller);
+    match visible_job(&state, owner.as_deref(), &job_id).await {
+        Ok(Some(schedule)) => match state.schedules.delete(&schedule.id).await {
+            Ok(()) => (StatusCode::NO_CONTENT, ()).into_response(),
+            Err(error) => store_error(&error),
+        },
+        Ok(None) => problem(StatusCode::NOT_FOUND, "cron job not found"),
         Err(error) => store_error(&error),
     }
 }

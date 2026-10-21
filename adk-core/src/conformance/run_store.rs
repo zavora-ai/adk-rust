@@ -134,7 +134,8 @@ pub async fn enqueue_claim_finish_round_trip<H: RunStoreHarness + ?Sized>(harnes
     let run = new_run(&queue)
         .with_session_id(unique_unicode("session"))
         .with_principal(principal)
-        .with_max_attempts(4);
+        .with_max_attempts(4)
+        .with_authenticated_user();
     let record = created(&*store, run.clone()).await;
     let expected = RunRecord::queued(record.run_id.clone(), run, base_time());
     assert_eq!(record, expected);
@@ -545,7 +546,11 @@ pub async fn runs_survive_a_restart<H: RunStoreHarness + ?Sized>(harness: &H) {
     };
     let (record, claimed) = {
         let before = harness.open(Arc::new(clock.clone())).await;
-        let record = created(&*before, new_run(&queue).with_idempotency_key("restart")).await;
+        let record = created(
+            &*before,
+            new_run(&queue).with_idempotency_key("restart").with_authenticated_user(),
+        )
+        .await;
         let claimed = claim(&*before, &queue, "w1").await.expect("claim");
         before
             .set_checkpoint(&record.run_id, claimed.epoch, checkpoint.clone())
@@ -557,6 +562,7 @@ pub async fn runs_survive_a_restart<H: RunStoreHarness + ?Sized>(harness: &H) {
     let after = harness.open(Arc::new(clock.clone())).await;
     let read = get(&*after, &record.run_id).await;
     assert_eq!(read.checkpoint, Some(checkpoint));
+    assert!(read.authenticated, "the authenticated flag survives a restart");
     assert_eq!((read.state, read.lease_epoch), (RunState::Running, claimed.epoch));
     let existing =
         after.enqueue(new_run(&queue).with_idempotency_key("restart")).await.expect("enqueue");
