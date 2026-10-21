@@ -8,6 +8,9 @@
 # tests for every pair in a shard, sharing one target directory so common dependencies
 # compile once.
 #
+# A pair's optional fourth column holds comma-separated flags: `no-default` builds with
+# `--no-default-features`, and `doc` also runs the crate's doctests, which nextest skips.
+#
 # Usage:
 #   scripts/check-feature-coverage.sh all      # every pair
 #   scripts/check-feature-coverage.sh 3        # shard 3 (CI matrix entry)
@@ -30,19 +33,23 @@ declare -a failed=()
 declare -i ran=0
 
 # Plain `read` keeps this runnable on the bash 3.2 that stock macOS ships.
-while IFS=' ' read -r shard package features; do
+while IFS=' ' read -r shard package features flags; do
     [[ -z "$shard" || "$shard" == \#* ]] && continue
     [[ "$SELECT" == "all" || "$SELECT" == "$shard" ]] || continue
     ran+=1
 
-    printf '\n==> %s --features %s (shard %s)\n' "$package" "$features" "$shard"
+    args=(--features "$features")
+    [[ ",$flags," == *,no-default,* ]] && args=(--no-default-features "${args[@]}")
+    label="$package ${args[*]}"
+    printf '\n==> %s (shard %s)\n' "$label" "$shard"
     started=$SECONDS
-    if cargo clippy -p "$package" --features "$features" --all-targets -- -D warnings \
-        && cargo nextest run -p "$package" --features "$features"; then
-        printf 'ok       %s --features %s (%ds)\n' "$package" "$features" "$((SECONDS - started))"
+    if cargo clippy -p "$package" "${args[@]}" --all-targets -- -D warnings \
+        && cargo nextest run -p "$package" "${args[@]}" \
+        && { [[ ",$flags," != *,doc,* ]] || cargo test -p "$package" "${args[@]}" --doc; }; then
+        printf 'ok       %s (%ds)\n' "$label" "$((SECONDS - started))"
     else
-        printf 'FAILED   %s --features %s (%ds)\n' "$package" "$features" "$((SECONDS - started))"
-        failed+=("$package --features $features")
+        printf 'FAILED   %s (%ds)\n' "$label" "$((SECONDS - started))"
+        failed+=("$label")
     fi
 done < "$PAIRS"
 

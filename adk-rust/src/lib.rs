@@ -79,10 +79,11 @@
 //! `standard` and above); the agent itself needs only the default tier:
 //!
 //! ```no_run
+//! # #[cfg(feature = "tools")]
+//! # async fn example() -> adk_rust::Result<()> {
 //! use adk_rust::prelude::*;
 //! use std::sync::Arc;
 //!
-//! # async fn example() -> Result<()> {
 //! let api_key = std::env::var("GOOGLE_API_KEY").map_err(|e| AdkError::config(e.to_string()))?;
 //! let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
 //!
@@ -163,6 +164,8 @@
 //! Convert any async function into a tool:
 //!
 //! ```no_run
+//! # #[cfg(feature = "tools")]
+//! # fn example() -> adk_rust::Result<()> {
 //! use adk_rust::prelude::*;
 //! use adk_rust::serde_json::{json, Value};
 //! use std::sync::Arc;
@@ -177,7 +180,6 @@
 //!     }))
 //! }
 //!
-//! # fn example() -> Result<()> {
 //! let weather_tool = FunctionTool::new(
 //!     "get_weather",
 //!     "Get current weather for a city",
@@ -288,10 +290,11 @@
 //! `artifacts` feature (included in `standard` and above):
 //!
 //! ```no_run
+//! # #[cfg(feature = "artifacts")]
+//! # async fn example() -> adk_rust::Result<()> {
 //! use adk_rust::prelude::*;
 //! use adk_rust::artifact::{ArtifactService, SaveRequest, LoadRequest};
 //!
-//! # async fn example() -> Result<()> {
 //! let artifact_service = InMemoryArtifactService::new();
 //!
 //! // Save an artifact
@@ -352,10 +355,11 @@
 //! feature (included in `standard` and above):
 //!
 //! ```no_run
+//! # #[cfg(feature = "server")]
+//! # async fn example() -> adk_rust::Result<()> {
 //! use adk_rust::server::{create_app_with_a2a, ServerConfig};
 //! use adk_rust::AgentLoader;
 //!
-//! # async fn example() -> adk_rust::Result<()> {
 //! # let agent_loader: std::sync::Arc<dyn AgentLoader> = todo!();
 //! # let session_service: std::sync::Arc<dyn adk_rust::session::SessionService> = todo!();
 //! // Create server with A2A protocol support
@@ -376,9 +380,10 @@
 //! `telemetry-otlp`:
 //!
 //! ```no_run
+//! # #[cfg(feature = "telemetry")]
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! use adk_rust::telemetry::init_telemetry;
 //!
-//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Basic telemetry with console logging
 //! init_telemetry("my-agent-service")?;
 //!
@@ -1290,6 +1295,10 @@ pub async fn run(instructions: &str, input: &str) -> Result<String> {
 
     let (model, cache_capable): ProviderPair = {
         #[allow(unused_assignments)]
+        #[cfg_attr(
+            not(any(feature = "anthropic", feature = "openai", feature = "gemini")),
+            allow(unused_mut)
+        )]
         let mut result: Option<ProviderPair> = None;
 
         #[cfg(feature = "anthropic")]
