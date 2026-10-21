@@ -1380,6 +1380,14 @@ impl Agent for CompiledTeam {
         true
     }
 
+    // The coordinator is one of the members, so each agent — and with it each toolset,
+    // MCP connection or container session it holds — closes once.
+    async fn close(&self) {
+        for member in &self.members {
+            member.close().await;
+        }
+    }
+
     async fn govern_transfer(
         &self,
         request: &adk_core::AgentTransferRequest,
@@ -1557,6 +1565,11 @@ impl Agent for TeamMemberAgent {
 
     fn capabilities(&self) -> adk_core::AgentCapabilities {
         self.agent.capabilities()
+    }
+
+    // `sub_agents` is empty on purpose, so the default `close` would stop here.
+    async fn close(&self) {
+        self.agent.close().await;
     }
 
     fn configure_run(&self, _agent_name: &str, config: &mut RunConfig) {

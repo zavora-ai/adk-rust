@@ -1043,10 +1043,9 @@ impl Harness {
                 .map(|((_, _, session), error)| (session, error))
                 .collect();
         }
+        // The runner closes the root agent: the coordinator's toolsets through a compiled
+        // team root, the harness toolset included.
         self.runner.close().await;
-        // A compiled team root does not forward `close` to its coordinator, so the harness
-        // toolset is closed here as well; closing it twice is harmless.
-        adk_core::Toolset::close(self.agent.runtime().toolset().as_ref()).await;
         report
     }
 

@@ -462,10 +462,15 @@ impl HarnessLayer<'_> {
             && let Some(budget) = &runtime.budget
         {
             config.budget = Some(budget.clone());
-            if config.budget_tracker.is_none() {
-                config.budget_tracker =
-                    Some(Arc::new(adk_core::BudgetTracker::new(budget.clone())));
-            }
+        }
+        // A tracker counts one run (spec 3.1 §7.13): the run's own config gets one here; a
+        // runner's base config carries the budget only, and the runner creates a tracker
+        // per run from it.
+        if compose_policy
+            && config.budget_tracker.is_none()
+            && let Some(budget) = &config.budget
+        {
+            config.budget_tracker = Some(Arc::new(adk_core::BudgetTracker::new(budget.clone())));
         }
         if config.spend_ledger.is_none() {
             config.spend_ledger = runtime.spend_ledger.clone();
@@ -558,6 +563,10 @@ impl HarnessAgent {
 
     /// Applies the harness run config, approval store and compaction to a runner builder.
     /// Call it before setting a run config of your own on the builder.
+    ///
+    /// A budget set with [`HarnessAgentBuilder::budget`](crate::HarnessAgentBuilder::budget)
+    /// bounds each run on its own: the runner's base config carries the budget and the
+    /// runner counts every run against fresh counters (spec 3.1 §7.13).
     #[cfg(feature = "runner")]
     pub fn configure_runner<A, G, S>(
         &self,
