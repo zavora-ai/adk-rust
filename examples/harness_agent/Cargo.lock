@@ -84,6 +84,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-auth"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "async-trait",
+ "chrono",
+ "hex",
+ "hmac 0.12.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "adk-core"
 version = "3.0.0"
 dependencies = [
@@ -186,11 +204,13 @@ version = "3.0.0"
 dependencies = [
  "adk-acp",
  "adk-agent",
+ "adk-auth",
  "adk-core",
  "adk-devtools",
  "adk-graph",
  "adk-guardrail",
  "adk-memory",
+ "adk-payments",
  "adk-rag",
  "adk-runner",
  "adk-sandbox",
@@ -254,6 +274,27 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower 0.5.3",
+ "tracing",
+]
+
+[[package]]
+name = "adk-payments"
+version = "3.0.0"
+dependencies = [
+ "adk-artifact",
+ "adk-auth",
+ "adk-core",
+ "adk-guardrail",
+ "adk-memory",
+ "adk-session",
+ "async-trait",
+ "chrono",
+ "hex",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
  "tracing",
 ]
 
@@ -2093,12 +2134,14 @@ name = "harness-agent-example"
 version = "0.0.1"
 dependencies = [
  "adk-agent",
+ "adk-auth",
  "adk-core",
  "adk-devtools",
  "adk-graph",
  "adk-harness",
  "adk-memory",
  "adk-model",
+ "adk-payments",
  "adk-runner",
  "adk-server",
  "adk-session",

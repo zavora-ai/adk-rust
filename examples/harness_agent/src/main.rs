@@ -33,6 +33,7 @@ use serde_json::{Value, json};
 
 mod hooks;
 mod local;
+mod payments;
 mod team_graph;
 mod web_mcp;
 
@@ -990,7 +991,10 @@ async fn run_scripted(name: &str, subject: Subject) -> Result<Checks> {
                     Some(result) => result,
                     None => match local::run_scripted(other, subject).await {
                         Some(result) => result,
-                        None => bail!("unknown scenario {other}"),
+                        None => match payments::run_scripted(other, subject).await {
+                            Some(result) => result,
+                            None => bail!("unknown scenario {other}"),
+                        },
                     },
                 },
             },
@@ -1031,7 +1035,7 @@ async fn main() -> Result<()> {
                 println!("| — | {provider} | — | skipped: no key |");
                 continue;
             };
-            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).chain(web_mcp::LIVE).chain(hooks::LIVE).copied() {
+            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).chain(web_mcp::LIVE).chain(hooks::LIVE).chain(payments::LIVE).copied() {
                 if !selected.is_empty() && !selected.contains(&scenario) {
                     continue;
                 }
@@ -1043,7 +1047,10 @@ async fn main() -> Result<()> {
                         Some(result) => result,
                         None => match web_mcp::run_live(other, model.clone()).await {
                             Some(result) => result,
-                            None => hooks::run_live(other, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                            None => match hooks::run_live(other, model.clone()).await {
+                                Some(result) => result,
+                                None => payments::run_live(other, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                            },
                         },
                     },
                 };
@@ -1064,6 +1071,7 @@ async fn main() -> Result<()> {
             .chain(web_mcp::SCRIPTED)
             .chain(hooks::SCRIPTED)
             .chain(local::SCRIPTED)
+            .chain(payments::SCRIPTED)
         {
             if !selected.is_empty() && !selected.contains(name) {
                 continue;
