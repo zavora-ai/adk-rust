@@ -92,6 +92,18 @@ pub struct HarnessArgs {
     /// Turn long-term memory off: nothing is recalled or learned (spec 3.1 §7.15.2)
     #[arg(long)]
     pub no_memory: bool,
+
+    /// Declare web_fetch (on by default in this binary; spec 3.1 §7.20)
+    #[arg(long, conflicts_with = "no_web")]
+    pub web: bool,
+
+    /// Declare no web tools
+    #[arg(long = "no-web")]
+    pub no_web: bool,
+
+    /// Host fetched without approval: exact, or *.example.com (repeatable)
+    #[arg(long = "allow-domain", value_name = "HOST")]
+    pub allow_domains: Vec<String>,
 }
 
 /// A `--member` flag value (spec 3.1 §8.1, §7.10).
@@ -225,6 +237,8 @@ struct ConfigFile {
     trust: Option<bool>,
     packs: Option<Vec<String>>,
     members: Option<Vec<String>>,
+    web: Option<bool>,
+    allow_domains: Option<Vec<String>>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
 }
@@ -290,6 +304,10 @@ pub struct ResolvedHarnessArgs {
     pub packs: Vec<Pack>,
     /// `--member`.
     pub members: Vec<MemberArg>,
+    /// `--web` / `--no-web`: whether `web_fetch` is declared (spec 3.1 §7.20).
+    pub web: bool,
+    /// `--allow-domain`: hosts fetched without approval.
+    pub allow_domains: Vec<String>,
     /// Long-term memory: on unless `--no-memory` or `--ephemeral`.
     pub memory: bool,
     /// Settings a config file made that were ignored, and why.
@@ -347,6 +365,8 @@ impl HarnessArgs {
         let mut trust = false;
         let mut packs = Vec::new();
         let mut members = Vec::new();
+        let mut web = true;
+        let mut allow_domains: Vec<String> = Vec::new();
         if let Some(user) = &user {
             let origin = user_config.map_or_else(String::new, |path| path.display().to_string());
             if let Some(value) = &user.mode {
@@ -364,6 +384,10 @@ impl HarnessArgs {
             for member in user.members.iter().flatten() {
                 members.push(parse_member(member).map_err(|error| config_error(&origin, &error))?);
             }
+            if let Some(value) = user.web {
+                web = value;
+            }
+            allow_domains.extend(user.allow_domains.iter().flatten().cloned());
             for key in user.unknown.keys().filter(|key| *key != DEPLOY_TABLE) {
                 notes.push(format!("{origin}: unknown key `{key}` ignored"));
             }
@@ -390,12 +414,19 @@ impl HarnessArgs {
             if project.fail_if_unavailable == Some(true) {
                 fail_if_unavailable = true;
             }
+            if project.web == Some(false) {
+                web = false;
+            }
             for (key, set) in [
                 ("yes", project.yes == Some(true)),
                 ("allow_unsandboxed", project.allow_unsandboxed == Some(true)),
                 ("trust", project.trust == Some(true)),
                 ("packs", project.packs.as_ref().is_some_and(|packs| !packs.is_empty())),
                 ("members", project.members.as_ref().is_some_and(|members| !members.is_empty())),
+                (
+                    "allow_domains",
+                    project.allow_domains.as_ref().is_some_and(|domains| !domains.is_empty()),
+                ),
             ] {
                 if set {
                     notes.push(loosening_note(key, "it would loosen what the agent may do"));
@@ -418,6 +449,12 @@ impl HarnessArgs {
         trust |= self.trust;
         packs.extend(self.packs.iter().copied());
         members.extend(self.members.iter().cloned());
+        if self.no_web {
+            web = false;
+        } else if self.web {
+            web = true;
+        }
+        allow_domains.extend(self.allow_domains.iter().cloned());
         if fail_if_unavailable && !sandbox {
             return Err(AdkError::config(
                 "fail_if_unavailable needs the sandbox: pass --sandbox or set sandbox = true",
@@ -436,6 +473,8 @@ impl HarnessArgs {
             packs,
             members,
             memory: !self.no_memory && !self.ephemeral,
+            web,
+            allow_domains,
             notes,
         })
     }
@@ -489,6 +528,8 @@ mod tests {
                 packs: vec![],
                 members: vec![],
                 memory: true,
+                web: true,
+                allow_domains: vec![],
                 notes: vec![],
             }
         );

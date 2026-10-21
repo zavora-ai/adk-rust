@@ -32,6 +32,7 @@ use futures::StreamExt;
 use serde_json::{Value, json};
 
 mod team_graph;
+mod web_mcp;
 
 const APP: &str = "harness-example";
 
@@ -972,13 +973,20 @@ async fn run_scripted(name: &str, subject: Subject) -> Result<Checks> {
         "long_term_memory_across_sessions" => long_term_memory_across_sessions(subject).await,
         other => match team_graph::run_scripted(other, subject).await {
             Some(result) => result,
-            None => bail!("unknown scenario {other}"),
+            None => match web_mcp::run_scripted(other, subject).await {
+                Some(result) => result,
+                None => bail!("unknown scenario {other}"),
+            },
         },
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Started by the MCP scenarios as their scripted server (spec 3.1 §7.21, H12).
+    if std::env::var(web_mcp::MCP_SERVER_ENV).is_ok() {
+        return web_mcp::serve_mcp_fixture().await;
+    }
     match std::env::var("HARNESS_ENV_FILE") {
         Ok(path) => {
             dotenvy::from_path_override(path).ok();
@@ -1006,7 +1014,7 @@ async fn main() -> Result<()> {
                 println!("| — | {provider} | — | skipped: no key |");
                 continue;
             };
-            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).copied() {
+            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).chain(web_mcp::LIVE).copied() {
                 if !selected.is_empty() && !selected.contains(&scenario) {
                     continue;
                 }
@@ -1014,7 +1022,10 @@ async fn main() -> Result<()> {
                 let checks = match scenario {
                     "live_plan_mode_writes_nothing" => live_plan_mode_writes_nothing(model.clone()).await,
                     "live_standing_rule" => live_standing_rule(model.clone()).await,
-                    other => team_graph::run_live(other, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                    other => match team_graph::run_live(other, model.clone()).await {
+                        Some(result) => result,
+                        None => web_mcp::run_live(other, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                    },
                 };
                 let result = match &checks {
                     Ok(checks) if checks.passed() => "PASS".to_string(),
@@ -1027,7 +1038,7 @@ async fn main() -> Result<()> {
         }
     } else {
         let mut rows = Vec::new();
-        for name in SCRIPTED.iter().chain(team_graph::SCRIPTED) {
+        for name in SCRIPTED.iter().chain(team_graph::SCRIPTED).chain(web_mcp::SCRIPTED) {
             if !selected.is_empty() && !selected.contains(name) {
                 continue;
             }

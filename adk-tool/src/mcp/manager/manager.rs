@@ -76,6 +76,14 @@ pub struct McpServerManager {
     #[cfg(feature = "mcp-sampling")]
     pub(crate) sampling_handler: Option<Arc<dyn crate::sampling::SamplingHandler>>,
 
+    /// Elicitation handlers of single servers, preferred over the shared one
+    /// (spec 3.1 §10 T2).
+    pub(crate) server_elicitation_handlers: HashMap<String, Arc<dyn ElicitationHandler>>,
+
+    /// Sampling handlers of single servers, preferred over the shared one (spec 3.1 §10 T2).
+    #[cfg(feature = "mcp-sampling")]
+    pub(crate) server_sampling_handlers: HashMap<String, Arc<dyn crate::sampling::SamplingHandler>>,
+
     /// Interval between health check cycles. Default: 30 seconds.
     pub(crate) health_check_interval: Duration,
 
@@ -120,6 +128,9 @@ struct Launcher {
     startup_timeout: Duration,
     #[cfg(feature = "mcp-sampling")]
     sampling_handler: Option<Arc<dyn crate::sampling::SamplingHandler>>,
+    server_elicitation_handlers: HashMap<String, Arc<dyn ElicitationHandler>>,
+    #[cfg(feature = "mcp-sampling")]
+    server_sampling_handlers: HashMap<String, Arc<dyn crate::sampling::SamplingHandler>>,
 }
 
 impl Launcher {
@@ -219,9 +230,12 @@ impl Launcher {
         })?;
 
         // Build one handler for both lifecycle negotiation and later MRTR/task input.
+        // A handler set for this server wins over the shared one (spec 3.1 §10 T2).
         let handler: Arc<dyn ElicitationHandler> = self
-            .elicitation_handler
-            .clone()
+            .server_elicitation_handlers
+            .get(id)
+            .cloned()
+            .or_else(|| self.elicitation_handler.clone())
             .unwrap_or_else(|| Arc::new(AutoDeclineElicitationHandler));
 
         let mut adk_handler = AdkClientHandler::new(handler);
@@ -233,7 +247,9 @@ impl Launcher {
                 adk_handler.with_resource_notification_handler(Arc::clone(resource_handler));
         }
         #[cfg(feature = "mcp-sampling")]
-        if let Some(sampling) = &self.sampling_handler {
+        if let Some(sampling) =
+            self.server_sampling_handlers.get(id).or(self.sampling_handler.as_ref())
+        {
             adk_handler = adk_handler.with_sampling_handler(Arc::clone(sampling));
         }
 
@@ -298,6 +314,9 @@ impl McpServerManager {
             resource_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "mcp-sampling")]
             sampling_handler: None,
+            server_elicitation_handlers: HashMap::new(),
+            #[cfg(feature = "mcp-sampling")]
+            server_sampling_handlers: HashMap::new(),
             health_check_interval: Duration::from_secs(30),
             grace_period: Duration::from_secs(5),
             monitor_cancel: StdMutex::new(CancellationToken::new()),
@@ -393,6 +412,65 @@ impl McpServerManager {
     ) -> Self {
         self.sampling_handler = Some(handler);
         self
+    }
+
+    /// Sets the elicitation handler of server `id` alone, preferred over the shared one
+    /// (spec 3.1 §10 T2).
+    ///
+    /// A server without its own handler uses the shared one, or declines.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::collections::HashMap;
+    /// use std::sync::Arc;
+    /// use adk_tool::mcp::{AutoDeclineElicitationHandler, McpServerManager};
+    ///
+    /// let manager = McpServerManager::new(HashMap::new())
+    ///     .with_server_elicitation_handler("fs", Arc::new(AutoDeclineElicitationHandler));
+    /// assert!(manager.server_elicitation_handler("fs").is_some());
+    /// assert!(manager.server_elicitation_handler("other").is_none());
+    /// ```
+    pub fn with_server_elicitation_handler(
+        mut self,
+        id: impl Into<String>,
+        handler: Arc<dyn ElicitationHandler>,
+    ) -> Self {
+        self.server_elicitation_handlers.insert(id.into(), handler);
+        self
+    }
+
+    /// The elicitation handler set for server `id` alone, if any.
+    pub fn server_elicitation_handler(&self, id: &str) -> Option<Arc<dyn ElicitationHandler>> {
+        self.server_elicitation_handlers.get(id).cloned()
+    }
+
+    /// Sets the sampling handler of server `id` alone, preferred over the shared one
+    /// (spec 3.1 §10 T2), so one server may sample while another cannot.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let manager = McpServerManager::new(configs)
+    ///     .with_server_sampling_handler("summarizer", Arc::new(LlmSamplingHandler::new(model)));
+    /// ```
+    #[cfg(feature = "mcp-sampling")]
+    pub fn with_server_sampling_handler(
+        mut self,
+        id: impl Into<String>,
+        handler: Arc<dyn crate::sampling::SamplingHandler>,
+    ) -> Self {
+        self.server_sampling_handlers.insert(id.into(), handler);
+        self
+    }
+
+    /// The sampling handler set for server `id` alone, if any.
+    #[cfg(feature = "mcp-sampling")]
+    pub fn server_sampling_handler(
+        &self,
+        id: &str,
+    ) -> Option<Arc<dyn crate::sampling::SamplingHandler>> {
+        self.server_sampling_handlers.get(id).cloned()
     }
 
     /// Set the interval between health check cycles.
@@ -501,6 +579,9 @@ impl McpServerManager {
             startup_timeout: self.startup_timeout,
             #[cfg(feature = "mcp-sampling")]
             sampling_handler: self.sampling_handler.clone(),
+            server_elicitation_handlers: self.server_elicitation_handlers.clone(),
+            #[cfg(feature = "mcp-sampling")]
+            server_sampling_handlers: self.server_sampling_handlers.clone(),
         }
     }
 

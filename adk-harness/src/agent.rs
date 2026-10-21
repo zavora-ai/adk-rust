@@ -124,6 +124,12 @@ pub struct HarnessRuntime {
     #[cfg(feature = "graph")]
     pub(crate) plan_graph: Option<Arc<crate::plan_graph::PlanGraphs>>,
     pub(crate) goals: crate::goal::GoalRuntime,
+    /// Provider-executed search and URL tools, when the operator enabled any (spec 3.1 §7.20).
+    #[cfg(feature = "web")]
+    pub(crate) provider_web: Option<Arc<crate::web::provider::ProviderWebToolset>>,
+    /// MCP servers and the bridges answering them (spec 3.1 §7.21).
+    #[cfg(feature = "mcp")]
+    pub(crate) mcp: Option<Arc<crate::mcp::McpInteractionRuntime>>,
 }
 
 /// The harness's audit trail, in Block mode: `recorder`, or with feature `auth` an
@@ -238,6 +244,46 @@ impl HarnessRuntime {
     /// The audit trail a run gets when it carries none (spec 3.1 §7.14, §9.2 I39).
     pub fn audit_trail(&self) -> Option<&adk_core::audit_log::AuditTrail> {
         self.audit.as_ref()
+    }
+
+    /// Reads MCP resource `uri` of `server` for an explicit `@server:resource` mention by
+    /// `user` in `session` of `app`: the delimited untrusted block, recorded as
+    /// `harness.mcp.resource.read` with `via: mention` (spec 3.1 §7.21, I52).
+    ///
+    /// # Errors
+    ///
+    /// `harness.mcp.unknown_server`, the server's error, or the audit error.
+    #[cfg(feature = "mcp")]
+    pub async fn mcp_resource_mention(
+        &self,
+        app: &str,
+        user: &str,
+        session: &str,
+        server: &str,
+        uri: &str,
+    ) -> Result<serde_json::Value> {
+        let Some(mcp) = &self.mcp else {
+            return Err(AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::NotFound,
+                "harness.mcp.unknown_server",
+                "this harness has no MCP servers",
+            ));
+        };
+        let audit = self.audit.clone().map(|trail| {
+            crate::audit::HarnessAudit::new(
+                trail,
+                adk_core::audit_log::AuditActor::for_invocation(app, "harness", user, "mention"),
+                session,
+            )
+        });
+        mcp.read_resource(server, uri, "mention", audit.as_ref()).await
+    }
+
+    /// The MCP servers and bridges, when the harness has any (spec 3.1 §7.21).
+    #[cfg(feature = "mcp")]
+    pub fn mcp(&self) -> Option<&Arc<crate::mcp::McpInteractionRuntime>> {
+        self.mcp.as_ref()
     }
 
     /// The compiled team, when the harness has members (spec 3.1 §7.10).
@@ -578,6 +624,18 @@ impl Agent for HarnessAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        // A run that starts in Ask or Auto with a provider-executed web tool declared
+        // records that an ungoverned fetch path was live (spec 3.1 §7.20, I49).
+        #[cfg(feature = "web")]
+        if let Some(provider_web) = &self.runtime.provider_web {
+            provider_web.record_run_start(ctx.as_ref()).await?;
+        }
+        // Operator-declared MCP servers start with the first run; workspace-declared ones
+        // only under workspace trust (spec 3.1 §7.21, I3).
+        #[cfg(feature = "mcp")]
+        if let Some(mcp) = &self.runtime.mcp {
+            mcp.ensure_started(self.runtime.workspace_trusted()).await;
+        }
         let events = self.run_governed(ctx.clone()).await?;
         Ok(self.with_mode_mirror(&ctx, events).await)
     }

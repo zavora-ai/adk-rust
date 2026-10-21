@@ -631,6 +631,48 @@ impl StandingRule {
             }
             return out;
         }
+        // Web: the exact host the call named, never a wildcard the human did not type
+        // (spec 3.1 §7.5, §7.20).
+        if name == "web_fetch" && static_tool {
+            let Some(host) =
+                request.args.get("url").and_then(Value::as_str).and_then(crate::web::url_host)
+            else {
+                return Vec::new();
+            };
+            if crate::web::is_private_host(&host) {
+                return Vec::new();
+            }
+            return vec![RuleSuggestion {
+                label: format!("web_fetch: any page on {host}"),
+                scope: SuggestedScope::User,
+                tool: "web_fetch".into(),
+                origin: pin,
+                predicates: vec![RulePredicate::Arg(ArgSpec::DomainIn {
+                    pointer: "/url".into(),
+                    domains: vec![host],
+                })],
+                runs_scripts: false,
+            }];
+        }
+        if name == "web_search" && static_tool {
+            let Some(site) = request.args.get("site").and_then(Value::as_str) else {
+                return Vec::new();
+            };
+            let Some(host) = crate::web::url_host(&format!("https://{site}/")) else {
+                return Vec::new();
+            };
+            return vec![RuleSuggestion {
+                label: format!("web_search: searches restricted to {host}"),
+                scope: SuggestedScope::User,
+                tool: "web_search".into(),
+                origin: pin,
+                predicates: vec![RulePredicate::Arg(ArgSpec::Equals {
+                    pointer: "/site".into(),
+                    value: Value::String(host),
+                })],
+                runs_scripts: false,
+            }];
+        }
         if EDIT_TOOLS.contains(&name) && static_tool {
             let Some(path) = request.args.get("path").and_then(Value::as_str) else {
                 return Vec::new();

@@ -167,6 +167,12 @@ pub struct HarnessAgentBuilder {
     customize: Option<Customize>,
     unimplemented: Vec<String>,
     last_todos: Option<Arc<Mutex<TodoList>>>,
+    web: Option<crate::web::WebConfig>,
+    search_provider: Option<Arc<dyn crate::web::SearchProvider>>,
+    provider_web_tools: crate::web::ProviderWebTools,
+    mcp_interaction: crate::mcp::McpInteractionConfig,
+    #[cfg(feature = "mcp")]
+    mcp_servers: Vec<crate::mcp::McpServerSet>,
 }
 
 impl HarnessAgentBuilder {
@@ -233,7 +239,81 @@ impl HarnessAgentBuilder {
             customize: None,
             unimplemented: Vec::new(),
             last_todos: None,
+            web: None,
+            search_provider: None,
+            provider_web_tools: crate::web::ProviderWebTools::default(),
+            mcp_interaction: crate::mcp::McpInteractionConfig::default(),
+            #[cfg(feature = "mcp")]
+            mcp_servers: Vec::new(),
         }
+    }
+
+    /// Governed web access (spec 3.1 §7.20): `web_fetch`, and `web_search` when a
+    /// [`search_provider`](Self::search_provider) is set, under `config`'s allowlist and
+    /// caps. Without feature `web` the configuration is kept and no tool is added.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let harness = HarnessAgent::builder("harness")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .web(WebConfig { allowed_domains: vec!["docs.rs".into()], ..WebConfig::default() })
+    ///     .build()?;
+    /// ```
+    pub fn web(mut self, config: crate::web::WebConfig) -> Self {
+        self.web = Some(config);
+        self
+    }
+
+    /// The search backend behind `web_search` (spec 3.1 §7.20); none by default, so
+    /// `web_search` is declared only when one is set.
+    pub fn search_provider(mut self, provider: Arc<dyn crate::web::SearchProvider>) -> Self {
+        self.search_provider = Some(provider);
+        self
+    }
+
+    /// Provider-executed search and URL tools (spec 3.1 §7.20); all off by default.
+    ///
+    /// An enabled tool is attached for the harness model's provider only, carries the
+    /// allowlist where the provider supports one, is declared only to a run starting in
+    /// Ask or Auto, and is recorded as `harness.web.provider_enabled` once per run (I49).
+    pub fn provider_web_tools(mut self, tools: crate::web::ProviderWebTools) -> Self {
+        self.provider_web_tools = tools;
+        self
+    }
+
+    /// How the harness answers what MCP servers ask of it (spec 3.1 §7.21): elicitation,
+    /// sampling and resources. Without feature `mcp` the configuration is kept and no
+    /// bridge is installed.
+    pub fn mcp_interaction(mut self, config: crate::mcp::McpInteractionConfig) -> Self {
+        self.mcp_interaction = config;
+        self
+    }
+
+    /// MCP servers the harness starts and governs (spec 3.1 §7.21): their tools are
+    /// `External` tools, their elicitations reach the prompter or the approval inbox,
+    /// their sampling runs under the run's budget, and their resources are reachable
+    /// through `mcp_list_resources` and `mcp_read_resource`.
+    ///
+    /// Operator-declared servers (`trusted: true`) start with the harness; servers a
+    /// workspace file declares start only once the workspace is trusted (spec 3.1 §7.7,
+    /// I3).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let servers = McpServerManager::from_json_file(".mcp.json")?.all_configs().await;
+    /// let harness = HarnessAgent::builder("harness")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .mcp_servers(crate::mcp::McpServerSet::workspace(servers))
+    ///     .build()?;
+    /// ```
+    #[cfg(feature = "mcp")]
+    pub fn mcp_servers(mut self, servers: crate::mcp::McpServerSet) -> Self {
+        self.mcp_servers.push(servers);
+        self
     }
 
     /// The model (required).
@@ -759,6 +839,22 @@ impl HarnessAgentBuilder {
                     tool.name()
                 )));
             }
+            // Every other builtin executes inside the provider, where no policy, ledger,
+            // guardrail or audit record covers it (spec 3.1 §7.20 "Refused builtins").
+            if tool.is_builtin() {
+                return Err(AdkError::config(format!(
+                    "'{}' is a provider-executed tool the harness does not manage; search and URL \
+                     context are enabled through HarnessAgentBuilder::provider_web_tools, computer \
+                     use through its pack, and the rest have no governed form (spec 3.1 §7.20)",
+                    tool.name()
+                )));
+            }
+        }
+        if self.search_provider.is_some() && self.provider_web_tools.anthropic_web_search {
+            return Err(AdkError::config(
+                "the governed web_search and Anthropic's provider web_search share one tool name; \
+                 set a search provider or enable anthropic_web_search, not both (spec 3.1 §7.20)",
+            ));
         }
 
         // 1. Shell runtime.
@@ -779,7 +875,9 @@ impl HarnessAgentBuilder {
             require_trust: self.instructions.require_trust,
         });
         #[cfg_attr(not(feature = "team"), allow(unused_mut))]
-        let mut registry = ToolClassRegistry::harness_defaults(&self.name);
+        let mut registry = ToolClassRegistry::harness_defaults(&self.name).with_web_allowlist(
+            self.web.as_ref().map(|web| web.allowed_domains.clone()).unwrap_or_default(),
+        );
         // 4 (resolved here: member names register as harness classes, spec 3.1 §7.4).
         #[cfg(feature = "team")]
         let team_plan = {
@@ -897,6 +995,33 @@ impl HarnessAgentBuilder {
             tools.push(Arc::new(crate::tools::MemorySearchTool::new(facts.clone())));
             tools.push(Arc::new(crate::tools::MemoryRememberTool::new(facts.clone())));
         }
+        // Governed web tools (spec 3.1 §7.20): `web_search` only with a provider.
+        #[cfg(feature = "web")]
+        if let Some(config) = self.web.clone() {
+            let runtime = crate::web::WebRuntime::new(config);
+            tools.push(Arc::new(crate::tools::WebFetchTool::new(runtime.clone())));
+            if let Some(provider) = &self.search_provider {
+                tools.push(Arc::new(crate::tools::WebSearchTool::new(runtime, provider.clone())));
+            }
+        }
+        // MCP interaction (spec 3.1 §7.21): the bridges exist before the prompter they
+        // answer through, which is bound once the handler is built.
+        #[cfg(feature = "mcp")]
+        let mcp = (!self.mcp_servers.is_empty()).then(|| {
+            Arc::new(crate::mcp::McpInteractionRuntime::new(
+                self.mcp_interaction.clone(),
+                self.mcp_servers.clone(),
+                model.clone(),
+                self.member_model.clone(),
+            ))
+        });
+        #[cfg(feature = "mcp")]
+        if let Some(mcp) = &mcp
+            && self.mcp_interaction.resources
+        {
+            tools.push(Arc::new(crate::tools::McpListResourcesTool::new(mcp.clone())));
+            tools.push(Arc::new(crate::tools::McpReadResourceTool::new(mcp.clone())));
+        }
         let tool_names: Vec<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
         #[cfg(feature = "auth")]
         let (tools, identity_gate) = {
@@ -934,6 +1059,27 @@ impl HarnessAgentBuilder {
         }
         let toolset = Arc::new(toolset);
 
+        // Provider-executed search and URL tools, for the model's provider only, declared
+        // to runs starting in Ask or Auto (spec 3.1 §7.20, I49).
+        #[cfg(feature = "web")]
+        let provider_web = if self.provider_web_tools.any() {
+            let allowlist =
+                self.web.as_ref().map(|web| web.allowed_domains.clone()).unwrap_or_default();
+            Some(Arc::new(crate::web::provider::ProviderWebToolset::new(
+                self.provider_web_tools,
+                model.name(),
+                allowlist,
+                mode_store.clone(),
+                self.mode,
+            )?))
+        } else {
+            None
+        };
+        #[cfg(feature = "web")]
+        let provider_web_names: BTreeSet<String> =
+            provider_web.as_ref().map(|p| p.tool_names().into_iter().collect()).unwrap_or_default();
+        #[cfg(not(feature = "web"))]
+        let provider_web_names: BTreeSet<String> = BTreeSet::new();
         // 5 (policy first: the handler re-checks against it).
         let switches = PolicySwitches {
             auto_allow_sandboxed: shell.auto_allow_sandboxed,
@@ -956,21 +1102,39 @@ impl HarnessAgentBuilder {
             switches,
             trust_mcp_read_only_hints: self.trust_mcp_read_only_hints,
             prompts: PromptContexts::default(),
+            provider_web_tools: provider_web_names,
             #[cfg(feature = "auth")]
             identity: identity_gate.clone(),
             #[cfg(feature = "observe")]
             root_agent: self.name.clone(),
         });
-        let handler: Option<Arc<dyn ToolConfirmationHandler>> =
-            match (self.confirmation_handler, self.prompter) {
-                (Some(handler), _) => Some(handler),
-                (None, Some(prompter)) => Some(Arc::new(PromptingConfirmationHandler::new(
-                    prompter,
-                    rules.clone(),
-                    policy.clone(),
-                ))),
-                (None, None) => None,
-            };
+        let prompting = match (&self.confirmation_handler, self.prompter) {
+            (None, Some(prompter)) => Some(Arc::new(PromptingConfirmationHandler::new(
+                prompter,
+                rules.clone(),
+                policy.clone(),
+            ))),
+            _ => None,
+        };
+        let handler: Option<Arc<dyn ToolConfirmationHandler>> = match self.confirmation_handler {
+            Some(handler) => Some(handler),
+            None => prompting.clone().map(|handler| handler as Arc<dyn ToolConfirmationHandler>),
+        };
+        // Elicitations reach the person through the same prompter, or park in the approval
+        // inbox (spec 3.1 §7.21).
+        #[cfg(feature = "mcp")]
+        if let Some(mcp) = &mcp {
+            mcp.bind_surface(crate::mcp::ElicitationSurface {
+                prompting: prompting.clone(),
+                approval_service: self.approval_service.clone(),
+                timeout: self.confirmation_timeout,
+                mode_store: mode_store.clone(),
+                default_mode: self.mode,
+                isolation: status.clone(),
+            });
+        }
+        #[cfg(not(feature = "mcp"))]
+        let _ = &prompting;
 
         // 3. The LlmAgent.
         let environment = Environment {
@@ -1036,6 +1200,14 @@ impl HarnessAgentBuilder {
         }
         for extra in self.toolsets {
             builder = builder.toolset(extra);
+        }
+        #[cfg(feature = "web")]
+        if let Some(provider_web) = &provider_web {
+            builder = builder.toolset(provider_web.clone());
+        }
+        #[cfg(feature = "mcp")]
+        if let Some(mcp) = &mcp {
+            builder = builder.toolset(mcp.manager());
         }
         if let Some(customize) = self.customize {
             builder = customize(builder);
@@ -1176,6 +1348,10 @@ impl HarnessAgentBuilder {
                 #[cfg(feature = "graph")]
                 plan_graph: plan_graphs,
                 goals,
+                #[cfg(feature = "web")]
+                provider_web,
+                #[cfg(feature = "mcp")]
+                mcp,
             },
             info,
         })

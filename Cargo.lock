@@ -707,6 +707,8 @@ dependencies = [
  "futures",
  "proptest",
  "regex",
+ "reqwest 0.12.28",
+ "rmcp",
  "serde",
  "serde_json",
  "sha2 0.10.9",
