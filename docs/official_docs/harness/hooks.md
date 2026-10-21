@@ -109,6 +109,23 @@ let harness = HarnessAgent::builder("harness")
 `HarnessAgentBuilder::without_hooks` runs none, the workspace's included (the `--no-hooks`
 flag of spec 3.1 §8.1). `HarnessRuntime::hooks` returns the merged set.
 
+## In the CLI
+
+| Surface | Behaviour |
+|---|---|
+| `[[hooks]]` in `.adk/harness.toml` | Workspace hooks; they run once the workspace is trusted, and the trust prompt lists each with its command (spec 3.1 §9.2 I54) |
+| `[[hooks]]` in `<config dir>/adk-rust/harness.toml` | User hooks, run before the workspace's; an invalid table stops the command with the entry number |
+| `--no-hooks` | Runs none, the workspace's included; the banner shows `Hooks : off (--no-hooks)` |
+| `/hooks` | The effective set: each hook's event, matcher and command, its source, isolation, timeout, `fail-closed`, and whether it runs; then the bounds of one turn |
+| `[hook:source] text` | A note from an `on_hold` or `on_stop` hook, shown after the call or the turn; the model never sees it |
+
+```text
+You > /hooks
+  pre_tool [bash]: ./scripts/check-call.sh — workspace · inherit · 5 s · fail-closed · runs
+  post_edit: cargo fmt — user · inherit · 30 s · runs
+  bounds: 8 per event, 60 s per turn
+```
+
 ## Trust
 
 A workspace hook runs only while the workspace is trusted under the content-keyed workspace

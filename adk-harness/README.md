@@ -102,7 +102,9 @@ event as JSON on stdin. It can deny a call, fail or annotate a result, or notify
 can never allow a call, change the mode, create a rule or answer a call, and
 `{"decision":"allow"}` is ignored and audited. Workspace hooks (`.adk/harness.toml`) run
 only under the workspace's content-keyed trust. Every run is a `harness.hook.ran` record.
-See `docs/official_docs/harness/hooks.md`.
+`adk-rust` builds the crate with this feature: `--no-hooks` runs none, `/hooks` lists the
+effective set, and `on_hold` and `on_stop` notes are shown at the console. See
+`docs/official_docs/harness/hooks.md`.
 
 ## Features
 

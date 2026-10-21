@@ -104,6 +104,17 @@ impl Setup {
     ) -> Result<Self> {
         install_tracing();
         let resolved = args.resolve(default_mode, user_config().as_deref())?;
+        // The payments pack takes a merchant backend only a program can supply
+        // (spec 3.1 §7.16): no flag or config file carries one.
+        if resolved.packs.contains(&adk_harness::Pack::Payments) {
+            bail!(
+                "--pack payments: the payments pack needs a merchant checkout service, a \
+                 transaction store and a mandate, which no flag or config file can supply. \
+                 Build a binary that calls HarnessAgentBuilder::pack_payments(PaymentsPack) — \
+                 `cargo adk new <name> --template harness` scaffolds one — and see \
+                 docs/official_docs/harness/payments.md (spec 3.1 §7.16)"
+            );
+        }
         #[cfg(feature = "persist")]
         let (db, store_note) = if args.ephemeral {
             (None, None)
@@ -185,6 +196,13 @@ impl Setup {
             .workspace(workspace)
             .mode(mode)
             .confirmation_timeout(adk_cli::launcher::CONSOLE_CONFIRMATION_TIMEOUT);
+        // Hooks (spec 3.1 §7.22, §8.1): the user config's run before the workspace's, which
+        // the harness reads at build; --no-hooks runs none.
+        if !self.resolved.hooks {
+            builder = builder.without_hooks();
+        } else if !self.resolved.user_hooks.is_empty() {
+            builder = builder.hooks(self.resolved.user_hooks.clone());
+        }
         // Explicit context caching for a model that supports it (spec 3.1 §7.23).
         if let Some(cache) = &models.harness.cache_capable {
             builder = builder.cache_capable(cache.clone());
@@ -273,11 +291,20 @@ impl Setup {
 
     /// A launcher for `agent` over this setup's sessions, user and session choice.
     async fn launcher(&self, agent: HarnessAgent) -> Result<HarnessLauncher> {
+        let hooks = match (self.resolved.hooks, agent.runtime().hooks()) {
+            (false, _) => Some("off (--no-hooks)".to_string()),
+            (true, Some(set)) => Some(format!("{} (/hooks lists them)", set.hooks.len())),
+            (true, None) => None,
+        };
         let mut launcher = HarnessLauncher::new(agent)
             .app_name(APP_NAME)
             .with_session_service(self.sessions())
             .with_user_id(self.user.clone())
-            .trust_workspace(self.resolved.trust);
+            .trust_workspace(self.resolved.trust)
+            .hooks_disabled(!self.resolved.hooks);
+        if let Some(hooks) = hooks {
+            launcher = launcher.with_status_line("Hooks", hooks);
+        }
         if self.resolved.mode_explicit {
             launcher = launcher.with_mode(self.resolved.mode);
         }

@@ -154,9 +154,18 @@ budget names each `RunBudget` limit the run sets.
 
 ## In the CLI
 
-`HarnessAgentBuilder::pack(Pack::Payments)`, which `adk-rust --pack payments` calls, refuses at
-`build`: the pack needs a merchant checkout service, a transaction store and a mandate, which
-only the library API takes (`HarnessAgentBuilder::pack_payments`).
+`adk-rust --pack payments` is refused before anything runs: the pack needs a merchant
+checkout service, a transaction store and a mandate, which no flag or config file can
+supply — a `MerchantCheckoutService` is code that talks to a merchant. The message names
+the path that works:
+
+1. Scaffold a binary with `cargo adk new <name> --template harness`.
+2. Build the harness with `HarnessAgentBuilder::pack_payments(PaymentsPack::new(merchant,
+   store, mandate))`, as the [quick start](#quick-start) shows, and keep the rest of the
+   scaffold — `HarnessLauncher` gives the binary the same REPL, `serve` and approvals.
+
+`HarnessAgentBuilder::pack(Pack::Payments)` without `pack_payments` refuses at `build` with
+the same reason.
 
 ## Known limits
 

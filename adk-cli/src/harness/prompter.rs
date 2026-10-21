@@ -110,6 +110,12 @@ impl ConsolePrompter {
         self.console.print(&text);
     }
 
+    /// Prints a decision made without asking, after the call's line (spec 3.1 §8.1): the
+    /// console holds it until its event reader has shown the call.
+    fn print_decision(&self, prompt: &ApprovalPrompt, text: &str) {
+        self.console.print_for_call(prompt.request.function_call_id.as_deref(), text);
+    }
+
     fn approved_unattended(
         &self,
         prompt: &ApprovalPrompt,
@@ -117,30 +123,37 @@ impl ConsolePrompter {
     ) -> PromptAnswer {
         let title = terminal_safe(&prompt.rendered.title).into_owned();
         if matches!(prompt.kind, ToolKind::ShellEscalation) && !allow_unsandboxed {
-            self.console.print(&format!(
-                "\n[denied] {title} — --yes does not approve an unsandboxed retry; add \
-                 --allow-unsandboxed to approve it\n"
-            ));
+            self.print_decision(
+                prompt,
+                &format!(
+                    "\n[denied] {title} — --yes does not approve an unsandboxed retry; add \
+                     --allow-unsandboxed to approve it\n"
+                ),
+            );
             return PromptAnswer::Deny {
                 message: Some(
                     "--yes does not approve unsandboxed retries without --allow-unsandboxed".into(),
                 ),
             };
         }
-        let full = prompt.rendered.expand().to_string();
-        self.console.print(&format!("\n[approved by --yes] {title}\n"));
-        for line in full.lines() {
-            self.console.print(&format!("  {}\n", terminal_safe(line)));
+        let mut text = format!("\n[approved by --yes] {title}\n");
+        for line in prompt.rendered.expand().lines() {
+            text.push_str(&format!("  {}\n", terminal_safe(line)));
         }
+        self.print_decision(prompt, &text);
         PromptAnswer::ApproveOnce
     }
 
     fn deny_unattended(&self, prompt: &ApprovalPrompt) -> PromptAnswer {
-        self.console.print(&format!(
-            "\n[approval needed] {} — denied: there is no terminal to ask. Run interactively, \
-             pass --yes to approve calls, or --mode plan to plan without changes.\n",
-            terminal_safe(&prompt.rendered.title)
-        ));
+        self.print_decision(
+            prompt,
+            &format!(
+                "\n[approval needed] {} — denied: there is no terminal to ask. Run \
+                 interactively, pass --yes to approve calls, or --mode plan to plan without \
+                 changes.\n",
+                terminal_safe(&prompt.rendered.title)
+            ),
+        );
         PromptAnswer::Deny { message: Some("no terminal was available to ask for approval".into()) }
     }
 
@@ -446,8 +459,32 @@ mod tests {
         let console = ConsoleIo::scripted([line("y")], false);
         let prompter = ConsolePrompter::new(console.clone());
         assert!(matches!(prompter.prompt(bash("make")).await.unwrap(), PromptAnswer::Deny { .. }));
+        // The denial is shown once the console has shown the call it belongs to.
+        assert!(!console.transcript().contains("pass --yes"));
+        console.call_shown("call-1");
         assert!(console.transcript().contains("pass --yes"));
         assert_eq!(console.read_line("").await, line("y"));
+    }
+
+    #[tokio::test]
+    async fn an_unattended_decision_follows_the_calls_line() {
+        let console = ConsoleIo::scripted([], false);
+        let prompter = ConsolePrompter::new(console.clone()).approve_all(false);
+        console.call_shown("call-0");
+        assert_eq!(prompter.prompt(bash("cargo test")).await.unwrap(), PromptAnswer::ApproveOnce);
+        assert!(!console.transcript().contains("[approved by --yes]"), "{}", console.transcript());
+        console.print("[tool-call] bash\n");
+        console.call_shown("call-1");
+        let shown = console.transcript();
+        let call = shown.find("[tool-call] bash").expect(&shown);
+        let approved = shown.find("[approved by --yes] bash on host").expect(&shown);
+        assert!(call < approved, "{shown}");
+        // A prompt for a call already shown prints at once.
+        assert_eq!(prompter.prompt(bash("cargo test")).await.unwrap(), PromptAnswer::ApproveOnce);
+        assert_eq!(
+            shown.matches("[approved by --yes]").count() + 1,
+            console.transcript().matches("[approved by --yes]").count()
+        );
     }
 
     #[tokio::test]
@@ -471,6 +508,7 @@ mod tests {
         assert!(matches!(prompter.prompt(retry.clone()).await.unwrap(), PromptAnswer::Deny { .. }));
         let allowing = ConsolePrompter::new(console.clone()).approve_all(true);
         assert_eq!(allowing.prompt(retry).await.unwrap(), PromptAnswer::ApproveOnce);
+        console.flush_call_prints();
         assert!(console.transcript().contains("[approved by --yes] bash on host"));
     }
 

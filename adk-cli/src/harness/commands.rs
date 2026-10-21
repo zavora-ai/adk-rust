@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use adk_core::{Effort, Result};
+use adk_harness::hooks::HookSource;
 use adk_harness::{
     FactStatus, FileMemory, HarnessMode, MemoryConfig, MemoryFact, MemoryLimits, ModeChange,
     OriginPin, PLAN_STATE_KEY, RuleScope, SkillsConfig, StandingDecision, StandingRule,
@@ -32,6 +33,7 @@ enum Kind {
     Web,
     Mcp,
     Effort,
+    Hooks,
 }
 
 const COMMANDS: &[(Kind, &str, &str)] = &[
@@ -49,6 +51,7 @@ const COMMANDS: &[(Kind, &str, &str)] = &[
     (Kind::Web, "web", "The web allowlist; /web allow HOST adds a standing rule for web_fetch"),
     (Kind::Mcp, "mcp", "MCP servers; /mcp resources SERVER lists what a server publishes"),
     (Kind::Effort, "effort", "Reasoning effort; /effort low|medium|high rebuilds the clients"),
+    (Kind::Hooks, "hooks", "Hooks on tool events: source, isolation and whether each runs"),
 ];
 
 /// One data-driven slash command over the REPL's shared state.
@@ -114,8 +117,56 @@ impl ConsoleCommand for HarnessCommand {
             Kind::Web => web(shared, args).await,
             Kind::Mcp => mcp(shared, args).await,
             Kind::Effort => effort(shared, args).await,
+            Kind::Hooks => Ok(hooks(shared)),
         }
     }
+}
+
+/// `/hooks`: the effective hook set — each hook with its source, isolation, timeout and
+/// whether it runs, since a workspace hook runs only under the workspace's trust — and the
+/// bounds of one turn (spec 3.1 §7.22, §8.1).
+fn hooks(shared: &Shared) -> String {
+    if shared.hooks_disabled {
+        return "Hooks are off (--no-hooks).".into();
+    }
+    let harness = shared.harness();
+    let agent = harness.agent();
+    let Some(set) = agent.runtime().hooks() else {
+        return format!(
+            "No hooks. Add [[hooks]] tables to {} (they run once the workspace is trusted) \
+             or to your user config.",
+            adk_cli_project_file()
+        );
+    };
+    let trusted = agent.runtime().workspace_trusted();
+    let mut out = String::new();
+    for hook in &set.hooks {
+        let runs = match hook.source {
+            HookSource::Workspace if !trusted => "does not run: the workspace is not trusted",
+            HookSource::Workspace | HookSource::User | HookSource::Operator => "runs",
+        };
+        let _ = writeln!(
+            out,
+            "  {} — {} · {} · {} s{} · {runs}",
+            hook.describe(),
+            hook.source.as_str(),
+            hook.isolation.as_str(),
+            hook.timeout.as_secs(),
+            if hook.fail_closed { " · fail-closed" } else { "" }
+        );
+    }
+    let _ = write!(
+        out,
+        "  bounds: {} per event, {} s per turn",
+        set.max_per_event,
+        set.max_time_per_turn.as_secs()
+    );
+    out
+}
+
+/// The project file, as `/hooks` names it.
+fn adk_cli_project_file() -> &'static str {
+    super::args::PROJECT_CONFIG_FILE
 }
 
 /// `/effort`: the session's reasoning effort; `/effort low|medium|high` rebuilds the
@@ -544,6 +595,8 @@ async fn mcp(shared: &Shared, args: &str) -> Result<String> {
             if out.is_empty() {
                 out.push_str("no resources");
             }
+            // The names just listed are the ones Tab completes.
+            shared.refresh_mentions().await;
             Ok(out)
         }
         _ => Ok("use /mcp, or /mcp resources SERVER".into()),

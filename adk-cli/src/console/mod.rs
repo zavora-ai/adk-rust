@@ -9,6 +9,7 @@
 //! configuration options (memory, artifacts, streaming mode, approvals, etc.).
 
 mod command;
+mod complete;
 mod confirm;
 mod edit;
 mod io;

@@ -564,6 +564,7 @@ impl Launcher {
         );
 
         print_banner(agent.name(), &session_id);
+        console.set_command_completions(command_completions(&commands));
 
         loop {
             let line = match console.read_line("\x1b[36mYou >\x1b[0m ").await {
@@ -956,8 +957,17 @@ pub(crate) async fn drive_turn(
                             let _ = io::stdout().flush();
                         }
 
+                        // A decision a prompter printed for a call follows the call's line
+                        // and precedes its response (spec 3.1 §8.1).
+                        let (calls, responses) = call_ids(&evt);
+                        for id in &responses {
+                            console.call_shown(id);
+                        }
                         if echo {
                             printer.handle_event(&evt);
+                        }
+                        for id in &calls {
+                            console.call_shown(id);
                         }
                         if let Some(request) = &evt.actions.tool_confirmation {
                             end.held.push(request.clone());
@@ -1005,11 +1015,40 @@ pub(crate) async fn drive_turn(
     if echo {
         printer.finish();
     }
+    console.flush_call_prints();
     // The stream can end on its own once a prompt cancelled the run.
     if cancellation_token.is_cancelled() && !end.ended_by_denial {
         end.interrupted = true;
     }
     end
+}
+
+/// The ids of the function calls and of the function responses a complete event shows.
+fn call_ids(event: &Event) -> (Vec<String>, Vec<String>) {
+    let (mut calls, mut responses) = (Vec::new(), Vec::new());
+    if event.llm_response.partial {
+        return (calls, responses);
+    }
+    for part in event.llm_response.content.as_ref().map_or(&[][..], |c| c.parts.as_slice()) {
+        match part {
+            Part::FunctionCall { id: Some(id), .. } => calls.push(id.clone()),
+            Part::FunctionResponse { id: Some(id), .. } => responses.push(id.clone()),
+            _ => {}
+        }
+    }
+    (calls, responses)
+}
+
+/// The slash commands Tab completes at the start of a line: the built-ins and `commands`.
+pub(crate) fn command_completions(commands: &[Arc<dyn ConsoleCommand>]) -> Vec<String> {
+    let mut names: Vec<String> =
+        ["/help", "/clear", "/quit", "/exit"].iter().map(ToString::to_string).collect();
+    names.extend(
+        commands.iter().map(|command| format!("/{}", command.name().trim_start_matches('/'))),
+    );
+    names.sort_unstable();
+    names.dedup();
+    names
 }
 
 /// The registered command a slash line names, with the text after the name.
@@ -1212,6 +1251,14 @@ impl<W: Write> StreamPrinter<W> {
     /// printer.finish();
     /// ```
     pub fn handle_event(&mut self, event: &Event) {
+        // A note from an `on_hold` or `on_stop` hook is for the user (spec 3.1 §7.22).
+        #[cfg(feature = "harness")]
+        if let Some(notice) = event.provider_metadata.get(adk_harness::hooks::HOOK_NOTICE_KEY) {
+            self.flush_pending_thinking();
+            let (source, text) = hook_notice(notice);
+            let text = text.replace('\n', "\n  ");
+            self.emit(&format!("\n[hook:{source}] {text}\n"));
+        }
         let held = event.actions.tool_confirmation.as_ref();
         let decision = event.actions.tool_confirmation_decision;
         let parts = event.llm_response.content.as_ref().map_or(&[][..], |c| c.parts.as_slice());
@@ -1439,6 +1486,21 @@ impl Default for StreamPrinter {
     }
 }
 
+/// The source and text of a rendered hook note (`<hook-note source="…" hook="…">` around
+/// the text); a note in another shape is shown as it is, from `hook`.
+#[cfg(feature = "harness")]
+fn hook_notice(rendered: &str) -> (String, String) {
+    let parsed = rendered
+        .strip_prefix("<hook-note source=\"")
+        .and_then(|rest| rest.split_once('"'))
+        .and_then(|(source, rest)| {
+            let body = rest.split_once(">\n")?.1;
+            let text = body.strip_suffix("\n</hook-note>").unwrap_or(body);
+            Some((source.to_string(), text.to_string()))
+        });
+    parsed.unwrap_or_else(|| ("hook".to_string(), rendered.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1451,6 +1513,48 @@ mod tests {
     use futures::stream;
     use std::sync::Arc;
     use tower::ServiceExt;
+
+    #[cfg(feature = "harness")]
+    #[test]
+    fn a_hook_notice_is_shown_to_the_user_with_its_source() {
+        use adk_harness::hooks::{HOOK_NOTICE_KEY, HookNote, HookSource};
+        let note = HookNote::new(HookSource::Workspace, "sha256:ab12", "turn done\ntwo files");
+        let mut event = Event::new("invocation");
+        event.provider_metadata.insert(HOOK_NOTICE_KEY.to_string(), note.render());
+        let captured = Captured::default();
+        let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, captured.clone());
+        printer.handle_event(&event);
+        printer.finish();
+        assert_eq!(captured.text(), "\n[hook:workspace] turn done\n  two files\n");
+        assert_eq!(
+            hook_notice("plain text"),
+            ("hook".to_string(), "plain text".to_string()),
+            "a note in another shape is shown as it is"
+        );
+    }
+
+    #[test]
+    fn command_completions_cover_the_built_ins_and_the_registered_commands() {
+        struct Named(&'static str);
+        #[async_trait]
+        impl ConsoleCommand for Named {
+            fn name(&self) -> &str {
+                self.0
+            }
+            fn description(&self) -> &str {
+                ""
+            }
+            async fn run(&self, _: &str, _: &ConsoleCommandContext) -> AdkResult<String> {
+                Ok(String::new())
+            }
+        }
+        let commands: Vec<Arc<dyn ConsoleCommand>> =
+            vec![Arc::new(Named("mode")), Arc::new(Named("/mcp")), Arc::new(Named("help"))];
+        assert_eq!(
+            command_completions(&commands),
+            ["/clear", "/exit", "/help", "/mcp", "/mode", "/quit"]
+        );
+    }
 
     struct TestAgent;
 

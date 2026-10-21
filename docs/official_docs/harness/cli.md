@@ -53,8 +53,13 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--no-memory` | Turns long-term memory off: nothing is recalled or learned |
 | `--effort low\|medium\|high` | The reasoning effort of this session's model clients (spec 3.1 §7.23); without it the `[effort]` policy applies per mode: plan high, everything else medium |
 | `--store-key keychain:<entry>\|secret:<provider>/<name>\|env:<VAR>` | Where the key sealing `harness.db` is kept (spec 3.1 §7.12); without it `[store] key` in the user config, else the store is plaintext |
+| `--no-hooks` | Runs no hooks, the workspace's included (spec 3.1 §7.22); `/hooks` lists the effective set |
 
 > **Note:** packs report themselves unavailable until their part of spec 3.1 lands (§7.16).
+
+`--pack payments` is refused with the reason: the pack needs a merchant checkout service, a
+transaction store and a mandate, which no flag or config file can supply; see
+[Payments](payments.md#in-the-cli) for the binary that does.
 
 ### Configuration files
 
@@ -86,12 +91,18 @@ distiller = "low"
 
 [store]                      # the user config only (spec 3.1 §7.12)
 key = "keychain:adk-rust"
+
+[[hooks]]                    # spec 3.1 §7.22; see Hooks
+event = "post_edit"
+command = "cargo fmt"
 ```
 
 `[effort]` names a level per mode (`read_only`, `plan`, `ask`, `auto`) and per role
 (`members`, `distiller`, `sampling`); a project file may set it, since effort costs money,
 not permissions. `[store]` names where the store key lives and is read from the user config
-only; a project file setting it is ignored with a note.
+only; a project file setting it is ignored with a note. `[[hooks]]` tables are hooks on
+tool events ([Hooks](hooks.md#in-the-cli)): the user config's run before the workspace's,
+and the workspace's run only once the workspace is trusted.
 
 A workspace file can only tighten (spec 3.1 §9.2 I3): it may choose a stricter mode than
 your config, turn the sandbox on, or require it. `yes`, `trust`, `allow_unsandboxed`,
@@ -179,9 +190,19 @@ asks again.
 | `/cost` | Your spend: model calls, tokens and cost per acting agent and vendor |
 | `/memory` | Working notes and long-term facts with their status, kind, source and session; `/memory forget ID` and `/memory accept ID` act on one fact (a unique prefix of the id is enough) |
 | `/effort [low\|medium\|high]` | Shows the session's reasoning effort and the policy; with a level, restarts the session's model clients at it (spec 3.1 §7.23) |
+| `/hooks` | The hooks on tool events — each with its source, isolation, timeout and whether it runs — and the bounds of one turn (spec 3.1 §7.22); a workspace hook runs only under the workspace's trust |
 | `/help`, `exit` | Lists the commands; leaves the REPL |
 
 Opening a session that has held calls with decisions resumes them first.
+
+Tab completes a slash command at the start of a line and an `@server:uri` mention
+anywhere in it, from the resources the MCP servers publish (spec 3.1 §7.21); the mentions
+are refreshed after each turn and after `/mcp resources SERVER`. A note from an `on_hold`
+or `on_stop` hook is shown as `[hook:source] text` after the call or the turn; the model
+never sees it. A decision printed without asking — `[approved by --yes] …`, or the denial
+of a call no terminal could ask about — follows the `[tool-call]` line it belongs to,
+including under a durable goal, where the console reads the run's events as the worker
+records them.
 
 ## Sessions and `harness.db`
 

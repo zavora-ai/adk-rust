@@ -142,9 +142,11 @@ adk-rust registry     Agent Registry registration and search (`vertex-agent-regi
 | `--allow-unsandboxed` | off | Let `--yes` approve an unsandboxed retry |
 | `--trust` | ask once | Trust the workspace's `AGENTS.md` without asking |
 | `--pack`, `--member` | none | Packs and team members |
+| `--no-hooks` | off | Run no hooks, the workspace's included; `/hooks` lists the effective set |
 
 Settings also come from `.adk/harness.toml` in the workspace (which can only tighten) and
-`adk-rust/harness.toml` in the config directory; flags win. See
+`adk-rust/harness.toml` in the config directory, `[[hooks]]` tables included; flags win.
+Tab completes slash commands and `@server:uri` mentions. See
 [The harness in your terminal](../docs/official_docs/harness/cli.md).
 
 ### `adk-rust chat` options

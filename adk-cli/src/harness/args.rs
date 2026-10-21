@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use adk_core::{AdkError, Effort, Result};
+use adk_harness::hooks::{HookSet, HookSource};
 use adk_harness::{EffortPolicy, HarnessMode, MemberSpec, Pack};
 use serde::Deserialize;
 
@@ -113,6 +114,10 @@ pub struct HarnessArgs {
     /// or `env:<VAR>` (default: `[store] key` in the user config; spec 3.1 §7.12)
     #[arg(long, value_name = "SOURCE")]
     pub store_key: Option<String>,
+
+    /// Run no hooks, not even the workspace's (spec 3.1 §7.22)
+    #[arg(long = "no-hooks")]
+    pub no_hooks: bool,
 }
 
 /// A `--member` flag value (spec 3.1 §8.1, §7.10).
@@ -256,6 +261,12 @@ struct ConfigFile {
     effort: Option<EffortPolicy>,
     /// `[store]`: where the store key is kept (spec 3.1 §7.12); the user config only.
     store: Option<StoreTable>,
+    /// `[[hooks]]` tables (spec 3.1 §7.22): the user config's are read by
+    /// `HookSet::load_file`, the workspace's by the harness at build, so they are neither
+    /// applied here nor reported as unknown.
+    #[serde(default)]
+    #[allow(dead_code)]
+    hooks: Vec<toml::Value>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
 }
@@ -342,6 +353,11 @@ pub struct ResolvedHarnessArgs {
     /// Where the store key is kept, from `--store-key` or the user config's `[store] key`
     /// (spec 3.1 §7.12).
     pub store_key: Option<String>,
+    /// Whether hooks run: off with `--no-hooks` (spec 3.1 §7.22, §8.1).
+    pub hooks: bool,
+    /// The `[[hooks]]` of the user config, source `User` (spec 3.1 §7.22); the workspace's
+    /// are read at build and run under its trust.
+    pub user_hooks: HookSet,
     /// Settings a config file made that were ignored, and why.
     pub notes: Vec<String>,
 }
@@ -383,6 +399,12 @@ impl HarnessArgs {
         let user = match user_config {
             Some(path) => ConfigFile::load(path)?,
             None => None,
+        };
+        let user_hooks = match user_config {
+            Some(path) if user.is_some() => {
+                HookSet::load_file(path, HookSource::User)?.unwrap_or_default()
+            }
+            _ => HookSet::default(),
         };
         let project = ConfigFile::load(&workspace.join(PROJECT_CONFIG_FILE))?;
         let mut notes = Vec::new();
@@ -536,6 +558,8 @@ impl HarnessArgs {
             effort,
             effort_explicit,
             store_key,
+            hooks: !self.no_hooks,
+            user_hooks,
             notes,
         })
     }
@@ -594,9 +618,45 @@ mod tests {
                 effort: EffortPolicy::default(),
                 effort_explicit: false,
                 store_key: None,
+                hooks: true,
+                user_hooks: HookSet::default(),
                 notes: vec![],
             }
         );
+    }
+
+    #[test]
+    fn hooks_tables_are_recognised_and_the_user_hooks_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("user.toml");
+        write(
+            &user,
+            "mode = \"ask\"\n\n[[hooks]]\nevent = \"post_edit\"\ncommand = \"cargo fmt\"\n",
+        );
+        write(
+            &dir.path().join(PROJECT_CONFIG_FILE),
+            "sandbox = true\n\n[[hooks]]\nevent = \"pre_tool\"\nmatcher = \"bash\"\n\
+             command = \"./check.sh\"\n",
+        );
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap();
+        assert!(resolved.hooks);
+        assert_eq!(resolved.user_hooks.hooks.len(), 1);
+        assert_eq!(resolved.user_hooks.hooks[0].source, HookSource::User);
+        assert_eq!(resolved.user_hooks.hooks[0].describe(), "post_edit: cargo fmt");
+        assert!(
+            !resolved.notes.iter().any(|note| note.contains("hooks")),
+            "[[hooks]] is a known table: {:?}",
+            resolved.notes
+        );
+
+        let off = HarnessArgs { no_hooks: true, ..args_in(dir.path()) }
+            .resolve(HarnessMode::Ask, Some(&user))
+            .unwrap();
+        assert!(!off.hooks);
+
+        write(&user, "[[hooks]]\nevent = \"post_edit\"\n");
+        let error = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap_err();
+        assert!(error.to_string().contains("[[hooks]] entry 1"), "{error}");
     }
 
     #[test]

@@ -111,7 +111,7 @@ audit-sql = ["audit", "adk-session/sqlite", "adk-session/postgres"]
 persist = ["adk-session/sqlite", "adk-harness?/sqlite"]
 # `adk-rust` with no subcommand is the harness REPL; `code`, `goal`, `ultracode` and
 # `serve` run on the harness; `sessions`, `rules` and `approvals` manage it (spec 3.1 §8.1)
-harness = ["dep:adk-harness", "adk-harness?/memory-embeddings", "adk-harness?/web", "adk-harness?/mcp", "dep:reqwest", "dep:sha2", "dep:uuid", "dep:chrono"]
+harness = ["dep:adk-harness", "adk-harness?/memory-embeddings", "adk-harness?/web", "adk-harness?/mcp", "adk-harness?/hooks", "dep:reqwest", "dep:sha2", "dep:uuid", "dep:chrono"]
 # `--store-key`, `[store] key`, `adk-rust store status|rotate-key`: harness.db sealed under
 # one keyring from the OS keychain, a secret provider or the environment (spec 3.1 §7.12)
 encrypted = ["adk-harness?/encrypted", "adk-session/encrypted-session", "dep:sqlx"]

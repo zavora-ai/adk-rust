@@ -25,8 +25,8 @@ use super::commands::harness_commands;
 use super::serve::LoopbackOperatorExtractor;
 use crate::console::{ConsoleCommandContext, ConsoleInput, ConsoleIo};
 use crate::launcher::{
-    CONSOLE_CONFIRMATION_TIMEOUT, Launcher, ThinkingDisplayMode, drive_turn, find_command,
-    help_text, is_exit_command, terminal_safe,
+    CONSOLE_CONFIRMATION_TIMEOUT, Launcher, ThinkingDisplayMode, command_completions, drive_turn,
+    find_command, help_text, is_exit_command, terminal_safe,
 };
 
 /// Session-state key recording the canonical workspace a harness session works in
@@ -128,6 +128,7 @@ pub struct HarnessLauncher {
     security_config: Option<SecurityConfig>,
     bind_address: IpAddr,
     run_store: Option<Arc<dyn DurableRunStore>>,
+    hooks_disabled: bool,
     opened: Option<Arc<Shared>>,
 }
 
@@ -168,8 +169,16 @@ impl HarnessLauncher {
             security_config: None,
             bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
             run_store: None,
+            hooks_disabled: false,
             opened: None,
         }
+    }
+
+    /// Records that `--no-hooks` turned hooks off, so `/hooks` says so (spec 3.1 §7.22,
+    /// §8.1). Build the harness with `HarnessAgentBuilder::without_hooks` as well.
+    pub fn hooks_disabled(mut self, disabled: bool) -> Self {
+        self.hooks_disabled = disabled;
+        self
     }
 
     /// Sets the application name the console keeps sessions, modes and rules under.
@@ -396,6 +405,7 @@ impl HarnessLauncher {
             effort: Mutex::new(self.effort),
             status_lines: self.status_lines.clone(),
             run_store: self.run_store.clone(),
+            hooks_disabled: self.hooks_disabled,
         });
         shared.decide_trust(self.trust).await?;
         self.opened = Some(shared.clone());
@@ -447,6 +457,9 @@ impl HarnessLauncher {
         let shared = self.open().await?;
         let commands = harness_commands(shared.clone());
         shared.print_banner(&self.banner_notes);
+        // Tab completes the commands and, once the servers run, `@server:uri` mentions.
+        shared.console.set_command_completions(command_completions(&commands));
+        shared.refresh_mentions().await;
         let context = ConsoleCommandContext::new(
             shared.app_name.clone(),
             shared.user.to_string(),
@@ -500,6 +513,8 @@ impl HarnessLauncher {
             println!();
             let text = shared.expand_mentions(&trimmed).await;
             report(&shared.turn(Some(&text), true).await?);
+            // Workspace servers start with the first run, so their resources appear now.
+            shared.refresh_mentions().await;
         }
         if memory_on(&shared.harness()) {
             println!("Saving what this session taught to long-term memory…");
@@ -723,9 +738,34 @@ pub(crate) struct Shared {
     effort: Mutex<Option<Effort>>,
     status_lines: Vec<(String, String)>,
     pub(crate) run_store: Option<Arc<dyn DurableRunStore>>,
+    /// `--no-hooks` turned hooks off.
+    pub(crate) hooks_disabled: bool,
 }
 
 impl Shared {
+    /// Replaces the `@server:uri` mentions Tab completes with what every MCP server
+    /// publishes (spec 3.1 §7.21); a server that cannot be listed — not started yet, or
+    /// failing — offers none.
+    pub(crate) async fn refresh_mentions(&self) {
+        let harness = self.harness();
+        let runtime = harness.agent().runtime();
+        let Some(mcp) = runtime.mcp() else {
+            return;
+        };
+        let mut mentions = Vec::new();
+        for (server, _) in mcp.servers() {
+            let Ok(listed) = mcp.list_resources(&server).await else {
+                continue;
+            };
+            for resource in listed["resources"].as_array().into_iter().flatten() {
+                if let Some(uri) = resource["uri"].as_str() {
+                    mentions.push(format!("@{server}:{uri}"));
+                }
+            }
+        }
+        self.console.set_mention_completions(mentions);
+    }
+
     /// The harness turns run on now.
     pub(crate) fn harness(&self) -> Arc<Harness> {
         self.harness.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
@@ -936,6 +976,21 @@ impl Shared {
             ));
         }
         text.push_str("They cannot grant permissions; they shape what the agent tries.\n");
+        // A trusted workspace also runs its hooks, so the prompt lists each with its
+        // command (spec 3.1 §7.22, §9.2 I54).
+        let hooks = runtime
+            .hooks()
+            .map(|set| set.describe(adk_harness::hooks::HookSource::Workspace))
+            .unwrap_or_default();
+        if !hooks.is_empty() {
+            text.push_str(&format!(
+                "Hooks in {} that would run on tool events, as the shell runs:\n",
+                adk_harness::hooks::WORKSPACE_HOOKS_FILE
+            ));
+            for hook in &hooks {
+                text.push_str(&format!("  {}\n", terminal_safe(hook)));
+            }
+        }
         self.console.print(&text);
         let decision = match self.console.read_line("Trust them? [y/N] > ").await {
             ConsoleInput::Line(answer) if matches!(answer.trim(), "y" | "yes") => {

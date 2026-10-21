@@ -156,7 +156,7 @@ prompts. Nothing a server sends changes its trust, its tools' class or any rule.
 | `/web` | The allowlist; `/web allow HOST` grants a `DomainIn` rule for `web_fetch` to the user |
 | `.mcp.json` | Servers in the workspace, started once the workspace is trusted |
 | `/mcp` | The servers and their status; `/mcp resources SERVER` lists what one publishes |
-| `@server:uri` | In a turn, appends the resource inside its untrusted block, recorded as `harness.mcp.resource.read` with `via: mention` |
+| `@server:uri` | In a turn, appends the resource inside its untrusted block, recorded as `harness.mcp.resource.read` with `via: mention`; Tab completes the mention from the resources the servers publish, refreshed after each turn and after `/mcp resources SERVER` |
 
 ## Audit records
 
