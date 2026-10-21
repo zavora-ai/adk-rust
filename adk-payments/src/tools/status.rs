@@ -44,6 +44,14 @@ impl Tool for StatusLookupTool {
         "Look up the current status of a payment transaction by its identifier. Returns a masked summary."
     }
 
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": { "transactionId": { "type": "string" } },
+            "required": ["transactionId"]
+        }))
+    }
+
     fn required_scopes(&self) -> &[&str] {
         CHECKOUT_CREATE_SCOPES
     }

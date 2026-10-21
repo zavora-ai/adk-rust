@@ -11,6 +11,7 @@ use adk_core::{
     AdkError, CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Tool,
     ToolContext, ToolEffect,
 };
+use adk_payments::auth::ALL_PAYMENT_SCOPES;
 use adk_payments::domain::{
     Cart, CommerceActor, CommerceActorRole, CommerceMode, Money, ProtocolExtensions,
     TransactionRecord,
@@ -220,6 +221,92 @@ async fn every_toolset_tool_is_scope_protected() {
             "{} ran for a caller with no scopes",
             tool.name()
         );
+    }
+}
+
+/// Refuses every intervention, after its arguments parsed.
+struct NoInterventions;
+
+#[async_trait]
+impl adk_payments::kernel::InterventionService for NoInterventions {
+    async fn begin_intervention(
+        &self,
+        _command: adk_payments::kernel::BeginInterventionCommand,
+    ) -> Result<TransactionRecord> {
+        Err(AdkError::tool("no interventions in this test"))
+    }
+    async fn continue_intervention(
+        &self,
+        _command: adk_payments::kernel::ContinueInterventionCommand,
+    ) -> Result<TransactionRecord> {
+        Err(AdkError::tool("no interventions in this test"))
+    }
+}
+
+/// Each tool's arguments as a model fills them from its schema.
+fn example_arguments() -> Vec<(&'static str, serde_json::Value)> {
+    let total = Money::new("USD", 7_500, 2);
+    let line = json!({
+        "lineId": "line-1", "title": "Desk", "quantity": 1,
+        "unitPrice": total, "totalPrice": total
+    });
+    let cart = json!({ "lines": [line], "total": total });
+    let fulfillment = json!({ "fulfillmentId": "ship-1", "kind": "shipping", "label": "Ground" });
+    vec![
+        (
+            "payments_checkout_create",
+            json!({
+                "merchantId": "desk-co", "merchantName": "Desk Co", "cart": cart,
+                "fulfillment": fulfillment, "mode": "human_present"
+            }),
+        ),
+        ("payments_checkout_update", json!({ "transactionId": "tx-1", "cart": cart })),
+        (
+            "payments_checkout_complete",
+            json!({ "transactionId": "tx-1", "selectedPaymentMethod": { "selectionKind": "card" } }),
+        ),
+        ("payments_checkout_cancel", json!({ "transactionId": "tx-1", "reason": "changed mind" })),
+        ("payments_status_lookup", json!({ "transactionId": "tx-1" })),
+        (
+            "payments_intervention_continue",
+            json!({ "transactionId": "tx-1", "interventionId": "3ds-1", "continuationToken": "t" }),
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn every_tool_declares_the_arguments_it_parses() {
+    // A tool without a schema is declared to take no arguments, so a model calls it with `{}`
+    // and the call fails at argument parsing.
+    let kernel = Arc::new(RecordingKernel::default());
+    let tools = PaymentToolsetBuilder::new(kernel.clone(), kernel.clone())
+        .with_intervention_service(Arc::new(NoInterventions))
+        .build()
+        .tools();
+    let examples = example_arguments();
+    assert_eq!(tools.len(), examples.len(), "every toolset tool has an example");
+    for (name, args) in examples {
+        let tool = tools.iter().find(|tool| tool.name() == name).expect(name);
+        let schema =
+            tool.parameters_schema().unwrap_or_else(|| panic!("{name} declares no schema"));
+        let validator = jsonschema::validator_for(&schema).expect("a valid schema");
+        assert!(validator.is_valid(&args), "{name}: {args} must satisfy its schema {schema}");
+
+        // Every required field is required.
+        for field in schema["required"].as_array().expect("required fields") {
+            let mut missing = args.clone();
+            missing.as_object_mut().unwrap().remove(field.as_str().unwrap());
+            assert!(!validator.is_valid(&missing), "{name} accepted a call without {field}");
+        }
+
+        // The arguments the schema admits are the arguments the tool parses.
+        let result = tool.execute(Caller::with_scopes(ALL_PAYMENT_SCOPES), args.clone()).await;
+        if let Err(error) = result {
+            assert!(
+                !error.code.ends_with("invalid_args"),
+                "{name} could not parse arguments its schema admits: {error}"
+            );
+        }
     }
 }
 
