@@ -46,6 +46,8 @@ agent tool — and the harness refuses to run without it.
 | Unsandboxed retry | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
 | Memory write (`memory_write`, `memory_delete`) | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
 | Fact proposal (`memory_remember`, assumed facts only) | Deny | Deny | Allow | Allow |
+| Web, allowlisted host | Allow | Allow | Allow | Allow |
+| Web, other host | Deny | Deny | RA | RA |
 | External tool, read-only, trusted origin | Allow | Allow | Allow | Allow |
 | Any other external tool | Deny | Deny | Approval | Approval |
 
@@ -105,6 +107,9 @@ walk through the spec 3.1 §5 capabilities on one provider each, scripted or liv
 | `auth` | on | `adk-auth` |
 | `memory` | on | working notes and long-term facts (`adk-memory`, `adk-guardrail`) |
 | `memory-embeddings` | off | `RagEmbedder`: `adk-rag`'s OpenAI and Gemini embedders for long-term facts |
+| `web` | off | `web_fetch`, `web_search`, screening and `ProviderWebTools` (`reqwest`, `adk-guardrail`); on in `adk-rust` |
+| `mcp` | off | MCP elicitation, sampling and resource bridges (`adk-tool/mcp`, `adk-tool/mcp-sampling`); on in `adk-rust` |
+| `web-fixture` | off | a loopback HTTP server stands in for the web in tests; never on in `adk-rust` |
 | `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores |
 | `ambient` | off | `adk-agent/ambient`: goals started by triggers |
 | `skills-registry`, `team-acp`, `team-a2a`, `docker`, `memory-graph` | off | registry skills, ACP and A2A members, containers, graph memory |
