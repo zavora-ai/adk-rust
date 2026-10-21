@@ -57,7 +57,7 @@ use adk_core::Memory;
 use adk_sandbox::SandboxBackend;
 use adk_session::service::{CreateRequest, SessionService};
 
-use crate::agent_builder::{BuildError, build_agent};
+use crate::agent_builder::{AgentResolver, BuildError, build_agent};
 use crate::checkpoint::CheckpointManager;
 use crate::durable::{DurableConfig, ManagedStores};
 use crate::replay::create_event_stream;
@@ -150,6 +150,8 @@ pub struct DefaultManagedAgentRuntime {
     stores: ManagedStores,
     /// How sessions claim, heartbeat, and park their runs.
     durable: DurableConfig,
+    /// Builds definitions before `build_agent` does (spec 3.1 §7.18).
+    agent_resolver: Option<Arc<dyn AgentResolver>>,
     /// Optional sandbox backend for isolated built-in tool execution.
     #[cfg(feature = "sandbox")]
     sandbox: Option<Arc<dyn SandboxBackend>>,
@@ -189,6 +191,7 @@ impl DefaultManagedAgentRuntime {
             session_service,
             stores: ManagedStores::in_memory(),
             durable: DurableConfig::default(),
+            agent_resolver: None,
             #[cfg(feature = "sandbox")]
             sandbox: None,
             #[cfg(feature = "memory")]
@@ -236,6 +239,48 @@ impl DefaultManagedAgentRuntime {
     #[must_use]
     pub fn with_durable_config(mut self, config: DurableConfig) -> Self {
         self.durable = config;
+        self
+    }
+
+    /// Builds definitions with `resolver` before [`build_agent`]: an agent it returns runs
+    /// in place of the one `build_agent` would make, on `create` and in every session
+    /// rebuilt from the state store (spec 3.1 §7.18).
+    ///
+    /// Every runtime instance that may host the same sessions needs the same resolver.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::Agent;
+    /// use adk_managed::resolver::DefaultModelResolver;
+    /// use adk_managed::types::{ManagedAgentDef, RuntimeError};
+    /// use adk_managed::{AgentResolver, DefaultManagedAgentRuntime, ModelResolver};
+    /// use adk_session::InMemorySessionService;
+    ///
+    /// struct Passthrough;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl AgentResolver for Passthrough {
+    ///     async fn resolve(
+    ///         &self,
+    ///         _def: &ManagedAgentDef,
+    ///         _models: &dyn ModelResolver,
+    ///     ) -> Result<Option<Arc<dyn Agent>>, RuntimeError> {
+    ///         Ok(None)
+    ///     }
+    /// }
+    ///
+    /// let runtime = DefaultManagedAgentRuntime::new(
+    ///     Arc::new(DefaultModelResolver::new()),
+    ///     Arc::new(InMemorySessionService::new()),
+    /// )
+    /// .with_agent_resolver(Arc::new(Passthrough));
+    /// # let _ = runtime;
+    /// ```
+    #[must_use]
+    pub fn with_agent_resolver(mut self, resolver: Arc<dyn AgentResolver>) -> Self {
+        self.agent_resolver = Some(resolver);
         self
     }
 
@@ -321,6 +366,11 @@ impl DefaultManagedAgentRuntime {
 
     /// Builds the runnable agent for `def`.
     async fn build(&self, def: &ManagedAgentDef) -> Result<Arc<dyn Agent>, RuntimeError> {
+        if let Some(resolver) = &self.agent_resolver
+            && let Some(agent) = resolver.resolve(def, self.model_resolver.as_ref()).await?
+        {
+            return Ok(agent);
+        }
         let model = self.model_resolver.resolve(&def.model).await.map_err(|e| {
             RuntimeError::ProviderError {
                 provider: format!("{:?}", def.model),

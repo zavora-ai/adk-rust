@@ -255,6 +255,55 @@ fn map_permission_policy(policy: &PermissionPolicy) -> ToolConfirmationPolicy {
     }
 }
 
+// ─── AgentResolver ───────────────────────────────────────────────────────────
+
+/// Builds the agent of a [`ManagedAgentDef`] in place of [`build_agent`] (spec 3.1 §7.18).
+///
+/// A definition can extend [`ManagedAgentDef`]: `adk-harness`'s `HarnessDef` carries the
+/// harness mode, shell policy, skills roots, members and packs in the definition's metadata.
+/// The runtime asks its resolver first, on
+/// [`create`](crate::ManagedAgentRuntime::create) and whenever it rebuilds a stored
+/// session, and builds the definition with [`build_agent`] when the resolver answers
+/// `None`. Every runtime instance that may host the same sessions needs the same resolver.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_core::Agent;
+/// use adk_managed::{AgentResolver, ModelResolver};
+/// use adk_managed::types::{ManagedAgentDef, RuntimeError};
+///
+/// /// Builds no definition itself, so every one goes to `build_agent`.
+/// struct Passthrough;
+///
+/// #[async_trait::async_trait]
+/// impl AgentResolver for Passthrough {
+///     async fn resolve(
+///         &self,
+///         _def: &ManagedAgentDef,
+///         _models: &dyn ModelResolver,
+///     ) -> Result<Option<Arc<dyn Agent>>, RuntimeError> {
+///         Ok(None)
+///     }
+/// }
+/// ```
+#[async_trait]
+pub trait AgentResolver: Send + Sync {
+    /// The agent for `def`, with its model taken from `models`, or `None` when this resolver
+    /// does not build `def`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`](crate::types::RuntimeError) when `def` is one this resolver
+    /// builds and it cannot build it.
+    async fn resolve(
+        &self,
+        def: &ManagedAgentDef,
+        models: &dyn crate::resolver::ModelResolver,
+    ) -> Result<Option<Arc<dyn Agent>>, crate::types::RuntimeError>;
+}
+
 // ─── ManagedBuiltinTool ──────────────────────────────────────────────────────
 
 /// Built-in tool for server-side execution (bash, filesystem, web_search, etc.).

@@ -313,6 +313,20 @@ the key from `with_api_key(Provider::OpenaiCompatible, ..)`.
 adk-rust = { version = "3.0.0", features = ["managed-runtime", "openai", "anthropic"] }
 ```
 
+### Agents beyond `build_agent`
+
+`DefaultManagedAgentRuntime::with_agent_resolver` puts an `AgentResolver` in front of
+`build_agent`: the runtime asks it first, on `create` and whenever it rebuilds a stored
+session, and builds the definition itself when the resolver answers `None`. Every instance
+that may host the same sessions needs the same resolver.
+
+| Resolver | Builds |
+|---|---|
+| `adk_harness::packs::managed::HarnessResolver` (feature `managed`) | a `HarnessAgent` from a `HarnessDef` — mode, shell policy, skills roots, members and packs in the definition's `adk.harness` metadata — or an application's own harness by name |
+| your own `impl AgentResolver` | any agent a definition's metadata selects |
+
+See [Serving the harness](../harness/serving.md#on-the-managed-runtime) for the harness.
+
 ### Event Replay
 
 Support SSE `Last-Event-ID` reconnection via sequence-based replay:
@@ -321,6 +335,10 @@ Support SSE `Last-Event-ID` reconnection via sequence-based replay:
 // Reconnect from seq 42 — replays events 43, 44, ... then live tail
 let stream = runtime.stream_events(&session, Some(42)).await?;
 ```
+
+An `adk-enterprise` client reads the runtime's events as it reads the service's: a
+platform that streams them as SSE frames with `id: <seq>` lets `EnterpriseClient::stream_events`
+reconnect with `Last-Event-ID` and receive what it missed.
 
 ### Provider Parity
 

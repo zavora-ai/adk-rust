@@ -26,6 +26,7 @@ This is the execution engine inside a managed agent service. It is a **library**
 - **Event streaming**: Uniform `SessionEvent` stream with monotonic sequence numbers and SSE replay support
 - **Parked tool calls**: Custom tool calls and tool confirmations end the turn with `requires_action` and park its durable run until answered or expired
 - **Model resolution**: `DefaultModelResolver` builds Gemini, OpenAI, Anthropic, Ollama, and OpenAI-compatible models under provider features
+- **Agent resolution**: an `AgentResolver` set with `with_agent_resolver` builds definitions before `build_agent`, on `create` and on every rebuild; `adk-harness`'s `HarnessResolver` builds a harness from a `HarnessDef` this way
 - **Composable**: Injected services (sessions, sandbox, memory) — no platform dependencies
 - **Additive**: Feature-gated; existing `Runner`/`LlmAgent` unchanged when feature is off
 

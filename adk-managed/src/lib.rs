@@ -55,7 +55,9 @@ pub mod testing;
 pub mod types;
 pub mod usage;
 
-pub use agent_builder::{BuildError, ManagedBuiltinTool, ManagedCustomTool, build_agent};
+pub use agent_builder::{
+    AgentResolver, BuildError, ManagedBuiltinTool, ManagedCustomTool, build_agent,
+};
 pub use checkpoint::{CheckpointManager, RunState};
 pub use default_runtime::DefaultManagedAgentRuntime;
 pub use durable::{DurableConfig, ManagedStores};
