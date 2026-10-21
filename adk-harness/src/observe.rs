@@ -119,6 +119,7 @@ pub fn tool_kind_label(kind: &ToolKind) -> String {
             format!("web:{}", if *allowlisted { "allowlisted" } else { "other" })
         }
         ToolKind::Payment => "payment".to_string(),
+        ToolKind::ComputerUse => "computer_use".to_string(),
         ToolKind::External { effect, trusted_origin } => format!(
             "external:{}:{}",
             serde_json::to_value(effect)

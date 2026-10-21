@@ -632,8 +632,12 @@ impl StandingRule {
             return out;
         }
         // Web: the exact host the call named, never a wildcard the human did not type
-        // (spec 3.1 §7.5, §7.20).
-        if name == "web_fetch" && static_tool {
+        // (spec 3.1 §7.5, §7.20); the browser pack's navigation is a web call too (§7.24).
+        if matches!(
+            name,
+            "web_fetch" | "browser_navigate" | "browser_new_tab" | "browser_new_window"
+        ) && static_tool
+        {
             let Some(host) =
                 request.args.get("url").and_then(Value::as_str).and_then(crate::web::url_host)
             else {
@@ -643,9 +647,9 @@ impl StandingRule {
                 return Vec::new();
             }
             return vec![RuleSuggestion {
-                label: format!("web_fetch: any page on {host}"),
+                label: format!("{name}: any page on {host}"),
                 scope: SuggestedScope::User,
-                tool: "web_fetch".into(),
+                tool: name.into(),
                 origin: pin,
                 predicates: vec![RulePredicate::Arg(ArgSpec::DomainIn {
                     pointer: "/url".into(),

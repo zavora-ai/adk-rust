@@ -188,6 +188,9 @@ pub enum ToolKind {
     },
     /// Payments pack tools; never waivable.
     Payment,
+    /// `computer_use_execute`: a desktop action through the computer-use pack; never
+    /// waivable (spec 3.1 §7.24).
+    ComputerUse,
     /// Any other tool: MCP, browser, extras, skill-activated.
     External {
         /// The effect the tool declares.
@@ -200,7 +203,7 @@ pub enum ToolKind {
 impl ToolKind {
     /// Whether any standing rule may cover the class (spec 3.1 §7.5).
     pub fn rule_eligible(&self) -> bool {
-        !matches!(self, Self::PlanExit | Self::Payment | Self::MemoryWrite)
+        !matches!(self, Self::PlanExit | Self::Payment | Self::MemoryWrite | Self::ComputerUse)
     }
 
     /// Whether the class is the shell or its escalation.
@@ -308,20 +311,20 @@ impl ToolClassRegistry {
         &self.web_allowlist
     }
 
-    /// Whether the web call `tool` with `args` names an allowlisted host: `web_fetch` by
-    /// its `url`, `web_search` by its `site` (absent: not allowlisted).
+    /// Whether the web call `tool` with `args` names an allowlisted host: `web_search` by
+    /// its `site`, every other `Web` tool — `web_fetch`, the browser pack's navigation
+    /// (spec 3.1 §7.24) — by its `url` (absent: not allowlisted).
     fn web_allowlisted(&self, tool: &str, args: &Value) -> bool {
         match tool {
-            "web_fetch" => args
-                .get("url")
-                .and_then(Value::as_str)
-                .is_some_and(|url| crate::web::url_allowlisted(url, &self.web_allowlist)),
             "web_search" => args.get("site").and_then(Value::as_str).is_some_and(|site| {
                 crate::web::ParsedUrl::parse(&format!("https://{site}/")).is_ok_and(|parsed| {
                     crate::web::host_allowlisted(&parsed.host, &self.web_allowlist)
                 })
             }),
-            _ => false,
+            _ => args
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| crate::web::url_allowlisted(url, &self.web_allowlist)),
         }
     }
 
@@ -423,6 +426,8 @@ pub enum TableRow {
     WebOther,
     /// Payments.
     Payment,
+    /// A desktop action through the computer-use pack (spec 3.1 §7.24).
+    ComputerUse,
     /// A read-only tool from a trusted origin.
     ExternalReadOnlyTrusted,
     /// Any other tool.
@@ -431,7 +436,7 @@ pub enum TableRow {
 
 impl TableRow {
     /// Every row, in table order.
-    pub const ALL: [TableRow; 15] = [
+    pub const ALL: [TableRow; 16] = [
         Self::ReadTodoDelegate,
         Self::PlanExit,
         Self::Edit,
@@ -445,6 +450,7 @@ impl TableRow {
         Self::WebAllowlisted,
         Self::WebOther,
         Self::Payment,
+        Self::ComputerUse,
         Self::ExternalReadOnlyTrusted,
         Self::ExternalOther,
     ];
@@ -465,6 +471,7 @@ impl TableRow {
             ToolKind::Web { allowlisted: true } => Self::WebAllowlisted,
             ToolKind::Web { allowlisted: false } => Self::WebOther,
             ToolKind::Payment => Self::Payment,
+            ToolKind::ComputerUse => Self::ComputerUse,
             ToolKind::External { effect: ToolEffect::ReadOnly, trusted_origin: true } => {
                 Self::ExternalReadOnlyTrusted
             }
@@ -482,6 +489,7 @@ impl TableRow {
                 | Self::ShellEscalation
                 | Self::MemoryWrite
                 | Self::Payment
+                | Self::ComputerUse
         )
     }
 
@@ -624,7 +632,7 @@ impl ModeCell {
 /// assert_eq!(decision_cell(HarnessMode::Plan, TableRow::Edit), ModeCell::Deny);
 /// assert_eq!(decision_cell(HarnessMode::Auto, TableRow::Edit), ModeCell::Allow);
 /// ```
-pub const MODE_TABLE: [[ModeCell; 4]; 15] = {
+pub const MODE_TABLE: [[ModeCell; 4]; 16] = {
     use ModeCell::{
         Allow, AllowWithActiveEnforcer, AllowWithS3, Ask, AskNonWaivable, AskOrAutoAllowSandboxed,
         AskOrHostShellInAuto, Deny,
@@ -644,6 +652,7 @@ pub const MODE_TABLE: [[ModeCell; 4]; 15] = {
         [Allow, Allow, Allow, Allow],       // Web, allowlisted host
         [Deny, Deny, Ask, Ask],             // Web, other host
         [Deny, Deny, AskNonWaivable, AskNonWaivable], // Payment
+        [Deny, Deny, AskNonWaivable, AskNonWaivable], // ComputerUse
         [Allow, Allow, Allow, Allow],       // External, read-only, trusted
         [Deny, Deny, Ask, Ask],             // External, other
     ]
@@ -1465,6 +1474,7 @@ fn describe(tool: &str, row: TableRow, mode: HarnessMode, base: TableDecision) -
         TableRow::WebAllowlisted => "a web request to an allowlisted host",
         TableRow::WebOther => "a web request to a host outside the allowlist",
         TableRow::Payment => "a payment",
+        TableRow::ComputerUse => "a desktop action",
         TableRow::ExternalReadOnlyTrusted => "a trusted read-only tool",
         TableRow::ExternalOther => "an external tool",
     };

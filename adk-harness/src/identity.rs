@@ -94,7 +94,8 @@ impl RbacMap {
     }
 
     /// `harness:shell` for every shell class and the unsandboxed retry, `harness:edit` for
-    /// edits, `harness:memory` for memory writes, `harness:pay` for payments.
+    /// edits, `harness:memory` for memory writes, `harness:pay` for payments, `harness:desktop`
+    /// for desktop actions (spec 3.1 §7.24).
     pub fn harness_defaults() -> Self {
         use crate::policy::Isolation;
         Self::new()
@@ -105,6 +106,7 @@ impl RbacMap {
             .require(ToolKind::Edit, "harness:edit")
             .require(ToolKind::MemoryWrite, "harness:memory")
             .require(ToolKind::Payment, "harness:pay")
+            .require(ToolKind::ComputerUse, "harness:desktop")
     }
 
     /// Requires `permission` for tools of `class`.
