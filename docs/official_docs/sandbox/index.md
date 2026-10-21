@@ -69,6 +69,15 @@ OS-level sandbox enforcement restricts child processes at the kernel level. This
 | Linux | bubblewrap (`bwrap`) | Filesystem namespace isolation (whitelist mounts); a seccomp filter denies process creation unless allowed |
 | Windows | AppContainer | **Not implemented** — the enforcer reports itself unavailable |
 
+Enforcement is proven on a real Linux runner by the `Sandbox Linux` workflow
+(`.github/workflows/sandbox-linux.yml`): it installs bubblewrap on `ubuntu-24.04`, sets
+`kernel.apparmor_restrict_unprivileged_userns=0` (the image restricts unprivileged user
+namespaces through AppArmor), and runs the sandbox and harness shell suites with
+`ADK_SANDBOX_REQUIRE_ENFORCER=1`. The enforcement tests skip with a note on a host whose
+enforcer cannot start; with that variable set they fail instead, so a runner where
+bubblewrap silently stopped confining processes turns the job red. It runs on every push
+to `main`, on a pull request that touches the sandbox or the harness shell, and on demand.
+
 ### Quick Start
 
 ```rust
@@ -193,8 +202,9 @@ read-only one is writable again, and fixed in place.
 | A hard link to a file beneath it | `Operation not permitted` | `Invalid cross-device link` |
 
 `adk-sandbox/tests/nested_read_only_conformance_tests.rs` runs the same scripts under both
-enforcers. The read-only entry must exist when the command is built, as every allowed path
-must, so a path that does not exist yet cannot be protected from creation this way.
+enforcers (under bubblewrap in CI through the `Sandbox Linux` workflow). The read-only entry
+must exist when the command is built, as every allowed path must, so a path that does not
+exist yet cannot be protected from creation this way.
 
 > **Note:** bubblewrap mounts each allowed path at its resolved location. On a merged-`/usr`
 > distribution `/bin` and `/lib` are symbolic links into `/usr`, so a policy that lists them

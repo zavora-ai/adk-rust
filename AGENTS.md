@@ -180,7 +180,10 @@ expensive axes move to a later tier.
   standalone examples and the macOS/Windows builds the pull request already passed.
 - **Merge tier** (`ci-merge.yml`, on `push: main`) — cross-platform
   `nextest --workspace` on macOS/Windows and doc-example compilation. Runs
-  post-merge; not branch-protection-required.
+  post-merge; not branch-protection-required. `sandbox-linux.yml` (on `push: main`,
+  on a pull request touching the sandbox or the harness shell, and on demand) proves
+  bubblewrap enforcement on `ubuntu-24.04` with `ADK_SANDBOX_REQUIRE_ENFORCER=1`, under
+  which the enforcement tests fail instead of skipping when the enforcer cannot start.
 - **Nightly tier** (`ci-nightly.yml`, on `schedule`) — the feature-combination
   matrix (clippy with `-D warnings`), `cargo-audit`/`cargo-deny` supply-chain
   checks, and `#[ignore]` integration tests gated on available secrets. Not

@@ -71,10 +71,15 @@ fn with_enforcer(enforcer: Arc<dyn SandboxEnforcer>) -> OsSandboxConfig {
 }
 
 /// The platform enforcer's default config, or `None` (and a note) when it cannot run here.
+/// With `ADK_SANDBOX_REQUIRE_ENFORCER` set, a host without one fails the test instead.
 fn platform_sandbox() -> Option<OsSandboxConfig> {
     match SandboxLauncher::new(OsSandboxConfig::default()).status() {
         IsolationStatus::OsSandbox { .. } => Some(OsSandboxConfig::default()),
         other => {
+            assert!(
+                std::env::var_os("ADK_SANDBOX_REQUIRE_ENFORCER").is_none(),
+                "ADK_SANDBOX_REQUIRE_ENFORCER is set and no OS sandbox runs here: {other}"
+            );
             eprintln!("no OS sandbox on this host, skipping: {other}");
             None
         }

@@ -1,0 +1,84 @@
+name: Sandbox Linux
+
+# Proves bubblewrap enforcement on a real Linux runner (spec 3.1 §11, "must be proven
+# live"). The PR tier runs the sandbox and harness suites on a runner where the enforcer
+# cannot start — GitHub's ubuntu-24.04 image restricts unprivileged user namespaces
+# through AppArmor and ships no bubblewrap — so every enforcement test there skips with a
+# note. This job installs bubblewrap, lifts the restriction as the spec describes, and
+# runs the same tests with `ADK_SANDBOX_REQUIRE_ENFORCER=1`, under which a test that would
+# skip fails instead. It runs on every push to main, on a pull request that touches the
+# sandbox, the harness shell, or this file, and on demand.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'adk-sandbox/**'
+      - 'adk-harness/src/shell/**'
+      - 'adk-harness/tests/shell_sandbox_tests.rs'
+      - '.github/workflows/sandbox-linux.yml'
+      - '.github/actions/setup-rust/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # A test that cannot start the OS sandbox fails instead of skipping.
+  ADK_SANDBOX_REQUIRE_ENFORCER: "1"
+
+concurrency:
+  group: sandbox-linux-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  bubblewrap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        neutralize-wild: 'true'
+        cache-key: sandbox-linux
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+      with:
+        tool: cargo-nextest
+
+    - name: Install bubblewrap and allow unprivileged user namespaces
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends bubblewrap
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        bwrap --version
+
+    - name: Prove bubblewrap confines a process on this runner
+      run: |
+        set -euo pipefail
+        bwrap --ro-bind / / --unshare-user --unshare-pid --new-session -- /bin/true
+        # A read-only root refuses a write; a denied write proves the mount is enforced.
+        if bwrap --ro-bind / / --unshare-user --unshare-pid --new-session -- /bin/sh -c 'echo x > /tmp/adk-sandbox-probe' 2>/dev/null; then
+          echo "bubblewrap did not confine a write to a read-only mount" >&2
+          exit 1
+        fi
+
+    - name: Sandbox enforcement tests (adk-sandbox)
+      run: |
+        cargo nextest run -p adk-sandbox --features sandbox-linux --no-fail-fast
+        cargo nextest run -p adk-sandbox --features sandbox-linux --run-ignored ignored-only \
+          -E 'binary(sandbox_integration_tests)'
+
+    - name: Shell sandbox tests (adk-harness)
+      run: cargo nextest run -p adk-harness --test shell_sandbox_tests --no-fail-fast
+
+    - name: Summary
+      if: always()
+      run: echo "### 🧱 bubblewrap enforcement proven on ubuntu-24.04 (ADK_SANDBOX_REQUIRE_ENFORCER=1)" >> "$GITHUB_STEP_SUMMARY"
