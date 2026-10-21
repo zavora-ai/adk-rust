@@ -37,7 +37,7 @@ pub const TOOL_ERROR_MESSAGE_LIMIT: usize = 500;
 /// Builds the function response for a tool call that failed with `error`.
 ///
 /// The response names the error's component, category, and code
-/// ([`AdkError::redacted`]). A rejection ([`ErrorCategory::is_rejection`]) — the tool
+/// ([`AdkError::redacted`]). A rejection ([`ErrorCategory::is_rejection`](crate::ErrorCategory::is_rejection)) — the tool
 /// refused the call or could not use it as made — also carries its message, cut at
 /// [`TOOL_ERROR_MESSAGE_LIMIT`] characters, since that message is the reason the model
 /// needs to act on. The message of an upstream or internal failure stays out unless

@@ -1,1 +1,5 @@
-`ProtectedTool`, `ProtectedToolDyn`, `ScopeGuard`'s `ScopedTool` and `ScopedToolDyn` forward `Tool::declaration`, `is_builtin`, `is_read_only`, `is_concurrency_safe` and `is_agent_delegation`, so a wrapped tool that builds its own declaration (an MCP or prefixed tool) keeps its declaration digest, and a standing rule or fingerprint approval pinned to the bare tool still matches it (spec 3.1 §7.5).
+- `ProtectedTool`, `ProtectedToolDyn`, `ScopeGuard`'s `ScopedTool` and `ScopedToolDyn` forward
+  `Tool::declaration`, `is_builtin`, `is_read_only`, `is_concurrency_safe` and
+  `is_agent_delegation`, so a wrapped tool that builds its own declaration (an MCP or prefixed tool)
+  keeps its declaration digest, and a standing rule or fingerprint approval pinned to the bare tool
+  still matches it (spec 3.1 §7.5).

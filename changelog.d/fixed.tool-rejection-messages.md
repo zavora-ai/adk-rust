@@ -1,1 +1,7 @@
-`LlmAgent` answers a tool call the tool rejected — `ErrorCategory::InvalidInput`, `Forbidden`, `NotFound`, `Unsupported`, `Conflict` or `ResourceExhausted` (`ErrorCategory::is_rejection`) — with the error's message as well as its component, category and code, cut at `TOOL_ERROR_MESSAGE_LIMIT` (500) characters. A harness refusal such as a protected path or a command outside the sandbox reached the model as `tool 'bash' failed: tool.forbidden (harness.shell.protected)` with no reason. Upstream and internal failures still withhold their message unless `expose_tool_error_messages(true)` is set.
+- **Tool rejections reach the model with their reason.** `LlmAgent` answers a tool call the tool
+  rejected — `ErrorCategory::InvalidInput`, `Forbidden`, `NotFound`, `Unsupported`, `Conflict` or
+  `ResourceExhausted` (`ErrorCategory::is_rejection`) — with the error's message as well as its
+  component, category and code, cut at `TOOL_ERROR_MESSAGE_LIMIT` (500) characters. A harness
+  refusal such as a protected path or a command outside the sandbox reached the model as `tool
+  'bash' failed: tool.forbidden (harness.shell.protected)` with no reason. Upstream and internal
+  failures still withhold their message unless `expose_tool_error_messages(true)` is set.

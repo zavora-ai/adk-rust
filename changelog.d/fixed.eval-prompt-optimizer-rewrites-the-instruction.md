@@ -1,1 +1,7 @@
-`PromptOptimizer::optimize_candidates` (adk-eval) optimizes an agent's instruction: it starts from `AgentCandidates::instruction`, builds the agent from each proposal with `AgentCandidates::build` (`InstructionCandidates` wraps a closure over the agent's builder) and evaluates that candidate. `PromptOptimizer::optimize` read `Agent::description` and re-evaluated the unchanged agent each round, so it never changed a prompt; it now scores the agent as given and fails with guidance when the baseline is below the threshold, since an `Arc<dyn Agent>` cannot be rebuilt. `examples/prompt_optimizer` uses the new loop.
+- `PromptOptimizer::optimize_candidates` (adk-eval) optimizes an agent's instruction: it starts from
+  `AgentCandidates::instruction`, builds the agent from each proposal with `AgentCandidates::build`
+  (`InstructionCandidates` wraps a closure over the agent's builder) and evaluates that candidate.
+  `PromptOptimizer::optimize` read `Agent::description` and re-evaluated the unchanged agent each
+  round, so it never changed a prompt; it now scores the agent as given and fails with guidance when
+  the baseline is below the threshold, since an `Arc<dyn Agent>` cannot be rebuilt.
+  `examples/prompt_optimizer` uses the new loop.
