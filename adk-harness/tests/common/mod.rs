@@ -101,12 +101,31 @@ pub async fn fixture(
     fixture_in(dir, responses, configure).await
 }
 
+/// A harness whose scripted model reports `model_name`, so provider-specific wiring
+/// (spec 3.1 §7.20 provider web tools) sees a provider-shaped name.
+#[allow(dead_code)]
+pub async fn fixture_named(
+    model_name: &str,
+    responses: Vec<ScriptedResponse>,
+    configure: impl FnOnce(HarnessAgentBuilder) -> HarnessAgentBuilder,
+) -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
+    fixture_with_model(dir, Arc::new(ScriptedLlm::new(model_name, responses)), configure).await
+}
+
 pub async fn fixture_in(
     dir: tempfile::TempDir,
     responses: Vec<ScriptedResponse>,
     configure: impl FnOnce(HarnessAgentBuilder) -> HarnessAgentBuilder,
 ) -> Fixture {
-    let model = Arc::new(ScriptedLlm::new("scripted", responses));
+    fixture_with_model(dir, Arc::new(ScriptedLlm::new("scripted", responses)), configure).await
+}
+
+async fn fixture_with_model(
+    dir: tempfile::TempDir,
+    model: Arc<ScriptedLlm>,
+    configure: impl FnOnce(HarnessAgentBuilder) -> HarnessAgentBuilder,
+) -> Fixture {
     let builder = HarnessAgent::builder("harness")
         .model(model.clone())
         .workspace(adk_devtools::Workspace::new(dir.path()).allow_bash(true))

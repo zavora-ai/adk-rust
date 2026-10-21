@@ -27,6 +27,8 @@
 //! | `PlanGraphs`, `compile_plan` (feature `graph`), [`GoalSpec`], [`GoalStore`], [`UntilCheckAgent`] | §7.11 |
 //! | `MemoryFact`, `FactStore`, `FactIndex`, `LongTermMemoryConfig`, `memory_search`, `memory_remember` (feature `memory`) | §7.15.2 |
 //! | [`coding::CodingAgent`] | §7.19 |
+//! | [`WebConfig`], [`SearchProvider`], [`ProviderWebTools`], `web_fetch`, `web_search` (feature `web`) | §7.20 |
+//! | [`McpInteractionConfig`], `HarnessElicitationHandler`, `HarnessSamplingHandler`, `mcp_*_resource` (feature `mcp`) | §7.21 |
 //!
 //! # Example
 //!
@@ -61,6 +63,7 @@ mod harness;
 mod identity;
 mod instructions;
 mod ledger;
+pub mod mcp;
 #[cfg(feature = "memory")]
 mod memory;
 mod mode;
@@ -78,6 +81,7 @@ mod skills;
 mod team;
 mod tools;
 mod toolset;
+pub mod web;
 
 pub mod approvals;
 #[path = "presets/coding.rs"]
@@ -125,6 +129,12 @@ pub use instructions::{
     FALLBACK_INSTRUCTION_FILES, FileWorkspaceTrustStore, InMemoryWorkspaceTrustStore,
     InstructionFile, InstructionScope, InstructionsConfig, ProjectInstructions, TrustDecision,
     WorkspaceTrust, WorkspaceTrustStore,
+};
+pub use mcp::McpInteractionConfig;
+#[cfg(feature = "mcp")]
+pub use mcp::{
+    HarnessElicitationHandler, HarnessSamplingHandler, McpInteractionRuntime, McpServerSet,
+    RESOURCE_TEXT_MAX, defaults_of, render_form, validate_answer,
 };
 #[cfg(feature = "memory")]
 pub use memory::{
@@ -175,8 +185,13 @@ pub use tools::{
     PLAN_STATE_KEY, PlanGate, PlanStep, TODOS_STATE_KEY, TodoItem, TodoList, TodoStatus,
     UpdateTodoTool, WriteTodosTool,
 };
+#[cfg(feature = "mcp")]
+pub use tools::{McpListResourcesTool, McpReadResourceTool};
 #[cfg(feature = "memory")]
 pub use tools::{MemoryDeleteTool, MemoryReadTool, MemoryWriteTool};
 #[cfg(feature = "memory")]
 pub use tools::{MemoryRememberTool, MemorySearchTool};
+#[cfg(feature = "web")]
+pub use tools::{WEB_TURN_CAP_CODE, WebFetchTool, WebSearchTool};
 pub use toolset::HarnessToolset;
+pub use web::{ProviderWebTools, SearchHit, SearchProvider, WebConfig};

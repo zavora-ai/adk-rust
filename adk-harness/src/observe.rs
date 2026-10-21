@@ -115,6 +115,9 @@ pub fn tool_kind_label(kind: &ToolKind) -> String {
         ToolKind::Delegate => "delegate".to_string(),
         ToolKind::MemoryWrite => "memory_write".to_string(),
         ToolKind::MemoryPropose => "memory_propose".to_string(),
+        ToolKind::Web { allowlisted } => {
+            format!("web:{}", if *allowlisted { "allowlisted" } else { "other" })
+        }
         ToolKind::Payment => "payment".to_string(),
         ToolKind::External { effect, trusted_origin } => format!(
             "external:{}:{}",

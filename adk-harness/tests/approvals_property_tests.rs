@@ -194,10 +194,16 @@ fn p3_mode_lattice_is_monotone() {
             }
         }
     }
-    // The ReadOnly column denies everything that is not a read.
+    // The ReadOnly column denies everything that is not a read; a fetch of an allowlisted
+    // host is a read (spec 3.1 §7.4, §7.20).
     for row in TableRow::ALL {
         let cell = decision_cell(HarnessMode::ReadOnly, row);
-        let read = matches!(row, TableRow::ReadTodoDelegate | TableRow::ExternalReadOnlyTrusted);
+        let read = matches!(
+            row,
+            TableRow::ReadTodoDelegate
+                | TableRow::ExternalReadOnlyTrusted
+                | TableRow::WebAllowlisted
+        );
         assert_eq!(cell == ModeCell::Allow, read, "{row:?}");
     }
 }
