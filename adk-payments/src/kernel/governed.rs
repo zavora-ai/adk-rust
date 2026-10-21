@@ -31,6 +31,11 @@ pub const PAYMENT_POLICY_DENIED_CODE: &str = "payments.policy.denied";
 pub const PAYMENT_APPROVAL_REQUIRED_CODE: &str = "payments.policy.approval_required";
 /// Error code returned when an escalated checkout was explicitly refused.
 pub const PAYMENT_APPROVAL_DENIED_CODE: &str = "payments.policy.approval_denied";
+/// Error code returned when an approver approved an escalated operation with substituted
+/// arguments: the operation did not run as proposed, and the error's `editedArgs` detail
+/// carries the arguments to re-issue it with. The payment tools re-issue the call
+/// themselves (spec 3.1 §10 C3).
+pub const PAYMENT_APPROVAL_EDITED_CODE: &str = "payments.policy.approval_edited";
 
 /// Outcome of asking for approval of an escalated payment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +46,63 @@ pub enum PaymentApproval {
     Denied,
     /// No decision is available yet; the payment does not proceed now.
     Pending,
+}
+
+/// What an approver decided about an escalated payment: the approval, the arguments it
+/// substituted for the call's own, and what it said (spec 3.1 §10 C3).
+///
+/// # Example
+///
+/// ```
+/// use adk_payments::kernel::{PaymentApproval, PaymentDecision};
+/// use serde_json::json;
+///
+/// let decision = PaymentDecision::new(PaymentApproval::Approved)
+///     .with_edited_args(json!({ "amount": 40 }))
+///     .with_message("approved at 40");
+/// assert_eq!(decision.approval, PaymentApproval::Approved);
+/// assert_eq!(decision.message.as_deref(), Some("approved at 40"));
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct PaymentDecision {
+    /// Whether the payment may proceed.
+    pub approval: PaymentApproval,
+    /// Arguments the approver substituted for the call's own. An approved payment with
+    /// edited arguments is not made as proposed: the governed service returns
+    /// [`PAYMENT_APPROVAL_EDITED_CODE`] and the caller re-issues it with these arguments.
+    pub edited_args: Option<Value>,
+    /// What the approver said: a reason for a refusal, or a note on an approval. It is
+    /// recorded with the decision and reported with a refusal.
+    pub message: Option<String>,
+}
+
+impl PaymentDecision {
+    /// A decision with no edited arguments and no message.
+    pub fn new(approval: PaymentApproval) -> Self {
+        Self { approval, edited_args: None, message: None }
+    }
+
+    /// Sets the arguments the approver substituted. See
+    /// [`edited_args`](Self::edited_args).
+    #[must_use]
+    pub fn with_edited_args(mut self, args: Value) -> Self {
+        self.edited_args = Some(args);
+        self
+    }
+
+    /// Sets what the approver said. See [`message`](Self::message).
+    #[must_use]
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
+        self
+    }
+}
+
+impl From<PaymentApproval> for PaymentDecision {
+    fn from(approval: PaymentApproval) -> Self {
+        Self::new(approval)
+    }
 }
 
 /// Decides payments that a policy escalated.
@@ -58,6 +120,16 @@ pub trait PaymentApprover: Send + Sync {
         record: &TransactionRecord,
         findings: &[PaymentPolicyFinding],
     ) -> Result<PaymentApproval>;
+
+    /// Decides `record` as [`approve`](Self::approve) does, and may substitute arguments
+    /// or add a message (spec 3.1 §10 C3). The default wraps `approve`.
+    async fn decide(
+        &self,
+        record: &TransactionRecord,
+        findings: &[PaymentPolicyFinding],
+    ) -> Result<PaymentDecision> {
+        Ok(PaymentDecision::new(self.approve(record, findings).await?))
+    }
 }
 
 /// Who is paying, and how escalations are decided, for one governed operation.
@@ -181,13 +253,22 @@ fn payment_draft(
     draft
 }
 
-fn policy_error(code: &'static str, summary: &str, findings: &[PaymentPolicyFinding]) -> AdkError {
+/// A policy refusal naming the guardrails that spoke, with `extra` metadata beside them.
+fn policy_error(
+    code: &'static str,
+    summary: &str,
+    findings: &[PaymentPolicyFinding],
+    extra: &[(&str, Value)],
+) -> AdkError {
     let reasons: Vec<String> = findings
         .iter()
         .map(|finding| format!("{}: {}", finding.guardrail, finding.reason))
         .collect();
     let mut details = ErrorDetails::default();
     details.metadata.insert("findings".to_string(), reasons.clone().into());
+    for (key, value) in extra {
+        details.metadata.insert((*key).to_string(), value.clone());
+    }
     AdkError::new(
         ErrorComponent::Guardrail,
         ErrorCategory::Forbidden,
@@ -302,42 +383,97 @@ impl PaymentGovernor {
                     PAYMENT_POLICY_DENIED_CODE,
                     "payment refused by policy",
                     &findings,
+                    &[],
                 ));
             }
             PaymentPolicyDecision::Escalate { findings } => {
-                let approval = match &caller.approver {
-                    Some(approver) => approver.approve(record, &findings).await,
-                    None => Ok(PaymentApproval::Pending),
+                let decided = match &caller.approver {
+                    Some(approver) => approver.decide(record, &findings).await,
+                    None => Ok(PaymentDecision::new(PaymentApproval::Pending)),
                 };
-                let refused_as = match &approval {
-                    Ok(PaymentApproval::Denied) => AuditDecision::Rejected,
-                    Ok(PaymentApproval::Pending) => AuditDecision::ApprovalRequired,
-                    Ok(PaymentApproval::Approved) | Err(_) => AuditDecision::Denied,
+                let (approval, edited, message) = match decided {
+                    Ok(decision) => (Ok(decision.approval), decision.edited_args, decision.message),
+                    Err(error) => (Err(error), None, None),
                 };
-                let refusal = match approval {
-                    Ok(PaymentApproval::Approved) => None,
-                    Ok(PaymentApproval::Denied) => Some(policy_error(
-                        PAYMENT_APPROVAL_DENIED_CODE,
-                        "payment approval was denied",
-                        &findings,
-                    )),
-                    Ok(PaymentApproval::Pending) => Some(policy_error(
+                // What the approver said and substituted travels with the decision's record.
+                let approver_exts = |draft: AuditRecordDraft, trail: &AuditTrail| {
+                    let draft = match &message {
+                        Some(message) => {
+                            draft.ext("approverMessage", Value::String(message.clone()))
+                        }
+                        None => draft,
+                    };
+                    match &edited {
+                        Some(edited) => {
+                            draft.ext("editedArgsDigest", Value::String(trail.digest(edited)))
+                        }
+                        None => draft,
+                    }
+                };
+                let message_ext = || {
+                    message
+                        .as_ref()
+                        .map(|message| ("approverMessage", Value::String(message.clone())))
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                };
+                let refused_as = match (&approval, &edited) {
+                    (Ok(PaymentApproval::Denied), _) => AuditDecision::Rejected,
+                    (Ok(PaymentApproval::Pending), _) => AuditDecision::ApprovalRequired,
+                    // Approved, but not as proposed: the caller re-issues the operation.
+                    (Ok(PaymentApproval::Approved), Some(_)) => AuditDecision::Approved,
+                    (Ok(PaymentApproval::Approved), None) | (Err(_), _) => AuditDecision::Denied,
+                };
+                let refusal = match (approval, &edited) {
+                    (Ok(PaymentApproval::Approved), None) => None,
+                    (Ok(PaymentApproval::Approved), Some(edited)) => {
+                        let mut extra = message_ext();
+                        extra.push(("editedArgs", edited.clone()));
+                        Some(policy_error(
+                            PAYMENT_APPROVAL_EDITED_CODE,
+                            "payment approved with edited arguments; re-issue it with them",
+                            &findings,
+                            &extra,
+                        ))
+                    }
+                    (Ok(PaymentApproval::Denied), _) => {
+                        let summary = match &message {
+                            Some(message) => format!("payment approval was denied ({message})"),
+                            None => "payment approval was denied".to_string(),
+                        };
+                        Some(policy_error(
+                            PAYMENT_APPROVAL_DENIED_CODE,
+                            &summary,
+                            &findings,
+                            &message_ext(),
+                        ))
+                    }
+                    (Ok(PaymentApproval::Pending), _) => Some(policy_error(
                         PAYMENT_APPROVAL_REQUIRED_CODE,
                         "payment requires approval",
                         &findings,
+                        &[],
                     )),
-                    Err(error) => Some(error),
+                    (Err(error), _) => Some(error),
                 };
                 if let Some(error) = refusal {
                     context.release_holds().await;
                     if let Some((trail, draft)) = caller_record(refused_as, &findings) {
+                        // An approval with edited arguments is recorded as approved, and as
+                        // not run, since the operation as proposed never runs.
+                        let draft =
+                            approver_exts(draft, &trail).outcome(AuditRecordOutcome::NotRun);
                         let _ = trail.record(draft).await;
                     }
-                    self.audit_refusal(operation, record, protocol, caller).await;
+                    // An approval with edited arguments refuses nothing: the operation runs
+                    // when the caller re-issues it, and that run is audited.
+                    if error.code != PAYMENT_APPROVAL_EDITED_CODE {
+                        self.audit_refusal(operation, record, protocol, caller).await;
+                    }
                     return Err(error);
                 }
                 if let Some((trail, draft)) = caller_record(AuditDecision::Approved, &findings)
-                    && let Err(error) = trail.record(draft).await
+                    && let Err(error) = trail.record(approver_exts(draft, &trail)).await
                 {
                     context.release_holds().await;
                     return Err(error);

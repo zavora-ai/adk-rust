@@ -63,7 +63,7 @@ against the stored checkout, so a cart changed after creation is judged as it wi
 | Outcome | Effect | Error code |
 |---------|--------|------------|
 | Allow | The backend runs; spend holds are committed on success and released on failure | — |
-| Escalate | The caller's `PaymentApprover` decides | `payments.policy.approval_required` (no decision), `payments.policy.approval_denied` |
+| Escalate | The caller's `PaymentApprover` decides | `payments.policy.approval_required` (no decision), `payments.policy.approval_denied`, `payments.policy.approval_edited` (approved with substituted arguments; the payment tools re-issue the call) |
 | Deny | The backend is not reached | `payments.policy.denied` |
 
 `PaymentToolsetBuilder` governs its create and complete tools with the policies passed to
@@ -82,9 +82,15 @@ Without a decision, the request is recorded as pending in the approval store and
 to the approval service, the call fails with `payments.policy.approval_required`, and its
 event carries `actions.tool_confirmation`. The agent holds the call; once an approver
 decides it, the next run dispatches it again and the payment runs once. An approval that
-edits the call's arguments refuses the payment with `payments.policy.approval_denied`. An
-approver lists the held payment with `ApprovalStore::pending` and decides it with
-`ApprovalStore::decide`, as for any held tool call.
+edits the call's arguments (`ToolApproval::edited_args`, from any source, including a
+handler's `decide_approval`) pays with them: the governed service answers
+`payments.policy.approval_edited` with the arguments in its `editedArgs` detail, and the
+create and complete tools re-issue the call with them once — after the run's `ToolPolicy`
+checks them (`payments.policy.edited_args_denied` when it refuses) and under the payment
+policies again, with the same approval answering a second escalation. The approver's
+`message` is recorded with the decision (`approverMessage` on the audit record) and quoted
+by a denial. An approver lists the held payment with `ApprovalStore::pending` and decides it
+with `ApprovalStore::decide`, as for any held tool call.
 
 ```rust
 use adk_payments::guardrail::{

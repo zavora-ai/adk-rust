@@ -340,7 +340,9 @@ names the same transaction.
 
 Checkout creation and completion run through a `GovernedCheckoutService`, which
 evaluates the policies passed to `with_payment_policies` on every call. A denial
-refuses the checkout, an escalation goes through the run's tool confirmation flow, and
+refuses the checkout, an escalation goes through the run's tool confirmation flow (an
+approval that edits the call's arguments re-issues the call with them once, and the
+approver's message is recorded with the decision), and
 `SpendLimitGuardrail` reserves each completed checkout against the spend ledger
 (`with_spend_ledger` or `RunConfig::spend_ledger`), failing closed when the ledger is
 unreachable. `GovernedCheckoutService::with_auditor` records each decision with a
