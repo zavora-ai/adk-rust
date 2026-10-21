@@ -96,7 +96,9 @@ pub use schema::{EvalCase, EvalSet, IntermediateData, SessionInput, TestFile, To
 pub use scoring::{ResponseScorer, ToolTrajectoryScorer};
 
 // Optimizer re-exports
-pub use optimizer::{OptimizationResult, OptimizerConfig, PromptOptimizer};
+pub use optimizer::{
+    AgentCandidates, InstructionCandidates, OptimizationResult, OptimizerConfig, PromptOptimizer,
+};
 
 // New module re-exports
 pub use annotation::{AnnotationRecord, AnnotationStore, HumanVerdict};

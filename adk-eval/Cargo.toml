@@ -51,6 +51,7 @@ statistics = ["dep:statrs"]
 vertex-eval = ["adk-gcp", "google-cloud-auth", "reqwest"]
 
 [dev-dependencies]
+adk-agent = { path = "../adk-agent" }
 tokio = { workspace = true, features = ["rt", "macros"] }
 tokio-test = "0.4"
 tempfile = "3.0"

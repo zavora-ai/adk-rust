@@ -13,19 +13,24 @@
 //! 5. Repeat until max iterations or target threshold is reached
 //! 6. Write the best-performing instructions to the output file
 //!
+//! The optimizer rewrites an agent's instruction, so it needs the instruction and a way to
+//! build the agent from a candidate: an [`AgentCandidates`], usually an
+//! [`InstructionCandidates`] over the agent's builder. `Arc<dyn Agent>` exposes neither.
+//!
 //! # Example
 //!
 //! ```rust,ignore
-//! use adk_eval::optimizer::{PromptOptimizer, OptimizerConfig};
+//! use adk_eval::optimizer::{InstructionCandidates, OptimizerConfig, PromptOptimizer};
 //! use std::sync::Arc;
 //!
-//! let optimizer = PromptOptimizer::new(
-//!     optimizer_llm,
-//!     evaluator,
-//!     OptimizerConfig::default(),
-//! );
-//! let result = optimizer.optimize(agent, &eval_set).await?;
-//! println!("Final score: {}", result.final_score);
+//! let candidates = InstructionCandidates::new("Answer questions", move |instruction| {
+//!     Ok(Arc::new(
+//!         LlmAgentBuilder::new("tutor").model(model.clone()).instruction(instruction).build()?,
+//!     ))
+//! });
+//! let optimizer = PromptOptimizer::new(optimizer_llm, evaluator, OptimizerConfig::default());
+//! let result = optimizer.optimize_candidates(&candidates, &eval_set).await?;
+//! println!("{} -> {}: {}", result.initial_score, result.final_score, result.best_instructions);
 //! ```
 
 use std::path::PathBuf;
@@ -76,6 +81,94 @@ pub struct OptimizationResult {
     pub best_instructions: String,
 }
 
+/// What the optimizer rewrites: the instruction under test and the agent to evaluate under
+/// a candidate instruction.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+///
+/// use adk_core::Agent;
+/// use adk_eval::optimizer::AgentCandidates;
+///
+/// struct Fixed(Arc<dyn Agent>);
+///
+/// impl AgentCandidates for Fixed {
+///     fn instruction(&self) -> String {
+///         "Answer questions".to_string()
+///     }
+///
+///     fn build(&self, _instruction: &str) -> adk_core::Result<Arc<dyn Agent>> {
+///         Ok(self.0.clone())
+///     }
+/// }
+/// ```
+pub trait AgentCandidates: Send + Sync {
+    /// The instruction the optimizer starts from.
+    fn instruction(&self) -> String;
+
+    /// The agent to evaluate under `instruction`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the agent's build error.
+    fn build(&self, instruction: &str) -> adk_core::Result<Arc<dyn Agent>>;
+}
+
+/// Builds the agent to evaluate under an instruction.
+type BuildAgent = dyn Fn(&str) -> adk_core::Result<Arc<dyn Agent>> + Send + Sync;
+
+/// [`AgentCandidates`] over a closure that builds the agent from an instruction.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+///
+/// use adk_eval::optimizer::{AgentCandidates, InstructionCandidates};
+/// use adk_model::{ScriptedLlm, ScriptedResponse};
+///
+/// let candidates = InstructionCandidates::new("Answer questions", |instruction| {
+///     let reply = if instruction.contains("capital") { "Paris" } else { "Not sure" };
+///     let model = Arc::new(ScriptedLlm::new("agent", vec![ScriptedResponse::text(reply)]));
+///     # let _ = model;
+///     # Err::<Arc<dyn adk_core::Agent>, _>(adk_core::AdkError::config("built elsewhere"))
+///     // Ok(Arc::new(LlmAgentBuilder::new("tutor").model(model).instruction(instruction).build()?))
+/// });
+/// assert_eq!(candidates.instruction(), "Answer questions");
+/// ```
+pub struct InstructionCandidates {
+    instruction: String,
+    build: Box<BuildAgent>,
+}
+
+impl InstructionCandidates {
+    /// Candidates starting from `instruction`, each built by `build`.
+    pub fn new(
+        instruction: impl Into<String>,
+        build: impl Fn(&str) -> adk_core::Result<Arc<dyn Agent>> + Send + Sync + 'static,
+    ) -> Self {
+        Self { instruction: instruction.into(), build: Box::new(build) }
+    }
+}
+
+impl AgentCandidates for InstructionCandidates {
+    fn instruction(&self) -> String {
+        self.instruction.clone()
+    }
+
+    fn build(&self, instruction: &str) -> adk_core::Result<Arc<dyn Agent>> {
+        (self.build)(instruction)
+    }
+}
+
+impl std::fmt::Debug for InstructionCandidates {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstructionCandidates").field("instruction", &self.instruction).finish()
+    }
+}
+
 /// Iteratively improves an agent's system instructions using an optimizer LLM
 /// and an evaluation set.
 ///
@@ -100,17 +193,69 @@ impl PromptOptimizer {
         Self { optimizer_llm, evaluator, config }
     }
 
-    /// Run the optimization loop.
+    /// Evaluates `agent` against the eval set.
     ///
-    /// Evaluates the agent, proposes improvements via the optimizer LLM,
-    /// applies the best improvement, and repeats until the target threshold
-    /// is met or max iterations are exhausted.
+    /// An `Arc<dyn Agent>` carries neither its instruction nor a way to rebuild it, so this
+    /// method can only score the agent as given: when the baseline meets the threshold it
+    /// writes the agent's description to the output file and returns; otherwise it fails,
+    /// since it cannot rewrite the instruction. [`optimize_candidates`](Self::optimize_candidates)
+    /// is the optimization loop.
     ///
-    /// On completion, writes the best-performing instructions to the configured
-    /// output file.
+    /// # Errors
+    ///
+    /// Returns [`EvalError::ConfigError`] when the eval set has no cases or the baseline is
+    /// below the target threshold, or the evaluator's error.
     pub async fn optimize(
         &self,
         agent: Arc<dyn Agent>,
+        eval_set: &EvalSet,
+    ) -> Result<OptimizationResult> {
+        let base_path = std::path::Path::new(".");
+        let cases = eval_set.get_all_cases(base_path)?;
+        if cases.is_empty() {
+            return Err(EvalError::ConfigError("eval set contains no cases".to_string()));
+        }
+        let initial_score = self.evaluate_agent(agent.clone(), eval_set).await?;
+        info!(iteration = 0, score = initial_score, "initial evaluation complete");
+        if initial_score < self.config.target_threshold {
+            return Err(EvalError::ConfigError(format!(
+                "the agent scored {initial_score:.2} against a target of {:.2}, and \
+                 PromptOptimizer::optimize cannot rewrite the instruction of an Arc<dyn Agent>. \
+                 Call optimize_candidates with InstructionCandidates::new(instruction, |candidate| \
+                 build the agent) so each proposal is evaluated",
+                self.config.target_threshold
+            )));
+        }
+        info!(
+            score = initial_score,
+            threshold = self.config.target_threshold,
+            "no optimization needed — initial score meets target threshold"
+        );
+        let instructions = agent.description().to_string();
+        self.write_output(&instructions)?;
+        Ok(OptimizationResult {
+            initial_score,
+            final_score: initial_score,
+            iterations_run: 0,
+            best_instructions: instructions,
+        })
+    }
+
+    /// Runs the optimization loop over `candidates`.
+    ///
+    /// Evaluates the agent built from the starting instruction, asks the optimizer LLM for
+    /// an improved instruction, evaluates the agent built from it, keeps the best, and
+    /// repeats until the target threshold is met or max iterations are exhausted. On
+    /// completion, writes the best-performing instruction to the configured output file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvalError::ConfigError`] when the eval set has no cases, the candidate's
+    /// build error, the evaluator's error, or [`EvalError::ExecutionError`] when the
+    /// optimizer LLM fails or answers nothing.
+    pub async fn optimize_candidates(
+        &self,
+        candidates: &dyn AgentCandidates,
         eval_set: &EvalSet,
     ) -> Result<OptimizationResult> {
         let base_path = std::path::Path::new(".");
@@ -120,11 +265,11 @@ impl PromptOptimizer {
             return Err(EvalError::ConfigError("eval set contains no cases".to_string()));
         }
 
-        // Get initial instructions from the agent
-        let mut current_instructions = agent.description().to_string();
+        let mut current_instructions = candidates.instruction();
+        let agent = candidates.build(&current_instructions)?;
 
         // Run initial evaluation
-        let initial_score = self.evaluate_agent(agent.clone(), eval_set).await?;
+        let initial_score = self.evaluate_agent(agent, eval_set).await?;
         info!(iteration = 0, score = initial_score, "initial evaluation complete");
 
         // Check if initial score already meets threshold
@@ -162,11 +307,10 @@ impl PromptOptimizer {
                 "proposed instruction improvements"
             );
 
-            // Apply the proposed instructions
-            current_instructions = proposed.clone();
-
-            // Re-evaluate with the new instructions
-            let score = self.evaluate_agent(agent.clone(), eval_set).await?;
+            // Evaluate the agent built from the proposed instructions
+            current_instructions = proposed;
+            let candidate = candidates.build(&current_instructions)?;
+            let score = self.evaluate_agent(candidate, eval_set).await?;
 
             info!(iteration, score, previous_best = best_score, "evaluation complete");
 

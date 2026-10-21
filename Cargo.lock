@@ -550,6 +550,7 @@ dependencies = [
 name = "adk-eval"
 version = "3.0.0"
 dependencies = [
+ "adk-agent",
  "adk-core",
  "adk-gcp",
  "adk-memory",

@@ -28,7 +28,7 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 - **A/B Comparison**: Statistical significance testing with Wilcoxon signed-rank (feature: `statistics`)
 - **Vertex AI Gen AI Evaluation Service**: Service-backed judge and trajectory metrics via `evaluateInstances` (feature: `vertex-eval`)
 - **Test Case Generation**: LLM-driven or event-based eval case creation
-- **Prompt Optimizer**: `PromptOptimizer` iterates on an agent's instructions against an eval set
+- **Prompt Optimizer**: `PromptOptimizer::optimize_candidates` iterates on an agent's instruction against an eval set, evaluating the agent built from each proposal (`InstructionCandidates`)
 - **User Personas**: simulated users for multi-turn evaluation (feature: `personas`)
 - **Conversation Metrics**: Multi-turn scoring for context retention, goal completion, coherence, topic drift
 - **CI Integration**: Eval sets run from integration tests or `cargo adk eval --agent-cmd`, with JUnit XML and baseline regression checks

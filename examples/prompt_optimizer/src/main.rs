@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use adk_core::model::Llm;
 use adk_eval::evaluator::{EvaluationConfig, Evaluator};
-use adk_eval::optimizer::{OptimizerConfig, PromptOptimizer};
+use adk_eval::optimizer::{InstructionCandidates, OptimizerConfig, PromptOptimizer};
 use adk_eval::schema::{EvalCase, EvalSet, Turn};
 use adk_eval::schema::ContentData;
 use adk_model::GeminiModel;
@@ -164,15 +164,19 @@ async fn main() -> anyhow::Result<()> {
     println!("   \"{initial_instructions}\"\n");
     println!("   (intentionally vague — the optimizer will improve these)\n");
 
-    // Build the agent under test using LlmAgent
+    // The agent under test, built again from each candidate instruction: the optimizer
+    // evaluates the agent that carries the proposal, not the original.
     let agent_model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&api_key, "gemini-3.7-flash")?);
-    let agent: Arc<dyn adk_core::Agent> = Arc::new(
-        adk_agent::LlmAgentBuilder::new("rust-tutor")
-            .model(agent_model)
-            .instruction(initial_instructions)
-            .description(initial_instructions)
-            .build()?,
-    );
+    let candidates = InstructionCandidates::new(initial_instructions, move |instruction| {
+        let agent: Arc<dyn adk_core::Agent> = Arc::new(
+            adk_agent::LlmAgentBuilder::new("rust-tutor")
+                .model(agent_model.clone())
+                .instruction(instruction)
+                .description("A Rust tutor")
+                .build()?,
+        );
+        Ok(agent)
+    });
 
     // -----------------------------------------------------------------------
     // 2. Load eval set from eval_set/ directory
@@ -239,7 +243,7 @@ async fn main() -> anyhow::Result<()> {
     println!("🚀 Starting optimization loop...\n");
     println!("═══════════════════════════════════════════");
 
-    let result = optimizer.optimize(agent, &eval_set).await.map_err(|e| {
+    let result = optimizer.optimize_candidates(&candidates, &eval_set).await.map_err(|e| {
         anyhow::anyhow!("Optimization failed: {e}")
     })?;
 
