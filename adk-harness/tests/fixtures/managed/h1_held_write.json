@@ -1,0 +1,36 @@
+{
+  "name": "H-1: a held write runs once after approval",
+  "description": "A harness definition in Ask mode. The model writes a file; the harness policy holds the call, the turn parks on its durable run with requires_action, the client allows it, and the resumed turn writes the file once and continues.",
+  "harness_def": {
+    "name": "builder",
+    "model": "gemini-3.7-flash",
+    "system": "Keep notes in notes.txt.",
+    "mode": "ask",
+    "shell": { "isolation": "none" }
+  },
+  "scripted_model": {
+    "turns": [
+      {
+        "tool_calls": [
+          { "name": "write_file", "input": { "path": "notes.txt", "content": "hello\n" }, "id": "tc_write" }
+        ]
+      },
+      { "text": "Wrote notes.txt." }
+    ]
+  },
+  "scenario": [
+    { "type": "user.message", "content": [{ "type": "text", "text": "Write hello to notes.txt" }] },
+    { "type": "user.tool_confirmation", "tool_use_id": "tc_write", "result": "allow" }
+  ],
+  "assertions": {
+    "exact_sequence": [
+      "status.running",
+      "agent.tool_use",
+      "status.idle:requires_action",
+      "status.running",
+      "agent.message",
+      "status.idle:end_turn"
+    ],
+    "files": { "notes.txt": "hello\n" }
+  }
+}

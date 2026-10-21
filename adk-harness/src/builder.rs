@@ -56,7 +56,8 @@ pub enum Pack {
     Payments,
     /// The voice surface.
     Voice,
-    /// The managed form.
+    /// The managed form (feature `managed`): `packs::managed::HarnessResolver` serves the
+    /// harness on the managed runtime.
     Managed,
 }
 
@@ -185,6 +186,7 @@ pub struct HarnessAgentBuilder {
     #[cfg(feature = "payments")]
     payments: Option<crate::packs::payments::PaymentsPack>,
     payments_requested: bool,
+    managed_requested: bool,
 }
 
 impl HarnessAgentBuilder {
@@ -268,6 +270,7 @@ impl HarnessAgentBuilder {
             #[cfg(feature = "payments")]
             payments: None,
             payments_requested: false,
+            managed_requested: false,
         }
     }
 
@@ -774,13 +777,16 @@ impl HarnessAgentBuilder {
     }
 
     /// Adds a pack (spec 3.1 §7.16–§7.18). `Pack::Payments` needs the services
-    /// `pack_payments` carries, so on its own it fails at `build`;
-    /// the other packs are not yet implemented.
+    /// `pack_payments` carries, so on its own it fails at `build`; `Pack::Managed` marks the
+    /// harness for the managed runtime (`info().packs` and the prompt name `managed`;
+    /// `packs::managed::HarnessResolver` serves it) and fails at `build` without feature
+    /// `managed`; the other packs are not yet implemented.
     pub fn pack(mut self, pack: Pack) -> Self {
         match pack {
             Pack::Payments => self.payments_requested = true,
-            Pack::Browser | Pack::ComputerUse | Pack::Voice | Pack::Managed => {
-                self.unimplemented.push(format!("pack {pack:?} (spec 3.1 §7.17–§7.18)"));
+            Pack::Managed => self.managed_requested = true,
+            Pack::Browser | Pack::ComputerUse | Pack::Voice => {
+                self.unimplemented.push(format!("pack {pack:?} (spec 3.1 §7.17)"));
             }
         }
         self
@@ -955,6 +961,13 @@ impl HarnessAgentBuilder {
                      `payments` (spec 3.1 §7.16)",
                 ));
             }
+        }
+        if self.managed_requested && cfg!(not(feature = "managed")) {
+            return Err(AdkError::config(
+                "the managed form needs adk-harness feature `managed`: HarnessResolver builds a \
+                 HarnessDef on the managed runtime and serves a harness marked Pack::Managed \
+                 (spec 3.1 §7.18)",
+            ));
         }
         let harness_names: HashSet<&str> = HARNESS_TOOL_NAMES.iter().copied().collect();
         for tool in &self.tools {
@@ -1385,10 +1398,13 @@ impl HarnessAgentBuilder {
 
         // 3. The LlmAgent.
         #[cfg(feature = "payments")]
-        let packs: Vec<String> =
+        let mut packs: Vec<String> =
             payments.as_ref().map(|_| vec!["payments".to_string()]).unwrap_or_default();
         #[cfg(not(feature = "payments"))]
-        let packs: Vec<String> = Vec::new();
+        let mut packs: Vec<String> = Vec::new();
+        if self.managed_requested {
+            packs.push("managed".to_string());
+        }
         let environment = Environment {
             root: workspace.root().display().to_string(),
             branch: instruction_state.instructions.git_branch().map(str::to_string),

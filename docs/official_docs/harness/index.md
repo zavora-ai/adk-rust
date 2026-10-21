@@ -95,7 +95,9 @@ turn runs it once (see [Modes and approvals](modes-and-approvals.md)).
 ## Status
 
 `adk-harness` is Beta ([STABILITY.md](https://github.com/zavora-ai/adk-rust/blob/main/STABILITY.md)).
-The payments pack (`harness-payments`) is in [Payments](payments.md). The other packs
-(`harness-browser`, `harness-computer-use`, `harness-voice`, `harness-managed`) compile, and
+The payments pack (`harness-payments`) is in [Payments](payments.md); the managed form
+(`harness-managed`, Experimental like `adk-managed`) runs the harness on the managed runtime,
+see [Serving the harness](serving.md#on-the-managed-runtime). The other packs
+(`harness-browser`, `harness-computer-use`, `harness-voice`) compile, and
 the builder refuses them with `not yet implemented` until they land. The design is
 [spec 3.1](https://github.com/zavora-ai/adk-rust/blob/main/docs/design/spec-3.1-harness-agent.md).

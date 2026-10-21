@@ -1,0 +1,32 @@
+{
+  "name": "H-2: the definition's mode governs",
+  "description": "A harness definition in Plan mode. The model tries to write a file; the harness policy denies it without holding, so the turn ends without requires_action and the workspace is unchanged.",
+  "harness_def": {
+    "name": "planner",
+    "model": "gemini-3.7-flash",
+    "mode": "plan",
+    "shell": { "isolation": "none" }
+  },
+  "scripted_model": {
+    "turns": [
+      {
+        "tool_calls": [
+          { "name": "write_file", "input": { "path": "notes.txt", "content": "hello\n" }, "id": "tc_write" }
+        ]
+      },
+      { "text": "Plan mode: I can only propose the change." }
+    ]
+  },
+  "scenario": [
+    { "type": "user.message", "content": [{ "type": "text", "text": "Write hello to notes.txt" }] }
+  ],
+  "assertions": {
+    "exact_sequence": [
+      "status.running",
+      "agent.tool_use",
+      "agent.message",
+      "status.idle:end_turn"
+    ],
+    "files": { "notes.txt": null }
+  }
+}

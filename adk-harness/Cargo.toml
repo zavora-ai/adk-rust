@@ -62,7 +62,8 @@ computer-use = ["dep:adk-computer-use"]
 # The payments pack (spec 3.1 §7.16): `adk-auth` for the scope guard its tools run under.
 payments = ["dep:adk-payments", "dep:adk-auth"]
 voice = ["dep:adk-realtime"]
-managed = ["dep:adk-managed"]
+# The managed form (spec 3.1 §7.18): adk-managed runs on adk-runner and adk-session already.
+managed = ["runner", "dep:adk-managed"]
 # Governed web access: web_fetch, web_search, screening (spec 3.1 §7.20).
 web = ["dep:reqwest", "dep:adk-guardrail", "dep:regex", "dep:adk-tool"]
 # MCP interaction: elicitation, sampling and resource bridges (spec 3.1 §7.21).
@@ -132,7 +133,7 @@ adk-model = { path = "../adk-model", default-features = false }
 # SQLite sessions, approvals and ledger, and the durable worker, for the durability tests;
 # `encrypted-session` for the encrypted store conformance suite.
 adk-session = { path = "../adk-session", features = ["sqlite", "encrypted-session"] }
-adk-server = { path = "../adk-server", features = ["background"] }
+adk-server = { path = "../adk-server", features = ["background", "agent-engine"] }
 # `MemoryServiceIndex` conformance over the SQLite FTS5 and PostgreSQL backends.
 adk-memory = { path = "../adk-memory", features = ["sqlite-memory", "database-memory"] }
 sqlx = { workspace = true, features = ["postgres", "sqlite"] }
@@ -143,6 +144,11 @@ tempfile = "3"
 tokio = { workspace = true, features = ["full"] }
 # Captures the harness spans in the observability tests.
 tracing-subscriber = { workspace = true, features = ["registry"] }
+# The managed form's replay to an `adk-enterprise` client over a local HTTP surface, and
+# the Agent Engine dispatch served locally (spec 3.1 §7.18, H9).
+adk-enterprise = { path = "../adk-enterprise" }
+axum = "0.8"
+reqwest = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true

@@ -27,6 +27,7 @@
 //! | `PlanGraphs`, `compile_plan` (feature `graph`), [`GoalSpec`], [`GoalStore`], [`UntilCheckAgent`] | §7.11 |
 //! | `MemoryFact`, `FactStore`, `FactIndex`, `LongTermMemoryConfig`, `memory_search`, `memory_remember` (feature `memory`) | §7.15.2 |
 //! | `hooks::HookSpec`, `hooks::HookSet`, `hooks::HookRunner` (feature `hooks`) | §7.22 |
+//! | `packs::managed::{HarnessDef, HarnessResolver}` (feature `managed`) | §7.18 |
 //! | [`coding::CodingAgent`] | §7.19 |
 //! | [`WebConfig`], [`SearchProvider`], [`ProviderWebTools`], `web_fetch`, `web_search` (feature `web`) | §7.20 |
 //! | [`McpInteractionConfig`], `HarnessElicitationHandler`, `HarnessSamplingHandler`, `mcp_*_resource` (feature `mcp`) | §7.21 |

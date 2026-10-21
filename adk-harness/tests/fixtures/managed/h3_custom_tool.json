@@ -1,0 +1,43 @@
+{
+  "name": "H-3: a custom tool is confirmed, then parks for its client result",
+  "description": "A harness definition with a custom tool, governed as an external tool: in Ask mode the call is held for confirmation first, then the client executes it and the turn parks again until user.custom_tool_result arrives.",
+  "harness_def": {
+    "name": "support",
+    "model": "gemini-3.7-flash",
+    "mode": "ask",
+    "shell": { "isolation": "none" },
+    "tools": [
+      {
+        "type": "custom",
+        "name": "lookup_order",
+        "description": "Looks up an order in the client's system.",
+        "input_schema": { "type": "object", "properties": { "order": { "type": "string" } }, "required": ["order"] }
+      }
+    ]
+  },
+  "scripted_model": {
+    "turns": [
+      { "tool_calls": [{ "name": "lookup_order", "input": { "order": "A-17" }, "id": "tc_lookup" }] },
+      { "text": "Order A-17 shipped." }
+    ]
+  },
+  "scenario": [
+    { "type": "user.message", "content": [{ "type": "text", "text": "Where is order A-17?" }] },
+    { "type": "user.tool_confirmation", "tool_use_id": "tc_lookup", "result": "allow" },
+    { "type": "user.custom_tool_result", "custom_tool_use_id": "tc_lookup", "content": [{ "type": "text", "text": "shipped" }] }
+  ],
+  "assertions": {
+    "exact_sequence": [
+      "status.running",
+      "agent.tool_use",
+      "status.idle:requires_action",
+      "status.running",
+      "agent.custom_tool_use",
+      "status.idle:requires_action",
+      "status.running",
+      "agent.message",
+      "status.idle:end_turn"
+    ],
+    "files": {}
+  }
+}

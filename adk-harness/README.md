@@ -128,13 +128,18 @@ See `docs/official_docs/harness/hooks.md`.
 | `docker` | off | `adk-sandbox/workspace-docker`: the container shell (`ShellIsolation::Container`, `ContainerBashTool`) |
 | `skills-registry`, `team-acp`, `team-a2a`, `memory-graph` | off | registry skills, ACP and A2A members, graph memory |
 | `payments` | off | the payments pack (spec 3.1 §7.16): `adk-payments` tools as class `Payment` under a `PaymentMandate`, `harness.payment` with the journal receipt |
-| `browser`, `computer-use`, `voice`, `managed` | off | the other packs |
+| `managed` | off | the managed form (spec 3.1 §7.18): `HarnessDef`, `HarnessResolver` on the managed runtime, `Pack::Managed` |
+| `browser`, `computer-use`, `voice` | off | the other packs |
 
 ## Status
 
 Beta (spec 3.1 phases 1 and 3). The payments pack (§7.16) is implemented
 ([guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/payments.md));
-the other packs (§7.17–§7.18) are refused by the builder with `not yet implemented: spec 3.1 §…`. The [team](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/team.md),
+the managed form (§7.18, feature `managed`) is Experimental, as `adk-managed` is:
+`packs::managed::HarnessDef` declares a harness as a managed agent definition and
+`HarnessResolver` builds it on the managed runtime
+([guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/serving.md#on-the-managed-runtime)).
+The other packs (§7.17) are refused by the builder with `not yet implemented: spec 3.1 §…`. The [team](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/team.md),
 [plans and goals](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/plan-and-goals.md)
 and [durability](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/durability.md)
 guides cover §7.10–§7.12. Under the container shell (`docker`), hooks with `inherit`

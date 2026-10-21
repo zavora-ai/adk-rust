@@ -4,6 +4,9 @@
 //! | Pack | Feature | Spec |
 //! |---|---|---|
 //! | `payments` | `payments` | §7.16 |
+//! | `managed` | `managed` | §7.18 |
 
+#[cfg(feature = "managed")]
+pub mod managed;
 #[cfg(feature = "payments")]
 pub mod payments;
