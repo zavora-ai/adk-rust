@@ -90,6 +90,7 @@ turn runs it once (see [Modes and approvals](modes-and-approvals.md)).
 | [Observability](observability.md) | Spans, spend, the loop guard, evaluation baselines |
 | [Memory](memory.md) | Working notes and long-term facts |
 | [Payments](payments.md) | The payments pack: purchases under a mandate, approved once each, metered and receipted |
+| [Browser and computer use](packs.md) | The browser pack under the web rules; desktop actions through the governed reference graph, approved once each |
 | [Migrating from `CodingAgent`](../migration/coding-agent-to-harness.md) | Moving from `adk_agent::coding` to the harness |
 
 ## Status
@@ -97,7 +98,8 @@ turn runs it once (see [Modes and approvals](modes-and-approvals.md)).
 `adk-harness` is Beta ([STABILITY.md](https://github.com/zavora-ai/adk-rust/blob/main/STABILITY.md)).
 The payments pack (`harness-payments`) is in [Payments](payments.md); the managed form
 (`harness-managed`, Experimental like `adk-managed`) runs the harness on the managed runtime,
-see [Serving the harness](serving.md#on-the-managed-runtime). The other packs
-(`harness-browser`, `harness-computer-use`, `harness-voice`) compile, and
-the builder refuses them with `not yet implemented` until they land. The design is
+see [Serving the harness](serving.md#on-the-managed-runtime). The browser and computer-use
+packs (`harness-browser`, `harness-computer-use`) are in
+[Browser and computer use](packs.md); the voice pack (`harness-voice`) compiles, and the
+builder refuses it with `not yet implemented` until it lands. The design is
 [spec 3.1](https://github.com/zavora-ai/adk-rust/blob/main/docs/design/spec-3.1-harness-agent.md).

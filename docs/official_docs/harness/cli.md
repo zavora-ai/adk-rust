@@ -48,14 +48,14 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--fail-if-unavailable` | With `--sandbox`: refuse to start when the sandbox is unavailable instead of running `bash` on the host |
 | `--allow-unsandboxed` | Lets `--yes` approve an unsandboxed retry of a command the sandbox refused |
 | `--trust` | Trusts the workspace's instruction files without asking |
-| `--pack browser\|computer-use\|payments` | Adds a pack |
+| `--pack browser\|computer-use\|payments` | Adds a pack: `browser` installs the browser pack over the WebDriver at `ADK_WEBDRIVER_URL` (default `http://localhost:4444`; adk-cli feature `browser`), see [Browser and computer use](packs.md); `computer-use` and `payments` name the library API |
 | `--member NAME=explore\|general` | Adds a team member |
 | `--no-memory` | Turns long-term memory off: nothing is recalled or learned |
 | `--effort low\|medium\|high` | The reasoning effort of this session's model clients (spec 3.1 §7.23); without it the `[effort]` policy applies per mode: plan high, everything else medium |
 | `--store-key keychain:<entry>\|secret:<provider>/<name>\|env:<VAR>` | Where the key sealing `harness.db` is kept (spec 3.1 §7.12); without it `[store] key` in the user config, else the store is plaintext |
 | `--no-hooks` | Runs no hooks, the workspace's included (spec 3.1 §7.22); `/hooks` lists the effective set |
 
-> **Note:** packs report themselves unavailable until their part of spec 3.1 lands (§7.16).
+> **Note:** `--pack computer-use` and `--pack payments` refuse at start: a desktop runtime and a merchant service are connections only the library API takes (spec 3.1 §7.16, §7.24).
 
 `--pack payments` is refused with the reason: the pack needs a merchant checkout service, a
 transaction store and a mandate, which no flag or config file can supply; see
