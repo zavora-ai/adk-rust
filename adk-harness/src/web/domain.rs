@@ -521,7 +521,7 @@ pub(crate) fn fixture_loopback_permitted() -> bool {
 
 /// Test fixtures (feature `web-fixture`): a loopback HTTP server standing in for the web.
 ///
-/// Off in every build without the feature, and off until [`permit_loopback`] is called;
+/// Off in every build without the feature, and off until `permit_loopback` is called;
 /// only loopback addresses are admitted, never link-local, private or mapped ones.
 pub mod fixture {
     pub(crate) static LOOPBACK: std::sync::atomic::AtomicBool =
