@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use adk_core::{AdkError, Result};
 use async_trait::async_trait;
@@ -106,51 +107,58 @@ impl EventSource for FileWatchTrigger {
         &self.name
     }
 
+    /// Subscribes to changes under the watched path. The `notify` watcher lives on its own
+    /// thread for as long as the returned stream: dropping the stream stops the watcher and
+    /// ends the thread.
     async fn subscribe(&self) -> Result<BoxStream<'static, TriggerEvent>> {
-        let (tx, mut rx) = mpsc::channel::<TriggerEvent>(256);
         let source_name = self.name.clone();
         let pattern = self.pattern.clone();
         let watch_path = self.path.clone();
 
-        // Create a synchronous channel for notify → async bridge
-        let (sync_tx, mut sync_rx) = mpsc::channel::<NotifyEvent>(256);
+        // `notify` calls back on its own thread; this bounded channel bridges to async.
+        let (sync_tx, sync_rx) = mpsc::channel::<NotifyEvent>(256);
+        let subscribed = sync_tx.clone();
 
-        // Spawn watcher in a blocking task since notify uses synchronous callbacks
-        std::thread::spawn(move || {
-            let rt = sync_tx;
-            let mut watcher = match RecommendedWatcher::new(
-                move |res: std::result::Result<NotifyEvent, notify::Error>| {
-                    if let Ok(event) = res {
-                        let _ = rt.blocking_send(event);
+        let watcher_thread = std::thread::Builder::new()
+            .name("adk-file-watch".into())
+            .spawn(move || {
+                let mut watcher = match RecommendedWatcher::new(
+                    move |res: std::result::Result<NotifyEvent, notify::Error>| {
+                        if let Ok(event) = res {
+                            let _ = sync_tx.blocking_send(event);
+                        }
+                    },
+                    Config::default(),
+                ) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        tracing::warn!("file watch trigger failed to create watcher: {e}");
+                        return;
                     }
-                },
-                Config::default(),
-            ) {
-                Ok(w) => w,
-                Err(e) => {
-                    tracing::warn!("file watch trigger failed to create watcher: {e}");
+                };
+
+                if let Err(e) = watcher.watch(&watch_path, RecursiveMode::Recursive) {
+                    tracing::warn!("file watch trigger failed to watch path: {e}");
                     return;
                 }
-            };
 
-            if let Err(e) = watcher.watch(&watch_path, RecursiveMode::Recursive) {
-                tracing::warn!("file watch trigger failed to watch path: {e}");
-                return;
-            }
+                // The watcher stops when it drops at the end of this closure, once the
+                // subscription closes the channel; `WatchSubscription` unparks the thread
+                // then, and the timeout only bounds a missed unpark.
+                while !subscribed.is_closed() {
+                    std::thread::park_timeout(Duration::from_secs(1));
+                }
+            })
+            .map_err(|e| AdkError::agent(format!("file watch trigger failed to start: {e}")))?;
 
-            // Keep the watcher alive until the thread is dropped
-            // The watcher will be dropped when the thread is stopped
-            std::thread::park();
-        });
-
-        // Spawn a task that filters events and forwards matching ones
-        tokio::spawn(async move {
-            while let Some(event) = sync_rx.recv().await {
+        let mut subscription =
+            WatchSubscription { events: sync_rx, watcher_thread: watcher_thread.thread().clone() };
+        let stream = async_stream::stream! {
+            while let Some(event) = subscription.events.recv().await {
                 let event_kind = format!("{:?}", event.kind);
-
                 for event_path in &event.paths {
                     if FileWatchTrigger::matches_pattern(&pattern, event_path) {
-                        let trigger_event = TriggerEvent {
+                        yield TriggerEvent {
                             source: source_name.clone(),
                             payload: serde_json::json!({
                                 "event": event_kind,
@@ -159,23 +167,26 @@ impl EventSource for FileWatchTrigger {
                             // A filesystem change has no caller.
                             principal: None,
                         };
-
-                        if tx.send(trigger_event).await.is_err() {
-                            tracing::debug!("file watch subscriber dropped");
-                            return;
-                        }
                     }
                 }
-            }
-        });
-
-        let stream = async_stream::stream! {
-            while let Some(event) = rx.recv().await {
-                yield event;
             }
         };
 
         Ok(Box::pin(stream))
+    }
+}
+
+/// The receiving end of one subscription. Dropping it closes the channel and wakes the
+/// watcher thread, which then drops the watcher and ends.
+struct WatchSubscription {
+    events: mpsc::Receiver<NotifyEvent>,
+    watcher_thread: std::thread::Thread,
+}
+
+impl Drop for WatchSubscription {
+    fn drop(&mut self) {
+        self.events.close();
+        self.watcher_thread.unpark();
     }
 }
 
