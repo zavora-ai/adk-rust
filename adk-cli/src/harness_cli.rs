@@ -700,7 +700,8 @@ pub async fn voice(
 ) -> Result<i32> {
     use adk_session::{CreateRequest, GetRequest};
 
-    let mut setup = Setup::new(model, instruction, args, HarnessMode::Ask).await?;
+    // The realtime session reads the provider and its key from the resolved model.
+    let mut setup = Setup::new(model.clone(), instruction, args, HarnessMode::Ask).await?;
     setup.print_notes();
     setup.memory_notice();
     if !setup.resolved.packs.contains(&adk_harness::Pack::Voice) {
@@ -736,7 +737,7 @@ pub async fn voice(
     let script = voice.voice_script.as_deref();
     #[cfg(not(feature = "scripted-model"))]
     let script = None;
-    let realtime = crate::voice_cli::realtime_model(&setup.model, script)?;
+    let realtime = crate::voice_cli::realtime_model(&model, script)?;
     println!(
         "harness ({}) voice on {} · mode {} · shell {} · realtime {}\n",
         setup.model_id,
