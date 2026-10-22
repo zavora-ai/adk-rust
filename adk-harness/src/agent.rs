@@ -1044,6 +1044,165 @@ impl HarnessAgent {
     }
 }
 
+/// The error of a standing rule that cannot be created for a call.
+fn rule_refused(message: &str) -> AdkError {
+    AdkError::new(
+        ErrorComponent::Agent,
+        ErrorCategory::InvalidInput,
+        "harness.decision.invalid",
+        message,
+    )
+}
+
+/// Standing rules created and revoked by a person outside a prompt: `Harness::decide`, a
+/// served harness's authenticated REST routes (spec 3.1 §7.5, §8.2).
+impl HarnessAgent {
+    /// The rule `suggestion` becomes for the held call `request`, owned by `owner`
+    /// (spec 3.1 §7.5, §9.2 I2, I8).
+    ///
+    /// The suggestion must pin the call's tool and exact declaration; an allow rule must be
+    /// one [`StandingRule::suggestions`](crate::StandingRule::suggestions) offers for the
+    /// call; a call no rule covers — plan exit, a payment, a memory write, a desktop action,
+    /// a protected or other non-waivable edit — gets none.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let suggestion = StandingRule::suggestions(&held.request).remove(0);
+    /// let rule = harness.rule_for_held_call(&held.request, suggestion, StandingDecision::Allow, &owner)?;
+    /// harness.grant_rule(rule, "rest", Some(&held.request)).await?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.decision.invalid` when the call records no tool origin or no rule
+    /// may be created from `suggestion` for it.
+    pub fn rule_for_held_call(
+        &self,
+        request: &adk_core::ToolConfirmationRequest,
+        suggestion: crate::RuleSuggestion,
+        decision: crate::StandingDecision,
+        owner: &crate::RuleOwner,
+    ) -> Result<crate::StandingRule> {
+        let runtime = &self.runtime;
+        let origin = request
+            .origin
+            .as_ref()
+            .ok_or_else(|| rule_refused("the pending call records no tool origin"))?;
+        let kind = runtime.policy.registry().classify(
+            &self.info.name,
+            &request.tool_name,
+            Some(origin),
+            &request.args,
+            adk_core::ToolEffect::NonIdempotent,
+            runtime.policy.isolation_status().isolation(),
+            false,
+        );
+        let protected = kind == crate::ToolKind::Edit
+            && request
+                .args
+                .get("path")
+                .and_then(Value::as_str)
+                .is_none_or(|path| is_protected_target(runtime.workspace.root(), path));
+        if !kind.rule_eligible() || crate::TableRow::of(&kind, protected).is_non_waivable() {
+            return Err(rule_refused("no standing rule applies to this call; decide it once"));
+        }
+        if !suggestion.origin.admits(origin)
+            || !matches!(suggestion.origin, crate::OriginPin::Exact { .. })
+            || suggestion.tool != request.tool_name
+        {
+            return Err(rule_refused(
+                "a remembered rule must pin this call's tool and declaration",
+            ));
+        }
+        if decision == crate::StandingDecision::Allow
+            && !crate::StandingRule::suggestions(request).contains(&suggestion)
+        {
+            return Err(rule_refused("only a suggested rule can be remembered as an allow rule"));
+        }
+        Ok(suggestion.into_rule(owner, decision, Some(request.fingerprint())))
+    }
+
+    /// Stores `rule`, recording `harness.rule.created` with `surface` (such as `rest`) in
+    /// the harness's audit trail before the store write (spec 3.1 §7.5, §9.3, I39).
+    /// `from` is the held call the rule was created from, if any.
+    ///
+    /// The caller authenticates the person the rule's scope and `created_by` name; a rule
+    /// is never created for a model-callable tool's request (spec 3.1 §9.2 I2, I5).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let granted = harness.grant_rule(rule, "rest", None).await?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the audit log's error, and then stores nothing, or the store's error.
+    pub async fn grant_rule(
+        &self,
+        rule: crate::StandingRule,
+        surface: &str,
+        from: Option<&adk_core::ToolConfirmationRequest>,
+    ) -> Result<crate::StandingRule> {
+        if let Some(trail) = self.runtime.audit_trail() {
+            let mut fields = crate::approvals::rule_audit_fields(
+                &rule,
+                from.and_then(|request| request.function_call_id.as_deref()),
+            );
+            fields["surface"] = json!(surface);
+            HarnessAudit::new(
+                trail.clone(),
+                AuditActor::subject(rule.created_by.clone()),
+                rule.scope.session_id().unwrap_or_default(),
+            )
+            .record("harness.rule.created", fields)
+            .await?;
+        }
+        self.runtime.standing_rules.grant(rule).await
+    }
+
+    /// Revokes the rule `id` of `user` in `app`, recording `harness.rule.revoked` with
+    /// `surface` before the store write (spec 3.1 §7.5, §9.2 I4, §9.3). Returns the revoked
+    /// rule, or `None` when `user` has no rule `id`, so a person revokes only their own.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let revoked = harness.revoke_rule("adk-rust", "ana", &rule.id, "rest").await?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the audit log's error, and then revokes nothing, or the store's error.
+    pub async fn revoke_rule(
+        &self,
+        app: &str,
+        user: &str,
+        id: &str,
+        surface: &str,
+    ) -> Result<Option<crate::StandingRule>> {
+        let standing = &self.runtime.standing_rules;
+        let Some(rule) = standing.list(app, user).await?.into_iter().find(|rule| rule.id == id)
+        else {
+            return Ok(None);
+        };
+        if let Some(trail) = self.runtime.audit_trail() {
+            let mut fields = crate::approvals::rule_audit_fields(&rule, None);
+            fields["by"] = json!(user);
+            fields["surface"] = json!(surface);
+            HarnessAudit::new(
+                trail.clone(),
+                AuditActor::subject(adk_core::principal::SubjectRef::human(user)),
+                rule.scope.session_id().unwrap_or_default(),
+            )
+            .record("harness.rule.revoked", fields)
+            .await?;
+        }
+        Ok(standing.revoke(app, id).await?.then_some(rule))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

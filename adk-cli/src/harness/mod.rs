@@ -7,6 +7,7 @@
 //! | [`ConsolePrompter`] | §8.1, §7.5 approvals at the terminal, `[a] always allow` |
 //! | [`HarnessLauncher`], [`TurnOutcome`] | §8.1 REPL, slash commands, one-turn runs, goals; §8.2 serve |
 //! | [`LoopbackOperatorExtractor`], [`BearerTokenExtractor`] | §8.2 request identity |
+//! | `/api/rules` on a served harness | §7.5, §8.2 standing rules over authenticated REST |
 //! | [`ultracode`] | §7.10, §8.1 adaptive `ultracode`: the review router, the board, the limits |
 //!
 //! # Example
@@ -33,6 +34,7 @@ mod commands;
 mod goal;
 mod launcher;
 mod prompter;
+mod rules;
 mod serve;
 pub mod ultracode;
 

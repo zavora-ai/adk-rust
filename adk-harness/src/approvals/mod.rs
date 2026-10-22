@@ -6,7 +6,6 @@ mod prompt;
 mod rule;
 mod store;
 
-#[cfg(feature = "runner")]
 pub(crate) use prompt::rule_audit_fields;
 pub use prompt::{
     ApprovalPrompt, ApprovalPrompter, DEFAULT_PROMPTS_PER_TURN, PromptAnswer,

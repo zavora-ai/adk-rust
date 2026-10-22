@@ -173,6 +173,9 @@ pub struct Launcher {
     console_commands: Vec<Arc<dyn ConsoleCommand>>,
     approval_service: Option<Arc<dyn ApprovalService>>,
     background_runs: Option<BackgroundState>,
+    /// Routes mounted under `/api` behind the auth middleware, such as a served harness's
+    /// standing-rule routes.
+    api_routes: Vec<Router>,
     thinking_mode: ThinkingDisplayMode,
     bind_address: IpAddr,
 }
@@ -203,6 +206,7 @@ impl Launcher {
             console_commands: Vec::new(),
             approval_service: None,
             background_runs: None,
+            api_routes: Vec::new(),
             thinking_mode: ThinkingDisplayMode::Auto,
             bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
         }
@@ -488,6 +492,14 @@ impl Launcher {
     /// ```
     pub fn with_background_runs(mut self, state: BackgroundState) -> Self {
         self.background_runs = Some(state);
+        self
+    }
+
+    /// Mounts `routes` under `/api` behind the auth middleware in serve mode
+    /// (spec 3.1 §8.2: the served harness's standing rules).
+    #[cfg(feature = "harness")]
+    pub(crate) fn with_api_routes(mut self, routes: Router) -> Self {
+        self.api_routes.push(routes);
         self
     }
 
@@ -777,6 +789,7 @@ impl Launcher {
         let a2a_base_url = self.a2a_base_url.clone();
         let approval_service = self.approval_service.clone();
         let background_runs = self.background_runs.clone();
+        let api_routes = self.api_routes.clone();
         let config = self.into_server_config(span_exporter);
 
         let mut builder = ServerBuilder::new(config);
@@ -794,6 +807,9 @@ impl Launcher {
         }
         if let Some(state) = background_runs {
             builder = builder.with_background_runs(state);
+        }
+        for routes in api_routes {
+            builder = builder.add_api_routes(routes);
         }
         Ok(builder.build())
     }

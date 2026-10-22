@@ -632,15 +632,17 @@ impl PromptingConfirmationHandler {
         };
         let rule = chosen.into_rule(&owner, decision, Some(request.fingerprint()));
         if let Some(audit) = context.audit() {
-            audit.record("harness.rule.created", rule_audit_fields(&rule, request)).await?;
+            let fields = rule_audit_fields(&rule, request.function_call_id.as_deref());
+            audit.record("harness.rule.created", fields).await?;
         }
         self.standing.grant(rule).await?;
         Ok(())
     }
 }
 
-/// The `ext` fields of a `harness.rule.*` record (spec 3.1 §9.3).
-pub(crate) fn rule_audit_fields(rule: &StandingRule, request: &ToolConfirmationRequest) -> Value {
+/// The `ext` fields of a `harness.rule.*` record (spec 3.1 §9.3); `created_from_call_id`
+/// names the held call the rule was created from.
+pub(crate) fn rule_audit_fields(rule: &StandingRule, created_from_call_id: Option<&str>) -> Value {
     let digest = |value: &Value| crate::fsutil::hex_digest(value.to_string().as_bytes());
     let (source, declaration_digest) = match &rule.origin {
         OriginPin::Exact { source, declaration_digest } => {
@@ -659,7 +661,7 @@ pub(crate) fn rule_audit_fields(rule: &StandingRule, request: &ToolConfirmationR
         "predicatesDigest": digest(&serde_json::to_value(&rule.predicates).unwrap_or(Value::Null)),
         "decision": serde_json::to_value(&rule.decision).unwrap_or(Value::Null),
         "expiresAt": rule.expires_at,
-        "createdFromCallId": request.function_call_id,
+        "createdFromCallId": created_from_call_id,
         "by": rule.created_by.id,
     })
 }

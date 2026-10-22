@@ -191,8 +191,8 @@ shows the session id.
 | `--agent` | `harness` | `harness`, or `chat` for the plain agent as before |
 | `--auth-token` | `$ADK_SERVE_TOKEN` | Bearer token callers present; without one only loopback peers are admitted |
 
-The harness is served in plan mode with `/api/approvals` and `/api/runs`; see
-[Serving the harness](../docs/official_docs/harness/serving.md).
+The harness is served in plan mode with `/api/approvals`, `/api/runs` and its standing
+rules at `/api/rules`; see [Serving the harness](../docs/official_docs/harness/serving.md).
 
 The server answers only loopback names and IP addresses, and allows no cross-origin browser
 access. The binary has no flag for more hosts or origins; a custom binary lists them with

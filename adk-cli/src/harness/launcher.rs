@@ -526,7 +526,10 @@ impl HarnessLauncher {
     /// Builds the HTTP app serving the harness (spec 3.1 §8.2).
     ///
     /// The harness is mounted through `ServerBuilder` with the approval inbox and
-    /// background runs when configured. Without an extractor, loopback peers are admitted
+    /// background runs when configured, and its standing rules under `/api/rules`
+    /// (spec 3.1 §7.5): list, create from a held call's suggestion or explicitly, revoke,
+    /// for callers with the `operator` scope, each audited with `surface: rest`. Without an
+    /// extractor, loopback peers are admitted
     /// as the operator ([`LoopbackOperatorExtractor`]), and the router records each
     /// request's peer for it; serve it with `into_make_service_with_connect_info`.
     ///
@@ -535,9 +538,15 @@ impl HarnessLauncher {
     /// Returns a configuration error when the bind address is not loopback and no
     /// extractor authenticates requests.
     pub fn build_app(self) -> Result<Router> {
+        let rules = super::rules::rules_router(super::rules::RuleEndpoints {
+            agent: self.agent.clone(),
+            app_name: self.resolved_app_name(),
+            approvals: self.approval_service.clone(),
+        });
         let mut launcher = Launcher::new(self.agent.agent())
             .app_name(self.resolved_app_name())
-            .with_bind_address(self.bind_address);
+            .with_bind_address(self.bind_address)
+            .with_api_routes(rules);
         if let Some(sessions) = self.session_service {
             launcher = launcher.with_session_service(sessions);
         }
@@ -596,6 +605,7 @@ impl HarnessLauncher {
             terminal_safe(&info.isolation.to_string())
         );
         println!("  approvals: GET /api/approvals, POST /api/approvals/{{id}}/decide");
+        println!("  standing rules: GET /api/rules, POST /api/rules, DELETE /api/rules/{{id}}");
         println!("Press Ctrl+C to stop\n");
         axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
             .with_graceful_shutdown(shutdown_signal())

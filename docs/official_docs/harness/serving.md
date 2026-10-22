@@ -17,6 +17,7 @@ adk-rust serve --store postgres://harness@db/harness --port 8081   # one replica
 | Agent and app name | `adk-rust` |
 | Mode | `plan`; the model reads the workspace and proposes plans, nothing changes |
 | Approval inbox | `/api/approvals`, expiry ticker every 30 s |
+| Standing rules | `/api/rules`, for callers with the `operator` scope |
 | Background runs | `/api/runs`, target `adk-rust` |
 | Storage | `<config dir>/adk-rust/harness.db`, shared with the REPL; `--store <url>` for [replicas](#running-replicas) |
 | Plans and goal graphs | Checkpointed in the same store; `--checkpointer <url>` names another |
@@ -129,6 +130,41 @@ adk-rust approvals list --server http://127.0.0.1:8080
 adk-rust approvals approve apr_… --server http://127.0.0.1:8080
 adk-rust approvals deny apr_… --reason "not on main" --server https://agents.example.com --token "$TOKEN"
 ```
+
+## Standing rules over HTTP
+
+A served harness keeps its standing rules under `/api/rules` (spec 3.1 §7.5). The routes sit
+behind the same authentication as `/api/approvals` and need the `operator` scope: no caller
+is `401`, a caller without the scope `403`. A rule's subject is always the authenticated
+caller — a body that names a `userId` is refused — so a rule covers only the caller's own
+calls, and a caller lists and revokes only their own rules.
+
+| Route | Effect |
+|---|---|
+| `GET /api/rules` | The caller's rules, oldest first |
+| `GET /api/rules/suggestions/{approvalId}` | The rules a call held in one of the caller's sessions offers, as a prompt would |
+| `POST /api/rules` | `{"approvalId": "apr_…", "suggestion": 1}` remembers an offered rule; `{"tool": "bash", "prefix": "cargo test"}` creates an explicit rule pinned to the served harness's declaration of the tool. Optional: `"decision": {"kind": "deny", "reason": "…"}`, `"expiresInHours": 8`; explicit rules also take `"pathWithin": "src"` and `"sessionId": "s1"`. Answers `201` with the rule |
+| `DELETE /api/rules/{id}` | Revokes one of the caller's rules; it stops applying from the next call |
+
+Every grant and revocation is recorded as `harness.rule.created` or `harness.rule.revoked`
+with `surface: rest` before the store write. Creating a rule from a held call does not
+decide that call: decide it through `/api/approvals`.
+
+```bash
+# The held call's offers, then "always allow `cargo test …`" (offer 0) for every session.
+curl -s localhost:8080/api/rules/suggestions/apr_…
+curl -s localhost:8080/api/rules -H 'content-type: application/json' \
+  -d '{"approvalId": "apr_…", "suggestion": 0}'
+
+# An explicit rule, and its revocation.
+curl -s localhost:8080/api/rules -H 'content-type: application/json' \
+  -d '{"tool": "bash", "prefix": "cargo test", "expiresInHours": 8}'
+curl -s -X DELETE localhost:8080/api/rules/<rule id>
+```
+
+A `bash` allow rule needs a `prefix` of plain command words that does not start with a
+command runner (`sh`, `bash`, `env`, `sudo` and similar); `exit_plan_mode`, memory writes,
+payments and desktop actions are never covered by a rule.
 
 ## Serving your own harness
 

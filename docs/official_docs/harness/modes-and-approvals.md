@@ -193,12 +193,23 @@ Deny rule, into Deny — for the calls it covers.
 | Decision | `StandingDecision::Allow`, or `Deny { reason }`; a Deny rule wins over an Allow rule |
 
 Rules come from a person only: from a prompt's suggestions (`ApproveAndRemember`), from
-`HarnessDecision::ApproveAndRemember`, or from the store directly, as `adk-rust rules add`
-does. No model-callable tool creates one. A rule never applies to a non-waivable call:
+`HarnessDecision::ApproveAndRemember`, from a served harness's authenticated `/api/rules`
+routes (see [Serving](serving.md#standing-rules-over-http)), or from the store directly, as
+`adk-rust rules add` does. No model-callable tool creates one. A rule never applies to a non-waivable call:
 `exit_plan_mode`, edits of protected paths, unsandboxed retries, `memory_write` and
 `memory_delete` are decided every time. A suggestion for `bash` never starts with a command
 that runs arbitrary code (`sh`, `bash`, `env`, `sudo` and similar), and the harness re-reads
 the store on every call, so a revoked rule stops applying at once.
+
+Code that authenticates the person itself creates and revokes rules through the harness,
+which records `harness.rule.created` and `harness.rule.revoked` with the surface before the
+store write:
+
+| Method | Effect |
+|---|---|
+| `HarnessAgent::rule_for_held_call(request, suggestion, decision, owner)` | The rule a held call's suggestion becomes, refused for a call no rule may cover or a suggestion that does not pin the call's declaration |
+| `HarnessAgent::grant_rule(rule, surface, from)` | Stores the rule after its `harness.rule.created` record |
+| `HarnessAgent::revoke_rule(app, user, id, surface)` | Revokes one of `user`'s rules after its `harness.rule.revoked` record; `None` for a rule `user` does not own |
 
 ## Related
 
