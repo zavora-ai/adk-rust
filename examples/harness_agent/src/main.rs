@@ -269,6 +269,17 @@ impl Checks {
             _ => None,
         }
     }
+    /// A baseline that is not run, with what it is expected to show: the table labels it
+    /// as expected rather than as a measured result.
+    fn expected(outcome: &str) -> Self {
+        Self(vec![(format!("EXPECTED: {outcome}"), true)])
+    }
+    fn expected_outcome(&self) -> Option<&str> {
+        match self.0.as_slice() {
+            [(name, true)] => name.strip_prefix("EXPECTED: "),
+            _ => None,
+        }
+    }
     fn passed(&self) -> bool {
         !self.0.is_empty() && self.0.iter().all(|(_, ok)| *ok)
     }
@@ -1134,6 +1145,9 @@ async fn main() -> Result<()> {
             let verdict = |result: &Result<Checks>| match result {
                 Ok(checks) if checks.skipped_reason().is_some() => {
                     format!("SKIPPED ({})", checks.skipped_reason().unwrap_or_default())
+                }
+                Ok(checks) if checks.expected_outcome().is_some() => {
+                    format!("not run, expected: {}", checks.expected_outcome().unwrap_or_default())
                 }
                 Ok(checks) if checks.passed() => "PASS".to_string(),
                 Ok(checks) => format!("FAIL ({})", checks.failures().join("; ")),

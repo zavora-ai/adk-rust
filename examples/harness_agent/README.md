@@ -7,7 +7,9 @@ asserted on files, stores and audit records, never on model prose.
 
 No keys needed. Each scenario runs a real `LlmAgent` behind a real `Runner` with a scripted
 model, once against `HarnessAgent` and once against the 3.0
-`adk_agent::coding::CodingAgent`, and prints a main-versus-branch table.
+`adk_agent::coding::CodingAgent`, and prints a main-versus-branch table. A main cell reading
+`not run, expected: …` is not measured: the 3.0 agent has nothing to run that scenario
+against, and the cell states what main's code does.
 
 ```bash
 cargo run                      # every scripted scenario

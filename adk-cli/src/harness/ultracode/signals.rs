@@ -60,6 +60,7 @@ pub(crate) const SECURITY_VOCABULARY: &[&str] = &[
     "keyring",
     "vault",
     "signing",
+    "security",
 ];
 
 /// Keyword categories of [`TaskFeatures`], each with its words and phrases.
@@ -648,6 +649,14 @@ mod tests {
         let features = TaskFeatures::extract("rotate the JWT signing key in auth.rs");
         assert_eq!(features.hits("security"), ["auth", "jwt", "signing"]);
         assert_eq!(features.path_mentions, 1);
+    }
+
+    #[test]
+    fn a_security_component_is_sensitive() {
+        assert!(has_security_component("src/security/headers.rs"));
+        assert!(has_security_component("docs/SECURITY.md"));
+        assert!(!has_security_component("src/securities/ledger.rs"));
+        assert!(TaskFeatures::extract("tighten the security headers").has("security"));
     }
 
     #[test]

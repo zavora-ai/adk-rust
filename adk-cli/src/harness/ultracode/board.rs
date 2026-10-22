@@ -55,7 +55,8 @@ impl Verdict {
     }
 }
 
-/// The verdict of a reviewer's text and its notes: the last `VERDICT:` line decides; text
+/// The verdict of a reviewer's text and its notes: the last `VERDICT:` line decides, and a
+/// line naming both verdicts requests changes (spec 3.1 §9.2 I63: it fails closed); text
 /// without one is [`Verdict::Failed`]. Notes are the lines after the first line naming the
 /// verdict, or the whole text, at most 180 characters.
 ///
@@ -67,6 +68,7 @@ impl Verdict {
 /// assert_eq!(parse_verdict("Looks right.\nVERDICT: approve").0, Verdict::Approve);
 /// let (verdict, notes) = parse_verdict("VERDICT: changes\n- handle the empty input");
 /// assert_eq!((verdict, notes.as_str()), (Verdict::Changes, "- handle the empty input"));
+/// assert_eq!(parse_verdict("VERDICT: approve or VERDICT: changes").0, Verdict::Changes);
 /// assert_eq!(parse_verdict("I could not finish.").0, Verdict::Failed);
 /// ```
 pub fn parse_verdict(text: &str) -> (Verdict, String) {
@@ -76,10 +78,11 @@ pub fn parse_verdict(text: &str) -> (Verdict, String) {
         .find_map(|line| {
             let line: String =
                 line.to_lowercase().chars().filter(|c| !c.is_whitespace() && *c != '*').collect();
-            if line.contains("verdict:approve") {
-                Some(Verdict::Approve)
-            } else if line.contains("verdict:changes") {
+            // Changes first: a line naming both verdicts is not an approval.
+            if line.contains("verdict:changes") {
                 Some(Verdict::Changes)
+            } else if line.contains("verdict:approve") {
+                Some(Verdict::Approve)
             } else {
                 None
             }
@@ -794,6 +797,14 @@ mod tests {
             parse_verdict("I cannot give VERDICT: approve yet.\nVERDICT: changes").0,
             Verdict::Changes
         );
+        // A line naming both verdicts fails closed (spec 3.1 §9.2 I63).
+        for both in [
+            "VERDICT: approve, unless you count VERDICT: changes",
+            "**VERDICT: changes** (not VERDICT: approve)",
+            "Fine.\nVERDICT: approve | VERDICT: changes",
+        ] {
+            assert_eq!(parse_verdict(both).0, Verdict::Changes, "{both}");
+        }
         let (verdict, notes) = parse_verdict("review failed: provider down");
         assert_eq!((verdict, notes.as_str()), (Verdict::Failed, "review failed: provider down"));
     }

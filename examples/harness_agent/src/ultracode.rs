@@ -35,21 +35,16 @@ pub async fn run_scripted(name: &str, subject: Subject) -> Option<Result<Checks>
     if !SCRIPTED.contains(&name) {
         return None;
     }
+    // The 3.0 `CodingAgent` has no review router or board to run these against, so the main
+    // column states what main's code does instead of measuring it.
     if subject == Subject::Baseline {
         return Some(Ok(match name {
             "ultracode_routes_by_change" => {
-                let mut checks = Checks::default();
-                checks.check("main runs one fixed review plan and records no routing decision", false);
-                checks
+                Checks::expected("FAIL; main runs one fixed review plan and records no routing decision")
             }
-            "ultracode_board_reads_each_other" => {
-                let mut checks = Checks::default();
-                checks.check(
-                    "main's review_round hands seat 1's turns to seat 2 as seat 2's own model turns",
-                    false,
-                );
-                checks
-            }
+            "ultracode_board_reads_each_other" => Checks::expected(
+                "FAIL; main's review_round hands seat 1's turns to seat 2 as seat 2's own model turns",
+            ),
             _ => Checks::skipped("main has no review board"),
         }));
     }

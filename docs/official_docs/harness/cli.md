@@ -383,8 +383,10 @@ Every model call of the run takes its effort from the session's policy (`--effor
 
 After each stage the verdicts are synthesized: every reviewer approving finishes the run;
 otherwise the implementer revises with the notes and the next stage reviews again, up to
-`max_rounds` stages. A reviewer with no `VERDICT` line, a failed reviewer and a board seat
-that never spoke are not approvals.
+`max_rounds` stages. A reviewer's verdict is its last `VERDICT` line, and a line naming both
+`approve` and `changes` requests changes. A reviewer with no `VERDICT` line, a failed reviewer
+and a board seat that never spoke are not approvals. The notes reach the implementer inside an
+`<untrusted-content source="review">` block, as findings to check rather than instructions.
 
 A revise can change more than the first turn did. After each revise the whole change since
 the run began is checked again: when it is now sensitive and the roster has no `security`
@@ -403,7 +405,7 @@ The first rule that matches decides (`ultracode-route/1`):
 |---|---|---|---|
 | `override` | `--architecture graph\|blackboard`, or `architecture` in a config file | That architecture | 0 |
 | `unchanged` | The first turn held, failed, was interrupted or changed no file | `graph` over correctness, edge-cases and style | 0 |
-| `sensitive` | A changed path is protected, has a security-vocabulary component (`auth`, `crypto`, `token`, `secret`, `policy`, `sandbox`, …) or matches `sensitive_paths` in your user config; or the workspace has more than 20,000 files, so the change could not be seen whole | `blackboard` with a `security` seat | 0 |
+| `sensitive` | A changed path is protected, has a security-vocabulary component (`auth`, `crypto`, `security`, `token`, `secret`, `policy`, `sandbox`, …) or matches `sensitive_paths` in your user config; or the workspace has more than 20,000 files, so the change could not be seen whole | `blackboard` with a `security` seat | 0 |
 | `model` | Router mode `model` (the default) | The model's answer to a closed schema at the `members` effort, validated whole | 1: no tools, 4,000 tokens, 20 seconds |
 | `heuristic` | Router mode `heuristic`, or the model call failed or answered anything invalid | A score over the signals | 0 |
 
