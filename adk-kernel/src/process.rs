@@ -1084,13 +1084,14 @@ impl ProcessTable {
                 action: "resumed before the freeze is lifted; run `adk-rust unfreeze`",
             });
         }
-        if run.state == RunState::Waiting {
-            self.runs.wake(pid).await?;
-        }
         meta.suspended_by = None;
         meta.suspend_requested = false;
         meta.wake = None;
+        // Written before the wake, so the claim that follows reads no suspension to honour.
         self.processes.put(meta.clone()).await?;
+        if run.state == RunState::Waiting {
+            self.runs.wake(pid).await?;
+        }
         if let Some(sup) = &self.sup {
             sup.record(
                 audit::PROCESS_RESUMED,

@@ -13,7 +13,7 @@ use adk_core::audit_log::AuditActor;
 use adk_core::{GovernanceControl, RunRecord, RunState, SubjectRef};
 use adk_kernel::{
     KernelError, KernelEvent, KernelState, ProcessFilter, ProcessKind, ProcessSpec, ProcessStore,
-    ProgressSource, QueueClass, RunUsage, Suspension, Wake, WakeSet,
+    ProgressSource, QueueClass, RunUsage, Suspension, Wake, WakeEvent, WakeOutcome, WakeSet, keys,
 };
 use adk_server::rest::FreezeDelegate;
 use async_trait::async_trait;
@@ -87,8 +87,12 @@ async fn sleepers_park_before_their_first_model_call_and_hold_no_lease() {
         assert_eq!(run.lease_owner, None, "a sleeping process holds no lease (K-I2)");
         let meta = meta(&world, pid).await;
         assert!(meta.wake.is_some(), "the wake set stays recorded while asleep");
-        assert!(!meta.suspend_requested);
         assert_eq!(meta.suspended_by, None, "asleep is not suspended");
+        // A row written after its sleeper parked keeps the request until the mirror clears it.
+        eventually("the sleep request to clear", || async {
+            (!world.processes.get(pid).await.unwrap()?.suspend_requested).then_some(())
+        })
+        .await;
     }
     assert_eq!(world.model_calls(), 0, "sleep makes no model call (K-I2)");
     let waiting =
@@ -481,5 +485,39 @@ async fn a_file_saved_after_a_sleeper_is_spawned_wakes_it_within_two_seconds() {
     in_state(&world.runs, &pid, RunState::Completed).await;
     assert!(saved.elapsed() < Duration::from_secs(2), "woke in {:?}", saved.elapsed());
     assert_eq!(world.model_calls(), 1, "only the woken run called the model");
+    kernel.stop().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sleeper_woken_before_its_sleep_request_clears_runs_rather_than_parking_again() {
+    let world = World::answer();
+    let control = GovernanceControl::new();
+    let slow = Arc::new(SlowPuts {
+        inner: Arc::clone(&world.processes) as Arc<dyn ProcessStore>,
+        delay: Duration::from_millis(1200),
+    });
+    let kernel = world.kernel_with("k1", &control, |builder| builder.process_store(slow));
+    kernel.start().await.unwrap();
+    let wake = WakeSet::any_of([Wake::Queue { source: "orders".into() }]);
+    let pid = kernel
+        .processes()
+        .spawn(
+            run_on(QueueClass::Interactive, "handle the order"),
+            ProcessSpec::new(ProcessKind::Goal).with_wake(wake),
+        )
+        .await
+        .unwrap()
+        .meta
+        .pid;
+    // The worker parked the sleeper before its row, with the sleep request, was written.
+    let parked = world.runs.get(&pid).await.unwrap().unwrap();
+    assert_eq!(parked.state, RunState::Waiting);
+    assert!(meta(&world, &pid).await.suspend_requested);
+
+    let event = WakeEvent::new("orders", keys::queue("orders", "m-1"), serde_json::json!({}));
+    let outcomes = kernel.wake_router().route(event).await.unwrap();
+    assert_eq!(outcomes, [WakeOutcome::Woke { pid: pid.clone() }]);
+    in_state(&world.runs, &pid, RunState::Completed).await;
+    assert_eq!(world.model_calls(), 1, "the woken sleeper ran its turn");
     kernel.stop().await.unwrap();
 }

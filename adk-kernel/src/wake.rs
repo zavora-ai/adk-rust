@@ -742,7 +742,7 @@ impl WakeRouter {
             if expired || !wake.any_of.iter().any(|wake| wake_matches(wake, &event)) {
                 continue;
             }
-            self.wake_sleeper(&meta.pid, &run).await?;
+            self.wake_sleeper(&meta, &run).await?;
             outcomes.push(WakeOutcome::Woke { pid: meta.pid });
         }
         if outcomes.is_empty() {
@@ -826,7 +826,7 @@ impl WakeRouter {
                             });
                         }
                     }
-                    ExpiryAction::Run => self.wake_sleeper(&meta.pid, &run).await?,
+                    ExpiryAction::Run => self.wake_sleeper(&meta, &run).await?,
                 }
                 let outcome =
                     WakeOutcome::Expired { pid: meta.pid.clone(), action: wake.on_expiry };
@@ -840,7 +840,7 @@ impl WakeRouter {
                 _ => None,
             });
             if let Some(at) = due {
-                self.wake_sleeper(&meta.pid, &run).await?;
+                self.wake_sleeper(&meta, &run).await?;
                 let outcome = WakeOutcome::Woke { pid: meta.pid.clone() };
                 let key = format!("{AT_SOURCE}:{}:{}", meta.pid, at.to_rfc3339());
                 self.publish(AT_SOURCE, &key, std::slice::from_ref(&outcome));
@@ -881,7 +881,7 @@ impl WakeRouter {
                 }
             }
             let Some((root, path, modified)) = newest else { continue };
-            self.wake_sleeper(&meta.pid, &run).await?;
+            self.wake_sleeper(&meta, &run).await?;
             let outcome = WakeOutcome::Woke { pid: meta.pid.clone() };
             self.publish(
                 RECONCILE_SOURCE,
@@ -909,11 +909,17 @@ impl WakeRouter {
         Ok(sleepers)
     }
 
-    /// Wakes `pid` and consumes its wake set. The wake comes first, so a failure in between
-    /// leaves a woken process with a stale set rather than a sleeper nothing can wake.
-    async fn wake_sleeper(&self, pid: &str, run: &RunRecord) -> Result<()> {
+    /// Wakes `meta`'s process and consumes its wake set. The wake comes first, so a failure
+    /// in between leaves a woken process with a stale set rather than a sleeper nothing can
+    /// wake. A sleep request still recorded — a spawn writes it, and a row written after
+    /// the sleeper parked keeps it until the mirror clears it — is cleared before the wake,
+    /// so the claim that follows does not park the process again.
+    async fn wake_sleeper(&self, meta: &ProcessMeta, run: &RunRecord) -> Result<()> {
+        if meta.suspend_requested {
+            self.processes.set_suspend_requested(&meta.pid, false).await?;
+        }
         self.runs.wake(&run.run_id).await?;
-        self.processes.set_wake(pid, None).await
+        self.processes.set_wake(&meta.pid, None).await
     }
 
     /// Enqueues `trigger`'s run for `event` and records its process.
