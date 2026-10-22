@@ -83,10 +83,10 @@ pub use agent_engine::{
 // Background runs and cron scheduling re-exports
 #[cfg(feature = "background")]
 pub use background::{
-    BackgroundState, DurableScheduler, DurableWorker, DurableWorkerConfig, RunStatus,
+    BackgroundState, DurableScheduler, DurableWorker, DurableWorkerConfig, ParkReason, RunStatus,
     RunStatusResponse, SchedulerTick, SubmitRunRequest, SubmitRunResponse, WorkerHandle,
-    WorkflowExecutor, WorkflowRegistry, WorkflowRunContext, WorkflowState, background_runs_router,
-    background_runs_router_with_state,
+    WorkerHooks, WorkflowExecutor, WorkflowRegistry, WorkflowRunContext, WorkflowState,
+    background_runs_router, background_runs_router_with_state,
 };
 #[cfg(feature = "background")]
 pub use background::{

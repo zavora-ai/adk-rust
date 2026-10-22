@@ -227,7 +227,7 @@ runs what the claim returned, because a claim can return after a freeze landed:
 |---------|--------|
 | Once the claim returns | Hands the run back unstarted |
 | By the runner before the agent produced an event (the runner's start check, or the agent's check before its first model call) | Hands the run back unstarted, when the worker's own control also refuses |
-| After the run made a model or tool call | Ends the attempt with the control's error (`governance.frozen` is not retried; `governance.stale` is) |
+| After the run made a model or tool call | Ends the attempt with the control's error (`governance.frozen` is not retried; `governance.stale` is); a run asked to suspend parks instead, as [Suspending a run](#suspending-a-run) describes |
 
 A run handed back is parked with `wait` until the time it was claimed: it is `Waiting`,
 claimable at once — by this worker once its control allows work again — and the claim that
@@ -238,6 +238,7 @@ resumes it counts no further attempt, so a freeze never uses up a queued run's a
 | `shutdown().await` | Stops claiming and waits for in-flight attempts to write their outcome |
 | `wake()` | Tries a claim now instead of after `poll_interval` |
 | `heartbeat_now()` | Makes every in-flight attempt heartbeat now, so a cancellation requested in this process is seen at once |
+| `suspend(run_id)` | Parks the agent run `run_id`, in flight on this worker, at its next model-call boundary; returns whether the request reached an attempt. See [Suspending a run](#suspending-a-run) |
 | `abort()` | Drops the loop and every in-flight attempt without writing, as a crash would; their leases expire and another worker recovers them |
 
 ```rust
@@ -280,6 +281,98 @@ instead of finishing:
 
 A run claimed again past `expires_at` with the same calls still held fails with
 `approval expired`.
+
+## Lifecycle hooks
+
+`DurableWorker::with_hooks` registers a `WorkerHooks` implementation; each call adds one, and
+hooks run in the order they were added. Every method has an empty default. A hook runs after the
+store write it reports, so the store already shows the state the hook receives, and it only
+observes: it cannot change what the worker does. The worker awaits each hook, so a hook hands
+slow work, such as delivery to a remote sink, to another task.
+
+| Hook | Called | The run it receives |
+|------|--------|---------------------|
+| `on_claim(run)` | Once the worker starts the claimed run's target, before any model call or workflow step | `Running`, at the claim's epoch |
+| `on_park(run, reason)` | After `wait` parked the run | `Waiting`, holding no lease |
+| `on_finish(run)` | After `finish` wrote the attempt's outcome | `Completed`, `Failed`, or `Cancelled`; `Queued` when a retryable failure requeued it |
+
+| `ParkReason` | Parked by | Claimable |
+|--------------|-----------|-----------|
+| `AwaitingApproval` | Held tool calls, on an `AwaitingApproval` checkpoint ([Parking on held tool calls](#parking-on-held-tool-calls)) | After a wake, or at `expires_at` |
+| `Suspended` | A suspend request, on a `Session` checkpoint ([Suspending a run](#suspending-a-run)) | After a wake |
+| `HandedBack` | The kill switch, before the run made a model or tool call | At once, once the control allows work |
+
+A run handed back because the control refused work when the claim returned is reported to
+`on_park` only: its target never started. An attempt that lost its lease writes nothing and calls
+no hook; the worker that recovers the run reports it.
+
+## Suspending a run
+
+`DurableWorker::suspend(run_id)` and `WorkerHandle::suspend(run_id)` ask an agent run in flight
+on that worker to stop at its next model-call boundary and park, so it resumes later instead of
+ending. Clones of a worker and its handle share the attempts in flight.
+
+1. The tool calls the model already asked for finish, and their responses reach the session. No
+   further model call is made.
+2. The worker interrupts the turn, records `RunCheckpointRef::Session { session_id,
+   invocation_id }` on the interrupted invocation, and calls `wait(run_id, epoch, None)`: the run
+   is `Waiting`, holds no lease, and is not claimable however long it waits.
+3. `DurableRunStore::wake(run_id)` makes it claimable. The claim, by any worker, continues the
+   session at the same attempt with an empty user turn, as [Crash resume](#crash-resume)
+   describes: a call that completed before the suspension is answered from the session and never
+   executed again.
+
+| Requested | Outcome |
+|-----------|---------|
+| `suspend` | Parked `Waiting` on its `Session` checkpoint; `on_park` with `ParkReason::Suspended` |
+| `suspend`, then the kill switch refuses the run at that boundary | Parked the same way, instead of failing with `governance.frozen` or `governance.stale`; refused before its first event, it is handed back as **Kill switch** describes |
+| `request_cancel`, with or without `suspend` | Finished `Cancelled` |
+| `suspend`, and the turn ends without another model call | Finished, or parked on its held tool calls, as without the request |
+
+`suspend` returns `false` when the worker has no attempt of the run in flight, or the run is a
+workflow run: a workflow has no model-call boundary the worker can stop at, so it runs on. A wake
+that arrives while the run is still running is kept (`wake_pending`) and applied when the run
+parks, so a resume requested before the suspension took effect makes the run claimable at once.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{DurableRunStore, RunRecord};
+use adk_runner::Runner;
+use adk_server::background::{DurableWorker, ParkReason, WorkerHandle, WorkerHooks};
+use async_trait::async_trait;
+
+struct Transitions;
+
+#[async_trait]
+impl WorkerHooks for Transitions {
+    async fn on_claim(&self, run: &RunRecord) {
+        tracing::info!(run.id = %run.run_id, "running");
+    }
+
+    async fn on_park(&self, run: &RunRecord, reason: ParkReason) {
+        tracing::info!(run.id = %run.run_id, park.reason = ?reason, "waiting");
+    }
+
+    async fn on_finish(&self, run: &RunRecord) {
+        tracing::info!(run.id = %run.run_id, run.state = ?run.state, "attempt finished");
+    }
+}
+
+fn start(runs: Arc<dyn DurableRunStore>, runner: Arc<Runner>) -> WorkerHandle {
+    DurableWorker::new(runs).with_agent("support", runner).with_hooks(Arc::new(Transitions)).spawn()
+}
+
+/// Parks the run at its next model-call boundary; `false` when it is not in flight here.
+fn suspend(worker: &WorkerHandle, run_id: &str) -> bool {
+    worker.suspend(run_id)
+}
+
+/// Makes the suspended run claimable; the claim resumes its session on any worker.
+async fn resume(runs: &dyn DurableRunStore, run_id: &str) -> adk_core::Result<()> {
+    runs.wake(run_id).await
+}
+```
 
 ## Crash resume
 
@@ -577,7 +670,7 @@ adk_core::run_store_conformance_tests!(harness = InMemory);
 | Suite | Cases |
 |-------|-------|
 | `lease_store_conformance_tests!` | acquire, renew, and release with epochs; 32 concurrent acquirers across two handles with one winner; expiry takeover at the next epoch; stale renew and release refused; restart survival |
-| `run_store_conformance_tests!` | round trip; 32 concurrent idempotent enqueues with one run; `Reject`, `Enqueue`, and `Interrupt`; 32 concurrent claimers with one winner per run; `not_before`; expired-lease recovery and exhausted attempts; stale-epoch `heartbeat`, `set_checkpoint`, `wait`, and `finish` refused; retryable failures until `max_attempts`; wait and wake; cancellation through heartbeat; prune; restart survival |
+| `run_store_conformance_tests!` | round trip; 32 concurrent idempotent enqueues with one run; `Reject`, `Enqueue`, and `Interrupt`; 32 concurrent claimers with one winner per run; `not_before`; expired-lease recovery and exhausted attempts; stale-epoch `heartbeat`, `set_checkpoint`, `wait`, and `finish` refused; retryable failures until `max_attempts`; wait and wake; a run parked until woken keeps its checkpoint and attempt across a restart; cancellation through heartbeat; prune; restart survival |
 | `schedule_store_conformance_tests!` | idempotent upsert; due ordering and limit; 32 concurrent advances with one winner; paused schedules never due; restart survival |
 | `governance_state_store_conformance_tests!` | set, get, and list with the epoch CAS; 32 concurrent sets with one winner; independent scopes; restart survival |
 

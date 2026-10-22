@@ -96,6 +96,8 @@ vertex-remote-engine = [
 # Input guardrails on the agents a recovering durable worker resumes.
 adk-agent = { path = "../adk-agent", features = ["guardrails"] }
 adk-graph = { path = "../adk-graph" }
+# ScriptedLlm for the durable worker's suspend and resume tests.
+adk-model = { path = "../adk-model", default-features = false }
 adk-session = { path = "../adk-session", features = ["sqlite", "postgres"] }
 async-stream.workspace = true
 tracing-subscriber = "0.3"

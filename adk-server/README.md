@@ -397,6 +397,8 @@ Each fire time is enqueued once however many replicas run the scheduler, and res
 
 **What survives a restart.** With a durable run store, everything: a run whose worker stopped is recovered by another worker once its lease expires and resumes from its checkpoint (see [Durable Runtime](../docs/official_docs/core/durable-runtime.md#crash-resume)). Finished runs are pruned after `DurableWorkerConfig::retain_finished` (24 hours by default). An agent run that ends holding a tool call for approval is parked (until woken, or until `DurableWorkerConfig::approval_timeout` when set) and resumes on the same session.
 
+**Observing and suspending runs.** `DurableWorker::with_hooks` registers `WorkerHooks` whose `on_claim`, `on_park` (with a `ParkReason`), and `on_finish` run after each store write the worker makes. `WorkerHandle::suspend(run_id)` stops an agent run in flight on that worker at its next model-call boundary and parks it `Waiting` on its `Session` checkpoint; a `wake` makes it claimable, and the claim resumes the session on any worker without executing a completed call again (see [Durable Runtime](../docs/official_docs/core/durable-runtime.md#suspending-a-run)).
+
 **Whose identity a run uses.** The worker acts as the runner's own principal, for the run's user. A run's stored principal is honoured only for agent ids listed with `DurableWorkerConfig::with_allowed_principal` (none by default); any other fails the run with `identity.principal_not_allowed`, recorded on the audit trail. Runs from the scheduler, webhook hooks, and queue ingress act for their user as a service (see [Agent Identity](../docs/official_docs/security/agent-identity.md#durable-runs)).
 
 ## Webhook Wake-ups (feature: `webhook-ingress`)

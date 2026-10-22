@@ -77,8 +77,51 @@
 //! no outcome is answered `outcome_unknown`; one that completed is answered from its
 //! ledger record. A run whose original user turn never reached the session (the worker
 //! stopped before the checkpoint was recorded) starts again from its input.
+//!
+//! # Lifecycle hooks
+//!
+//! [`WorkerHooks`] registered with [`DurableWorker::with_hooks`] observe every state change
+//! the worker writes (spec 3.2 §10 S1). Each hook runs after the store write it reports, so
+//! the store already shows the state the hook receives:
+//!
+//! | Hook | Called | The run it receives |
+//! |------|--------|---------------------|
+//! | [`on_claim`](WorkerHooks::on_claim) | Once the worker starts the claimed run's target, before any model call or workflow step | `Running`, at the claim's epoch |
+//! | [`on_park`](WorkerHooks::on_park) | After [`wait`](DurableRunStore::wait) parked the run, with the [`ParkReason`] | `Waiting`, holding no lease |
+//! | [`on_finish`](WorkerHooks::on_finish) | After [`finish`](DurableRunStore::finish) wrote the attempt's outcome | `Completed`, `Failed`, or `Cancelled`; `Queued` when a retryable failure requeued it |
+//!
+//! A run the worker hands back at once, because its governance control refused work when
+//! the claim returned, is reported to `on_park` only: its target never started. An attempt
+//! that lost its lease writes nothing and calls no hook; the worker that recovers the run
+//! reports it.
+//!
+//! # Suspending a run
+//!
+//! [`DurableWorker::suspend`] (or [`WorkerHandle::suspend`]) asks an agent run in flight on
+//! this worker to stop at its next model-call boundary and park, so it resumes later rather
+//! than ending (spec 3.2 §10 S1):
+//!
+//! 1. The tool calls the model already asked for finish and their responses reach the
+//!    session; no further model call is made.
+//! 2. The worker interrupts the turn, records `RunCheckpointRef::Session` on the
+//!    interrupted invocation, and parks the run with [`wait`](DurableRunStore::wait) until
+//!    woken: it is `Waiting`, holds no lease, and is claimable only after
+//!    [`wake`](DurableRunStore::wake).
+//! 3. The claim after the wake, by any worker, continues the session at the same attempt,
+//!    as [Crash resume](self#crash-resume) describes; a non-idempotent call that completed
+//!    before the suspension is never executed again.
+//!
+//! | Requested | Outcome |
+//! |-----------|---------|
+//! | `suspend` | Parked `Waiting` on its `Session` checkpoint; [`on_park`](WorkerHooks::on_park) with [`ParkReason::Suspended`] |
+//! | `suspend`, then the governance control refuses the run at that boundary | Parked the same way, rather than failing with the control's error; refused before its first event, it is handed back as [Kill switch](self#kill-switch) describes |
+//! | [`request_cancel`](DurableRunStore::request_cancel), with or without `suspend` | Finished `Cancelled`, as before |
+//! | `suspend`, and the turn ends without another model call | Finished, or parked on its held tool calls, as without the request |
+//!
+//! Only agent runs are suspendable: a workflow run has no model-call boundary the worker
+//! can stop at, so `suspend` returns `false` for it and it runs on.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -90,7 +133,8 @@ use adk_core::{
     ActingConfig, AdkError, AgentId, AgentPrincipal, BeforeModelResult, CallbackContext,
     ClaimedRun, Content, DurableRunStore, ErrorCategory, ErrorComponent, GOVERNANCE_FROZEN_CODE,
     GOVERNANCE_STALE_CODE, GovernanceControl, InvocationHooks, LlmRequest, LlmResponse,
-    PRINCIPAL_NOT_ALLOWED_CODE, Part, RunCheckpointRef, RunOutcome, RunRecord, SessionId, UserId,
+    PRINCIPAL_NOT_ALLOWED_CODE, Part, RunCheckpointRef, RunOutcome, RunRecord, RunState, SessionId,
+    UserId,
     run_store::{RUN_NOT_FOUND_CODE, RUN_STALE_EPOCH_CODE},
 };
 use adk_runner::Runner;
@@ -217,6 +261,76 @@ impl DurableWorkerConfig {
     }
 }
 
+/// Why a [`DurableWorker`] parked a run as `Waiting`, as [`WorkerHooks::on_park`] reports it
+/// (spec 3.2 §10 S1).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_server::background::ParkReason;
+///
+/// let reason = ParkReason::Suspended;
+/// assert_ne!(reason, ParkReason::AwaitingApproval);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ParkReason {
+    /// The run holds tool calls for approval, on a `RunCheckpointRef::AwaitingApproval`
+    /// checkpoint; a wake after the decision resumes it.
+    AwaitingApproval,
+    /// The run was asked to [`suspend`](DurableWorker::suspend) and stopped at a model-call
+    /// boundary, on a `RunCheckpointRef::Session` checkpoint; it waits until woken.
+    Suspended,
+    /// The governance control refused the run before it made a model or tool call; it is
+    /// claimable again at once.
+    HandedBack,
+}
+
+/// Lifecycle hooks a [`DurableWorker`] calls as it moves a run between states (spec 3.2
+/// §10 S1).
+///
+/// Every method has an empty default, so an implementation overrides only the transitions
+/// it reports. A hook runs after the store write it reports and observes it: it cannot change
+/// what the worker does. The worker awaits each hook before it continues the attempt, so a
+/// hook hands slow work, such as delivery to a remote sink, off to another task. See
+/// [Lifecycle hooks](self#lifecycle-hooks) for when each is called.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_core::{InMemoryRunStore, RunRecord};
+/// use adk_server::background::{DurableWorker, ParkReason, WorkerHooks};
+/// use async_trait::async_trait;
+///
+/// #[derive(Debug)]
+/// struct LogTransitions;
+///
+/// #[async_trait]
+/// impl WorkerHooks for LogTransitions {
+///     async fn on_park(&self, run: &RunRecord, reason: ParkReason) {
+///         tracing::info!(run.id = %run.run_id, park.reason = ?reason, "run parked");
+///     }
+/// }
+///
+/// let worker =
+///     DurableWorker::new(Arc::new(InMemoryRunStore::new())).with_hooks(Arc::new(LogTransitions));
+/// # let _ = worker;
+/// ```
+#[async_trait]
+pub trait WorkerHooks: Send + Sync {
+    /// Called once the worker starts the target of a run it claimed, before any model call
+    /// or workflow step. `run` is `Running` at the claim's epoch.
+    async fn on_claim(&self, _run: &RunRecord) {}
+
+    /// Called after the worker parked `run` as `Waiting`, with why. `run` holds no lease.
+    async fn on_park(&self, _run: &RunRecord, _reason: ParkReason) {}
+
+    /// Called after the worker wrote the attempt's outcome. `run` is `Completed`, `Failed`,
+    /// or `Cancelled`, or `Queued` when a retryable failure requeued it.
+    async fn on_finish(&self, _run: &RunRecord) {}
+}
+
 /// Claims runs from a [`DurableRunStore`] and executes them: agents through their
 /// [`Runner`], workflows through a [`WorkflowExecutor`].
 ///
@@ -251,6 +365,10 @@ pub struct DurableWorker {
     /// Makes every in-flight attempt heartbeat now, so a cancel requested in this
     /// process is seen without waiting a heartbeat interval.
     heartbeat_now: Arc<Notify>,
+    hooks: Vec<Arc<dyn WorkerHooks>>,
+    /// The agent attempts in flight, shared with clones and the handle, so a suspend
+    /// request reaches the attempt wherever it was asked.
+    suspensions: Arc<Suspensions>,
 }
 
 impl std::fmt::Debug for DurableWorker {
@@ -259,6 +377,7 @@ impl std::fmt::Debug for DurableWorker {
             .field("agents", &self.agents.keys().collect::<Vec<_>>())
             .field("workflows", &self.workflows.is_some())
             .field("config", &self.config)
+            .field("hooks", &self.hooks.len())
             .finish_non_exhaustive()
     }
 }
@@ -277,6 +396,9 @@ enum Attempt {
     Parked(Option<chrono::DateTime<chrono::Utc>>),
     /// The governance control refused the run before it made a model or tool call.
     Refused(AdkError),
+    /// The run was asked to suspend and stopped at a model-call boundary; its `Session`
+    /// checkpoint is recorded.
+    Suspended,
 }
 
 /// A failed attempt.
@@ -302,6 +424,8 @@ impl DurableWorker {
             audit: None,
             config: DurableWorkerConfig::default(),
             heartbeat_now: Arc::new(Notify::new()),
+            hooks: Vec::new(),
+            suspensions: Arc::default(),
         }
     }
 
@@ -337,6 +461,39 @@ impl DurableWorker {
     pub fn with_config(mut self, config: DurableWorkerConfig) -> Self {
         self.config = config;
         self
+    }
+
+    /// Adds lifecycle hooks, called after those added before (spec 3.2 §10 S1).
+    ///
+    /// See [Lifecycle hooks](self#lifecycle-hooks) for when each hook is called.
+    pub fn with_hooks(mut self, hooks: Arc<dyn WorkerHooks>) -> Self {
+        self.hooks.push(hooks);
+        self
+    }
+
+    /// Asks the agent run `run_id`, in flight on this worker, to stop at its next model-call
+    /// boundary and park as `Waiting` on its `Session` checkpoint until woken (spec 3.2 §10
+    /// S1).
+    ///
+    /// Returns whether the request reached an attempt: `false` when this worker has no
+    /// attempt of `run_id` in flight, or the run is a workflow run, which is not
+    /// suspendable. A turn that ends without another model call finishes as it would
+    /// without the request, and a cancellation requested through the run store still
+    /// finishes the run `Cancelled`. Clones of the worker and its [`WorkerHandle`] share
+    /// the attempts in flight. See [Suspending a run](self#suspending-a-run).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::InMemoryRunStore;
+    /// use adk_server::background::DurableWorker;
+    ///
+    /// let worker = DurableWorker::new(Arc::new(InMemoryRunStore::new()));
+    /// assert!(!worker.suspend("run-1"), "nothing is in flight");
+    /// ```
+    pub fn suspend(&self, run_id: &str) -> bool {
+        self.suspensions.request(run_id)
     }
 
     /// The configuration.
@@ -395,8 +552,9 @@ impl DurableWorker {
         let wake = Arc::new(Notify::new());
         let woken = Arc::clone(&wake);
         let heartbeat_now = Arc::clone(&self.heartbeat_now);
+        let suspensions = Arc::clone(&self.suspensions);
         let task = tokio::spawn(async move { self.claim_loop(stop, woken).await });
-        WorkerHandle { shutdown, task, wake, heartbeat_now }
+        WorkerHandle { shutdown, task, wake, heartbeat_now, suspensions }
     }
 
     async fn claim_loop(self, shutdown: CancellationToken, wake: Arc<Notify>) {
@@ -489,8 +647,16 @@ impl DurableWorker {
         if let Some(error) = self.refusal() {
             return self.hand_back(&record, epoch, &error, &span).await;
         }
+        // Registered before `on_claim`, so a suspend asked from that hook reaches the attempt.
+        let _suspendable = self
+            .agents
+            .contains_key(&record.target)
+            .then(|| Suspensions::register(&self.suspensions, &run_id, &lease));
 
         let work = async {
+            for hooks in &self.hooks {
+                hooks.on_claim(&record).await;
+            }
             let attempt = self.run_target(&record, epoch, &lease, &cancel);
             match self.config.run_timeout {
                 Some(timeout) => match tokio::time::timeout(timeout, attempt).await {
@@ -521,10 +687,22 @@ impl DurableWorker {
                 return match self.runs.wait(&run_id, epoch, until).await {
                     Ok(()) => {
                         tracing::info!(parent: &span, wait.until = ?until, "run parked until its held tool calls are decided");
-                        self.runs.get(&run_id).await.ok().flatten()
+                        self.parked(&record, ParkReason::AwaitingApproval).await
                     }
                     Err(error) => {
                         tracing::warn!(parent: &span, error = %error, "could not park the run; another worker owns it");
+                        None
+                    }
+                };
+            }
+            Ok(Ok(Attempt::Suspended)) => {
+                return match self.runs.wait(&run_id, epoch, None).await {
+                    Ok(()) => {
+                        tracing::info!(parent: &span, "run suspended at a model-call boundary; parked until woken");
+                        self.parked(&record, ParkReason::Suspended).await
+                    }
+                    Err(error) => {
+                        tracing::warn!(parent: &span, error = %error, "could not park the suspended run; another worker owns it");
                         None
                     }
                 };
@@ -537,6 +715,9 @@ impl DurableWorker {
         match self.runs.finish(&run_id, epoch, outcome).await {
             Ok(finished) => {
                 tracing::info!(parent: &span, run.state = ?finished.state, "attempt finished");
+                for hooks in &self.hooks {
+                    hooks.on_finish(&finished).await;
+                }
                 Some(finished)
             }
             Err(error) => {
@@ -561,12 +742,38 @@ impl DurableWorker {
         match self.runs.wait(&record.run_id, epoch, Some(record.updated_at)).await {
             Ok(()) => {
                 tracing::info!(parent: span, error = %refusal.diagnostics(), "governance refuses work; the run was handed back unstarted");
+                self.parked(record, ParkReason::HandedBack).await;
             }
             Err(error) => {
                 tracing::warn!(parent: span, error = %error, "could not hand the run back; it is recovered once its lease expires");
             }
         }
         None
+    }
+
+    /// Reads back a run this worker just parked, reports it to the `on_park` hooks, and
+    /// returns it as read.
+    ///
+    /// When the store cannot be read, the hooks receive the claimed record as parked, so a
+    /// hook never misses a transition the store accepted.
+    async fn parked(&self, claimed: &RunRecord, reason: ParkReason) -> Option<RunRecord> {
+        let read = self.runs.get(&claimed.run_id).await;
+        let parked = match &read {
+            Ok(Some(parked)) => parked.clone(),
+            Ok(None) | Err(_) => {
+                tracing::warn!(run.id = %claimed.run_id, error = ?read.as_ref().err(), "could not read the parked run back; reporting it from its claim");
+                RunRecord {
+                    state: RunState::Waiting,
+                    lease_owner: None,
+                    lease_expires_at: None,
+                    ..claimed.clone()
+                }
+            }
+        };
+        for hooks in &self.hooks {
+            hooks.on_park(&parked, reason).await;
+        }
+        read.ok().flatten()
     }
 
     /// Heartbeats until the lease is lost; returns only then.
@@ -817,6 +1024,8 @@ impl DurableWorker {
                 metadata: std::collections::HashMap::new(),
             });
         }
+        // First, so no other hook acts on a model call a suspension stops.
+        config.invocation_hooks.insert(0, Arc::new(SuspendGate(Arc::clone(lease))));
         config.invocation_hooks.push(Arc::new(LeaseFence(Arc::clone(lease))));
         // Approval requests for calls this run holds carry its id, so their decision
         // wakes exactly this run.
@@ -891,11 +1100,18 @@ impl DurableWorker {
         let mut text = String::new();
         let mut interrupted = false;
         let mut produced = false;
+        let mut refused_while_suspending = false;
         loop {
             let next = tokio::select! {
                 next = events.next() => next,
                 () = cancel.cancelled(), if !interrupted => {
                     interrupted = true;
+                    runner.interrupt_identity(runner.app_name(), user_id, &session_id);
+                    continue;
+                }
+                () = lease.suspended.cancelled(), if !interrupted => {
+                    interrupted = true;
+                    tracing::info!(run.id = %record.run_id, "suspend requested; interrupting the run at its model-call boundary");
                     runner.interrupt_identity(runner.app_name(), user_id, &session_id);
                     continue;
                 }
@@ -929,10 +1145,31 @@ impl DurableWorker {
                 {
                     return Ok(Ok(Attempt::Refused(error)));
                 }
+                // A refusal at the boundary the run was asked to suspend at stops it there
+                // as the suspension would, so the run parks instead of failing.
+                Err(error)
+                    if lease.suspend_requested.load(Ordering::SeqCst)
+                        && (error.code == GOVERNANCE_FROZEN_CODE
+                            || error.code == GOVERNANCE_STALE_CODE) =>
+                {
+                    tracing::info!(run.id = %record.run_id, error = %error.diagnostics(), "governance refused the run it was asked to suspend; suspending it");
+                    refused_while_suspending = true;
+                    break;
+                }
                 Err(error) => return Ok(Err(error.into())),
             }
         }
         drop(events);
+
+        if refused_while_suspending || lease.suspended.is_cancelled() {
+            self.checkpoint(
+                &record.run_id,
+                epoch,
+                RunCheckpointRef::Session { session_id, invocation_id: Some(invocation_id) },
+            )
+            .await?;
+            return Ok(Ok(Attempt::Suspended));
+        }
 
         let held = match held_by_invocation(runner, user_id, &session_id, &invocation_id).await {
             Ok(held) => held,
@@ -1039,6 +1276,7 @@ pub struct WorkerHandle {
     task: tokio::task::JoinHandle<()>,
     wake: Arc<Notify>,
     heartbeat_now: Arc<Notify>,
+    suspensions: Arc<Suspensions>,
 }
 
 impl WorkerHandle {
@@ -1052,6 +1290,14 @@ impl WorkerHandle {
     /// the run store is seen at once rather than at the next heartbeat interval.
     pub fn heartbeat_now(&self) {
         self.heartbeat_now.notify_waiters();
+    }
+
+    /// Asks the agent run `run_id`, in flight on this worker, to stop at its next model-call
+    /// boundary and park as `Waiting` on its `Session` checkpoint until woken (spec 3.2 §10
+    /// S1). Returns whether the request reached an attempt; see
+    /// [`DurableWorker::suspend`].
+    pub fn suspend(&self, run_id: &str) -> bool {
+        self.suspensions.request(run_id)
     }
 
     /// Stops claiming and waits for in-flight attempts to finish and write their outcome.
@@ -1072,7 +1318,100 @@ impl WorkerHandle {
     }
 }
 
-/// What a worker knows about the lease it holds on one run.
+/// The agent attempts in flight on one worker, by run id.
+#[derive(Default)]
+struct Suspensions(std::sync::Mutex<HashMap<String, Arc<LeaseState>>>);
+
+impl std::fmt::Debug for Suspensions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let attempts = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        f.debug_struct("Suspensions").field("in_flight", &attempts.len()).finish()
+    }
+}
+
+impl Suspensions {
+    /// Registers the agent attempt of `run_id` holding `lease` until the returned
+    /// registration drops.
+    fn register(
+        suspensions: &Arc<Self>,
+        run_id: &str,
+        lease: &Arc<LeaseState>,
+    ) -> SuspendRegistration {
+        suspensions
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(run_id.to_string(), Arc::clone(lease));
+        SuspendRegistration {
+            suspensions: Arc::clone(suspensions),
+            run_id: run_id.to_string(),
+            lease: Arc::clone(lease),
+        }
+    }
+
+    fn request(&self, run_id: &str) -> bool {
+        let attempts = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(lease) = attempts.get(run_id) else {
+            tracing::debug!(
+                run.id = run_id,
+                "no agent attempt of the run is in flight here; not suspending"
+            );
+            return false;
+        };
+        if !lease.suspend_requested.swap(true, Ordering::SeqCst) {
+            tracing::info!(
+                run.id = run_id,
+                "suspend requested; the run parks at its next model-call boundary"
+            );
+        }
+        true
+    }
+}
+
+/// One attempt's place in [`Suspensions`], removed when the attempt ends however it ends.
+struct SuspendRegistration {
+    suspensions: Arc<Suspensions>,
+    run_id: String,
+    lease: Arc<LeaseState>,
+}
+
+impl Drop for SuspendRegistration {
+    fn drop(&mut self) {
+        let mut attempts = self.suspensions.0.lock().unwrap_or_else(|e| e.into_inner());
+        if attempts.get(&self.run_id).is_some_and(|lease| Arc::ptr_eq(lease, &self.lease)) {
+            attempts.remove(&self.run_id);
+        }
+    }
+}
+
+/// Stops an agent run at its next model-call boundary once it was asked to suspend: the
+/// model call never starts, and the worker interrupts the turn.
+struct SuspendGate(Arc<LeaseState>);
+
+impl std::fmt::Debug for SuspendGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SuspendGate").finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl InvocationHooks for SuspendGate {
+    async fn before_model(
+        &self,
+        _ctx: Arc<dyn CallbackContext>,
+        request: LlmRequest,
+    ) -> adk_core::Result<BeforeModelResult> {
+        if self.0.suspend_requested.load(Ordering::SeqCst) {
+            self.0.suspended.cancel();
+            // The worker interrupts the run, which drops this call before it returns.
+            std::future::pending::<()>().await;
+        }
+        Ok(BeforeModelResult::Continue(request))
+    }
+}
+
+/// What a worker knows about the lease it holds on one run, and the requests that stop
+/// the attempt.
 struct LeaseState {
     ttl: Duration,
     /// The lease is provably held until this instant: the last successful heartbeat (or
@@ -1081,6 +1420,10 @@ struct LeaseState {
     lost_flag: AtomicBool,
     lost: Notify,
     cancel_requested: AtomicBool,
+    /// Set by a suspend request; the attempt stops at its next model-call boundary.
+    suspend_requested: AtomicBool,
+    /// Cancelled by [`SuspendGate`] once the attempt stopped at a model-call boundary.
+    suspended: CancellationToken,
 }
 
 impl LeaseState {
@@ -1091,6 +1434,8 @@ impl LeaseState {
             lost_flag: AtomicBool::new(false),
             lost: Notify::new(),
             cancel_requested: AtomicBool::new(false),
+            suspend_requested: AtomicBool::new(false),
+            suspended: CancellationToken::new(),
         }
     }
 

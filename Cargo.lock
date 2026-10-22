@@ -1114,6 +1114,7 @@ dependencies = [
  "adk-gcp",
  "adk-graph",
  "adk-memory",
+ "adk-model",
  "adk-runner",
  "adk-session",
  "adk-skill",
