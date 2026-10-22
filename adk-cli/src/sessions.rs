@@ -10,12 +10,22 @@ use anyhow::{Context, Result};
 /// The application name `chat` sessions are kept under.
 pub const APP_NAME: &str = "adk-rust";
 
+/// The directory `harness.db` lives in by default: `<config dir>/adk-rust`, which is also
+/// the default kernel home (spec 3.2 §7.2).
+pub fn default_dir() -> Result<std::path::PathBuf> {
+    Ok(dirs::config_dir()
+        .context("could not determine the config directory; pass --ephemeral")?
+        .join("adk-rust"))
+}
+
 /// Opens (and migrates) the session store, creating the file readable by its owner only.
 pub async fn open() -> Result<Arc<SqliteSessionService>> {
-    let path = dirs::config_dir()
-        .context("could not determine the config directory; pass --ephemeral")?
-        .join("adk-rust")
-        .join("harness.db");
+    open_in(&default_dir()?).await
+}
+
+/// [`open`], with `harness.db` in `dir` (`adk-rust up --home`; spec 3.2 §7.2).
+pub async fn open_in(dir: &Path) -> Result<Arc<SqliteSessionService>> {
+    let path = dir.join("harness.db");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -67,6 +77,9 @@ pub use crate::setup::os_user;
 /// own migration table (spec 3.1 §8.1).
 #[cfg(feature = "harness")]
 pub struct HarnessDb {
+    /// The one pool every store writes through; the kernel's stores join it with their own
+    /// migration tables (spec 3.2 §7.1).
+    pub pool: sqlx::SqlitePool,
     /// Sessions; `EncryptedSession` over SQLite under a store key (spec 3.1 §7.12).
     pub sessions: Arc<dyn SessionService>,
     pub modes: Arc<adk_harness::SqliteModeStore>,
@@ -110,7 +123,16 @@ pub async fn open_default_db() -> Result<HarnessDb> {
 pub async fn open_harness_db(
     keyring: Option<&adk_harness::encrypted::StoreKeyring>,
 ) -> Result<HarnessDb> {
-    let base = open().await?;
+    open_harness_db_in(&default_dir()?, keyring).await
+}
+
+/// [`open_harness_db`] in `dir` (`adk-rust up --home`; spec 3.2 §7.2).
+#[cfg(all(feature = "harness", feature = "encrypted"))]
+pub async fn open_harness_db_in(
+    dir: &Path,
+    keyring: Option<&adk_harness::encrypted::StoreKeyring>,
+) -> Result<HarnessDb> {
+    let base = open_in(dir).await?;
     let pool = base.pool().clone();
     let marker = adk_harness::encrypted::SqliteStoreMarker::new(pool.clone());
     marker.migrate().await?;
@@ -133,6 +155,7 @@ pub async fn open_harness_db(
         Arc::new(adk_graph::SqliteCheckpointer::from_pool(pool.clone()).await?);
     let Some(keyring) = keyring else {
         return Ok(HarnessDb {
+            pool,
             sessions: base,
             modes: Arc::new(modes),
             rules: Arc::new(rules),
@@ -173,6 +196,7 @@ pub async fn open_harness_db(
         keyring.previous_keys(),
     );
     Ok(HarnessDb {
+        pool,
         sessions: Arc::new(sessions),
         modes: Arc::new(modes.with_keyring(keyring.clone())),
         rules: Arc::new(rules.with_keyring(keyring.clone())),
@@ -190,7 +214,13 @@ pub async fn open_harness_db(
 /// Opens `harness.db` and migrates every store in it.
 #[cfg(all(feature = "harness", not(feature = "encrypted")))]
 pub async fn open_harness_db() -> Result<HarnessDb> {
-    let sessions = open().await?;
+    open_harness_db_in(&default_dir()?).await
+}
+
+/// [`open_harness_db`] in `dir` (`adk-rust up --home`; spec 3.2 §7.2).
+#[cfg(all(feature = "harness", not(feature = "encrypted")))]
+pub async fn open_harness_db_in(dir: &Path) -> Result<HarnessDb> {
+    let sessions = open_in(dir).await?;
     let pool = sessions.pool().clone();
     let modes = adk_harness::SqliteModeStore::new(pool.clone());
     modes.migrate().await?;
@@ -206,8 +236,9 @@ pub async fn open_harness_db() -> Result<HarnessDb> {
     facts.migrate().await?;
     let goals = adk_harness::SqliteGoalStore::new(pool.clone());
     goals.migrate().await?;
-    let plans = adk_graph::SqliteCheckpointer::from_pool(pool).await?;
+    let plans = adk_graph::SqliteCheckpointer::from_pool(pool.clone()).await?;
     Ok(HarnessDb {
+        pool,
         sessions,
         modes: Arc::new(modes),
         rules: Arc::new(rules),

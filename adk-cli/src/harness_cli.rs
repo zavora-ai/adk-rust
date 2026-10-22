@@ -33,6 +33,9 @@ use serde_json::json;
 use crate::ultra::{self, UltraAgents};
 use crate::{BuiltModel, ResolvedModel};
 
+mod up;
+pub use up::up;
+
 /// Exit code of a run that left calls held for a decision (spec 3.1 §8.1).
 pub const EXIT_HELD: i32 = 3;
 
@@ -104,17 +107,19 @@ impl Setup {
         // `serve` opens without this subscriber: its launcher installs the telemetry one,
         // and a second global subscriber panics at start.
         install_tracing();
-        Self::open(model, instruction, args, default_mode, None).await
+        Self::open(model, instruction, args, default_mode, None, None).await
     }
 
     /// [`new`](Self::new), with every store in the backend at `store` instead of
-    /// `harness.db` when one is given (`serve --store`; spec 3.1 §8.2, §13 Q2).
+    /// `harness.db` when one is given (`serve --store`; spec 3.1 §8.2, §13 Q2), and
+    /// `harness.db` in `home` when one is given (`up --home`; spec 3.2 §7.2).
     async fn open(
         model: ResolvedModel,
         instruction: Option<String>,
         args: HarnessArgs,
         default_mode: HarnessMode,
         store: Option<&str>,
+        home: Option<&Path>,
     ) -> Result<Self> {
         let resolved = args.resolve(default_mode, user_config().as_deref())?;
         // The payments pack takes a merchant backend only a program can supply
@@ -147,12 +152,19 @@ impl Setup {
             #[cfg(feature = "encrypted")]
             let (keyring, store_note) =
                 crate::store::resolve_keyring(resolved.store_key.as_deref()).await?;
+            let dir = match home {
+                Some(home) => home.to_path_buf(),
+                None => crate::sessions::default_dir()?,
+            };
             #[cfg(feature = "encrypted")]
-            let db = crate::sessions::open_harness_db(keyring.as_ref()).await?;
+            let db = crate::sessions::open_harness_db_in(&dir, keyring.as_ref()).await?;
             #[cfg(not(feature = "encrypted"))]
-            let (db, store_note) = (crate::sessions::open_harness_db().await?, None::<String>);
+            let (db, store_note) =
+                (crate::sessions::open_harness_db_in(&dir).await?, None::<String>);
             (Some(Arc::new(db)), store_note)
         };
+        #[cfg(not(feature = "persist"))]
+        let _ = home;
         #[cfg(not(feature = "persist"))]
         if args.session.is_some() || args.continue_session {
             bail!(
@@ -879,6 +891,15 @@ pub async fn goal(
         .as_deref()
         .map(|path| OutputFile::prepare(Path::new(path), &setup.resolved.workspace))
         .transpose()?;
+    // A running kernel over harness.db runs the goal on its background queue
+    // (spec 3.2 §8.1); `--resume` continues here.
+    #[cfg(feature = "persist")]
+    if !goal.resume
+        && setup.db.is_some()
+        && let Some(client) = crate::kernel_cli::local().await?
+    {
+        return goal_on_kernel(&setup, client, goal, mirror).await;
+    }
     let console = ConsoleIo::terminal()?;
     let prompter = setup.unattended_prompter(&console);
     let agent =
@@ -940,6 +961,72 @@ pub async fn goal(
     };
     launcher.close().await;
     Ok(code)
+}
+
+/// `adk-rust goal` with a kernel running (spec 3.2 §8.1): the goal is enqueued on the
+/// shared stores for the kernel's background worker, and this terminal follows it over the
+/// control plane until it ends, holds a call no one here decides, or Ctrl-C detaches —
+/// which leaves it running.
+#[cfg(feature = "persist")]
+async fn goal_on_kernel(
+    setup: &Setup,
+    client: adk_kernel::control::ControlClient,
+    goal: GoalArgs,
+    mirror: Option<OutputFile>,
+) -> Result<i32> {
+    use crate::kernel_cli::Followed;
+
+    let Some(db) = &setup.db else {
+        bail!("a goal on the kernel is enqueued in harness.db");
+    };
+    let console = ConsoleIo::terminal()?;
+    // The kernel's harness asks; this one only enqueues.
+    let agent = setup.agent(APP_NAME, setup.resolved.mode, setup.resolved.sandbox, None, None)?;
+    let mut launcher = setup
+        .launcher(agent)
+        .await?
+        .with_console(console.clone())
+        .with_run_store(db.runs.clone())
+        .with_goal_queue(adk_kernel::QueueClass::BACKGROUND);
+    let spec = GoalSpec {
+        goal: goal.goal.clone(),
+        until: goal.until.clone(),
+        max_iterations: goal.max_iters,
+        check_timeout: goal.check_timeout,
+    };
+    let mut cursor = Some(chrono::Utc::now());
+    let pid = launcher.enqueue_goal(spec).await?;
+    let session = launcher.session_id().unwrap_or_default().to_string();
+    println!("goal mode on the kernel at {}", client.endpoint());
+    println!("goal:  {}", goal.goal);
+    println!("until: {}  (budget: {} iterations)", goal.until, goal.max_iters);
+    println!("process {pid} · session {session}");
+    println!(
+        "Ctrl-C detaches; the goal keeps running. Follow it again with `adk-rust attach          --session {session}`.\n"
+    );
+    let terminal = console.is_terminal().then_some(&console);
+    let followed =
+        crate::kernel_cli::follow(&client, terminal, &session, &mut cursor, Some(&pid)).await?;
+    let state = launcher.goal().await?;
+    if let (Some(mirror), Some(state)) = (&mirror, &state) {
+        write_goal_mirror(mirror, state)?;
+    }
+    Ok(match followed {
+        Followed::Done(_) => {
+            let outcome = TurnOutcome { session_id: session, ..TurnOutcome::default() };
+            goal_exit(state.as_ref(), &outcome)
+        }
+        Followed::Held(calls) => {
+            println!(
+                "\n{calls} call(s) wait for a decision. The goal waits on the kernel: decide                  with `adk-rust approvals` or from any surface."
+            );
+            EXIT_HELD
+        }
+        Followed::Detached => {
+            println!("\ndetached; the goal keeps running on the kernel (process {pid}).");
+            0
+        }
+    })
 }
 
 /// Reports how a goal stands and returns the exit code: `0` met, `1` otherwise.
@@ -1671,7 +1758,8 @@ pub async fn serve(
     auth_token: Option<String>,
     store: Option<String>,
 ) -> Result<()> {
-    let setup = Setup::open(model, instruction, args, HarnessMode::Plan, store.as_deref()).await?;
+    let setup =
+        Setup::open(model, instruction, args, HarnessMode::Plan, store.as_deref(), None).await?;
     setup.print_notes();
     let loopback = host.is_loopback();
     let token = auth_token.filter(|token| !token.trim().is_empty());

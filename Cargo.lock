@@ -329,6 +329,7 @@ dependencies = [
  "adk-devtools",
  "adk-graph",
  "adk-harness",
+ "adk-kernel",
  "adk-mistralrs",
  "adk-model",
  "adk-realtime",

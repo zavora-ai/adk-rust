@@ -375,6 +375,119 @@ pub enum Commands {
         receipt: Option<std::path::PathBuf>,
     },
 
+    /// Run the harness as the agent kernel, in the foreground: a worker per queue, wake
+    /// sources, the process table, and a control plane on a local socket and HTTP.
+    ///
+    /// Example: `adk-rust up --mode ask`, then `adk-rust ps` or `adk-rust attach` from
+    /// another terminal (spec 3.2 §8.1).
+    #[cfg(feature = "harness")]
+    Up(Box<UpArgs>),
+
+    /// Open the REPL on the running kernel: each turn runs as a process the kernel owns,
+    /// held calls are answered here or from any other surface, and closing the terminal
+    /// changes nothing.
+    #[cfg(feature = "harness")]
+    Attach {
+        /// Continue this session (default: a new one)
+        #[arg(long)]
+        session: Option<String>,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
+    /// The running kernel's processes, each with its age, spend, calls and goal progress
+    #[cfg(feature = "harness")]
+    Ps {
+        /// Only processes in this partition
+        #[arg(long)]
+        partition: Option<String>,
+        /// Only processes in this state: queued, running, waiting, completed, failed or
+        /// cancelled
+        #[arg(long, value_parser = parse_run_state)]
+        state: Option<adk_core::RunState>,
+        /// At most this many processes
+        #[arg(long)]
+        limit: Option<usize>,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
+    /// `ps` ordered by burn rate, refreshing until Ctrl-C
+    #[cfg(feature = "harness")]
+    Top {
+        /// Only processes in this partition
+        #[arg(long)]
+        partition: Option<String>,
+        /// Seconds between refreshes
+        #[arg(long, value_name = "SECS", default_value_t = 2)]
+        interval: u64,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
+    /// Kill a process: it stops at its next checkpoint and holds no lease
+    #[cfg(feature = "harness")]
+    Kill {
+        /// Process id, or a unique prefix of it
+        pid: String,
+        /// Recorded on the run and in the audit record
+        #[arg(long)]
+        reason: Option<String>,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
+    /// Suspend a process at its next model-call boundary
+    #[cfg(feature = "harness")]
+    Suspend {
+        /// Process id, or a unique prefix of it
+        pid: String,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
+    /// Resume a suspended or sleeping process; one a freeze parked resumes on unfreeze
+    #[cfg(feature = "harness")]
+    Resume {
+        /// Process id, or a unique prefix of it
+        pid: String,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
+    /// Freeze execution on every replica: running processes park and nothing starts
+    #[cfg(feature = "harness")]
+    Freeze {
+        /// Why; shown with every refusal while frozen
+        #[arg(long)]
+        reason: Option<String>,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
+    /// Lift the freeze: the processes it parked resume
+    #[cfg(feature = "harness")]
+    Unfreeze {
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
+    /// The kernel's event bus: process changes, wakes, holds, decisions, governance
+    #[cfg(feature = "harness")]
+    Events {
+        /// Keep streaming new events until Ctrl-C
+        #[arg(long)]
+        follow: bool,
+        /// Only events after this cursor (default: what the kernel still holds)
+        #[arg(long, value_name = "CURSOR")]
+        after: Option<u64>,
+        /// One JSON record per line
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
     /// Harness sessions kept in harness.db
     #[cfg(all(feature = "harness", feature = "persist"))]
     Sessions {
@@ -476,6 +589,71 @@ pub struct ChatArgs {
     /// Keep the conversation in memory only; nothing is written to disk
     #[arg(long)]
     pub ephemeral: bool,
+}
+
+/// `adk-rust up` (spec 3.2 §8.1).
+#[cfg(feature = "harness")]
+#[derive(clap::Args, Debug, Clone)]
+pub struct UpArgs {
+    /// Install the kernel as a launchd agent, systemd user unit or Windows service; not in
+    /// this build — run `adk-rust up` in the foreground or under your own supervisor
+    #[arg(long, conflicts_with = "uninstall")]
+    pub install: bool,
+    /// Remove the installed service; not in this build
+    #[arg(long)]
+    pub uninstall: bool,
+    /// The kernel home: its socket and harness.db (default: `[kernel] home` in the user
+    /// config, else the config directory's adk-rust)
+    #[arg(long, value_name = "DIR")]
+    pub home: Option<std::path::PathBuf>,
+    /// Where the HTTP control plane and the served harness listen (default: `[kernel] bind`,
+    /// else 127.0.0.1:8080); anything but loopback needs --auth-token
+    #[arg(long, value_name = "HOST:PORT")]
+    pub bind: Option<std::net::SocketAddr>,
+    /// Bearer token callers must present (default: $ADK_SERVE_TOKEN); required beyond
+    /// loopback
+    #[arg(long)]
+    pub auth_token: Option<String>,
+    /// Keep every store, the kernel's included, in one backend replicas share:
+    /// postgres://… or redis://… (default: harness.db)
+    #[arg(long, value_name = "URL", conflicts_with = "ephemeral")]
+    pub store: Option<String>,
+    /// Turn the consolidation tick off (spec 3.2 §7.5); no tick runs in this build
+    #[arg(long)]
+    pub no_consolidation: bool,
+    #[command(flatten)]
+    pub harness: adk_cli::harness::HarnessArgs,
+}
+
+/// Which running kernel a control command reaches (spec 3.2 §7.11): the local socket of a
+/// home, or an HTTP control plane.
+#[cfg(feature = "harness")]
+#[derive(clap::Args, Debug, Clone, Default, PartialEq, Eq)]
+pub struct KernelTarget {
+    /// The home of the kernel to reach, on its socket (default: the config directory's
+    /// adk-rust)
+    #[arg(long, value_name = "DIR")]
+    pub home: Option<std::path::PathBuf>,
+    /// A kernel's HTTP control plane instead of the local socket, such as
+    /// http://127.0.0.1:8080
+    #[arg(long, value_name = "URL")]
+    pub server: Option<String>,
+    /// Bearer token for --server (default: $ADK_SERVE_TOKEN)
+    #[arg(long)]
+    pub token: Option<String>,
+}
+
+/// Parses a run state as the run store names it: `waiting`, `running`, ….
+#[cfg(feature = "harness")]
+fn parse_run_state(value: &str) -> Result<adk_core::RunState, String> {
+    serde_json::from_value(serde_json::Value::String(value.trim().to_ascii_lowercase())).map_err(
+        |_| {
+            format!(
+                "unknown state '{value}'; use queued, running, waiting, completed, failed or \
+                 cancelled"
+            )
+        },
+    )
 }
 
 /// What `adk-rust serve` serves (spec 3.1 §8.2).

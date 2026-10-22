@@ -91,6 +91,41 @@ impl HarnessLauncher {
         drive_durable(&shared, runs, run_id, token, echo).await
     }
 
+    /// Starts `spec` as the session's goal as a durable run and returns the run's id without
+    /// executing it here: a running kernel's worker for the goal queue claims it (spec 3.2
+    /// §8.1, `goal` on a running kernel). Set the kernel's queue with
+    /// [`with_goal_queue`](Self::with_goal_queue).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let launcher = launcher.with_run_store(runs).with_goal_queue("background");
+    /// let run_id = launcher.enqueue_goal(spec).await?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error without a run store
+    /// ([`with_run_store`](Self::with_run_store)), or the `Harness::start_goal` error.
+    pub async fn enqueue_goal(&mut self, spec: GoalSpec) -> Result<String> {
+        let shared = self.open().await?;
+        if shared.run_store.is_none() {
+            return Err(AdkError::config(
+                "a goal is enqueued as a durable run: give the launcher a run store",
+            ));
+        }
+        let mut started = shared.harness().start_goal(&shared.user, &shared.session, spec).await?;
+        match started.next().await {
+            Some(Ok(event)) => event
+                .provider_metadata
+                .get("harness.goal.run_id")
+                .cloned()
+                .ok_or_else(|| AdkError::config("the goal was not enqueued as a durable run")),
+            Some(Err(error)) => Err(error),
+            None => Err(AdkError::config("the goal was not enqueued as a durable run")),
+        }
+    }
+
     /// Continues the session's goal (spec 3.1 §7.11, §8.1): in the same session, at the
     /// iteration it reached, with its conversation.
     ///

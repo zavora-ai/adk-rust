@@ -5,6 +5,8 @@ mod deploy;
 mod graph;
 #[cfg(feature = "harness")]
 mod harness_cli;
+#[cfg(feature = "harness")]
+mod kernel_cli;
 #[cfg(not(feature = "harness"))]
 mod legacy;
 #[cfg(all(feature = "harness", feature = "persist"))]
@@ -48,6 +50,19 @@ async fn main() -> Result<()> {
     match command {
         #[cfg(feature = "harness")]
         None => {
+            #[cfg(feature = "voice")]
+            let in_process = voice.voice.is_some();
+            #[cfg(not(feature = "voice"))]
+            let in_process = false;
+            // A running kernel owns the sessions, so the REPL attaches to it; --ephemeral,
+            // --continue and --voice keep the in-process REPL (spec 3.2 §7.11).
+            if !in_process
+                && !harness.ephemeral
+                && !harness.continue_session
+                && let Some(client) = kernel_cli::local().await?
+            {
+                return kernel_cli::repl(client, harness.session.clone()).await;
+            }
             let model = resolve_model(&options).await?;
             #[cfg(feature = "voice")]
             if voice.voice.is_some() {
@@ -148,6 +163,44 @@ async fn main() -> Result<()> {
                 instruction: options.instruction,
             });
             ultra::run_with(agents, &model.id, &dir, task, max_rounds.unwrap_or(2)).await.map(drop)
+        }
+        #[cfg(feature = "harness")]
+        Some(Commands::Up(mut up)) => {
+            let model = resolve_model(&options).await?;
+            up.auth_token = up.auth_token.or_else(|| std::env::var("ADK_SERVE_TOKEN").ok());
+            harness_cli::up(model, options.instruction.clone(), *up).await
+        }
+        #[cfg(feature = "harness")]
+        Some(Commands::Attach { session, kernel }) => kernel_cli::attach(&kernel, session).await,
+        #[cfg(feature = "harness")]
+        Some(Commands::Ps { partition, state, limit, kernel }) => {
+            kernel_cli::ps(&kernel, partition, state, limit).await
+        }
+        #[cfg(feature = "harness")]
+        Some(Commands::Top { partition, interval, kernel }) => {
+            kernel_cli::top(&kernel, partition, interval).await
+        }
+        #[cfg(feature = "harness")]
+        Some(Commands::Kill { pid, reason, kernel }) => {
+            kernel_cli::act(&kernel, &pid, kernel_cli::Action::Kill(reason)).await
+        }
+        #[cfg(feature = "harness")]
+        Some(Commands::Suspend { pid, kernel }) => {
+            kernel_cli::act(&kernel, &pid, kernel_cli::Action::Suspend).await
+        }
+        #[cfg(feature = "harness")]
+        Some(Commands::Resume { pid, kernel }) => {
+            kernel_cli::act(&kernel, &pid, kernel_cli::Action::Resume).await
+        }
+        #[cfg(feature = "harness")]
+        Some(Commands::Freeze { reason, kernel }) => {
+            kernel_cli::freeze(&kernel, reason.as_deref()).await
+        }
+        #[cfg(feature = "harness")]
+        Some(Commands::Unfreeze { kernel }) => kernel_cli::unfreeze(&kernel).await,
+        #[cfg(feature = "harness")]
+        Some(Commands::Events { follow, after, json, kernel }) => {
+            kernel_cli::events(&kernel, follow, after, json).await
         }
         #[cfg(all(feature = "harness", feature = "persist"))]
         Some(Commands::Sessions { command }) => manage::sessions(command).await,
