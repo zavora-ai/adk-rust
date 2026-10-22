@@ -106,6 +106,37 @@ only under the workspace's content-keyed trust. Every run is a `harness.hook.ran
 effective set, and `on_hold` and `on_stop` notes are shown at the console. See
 `docs/official_docs/harness/hooks.md`.
 
+## Kernel (feature `kernel`)
+
+`Harness::kernel` returns an `adk_kernel::KernelBuilder` with the harness's runner registered
+as the app's target (`adk-rust` in the CLI) and as `harness.goal`, and with the harness's
+sessions, approval service, kill switch, audit trail, spend ledger and, when it has one, run
+store (spec 3.2 §10 HK1). The caller adds the process store, the `KernelConfig` and the
+control plane, then builds and starts the kernel.
+
+| Harness part | What the kernel gets |
+|---|---|
+| Approvals | A decision through the harness's approval service wakes the process asleep on `Wake::Approval` for that call |
+| Process view | A `ProgressSource`: a goal's iteration of max, duration and last check, the loop guard's verdict, and the session's model calls, tool calls and cost for spend attribution |
+| Goals | The goal thread keeps the last `2 × GOAL_STALL_WINDOW` checkpoints. Under a kernel, a goal whose check repeats its last `GOAL_STALL_WINDOW` (3) results, or whose iteration made no tool call (`Graph` engine), records `harness.goal.stalled` and parks `Waiting` before its next model call instead of spending its iteration cap |
+
+```rust,ignore
+use std::sync::Arc;
+
+use adk_kernel::{InMemoryProcessStore, KernelConfig};
+
+async fn host(harness: &adk_harness::Harness) -> Result<(), Box<dyn std::error::Error>> {
+    let kernel = harness
+        .kernel()
+        .config(KernelConfig::default())
+        .process_store(Arc::new(InMemoryProcessStore::new()))
+        .build()?;
+    kernel.start().await?;
+    kernel.shutdown_on_signal().await?;
+    Ok(())
+}
+```
+
 ## Features
 
 | Feature | Default | Pulls in |
@@ -129,6 +160,7 @@ effective set, and `on_hold` and `on_stop` notes are shown at the console. See
 | `postgres`, `redis` | off | `PostgresModeStore`, `PostgresStandingRuleStore`, `RedisModeStore`, `RedisStandingRuleStore`: the mode and rule stores every replica of a served harness shares (spec 3.1 §13 Q2), `postgres://` and `redis://` plan checkpoints, and `adk-session`'s stores on the same backend |
 | `mongodb`, `neo4j`, `firestore` | off | `mongodb://`, `neo4j://` and `firestore://` plan checkpoints (spec 3.1 §13 Q5) |
 | `ambient` | off | `adk-agent/ambient`: goals started by triggers |
+| `kernel` | off | `adk-kernel`: `Harness::kernel`, the harness as a kernel's resident agent, and goal stall parking (spec 3.2 §10 HK1, HK3) |
 | `docker` | off | `adk-sandbox/workspace-docker`: the container shell (`ShellIsolation::Container`, `ContainerBashTool`) |
 | `skills-registry`, `team-acp`, `team-a2a`, `memory-graph` | off | registry skills, ACP and A2A members, graph memory |
 | `payments` | off | the payments pack (spec 3.1 §7.16): `adk-payments` tools as class `Payment` under a `PaymentMandate`, `harness.payment` with the journal receipt |

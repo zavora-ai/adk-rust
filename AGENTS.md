@@ -351,7 +351,16 @@ adk-harness/     Governed harness agent (spec 3.1): HarnessAgent over LlmAgent w
                  durable goals, spend and loop guard, RBAC and shell credentials, working
                  notes and long-term facts with provenance (FactStore, FactIndex, recall,
                  distillation), `.adk/harness.toml` (HarnessConfig), and the `coding`
-                 preset. Umbrella feature `harness`. Beta.
+                 preset. Umbrella feature `harness`; `kernel` feature hosts it in adk-kernel
+                 (Harness::kernel, goal stall parking). Beta.
+adk-kernel/      Agent kernel (spec 3.2): Kernel supervisor with a DurableWorker per QueueClass
+                 (interactive, background, maintenance) and the DurableScheduler, ProcessTable
+                 (ps, spawn, kill, nice, suspend, resume, live ProcessView with spend),
+                 WakeSet sleepers with no lease woken through keyed `kernel.wake` runs (cron,
+                 file, webhook, queue, approval, run-finished, time), standing Triggers,
+                 EventBus, freeze that parks across replicas, control plane on a Unix socket
+                 and loopback HTTP with ControlClient. ProcessStore on in-memory, SQLite,
+                 PostgreSQL, Redis. Beta.
 adk-bench/       Benchmarking framework: framework-level runtime performance with real LLM APIs
                  and cross-framework (Python ADK) comparison
 adk-sandbox/     Sandboxed execution environments — process/WASM backends, OS-level sandbox profiles
