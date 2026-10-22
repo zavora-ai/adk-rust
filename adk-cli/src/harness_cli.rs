@@ -675,6 +675,85 @@ pub async fn code(
     Ok(if outcome.interrupted { 130 } else { 0 })
 }
 
+/// `adk-rust --voice`: the harness over a realtime session (spec 3.1 §8.1, §7.17, H5).
+///
+/// The harness is built marked `Pack::Voice` with no console prompter: a call that needs a
+/// decision is held and answered by voice, by `--voice-input`, or in the inbox
+/// (`adk-rust approvals`), and resumed. Exit code 3 means a call is still held.
+#[cfg(feature = "voice")]
+pub async fn voice(
+    model: ResolvedModel,
+    instruction: Option<String>,
+    args: HarnessArgs,
+    voice: crate::cli::VoiceArgs,
+) -> Result<i32> {
+    use adk_session::{CreateRequest, GetRequest};
+
+    let mut setup = Setup::new(model, instruction, args, HarnessMode::Ask).await?;
+    setup.print_notes();
+    setup.memory_notice();
+    if !setup.resolved.packs.contains(&adk_harness::Pack::Voice) {
+        setup.resolved.packs.push(adk_harness::Pack::Voice);
+    }
+    let agent = setup.agent(APP_NAME, setup.resolved.mode, setup.resolved.sandbox, None, None)?;
+    let info = agent.info().clone();
+    let sessions = setup.sessions();
+    let session_id = match setup.session_id().await? {
+        Some(id) => id,
+        None => uuid::Uuid::new_v4().to_string(),
+    };
+    let existing = sessions
+        .get(GetRequest {
+            app_name: APP_NAME.to_string(),
+            user_id: setup.user.clone(),
+            session_id: session_id.clone(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await;
+    if existing.is_err() {
+        sessions
+            .create(CreateRequest {
+                app_name: APP_NAME.to_string(),
+                user_id: setup.user.clone(),
+                session_id: Some(session_id.clone()),
+                state: std::collections::HashMap::new(),
+            })
+            .await?;
+    }
+    #[cfg(feature = "scripted-model")]
+    let script = voice.voice_script.as_deref();
+    #[cfg(not(feature = "scripted-model"))]
+    let script = None;
+    let realtime = crate::voice_cli::realtime_model(&setup.model, script)?;
+    println!(
+        "harness ({}) voice on {} · mode {} · shell {} · realtime {}\n",
+        setup.model_id,
+        setup.resolved.workspace.display(),
+        setup.resolved.mode,
+        info.isolation,
+        realtime.id
+    );
+    let surface = adk_harness::VoiceSurface::open(
+        Arc::new(agent),
+        realtime.model,
+        sessions,
+        setup.user.clone(),
+        session_id.clone(),
+        adk_harness::VoiceConfig::new(APP_NAME),
+    )?;
+    let code = crate::voice_cli::run(
+        Arc::new(surface),
+        voice.voice.as_deref().filter(|text| !text.trim().is_empty()),
+        voice.voice_input.as_deref(),
+        voice.voice_output.as_deref(),
+        realtime.input_rate,
+    )
+    .await?;
+    println!("session: {session_id}");
+    Ok(code)
+}
+
 fn persistent(setup: &Setup) -> bool {
     #[cfg(feature = "persist")]
     return setup.db.is_some();

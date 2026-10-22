@@ -45,6 +45,10 @@ adk-harness = { workspace = true, optional = true }
 adk-browser = { workspace = true, optional = true }
 # `--provider mistralrs`: local inference in process (spec 3.1 §8.1); a heavy build
 adk-mistralrs = { workspace = true, optional = true }
+# `adk-rust --voice`: the harness voice surface (spec 3.1 §7.17); the realtime providers and
+# the WAV codec for `--voice-input`/`--voice-output`
+adk-realtime = { workspace = true, optional = true }
+adk-audio = { workspace = true, optional = true }
 # `adk-rust approvals --server` talks to a served harness's approval inbox
 reqwest = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
@@ -128,10 +132,18 @@ memory-local = ["adk-harness?/memory-embeddings-local"]
 secrets-gcp = ["dep:adk-auth", "adk-auth/gcp-secrets"]
 secrets-aws = ["dep:adk-auth", "adk-auth/aws-secrets"]
 # Hidden `--model-script` and `--approval-fixture` flags for binary end-to-end tests:
-# a scripted model and a tool that needs approval, no provider key required
-scripted-model = []
+# a scripted model and a tool that needs approval, no provider key required; with `voice`,
+# `--voice-script` plays a scripted realtime provider
+scripted-model = ["adk-realtime?/scripted"]
+# `adk-rust --voice`: the harness voice surface over Gemini Live or the OpenAI Realtime API
+# (spec 3.1 §7.17, H5); `--voice-input <wav>` and `--voice-output <wav>` need no audio hardware
+voice = ["harness", "adk-harness?/voice", "dep:adk-realtime", "adk-realtime/integration", "adk-realtime/gemini", "adk-realtime/openai", "dep:adk-audio"]
+# The microphone and the speaker for `--voice` (cpal: audio hardware, ALSA headers on Linux)
+voice-desktop = ["voice", "adk-audio/desktop-audio"]
 
 [dev-dependencies]
+# The scripted realtime provider the `--voice` end-to-end test writes its script with.
+adk-realtime = { path = "../adk-realtime", features = ["scripted"] }
 tower = { version = "0.5", features = ["util"] }
 axum = "0.8"
 google-cloud-auth = { version = "1.8", default-features = false, features = ["default-rustls-provider"] }

@@ -125,6 +125,37 @@ pub struct Cli {
     #[cfg(feature = "harness")]
     #[command(flatten)]
     pub harness: adk_cli::harness::HarnessArgs,
+
+    /// The voice surface (`--voice`), which also runs without a subcommand.
+    #[cfg(feature = "voice")]
+    #[command(flatten)]
+    pub voice: VoiceArgs,
+}
+
+/// `adk-rust --voice`: the harness over a realtime session (spec 3.1 §8.1, §7.17, H5).
+#[cfg(feature = "voice")]
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct VoiceArgs {
+    /// Talk to the harness: voice in and out, spoken approvals, the same policy. TEXT is
+    /// the first turn. Needs --provider gemini or openai.
+    #[arg(long, value_name = "TEXT", num_args = 0..=1, default_missing_value = "")]
+    pub voice: Option<String>,
+
+    /// Without a microphone: a mono PCM16 WAV (16 kHz for Gemini, 24 kHz for OpenAI) sent as
+    /// the answer to the first held call; the run ends after that call's response (exit 3
+    /// while a call is still held).
+    #[arg(long, value_name = "WAV", requires = "voice")]
+    pub voice_input: Option<std::path::PathBuf>,
+
+    /// Write the model's audio to this WAV file instead of playing it.
+    #[arg(long, value_name = "WAV", requires = "voice")]
+    pub voice_output: Option<std::path::PathBuf>,
+
+    /// A scripted realtime provider instead of a live one: a JSON array of scripted steps,
+    /// inline or in the named file (end-to-end tests).
+    #[cfg(feature = "scripted-model")]
+    #[arg(long, value_name = "JSON", hide = true, requires = "voice")]
+    pub voice_script: Option<String>,
 }
 
 /// Model and rendering options shared by every agent command.

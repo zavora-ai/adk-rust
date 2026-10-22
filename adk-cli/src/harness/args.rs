@@ -82,7 +82,7 @@ pub struct HarnessArgs {
     #[arg(long)]
     pub trust: bool,
 
-    /// Add a pack: browser, computer-use or payments
+    /// Add a pack: browser, computer-use, payments or voice
     #[arg(long = "pack", value_parser = parse_pack, value_name = "PACK")]
     pub packs: Vec<Pack>,
 
@@ -303,7 +303,10 @@ fn parse_pack(value: &str) -> std::result::Result<Pack, String> {
         "browser" => Ok(Pack::Browser),
         "computer-use" => Ok(Pack::ComputerUse),
         "payments" => Ok(Pack::Payments),
-        other => Err(format!("unknown pack '{other}'; use browser, computer-use or payments")),
+        "voice" => Ok(Pack::Voice),
+        other => {
+            Err(format!("unknown pack '{other}'; use browser, computer-use, payments or voice"))
+        }
     }
 }
 

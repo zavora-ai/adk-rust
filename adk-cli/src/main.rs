@@ -20,6 +20,8 @@ mod skills;
 #[cfg(all(feature = "harness", feature = "persist", feature = "encrypted"))]
 mod store;
 mod ultra;
+#[cfg(feature = "voice")]
+mod voice_cli;
 
 use adk_agent::LlmAgentBuilder;
 use adk_cli::{Launcher, launcher::ThinkingDisplayMode};
@@ -33,15 +35,24 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let parsed = Cli::parse();
+    #[cfg(feature = "voice")]
+    let voice = parsed.voice.clone();
     #[cfg(feature = "harness")]
-    let Cli { command, options, harness } = Cli::parse();
+    let Cli { command, options, harness, .. } = parsed;
     #[cfg(not(feature = "harness"))]
-    let Cli { command, options } = Cli::parse();
+    let Cli { command, options } = parsed;
 
     match command {
         #[cfg(feature = "harness")]
         None => {
             let model = resolve_model(&options).await?;
+            #[cfg(feature = "voice")]
+            if voice.voice.is_some() {
+                return exit_with(
+                    harness_cli::voice(model, options.instruction.clone(), harness, voice).await?,
+                );
+            }
             harness_cli::repl(model, options.instruction.clone(), harness).await
         }
         #[cfg(not(feature = "harness"))]
