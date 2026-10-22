@@ -49,8 +49,10 @@ impl TurnAccumulator {
 /// - Finalizing a turn on `ResponseDone`
 /// - Handling interrupted turns (new `ResponseCreated` during accumulation)
 /// - Collecting the user's input transcript: `InputTranscriptCompleted` completes it, and
-///   on a provider that streams only `InputTranscriptDelta`s it completes when the model's
-///   next turn starts or ends
+///   a transcript streamed without an item id (Gemini Live, which never completes one)
+///   completes when the model's next turn starts or ends. A transcript under an item id
+///   (OpenAI) waits for its `InputTranscriptCompleted`, which often arrives after the
+///   model's response has started, so it is reported once, complete
 ///
 /// [`process`](Self::process) returns the first event an input produces;
 /// [`take_pending`](Self::take_pending) returns the rest, in order.
@@ -72,7 +74,7 @@ impl TurnAccumulator {
 pub struct TranscriptAggregator {
     /// Current accumulating turn (None if idle between turns).
     current_turn: Option<TurnAccumulator>,
-    /// The user's input transcript streamed so far, not yet completed.
+    /// The user's input transcript streamed so far without an item id, not yet completed.
     user_transcript: String,
     /// Events an input produced beyond the one `process` returned.
     pending: VecDeque<AggregatedEvent>,
@@ -118,8 +120,10 @@ impl TranscriptAggregator {
                 }
                 utterance
             }
-            ServerEvent::InputTranscriptDelta { delta, .. } => {
-                self.user_transcript.push_str(delta);
+            ServerEvent::InputTranscriptDelta { item_id, delta, .. } => {
+                if item_id.is_empty() {
+                    self.user_transcript.push_str(delta);
+                }
                 None
             }
             ServerEvent::InputTranscriptCompleted { transcript, .. } => {
@@ -229,9 +233,10 @@ mod tests {
         ServerEvent::ResponseDone { event_id: "e".into(), response: serde_json::json!({}) }
     }
 
+    /// A piece of the user's transcript as Gemini Live streams it, without an item id.
     fn input(delta: &str) -> ServerEvent {
         ServerEvent::InputTranscriptDelta {
-            item_id: "in".into(),
+            item_id: String::new(),
             content_index: 0,
             delta: delta.into(),
         }
@@ -302,5 +307,35 @@ mod tests {
         ));
         // The streamed prefix is not reported a second time.
         assert!(aggregator.process(&done()).is_none());
+    }
+
+    /// OpenAI streams the user's transcript under its item and completes it, often after the
+    /// model's response has started: the utterance is reported once, complete.
+    #[test]
+    fn an_item_transcript_is_reported_once_when_it_completes() {
+        let heard = |delta: &str| ServerEvent::InputTranscriptDelta {
+            item_id: "item_in".into(),
+            content_index: 0,
+            delta: delta.into(),
+        };
+        let created =
+            ServerEvent::ResponseCreated { event_id: "e".into(), response: serde_json::json!({}) };
+        let mut aggregator = TranscriptAggregator::new();
+        assert!(aggregator.process(&heard("What is")).is_none());
+        assert!(aggregator.process(&created).is_none());
+        assert!(aggregator.take_pending().is_empty());
+        assert!(aggregator.process(&heard(" two plus two?")).is_none());
+        let completed = ServerEvent::InputTranscriptCompleted {
+            item_id: "item_in".into(),
+            content_index: 0,
+            transcript: "What is two plus two?".into(),
+        };
+        assert!(matches!(
+            aggregator.process(&completed),
+            Some(AggregatedEvent::UserUtteranceComplete { transcript })
+                if transcript == "What is two plus two?"
+        ));
+        assert!(matches!(aggregator.process(&done()), Some(AggregatedEvent::TurnComplete { .. })));
+        assert!(aggregator.take_pending().is_empty());
     }
 }

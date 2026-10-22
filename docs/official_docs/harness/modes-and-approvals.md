@@ -194,8 +194,8 @@ Deny rule, into Deny — for the calls it covers.
 
 Rules come from a person only: from a prompt's suggestions (`ApproveAndRemember`), from
 `HarnessDecision::ApproveAndRemember`, from a served harness's authenticated `/api/rules`
-routes (see [Serving](serving.md#standing-rules-over-http)), or from the store directly, as
-`adk-rust rules add` does. No model-callable tool creates one. A rule never applies to a non-waivable call:
+routes (see [Serving](serving.md#standing-rules-over-http)), or from `adk-rust rules add`.
+No model-callable tool creates one. A rule never applies to a non-waivable call:
 `exit_plan_mode`, edits of protected paths, unsandboxed retries, `memory_write` and
 `memory_delete` are decided every time. A suggestion for `bash` never starts with a command
 that runs arbitrary code (`sh`, `bash`, `env`, `sudo` and similar), and the harness re-reads
@@ -203,7 +203,7 @@ the store on every call, so a revoked rule stops applying at once.
 
 Code that authenticates the person itself creates and revokes rules through the harness,
 which records `harness.rule.created` and `harness.rule.revoked` with the surface before the
-store write:
+store write — `rest` for the REST routes, `cli` for `adk-rust rules add` and `rules rm`:
 
 | Method | Effect |
 |---|---|

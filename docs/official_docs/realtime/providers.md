@@ -62,9 +62,21 @@ fn gemini_model() -> anyhow::Result<BoxedModel> {
   with 1007 on a bare id, so `GeminiRealtimeModel::new` adds the prefix: `gemini-3.1-flash-live-preview`
   and `models/gemini-3.1-flash-live-preview` name the same model, and `model_id()` reports the
   prefixed name. Vertex AI names are sent as given.
+- **Response modalities**: one per session, and `gemini-3.1-flash-live-preview` accepts only
+  `AUDIO`; the server closes the socket with 1007 ("The requested combination of response
+  modalities … is not supported by the model") on a setup the model does not support. A
+  `RealtimeConfig` without modalities asks for `AUDIO`.
 - **Voice activity**: the server's `voiceActivity` messages arrive as `ServerEvent::SpeechStarted`
   (`ACTIVITY_START`) and `ServerEvent::SpeechStopped` (`ACTIVITY_END`), with the offset into the
   audio stream in `audio_start_ms` / `audio_end_ms`, so barge-in handlers work as on OpenAI.
+- **Interruption**: `serverContent.interrupted`, the server's report that the user's speech cut
+  the model's reply off, arrives as `ServerEvent::SpeechStarted` with `audio_start_ms` 0 when no
+  `ACTIVITY_START` reported that speech; after one it adds no second event.
+- **Session resumption**: the server sends a handle in `sessionResumptionUpdate.newHandle`,
+  empty while `resumable` is false (during a tool call or generation). Each non-empty handle
+  arrives as `ServerEvent::SessionUpdated` with `{"resumeToken": handle}`; `RealtimeRunner`
+  keeps the latest and sends it as `sessionResumption.handle` when it reconnects. The older
+  field name `resumptionToken` is read too.
 - **Audio**: 16 kHz PCM16 in, 24 kHz PCM16 out.
 - **Voices**: `Kore` and the other Gemini voices; `with_voice("Kore")`.
 - **Language**: `with_language("en-US")` pins the spoken language
