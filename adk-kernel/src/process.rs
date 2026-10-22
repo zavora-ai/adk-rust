@@ -723,6 +723,11 @@ impl ProcessTable {
         &self.processes
     }
 
+    /// The kernel's clock for a kernel's table, the system clock otherwise.
+    fn now(&self) -> DateTime<Utc> {
+        self.sup.as_ref().map_or_else(Utc::now, |sup| sup.clock.now())
+    }
+
     /// Lists the processes `filter` selects, each with its live [`ProcessView`]; `Waiting`
     /// processes show their age (spec 3.2 §7.3, §8.1 `adk-rust ps`). Processes are ordered
     /// by creation. A side-table row whose run the run store pruned is deleted. The
@@ -774,7 +779,7 @@ impl ProcessTable {
         if let Some(limit) = filter.limit {
             rows.truncate(limit);
         }
-        let now = Utc::now();
+        let now = self.now();
         let mut processes = Vec::with_capacity(rows.len());
         for (run, meta) in rows {
             let view = self.view(&run, &meta, now).await;
@@ -793,7 +798,7 @@ impl ProcessTable {
             return Ok(None);
         };
         let meta = self.meta(&run).await?;
-        let view = self.view(&run, &meta, Utc::now()).await;
+        let view = self.view(&run, &meta, self.now()).await;
         Ok(Some(Process { run, meta, view }))
     }
 
@@ -824,7 +829,7 @@ impl ProcessTable {
             Enqueued::Created(record) => record,
             Enqueued::Existing(record) => {
                 let meta = self.meta(&record).await?;
-                let view = self.view(&record, &meta, Utc::now()).await;
+                let view = self.view(&record, &meta, self.now()).await;
                 return Ok(Process { run: record, meta, view });
             }
             Enqueued::Rejected { blocking_run_id } => {
@@ -871,7 +876,7 @@ impl ProcessTable {
             .await;
             sup.nudge();
         }
-        let view = self.view(&record, &meta, Utc::now()).await;
+        let view = self.view(&record, &meta, self.now()).await;
         Ok(Process { run: record, meta, view })
     }
 
@@ -956,7 +961,7 @@ impl ProcessTable {
             });
         }
         if meta.queue == queue {
-            let view = self.view(&run, &meta, Utc::now()).await;
+            let view = self.view(&run, &meta, self.now()).await;
             return Ok(Process { run, meta, view });
         }
         // Checked before the cancel, so a freeze never leaves the process cancelled and not

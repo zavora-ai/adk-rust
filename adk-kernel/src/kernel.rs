@@ -7,7 +7,7 @@
 //! | Kernel part | Built from |
 //! |---|---|
 //! | Workers | One `DurableWorker` per [`QueueClass`], each with [`KernelConfig::worker_config`]: `on_governance_refusal: Park` (§10 S3), the class's poll interval, the S1 `WorkerHooks` turned into [`KernelEvent`]s, and the targets registered with [`KernelBuilder::agent`] (the harness runner as `adk-rust` and `harness.goal`) |
-//! | Scheduler | `DurableScheduler::new(schedules, runs).with_governance(..)`, ticking every [`KernelConfig::scheduler_tick`] |
+//! | Scheduler | `DurableScheduler::new(schedules, runs).with_governance(..).with_clock(..)`, ticking every [`KernelConfig::scheduler_tick`] on [`KernelConfig::clock`] |
 //! | Wake sources | [`KernelBuilder::wake_source`], [`KernelBuilder::trigger`] and [`KernelBuilder::queue_ingress`], routed by the [`WakeRouter`] (§7.4) |
 //! | Approvals | `StoreApprovalService::with_run_store`, so a decision wakes the parked run; `spawn_approval_ticker` for expiries |
 //! | Kill switch | [`KernelConfig::governance`]: `GovernanceControl::mirrored` with a 250 ms poll on multi-replica ([`KernelConfig::mirrored_governance`], K-I8) |
@@ -38,8 +38,8 @@ use std::time::Duration;
 use adk_core::audit_log::{AuditActor, AuditTrail};
 use adk_core::queue_source::QueueIngress;
 use adk_core::{
-    ApprovalService, DurableRunStore, Enqueued, GovernanceControl, GovernanceMirrorConfig,
-    GovernanceStateStore, ScheduleStore, SpendLedger,
+    ApprovalService, Clock, DurableRunStore, Enqueued, GovernanceControl, GovernanceMirrorConfig,
+    GovernanceStateStore, ScheduleStore, SpendLedger, SystemClock,
 };
 use adk_runner::Runner;
 use adk_server::background::{
@@ -49,7 +49,6 @@ use adk_server::background::{
 use adk_server::rest::{FreezeDelegate, FreezeReport};
 use adk_session::SessionService;
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -114,6 +113,11 @@ pub struct KernelConfig {
     /// Refuse to start a driver where no sandbox enforcer exists (spec 3.2 §7.7). Defaults
     /// to `false`.
     pub fail_if_sandbox_unavailable: bool,
+    /// The time the kernel reads: [`Wake::At`] times and wake-set expiry, the scheduler's
+    /// due schedules, process ages and spend days. Defaults to `SystemClock`. Give the run
+    /// store the same clock (`SqliteRunStore::with_clock`), since it decides leases and
+    /// `not_before`.
+    pub clock: Arc<dyn Clock>,
 }
 
 impl Default for KernelConfig {
@@ -127,6 +131,7 @@ impl Default for KernelConfig {
             governance: GovernanceControl::new(),
             control: ControlPlaneConfig::default(),
             fail_if_sandbox_unavailable: false,
+            clock: Arc::new(SystemClock),
         }
     }
 }
@@ -189,6 +194,13 @@ impl KernelConfig {
     #[must_use]
     pub fn with_fail_if_sandbox_unavailable(mut self, fail: bool) -> Self {
         self.fail_if_sandbox_unavailable = fail;
+        self
+    }
+
+    /// Sets the clock the kernel reads, such as a `ManualClock` a test advances.
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
         self
     }
 
@@ -493,9 +505,11 @@ impl Kernel {
         self.spawn_workers();
         if let Some(schedules) = &self.inner.schedules {
             let scheduler = DurableScheduler::new(Arc::clone(schedules), Arc::clone(&sup.runs))
-                .with_governance(governance.clone());
+                .with_governance(governance.clone())
+                .with_clock(Arc::clone(&config.clock));
             tasks.push(spawn_scheduler(
                 scheduler,
+                Arc::clone(&sup),
                 config.scheduler_tick,
                 Arc::clone(&self.inner.status),
                 stop.clone(),
@@ -510,11 +524,7 @@ impl Kernel {
             ));
         }
         for ingress in &self.inner.queue_ingresses {
-            let ingress = ingress.clone();
-            let stop = stop.clone();
-            tasks.push(tokio::spawn(async move {
-                ingress.run(INGRESS_IDLE, stop.cancelled_owned()).await;
-            }));
+            tasks.push(spawn_queue_ingress(ingress.clone(), Arc::clone(&sup), stop.clone()));
         }
         if let Some(approvals) = &self.inner.approvals {
             tasks.push(adk_server::approvals::spawn_approval_ticker(
@@ -880,6 +890,7 @@ const DRAIN_POLL: Duration = Duration::from_millis(50);
 /// Ticks the scheduler every `tick`, recording how late each tick ran.
 fn spawn_scheduler(
     scheduler: DurableScheduler,
+    sup: Arc<Supervision>,
     tick: Duration,
     status: Arc<RwLock<Status>>,
     stop: CancellationToken,
@@ -892,11 +903,44 @@ fn spawn_scheduler(
                 () = tokio::time::sleep_until(due) => {}
             }
             let lag = tokio::time::Instant::now().saturating_duration_since(due);
-            if let Err(error) = scheduler.tick().await {
-                tracing::warn!(error = %error, "scheduler tick failed");
+            match scheduler.tick().await {
+                // A fired schedule runs now, not at its queue's next poll.
+                Ok(fired) if fired.enqueued > 0 => sup.nudge(),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(error = %error, "scheduler tick failed"),
             }
             status.write().unwrap_or_else(|e| e.into_inner()).scheduler_lag = Some(lag);
             due = (due + tick).max(tokio::time::Instant::now());
+        }
+    })
+}
+
+/// Runs `ingress` as `QueueIngress::run` does, waking the workers when a message became a
+/// `kernel.wake` run, so a queue wake is claimed at once rather than at the maintenance
+/// queue's next poll.
+fn spawn_queue_ingress(
+    ingress: QueueIngress,
+    sup: Arc<Supervision>,
+    stop: CancellationToken,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            let pause = match ingress.poll_once().await {
+                Ok(report) => {
+                    if !report.created.is_empty() {
+                        sup.nudge();
+                    }
+                    if report.pulled > 0 { Duration::ZERO } else { INGRESS_IDLE }
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "queue ingress pull failed");
+                    INGRESS_IDLE
+                }
+            };
+            tokio::select! {
+                () = stop.cancelled() => return,
+                () = tokio::time::sleep(pause) => {}
+            }
         }
     })
 }
@@ -1048,8 +1092,8 @@ fn spawn_mirror(sup: Arc<Supervision>, stop: CancellationToken) -> JoinHandle<()
     })
 }
 
-/// Every scheduler tick: expires wake sets and fires time wakes, attributes spend, and
-/// measures the store.
+/// Every scheduler tick: expires wake sets and fires time wakes, claims wake runs enqueued
+/// from outside the kernel, attributes spend, and measures the store.
 fn spawn_maintenance(
     sup: Arc<Supervision>,
     router: WakeRouter,
@@ -1063,10 +1107,16 @@ fn spawn_maintenance(
                 () = stop.cancelled() => return,
                 () = tokio::time::sleep(tick) => {}
             }
-            match router.sweep_expired(Utc::now()).await {
+            match router.sweep_expired(sup.clock.now()).await {
                 Ok(outcomes) if !outcomes.is_empty() => sup.nudge(),
                 Ok(_) => {}
                 Err(error) => tracing::debug!(error = %error, "could not sweep expired wake sets"),
+            }
+            // A webhook ingress served outside the kernel, or another replica, enqueues
+            // `kernel.wake` runs this kernel never sees enqueued: claim them within a tick
+            // rather than at the maintenance queue's 5 s poll (§7.4, under 2 s).
+            if sup.external_wakes_due().await {
+                sup.nudge();
             }
             sup.attribute_all().await;
             let probe = tokio::time::Instant::now();
@@ -1385,7 +1435,8 @@ impl KernelBuilder {
             .triggers
             .into_iter()
             .fold(WakeRouter::new(runs.clone(), processes.clone()), WakeRouter::with_trigger)
-            .with_bus(bus.clone());
+            .with_bus(bus.clone())
+            .with_clock(Arc::clone(&config.clock));
         let sup = Arc::new(Supervision {
             app_name: config.app_name.clone(),
             kernel_id: format!("kernel-{}", uuid::Uuid::new_v4()),
@@ -1403,6 +1454,7 @@ impl KernelBuilder {
             local: std::sync::Mutex::new(HashMap::new()),
             roots_changed: tokio::sync::Notify::new(),
             watched: std::sync::Mutex::new(BTreeMap::new()),
+            clock: Arc::clone(&config.clock),
         });
         let run_finished = Arc::new(RunFinishedWakeSource::new());
         let hooks =
@@ -1498,7 +1550,7 @@ mod tests {
         // Not claimable for an hour: it stays a queued sleeper the whole test.
         let run =
             NewRun::new("background", "adk-rust", "alice", "adk-rust", json!({ "text": "x" }))
-                .with_not_before(Utc::now() + chrono::Duration::hours(1));
+                .with_not_before(chrono::Utc::now() + chrono::Duration::hours(1));
         let process = kernel
             .processes()
             .spawn(run, ProcessSpec::new(ProcessKind::Interactive).with_wake(wake))

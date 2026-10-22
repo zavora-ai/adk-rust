@@ -57,7 +57,7 @@ use adk_agent::ambient::{CronTrigger, EventSource, FileWatchTrigger};
 use adk_core::approval::{ApprovalEventKind, ApprovalNotification, ApprovalNotifier};
 use adk_core::queue_source::{QueueIngress, QueueSource};
 use adk_core::schedule::MissedFirePolicy;
-use adk_core::{DurableRunStore, Enqueued, NewRun, RunRecord, RunState};
+use adk_core::{Clock, DurableRunStore, Enqueued, NewRun, RunRecord, RunState, SystemClock};
 use adk_server::background::{WorkerHooks, WorkflowExecutor, WorkflowState};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -666,6 +666,7 @@ pub struct WakeRouter {
     triggers: Vec<Trigger>,
     bus: Option<EventBus>,
     gate: Arc<tokio::sync::Mutex<()>>,
+    clock: Arc<dyn Clock>,
 }
 
 impl fmt::Debug for WakeRouter {
@@ -683,7 +684,14 @@ impl WakeRouter {
             triggers: Vec::new(),
             bus: None,
             gate: Arc::new(tokio::sync::Mutex::new(())),
+            clock: Arc::new(SystemClock),
         }
+    }
+
+    /// Reads wake-set expiry against `clock`: the kernel's [`KernelConfig::clock`](crate::KernelConfig::clock).
+    pub(crate) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Adds a standing trigger.
@@ -735,7 +743,7 @@ impl WakeRouter {
     /// key deduplicates what already ran.
     pub async fn route(&self, event: WakeEvent) -> Result<Vec<WakeOutcome>> {
         let _gate = self.gate.lock().await;
-        let now = Utc::now();
+        let now = self.clock.now();
         let mut outcomes = Vec::new();
         for (meta, wake, run) in self.sleepers().await? {
             let expired = wake.expires_at.is_some_and(|at| at <= now);

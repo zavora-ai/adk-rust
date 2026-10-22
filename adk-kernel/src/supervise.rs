@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind, AuditTrail};
 use adk_core::{
-    DurableRunStore, GovernanceControl, Part, RunCheckpointRef, RunFilter, RunRecord, RunState,
-    SpendKey,
+    Clock, DurableRunStore, GovernanceControl, Part, RunCheckpointRef, RunFilter, RunRecord,
+    RunState, SpendKey,
 };
 use adk_server::background::{DurableWorker, ParkReason, WorkerHandle, WorkerHooks};
 use adk_session::{GetRequest, SessionService};
@@ -52,6 +52,8 @@ pub(crate) fn spawned_asleep(run: &RunRecord) -> bool {
 
 /// How many spend samples a running process keeps for its burn rate.
 const SAMPLES: usize = 64;
+/// How many queued maintenance runs the tick's probe reads, oldest first.
+const EXTERNAL_WAKE_PROBE: usize = 8;
 
 /// What this replica knows about a process its own workers run.
 #[derive(Debug, Clone)]
@@ -90,6 +92,8 @@ pub(crate) struct Supervision {
     pub(crate) roots_changed: tokio::sync::Notify,
     /// One file wake source per watched root, while the kernel runs (spec 3.2 §7.4).
     pub(crate) watched: Mutex<BTreeMap<PathBuf, tokio::task::JoinHandle<()>>>,
+    /// The kernel's clock ([`KernelConfig::clock`](crate::KernelConfig::clock)).
+    pub(crate) clock: Arc<dyn Clock>,
 }
 
 impl std::fmt::Debug for Supervision {
@@ -235,6 +239,28 @@ impl Supervision {
         }
     }
 
+    /// Whether a `kernel.wake` run is due on the maintenance queue: one the worker would
+    /// claim at its next poll. Reads at most a few rows, oldest first.
+    pub(crate) async fn external_wakes_due(&self) -> bool {
+        if !self.queues.iter().any(|queue| queue.as_str() == QueueClass::MAINTENANCE) {
+            return false;
+        }
+        let filter = RunFilter::default()
+            .queue(QueueClass::MAINTENANCE)
+            .states([RunState::Queued])
+            .limit(EXTERNAL_WAKE_PROBE);
+        let now = self.clock.now();
+        match self.runs.list(filter).await {
+            Ok(queued) => queued.iter().any(|run| {
+                run.target == KERNEL_WAKE_TARGET && run.not_before.is_none_or(|at| at <= now)
+            }),
+            Err(error) => {
+                tracing::debug!(error = %error, "could not look for queued wake runs");
+                false
+            }
+        }
+    }
+
     /// The running runs of the kernel's queues.
     pub(crate) async fn running(&self) -> Vec<RunRecord> {
         let mut running = Vec::new();
@@ -351,7 +377,7 @@ impl Supervision {
         } else {
             usage.cost_micro_usd
         };
-        let now = Utc::now();
+        let now = self.clock.now();
         {
             let mut table = self.local.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = table.get_mut(pid) {
@@ -520,7 +546,7 @@ impl WorkerHooks for KernelHooks {
             LocalRun {
                 run: run.clone(),
                 partition: meta.partition.clone(),
-                claimed_at: Utc::now(),
+                claimed_at: sup.clock.now(),
                 baseline,
                 last: None,
                 samples: VecDeque::new(),
