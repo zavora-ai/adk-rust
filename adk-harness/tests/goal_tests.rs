@@ -213,11 +213,10 @@ mod ambient {
             &self,
         ) -> adk_core::Result<futures::stream::BoxStream<'static, adk_agent::TriggerEvent>>
         {
-            Ok(Box::pin(futures::stream::iter(vec![adk_agent::TriggerEvent {
-                source: "file:Cargo.lock".into(),
-                payload: json!({ "path": "Cargo.lock" }),
-                principal: None,
-            }])))
+            Ok(Box::pin(futures::stream::iter(vec![adk_agent::TriggerEvent::new(
+                "file:Cargo.lock",
+                json!({ "path": "Cargo.lock" }),
+            )])))
         }
     }
 

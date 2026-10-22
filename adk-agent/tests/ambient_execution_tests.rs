@@ -52,12 +52,8 @@ impl EventSource for BurstSource {
 
     async fn subscribe(&self) -> Result<BoxStream<'static, TriggerEvent>> {
         let events: Vec<TriggerEvent> = (0..self.count)
-            .map(|index| TriggerEvent {
-                source: "burst".to_string(),
-                payload: serde_json::json!({ "index": index }),
-                // A synthetic burst has no authenticated caller.
-                principal: None,
-            })
+            // A synthetic burst has no authenticated caller.
+            .map(|index| TriggerEvent::new("burst", serde_json::json!({ "index": index })))
             .collect();
         Ok(Box::pin(futures::stream::iter(events)))
     }
