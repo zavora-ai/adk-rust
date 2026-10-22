@@ -1078,6 +1078,7 @@ dependencies = [
  "adk-graph",
  "adk-guardrail",
  "adk-harness",
+ "adk-kernel",
  "adk-managed",
  "adk-memory",
  "adk-mistralrs",

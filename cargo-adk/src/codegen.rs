@@ -897,6 +897,7 @@ mod tests {
             ".config(HarnessConfig::discover(\".\")?)",
             "HarnessLauncher::new(harness)",
             ".with_session_service(sessions)",
+            "`cargo run -- up` runs it as the agent kernel",
             "GeminiModel::new(&api_key, \"gemini-3.7-flash\")?",
         ] {
             assert!(main_rs.contains(expected), "missing `{expected}` in:\n{main_rs}");
@@ -918,6 +919,7 @@ mod tests {
         assert!(file("tests/harness_smoke.rs").contains("HarnessAgent::builder(\"demo\")"));
         assert!(file("tests/harness_smoke.rs").contains(".mode(HarnessMode::Plan)"));
         assert!(file("README.md").starts_with("# demo\n"));
+        assert!(file("README.md").contains("cargo run -- up"), "the README names the kernel");
         assert!(file("AGENTS.md").starts_with("# demo\n"));
         assert!(file(".adk/harness.toml").contains("[deploy]"));
         assert!(file(".skills/example/SKILL.md").contains("name: example"));
