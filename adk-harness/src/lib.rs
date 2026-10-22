@@ -74,6 +74,8 @@ mod harness;
 #[cfg(feature = "auth")]
 mod identity;
 mod instructions;
+#[cfg(feature = "kernel")]
+mod kernel;
 mod ledger;
 pub mod mcp;
 #[cfg(feature = "memory")]
@@ -143,8 +145,8 @@ pub use goal::GoalEngine;
 #[cfg(feature = "sqlite")]
 pub use goal::SqliteGoalStore;
 pub use goal::{
-    GOAL_QUEUE, GOAL_STATE_KEY, GOAL_TARGET, GoalRecord, GoalSpec, GoalState, GoalStatus,
-    GoalStore, InMemoryGoalStore, UNTIL_CHECK_AGENT, UntilCheckAgent,
+    GOAL_QUEUE, GOAL_STALL_WINDOW, GOAL_STATE_KEY, GOAL_TARGET, GoalRecord, GoalSpec, GoalState,
+    GoalStatus, GoalStore, InMemoryGoalStore, UNTIL_CHECK_AGENT, UntilCheckAgent,
 };
 #[cfg(feature = "runner")]
 pub use harness::{CANCELLED_BY_MODE_CHANGE_STATUS, CloseReport, Harness, HarnessDecision};

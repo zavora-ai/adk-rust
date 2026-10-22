@@ -130,6 +130,9 @@ pub struct HarnessRuntime {
     #[cfg(feature = "graph")]
     pub(crate) plan_graph: Option<Arc<crate::plan_graph::PlanGraphs>>,
     pub(crate) goals: crate::goal::GoalRuntime,
+    /// Reports approval outcomes to the kernel built by `Harness::kernel` (spec 3.2 §7.4).
+    #[cfg(feature = "kernel")]
+    pub(crate) kernel_approvals: Arc<crate::kernel::LateApprovalNotifier>,
     /// Provider-executed search and URL tools, when the operator enabled any (spec 3.1 §7.20).
     #[cfg(feature = "web")]
     pub(crate) provider_web: Option<Arc<crate::web::provider::ProviderWebToolset>>,

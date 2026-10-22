@@ -582,6 +582,9 @@ pub(crate) fn observe_run(
     if let Some(trail) = &config.audit {
         trails.set(&session_key, trail.clone());
     }
+    if let Some(tracker) = &tracker {
+        trails.usage_begin(&session_key, tracker.clone());
+    }
     struct Finish {
         audit: Option<HarnessAudit>,
         tracker: Option<Arc<BudgetTracker>>,
@@ -613,6 +616,7 @@ pub(crate) fn observe_run(
             let usage = self.tracker.as_ref().map(|tracker| tracker.usage()).unwrap_or_default();
             if !self.settled {
                 self.settled = true;
+                self.trails.usage_settle(&self.session_key, &usage);
                 self.trails.clear(&self.session_key);
                 self.accounts.finish_run(self.subject.clone(), &usage, self.tokens);
             }
@@ -700,15 +704,94 @@ pub(crate) fn observe_run(
     }))
 }
 
+/// A session's usage: what its finished harness runs used, and its run in flight (spec 3.2
+/// §7.3, §7.10).
+#[derive(Default)]
+struct SessionUsage {
+    model_calls: u64,
+    tool_calls: u64,
+    cost_micro_usd: u64,
+    live: Option<Arc<BudgetTracker>>,
+}
+
 /// The audit trail of each session's running harness run, so the loop guard, which sees
 /// only a `ReadonlyContext`, records through it — for members too, whose calls belong to
-/// the caller's session.
-#[derive(Debug, Default)]
+/// the caller's session. It also counts each session's usage and keeps the loop guard's
+/// last verdict, for a kernel's process view (spec 3.2 §7.3).
+#[derive(Default)]
 pub(crate) struct RunTrails {
     trails: Mutex<HashMap<(String, String, String), AuditTrail>>,
+    usage: Mutex<HashMap<(String, String, String), SessionUsage>>,
+    verdicts: Mutex<HashMap<(String, String, String), String>>,
+}
+
+impl std::fmt::Debug for RunTrails {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunTrails").finish_non_exhaustive()
+    }
+}
+
+fn session_key(app: &str, user: &str, session: &str) -> (String, String, String) {
+    (app.to_string(), user.to_string(), session.to_string())
 }
 
 impl RunTrails {
+    /// Counts `tracker` as the session's run in flight.
+    fn usage_begin(&self, key: &(String, String, String), tracker: Arc<BudgetTracker>) {
+        let mut usage = self.usage.lock().unwrap_or_else(|e| e.into_inner());
+        if usage.len() > 4096 {
+            usage.clear();
+        }
+        usage.entry(key.clone()).or_default().live = Some(tracker);
+    }
+
+    /// Adds a finished run's `usage` to the session's total.
+    fn usage_settle(&self, key: &(String, String, String), run: &BudgetUsage) {
+        let mut usage = self.usage.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = usage.entry(key.clone()).or_default();
+        entry.model_calls += run.model_calls;
+        entry.tool_calls += run.tool_calls;
+        entry.cost_micro_usd = entry.cost_micro_usd.saturating_add(run.cost_micro_usd);
+        entry.live = None;
+    }
+
+    /// The session's model calls, tool calls and cost in micro-USD since the harness was
+    /// built, its run in flight included; `None` before its first run.
+    #[cfg(feature = "kernel")]
+    pub(crate) fn session_usage(
+        &self,
+        app: &str,
+        user: &str,
+        session: &str,
+    ) -> Option<(u64, u64, u64)> {
+        let usage = self.usage.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = usage.get(&session_key(app, user, session))?;
+        let live = entry.live.as_ref().map(|tracker| tracker.usage()).unwrap_or_default();
+        Some((
+            entry.model_calls + live.model_calls,
+            entry.tool_calls + live.tool_calls,
+            entry.cost_micro_usd.saturating_add(live.cost_micro_usd),
+        ))
+    }
+
+    fn set_verdict(&self, key: (String, String, String), verdict: String) {
+        let mut verdicts = self.verdicts.lock().unwrap_or_else(|e| e.into_inner());
+        if verdicts.len() > 4096 {
+            verdicts.clear();
+        }
+        verdicts.insert(key, verdict);
+    }
+
+    /// The loop guard's last verdict in the session.
+    #[cfg(feature = "kernel")]
+    pub(crate) fn verdict(&self, app: &str, user: &str, session: &str) -> Option<String> {
+        self.verdicts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&session_key(app, user, session))
+            .cloned()
+    }
+
     fn set(&self, key: &(String, String, String), trail: AuditTrail) {
         let mut trails = self.trails.lock().unwrap_or_else(|e| e.into_inner());
         if trails.len() > 4096 {
@@ -850,7 +933,18 @@ impl RequestObserver for LoopGuardObserver {
             calls[entry.start..].to_vec()
         };
         let finding = self.guard.analyze(&window);
-        if !self.guard.is_loop(finding) {
+        let looping = self.guard.is_loop(finding);
+        self.trails.set_verdict(
+            session_key(ctx.app_name(), ctx.user_id(), ctx.session_id()),
+            format!(
+                "{}: {} identical, {} redundant in the last {}",
+                if looping { "loop" } else { "ok" },
+                finding.identical,
+                finding.redundant,
+                window.len().min(self.guard.window)
+            ),
+        );
+        if !looping {
             return Ok(());
         }
         let reason = format!(

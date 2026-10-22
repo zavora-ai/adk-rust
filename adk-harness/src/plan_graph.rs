@@ -372,6 +372,21 @@ pub(crate) async fn run_agent_node(
     content: Content,
     sink: &Sink,
 ) -> adk_graph::Result<(bool, String)> {
+    run_agent_node_counted(node, root, harness, parent, content, sink)
+        .await
+        .map(|(held, output, _)| (held, output))
+}
+
+/// [`run_agent_node`], also returning how many tool calls the harness made, for the goal
+/// stall rule (spec 3.2 §10 HK3).
+pub(crate) async fn run_agent_node_counted(
+    node: &str,
+    root: &Arc<dyn Agent>,
+    harness: &str,
+    parent: Arc<dyn InvocationContext>,
+    content: Content,
+    sink: &Sink,
+) -> adk_graph::Result<(bool, String, usize)> {
     let scoped = Arc::new(
         ScopedContext::new(parent)
             .for_agent(root.clone(), harness.to_string())
@@ -380,6 +395,7 @@ pub(crate) async fn run_agent_node(
     let mut stream = root.run(scoped).await.map_err(|error| failed(node, error))?;
     let mut held = false;
     let mut output = String::new();
+    let mut tool_calls = 0;
     while let Some(item) = futures::StreamExt::next(&mut stream).await {
         let event = item.map_err(|error| failed(node, error))?;
         held |= event.actions.tool_confirmation.is_some();
@@ -391,10 +407,15 @@ pub(crate) async fn run_agent_node(
             if !text.is_empty() {
                 output = text;
             }
+            tool_calls += content
+                .parts
+                .iter()
+                .filter(|part| matches!(part, Part::FunctionCall { .. }))
+                .count();
         }
         let _ = sink.send(Forward::Event(event));
     }
-    Ok((held, output))
+    Ok((held, output, tool_calls))
 }
 
 impl PlanGraphs {

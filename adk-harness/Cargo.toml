@@ -30,6 +30,9 @@ team-acp = ["team", "dep:adk-acp"]
 team-a2a = ["team", "dep:adk-server"]
 # Goals started by cron, file-watch and webhook triggers (spec 3.1 §7.11).
 ambient = ["runner", "adk-agent/ambient"]
+# The Agent Kernel glue (spec 3.2 §10 HK1, HK3, §13 Q6): `Harness::kernel`, the partition
+# mode mapping, goal progress and stall parking. Opt-in; adk-cli's `harness` enables it.
+kernel = ["runner", "dep:adk-kernel"]
 # Plan graph and goal engine (spec 3.1 §7.11).
 graph = ["dep:adk-graph", "adk-graph/time-travel", "adk-graph/action"]
 # OS sandbox for the shell (spec 3.1 §7.9).
@@ -108,6 +111,7 @@ adk-computer-use = { workspace = true, optional = true }
 adk-payments = { workspace = true, optional = true }
 adk-realtime = { workspace = true, optional = true }
 adk-managed = { workspace = true, optional = true }
+adk-kernel = { workspace = true, optional = true }
 async-stream.workspace = true
 async-trait.workspace = true
 chrono.workspace = true

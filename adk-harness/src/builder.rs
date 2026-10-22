@@ -125,6 +125,8 @@ pub struct HarnessAgentBuilder {
     confirmation_handler: Option<Arc<dyn ToolConfirmationHandler>>,
     approval_store: Option<Arc<dyn ApprovalStore>>,
     approval_service: Option<Arc<dyn ApprovalService>>,
+    #[cfg(feature = "kernel")]
+    kernel_approvals: Arc<crate::kernel::LateApprovalNotifier>,
     action_ledger: Option<Arc<dyn ActionLedger>>,
     confirmation_timeout: Duration,
     shell: ShellConfig,
@@ -218,6 +220,8 @@ impl HarnessAgentBuilder {
             confirmation_handler: None,
             approval_store: None,
             approval_service: None,
+            #[cfg(feature = "kernel")]
+            kernel_approvals: Arc::default(),
             action_ledger: None,
             confirmation_timeout: Duration::from_secs(300),
             shell: ShellConfig::default(),
@@ -496,7 +500,12 @@ impl HarnessAgentBuilder {
     }
 
     /// The approval inbox held calls are submitted to.
+    ///
+    /// With feature `kernel`, the harness keeps a wrapper that also reports each request
+    /// reaching its outcome to the kernel `Harness::kernel` builds (spec 3.2 §7.4).
     pub fn approval_service(mut self, service: Arc<dyn ApprovalService>) -> Self {
+        #[cfg(feature = "kernel")]
+        let service = crate::kernel::NotifyingApprovals::wrap(service, &self.kernel_approvals);
         self.approval_service = Some(service);
         self
     }
@@ -1993,6 +2002,8 @@ impl HarnessAgentBuilder {
                 #[cfg(feature = "graph")]
                 plan_graph: plan_graphs,
                 goals,
+                #[cfg(feature = "kernel")]
+                kernel_approvals: self.kernel_approvals,
                 #[cfg(feature = "web")]
                 provider_web,
                 #[cfg(feature = "mcp")]

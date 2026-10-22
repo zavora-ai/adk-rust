@@ -924,6 +924,18 @@ impl Harness {
         (GOAL_TARGET.to_string(), self.runner.clone())
     }
 
+    /// The session service the harness runner uses.
+    #[cfg(feature = "kernel")]
+    pub(crate) fn sessions(&self) -> &Arc<dyn SessionService> {
+        &self.sessions
+    }
+
+    /// The durable run store goals are enqueued on, when one is set.
+    #[cfg(feature = "kernel")]
+    pub(crate) fn run_store(&self) -> Option<&Arc<dyn adk_core::DurableRunStore>> {
+        self.run_store.as_ref()
+    }
+
     /// An ambient goal (spec 3.1 §7.11, feature `ambient`): every event of `source` — a
     /// `CronTrigger`, `FileWatchTrigger` or `WebhookTrigger` — starts `spec` for `user` in
     /// `session`, or in a new session per trigger when `session` is `None`, under the same

@@ -696,6 +696,7 @@ dependencies = [
  "adk-eval",
  "adk-graph",
  "adk-guardrail",
+ "adk-kernel",
  "adk-managed",
  "adk-memory",
  "adk-model",

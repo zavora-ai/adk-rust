@@ -13,8 +13,8 @@
 //! runs the goal engine, so the same `Runner` serves `Harness::start_goal`, a resumed goal
 //! and a `DurableWorker` claiming target [`GOAL_TARGET`].
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, RwLock as StdRwLock};
 use std::time::{Duration, Instant};
 
 use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind};
@@ -76,6 +76,129 @@ const GOAL_LOOP_CEILING: u32 = 10_000;
 
 /// Most bytes of the check's output the next iteration reads.
 const CHECK_OUTPUT_TAIL: usize = 4 * 1024;
+
+/// How many iterations in a row a kernel-hosted goal may end with the same check result
+/// before it counts as stalled (spec 3.2 §7.3, §10 HK3); a `Graph` goal thread keeps the
+/// newest `2 * GOAL_STALL_WINDOW` checkpoints.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_harness::GOAL_STALL_WINDOW, 3);
+/// ```
+pub const GOAL_STALL_WINDOW: u32 = 3;
+
+/// The `harness.goal.stalled` reason of a check that repeated the last
+/// [`GOAL_STALL_WINDOW`] results.
+pub(crate) const STALL_SAME_CHECK: &str = "same_check";
+/// The `harness.goal.stalled` reason of an iteration that made no tool call.
+pub(crate) const STALL_NO_TOOL_CALL: &str = "no_tool_call";
+
+/// Parks a stalled goal's run at its next model-call boundary: the kernel glue's handle on
+/// the kernel's processes (spec 3.2 §10 HK3).
+#[async_trait]
+pub(crate) trait GoalParker: Send + Sync {
+    /// Suspends the durable run `run_id`; `false` when the kernel is gone.
+    async fn park(&self, run_id: &str) -> Result<bool>;
+}
+
+/// What the harness knows about one start of a goal beyond its [`GoalState`]: when it
+/// started, the tail of its last check's output and its recent check results.
+#[derive(Clone, Debug)]
+pub(crate) struct GoalTrack {
+    // Read by the kernel glue's goal progress (feature `kernel`).
+    #[cfg_attr(not(feature = "kernel"), allow(dead_code))]
+    pub(crate) started_at: DateTime<Utc>,
+    pub(crate) last_tail: Option<String>,
+    digests: VecDeque<String>,
+}
+
+/// The goals this harness runs, by [`GoalRecord::run_id`], and the parker a kernel attached
+/// (spec 3.2 §7.3, §10 HK3). Stalls are watched only while a parker is attached, so a goal
+/// outside a kernel runs exactly as before.
+#[derive(Default)]
+pub(crate) struct GoalBook {
+    goals: Mutex<HashMap<String, GoalTrack>>,
+    parker: StdRwLock<Option<Arc<dyn GoalParker>>>,
+}
+
+impl std::fmt::Debug for GoalBook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GoalBook").finish_non_exhaustive()
+    }
+}
+
+impl GoalBook {
+    /// Notes that goal `run_id` is running, from now if it was not known.
+    pub(crate) fn started(&self, run_id: &str) {
+        let mut goals = self.goals.lock().unwrap_or_else(|e| e.into_inner());
+        if goals.len() > 4096 {
+            goals.clear();
+        }
+        goals.entry(run_id.to_string()).or_insert_with(|| GoalTrack {
+            started_at: Utc::now(),
+            last_tail: None,
+            digests: VecDeque::new(),
+        });
+    }
+
+    /// What is known about goal `run_id`.
+    #[cfg(feature = "kernel")]
+    pub(crate) fn track(&self, run_id: &str) -> Option<GoalTrack> {
+        self.goals.lock().unwrap_or_else(|e| e.into_inner()).get(run_id).cloned()
+    }
+
+    /// Attaches the kernel's parker, which also turns stall detection on.
+    #[cfg(feature = "kernel")]
+    pub(crate) fn set_parker(&self, parker: Arc<dyn GoalParker>) {
+        *self.parker.write().unwrap_or_else(|e| e.into_inner()) = Some(parker);
+    }
+
+    fn parker(&self) -> Option<Arc<dyn GoalParker>> {
+        self.parker.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Records a check of goal `run_id` and returns the stall reason when, with a parker
+    /// attached and the goal still running, the iteration made no tool call or the last
+    /// [`GOAL_STALL_WINDOW`] checks gave the same result. A stall restarts the window.
+    fn record_check(
+        &self,
+        run_id: &str,
+        exit_code: Option<i32>,
+        output: &str,
+        tool_calls: Option<usize>,
+        running: bool,
+    ) -> Option<&'static str> {
+        let watching = self.parker().is_some();
+        let mut goals = self.goals.lock().unwrap_or_else(|e| e.into_inner());
+        let track = goals.entry(run_id.to_string()).or_insert_with(|| GoalTrack {
+            started_at: Utc::now(),
+            last_tail: None,
+            digests: VecDeque::new(),
+        });
+        track.last_tail = Some(tail(output, CHECK_OUTPUT_TAIL).to_string());
+        track.digests.push_back(crate::fsutil::sha256_hex(&format!("{exit_code:?}\n{output}")));
+        while track.digests.len() > GOAL_STALL_WINDOW as usize {
+            track.digests.pop_front();
+        }
+        if !(watching && running) {
+            return None;
+        }
+        let same = track.digests.len() == GOAL_STALL_WINDOW as usize
+            && track.digests.iter().all(|digest| *digest == track.digests[0]);
+        let reason = if tool_calls == Some(0) {
+            Some(STALL_NO_TOOL_CALL)
+        } else if same {
+            Some(STALL_SAME_CHECK)
+        } else {
+            None
+        };
+        if reason.is_some() {
+            track.digests.clear();
+        }
+        reason
+    }
+}
 
 /// A loop-until goal (spec 3.1 §7.11).
 ///
@@ -506,6 +629,7 @@ pub struct UntilCheckAgent {
     goals: Arc<dyn GoalStore>,
     workspace: Workspace,
     launcher: Arc<dyn CommandLauncher>,
+    book: Arc<GoalBook>,
 }
 
 impl std::fmt::Debug for UntilCheckAgent {
@@ -526,7 +650,17 @@ impl UntilCheckAgent {
         workspace: Workspace,
         launcher: Arc<dyn CommandLauncher>,
     ) -> Self {
-        Self { goals, workspace: workspace.allow_bash(true), launcher }
+        Self {
+            goals,
+            workspace: workspace.allow_bash(true),
+            launcher,
+            book: Arc::new(GoalBook::default()),
+        }
+    }
+
+    /// The goals this check has seen, and the kernel's parker when one is attached.
+    pub(crate) fn book(&self) -> &Arc<GoalBook> {
+        &self.book
     }
 
     fn audit(ctx: &dyn InvocationContext) -> Option<HarnessAudit> {
@@ -536,6 +670,16 @@ impl UntilCheckAgent {
 
     /// Runs one check and records it. The event mirrors the goal state while it runs on.
     async fn check(&self, ctx: Arc<dyn InvocationContext>) -> Result<Event> {
+        self.check_with(ctx, None).await
+    }
+
+    /// [`check`](Self::check) for an iteration that made `tool_calls` tool calls, when the
+    /// engine counted them.
+    async fn check_with(
+        &self,
+        ctx: Arc<dyn InvocationContext>,
+        tool_calls: Option<usize>,
+    ) -> Result<Event> {
         ctx.run_config().check_governance()?;
         let (app, user, session) =
             (ctx.app_name().to_string(), ctx.user_id().to_string(), ctx.session_id().to_string());
@@ -566,7 +710,7 @@ impl UntilCheckAgent {
         );
         #[cfg(not(feature = "observe"))]
         let span = tracing::Span::none();
-        self.finish_check(ctx, record, event).instrument(span).await
+        self.finish_check(ctx, record, event, tool_calls).instrument(span).await
     }
 
     /// Runs the check of `record`'s current iteration and records it.
@@ -575,6 +719,7 @@ impl UntilCheckAgent {
         ctx: Arc<dyn InvocationContext>,
         mut record: GoalRecord,
         mut event: Event,
+        tool_calls: Option<usize>,
     ) -> Result<Event> {
         let (app, user, session) =
             (ctx.app_name().to_string(), ctx.user_id().to_string(), ctx.session_id().to_string());
@@ -664,8 +809,15 @@ impl UntilCheckAgent {
             check.exit_code = ?exit_code,
             "goal check finished"
         );
+        let stalled = self.book.record_check(
+            &record.run_id,
+            exit_code,
+            &output,
+            tool_calls,
+            record.state.status == GoalStatus::Running,
+        );
         let tail = tail(&output, CHECK_OUTPUT_TAIL);
-        let summary = match record.state.status {
+        let mut summary = match record.state.status {
             GoalStatus::Done => format!(
                 "Goal check `{}` passed on iteration {}. The goal is done.",
                 record.spec.until, record.state.iteration
@@ -685,6 +837,12 @@ impl UntilCheckAgent {
                 record.state.max_iterations
             ),
         };
+        if let Some(reason) = stalled {
+            self.stall(ctx.as_ref(), &record, reason, audit.as_ref()).await?;
+            summary.push_str(&format!(
+                "\nThe goal made no progress ({reason}); it is parked until a person resumes it."
+            ));
+        }
         event.llm_response.content = Some(Content::new("model").with_text(summary));
         event.actions.state_delta.insert(
             GOAL_STATE_KEY.to_string(),
@@ -692,6 +850,52 @@ impl UntilCheckAgent {
         );
         event.actions.escalate = record.state.status != GoalStatus::Running;
         Ok(event)
+    }
+}
+
+impl UntilCheckAgent {
+    /// Records the stall of `record` and parks its durable run at its next model-call
+    /// boundary, where the kernel shows it `Waiting`, suspended manually (spec 3.2 §7.3,
+    /// §9.3 `harness.goal.stalled`).
+    async fn stall(
+        &self,
+        ctx: &dyn InvocationContext,
+        record: &GoalRecord,
+        reason: &str,
+        audit: Option<&HarnessAudit>,
+    ) -> Result<()> {
+        let pid = ctx.run_config().durable_run_id.clone();
+        tracing::warn!(
+            harness.goal.iteration = record.state.iteration,
+            goal.stall = reason,
+            run.id = ?pid,
+            "goal made no progress; parking it"
+        );
+        if let Some(audit) = audit {
+            audit
+                .record(
+                    "harness.goal.stalled",
+                    json!({
+                        "pid": pid,
+                        "goal": record.run_id,
+                        "iteration": record.state.iteration,
+                        "reason": reason,
+                    }),
+                )
+                .await?;
+        }
+        if let (Some(parker), Some(pid)) = (self.book.parker(), pid) {
+            match parker.park(&pid).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::warn!(run.id = %pid, "the kernel is gone; the stalled goal runs on")
+                }
+                Err(error) => {
+                    tracing::warn!(run.id = %pid, error = %error, "could not park the stalled goal")
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -757,6 +961,7 @@ impl GoalRuntime {
         if record.state.status != GoalStatus::Running {
             return Ok(None);
         }
+        self.until.book().started(&record.run_id);
         #[cfg(feature = "graph")]
         if self.engine == GoalEngine::Graph {
             return Ok(Some(self.run_graph(&record, harness, root, ctx)?));
@@ -804,6 +1009,11 @@ impl GoalRuntime {
             )
             .compile()?
             .with_checkpointer_arc(self.checkpointer.clone())
+            // Iterate and check checkpoint each iteration; the stall window and its
+            // predecessor are all a resume needs (spec 3.2 §10 HK3).
+            .with_checkpoint_retention(adk_graph::RetentionPolicy::keep_last(
+                2 * GOAL_STALL_WINDOW as usize,
+            ))
             .with_recursion_limit(2 * record.spec.max_iterations as usize + 2);
         let thread = format!(
             "{}:goal:{}",
@@ -822,6 +1032,10 @@ impl GoalRuntime {
         }))
     }
 }
+
+/// The graph state key of the tool calls the last iteration made.
+#[cfg(feature = "graph")]
+const ITERATION_TOOL_CALLS: &str = "iterationToolCalls";
 
 /// One iteration of the `Graph` engine: the harness agent works on the goal.
 #[cfg(feature = "graph")]
@@ -849,7 +1063,7 @@ impl adk_graph::Node for IterateNode {
                 message: "a goal iteration runs only inside a harness turn".into(),
             }
         })?;
-        let (held, _) = crate::plan_graph::run_agent_node(
+        let (held, _, tool_calls) = crate::plan_graph::run_agent_node_counted(
             "iterate",
             &self.root,
             &self.harness,
@@ -864,7 +1078,7 @@ impl adk_graph::Node for IterateNode {
                 json!({}),
             ));
         }
-        Ok(adk_graph::NodeOutput::new())
+        Ok(adk_graph::NodeOutput::new().with_update(ITERATION_TOOL_CALLS, json!(tool_calls)))
     }
 }
 
@@ -892,7 +1106,12 @@ impl adk_graph::Node for CheckNode {
                 message: "a goal check runs only inside a harness turn".into(),
             }
         })?;
-        let event = self.until.check(parent).await.map_err(|error| {
+        let tool_calls = ctx
+            .state
+            .get(ITERATION_TOOL_CALLS)
+            .and_then(Value::as_u64)
+            .and_then(|calls| usize::try_from(calls).ok());
+        let event = self.until.check_with(parent, tool_calls).await.map_err(|error| {
             adk_graph::GraphError::AgentFailed { node: "check".into(), source: Box::new(error) }
         })?;
         // A check of a goal that no longer runs mirrors nothing, and ends the graph.
