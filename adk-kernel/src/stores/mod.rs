@@ -1,6 +1,8 @@
 //! The kernel-owned stores and their backends (spec 3.2 §7.1, §7.3, §13 Q8).
 //!
-//! Phase 1 has one kernel-owned store, the [`ProcessStore`] side table. It runs on every
+//! Phase 1 has one kernel-owned store, the [`ProcessStore`] side table, with the kernel's
+//! daily spend totals per process (the phase-1 source of `ProcessView::spend_today` and
+//! `spend_7d`). It runs on every
 //! backend that holds the run, schedule and governance stores, with one conformance suite
 //! (`process_store_conformance_tests!`, feature `conformance`):
 //!
@@ -15,10 +17,12 @@
 //! and the agenda, driver, partition and ledger stores arrive with their phases.
 
 use async_trait::async_trait;
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use adk_core::RunState;
 
+use crate::bus::SpendDelta;
 use crate::error::Result;
 use crate::partition::PartitionId;
 use crate::process::ProcessMeta;
@@ -76,7 +80,8 @@ pub trait ProcessStore: Send + Sync {
     /// Returns [`KernelError::Store`](crate::KernelError::Store) when the backend fails.
     async fn get(&self, pid: &str) -> Result<Option<ProcessMeta>>;
 
-    /// The rows `filter` selects by partition, queue and parent, ordered by `pid`, at most
+    /// The rows `filter` selects by partition, queue, parent and pending suspension request,
+    /// ordered by `pid`, at most
     /// `filter.limit`. `filter.states` is a run-store field and is applied by
     /// [`ProcessTable::ps`](crate::ProcessTable::ps), not here.
     ///
@@ -107,6 +112,62 @@ pub trait ProcessStore: Send + Sync {
     ///
     /// Returns [`KernelError::Store`](crate::KernelError::Store) when the backend fails.
     async fn delete(&self, pid: &str) -> Result<bool>;
+
+    /// Sets or clears the pending suspension request of `pid`
+    /// ([`ProcessMeta::suspend_requested`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::NotFound`](crate::KernelError::NotFound) when no row has
+    /// `pid`, or [`KernelError::Store`](crate::KernelError::Store) when the backend fails.
+    async fn set_suspend_requested(&self, pid: &str, requested: bool) -> Result<()>;
+
+    /// Adds `delta` to the spend of `pid` in `partition` on the UTC day `day`. Additions
+    /// from concurrent writers all count.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Store`](crate::KernelError::Store) when the backend fails.
+    async fn add_spend(
+        &self,
+        pid: &str,
+        partition: &PartitionId,
+        day: NaiveDate,
+        delta: SpendDelta,
+    ) -> Result<()>;
+
+    /// The spend `scope` recorded from `from` through `to_inclusive`, in micro-USD; 0 when
+    /// none was.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Store`](crate::KernelError::Store) when the backend fails.
+    async fn spend(
+        &self,
+        scope: &SpendScope,
+        from: NaiveDate,
+        to_inclusive: NaiveDate,
+    ) -> Result<u64>;
+}
+
+/// Whose spend [`ProcessStore::spend`] sums (spec 3.2 §7.3, §7.10).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::stores::SpendScope;
+///
+/// let scope = SpendScope::Process("run-1".into());
+/// assert_eq!(serde_json::to_value(&scope).unwrap()["process"], "run-1");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum SpendScope {
+    /// One process.
+    Process(String),
+    /// Every process of a partition.
+    Partition(PartitionId),
 }
 
 /// Which processes `ps` lists (spec 3.2 §7.3, §8.1 `adk-rust ps [--partition P] [--state S]`).
@@ -140,6 +201,9 @@ pub struct ProcessFilter {
     /// Only processes this run caused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// Only processes whose [`ProcessMeta::suspend_requested`] is this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspend_requested: Option<bool>,
     /// At most this many processes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
@@ -174,6 +238,13 @@ impl ProcessFilter {
         self
     }
 
+    /// Only processes whose pending suspension request is `requested`.
+    #[must_use]
+    pub fn suspend_requested(mut self, requested: bool) -> Self {
+        self.suspend_requested = Some(requested);
+        self
+    }
+
     /// At most `limit` processes.
     #[must_use]
     pub fn limit(mut self, limit: usize) -> Self {
@@ -181,11 +252,12 @@ impl ProcessFilter {
         self
     }
 
-    /// Whether `meta` passes the side-table fields: partition, queue and parent.
-    /// `states` and `limit` are not checked here.
+    /// Whether `meta` passes the side-table fields: partition, queue, parent and the
+    /// pending suspension request. `states` and `limit` are not checked here.
     pub fn matches(&self, meta: &ProcessMeta) -> bool {
         self.partition.as_ref().is_none_or(|partition| *partition == meta.partition)
             && self.queue.as_ref().is_none_or(|queue| *queue == meta.queue)
             && self.parent.as_ref().is_none_or(|parent| meta.parent.as_ref() == Some(parent))
+            && self.suspend_requested.is_none_or(|requested| requested == meta.suspend_requested)
     }
 }

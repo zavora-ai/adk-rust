@@ -24,7 +24,7 @@
 //! |---|---|
 //! | [`Kernel`], [`KernelBuilder`], [`KernelConfig`], [`KernelHealth`], [`KernelState`] | §7.2 |
 //! | [`Process`], [`ProcessMeta`], [`ProcessView`], [`GoalProgress`], [`ProcessKind`], [`Suspension`], [`ProcessTable`], [`ProcessSpec`], [`ProgressSource`] | §7.3 |
-//! | [`ProcessStore`], [`ProcessFilter`], [`InMemoryProcessStore`], `SqliteProcessStore`, `PostgresProcessStore`, `RedisProcessStore` | §7.3, §13 Q8 |
+//! | [`ProcessStore`], [`ProcessFilter`], [`SpendScope`], [`InMemoryProcessStore`], `SqliteProcessStore`, `PostgresProcessStore`, `RedisProcessStore` | §7.3, §13 Q8 |
 //! | [`Wake`], [`WakeSet`], [`ExpiryAction`], [`WakeSource`], [`WakeEvent`], [`keys`], [`Trigger`], [`WakeRouter`], [`WakeOutcome`], [`KernelWakeExecutor`], the wake source adapters | §7.4 |
 //! | [`KernelEvent`], [`EventRecord`], [`EventBus`], [`EventSubscriber`], [`EventSink`], [`AuditSink`], [`SpendDelta`] | §7.6 |
 //! | [`QueueClass`] | §7.9 |
@@ -107,7 +107,7 @@ pub use stores::PostgresProcessStore;
 pub use stores::RedisProcessStore;
 #[cfg(feature = "sqlite")]
 pub use stores::SqliteProcessStore;
-pub use stores::{InMemoryProcessStore, ProcessFilter, ProcessStore};
+pub use stores::{InMemoryProcessStore, ProcessFilter, ProcessStore, SpendScope};
 #[cfg(feature = "webhooks")]
 pub use wake::webhook_wake_hook;
 pub use wake::{

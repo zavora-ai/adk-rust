@@ -1,7 +1,8 @@
 //! Audit actions of the kernel (spec 3.2 §9.3).
 //!
-//! The kernel writes these through the signed audit log (spec 3.1 §9.3) as kind `Other`,
-//! with the actor taken from the control-plane subject or the process's acting context.
+//! The kernel writes these through the signed audit log (spec 3.1 §9.3) as kind
+//! `Other(`[`KERNEL_AUDIT_KIND`]`)`, with the actor taken from the control-plane subject or
+//! the process's acting context.
 //! `governance.freeze` and `governance.unfreeze` are written by
 //! `GovernanceControl::freeze_recorded` and `unfreeze_recorded`; a freeze adds one
 //! [`PROCESS_SUSPENDED`] record per process it parks, with `suspendedBy: freeze`.
@@ -21,6 +22,10 @@
 //! ```rust
 //! assert_eq!(adk_kernel::audit::PROCESS_SUSPENDED, "kernel.process.suspended");
 //! ```
+
+/// The kind of every kernel audit record, as `AuditRecordKind::Other(KERNEL_AUDIT_KIND.into())`
+/// (spec 3.2 §9.3).
+pub const KERNEL_AUDIT_KIND: &str = "kernel";
 
 /// The kernel started its workers, scheduler, wake sources and control plane.
 pub const KERNEL_STARTED: &str = "kernel.started";

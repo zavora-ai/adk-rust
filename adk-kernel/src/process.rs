@@ -73,8 +73,9 @@ impl Process {
 }
 
 /// A process's live aggregates (spec 3.2 §7.3, §7.10, §13 Q4): what `ps` and `top` show,
-/// computed by sum and count over the `SpendLedger` and the kernel's records. Spend is in
-/// micro-USD, as `SpendLedger` counts it.
+/// computed by sum and count over the kernel's records. Spend is in micro-USD, as
+/// `SpendLedger` counts it; the kernel attributes each charge to the run that made it and
+/// keeps daily totals per process ([`ProcessStore::spend`]).
 ///
 /// # Example
 ///
@@ -96,9 +97,9 @@ pub struct ProcessView {
     /// Since the last state change: a `Waiting` process's time asleep, a parked run's wait.
     #[serde(rename = "ageMs", with = "crate::serde_util::millis")]
     pub age: Duration,
-    /// Spend today (UTC), from `SpendLedger::spent(key, SpendPeriod::Day)`.
+    /// Spend today (UTC), from the kernel's daily totals.
     pub spend_today: u64,
-    /// Spend over the last seven days.
+    /// Spend over the last seven UTC days, today included, from the kernel's daily totals.
     #[serde(rename = "spend7d")]
     pub spend_7d: u64,
     /// A `Running` process's spend per minute.
@@ -229,6 +230,12 @@ pub struct ProcessMeta {
     /// Why it is suspended, while parked by a suspension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suspended_by: Option<Suspension>,
+    /// A suspension was requested and the run has not parked yet. Every replica's kernel
+    /// mirrors pending requests and suspends the runs its own workers lease, so a process
+    /// leased by another replica suspends too; the requester clears the flag once the run
+    /// parks (spec 3.2 §7.3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub suspend_requested: bool,
     /// The agenda item it runs (spec 3.2 §7.5, phase 2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agenda_item: Option<String>,
@@ -249,6 +256,7 @@ impl ProcessMeta {
             kind,
             wake: None,
             suspended_by: None,
+            suspend_requested: false,
             agenda_item: None,
             labels: BTreeMap::new(),
         }
@@ -638,19 +646,30 @@ impl ProcessTable {
         Err(KernelError::Unimplemented { item: "process::ProcessTable::kill" })
     }
 
-    /// Moves a `Queued` or `Waiting` process to `queue` (spec 3.2 §6 D-5).
+    /// Moves a `Queued` run or a sleeping process (`Waiting` with a wake set) to `queue`
+    /// (spec 3.2 §6 D-5) and returns the moved process.
+    ///
+    /// The run store has no queue change, so `nice` cancels the run and enqueues it again on
+    /// `queue`, in the same session, with the same wake set: **the pid changes**. The new
+    /// process's [`ProcessMeta::parent`] is the old pid.
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::NotFound`] for an unknown `pid`,
-    /// [`KernelError::InvalidState`] for a `Running` or finished one, or a store error.
-    pub async fn nice(&self, _pid: &str, _queue: QueueClass) -> Result<()> {
+    /// Returns [`KernelError::NotFound`] for an unknown `pid`; [`KernelError::InvalidState`]
+    /// for a `Running` process (suspend it first), a suspended or approval-parked one, or a
+    /// finished one; or a store error.
+    pub async fn nice(&self, _pid: &str, _queue: QueueClass) -> Result<Process> {
         Err(KernelError::Unimplemented { item: "process::ProcessTable::nice" })
     }
 
     /// Suspends `pid` through the worker's suspend path (§10 S1): it stops at its next
     /// model-call boundary and parks `Waiting` with [`Suspension::Manual`]; a `Queued` or
     /// `Waiting` process is marked suspended where it is.
+    ///
+    /// A `Running` process gets [`ProcessMeta::suspend_requested`]: every replica's kernel
+    /// mirrors pending requests every 250 ms and suspends the runs its own workers lease, so
+    /// the request reaches the replica that holds the lease without a run-store change; the
+    /// flag is cleared once the run parks.
     ///
     /// # Errors
     ///

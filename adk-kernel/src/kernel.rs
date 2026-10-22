@@ -80,7 +80,9 @@ pub struct KernelConfig {
     /// The kernel home: stores, socket and logs. Defaults to `dirs::config_dir()/adk-rust`.
     pub home: PathBuf,
     /// The queue classes, one worker each (spec 3.2 §7.9). Defaults to interactive,
-    /// background and maintenance.
+    /// background and maintenance. Under a kernel, runs submitted without a queue — through
+    /// `/api/runs` or `adk-rust serve`'s background state — land on `interactive`; there is
+    /// no worker for the `default` queue.
     pub queues: Vec<QueueClass>,
     /// The worker configuration every queue's worker starts from
     /// (`adk-server/src/background/worker.rs`); [`worker_config`](Self::worker_config) sets
@@ -493,6 +495,37 @@ impl Kernel {
     }
 }
 
+// Unimplemented: the control plane reads these once feat/kernel-cli lands (spec 3.2 §7.11).
+#[allow(dead_code)]
+impl Kernel {
+    /// The session service `attach` reads transcripts and holds from (spec 3.2 §7.11).
+    pub(crate) fn session_service(&self) -> Option<&Arc<dyn SessionService>> {
+        self.inner.sessions.as_ref()
+    }
+
+    /// The approval service the socket serves the `/api/approvals` inbox from (K5).
+    pub(crate) fn approval_service(&self) -> Option<&Arc<dyn ApprovalService>> {
+        self.inner.approvals.as_ref()
+    }
+
+    /// The audit trail `kernel.control` records go to (K-I16, spec 3.2 §9.3).
+    pub(crate) fn audit_trail(&self) -> Option<&AuditTrail> {
+        self.inner.audit.as_ref()
+    }
+
+    /// The registered agent target names, sorted; workflow ids cannot be listed
+    /// (spec 3.2 §7.11, `POST /api/kernel/processes`).
+    pub(crate) fn targets(&self) -> Vec<String> {
+        self.inner.agents.keys().cloned().collect()
+    }
+
+    /// Whether `target` is a registered agent target or a workflow the executor has.
+    pub(crate) fn has_target(&self, target: &str) -> bool {
+        self.inner.agents.contains_key(target)
+            || self.inner.workflows.as_ref().is_some_and(|workflows| workflows.has_workflow(target))
+    }
+}
+
 #[async_trait]
 impl FreezeDelegate for Kernel {
     async fn freeze(&self, _reason: &str, _by: AuditActor) -> adk_core::Result<FreezeReport> {
@@ -529,6 +562,7 @@ impl FreezeDelegate for Kernel {
 #[derive(Default)]
 pub struct KernelBuilder {
     config: KernelConfig,
+    governance: Option<GovernanceControl>,
     runs: Option<Arc<dyn DurableRunStore>>,
     processes: Option<Arc<dyn ProcessStore>>,
     schedules: Option<Arc<dyn ScheduleStore>>,
@@ -566,6 +600,16 @@ impl KernelBuilder {
     #[must_use]
     pub fn config(mut self, config: KernelConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Sets the kill switch. It replaces [`KernelConfig::governance`] at
+    /// [`build`](Self::build), whenever [`config`](Self::config) is called, so a builder
+    /// from `Harness::kernel()` keeps the harness's control when the caller sets its own
+    /// configuration.
+    #[must_use]
+    pub fn governance(mut self, control: GovernanceControl) -> Self {
+        self.governance = Some(control);
         self
     }
 
@@ -680,7 +724,11 @@ impl KernelBuilder {
         let runs = self.runs.ok_or_else(|| KernelError::Config {
             reason: "a kernel needs a durable run store; call KernelBuilder::run_store".into(),
         })?;
-        self.config.control.validate()?;
+        let mut config = self.config;
+        if let Some(governance) = self.governance {
+            config.governance = governance;
+        }
+        config.control.validate()?;
         let processes: Arc<dyn ProcessStore> =
             self.processes.unwrap_or_else(|| Arc::new(InMemoryProcessStore::new()));
         let mut table = ProcessTable::new(runs.clone(), processes.clone());
@@ -701,7 +749,7 @@ impl KernelBuilder {
             .with_bus(bus.clone());
         Ok(Kernel {
             inner: Arc::new(KernelInner {
-                config: self.config,
+                config,
                 runs,
                 processes: table,
                 bus,

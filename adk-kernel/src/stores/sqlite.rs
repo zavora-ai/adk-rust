@@ -1,9 +1,12 @@
 //! The SQLite [`ProcessStore`] (spec 3.2 §7.1, §13 Q8, feature `sqlite`).
 
 use async_trait::async_trait;
+use chrono::NaiveDate;
 
-use super::{ProcessFilter, ProcessStore};
+use super::{ProcessFilter, ProcessStore, SpendScope};
+use crate::bus::SpendDelta;
 use crate::error::{KernelError, Result};
+use crate::partition::PartitionId;
 use crate::process::ProcessMeta;
 use crate::sched::QueueClass;
 use crate::wake::WakeSet;
@@ -76,5 +79,30 @@ impl ProcessStore for SqliteProcessStore {
 
     async fn delete(&self, _pid: &str) -> Result<bool> {
         Err(KernelError::Unimplemented { item: "stores::SqliteProcessStore::delete" })
+    }
+
+    async fn set_suspend_requested(&self, _pid: &str, _requested: bool) -> Result<()> {
+        Err(KernelError::Unimplemented {
+            item: "stores::SqliteProcessStore::set_suspend_requested",
+        })
+    }
+
+    async fn add_spend(
+        &self,
+        _pid: &str,
+        _partition: &PartitionId,
+        _day: NaiveDate,
+        _delta: SpendDelta,
+    ) -> Result<()> {
+        Err(KernelError::Unimplemented { item: "stores::SqliteProcessStore::add_spend" })
+    }
+
+    async fn spend(
+        &self,
+        _scope: &SpendScope,
+        _from: NaiveDate,
+        _to_inclusive: NaiveDate,
+    ) -> Result<u64> {
+        Err(KernelError::Unimplemented { item: "stores::SqliteProcessStore::spend" })
     }
 }
