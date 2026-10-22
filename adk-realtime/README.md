@@ -318,14 +318,18 @@ the runners take them from `tool_governance` on their builders.
 | `tool_timeout`, `tool_result_screen`, `expose_tool_error_messages` | See [Tool governance](#tool-governance) |
 | `voice(str)` | Voice, such as `"alloy"` |
 | `server_vad()`, `vad(VadConfig)` | Server-side VAD with defaults, or custom VAD |
-| `modalities(vec)` | Output modalities, such as `["text", "audio"]` |
+| `modalities(vec)` | Output modalities, such as `["audio"]` or `["text"]`. Unset, the provider's default applies: audio with a transcript on OpenAI and Gemini Live |
 | `transcription()` | Transcribe the user's speech (and, on Gemini Live, the model's), so spoken turns are saved |
 | `on_audio`, `on_transcript`, `on_speech_started`, `on_speech_stopped` | Event callbacks |
 | `avatar(AvatarConfig)`, `avatar_provider(provider)` | Video avatar (`video-avatar`) |
 
 Under `Runner`, the agent saves each of the user's spoken turns (with `transcription()`) as a
 user event ahead of the model's reply: on OpenAI when its transcript completes, on Gemini Live,
-which never completes a transcript, when the model's reply starts or ends.
+which never completes a transcript, when the model's reply starts or ends. Each reply is saved
+under its own event id, also on Gemini Live, which streams replies without an item id. A
+session the provider closes with a failure code — Gemini Live closes with 1007 on a setup it
+refuses — ends the run with `model.realtime.session_closed`, carrying the code and the
+provider's reason.
 
 ## Events
 

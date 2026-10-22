@@ -121,11 +121,10 @@ Gaps that remain open after the fixes in #848–#877: from the October 2026 revi
 | Event iteration continues, or hangs, after a session closes | A closing flag that makes `next_event` and `receive_raw` return `None`; drop the WebRTC sender on close; bound Gemini's close | October 2026 review |
 | Provider options leak into the OpenAI session config, and transcription options are limited | Strip `language_code`, `thinking_level` and `resumeToken` before merging `extra`; merge `extra` recursively; add language and prompt to `TranscriptionConfig` | October 2026 review |
 | A runner built without `tool_governance` has no payload switch, and error messages logged under `record_payloads` are not length-capped | Give realtime runners their own `record_payloads` and apply `trace_payload_max_bytes` | #857 |
-| Gemini Live never captures the session resumption handle (it reads `resumptionToken`; the wire field is `sessionResumptionUpdate.newHandle`), so every reconnect starts a blank session | Read `newHandle` when `resumable` is true and keep the latest | parity review |
 | `RealtimeAgent` saves every audio delta (about 48 KB of rows per second of speech) and no transcript | Keep audio deltas out of the session, or mark them partial; emit one transcript event per response | parity review |
 | Gemini Live `GoAway` is dropped, so the connection ends without warning | Surface `GoAway{timeLeft}` and offer a resume helper that uses the resumption handle | parity review |
 | `RealtimeAgent` does not replay session history on connect, so memory is lost after a transfer or a new invocation | Send the session's text history as `clientContent` turns on connect | parity review |
-| Gemini Live `interrupted` and `turnCompleteReason` are dropped | Map `interrupted` to an interruption event and carry the reason on `ResponseDone` | parity review |
+| Gemini Live `turnCompleteReason` is dropped | Carry the reason on `ResponseDone` | parity review |
 | Gemini Live setup ignores generic config fields such as output caps and tool choice | Map `max_response_output_tokens` and `tool_choice`; add safety and thinking fields | parity review |
 | The Gemini Live input sample rate is hard-coded to 16 kHz | Take the rate from `AudioChunk.format` | parity review |
 | Transparent session resumption is not modelled | Add a `transparent` flag | parity review |

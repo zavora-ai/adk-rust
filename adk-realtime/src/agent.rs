@@ -90,7 +90,7 @@ pub struct RealtimeAgent {
     // Voice-specific settings
     voice: Option<String>,
     vad_config: Option<VadConfig>,
-    modalities: Vec<String>,
+    modalities: Option<Vec<String>>,
     transcription: bool,
 
     // Tools (same as LlmAgent)
@@ -170,7 +170,7 @@ pub struct RealtimeAgentBuilder {
     global_instruction_provider: Option<Arc<GlobalInstructionProvider>>,
     voice: Option<String>,
     vad_config: Option<VadConfig>,
-    modalities: Vec<String>,
+    modalities: Option<Vec<String>>,
     transcription: bool,
     tools: Vec<Arc<dyn Tool>>,
     toolsets: Vec<Arc<dyn Toolset>>,
@@ -210,7 +210,7 @@ impl RealtimeAgentBuilder {
             global_instruction_provider: None,
             voice: None,
             vad_config: None,
-            modalities: vec!["text".to_string(), "audio".to_string()],
+            modalities: None,
             transcription: false,
             tools: Vec::new(),
             toolsets: Vec::new(),
@@ -297,9 +297,14 @@ impl RealtimeAgentBuilder {
         self
     }
 
-    /// Set output modalities (e.g., ["text", "audio"]).
+    /// Set output modalities, such as `["audio"]` or `["text"]`.
+    ///
+    /// Unset, the provider's default applies: audio, with a transcript, on the OpenAI Realtime
+    /// API and on Gemini Live. A provider refuses a combination it does not support — Gemini
+    /// Live accepts one response modality per session, and `gemini-3.1-flash-live-preview`
+    /// only `audio` — and the run then ends with the provider's reason as its error.
     pub fn modalities(mut self, modalities: Vec<String>) -> Self {
-        self.modalities = modalities;
+        self.modalities = Some(modalities);
         self
     }
 
@@ -656,7 +661,7 @@ impl RealtimeAgent {
         // Voice settings
         config.voice = self.voice.clone();
         config.turn_detection = self.vad_config.clone();
-        config.modalities = Some(self.modalities.clone());
+        config.modalities = self.modalities.clone();
         if self.transcription {
             config = config.with_transcription();
         }
@@ -1027,6 +1032,11 @@ impl Agent for RealtimeAgent {
             let mut oversized_audio = std::collections::HashSet::<String>::new();
             // The user's input transcripts streamed so far, by item, not yet saved.
             let mut user_transcripts = Vec::<(String, String)>::new();
+            // The item a reply streamed without one (Gemini Live) is saved under, so each
+            // reply's final event has its own id.
+            let mut reply_item: Option<String> = None;
+            // Why the provider closed the session, when its close code reports a failure.
+            let mut failed_close: Option<crate::session::DisconnectReason> = None;
             loop {
                 let event = session.next_event().await;
 
@@ -1156,6 +1166,7 @@ impl Agent for RealtimeAgent {
                             }
 
                             ServerEvent::TextDelta { delta, item_id, .. } => {
+                                let item_id = reply_item_id(item_id, &mut reply_item);
                                 pending_text.entry(item_id.clone()).or_default().push_str(&delta);
                                 let mut text_event = Event::with_id(
                                     format!("{invocation_id}:realtime-text:{item_id}"),
@@ -1181,6 +1192,7 @@ impl Agent for RealtimeAgent {
                             }
 
                             ServerEvent::TextDone { text, item_id, .. } => {
+                                let item_id = reply_item_id(item_id, &mut reply_item);
                                 pending_text.remove(&item_id);
                                 let text = match screen_output(
                                     #[cfg(feature = "guardrails")]
@@ -1213,6 +1225,7 @@ impl Agent for RealtimeAgent {
                                 if let Some(ref cb) = on_transcript {
                                     cb(&delta, &item_id).await;
                                 }
+                                let item_id = reply_item_id(item_id, &mut reply_item);
                                 pending_transcript.entry(item_id.clone()).or_default().push_str(&delta);
                                 let mut transcript_event = Event::with_id(
                                     format!("{invocation_id}:realtime-transcript:{item_id}"),
@@ -1232,6 +1245,7 @@ impl Agent for RealtimeAgent {
                             }
 
                             ServerEvent::TranscriptDone { transcript, item_id, .. } => {
+                                let item_id = reply_item_id(item_id, &mut reply_item);
                                 pending_transcript.remove(&item_id);
                                 let transcript = match screen_output(
                                     #[cfg(feature = "guardrails")]
@@ -1430,6 +1444,7 @@ impl Agent for RealtimeAgent {
                                         yield Ok(final_event);
                                     }
                                 }
+                                reply_item = None;
 
                                 // The response's usage, metered in the run's spend ledger and
                                 // reported on an event so cost per run is visible.
@@ -1474,7 +1489,12 @@ impl Agent for RealtimeAgent {
                         break;
                     }
                     None => {
-                        // Session closed
+                        // A provider that refuses the setup (Gemini Live: 1007 on a response
+                        // modality the model does not support) or fails the session closes the
+                        // socket with a code that says so; a normal close ends the run quietly.
+                        failed_close = session
+                            .disconnect_reason()
+                            .filter(|reason| reason.code.is_some_and(|code| !matches!(code, 1000 | 1001)));
                         break;
                     }
                 }
@@ -1486,6 +1506,27 @@ impl Agent for RealtimeAgent {
                 if !text.trim().is_empty() {
                     yield Ok(user_turn(&invocation_id, text));
                 }
+            }
+
+            // 1002, 1003, 1007, 1009 and 1010 report something the client sent that the
+            // provider refused, such as a setup the model does not support.
+            if let Some(reason) = failed_close {
+                let refused = reason.code.is_some_and(|code| matches!(code, 1002 | 1003 | 1007 | 1009 | 1010));
+                let (category, guidance) = if refused {
+                    (
+                        adk_core::ErrorCategory::InvalidInput,
+                        "the provider refused the session's setup or a message on it; check the \
+                         model name, modalities, voice and tool schemas against what the model supports",
+                    )
+                } else {
+                    (adk_core::ErrorCategory::Unavailable, "the provider ended the session")
+                };
+                yield Err(AdkError::new(
+                    adk_core::ErrorComponent::Model,
+                    category,
+                    "model.realtime.session_closed",
+                    format!("realtime session closed by the provider ({reason}): {guidance}"),
+                ));
             }
 
             // ===== STOP AVATAR SESSION (cleanup) =====
@@ -1542,6 +1583,15 @@ impl Agent for RealtimeAgent {
 
         Ok(Box::pin(s))
     }
+}
+
+/// The item a reply's text is saved under: the provider's item, or for a reply streamed
+/// without one (Gemini Live) an id minted on its first delta and kept until its response ends.
+fn reply_item_id(item_id: String, reply_item: &mut Option<String>) -> String {
+    if !item_id.is_empty() {
+        return item_id;
+    }
+    reply_item.get_or_insert_with(|| format!("reply-{}", uuid::Uuid::new_v4())).clone()
 }
 
 /// The user's spoken turn, saved as the runner saves a user message: authored `user`, in the

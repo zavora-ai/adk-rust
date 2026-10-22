@@ -245,7 +245,10 @@ adk-rust rules rm 2
 
 `rules add --operator --source mcp:github list_issues` pins any declaration of a publisher's
 tool rather than the current one, for tools you maintain yourself. `--store <url>` manages
-the rules of served replicas that share that store instead of `harness.db`.
+the rules of served replicas that share that store instead of `harness.db`. `rules add` and
+`rules rm` go through the harness, which records `harness.rule.created` or
+`harness.rule.revoked` with `surface: cli` before the store write, as the REST routes record
+theirs with `surface: rest`; a change whose record cannot be written is not made.
 
 ## The encrypted store
 

@@ -488,6 +488,9 @@ pub struct GeminiRealtimeSession {
     /// attached to the next `ResponseDone` so a usage report separate from the turn is not
     /// lost.
     last_usage: Arc<ParkingMutex<Option<Value>>>,
+    /// Whether `voiceActivity` reported the user's speech onset and not yet its end, so the
+    /// `interrupted` report of the same speech is not a second speech event.
+    speech_active: Arc<AtomicBool>,
 }
 
 impl GeminiRealtimeSession {
@@ -639,6 +642,7 @@ impl GeminiRealtimeSession {
             activity_open: Arc::new(AtomicBool::new(false)),
             schema_dialect,
             last_usage: Arc::new(ParkingMutex::new(None)),
+            speech_active: Arc::new(AtomicBool::new(false)),
         };
 
         session.send_setup(&model, config).await?;
@@ -953,6 +957,8 @@ impl GeminiRealtimeSession {
         let Some(activity) = voice_activity_event(&value) else {
             return self.translate_gemini_message(value);
         };
+        self.speech_active
+            .store(matches!(activity, ServerEvent::SpeechStarted { .. }), Ordering::SeqCst);
         let rest = self.translate_gemini_message(value)?;
         Ok(std::iter::once(activity)
             .chain(rest.into_iter().filter(|event| !matches!(event, ServerEvent::Unknown)))
@@ -972,6 +978,18 @@ impl GeminiRealtimeSession {
         // Check for server content (audio/text)
         if let Some(content) = value.get("serverContent") {
             let mut events = Vec::new();
+
+            // The user's speech cut the model's reply off: the barge-in signal OpenAI sends as
+            // `speech_started`. Speech whose onset `voiceActivity` already reported is reported
+            // once; without one there is no offset, so `audio_start_ms` is 0.
+            if content.get("interrupted").and_then(Value::as_bool) == Some(true)
+                && !self.speech_active.load(Ordering::SeqCst)
+            {
+                events.push(ServerEvent::SpeechStarted {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    audio_start_ms: 0,
+                });
+            }
 
             if let Some(parts) = content.get("modelTurn").and_then(|t| t.get("parts"))
                 && let Some(parts_arr) = parts.as_array()
@@ -1072,14 +1090,18 @@ impl GeminiRealtimeSession {
             *self.last_usage.lock() = Some(usage.clone());
         }
 
-        // Catch the Server Update for sessionResumptionUpdate
-        // Note the intentional protocol asymmetry here: the client sends the parameter as handle,
-        // but the server transmits the parameter back as resumptionToken.
+        // The server sends the handle as `newHandle`, empty while `resumable` is false (during a
+        // tool call or generation); `resumptionToken` is read when `newHandle` is absent.
         // Reference: https://ai.google.dev/gemini-api/docs/live-api/session-management
         if let Some(resumption_update) = value.get("sessionResumptionUpdate")
-            && let Some(token) = resumption_update.get("resumptionToken").and_then(|t| t.as_str())
+            && resumption_update.get("resumable").and_then(Value::as_bool) != Some(false)
+            && let Some(token) = resumption_update
+                .get("newHandle")
+                .or_else(|| resumption_update.get("resumptionToken"))
+                .and_then(Value::as_str)
+                .filter(|token| !token.is_empty())
         {
-            tracing::debug!("Received new Gemini 2.5 Native resumption token");
+            tracing::debug!("received a Gemini Live session resumption handle");
             return Ok(vec![ServerEvent::SessionUpdated {
                 event_id: uuid::Uuid::new_v4().to_string(),
                 session: json!({ "resumeToken": token }),
@@ -2016,6 +2038,7 @@ mod tests {
             activity_open: Arc::new(AtomicBool::new(false)),
             schema_dialect,
             last_usage: Arc::new(ParkingMutex::new(None)),
+            speech_active: Arc::new(AtomicBool::new(false)),
         };
 
         (session, server_ws)
@@ -2367,5 +2390,244 @@ mod tests {
             matches!(events.as_slice(), [ServerEvent::SpeechStarted { audio_start_ms: 0, .. }]),
             "{events:?}"
         );
+    }
+
+    // ── Recorded frames: resumption handles and interruptions ────────────
+
+    /// Gemini Live sends the resumption handle as `newHandle` (frames recorded from
+    /// `gemini-3.1-flash-live-preview`, handle replaced): it reaches the runner as the
+    /// `resumeToken` the next connect resumes with. While the session cannot be resumed the
+    /// update carries no handle and the last one stands.
+    #[tokio::test]
+    async fn the_resumption_handle_is_read_from_new_handle() {
+        let (session, _server) = session_on_loopback(ActivityDetection::Automatic).await;
+        let handle = |frame: &str| match session.translate_gemini_event(frame).unwrap().as_slice() {
+            [ServerEvent::SessionUpdated { session, .. }] => {
+                session["resumeToken"].as_str().map(str::to_string)
+            }
+            _ => None,
+        };
+
+        assert_eq!(
+            handle(
+                r#"{"sessionResumptionUpdate":{"newHandle":"4c2b7e0a-9f1d-4e55-8a6b-1d2e3f405162","resumable":true}}"#
+            )
+            .as_deref(),
+            Some("4c2b7e0a-9f1d-4e55-8a6b-1d2e3f405162")
+        );
+        assert_eq!(
+            handle("{\n  \"sessionResumptionUpdate\": {\n    \"newHandle\": \"h-2\",\n    \"resumable\": true\n  }\n}\n")
+                .as_deref(),
+            Some("h-2")
+        );
+        assert_eq!(
+            handle(r#"{"sessionResumptionUpdate":{"resumptionToken":"h-legacy"}}"#).as_deref(),
+            Some("h-legacy")
+        );
+        assert_eq!(handle(r#"{"sessionResumptionUpdate":{"resumable":false}}"#), None);
+        assert_eq!(
+            handle(r#"{"sessionResumptionUpdate":{"newHandle":"","resumable":false}}"#),
+            None
+        );
+    }
+
+    /// `serverContent.interrupted` (recorded) is the server's report that the user's speech
+    /// cut the model off. It reaches callers as `SpeechStarted`, the barge-in event, and a
+    /// speech whose onset `voiceActivity` already reported is reported once.
+    #[tokio::test]
+    async fn interrupted_is_reported_as_speech_started() {
+        let (session, _server) = session_on_loopback(ActivityDetection::Automatic).await;
+        let interrupted = "{\n  \"serverContent\": {\n    \"interrupted\": true\n  }\n}\n";
+
+        let events = session.translate_gemini_event(interrupted).unwrap();
+        assert!(
+            matches!(events.as_slice(), [ServerEvent::SpeechStarted { audio_start_ms: 0, .. }]),
+            "{events:?}"
+        );
+
+        let onset = session
+            .translate_gemini_event(
+                r#"{"serverContent":{"speechState":"SPEECH"},"voiceActivity":{"type":"ACTIVITY_START","audioOffset":"0.280s"}}"#,
+            )
+            .unwrap();
+        assert!(
+            matches!(onset.as_slice(), [ServerEvent::SpeechStarted { audio_start_ms: 280, .. }]),
+            "{onset:?}"
+        );
+        let events = session.translate_gemini_event(interrupted).unwrap();
+        assert!(matches!(events.as_slice(), [ServerEvent::Unknown]), "{events:?}");
+
+        session
+            .translate_gemini_event(
+                r#"{"serverContent":{"speechState":"NON_SPEECH"},"voiceActivity":{"type":"ACTIVITY_END","audioOffset":"3.880s"}}"#,
+            )
+            .unwrap();
+        let events = session.translate_gemini_event(interrupted).unwrap();
+        assert!(matches!(events.as_slice(), [ServerEvent::SpeechStarted { .. }]), "{events:?}");
+    }
+
+    // ── RealtimeAgent on Gemini Live ─────────────────────────────────────
+
+    /// The close reason Gemini Live sends for a setup with two response modalities, recorded
+    /// from `gemini-3.1-flash-live-preview` (the API cuts a close reason at 123 bytes).
+    const MODALITIES_REFUSED: &str = "The requested combination of response modalities (AUDIO, TEXT) is not supported by the model. models/gemini-3.1-flash-live-";
+
+    /// A model whose sessions talk to a loopback server that keeps Gemini Live's setup rule
+    /// for `gemini-3.1-flash-live-preview` — one response modality, `AUDIO` — and closes with
+    /// 1007 otherwise, as the API does. It answers the first turn with recorded frames and
+    /// then closes the session normally.
+    struct LoopbackGeminiLive;
+
+    #[async_trait]
+    impl crate::model::RealtimeModel for LoopbackGeminiLive {
+        fn provider(&self) -> &str {
+            "gemini"
+        }
+
+        fn model_id(&self) -> &str {
+            "models/gemini-3.1-flash-live-preview"
+        }
+
+        fn supported_input_formats(&self) -> Vec<AudioFormat> {
+            vec![AudioFormat::pcm16_16khz()]
+        }
+
+        fn supported_output_formats(&self) -> Vec<AudioFormat> {
+            vec![AudioFormat::pcm16_24khz()]
+        }
+
+        fn available_voices(&self) -> Vec<&str> {
+            vec!["Kore"]
+        }
+
+        async fn connect(&self, config: RealtimeConfig) -> Result<crate::session::BoxedSession> {
+            let (session, server) =
+                session_on_loopback(ActivityDetection::from_config(&config)).await;
+            tokio::spawn(gemini_live_server(server));
+            session.send_setup(self.model_id(), config).await?;
+            Ok(Box::new(session))
+        }
+    }
+
+    async fn gemini_live_server(mut server: ServerEnd) {
+        use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+        use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
+        let setup = next_frame(&mut server).await;
+        let modalities = setup["setup"]["generationConfig"]["responseModalities"].as_array();
+        let audio_only = matches!(
+            modalities.map(Vec::as_slice),
+            Some([only]) if only.as_str().is_some_and(|m| m.eq_ignore_ascii_case("audio"))
+        );
+        if !audio_only {
+            let _ = server
+                .close(Some(CloseFrame {
+                    code: CloseCode::Invalid,
+                    reason: MODALITIES_REFUSED.into(),
+                }))
+                .await;
+            return;
+        }
+        server.send(Message::Text(r#"{"setupComplete":{}}"#.into())).await.unwrap();
+        let turn = next_frame(&mut server).await;
+        assert!(turn.get("clientContent").is_some(), "{turn}");
+        for frame in [
+            r#"{"serverContent":{"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":"AAABAAIA"}}]}}}"#,
+            r#"{"serverContent":{"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":"AwAEAAUA"}}]}}}"#,
+            r#"{"serverContent":{"generationComplete":true}}"#,
+            r#"{"serverContent":{"turnComplete":true},"usageMetadata":{"promptTokenCount":155,"responseTokenCount":42,"totalTokenCount":197}}"#,
+        ] {
+            server.send(Message::Text(frame.into())).await.unwrap();
+        }
+        let _ = server.close(Some(CloseFrame { code: CloseCode::Normal, reason: "".into() })).await;
+    }
+
+    /// Runs `agent` once under `Runner` with a text turn; returns what the run yielded and
+    /// what the session saved.
+    async fn run_agent(
+        agent: crate::RealtimeAgent,
+    ) -> (Vec<adk_core::Result<adk_core::Event>>, Vec<adk_core::Event>) {
+        use adk_session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
+
+        let sessions = Arc::new(InMemorySessionService::new());
+        sessions
+            .create(CreateRequest {
+                app_name: "voice-app".to_string(),
+                user_id: "ana".to_string(),
+                session_id: Some("s1".to_string()),
+                state: Default::default(),
+            })
+            .await
+            .unwrap();
+        let runner = adk_runner::Runner::builder()
+            .app_name("voice-app")
+            .agent(Arc::new(agent))
+            .session_service(sessions.clone() as Arc<dyn SessionService>)
+            .build()
+            .unwrap();
+        let results: Vec<_> = runner
+            .run_str("ana", "s1", adk_core::Content::new("user").with_text("What is two plus two?"))
+            .await
+            .unwrap()
+            .collect()
+            .await;
+        let saved = sessions
+            .get(GetRequest {
+                app_name: "voice-app".to_string(),
+                user_id: "ana".to_string(),
+                session_id: "s1".to_string(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .unwrap()
+            .events()
+            .all();
+        (results, saved)
+    }
+
+    /// A `RealtimeAgent` built with default settings leaves the modalities to the provider,
+    /// so Gemini Live accepts its setup and the spoken reply arrives.
+    #[tokio::test]
+    async fn a_default_realtime_agent_runs_on_gemini_live() {
+        let agent = crate::RealtimeAgent::builder("voice")
+            .model(Arc::new(LoopbackGeminiLive))
+            .build()
+            .unwrap();
+        let (results, saved) = run_agent(agent).await;
+
+        assert!(results.iter().all(std::result::Result::is_ok), "{results:?}");
+        let audio: Vec<u8> = saved
+            .iter()
+            .filter(|event| event.author == "voice")
+            .filter_map(|event| event.llm_response.content.as_ref())
+            .flat_map(|content| &content.parts)
+            .filter_map(|part| match part {
+                Part::InlineData { mime_type, data, .. } if mime_type == "audio/pcm" => {
+                    Some(data.clone())
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(audio, vec![0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0]);
+    }
+
+    /// A setup Gemini Live refuses closes the socket with 1007; the run ends with that error
+    /// instead of ending as though the session had finished.
+    #[tokio::test]
+    async fn a_refused_setup_ends_the_run_with_the_providers_reason() {
+        let agent = crate::RealtimeAgent::builder("voice")
+            .model(Arc::new(LoopbackGeminiLive))
+            .modalities(vec!["text".to_string(), "audio".to_string()])
+            .build()
+            .unwrap();
+        let (results, _) = run_agent(agent).await;
+
+        let errors: Vec<_> = results.iter().filter_map(|result| result.as_ref().err()).collect();
+        assert_eq!(errors.len(), 1, "{results:?}");
+        assert_eq!(errors[0].code, "model.realtime.session_closed");
+        assert_eq!(errors[0].category, adk_core::ErrorCategory::InvalidInput);
+        assert!(errors[0].message.contains(&format!("1007:{MODALITIES_REFUSED}")), "{}", errors[0]);
     }
 }

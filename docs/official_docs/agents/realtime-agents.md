@@ -188,6 +188,15 @@ let agent = RealtimeAgent::builder("assistant")
 When both are set, `instruction_provider` is used and computes the instruction for each run.
 `.server_vad()` is shorthand for server VAD with its defaults.
 
+`modalities(vec)` sets the output modalities. Unset, the provider's default applies — audio,
+with a transcript, on the OpenAI Realtime API and on Gemini Live — so a default agent runs on
+both. Gemini Live accepts one response modality per session, and
+`gemini-3.1-flash-live-preview` only `audio`; it refuses any other setup by closing the
+socket with 1007, and the run then ends with the error `model.realtime.session_closed`
+(category `InvalidInput`), which carries the close code and the provider's reason. A close with
+another failure code ends the run with the same error code (category `Unavailable`); a normal
+close (1000, 1001) ends the run without one.
+
 ## Voice Activity Detection (VAD)
 
 VAD enables natural conversation flow by detecting when the user starts and stops speaking.
@@ -370,7 +379,7 @@ let decoded = AudioChunk::from_base64(&base64, format)?;
 | `InputTranscriptDelta` | Transcript of the user's input audio |
 | `FunctionCallDone` | Tool call request |
 | `ResponseDone` | Response completed |
-| `SpeechStarted` | VAD detected speech start (OpenAI `speech_started`, Gemini Live `voiceActivity` `ACTIVITY_START`) |
+| `SpeechStarted` | VAD detected speech start, the barge-in signal (OpenAI `speech_started`, Gemini Live `voiceActivity` `ACTIVITY_START`, or `serverContent.interrupted` when no `ACTIVITY_START` reported the speech) |
 | `SpeechStopped` | VAD detected speech end (OpenAI `speech_stopped`, Gemini Live `voiceActivity` `ACTIVITY_END`) |
 | `Error` | Error occurred |
 
@@ -388,7 +397,11 @@ of the model's reply:
 | Gemini Live, which streams `InputTranscriptDelta`s and never completes them | When the model's reply starts or ends |
 | Either | At the end of the session, if the model has not replied |
 
-The model's replies are saved as final text and transcript events authored by the agent.
+The model's replies are saved as final text and transcript events authored by the agent, each
+reply under its own event id (`{invocation}:realtime-transcript:{item}`, or
+`{invocation}:realtime-text:{item}`). Gemini Live streams a reply without an item id, so the
+agent names its item `reply-{uuid}` when the reply starts; a session backend that keys events
+by id, such as SQLite, stores every reply of a run.
 
 ### Client Events
 

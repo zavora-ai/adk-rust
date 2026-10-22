@@ -268,14 +268,30 @@ fn fact_line(fact: &adk_harness::MemoryFact) -> String {
     )
 }
 
+/// The surface `rules add` and `rules rm` are audited with (spec 3.1 §9.3).
+const RULES_SURFACE: &str = "cli";
+
 /// `adk-rust rules …`, on `harness.db` or, with `--store`, on the store served replicas
 /// share (spec 3.1 §13 Q2).
 pub async fn rules(command: RulesCommands, shared: Option<String>) -> Result<()> {
-    let user = crate::setup::os_user();
     let store: Arc<dyn StandingRuleStore> = match &shared {
         Some(url) => crate::shared_store::open_rules(url).await?,
         None => crate::sessions::open_default_db().await?.rules.clone(),
     };
+    rules_in(command, store, &crate::setup::os_user(), None).await
+}
+
+/// `rules` on `store` for `user`. A grant or revocation goes through the harness, which
+/// records `harness.rule.created` or `harness.rule.revoked` with `surface: cli` in `audit`
+/// (the harness's own log when `None`) before the store write, as the REST routes record
+/// theirs with `surface: rest` (spec 3.1 §7.5, §9.2 I4, §9.3).
+async fn rules_in(
+    command: RulesCommands,
+    store: Arc<dyn StandingRuleStore>,
+    user: &str,
+    audit: Option<Arc<dyn adk_core::audit_log::AuditRecorder>>,
+) -> Result<()> {
+    let user = user.to_string();
     let mut listed = store.list(APP_NAME, &user).await?;
     listed.sort_by_key(|rule| rule.created_at);
     match command {
@@ -297,7 +313,10 @@ pub async fn rules(command: RulesCommands, shared: Option<String>) -> Result<()>
             let Some(found) = found else {
                 bail!("no rule {rule}; `adk-rust rules list` shows yours");
             };
-            store.revoke(APP_NAME, &found.id).await?;
+            rules_harness(store, audit)?
+                .revoke_rule(APP_NAME, &user, &found.id, RULES_SURFACE)
+                .await?
+                .with_context(|| format!("rule {} was revoked meanwhile", found.id))?;
             println!("revoked: {}", safe(&found.label));
         }
         RulesCommands::Add {
@@ -325,11 +344,30 @@ pub async fn rules(command: RulesCommands, shared: Option<String>) -> Result<()>
                     source,
                 },
             )?;
-            let granted = store.grant(rule).await?;
+            let granted =
+                rules_harness(store, audit)?.grant_rule(rule, RULES_SURFACE, None).await?;
             println!("{}", safe(&describe(listed.len() + 1, &granted)));
         }
     }
     Ok(())
+}
+
+/// The harness `rules add` and `rules rm` grant and revoke through: `store` and `audit`.
+fn rules_harness(
+    store: Arc<dyn StandingRuleStore>,
+    audit: Option<Arc<dyn adk_core::audit_log::AuditRecorder>>,
+) -> Result<HarnessAgent> {
+    let workspace = std::env::current_dir().context("no current directory")?;
+    let model =
+        Arc::new(adk_model::ScriptedLlm::new("rules", Vec::<adk_model::ScriptedResponse>::new()));
+    let mut builder = HarnessAgent::builder(APP_NAME)
+        .model(model)
+        .workspace(adk_devtools::Workspace::new(&workspace))
+        .standing_rules(store);
+    if let Some(audit) = audit {
+        builder = builder.audit_log(audit);
+    }
+    Ok(builder.build()?)
 }
 
 fn describe(n: usize, rule: &StandingRule) -> String {
@@ -724,6 +762,91 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rule.origin, OriginPin::AnyDeclaration { source: "mcp:github".into() });
+    }
+
+    fn add_bash() -> RulesCommands {
+        RulesCommands::Add {
+            tool: "bash".into(),
+            prefix: Some("cargo test".into()),
+            path_within: None,
+            deny: None,
+            session: None,
+            hours: None,
+            sandbox: false,
+            operator: false,
+            source: None,
+        }
+    }
+
+    fn rule_records(records: &[adk_core::audit_log::AuditRecord], action: &str) -> Vec<Value> {
+        records
+            .iter()
+            .filter(|record| record.action == action)
+            .map(|record| serde_json::to_value(&record.ext).unwrap())
+            .collect()
+    }
+
+    /// `rules add` and `rules rm` record `harness.rule.created` and `harness.rule.revoked`
+    /// with `surface: cli`, as the REST routes record theirs (spec 3.1 §9.3).
+    #[tokio::test]
+    async fn rules_add_and_rm_are_audited_with_the_cli_surface() {
+        let store: Arc<dyn StandingRuleStore> =
+            Arc::new(adk_harness::InMemoryStandingRuleStore::new());
+        let log = Arc::new(adk_harness::EphemeralAuditLog::new().unwrap());
+
+        rules_in(add_bash(), store.clone(), "ana", Some(log.clone())).await.unwrap();
+        let id = store.list(APP_NAME, "ana").await.unwrap()[0].id.clone();
+        rules_in(RulesCommands::Rm { rule: id.clone() }, store.clone(), "ana", Some(log.clone()))
+            .await
+            .unwrap();
+        assert!(store.list(APP_NAME, "ana").await.unwrap().is_empty());
+
+        let records = log.records().await.unwrap();
+        let created = rule_records(&records, "harness.rule.created");
+        let revoked = rule_records(&records, "harness.rule.revoked");
+        assert_eq!((created.len(), revoked.len()), (1, 1), "{records:?}");
+        for ext in [&created[0], &revoked[0]] {
+            assert_eq!(ext["ruleId"], id.as_str());
+            assert_eq!(ext["surface"], "cli");
+            assert_eq!(ext["subject"], "ana");
+            assert_eq!(ext["by"], "ana");
+        }
+        assert!(log.verify().await.unwrap());
+    }
+
+    /// The record precedes the store write: a grant or a revocation whose record cannot be
+    /// written changes nothing.
+    #[tokio::test]
+    async fn a_rule_change_whose_record_fails_is_not_made() {
+        struct Offline;
+        #[async_trait::async_trait]
+        impl adk_core::audit_log::AuditRecorder for Offline {
+            fn digest(&self, _value: &Value) -> String {
+                "sha256:0".into()
+            }
+            async fn record(
+                &self,
+                _draft: adk_core::audit_log::AuditRecordDraft,
+            ) -> adk_core::Result<()> {
+                Err(adk_core::AdkError::internal(
+                    adk_core::ErrorComponent::Server,
+                    "audit.offline",
+                    "the audit store is offline",
+                ))
+            }
+        }
+        let store: Arc<dyn StandingRuleStore> =
+            Arc::new(adk_harness::InMemoryStandingRuleStore::new());
+
+        assert!(rules_in(add_bash(), store.clone(), "ana", Some(Arc::new(Offline))).await.is_err());
+        assert!(store.list(APP_NAME, "ana").await.unwrap().is_empty(), "nothing was granted");
+
+        let log = Arc::new(adk_harness::EphemeralAuditLog::new().unwrap());
+        rules_in(add_bash(), store.clone(), "ana", Some(log)).await.unwrap();
+        let id = store.list(APP_NAME, "ana").await.unwrap()[0].id.clone();
+        let rm = RulesCommands::Rm { rule: id };
+        assert!(rules_in(rm, store.clone(), "ana", Some(Arc::new(Offline))).await.is_err());
+        assert_eq!(store.list(APP_NAME, "ana").await.unwrap().len(), 1, "nothing was revoked");
     }
 
     #[test]
