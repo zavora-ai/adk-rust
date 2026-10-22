@@ -97,5 +97,15 @@ macro_rules! process_store_conformance_tests {
         async fn process_store_sustained_writes() {
             $crate::conformance::process_store::sustained_writes(&$harness).await;
         }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn process_store_suspend_request_round_trips() {
+            $crate::conformance::process_store::suspend_request_round_trips(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn process_store_spend_sums_by_day_and_scope() {
+            $crate::conformance::process_store::spend_sums_by_day_and_scope(&$harness).await;
+        }
     };
 }
