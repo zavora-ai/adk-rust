@@ -87,6 +87,7 @@ pub mod process;
 pub mod sched;
 mod serde_util;
 pub mod stores;
+mod supervise;
 pub mod wake;
 
 pub use bus::{
@@ -97,8 +98,8 @@ pub use error::{KernelError, Result};
 pub use kernel::{Kernel, KernelBuilder, KernelConfig, KernelHealth, KernelState, WorkerHealth};
 pub use partition::{PartitionId, PartitionMode};
 pub use process::{
-    GoalProgress, Process, ProcessKind, ProcessMeta, ProcessSpec, ProcessTable, ProcessView,
-    ProgressSource, Suspension,
+    GoalProgress, Process, ProcessHandle, ProcessKind, ProcessMeta, ProcessSpec, ProcessTable,
+    ProcessView, ProgressSource, RunUsage, Suspension,
 };
 pub use sched::QueueClass;
 #[cfg(feature = "postgres")]
