@@ -155,7 +155,7 @@ Tab completes slash commands and `@server:uri` mentions. See
 independent reviewers (`graph`) or one round-robin board whose reviewers read each other
 (`blackboard`), read-only and shell-less in both (spec 3.1 §7.10). A security-sensitive or
 protected path routes to the board with a `security` seat; otherwise one closed-schema call
-to the member model chooses, with a deterministic heuristic when it fails. A revise that
+at the session's `members` effort chooses, with a deterministic heuristic when it fails. A revise that
 makes the change sensitive adds the `security` seat to the stages after it.
 
 | Flag | Default | Description |

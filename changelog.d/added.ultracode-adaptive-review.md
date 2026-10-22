@@ -5,9 +5,12 @@
   - Routing (`ultracode-route/1`): an operator override, then `unchanged` (the fixed review),
     then `sensitive` (a protected, security-vocabulary or user-config `sensitive_paths`
     change, or a workspace too large to see whole, goes to a board with a `security` seat),
-    then one closed-schema call to the member model, validated whole, with a deterministic
-    heuristic as the fallback for any failure or invalid answer. A workspace's own
-    `sensitive_paths` add the `security` seat without choosing the board.
+    then one closed-schema call at the session's `members` effort, validated whole, with a
+    deterministic heuristic as the fallback for any failure or invalid answer. A
+    workspace's own `sensitive_paths` add the `security` seat without choosing the board.
+  - Every call takes its effort from the session's `EffortPolicy` (`--effort`, `[effort]`):
+    independent reviewers `read_only`, board seats and the router `members`
+    (`IndependentReviewer::effort`, `ReviewBoard::effort`).
   - A revise turn that makes the change sensitive adds the `security` seat to the stages
     after it (`harness.ultracode.escalated`, `replay_escalation`); the revise is reserved
     against the budget at that size.

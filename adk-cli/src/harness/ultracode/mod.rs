@@ -38,7 +38,8 @@
 //!     repo: RepoSignals::from_snapshot(&after),
 //!     limits,
 //! };
-//! let routed = route(&router, task, inputs).await;
+//! // The router call carries the session's `members` effort (spec 3.1 §7.23).
+//! let routed = route(&router, Some(adk_core::Effort::Low), task, inputs).await;
 //! println!("{} via {}", routed.plan.architecture, routed.rule);
 //! # Ok(())
 //! # }

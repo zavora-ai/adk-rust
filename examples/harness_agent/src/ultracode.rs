@@ -103,7 +103,7 @@ async fn routes_by_change() -> Result<Checks> {
     let security = inputs("make tokens expire", &[("src/lib.rs", "")], &[("src/auth/token.rs", "pub fn expiry() {}")])?;
     let idle = Arc::new(ScriptedLlm::new("router", Vec::<ScriptedResponse>::new()));
     let router: Arc<dyn Llm> = idle.clone();
-    let routed = route(&router, "make tokens expire", security).await;
+    let routed = route(&router, None, "make tokens expire", security).await;
     checks.check(
         "a security path routes to a board with a security seat, by rule",
         routed.rule == Rule::Sensitive
@@ -124,7 +124,7 @@ async fn routes_by_change() -> Result<Checks> {
         [reply(r#"{"architecture":"blackboard","specialists":["api-compat"],"boardRounds":1,"rationale":"a trait spans two crates"}"#)],
     ));
     let router: Arc<dyn Llm> = answering.clone();
-    let routed = route(&router, "add a Greeter trait and use it", cross.clone()).await;
+    let routed = route(&router, None, "add a Greeter trait and use it", cross.clone()).await;
     checks.check(
         "a cross-package change applies the model's whole answer",
         routed.rule == Rule::Model
@@ -144,7 +144,7 @@ async fn routes_by_change() -> Result<Checks> {
 
     let prose = Arc::new(ScriptedLlm::new("router", [reply("A graph review would do.")]));
     let router: Arc<dyn Llm> = prose;
-    let routed = route(&router, "add a Greeter trait and use it", cross).await;
+    let routed = route(&router, None, "add a Greeter trait and use it", cross).await;
     checks.check(
         "a prose answer falls back to the heuristic, with router.unparseable recorded",
         routed.rule == Rule::Heuristic
@@ -306,7 +306,9 @@ async fn live_ultracode(model: Arc<dyn Llm>) -> Result<Checks> {
         &[("greet/Cargo.toml", "[package]"), ("app/Cargo.toml", "[package]")],
         &[("greet/src/lib.rs", "pub trait Greeter {}"), ("app/src/lib.rs", "use greet::Greeter;")],
     )?;
-    let routed = route(&model, task, cross).await;
+    // As `adk-rust ultracode` routes: at the session's `members` effort (spec 3.1 §7.23).
+    let policy = adk_harness::EffortPolicy::default();
+    let routed = route(&model, Some(policy.members), task, cross).await;
     println!(
         "      route: {} ({}{}) · reviewers {:?}",
         routed.plan.architecture,
@@ -329,6 +331,7 @@ async fn live_ultracode(model: Arc<dyn Llm>) -> Result<Checks> {
     let before = crate::tree_digest(dir.path());
     let log = Arc::new(adk_harness::EphemeralAuditLog::new()?);
     let outcome = ReviewBoard::new(model, dir.path())
+        .effort(policy)
         .roster(vec![Focus::Correctness, Focus::EdgeCases, Focus::Security, Focus::Style])
         .audit_log(log.clone() as Arc<dyn AuditRecorder>)
         .model_calls(48)

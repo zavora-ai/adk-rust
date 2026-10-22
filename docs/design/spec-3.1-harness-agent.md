@@ -633,12 +633,14 @@ Read-before-edit tracking is scoped per (session, agent) through D2 so members s
 | `graph` | Parallel independent reviewers: one fresh `HarnessAgent` per focus, ReadOnly, `without_shell` | `reviewer_model_calls` per reviewer |
 | `blackboard` | One round-robin board of ReadOnly members of a ReadOnly, shell-less harness; history `Full`; `boardRounds` rounds; seats left without a verdict by a failed board go to independent reviewers | `board_model_calls`, with the `TeamBudget` chained to it |
 
+Every review call takes its effort from the session's `EffortPolicy` (§7.23): an independent reviewer `read_only`, a board seat `members`.
+
 | Rule (`ultracode-route/1`, first match) | Condition | Plan | Model calls |
 |---|---|---|---|
 | `override` | `--architecture graph\|blackboard`, or `architecture` in a config file | That architecture | 0 |
 | `unchanged` | The first turn held, failed, was interrupted or changed no file | `graph` over correctness, edge-cases and style | 0 |
 | `sensitive` | A changed path is protected (I29), has a security-vocabulary component, or matches `sensitive_paths` of the user config; or the snapshot stopped at its 20,000-file cap (fail closed) | `blackboard` | 0 |
-| `model` | Router mode `model` | The member model's closed-schema answer, validated whole against the caps and floors | 1: no tools, 4,000 tokens, 20 s |
+| `model` | Router mode `model` | The member model's closed-schema answer at the `members` effort (§7.23), validated whole against the caps and floors | 1: no tools, 4,000 tokens, 20 s |
 | `heuristic` | Router mode `heuristic`, or the `model` call failed or its answer is invalid | A pure score over the recorded signals | 0 |
 
 | Floor or limit | Value |

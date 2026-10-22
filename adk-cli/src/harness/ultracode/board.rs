@@ -11,7 +11,9 @@ use adk_agent::{BlackboardHistoryPolicy, BlackboardPolicy, TeamBudget};
 use adk_core::audit_log::AuditRecorder;
 use adk_core::{Content, Llm, RunBudget, SessionId, UserId};
 use adk_devtools::Workspace;
-use adk_harness::{HarnessAgent, HarnessMode, MEMBER_TIMEOUT, MemberKind, MemberSpec, MemberTools};
+use adk_harness::{
+    EffortPolicy, HarnessAgent, HarnessMode, MEMBER_TIMEOUT, MemberKind, MemberSpec, MemberTools,
+};
 use adk_runner::Runner;
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use futures::StreamExt;
@@ -109,7 +111,8 @@ pub struct ReviewerRun {
 
 /// An independent reviewer (spec 3.1 §7.10 graph architecture, §9.2 I61): a fresh harness
 /// per review in [`HarnessMode::ReadOnly`] with no shell, under a `RunBudget` of its model
-/// calls and 15 minutes, recording into the run's audit log.
+/// calls and 15 minutes, recording into the run's audit log. Each of its model calls carries
+/// the [`effort`](Self::effort) policy's `read_only` level (spec 3.1 §7.23).
 ///
 /// # Example
 ///
@@ -117,9 +120,11 @@ pub struct ReviewerRun {
 /// use std::sync::Arc;
 ///
 /// use adk_cli::harness::ultracode::{Focus, IndependentReviewer};
+/// use adk_harness::EffortPolicy;
 ///
 /// # async fn review(model: Arc<dyn adk_core::Llm>) {
-/// let reviewer = IndependentReviewer::new(model, ".").model_calls(20);
+/// let reviewer =
+///     IndependentReviewer::new(model, ".").effort(EffortPolicy::default()).model_calls(20);
 /// let run = reviewer.run(Focus::Style.name(), Focus::Style.desc(), "Review the change now.").await;
 /// println!("{} ({} model calls)", run.text, run.model_calls);
 /// # }
@@ -128,6 +133,7 @@ pub struct ReviewerRun {
 pub struct IndependentReviewer {
     model: Arc<dyn Llm>,
     workspace: PathBuf,
+    effort: EffortPolicy,
     guidance: Option<String>,
     audit: Option<Arc<dyn AuditRecorder>>,
     user: String,
@@ -144,11 +150,13 @@ impl std::fmt::Debug for IndependentReviewer {
 }
 
 impl IndependentReviewer {
-    /// A reviewer on `model` in `workspace`, as user `user`, with 20 model calls.
+    /// A reviewer on `model` in `workspace`, as user `user`, with 20 model calls at the
+    /// default effort policy.
     pub fn new(model: Arc<dyn Llm>, workspace: impl Into<PathBuf>) -> Self {
         Self {
             model,
             workspace: workspace.into(),
+            effort: EffortPolicy::default(),
             guidance: None,
             audit: None,
             user: "user".to_string(),
@@ -180,6 +188,13 @@ impl IndependentReviewer {
         self
     }
 
+    /// The session's effort policy (spec 3.1 §7.23): each review request carries its
+    /// `read_only` level as `GenerateContentConfig::effort`.
+    pub fn effort(mut self, policy: EffortPolicy) -> Self {
+        self.effort = policy;
+        self
+    }
+
     /// The model-call cap of one review.
     pub fn max_model_calls(&self) -> u64 {
         self.model_calls
@@ -190,6 +205,7 @@ impl IndependentReviewer {
         let instruction = super::review_instruction(focus, desc, self.guidance.as_deref());
         let mut builder = HarnessAgent::builder(format!("review-{focus}"))
             .model(self.model.clone())
+            .effort(self.effort)
             .workspace(Workspace::new(&self.workspace))
             .mode(HarnessMode::ReadOnly)
             .without_shell()
@@ -277,7 +293,8 @@ impl BoardOutcome {
 /// none is [`Verdict::Failed`]. A board that cannot be built, or fails with an error other
 /// than a budget stop, hands the seats without a verdict to independent reviewers in
 /// parallel when the [`fallback`](Self::fallback) budget covers them; a budget stop never
-/// runs anything again.
+/// runs anything again. Each seat's model call carries the [`effort`](Self::effort)
+/// policy's `members` level, as every harness team member's does (spec 3.1 §7.23).
 ///
 /// # Example
 ///
@@ -285,9 +302,11 @@ impl BoardOutcome {
 /// use std::sync::Arc;
 ///
 /// use adk_cli::harness::ultracode::{Focus, ReviewBoard};
+/// use adk_harness::EffortPolicy;
 ///
 /// # async fn review(model: Arc<dyn adk_core::Llm>) {
 /// let outcome = ReviewBoard::new(model, ".")
+///     .effort(EffortPolicy::default())
 ///     .roster(vec![Focus::Correctness, Focus::EdgeCases, Focus::Security, Focus::Style])
 ///     .rounds(2)
 ///     .model_calls(48)
@@ -300,6 +319,7 @@ impl BoardOutcome {
 pub struct ReviewBoard {
     model: Arc<dyn Llm>,
     workspace: PathBuf,
+    effort: EffortPolicy,
     guidance: Option<String>,
     audit: Option<Arc<dyn AuditRecorder>>,
     roster: Vec<Focus>,
@@ -320,11 +340,13 @@ impl std::fmt::Debug for ReviewBoard {
 }
 
 impl ReviewBoard {
-    /// A board on `model` in `workspace`: the floor seats, one round, 48 model calls.
+    /// A board on `model` in `workspace`: the floor seats, one round, 48 model calls, the
+    /// default effort policy.
     pub fn new(model: Arc<dyn Llm>, workspace: impl Into<PathBuf>) -> Self {
         Self {
             model,
             workspace: workspace.into(),
+            effort: EffortPolicy::default(),
             guidance: None,
             audit: None,
             roster: super::route::FLOOR.to_vec(),
@@ -365,6 +387,13 @@ impl ReviewBoard {
         self
     }
 
+    /// The session's effort policy (spec 3.1 §7.23): each seat's request carries its
+    /// `members` level as `GenerateContentConfig::effort`.
+    pub fn effort(mut self, policy: EffortPolicy) -> Self {
+        self.effort = policy;
+        self
+    }
+
     /// The user the board runs as.
     pub fn user(mut self, user: impl Into<String>) -> Self {
         self.user = user.into();
@@ -386,6 +415,7 @@ impl ReviewBoard {
     fn harness(&self) -> adk_core::Result<HarnessAgent> {
         let mut builder = HarnessAgent::builder(BOARD_NAME)
             .model(self.model.clone())
+            .effort(self.effort)
             .workspace(Workspace::new(&self.workspace))
             .mode(HarnessMode::ReadOnly)
             .without_shell()
@@ -717,6 +747,42 @@ mod tests {
         assert!(outcome.fallback.is_empty() && idle.requests().is_empty(), "nothing runs again");
         assert_eq!(board.requests().len(), 2);
         assert_eq!(outcome.model_calls, 2);
+    }
+
+    #[tokio::test]
+    async fn reviewers_and_seats_carry_the_sessions_effort() {
+        let dir = workspace();
+        let policy = EffortPolicy {
+            read_only: adk_core::Effort::Low,
+            members: adk_core::Effort::High,
+            ..EffortPolicy::default()
+        };
+        let efforts = |model: &ScriptedLlm| {
+            model
+                .requests()
+                .iter()
+                .map(|request| request.config.as_ref().and_then(|config| config.effort))
+                .collect::<Vec<_>>()
+        };
+        let model = Arc::new(ScriptedLlm::new("reviewer", [text("VERDICT: approve")]));
+        let run = IndependentReviewer::new(model.clone(), dir.path())
+            .effort(policy)
+            .run(Focus::Style.name(), Focus::Style.desc(), "Review now.")
+            .await;
+        assert!(run.text.contains("VERDICT: approve"), "{}", run.text);
+        assert_eq!(efforts(&model), [Some(adk_core::Effort::Low)], "the read_only level");
+
+        let board = Arc::new(ScriptedLlm::new(
+            "board",
+            [text("VERDICT: approve"), text("VERDICT: approve"), text("VERDICT: approve")],
+        ));
+        let outcome = ReviewBoard::new(board.clone(), dir.path())
+            .effort(policy)
+            .model_calls(8)
+            .run("Review now.")
+            .await;
+        assert_eq!(outcome.status, BoardStatus::Completed);
+        assert_eq!(efforts(&board), [Some(adk_core::Effort::High); 3], "the members level");
     }
 
     #[test]

@@ -693,6 +693,7 @@ fn ultracode_takes_the_model_route_and_records_it() {
         serde_json::json!(["correctness", "edge-cases", "api-compat", "style"])
     );
     assert!(routed["router"]["answerDigest"].as_str().unwrap().starts_with("sha256:"));
+    assert_eq!(routed["router"]["effort"], "low", "the router runs at the members' effort");
     assert!(receipt["routerAnswer"].as_str().unwrap().contains("one trait spans two crates"));
     let plan = adk_cli::harness::ultracode::replay(routed).unwrap();
     assert_eq!(serde_json::to_value(&plan).unwrap(), routed["plan"]);

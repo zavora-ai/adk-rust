@@ -1227,7 +1227,7 @@ mod tests {
             repo: RepoSignals::default(),
             limits: UltracodeLimits::default(),
         };
-        let routed = route(&router, "add coverage for the parser", inputs).await;
+        let routed = route(&router, None, "add coverage for the parser", inputs).await;
         assert_eq!(routed.rule, Rule::Model);
         assert_eq!(routed.router.as_ref().unwrap().rationale.as_deref(), Some(injection));
         for plan in [

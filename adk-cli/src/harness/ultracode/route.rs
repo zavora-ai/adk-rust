@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use adk_core::{
-    BudgetTracker, BudgetUsage, Content, GenerateContentConfig, Llm, LlmRequest, Part, RunBudget,
+    BudgetTracker, BudgetUsage, Content, Effort, GenerateContentConfig, Llm, LlmRequest, Part,
+    RunBudget,
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -432,7 +433,8 @@ pub struct HeuristicTrace {
 pub struct RouterCall {
     /// The model's name.
     pub model: String,
-    /// The effort level the model client was built at.
+    /// The reasoning effort the call carried as `GenerateContentConfig::effort`
+    /// (spec 3.1 §7.23); `None` when it set none.
     pub effort: Option<String>,
     /// `sha256:` of the prompt text.
     pub prompt_digest: String,
@@ -790,7 +792,9 @@ fn validate(answer: &Value, inputs: &RouteInputs) -> Result<(RouterAnswer, Revie
 /// the fallback is recorded.
 ///
 /// The router call is one `generate_content` with no tools and the closed answer schema,
-/// under a budget of one model call, 4,000 tokens and 20 seconds.
+/// under a budget of one model call, 4,000 tokens and 20 seconds. It carries `effort` as
+/// its `GenerateContentConfig::effort` (spec 3.1 §7.23): `adk-rust ultracode` passes the
+/// session's `EffortPolicy::members`.
 ///
 /// # Example
 ///
@@ -815,12 +819,18 @@ fn validate(answer: &Value, inputs: &RouteInputs) -> Result<(RouterAnswer, Revie
 ///     repo: RepoSignals::default(),
 ///     limits: UltracodeLimits::default(),
 /// };
-/// let routed = route(&(router.clone() as Arc<dyn adk_core::Llm>), "rotate the session token", inputs).await;
+/// let llm: Arc<dyn adk_core::Llm> = router.clone();
+/// let routed = route(&llm, Some(adk_core::Effort::Low), "rotate the session token", inputs).await;
 /// assert_eq!((routed.rule, routed.plan.architecture), (Rule::Sensitive, Architecture::Blackboard));
 /// assert!(router.requests().is_empty());
 /// # });
 /// ```
-pub async fn route(router: &Arc<dyn Llm>, task: &str, inputs: RouteInputs) -> RouteDecision {
+pub async fn route(
+    router: &Arc<dyn Llm>,
+    effort: Option<Effort>,
+    task: &str,
+    inputs: RouteInputs,
+) -> RouteDecision {
     let trace = heuristic(&inputs);
     if let Some((rule, plan)) = deterministic(&inputs) {
         return RouteDecision {
@@ -849,7 +859,7 @@ pub async fn route(router: &Arc<dyn Llm>, task: &str, inputs: RouteInputs) -> Ro
     let prompt = router_prompt(task, &inputs, &schema);
     let mut call = RouterCall {
         model: router.name().to_string(),
-        effort: None,
+        effort: effort.map(|effort| effort.to_string()),
         prompt_digest: digest(prompt.as_bytes()),
         schema_digest: digest(schema.to_string().as_bytes()),
         answer_digest: None,
@@ -863,7 +873,7 @@ pub async fn route(router: &Arc<dyn Llm>, task: &str, inputs: RouteInputs) -> Ro
             .max_total_tokens(ROUTER_MAX_TOKENS)
             .max_wall_time(ROUTER_TIMEOUT),
     ));
-    let answered = ask(router, &prompt, &schema, &tracker).await;
+    let answered = ask(router, effort, &prompt, &schema, &tracker).await;
     let usage = tracker.usage();
     let outcome = answered.and_then(|text| {
         call.answer_digest = Some(digest(text.as_bytes()));
@@ -906,6 +916,7 @@ pub async fn route(router: &Arc<dyn Llm>, task: &str, inputs: RouteInputs) -> Ro
 /// The router's one model call: the answer text, or why there is none.
 async fn ask(
     router: &Arc<dyn Llm>,
+    effort: Option<Effort>,
     prompt: &str,
     schema: &Value,
     tracker: &Arc<BudgetTracker>,
@@ -921,6 +932,7 @@ async fn ask(
         .with_config(GenerateContentConfig {
             max_output_tokens: Some(ROUTER_MAX_OUTPUT_TOKENS),
             response_schema: Some(schema.clone()),
+            effort,
             ..GenerateContentConfig::default()
         });
     let call = async {
@@ -1161,7 +1173,7 @@ mod tests {
         std::fs::write(dir.path().join("src/auth/token.rs"), "pub fn expiry() {}").unwrap();
         let change = before.diff(&WorkspaceSnapshot::capture(dir.path()), &[]);
         let (scripted, router) = model(vec![]);
-        let routed = route(&router, "fix the expiry", inputs("fix the expiry", change)).await;
+        let routed = route(&router, None, "fix the expiry", inputs("fix the expiry", change)).await;
         assert_eq!(routed.rule, Rule::Sensitive);
         assert_eq!(
             routed.plan,
@@ -1185,7 +1197,7 @@ mod tests {
         let mut tight = inputs("fix", changed(&[".github/workflows/ci.yml"]));
         tight.change.protected = tight.change.changed_paths.clone();
         tight.limits.max_reviewers = 3;
-        let routed = route(&router, "fix", tight).await;
+        let routed = route(&router, None, "fix", tight).await;
         assert_eq!(routed.plan.reviewers, [Focus::Correctness, Focus::EdgeCases, Focus::Security]);
     }
 
@@ -1196,7 +1208,7 @@ mod tests {
         )]);
         let mut change = changed(&["src/lib.rs"]);
         change.workspace_sensitive_matched = vec!["src/lib.rs".into()];
-        let routed = route(&router, "tidy", inputs("tidy", change.clone())).await;
+        let routed = route(&router, None, "tidy", inputs("tidy", change.clone())).await;
         assert_eq!(routed.rule, Rule::Model, "the router still chooses");
         assert_eq!(routed.plan.architecture, Architecture::Graph);
         assert_eq!(
@@ -1208,7 +1220,7 @@ mod tests {
 
         // The same match from the operator's own config is rule `sensitive`.
         change.sensitive_matched = std::mem::take(&mut change.workspace_sensitive_matched);
-        let routed = route(&router, "tidy", inputs("tidy", change)).await;
+        let routed = route(&router, None, "tidy", inputs("tidy", change)).await;
         assert_eq!(
             (routed.rule, routed.plan.architecture),
             (Rule::Sensitive, Architecture::Blackboard)
@@ -1217,7 +1229,7 @@ mod tests {
         // A snapshot cut at its cap fails closed to rule `sensitive`.
         let mut cut = changed(&["src/lib.rs"]);
         cut.truncated = true;
-        let routed = route(&router, "tidy", inputs("tidy", cut)).await;
+        let routed = route(&router, None, "tidy", inputs("tidy", cut)).await;
         assert_eq!(routed.rule, Rule::Sensitive);
         assert!(routed.plan.reviewers.contains(&Focus::Security));
         assert_eq!(replay(&routed.record_ext("run", "d")), Ok(routed.plan.clone()));
@@ -1289,7 +1301,8 @@ mod tests {
         ] {
             let change = ChangeSignals { first_turn: status, ..change };
             let routed =
-                route(&router, "refactor everything", inputs("refactor everything", change)).await;
+                route(&router, None, "refactor everything", inputs("refactor everything", change))
+                    .await;
             assert_eq!(
                 (routed.rule, &routed.plan),
                 (Rule::Unchanged, &ReviewPlan::fixed(2)),
@@ -1308,6 +1321,7 @@ mod tests {
         let limits = UltracodeLimits::default();
         let routed = route(
             &router,
+            Some(Effort::Low),
             "rename the trait",
             inputs("rename the trait", changed(&["a/src/lib.rs"])),
         )
@@ -1336,6 +1350,7 @@ mod tests {
         assert_eq!(config.response_schema.as_ref(), Some(&router_schema(&limits)));
         assert_eq!(config.max_output_tokens, Some(512));
         assert_eq!(config.temperature, None);
+        assert_eq!(config.effort, Some(Effort::Low), "the call carries the effort it was given");
         let prompt: String =
             request.contents.iter().flat_map(|c| c.parts.iter()).filter_map(Part::text).collect();
         assert!(
@@ -1349,6 +1364,7 @@ mod tests {
         assert_eq!(routed.usage.model_calls, 1);
         let ext = routed.record_ext("run-1", "sha256:task");
         assert_eq!(ext["router"]["rationale"], "two crates change one trait");
+        assert_eq!(ext["router"]["effort"], "low");
         assert!(ext["router"].get("raw").is_none(), "the raw answer is never in the record");
         assert_eq!(replay(&ext), Ok(routed.plan.clone()));
     }
@@ -1417,7 +1433,7 @@ mod tests {
         ];
         for (name, reply, code) in cases {
             let (_, router) = model(vec![reply]);
-            let routed = route(&router, task, base.clone()).await;
+            let routed = route(&router, None, task, base.clone()).await;
             match code {
                 Some(code) => {
                     assert_eq!(routed.rule, Rule::Heuristic, "{name}");
@@ -1442,7 +1458,7 @@ mod tests {
             assert_eq!(replay(&routed.record_ext("run", "d")), Ok(routed.plan.clone()), "{name}");
         }
         let (_, router) = model(vec![]);
-        let routed = route(&router, task, base.clone()).await;
+        let routed = route(&router, None, task, base.clone()).await;
         let fallback = routed.fallback.unwrap();
         assert_eq!(fallback.code, "router.call_failed");
         assert_eq!(fallback.errors, [adk_model::SCRIPT_EXHAUSTED_CODE]);
@@ -1470,7 +1486,7 @@ mod tests {
     async fn router_timeout_and_token_budget_fall_back() {
         let base = inputs("tidy the parser", changed(&["src/parse.rs"]));
         let silent: Arc<dyn Llm> = Arc::new(Silent);
-        let routed = route(&silent, "tidy the parser", base.clone()).await;
+        let routed = route(&silent, None, "tidy the parser", base.clone()).await;
         assert_eq!(routed.fallback.map(|f| f.code), Some("router.timeout".to_string()));
         assert_eq!(routed.rule, Rule::Heuristic);
 
@@ -1480,7 +1496,7 @@ mod tests {
             )
             .with_usage(usage(9_000)),
         ]);
-        let routed = route(&router, "tidy the parser", base.clone()).await;
+        let routed = route(&router, None, "tidy the parser", base.clone()).await;
         let fallback = routed.fallback.clone().unwrap();
         assert_eq!(fallback.code, "router.budget_exceeded");
         assert_eq!(fallback.errors, ["budget.total_tokens"]);
@@ -1491,7 +1507,7 @@ mod tests {
         let (_, router) = model(vec![ScriptedResponse::text(
             r#"{"architecture":"graph","specialists":[],"boardRounds":1,"rationale":"x"}"#,
         )]);
-        let routed = route(&router, "tidy the parser", base).await;
+        let routed = route(&router, None, "tidy the parser", base).await;
         assert_eq!(routed.fallback.map(|f| f.code), Some("router.budget_exceeded".to_string()));
     }
 
@@ -1556,7 +1572,7 @@ mod tests {
         for routed_inputs in
             [overridden, heuristic_mode, sensitive, unchanged, model_input.clone(), model_input]
         {
-            decisions.push(route(&router, "task", routed_inputs).await);
+            decisions.push(route(&router, None, "task", routed_inputs).await);
         }
         let rules: Vec<Rule> = decisions.iter().map(|routed| routed.rule).collect();
         assert_eq!(

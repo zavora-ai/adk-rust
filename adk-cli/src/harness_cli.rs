@@ -1204,10 +1204,9 @@ pub async fn ultracode(
         repo: RepoSignals::from_snapshot(&after),
         limits: limits.clone(),
     };
-    let mut decision = route(&agents.roles.router, &task, inputs).await;
-    if let Some(router) = decision.router.as_mut() {
-        router.effort = Some(setup.resolved.effort.members.to_string());
-    }
+    // The router call runs at the session's `members` effort (spec 3.1 §7.23).
+    let decision =
+        route(&agents.roles.router, Some(setup.resolved.effort.members), &task, inputs).await;
     agents.charged.store(decision.usage.model_calls, std::sync::atomic::Ordering::SeqCst);
     // Write-ahead: no review starts unless the routing decision is on record (I62).
     audit.record("harness.ultracode.routed", decision.record_ext(&run_id, &task_digest)).await?;
@@ -1369,9 +1368,10 @@ async fn write_receipt(
     receipt_file.write(serde_json::to_string_pretty(&receipt)?.as_bytes())
 }
 
-/// The models of each `ultracode` role (spec 3.1 §7.10): the router is the member model at
-/// the members' effort; reviewers and the board use the harness model, per focus when one
-/// is set.
+/// The models of each `ultracode` role (spec 3.1 §7.10): every role uses the session's
+/// client, per focus when one is set, and each call carries its effort from the session's
+/// `EffortPolicy` (spec 3.1 §7.23): the router and board seats `members`, independent
+/// reviewers `read_only`.
 struct RoleModels {
     router: Arc<dyn Llm>,
     reviewers: std::collections::BTreeMap<Focus, Arc<dyn Llm>>,
@@ -1421,6 +1421,7 @@ struct HarnessUltra {
 impl HarnessUltra {
     fn reviewer(&self, focus: &str) -> IndependentReviewer {
         IndependentReviewer::new(self.roles.reviewer(focus), &self.setup.resolved.workspace)
+            .effort(self.setup.resolved.effort)
             .guidance(self.setup.instruction.clone())
             .audit_log(self.recorder.clone())
             .user(self.setup.user.clone())
@@ -1520,6 +1521,7 @@ impl UltraAgents for HarnessUltra {
         let remaining = self.limits.max_model_calls.saturating_sub(used);
         let fallback = self.reviewer(Focus::Correctness.name());
         let outcome = ReviewBoard::new(self.roles.board.clone(), &self.setup.resolved.workspace)
+            .effort(self.setup.resolved.effort)
             .guidance(self.setup.instruction.clone())
             .audit_log(self.recorder.clone())
             .roster(roster)
