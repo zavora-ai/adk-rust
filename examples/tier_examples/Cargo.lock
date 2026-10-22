@@ -720,6 +720,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "sqlx",
  "tracing",
  "uuid",
 ]
