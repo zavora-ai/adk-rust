@@ -1146,7 +1146,8 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
    first to return content skips the tool
 4. Circuit breaker
 5. The governed path (`adk_core::authorize_tool_call`) on the final arguments:
-   1. Kill switch — a frozen run ends with a `governance.frozen` error
+   1. Kill switch — a frozen run's call is answered `not run` and the run ends with a
+      `governance.frozen` error at its next model call (`CodeActAgent`: at once)
    2. Resume binding, for a held call being resumed — another acting agent or another tool
       origin answers the call as not run and spends its stored decision
    3. `ToolPolicy` — a denial becomes the call's result
@@ -1190,7 +1191,7 @@ reachable through `Runner::governance()`; share one control across runners with
 |-------|--------|
 | Run start | The run's stream yields a `governance.frozen` error before the session is read |
 | Before each model call | The agent ends the run with the error; no request, and so no built-in tool, reaches the provider |
-| Before each tool call | The tool does not execute and the run ends with the error |
+| Before each tool call | The tool does not execute. `LlmAgent` answers the call, and each later call of the same batch, `{"error": "not run: ..."}` and ends the run with the error at its next model call, so the session holds a response for every call; `CodeActAgent` ends the run with the error |
 
 ```rust
 use adk_core::GovernanceControl;
@@ -1215,7 +1216,9 @@ spin against a frozen runner.
 `adk-server` shares one control across every runner it builds (`ServerConfig::governance`) and
 exposes `POST /api/admin/freeze` and `POST /api/admin/unfreeze` through
 `ServerBuilder::enable_governance_endpoints`; freezing also pauses background-run and cron
-scheduling. See [Server](../deployment/server.md#kill-switch).
+scheduling, and a durable run the switch refuses after it made a call parks at its next
+model-call boundary — the refused calls of its batch answered `not run` — and resumes on
+unfreeze. See [Server](../deployment/server.md#kill-switch).
 
 Realtime tool calls go through the same governed path — see
 [Realtime Tools](../realtime/tools.md#the-governed-path).

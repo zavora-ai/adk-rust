@@ -2840,6 +2840,21 @@ impl ToolExecutor<'_> {
                     pending_confirmation = Some(request);
                     run_after_tool_callbacks = false;
                 }
+                // The kill switch refused the call mid-turn: it is answered `not run`, the
+                // batch's remaining calls meet the same refusal, and the turn ends at the
+                // next model call, where a durable worker parks the run (spec 3.2 §10 S3).
+                Err(error)
+                    if error.code == adk_core::GOVERNANCE_FROZEN_CODE
+                        || error.code == adk_core::GOVERNANCE_STALE_CODE =>
+                {
+                    tracing::info!(
+                        tool.name = %name,
+                        error = %error.diagnostics(),
+                        "tool call not run: the governance control refuses work"
+                    );
+                    response_content = Some(error_response(format!("not run: {}", error.message)));
+                    run_after_tool_callbacks = false;
+                }
                 Err(error) => {
                     self.approval_failed.send_replace(true);
                     return Err(error);

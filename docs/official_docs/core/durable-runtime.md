@@ -193,12 +193,13 @@ same store and queue shares the work.
 | `worker_id` | `worker-{uuid}` | Owner name written into every lease |
 | `queue` | `default` | Queue claimed from |
 | `lease_ttl` | 30 s | How long a claim or heartbeat holds the run; heartbeats run every `lease_ttl / 3` |
-| `poll_interval` | 500 ms | Wait when nothing is claimable |
+| `poll_interval` | 500 ms | Wait when nothing is claimable; the loop wakes earlier, at the earliest future `not_before` of a queued or parked run on its queue, so a delayed run or a timed wait resumes at its time (spec 3.2 §7.9, §13 Q2) |
 | `max_concurrent_runs` | 4 | Attempts executed at once |
 | `run_timeout` | `None` | Fails an attempt that runs longer (not retried) |
 | `retain_finished` | 24 h | Finished runs older than this are pruned by the claim loop |
 | `approval_timeout` | `None` | How long a run parked on a held tool call waits for a decision; `None` waits until woken |
 | `allowed_principals` | Empty | Agent ids beyond the worker's own and the target's derived id that a run's stored principal may name (`with_allowed_principal`); any other fails the run with `identity.principal_not_allowed` |
+| `on_governance_refusal` | `GovernanceRefusal::Park` | What a kill-switch refusal does to a run that already made a model or tool call, on a worker with a governance control: `Park` parks it at its next model-call boundary and wakes it on unfreeze, as **Kill switch** below describes; `Fail` ends the attempt with the control's error (spec 3.2 §10 S3) |
 
 One attempt of a claimed run:
 
@@ -227,11 +228,29 @@ runs what the claim returned, because a claim can return after a freeze landed:
 |---------|--------|
 | Once the claim returns | Hands the run back unstarted |
 | By the runner before the agent produced an event (the runner's start check, or the agent's check before its first model call) | Hands the run back unstarted, when the worker's own control also refuses |
-| After the run made a model or tool call | Ends the attempt with the control's error (`governance.frozen` is not retried; `governance.stale` is); a run asked to suspend parks instead, as [Suspending a run](#suspending-a-run) describes |
+| After the run made a model or tool call, under `on_governance_refusal = Park` (the default) | Parks the run at its next model-call boundary, as below |
+| After the run made a model or tool call, under `on_governance_refusal = Fail`, or by the runner's control on a worker with none | Ends the attempt with the control's error (`governance.frozen` is not retried; `governance.stale` is); a run asked to suspend parks instead, as [Suspending a run](#suspending-a-run) describes |
 
 A run handed back is parked with `wait` until the time it was claimed: it is `Waiting`,
 claimable at once — by this worker once its control allows work again — and the claim that
 resumes it counts no further attempt, so a freeze never uses up a queued run's attempts.
+
+**Freeze parks** (spec 3.2 §10 S3, K-I21). Under `Park`, a run the control refuses after it
+made a call stops at its next model-call boundary: the model's last tool calls are answered —
+those the kill switch refused inside the batch as `{"error": "not run: ..."}` — the worker records
+`RunCheckpointRef::Session`, parks the run with `wait(run_id, epoch, None)`, and reports
+`ParkReason::Frozen` to `on_park`. The park has no expiry. The worker keeps the ids of the runs it
+parked this way and wakes exactly those once its control allows work again — never a run parked
+by `suspend` — and `wake_frozen()` does the same on demand. The resumed run continues its session
+as [Crash resume](#crash-resume) describes, and the action ledger keeps a completed call from
+running twice. `request_cancel` still finishes a parked run `Cancelled`, and the unfreeze does
+not revive it.
+
+Only a worker with a governance control (`with_governance`) parks this way, since its own control
+tells it the freeze is over. The list of parked runs lives in the worker's memory: a worker
+restarted while frozen does not wake the runs parked before the restart, so a supervisor that must
+survive restarts records each `ParkReason::Frozen` that `on_park` reports and wakes those runs
+itself.
 
 | `WorkerHandle` method | Effect |
 |-----------------------|--------|
@@ -239,6 +258,8 @@ resumes it counts no further attempt, so a freeze never uses up a queued run's a
 | `wake()` | Tries a claim now instead of after `poll_interval` |
 | `heartbeat_now()` | Makes every in-flight attempt heartbeat now, so a cancellation requested in this process is seen at once |
 | `suspend(run_id)` | Parks the agent run `run_id`, in flight on this worker, at its next model-call boundary; returns whether the request reached an attempt. See [Suspending a run](#suspending-a-run) |
+| `wake_frozen().await` | Wakes every run the worker parked under a freeze and returns how many; the claim loop does the same when its control allows work again |
+| `frozen_runs()` | The ids of the runs parked under a freeze and not woken yet |
 | `abort()` | Drops the loop and every in-flight attempt without writing, as a crash would; their leases expire and another worker recovers them |
 
 ```rust
@@ -325,7 +346,7 @@ ending. Clones of a worker and its handle share the attempts in flight.
 | Requested | Outcome |
 |-----------|---------|
 | `suspend` | Parked `Waiting` on its `Session` checkpoint; `on_park` with `ParkReason::Suspended` |
-| `suspend`, then the kill switch refuses the run at that boundary | Parked the same way, instead of failing with `governance.frozen` or `governance.stale`; refused before its first event, it is handed back as **Kill switch** describes |
+| `suspend`, then the kill switch refuses the run at that boundary | Parked the same way, with `ParkReason::Suspended`, so an unfreeze does not wake it; refused before its first event, it is handed back as **Kill switch** describes |
 | `request_cancel`, with or without `suspend` | Finished `Cancelled` |
 | `suspend`, and the turn ends without another model call | Finished, or parked on its held tool calls, as without the request |
 
@@ -491,11 +512,15 @@ read, `check` fails closed with `governance.stale` (`ErrorCategory::Unavailable`
 check, as under a freeze (`governance.frozen`, `GOVERNANCE_FROZEN_CODE`). A local `freeze` on a
 mirrored control holds until a local `unfreeze`; the store never lifts it.
 
-The server's `POST /api/admin/freeze` and `POST /api/admin/unfreeze` call `freeze_replicated`
-and `unfreeze_replicated`, so a mirrored `ServerConfig::governance` reaches every replica. A
+The server's `POST /api/admin/freeze` and `POST /api/admin/unfreeze` call `freeze_recorded`
+and `unfreeze_recorded`, so a mirrored `ServerConfig::governance` reaches every replica. A
 freeze also requests cancellation of every running run in the background run stores mounted on
-the builder. Responses report `frozen`, `reason`, `mirrored`, `stale`, and, for a freeze,
-`cancelledRuns`; a store write failure returns `503` with `error`.
+the builder — a terminate, not a pause — unless a `FreezeDelegate` registered with
+`ServerBuilder::with_freeze_delegate` handles the freeze (spec 3.2 §10 S4), as a kernel does,
+and parks them instead; the delegate also handles the unfreeze and resumes them. Responses report
+`frozen`, `reason`, `mirrored`, `stale`, `runningRuns` (`park` under a delegate, `cancel`
+otherwise), and, for a freeze, `parkedRuns` and `cancelledRuns`; a store write failure returns
+`503` with `error`.
 
 ```rust
 use std::sync::Arc;

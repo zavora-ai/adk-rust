@@ -2,7 +2,8 @@ pub mod controllers;
 mod routes;
 
 pub use controllers::{
-    A2aController, AppsController, ArtifactsController, DebugController, RuntimeController,
+    A2aController, AppsController, ArtifactsController, DebugController, FreezeDelegate,
+    FreezeReport, GovernanceController, GovernanceStatus, RunningRuns, RuntimeController,
     SessionController, a2a::A2aTaskRetention,
 };
 
@@ -475,6 +476,7 @@ pub struct ServerBuilder {
     root_routes: Vec<Router>,
     shutdown_endpoint: bool,
     governance_endpoints: bool,
+    freeze_delegate: Option<Arc<dyn FreezeDelegate>>,
     skill_index: Option<Arc<adk_skill::SkillIndex>>,
     a2a_task_retention: Option<A2aTaskRetention>,
     #[cfg(feature = "agent-engine")]
@@ -497,6 +499,7 @@ impl ServerBuilder {
             root_routes: Vec::new(),
             shutdown_endpoint: false,
             governance_endpoints: false,
+            freeze_delegate: None,
             skill_index: None,
             a2a_task_retention: None,
             #[cfg(feature = "agent-engine")]
@@ -709,9 +712,9 @@ impl ServerBuilder {
     ///
     /// | Route | Effect |
     /// |-------|--------|
-    /// | `POST /api/admin/freeze` | Freezes [`ServerConfig::governance`], failing new runs and stopping running ones before their next model or tool call; background workers stop claiming and schedules stop firing; running durable runs are asked to cancel. A mirrored control writes the freeze to the shared store, so it reaches every replica. Body: `{"reason": "..."}` |
-    /// | `POST /api/admin/unfreeze` | Lifts the freeze |
-    /// | `GET /api/admin/governance` | Reports `{"frozen", "reason", "mirrored", "stale"}` |
+    /// | `POST /api/admin/freeze` | Freezes [`ServerConfig::governance`], failing new runs and stopping running ones before their next model or tool call; background workers stop claiming and schedules stop firing; running durable runs are asked to cancel, or parked by the [`FreezeDelegate`] registered with [`with_freeze_delegate`](Self::with_freeze_delegate). A mirrored control writes the freeze to the shared store, so it reaches every replica. Body: `{"reason": "..."}`; answers the status with `parkedRuns` and `cancelledRuns` |
+    /// | `POST /api/admin/unfreeze` | Lifts the freeze; a delegate also resumes what the freeze parked |
+    /// | `GET /api/admin/governance` | Reports `{"frozen", "reason", "mirrored", "stale", "runningRuns"}`, where `runningRuns` is `park` under a delegate and `cancel` otherwise |
     ///
     /// The endpoints carry the same authentication as every other mutation surface. Without
     /// a `RequestContextExtractor` they are open to anyone who reaches the server, so enable
@@ -723,6 +726,23 @@ impl ServerBuilder {
     /// let app = ServerBuilder::new(config).enable_governance_endpoints().build();
     /// ```
     pub fn enable_governance_endpoints(mut self) -> Self {
+        self.governance_endpoints = true;
+        self
+    }
+
+    /// Hands the governance endpoints' freezes and unfreezes to `delegate` (spec 3.2 §10
+    /// S4), so `POST /api/admin/freeze` parks the running runs the delegate supervises
+    /// instead of cancelling the background run stores' runs, and `POST /api/admin/unfreeze`
+    /// resumes them. A kernel registers itself here. Implies
+    /// [`enable_governance_endpoints`](Self::enable_governance_endpoints).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let app = ServerBuilder::new(config).with_freeze_delegate(kernel).build();
+    /// ```
+    pub fn with_freeze_delegate(mut self, delegate: Arc<dyn FreezeDelegate>) -> Self {
+        self.freeze_delegate = Some(delegate);
         self.governance_endpoints = true;
         self
     }
@@ -930,6 +950,10 @@ impl ServerBuilder {
             let controller = background_run_stores
                 .iter()
                 .fold(controller, |controller, store| controller.with_run_store(Arc::clone(store)));
+            let controller = match self.freeze_delegate {
+                Some(delegate) => controller.with_freeze_delegate(delegate),
+                None => controller,
+            };
             api_router = api_router.merge(
                 Router::new()
                     .route("/admin/freeze", post(controllers::governance::freeze))

@@ -595,9 +595,9 @@ let app = ServerBuilder::new(config).enable_governance_endpoints().build();
 
 | Route | Effect |
 |-------|--------|
-| `POST /api/admin/freeze` | Body `{"reason": "..."}`. Freezes the control and answers `{"frozen", "reason", "mirrored", "stale", "cancelledRuns"}` |
-| `POST /api/admin/unfreeze` | Lifts the freeze |
-| `GET /api/admin/governance` | Returns `{"frozen", "reason", "mirrored", "stale"}`; `reason` only while frozen |
+| `POST /api/admin/freeze` | Body `{"reason": "..."}`. Freezes the control and answers `{"frozen", "reason", "mirrored", "stale", "runningRuns", "parkedRuns", "cancelledRuns"}` |
+| `POST /api/admin/unfreeze` | Lifts the freeze; a `FreezeDelegate` also resumes what the freeze parked |
+| `GET /api/admin/governance` | Returns `{"frozen", "reason", "mirrored", "stale", "runningRuns"}`; `reason` only while frozen; `runningRuns` is `park` when a `FreezeDelegate` is registered (`ServerBuilder::with_freeze_delegate`, as a kernel does) and `cancel` otherwise |
 
 While the control is frozen:
 
@@ -605,7 +605,11 @@ While the control is frozen:
   one event carrying that `error_code`.
 - With the `background` feature, `POST /api/runs` answers `503`, workers claim no runs, a run
   whose claim returns after the freeze is handed back unstarted, schedules fire nothing, and the
-  freeze asks every running background run to cancel (`cancelledRuns`).
+  freeze asks every running background run to cancel (`cancelledRuns`) — a terminate, not a
+  pause — unless a `FreezeDelegate` parks them (`parkedRuns`). A run a worker's own control
+  refuses after it made a call parks at its next model-call boundary and resumes on unfreeze
+  (`DurableWorkerConfig::on_governance_refusal`; see
+  [Durable runtime](../core/durable-runtime.md#worker)).
 
 A control built with `GovernanceControl::mirrored` shares the freeze across replicas through a
 `GovernanceStateStore`; `mirrored` and `stale` report its state. See

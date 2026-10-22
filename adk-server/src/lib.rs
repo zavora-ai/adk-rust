@@ -83,10 +83,10 @@ pub use agent_engine::{
 // Background runs and cron scheduling re-exports
 #[cfg(feature = "background")]
 pub use background::{
-    BackgroundState, DurableScheduler, DurableWorker, DurableWorkerConfig, ParkReason, RunStatus,
-    RunStatusResponse, SchedulerTick, SubmitRunRequest, SubmitRunResponse, WorkerHandle,
-    WorkerHooks, WorkflowExecutor, WorkflowRegistry, WorkflowRunContext, WorkflowState,
-    background_runs_router, background_runs_router_with_state,
+    BackgroundState, DurableScheduler, DurableWorker, DurableWorkerConfig, GovernanceRefusal,
+    ParkReason, RunStatus, RunStatusResponse, SchedulerTick, SubmitRunRequest, SubmitRunResponse,
+    WorkerHandle, WorkerHooks, WorkflowExecutor, WorkflowRegistry, WorkflowRunContext,
+    WorkflowState, background_runs_router, background_runs_router_with_state,
 };
 #[cfg(feature = "background")]
 pub use background::{
@@ -105,6 +105,7 @@ pub use auth_bridge::{
 };
 pub use config::{DEFAULT_RUN_TIMEOUT, SecurityConfig, ServerConfig};
 pub use rest::{
-    A2aController, A2aTaskRetention, RuntimeController, ServerBuilder, SessionController,
+    A2aController, A2aTaskRetention, FreezeDelegate, FreezeReport, GovernanceController,
+    GovernanceStatus, RunningRuns, RuntimeController, ServerBuilder, SessionController,
     ShutdownHandle, create_app, create_app_with_a2a, shutdown_signal,
 };

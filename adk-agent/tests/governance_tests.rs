@@ -533,6 +533,75 @@ async fn freezing_stops_a_running_loop_before_the_next_tool_call() {
     assert!(error.message.contains("incident 4012"), "{}", error.message);
 }
 
+/// A freeze that lands while a tool batch runs answers the batch's remaining calls `not run`
+/// and ends the turn at the next model call, so a durable worker parks the run on a session
+/// that holds every call's response (spec 3.2 §10 S3).
+#[tokio::test]
+async fn a_freeze_during_a_tool_batch_answers_the_remaining_calls_not_run() {
+    /// Freezes the control from inside its first execution, as an operator would while the
+    /// batch runs.
+    struct FreezingTool {
+        control: GovernanceControl,
+        executions: Arc<Mutex<Vec<Value>>>,
+    }
+
+    #[async_trait]
+    impl Tool for FreezingTool {
+        fn name(&self) -> &str {
+            "step"
+        }
+
+        fn description(&self) -> &str {
+            "freezes execution"
+        }
+
+        async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+            self.executions.lock().unwrap().push(args);
+            self.control.freeze("incident 4013");
+            Ok(json!({ "status": "ok" }))
+        }
+    }
+
+    let control = GovernanceControl::new();
+    let executions = Arc::new(Mutex::new(Vec::new()));
+    let model = ScriptedModel::new(vec![calls(&[
+        ("step", json!({ "n": 1 }), "c1"),
+        ("step", json!({ "n": 2 }), "c2"),
+    ])]);
+    let agent = LlmAgentBuilder::new("ops")
+        .model(model.clone())
+        .tool(Arc::new(FreezingTool { control: control.clone(), executions: executions.clone() }))
+        .build()
+        .unwrap();
+    let runner = runner(agent, |builder| builder.governance(control)).await;
+
+    let events = run(&runner, None).await;
+
+    assert_eq!(*executions.lock().unwrap(), vec![json!({ "n": 1 })], "the second call never runs");
+    let error = events.last().unwrap().as_ref().expect_err("the turn ends at the next model call");
+    assert_eq!(error.code, "governance.frozen");
+    assert_eq!(model.requests.lock().unwrap().len(), 1, "no model call after the freeze");
+    let responses: Vec<(Option<String>, Value)> = events
+        .iter()
+        .filter_map(|event| event.as_ref().ok())
+        .filter_map(|event| event.llm_response.content.as_ref())
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::FunctionResponse { function_response, id, .. } => {
+                Some((id.clone(), function_response.response.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(responses.len(), 2, "both calls are answered: {responses:?}");
+    assert_eq!(responses[0], (Some("c1".into()), json!({ "status": "ok" })));
+    let (id, not_run) = &responses[1];
+    assert_eq!(id.as_deref(), Some("c2"));
+    let message = not_run["error"].as_str().expect("an error response");
+    assert!(message.starts_with("not run: execution is frozen"), "{message}");
+    assert!(message.contains("incident 4013"), "{message}");
+}
+
 #[tokio::test]
 async fn a_frozen_runner_refuses_new_runs_until_unfrozen() {
     let model = ScriptedModel::new(vec![text_response("hello")]);

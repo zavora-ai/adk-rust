@@ -231,7 +231,7 @@ async fn serve(config: ServerConfig) -> std::io::Result<()> {
 
 ### Governance Kill Switch
 
-`ServerConfig::governance` is shared by every runner the server builds. Freezing it fails new runs and stops running ones before their next model or tool call. `ServerBuilder::enable_governance_endpoints()` mounts `POST /api/admin/freeze`, `POST /api/admin/unfreeze`, and `GET /api/admin/governance` behind the auth middleware; a freeze also requests cancellation of running background runs and stops scheduling. With a mirrored control (`GovernanceControl::mirrored`), freeze and unfreeze write the shared `GovernanceStateStore`, and the status reports `mirrored` and `stale`.
+`ServerConfig::governance` is shared by every runner the server builds. Freezing it fails new runs and stops running ones before their next model or tool call. `ServerBuilder::enable_governance_endpoints()` mounts `POST /api/admin/freeze`, `POST /api/admin/unfreeze`, and `GET /api/admin/governance` behind the auth middleware; a freeze stops scheduling and requests cancellation of running background runs — a terminate, not a pause — unless a `FreezeDelegate` (`ServerBuilder::with_freeze_delegate`), as a kernel registers, parks them instead; the responses report `parkedRuns`, `cancelledRuns` and `runningRuns` (`park` or `cancel`). A `DurableWorker` whose own control refuses a run after it made a call parks it at its next model-call boundary and wakes it on unfreeze (`DurableWorkerConfig::on_governance_refusal`). With a mirrored control (`GovernanceControl::mirrored`), freeze and unfreeze write the shared `GovernanceStateStore`, and the status reports `mirrored` and `stale`.
 
 ```rust
 use adk_core::GovernanceControl;

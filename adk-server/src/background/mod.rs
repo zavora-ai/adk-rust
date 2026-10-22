@@ -92,7 +92,9 @@ pub use cron::{
     cron_jobs_router, cron_jobs_router_with_state, start_cron_scheduler, validate_cron_expression,
 };
 pub use scheduler::{DurableScheduler, SchedulerTick};
-pub use worker::{DurableWorker, DurableWorkerConfig, ParkReason, WorkerHandle, WorkerHooks};
+pub use worker::{
+    DurableWorker, DurableWorkerConfig, GovernanceRefusal, ParkReason, WorkerHandle, WorkerHooks,
+};
 
 // ---------------------------------------------------------------------------
 // Data Types

@@ -445,6 +445,11 @@ macro_rules! run_store_conformance_tests {
         }
         $(#[$attr])*
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn run_freeze_parked_runs_wake_only_when_woken() {
+            $crate::conformance::run_store::freeze_parked_runs_wake_only_when_woken(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn run_cancel_is_visible_through_heartbeat() {
             $crate::conformance::run_store::cancel_is_visible_through_heartbeat(&$harness).await;
         }

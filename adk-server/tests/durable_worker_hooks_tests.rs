@@ -1,10 +1,12 @@
-//! The durable worker's lifecycle hooks and suspend path (spec 3.2 §10 S1).
+//! The durable worker's lifecycle hooks, suspend path, freeze parks, and idle waits (spec 3.2
+//! §10 S1, S3; §7.9, §13 Q2).
 //!
 //! Each hook is checked to run after the store write it reports, in claim, park, and
 //! finish order. A run asked to suspend stops at its next model-call boundary, parks
 //! `Waiting` on its `Session` checkpoint, and resumes on another worker after a restart
 //! without executing its completed non-idempotent call again; a cancellation still finishes
-//! it `Cancelled`.
+//! it `Cancelled`. A freeze that lands after a run made a call parks it the same way, and the
+//! unfreeze wakes exactly the runs the freeze parked.
 
 #![cfg(feature = "background")]
 
@@ -22,7 +24,8 @@ use adk_core::{
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_runner::Runner;
 use adk_server::background::{
-    DurableWorker, DurableWorkerConfig, ParkReason, WorkerHooks, WorkflowRegistry,
+    DurableWorker, DurableWorkerConfig, GovernanceRefusal, ParkReason, WorkerHooks,
+    WorkflowRegistry,
 };
 use adk_session::{InMemorySessionService, SessionService};
 use async_trait::async_trait;
@@ -92,11 +95,14 @@ impl Seen {
 }
 
 /// Records every hook call; freezes `freeze_on_claim` inside the first `on_claim`, as a
-/// freeze that lands after the claim and before the runner starts the agent.
+/// freeze that lands after the claim and before the runner starts the agent, and lifts
+/// `unfreeze_on_park` inside the first freeze park, as a freeze shorter than the claim loop's
+/// wait.
 struct Recorder {
     runs: Arc<dyn DurableRunStore>,
     seen: Mutex<Vec<Seen>>,
     freeze_on_claim: Mutex<Option<GovernanceControl>>,
+    unfreeze_on_park: Mutex<Option<GovernanceControl>>,
 }
 
 impl Recorder {
@@ -105,6 +111,7 @@ impl Recorder {
             runs: Arc::clone(runs),
             seen: Mutex::default(),
             freeze_on_claim: Mutex::default(),
+            unfreeze_on_park: Mutex::default(),
         })
     }
 
@@ -129,6 +136,11 @@ impl WorkerHooks for Recorder {
 
     async fn on_park(&self, run: &RunRecord, reason: ParkReason) {
         self.record("on_park", run, Some(reason)).await;
+        if reason == ParkReason::Frozen
+            && let Some(control) = self.unfreeze_on_park.lock().unwrap().take()
+        {
+            control.unfreeze();
+        }
     }
 
     async fn on_finish(&self, run: &RunRecord) {
@@ -173,6 +185,8 @@ struct Payment {
     charges: Arc<AtomicUsize>,
     release: Arc<Semaphore>,
     governance: Option<GovernanceControl>,
+    /// The runner's control, when it differs from the worker's.
+    runner_governance: Option<GovernanceControl>,
 }
 
 impl Payment {
@@ -191,6 +205,7 @@ impl Payment {
             charges: Arc::new(AtomicUsize::new(0)),
             release: Arc::new(Semaphore::new(0)),
             governance: None,
+            runner_governance: None,
         }
     }
 
@@ -199,8 +214,25 @@ impl Payment {
         self
     }
 
+    /// Governs the runner alone, leaving the worker without a control.
+    fn governed_runner(mut self, control: &GovernanceControl) -> Self {
+        self.runner_governance = Some(control.clone());
+        self
+    }
+
+    /// Replaces the one-charge script with `model`.
+    fn with_model(mut self, model: ScriptedLlm) -> Self {
+        self.model = Arc::new(model);
+        self
+    }
+
     /// One replica's worker: its own runner, agent, and tool over the shared stores.
     fn worker(&self, id: &str, hooks: &Arc<Recorder>) -> DurableWorker {
+        self.worker_with(hooks, worker_config(id))
+    }
+
+    /// [`worker`](Self::worker) under `config`.
+    fn worker_with(&self, hooks: &Arc<Recorder>, config: DurableWorkerConfig) -> DurableWorker {
         let agent = LlmAgentBuilder::new("billing")
             .model(Arc::clone(&self.model) as Arc<dyn Llm>)
             .tool(Arc::new(ChargeTool {
@@ -214,13 +246,13 @@ impl Payment {
             .agent(Arc::new(agent))
             .session_service(Arc::clone(&self.sessions) as Arc<dyn SessionService>)
             .action_ledger(Arc::clone(&self.ledger) as Arc<dyn adk_core::ActionLedger>);
-        if let Some(control) = &self.governance {
+        if let Some(control) = self.runner_governance.as_ref().or(self.governance.as_ref()) {
             runner = runner.governance(control.clone());
         }
         let mut worker = DurableWorker::new(Arc::clone(&self.runs))
             .with_agent("billing", Arc::new(runner.build().unwrap()))
             .with_hooks(Arc::clone(hooks) as Arc<dyn WorkerHooks>)
-            .with_config(worker_config(id));
+            .with_config(config);
         if let Some(control) = &self.governance {
             worker = worker.with_governance(control.clone());
         }
@@ -228,10 +260,24 @@ impl Payment {
     }
 
     async fn enqueue(&self) -> RunRecord {
-        let run =
-            NewRun::new("default", "billing", "customer-1", "billing", json!("charge my card"))
-                .with_session_id("order-7");
+        self.enqueue_run(self.new_run()).await
+    }
+
+    fn new_run(&self) -> NewRun {
+        NewRun::new("default", "billing", "customer-1", "billing", json!("charge my card"))
+            .with_session_id("order-7")
+    }
+
+    async fn enqueue_run(&self, run: NewRun) -> RunRecord {
         self.runs.enqueue(run).await.unwrap().record().cloned().unwrap()
+    }
+
+    /// Lets the charge in flight finish and freezes `control` first, so the run meets the
+    /// freeze at its next model-call boundary.
+    async fn freeze_after_the_charge(&self, control: &GovernanceControl, reason: &str) {
+        self.charge_started().await;
+        control.freeze(reason);
+        self.release.add_permits(1);
     }
 
     async fn charge_started(&self) {
@@ -506,6 +552,281 @@ async fn a_freeze_at_the_boundary_parks_a_run_asked_to_suspend() {
     let finished = worker.run_next().await.unwrap().expect("claimed once unfrozen");
     assert_eq!((finished.state, finished.attempt), (RunState::Completed, 1), "{finished:?}");
     assert_eq!(payment.charges.load(Ordering::SeqCst), 1);
+}
+
+/// Gate (spec 3.2 §10 S3): a freeze that lands after the run made its charge parks it
+/// `Waiting` on its `Session` checkpoint with `ParkReason::Frozen`, at the same attempt and
+/// with no lease, and makes no further model call; the worker lists it as frozen. When the
+/// control allows work again the worker wakes it, and it completes at the same attempt with
+/// the charge executed once and its one response sent.
+#[tokio::test]
+async fn a_freeze_after_a_call_parks_the_run_and_the_lift_wakes_it() {
+    let control = GovernanceControl::new();
+    let payment = Payment::new().governed(&control);
+    let hooks = Recorder::new(&payment.runs);
+    let worker = payment.worker("w", &hooks).spawn();
+    let run = payment.enqueue().await;
+
+    payment.freeze_after_the_charge(&control, "incident 11").await;
+    let parked = run_in_state(&payment.runs, &run.run_id, RunState::Waiting).await;
+
+    assert_eq!(
+        (parked.attempt, parked.lease_owner.as_deref(), parked.lease_expires_at, &parked.error),
+        (1, None, None, &None),
+        "parked at the same attempt, holding no lease, not failed: {parked:?}"
+    );
+    assert_eq!(session_checkpoint(&parked).0, "order-7");
+    assert_eq!(payment.model.requests().len(), 1, "no model call after the freeze");
+    assert_eq!(payment.charges.load(Ordering::SeqCst), 1);
+    assert_eq!(hooks.take(), vec![Seen::claim(), Seen::park(ParkReason::Frozen)]);
+    assert_eq!(worker.frozen_runs(), vec![run.run_id.clone()]);
+
+    tokio::time::sleep(POLL * 5).await;
+    let still = payment.runs.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(still.state, RunState::Waiting, "a freeze park has no expiry");
+    assert_eq!(hooks.take(), Vec::<Seen>::new(), "nothing happens while frozen");
+
+    control.unfreeze();
+    let finished = run_in_state(&payment.runs, &run.run_id, RunState::Completed).await;
+    assert_eq!(
+        (finished.attempt, finished.result.as_ref().map(|r| r["text"].clone())),
+        (1, Some(json!("charge status: charged"))),
+        "{finished:?}"
+    );
+    assert_eq!(payment.charges.load(Ordering::SeqCst), 1, "the completed charge never re-runs");
+    assert_eq!(
+        payment.charge_responses_sent(),
+        vec![vec![], vec![json!({ "status": "charged" })]],
+        "the resumed turn sends the charge's one response"
+    );
+    assert_eq!(hooks.take(), vec![Seen::claim(), Seen::finish(RunState::Completed)]);
+    assert!(worker.frozen_runs().is_empty(), "woken runs are no longer listed");
+    worker.shutdown().await;
+}
+
+/// Gate (spec 3.2 §10 S3): `request_cancel` finishes a freeze-parked run `Cancelled`, and
+/// the unfreeze does not revive it.
+#[tokio::test]
+async fn a_cancel_finishes_a_freeze_parked_run_and_the_lift_does_not_revive_it() {
+    let control = GovernanceControl::new();
+    let payment = Payment::new().governed(&control);
+    let hooks = Recorder::new(&payment.runs);
+    let worker = payment.worker("w", &hooks).spawn();
+    let run = payment.enqueue().await;
+
+    payment.freeze_after_the_charge(&control, "incident 12").await;
+    run_in_state(&payment.runs, &run.run_id, RunState::Waiting).await;
+    assert_eq!(hooks.take(), vec![Seen::claim(), Seen::park(ParkReason::Frozen)]);
+
+    payment.runs.request_cancel(&run.run_id).await.unwrap();
+    let cancelled = payment.runs.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!((cancelled.state, cancelled.lease_owner), (RunState::Cancelled, None));
+
+    control.unfreeze();
+    tokio::time::sleep(POLL * 5).await;
+    assert_eq!(payment.runs.get(&run.run_id).await.unwrap().unwrap().state, RunState::Cancelled);
+    assert_eq!(payment.model.requests().len(), 1, "a cancelled run makes no model call");
+    assert_eq!(hooks.take(), Vec::<Seen>::new());
+    assert!(worker.frozen_runs().is_empty(), "a run that cannot resume is forgotten");
+    worker.shutdown().await;
+}
+
+/// Gate (spec 3.2 §10 S3): the unfreeze wakes exactly the runs the freeze parked. A run
+/// suspended by request before the freeze stays parked after the unfreeze, while the
+/// freeze-parked run completes.
+#[tokio::test]
+async fn an_unfreeze_wakes_frozen_runs_but_not_a_manual_suspension() {
+    let control = GovernanceControl::new();
+    let suspended = Payment::new().governed(&control);
+    let frozen = Payment::new().governed(&control);
+    let hooks_a = Recorder::new(&suspended.runs);
+    let hooks_b = Recorder::new(&frozen.runs);
+    let worker_a = suspended.worker("a", &hooks_a).spawn();
+    let worker_b = frozen.worker("b", &hooks_b).spawn();
+
+    let run_a = suspended.enqueue().await;
+    suspended.charge_started().await;
+    assert!(worker_a.suspend(&run_a.run_id));
+    suspended.release.add_permits(1);
+    run_in_state(&suspended.runs, &run_a.run_id, RunState::Waiting).await;
+    assert_eq!(hooks_a.take(), vec![Seen::claim(), Seen::park(ParkReason::Suspended)]);
+
+    let run_b = frozen.enqueue().await;
+    frozen.freeze_after_the_charge(&control, "incident 13").await;
+    run_in_state(&frozen.runs, &run_b.run_id, RunState::Waiting).await;
+    assert_eq!(hooks_b.take(), vec![Seen::claim(), Seen::park(ParkReason::Frozen)]);
+    assert!(worker_a.frozen_runs().is_empty(), "a suspension is not a freeze park");
+
+    control.unfreeze();
+    let finished = run_in_state(&frozen.runs, &run_b.run_id, RunState::Completed).await;
+    assert_eq!((finished.attempt, frozen.charges.load(Ordering::SeqCst)), (1, 1));
+    assert_eq!(hooks_b.take(), vec![Seen::claim(), Seen::finish(RunState::Completed)]);
+
+    tokio::time::sleep(POLL * 5).await;
+    let still = suspended.runs.get(&run_a.run_id).await.unwrap().unwrap();
+    assert_eq!(still.state, RunState::Waiting, "the suspension waits for its own wake");
+    assert_eq!(suspended.model.requests().len(), 1);
+    assert_eq!(hooks_a.take(), Vec::<Seen>::new());
+    worker_a.shutdown().await;
+    worker_b.shutdown().await;
+}
+
+/// Gate (spec 3.2 §10 S3): under `GovernanceRefusal::Fail` a freeze after the run made a
+/// call ends the attempt with the control's error, as before.
+#[tokio::test]
+async fn a_freeze_after_a_call_fails_the_run_under_governance_refusal_fail() {
+    let control = GovernanceControl::new();
+    let payment = Payment::new().governed(&control);
+    let hooks = Recorder::new(&payment.runs);
+    let config = worker_config("w").with_governance_refusal(GovernanceRefusal::Fail);
+    let worker = payment.worker_with(&hooks, config).spawn();
+    let run = payment.enqueue().await;
+
+    payment.freeze_after_the_charge(&control, "incident 14").await;
+    let failed = run_in_state(&payment.runs, &run.run_id, RunState::Failed).await;
+
+    assert!(
+        failed.error.as_deref().is_some_and(|error| error.contains("frozen")),
+        "the run carries the control's error: {failed:?}"
+    );
+    assert_eq!(payment.model.requests().len(), 1);
+    assert_eq!(hooks.take(), vec![Seen::claim(), Seen::finish(RunState::Failed)]);
+    assert!(worker.frozen_runs().is_empty());
+    control.unfreeze();
+    tokio::time::sleep(POLL * 5).await;
+    assert_eq!(payment.runs.get(&run.run_id).await.unwrap().unwrap().state, RunState::Failed);
+    worker.shutdown().await;
+}
+
+/// Gate (spec 3.2 §10 S3): a freeze that lands while a tool batch runs refuses the batch's
+/// next call on the governed path. That call is answered `not run` and never executes, the run
+/// parks at the next model-call boundary with `ParkReason::Frozen`, and after the unfreeze the
+/// resumed turn sends both responses, with the completed charge executed once.
+#[tokio::test]
+async fn a_freeze_inside_a_tool_batch_answers_the_rest_not_run_and_parks_the_run() {
+    let control = GovernanceControl::new();
+    let payment = Payment::new().governed(&control).with_model(ScriptedLlm::new(
+        "batch-script",
+        [
+            ScriptedResponse::function_calls([
+                ("charge_card", json!({ "amountCents": 1999 })),
+                ("charge_card", json!({ "amountCents": 500 })),
+            ]),
+            ScriptedResponse::text("charge status: charged"),
+        ],
+    ));
+    let hooks = Recorder::new(&payment.runs);
+    let worker = payment.worker("w", &hooks).spawn();
+    let run = payment.enqueue().await;
+
+    // The first charge is executing when the freeze lands; the second meets the kill switch.
+    payment.freeze_after_the_charge(&control, "incident 15").await;
+    let parked = run_in_state(&payment.runs, &run.run_id, RunState::Waiting).await;
+
+    assert_eq!(
+        (parked.attempt, parked.lease_owner.as_deref(), &parked.error),
+        (1, None, &None),
+        "parked at the same attempt, not failed: {parked:?}"
+    );
+    assert_eq!(hooks.take(), vec![Seen::claim(), Seen::park(ParkReason::Frozen)]);
+    assert_eq!(payment.model.requests().len(), 1, "no model call after the freeze");
+    assert_eq!(payment.charges.load(Ordering::SeqCst), 1, "the refused charge never runs");
+
+    control.unfreeze();
+    let finished = run_in_state(&payment.runs, &run.run_id, RunState::Completed).await;
+    assert_eq!(finished.attempt, 1);
+    assert_eq!(payment.charges.load(Ordering::SeqCst), 1, "no charge runs after the resume");
+    let sent = payment.charge_responses_sent();
+    assert_eq!(sent.len(), 2, "one model call before the freeze and one after: {sent:?}");
+    assert_eq!(sent[1].len(), 2, "the resumed turn answers both calls: {sent:?}");
+    assert_eq!(sent[1][0], json!({ "status": "charged" }));
+    let not_run = sent[1][1]["error"].as_str().expect("the refused call is answered");
+    assert!(not_run.starts_with("not run: execution is frozen"), "{not_run}");
+    assert!(not_run.contains("incident 15"), "{not_run}");
+    assert_eq!(hooks.take(), vec![Seen::claim(), Seen::finish(RunState::Completed)]);
+    worker.shutdown().await;
+}
+
+/// Gate (spec 3.2 §10 S3): a freeze lifted before the claim loop next reads the control
+/// still wakes the run it parked. The loop polls every ten seconds and the unfreeze lands
+/// inside `on_park`, so the loop never sees the control refuse.
+#[tokio::test]
+async fn a_freeze_lifted_before_the_loop_looks_still_wakes_the_run_it_parked() {
+    let control = GovernanceControl::new();
+    let payment = Payment::new().governed(&control);
+    let hooks = Recorder::new(&payment.runs);
+    *hooks.unfreeze_on_park.lock().unwrap() = Some(control.clone());
+    let config = worker_config("w").with_poll_interval(Duration::from_secs(10));
+    let worker = payment.worker_with(&hooks, config).spawn();
+    let run = payment.enqueue().await;
+    worker.wake();
+
+    payment.freeze_after_the_charge(&control, "incident 16").await;
+    let finished = run_in_state(&payment.runs, &run.run_id, RunState::Completed).await;
+
+    assert_eq!((finished.attempt, payment.charges.load(Ordering::SeqCst)), (1, 1));
+    assert_eq!(
+        hooks.take(),
+        vec![
+            Seen::claim(),
+            Seen::park(ParkReason::Frozen),
+            Seen::claim(),
+            Seen::finish(RunState::Completed)
+        ]
+    );
+    assert!(worker.frozen_runs().is_empty());
+    worker.shutdown().await;
+}
+
+/// Gate (spec 3.2 §10 S3): only a worker with a governance control parks. On a worker
+/// without one, a refusal from the runner's own control after the charge ends the attempt
+/// with the control's error, as before, rather than parking a run nothing would wake.
+#[tokio::test]
+async fn a_worker_without_a_control_fails_a_run_its_runner_refuses() {
+    let control = GovernanceControl::new();
+    let payment = Payment::new().governed_runner(&control);
+    let hooks = Recorder::new(&payment.runs);
+    let worker = payment.worker("w", &hooks).spawn();
+    let run = payment.enqueue().await;
+
+    payment.freeze_after_the_charge(&control, "incident 17").await;
+    let failed = run_in_state(&payment.runs, &run.run_id, RunState::Failed).await;
+
+    assert!(
+        failed.error.as_deref().is_some_and(|error| error.contains("incident 17")),
+        "the run carries the control's error: {failed:?}"
+    );
+    assert_eq!(hooks.take(), vec![Seen::claim(), Seen::finish(RunState::Failed)]);
+    assert!(worker.frozen_runs().is_empty());
+    worker.shutdown().await;
+}
+
+/// Gate (spec 3.2 §7.9, §13 Q2): an idle worker whose poll interval is long claims a delayed
+/// run at its `not_before`, not at the next poll.
+#[tokio::test]
+async fn a_delayed_run_is_claimed_at_its_not_before_without_waiting_for_the_poll() {
+    let payment = Payment::new();
+    payment.release.add_permits(1);
+    let hooks = Recorder::new(&payment.runs);
+    let config = worker_config("w").with_poll_interval(Duration::from_secs(10));
+    let worker = payment.worker_with(&hooks, config).spawn();
+    // The loop is idle on its long poll when the run arrives, so only the wake reaches it.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let at = chrono::Utc::now() + chrono::Duration::milliseconds(300);
+    let run = payment.enqueue_run(payment.new_run().with_not_before(at)).await;
+    worker.wake();
+    let started = tokio::time::Instant::now();
+    let finished = run_in_state(&payment.runs, &run.run_id, RunState::Completed).await;
+
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "claimed at its time, not at the next poll: took {:?}",
+        started.elapsed()
+    );
+    assert!(finished.updated_at >= at, "not claimed before its time");
+    assert_eq!(hooks.take(), vec![Seen::claim(), Seen::finish(RunState::Completed)]);
+    worker.shutdown().await;
 }
 
 /// Gate: `suspend` reaches only agent attempts in flight on the worker: a workflow run and
