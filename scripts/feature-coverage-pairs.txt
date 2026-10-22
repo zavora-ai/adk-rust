@@ -56,6 +56,9 @@
 1 adk-harness docker,hooks
 # The managed form: HarnessDef, HarnessResolver and the managed runtime round trips.
 1 adk-harness managed
+# The kernel host (spec 3.2 §10 HK1, HK3): `Harness::kernel`, the approval wake and the goal
+# stall; no workspace member enables it until adk-cli's `harness` does.
+1 adk-harness kernel
 # The browser and computer-use packs (spec 3.1 §7.24): adk-browser and adk-computer-use enter
 # the harness only through them; `web-fixture` admits the loopback fixture page.
 1 adk-harness browser,computer-use,web-fixture doc
