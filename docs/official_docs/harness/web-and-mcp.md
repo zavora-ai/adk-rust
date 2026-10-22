@@ -109,6 +109,10 @@ from what the model writes:
 | `OpenAIResponsesClient` on `https://api.deepseek.com` with `deepseek-v4-pro` | `DeepSeekWebSearchTool` | `deepseek_web_search` | None documented: every domain |
 | `OpenAIClient` (Chat Completions), `DeepSeekClient`, `OllamaModel`, `GroqClient`, `BedrockClient`, mistral.rs, any other endpoint | None | — | Configure a search provider |
 
+`adk-rust --provider openai` builds `OpenAIResponsesClient` for GPT-5.6 and every later GPT
+generation, so a session on those models searches with OpenAI's `web_search` by default; an
+older model stays on `OpenAIClient` (Chat Completions) and has no provider search.
+
 DeepSeek runs its search on the Responses endpoint for `deepseek-v4-pro` (`deepseek-flash`
 ignores the tool) and on its Anthropic-compatible endpoint; its Chat Completions endpoint,
 which `DeepSeekClient` uses, accepts function tools only

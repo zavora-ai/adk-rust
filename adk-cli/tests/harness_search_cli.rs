@@ -66,3 +66,29 @@ fn the_banner_and_web_name_where_search_runs() {
     terminal.expect("off (provider search is off and no search provider is configured)");
     terminal.finish();
 }
+
+#[test]
+fn an_openai_session_searches_with_openai_by_default() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let dir = ws.path().display().to_string();
+    // No request is sent: the banner is decided from the client the CLI builds.
+    let args = [
+        "--dir",
+        dir.as_str(),
+        "--ephemeral",
+        "--provider",
+        "openai",
+        "--model",
+        "gpt-5.6-terra",
+        "--api-key",
+        "sk-test-not-sent",
+    ];
+    let mut terminal = Terminal::spawn_in(&args, home.path(), ws.path());
+    terminal.expect("Search    : ");
+    terminal.expect("openai openai_web_search, run by the provider: every domain");
+    terminal.expect("You >");
+    terminal.send("/web\r");
+    terminal.expect("Search: openai openai_web_search, run by the provider");
+    terminal.finish();
+}

@@ -362,6 +362,21 @@ async fn create_model(
         Provider::Model(ModelProvider::Openai) => {
             reject_unsupported_thinking_budget(provider, thinking_budget)?;
             let key = api_key.ok_or_else(|| anyhow::anyhow!("OpenAI requires an API key"))?;
+            // The Responses API serves OpenAI's provider search and the Responses-only
+            // features (spec 3.1 §7.20); older models stay on Chat Completions.
+            if openai_responses_model(model) {
+                let config = adk_model::openai::OpenAIResponsesConfig::new(key, model);
+                // Chat Completions does not store responses by default; keep that.
+                let store_off: adk_model::openai::RequestAdapter = Arc::new(|body, _headers| {
+                    if let Some(body) = body.as_object_mut() {
+                        body.entry("store").or_insert(serde_json::Value::Bool(false));
+                    }
+                    Ok(())
+                });
+                let client = adk_model::openai::OpenAIResponsesClient::new(config)?
+                    .with_request_adapter(store_off);
+                return Ok(plain(Arc::new(client)));
+            }
             let config = adk_model::OpenAIConfig::new(key, model);
             Ok(plain(Arc::new(adk_model::OpenAIClient::new(config)?)))
         }
@@ -424,6 +439,24 @@ async fn create_model(
     }
 }
 
+/// Whether the CLI runs `model` on the OpenAI Responses API: GPT-5.6 and every later GPT
+/// generation, the models whose tool calls `OpenAIClient` already sends there because Chat
+/// Completions rejects them with reasoning on.
+#[cfg(feature = "openai")]
+fn openai_responses_model(model: &str) -> bool {
+    let model = model.strip_prefix("ft:").unwrap_or(model);
+    let Some(version) = model.strip_prefix("gpt-") else {
+        return false;
+    };
+    let end = version.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(version.len());
+    let mut numbers = version[..end].split('.').map(str::parse::<u32>);
+    match (numbers.next(), numbers.next()) {
+        (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= (5, 6),
+        (Some(Ok(major)), None) => major >= 6,
+        _ => false,
+    }
+}
+
 fn reject_unsupported_thinking_budget(
     provider: Provider,
     thinking_budget: Option<u32>,
@@ -440,5 +473,29 @@ fn map_thinking_mode(mode: ThinkingMode) -> ThinkingDisplayMode {
         ThinkingMode::Auto => ThinkingDisplayMode::Auto,
         ThinkingMode::Show => ThinkingDisplayMode::Show,
         ThinkingMode::Hide => ThinkingDisplayMode::Hide,
+    }
+}
+
+#[cfg(all(test, feature = "openai"))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn openai_models_on_the_responses_api_serve_the_provider_search() {
+        let openai = Provider::Model(ModelProvider::Openai);
+        for model in ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "ft:gpt-5.6-terra:acme::x1"] {
+            let built = create_model(openai, model, Some("sk-test"), None).await.unwrap();
+            let search = built.llm.native_web_search().expect(model);
+            assert_eq!(
+                (search.provider, search.tool),
+                ("openai", adk_core::NativeWebSearchTool::OpenAiWebSearch),
+                "{model}"
+            );
+        }
+        // Older models stay on Chat Completions, which serves no provider search.
+        for model in ["gpt-5.5", "gpt-5", "gpt-4.1", "o4-mini"] {
+            let built = create_model(openai, model, Some("sk-test"), None).await.unwrap();
+            assert!(built.llm.native_web_search().is_none(), "{model}");
+        }
     }
 }
