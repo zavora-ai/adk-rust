@@ -714,6 +714,7 @@ dependencies = [
  "axum",
  "chrono",
  "dirs 7.0.0",
+ "fred",
  "futures",
  "keyring",
  "libc",

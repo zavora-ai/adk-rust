@@ -706,12 +706,42 @@ impl HarnessAgentBuilder {
         self
     }
 
-    /// Where plan graphs are checkpointed (spec 3.1 §7.11; default in memory): SQLite
-    /// beside the harness stores in the CLI, the session's backend on a server.
+    /// Where plan graphs and the `Graph` goal engine are checkpointed (spec 3.1 §7.11,
+    /// §13 Q5). Without this or [`plan_checkpoint_store`](Self::plan_checkpoint_store),
+    /// plans live in memory and do not survive a restart; `adk-rust` checkpoints them in
+    /// the backend that holds its sessions.
     #[cfg(feature = "graph")]
     pub fn plan_checkpointer(mut self, checkpointer: Arc<dyn adk_graph::Checkpointer>) -> Self {
         self.plan_checkpointer = Some(checkpointer);
         self
+    }
+
+    /// Checkpoints plan graphs and the `Graph` goal engine in the store `url` names
+    /// (spec 3.1 §7.11, §13 Q5): `sqlite://`, `postgres://`, `redis://`, `mongodb://`,
+    /// `neo4j://` or `firestore://`, opened by [`checkpointer_from_url`](crate::checkpointer_from_url).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # async fn example(model: std::sync::Arc<dyn adk_core::Llm>) -> adk_core::Result<()> {
+    /// let agent = adk_harness::HarnessAgent::builder("harness")
+    ///     .model(model)
+    ///     .plan_checkpoint_store("postgres://harness@db/harness")
+    ///     .await?
+    ///     .build()?;
+    /// # let _ = agent;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`checkpointer_from_url`](crate::checkpointer_from_url): an
+    /// unknown scheme, a scheme whose feature this build does not include, or a backend
+    /// that cannot be opened.
+    #[cfg(feature = "graph")]
+    pub async fn plan_checkpoint_store(self, url: &str) -> Result<Self> {
+        Ok(self.plan_checkpointer(crate::checkpoint::checkpointer_from_url(url).await?))
     }
 
     /// Long-term facts (spec 3.1 §7.15.2; off until set): recall into each user turn,

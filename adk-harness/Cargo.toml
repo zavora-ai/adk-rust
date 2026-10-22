@@ -53,6 +53,17 @@ memory-graph = ["memory", "dep:adk-memory"]
 hooks = []
 # SQLite backends for the mode, standing-rule and shell-ledger stores.
 sqlite = ["dep:sqlx", "sqlx/sqlite", "adk-graph?/sqlite", "adk-session?/sqlite"]
+# PostgreSQL backends for the mode and standing-rule stores, shared by every replica of a
+# served harness, and the plan checkpointer (spec 3.1 §7.4, §7.5, §7.11, §13 Q2, Q5).
+postgres = ["dep:sqlx", "sqlx/postgres", "dep:adk-session", "adk-session/postgres", "adk-graph?/postgres"]
+# Redis backends for the mode and standing-rule stores, and the plan checkpointer
+# (spec 3.1 §7.4, §7.5, §7.11, §13 Q2, Q5).
+redis = ["dep:fred", "dep:adk-session", "adk-session/redis", "adk-graph?/redis"]
+# Plan checkpointers on MongoDB, Neo4j and Firestore for `checkpointer_from_url`
+# (spec 3.1 §7.11, §13 Q5).
+mongodb = ["adk-graph?/mongodb"]
+neo4j = ["adk-graph?/neo4j"]
+firestore = ["adk-graph?/firestore"]
 # The store envelope of spec 3.1 §7.12: sessions, approvals and the SQLite stores sealed
 # under one keyring from a secret provider, the OS keychain or an environment variable.
 encrypted = ["dep:adk-session", "adk-session/encrypted-session", "dep:keyring"]
@@ -101,6 +112,7 @@ async-stream.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 dirs = "7"
+fred = { version = "10", optional = true, features = ["i-scripts"] }
 futures.workspace = true
 regex = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }

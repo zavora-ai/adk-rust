@@ -60,6 +60,8 @@
 mod agent;
 mod audit;
 mod builder;
+#[cfg(feature = "graph")]
+mod checkpoint;
 mod config;
 #[cfg(feature = "encrypted")]
 pub mod encrypted;
@@ -103,6 +105,10 @@ pub mod conformance;
 pub mod hooks;
 
 pub use agent::{HARNESS_UNGOVERNED_CODE, HarnessAgent, HarnessInfo, HarnessLayer, HarnessRuntime};
+#[cfg(feature = "postgres")]
+pub use approvals::PostgresStandingRuleStore;
+#[cfg(feature = "redis")]
+pub use approvals::RedisStandingRuleStore;
 #[cfg(feature = "sqlite")]
 pub use approvals::SqliteStandingRuleStore;
 pub use approvals::{
@@ -115,6 +121,10 @@ pub use approvals::{
 #[cfg(feature = "observe")]
 pub use builder::LoopGuard;
 pub use builder::{HarnessAgentBuilder, Pack};
+#[cfg(all(feature = "graph", feature = "encrypted"))]
+pub use checkpoint::SealedCheckpointer;
+#[cfg(feature = "graph")]
+pub use checkpoint::checkpointer_from_url;
 pub use config::{HARNESS_CONFIG_FILE, HarnessConfig};
 #[cfg(any(feature = "memory-embeddings", feature = "memory-embeddings-local"))]
 pub use facts::RagEmbedder;
@@ -127,6 +137,7 @@ pub use facts::{
     LongTermMemoryConfig, MemoryFact, MemoryServiceIndex, Provenance, fact_digest,
     redact_fact_text,
 };
+pub use fsutil::redact_store_url;
 #[cfg(feature = "graph")]
 pub use goal::GoalEngine;
 #[cfg(feature = "sqlite")]
@@ -155,6 +166,10 @@ pub use memory::{
     FileMemory, MEMORY_INDEX_FILE, MEMORY_INDEX_MARKER, MemoryChange, MemoryConfig, MemoryLayout,
     MemoryLimits, MemoryTopic, MemoryWritePolicy, project_slug,
 };
+#[cfg(feature = "postgres")]
+pub use mode::PostgresModeStore;
+#[cfg(feature = "redis")]
+pub use mode::RedisModeStore;
 #[cfg(feature = "sqlite")]
 pub use mode::SqliteModeStore;
 pub use mode::{

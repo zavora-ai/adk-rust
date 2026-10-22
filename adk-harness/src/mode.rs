@@ -583,6 +583,211 @@ impl ModeStore for SqliteModeStore {
     }
 }
 
+/// Migrations of [`PostgresModeStore`], recorded in `_adk_harness_mode_migrations`.
+#[cfg(feature = "postgres")]
+const POSTGRES_MODE_MIGRATIONS: &[(i64, &str, &str)] = &[(
+    1,
+    "create harness mode table",
+    "CREATE TABLE IF NOT EXISTS adk_harness_modes (\
+        app_name TEXT NOT NULL, user_id TEXT NOT NULL, session_id TEXT NOT NULL, \
+        record TEXT NOT NULL, PRIMARY KEY (app_name, user_id, session_id))",
+)];
+
+/// A [`ModeStore`] in PostgreSQL, shared by every replica of a served harness (spec 3.1
+/// §7.4, §13 Q2; feature `postgres`).
+///
+/// The table is `adk_harness_modes`, keyed as the SQLite store's is by (`app_name`,
+/// `user_id`, `session_id`). Every [`get`](ModeStore::get) reads the row, so a mode one
+/// replica tightens applies at the next evaluation on every replica (spec 3.1 §9.2 I14).
+/// [`migrate`](Self::migrate) records its steps in `_adk_harness_mode_migrations` under an
+/// advisory lock, so replicas starting together migrate one at a time.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use adk_harness::{HarnessMode, ModeRecord, ModeSource, ModeStore, PostgresModeStore};
+///
+/// # async fn example() -> adk_core::Result<()> {
+/// let store = PostgresModeStore::connect("postgres://localhost/app").await?;
+/// store.migrate().await?;
+/// store.set("app", "alice", "s1", ModeRecord::new(HarnessMode::Plan, ModeSource::User)).await?;
+/// assert_eq!(store.get("app", "alice", "s1").await?.unwrap().mode, HarnessMode::Plan);
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(feature = "postgres")]
+#[derive(Debug, Clone)]
+pub struct PostgresModeStore {
+    pool: sqlx::PgPool,
+}
+
+#[cfg(feature = "postgres")]
+impl PostgresModeStore {
+    /// A store over `pool`, such as the one the session service and the approval store use.
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Connects to `database_url` with a pool of its own.
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.store.database` when the server cannot be reached.
+    pub async fn connect(database_url: &str) -> Result<Self> {
+        let pool = sqlx::PgPool::connect(database_url).await.map_err(crate::fsutil::db_error)?;
+        Ok(Self::new(pool))
+    }
+
+    /// Creates or upgrades the store's table.
+    ///
+    /// # Errors
+    ///
+    /// Returns the database error when a statement fails, or a version mismatch when the
+    /// database was migrated by a newer release.
+    pub async fn migrate(&self) -> Result<()> {
+        crate::fsutil::migrate_postgres(
+            &self.pool,
+            "_adk_harness_mode_migrations",
+            POSTGRES_MODE_MIGRATIONS,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "postgres")]
+#[async_trait]
+impl ModeStore for PostgresModeStore {
+    async fn get(&self, app: &str, user: &str, session: &str) -> Result<Option<ModeRecord>> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT record FROM adk_harness_modes \
+             WHERE app_name = $1 AND user_id = $2 AND session_id = $3",
+        )
+        .bind(app)
+        .bind(user)
+        .bind(session)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        Ok(row.map(|(text,)| {
+            let value = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
+            ModeRecord::from_json_lenient(&value)
+        }))
+    }
+
+    async fn set(&self, app: &str, user: &str, session: &str, record: ModeRecord) -> Result<()> {
+        let text = serde_json::to_string(&record)
+            .map_err(|error| crate::fsutil::serialize_error("mode record", &error))?;
+        sqlx::query(
+            "INSERT INTO adk_harness_modes (app_name, user_id, session_id, record) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (app_name, user_id, session_id) DO UPDATE SET record = excluded.record",
+        )
+        .bind(app)
+        .bind(user)
+        .bind(session)
+        .bind(text)
+        .execute(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        Ok(())
+    }
+}
+
+/// A [`ModeStore`] in Redis, shared by every replica of a served harness (spec 3.1 §7.4,
+/// §13 Q2; feature `redis`).
+///
+/// One string per session at `<namespace>:{<app>}:mode:<user>:<session>` holds the
+/// record's JSON. The namespace is `adk:harness` unless
+/// [`with_namespace`](Self::with_namespace) sets another; the app segment is the key's
+/// hash tag, so every key of an app sits in one Redis Cluster slot. App, user and session
+/// segments are percent-encoded (`%`, `:`, `{`, `}`). Every [`get`](ModeStore::get) reads
+/// the key, so a mode one replica tightens applies at the next evaluation on every replica
+/// (spec 3.1 §9.2 I14).
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use adk_harness::{HarnessMode, ModeRecord, ModeSource, ModeStore, RedisModeStore};
+///
+/// # async fn example() -> adk_core::Result<()> {
+/// let store = RedisModeStore::connect("redis://localhost:6379").await?;
+/// store.set("app", "alice", "s1", ModeRecord::new(HarnessMode::Plan, ModeSource::User)).await?;
+/// assert_eq!(store.get("app", "alice", "s1").await?.unwrap().mode, HarnessMode::Plan);
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(feature = "redis")]
+#[derive(Debug, Clone)]
+pub struct RedisModeStore {
+    client: fred::prelude::Client,
+    namespace: String,
+}
+
+#[cfg(feature = "redis")]
+impl RedisModeStore {
+    /// A store over an initialized client, such as one shared with the rule store.
+    pub fn from_client(client: fred::prelude::Client) -> Self {
+        Self { client, namespace: crate::fsutil::REDIS_NAMESPACE.to_string() }
+    }
+
+    /// Connects to `url`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.store.database` when the server cannot be reached.
+    pub async fn connect(url: &str) -> Result<Self> {
+        Ok(Self::from_client(crate::fsutil::redis_connect(url).await?))
+    }
+
+    /// Keeps the store's keys under `namespace` instead of `adk:harness`, for example to
+    /// separate deployments that share a server.
+    #[must_use]
+    pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.namespace = crate::fsutil::redis_namespace(&namespace.into());
+        self
+    }
+
+    fn key(&self, app: &str, user: &str, session: &str) -> String {
+        use crate::fsutil::redis_segment;
+        format!(
+            "{}:{{{}}}:mode:{}:{}",
+            self.namespace,
+            redis_segment(app),
+            redis_segment(user),
+            redis_segment(session)
+        )
+    }
+}
+
+#[cfg(feature = "redis")]
+#[async_trait]
+impl ModeStore for RedisModeStore {
+    async fn get(&self, app: &str, user: &str, session: &str) -> Result<Option<ModeRecord>> {
+        use fred::prelude::KeysInterface as _;
+        let text: Option<String> = self
+            .client
+            .get(self.key(app, user, session))
+            .await
+            .map_err(|error| crate::fsutil::redis_error("read a mode record", &error))?;
+        Ok(text.map(|text| {
+            let value = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
+            ModeRecord::from_json_lenient(&value)
+        }))
+    }
+
+    async fn set(&self, app: &str, user: &str, session: &str, record: ModeRecord) -> Result<()> {
+        use fred::prelude::KeysInterface as _;
+        let text = serde_json::to_string(&record)
+            .map_err(|error| crate::fsutil::serialize_error("mode record", &error))?;
+        let () = self
+            .client
+            .set(self.key(app, user, session), text, None, None, false)
+            .await
+            .map_err(|error| crate::fsutil::redis_error("write a mode record", &error))?;
+        Ok(())
+    }
+}
+
 /// How a requested mode change relates to the current mode (spec 3.1 §7.4).
 ///
 /// # Example

@@ -75,7 +75,7 @@ pub(crate) async fn write_atomic_private(path: &Path, bytes: &[u8]) -> Result<()
 }
 
 /// Maps a database error to a retryable store error.
-#[cfg(feature = "sqlite")]
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
 pub(crate) fn db_error(error: sqlx::Error) -> AdkError {
     AdkError::new(
         ErrorComponent::Agent,
@@ -83,6 +83,131 @@ pub(crate) fn db_error(error: sqlx::Error) -> AdkError {
         "harness.store.database",
         format!("harness store database error: {error}"),
     )
+}
+
+/// Runs a PostgreSQL store's migrations under a session-level advisory lock keyed by
+/// `registry_table`, so replicas starting together migrate one at a time (spec 3.1 §13 Q2).
+///
+/// The lock is held on a connection opened outside `pool`, so a one-connection pool can
+/// still run the statements; closing that connection releases the lock.
+#[cfg(feature = "postgres")]
+pub(crate) fn migrate_postgres(
+    pool: &sqlx::PgPool,
+    registry_table: &'static str,
+    steps: &'static [(i64, &'static str, &'static str)],
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+    use sqlx::Connection as _;
+
+    // Boxed so the future is checked for `Send` here, with concrete lifetimes.
+    let pool = pool.clone();
+    Box::pin(async move {
+        let key = registry_table
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+            })
+            .cast_signed();
+        let mut lock =
+            sqlx::PgConnection::connect_with(&pool.connect_options()).await.map_err(db_error)?;
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(key)
+            .execute(&mut lock)
+            .await
+            .map_err(db_error)?;
+        let result = adk_session::migration::pg_runner::run_sql_migrations(
+            &pool,
+            registry_table,
+            steps,
+            || async { Ok(false) },
+        )
+        .await;
+        let _ = lock.close().await;
+        result
+    })
+}
+
+/// The key namespace of the Redis stores unless one is set.
+#[cfg(feature = "redis")]
+pub(crate) const REDIS_NAMESPACE: &str = "adk:harness";
+
+/// Connects to the Redis server at `url`.
+#[cfg(feature = "redis")]
+pub(crate) async fn redis_connect(url: &str) -> Result<fred::prelude::Client> {
+    use fred::prelude::ClientLike as _;
+    let config = fred::prelude::Config::from_url(url)
+        .map_err(|error| redis_error("parse the Redis URL", &error))?;
+    let client = fred::prelude::Builder::from_config(config)
+        .build()
+        .map_err(|error| redis_error("build the Redis client", &error))?;
+    client.init().await.map_err(|error| redis_error("connect to Redis", &error))?;
+    Ok(client)
+}
+
+/// Maps a Redis error to a retryable store error.
+#[cfg(feature = "redis")]
+pub(crate) fn redis_error(action: &str, error: &dyn std::fmt::Display) -> AdkError {
+    AdkError::new(
+        ErrorComponent::Agent,
+        ErrorCategory::Unavailable,
+        "harness.store.database",
+        format!("harness store could not {action}: {error}"),
+    )
+}
+
+/// Percent-encodes the characters that delimit Redis key segments and hash tags, so an
+/// identifier cannot spill into the next segment or move a key's hash slot.
+#[cfg(feature = "redis")]
+pub(crate) fn redis_segment(segment: &str) -> String {
+    let mut encoded = String::with_capacity(segment.len());
+    for c in segment.chars() {
+        match c {
+            '%' => encoded.push_str("%25"),
+            ':' => encoded.push_str("%3A"),
+            '{' => encoded.push_str("%7B"),
+            '}' => encoded.push_str("%7D"),
+            other => encoded.push(other),
+        }
+    }
+    encoded
+}
+
+/// A key namespace with its hash-tag braces encoded; colons stay, as separators.
+#[cfg(feature = "redis")]
+pub(crate) fn redis_namespace(namespace: &str) -> String {
+    namespace.replace('{', "%7B").replace('}', "%7D")
+}
+
+/// `url` with the password of its userinfo replaced by `***`, for banners, logs and
+/// errors (spec 3.1 §13 Q5).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::redact_store_url;
+///
+/// assert_eq!(
+///     redact_store_url("postgres://app:s3cret@db:5432/harness"),
+///     "postgres://app:***@db:5432/harness"
+/// );
+/// assert_eq!(redact_store_url("redis://localhost:6379"), "redis://localhost:6379");
+/// ```
+pub fn redact_store_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(authority_end);
+    match authority.rsplit_once('@') {
+        Some((userinfo, host)) => {
+            let user = userinfo.split_once(':').map_or(userinfo, |(user, _)| user);
+            if userinfo.contains(':') {
+                format!("{scheme}://{user}:***@{host}{tail}")
+            } else {
+                format!("{scheme}://{user}@{host}{tail}")
+            }
+        }
+        None => url.to_string(),
+    }
 }
 
 /// Maps a serialization failure of a store record.

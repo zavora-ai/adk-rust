@@ -4,7 +4,9 @@
 //! [`mode_store_conformance_tests!`](crate::mode_store_conformance_tests) and
 //! [`standing_rule_store_conformance_tests!`](crate::standing_rule_store_conformance_tests)
 //! macros generate one `#[tokio::test]` per case for a store expression, evaluated afresh
-//! in each test.
+//! in each test. [`shared_store_conformance_tests!`](crate::shared_store_conformance_tests)
+//! runs the cases for two instances over one backend, as two replicas of a served harness
+//! hold them (spec 3.1 §13 Q2).
 //!
 //! # Example
 //!
@@ -76,6 +78,26 @@ pub mod mode_store {
     }
 }
 
+/// Cases for two [`ModeStore`](crate::ModeStore) instances over one shared backend, as
+/// two replicas of a served harness hold (spec 3.1 §13 Q2).
+pub mod shared_mode_store {
+    use crate::{HarnessMode, ModeRecord, ModeSource, ModeStore};
+
+    /// A record written through one instance is read through the other, and a tightening
+    /// through either applies at the other's next read (spec 3.1 §9.2 I14).
+    pub async fn changes_reach_every_instance(first: &dyn ModeStore, second: &dyn ModeStore) {
+        assert!(second.get("app", "alice", "s1").await.unwrap().is_none());
+        let mut auto = ModeRecord::new(HarnessMode::Auto, ModeSource::User);
+        auto.revision = 1;
+        first.set("app", "alice", "s1", auto.clone()).await.unwrap();
+        assert_eq!(second.get("app", "alice", "s1").await.unwrap(), Some(auto));
+        let mut tightened = ModeRecord::new(HarnessMode::ReadOnly, ModeSource::SystemTighten);
+        tightened.revision = 2;
+        second.set("app", "alice", "s1", tightened.clone()).await.unwrap();
+        assert_eq!(first.get("app", "alice", "s1").await.unwrap(), Some(tightened));
+    }
+}
+
 /// [`StandingRuleStore`](crate::StandingRuleStore) cases.
 pub mod standing_rule_store {
     use adk_core::principal::{SubjectKind, SubjectRef};
@@ -84,6 +106,12 @@ pub mod standing_rule_store {
     use crate::{
         OriginPin, RulePredicate, RuleScope, StandingDecision, StandingRule, StandingRuleStore,
     };
+
+    /// The rule the cases grant: `bash` with a `cargo test` prefix, allowed, user-scoped
+    /// unless `session` names a session.
+    pub fn rule_for_tests(id: &str, app: &str, user: &str, session: Option<&str>) -> StandingRule {
+        rule(id, app, user, session)
+    }
 
     fn rule(id: &str, app: &str, user: &str, session: Option<&str>) -> StandingRule {
         let scope = match session {
@@ -170,6 +198,105 @@ pub mod standing_rule_store {
         assert!(!store.revoke("app", "r1").await.unwrap());
         assert_eq!(ids(&store.list("app", "alice").await.unwrap()), ["r2"]);
     }
+
+    /// Rules read back from the store keep their decision and expiry, so the matcher
+    /// lets a Deny beat an Allow and refuses an expired rule (spec 3.1 §7.5).
+    pub async fn deny_beats_allow_and_expiry_hold(store: &dyn StandingRuleStore) {
+        use adk_core::ToolOrigin;
+        use serde_json::json;
+
+        use crate::approvals::matcher::{RuleCall, RuleOutcome, evaluate_standing_rules};
+        use crate::{Isolation, ToolKind};
+
+        let origin = ToolOrigin::new("static", &json!({ "name": "bash" }), None);
+        let pinned = |id: &str, tokens: &[&str]| {
+            let mut rule = rule(id, "app", "alice", None);
+            rule.origin = OriginPin::exact(&origin);
+            rule.predicates = vec![RulePredicate::ShellPrefix {
+                pointer: "/command".into(),
+                tokens: tokens.iter().map(|token| (*token).to_string()).collect(),
+            }];
+            rule
+        };
+        let mut deny = pinned("deny", &["cargo", "test"]);
+        deny.decision = StandingDecision::Deny { reason: "not here".into() };
+        let mut expired = pinned("expired", &["make"]);
+        expired.expires_at = Some(Utc::now() - chrono::Duration::minutes(1));
+        for granted in [pinned("allow", &["cargo", "test"]), deny, expired] {
+            store.grant(granted).await.unwrap();
+        }
+        let acting = adk_core::ActingContext::derived(
+            "app",
+            "harness",
+            "alice",
+            adk_core::SubjectKind::Human,
+        );
+        let check = |rules: Vec<StandingRule>, command: &'static str| {
+            let args = json!({ "command": command });
+            let call = RuleCall {
+                app_name: "app",
+                user_id: "alice",
+                session_id: "s1",
+                acting: Some(&acting),
+                tool_name: "bash",
+                args: &args,
+                origin: Some(&origin),
+                kind: ToolKind::Shell(Isolation::Host),
+                workspace_root: std::path::Path::new("/repo"),
+            };
+            evaluate_standing_rules(&rules, &call, Utc::now())
+        };
+        let rules = store.rules_for("app", "alice", "s1").await.unwrap();
+        assert_eq!(
+            check(rules.clone(), "cargo test --quiet").outcome,
+            RuleOutcome::Deny { rule_id: "deny".into(), reason: "not here".into() }
+        );
+        let make = check(rules, "make all");
+        assert_eq!((make.outcome, make.expired), (RuleOutcome::NoMatch, vec!["expired".into()]));
+        assert!(store.revoke("app", "deny").await.unwrap());
+        assert_eq!(
+            check(store.rules_for("app", "alice", "s1").await.unwrap(), "cargo test").outcome,
+            RuleOutcome::Allow { rule_id: "allow".into() }
+        );
+    }
+}
+
+/// Cases for two [`StandingRuleStore`](crate::StandingRuleStore) instances over one
+/// shared backend, as two replicas of a served harness hold (spec 3.1 §13 Q2).
+pub mod shared_standing_rule_store {
+    use crate::{StandingDecision, StandingRuleStore};
+
+    /// A rule granted through one instance is read through the other; a revocation or a
+    /// replacement through either is seen at the other's next read, even after the other
+    /// has read the rule before (spec 3.1 §9.2 I4).
+    pub async fn changes_reach_every_instance(
+        first: &dyn StandingRuleStore,
+        second: &dyn StandingRuleStore,
+    ) {
+        let granted = super::standing_rule_store::rule_for_tests("r1", "app", "alice", None);
+        assert!(second.rules_for("app", "alice", "s1").await.unwrap().is_empty());
+        first.grant(granted.clone()).await.unwrap();
+        assert_eq!(second.rules_for("app", "alice", "s1").await.unwrap(), vec![granted.clone()]);
+        assert_eq!(second.list("app", "alice").await.unwrap(), vec![granted.clone()]);
+
+        assert!(first.revoke("app", "r1").await.unwrap());
+        assert!(second.rules_for("app", "alice", "s1").await.unwrap().is_empty());
+        assert!(second.list("app", "alice").await.unwrap().is_empty());
+
+        second.grant(granted.clone()).await.unwrap();
+        assert_eq!(first.rules_for("app", "alice", "s1").await.unwrap(), vec![granted.clone()]);
+        let mut denied = granted;
+        denied.decision = StandingDecision::Deny { reason: "revoked by policy".into() };
+        first.grant(denied.clone()).await.unwrap();
+        assert_eq!(second.rules_for("app", "alice", "s1").await.unwrap(), vec![denied]);
+
+        let bob = super::standing_rule_store::rule_for_tests("r2", "app", "bob", Some("s9"));
+        second.grant(bob.clone()).await.unwrap();
+        assert_eq!(first.rules_for("app", "bob", "s9").await.unwrap(), vec![bob]);
+        assert!(first.rules_for("app", "bob", "s1").await.unwrap().is_empty());
+        assert!(second.revoke("app", "r2").await.unwrap());
+        assert!(first.rules_for("app", "bob", "s9").await.unwrap().is_empty());
+    }
 }
 
 /// Generates one `#[tokio::test]` per [`conformance::mode_store`](crate::conformance::mode_store)
@@ -253,6 +380,48 @@ macro_rules! standing_rule_store_conformance_tests {
         async fn rule_store_revoke_removes_one_rule() {
             let store = $store;
             $crate::conformance::standing_rule_store::revoke_removes_one_rule(&store).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test]
+        async fn rule_store_deny_beats_allow_and_expiry_hold() {
+            let store = $store;
+            $crate::conformance::standing_rule_store::deny_beats_allow_and_expiry_hold(&store)
+                .await;
+        }
+    };
+}
+
+/// Generates the [`conformance::shared_mode_store`](crate::conformance::shared_mode_store)
+/// and [`conformance::shared_standing_rule_store`](crate::conformance::shared_standing_rule_store)
+/// cases for a backend two replicas share (spec 3.1 §13 Q2): `modes` and `rules` each
+/// evaluate to a pair of stores over one backend, as two replicas hold them.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// adk_harness::shared_store_conformance_tests!(
+///     modes = (adk_harness::FileModeStore::new(&dir), adk_harness::FileModeStore::new(&dir)),
+///     rules = (adk_harness::FileStandingRuleStore::new(&dir), adk_harness::FileStandingRuleStore::new(&dir)),
+/// );
+/// ```
+#[macro_export]
+macro_rules! shared_store_conformance_tests {
+    ($(#[$attr:meta])* modes = $modes:expr, rules = $rules:expr $(,)?) => {
+        $(#[$attr])*
+        #[::tokio::test]
+        async fn shared_mode_store_changes_reach_every_instance() {
+            let (first, second) = $modes;
+            $crate::conformance::shared_mode_store::changes_reach_every_instance(&first, &second)
+                .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test]
+        async fn shared_rule_store_changes_reach_every_instance() {
+            let (first, second) = $rules;
+            $crate::conformance::shared_standing_rule_store::changes_reach_every_instance(
+                &first, &second,
+            )
+            .await;
         }
     };
 }

@@ -113,7 +113,7 @@ effective set, and `on_hold` and `on_stop` notes are shown at the console. See
 | `runner` | on | `adk-runner`, `adk-session` (`Harness`) |
 | `skills` | on | `adk-skill/progressive-disclosure` |
 | `team` | on | `adk-tool`, `adk-agent/team-tools` |
-| `graph` | on | `adk-graph` |
+| `graph` | on | `adk-graph`: the plan graph and the `Graph` goal engine, checkpointed in the store `plan_checkpoint_store(url)` names (`checkpointer_from_url`), in memory without one |
 | `sandbox` | on | `adk-sandbox/sandbox-native` |
 | `observe` | on | `adk-telemetry`, `adk-eval` |
 | `auth` | on | `adk-auth` |
@@ -125,7 +125,9 @@ effective set, and `on_hold` and `on_stop` notes are shown at the console. See
 | `hooks` | off | `toml`; `[[hooks]]` from `.adk/harness.toml`, the user config and the builder, run through the shell's launcher (spec 3.1 §7.22) |
 | `memory-embeddings-local` | off | `RagEmbedder::onnx`: `adk-rag`'s in-process ONNX embedder (`BAAI/bge-small-en-v1.5`), no network and no key; `ort` downloads the onnxruntime binary at build time |
 | `encrypted` | off | The store envelope of spec 3.1 §7.12: `StoreKeyring`, `StoreKeySource` (secret provider, OS keychain, environment), sessions, approvals and the SQLite stores sealed at rest, key rotation |
-| `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores |
+| `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores, and `sqlite://` plan checkpoints |
+| `postgres`, `redis` | off | `PostgresModeStore`, `PostgresStandingRuleStore`, `RedisModeStore`, `RedisStandingRuleStore`: the mode and rule stores every replica of a served harness shares (spec 3.1 §13 Q2), `postgres://` and `redis://` plan checkpoints, and `adk-session`'s stores on the same backend |
+| `mongodb`, `neo4j`, `firestore` | off | `mongodb://`, `neo4j://` and `firestore://` plan checkpoints (spec 3.1 §13 Q5) |
 | `ambient` | off | `adk-agent/ambient`: goals started by triggers |
 | `docker` | off | `adk-sandbox/workspace-docker`: the container shell (`ShellIsolation::Container`, `ContainerBashTool`) |
 | `skills-registry`, `team-acp`, `team-a2a`, `memory-graph` | off | registry skills, ACP and A2A members, graph memory |

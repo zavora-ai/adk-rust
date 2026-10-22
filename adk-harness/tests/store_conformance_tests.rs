@@ -14,6 +14,19 @@ mod file {
     adk_harness::standing_rule_store_conformance_tests!(
         store = adk_harness::FileStandingRuleStore::new(tempfile::tempdir().unwrap().keep())
     );
+    adk_harness::shared_store_conformance_tests!(
+        modes = {
+            let dir = tempfile::tempdir().unwrap().keep();
+            (adk_harness::FileModeStore::new(&dir), adk_harness::FileModeStore::new(&dir))
+        },
+        rules = {
+            let dir = tempfile::tempdir().unwrap().keep();
+            (
+                adk_harness::FileStandingRuleStore::new(&dir),
+                adk_harness::FileStandingRuleStore::new(&dir),
+            )
+        },
+    );
 
     #[tokio::test]
     async fn files_are_private_and_survive_a_reopen() {
@@ -69,6 +82,20 @@ mod sqlite {
             store.migrate().await.unwrap();
             store
         }
+    );
+    adk_harness::shared_store_conformance_tests!(
+        modes = {
+            let pool = pool().await;
+            let store = adk_harness::SqliteModeStore::new(pool.clone());
+            store.migrate().await.unwrap();
+            (store, adk_harness::SqliteModeStore::new(pool))
+        },
+        rules = {
+            let pool = pool().await;
+            let store = adk_harness::SqliteStandingRuleStore::new(pool.clone());
+            store.migrate().await.unwrap();
+            (store, adk_harness::SqliteStandingRuleStore::new(pool))
+        },
     );
 
     #[tokio::test]
