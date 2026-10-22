@@ -91,7 +91,7 @@ fn inputs(task: &str, setup: &[(&str, &str)], change: &[(&str, &str)]) -> Result
     let limits = UltracodeLimits::resolve(None, dir.path(), &UltracodeFlags::default())?;
     Ok(RouteInputs {
         features: TaskFeatures::extract(task),
-        change: before.diff(&after, &limits.sensitive_paths),
+        change: before.diff_with(&after, &limits),
         repo: RepoSignals::from_snapshot(&after),
         limits,
     })

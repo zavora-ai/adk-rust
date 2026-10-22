@@ -224,6 +224,37 @@ impl ReviewPlan {
         }
     }
 
+    /// The plan for the stages after a revise turn made the change sensitive (spec 3.1
+    /// §7.10): the `security` seat joins the roster as the `sensitive` rule places it, in
+    /// style's seat when `max_reviewers` is 3 and otherwise ahead of the lowest-priority
+    /// specialist when the roster is full; the architecture and the rounds hold. `None` when
+    /// the roster already has the seat.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_cli::harness::ultracode::{Focus, ReviewPlan, UltracodeLimits};
+    ///
+    /// let limits = UltracodeLimits::default();
+    /// let escalated = ReviewPlan::fixed(2).escalated(&limits).unwrap();
+    /// assert_eq!(
+    ///     escalated.reviewers,
+    ///     [Focus::Correctness, Focus::EdgeCases, Focus::Security, Focus::Style]
+    /// );
+    /// assert_eq!(escalated.escalated(&limits), None);
+    /// ```
+    pub fn escalated(&self, limits: &UltracodeLimits) -> Option<ReviewPlan> {
+        if self.reviewers.contains(&Focus::Security) {
+            return None;
+        }
+        let specialists: Vec<Focus> =
+            self.reviewers.iter().copied().filter(|focus| SPECIALISTS.contains(focus)).collect();
+        Some(ReviewPlan {
+            reviewers: roster(&specialists, true, limits.max_reviewers),
+            ..self.clone()
+        })
+    }
+
     /// Whether the plan holds the floors and caps of `limits` for a change that is
     /// `sensitive`: every error, or none.
     pub fn check(&self, limits: &UltracodeLimits, sensitive: bool) -> Vec<String> {
@@ -309,7 +340,8 @@ pub enum Rule {
     Override,
     /// The first turn held, failed, was interrupted or changed nothing.
     Unchanged,
-    /// A protected, security-vocabulary or `sensitive_paths` path changed.
+    /// A protected, security-vocabulary or user-config `sensitive_paths` path changed, or
+    /// the snapshot stopped at its cap.
     Sensitive,
     /// The router model's validated answer.
     Model,
@@ -572,7 +604,7 @@ fn deterministic(inputs: &RouteInputs) -> Option<(Rule, ReviewPlan)> {
         plan.reviewers = roster(&[], inputs.change.is_sensitive(), limits.max_reviewers);
         return Some((Rule::Unchanged, plan));
     }
-    if inputs.change.is_sensitive() {
+    if inputs.change.sensitive_rule_applies() {
         return Some((Rule::Sensitive, plan_for(Architecture::Blackboard, &specialists, inputs)));
     }
     None
@@ -956,6 +988,9 @@ pub enum ReplayError {
         /// The recomputed plan, as JSON.
         recomputed: String,
     },
+    /// A `harness.ultracode.escalated` record does not follow from its run's records.
+    #[error("the escalation does not replay: {0}")]
+    Escalation(String),
 }
 
 fn field<T: serde::de::DeserializeOwned>(
@@ -1025,6 +1060,50 @@ pub fn replay(routed_ext: &Value) -> Result<ReviewPlan, ReplayError> {
         });
     }
     if plan != recorded_plan {
+        return Err(ReplayError::Plan {
+            recomputed: serde_json::to_string(&plan).unwrap_or_default(),
+        });
+    }
+    Ok(plan)
+}
+
+/// Recomputes the plan a `harness.ultracode.escalated` record tightened the run's routed
+/// plan to (spec 3.1 §9.2 I62): the `routed` record replays, the escalation tightens that
+/// plan, its recorded change is sensitive, and [`ReviewPlan::escalated`] under the routed
+/// limits gives the recorded plan.
+///
+/// # Errors
+///
+/// Returns a [`ReplayError`] naming the first difference.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let plan = adk_cli::harness::ultracode::replay_escalation(&receipt["routed"], &receipt["escalated"])?;
+/// ```
+pub fn replay_escalation(
+    routed_ext: &Value,
+    escalated_ext: &Value,
+) -> Result<ReviewPlan, ReplayError> {
+    let routed = replay(routed_ext)?;
+    let version: String = field(escalated_ext, "routerVersion")?;
+    if version != ROUTER_VERSION {
+        return Err(ReplayError::Version { found: version });
+    }
+    let inputs: RouteInputs = field(routed_ext, "inputs")?;
+    let from: ReviewPlan = field(escalated_ext, "from")?;
+    let change: ChangeSignals = field(escalated_ext, "change")?;
+    let recorded: ReviewPlan = field(escalated_ext, "plan")?;
+    if from != routed {
+        return Err(ReplayError::Escalation("it tightens another plan than the routed one".into()));
+    }
+    if !change.is_sensitive() {
+        return Err(ReplayError::Escalation("its recorded change is not sensitive".into()));
+    }
+    let Some(plan) = routed.escalated(&inputs.limits) else {
+        return Err(ReplayError::Escalation("the routed plan already has a security seat".into()));
+    };
+    if plan != recorded {
         return Err(ReplayError::Plan {
             recomputed: serde_json::to_string(&plan).unwrap_or_default(),
         });
@@ -1108,6 +1187,95 @@ mod tests {
         tight.limits.max_reviewers = 3;
         let routed = route(&router, "fix", tight).await;
         assert_eq!(routed.plan.reviewers, [Focus::Correctness, Focus::EdgeCases, Focus::Security]);
+    }
+
+    #[tokio::test]
+    async fn a_workspace_glob_adds_the_seat_but_never_the_board() {
+        let (scripted, router) = model(vec![answer(
+            r#"{"architecture":"graph","specialists":[],"boardRounds":1,"rationale":"small"}"#,
+        )]);
+        let mut change = changed(&["src/lib.rs"]);
+        change.workspace_sensitive_matched = vec!["src/lib.rs".into()];
+        let routed = route(&router, "tidy", inputs("tidy", change.clone())).await;
+        assert_eq!(routed.rule, Rule::Model, "the router still chooses");
+        assert_eq!(routed.plan.architecture, Architecture::Graph);
+        assert_eq!(
+            routed.plan.reviewers,
+            [Focus::Correctness, Focus::EdgeCases, Focus::Security, Focus::Style]
+        );
+        assert_eq!(scripted.requests().len(), 1);
+        assert_eq!(replay(&routed.record_ext("run", "d")), Ok(routed.plan.clone()));
+
+        // The same match from the operator's own config is rule `sensitive`.
+        change.sensitive_matched = std::mem::take(&mut change.workspace_sensitive_matched);
+        let routed = route(&router, "tidy", inputs("tidy", change)).await;
+        assert_eq!(
+            (routed.rule, routed.plan.architecture),
+            (Rule::Sensitive, Architecture::Blackboard)
+        );
+
+        // A snapshot cut at its cap fails closed to rule `sensitive`.
+        let mut cut = changed(&["src/lib.rs"]);
+        cut.truncated = true;
+        let routed = route(&router, "tidy", inputs("tidy", cut)).await;
+        assert_eq!(routed.rule, Rule::Sensitive);
+        assert!(routed.plan.reviewers.contains(&Focus::Security));
+        assert_eq!(replay(&routed.record_ext("run", "d")), Ok(routed.plan.clone()));
+    }
+
+    #[test]
+    fn escalation_replays_from_its_records() {
+        let routed = json!({
+            "routerVersion": ROUTER_VERSION,
+            "rule": "unchanged",
+            "plan": ReviewPlan::fixed(2),
+            "inputs": inputs("add a greeting", changed(&[])),
+        });
+        let mut sensitive = changed(&["src/greet.rs", "src/auth/token.rs"]);
+        sensitive.security = vec!["src/auth/token.rs".into()];
+        let limits = UltracodeLimits::default();
+        let escalated = ReviewPlan::fixed(2).escalated(&limits).unwrap();
+        let record = json!({
+            "routerVersion": ROUTER_VERSION,
+            "round": 1,
+            "change": sensitive,
+            "from": ReviewPlan::fixed(2),
+            "plan": escalated,
+        });
+        assert_eq!(replay_escalation(&routed, &record), Ok(escalated.clone()));
+        assert_eq!(
+            escalated.reviewers,
+            [Focus::Correctness, Focus::EdgeCases, Focus::Security, Focus::Style]
+        );
+
+        let mut quiet = record.clone();
+        quiet["change"] = json!(changed(&["src/greet.rs"]));
+        assert!(matches!(replay_escalation(&routed, &quiet), Err(ReplayError::Escalation(_))));
+        let mut loosened = record.clone();
+        loosened["plan"] = json!(ReviewPlan::fixed(2));
+        assert!(matches!(replay_escalation(&routed, &loosened), Err(ReplayError::Plan { .. })));
+        let mut other = record.clone();
+        other["from"] = json!(escalated);
+        assert!(matches!(replay_escalation(&routed, &other), Err(ReplayError::Escalation(_))));
+
+        // With three seats, security takes style's; a full roster drops its lowest
+        // specialist.
+        let tight = UltracodeLimits { max_reviewers: 3, ..UltracodeLimits::default() };
+        assert_eq!(
+            ReviewPlan::fixed(2).escalated(&tight).unwrap().reviewers,
+            [Focus::Correctness, Focus::EdgeCases, Focus::Security]
+        );
+        let full = ReviewPlan {
+            reviewers: vec![Focus::Correctness, Focus::EdgeCases, Focus::ApiCompat, Focus::Style],
+            ..ReviewPlan::fixed(2)
+        };
+        assert_eq!(
+            full.escalated(&limits).unwrap().reviewers,
+            [Focus::Correctness, Focus::EdgeCases, Focus::Security, Focus::Style]
+        );
+        for plan in [escalated, full.escalated(&limits).unwrap()] {
+            assert_eq!(plan.check(&limits, true), Vec::<String>::new());
+        }
     }
 
     #[tokio::test]

@@ -626,7 +626,7 @@ What the team gives that the old `SpawnSubagentTool` design did not:
 
 Read-before-edit tracking is scoped per (session, agent) through D2 so members sharing a `Workspace` do not share read state. Member todos stay in the member's isolated session. Members have no `exit_plan_mode`, `memory_write` or nested delegation.
 
-**Adaptive review (`ultracode`).** The implementer runs one turn in the user's mode; the review is then routed once to one of two architectures, and the plan holds for the run.
+**Adaptive review (`ultracode`).** The implementer runs one turn in the user's mode; the review is then routed once to one of two architectures, and the plan holds for the run. The one tightening: when a revise turn makes the change since the run began sensitive and the roster lacks `security`, the stages after it take the seat (`ReviewPlan::escalated`, recorded as `harness.ultracode.escalated` before the next stage); the architecture and the rounds hold, and a revise starts only when the rest of the budget covers the next stage with that seat.
 
 | Architecture | Review stage | Bound per stage |
 |---|---|---|
@@ -637,15 +637,15 @@ Read-before-edit tracking is scoped per (session, agent) through D2 so members s
 |---|---|---|---|
 | `override` | `--architecture graph\|blackboard`, or `architecture` in a config file | That architecture | 0 |
 | `unchanged` | The first turn held, failed, was interrupted or changed no file | `graph` over correctness, edge-cases and style | 0 |
-| `sensitive` | A changed path is protected (I29), has a security-vocabulary component, or matches `sensitive_paths` | `blackboard` | 0 |
+| `sensitive` | A changed path is protected (I29), has a security-vocabulary component, or matches `sensitive_paths` of the user config; or the snapshot stopped at its 20,000-file cap (fail closed) | `blackboard` | 0 |
 | `model` | Router mode `model` | The member model's closed-schema answer, validated whole against the caps and floors | 1: no tools, 4,000 tokens, 20 s |
 | `heuristic` | Router mode `heuristic`, or the `model` call failed or its answer is invalid | A pure score over the recorded signals | 0 |
 
 | Floor or limit | Value |
 |---|---|
-| Roster | Always correctness, edge-cases and style; a sensitive change adds `security` under every rule, in style's seat only when `max_reviewers` is 3 |
+| Roster | Always correctness, edge-cases and style; a sensitive change — including a match of the workspace's own `sensitive_paths` — adds `security` under every rule, in style's seat only when `max_reviewers` is 3, otherwise ahead of the lowest-priority specialist when the roster is full |
 | Router choice | The architecture, up to `max_reviewers − 3` specialists (security, performance, tests, api-compat, concurrency) and the board rounds; never the review rounds |
-| Signals | Keyword features of the task and a metadata snapshot of the workspace before and after the first turn; no file contents, no `git` |
+| Signals | Keyword features of the task and a metadata snapshot of the workspace before and after the first turn (and before each review stage that follows a revise); no file contents, no `git` process. The breadth-first walk records `config`, `config.worktree`, `hooks/` and `info/` of `.git`, and enters a build or dependency directory (`target`, `node_modules`, `dist`, `build`, …) only when a `sensitive_paths` glob names it from the workspace root |
 | Board verdict | Each seat's last turn, per focus; any `changes` means changes |
 
 | `[ultracode]` key | Default | Ceiling | In `.adk/harness.toml` |
@@ -655,7 +655,7 @@ Read-before-edit tracking is scoped per (session, agent) through D2 so members s
 | `max_rounds`, `max_reviewers`, `max_board_rounds` | 2, 4, 2 | 5, 6, 3 | Lower only; floors 1, 3, 1 |
 | `implement_model_calls`, `reviewer_model_calls`, `board_model_calls` | 100, 20, 48 | 500, 50, 150 | Lower only |
 | `max_model_calls` | 400 | 2,000 | Lower only |
-| `sensitive_paths` | `[]` | — | Append only |
+| `sensitive_paths` | `[]` | — | Append only; a match adds the `security` seat but never selects the board |
 
 ### 7.11 Plan mode, the plan graph and the goal engine
 
@@ -1149,7 +1149,7 @@ Secrets come from `adk-auth` secret providers; nothing in the image. A served ha
 
 **Browser and computer use.** I58 The browser pack attaches no tool that runs model-written code in the page or hands it a host file; every navigation is decided by the URL's host under the §7.20 rules and refused before the browser moves when the target is private or the URL carries a secret; text the browser returns reaches the model only inside a delimited untrusted block, screened as fetched text is; typed text that matches a secret pattern is refused. I59 A desktop action runs only through adk-computer-use's reference graph, once, after a one-shot harness approval bound to the runtime's action and policy digests; no standing rule, `tool_approvals` entry or hook authorizes one; a digest or description that differs from the previewed action runs nothing. I60 A pack's tools are registered harness classes decided by the mode table on every call; in ReadOnly and Plan no pack tool changes page or desktop state; a member gets a pack's `Read` tools only.
 
-**Adaptive review.** I61 An `ultracode` reviewer, independent or on a board, is ReadOnly and shell-less and runs under the layer of a ReadOnly harness that records into the run's audit trail; only the implementer changes the workspace, in the user's mode. I62 The review plan is a pure function of its `harness.ultracode.routed` record — signals, limits, rule version and validated model answer; a model answer selects only closed-enum values within the caps and above the floors, and applies whole or not at all; no router text reaches an agent prompt; the record commits before the first review stage. I63 A step starts only when its own budget fits in what remains of `max_model_calls`; a missing, failed or unparseable verdict is never an approval.
+**Adaptive review.** I61 An `ultracode` reviewer, independent or on a board, is ReadOnly and shell-less and runs under the layer of a ReadOnly harness that records into the run's audit trail; only the implementer changes the workspace, in the user's mode. I62 The review plan is a pure function of its `harness.ultracode.routed` record — signals, limits, rule version and validated model answer — and, after an escalation, of its `harness.ultracode.escalated` record; a model answer selects only closed-enum values within the caps and above the floors, and applies whole or not at all; no router text reaches an agent prompt; each record commits before the first review stage it governs; an escalation only adds the `security` seat. I63 A step starts only when its own budget fits in what remains of `max_model_calls`; a missing, failed or unparseable verdict is never an approval.
 
 ### 9.3 Audit records
 
@@ -1188,8 +1188,9 @@ Actor from `AuditActor::new(acting, invocation_id)` ([`audit_log.rs:288`](../../
 | Sandbox unavailable; held calls cancelled | `harness.sandbox.unavailable`, `harness.held.cancelled` | requested, error; callIds, reason | build and per call; mode loosening, freeze |
 | ultracode started | `harness.ultracode.started` | runId, taskDigest, requested, source, routerMode, limits, worstCaseModelCalls, modelCallBound, notes | before the first turn, write-ahead |
 | ultracode routed | `harness.ultracode.routed` | runId, taskDigest, routerVersion, rule, source, fallback {code, errors}, plan {architecture, reviewers, boardRounds, reviewRounds}, inputs {features, change, repo, limits}, heuristic {score, triggers, plan}, router {model, effort, promptDigest, schemaDigest, answerDigest, answer, rationale}, usage | after the first turn, write-ahead of the first review stage |
+| ultracode escalated | `harness.ultracode.escalated` | runId, taskDigest, routerVersion, round, change (since the run began; `firstTurn` is the revise turn's outcome), from, plan | after a revise that made the change sensitive, write-ahead of the next review stage |
 | ultracode stage reviewed | `harness.ultracode.reviewed` | runId, round, architecture, verdicts [{focus, verdict}], status, fallback, modelCalls, notesDigest, workspaceUnchanged | after each review stage |
-| ultracode finished | `harness.ultracode.finished` | runId, rounds, decision, architecture, modelCalls, heldCalls | end of run |
+| ultracode finished | `harness.ultracode.finished` | runId, rounds, decision, architecture, escalated, modelCalls, heldCalls | end of run |
 
 Records go to `adk_auth::signed_audit::AuditLog` (hash chain, Merkle tree, signed checkpoints) through `Runner::builder().audit_log` ([`adk-runner/src/builder.rs:481`](../../adk-runner/src/builder.rs)), not `FileAuditSink`, whose verification cannot detect a truncated tail or an edited last line ([`adk-auth/src/audit.rs:665-699`](../../adk-auth/src/audit.rs)).
 

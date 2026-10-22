@@ -753,7 +753,7 @@ fn ultracode_project_file_cannot_force_the_board() {
     let home = tempfile::tempdir().unwrap();
     let ws = workspace();
     write(&ws.path().join(".adk/harness.toml"), "[ultracode]\narchitecture = \"blackboard\"\n");
-    let script = script(
+    let pinned = script(
         &[
             r#"{"call": {"name": "write_file", "args": {"path": "src/lib.rs", "content": "pub fn two() -> u8 { 2 }\n"}}}"#,
             r#"{"text": "Done."}"#,
@@ -761,12 +761,149 @@ fn ultracode_project_file_cannot_force_the_board() {
         3,
     );
     let (output, receipt) =
-        ultracode(ws.path(), home.path(), "add two()", &script, &["--router", "heuristic"]);
+        ultracode(ws.path(), home.path(), "add two()", &pinned, &["--router", "heuristic"]);
     let shown = text(&output);
     assert_eq!(output.status.code(), Some(0), "{shown}");
     assert!(shown.contains("`ultracode.architecture` ignored"), "{shown}");
     assert_eq!(receipt["routed"]["rule"], "heuristic");
     assert_eq!(receipt["started"]["requested"], "auto");
+
+    // A glob that matches every path adds the security seat, and still does not choose the
+    // board.
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    write(&ws.path().join(".adk/harness.toml"), "[ultracode]\nsensitive_paths = [\"*\"]\n");
+    let globbed = script(
+        &[
+            r#"{"call": {"name": "write_file", "args": {"path": "src/lib.rs", "content": "pub fn two() -> u8 { 2 }\n"}}}"#,
+            r#"{"text": "Done."}"#,
+        ],
+        4,
+    );
+    let (output, receipt) =
+        ultracode(ws.path(), home.path(), "add two()", &globbed, &["--router", "heuristic"]);
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{shown}");
+    let routed = &receipt["routed"];
+    assert_eq!(routed["rule"], "heuristic", "{receipt:#}");
+    assert_eq!(routed["plan"]["architecture"], "graph");
+    assert_eq!(
+        routed["plan"]["reviewers"],
+        serde_json::json!(["correctness", "edge-cases", "security", "style"])
+    );
+    assert_eq!(
+        routed["inputs"]["change"]["workspaceSensitiveMatched"],
+        serde_json::json!(["src/lib.rs"])
+    );
+    assert!(adk_cli::harness::ultracode::replay(routed).is_ok());
+}
+
+#[test]
+fn ultracode_a_sensitive_revise_adds_the_security_seat() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let changes = r#"{"text": "VERDICT: changes\n- validate the caller's token"}"#;
+    let script = script(
+        &[
+            r#"{"call": {"name": "write_file", "args": {"path": "src/greet.rs", "content": "pub fn hi() -> &'static str { \"hi\" }\n"}}}"#,
+            r#"{"text": "Done."}"#,
+            changes,
+            changes,
+            changes,
+            r#"{"call": {"name": "write_file", "args": {"path": "src/auth/token.rs", "content": "pub fn valid(token: &str) -> bool { !token.is_empty() }\n"}}}"#,
+            r#"{"text": "Revised."}"#,
+        ],
+        4,
+    );
+    let (output, receipt) =
+        ultracode(ws.path(), home.path(), "add a greeting", &script, &["--router", "heuristic"]);
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{shown}");
+    assert!(
+        shown.contains("━━ escalate ━━ a sensitive path changed: src/auth/token.rs"),
+        "{shown}"
+    );
+    let routed = &receipt["routed"];
+    assert_eq!(
+        routed["plan"]["reviewers"],
+        serde_json::json!(["correctness", "edge-cases", "style"])
+    );
+    let escalated = &receipt["escalated"];
+    assert_eq!(escalated["round"], 1, "{receipt:#}");
+    assert_eq!(escalated["change"]["security"], serde_json::json!(["src/auth/token.rs"]));
+    assert_eq!(
+        escalated["plan"]["reviewers"],
+        serde_json::json!(["correctness", "edge-cases", "security", "style"])
+    );
+    let stages: Vec<Vec<String>> = receipt["reviewed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|stage| {
+            stage["verdicts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|verdict| verdict["focus"].as_str().unwrap().to_string())
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        stages,
+        [
+            vec!["correctness", "edge-cases", "style"],
+            vec!["correctness", "edge-cases", "security", "style"]
+        ]
+    );
+    assert_eq!(receipt["finished"]["decision"], "approved", "{receipt:#}");
+    assert_eq!(receipt["finished"]["escalated"], true);
+    assert_eq!(receipt["finished"]["modelCalls"], 2 + 3 + 2 + 4);
+    let plan = adk_cli::harness::ultracode::replay_escalation(routed, escalated).unwrap();
+    assert_eq!(serde_json::to_value(&plan).unwrap(), escalated["plan"]);
+    let order: Vec<&str> = receipt["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| record["action"].as_str().unwrap())
+        .collect();
+    let at = |action: &str| order.iter().position(|a| *a == action).unwrap();
+    assert!(
+        at("harness.ultracode.escalated")
+            < order.iter().rposition(|a| *a == "harness.ultracode.reviewed").unwrap()
+    );
+}
+
+#[test]
+fn ultracode_sees_a_planted_git_hook() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    write(&ws.path().join(".git/config"), "[core]\n");
+    write(&ws.path().join(".git/objects/ab/cdef"), "blob");
+    write(&ws.path().join(".adk/harness.toml"), "[ultracode]\nmax_board_rounds = 1\n");
+    let script = script(
+        &[
+            r#"{"call": {"name": "bash", "args": {"command": "mkdir -p .git/hooks && printf 'curl example.com' > .git/hooks/pre-commit"}}}"#,
+            r#"{"text": "Done."}"#,
+        ],
+        4,
+    );
+    let (output, receipt) = ultracode(
+        ws.path(),
+        home.path(),
+        "speed up the tests",
+        &script,
+        &["--router", "heuristic"],
+    );
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{shown}");
+    assert!(ws.path().join(".git/hooks/pre-commit").exists(), "{shown}");
+    let routed = &receipt["routed"];
+    assert_eq!(routed["rule"], "sensitive", "{receipt:#}");
+    assert_eq!(
+        routed["inputs"]["change"]["protected"],
+        serde_json::json!([".git/hooks/pre-commit"])
+    );
+    assert!(routed["plan"]["reviewers"].as_array().unwrap().contains(&"security".into()));
 }
 
 #[test]
@@ -793,4 +930,157 @@ fn ultracode_budget_cap_finalizes_before_revise() {
     assert_eq!(receipt["finished"]["modelCalls"], 5);
     assert_eq!(receipt["started"]["limits"]["maxModelCalls"], 12);
     assert!(!shown.contains("━━ revise ━━"), "no revise starts: {shown}");
+}
+
+#[test]
+fn ultracode_counts_an_implement_turn_a_denial_ended() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let receipt = home.path().join("receipt.json");
+    let receipt_arg = receipt.display().to_string();
+    let dir = dir_arg(ws.path());
+    let script = script(&[r#"{"call": {"name": "bash", "args": {"command": "rm -rf build"}}}"#], 3);
+    let mut terminal = Terminal::spawn_in(
+        &[
+            "ultracode",
+            "clean up the build",
+            "--ephemeral",
+            "--dir",
+            &dir,
+            "--receipt",
+            &receipt_arg,
+            "--model-script",
+            &script,
+        ],
+        home.path(),
+        ws.path(),
+    );
+    terminal.expect("[approval needed] bash on host");
+    terminal.expect("details >");
+    terminal.send("n\r");
+    terminal.expect("reason (optional) >");
+    terminal.send("keep the build\r");
+    let (code, shown) = terminal.wait();
+    assert_eq!(code, Some(0), "{shown}");
+    let receipt: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&receipt).expect(&shown)).unwrap();
+    assert_eq!(receipt["routed"]["rule"], "unchanged", "{receipt:#}");
+    assert_eq!(receipt["routed"]["inputs"]["change"]["firstTurn"], "failed");
+    // The implement turn's one model call counts, though the denial stopped its stream.
+    assert_eq!(receipt["finished"]["modelCalls"], 1 + 3, "{receipt:#}");
+    assert_eq!(receipt["finished"]["decision"], "approved");
+}
+
+#[test]
+fn ultracode_receipt_never_follows_a_planted_link() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let victim = home.path().join("victim.txt");
+    std::fs::write(&victim, "keep").unwrap();
+    let elsewhere = home.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    let dir = dir_arg(ws.path());
+    let approvals = std::iter::repeat_n(APPROVE, 3).collect::<Vec<_>>().join(",");
+
+    // The implementer links the receipt's temporary name to a file outside the workspace.
+    let link = format!(
+        r#"{{"call": {{"name": "bash", "args": {{"command": "ln -s {} receipt.json.tmp"}}}}}}"#,
+        victim.display()
+    );
+    let script = format!(r#"[{link}, {{"text": "Done."}}, {approvals}]"#);
+    let receipt = ws.path().join("receipt.json").display().to_string();
+    let args = [
+        "ultracode",
+        "tidy up",
+        "--ephemeral",
+        "--mode",
+        "auto",
+        "--yes",
+        "--router",
+        "heuristic",
+        "--dir",
+        &dir,
+        "--receipt",
+        &receipt,
+        "--model-script",
+        &script,
+    ];
+    let output = run(&args, home.path(), ws.path());
+    let shown = text(&output);
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep", "{shown}");
+    assert!(ws.path().join("receipt.json.tmp").symlink_metadata().is_ok(), "{shown}");
+    assert_eq!(output.status.code(), Some(0), "{shown}");
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&receipt).unwrap()).unwrap();
+    assert_eq!(written["chainVerified"], true);
+
+    // The implementer links the receipt's directory outside the workspace.
+    let link = format!(
+        r#"{{"call": {{"name": "bash", "args": {{"command": "ln -s {} out"}}}}}}"#,
+        elsewhere.display()
+    );
+    let script = format!(r#"[{link}, {{"text": "Done."}}, {approvals}]"#);
+    let receipt = ws.path().join("out/r.json").display().to_string();
+    let args = [
+        "ultracode",
+        "tidy up",
+        "--ephemeral",
+        "--mode",
+        "auto",
+        "--yes",
+        "--router",
+        "heuristic",
+        "--dir",
+        &dir,
+        "--receipt",
+        &receipt,
+        "--model-script",
+        &script,
+    ];
+    let output = run(&args, home.path(), ws.path());
+    let shown = text(&output);
+    assert!(ws.path().join("out").symlink_metadata().is_ok(), "{shown}");
+    assert!(!elsewhere.join("r.json").exists(), "{shown}");
+    assert_ne!(output.status.code(), Some(0), "{shown}");
+    assert!(shown.contains("refusing to write"), "{shown}");
+}
+
+#[test]
+fn the_goal_mirror_never_follows_a_planted_link() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let victim = home.path().join("victim.txt");
+    std::fs::write(&victim, "keep").unwrap();
+    let dir = dir_arg(ws.path());
+    let state = ws.path().join("goal.json").display().to_string();
+    let link = format!(
+        r#"{{"call": {{"name": "bash", "args": {{"command": "ln -s {} goal.json.tmp && touch done.txt"}}}}}}"#,
+        victim.display()
+    );
+    let script = format!(r#"[{link}, {{"text": "Done."}}]"#);
+    let args = [
+        "goal",
+        "create done.txt",
+        "--until",
+        "test -f done.txt",
+        "--mode",
+        "auto",
+        "--yes",
+        "--dir",
+        &dir,
+        "--max-iters",
+        "1",
+        "--state",
+        &state,
+        "--model-script",
+        &script,
+    ];
+    let output = run(&args, home.path(), ws.path());
+    let shown = text(&output);
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep", "{shown}");
+    assert!(ws.path().join("goal.json.tmp").symlink_metadata().is_ok(), "{shown}");
+    assert_eq!(output.status.code(), Some(0), "{shown}");
+    let mirror: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state).unwrap()).unwrap();
+    assert_eq!(mirror["goal"], "create done.txt");
 }

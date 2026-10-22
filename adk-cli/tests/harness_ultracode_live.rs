@@ -275,3 +275,66 @@ fn live_ultracode_trait_rename_across_crates() {
         check_common(provider.0, ws.path(), home.path(), &output, &receipt);
     }
 }
+
+#[test]
+#[ignore = "live: needs ANTHROPIC_API_KEY or GOOGLE_API_KEY"]
+fn live_ultracode_a_revise_escalates_the_review() {
+    for provider in providers() {
+        let home = tempfile::tempdir().unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        crate_fixture(ws.path(), "pages");
+        write(ws.path(), "src/lib.rs", "pub mod html;\n");
+        let stub = "/// Escapes `<`, `>`, `&` and `\"` in `text` for HTML.\npub fn escape(text: &str) -> String {\n    // TODO: escape the text; it is returned unchanged for now.\n    text.to_string()\n}\n";
+        write(ws.path(), "src/html/mod.rs", stub);
+        // The operator marks the HTML helpers sensitive and keeps three reviewers, so the
+        // routed roster has no security seat until a change reaches them.
+        let config = "[ultracode]\nmax_reviewers = 3\nsensitive_paths = [\"src/html/*\"]\n";
+        for dir in ["Library/Application Support/adk-rust", ".config/adk-rust"] {
+            write(home.path(), &format!("{dir}/harness.toml"), config);
+        }
+        lock(ws.path());
+        let (output, receipt) = run(
+            &provider,
+            ws.path(),
+            home.path(),
+            "In src/lib.rs, add `pub fn welcome(name: &str) -> String` that returns `format!(\"<p>Welcome, {}</p>\", html::escape(name))`, with a unit test in src/lib.rs that `welcome(\"<b>Ann</b>\")` is `\"<p>Welcome, &lt;b&gt;Ann&lt;/b&gt;</p>\"`. Change only src/lib.rs in this first step; code review asks for any follow-up change.",
+        );
+        let routed = &receipt["routed"];
+        let escalated = &receipt["escalated"];
+        println!("escalated: {escalated:#}");
+        let html_changed =
+            std::fs::read_to_string(ws.path().join("src/html/mod.rs")).unwrap() != stub;
+        if routed["rule"] == "sensitive" {
+            println!("{}: the first turn changed src/html; no escalation to show", provider.0);
+        } else if html_changed {
+            assert_eq!(
+                routed["plan"]["reviewers"],
+                serde_json::json!(["correctness", "edge-cases", "style"])
+            );
+            assert_eq!(
+                escalated["change"]["sensitiveMatched"],
+                serde_json::json!(["src/html/mod.rs"])
+            );
+            let plan = adk_cli::harness::ultracode::replay_escalation(routed, escalated)
+                .expect("the escalation replays");
+            assert_eq!(serde_json::to_value(&plan).unwrap(), escalated["plan"]);
+            assert_eq!(
+                escalated["plan"]["reviewers"],
+                serde_json::json!(["correctness", "edge-cases", "security"])
+            );
+            let round = usize::try_from(escalated["round"].as_u64().unwrap()).unwrap();
+            let next = &receipt["reviewed"][round];
+            let focuses: Vec<&str> = next["verdicts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|verdict| verdict["focus"].as_str().unwrap())
+                .collect();
+            assert_eq!(focuses, ["correctness", "edge-cases", "security"], "{next:#}");
+            assert_eq!(receipt["finished"]["escalated"], true);
+        } else {
+            assert!(escalated.is_null(), "{escalated:#}");
+        }
+        check_common(provider.0, ws.path(), home.path(), &output, &receipt);
+    }
+}

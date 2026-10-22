@@ -79,7 +79,7 @@ pub struct UltracodeFlags {
 /// | `max_rounds`, `max_reviewers`, `max_board_rounds` | 2, 4, 2 | 5, 6, 3 | lower only; floors 1, 3, 1 |
 /// | `implement_model_calls`, `reviewer_model_calls`, `board_model_calls` | 100, 20, 48 | 500, 50, 150 | lower only |
 /// | `max_model_calls` | 400 | 2,000 | lower only |
-/// | `sensitive_paths` | `[]` | — | append only |
+/// | `sensitive_paths` | `[]` | — | append only, into `workspace_sensitive_paths` |
 ///
 /// # Example
 ///
@@ -112,8 +112,13 @@ pub struct UltracodeLimits {
     pub board_model_calls: u64,
     /// Most model calls of the whole run.
     pub max_model_calls: u64,
-    /// Globs of paths whose change makes the review `sensitive`.
+    /// Globs of the user config whose match makes the change sensitive: rule `sensitive`
+    /// routes it to the board with a `security` seat.
     pub sensitive_paths: Vec<String>,
+    /// Globs of `.adk/harness.toml` whose match adds the `security` seat but never chooses
+    /// the board: a workspace may not choose the review architecture.
+    #[serde(default)]
+    pub workspace_sensitive_paths: Vec<String>,
     /// Where `architecture` came from.
     #[serde(skip)]
     pub architecture_source: SettingSource,
@@ -135,6 +140,7 @@ impl Default for UltracodeLimits {
             board_model_calls: BOARD_MODEL_CALLS.default,
             max_model_calls: MAX_MODEL_CALLS.default,
             sensitive_paths: Vec::new(),
+            workspace_sensitive_paths: Vec::new(),
             architecture_source: SettingSource::Default,
             notes: Vec::new(),
         }
@@ -204,8 +210,10 @@ impl UltracodeLimits {
     /// Resolves the limits: the defaults, then `[ultracode]` in `user_config` (values beyond
     /// a ceiling or floor are clamped, with a note), then `[ultracode]` in
     /// `.adk/harness.toml` under `workspace` (tighten-only: `architecture = "graph"`,
-    /// `router = "heuristic"`, lower numbers down to the floors, appended `sensitive_paths`;
-    /// anything else is ignored with a note), then `flags`, which win (spec 3.1 §7.10, §8.1).
+    /// `router = "heuristic"`, lower numbers down to the floors, `sensitive_paths` appended
+    /// to `workspace_sensitive_paths`; anything else is ignored with a note), then `flags`,
+    /// which win (spec 3.1 §7.10, §8.1). A `sensitive_paths` glob that names a directory the
+    /// change snapshot skips past its first wildcard, such as `**/dist/**`, gets a note.
     ///
     /// # Errors
     ///
@@ -227,6 +235,16 @@ impl UltracodeLimits {
             limits.apply_project(&table)?;
         }
         limits.apply_flags(flags)?;
+        if let Some(path) = user_config {
+            let origin = path.display().to_string();
+            let notes = super::signals::unreachable_glob_notes(&origin, &limits.sensitive_paths);
+            limits.notes.extend(notes);
+        }
+        let notes = super::signals::unreachable_glob_notes(
+            PROJECT_CONFIG_FILE,
+            &limits.workspace_sensitive_paths,
+        );
+        limits.notes.extend(notes);
         let floor = limits.minimum_model_calls();
         if floor > limits.max_model_calls {
             return Err(AdkError::config(format!(
@@ -361,7 +379,7 @@ impl UltracodeLimits {
             }
         }
         self.notes.extend(notes);
-        self.sensitive_paths.extend(table.sensitive_paths.iter().flatten().cloned());
+        self.workspace_sensitive_paths.extend(table.sensitive_paths.iter().flatten().cloned());
         for key in table.unknown.keys() {
             self.notes.push(format!("{origin}: unknown key `ultracode.{key}` ignored"));
         }
@@ -472,7 +490,7 @@ mod tests {
                 implement_model_calls: 60,
                 reviewer_model_calls: 30,
                 max_model_calls: 2_000,
-                sensitive_paths: vec!["migrations/*".into()],
+                workspace_sensitive_paths: vec!["migrations/*".into()],
                 notes: limits.notes.clone(),
                 ..UltracodeLimits::default()
             }

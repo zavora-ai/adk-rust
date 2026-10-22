@@ -10,6 +10,7 @@
 //! | Item | What |
 //! |---|---|
 //! | [`route`], [`replay`], [`heuristic`], [`router_schema`] | `ultracode-route/1`: override, `unchanged`, `sensitive`, the closed-schema model answer, the heuristic |
+//! | [`ReviewPlan::escalated`], [`replay_escalation`] | the `security` seat a revise turn that makes the change sensitive adds |
 //! | [`TaskFeatures`], [`WorkspaceSnapshot`], [`ChangeSignals`], [`RepoSignals`] | the signals: task keywords and a metadata snapshot, no file contents, no `git` |
 //! | [`UltracodeLimits`] | the `[ultracode]` table: defaults, ceilings, tighten-only project file, flags |
 //! | [`ReviewBoard`], [`IndependentReviewer`] | the board and the independent reviewer |
@@ -64,7 +65,7 @@ pub use config::{SettingSource, UltracodeFlags, UltracodeLimits};
 pub use route::{
     Architecture, ArchitectureChoice, FLOOR, Fallback, Focus, HeuristicTrace, ROUTER_VERSION,
     ReplayError, ReviewPlan, RouteDecision, RouteInputs, RouteSource, RouterAnswer, RouterCall,
-    RouterMode, Rule, SPECIALISTS, heuristic, replay, route, router_schema,
+    RouterMode, Rule, SPECIALISTS, heuristic, replay, replay_escalation, route, router_schema,
 };
 pub use signals::{
     ChangeSignals, FileStamp, LanguageCount, RepoSignals, SNAPSHOT_MAX_FILES, TaskFeatures,

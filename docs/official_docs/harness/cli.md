@@ -371,6 +371,15 @@ otherwise the implementer revises with the notes and the next stage reviews agai
 `max_rounds` stages. A reviewer with no `VERDICT` line, a failed reviewer and a board seat
 that never spoke are not approvals.
 
+A revise can change more than the first turn did. After each revise the whole change since
+the run began is checked again: when it is now sensitive and the roster has no `security`
+seat, the stages that follow add one, and `harness.ultracode.escalated` records why before
+the next stage starts. The architecture and the rounds stay as routed:
+
+```text
+━━ escalate ━━ a sensitive path changed: src/auth/token.rs; reviewers now correctness, edge-cases, security, style
+```
+
 ### Routing
 
 The first rule that matches decides (`ultracode-route/1`):
@@ -379,15 +388,15 @@ The first rule that matches decides (`ultracode-route/1`):
 |---|---|---|---|
 | `override` | `--architecture graph\|blackboard`, or `architecture` in a config file | That architecture | 0 |
 | `unchanged` | The first turn held, failed, was interrupted or changed no file | `graph` over correctness, edge-cases and style | 0 |
-| `sensitive` | A changed path is protected, has a security-vocabulary component (`auth`, `crypto`, `token`, `secret`, `policy`, `sandbox`, …) or matches `sensitive_paths` | `blackboard` with a `security` seat | 0 |
+| `sensitive` | A changed path is protected, has a security-vocabulary component (`auth`, `crypto`, `token`, `secret`, `policy`, `sandbox`, …) or matches `sensitive_paths` in your user config; or the workspace has more than 20,000 files, so the change could not be seen whole | `blackboard` with a `security` seat | 0 |
 | `model` | Router mode `model` (the default) | The member model's answer to a closed schema, validated whole | 1: no tools, 4,000 tokens, 20 seconds |
 | `heuristic` | Router mode `heuristic`, or the model call failed or answered anything invalid | A score over the signals | 0 |
 
 | Floor or limit | Value |
 |---|---|
-| Roster | Always correctness, edge-cases and style; a sensitive change adds `security`, in style's seat only when `max_reviewers` is 3 |
+| Roster | Always correctness, edge-cases and style; a sensitive change, including a match of `sensitive_paths` in `.adk/harness.toml`, adds `security`, in style's seat when `max_reviewers` is 3 and otherwise ahead of the lowest-priority specialist when the roster is full |
 | What the router chooses | The architecture, up to `max_reviewers − 3` specialists (`security`, `performance`, `tests`, `api-compat`, `concurrency`) and the board rounds; never the review rounds |
-| Signals | Keywords of the task, and file paths, sizes and modification times before and after the first turn; no file contents, no `git` |
+| Signals | Keywords of the task, and file paths, sizes and modification times before and after the first turn; no file contents, no `git` process. Of `.git`, only `config`, `config.worktree`, `hooks/` and `info/` are seen; build and dependency directories (`target`, `node_modules`, `dist`, `build`, `.venv`, …) only when a `sensitive_paths` glob names them from the workspace root, such as `dist/**` |
 | The model's rationale | Printed after `why:` and recorded; never part of any agent's prompt |
 
 A router answer is at most 4 KiB, one JSON object (a code fence is accepted), and applies
@@ -408,7 +417,7 @@ why: heuristic score 2 (packages>=2)
 | `--router model\|heuristic` | How `auto` chooses; `model` is the default |
 | `--max-rounds N` | Review stages, 1 to 5; default 2 |
 | `--max-model-calls N` | The whole run's model calls, up to 2,000; default 400 |
-| `--receipt FILE` | Writes the run's `harness.ultracode.*` records, the verification of the run's signed audit log and the router's raw answer |
+| `--receipt FILE` | Writes the run's `harness.ultracode.*` records, the verification of the run's signed audit log and the router's raw answer. The file is written as you, outside any sandbox, so the write is refused when a link inside the workspace is on the way to it or its directory resolves elsewhere than when the run started |
 
 ### Budget
 
@@ -428,7 +437,7 @@ fit in `max_model_calls`, or the command says what to change.
 | `max_rounds`, `max_reviewers`, `max_board_rounds` | 2, 4, 2 | 5, 6, 3 | Lower only; floors 1, 3, 1 |
 | `implement_model_calls`, `reviewer_model_calls`, `board_model_calls` | 100, 20, 48 | 500, 50, 150 | Lower only |
 | `max_model_calls` | 400 | 2,000 | Lower only |
-| `sensitive_paths` | `[]` | — | Append only |
+| `sensitive_paths` | `[]` | — | Append only; a match adds the `security` seat but never chooses the board |
 
 In the user config a value beyond a ceiling or floor is clamped, with a note. Flags win, and
 a flag beyond a ceiling is an error that names it.
@@ -442,11 +451,14 @@ and these records, kind `harness`, actor `urn:adk:agent:adk-rust/ultracode`:
 |---|---|
 | `harness.ultracode.started` | Before the first turn: the limits, the requested architecture and its source, the worst case and the bound |
 | `harness.ultracode.routed` | Before the first review: the rule, the plan, the inputs, the heuristic's trace, the router call by digest and its validated answer |
+| `harness.ultracode.escalated` | Before the stage after a revise that made the change sensitive: the change since the run began, the plan it tightened and the plan with the `security` seat |
 | `harness.ultracode.reviewed` | After each stage: the verdicts, the board's status and fallback seats, the stage's model calls, whether the workspace is unchanged |
-| `harness.ultracode.finished` | At the end: rounds, decision, model calls, held calls |
+| `harness.ultracode.finished` | At the end: rounds, decision, whether the review escalated, model calls, held calls |
 
 `adk_cli::harness::ultracode::replay(&receipt["routed"])` recomputes the plan from the
-recorded inputs and fails when it differs. Exit codes: `0`, or `3` when calls are held.
+recorded inputs and fails when it differs; `replay_escalation(&receipt["routed"],
+&receipt["escalated"])` does the same for an escalation. Model calls of a turn that a
+denial or Ctrl-C ended count against `max_model_calls` like any other. Exit codes: `0`, or `3` when calls are held.
 
 ## Embedding the REPL
 

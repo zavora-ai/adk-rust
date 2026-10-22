@@ -166,7 +166,7 @@ win (spec 3.1 §7.10).
 | `reviewer_model_calls` | 20 | 50 | Lower only |
 | `board_model_calls` | 48 | 150 | Lower only |
 | `max_model_calls` | 400 | 2,000 | Lower only |
-| `sensitive_paths` | `[]` | — | Append only |
+| `sensitive_paths` | `[]` | — | Append only; adds the `security` seat, never the board |
 
 ```toml
 [ultracode]
@@ -178,7 +178,12 @@ sensitive_paths = ["migrations/*", "src/billing/*"]
 ```
 
 A workspace value that would loosen a limit, or choose `blackboard` or `auto` over your
-setting, is ignored with a note, and a value below a floor is raised to it. In the user
+setting, is ignored with a note, and a value below a floor is raised to it. A change that
+matches the workspace's `sensitive_paths` gets the `security` seat; only your user config's
+`sensitive_paths` route it to a board, since a workspace may not choose the architecture.
+Build and dependency directories (`target`, `node_modules`, `dist`, `build`, …) are not in
+the change snapshot unless a glob names them from the workspace root (`dist/**`); a glob
+such as `**/dist/**` gets a note saying so. In the user
 config a value beyond a ceiling or floor is clamped, with a note. A flag beyond a ceiling
 is an error that names the ceiling.
 

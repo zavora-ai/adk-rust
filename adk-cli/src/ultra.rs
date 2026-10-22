@@ -4,7 +4,8 @@
 //! review stage → synthesize (fan-in) → revise → review stage … → finalize. A review stage
 //! is either parallel independent reviewers, one per focus, or one Blackboard board. With
 //! the harness, implement and revise run in the user's mode, reviewers in read-only mode,
-//! and the stage is chosen once per run by the review router (spec 3.1 §7.10, §8.1).
+//! and the stage is chosen once per run by the review router (spec 3.1 §7.10, §8.1); a
+//! revise that makes the change sensitive adds the `security` seat to the stages after it.
 
 use std::sync::Arc;
 
@@ -80,8 +81,24 @@ pub struct ReviewLoop {
     pub board: bool,
     /// `(focus, what it looks for)`, in roster order.
     pub reviewers: Vec<(String, String)>,
+    /// The roster of the stages after a revise turn makes the change sensitive: the
+    /// reviewers with the `security` seat; `None` when nothing can escalate the loop.
+    pub escalation: Option<Vec<(String, String)>>,
     pub board_rounds: u32,
     pub rounds: i64,
+}
+
+/// The roster of the coming stage: the loop's own, or its escalation once a revise made
+/// the change sensitive.
+fn roster_of(plan: &ReviewLoop, escalated: bool) -> &[(String, String)] {
+    match &plan.escalation {
+        Some(escalation) if escalated => escalation,
+        Some(_) | None => &plan.reviewers,
+    }
+}
+
+fn escalated_in(ctx: &adk_graph::node::NodeContext) -> bool {
+    ctx.get("escalated").and_then(Value::as_bool).unwrap_or(false)
 }
 
 impl ReviewLoop {
@@ -94,6 +111,7 @@ impl ReviewLoop {
                 .iter()
                 .map(|(n, d)| ((*n).to_string(), (*d).to_string()))
                 .collect(),
+            escalation: None,
             board_rounds: 1,
             rounds,
         }
@@ -110,8 +128,24 @@ impl From<&adk_cli::harness::ultracode::ReviewPlan> for ReviewLoop {
                 .iter()
                 .map(|focus| (focus.name().to_string(), focus.desc().to_string()))
                 .collect(),
+            escalation: None,
             board_rounds: plan.board_rounds,
             rounds: i64::from(plan.review_rounds),
+        }
+    }
+}
+
+#[cfg(feature = "harness")]
+impl ReviewLoop {
+    /// The loop of a routed `plan` whose stages take `escalated`'s roster once a revise
+    /// turn makes the change sensitive (spec 3.1 §7.10).
+    pub fn routed(
+        plan: &adk_cli::harness::ultracode::ReviewPlan,
+        escalated: Option<&adk_cli::harness::ultracode::ReviewPlan>,
+    ) -> Self {
+        Self {
+            escalation: escalated.map(|escalated| Self::from(escalated).reviewers),
+            ..Self::from(plan)
         }
     }
 }
@@ -139,10 +173,15 @@ impl UltraBudget {
 
     /// The most model calls one review stage of `plan` may make.
     fn stage_cost(&self, plan: &ReviewLoop) -> u64 {
-        if plan.board {
+        self.stage_cost_for(plan.board, plan.reviewers.len())
+    }
+
+    /// The most model calls a board, or `seats` independent reviewers, may make.
+    fn stage_cost_for(&self, board: bool, seats: usize) -> u64 {
+        if board {
             self.board_model_calls
         } else {
-            self.reviewer_model_calls.saturating_mul(plan.reviewers.len() as u64)
+            self.reviewer_model_calls.saturating_mul(seats as u64)
         }
     }
 }
@@ -172,6 +211,13 @@ pub trait UltraAgents: Send + Sync {
             status: "failed".to_string(),
             fallback: Vec::new(),
         }
+    }
+
+    /// After the revise turn of `round`, while the loop can escalate: whether the change
+    /// since the run began is now sensitive, so the stages that follow take the loop's
+    /// escalation roster. Records why before it returns `true`; an error stops the run.
+    async fn escalate(&self, _round: i64) -> Result<bool> {
+        Ok(false)
     }
 
     /// Model calls the agents made so far in this run.
@@ -302,6 +348,7 @@ pub async fn run_plan(
     input.insert("task".into(), json!(task));
     input.insert("round".into(), json!(0));
     input.insert("stage_start".into(), json!(agents.model_calls()));
+    input.insert("escalated".into(), json!(false));
 
     let final_state = graph.invoke(input, ExecutionConfig::new("ultracode")).await?;
     let rounds = final_state.get("round").and_then(Value::as_i64).unwrap_or(0);
@@ -326,10 +373,17 @@ fn build_graph(
     budget: UltraBudget,
     charged: u64,
 ) -> Result<adk_graph::CompiledGraph> {
-    let keys: Vec<String> =
-        plan.reviewers.iter().map(|(focus, _)| format!("rev_{focus}")).collect();
+    // Every seat a stage can have: the roster and, when a revise can escalate it, the
+    // escalation's seats. A seat outside the coming stage's roster does nothing.
+    let mut seats: Vec<(String, String)> = plan.reviewers.clone();
+    for seat in plan.escalation.iter().flatten() {
+        if !seats.iter().any(|(focus, _)| *focus == seat.0) {
+            seats.push(seat.clone());
+        }
+    }
+    let keys: Vec<String> = seats.iter().map(|(focus, _)| format!("rev_{focus}")).collect();
     let mut channels: Vec<&str> =
-        vec!["task", "round", "decision", "outcome", "notes", "stage_start", "stage"];
+        vec!["task", "round", "decision", "outcome", "notes", "stage_start", "stage", "escalated"];
     channels.extend(keys.iter().map(String::as_str));
     let mut graph = StateGraph::with_channels(&channels);
 
@@ -342,6 +396,11 @@ fn build_graph(
                 let agents = agents.clone();
                 let plan = plan.clone();
                 let task = ctx.get("task").and_then(Value::as_str).unwrap_or_default().to_string();
+                let plan = ReviewLoop {
+                    reviewers: roster_of(&plan, escalated_in(&ctx)).to_vec(),
+                    escalation: None,
+                    ..plan
+                };
                 async move {
                     let stage = agents.review_board(&plan, &review_prompt(&task)).await;
                     let mut output = NodeOutput::new().with_update(
@@ -373,11 +432,12 @@ fn build_graph(
         vec![node]
     } else {
         let mut nodes = Vec::new();
-        for (name, desc) in &plan.reviewers {
+        for (name, desc) in &seats {
             let key = format!("rev_{name}");
             let node = format!("review_{name}");
             graph = graph.add_node_fn(&node, {
                 let agents = agents.clone();
+                let plan = plan.clone();
                 let name = name.clone();
                 let desc = desc.clone();
                 let key = key.clone();
@@ -388,7 +448,13 @@ fn build_graph(
                     let key = key.clone();
                     let task =
                         ctx.get("task").and_then(Value::as_str).unwrap_or_default().to_string();
+                    let seated = roster_of(&plan, escalated_in(&ctx))
+                        .iter()
+                        .any(|(focus, _)| *focus == name);
                     async move {
+                        if !seated {
+                            return Ok(NodeOutput::new());
+                        }
                         let text = agents.review(&name, &desc, &review_prompt(&task)).await;
                         let (review, notes) = parse_verdict(&text);
                         println!(
@@ -420,12 +486,14 @@ fn build_graph(
                 let plan = synth_plan.clone();
                 async move {
                     let round = ctx.get("round").and_then(Value::as_i64).unwrap_or(0) + 1;
+                    let escalated = escalated_in(&ctx);
+                    let roster = roster_of(&plan, escalated);
                     let mut notes = Vec::new();
                     let mut seats = Vec::new();
                     let mut all_approved = true;
                     // Only the roster's keys count; a missing or failed review is never an
                     // approval (spec 3.1 §9.2 I63).
-                    for (focus, _) in &plan.reviewers {
+                    for (focus, _) in roster {
                         let seat = ctx.get(&format!("rev_{focus}"));
                         let review = match seat
                             .and_then(|seat| seat.get("review"))
@@ -479,7 +547,15 @@ fn build_graph(
                     })?;
                     let remaining =
                         budget.max_model_calls.saturating_sub(now.saturating_add(charged));
-                    let next = budget.implement_model_calls.saturating_add(budget.stage_cost(&plan));
+                    // The revise may make the change sensitive: reserve the next stage at
+                    // its escalated size (spec 3.1 §9.2 I63).
+                    let seats = match &plan.escalation {
+                        Some(escalation) if !escalated => roster.len().max(escalation.len()),
+                        Some(_) | None => roster.len(),
+                    };
+                    let next = budget
+                        .implement_model_calls
+                        .saturating_add(budget.stage_cost_for(plan.board, seats));
                     let (decision, outcome) = if all_approved {
                         ("finalize", "approved")
                     } else if round >= max_rounds {
@@ -519,8 +595,11 @@ fn build_graph(
 
     graph = graph.add_node_fn("revise", {
         let agents = agents.clone();
+        let can_escalate = plan.escalation.is_some();
         move |ctx| {
             let agents = agents.clone();
+            let escalate = can_escalate && !escalated_in(&ctx);
+            let round = ctx.get("round").and_then(Value::as_i64).unwrap_or(0);
             async move {
                 let notes = ctx.get("notes").and_then(Value::as_str).unwrap_or("").to_string();
                 println!("━━ revise ━━");
@@ -529,7 +608,18 @@ fn build_graph(
                      the task requires:\n{notes}"
                 );
                 agents.implement(&prompt).await;
-                Ok(NodeOutput::new().with_update("stage_start", json!(agents.model_calls())))
+                let mut output = NodeOutput::new();
+                if escalate
+                    && agents.escalate(round).await.map_err(|error| {
+                        adk_graph::GraphError::NodeExecutionFailed {
+                            node: "revise".to_string(),
+                            message: error.to_string(),
+                        }
+                    })?
+                {
+                    output = output.with_update("escalated", json!(true));
+                }
+                Ok(output.with_update("stage_start", json!(agents.model_calls())))
             }
         }
     });
@@ -681,6 +771,7 @@ mod tests {
         Implement(String),
         Review { focus: String, desc: String, prompt: String },
         Board { reviewers: Vec<String>, rounds: u32, prompt: String },
+        Escalate(i64),
     }
 
     /// Scripted agents: review texts per focus, board stages in order, a model-call charge
@@ -694,6 +785,8 @@ mod tests {
         model_calls: AtomicU64,
         per_implement: u64,
         per_review: u64,
+        /// Whether a revise makes the change sensitive.
+        escalates: bool,
     }
 
     impl Scripted {
@@ -740,6 +833,11 @@ mod tests {
                 prompt: prompt.to_string(),
             });
             self.boards.lock().unwrap().pop_front().unwrap_or_default()
+        }
+
+        async fn escalate(&self, round: i64) -> Result<bool> {
+            self.calls.lock().unwrap().push(Call::Escalate(round));
+            Ok(self.escalates)
         }
 
         fn model_calls(&self) -> u64 {
@@ -972,6 +1070,132 @@ mod tests {
         let plan = ReviewLoop { board: true, ..ReviewLoop::fixed(1) };
         let outcome = run_plan(agents.clone(), &plan, &budget, "t", 0).await.unwrap();
         assert_eq!(outcome.decision, "budgetExhausted");
+    }
+
+    /// The fixed loop whose escalation adds the security seat before style.
+    fn escalating(rounds: i64) -> ReviewLoop {
+        let mut plan = ReviewLoop::fixed(rounds);
+        let mut escalation = plan.reviewers.clone();
+        escalation.insert(2, ("security".into(), "trust boundaries".into()));
+        plan.escalation = Some(escalation);
+        plan
+    }
+
+    fn stage_focuses(agents: &Scripted) -> Vec<Vec<String>> {
+        let stages = agents.stages.lock().unwrap().clone();
+        stages
+            .iter()
+            .map(|stage| stage.seats.iter().map(|seat| seat.focus.clone()).collect())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_revise_that_makes_the_change_sensitive_adds_the_security_seat() {
+        let changes = "VERDICT: changes\n- validate the token";
+        let agents = Arc::new(
+            Scripted { escalates: true, ..Scripted::default() }
+                .reviews("correctness", &[changes, "VERDICT: approve"]),
+        );
+        let outcome = run_plan(agents.clone(), &escalating(2), &UltraBudget::unlimited(), "t", 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            UltraOutcome { rounds: 2, decision: "approved".into(), approved: true }
+        );
+        assert_eq!(
+            stage_focuses(&agents),
+            [
+                vec!["correctness", "edge-cases", "style"],
+                vec!["correctness", "edge-cases", "security", "style"]
+            ]
+        );
+        let calls = agents.calls();
+        let security = calls
+            .iter()
+            .filter(|call| matches!(call, Call::Review { focus, .. } if focus == "security"))
+            .count();
+        assert_eq!(security, 1, "the security seat reviews the stage after the revise");
+        assert_eq!(calls.iter().filter(|call| matches!(call, Call::Escalate(1))).count(), 1);
+
+        // A board takes the escalated roster too.
+        let agents = Arc::new(Scripted { escalates: true, ..Scripted::default() });
+        let seat_list = |focuses: &[&str], review: Review| BoardStage {
+            seats: focuses.iter().map(|focus| seat(focus, review)).collect(),
+            status: "completed".into(),
+            fallback: vec![],
+        };
+        agents.boards.lock().unwrap().extend([
+            seat_list(&["correctness", "edge-cases", "style"], Review::Changes),
+            seat_list(&["correctness", "edge-cases", "security", "style"], Review::Approve),
+        ]);
+        let plan = ReviewLoop { board: true, ..escalating(2) };
+        let outcome =
+            run_plan(agents.clone(), &plan, &UltraBudget::unlimited(), "t", 0).await.unwrap();
+        assert!(outcome.approved);
+        let boards: Vec<Vec<String>> = agents
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::Board { reviewers, .. } => Some(reviewers),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            boards,
+            [
+                vec!["correctness", "edge-cases", "style"],
+                vec!["correctness", "edge-cases", "security", "style"]
+            ]
+        );
+
+        // A revise that leaves the change insensitive keeps the roster, and asks again
+        // after each revise.
+        let agents = Arc::new(Scripted::default().reviews("style", &[changes, changes]));
+        let outcome = run_plan(agents.clone(), &escalating(3), &UltraBudget::unlimited(), "t", 0)
+            .await
+            .unwrap();
+        assert!(outcome.approved);
+        assert!(stage_focuses(&agents).iter().all(|focuses| focuses.len() == 3));
+        let asked: Vec<i64> = agents
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::Escalate(round) => Some(round),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked, [1, 2]);
+    }
+
+    #[tokio::test]
+    async fn the_reservation_covers_the_escalated_stage() {
+        let budget = UltraBudget {
+            max_model_calls: 30,
+            implement_model_calls: 10,
+            reviewer_model_calls: 5,
+            board_model_calls: 12,
+        };
+        let changes = &["VERDICT: changes\n- again"; 3];
+        // After a 3-call stage 27 remain: a revise and a 3-seat stage need 25, a revise and
+        // the escalated 4-seat stage 30.
+        let agents =
+            Arc::new(Scripted { per_review: 1, ..Scripted::default() }.reviews("style", changes));
+        let outcome = run_plan(agents.clone(), &escalating(3), &budget, "t", 0).await.unwrap();
+        assert_eq!(
+            outcome,
+            UltraOutcome { rounds: 1, decision: "budgetExhausted".into(), approved: false }
+        );
+        assert!(!agents.calls().iter().any(|call| matches!(call, Call::Implement(_))), "no revise");
+
+        let agents =
+            Arc::new(Scripted { per_review: 1, ..Scripted::default() }.reviews("style", changes));
+        let outcome =
+            run_plan(agents.clone(), &ReviewLoop::fixed(3), &budget, "t", 0).await.unwrap();
+        assert!(
+            agents.calls().iter().any(|call| matches!(call, Call::Implement(_))),
+            "{outcome:?}"
+        );
     }
 
     #[cfg(feature = "harness")]

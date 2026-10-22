@@ -143,6 +143,21 @@ impl Terminal {
         self.master.flush().unwrap();
     }
 
+    /// Waits for a command that exits on its own and returns its exit code and output.
+    pub fn wait(mut self) -> (Option<i32>, String) {
+        let started = Instant::now();
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return (status.code(), self.text());
+            }
+            if started.elapsed() > TIMEOUT {
+                let _ = self.child.kill();
+                panic!("adk-rust did not exit:\n{}", self.text());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     pub fn finish(mut self) -> String {
         self.send("exit\r");
         let started = Instant::now();
