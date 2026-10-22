@@ -11,6 +11,7 @@
 //! | [`stale_epoch_writes_are_refused`] | `heartbeat`, `set_checkpoint`, `wait`, and `finish` with a stale epoch fail with `run_store.stale_epoch`; unknown runs fail with `run_store.not_found` | Epoch compared inside the conditional write |
 //! | [`retryable_failure_requeues_until_max_attempts`] | A retryable failure requeues while attempts remain; others are terminal | Conditional write |
 //! | [`wait_and_wake`] | `wait` parks a run until its timer or `wake`; a wake that arrives first is not lost | Conditional write |
+//! | [`parked_run_keeps_its_checkpoint`] | A run parked until woken on a `Session` checkpoint, as a suspended run is, holds no lease, keeps its attempt and checkpoint across a restart, resumes at the same attempt, and cancels at once | Conditional write |
 //! | [`cancel_is_visible_through_heartbeat`] | Cancelling a running run is reported by the next heartbeat; queued runs cancel at once | Conditional write |
 //! | [`prune_removes_old_finished_runs`] | Prune deletes finished runs older than the cut-off, keeps the rest, and frees their idempotency keys | Range delete |
 //! | [`runs_survive_a_restart`] | Runs, leases, and checkpoints read back after a restart, and fencing still holds | Durable storage |
@@ -459,6 +460,66 @@ pub async fn wait_and_wake<H: RunStoreHarness + ?Sized>(harness: &H) {
     store.finish(id, early.epoch, RunOutcome::Completed(json!(null))).await.expect("finish");
     store.wake(id).await.expect("waking a finished run is a no-op");
     assert_eq!(get(&*store, id).await.state, RunState::Completed);
+}
+
+/// A run parked with `wait(None)` on a `Session` checkpoint — how a worker suspends a run
+/// (spec 3.2 §10 S1) — holds no lease, keeps its attempt and checkpoint, and is not claimable
+/// until woken, however long it waits and across a restart. The claim after `wake` resumes it
+/// at the same attempt and the next epoch with the checkpoint; `request_cancel` on a parked
+/// run finishes it `Cancelled`.
+pub async fn parked_run_keeps_its_checkpoint<H: RunStoreHarness + ?Sized>(harness: &H) {
+    let clock = ManualClock::new(base_time());
+    let store = harness.open(Arc::new(clock.clone())).await;
+    let queue = unique_unicode("queue");
+    let checkpoint = RunCheckpointRef::Session {
+        session_id: "session/ü:1".into(),
+        invocation_id: Some("invocation:ü/1".into()),
+    };
+    let run = created(&*store, new_run(&queue)).await;
+    let id = run.run_id.as_str();
+
+    let claimed = claim(&*store, &queue, "w1").await.expect("claim");
+    store.set_checkpoint(id, claimed.epoch, checkpoint.clone()).await.expect("checkpoint");
+    store.wait(id, claimed.epoch, None).await.expect("park until woken");
+    let parked = get(&*store, id).await;
+    assert_eq!(
+        (
+            parked.state,
+            parked.attempt,
+            parked.lease_owner.as_deref(),
+            parked.lease_expires_at,
+            parked.checkpoint.as_ref(),
+        ),
+        (RunState::Waiting, 1, None, None, Some(&checkpoint)),
+        "a parked run holds no lease and keeps its checkpoint"
+    );
+    clock.advance(Duration::from_secs(24 * 3600));
+    assert!(claim(&*store, &queue, "w2").await.is_none(), "parked until woken");
+
+    let store =
+        if harness.is_durable() { harness.open(Arc::new(clock.clone())).await } else { store };
+    let reopened = get(&*store, id).await;
+    assert_eq!(
+        (reopened.state, reopened.lease_owner.as_deref(), reopened.checkpoint.as_ref()),
+        (RunState::Waiting, None, Some(&checkpoint)),
+        "parked across a restart"
+    );
+    assert!(claim(&*store, &queue, "w2").await.is_none(), "still parked after a restart");
+
+    store.wake(id).await.expect("wake");
+    let resumed = claim(&*store, &queue, "w2").await.expect("claimable once woken");
+    assert_eq!(
+        (resumed.record.attempt, resumed.epoch, resumed.record.checkpoint.as_ref()),
+        (1, claimed.epoch + 1, Some(&checkpoint)),
+        "resumed at the same attempt with its checkpoint"
+    );
+
+    store.wait(id, resumed.epoch, None).await.expect("park again");
+    store.request_cancel(id).await.expect("request_cancel");
+    let cancelled = get(&*store, id).await;
+    assert_eq!((cancelled.state, cancelled.lease_owner), (RunState::Cancelled, None));
+    store.wake(id).await.expect("waking a cancelled run is a no-op");
+    assert!(claim(&*store, &queue, "w3").await.is_none(), "a cancelled run is not claimed");
 }
 
 /// Cancelling a running run is reported by its next heartbeat and blocks a retry;
