@@ -110,7 +110,7 @@ approved
 ```text
 $ adk-rust ps
 PID                                   STATE      KIND           QUEUE            AGE      TODAY      CALLS  NOTE
-6c2f…                                 waiting    goal           background     3m12s    $0.0123        4/9  suspended: freeze · goal 3/10, check exit 1
+6c2f9a1e-0b7d-4c55-9e0a-3f1d2b8c7a64  waiting    goal           background     3m12s    $0.0123        4/9  suspended: freeze · goal 3/10, check exit 1
 ```
 
 | Column | Source |
