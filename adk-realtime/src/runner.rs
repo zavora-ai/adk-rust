@@ -6,6 +6,7 @@
 use crate::config::{RealtimeConfig, SessionUpdateConfig, ToolDefinition};
 use crate::error::{RealtimeError, Result};
 use crate::events::{ServerEvent, ToolCall, ToolResponse};
+use crate::metering::{RealtimePricing, ResponseMeter};
 use crate::model::BoxedModel;
 use crate::session::ContextMutationOutcome;
 use async_trait::async_trait;
@@ -16,6 +17,11 @@ use tokio::sync::RwLock;
 
 /// How long a realtime tool may run before its call is answered with a timeout error.
 pub const DEFAULT_REALTIME_TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// The agent a realtime runner governs and meters its tool calls under unless
+/// [`RealtimeRunnerBuilder::agent_name`] names another; `IntegratedRealtimeRunner` also
+/// authors its held-call events with it, where [`adk_core::held_tool_calls`] finds them.
+pub const DEFAULT_REALTIME_AGENT_NAME: &str = "realtime";
 
 /// Parses a provider's tool-call arguments.
 ///
@@ -232,6 +238,8 @@ pub struct RealtimeRunnerBuilder {
     tool_timeout: std::time::Duration,
     tool_result_screen: Option<Arc<dyn adk_core::ToolResultScreen>>,
     expose_tool_error_messages: bool,
+    pricing: Option<RealtimePricing>,
+    agent_name: String,
 }
 
 impl Default for RealtimeRunnerBuilder {
@@ -254,7 +262,43 @@ impl RealtimeRunnerBuilder {
             tool_timeout: DEFAULT_REALTIME_TOOL_TIMEOUT,
             tool_result_screen: None,
             expose_tool_error_messages: false,
+            pricing: None,
+            agent_name: DEFAULT_REALTIME_AGENT_NAME.to_string(),
         }
+    }
+
+    /// Names the agent every tool call is governed and metered under: the gate's agent
+    /// name, the acting agent of each call's fingerprint and audit record, and the agent in
+    /// the spend key. Defaults to [`DEFAULT_REALTIME_AGENT_NAME`]. A surface that runs an
+    /// existing agent's tools over a realtime session sets that agent's name, so the
+    /// agent's tool policy recognises its own tools (spec 3.1 §7.17).
+    pub fn agent_name(mut self, name: impl Into<String>) -> Self {
+        self.agent_name = name.into();
+        self
+    }
+
+    /// Prices each response's reported usage, so the cost committed in the run's spend
+    /// ledger is the usage's price rather than the run's per-call estimate. Metering needs
+    /// [`tool_governance`](Self::tool_governance) with a `spend_ledger`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_realtime::metering::RealtimePricing;
+    ///
+    /// let runner = RealtimeRunner::builder()
+    ///     .model(model)
+    ///     .tool_governance(config, scope)
+    ///     .realtime_pricing(RealtimePricing {
+    ///         input_audio_micro_usd_per_million: 32_000_000,
+    ///         output_audio_micro_usd_per_million: 64_000_000,
+    ///         ..RealtimePricing::default()
+    ///     })
+    ///     .build()?;
+    /// ```
+    pub fn realtime_pricing(mut self, pricing: RealtimePricing) -> Self {
+        self.pricing = Some(pricing);
+        self
     }
 
     /// Governs every tool call this runner dispatches.
@@ -431,6 +475,17 @@ impl RealtimeRunnerBuilder {
 
         let max_concurrent_tools = self.runner_config.max_concurrent_tools.max(1);
 
+        // Every response is metered in the run's spend ledger, as `LlmAgent` meters a call.
+        let meter = self.governance.as_ref().and_then(|governance| {
+            ResponseMeter::for_run(
+                &governance.config,
+                &governance.scope.app_name,
+                &self.agent_name,
+                model.model_id(),
+                self.pricing,
+            )
+        });
+
         Ok(RealtimeRunner {
             model,
             config: Arc::new(RwLock::new(config)),
@@ -447,6 +502,8 @@ impl RealtimeRunnerBuilder {
             tool_timeout: self.tool_timeout,
             tool_result_screen: self.tool_result_screen,
             expose_tool_error_messages: self.expose_tool_error_messages,
+            meter,
+            agent_name: self.agent_name,
         })
     }
 }
@@ -515,6 +572,10 @@ pub struct RealtimeRunner {
     tool_result_screen: Option<Arc<dyn adk_core::ToolResultScreen>>,
     /// Whether handler error messages reach the model.
     expose_tool_error_messages: bool,
+    /// Meters each response in the run's spend ledger, when the governance has one.
+    meter: Option<ResponseMeter>,
+    /// The agent every tool call is governed and metered under.
+    agent_name: String,
 }
 
 impl RealtimeRunner {
@@ -873,7 +934,73 @@ impl RealtimeRunner {
 
         // Some sessions might yield inside next_event, but just in case, yield here too
         tokio::task::yield_now().await;
-        session.next_event().await
+        let event = session.next_event().await?;
+        if let Ok(event) = &event
+            && let Err(error) = self.observe_event(event).await
+        {
+            return Some(Err(error));
+        }
+        Some(event)
+    }
+
+    /// Meters `event` when it starts or ends a response.
+    ///
+    /// Returns the usage a `ResponseDone` reported, priced with
+    /// [`realtime_pricing`](RealtimeRunnerBuilder::realtime_pricing).
+    ///
+    /// # Errors
+    ///
+    /// [`RealtimeError::SpendRefused`] when the run's spend ledger refuses the response's
+    /// hold; the caller ends the session.
+    pub(crate) async fn observe_event(
+        &self,
+        event: &ServerEvent,
+    ) -> Result<Option<adk_core::UsageMetadata>> {
+        let Some(meter) = &self.meter else {
+            return Ok(None);
+        };
+        match event {
+            ServerEvent::ResponseCreated { .. } => {
+                meter.begin_response().await?;
+                Ok(None)
+            }
+            ServerEvent::ResponseDone { response, .. } => meter.end_response(response).await,
+            _ => Ok(None),
+        }
+    }
+
+    /// The agent every tool call is governed and metered under.
+    #[cfg(feature = "integration")]
+    pub(crate) fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+
+    /// The run config every tool call is governed under, when one was set.
+    #[cfg(feature = "integration")]
+    pub(crate) fn governance_config(&self) -> Option<&adk_core::RunConfig> {
+        self.governance.as_ref().map(|governance| &governance.config)
+    }
+
+    /// The approval scope held calls are recorded under, when governance was set.
+    #[cfg(feature = "integration")]
+    pub(crate) fn approval_scope(&self) -> Option<&adk_core::ApprovalScope> {
+        self.governance.as_ref().map(|governance| &governance.scope)
+    }
+
+    /// Counts a tool dispatch the caller runs outside [`run`](Self::run), so the follow-up
+    /// response waits for it; pair with [`end_dispatch`](Self::end_dispatch).
+    #[cfg(feature = "integration")]
+    pub(crate) fn begin_dispatch(&self) {
+        self.outstanding_tools.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Marks a dispatch counted by [`begin_dispatch`](Self::begin_dispatch) as finished.
+    /// Returns `true` when the dispatching response closed meanwhile, so the caller owes
+    /// the follow-up response ([`respond_after_tools`](Self::respond_after_tools)).
+    #[cfg(feature = "integration")]
+    pub(crate) fn end_dispatch(&self) -> bool {
+        self.outstanding_tools.fetch_sub(1, Ordering::AcqRel) == 1
+            && self.response_closed_awaiting_tools.swap(false, Ordering::AcqRel)
     }
 
     /// Send a tool response to the session.
@@ -969,6 +1096,11 @@ impl RealtimeRunner {
 
             match event {
                 Some(Ok(event)) => {
+                    if let Err(error) = self.observe_event(&event).await {
+                        self.event_handler.on_error(&error).await?;
+                        let _ = self.close().await;
+                        return Err(error);
+                    }
                     if let Some(call) = self.handle_event(event).await? {
                         self.outstanding_tools.fetch_add(1, Ordering::AcqRel);
                         running_tools.push(self.run_tool_call(call));
@@ -1174,7 +1306,7 @@ impl RealtimeRunner {
         };
         let gate = adk_core::ToolGate::new(
             &governance.config,
-            "realtime",
+            &self.agent_name,
             &governance.scope.session_id,
             governance.scope.clone(),
         );
@@ -1359,6 +1491,9 @@ impl RealtimeRunner {
 
     /// Close the session.
     pub async fn close(&self) -> Result<()> {
+        if let Some(meter) = &self.meter {
+            meter.abandon().await;
+        }
         if let Ok(session) = self.session_handle().await {
             session.close().await?;
         }

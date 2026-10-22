@@ -486,6 +486,23 @@ pub enum ServerEvent {
         transcript: String,
     },
 
+    /// A tool call held for a confirmation decision.
+    ///
+    /// Emitted by `IntegratedRealtimeRunner`, never by a provider, when the governed path
+    /// holds a call (`ToolAuthorization::Pending`) or when a tool's delegate held a call of
+    /// its own (an `AgentTool` whose agent held a call surfaces it through the tool
+    /// context's actions). `call_id` is the provider's call; `request` carries the final
+    /// arguments, the acting agent and the tool's origin, and its fingerprint is the key a
+    /// decision is recorded under in the run's `ApprovalStore`. Once a decision exists,
+    /// `IntegratedRealtimeRunner::resume_held_calls` runs the call.
+    #[serde(rename = "tool.confirmation_requested")]
+    ToolConfirmationRequested {
+        /// The provider's call ID.
+        call_id: String,
+        /// The held request, with the call's final arguments.
+        request: adk_core::ToolConfirmationRequest,
+    },
+
     /// Unknown event type (for forward compatibility).
     #[serde(other)]
     Unknown,

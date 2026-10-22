@@ -7,8 +7,8 @@
 use std::sync::{Arc, Mutex};
 
 use adk_core::{
-    Artifacts, CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext,
-    RequestContext, ToolContext,
+    ActingContext, Artifacts, CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext,
+    RequestContext, RunConfig, ToolContext,
 };
 use adk_memory::MemoryService;
 use async_trait::async_trait;
@@ -41,6 +41,13 @@ pub struct RealtimeToolContext {
     user_content: Content,
     /// The identity the server authenticated for the session, if any.
     request_context: Option<RequestContext>,
+    /// The run config the call was governed under, so a tool that checks its run's
+    /// policy (`ToolContext::run_config`) sees the same one the gate applied.
+    run_config: Option<RunConfig>,
+    /// The acting context the gate authorized the call under.
+    acting: Option<ActingContext>,
+    /// The agent the call is governed under.
+    agent_name: String,
 }
 
 impl RealtimeToolContext {
@@ -69,7 +76,54 @@ impl RealtimeToolContext {
             actions: Mutex::new(EventActions::default()),
             user_content: Content::new("user"),
             request_context: None,
+            run_config: None,
+            acting: None,
+            agent_name: crate::runner::DEFAULT_REALTIME_AGENT_NAME.to_string(),
         }
+    }
+
+    /// Names the agent the call is governed under, which
+    /// [`agent_name`](ReadonlyContext::agent_name) reports; defaults to
+    /// [`DEFAULT_REALTIME_AGENT_NAME`](crate::runner::DEFAULT_REALTIME_AGENT_NAME).
+    #[must_use]
+    pub fn with_agent_name(mut self, agent_name: impl Into<String>) -> Self {
+        self.agent_name = agent_name.into();
+        self
+    }
+
+    /// Carries the run config the call was governed under, so
+    /// [`run_config`](ToolContext::run_config) answers it: a tool that refuses to run
+    /// outside a governed run (a harness `bash`) sees the policy the gate applied.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{RunConfig, ToolContext};
+    /// use adk_realtime::integration::RealtimeToolContext;
+    ///
+    /// let ctx = RealtimeToolContext::new(
+    ///     "voice".to_string(),
+    ///     "user-1".to_string(),
+    ///     "session-1".to_string(),
+    ///     "call-1".to_string(),
+    ///     None,
+    /// )
+    /// .with_run_config(RunConfig::default());
+    /// assert!(ctx.run_config().is_some());
+    /// ```
+    #[must_use]
+    pub fn with_run_config(mut self, run_config: RunConfig) -> Self {
+        self.run_config = Some(run_config);
+        self
+    }
+
+    /// Carries the acting context the gate authorized the call under, so
+    /// [`acting_context`](ReadonlyContext::acting_context) reports the same agent and
+    /// subject the request's fingerprint and the audit actor name.
+    #[must_use]
+    pub fn with_acting_context(mut self, acting: ActingContext) -> Self {
+        self.acting = Some(acting);
+        self
     }
 
     /// Marks the context as acting for the identity the server authenticated (spec 3.1
@@ -113,7 +167,7 @@ impl ReadonlyContext for RealtimeToolContext {
     }
 
     fn agent_name(&self) -> &str {
-        "realtime"
+        &self.agent_name
     }
 
     fn user_id(&self) -> &str {
@@ -134,6 +188,18 @@ impl ReadonlyContext for RealtimeToolContext {
 
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+
+    fn acting_context(&self) -> ActingContext {
+        match &self.acting {
+            Some(acting) => acting.clone(),
+            None => ActingContext::derived(
+                self.app_name(),
+                self.agent_name(),
+                self.user_id(),
+                adk_core::SubjectKind::Human,
+            ),
+        }
     }
 
     fn is_authenticated(&self) -> bool {
@@ -160,6 +226,10 @@ impl ToolContext for RealtimeToolContext {
 
     fn set_actions(&self, actions: EventActions) {
         *self.actions.lock().unwrap() = actions;
+    }
+
+    fn run_config(&self) -> Option<&RunConfig> {
+        self.run_config.as_ref()
     }
 
     fn user_scopes(&self) -> Vec<String> {
@@ -261,20 +331,34 @@ pub(crate) struct IdentityToolContextFactory {
     pub(crate) identity: SessionIdentity,
     pub(crate) memory_service: Option<Arc<dyn MemoryService>>,
     pub(crate) request_context: Option<RequestContext>,
+    /// The governance config, carried into every context as its run config.
+    pub(crate) run_config: Option<RunConfig>,
+    /// The agent calls are governed under.
+    pub(crate) agent_name: String,
 }
 
 impl ToolContextFactory for IdentityToolContextFactory {
     fn create_context(&self, function_call_id: &str) -> Arc<dyn ToolContext> {
-        let ctx = RealtimeToolContext::new(
+        let mut ctx = RealtimeToolContext::new(
             self.identity.app_name.clone(),
             self.identity.user_id.clone(),
             self.identity.session_id.clone(),
             function_call_id.to_string(),
             self.memory_service.clone(),
-        );
-        Arc::new(match &self.request_context {
-            Some(request_context) => ctx.with_request_context(request_context.clone()),
-            None => ctx,
-        })
+        )
+        .with_agent_name(&self.agent_name);
+        if let Some(request_context) = &self.request_context {
+            ctx = ctx.with_request_context(request_context.clone());
+        }
+        if let Some(run_config) = &self.run_config {
+            ctx = ctx
+                .with_acting_context(run_config.acting_context_for(
+                    &self.identity.app_name,
+                    &self.agent_name,
+                    &self.identity.user_id,
+                ))
+                .with_run_config(run_config.clone());
+        }
+        Arc::new(ctx)
     }
 }

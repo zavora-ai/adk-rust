@@ -927,6 +927,7 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "adk-gemini",
+ "adk-guardrail",
  "adk-memory",
  "adk-plugin",
  "adk-session",

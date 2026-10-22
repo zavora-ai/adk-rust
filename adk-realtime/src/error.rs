@@ -40,6 +40,20 @@ pub enum RealtimeError {
     #[error("Tool execution error: {0}")]
     ToolError(String),
 
+    /// An output guardrail blocked the model's text or transcript; the response was
+    /// interrupted and the text was not persisted.
+    #[error("output blocked by guardrail {guardrail}: {reason}")]
+    OutputBlocked {
+        /// The guardrail that blocked the text.
+        guardrail: String,
+        /// Why it blocked, as the guardrail reported.
+        reason: String,
+    },
+
+    /// The run's spend ledger refused to reserve the next response, so the session ended.
+    #[error("spend ledger refused the response: {0}")]
+    SpendRefused(String),
+
     /// Server returned an error.
     #[error("Server error: {code} - {message}")]
     ServerError {
@@ -104,6 +118,8 @@ impl RealtimeError {
             Self::ConfigError(_) => "config",
             Self::AudioFormatError(_) => "audio_format",
             Self::ToolError(_) => "tool",
+            Self::OutputBlocked { .. } => "output_blocked",
+            Self::SpendRefused(_) => "spend_refused",
             Self::ServerError { .. } => "server",
             Self::Timeout(_) => "timeout",
             Self::SerializationError(_) => "serialization",

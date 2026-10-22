@@ -298,6 +298,12 @@ the runners take them from `tool_governance` on their builders.
 | After-tool failure | An after-tool callback or plugin error withholds the result (`result_withheld`) |
 | Result screening | `tool_result_screen(screen)` rewrites or withholds each result before the model sees it; a screen that cannot decide withholds the result |
 | Authenticated identity | `IntegratedRealtimeRunnerBuilder::request_context(ctx)` runs every tool call as the identity the server authenticated: tool contexts answer `is_authenticated()` with `true` and `user_scopes()` with its scopes. Without it they report an unauthenticated user; a context for a user other than `identity`'s fails `build` |
+| Run config in tool contexts | With `tool_governance`, every tool context answers `run_config()` with the governance config and `acting_context()` with the acting context the gate authorized the call under |
+| Governing agent | `agent_name(name)` on either runner builder names the agent calls are governed, metered and held under (default `realtime`); a surface running an existing agent's tools sets that agent's name, so its tool policy recognises them |
+| Held calls | A call the governed path holds, or that a tool's delegate holds (an `AgentTool` whose agent held a call), is answered to the model as `confirmation_pending`, recorded in the session under the runner's agent name (`agent_name`, default `realtime`) and in the run's `ApprovalStore`, and surfaced as `ServerEvent::ToolConfirmationRequested`; `held_calls()` lists them and `resume_held_calls()` runs each one that has a decision under its original call ID. `RealtimeAgent` holds its own call when its delegate holds one and resumes decided calls at the start of a run |
+| Concurrent dispatch | `IntegratedRealtimeRunnerBuilder::concurrent_tool_dispatch(true)` runs each dispatch on its own task, so `next_event` keeps reading provider events while a tool runs; off by default |
+| Metering | With a `spend_ledger` in the governance config, every response reserves a hold (the run's `LlmSpendEstimate`) when it starts and commits its cost when it ends: `RealtimeUsage::from_response` reads OpenAI's `response.usage` or Gemini's `usageMetadata`, `realtime_pricing(RealtimePricing)` prices it, and without pricing the estimate is committed. A refused hold ends the session with `RealtimeError::SpendRefused`. `RealtimeAgent` yields the usage on an event at each response's end |
+| Output guardrails | `output_guardrails(GuardrailSet)` (feature `guardrails`) screens each completed turn as `LlmAgent` screens final text: a transform replaces the persisted text; a block interrupts the response, persists nothing of the turn and reports `RealtimeError::OutputBlocked` (the agent ends the run with the guardrail's error) |
 
 ## RealtimeAgent builder
 
@@ -327,6 +333,7 @@ the runners take them from `tool_governance` on their builders.
 | `InputTranscriptDelta`, `InputTranscriptCompleted` | Transcript of the user's input audio |
 | `FunctionCallDelta`, `FunctionCallDone` | Tool call arguments, completed tool call |
 | `ResponseCreated`, `ResponseDone` | Response started, response completed |
+| `ToolConfirmationRequested` | A tool call held for a confirmation decision (emitted by the integrated runner, not a provider) |
 | `SpeechStarted`, `SpeechStopped` | VAD detected speech or silence |
 | `Error` | Provider error |
 | `Unknown` | An event type this version does not model |
@@ -361,6 +368,8 @@ the runners take them from `tool_governance` on their builders.
 | `heygen-avatar` | HeyGen LiveAvatar provider (implies `video-avatar`, `livekit`) | |
 | `did-avatar` | D-ID Realtime Agents provider (implies `video-avatar`) | |
 | `integration` | `IntegratedRealtimeRunner`: sessions, memory, and plugins around `RealtimeRunner` | |
+| `guardrails` | Output guardrails on the model's text and transcripts (`adk-guardrail`) | |
+| `scripted` | `ScriptedRealtimeModel`: a provider-free model that answers each client action from a script, for tests | |
 | `record-payloads` | Quotes provider frames in OpenAI schema-drift warnings; without it they are redacted | |
 | `full` | `openai`, `gemini`, `vertex-live`, `livekit` | |
 | `full-webrtc` | `full` and `openai-webrtc` | cmake |

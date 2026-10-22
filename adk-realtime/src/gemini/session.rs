@@ -243,6 +243,10 @@ struct GeminiRealtimeInput {
     /// detection is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     activity_end: Option<GeminiActivityMarker>,
+    /// The audio stream has paused: the server flushes the audio it cached, so its
+    /// activity detection can close the turn. Sent while automatic detection is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    audio_stream_end: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -480,6 +484,10 @@ pub struct GeminiRealtimeSession {
     /// posting a schema that kept `additionalProperties` under the legacy
     /// `parameters` field closes the socket with WS 1007.
     schema_dialect: adk_gemini::GeminiSchemaDialect,
+    /// The latest `usageMetadata` the server sent on a message that carried nothing else,
+    /// attached to the next `ResponseDone` so a usage report separate from the turn is not
+    /// lost.
+    last_usage: Arc<ParkingMutex<Option<Value>>>,
 }
 
 impl GeminiRealtimeSession {
@@ -626,6 +634,7 @@ impl GeminiRealtimeSession {
             activity_detection,
             activity_open: Arc::new(AtomicBool::new(false)),
             schema_dialect,
+            last_usage: Arc::new(ParkingMutex::new(None)),
         };
 
         session.send_setup(model, config).await?;
@@ -1017,15 +1026,33 @@ impl GeminiRealtimeSession {
             if let Some(turn_complete) = content.get("turnComplete")
                 && turn_complete.as_bool().unwrap_or(false)
             {
+                // The usage report may ride on this message or on one of its own just
+                // before it; either way it belongs to the response that closes here.
+                let mut response = value.clone();
+                if response.get("usageMetadata").is_none()
+                    && let Some(usage) = self.last_usage.lock().take()
+                {
+                    response["usageMetadata"] = usage;
+                }
                 events.push(ServerEvent::ResponseDone {
                     event_id: uuid::Uuid::new_v4().to_string(),
-                    response: value.clone(),
+                    response,
                 });
+            } else if let Some(usage) = value.get("usageMetadata") {
+                *self.last_usage.lock() = Some(usage.clone());
             }
 
             if !events.is_empty() {
                 return Ok(events);
             }
+        }
+
+        // A usage report on a message of its own belongs to the response that closes next.
+        if let Some(usage) = value.get("usageMetadata")
+            && value.get("serverContent").is_none()
+            && value.get("toolCall").is_none()
+        {
+            *self.last_usage.lock() = Some(usage.clone());
         }
 
         // Catch the Server Update for sessionResumptionUpdate
@@ -1164,7 +1191,21 @@ impl RealtimeSession for GeminiRealtimeSession {
     }
 
     async fn commit_audio(&self) -> Result<()> {
-        self.flush_audio().await
+        self.flush_audio().await?;
+        // Under automatic detection the server caches the tail of the stream and closes the
+        // turn only once more audio or `audioStreamEnd` arrives; a client that has stopped
+        // sending would otherwise leave the user's turn open indefinitely.
+        if self.activity_detection == ActivityDetection::Automatic {
+            let msg = GeminiClientMessage {
+                realtime_input: Some(GeminiRealtimeInput {
+                    audio_stream_end: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            self.send_raw(&msg).await?;
+        }
+        Ok(())
     }
 
     async fn clear_audio(&self) -> Result<()> {
@@ -1920,6 +1961,7 @@ mod tests {
             activity_detection,
             activity_open: Arc::new(AtomicBool::new(false)),
             schema_dialect,
+            last_usage: Arc::new(ParkingMutex::new(None)),
         };
 
         (session, server_ws)
@@ -1959,6 +2001,35 @@ mod tests {
             "expected a config error, got {err:?}"
         );
         assert!(err.to_string().contains("automatic activity detection is disabled"));
+    }
+
+    /// Committing on a server-VAD session flushes the buffered audio and ends the audio
+    /// stream, so the server closes the user's turn without waiting for more audio.
+    #[tokio::test]
+    async fn commit_ends_the_audio_stream_when_the_server_owns_detection() {
+        let (session, mut server) = session_on_loopback(ActivityDetection::Automatic).await;
+
+        session.send_audio(&AudioChunk::pcm16_16khz(vec![0; 64])).await.unwrap();
+        session.commit_audio().await.unwrap();
+
+        let audio = next_frame(&mut server).await;
+        assert_eq!(audio["realtimeInput"]["audio"]["mimeType"], "audio/pcm;rate=16000");
+        assert_eq!(
+            next_frame(&mut server).await,
+            json!({ "realtimeInput": { "audioStreamEnd": true } })
+        );
+    }
+
+    /// In manual mode the client's `activityEnd` closes the turn; commit only flushes.
+    #[tokio::test]
+    async fn commit_only_flushes_in_manual_mode() {
+        let (session, mut server) = session_on_loopback(ActivityDetection::Manual).await;
+
+        session.commit_audio().await.unwrap();
+        session.send_text("sentinel").await.unwrap();
+
+        let frame = next_frame(&mut server).await;
+        assert!(frame.get("clientContent").is_some(), "commit wrote a frame: {frame}");
     }
 
     /// `interrupt()` on a server-VAD session must stay a local-only operation:

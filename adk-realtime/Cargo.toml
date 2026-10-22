@@ -69,6 +69,9 @@ adk-plugin = { workspace = true, optional = true }
 # Timestamp support for session/memory integration
 chrono = { workspace = true, optional = true }
 
+# Output guardrails (optional, behind "guardrails")
+adk-guardrail = { workspace = true, optional = true }
+
 # Vertex AI Live (optional)
 google-cloud-auth = { version = "1.4", optional = true, default-features = false, features = ["default-rustls-provider"] }
 
@@ -169,6 +172,12 @@ default = []
 record-payloads = []
 # Enable ADK services integration (sessions, memory, plugins)
 integration = ["dep:adk-session", "dep:adk-memory", "dep:adk-plugin", "dep:chrono"]
+# Output guardrails on the model's text and transcripts (`adk-guardrail`'s `GuardrailSet`),
+# as `LlmAgent` screens final text.
+guardrails = ["dep:adk-guardrail"]
+# `ScriptedRealtimeModel`: a provider-free test double that answers each client action from
+# a script, for tests of the runners, the integration layer and voice surfaces.
+scripted = []
 # Enable OpenAI Realtime API support
 openai = ["dep:async-openai", "dep:tokio-tungstenite", "dep:getrandom"]
 # Enable Gemini Live API support

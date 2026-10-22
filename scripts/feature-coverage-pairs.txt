@@ -129,9 +129,14 @@
 
 # Shard 5 — adk-realtime, adk-session, adk-memory, adk-eval, adk-deploy, adk-bench.
 5 adk-realtime integration
+# Held calls, metering and output guardrails on the integrated runner, and the scripted
+# provider the voice surface tests run on.
+5 adk-realtime integration,guardrails,scripted
 # The OpenAI realtime session and its WebSocket transport: compiled by the nightly `full`
 # build but never tested anywhere else.
 5 adk-realtime openai
+# The Gemini Live session: setup, usage reports, the audio stream end on commit.
+5 adk-realtime gemini
 5 adk-session vertex-session
 5 adk-session postgres
 # Durable stores on every backend: compiles them and runs the SQLite conformance suites;

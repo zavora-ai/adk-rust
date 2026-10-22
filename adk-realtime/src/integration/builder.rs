@@ -14,6 +14,7 @@ use adk_session::SessionService;
 
 use crate::config::{RealtimeConfig, ToolDefinition};
 use crate::error::RealtimeError;
+use crate::metering::RealtimePricing;
 use crate::model::BoxedModel;
 use crate::runner::{EventHandler, RealtimeRunner, RunnerConfig, ToolHandler};
 
@@ -76,6 +77,15 @@ pub struct IntegratedRealtimeRunnerBuilder {
     pub(crate) expose_tool_error_messages: bool,
     /// The identity the server authenticated for the session, if any.
     pub(crate) request_context: Option<adk_core::RequestContext>,
+    /// Output guardrails on the model's text and transcripts.
+    #[cfg(feature = "guardrails")]
+    pub(crate) output_guardrails: Option<adk_guardrail::GuardrailSet>,
+    /// Prices each response's usage for the spend ledger.
+    pub(crate) pricing: Option<RealtimePricing>,
+    /// Whether `next_event` runs tool dispatch on its own task.
+    pub(crate) concurrent_tool_dispatch: bool,
+    /// The agent tool calls are governed, metered and held under.
+    pub(crate) agent_name: String,
 }
 
 impl Default for IntegratedRealtimeRunnerBuilder {
@@ -107,6 +117,11 @@ impl IntegratedRealtimeRunnerBuilder {
             tool_result_screen: None,
             expose_tool_error_messages: false,
             request_context: None,
+            #[cfg(feature = "guardrails")]
+            output_guardrails: None,
+            pricing: None,
+            concurrent_tool_dispatch: false,
+            agent_name: crate::runner::DEFAULT_REALTIME_AGENT_NAME.to_string(),
         }
     }
 
@@ -266,7 +281,13 @@ impl IntegratedRealtimeRunnerBuilder {
 
     /// Governs every tool call with `config`'s tool policy, kill switches, confirmation
     /// handler, approvals, and approval store, scoped to this runner's identity. ADK tools
-    /// are authorized after the plugin pipeline rewrites their arguments.
+    /// are authorized after the plugin pipeline rewrites their arguments, and every tool
+    /// context answers [`run_config`](adk_core::ToolContext::run_config) with `config`.
+    /// A call the governed path holds, or that a tool's delegate holds, is surfaced as
+    /// [`ServerEvent::ToolConfirmationRequested`](crate::events::ServerEvent::ToolConfirmationRequested)
+    /// and recorded in the session; see
+    /// [`IntegratedRealtimeRunner::resume_held_calls`](super::IntegratedRealtimeRunner::resume_held_calls).
+    /// With a `spend_ledger`, every response is metered under the identity's app name.
     ///
     /// # Example
     ///
@@ -336,6 +357,71 @@ impl IntegratedRealtimeRunnerBuilder {
         self
     }
 
+    /// Screens every completed model turn — its text, or its audio transcript when it
+    /// produced no text — with `guardrails` before it reaches the session and memory, as
+    /// `LlmAgent` screens final text. A transform replaces the persisted text; a block
+    /// interrupts the response, persists nothing of the turn, and makes
+    /// [`next_event`](super::IntegratedRealtimeRunner::next_event) return
+    /// [`crate::error::RealtimeError::OutputBlocked`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_guardrail::{GuardrailSet, PiiRedactor};
+    ///
+    /// let runner = IntegratedRealtimeRunner::builder()
+    ///     .model(model)
+    ///     .identity("voice", "user-1", "session-1")
+    ///     .output_guardrails(GuardrailSet::new().with(PiiRedactor::new()))
+    ///     .build()?;
+    /// ```
+    #[cfg(feature = "guardrails")]
+    pub fn output_guardrails(mut self, guardrails: adk_guardrail::GuardrailSet) -> Self {
+        self.output_guardrails = Some(guardrails);
+        self
+    }
+
+    /// Prices each response's reported usage, so the run's spend ledger is charged the
+    /// usage's price rather than the per-call estimate. Needs
+    /// [`tool_governance`](Self::tool_governance) with a `spend_ledger`.
+    pub fn realtime_pricing(mut self, pricing: RealtimePricing) -> Self {
+        self.pricing = Some(pricing);
+        self
+    }
+
+    /// Runs each tool dispatch on its own task, so
+    /// [`next_event`](super::IntegratedRealtimeRunner::next_event) keeps reading provider
+    /// events — the user's transcript included — while a tool runs or waits for a
+    /// confirmation handler. The follow-up response is sent once the dispatching response
+    /// has closed and every tool is in, as [`RealtimeRunner::run`] does. Off by default:
+    /// `next_event` then dispatches inline and returns after the result is sent.
+    pub fn concurrent_tool_dispatch(mut self, concurrent: bool) -> Self {
+        self.concurrent_tool_dispatch = concurrent;
+        self
+    }
+
+    /// Names the agent every tool call is governed, metered and held under: the gate's
+    /// agent name, the acting agent of each call, the agent tool contexts report, and the
+    /// author of the session events that record a hold. Defaults to
+    /// [`DEFAULT_REALTIME_AGENT_NAME`](crate::runner::DEFAULT_REALTIME_AGENT_NAME). A
+    /// surface that runs an existing agent's tools sets that agent's name, so the agent's
+    /// tool policy classifies its own tools (spec 3.1 §7.17).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let runner = IntegratedRealtimeRunner::builder()
+    ///     .model(model)
+    ///     .identity("adk-rust", "ana", "voice-1")
+    ///     .agent_name("harness")
+    ///     .tool_governance(harness.run_config())
+    ///     .build()?;
+    /// ```
+    pub fn agent_name(mut self, name: impl Into<String>) -> Self {
+        self.agent_name = name.into();
+        self
+    }
+
     /// Builds the [`IntegratedRealtimeRunner`](super::IntegratedRealtimeRunner).
     ///
     /// Validates required fields, bridges ADK tools via
@@ -382,6 +468,8 @@ impl IntegratedRealtimeRunnerBuilder {
             identity: identity.clone(),
             memory_service: self.memory_service.clone(),
             request_context: self.request_context.clone(),
+            run_config: self.tool_governance.clone(),
+            agent_name: self.agent_name.clone(),
         });
 
         // Bridge ADK tools via ToolBridgeAdapter
@@ -411,9 +499,13 @@ impl IntegratedRealtimeRunnerBuilder {
             .config(self.config)
             .runner_config(self.runner_config)
             .tool_timeout(self.tool_timeout)
-            .expose_tool_error_messages(self.expose_tool_error_messages);
+            .expose_tool_error_messages(self.expose_tool_error_messages)
+            .agent_name(self.agent_name);
         if let Some(screen) = self.tool_result_screen {
             runner_builder = runner_builder.tool_result_screen(screen);
+        }
+        if let Some(pricing) = self.pricing {
+            runner_builder = runner_builder.realtime_pricing(pricing);
         }
         if let Some(config) = self.tool_governance {
             let scope = adk_core::ApprovalScope::new(
@@ -440,15 +532,22 @@ impl IntegratedRealtimeRunnerBuilder {
             self.adk_tools.iter().map(|tool| (tool.name().to_string(), Arc::clone(tool))).collect();
 
         Ok(super::IntegratedRealtimeRunner {
-            runner,
-            session_service: self.session_service,
-            memory_service: self.memory_service,
-            plugin_manager: self.plugin_manager,
-            aggregator: tokio::sync::RwLock::new(super::transcript::TranscriptAggregator::new()),
-            identity,
-            config: self.integration_config,
-            adk_tools: adk_tools_by_name,
-            request_context: self.request_context,
+            inner: Arc::new(super::Inner {
+                runner,
+                session_service: self.session_service,
+                memory_service: self.memory_service,
+                plugin_manager: self.plugin_manager,
+                aggregator: tokio::sync::RwLock::new(super::transcript::TranscriptAggregator::new()),
+                identity,
+                config: self.integration_config,
+                adk_tools: adk_tools_by_name,
+                request_context: self.request_context,
+                pending_events: std::sync::Mutex::new(std::collections::VecDeque::new()),
+                connected_calls: std::sync::Mutex::new(std::collections::HashSet::new()),
+                concurrent_dispatch: self.concurrent_tool_dispatch,
+                #[cfg(feature = "guardrails")]
+                output_guardrails: self.output_guardrails,
+            }),
         })
     }
 }

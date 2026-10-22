@@ -120,17 +120,15 @@ Gaps that remain open after the fixes in #848–#877: from the October 2026 revi
 | Barge-in neither truncates played audio nor clears provider buffers | Track played milliseconds per item; on interruption send `conversation.item.truncate` (WebSocket) and `output_audio_buffer.clear` (WebRTC), and call `clear_buffer` (LiveKit) | October 2026 review |
 | Event iteration continues, or hangs, after a session closes | A closing flag that makes `next_event` and `receive_raw` return `None`; drop the WebRTC sender on close; bound Gemini's close | October 2026 review |
 | Provider options leak into the OpenAI session config, and transcription options are limited | Strip `language_code`, `thinking_level` and `resumeToken` before merging `extra`; merge `extra` recursively; add language and prompt to `TranscriptionConfig` | October 2026 review |
-| No content guardrails on the model's own text or transcript events | Run output guardrails on realtime text and transcripts, as `LlmAgent` does for final text | #857 |
 | A runner built without `tool_governance` has no payload switch, and error messages logged under `record_payloads` are not length-capped | Give realtime runners their own `record_payloads` and apply `trace_payload_max_bytes` | #857 |
 | Gemini Live never captures the session resumption handle (it reads `resumptionToken`; the wire field is `sessionResumptionUpdate.newHandle`), so every reconnect starts a blank session | Read `newHandle` when `resumable` is true and keep the latest | parity review |
-| Realtime runs do not persist user turns, and on Gemini persist no turns at all | Persist input transcripts and typed text as user events; open a Gemini turn on the first delta and close it at `turnComplete`/`generationComplete` | parity review |
+| `RealtimeAgent` does not persist user turns | Persist input transcripts and typed text as user events, as `IntegratedRealtimeRunner` does | parity review |
 | `RealtimeAgent` saves every audio delta (about 48 KB of rows per second of speech) and no transcript | Keep audio deltas out of the session, or mark them partial; emit one transcript event per response | parity review |
-| Realtime usage is not reported, so realtime spend is unmetered | Translate Gemini `usageMetadata` and OpenAI `response.done` usage and meter it | parity review |
 | Gemini Live `GoAway` is dropped, so the connection ends without warning | Surface `GoAway{timeLeft}` and offer a resume helper that uses the resumption handle | parity review |
 | `RealtimeAgent` does not replay session history on connect, so memory is lost after a transfer or a new invocation | Send the session's text history as `clientContent` turns on connect | parity review |
 | Gemini Live `interrupted` and `turnCompleteReason` are dropped | Map `interrupted` to an interruption event and carry the reason on `ResponseDone` | parity review |
 | Gemini Live setup ignores generic config fields such as output caps and tool choice | Map `max_response_output_tokens` and `tool_choice`; add safety and thinking fields | parity review |
-| No `audioStreamEnd`, and the input sample rate is hard-coded to 16 kHz | Add `audio_stream_end`; take the rate from `AudioChunk.format` | parity review |
+| The Gemini Live input sample rate is hard-coded to 16 kHz | Take the rate from `AudioChunk.format` | parity review |
 | Transparent session resumption is not modelled | Add a `transparent` flag | parity review |
 
 ### Gemini and Interactions
@@ -160,7 +158,7 @@ Gaps that remain open after the fixes in #848–#877: from the October 2026 revi
 
 | Gap | Fix | Origin |
 |-----|-----|--------|
-| `CodeActAgent`, realtime runners and graph tool nodes ignore an `AgentTool` delegate's hold | Surface the delegate's `ToolConfirmationRequest` and resume it, as `LlmAgent` does | #852 |
+| `CodeActAgent` and graph tool nodes ignore an `AgentTool` delegate's hold | Surface the delegate's `ToolConfirmationRequest` and resume it, as `LlmAgent` and the realtime runners do | #852 |
 | A delegate that holds several calls in one turn surfaces them one at a time; an `AgentTool` that itself requires confirmation is asked again when it resumes | Surface every held call of the turn; carry the caller's approval across the resume | #852 |
 | A call-ID decision passed without its fingerprint matches on the call ID alone | Bind call-ID decisions to the held request's fingerprint inside the approval check | #853 |
 | When one `ParallelAgent` branch fails while another holds a call, the failed branch is not re-run on resume | Record failed branches in the workflow position and re-run them | #860 |

@@ -118,9 +118,17 @@ pub mod integration;
 #[cfg(feature = "integration")]
 pub use integration::{
     AggregatedEvent, CompletedToolCall, DefaultToolContextFactory, IntegratedRealtimeRunner,
-    IntegratedRealtimeRunnerBuilder, IntegrationConfig, RealtimeToolContext, SessionIdentity,
-    ToolBridgeAdapter, TranscriptAggregator,
+    IntegratedRealtimeRunnerBuilder, IntegrationConfig, RealtimeToolContext, ResumedToolCall,
+    SessionIdentity, ToolBridgeAdapter, TranscriptAggregator,
 };
+
+pub mod metering;
+pub use metering::{RealtimePricing, RealtimeUsage};
+
+#[cfg(feature = "scripted")]
+pub mod scripted;
+#[cfg(feature = "scripted")]
+pub use scripted::{ScriptedRealtimeModel, ScriptedReply, ScriptedStep};
 
 // Re-exports
 pub use agent::{RealtimeAgent, RealtimeAgentBuilder};
