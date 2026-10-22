@@ -34,6 +34,8 @@ mod memory;
 mod postgres;
 #[cfg(feature = "redis")]
 mod redis;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+mod sql;
 #[cfg(feature = "sqlite")]
 mod sqlite;
 

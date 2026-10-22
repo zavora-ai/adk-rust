@@ -17,11 +17,12 @@ categories = ["asynchronous", "development-tools"]
 [features]
 default = ["sqlite", "webhooks", "drivers", "service", "proc"]
 # SQLite backends for the kernel-owned stores, on the pool of `harness.db` with distinct
-# migration tables (spec 3.2 §7.1, §13 Q8).
-sqlite = ["dep:sqlx", "sqlx/sqlite"]
+# migration tables (spec 3.2 §7.1, §13 Q8). The SQL backends record their steps with
+# `adk_session::migration`'s runners, as adk-session's stores in `harness.db` do.
+sqlite = ["dep:sqlx", "sqlx/sqlite", "adk-session/sqlite"]
 # Shared kernel stores for replicas, opened from the URL of `adk-rust serve --store`
 # (spec 3.2 §7.1, §13 Q8).
-postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs"]
+postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs", "adk-session/postgres"]
 redis = ["dep:fred"]
 # Webhook wake sources through `WebhookIngress` (spec 3.2 §7.4).
 webhooks = ["adk-core/webhooks", "adk-server/webhook-ingress"]
