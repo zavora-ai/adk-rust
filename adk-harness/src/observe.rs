@@ -592,6 +592,7 @@ pub(crate) fn observe_run(
         subject: Option<SubjectRef>,
         effort: crate::posture::Effort,
         tokens: TurnTokens,
+        settled: bool,
     }
     impl Finish {
         /// Counts a model response's prompt tokens, cached and not (spec 3.1 §7.23).
@@ -607,10 +608,19 @@ pub(crate) fn observe_run(
             }
         }
 
-        async fn run(self) -> Result<()> {
-            self.trails.clear(&self.session_key);
+        /// Counts the run into the spend accounts, once, and returns its usage.
+        fn settle(&mut self) -> BudgetUsage {
             let usage = self.tracker.as_ref().map(|tracker| tracker.usage()).unwrap_or_default();
-            self.accounts.finish_run(self.subject.clone(), &usage, self.tokens);
+            if !self.settled {
+                self.settled = true;
+                self.trails.clear(&self.session_key);
+                self.accounts.finish_run(self.subject.clone(), &usage, self.tokens);
+            }
+            usage
+        }
+
+        async fn run(mut self) -> Result<()> {
+            let usage = self.settle();
             let Some(audit) = &self.audit else {
                 return Ok(());
             };
@@ -641,6 +651,14 @@ pub(crate) fn observe_run(
                 .await
         }
     }
+    // A consumer that stops polling before the end — a person's denial or Ctrl-C in the
+    // launcher — drops the stream; its model calls still count (spec 3.1 §9.2 I63). The
+    // `harness.spend` record needs an await and is written only when the stream ends.
+    impl Drop for Finish {
+        fn drop(&mut self) {
+            self.settle();
+        }
+    }
     let finish = Finish {
         audit,
         tracker,
@@ -651,6 +669,7 @@ pub(crate) fn observe_run(
         subject: acting.on_behalf_of,
         effort,
         tokens: TurnTokens::default(),
+        settled: false,
     };
     let state = (events, Some(finish), span);
     Box::pin(futures::stream::unfold(state, |(mut events, mut finish, span)| async move {

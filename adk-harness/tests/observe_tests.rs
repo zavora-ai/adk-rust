@@ -116,6 +116,25 @@ async fn the_spend_report_equals_the_ledger_totals_per_agent_and_subject() {
     assert_eq!(spend[0].ext["spendKey"]["subject"]["id"], "alice");
 }
 
+#[tokio::test]
+async fn a_run_dropped_mid_stream_still_counts_its_model_calls() {
+    // A launcher stops polling on a person's denial or Ctrl-C and drops the stream.
+    let script = vec![
+        priced(call("read_file", json!({ "path": "a.txt" })), 100, 0.002),
+        priced(ScriptedResponse::text("done"), 40, 0.001),
+    ];
+    let f = fixture(script, |b| b.mode(HarnessMode::Auto)).await;
+    std::fs::write(f.path("a.txt"), "x").unwrap();
+    let mut stream = f.harness.send(&f.user, &f.session, "read a").await.unwrap();
+    let first = stream.next().await.expect("an event").expect("not an error");
+    assert!(first.llm_response.content.is_some(), "the model's first turn");
+    drop(stream);
+
+    let report = f.harness.spend(None);
+    assert_eq!((report.runs, report.model_calls), (1, 1), "{}", report.render());
+    assert_eq!(report.total_tokens, 100);
+}
+
 #[derive(Default)]
 struct Capture(Mutex<Vec<(String, HashMap<String, String>)>>);
 
