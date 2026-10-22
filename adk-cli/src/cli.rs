@@ -71,6 +71,7 @@ impl Provider {
 
     /// Whether the provider runs on this machine, so nothing leaves it but the model
     /// endpoint (spec 3.1 §8.1, H10).
+    #[cfg(feature = "harness")]
     pub const fn is_local(self) -> bool {
         matches!(self, Self::Model(ModelProvider::Ollama) | Self::MistralRs)
     }

@@ -88,6 +88,8 @@
 2 adk-cli scripted-model
 # `adk-rust --voice` (spec 3.1 §7.17) end to end on a scripted realtime provider.
 2 adk-cli voice,scripted-model
+# adk-cli without the harness: the chat agent and the legacy `code`, `goal` and `ultracode`.
+2 adk-cli gemini no-default
 
 # Shard 3 — adk-graph, adk-managed, adk-code.
 # No workspace member enables these four; four clippy failures and two uncompilable doc

@@ -354,7 +354,7 @@ async fn create_model(
             reject_unsupported_thinking_budget(provider, thinking_budget)?;
             let key = api_key.ok_or_else(|| anyhow::anyhow!("Gemini requires an API key"))?;
             let m = Arc::new(adk_model::GeminiModel::new(key, model)?);
-            Ok(BuiltModel { llm: m.clone(), cache_capable: Some(m) })
+            Ok(BuiltModel { cache_capable: Some(m.clone()), ..plain(m) })
         }
         #[cfg(not(feature = "gemini"))]
         Provider::Model(ModelProvider::Gemini) => Err(setup::not_compiled(provider)),
