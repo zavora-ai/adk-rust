@@ -363,6 +363,42 @@ impl HarnessTeam {
         reviewers: &[&str],
         max_rounds: u32,
     ) -> Result<Arc<dyn Agent>> {
+        self.review_round_with(
+            name,
+            reviewers,
+            adk_agent::BlackboardPolicy { max_rounds, ..Default::default() },
+        )
+    }
+
+    /// A review round over `reviewers` under `policy` (spec 3.1 §7.10 "group work"): a
+    /// round-robin `BlackboardSpec` whose rounds, history window, `TeamBudget` and
+    /// termination are the policy's. Each reviewer sees what the others said, called and got
+    /// back as other-agent context. Run it as an isolated delegation, or as a runner root
+    /// under the harness layer with [`HarnessAgent::governed_root`](crate::HarnessAgent::governed_root).
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when a reviewer is not a member the harness built, or
+    /// the round is invalid (no reviewers, zero rounds, an empty history window).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_agent::{BlackboardHistoryPolicy, BlackboardPolicy};
+    ///
+    /// let team = harness.runtime().team().expect("the harness has members");
+    /// let round = team.review_round_with(
+    ///     "review",
+    ///     &["review_correctness", "review_style"],
+    ///     BlackboardPolicy { max_rounds: 2, history: BlackboardHistoryPolicy::Full, ..Default::default() },
+    /// )?;
+    /// ```
+    pub fn review_round_with(
+        &self,
+        name: &str,
+        reviewers: &[&str],
+        policy: adk_agent::BlackboardPolicy,
+    ) -> Result<Arc<dyn Agent>> {
         let agents = reviewers
             .iter()
             .map(|reviewer| {
@@ -377,7 +413,7 @@ impl HarnessTeam {
             members: reviewers.iter().map(|reviewer| (*reviewer).to_string()).collect(),
             schedule: adk_agent::BlackboardSchedule::RoundRobin,
             transitions: Vec::new(),
-            policy: adk_agent::BlackboardPolicy { max_rounds, ..Default::default() },
+            policy,
         };
         Ok(Arc::new(spec.compile(agents).map_err(AdkError::from)?))
     }

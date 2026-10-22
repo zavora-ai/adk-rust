@@ -470,7 +470,10 @@ impl BlackboardContext {
     ) -> Self {
         let mut config = inner.run_config().clone();
         config.budget_tracker = Some(budget_tracker);
-        let mut history = inner.session().conversation_history();
+        // What the other speakers said, called and got back reaches this speaker as
+        // other-agent context, never as turns it appears to have taken itself.
+        let mut history =
+            inner.session().conversation_history_with_context(agent.name(), inner.branch());
         if let BlackboardHistoryPolicy::Last { max_messages } = history_policy
             && history.len() > max_messages
         {
@@ -668,7 +671,11 @@ mod tests {
         }
     }
 
-    struct TestSession;
+    /// A session whose agent-aware projection marks the agent it was built for, so a test
+    /// can tell which projection a speaker received.
+    struct TestSession {
+        context_marker: bool,
+    }
 
     impl Session for TestSession {
         fn id(&self) -> &str {
@@ -689,6 +696,17 @@ mod tests {
 
         fn conversation_history(&self) -> Vec<Content> {
             (0..4).map(|index| Content::new("user").with_text(format!("message-{index}"))).collect()
+        }
+
+        fn conversation_history_with_context(
+            &self,
+            agent_name: &str,
+            branch: &str,
+        ) -> Vec<Content> {
+            if !self.context_marker {
+                return self.conversation_history_scoped(None, branch);
+            }
+            vec![Content::new("user").with_text(format!("context-for:{agent_name}"))]
         }
     }
 
@@ -797,8 +815,82 @@ mod tests {
         Arc::new(TestContext {
             content: Content::new("user").with_text("discuss"),
             config: RunConfig::default(),
-            session: TestSession,
+            session: TestSession { context_marker: false },
         })
+    }
+
+    /// Records the history each run receives.
+    struct Recorder {
+        name: String,
+        seen: Arc<std::sync::Mutex<Vec<Vec<Content>>>>,
+    }
+
+    #[async_trait]
+    impl Agent for Recorder {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn description(&self) -> &str {
+            "records the history it is given"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+
+        async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+            self.seen.lock().unwrap().push(ctx.session().conversation_history());
+            let mut event = Event::new(ctx.invocation_id());
+            event.author = self.name.clone();
+            event.llm_response.content = Some(Content::new("model").with_text(&self.name));
+            Ok(Box::pin(futures::stream::once(async { Ok(event) })))
+        }
+    }
+
+    #[tokio::test]
+    async fn speakers_see_other_speakers_as_context() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let spec = BlackboardSpec {
+            name: "blackboard".to_string(),
+            description: String::new(),
+            members: vec!["first".to_string(), "second".to_string()],
+            schedule: BlackboardSchedule::RoundRobin,
+            transitions: Vec::new(),
+            policy: BlackboardPolicy {
+                max_rounds: 1,
+                history: BlackboardHistoryPolicy::Full,
+                ..BlackboardPolicy::default()
+            },
+        };
+        let team = spec
+            .compile(["first", "second"].map(|name| {
+                Arc::new(Recorder { name: name.to_string(), seen: seen.clone() }) as Arc<dyn Agent>
+            }))
+            .unwrap();
+        let ctx = Arc::new(TestContext {
+            content: Content::new("user").with_text("discuss"),
+            config: RunConfig::default(),
+            session: TestSession { context_marker: true },
+        });
+        let events = team.run(ctx).await.unwrap().collect::<Vec<_>>().await;
+        assert_eq!(events.len(), 2);
+        let seen: Vec<Vec<(String, String)>> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|history| {
+                history
+                    .iter()
+                    .map(|content| {
+                        let text = content.parts.iter().filter_map(|part| part.text()).collect();
+                        (content.role.clone(), text)
+                    })
+                    .collect()
+            })
+            .collect();
+        let marker = |name: &str| vec![("user".to_string(), format!("context-for:{name}"))];
+        assert_eq!(seen, vec![marker("first"), marker("second")]);
     }
 
     #[tokio::test]

@@ -112,6 +112,108 @@ isolated, with its own edge.
 A plan's `Review` gate uses the member named `reviewer`, a review round when several members
 are named `reviewer*`, or `explore`.
 
+A speaker sees what the other speakers said, called and got back as other-agent context —
+user-role text that names the speaker, such as `[review_correctness] said:` — never as turns
+it appears to have taken itself. Its own earlier turns stay its own.
+
+### A review board as a runner root
+
+`HarnessTeam::review_round_with(name, reviewers, policy)` takes the whole
+`BlackboardPolicy`: rounds, history window, `TeamBudget` and termination.
+`HarnessAgent::governed_root(round)` runs the round as the root agent of a `Runner` under
+the harness layer:
+
+| What | How |
+|---|---|
+| Policy | `configure_run` applies the round's own configuration, then `HarnessRuntime::layer()`: every member call goes through `authorize_tool_call` under the harness policy and mode |
+| Refusal | without that layer in the run config the root refuses with `harness.ungoverned`, and with feature `auth` without a blocking audit trail |
+| Audit | the members record `harness.member.spawned` and `.finished`, their calls governed `ToolCall` records, all in the runner's audit trail |
+| Spend | with feature `observe` the run is metered into `HarnessRuntime::spend` and recorded as `harness.spend` |
+| Transfer | never: the runner always starts at the round |
+
+```rust,no_run
+use std::sync::Arc;
+use std::time::Duration;
+
+use adk_agent::{BlackboardHistoryPolicy, BlackboardPolicy, TeamBudget};
+use adk_core::{Content, SessionId, UserId};
+use adk_harness::{HarnessAgent, HarnessMode, MemberKind, MemberSpec, MemberTools};
+use adk_model::gemini::GeminiModel;
+use adk_runner::Runner;
+use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+use futures::StreamExt;
+
+fn seat(focus: &str) -> MemberSpec {
+    MemberSpec {
+        name: format!("review_{focus}"),
+        description: format!("Reviews the change for {focus}."),
+        kind: MemberKind::Local {
+            instruction: format!("Review the workspace for {focus}. End with a VERDICT line."),
+            model: None,
+        },
+        tools: MemberTools::ReadOnly,
+        skills: false,
+        max_iterations: 8,
+        timeout: Duration::from_secs(600),
+        output_schema: None,
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let model = Arc::new(GeminiModel::new(std::env::var("GOOGLE_API_KEY")?, "gemini-3.7-flash")?);
+    let board = HarnessAgent::builder("review_board")
+        .model(model)
+        .workspace(adk_devtools::Workspace::new("."))
+        .mode(HarnessMode::ReadOnly)
+        .without_shell()
+        .without_default_members()
+        .member(seat("correctness"))
+        .member(seat("style"))
+        .build()?;
+    let round = board.runtime().team().expect("two seats").review_round_with(
+        "review_board",
+        &["review_correctness", "review_style"],
+        BlackboardPolicy {
+            max_rounds: 2,
+            history: BlackboardHistoryPolicy::Full,
+            budget: TeamBudget { max_model_requests: Some(16), ..TeamBudget::default() },
+            ..BlackboardPolicy::default()
+        },
+    )?;
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "review".into(),
+            user_id: "alice".into(),
+            session_id: Some("board".into()),
+            state: Default::default(),
+        })
+        .await?;
+    let runner = board
+        .configure_runner(
+            Runner::builder()
+                .app_name("review")
+                .agent(board.governed_root(round))
+                .session_service(sessions),
+        )
+        .build()?;
+    let mut events = runner
+        .run(
+            UserId::new("alice")?,
+            SessionId::new("board")?,
+            Content::new("user").with_text("Review the change against the task."),
+        )
+        .await?;
+    while let Some(event) = events.next().await {
+        println!("{} spoke", event?.author);
+    }
+    Ok(())
+}
+```
+
+`adk-rust ultracode` runs its Blackboard review this way ([CLI](cli.md#ultracode)).
+
 ## Audit and spans
 
 | Record | Fields |

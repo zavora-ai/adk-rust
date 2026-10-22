@@ -565,6 +565,41 @@ impl HarnessAgent {
         config
     }
 
+    /// `root` as the root agent of a `Runner` under this harness's layer (spec 3.1 §7.10):
+    /// a review round from [`HarnessTeam::review_round_with`](crate::HarnessTeam::review_round_with),
+    /// or any agent built from the harness's members.
+    ///
+    /// Its `configure_run` applies `root`'s own configuration and then
+    /// [`HarnessRuntime::layer`], so every tool call `root`'s agents make goes through
+    /// `authorize_tool_call` under the harness policy and mode, with the run's audit trail,
+    /// approvals and budget, and the members record `harness.member.*` in that trail. It
+    /// refuses to run without that layer, as the harness does (spec 3.1 §9.2 I17), and with
+    /// feature `observe` meters the run into [`HarnessRuntime::spend`] and records
+    /// `harness.spend`. It never transfers: the runner always starts at `root`. Its name,
+    /// description and sub-agents are `root`'s.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_runner::Runner;
+    ///
+    /// let team = harness.runtime().team().expect("the harness has members");
+    /// let round = team.review_round("review", &["review_correctness", "review_style"], 1)?;
+    /// let runner = harness
+    ///     .configure_runner(
+    ///         Runner::builder().app_name("app").agent(harness.governed_root(round)).session_service(sessions),
+    ///     )
+    ///     .build()?;
+    /// ```
+    pub fn governed_root(&self, root: Arc<dyn Agent>) -> Arc<dyn Agent> {
+        Arc::new(GovernedRoot {
+            runtime: self.runtime.clone(),
+            root,
+            default_mode: self.info.default_mode,
+            isolation: self.info.isolation.clone(),
+        })
+    }
+
     /// Applies the harness run config, approval store and compaction to a runner builder.
     /// Call it before setting a run config of your own on the builder.
     ///
@@ -891,6 +926,97 @@ impl HarnessAgent {
             None => events,
         };
         Ok(events)
+    }
+}
+
+/// An agent run as a runner root under a harness's layer (spec 3.1 §7.10); built by
+/// [`HarnessAgent::governed_root`].
+struct GovernedRoot {
+    runtime: HarnessRuntime,
+    root: Arc<dyn Agent>,
+    default_mode: HarnessMode,
+    isolation: crate::shell::IsolationStatus,
+}
+
+#[async_trait]
+impl Agent for GovernedRoot {
+    fn name(&self) -> &str {
+        self.root.name()
+    }
+
+    fn description(&self) -> &str {
+        self.root.description()
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        self.root.sub_agents()
+    }
+
+    fn supports_agent_transfer(&self) -> bool {
+        false
+    }
+
+    fn configure_run(&self, agent_name: &str, config: &mut RunConfig) {
+        self.root.configure_run(agent_name, config);
+        self.runtime.layer().apply(config);
+    }
+
+    async fn close(&self) {
+        self.root.close().await;
+    }
+
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        let config = ctx.run_config();
+        if config.tool_policy.as_deref().and_then(composed_layer_owner)
+            != Some(self.runtime.policy.owner_id())
+        {
+            return Err(AdkError::new(
+                ErrorComponent::Agent,
+                ErrorCategory::Forbidden,
+                HARNESS_UNGOVERNED_CODE,
+                format!(
+                    "'{}' runs only under its harness's policy; run it as the root agent of a \
+                     Runner, whose configure_run applies the harness layer",
+                    self.root.name()
+                ),
+            ));
+        }
+        #[cfg(feature = "auth")]
+        if !config.audit.as_ref().is_some_and(|trail| {
+            trail.failure_mode() == adk_core::audit_log::AuditFailureMode::Block
+        }) {
+            return Err(crate::identity::audit_required(self.root.name()));
+        }
+        #[cfg(feature = "observe")]
+        {
+            use tracing::Instrument as _;
+            let mode = crate::observe::run_mode(
+                self.runtime.mode_store.as_ref(),
+                self.default_mode,
+                ctx.as_ref(),
+            )
+            .await;
+            let span = crate::observe::run_span(
+                self.root.name(),
+                ctx.invocation_id(),
+                mode,
+                &self.isolation,
+            );
+            let events = self.root.run(ctx.clone()).instrument(span.clone()).await?;
+            Ok(crate::observe::observe_run(
+                events,
+                &ctx,
+                span,
+                self.runtime.spend.clone(),
+                self.runtime.run_trails.clone(),
+                self.runtime.effort.for_mode(mode),
+            ))
+        }
+        #[cfg(not(feature = "observe"))]
+        {
+            let _ = (self.default_mode, &self.isolation);
+            self.root.run(ctx).await
+        }
     }
 }
 
