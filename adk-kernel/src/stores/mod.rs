@@ -29,6 +29,7 @@ use crate::process::ProcessMeta;
 use crate::sched::QueueClass;
 use crate::wake::WakeSet;
 
+mod agenda_memory;
 mod memory;
 #[cfg(feature = "postgres")]
 mod postgres;
@@ -39,6 +40,7 @@ mod sql;
 #[cfg(feature = "sqlite")]
 mod sqlite;
 
+pub use agenda_memory::InMemoryAgendaStore;
 pub use memory::InMemoryProcessStore;
 #[cfg(feature = "postgres")]
 pub use postgres::PostgresProcessStore;

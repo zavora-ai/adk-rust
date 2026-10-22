@@ -27,13 +27,16 @@
 //! | [`ProcessStore`], [`ProcessFilter`], [`SpendScope`], [`InMemoryProcessStore`], `SqliteProcessStore`, `PostgresProcessStore`, `RedisProcessStore` | §7.3, §13 Q8 |
 //! | [`Wake`], [`WakeSet`], [`ExpiryAction`], [`WakeSource`], [`WakeEvent`], [`keys`], [`Trigger`], [`WakeRouter`], [`WakeOutcome`], [`KernelWakeExecutor`], the wake source adapters | §7.4 |
 //! | [`KernelEvent`], [`EventRecord`], [`EventBus`], [`EventSubscriber`], [`EventSink`], [`AuditSink`], [`SpendDelta`] | §7.6 |
-//! | [`QueueClass`] | §7.9 |
+//! | [`AgendaItem`], [`AgendaState`], [`AgendaStateKind`], [`AgendaOrigin`], [`PlanRef`], [`AgendaStore`], [`AgendaFilter`], [`InMemoryAgendaStore`], [`ProactivityPolicy`], [`ProactiveApproval`] | §7.5 |
+//! | [`ConsolidationTick`] | §7.5, §13 Q1, Q12 |
+//! | [`QueueClass`], [`QuietHours`], [`Quotas`] | §7.9 |
 //! | [`PartitionId`], [`PartitionMode`] | §7.8 (the phase-1 part) |
 //! | [`control`]: [`ControlPlaneConfig`](control::ControlPlaneConfig), [`router`](control::router), [`ControlPlane`](control::ControlPlane), [`ControlClient`](control::ControlClient), [`api`](control::api) | §7.11 |
 //! | [`audit`] action names | §9.3 |
 //! | `conformance` (feature `conformance`) | §11 |
 //!
-//! Agenda and proactivity (§7.5) are phase 2; drivers (§7.7) and partitions (§7.8) phase 3;
+//! Agenda and proactivity (§7.5) and attention and resources (§7.9) are phase 2; drivers
+//! (§7.7) and partitions (§7.8) phase 3;
 //! `/proc` baselines (§7.10) and service installation (§7.12) phase 4; the managed form
 //! (§7.13) and channel wakes phase 5. Each adds to these types without changing them.
 //!
@@ -75,10 +78,12 @@
 
 #![deny(missing_docs)]
 
+pub mod agenda;
 pub mod audit;
 pub mod bus;
 #[cfg(feature = "conformance")]
 pub mod conformance;
+pub mod consolidation;
 pub mod control;
 pub mod error;
 pub mod kernel;
@@ -90,10 +95,15 @@ pub mod stores;
 mod supervise;
 pub mod wake;
 
+pub use agenda::{
+    AgendaFilter, AgendaItem, AgendaOrigin, AgendaState, AgendaStateKind, AgendaStore, PlanRef,
+    ProactiveApproval, ProactivityPolicy,
+};
 pub use bus::{
     AuditSink, DEFAULT_EVENT_CAPACITY, EventBus, EventRecord, EventSink, EventSubscriber,
     KernelEvent, SpendDelta,
 };
+pub use consolidation::ConsolidationTick;
 pub use error::{KernelError, Result};
 pub use kernel::{Kernel, KernelBuilder, KernelConfig, KernelHealth, KernelState, WorkerHealth};
 pub use partition::{PartitionId, PartitionMode};
@@ -101,14 +111,16 @@ pub use process::{
     GoalProgress, Process, ProcessHandle, ProcessKind, ProcessMeta, ProcessSpec, ProcessTable,
     ProcessView, ProgressSource, RunUsage, Suspension,
 };
-pub use sched::QueueClass;
+pub use sched::{QueueClass, QuietHours, Quotas};
 #[cfg(feature = "postgres")]
 pub use stores::PostgresProcessStore;
 #[cfg(feature = "redis")]
 pub use stores::RedisProcessStore;
 #[cfg(feature = "sqlite")]
 pub use stores::SqliteProcessStore;
-pub use stores::{InMemoryProcessStore, ProcessFilter, ProcessStore, SpendScope};
+pub use stores::{
+    InMemoryAgendaStore, InMemoryProcessStore, ProcessFilter, ProcessStore, SpendScope,
+};
 #[cfg(feature = "webhooks")]
 pub use wake::webhook_wake_hook;
 pub use wake::{
