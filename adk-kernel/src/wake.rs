@@ -1385,9 +1385,11 @@ impl Default for RunFinishedWakeSource {
 impl WorkerHooks for RunFinishedWakeSource {
     /// Publishes a run that finished — `Completed`, `Failed` or `Cancelled` — as one event
     /// keyed [`keys::run_finished`]; a retryable failure the worker requeued is not finished.
-    /// The payload carries `pid`, `state`, `target` and `queue`.
+    /// The payload carries `pid`, `state`, `target` and `queue`. A [`KERNEL_WAKE_TARGET`] run
+    /// is the kernel routing a wake, not a process: its finish publishes nothing, since its
+    /// event would be routed by another `kernel.wake` run, without end.
     async fn on_finish(&self, run: &RunRecord) {
-        if !run.state.is_terminal() {
+        if !run.state.is_terminal() || run.target == KERNEL_WAKE_TARGET {
             return;
         }
         let payload = json!({
