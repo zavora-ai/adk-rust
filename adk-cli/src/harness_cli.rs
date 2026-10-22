@@ -57,6 +57,11 @@ struct Setup {
     /// How `harness.db` is sealed, for the banner (spec 3.1 §7.12).
     #[cfg(feature = "persist")]
     store_note: Option<String>,
+    /// Every store in one backend the replicas share, from `serve --store` (spec 3.1 §13 Q2).
+    shared: Option<Arc<crate::shared_store::SharedStores>>,
+    /// Where plans and goal graphs are checkpointed, and its name for the banner (spec 3.1
+    /// §7.11, §13 Q5); `None` keeps them in memory.
+    plans: Option<(Arc<dyn adk_graph::Checkpointer>, String)>,
 }
 
 /// The client of one session (spec 3.1 §7.23): the harness, its members and the
@@ -96,7 +101,21 @@ impl Setup {
         args: HarnessArgs,
         default_mode: HarnessMode,
     ) -> Result<Self> {
+        // `serve` opens without this subscriber: its launcher installs the telemetry one,
+        // and a second global subscriber panics at start.
         install_tracing();
+        Self::open(model, instruction, args, default_mode, None).await
+    }
+
+    /// [`new`](Self::new), with every store in the backend at `store` instead of
+    /// `harness.db` when one is given (`serve --store`; spec 3.1 §8.2, §13 Q2).
+    async fn open(
+        model: ResolvedModel,
+        instruction: Option<String>,
+        args: HarnessArgs,
+        default_mode: HarnessMode,
+        store: Option<&str>,
+    ) -> Result<Self> {
         let resolved = args.resolve(default_mode, user_config().as_deref())?;
         // The payments pack takes a merchant backend only a program can supply
         // (spec 3.1 §7.16): no flag or config file carries one.
@@ -109,8 +128,20 @@ impl Setup {
                  docs/official_docs/harness/payments.md (spec 3.1 §7.16)"
             );
         }
+        let shared = match store {
+            // The mode and rule stores of a shared backend are not sealed by a store key, so
+            // a configured key refuses rather than write them in plaintext (spec 3.1 I57).
+            Some(url) if resolved.store_key.is_some() => bail!(
+                "--store keeps rules and modes in {} without the store key's envelope; serve \
+                 without --store-key and [store] key and encrypt the shared backend at rest, or \
+                 serve from harness.db",
+                adk_harness::redact_store_url(url)
+            ),
+            Some(url) => Some(Arc::new(crate::shared_store::open(url).await?)),
+            None => None,
+        };
         #[cfg(feature = "persist")]
-        let (db, store_note) = if args.ephemeral {
+        let (db, store_note) = if args.ephemeral || shared.is_some() {
             (None, None)
         } else {
             #[cfg(feature = "encrypted")]
@@ -131,7 +162,14 @@ impl Setup {
         }
         let models = Models { harness: model.built() };
         let embedder = if resolved.memory { memory_embedder(&model) } else { None };
+        #[cfg(feature = "persist")]
+        let plans =
+            plan_checkpointer(&resolved, args.ephemeral, shared.as_deref(), db.as_deref()).await?;
+        #[cfg(not(feature = "persist"))]
+        let plans = plan_checkpointer(&resolved, args.ephemeral, shared.as_deref()).await?;
         Ok(Self {
+            shared,
+            plans,
             embedder,
             model_id: model.id.clone(),
             models,
@@ -147,6 +185,9 @@ impl Setup {
     }
 
     fn sessions(&self) -> Arc<dyn SessionService> {
+        if let Some(shared) = &self.shared {
+            return shared.sessions.clone();
+        }
         #[cfg(feature = "persist")]
         if let Some(db) = &self.db {
             return db.sessions.clone();
@@ -230,6 +271,20 @@ impl Setup {
                 if let Some((embedder, _)) = &self.embedder {
                     builder = builder.memory_embedder(embedder.clone());
                 }
+            }
+        }
+        if let Some(shared) = &self.shared {
+            builder = builder
+                .mode_store(shared.modes.clone())
+                .standing_rules(shared.rules.clone())
+                .approval_store(shared.approvals.clone());
+        }
+        if let Some((checkpointer, _)) = &self.plans {
+            builder = builder.plan_checkpointer(checkpointer.clone());
+            // Goals run on the loop engine in the CLI and on the checkpointed graph when
+            // served (spec 3.1 §7.11).
+            if approval_service.is_none() {
+                builder = builder.goal_engine(adk_harness::GoalEngine::Loop);
             }
         }
         if sandbox {
@@ -379,6 +434,7 @@ impl Setup {
             };
             launcher = launcher.with_status_line("Store", store);
         }
+        launcher = launcher.with_status_line("Plans", self.plans_note());
         for note in &self.resolved.notes {
             launcher = launcher.with_banner_note(note.clone());
         }
@@ -396,6 +452,14 @@ impl Setup {
             Some(Arc::new(ConsolePrompter::new(console.clone())))
         } else {
             None
+        }
+    }
+
+    /// Where plans are checkpointed, for the banner (spec 3.1 §13 Q5).
+    fn plans_note(&self) -> String {
+        match &self.plans {
+            Some((_, label)) => format!("checkpointed in {label}"),
+            None => "in memory; an approved plan does not survive a restart".into(),
         }
     }
 
@@ -652,11 +716,12 @@ pub async fn code(
     let info = agent.info().clone();
     let mut launcher = setup.launcher(agent).await?.with_console(console);
     println!(
-        "harness ({}) on {} · mode {} · shell {}\ntask: {task}\n",
+        "harness ({}) on {} · mode {} · shell {}\nplans {}\ntask: {task}\n",
         setup.model_id,
         setup.resolved.workspace.display(),
         setup.resolved.mode,
-        info.isolation
+        info.isolation,
+        setup.plans_note()
     );
     let outcome = launcher.run_once(&task).await?;
     println!();
@@ -842,6 +907,7 @@ pub async fn goal(
     }
 
     println!("goal mode ({}) on {}", setup.model_id, workspace.display());
+    println!("plans {}", setup.plans_note());
     let outcome = if goal.resume && (resumed.is_some() || setup.args.session.is_some()) {
         let session = resumed.as_deref().or(setup.args.session.as_deref()).unwrap_or_default();
         println!("resuming goal in session {session}");
@@ -1603,8 +1669,9 @@ pub async fn serve(
     port: u16,
     host: IpAddr,
     auth_token: Option<String>,
+    store: Option<String>,
 ) -> Result<()> {
-    let setup = Setup::new(model, instruction, args, HarnessMode::Plan).await?;
+    let setup = Setup::open(model, instruction, args, HarnessMode::Plan, store.as_deref()).await?;
     setup.print_notes();
     let loopback = host.is_loopback();
     let token = auth_token.filter(|token| !token.trim().is_empty());
@@ -1639,6 +1706,10 @@ pub async fn serve(
         Arc::new(adk_core::InMemoryApprovalStore::new()),
         Arc::new(adk_core::InMemoryRunStore::new()),
     );
+    let (approval_store, run_store) = match &setup.shared {
+        Some(shared) => (shared.approvals.clone(), shared.runs.clone()),
+        None => (approval_store, run_store),
+    };
     // The person running the server is the operator: their own run's calls are theirs to
     // approve, so self-approval is allowed.
     let routing =
@@ -1685,7 +1756,47 @@ pub async fn serve(
             setup.user.clone(),
         )));
     }
+    if let Some(shared) = &setup.shared {
+        println!(
+            "  store {}: sessions, approvals, runs, modes, rules and plans, shared by every replica",
+            shared.label
+        );
+    }
+    println!("  plans {}", setup.plans_note());
     launcher.run_serve_directly(port).await.map_err(Into::into)
+}
+
+/// Where plans and goal graphs are checkpointed (spec 3.1 §7.11, §13 Q5): nowhere but memory
+/// with `--ephemeral`; else `--checkpointer` or the user config's `[plan] checkpointer`, sealed
+/// under the store key when `harness.db` is; else the store the sessions are in — the
+/// `--store` backend or `harness.db`.
+async fn plan_checkpointer(
+    resolved: &ResolvedHarnessArgs,
+    ephemeral: bool,
+    shared: Option<&crate::shared_store::SharedStores>,
+    #[cfg(feature = "persist")] db: Option<&crate::sessions::HarnessDb>,
+) -> Result<Option<(Arc<dyn adk_graph::Checkpointer>, String)>> {
+    if ephemeral {
+        return Ok(None);
+    }
+    if let Some(url) = &resolved.checkpointer {
+        let checkpointer = adk_harness::checkpointer_from_url(url).await?;
+        let label = adk_harness::redact_store_url(url);
+        #[cfg(all(feature = "persist", feature = "encrypted"))]
+        if let Some(keyring) = db.and_then(|db| db.keyring.clone()) {
+            let sealed = adk_harness::SealedCheckpointer::new(checkpointer, keyring);
+            return Ok(Some((Arc::new(sealed), format!("{label}, sealed under the store key"))));
+        }
+        return Ok(Some((checkpointer, label)));
+    }
+    if let Some(shared) = shared {
+        return Ok(Some((shared.checkpointer.clone(), shared.label.clone())));
+    }
+    #[cfg(feature = "persist")]
+    if let Some(db) = db {
+        return Ok(Some((db.plans.clone(), "harness.db".into())));
+    }
+    Ok(None)
 }
 
 /// The servers `.mcp.json` in `workspace` declares (the Kiro `mcpServers` format

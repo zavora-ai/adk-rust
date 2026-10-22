@@ -115,6 +115,17 @@ audit-sql = ["audit", "adk-session/sqlite", "adk-session/postgres"]
 # Sessions, approvals, durable runs, modes and standing rules in SQLite at
 # <config dir>/adk-rust/harness.db
 persist = ["adk-session/sqlite", "adk-harness?/sqlite"]
+# `adk-rust serve --store postgres://…`: sessions, approvals, durable runs, modes, standing
+# rules and plan checkpoints in one PostgreSQL database every replica shares, and
+# `--checkpointer postgres://…` (spec 3.1 §8.2, §7.11, §13 Q2, Q5)
+postgres = ["adk-harness?/postgres", "adk-session/postgres", "adk-graph/postgres", "dep:sqlx", "sqlx/postgres"]
+# `adk-rust serve --store redis://…`: the same stores on one Redis server, and
+# `--checkpointer redis://…`
+redis = ["adk-harness?/redis", "adk-session/redis"]
+# `--checkpointer mongodb://…`, `neo4j://…` or `firestore://…` (spec 3.1 §7.11, §13 Q5)
+mongodb = ["adk-harness?/mongodb"]
+neo4j = ["adk-harness?/neo4j"]
+firestore = ["adk-harness?/firestore"]
 # `adk-rust` with no subcommand is the harness REPL; `code`, `goal`, `ultracode` and
 # `serve` run on the harness; `sessions`, `rules` and `approvals` manage it (spec 3.1 §8.1)
 harness = ["dep:adk-harness", "adk-harness?/memory-embeddings", "adk-harness?/web", "adk-harness?/mcp", "adk-harness?/hooks", "dep:reqwest", "dep:sha2", "dep:uuid", "dep:chrono"]

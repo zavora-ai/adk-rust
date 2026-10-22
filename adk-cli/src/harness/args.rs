@@ -124,6 +124,12 @@ pub struct HarnessArgs {
     /// Run no hooks, not even the workspace's (spec 3.1 §7.22)
     #[arg(long = "no-hooks")]
     pub no_hooks: bool,
+
+    /// Where plans and goal graphs are checkpointed: sqlite://, postgres://, redis://,
+    /// mongodb://, neo4j:// or firestore:// (default: `[plan] checkpointer` in the user
+    /// config, else the store the sessions are in; spec 3.1 §7.11)
+    #[arg(long, value_name = "URL", conflicts_with = "ephemeral")]
+    pub checkpointer: Option<String>,
 }
 
 /// A `--member` flag value (spec 3.1 §8.1, §7.10).
@@ -333,6 +339,8 @@ struct ConfigFile {
     effort: Option<EffortPolicy>,
     /// `[store]`: where the store key is kept (spec 3.1 §7.12); the user config only.
     store: Option<StoreTable>,
+    /// `[plan]`: where plans are checkpointed (spec 3.1 §7.11); the user config only.
+    plan: Option<PlanTable>,
     /// `[[hooks]]` tables (spec 3.1 §7.22): the user config's are read by
     /// `HookSet::load_file`, the workspace's by the harness at build, so they are neither
     /// applied here nor reported as unknown.
@@ -389,6 +397,13 @@ struct WebTable {
 #[serde(default)]
 struct StoreTable {
     key: Option<String>,
+}
+
+/// The `[plan]` table.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct PlanTable {
+    checkpointer: Option<String>,
 }
 
 /// The `[deploy]` table is read by deployment tooling (spec 3.1 §8.5), not by the CLI.
@@ -472,6 +487,10 @@ pub struct ResolvedHarnessArgs {
     pub store_key: Option<String>,
     /// Whether hooks run: off with `--no-hooks` (spec 3.1 §7.22, §8.1).
     pub hooks: bool,
+    /// Where plans and goal graphs are checkpointed, from `--checkpointer` or the user
+    /// config's `[plan] checkpointer`; `None` checkpoints them beside the sessions
+    /// (spec 3.1 §7.11, §13 Q5).
+    pub checkpointer: Option<String>,
     /// The `[[hooks]]` of the user config, source `User` (spec 3.1 §7.22); the workspace's
     /// are read at build and run under its trust.
     pub user_hooks: HookSet,
@@ -543,6 +562,7 @@ impl HarnessArgs {
         let mut effort = EffortPolicy::default();
         let mut effort_explicit = false;
         let mut store_key = None;
+        let mut checkpointer = None;
         if let Some(user) = &user {
             let origin = user_config.map_or_else(String::new, |path| path.display().to_string());
             if let Some(value) = &user.mode {
@@ -579,6 +599,7 @@ impl HarnessArgs {
                 effort_explicit = true;
             }
             store_key = user.store.as_ref().and_then(|store| store.key.clone());
+            checkpointer = user.plan.as_ref().and_then(|plan| plan.checkpointer.clone());
             for key in user.unknown.keys().filter(|key| *key != DEPLOY_TABLE) {
                 notes.push(format!("{origin}: unknown key `{key}` ignored"));
             }
@@ -637,6 +658,14 @@ impl HarnessArgs {
                 effort = policy;
                 effort_explicit = true;
             }
+            // A checkpointer location is not a permission, but a workspace file naming one
+            // would send plan state to a server the repository chose.
+            if project.plan.as_ref().is_some_and(|plan| plan.checkpointer.is_some()) {
+                notes.push(format!(
+                    "{origin}: `plan.checkpointer` ignored — where plans are written is yours to \
+                     choose; set [plan] checkpointer in your user config or pass --checkpointer"
+                ));
+            }
             if project.store.is_some() {
                 notes.push(format!(
                     "{origin}: `store` ignored — where your store key lives is yours to choose; \
@@ -691,6 +720,9 @@ impl HarnessArgs {
         if let Some(source) = &self.store_key {
             store_key = Some(source.clone());
         }
+        if let Some(url) = &self.checkpointer {
+            checkpointer = Some(url.clone());
+        }
         if fail_if_unavailable && !sandbox {
             return Err(AdkError::config(
                 "fail_if_unavailable needs the sandbox: pass --sandbox or set sandbox = true",
@@ -717,6 +749,7 @@ impl HarnessArgs {
             effort_explicit,
             store_key,
             hooks: !self.no_hooks,
+            checkpointer,
             user_hooks,
             notes,
         })
@@ -779,6 +812,7 @@ mod tests {
                 effort_explicit: false,
                 store_key: None,
                 hooks: true,
+                checkpointer: None,
                 user_hooks: HookSet::default(),
                 notes: vec![],
             }
@@ -843,6 +877,31 @@ mod tests {
         .unwrap();
         assert_eq!(flagged.effort, EffortPolicy::uniform(Effort::Low));
         assert_eq!(flagged.store_key.as_deref(), Some("env:ADK_STORE_KEY"));
+    }
+
+    #[test]
+    fn the_checkpointer_comes_from_the_flag_then_the_user_config_never_the_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("user.toml");
+        write(&user, "[plan]\ncheckpointer = \"postgres://plans@db/harness\"\n");
+        write(
+            &dir.path().join(PROJECT_CONFIG_FILE),
+            "[plan]\ncheckpointer = \"redis://attacker.example:6379\"\n",
+        );
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap();
+        assert_eq!(resolved.checkpointer.as_deref(), Some("postgres://plans@db/harness"));
+        assert!(
+            resolved.notes.iter().any(|note| note.contains("`plan.checkpointer` ignored")),
+            "{:?}",
+            resolved.notes
+        );
+        let flagged =
+            HarnessArgs { checkpointer: Some("sqlite:///plans.db".into()), ..args_in(dir.path()) }
+                .resolve(HarnessMode::Ask, Some(&user))
+                .unwrap();
+        assert_eq!(flagged.checkpointer.as_deref(), Some("sqlite:///plans.db"));
+        let workspace_only = args_in(dir.path()).resolve(HarnessMode::Ask, None).unwrap();
+        assert_eq!(workspace_only.checkpointer, None);
     }
 
     #[test]

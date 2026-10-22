@@ -81,6 +81,12 @@ pub struct HarnessDb {
     pub goals: Arc<adk_harness::SqliteGoalStore>,
     /// The id of the key the stores are sealed under, if any.
     pub key_id: Option<String>,
+    /// Plan and goal checkpoints, sealed under the store key when one is configured
+    /// (spec 3.1 §7.11, §7.12, §13 Q5).
+    pub plans: Arc<dyn adk_graph::Checkpointer>,
+    /// The keyring the stores are sealed under, if any.
+    #[cfg(feature = "encrypted")]
+    pub keyring: Option<adk_harness::encrypted::StoreKeyring>,
 }
 
 /// Opens `harness.db` with the keyring the user config names, if any (spec 3.1 §7.12).
@@ -123,6 +129,8 @@ pub async fn open_harness_db(
     facts.migrate().await?;
     let goals = adk_harness::SqliteGoalStore::new(pool.clone());
     goals.migrate().await?;
+    let plans: Arc<dyn adk_graph::Checkpointer> =
+        Arc::new(adk_graph::SqliteCheckpointer::from_pool(pool.clone()).await?);
     let Some(keyring) = keyring else {
         return Ok(HarnessDb {
             sessions: base,
@@ -134,12 +142,15 @@ pub async fn open_harness_db(
             facts: Arc::new(facts),
             goals: Arc::new(goals),
             key_id: None,
+            plans,
+            keyring: None,
         });
     };
     if marker.key_id().await?.is_none() {
         let (rows,): (i64,) = sqlx::query_as(
             "SELECT (SELECT count(*) FROM sessions) + (SELECT count(*) FROM adk_harness_rules) \
-             + (SELECT count(*) FROM adk_harness_facts) + (SELECT count(*) FROM adk_approval_pending)",
+             + (SELECT count(*) FROM adk_harness_facts) + (SELECT count(*) FROM adk_approval_pending) \
+             + (SELECT count(*) FROM graph_checkpoints)",
         )
         .fetch_one(&pool)
         .await?;
@@ -171,6 +182,8 @@ pub async fn open_harness_db(
         facts: Arc::new(facts.with_keyring(keyring.clone())),
         goals: Arc::new(goals.with_keyring(keyring.clone())),
         key_id: Some(keyring.key_id()),
+        plans: Arc::new(adk_harness::SealedCheckpointer::new(plans, keyring.clone())),
+        keyring: Some(keyring.clone()),
     })
 }
 
@@ -191,8 +204,9 @@ pub async fn open_harness_db() -> Result<HarnessDb> {
     runs.migrate().await?;
     let facts = adk_harness::SqliteFactStore::new(pool.clone());
     facts.migrate().await?;
-    let goals = adk_harness::SqliteGoalStore::new(pool);
+    let goals = adk_harness::SqliteGoalStore::new(pool.clone());
     goals.migrate().await?;
+    let plans = adk_graph::SqliteCheckpointer::from_pool(pool).await?;
     Ok(HarnessDb {
         sessions,
         modes: Arc::new(modes),
@@ -203,6 +217,7 @@ pub async fn open_harness_db() -> Result<HarnessDb> {
         facts: Arc::new(facts),
         goals: Arc::new(goals),
         key_id: None,
+        plans: Arc::new(plans),
     })
 }
 

@@ -248,6 +248,11 @@ pub enum Commands {
         #[cfg(feature = "harness")]
         #[arg(long)]
         auth_token: Option<String>,
+        /// Keep sessions, approvals, runs, modes, standing rules and plans in one store every
+        /// replica shares: postgres://… or redis://… (default: harness.db; spec 3.1 §8.2)
+        #[cfg(feature = "harness")]
+        #[arg(long, value_name = "URL", conflicts_with = "ephemeral")]
+        store: Option<String>,
         #[cfg(feature = "harness")]
         #[command(flatten)]
         harness: adk_cli::harness::HarnessArgs,
@@ -381,6 +386,10 @@ pub enum Commands {
     Rules {
         #[command(subcommand)]
         command: RulesCommands,
+        /// The rules of served replicas sharing this store, postgres://… or redis://…,
+        /// instead of harness.db (spec 3.1 §13 Q2)
+        #[arg(long, value_name = "URL", global = true)]
+        store: Option<String>,
     },
 
     /// Long-term memory: the facts the harness learned about you and your projects

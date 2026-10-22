@@ -16,6 +16,8 @@ mod scripted;
 #[cfg(feature = "persist")]
 mod sessions;
 mod setup;
+#[cfg(feature = "harness")]
+mod shared_store;
 mod skills;
 #[cfg(all(feature = "harness", feature = "persist", feature = "encrypted"))]
 mod store;
@@ -64,12 +66,13 @@ async fn main() -> Result<()> {
             host,
             agent: cli::ServeAgent::Harness,
             auth_token,
+            store,
             harness,
         }) => {
             let model = resolve_model(&options).await?;
             let auth_token = auth_token.or_else(|| std::env::var("ADK_SERVE_TOKEN").ok());
-            harness_cli::serve(model, options.instruction.clone(), harness, port, host, auth_token)
-                .await
+            let instruction = options.instruction.clone();
+            harness_cli::serve(model, instruction, harness, port, host, auth_token, store).await
         }
         #[cfg(feature = "harness")]
         Some(Commands::Serve { port, host, agent: cli::ServeAgent::Chat, .. }) => {
@@ -149,7 +152,7 @@ async fn main() -> Result<()> {
         #[cfg(all(feature = "harness", feature = "persist"))]
         Some(Commands::Sessions { command }) => manage::sessions(command).await,
         #[cfg(all(feature = "harness", feature = "persist"))]
-        Some(Commands::Rules { command }) => manage::rules(command).await,
+        Some(Commands::Rules { command, store }) => manage::rules(command, store).await,
         #[cfg(all(feature = "harness", feature = "persist"))]
         Some(Commands::Memory { command }) => manage::memory(command).await,
         #[cfg(all(feature = "harness", feature = "persist", feature = "encrypted"))]

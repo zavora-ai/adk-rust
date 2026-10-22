@@ -268,11 +268,14 @@ fn fact_line(fact: &adk_harness::MemoryFact) -> String {
     )
 }
 
-/// `adk-rust rules …`.
-pub async fn rules(command: RulesCommands) -> Result<()> {
-    let db = crate::sessions::open_default_db().await?;
+/// `adk-rust rules …`, on `harness.db` or, with `--store`, on the store served replicas
+/// share (spec 3.1 §13 Q2).
+pub async fn rules(command: RulesCommands, shared: Option<String>) -> Result<()> {
     let user = crate::setup::os_user();
-    let store: Arc<dyn StandingRuleStore> = db.rules.clone();
+    let store: Arc<dyn StandingRuleStore> = match &shared {
+        Some(url) => crate::shared_store::open_rules(url).await?,
+        None => crate::sessions::open_default_db().await?.rules.clone(),
+    };
     let mut listed = store.list(APP_NAME, &user).await?;
     listed.sort_by_key(|rule| rule.created_at);
     match command {

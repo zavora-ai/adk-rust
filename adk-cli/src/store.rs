@@ -212,6 +212,10 @@ const PAYLOADS: &[(&str, &str)] = &[
         "facts",
         "SELECT count(*), sum(CASE WHEN record LIKE 'adk-enc:v1:%' THEN 1 ELSE 0 END) FROM adk_harness_facts",
     ),
+    (
+        "plan checkpoints",
+        "SELECT count(*), sum(CASE WHEN state LIKE '%adk-enc:v1:%' THEN 1 ELSE 0 END) FROM graph_checkpoints",
+    ),
 ];
 
 /// `adk-rust store status`: the key source, the key the database is sealed under, and per
@@ -337,6 +341,11 @@ async fn rotate_key(store_key: Option<String>, key: Option<String>) -> Result<()
     let facts = adk_harness::SqliteFactStore::new(pool.clone()).with_keyring(rotated.clone());
     facts.migrate().await?;
     stores.push(("facts".to_string(), facts.rewrap().await?));
+    let plans = adk_harness::SealedCheckpointer::new(
+        std::sync::Arc::new(adk_graph::SqliteCheckpointer::from_pool(pool.clone()).await?),
+        rotated.clone(),
+    );
+    stores.push(("plan-checkpoints".to_string(), plans.rewrap_sqlite(&pool).await?));
     marker.set_key_id(&rotated.key_id()).await?;
     adk_harness::encrypted::compact(&pool).await?;
 
