@@ -7,16 +7,21 @@
 //!
 //! 1. A [`WakeEvent`] arrives from a [`WakeSource`]. Every source sets [`WakeEvent::key`],
 //!    the idempotency key, as [`keys`] derives it (§13 Q7).
-//! 2. The [`WakeRouter`] matches it against the wake sets of `Waiting` processes and against
-//!    the kernel's [`Trigger`]s.
-//! 3. A matched `Waiting` process is woken with `DurableRunStore::wake` and the wake reason
-//!    recorded; a matched trigger enqueues its run with `idempotency_key` = the event key,
-//!    `concurrency_key` = the session or partition, the partition's queue, and the principal
+//! 2. The event becomes its keyed `kernel.wake` maintenance run ([`kernel_wake_run`]):
+//!    in-process sources through [`WakeRouter::submit`], webhooks and queues through their
+//!    ingress. The run store keeps one run per key, so a duplicate delivery reaches the
+//!    router never (K-I3); the key lives until `DurableRunStore::prune` frees it, so the
+//!    prune policy is the dedup window.
+//! 3. The maintenance worker's [`KernelWakeExecutor`] hands the event to the
+//!    [`WakeRouter`], which matches it against the wake sets of `Waiting` processes and
+//!    against the kernel's [`Trigger`]s.
+//! 4. A matched `Waiting` process is woken with `DurableRunStore::wake` and the wake reason
+//!    recorded. When no sleeper matched, each matched trigger enqueues its run with
+//!    `idempotency_key` = [`keys::trigger`] (the event key and the trigger's name),
+//!    `concurrency_key` = the session or partition, the trigger's queue, and the principal
 //!    as a `Service` subject (`NewRun::with_service_subject`). `NewRun::authenticated` is
-//!    set only when the wake carries an authenticated subject. A duplicate delivery hits
-//!    the key and wakes nothing (K-I3); the key lives until `DurableRunStore::prune` frees
-//!    it, so the prune policy is the dedup window.
-//! 4. The run executes under the harness's `configure_run`, as an interactive turn does.
+//!    set only when the wake carries an authenticated subject.
+//! 5. The run executes under the harness's `configure_run`, as an interactive turn does.
 //!
 //! | Source | Built on | Key |
 //! |---|---|---|
@@ -28,6 +33,10 @@
 //! | Approval decided | [`ApprovalWakeSource`], an `ApprovalNotifier` on `StoreApprovalService` | [`keys::approval`]: the approval request id |
 //! | Run finished | [`RunFinishedWakeSource`], the S1 `on_finish` hook | [`keys::run_finished`]: `run:<pid>:<final state>` |
 //!
+//! A trigger's run is keyed [`keys::trigger`], `<event key>#<trigger name>`, rather than by
+//! the bare event key of the §7.4 table, so two triggers that match one event on one queue
+//! each run; the `kernel.wake` run keeps the bare key.
+//!
 //! Webhook and queue deliveries become `kernel.wake` runs ([`KERNEL_WAKE_TARGET`]) on the
 //! maintenance queue, which the [`KernelWakeExecutor`] turns into a routed wake, so their
 //! signature checks, keys and back-pressure hold unchanged.
@@ -38,28 +47,32 @@
 //! [`Wake::FileChange`]. Parked work has no expiry of its own: a process sleeps until its
 //! wake set fires or [`WakeSet::on_expiry`] acts.
 
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use adk_agent::ambient::{CronTrigger, FileWatchTrigger};
-use adk_core::approval::{ApprovalNotification, ApprovalNotifier};
+use adk_agent::ambient::{CronTrigger, EventSource, FileWatchTrigger};
+use adk_core::approval::{ApprovalEventKind, ApprovalNotification, ApprovalNotifier};
 use adk_core::queue_source::{QueueIngress, QueueSource};
 use adk_core::schedule::MissedFirePolicy;
-use adk_core::{DurableRunStore, NewRun, RunRecord};
+use adk_core::{DurableRunStore, Enqueued, NewRun, RunRecord, RunState};
 use adk_server::background::{WorkerHooks, WorkflowExecutor, WorkflowState};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::stream::BoxStream;
+use futures::stream::{self, BoxStream, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::bus::EventBus;
+use crate::bus::{EventBus, KernelEvent};
 use crate::error::{KernelError, Result};
 use crate::partition::PartitionId;
-use crate::stores::ProcessStore;
+use crate::process::{ProcessKind, ProcessMeta};
+use crate::sched::QueueClass;
+use crate::stores::{ProcessFilter, ProcessStore};
 
 /// The target of a `kernel.wake` run: a webhook or queue delivery the maintenance worker
 /// turns into a routed wake (spec 3.2 §7.4).
@@ -307,6 +320,7 @@ impl WakeEvent {
 /// assert_eq!(keys::webhook("github", "msg_1"), "hook:github:msg_1");
 /// assert_eq!(keys::queue("orders", "m-1"), "queue:orders:m-1");
 /// assert_eq!(keys::run_finished("run-7", adk_core::RunState::Completed), "run:run-7:completed");
+/// assert_eq!(keys::trigger("hook:github:msg_1", "triage"), "hook:github:msg_1#triage");
 /// ```
 pub mod keys {
     use std::path::Path;
@@ -352,6 +366,12 @@ pub mod keys {
         request_id.to_string()
     }
 
+    /// `<event key>#<trigger name>`: the run a [`Trigger`](crate::Trigger) enqueues for an
+    /// event, so two triggers that match one event on one queue each run.
+    pub fn trigger(event_key: &str, trigger: &str) -> String {
+        format!("{event_key}#{trigger}")
+    }
+
     /// `run:<pid>:<final state>`, the state as the run store serializes it (`completed`,
     /// `failed`, `cancelled`).
     pub fn run_finished(pid: &str, state: RunState) -> String {
@@ -367,18 +387,137 @@ pub mod keys {
 /// [`KERNEL_WAKE_TARGET`] on the maintenance queue, keyed by `event.key`, with the event as
 /// input, acting as a `Service` subject (spec 3.2 §7.4).
 ///
+/// The run's user is the event's principal, or the source's name when the event carries
+/// none. `NewRun::authenticated` is set only when the event carries a principal, which a
+/// source sets only for a subject it verified (spec 3.1 I6).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::{KERNEL_WAKE_TARGET, QueueClass, WakeEvent, kernel_wake_run};
+///
+/// let event = WakeEvent::new("hook:github", "hook:github:msg_1", serde_json::json!({"action": "opened"}));
+/// let run = kernel_wake_run(&event, "adk-rust").unwrap();
+/// assert_eq!(run.target, KERNEL_WAKE_TARGET);
+/// assert_eq!(run.queue, QueueClass::MAINTENANCE);
+/// assert_eq!(run.idempotency_key.as_deref(), Some("hook:github:msg_1"));
+/// assert!(!run.authenticated);
+/// assert_eq!(run.input["payload"]["action"], "opened");
+/// ```
+///
 /// # Errors
 ///
-/// Returns [`KernelError::Serde`] when the event cannot be encoded.
-pub fn kernel_wake_run(_event: &WakeEvent, _app_name: &str) -> Result<NewRun> {
-    Err(KernelError::Unimplemented { item: "wake::kernel_wake_run" })
+/// Returns [`KernelError::Serde`] when the event cannot be encoded, or
+/// [`KernelError::Core`] when the run is invalid, such as an event with an empty key or
+/// source.
+pub fn kernel_wake_run(event: &WakeEvent, app_name: &str) -> Result<NewRun> {
+    let user = event.principal.clone().unwrap_or_else(|| event.source.clone());
+    let mut run = NewRun::new(
+        QueueClass::MAINTENANCE,
+        app_name,
+        user,
+        KERNEL_WAKE_TARGET,
+        serde_json::to_value(event)?,
+    )
+    .with_idempotency_key(event.key.clone());
+    if event.principal.is_some() {
+        run = run.with_authenticated_user();
+    }
+    let run = run.with_service_subject();
+    run.validate()?;
+    Ok(run)
+}
+
+/// Whether `wake` fires for `event` (spec 3.2 §7.4 step 2).
+///
+/// Each kernel source keys its events with its own prefix ([`keys`]); the payload carries
+/// what a variant compares. `At`, `BudgetReplenished` and `Manual` match no event: a time
+/// wake is swept by [`WakeRouter::sweep_expired`], a budget wake has no source until phase 2,
+/// and a manual wake is `adk-rust resume`.
+fn wake_matches(wake: &Wake, event: &WakeEvent) -> bool {
+    let text = |field: &str| event.payload.get(field).and_then(Value::as_str);
+    match wake {
+        Wake::Cron { expr, missed } => {
+            let catch_up = event.payload.get("catch_up").and_then(Value::as_bool) == Some(true);
+            event.key.starts_with("cron:")
+                && text("expression") == Some(expr.as_str())
+                && !(catch_up && *missed == MissedFirePolicy::Skip)
+        }
+        Wake::FileChange { root, glob, .. } => {
+            event.key.starts_with("file:")
+                && text("path").is_some_and(|path| path_matches(root, glob, Path::new(path)))
+        }
+        Wake::Webhook { hook } => {
+            event.key.starts_with("hook:") && event.source == format!("hook:{hook}")
+        }
+        Wake::Queue { source } => event.key.starts_with("queue:") && event.source == *source,
+        Wake::Approval { fingerprint } => {
+            event.source == ApprovalWakeSource::NAME && text("fingerprint") == Some(fingerprint)
+        }
+        Wake::RunFinished { pid } => {
+            event.key.starts_with("run:") && text("pid") == Some(pid.as_str())
+        }
+        Wake::At(_) | Wake::BudgetReplenished { .. } | Wake::Manual => false,
+    }
+}
+
+/// Whether `path` lies under `root` and its file name matches `glob`, as
+/// `FileWatchTrigger` matches: `*` is any run of characters, `?` one character.
+fn path_matches(root: &Path, glob: &str, path: &Path) -> bool {
+    let under = path.starts_with(root)
+        || std::fs::canonicalize(root).is_ok_and(|root| path.starts_with(root));
+    under
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| glob_matches(glob, name))
+}
+
+/// `*` and `?` glob matching over characters, without backtracking blow-up.
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let text: Vec<char> = text.chars().collect();
+    let (mut p, mut t) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                star = Some((p, t));
+                p += 1;
+            }
+            Some(&c) if c == '?' || c == text[t] => {
+                p += 1;
+                t += 1;
+            }
+            _ => match star {
+                Some((star_p, star_t)) => {
+                    p = star_p + 1;
+                    t = star_t + 1;
+                    star = Some((star_p, star_t + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|c| *c == '*')
+}
+
+/// `path` with symbolic links and `.` resolved, so keys and matches agree however a watcher
+/// reports it; a removed file resolves through its parent.
+fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| {
+        match (path.parent().map(std::fs::canonicalize), path.file_name()) {
+            (Some(Ok(parent)), Some(name)) => parent.join(name),
+            _ => path.to_path_buf(),
+        }
+    })
 }
 
 /// A standing wake that starts a new process each time it fires, when no sleeping process
-/// matched (spec 3.2 §7.4 step 3).
+/// matched (spec 3.2 §7.4 step 3): a sleeper consumes the event, a trigger is the fallback.
 ///
-/// `run` is the template: the router sets its idempotency key, concurrency key, service
-/// subject and `authenticated` from the event.
+/// `run` is the template: the router sets its idempotency key ([`keys::trigger`]),
+/// concurrency key, service subject and `authenticated` from the event.
 ///
 /// # Example
 ///
@@ -477,8 +616,34 @@ impl WakeOutcome {
     }
 }
 
+/// The source of the [`KernelEvent::Wake`] a wake set's expiry publishes.
+const EXPIRY_SOURCE: &str = "expiry";
+/// The source of the [`KernelEvent::Wake`] a passed [`Wake::At`] publishes.
+const AT_SOURCE: &str = "at";
+/// The source of the [`KernelEvent::Wake`] [`WakeRouter::reconcile`] publishes.
+const RECONCILE_SOURCE: &str = "reconcile";
+/// The most directory entries one [`WakeRouter::reconcile`] scan of a root visits.
+const RECONCILE_SCAN_LIMIT: usize = 100_000;
+
 /// The wake matcher (spec 3.2 §7.4 steps 2–3): routes each [`WakeEvent`] to the sleeping
 /// processes and [`Trigger`]s it matches.
+///
+/// | Match | What the router does | Outcome |
+/// |---|---|---|
+/// | A `Waiting` process whose wake set holds a matching [`Wake`] | `DurableRunStore::wake`, then clears the wake set | [`WakeOutcome::Woke`] |
+/// | No sleeper matched; a [`Trigger`] whose wake matches | Enqueues the trigger's run keyed [`keys::trigger`] and records its process | [`WakeOutcome::Spawned`], or [`WakeOutcome::Deduplicated`] when the key already holds a run |
+///
+/// Events reach [`route`](Self::route) through their keyed `kernel.wake` run
+/// ([`submit`](Self::submit), the webhook and queue ingresses), so a duplicate delivery
+/// never reaches it, and a key that woke a sleeper never later starts a trigger run (K-I3).
+/// A woken process's wake set is cleared, so a later event wakes it only once it sleeps
+/// again. A process that is suspended
+/// ([`ProcessMeta::suspended_by`]), not `Waiting`, or whose set expired is not woken; a
+/// freeze-parked process wakes only on `unfreeze` (K-I21). Routing on one router is
+/// serialized, so two sources delivering the same key at once wake once.
+///
+/// Every routed event is published on the bus as a [`KernelEvent::Wake`] per outcome, or
+/// one with no process when it matched nothing.
 ///
 /// # Example
 ///
@@ -499,9 +664,8 @@ pub struct WakeRouter {
     runs: Arc<dyn DurableRunStore>,
     processes: Arc<dyn ProcessStore>,
     triggers: Vec<Trigger>,
-    // Unimplemented: read by `route` once feat/kernel-wake lands (spec 3.2 §7.4).
-    #[allow(dead_code)]
     bus: Option<EventBus>,
+    gate: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl fmt::Debug for WakeRouter {
@@ -513,7 +677,13 @@ impl fmt::Debug for WakeRouter {
 impl WakeRouter {
     /// A router over the run store and the process side table, with no triggers.
     pub fn new(runs: Arc<dyn DurableRunStore>, processes: Arc<dyn ProcessStore>) -> Self {
-        Self { runs, processes, triggers: Vec::new(), bus: None }
+        Self {
+            runs,
+            processes,
+            triggers: Vec::new(),
+            bus: None,
+            gate: Arc::new(tokio::sync::Mutex::new(())),
+        }
     }
 
     /// Adds a standing trigger.
@@ -545,36 +715,322 @@ impl WakeRouter {
         &self.processes
     }
 
-    /// Routes `event`: wakes each `Waiting` process whose wake set it matches and enqueues
-    /// the run of each matching trigger, keyed by `event.key`; returns what it did, one
-    /// outcome per process. An event that matches nothing returns an empty list.
+    /// Routes `event`: wakes each `Waiting` process whose wake set it matches; when it woke
+    /// none, enqueues the run of each matching trigger; returns what it did, one outcome per
+    /// process. An event that matches nothing returns an empty list.
+    ///
+    /// The [`KernelWakeExecutor`] calls this for each `kernel.wake` run; a source hands its
+    /// events to [`submit`](Self::submit) instead, so each key is routed once.
+    ///
+    /// A trigger's run is its template with `idempotency_key` = [`keys::trigger`], the
+    /// concurrency key `<session id>` or `partition:<partition>` when the template sets
+    /// none, acting as a `Service` subject (`NewRun::with_service_subject`). With an event
+    /// principal the run's user is the principal and `NewRun::authenticated` is set;
+    /// without one `authenticated` is cleared, so standing rules and Auto stay inert for the
+    /// run (spec 3.1 I6).
     ///
     /// # Errors
     ///
     /// Returns a store error; a partially routed event is safe to route again, since its
     /// key deduplicates what already ran.
-    pub async fn route(&self, _event: WakeEvent) -> Result<Vec<WakeOutcome>> {
-        Err(KernelError::Unimplemented { item: "wake::WakeRouter::route" })
+    pub async fn route(&self, event: WakeEvent) -> Result<Vec<WakeOutcome>> {
+        let _gate = self.gate.lock().await;
+        let now = Utc::now();
+        let mut outcomes = Vec::new();
+        for (meta, wake, run) in self.sleepers().await? {
+            let expired = wake.expires_at.is_some_and(|at| at <= now);
+            if expired || !wake.any_of.iter().any(|wake| wake_matches(wake, &event)) {
+                continue;
+            }
+            self.wake_sleeper(&meta.pid, &run).await?;
+            outcomes.push(WakeOutcome::Woke { pid: meta.pid });
+        }
+        if outcomes.is_empty() {
+            for trigger in self.triggers.iter().filter(|t| wake_matches(&t.wake, &event)) {
+                if let Some(outcome) = self.fire(trigger, &event).await? {
+                    outcomes.push(outcome);
+                }
+            }
+        }
+        tracing::debug!(
+            wake.source = %event.source,
+            wake.key = %event.key,
+            wake.outcomes = outcomes.len(),
+            "wake routed"
+        );
+        self.publish(&event.source, &event.key, &outcomes);
+        Ok(outcomes)
     }
 
-    /// Applies the [`ExpiryAction`] of every wake set that expired by `now`.
+    /// Submits `event` from an in-process source as its keyed `kernel.wake` maintenance run
+    /// ([`kernel_wake_run`]), the way a source's event reaches [`route`](Self::route) (spec
+    /// 3.2 §7.4, K-I3). The run store keeps one run per key, so a repeat of a key, even one
+    /// that already woke a sleeper, never reaches the router and cannot start a trigger run.
+    /// The maintenance worker's [`KernelWakeExecutor`] routes the run.
+    ///
+    /// Returns `Enqueued::Created` for a new key and `Enqueued::Existing` for a repeat.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::{Enqueued, InMemoryRunStore};
+    /// use adk_kernel::{InMemoryProcessStore, WakeEvent, WakeRouter};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> adk_kernel::Result<()> {
+    /// let router = WakeRouter::new(Arc::new(InMemoryRunStore::new()), Arc::new(InMemoryProcessStore::new()));
+    /// let event = WakeEvent::new("lockfile", "file:/repo:/repo/Cargo.lock:2026-10-22T09:00:00Z", serde_json::json!({}));
+    /// assert!(matches!(router.submit(&event, "adk-rust").await?, Enqueued::Created(_)));
+    /// assert!(matches!(router.submit(&event, "adk-rust").await?, Enqueued::Existing(_)));
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`kernel_wake_run`]'s error, or the run store's.
+    pub async fn submit(&self, event: &WakeEvent, app_name: &str) -> Result<Enqueued> {
+        let enqueued = self.runs.enqueue(kernel_wake_run(event, app_name)?).await?;
+        if let Enqueued::Existing(run) = &enqueued {
+            tracing::debug!(wake.key = %event.key, run.id = %run.run_id, "repeated wake not routed");
+        }
+        Ok(enqueued)
+    }
+
+    /// Applies the [`ExpiryAction`] of every wake set that expired by `now`, and wakes every
+    /// sleeper whose [`Wake::At`] time passed by `now`; called on the scheduler tick.
+    ///
+    /// [`ExpiryAction::Cancel`] cancels the process through `DurableRunStore::request_cancel`;
+    /// [`ExpiryAction::Run`] wakes it as though a wake fired. Either way the wake set is
+    /// cleared. A suspended process is left alone: it has no expiry of its own.
     ///
     /// # Errors
     ///
     /// Returns a store error.
-    pub async fn sweep_expired(&self, _now: DateTime<Utc>) -> Result<Vec<WakeOutcome>> {
-        Err(KernelError::Unimplemented { item: "wake::WakeRouter::sweep_expired" })
+    pub async fn sweep_expired(&self, now: DateTime<Utc>) -> Result<Vec<WakeOutcome>> {
+        let _gate = self.gate.lock().await;
+        let mut outcomes = Vec::new();
+        for (meta, wake, run) in self.sleepers().await? {
+            if let Some(expires_at) = wake.expires_at.filter(|at| *at <= now) {
+                match wake.on_expiry {
+                    ExpiryAction::Cancel => {
+                        self.runs.request_cancel(&meta.pid).await?;
+                        self.processes.set_wake(&meta.pid, None).await?;
+                        if let Some(bus) = &self.bus {
+                            bus.publish(KernelEvent::Process {
+                                pid: meta.pid.clone(),
+                                from: RunState::Waiting,
+                                to: RunState::Cancelled,
+                                reason: Some("wake set expired".into()),
+                            });
+                        }
+                    }
+                    ExpiryAction::Run => self.wake_sleeper(&meta.pid, &run).await?,
+                }
+                let outcome =
+                    WakeOutcome::Expired { pid: meta.pid.clone(), action: wake.on_expiry };
+                let key = format!("{EXPIRY_SOURCE}:{}:{}", meta.pid, expires_at.to_rfc3339());
+                self.publish(EXPIRY_SOURCE, &key, std::slice::from_ref(&outcome));
+                outcomes.push(outcome);
+                continue;
+            }
+            let due = wake.any_of.iter().find_map(|wake| match wake {
+                Wake::At(at) if *at <= now => Some(*at),
+                _ => None,
+            });
+            if let Some(at) = due {
+                self.wake_sleeper(&meta.pid, &run).await?;
+                let outcome = WakeOutcome::Woke { pid: meta.pid.clone() };
+                let key = format!("{AT_SOURCE}:{}:{}", meta.pid, at.to_rfc3339());
+                self.publish(AT_SOURCE, &key, std::slice::from_ref(&outcome));
+                outcomes.push(outcome);
+            }
+        }
+        Ok(outcomes)
     }
 
     /// Wakes every sleeper whose [`Wake::FileChange`] matches a file modified since the
-    /// process went to sleep, for the changes missed while the kernel was down.
+    /// process went to sleep (its run's last change), for the changes missed while the
+    /// kernel was down (spec 3.2 §7.4 missed wakes). Runs on start, before the wake sources
+    /// subscribe.
+    ///
+    /// The scan walks each root without following symbolic links, at most 100,000 entries
+    /// per root. The wake is published keyed [`keys::file`] by the newest such file.
     ///
     /// # Errors
     ///
-    /// Returns a store or file-system error.
+    /// Returns a store error, or [`KernelError::Io`] when a scan cannot run.
     pub async fn reconcile(&self) -> Result<Vec<WakeOutcome>> {
-        Err(KernelError::Unimplemented { item: "wake::WakeRouter::reconcile" })
+        let _gate = self.gate.lock().await;
+        let mut outcomes = Vec::new();
+        for (meta, wake, run) in self.sleepers().await? {
+            let mut newest: Option<(PathBuf, PathBuf, DateTime<Utc>)> = None;
+            for watched in &wake.any_of {
+                let Wake::FileChange { root, glob, .. } = watched else { continue };
+                let (root, glob, since) = (canonical(root), glob.clone(), run.updated_at);
+                let scan_root = root.clone();
+                let found =
+                    tokio::task::spawn_blocking(move || newest_since(&scan_root, &glob, since))
+                        .await
+                        .map_err(|error| KernelError::Io(std::io::Error::other(error)))?;
+                if let Some((path, modified)) = found
+                    && newest.as_ref().is_none_or(|(_, _, newest)| modified > *newest)
+                {
+                    newest = Some((root, path, modified));
+                }
+            }
+            let Some((root, path, modified)) = newest else { continue };
+            self.wake_sleeper(&meta.pid, &run).await?;
+            let outcome = WakeOutcome::Woke { pid: meta.pid.clone() };
+            self.publish(
+                RECONCILE_SOURCE,
+                &keys::file(&root, &path, modified),
+                std::slice::from_ref(&outcome),
+            );
+            outcomes.push(outcome);
+        }
+        Ok(outcomes)
     }
+
+    /// The `Waiting` processes asleep on a wake set: not suspended, run still held.
+    async fn sleepers(&self) -> Result<Vec<(ProcessMeta, WakeSet, RunRecord)>> {
+        let mut sleepers = Vec::new();
+        for meta in self.processes.list(&ProcessFilter::default()).await? {
+            let Some(wake) = meta.wake.clone() else { continue };
+            if meta.suspended_by.is_some() {
+                continue;
+            }
+            let Some(run) = self.runs.get(&meta.pid).await? else { continue };
+            if run.state == RunState::Waiting {
+                sleepers.push((meta, wake, run));
+            }
+        }
+        Ok(sleepers)
+    }
+
+    /// Wakes `pid` and consumes its wake set. The wake comes first, so a failure in between
+    /// leaves a woken process with a stale set rather than a sleeper nothing can wake.
+    async fn wake_sleeper(&self, pid: &str, run: &RunRecord) -> Result<()> {
+        self.runs.wake(&run.run_id).await?;
+        self.processes.set_wake(pid, None).await
+    }
+
+    /// Enqueues `trigger`'s run for `event` and records its process.
+    async fn fire(&self, trigger: &Trigger, event: &WakeEvent) -> Result<Option<WakeOutcome>> {
+        let mut run = trigger.run.clone();
+        run.idempotency_key = Some(keys::trigger(&event.key, &trigger.name));
+        if run.concurrency_key.is_none() {
+            run.concurrency_key = Some(
+                run.session_id
+                    .clone()
+                    .unwrap_or_else(|| format!("partition:{}", trigger.partition)),
+            );
+        }
+        match &event.principal {
+            Some(principal) => {
+                run.user_id = principal.clone();
+                run.authenticated = true;
+            }
+            None => run.authenticated = false,
+        }
+        let run = run.with_service_subject();
+        let (record, created) = match self.runs.enqueue(run).await? {
+            Enqueued::Created(record) => (record, true),
+            Enqueued::Existing(record) => (record, false),
+            Enqueued::Rejected { blocking_run_id } => {
+                tracing::info!(
+                    wake.trigger = %trigger.name,
+                    wake.key = %event.key,
+                    run.blocking_id = %blocking_run_id,
+                    "trigger run refused by its concurrency key"
+                );
+                return Ok(None);
+            }
+        };
+        if created || self.processes.get(&record.run_id).await?.is_none() {
+            let mut meta = ProcessMeta::new(
+                record.run_id.clone(),
+                QueueClass::from_name(&record.queue),
+                ProcessKind::Triggered { source: trigger.name.clone() },
+            )
+            .with_partition(trigger.partition.clone());
+            if let Some(parent) = event
+                .key
+                .starts_with("run:")
+                .then(|| event.payload.get("pid"))
+                .flatten()
+                .and_then(Value::as_str)
+            {
+                meta = meta.with_parent(parent);
+            }
+            self.processes.put(meta).await?;
+        }
+        Ok(Some(if created {
+            WakeOutcome::Spawned { pid: record.run_id, trigger: trigger.name.clone() }
+        } else {
+            WakeOutcome::Deduplicated { pid: record.run_id }
+        }))
+    }
+
+    fn publish(&self, source: &str, key: &str, outcomes: &[WakeOutcome]) {
+        let Some(bus) = &self.bus else { return };
+        if outcomes.is_empty() {
+            bus.publish(KernelEvent::Wake {
+                pid: None,
+                source: source.to_string(),
+                key: key.to_string(),
+                outcome: None,
+            });
+        }
+        for outcome in outcomes {
+            bus.publish(KernelEvent::Wake {
+                pid: Some(outcome.pid().to_string()),
+                source: source.to_string(),
+                key: key.to_string(),
+                outcome: Some(outcome.clone()),
+            });
+        }
+    }
+}
+
+/// The newest file under `root` whose name matches `glob` and that was modified after
+/// `since`, walking without following symbolic links.
+fn newest_since(root: &Path, glob: &str, since: DateTime<Utc>) -> Option<(PathBuf, DateTime<Utc>)> {
+    let mut newest: Option<(PathBuf, DateTime<Utc>)> = None;
+    let mut pending = vec![root.to_path_buf()];
+    let mut visited = 0usize;
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > RECONCILE_SCAN_LIMIT {
+                tracing::warn!(wake.root = %root.display(), "reconcile scan limit reached");
+                return newest;
+            }
+            let Ok(file_type) = entry.file_type() else { continue };
+            let path = entry.path();
+            if file_type.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            let name_matches = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| glob_matches(glob, name));
+            if !file_type.is_file() || !name_matches {
+                continue;
+            }
+            let Some(modified) = entry.metadata().ok().and_then(|meta| meta.modified().ok()) else {
+                continue;
+            };
+            let modified = DateTime::<Utc>::from(modified);
+            if modified > since && newest.as_ref().is_none_or(|(_, newest)| modified > *newest) {
+                newest = Some((path, modified));
+            }
+        }
+    }
+    newest
 }
 
 /// Executes `kernel.wake` runs on the maintenance worker: decodes the [`WakeEvent`] a
@@ -615,13 +1071,33 @@ impl WorkflowExecutor for KernelWakeExecutor {
         workflow_id == KERNEL_WAKE_TARGET
     }
 
+    /// Decodes the run's input as a [`WakeEvent`] and routes it; the result is
+    /// `{"outcomes": [..]}`. A failed route fails the attempt, and a retry routes again
+    /// safely, since the event's key deduplicates what already ran.
     async fn execute(
         &self,
-        _workflow_id: &str,
-        _input: WorkflowState,
-        _cancel_token: CancellationToken,
+        workflow_id: &str,
+        input: WorkflowState,
+        cancel_token: CancellationToken,
     ) -> std::result::Result<Value, String> {
-        Err(KernelError::Unimplemented { item: "wake::KernelWakeExecutor::execute" }.to_string())
+        if workflow_id != KERNEL_WAKE_TARGET {
+            return Err(format!(
+                "the kernel wake executor runs only `{KERNEL_WAKE_TARGET}`, not `{workflow_id}`"
+            ));
+        }
+        let event: WakeEvent = serde_json::from_value(Value::Object(input.into_iter().collect()))
+            .map_err(|error| {
+            format!(
+                "a `{KERNEL_WAKE_TARGET}` run's input must be a wake event, as \
+                     kernel_wake_run builds it: {error}"
+            )
+        })?;
+        tokio::select! {
+            routed = self.router.route(event) => routed
+                .map(|outcomes| json!({ "outcomes": outcomes }))
+                .map_err(|error| error.to_string()),
+            () = cancel_token.cancelled() => Err("the wake run was cancelled".to_string()),
+        }
     }
 }
 
@@ -640,8 +1116,6 @@ impl WorkflowExecutor for KernelWakeExecutor {
 /// ```
 pub struct CronWakeSource {
     name: String,
-    // Unimplemented: read by `subscribe` once feat/kernel-wake lands (spec 3.2 §7.4).
-    #[allow(dead_code)]
     trigger: CronTrigger,
 }
 
@@ -664,8 +1138,31 @@ impl WakeSource for CronWakeSource {
         &self.name
     }
 
+    /// Subscribes to the cron trigger: each tick, catch-up ticks included, becomes an event
+    /// keyed [`keys::cron`] by its `scheduled_for`, with the tick's payload (`expression`,
+    /// `scheduled_for`, `catch_up`). Missed ticks follow the trigger's `MissedTickPolicy`
+    /// and watermark.
     async fn subscribe(&self) -> Result<BoxStream<'static, WakeEvent>> {
-        Err(KernelError::Unimplemented { item: "wake::CronWakeSource::subscribe" })
+        let name = self.name.clone();
+        let ticks = self.trigger.subscribe().await?;
+        Ok(ticks
+            .filter_map(move |tick| {
+                let scheduled_for = tick
+                    .payload
+                    .get("scheduled_for")
+                    .and_then(Value::as_str)
+                    .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+                    .map(|at| at.with_timezone(&Utc));
+                let event = match scheduled_for {
+                    Some(at) => Some(WakeEvent::new(name.clone(), keys::cron(&name, at), tick.payload)),
+                    None => {
+                        tracing::warn!(wake.source = %name, "cron tick without scheduled_for; skipped");
+                        None
+                    }
+                };
+                futures::future::ready(event)
+            })
+            .boxed())
     }
 }
 
@@ -686,8 +1183,6 @@ pub struct FileWakeSource {
     name: String,
     root: PathBuf,
     debounce: Duration,
-    // Unimplemented: read by `subscribe` once feat/kernel-wake lands (spec 3.2 §7.4).
-    #[allow(dead_code)]
     trigger: FileWatchTrigger,
 }
 
@@ -705,11 +1200,12 @@ impl FileWakeSource {
     /// The default debounce: changes within 500 ms of each other wake once.
     pub const DEFAULT_DEBOUNCE: Duration = Duration::from_millis(500);
 
-    /// A source named `name` watching `root` for paths matching `glob`.
+    /// A source named `name` watching `root`, recursively, for files whose name matches
+    /// `glob` (`*` any run of characters, `?` one character).
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::Core`] when `glob` is not a valid pattern.
+    /// Returns [`KernelError::Core`] when `root` does not exist.
     pub fn new(name: impl Into<String>, root: impl Into<PathBuf>, glob: &str) -> Result<Self> {
         let root = root.into();
         let trigger = FileWatchTrigger::new(root.clone(), glob)?;
@@ -740,8 +1236,26 @@ impl WakeSource for FileWakeSource {
         &self.name
     }
 
+    /// Subscribes to the watcher. Notifications for one path are debounced: the event is
+    /// emitted once the path has been quiet for [`debounce`](Self::debounce), keyed
+    /// [`keys::file`] by the modification time read then, so the several notifications
+    /// one save produces wake once and a later save, even back to earlier contents, wakes
+    /// again. A removed file is keyed by the time it was seen gone. The payload carries
+    /// `event` (the last notification's kind), `path`, `root`, `modified` and `removed`;
+    /// paths are canonical.
     async fn subscribe(&self) -> Result<BoxStream<'static, WakeEvent>> {
-        Err(KernelError::Unimplemented { item: "wake::FileWakeSource::subscribe" })
+        let notifications = self.trigger.subscribe().await?;
+        let state = FileDebounce {
+            name: self.name.clone(),
+            root: canonical(&self.root),
+            debounce: self.debounce,
+            notifications: Some(notifications),
+            pending: HashMap::new(),
+        };
+        Ok(stream::unfold(state, |mut state| async move {
+            state.next().await.map(|event| (event, state))
+        })
+        .boxed())
     }
 }
 
@@ -767,6 +1281,7 @@ impl WakeSource for FileWakeSource {
 #[derive(Debug)]
 pub struct ApprovalWakeSource {
     name: String,
+    hub: WakeHub,
 }
 
 impl ApprovalWakeSource {
@@ -775,7 +1290,7 @@ impl ApprovalWakeSource {
 
     /// A source named [`NAME`](Self::NAME).
     pub fn new() -> Self {
-        Self { name: Self::NAME.to_string() }
+        Self { name: Self::NAME.to_string(), hub: WakeHub::default() }
     }
 }
 
@@ -787,8 +1302,32 @@ impl Default for ApprovalWakeSource {
 
 #[async_trait]
 impl ApprovalNotifier for ApprovalWakeSource {
-    async fn notify(&self, _notification: &ApprovalNotification) -> adk_core::Result<()> {
-        Err(KernelError::Unimplemented { item: "wake::ApprovalWakeSource::notify" }.into())
+    /// Publishes a request that reached its outcome — resolved (approved, rejected or
+    /// answered), expired or cancelled — as one event keyed [`keys::approval`] by the request
+    /// id, so each request wakes at most once. Submissions, escalations and the single
+    /// decisions of a multi-approver policy are not wakes. The payload carries `requestId`,
+    /// `fingerprint`, `runId`, `toolName`, `state` and `kind`; the event names no principal.
+    async fn notify(&self, notification: &ApprovalNotification) -> adk_core::Result<()> {
+        if !matches!(
+            notification.kind,
+            ApprovalEventKind::Resolved | ApprovalEventKind::Expired | ApprovalEventKind::Cancelled
+        ) {
+            return Ok(());
+        }
+        let request = &notification.request;
+        let payload = json!({
+            "requestId": request.id,
+            "fingerprint": request.fingerprint,
+            "runId": request.run_id,
+            "toolName": request.tool_name,
+            "state": request.state,
+            "kind": notification.kind,
+        });
+        self.hub.publish(
+            WakeEvent::new(self.name.clone(), keys::approval(&request.id), payload)
+                .with_at(notification.at),
+        );
+        Ok(())
     }
 }
 
@@ -798,8 +1337,10 @@ impl WakeSource for ApprovalWakeSource {
         &self.name
     }
 
+    /// Subscribes to decided approvals. Events published while no subscriber is attached are
+    /// held, up to 1024, for the first subscriber.
     async fn subscribe(&self) -> Result<BoxStream<'static, WakeEvent>> {
-        Err(KernelError::Unimplemented { item: "wake::ApprovalWakeSource::subscribe" })
+        Ok(self.hub.subscribe())
     }
 }
 
@@ -821,6 +1362,7 @@ impl WakeSource for ApprovalWakeSource {
 #[derive(Debug)]
 pub struct RunFinishedWakeSource {
     name: String,
+    hub: WakeHub,
 }
 
 impl RunFinishedWakeSource {
@@ -829,7 +1371,7 @@ impl RunFinishedWakeSource {
 
     /// A source named [`NAME`](Self::NAME).
     pub fn new() -> Self {
-        Self { name: Self::NAME.to_string() }
+        Self { name: Self::NAME.to_string(), hub: WakeHub::default() }
     }
 }
 
@@ -841,10 +1383,23 @@ impl Default for RunFinishedWakeSource {
 
 #[async_trait]
 impl WorkerHooks for RunFinishedWakeSource {
+    /// Publishes a run that finished — `Completed`, `Failed` or `Cancelled` — as one event
+    /// keyed [`keys::run_finished`]; a retryable failure the worker requeued is not finished.
+    /// The payload carries `pid`, `state`, `target` and `queue`.
     async fn on_finish(&self, run: &RunRecord) {
-        // Unimplemented: wake::RunFinishedWakeSource::on_finish publishes a
-        // `keys::run_finished` wake event once feat/kernel-wake lands (spec 3.2 §7.4).
-        tracing::trace!(run.id = %run.run_id, "run finished");
+        if !run.state.is_terminal() {
+            return;
+        }
+        let payload = json!({
+            "pid": run.run_id,
+            "state": run.state,
+            "target": run.target,
+            "queue": run.queue,
+        });
+        self.hub.publish(
+            WakeEvent::new(self.name.clone(), keys::run_finished(&run.run_id, run.state), payload)
+                .with_at(run.updated_at),
+        );
     }
 }
 
@@ -854,8 +1409,143 @@ impl WakeSource for RunFinishedWakeSource {
         &self.name
     }
 
+    /// Subscribes to finished runs. Events published while no subscriber is attached are
+    /// held, up to 1024, for the first subscriber.
     async fn subscribe(&self) -> Result<BoxStream<'static, WakeEvent>> {
-        Err(KernelError::Unimplemented { item: "wake::RunFinishedWakeSource::subscribe" })
+        Ok(self.hub.subscribe())
+    }
+}
+
+/// How many events a push source holds for its first subscriber.
+const HUB_BACKLOG: usize = 1024;
+
+/// The fan-out behind the push sources: every subscriber gets every event; events published
+/// with no subscriber attached wait, bounded, for the first one.
+#[derive(Debug, Default)]
+struct WakeHub {
+    state: Mutex<HubState>,
+}
+
+#[derive(Debug, Default)]
+struct HubState {
+    subscribers: Vec<mpsc::UnboundedSender<WakeEvent>>,
+    backlog: VecDeque<WakeEvent>,
+}
+
+impl WakeHub {
+    fn publish(&self, event: WakeEvent) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.subscribers.retain(|subscriber| !subscriber.is_closed());
+        if state.subscribers.is_empty() {
+            if state.backlog.len() == HUB_BACKLOG {
+                state.backlog.pop_front();
+                tracing::warn!(wake.source = %event.source, "wake backlog full; oldest event dropped");
+            }
+            state.backlog.push_back(event);
+            return;
+        }
+        state.subscribers.retain(|subscriber| subscriber.send(event.clone()).is_ok());
+    }
+
+    fn subscribe(&self) -> BoxStream<'static, WakeEvent> {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        for event in state.backlog.drain(..) {
+            // The receiver is held here, so the send cannot fail.
+            let _ = sender.send(event);
+        }
+        state.subscribers.push(sender);
+        stream::unfold(receiver, |mut receiver| async move {
+            receiver.recv().await.map(|event| (event, receiver))
+        })
+        .boxed()
+    }
+}
+
+/// The state of a [`FileWakeSource`] subscription: watcher notifications in, debounced wake
+/// events out.
+struct FileDebounce {
+    name: String,
+    root: PathBuf,
+    debounce: Duration,
+    notifications: Option<BoxStream<'static, adk_agent::ambient::TriggerEvent>>,
+    /// Each changed path with the time it settles and its last notification's kind.
+    pending: HashMap<PathBuf, (tokio::time::Instant, String)>,
+}
+
+impl FileDebounce {
+    /// The next settled change, or `None` once the watcher ended and nothing is pending.
+    async fn next(&mut self) -> Option<WakeEvent> {
+        loop {
+            let settles = self.pending.values().map(|(at, _)| *at).min();
+            let notification = match (self.notifications.as_mut(), settles) {
+                (None, None) => return None,
+                (None, Some(at)) => {
+                    tokio::time::sleep_until(at).await;
+                    None
+                }
+                (Some(notifications), None) => match notifications.next().await {
+                    Some(notification) => Some(notification),
+                    None => {
+                        self.notifications = None;
+                        continue;
+                    }
+                },
+                (Some(notifications), Some(at)) => tokio::select! {
+                    notification = notifications.next() => match notification {
+                        Some(notification) => Some(notification),
+                        None => {
+                            self.notifications = None;
+                            continue;
+                        }
+                    },
+                    () = tokio::time::sleep_until(at) => None,
+                },
+            };
+            if let Some(notification) = notification {
+                let Some(path) = notification.payload.get("path").and_then(Value::as_str) else {
+                    continue;
+                };
+                let kind = notification
+                    .payload
+                    .get("event")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let settles = tokio::time::Instant::now() + self.debounce;
+                self.pending.insert(canonical(Path::new(path)), (settles, kind));
+                continue;
+            }
+            let now = tokio::time::Instant::now();
+            let due = self
+                .pending
+                .iter()
+                .filter(|(_, (at, _))| *at <= now)
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(path, _)| path.clone());
+            let Some(path) = due else { continue };
+            let Some((_, kind)) = self.pending.remove(&path) else { continue };
+            // Read before borrowing `self`: the watcher stream is not `Sync`, so `&self` may
+            // not live across an await.
+            let modified = tokio::fs::metadata(&path)
+                .await
+                .and_then(|meta| meta.modified())
+                .map(DateTime::<Utc>::from)
+                .ok();
+            return Some(self.settled(path, kind, modified));
+        }
+    }
+
+    fn settled(&self, path: PathBuf, kind: String, modified: Option<DateTime<Utc>>) -> WakeEvent {
+        let at = modified.unwrap_or_else(Utc::now);
+        let payload = json!({
+            "event": kind,
+            "path": path.display().to_string(),
+            "root": self.root.display().to_string(),
+            "modified": at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+            "removed": modified.is_none(),
+        });
+        WakeEvent::new(self.name.clone(), keys::file(&self.root, &path, at), payload)
     }
 }
 
@@ -947,5 +1637,184 @@ mod tests {
             "file:/w:/w/Cargo.lock:2026-10-22T09:00:00.000000000Z"
         );
         assert_eq!(keys::queue("orders", "m-1"), QueueIngress::idempotency_key("orders", "m-1"));
+        assert_eq!(keys::approval("apr-7"), "apr-7");
+        assert_eq!(keys::run_finished("run-7", RunState::Failed), "run:run-7:failed");
+        assert_eq!(keys::run_finished("run-7", RunState::Cancelled), "run:run-7:cancelled");
+        #[cfg(feature = "webhooks")]
+        assert_eq!(
+            keys::webhook("github", "msg_1"),
+            adk_server::webhooks::WebhookHook::idempotency_key("github", "msg_1")
+        );
+    }
+
+    fn event(source: &str, key: &str, payload: Value) -> WakeEvent {
+        WakeEvent::new(source, key, payload)
+    }
+
+    fn cron_tick(expression: &str, catch_up: bool) -> WakeEvent {
+        event(
+            "nightly",
+            "cron:nightly:2026-10-22T02:00:00Z",
+            json!({"expression": expression, "scheduled_for": "2026-10-22T02:00:00+00:00", "catch_up": catch_up}),
+        )
+    }
+
+    #[test]
+    fn cron_wakes_match_their_expression_and_missed_policy() {
+        let wake = |missed| Wake::Cron { expr: "0 0 2 * * *".into(), missed };
+        assert!(wake_matches(&wake(MissedFirePolicy::Skip), &cron_tick("0 0 2 * * *", false)));
+        assert!(!wake_matches(&wake(MissedFirePolicy::Skip), &cron_tick("0 0 2 * * *", true)));
+        assert!(wake_matches(&wake(MissedFirePolicy::FireOnce), &cron_tick("0 0 2 * * *", true)));
+        assert!(wake_matches(&wake(MissedFirePolicy::CatchUp(3)), &cron_tick("0 0 2 * * *", true)));
+        assert!(!wake_matches(&wake(MissedFirePolicy::FireOnce), &cron_tick("0 0 3 * * *", false)));
+        let not_cron = event("nightly", "queue:nightly:1", json!({"expression": "0 0 2 * * *"}));
+        assert!(!wake_matches(&wake(MissedFirePolicy::FireOnce), &not_cron));
+    }
+
+    #[test]
+    fn file_wakes_match_paths_under_their_root_by_file_name() {
+        let wake = Wake::FileChange {
+            root: "/work/repo".into(),
+            glob: "*.lock".into(),
+            debounce: FileWakeSource::DEFAULT_DEBOUNCE,
+        };
+        let change = |path: &str| {
+            event("lockfile", &format!("file:/work/repo:{path}:t"), json!({"path": path}))
+        };
+        assert!(wake_matches(&wake, &change("/work/repo/Cargo.lock")));
+        assert!(wake_matches(&wake, &change("/work/repo/crates/a/Cargo.lock")));
+        assert!(!wake_matches(&wake, &change("/work/repo/Cargo.toml")));
+        assert!(!wake_matches(&wake, &change("/work/other/Cargo.lock")));
+        assert!(!wake_matches(&wake, &change("/work/repository/Cargo.lock")));
+        let not_file = event("lockfile", "hook:x:1", json!({"path": "/work/repo/Cargo.lock"}));
+        assert!(!wake_matches(&wake, &not_file));
+    }
+
+    #[test]
+    fn file_wakes_match_a_canonical_path_against_a_relative_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canonical(dir.path());
+        let relative = Wake::FileChange {
+            root: dir.path().join("."),
+            glob: "notes.md".into(),
+            debounce: FileWakeSource::DEFAULT_DEBOUNCE,
+        };
+        let path = root.join("notes.md").display().to_string();
+        assert!(wake_matches(&relative, &event("notes", "file:k", json!({ "path": path }))));
+    }
+
+    #[test]
+    fn webhook_queue_approval_and_run_finished_wakes_match_their_source() {
+        let webhook = Wake::Webhook { hook: "github".into() };
+        assert!(wake_matches(&webhook, &event("hook:github", "hook:github:msg_1", json!({}))));
+        assert!(!wake_matches(&webhook, &event("hook:gitlab", "hook:gitlab:msg_1", json!({}))));
+        assert!(!wake_matches(&webhook, &event("hook:github", "queue:github:1", json!({}))));
+
+        let queue = Wake::Queue { source: "orders".into() };
+        assert!(wake_matches(&queue, &event("orders", "queue:orders:m-1", json!({}))));
+        assert!(!wake_matches(&queue, &event("refunds", "queue:refunds:m-1", json!({}))));
+        assert!(!wake_matches(&queue, &event("orders", "cron:orders:t", json!({}))));
+
+        let approval = Wake::Approval { fingerprint: "fp-1".into() };
+        let decided = |fingerprint: &str| {
+            event(ApprovalWakeSource::NAME, "apr-1", json!({ "fingerprint": fingerprint }))
+        };
+        assert!(wake_matches(&approval, &decided("fp-1")));
+        assert!(!wake_matches(&approval, &decided("fp-2")));
+        assert!(!wake_matches(&approval, &event("other", "apr-1", json!({"fingerprint": "fp-1"}))));
+
+        let finished = Wake::RunFinished { pid: "run-1".into() };
+        let done = |pid: &str| {
+            event(
+                RunFinishedWakeSource::NAME,
+                &keys::run_finished(pid, RunState::Completed),
+                json!({ "pid": pid }),
+            )
+        };
+        assert!(wake_matches(&finished, &done("run-1")));
+        assert!(!wake_matches(&finished, &done("run-2")));
+    }
+
+    #[test]
+    fn time_budget_and_manual_wakes_match_no_event() {
+        let any = [
+            cron_tick("0 0 2 * * *", false),
+            event("hook:github", "hook:github:msg_1", json!({})),
+            event("budget", "budget:default", json!({"partition": "default"})),
+            event("manual", "manual:run-1", json!({})),
+        ];
+        for wake in [
+            Wake::At(Utc::now()),
+            Wake::BudgetReplenished { partition: PartitionId::default() },
+            Wake::Manual,
+        ] {
+            assert!(any.iter().all(|event| !wake_matches(&wake, event)), "{wake:?} matched");
+        }
+    }
+
+    #[test]
+    fn globs_match_like_the_file_watch_trigger() {
+        let cases = [
+            ("*.rs", "main.rs", true),
+            ("*.rs", "main.rsx", false),
+            ("Cargo.lock", "Cargo.lock", true),
+            ("Cargo.?ock", "Cargo.lock", true),
+            ("*", "", true),
+            ("a*b*c", "aXXbYYc", true),
+            ("a*b*c", "aXXbYY", false),
+            ("**x", "abx", true),
+            ("?", "", false),
+        ];
+        for (pattern, text, expected) in cases {
+            assert_eq!(glob_matches(pattern, text), expected, "{pattern} vs {text}");
+        }
+    }
+
+    #[test]
+    fn kernel_wake_runs_are_maintenance_service_runs_keyed_by_the_event() {
+        let anonymous = event("hook:github", "hook:github:msg_1", json!({"n": 1}));
+        let run = kernel_wake_run(&anonymous, "adk-rust").unwrap();
+        assert_eq!(
+            (run.queue.as_str(), run.target.as_str(), run.user_id.as_str()),
+            (QueueClass::MAINTENANCE, KERNEL_WAKE_TARGET, "hook:github")
+        );
+        assert_eq!(run.idempotency_key.as_deref(), Some("hook:github:msg_1"));
+        assert!(!run.authenticated);
+        let principal = run.principal.clone().unwrap();
+        assert_eq!(principal.on_behalf_of, Some(adk_core::SubjectRef::service("hook:github")));
+        let decoded: WakeEvent = serde_json::from_value(run.input).unwrap();
+        assert_eq!(decoded, anonymous);
+
+        let verified = anonymous.clone().with_principal("github-app");
+        let run = kernel_wake_run(&verified, "adk-rust").unwrap();
+        assert!(run.authenticated);
+        assert_eq!(run.user_id, "github-app");
+
+        assert!(kernel_wake_run(&event("hook:github", "", json!({})), "adk-rust").is_err());
+    }
+
+    #[tokio::test]
+    async fn push_sources_hold_events_for_their_first_subscriber() {
+        let source = RunFinishedWakeSource::new();
+        let mut run = RunRecord::queued(
+            "run-1",
+            NewRun::new("background", "adk-rust", "alice", "adk-rust", Value::Null),
+            Utc::now(),
+        );
+        source.on_finish(&run).await;
+        run.state = RunState::Completed;
+        source.on_finish(&run).await;
+        let mut events = source.subscribe().await.unwrap();
+        let first = events.next().await.unwrap();
+        assert_eq!(first.key, "run:run-1:completed");
+        assert_eq!(first.source, RunFinishedWakeSource::NAME);
+        assert_eq!(first.payload["pid"], "run-1");
+
+        let mut second = source.subscribe().await.unwrap();
+        run.run_id = "run-2".into();
+        run.state = RunState::Failed;
+        source.on_finish(&run).await;
+        assert_eq!(events.next().await.unwrap().key, "run:run-2:failed");
+        assert_eq!(second.next().await.unwrap().key, "run:run-2:failed");
     }
 }
