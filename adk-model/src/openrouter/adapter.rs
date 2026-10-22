@@ -761,11 +761,37 @@ fn chat_plugins_for_request(
     (!plugins.is_empty()).then_some(plugins)
 }
 
+/// The reasoning of one request (spec 3.1 §7.23, §10 C4): the request's `effort` becomes
+/// `reasoning.effort` unless the `openrouter` options already choose an effort, a token
+/// budget, or no reasoning, which are provider-specific and win.
+fn request_reasoning(
+    options: Option<OpenRouterReasoningConfig>,
+    config: &GenerateContentConfig,
+) -> Option<OpenRouterReasoningConfig> {
+    let Some(level) = config.effort else {
+        return options;
+    };
+    let mut reasoning = options.unwrap_or_default();
+    if reasoning.effort.is_some()
+        || reasoning.max_tokens.is_some()
+        || reasoning.enabled == Some(false)
+    {
+        tracing::debug!(
+            effort = %level,
+            "openrouter reasoning options choose the reasoning; the request's effort is ignored"
+        );
+        return Some(reasoning);
+    }
+    reasoning.effort = Some(level.as_str().to_string());
+    Some(reasoning)
+}
+
 fn apply_generate_config_to_chat_request(
     request: &mut OpenRouterChatRequest,
     config: &GenerateContentConfig,
     model_name: &str,
 ) {
+    request.reasoning = request_reasoning(request.reasoning.take(), config);
     request.temperature = config.temperature;
     request.top_p = config.top_p;
     request.max_completion_tokens = config.max_output_tokens;
@@ -798,6 +824,7 @@ fn apply_generate_config_to_responses_request(
     config: &GenerateContentConfig,
     model_name: &str,
 ) {
+    request.reasoning = request_reasoning(request.reasoning.take(), config);
     request.temperature = config.temperature;
     request.top_p = config.top_p;
     request.top_k = config.top_k;

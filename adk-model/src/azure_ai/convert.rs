@@ -39,6 +39,14 @@ pub(crate) fn build_request_body(
             top_logprobs: false,
         },
     )?;
+    // The Azure AI Inference API exposes no effort control (spec 3.1 §7.23).
+    if let Some(level) = config.and_then(|config| config.effort) {
+        tracing::debug!(
+            model.name = model,
+            effort = %level,
+            "azure ai inference takes no reasoning effort; the request's effort is ignored"
+        );
+    }
     let contents = crate::tool_result::with_images(contents);
     let messages: Vec<Value> = contents.iter().flat_map(content_to_messages).collect();
 

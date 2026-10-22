@@ -36,6 +36,8 @@ pub struct OpenAIClient {
     /// Responses API client for requests that declare tools, present only when the
     /// model's Chat Completions endpoint rejects function tools with reasoning on.
     tool_route: Option<OpenAIResponsesClient>,
+    /// The configured reasoning effort, which decides whether a request reasons.
+    reasoning_effort: Option<OpenAIReasoningEffort>,
 }
 
 /// Returns whether OpenAI Chat Completions rejects function tools for `model` while
@@ -96,33 +98,33 @@ impl OpenAIClient {
         reasoning_effort: Option<OpenAIReasoningEffort>,
     ) -> Result<Self, AdkError> {
         // An empty key cannot build the Responses client; the request then fails
-        // authentication on Chat Completions exactly as before.
-        let tool_route = if chat_rejects_reasoning_tools(&config.model)
-            && reasoning_effort != Some(OpenAIReasoningEffort::None)
-            && !config.api_key.is_empty()
-        {
-            let mut responses_config =
-                OpenAIResponsesConfig::new(config.api_key.clone(), config.model.clone());
-            responses_config.organization_id.clone_from(&config.organization_id);
-            responses_config.project_id.clone_from(&config.project_id);
-            responses_config.base_url.clone_from(&config.base_url);
-            let client = match reasoning_effort {
-                Some(effort) => {
-                    OpenAIResponsesClient::new_with_reasoning_effort(responses_config, effort)?
-                }
-                None => OpenAIResponsesClient::new(responses_config)?,
+        // authentication on Chat Completions exactly as before. A client configured with
+        // reasoning off still gets the route: a request's effort turns reasoning on for that
+        // call (spec 3.1 §7.23).
+        let tool_route =
+            if chat_rejects_reasoning_tools(&config.model) && !config.api_key.is_empty() {
+                let mut responses_config =
+                    OpenAIResponsesConfig::new(config.api_key.clone(), config.model.clone());
+                responses_config.organization_id.clone_from(&config.organization_id);
+                responses_config.project_id.clone_from(&config.project_id);
+                responses_config.base_url.clone_from(&config.base_url);
+                let client = match reasoning_effort {
+                    Some(effort) => {
+                        OpenAIResponsesClient::new_with_reasoning_effort(responses_config, effort)?
+                    }
+                    None => OpenAIResponsesClient::new(responses_config)?,
+                };
+                // Chat Completions does not store responses by default; keep that.
+                let store_off: super::RequestAdapter = std::sync::Arc::new(|body, _headers| {
+                    if let Some(body) = body.as_object_mut() {
+                        body.entry("store").or_insert(serde_json::Value::Bool(false));
+                    }
+                    Ok(())
+                });
+                Some(client.with_request_adapter(store_off))
+            } else {
+                None
             };
-            // Chat Completions does not store responses by default; keep that.
-            let store_off: super::RequestAdapter = std::sync::Arc::new(|body, _headers| {
-                if let Some(body) = body.as_object_mut() {
-                    body.entry("store").or_insert(serde_json::Value::Bool(false));
-                }
-                Ok(())
-            });
-            Some(client.with_request_adapter(store_off))
-        } else {
-            None
-        };
         let mut compat_config =
             OpenAICompatibleConfig::new(config.api_key, config.model).with_provider_name("openai");
         if let Some(base_url) = config.base_url {
@@ -137,6 +139,7 @@ impl OpenAIClient {
         Ok(Self {
             inner: OpenAICompatible::new_with_reasoning_effort(compat_config, reasoning_effort)?,
             tool_route,
+            reasoning_effort,
         })
     }
 
@@ -149,7 +152,7 @@ impl OpenAIClient {
         let config = OpenAICompatibleConfig::new(api_key, model)
             .with_provider_name("openai-compatible")
             .with_base_url(base_url);
-        Ok(Self { inner: OpenAICompatible::new(config)?, tool_route: None })
+        Ok(Self { inner: OpenAICompatible::new(config)?, tool_route: None, reasoning_effort: None })
     }
 
     /// Set the retry configuration (builder pattern).
@@ -235,14 +238,16 @@ impl Llm for OpenAIClient {
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
         // A request that disables reasoning through the `openai` extension is accepted
-        // by Chat Completions, so it keeps the endpoint the caller configured.
-        let reasoning_disabled = request
-            .config
-            .as_ref()
+        // by Chat Completions, so it keeps the endpoint the caller configured; so is one
+        // on a client configured with reasoning off, unless the request sets an effort.
+        let config = request.config.as_ref();
+        let reasoning_disabled = config
             .and_then(|config| config.extensions.get("openai"))
             .and_then(|openai| openai.get("reasoning_effort"))
             .and_then(serde_json::Value::as_str)
-            == Some("none");
+            == Some("none")
+            || (config.and_then(|config| config.effort).is_none()
+                && self.reasoning_effort == Some(OpenAIReasoningEffort::None));
         if let Some(route) = &self.tool_route
             && !request.tools.is_empty()
             && !reasoning_disabled
@@ -322,7 +327,9 @@ mod tests {
             OpenAIReasoningEffort::None,
         )
         .unwrap();
-        assert!(disabled.tool_route.is_none());
+        // A request's effort turns reasoning on for one call (spec 3.1 §7.23), so the
+        // route exists; a request without one stays on Chat Completions.
+        assert!(disabled.tool_route.is_some());
         let compatible =
             OpenAIClient::compatible("test-key", "http://localhost:8000/v1", "gpt-6-astra")
                 .unwrap();

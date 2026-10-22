@@ -220,8 +220,21 @@ impl DeepSeekClient {
             }
         };
 
-        // Reasoning effort
-        let reasoning_effort = self.config.reasoning_effort.map(|e| e.to_string());
+        // Reasoning effort. The request's effort wins for this call (spec 3.1 §7.23); the
+        // API serves `low` and `medium` as `high`, so every level is sent as `high`. Thinking
+        // turned off takes no effort.
+        let reasoning_effort = match config.and_then(|c| c.effort) {
+            Some(level) if self.config.thinking == Some(ThinkingMode::Disabled) => {
+                tracing::debug!(
+                    effort = %level,
+                    "deepseek thinking is disabled; the request's effort is ignored"
+                );
+                self.config.reasoning_effort
+            }
+            Some(_) => Some(super::config::ReasoningEffort::High),
+            None => self.config.reasoning_effort,
+        }
+        .map(|e| e.to_string());
 
         Ok(ChatCompletionRequest {
             model: self.config.model.clone(),

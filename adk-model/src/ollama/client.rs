@@ -300,6 +300,14 @@ impl Llm for OllamaModel {
                 top_logprobs: true,
             },
         )?;
+        // Ollama exposes no effort control (spec 3.1 §7.23).
+        if let Some(level) = request.config.as_ref().and_then(|config| config.effort) {
+            tracing::debug!(
+                model.name = %model,
+                effort = %level,
+                "ollama takes no reasoning effort; the request's effort is ignored"
+            );
+        }
         let options = self.build_options(&request);
 
         // Convert ADK contents to Ollama messages

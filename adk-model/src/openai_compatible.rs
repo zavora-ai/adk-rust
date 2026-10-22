@@ -649,6 +649,8 @@ pub(crate) fn build_request_json(
         request_builder.parallel_tool_calls(capabilities.parallel_tool_calls);
     }
 
+    let reasoning_effort =
+        crate::openai::request_reasoning_effort(model, *reasoning_effort, request);
     if let Some(effort) = reasoning_effort.and_then(to_oai_reasoning_effort) {
         request_builder.reasoning_effort(effort);
     }

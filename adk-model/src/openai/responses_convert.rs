@@ -441,8 +441,9 @@ pub fn build_create_response(
     let top_p = config.and_then(|c| c.top_p);
     let max_output_tokens = config.and_then(|c| c.max_output_tokens).map(|v| v as u32);
 
-    // 6. Build reasoning field
-    let mut effective_effort = reasoning_effort;
+    // 6. Build reasoning field; the request's effort wins over the client's (spec 3.1 §7.23).
+    let mut effective_effort =
+        super::config::request_reasoning_effort(model, reasoning_effort, request);
     let mut effective_summary = reasoning_summary;
 
     // 8. Read extensions["openai"]["reasoning"] → override config-level reasoning

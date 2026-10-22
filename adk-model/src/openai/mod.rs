@@ -39,6 +39,7 @@ pub use crate::openai_compatible::{
 };
 pub use azure::AzureOpenAIClient;
 pub use client::OpenAIClient;
+pub(crate) use config::request_reasoning_effort;
 pub use config::{
     AzureConfig, OpenAIConfig, OpenAIReasoningEffort, OpenAIResponsesConfig, PromptCacheRetention,
     ReasoningEffort, ReasoningSummary, ServiceTier,

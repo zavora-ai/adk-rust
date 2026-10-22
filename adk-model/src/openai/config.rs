@@ -80,6 +80,47 @@ impl From<ReasoningEffort> for OpenAIReasoningEffort {
     }
 }
 
+/// Whether `model` is a reasoning model that takes `reasoning_effort` (spec 3.1 §7.23): the
+/// o-series, GPT-OSS, and GPT-5 and later except their `-chat` variants.
+pub(crate) fn takes_reasoning_effort(model: &str) -> bool {
+    let model = model.strip_prefix("ft:").unwrap_or(model);
+    let model = model.rsplit('/').next().unwrap_or(model);
+    if model.starts_with("gpt-oss") {
+        return true;
+    }
+    if let Some(rest) = model.strip_prefix('o') {
+        return rest.starts_with(|c: char| c.is_ascii_digit());
+    }
+    let Some(version) = model.strip_prefix("gpt-") else {
+        return false;
+    };
+    let major_end = version.find(|c: char| !c.is_ascii_digit()).unwrap_or(version.len());
+    version[..major_end].parse::<u32>().is_ok_and(|major| major >= 5) && !model.contains("-chat")
+}
+
+/// The reasoning effort of one request (spec 3.1 §7.23, §10 C4): the request's `effort` wins
+/// over the client's `configured` level for this call when the model takes one — a reasoning
+/// model, or any model whose client was configured with an effort — and is logged and
+/// ignored otherwise.
+pub(crate) fn request_reasoning_effort(
+    model: &str,
+    configured: Option<OpenAIReasoningEffort>,
+    request: &adk_core::LlmRequest,
+) -> Option<OpenAIReasoningEffort> {
+    let Some(level) = request.config.as_ref().and_then(|config| config.effort) else {
+        return configured;
+    };
+    if configured.is_some() || takes_reasoning_effort(model) {
+        return Some(level.into());
+    }
+    tracing::debug!(
+        model.name = model,
+        effort = %level,
+        "model takes no reasoning effort; the request's effort is ignored"
+    );
+    configured
+}
+
 /// Configuration for OpenAI API.
 ///
 /// The API key is redacted from `Debug` output and omitted when serializing.
@@ -411,6 +452,18 @@ impl OpenAIResponsesConfig {
 #[cfg(test)]
 mod effort_tests {
     use super::{OpenAIReasoningEffort, ReasoningEffort};
+
+    #[test]
+    fn reasoning_models_take_a_reasoning_effort() {
+        for model in
+            ["gpt-5.6-terra", "gpt-5", "o3", "o4-mini", "openai/gpt-oss-120b", "ft:gpt-5:org"]
+        {
+            assert!(super::takes_reasoning_effort(model), "{model}");
+        }
+        for model in ["gpt-4.1", "gpt-4o-mini", "gpt-5-chat-latest", "omni-moderation", "llama-4"] {
+            assert!(!super::takes_reasoning_effort(model), "{model}");
+        }
+    }
 
     /// The harness levels map to their namesakes on both effort vocabularies.
     #[test]

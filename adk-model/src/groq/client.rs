@@ -151,6 +151,18 @@ impl GroqClient {
             .or(self.config.max_tokens);
 
         let include_reasoning = if self.config.reasoning_enabled { Some(true) } else { None };
+        // Groq takes `low`, `medium` and `high` on its GPT-OSS models (spec 3.1 §7.23).
+        let reasoning_effort = config.and_then(|c| c.effort).and_then(|level| {
+            if self.config.model.contains("gpt-oss") {
+                return Some(level.as_str().to_string());
+            }
+            tracing::debug!(
+                model.name = %self.config.model,
+                effort = %level,
+                "model takes no reasoning effort; the request's effort is ignored"
+            );
+            None
+        });
 
         Ok(ChatCompletionRequest {
             model: self.config.model.clone(),
@@ -165,6 +177,7 @@ impl GroqClient {
             seed: config.and_then(|c| c.seed),
             frequency_penalty: config.and_then(|c| c.frequency_penalty),
             presence_penalty: config.and_then(|c| c.presence_penalty),
+            reasoning_effort,
         })
     }
 }

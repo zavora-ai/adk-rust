@@ -24,6 +24,19 @@ use tracing::field;
 /// Request timeout used when [`AnthropicConfig::request_timeout_secs`] is unset.
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 600;
 
+/// The effort control of an Anthropic model (spec 3.1 §7.23).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EffortControl {
+    /// `output_config.effort` with adaptive thinking (Claude 4.6 and later).
+    Adaptive,
+    /// `output_config.effort` without adaptive thinking (Claude Opus 4.5).
+    EffortOnly,
+    /// Neither (Claude Sonnet 4.5, Haiku 4.5 and earlier).
+    Unsupported,
+    /// An identifier this client does not recognize.
+    Unknown,
+}
+
 /// Anthropic client for Claude models.
 pub struct AnthropicClient {
     pub(super) client: Anthropic,
@@ -54,6 +67,70 @@ impl AnthropicClient {
 
     fn supports_fast_mode(model: &str) -> bool {
         model.starts_with("claude-opus-5") || model.starts_with("claude-opus-4-8")
+    }
+
+    /// The effort control `model` has (spec 3.1 §7.23): Claude 4.6 and later take
+    /// `output_config.effort` with adaptive thinking, Claude Opus 4.5 takes the effort
+    /// alone, and older or unrecognized models take neither.
+    fn effort_control(model: &str) -> EffortControl {
+        let Some(start) = model.find("claude-") else {
+            return EffortControl::Unknown;
+        };
+        let Some((family, version)) = model[start + "claude-".len()..].split_once('-') else {
+            return EffortControl::Unknown;
+        };
+        if matches!(family, "fable" | "mythos") {
+            return EffortControl::Adaptive;
+        }
+        if !matches!(family, "opus" | "sonnet" | "haiku") {
+            // `claude-3-5-sonnet-…` and other pre-4 identifiers.
+            return EffortControl::Unsupported;
+        }
+        let mut numbers = version.split(['-', '@', '.', ':']);
+        let Some(Ok(major)) = numbers.next().map(str::parse::<u32>) else {
+            return EffortControl::Unknown;
+        };
+        // A dated snapshot (`-20250929`) is not a minor version.
+        let minor = numbers
+            .next()
+            .filter(|part| part.len() <= 2)
+            .and_then(|part| part.parse::<u32>().ok())
+            .unwrap_or(0);
+        match (family, (major, minor)) {
+            (_, version) if version >= (4, 6) => EffortControl::Adaptive,
+            ("opus", (4, 5)) => EffortControl::EffortOnly,
+            _ => EffortControl::Unsupported,
+        }
+    }
+
+    /// The thinking mode and effort of one request (spec 3.1 §7.23, §10 C4): the request's
+    /// `effort` wins over the client's for this call; a model with no effort control keeps
+    /// the client's configuration and the request's effort is logged and ignored.
+    fn request_posture(
+        model: &str,
+        request: &LlmRequest,
+        config: &AnthropicConfig,
+    ) -> (Option<super::config::ThinkingMode>, Option<super::config::Effort>) {
+        let configured = (config.thinking.clone(), config.effort);
+        let Some(level) = request.config.as_ref().and_then(|config| config.effort) else {
+            return configured;
+        };
+        match Self::effort_control(model) {
+            EffortControl::Adaptive => {
+                (configured.0.or(Some(super::config::ThinkingMode::Adaptive)), Some(level.into()))
+            }
+            EffortControl::EffortOnly => (configured.0, Some(level.into())),
+            // The operator configured an effort, so the endpoint takes one.
+            EffortControl::Unknown if configured.1.is_some() => (configured.0, Some(level.into())),
+            EffortControl::Unknown | EffortControl::Unsupported => {
+                tracing::debug!(
+                    model.name = model,
+                    effort = %level,
+                    "model has no effort control; the request's effort is ignored"
+                );
+                configured
+            }
+        }
     }
 
     /// Create a new Anthropic client.
@@ -381,10 +458,12 @@ impl AnthropicClient {
             }
         }
 
+        let (thinking, effort) = Self::request_posture(model, request, anthropic_config);
+
         // Requirement 7.3: Force temperature to 1.0 when thinking is enabled
         let temperature = if Self::rejects_sampling(model) {
             None
-        } else if anthropic_config.thinking.is_some() {
+        } else if thinking.is_some() {
             Some(1.0)
         } else {
             request.config.as_ref().and_then(|c| c.temperature)
@@ -415,8 +494,8 @@ impl AnthropicClient {
             top_k,
             anthropic_config.prompt_caching,
             anthropic_config.prompt_cache_ttl.as_ref(),
-            anthropic_config.thinking.as_ref(),
-            anthropic_config.effort,
+            thinking.as_ref(),
+            effort,
             anthropic_config.fast_mode,
             anthropic_config.inference_geo.as_deref(),
             anthropic_config.service_tier.as_deref(),
@@ -783,6 +862,28 @@ impl Llm for AnthropicClient {
 mod tests {
     use super::*;
     use adk_anthropic::{CacheTtl, SystemPrompt};
+
+    #[test]
+    fn effort_control_follows_the_model_generation() {
+        let cases = [
+            ("claude-sonnet-5-5", EffortControl::Adaptive),
+            ("claude-opus-4-6", EffortControl::Adaptive),
+            ("us.anthropic.claude-opus-4-6-v1:0", EffortControl::Adaptive),
+            ("claude-haiku-5-5", EffortControl::Adaptive),
+            ("claude-fable-5-1", EffortControl::Adaptive),
+            ("claude-mythos-preview", EffortControl::Adaptive),
+            ("claude-opus-4-5@20251101", EffortControl::EffortOnly),
+            ("claude-opus-4-5-20251101", EffortControl::EffortOnly),
+            ("claude-sonnet-4-5-20250929", EffortControl::Unsupported),
+            ("claude-haiku-4-5", EffortControl::Unsupported),
+            ("claude-opus-4-20250514", EffortControl::Unsupported),
+            ("claude-3-5-haiku-20241022", EffortControl::Unsupported),
+            ("deepseek-v4-pro", EffortControl::Unknown),
+        ];
+        for (model, control) in cases {
+            assert_eq!(AnthropicClient::effort_control(model), control, "{model}");
+        }
+    }
     use adk_core::{Content, GenerateContentConfig, LlmRequest, Part};
     use serde_json::{Value, json};
 

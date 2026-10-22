@@ -884,7 +884,11 @@ fn set_max_reasoning_effort(
                 "max reasoning requires a Responses reasoning object".to_string(),
             )
         })?;
-    reasoning.insert("effort".to_string(), serde_json::Value::String("max".to_string()));
+    // `max` travels as `xhigh` through the SDK's types; a request that chose its own level
+    // (spec 3.1 §7.23) keeps it.
+    if reasoning.get("effort").and_then(serde_json::Value::as_str) == Some("xhigh") {
+        reasoning.insert("effort".to_string(), serde_json::Value::String("max".to_string()));
+    }
     Ok(())
 }
 

@@ -217,7 +217,7 @@ handles this per request:
 |---------|----------|
 | Declares tools, model GPT-5.6 or later, reasoning not `none` | Responses API (`/responses`) with the same key, organization, project, base URL, reasoning effort, retry policy, and timeouts; `store: false` |
 | No tools | Chat Completions |
-| Model before GPT-5.6, reasoning effort `None` on the client, or `"reasoning_effort": "none"` in the request's `openai` extension | Chat Completions |
+| Model before GPT-5.6, reasoning effort `None` on the client and no `effort` on the request, or `"reasoning_effort": "none"` in the request's `openai` extension | Chat Completions |
 | Client built with `OpenAIClient::compatible` | Chat Completions |
 
 ### Structured Output (JSON Schema)
@@ -830,6 +830,39 @@ use adk_core::GenerateContentConfig;
 // Stops at the first "7" on every client that sends `stop_sequences`.
 fn config() -> GenerateContentConfig {
     GenerateContentConfig { stop_sequences: vec!["7".to_string()], ..Default::default() }
+}
+```
+
+### Per-Call Reasoning Effort
+
+`GenerateContentConfig::effort` sets the reasoning effort of one call (`Effort::Low`,
+`Medium`, or `High`). A set value wins over the effort the client was built with; `None`
+keeps the client's configuration. The harness sets it on every request from its
+`EffortPolicy` (spec 3.1 §7.23).
+
+| Client | Sent as | Models that take it |
+|--------|---------|---------------------|
+| `AnthropicClient` | `output_config.effort`, with `thinking: {type: "adaptive"}` when the client sets no thinking mode | Claude 4.6 and later; Claude Opus 4.5 takes the effort without adaptive thinking |
+| `OpenAIClient`, `OpenAICompatible` and its presets, `AzureOpenAIClient`, OpenCode Chat | `reasoning_effort` | the o-series, GPT-OSS, GPT-5 and later except `-chat` models, and any model whose client was built with an effort |
+| `OpenAIResponsesClient`, and `OpenAIClient` when it routes a tool call through Responses | `reasoning.effort` | the same |
+| `GeminiModel`, both transports | `thinking_level`, replacing a configured token budget | Gemini 3 and later, and any model whose client sets a thinking level |
+| `OpenRouterClient` | `reasoning.effort`, unless the request's `openrouter` options set an effort, a token budget, or `enabled: false` | every model |
+| `DeepSeekClient` | `reasoning_effort: "high"` (the API serves `low` and `medium` as `high`) | every model, unless the client disables thinking |
+| `GroqClient` | `reasoning_effort` | GPT-OSS models |
+| `OllamaModel`, `BedrockClient`, `AzureAIClient` | not sent | none |
+
+A model that does not take the effort runs with its client's configuration, and the client
+logs the ignored value at debug level. A request's `openai` extension still overrides the
+Chat Completions body, and its `reasoning` object the Responses one. A request that sets an
+effort on an `OpenAIClient` built with reasoning effort `None` turns reasoning on for that
+call, so a GPT-5.6 tool call goes through the Responses API.
+
+```rust
+use adk_core::{Effort, GenerateContentConfig};
+
+// Every call made with this config runs at high effort, whatever the client's default.
+fn config() -> GenerateContentConfig {
+    GenerateContentConfig { effort: Some(Effort::High), ..Default::default() }
 }
 ```
 

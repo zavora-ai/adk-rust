@@ -439,6 +439,36 @@ fn vertex_target_from_env() -> Result<(String, String)> {
 }
 
 impl GeminiModel {
+    /// The thinking configuration of one request (spec 3.1 §7.23, §10 C4): the request's
+    /// `effort` becomes the `thinking_level` for this call on Gemini 3 and later, or on any
+    /// model configured with a level, replacing a configured token budget; elsewhere it is
+    /// logged and ignored.
+    fn request_thinking_config(&self, req: &LlmRequest) -> Option<adk_gemini::ThinkingConfig> {
+        let configured = self.thinking_config.clone();
+        let Some(level) = req.config.as_ref().and_then(|config| config.effort) else {
+            return configured;
+        };
+        let configured_level =
+            configured.as_ref().is_some_and(|config| config.thinking_level.is_some());
+        let generation = self.model_name.find("gemini-").and_then(|start| {
+            let version = &self.model_name[start + "gemini-".len()..];
+            let end = version.find(|c: char| !c.is_ascii_digit()).unwrap_or(version.len());
+            version[..end].parse::<u32>().ok()
+        });
+        if !configured_level && generation.is_none_or(|major| major < 3) {
+            tracing::debug!(
+                model.name = %self.model_name,
+                effort = %level,
+                "model takes no thinking level; the request's effort is ignored"
+            );
+            return configured;
+        }
+        let mut config = configured.unwrap_or_default();
+        config.thinking_budget = None;
+        config.thinking_level = Some(level.into());
+        Some(config)
+    }
+
     fn gemini_part_thought_signature(value: &serde_json::Value) -> Option<String> {
         value.get("thoughtSignature").and_then(serde_json::Value::as_str).map(str::to_string)
     }
@@ -1365,6 +1395,7 @@ impl GeminiModel {
         stream: bool,
     ) -> Result<LlmResponseStream> {
         let mut builder = self.client.generate_content();
+        let thinking_config = self.request_thinking_config(&req);
 
         // Build a map of function_name → thought_signature from FunctionCall parts
         // in model content. Gemini 3.x requires thought_signature on FunctionResponse
@@ -1609,7 +1640,7 @@ impl GeminiModel {
                 } else {
                     None
                 },
-                thinking_config: self.thinking_config.clone(),
+                thinking_config: thinking_config.clone(),
                 ..Default::default()
             };
             builder = builder.with_generation_config(gen_config);
@@ -1619,11 +1650,11 @@ impl GeminiModel {
                 let handle = self.client.get_cached_content(name);
                 builder = builder.with_cached_content(&handle);
             }
-        } else if self.thinking_config.is_some() {
+        } else if thinking_config.is_some() {
             // No generation config from the request, but we have a default
             // thinking config — apply it in an otherwise-default gen config.
             let gen_config = adk_gemini::GenerationConfig {
-                thinking_config: self.thinking_config.clone(),
+                thinking_config: thinking_config.clone(),
                 ..Default::default()
             };
             builder = builder.with_generation_config(gen_config);
@@ -1839,7 +1870,7 @@ impl GeminiModel {
 
         // Resolve the thinking level (Gemini 3 level-based reasoning). Budget-only
         // configs (Gemini 2.5) carry no level, so this stays `None` for them.
-        let thinking_level = self.thinking_config.as_ref().and_then(|c| c.thinking_level);
+        let thinking_level = self.request_thinking_config(&req).and_then(|c| c.thinking_level);
 
         let stateful = self.interaction_options.stateful;
         let store = self.interaction_options.store;
@@ -1998,7 +2029,7 @@ impl GeminiModel {
             .with_provider("gemini")
         })?;
 
-        let thinking_level = self.thinking_config.as_ref().and_then(|c| c.thinking_level);
+        let thinking_level = self.request_thinking_config(&req).and_then(|c| c.thinking_level);
         let stateful = self.interaction_options.stateful;
         let store = self.interaction_options.store;
 

@@ -221,6 +221,14 @@ impl Llm for BedrockClient {
             };
             reject_unsupported("bedrock", request.config.as_ref(), supports)?;
         }
+        // This client sends no reasoning configuration (spec 3.1 §7.23).
+        if let Some(level) = request.config.as_ref().and_then(|config| config.effort) {
+            tracing::debug!(
+                model.name = %self.model_id,
+                effort = %level,
+                "bedrock takes no reasoning effort from this client; the request's effort is ignored"
+            );
+        }
         let usage_span = adk_telemetry::llm_generate_span("bedrock", &self.model_id, stream);
         let bedrock_input = adk_request_to_bedrock(
             &request.contents,
