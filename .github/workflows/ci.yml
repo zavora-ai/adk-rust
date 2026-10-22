@@ -250,7 +250,7 @@ jobs:
   # which the pgvector and memory suites need. Service containers cannot mount files,
   # so the TLS server is started by a step. scripts/test-postgres.sh lists the suites.
   # The Redis service serves the harness's shared mode and rule stores, whose replicas
-  # are the same suites' Redis leg.
+  # are the same suites' Redis leg, and the kernel's process store.
   postgres:
     needs: [fmt, scope]
     if: needs.scope.outputs.docs_only != 'true'
@@ -308,6 +308,16 @@ jobs:
         --features memory,postgres,redis
         --run-ignored only --no-fail-fast
         --test shared_store_redis_tests
+
+    # The feature set matches the adk-kernel suite of scripts/test-postgres.sh, so the
+    # build is reused.
+    - name: Run the kernel's Redis store suites
+      if: ${{ !cancelled() }}
+      run: >-
+        cargo nextest run --profile ci -p adk-kernel
+        --features postgres,redis
+        --run-ignored only --no-fail-fast
+        --test process_store_redis
 
   # ── Docs: documentation coverage for Stable-tier crates ──────
   docs:
