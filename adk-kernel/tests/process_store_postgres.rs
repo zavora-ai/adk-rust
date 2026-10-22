@@ -84,6 +84,9 @@ mod conformance {
 #[ignore = "needs DATABASE_URL; CI's postgres job runs it"]
 async fn replicas_starting_together_migrate_once() {
     let scratch = Arc::new(Scratch::new());
+    // The schema exists before the replicas start, as a deployment's database does;
+    // concurrent `CREATE SCHEMA IF NOT EXISTS` statements race in PostgreSQL itself.
+    scratch.options().await;
     let mut starts = Vec::new();
     for _ in 0..4 {
         let scratch = scratch.clone();
