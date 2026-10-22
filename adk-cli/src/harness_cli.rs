@@ -10,9 +10,7 @@ use adk_cli::harness::{
     BearerTokenExtractor, ConsolePrompter, HarnessArgs, HarnessLauncher, OPERATOR_SCOPE,
     ResolvedHarnessArgs, SearchArg, TurnOutcome,
 };
-use adk_core::{
-    ApprovalPolicy, ApprovalService, ApproverSelector, Effort, Llm, StoreApprovalService,
-};
+use adk_core::{ApprovalPolicy, ApprovalService, ApproverSelector, Effort, StoreApprovalService};
 use adk_devtools::Workspace;
 use adk_harness::{
     ApprovalPrompter, FileWorkspaceTrustStore, GOAL_STATE_KEY, GoalSpec, GoalState, GoalStatus,
@@ -36,9 +34,7 @@ fn user_config() -> Option<std::path::PathBuf> {
 
 /// Everything a harness command needs to build its agent and launcher.
 struct Setup {
-    /// The resolved model, rebuilt at another effort by `/effort` (spec 3.1 §7.23).
-    model: ResolvedModel,
-    /// The session's clients, built at its mode's effort.
+    /// The session's client.
     models: Models,
     model_id: String,
     instruction: Option<String>,
@@ -54,30 +50,11 @@ struct Setup {
     store_note: Option<String>,
 }
 
-/// The clients of one session, built where the providers read their effort
-/// (spec 3.1 §7.23): the harness model at the mode's level, the member model at
-/// `members`, the distiller at `distiller`.
+/// The client of one session (spec 3.1 §7.23): the harness, its members and the
+/// distiller share it, and the harness sets each request's effort from the policy.
 #[derive(Clone)]
 struct Models {
     harness: BuiltModel,
-    member: Arc<dyn Llm>,
-    distill: Arc<dyn Llm>,
-    effort: Effort,
-}
-
-impl Models {
-    async fn build(
-        model: &ResolvedModel,
-        policy: &adk_harness::EffortPolicy,
-        effort: Effort,
-    ) -> Result<Self> {
-        Ok(Self {
-            harness: model.at_effort(effort).await?,
-            member: model.at_effort(policy.members).await?.llm,
-            distill: model.at_effort(policy.distiller).await?.llm,
-            effort,
-        })
-    }
 }
 
 /// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
@@ -135,14 +112,11 @@ impl Setup {
                  `--features persist`, or start without --session and --continue."
             );
         }
-        let models =
-            Models::build(&model, &resolved.effort, resolved.effort.for_mode(resolved.mode))
-                .await?;
+        let models = Models { harness: model.built() };
         let embedder = if resolved.memory { memory_embedder(&model) } else { None };
         Ok(Self {
             embedder,
             model_id: model.id.clone(),
-            model,
             models,
             instruction,
             args,
@@ -175,13 +149,13 @@ impl Setup {
         prompter: Option<Arc<dyn ApprovalPrompter>>,
         approval_service: Option<Arc<dyn ApprovalService>>,
     ) -> Result<HarnessAgent> {
-        self.agent_with(&self.models, name, mode, sandbox, prompter, approval_service)
+        self.agent_with(self.resolved.effort, name, mode, sandbox, prompter, approval_service)
     }
 
-    /// [`agent`](Self::agent) over `models`, which `/effort` rebuilds at another level.
+    /// [`agent`](Self::agent) at the effort `policy`, which `/effort` replaces.
     fn agent_with(
         &self,
-        models: &Models,
+        effort: adk_harness::EffortPolicy,
         name: &str,
         mode: HarnessMode,
         sandbox: bool,
@@ -190,9 +164,8 @@ impl Setup {
     ) -> Result<HarnessAgent> {
         let workspace = Workspace::new(&self.resolved.workspace).allow_bash(true);
         let mut builder = HarnessAgent::builder(name)
-            .model(models.harness.llm.clone())
-            .member_model(models.member.clone())
-            .effort(self.resolved.effort)
+            .model(self.models.harness.llm.clone())
+            .effort(effort)
             .workspace(workspace)
             .mode(mode)
             .confirmation_timeout(adk_cli::launcher::CONSOLE_CONFIRMATION_TIMEOUT);
@@ -204,7 +177,7 @@ impl Setup {
             builder = builder.hooks(self.resolved.user_hooks.clone());
         }
         // Explicit context caching for a model that supports it (spec 3.1 §7.23).
-        if let Some(cache) = &models.harness.cache_capable {
+        if let Some(cache) = &self.models.harness.cache_capable {
             builder = builder.cache_capable(cache.clone());
         }
         if let Ok(trust) = FileWorkspaceTrustStore::in_home() {
@@ -224,10 +197,7 @@ impl Setup {
             // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2).
             if self.resolved.memory && approval_service.is_none() {
                 builder = builder
-                    .long_term_memory(adk_harness::LongTermMemoryConfig {
-                        distill_model: Some(models.distill.clone()),
-                        ..adk_harness::LongTermMemoryConfig::default()
-                    })
+                    .long_term_memory(adk_harness::LongTermMemoryConfig::default())
                     .fact_store(db.facts.clone());
                 if let Some((embedder, _)) = &self.embedder {
                     builder = builder.memory_embedder(embedder.clone());
@@ -348,9 +318,13 @@ impl Setup {
         if let Some(session) = self.session_id().await? {
             launcher = launcher.with_session_id(session);
         }
-        launcher = launcher.with_effort(self.models.effort).with_status_line(
+        launcher = launcher.with_status_line(
             "Effort",
-            format!("{} ({})", self.models.effort, self.resolved.effort.describe()),
+            format!(
+                "{} now; per mode: {}",
+                self.resolved.effort.for_mode(self.resolved.mode),
+                self.resolved.effort.describe()
+            ),
         );
         #[cfg(feature = "persist")]
         if let Some(db) = &self.db {
@@ -575,7 +549,8 @@ pub async fn repl(
                 .map_err(|error| adk_core::AdkError::config(error.to_string()))
         })
     };
-    // `/effort` restarts the session's clients at the level (spec 3.1 §7.23).
+    // `/effort` sets every mode and role to the level from the next model call (spec 3.1
+    // §7.23); the session keeps its client.
     let effort_rebuild: adk_cli::harness::HarnessEffortRebuild = {
         let setup = setup.clone();
         let console = console.clone();
@@ -589,16 +564,9 @@ pub async fn repl(
                 } else {
                     prompter
                 });
-                let models = Models::build(
-                    &setup.model,
-                    &adk_harness::EffortPolicy::uniform(effort),
-                    effort,
-                )
-                .await
-                .map_err(|error| adk_core::AdkError::config(error.to_string()))?;
                 setup
                     .agent_with(
-                        &models,
+                        adk_harness::EffortPolicy::uniform(effort),
                         APP_NAME,
                         setup.resolved.mode,
                         setup.resolved.sandbox,
@@ -916,6 +884,7 @@ impl UltraAgents for HarnessUltra {
             let workspace = Workspace::new(&self.setup.resolved.workspace);
             let agent = HarnessAgent::builder(format!("review-{focus}"))
                 .model(self.setup.models.harness.llm.clone())
+                .effort(self.setup.resolved.effort)
                 .workspace(workspace)
                 .mode(HarnessMode::ReadOnly)
                 .without_shell()

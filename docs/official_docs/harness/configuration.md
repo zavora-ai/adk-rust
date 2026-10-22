@@ -75,7 +75,7 @@ See [Shell and sandbox](shell-and-sandbox.md) and [Durability](durability.md).
 | `goal_store(store)`, `goal_engine(GoalEngine)` | in memory; `Loop`, or `Graph` with a plan checkpointer | Where goals are kept and how they iterate |
 | `memory(MemoryConfig)` | off | Working notes (feature `memory`) |
 | `long_term_memory(config)`, `fact_store(store)`, `fact_index(index)`, `memory_embedder(embedder)` | off; in memory; a local lexical index; none | Long-term facts with provenance (feature `memory`) |
-| `effort(EffortPolicy)` | plan high, members low, else medium | The reasoning effort per mode and role (spec 3.1 §7.23); surfaces build clients at it, `HarnessAgent::effort` reads it |
+| `effort(EffortPolicy)` | plan high, members low, else medium | The reasoning effort per mode and role (spec 3.1 §7.23): each request carries its mode's level (a member's `members`, the distiller's `distiller`, MCP sampling's `sampling`) as `GenerateContentConfig::effort`; `HarnessAgent::effort` reads it |
 | `cache_capable(model)` / `without_context_caching()` | none; on | A Gemini model the runner caches explicitly with `ContextCacheConfig::default()` (spec 3.1 §7.23) |
 
 See [Team](team.md), [Plans and goals](plan-and-goals.md) and [Memory](memory.md).

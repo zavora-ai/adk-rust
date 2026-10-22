@@ -424,6 +424,8 @@ pub(crate) struct TeamInputs<'a> {
     pub(crate) skills: &'a crate::skills::SkillsConfig,
     /// The coordinator toolset's request observers (identity gate, loop guard).
     pub(crate) observers: &'a [Arc<dyn crate::toolset::RequestObserver>],
+    /// The harness's effort policy; members run at `members` (spec 3.1 §7.23).
+    pub(crate) effort: crate::posture::EffortPolicy,
 }
 
 /// Runs `future` to completion from a synchronous caller, inside a runtime or not.
@@ -703,7 +705,8 @@ fn build_local(
         .instruction_provider(provider)
         .toolset(Arc::new(
             HarnessToolset::member(tools, inputs.mode_store.clone(), inputs.default_mode)
-                .with_observers(inputs.observers),
+                .with_observers(inputs.observers)
+                .with_effort(inputs.effort),
         ))
         .max_iterations(member.max_iterations)
         .tool_timeout(inputs.tool_timeout);

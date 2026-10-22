@@ -6,10 +6,13 @@
 //! an [`Effort`] for every mode and for the member, distiller and sampling models;
 //! `HarnessAgentBuilder::effort` sets it and `HarnessAgent::effort` reads it.
 //!
-//! Until spec 3.1 §10 C4 lands (an `effort` field on `GenerateContentConfig`, deferred as
-//! open question 6), providers read effort when their client is built, so the policy
-//! applies where clients are built — per session, not per model call. The surfaces map a
-//! level through the `From<adk_core::Effort>` conversions in `adk-model` and `adk-gemini`:
+//! The policy applies per model call (spec 3.1 §7.23 "Mechanism", §10 C4): the harness's
+//! toolset sets `GenerateContentConfig::effort` on each request from the mode it reads for
+//! that request, a member's toolset at `members`, and the distiller and MCP sampling models
+//! carry `distiller` and `sampling`. A mode switch changes the effort of the next model call
+//! without rebuilding a client, and the effort never enters the request's contents, so the
+//! prompt prefix stays byte-stable (I56). Each `adk-model` provider maps the level through
+//! the `From<adk_core::Effort>` conversions in `adk-model` and `adk-gemini`:
 //!
 //! | `Effort` | Anthropic | OpenAI | Gemini | Ollama, mistral.rs |
 //! |---|---|---|---|---|
@@ -115,6 +118,63 @@ impl EffortPolicy {
             self.distiller,
             self.sampling
         )
+    }
+}
+
+#[cfg(any(feature = "memory", feature = "mcp"))]
+pub(crate) use at_effort::AtEffort;
+
+#[cfg(any(feature = "memory", feature = "mcp"))]
+mod at_effort {
+    use std::sync::Arc;
+
+    use adk_core::{Effort, Llm, LlmRequest, LlmResponseStream, Result, SchemaAdapter};
+    use async_trait::async_trait;
+
+    /// A model whose requests carry `effort` unless they set their own: the distiller and
+    /// the MCP sampling model, which run outside the harness toolset (spec 3.1 §7.23).
+    pub(crate) struct AtEffort {
+        inner: Arc<dyn Llm>,
+        effort: Effort,
+    }
+
+    impl AtEffort {
+        /// `inner`, with each request at `effort`.
+        pub(crate) fn wrap(inner: Arc<dyn Llm>, effort: Effort) -> Arc<dyn Llm> {
+            Arc::new(Self { inner, effort })
+        }
+    }
+
+    #[async_trait]
+    impl Llm for AtEffort {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+
+        async fn generate_content(
+            &self,
+            mut request: LlmRequest,
+            stream: bool,
+        ) -> Result<LlmResponseStream> {
+            request.config.get_or_insert_with(Default::default).effort.get_or_insert(self.effort);
+            self.inner.generate_content(request, stream).await
+        }
+
+        fn schema_adapter(&self) -> &dyn SchemaAdapter {
+            self.inner.schema_adapter()
+        }
+
+        fn uses_interactions_api(&self) -> bool {
+            self.inner.uses_interactions_api()
+        }
+
+        fn max_cost_micro_usd(&self, request: &LlmRequest) -> Option<u64> {
+            self.inner.max_cost_micro_usd(request)
+        }
+
+        fn native_web_search(&self) -> Option<adk_core::NativeWebSearch> {
+            self.inner.native_web_search()
+        }
     }
 }
 

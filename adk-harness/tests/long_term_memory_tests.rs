@@ -205,6 +205,11 @@ async fn h11_preferences_and_lessons_carry_to_the_next_session() {
     assert_eq!(response_of(&events, "bash")["exit_code"], json!(101), "{events:#?}");
     first.close().await;
     assert_eq!(distiller.requests().len(), 1, "the session was distilled once, at close");
+    assert_eq!(
+        distiller.requests()[0].config.as_ref().and_then(|config| config.effort),
+        Some(adk_core::Effort::Low),
+        "the distiller runs at the policy's `distiller` level (spec 3.1 §7.23)"
+    );
     let input = distiller.requests()[0]
         .contents
         .iter()

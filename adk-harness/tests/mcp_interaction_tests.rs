@@ -453,6 +453,12 @@ async fn sampling_runs_the_harness_model_with_no_tools_under_the_budget_and_the_
     );
     let max = sampling.config.as_ref().and_then(|c| c.max_output_tokens).unwrap();
     assert_eq!(max, 4_096, "capped from the 10,000 the server asked");
+    // Sampling runs at the policy's `sampling` level, the harness at its mode's (spec 3.1 §7.23).
+    let effort = |request: &adk_core::LlmRequest| request.config.as_ref().and_then(|c| c.effort);
+    assert_eq!(
+        (effort(&requests[0]), effort(sampling)),
+        (Some(adk_core::Effort::Medium), Some(adk_core::Effort::Low))
+    );
     let key = SpendKey::org(common::APP)
         .with_agent("mcp:fixture")
         .with_vendor(vendor_for_model("scripted"));

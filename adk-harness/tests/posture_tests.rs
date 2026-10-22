@@ -1,8 +1,9 @@
 //! Model posture through real harness runs (spec 3.1 §7.23, §9.2 I56): the request prefix
 //! is byte-stable across the model calls of a run while todos, memory and recalled facts
 //! change, per-turn text is appended last, `harness.spend` carries the prompt tokens the
-//! provider cached and the run's effort, and a cache-capable model gets the runner's
-//! default context cache unless caching is turned off.
+//! provider cached and the run's effort, a cache-capable model gets the runner's default
+//! context cache unless caching is turned off, and every request carries the effort of the
+//! mode it reads, a member's `members`, on the same client (§7.23 "Mechanism", §10 C4).
 
 #![cfg(all(feature = "runner", feature = "observe", feature = "memory"))]
 
@@ -279,4 +280,78 @@ async fn a_cache_capable_model_gets_the_default_context_cache_unless_caching_is_
     g.send("hello").await;
     assert!(off.created.lock().unwrap().is_empty(), "no cache without context caching");
     assert!(!g.harness.agent().info().context_caching);
+}
+
+/// The effort of each request the model received.
+fn efforts(requests: &[LlmRequest]) -> Vec<Option<Effort>> {
+    requests.iter().map(|request| request.config.as_ref().and_then(|c| c.effort)).collect()
+}
+
+#[tokio::test]
+async fn an_approved_plan_moves_the_next_request_to_the_ask_effort_on_the_same_client() {
+    let prompter = common::ScriptedPrompter::new();
+    prompter.approve_once();
+    let f = fixture(
+        vec![
+            call(
+                "exit_plan_mode",
+                json!({ "plan": "1. read it", "steps": [{ "id": "1", "title": "read", "instruction": "read it" }] }),
+            ),
+            ScriptedResponse::text("reading it"),
+        ],
+        |b| {
+            b.mode(HarnessMode::Plan)
+                .prompter(prompter.clone())
+                .effort(EffortPolicy { plan: Effort::High, ask: Effort::Low, ..EffortPolicy::default() })
+        },
+    )
+    .await;
+    f.send("plan it").await;
+    assert_eq!(f.harness.mode(&f.user, &f.session).await.unwrap(), HarnessMode::Ask);
+    f.send("go").await;
+
+    let requests = f.model.requests();
+    assert_eq!(efforts(&requests), vec![Some(Effort::High), Some(Effort::Low)]);
+    // I56: the effort travels in the config, so the prefix is the one the plan turn sent.
+    assert_eq!(prefix(&requests[1]), prefix(&requests[0]));
+}
+
+#[tokio::test]
+async fn an_operator_mode_change_reaches_the_next_request_without_a_rebuild() {
+    let f = fixture(vec![ScriptedResponse::text("one"), ScriptedResponse::text("two")], |b| {
+        b.mode(HarnessMode::ReadOnly)
+            .effort(EffortPolicy { auto: Effort::High, ..EffortPolicy::uniform(Effort::Low) })
+    })
+    .await;
+    f.send("first").await;
+    f.harness.set_mode(&f.user, &f.session, HarnessMode::Auto).await.unwrap();
+    f.send("second").await;
+    assert_eq!(efforts(&f.model.requests()), vec![Some(Effort::Low), Some(Effort::High)]);
+}
+
+#[cfg(feature = "team")]
+#[tokio::test]
+async fn a_member_runs_at_the_members_effort_and_the_coordinator_at_its_modes() {
+    let members = Arc::new(adk_model::ScriptedLlm::new(
+        "member",
+        vec![ScriptedResponse::text("found the readme")],
+    ));
+    let member_model = members.clone();
+    let f = fixture(
+        vec![
+            call("explore", json!({ "request": "find the readme" })),
+            ScriptedResponse::text("ok"),
+        ],
+        move |b| {
+            b.mode(HarnessMode::Auto).member_model(member_model).effort(EffortPolicy {
+                auto: Effort::High,
+                members: Effort::Low,
+                ..EffortPolicy::default()
+            })
+        },
+    )
+    .await;
+    f.send("look around").await;
+    assert_eq!(efforts(&f.model.requests()), vec![Some(Effort::High); 2]);
+    assert_eq!(efforts(&members.requests()), vec![Some(Effort::Low)]);
 }

@@ -28,7 +28,10 @@ pub(crate) trait RequestObserver: Send + Sync {
 /// policy decides what each mode allows. [`process_llm_request`](Toolset::process_llm_request)
 /// appends a one-line mode banner to every request and a reminder of the open todos when
 /// the list changed, at the end of the request, keeping the cached prefix stable
-/// (spec 3.1 §7.6, §7.7).
+/// (spec 3.1 §7.6, §7.7). The harness's toolset also sets the request's
+/// [`GenerateContentConfig::effort`](adk_core::GenerateContentConfig::effort) to the
+/// [`EffortPolicy`](crate::EffortPolicy) level of the mode it reads, and a member's to
+/// `members` (spec 3.1 §7.23).
 ///
 /// # Example
 ///
@@ -42,6 +45,10 @@ pub struct HarnessToolset {
     default_mode: HarnessMode,
     reminded: Mutex<HashMap<String, u64>>,
     observers: Vec<Arc<dyn RequestObserver>>,
+    /// The effort each request carries (spec 3.1 §7.23); `None` leaves requests as they are.
+    effort: Option<crate::posture::EffortPolicy>,
+    /// A team member's toolset, whose requests run at `members` rather than the mode's level.
+    member: bool,
     #[cfg(feature = "memory")]
     facts: Option<Arc<crate::facts::runtime::FactsRuntime>>,
     /// The session containers of the container shell, stopped when the toolset closes
@@ -62,6 +69,8 @@ impl HarnessToolset {
             default_mode,
             reminded: Mutex::new(HashMap::new()),
             observers: Vec::new(),
+            effort: None,
+            member: false,
             #[cfg(feature = "memory")]
             facts: None,
             #[cfg(feature = "docker")]
@@ -87,6 +96,13 @@ impl HarnessToolset {
     #[cfg(feature = "memory")]
     pub(crate) fn facts(&self) -> Option<&Arc<crate::facts::runtime::FactsRuntime>> {
         self.facts.as_ref()
+    }
+
+    /// Sets each request's effort from `policy` (spec 3.1 §7.23): the level of the mode the
+    /// request reads, or `members` on a team member's toolset.
+    pub(crate) fn with_effort(mut self, policy: crate::posture::EffortPolicy) -> Self {
+        self.effort = Some(policy);
+        self
     }
 
     /// Adds work to run before each model request, in order; a team member gets its
@@ -137,7 +153,7 @@ impl HarnessToolset {
                 ) && !tool.is_agent_delegation()
             })
             .collect();
-        Self::new(tools, mode_store, default_mode)
+        Self { member: true, ..Self::new(tools, mode_store, default_mode) }
     }
 
     /// Names of the tools, in declaration order.
@@ -226,6 +242,12 @@ impl Toolset for HarnessToolset {
             Ok(None) => self.default_mode,
             Err(_) => HarnessMode::ReadOnly,
         };
+        // The effort travels in the request's config, never in its contents, so the prefix
+        // stays byte-stable when the mode changes (spec 3.1 §7.23, I56).
+        if let Some(policy) = &self.effort {
+            let level = if self.member { policy.members } else { policy.for_mode(mode) };
+            request.config.get_or_insert_with(Default::default).effort = Some(level);
+        }
         let mut lines = vec![mode_banner(mode)];
         if let Some(list) = ctx.state().map(TodoList::from_state)
             && list.revision > 0

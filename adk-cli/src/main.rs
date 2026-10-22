@@ -23,7 +23,7 @@ mod ultra;
 
 use adk_agent::LlmAgentBuilder;
 use adk_cli::{Launcher, launcher::ThinkingDisplayMode};
-use adk_core::{Effort, Llm};
+use adk_core::Llm;
 use adk_model::ModelProvider;
 use adk_tool::GoogleSearchTool;
 use anyhow::Result;
@@ -169,8 +169,8 @@ async fn serve_chat(options: &AgentOptions, port: u16, host: std::net::IpAddr) -
         .map_err(Into::into)
 }
 
-/// A client built for one effort level (spec 3.1 §7.23): the model, and the same model as
-/// a `CacheCapable` when it caches its context explicitly (Gemini).
+/// A model client, and the same model as a `CacheCapable` when it caches its context
+/// explicitly (Gemini).
 #[derive(Clone)]
 pub(crate) struct BuiltModel {
     pub(crate) llm: Arc<dyn Llm>,
@@ -190,34 +190,17 @@ pub(crate) struct ResolvedModel {
     /// The provider key, for the long-term memory embedder (spec 3.1 §7.15.2).
     #[cfg_attr(not(feature = "harness"), allow(dead_code))]
     api_key: Option<String>,
-    #[cfg_attr(not(feature = "harness"), allow(dead_code))]
-    thinking_budget: Option<u32>,
     /// The model as a `CacheCapable`, when it caches its context explicitly.
     #[cfg_attr(not(feature = "harness"), allow(dead_code))]
     cache_capable: Option<Arc<dyn adk_core::CacheCapable>>,
 }
 
 impl ResolvedModel {
-    /// The same model built at `effort` (spec 3.1 §7.23): a fresh client for Gemini,
-    /// OpenAI and Anthropic, whose effort is read when the client is built; the model as
-    /// it is for providers with no effort control (Ollama, mistral.rs, scripted).
+    /// The model's client; the harness sets each request's effort, so one client serves
+    /// every mode and role (spec 3.1 §7.23).
     #[cfg(feature = "harness")]
-    pub(crate) async fn at_effort(&self, effort: Effort) -> Result<BuiltModel> {
-        match self.provider {
-            Some(provider) if supports_effort(provider) => {
-                create_model(
-                    provider,
-                    &self.id,
-                    self.api_key.as_deref(),
-                    self.thinking_budget,
-                    Some(effort),
-                )
-                .await
-            }
-            _ => {
-                Ok(BuiltModel { llm: self.llm.clone(), cache_capable: self.cache_capable.clone() })
-            }
-        }
+    pub(crate) fn built(&self) -> BuiltModel {
+        BuiltModel { llm: self.llm.clone(), cache_capable: self.cache_capable.clone() }
     }
 
     /// The provider, for the long-term memory embedder and the local posture.
@@ -225,15 +208,6 @@ impl ResolvedModel {
     pub(crate) fn provider(&self) -> Option<Provider> {
         self.provider
     }
-}
-
-/// Whether `provider` reads an effort level when its client is built (spec 3.1 §7.23).
-#[cfg(feature = "harness")]
-fn supports_effort(provider: Provider) -> bool {
-    matches!(
-        provider,
-        Provider::Model(ModelProvider::Gemini | ModelProvider::Openai | ModelProvider::Anthropic)
-    )
 }
 
 /// Resolves the model from the flags, saved config, secure storage, or first-run setup
@@ -247,7 +221,6 @@ async fn resolve_model(options: &AgentOptions) -> Result<ResolvedModel> {
             provider: None,
             instruction: options.instruction.clone().unwrap_or_else(setup::default_instruction),
             api_key: None,
-            thinking_budget: None,
             cache_capable: None,
         });
     }
@@ -262,7 +235,6 @@ async fn resolve_model(options: &AgentOptions) -> Result<ResolvedModel> {
         &resolved.model,
         resolved.api_key.as_deref(),
         options.thinking_budget,
-        None,
     )
     .await?;
     Ok(ResolvedModel {
@@ -271,7 +243,6 @@ async fn resolve_model(options: &AgentOptions) -> Result<ResolvedModel> {
         provider: Some(resolved.provider),
         instruction: resolved.instruction,
         api_key: resolved.api_key,
-        thinking_budget: options.thinking_budget,
         cache_capable: built.cache_capable,
     })
 }
@@ -345,15 +316,13 @@ async fn build_agent(options: &AgentOptions) -> Result<adk_agent::LlmAgent> {
     builder.build().map_err(Into::into)
 }
 
-/// Builds the client of `provider` for `model`, at `effort` where the provider reads one
-/// (spec 3.1 §7.23): Gemini `thinking_level`, OpenAI `reasoning_effort`, Anthropic
-/// `output_config.effort` with adaptive thinking; Ollama and mistral.rs have none.
+/// Builds the client of `provider` for `model`. The harness sets each request's effort
+/// (spec 3.1 §7.23), which the client maps to its own control.
 async fn create_model(
     provider: Provider,
     model: &str,
     api_key: Option<&str>,
     thinking_budget: Option<u32>,
-    effort: Option<Effort>,
 ) -> Result<BuiltModel> {
     let plain = |llm: Arc<dyn Llm>| BuiltModel { llm, cache_capable: None };
     match provider {
@@ -361,13 +330,7 @@ async fn create_model(
         Provider::Model(ModelProvider::Gemini) => {
             reject_unsupported_thinking_budget(provider, thinking_budget)?;
             let key = api_key.ok_or_else(|| anyhow::anyhow!("Gemini requires an API key"))?;
-            let mut m = adk_model::GeminiModel::new(key, model)?;
-            if let Some(effort) = effort {
-                m = m.with_thinking_config(
-                    adk_model::gemini::ThinkingConfig::new().with_thinking_level(effort.into()),
-                );
-            }
-            let m = Arc::new(m);
+            let m = Arc::new(adk_model::GeminiModel::new(key, model)?);
             Ok(BuiltModel { llm: m.clone(), cache_capable: Some(m) })
         }
         #[cfg(not(feature = "gemini"))]
@@ -376,10 +339,7 @@ async fn create_model(
         Provider::Model(ModelProvider::Openai) => {
             reject_unsupported_thinking_budget(provider, thinking_budget)?;
             let key = api_key.ok_or_else(|| anyhow::anyhow!("OpenAI requires an API key"))?;
-            let mut config = adk_model::OpenAIConfig::new(key, model);
-            if let Some(effort) = effort {
-                config = config.with_reasoning_effort(effort.into());
-            }
+            let config = adk_model::OpenAIConfig::new(key, model);
             Ok(plain(Arc::new(adk_model::OpenAIClient::new(config)?)))
         }
         #[cfg(not(feature = "openai"))]
@@ -388,22 +348,12 @@ async fn create_model(
         Provider::Model(ModelProvider::Anthropic) => {
             let key = api_key.ok_or_else(|| anyhow::anyhow!("Anthropic requires an API key"))?;
             let mut config = adk_model::anthropic::AnthropicConfig::new(key, model);
-            match (thinking_budget, effort) {
-                (Some(0), _) => {
+            match thinking_budget {
+                Some(0) => {
                     return Err(anyhow::anyhow!("--thinking-budget must be greater than 0"));
                 }
-                (Some(budget), effort) => {
-                    config = config.with_thinking(budget);
-                    if let Some(effort) = effort {
-                        config = config.with_effort(effort.into());
-                    }
-                }
-                (None, Some(effort)) => {
-                    config = config
-                        .with_thinking_mode(adk_model::anthropic::ThinkingMode::Adaptive)
-                        .with_effort(effort.into());
-                }
-                (None, None) => {}
+                Some(budget) => config = config.with_thinking(budget),
+                None => {}
             }
             Ok(plain(Arc::new(adk_model::AnthropicClient::new(config)?)))
         }

@@ -40,9 +40,9 @@ const SERVE_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// Rebuilds the harness with the OS sandbox on (`true`) or off, for `/sandbox on|off`.
 pub type HarnessRebuild = Arc<dyn Fn(bool) -> Result<HarnessAgent> + Send + Sync>;
 
-/// Rebuilds the harness with its model clients at another effort, for
-/// `/effort low|medium|high` (spec 3.1 §7.23): the providers read effort when a client
-/// is built, so the session's clients are restarted.
+/// Rebuilds the harness with every mode and role at another effort, for
+/// `/effort low|medium|high` (spec 3.1 §7.23); the harness sets each request's effort, so
+/// the next model call runs at it on the same client.
 pub type HarnessEffortRebuild =
     Arc<dyn Fn(Effort) -> Pin<Box<dyn Future<Output = Result<HarnessAgent>> + Send>> + Send + Sync>;
 
@@ -251,14 +251,14 @@ impl HarnessLauncher {
         self
     }
 
-    /// Lets `/effort low|medium|high` rebuild the harness with its model clients at that
+    /// Lets `/effort low|medium|high` rebuild the harness with every mode and role at that
     /// level (spec 3.1 §7.23).
     pub fn with_effort_rebuild(mut self, rebuild: HarnessEffortRebuild) -> Self {
         self.effort_rebuild = Some(rebuild);
         self
     }
 
-    /// The effort the session's clients were built at, shown by `/effort`.
+    /// The effort `/effort` shows for the session; without it `/effort` shows "per mode".
     pub fn with_effort(mut self, effort: Effort) -> Self {
         self.effort = Some(effort);
         self
@@ -828,7 +828,7 @@ impl Shared {
         out
     }
 
-    /// Replaces the harness with one whose model clients run at `effort`
+    /// Replaces the harness with one whose every mode and role runs at `effort`
     /// (spec 3.1 §7.23).
     pub(crate) async fn rebuild_effort(&self, effort: Effort) -> Result<Option<Arc<Harness>>> {
         let Some(rebuild) = &self.effort_rebuild else {
@@ -846,7 +846,7 @@ impl Shared {
         Ok(Some(harness))
     }
 
-    /// The effort the session's clients run at, when the surface told the launcher.
+    /// The session's effort, once `/effort` or the surface set one.
     pub(crate) fn current_effort(&self) -> Option<Effort> {
         *self.effort.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }

@@ -51,7 +51,7 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--pack browser\|computer-use\|payments` | Adds a pack: `browser` installs the browser pack over the WebDriver at `ADK_WEBDRIVER_URL` (default `http://localhost:4444`; adk-cli feature `browser`), see [Browser and computer use](packs.md); `computer-use` and `payments` name the library API |
 | `--member NAME=explore\|general` | Adds a team member |
 | `--no-memory` | Turns long-term memory off: nothing is recalled or learned |
-| `--effort low\|medium\|high` | The reasoning effort of this session's model clients (spec 3.1 §7.23); without it the `[effort]` policy applies per mode: plan high, everything else medium |
+| `--effort low\|medium\|high` | The reasoning effort of every model call in this session, whatever the mode or role (spec 3.1 §7.23); without it the `[effort]` policy applies per mode: plan high, members low, everything else medium |
 | `--store-key keychain:<entry>\|secret:<provider>/<name>\|env:<VAR>` | Where the key sealing `harness.db` is kept (spec 3.1 §7.12); without it `[store] key` in the user config, else the store is plaintext |
 | `--no-hooks` | Runs no hooks, the workspace's included (spec 3.1 §7.22); `/hooks` lists the effective set |
 | `--web` / `--no-web` | Declares the web tools (on by default) or none at all (spec 3.1 §7.20) |
@@ -198,7 +198,7 @@ asks again.
 | `/skills` | Skills in the workspace's skill directories, `.adk/skills/` and `~/.adk/skills/` |
 | `/cost` | Your spend: model calls, tokens and cost per acting agent and vendor |
 | `/memory` | Working notes and long-term facts with their status, kind, source and session; `/memory forget ID` and `/memory accept ID` act on one fact (a unique prefix of the id is enough) |
-| `/effort [low\|medium\|high]` | Shows the session's reasoning effort and the policy; with a level, restarts the session's model clients at it (spec 3.1 §7.23) |
+| `/effort [low\|medium\|high]` | Shows the session's reasoning effort and the policy; with a level, sets every mode and role to it from the next model call (spec 3.1 §7.23) |
 | `/hooks` | The hooks on tool events — each with its source, isolation, timeout and whether it runs — and the bounds of one turn (spec 3.1 §7.22); a workspace hook runs only under the workspace's trust |
 | `/help`, `exit` | Lists the commands; leaves the REPL |
 
@@ -266,15 +266,17 @@ ADK_STORE_KEY=$(openssl rand -base64 32) adk-rust --store-key env:ADK_STORE_KEY
 
 ## Model posture
 
-Each session's model clients are built at the reasoning effort of its mode (spec 3.1
-§7.23): Gemini `thinking_level`, OpenAI `reasoning_effort`, Anthropic `output_config.effort`
-with adaptive thinking; Ollama and mistral.rs have no such control and run unchanged. The
-member model is built at `members` and the distiller at `distiller`. Until the request-level
-effort of spec 3.1 §10 C4 lands, effort changes per session, not per mode switch: `--effort`
-and `[effort]` set it, and `/effort` restarts the session's clients. The banner shows the
-level. Caching is on where the provider supports it — Anthropic and OpenAI cache the prefix
-on their own, a Gemini model gets the runner's explicit context cache — and `/cost` shows
-cached against uncached prompt tokens per turn.
+Every model call carries the reasoning effort of the mode it runs in (spec 3.1 §7.23):
+the harness sets it on each request, so approving a plan or switching with `/mode` changes
+the next call's effort on the same client. Members run at `members` and the distiller at
+`distiller`. The provider maps the level to its own control — Gemini `thinking_level`,
+OpenAI `reasoning_effort`, Anthropic `output_config.effort` with adaptive thinking — and a
+model without one (Ollama, mistral.rs, Claude Haiku 4.5) runs unchanged. `--effort` and
+`[effort]` set the policy, `/effort low|medium|high` sets every mode and role to one level
+from the next call, and the banner shows the current level and the policy. Caching is on
+where the provider supports it — Anthropic and OpenAI cache the prefix on their own, a
+Gemini model gets the runner's explicit context cache — and `/cost` shows cached against
+uncached prompt tokens per turn.
 
 ## Local posture
 

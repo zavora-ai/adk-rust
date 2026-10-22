@@ -5,9 +5,9 @@
   sealed under and which stores are wrapped; `adk-rust store rotate-key` re-seals every
   store under a new key, retires the current one, seals rows written before any key, vacuums
   the file and reports `harness.store.key_rotated`. `--effort low|medium|high` and the
-  `[effort]` table set the reasoning effort the session's clients are built at (Gemini
-  `thinking_level`, OpenAI `reasoning_effort`, Anthropic `output_config.effort` with
-  adaptive thinking; the member model at `members`, the distiller at `distiller`), a Gemini
-  model gets the runner's explicit context cache, `/effort` restarts the session's clients at
-  another level, `/cost` lists cached against uncached prompt tokens per turn, and the banner
-  shows the effort and the store.
+  `[effort]` table set the session's effort policy, which the harness applies to every model
+  call (Gemini `thinking_level`, OpenAI `reasoning_effort`, Anthropic `output_config.effort`
+  with adaptive thinking; members at `members`, the distiller at `distiller`), a Gemini model
+  gets the runner's explicit context cache, `/effort` sets every mode and role to another
+  level from the next call, `/cost` lists cached against uncached prompt tokens per turn, and
+  the banner shows the effort and the store.

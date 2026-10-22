@@ -946,10 +946,21 @@ impl HarnessAgentBuilder {
     /// The reasoning effort of each mode and model role (spec 3.1 §7.23); the defaults
     /// are the spec's table (plan high, members low).
     ///
-    /// Until §10 C4 lands, providers read effort when their client is built, so the policy
-    /// applies where clients are built: `HarnessAgent::effort` reports it and a surface
-    /// builds the harness model at the session mode's level, the member model at `members`
-    /// and the distiller at `distiller`.
+    /// The policy applies per model call (§10 C4): each request of the harness model carries
+    /// the level of the mode it reads, a member's request `members`, the distiller's
+    /// `distiller` and an MCP sampling request `sampling`, as `GenerateContentConfig::effort`,
+    /// which each `adk-model` provider maps to its own control. A mode switch changes the
+    /// next call's effort without rebuilding a client.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::{Effort, EffortPolicy, HarnessAgent};
+    ///
+    /// let builder = HarnessAgent::builder("coder")
+    ///     .effort(EffortPolicy { plan: Effort::High, ask: Effort::Low, ..EffortPolicy::default() });
+    /// # let _ = builder;
+    /// ```
     pub fn effort(mut self, policy: crate::posture::EffortPolicy) -> Self {
         self.effort = policy;
         self
@@ -1373,6 +1384,7 @@ impl HarnessAgentBuilder {
                 self.member_model.clone().unwrap_or_else(|| model.clone()),
                 self.budget.clone(),
                 (mode_store.clone(), self.mode),
+                self.effort.distiller,
             )?
         };
         #[cfg(feature = "memory")]
@@ -1393,11 +1405,16 @@ impl HarnessAgentBuilder {
         // answer through, which is bound once the handler is built.
         #[cfg(feature = "mcp")]
         let mcp = (!self.mcp_servers.is_empty()).then(|| {
+            // Sampling runs at `sampling` (spec 3.1 §7.23), whichever model answers it.
+            let at_sampling =
+                |model: Arc<dyn Llm>| crate::posture::AtEffort::wrap(model, self.effort.sampling);
+            let mut interaction = self.mcp_interaction.clone();
+            interaction.sampling_model = interaction.sampling_model.map(at_sampling);
             Arc::new(crate::mcp::McpInteractionRuntime::new(
-                self.mcp_interaction.clone(),
+                interaction,
                 self.mcp_servers.clone(),
-                model.clone(),
-                self.member_model.clone(),
+                at_sampling(model.clone()),
+                self.member_model.clone().map(at_sampling),
             ))
         });
         #[cfg(feature = "mcp")]
@@ -1498,8 +1515,9 @@ impl HarnessAgentBuilder {
             observers.push(payments.reminder.clone());
         }
         #[cfg_attr(not(feature = "memory"), allow(unused_mut))]
-        let mut toolset =
-            HarnessToolset::new(tools, mode_store.clone(), self.mode).with_observers(&observers);
+        let mut toolset = HarnessToolset::new(tools, mode_store.clone(), self.mode)
+            .with_observers(&observers)
+            .with_effort(self.effort);
         #[cfg(feature = "docker")]
         if let Some(pool) = container_pool {
             toolset = toolset.with_containers(pool);
@@ -1813,6 +1831,7 @@ impl HarnessAgentBuilder {
                 #[cfg(feature = "skills")]
                 skills: &self.skills,
                 observers: &observers,
+                effort: self.effort,
             })?)),
             None => None,
         };
@@ -2065,6 +2084,7 @@ impl LongTermOptions {
         member_model: Arc<dyn Llm>,
         budget: Option<RunBudget>,
         (mode_store, default_mode): (Arc<dyn ModeStore>, HarnessMode),
+        distiller: crate::posture::Effort,
     ) -> Result<Option<Arc<crate::facts::runtime::FactsRuntime>>> {
         let Some(config) = self.config.clone() else {
             if self.store.is_some() || self.index.is_some() || self.embedder.is_some() {
@@ -2090,7 +2110,11 @@ impl LongTermOptions {
             ),
             (None, None) => Arc::new(crate::facts::LocalFactIndex::new(store.clone())),
         };
-        let distill_model = config.distill_model.clone().unwrap_or(member_model);
+        // The distiller runs at `distiller` (spec 3.1 §7.23), whichever model it is.
+        let distill_model = crate::posture::AtEffort::wrap(
+            config.distill_model.clone().unwrap_or(member_model),
+            distiller,
+        );
         Ok(Some(Arc::new(crate::facts::runtime::FactsRuntime::new(
             config,
             store,

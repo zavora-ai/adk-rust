@@ -50,7 +50,7 @@ const COMMANDS: &[(Kind, &str, &str)] = &[
     (Kind::Memory, "memory", "Working notes and long-term facts; /memory forget|accept ID"),
     (Kind::Web, "web", "The web allowlist; /web allow HOST adds a standing rule for web_fetch"),
     (Kind::Mcp, "mcp", "MCP servers; /mcp resources SERVER lists what a server publishes"),
-    (Kind::Effort, "effort", "Reasoning effort; /effort low|medium|high rebuilds the clients"),
+    (Kind::Effort, "effort", "Reasoning effort; /effort low|medium|high sets every mode"),
     (Kind::Hooks, "hooks", "Hooks on tool events: source, isolation and whether each runs"),
 ];
 
@@ -169,15 +169,15 @@ fn adk_cli_project_file() -> &'static str {
     super::args::PROJECT_CONFIG_FILE
 }
 
-/// `/effort`: the session's reasoning effort; `/effort low|medium|high` rebuilds the
-/// session's model clients at that level (spec 3.1 §7.23).
+/// `/effort`: the session's reasoning effort; `/effort low|medium|high` sets every mode and
+/// role to that level from the next model call (spec 3.1 §7.23).
 async fn effort(shared: &Shared, args: &str) -> Result<String> {
     let policy = *shared.harness().agent().effort();
     let current = shared.current_effort().map_or_else(|| "per mode".to_string(), |e| e.to_string());
     if args.trim().is_empty() {
         return Ok(format!(
-            "effort: {current}\n  policy: {}\n  /effort low|medium|high restarts this session's \
-             model clients at that level",
+            "effort: {current}\n  policy: {}\n  /effort low|medium|high sets every mode and role \
+             to that level from the next model call",
             policy.describe()
         ));
     }
@@ -186,7 +186,7 @@ async fn effort(shared: &Shared, args: &str) -> Result<String> {
         Err(error) => return Ok(error),
     };
     match shared.rebuild_effort(level).await? {
-        Some(_) => Ok(format!("effort: {level}; the session's model clients were restarted")),
+        Some(_) => Ok(format!("effort: {level} for every mode and role from the next model call")),
         None => Ok("this console cannot change the effort; restart with --effort".into()),
     }
 }
