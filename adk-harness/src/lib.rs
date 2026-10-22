@@ -36,6 +36,7 @@
 //! | `packs::payments::{PaymentsPack, PaymentMandate}` (feature `payments`) | §7.16 |
 //! | `packs::browser::BrowserPack` (feature `browser`) | §7.24 |
 //! | `packs::computer_use::ComputerUsePack` (feature `computer-use`) | §7.24 |
+//! | `packs::voice::{VoiceSurface, VoiceConfig, VoiceEvent, SpokenDecision}` (feature `voice`) | §7.17 |
 //!
 //! # Example
 //!
@@ -175,6 +176,11 @@ pub use packs::browser::{
 pub use packs::computer_use::{COMPUTER_USE_TOOL_NAMES, ComputerUsePack};
 #[cfg(feature = "payments")]
 pub use packs::payments::{PAYMENT_AUDIT_ACTION, PAYMENT_TOOL_NAMES, PaymentMandate, PaymentsPack};
+#[cfg(feature = "voice")]
+pub use packs::voice::{
+    DecisionSource, SpokenDecision, VOICE_AUDIT_DECIDED, VOICE_AUDIT_HELD, VOICE_AUDIT_RESUMED,
+    VoiceConfig, VoiceEvent, VoiceSurface, parse_spoken_decision,
+};
 #[cfg(feature = "graph")]
 pub use plan_graph::{
     ActivePlan, PLAN_GATE_TOOL, PlanGraphShape, PlanGraphs, PlanRunStatus, compile_plan,

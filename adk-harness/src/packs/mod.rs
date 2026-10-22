@@ -6,6 +6,7 @@
 //! | `browser` | `browser` | §7.24 |
 //! | `computer_use` | `computer-use` | §7.24 |
 //! | `payments` | `payments` | §7.16 |
+//! | `voice` | `voice` | §7.17 |
 //! | `managed` | `managed` | §7.18 |
 
 #[cfg(feature = "browser")]
@@ -16,3 +17,5 @@ pub mod computer_use;
 pub mod managed;
 #[cfg(feature = "payments")]
 pub mod payments;
+#[cfg(feature = "voice")]
+pub mod voice;

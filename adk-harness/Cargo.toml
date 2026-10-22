@@ -63,7 +63,8 @@ browser = ["dep:adk-browser", "web"]
 computer-use = ["dep:adk-computer-use", "graph"]
 # The payments pack (spec 3.1 §7.16): `adk-auth` for the scope guard its tools run under.
 payments = ["dep:adk-payments", "dep:adk-auth"]
-voice = ["dep:adk-realtime"]
+# The voice surface (spec 3.1 §7.17): the harness as the agent of an `IntegratedRealtimeRunner`.
+voice = ["dep:adk-realtime", "adk-realtime/integration"]
 # The managed form (spec 3.1 §7.18): adk-managed runs on adk-runner and adk-session already.
 managed = ["runner", "dep:adk-managed"]
 # Governed web access: web_fetch, web_search, screening (spec 3.1 §7.20).
@@ -132,6 +133,8 @@ keyring = { version = "3.6.3", default-features = false, features = ["sync-secre
 
 [dev-dependencies]
 adk-model = { path = "../adk-model", default-features = false }
+# The scripted realtime provider of the voice surface tests (spec 3.1 §7.17).
+adk-realtime = { path = "../adk-realtime", features = ["integration", "scripted"] }
 # SQLite sessions, approvals and ledger, and the durable worker, for the durability tests;
 # `encrypted-session` for the encrypted store conformance suite.
 adk-session = { path = "../adk-session", features = ["sqlite", "encrypted-session"] }

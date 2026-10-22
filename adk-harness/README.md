@@ -133,12 +133,14 @@ effective set, and `on_hold` and `on_stop` notes are shown at the console. See
 | `managed` | off | the managed form (spec 3.1 §7.18): `HarnessDef`, `HarnessResolver` on the managed runtime, `Pack::Managed` |
 | `browser` | off | the browser pack (spec 3.1 §7.24): `adk-browser`'s tools as `Read`, `Web` and `External` classes under the web rules, `BrowserPack`, `harness.browser.*` |
 | `computer-use` | off | the computer-use pack (spec 3.1 §7.24): `computer_use_observe`, `computer_use_preview` and the never-waivable `computer_use_execute` through `adk-computer-use`'s reference graph, `ComputerUsePack` |
-| `voice` | off | the voice pack |
+| `voice` | off | the voice surface (spec 3.1 §7.17): `VoiceSurface` runs a harness marked `Pack::Voice` over `adk-realtime`'s `IntegratedRealtimeRunner`, with spoken or inbox approvals and `harness.voice.*` audit records |
 
 ## Status
 
 Beta (spec 3.1 phases 1 and 3). The payments pack (§7.16) is implemented
-([guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/payments.md));
+([guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/payments.md)),
+and so is the voice surface (§7.17,
+[guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/voice.md));
 the managed form (§7.18, feature `managed`) is Experimental, as `adk-managed` is:
 `packs::managed::HarnessDef` declares a harness as a managed agent definition and
 `HarnessResolver` builds it on the managed runtime

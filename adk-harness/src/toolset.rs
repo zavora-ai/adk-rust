@@ -144,6 +144,12 @@ impl HarnessToolset {
     pub fn tool_names(&self) -> Vec<String> {
         self.tools.iter().map(|tool| tool.name().to_string()).collect()
     }
+
+    /// The tools, in declaration order, for a surface that registers them with a runtime
+    /// of its own (the voice surface, spec 3.1 §7.17).
+    pub fn all_tools(&self) -> Vec<Arc<dyn Tool>> {
+        self.tools.clone()
+    }
 }
 
 /// The one-line banner describing what `mode` allows.

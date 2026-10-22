@@ -33,9 +33,20 @@ fn pack_managed_needs_the_feature() {
     assert!(error.to_string().contains("feature `managed`"), "{error}");
 }
 
+/// The voice surface (spec 3.1 §7.17) is a pack like the managed form: marked on the
+/// harness, served by `packs::voice::VoiceSurface`, refused without its feature.
+#[cfg(feature = "voice")]
 #[test]
-fn the_voice_pack_is_still_not_implemented() {
+fn pack_voice_marks_the_harness() {
+    let workspace = tempfile::tempdir().unwrap();
+    let harness = builder(workspace.path()).pack(Pack::Voice).build().unwrap();
+    assert!(harness.info().packs.iter().any(|pack| pack == "voice"), "{:?}", harness.info().packs);
+}
+
+#[cfg(not(feature = "voice"))]
+#[test]
+fn pack_voice_needs_the_feature() {
     let workspace = tempfile::tempdir().unwrap();
     let error = builder(workspace.path()).pack(Pack::Voice).build().unwrap_err();
-    assert!(error.to_string().contains("not yet implemented"), "{error}");
+    assert!(error.to_string().contains("feature `voice`"), "{error}");
 }

@@ -42,6 +42,8 @@
 1 adk-harness hooks
 # The payments pack (spec 3.1 §7.16) links adk-payments, which no other harness feature does.
 1 adk-harness payments
+# The voice surface (spec 3.1 §7.17): the harness over adk-realtime's integrated runner.
+1 adk-harness voice
 # The crate docs' examples under the default tier: an `artifacts` example once compiled only
 # with `full`, and nothing ran the doctests below it.
 1 adk-rust minimal doc

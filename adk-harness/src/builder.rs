@@ -194,6 +194,7 @@ pub struct HarnessAgentBuilder {
     #[cfg(feature = "computer-use")]
     computer_use: Option<crate::packs::computer_use::ComputerUsePack>,
     computer_use_requested: bool,
+    voice_requested: bool,
 }
 
 impl HarnessAgentBuilder {
@@ -284,6 +285,7 @@ impl HarnessAgentBuilder {
             #[cfg(feature = "computer-use")]
             computer_use: None,
             computer_use_requested: false,
+            voice_requested: false,
         }
     }
 
@@ -817,16 +819,16 @@ impl HarnessAgentBuilder {
     /// `managed`; `Pack::Browser` installs the browser pack over `BrowserConfig::default()`
     /// (Chrome, headless, WebDriver at `localhost:4444`) and fails at `build` without feature
     /// `browser`; `Pack::ComputerUse` needs the runtime `pack_computer_use` carries, so on its
-    /// own it fails at `build`; `Pack::Voice` is not yet implemented.
+    /// own it fails at `build`; `Pack::Voice` marks the harness for the voice surface
+    /// (`packs::voice::VoiceSurface` runs it, spec 3.1 §7.17) and fails at `build` without
+    /// feature `voice`.
     pub fn pack(mut self, pack: Pack) -> Self {
         match pack {
             Pack::Payments => self.payments_requested = true,
             Pack::Managed => self.managed_requested = true,
             Pack::Browser => self.browser_requested = true,
             Pack::ComputerUse => self.computer_use_requested = true,
-            Pack::Voice => {
-                self.unimplemented.push(format!("pack {pack:?} (spec 3.1 §7.17)"));
-            }
+            Pack::Voice => self.voice_requested = true,
         }
         self
     }
@@ -1085,6 +1087,13 @@ impl HarnessAgentBuilder {
                      feature `computer-use` (spec 3.1 §7.24)",
                 ));
             }
+        }
+        if self.voice_requested && cfg!(not(feature = "voice")) {
+            return Err(AdkError::config(
+                "the voice surface needs adk-harness feature `voice`: packs::voice::VoiceSurface \
+                 runs a harness marked Pack::Voice as the agent of an IntegratedRealtimeRunner \
+                 (spec 3.1 §7.17)",
+            ));
         }
         let harness_names: HashSet<&str> = HARNESS_TOOL_NAMES.iter().copied().collect();
         for tool in &self.tools {
@@ -1636,6 +1645,9 @@ impl HarnessAgentBuilder {
         }
         if self.managed_requested {
             packs.push("managed".to_string());
+        }
+        if self.voice_requested {
+            packs.push("voice".to_string());
         }
         let environment = Environment {
             root: workspace.root().display().to_string(),
