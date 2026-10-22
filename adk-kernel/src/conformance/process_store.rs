@@ -2,7 +2,7 @@
 //!
 //! | Case | Contract |
 //! |------|----------|
-//! | [`put_get_round_trip`] | A row reads back exactly as put, every field and every [`Wake`](crate::Wake), [`ProcessKind`](crate::ProcessKind) and [`Suspension`](crate::Suspension) variant included; ids with `:`, `/` and non-ASCII characters survive |
+//! | [`put_get_round_trip`] | A row reads back exactly as put, every field and every [`Wake`], [`ProcessKind`] and [`Suspension`] variant included; ids with `:`, `/` and non-ASCII characters survive |
 //! | [`put_replaces`] | A second put with the same `pid` replaces the row, and `list` finds it only under its new partition, queue and parent |
 //! | [`list_filters_and_orders`] | `list` applies partition, queue, parent and limit, orders by `pid` in byte order, and ignores `states` |
 //! | [`set_wake_and_queue`] | `set_wake` sets and clears the wake set, `set_queue` the queue, leaving every other field |

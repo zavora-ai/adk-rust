@@ -55,10 +55,11 @@ pub use sqlite::SqliteProcessStore;
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust
 /// use adk_kernel::{InMemoryProcessStore, ProcessKind, ProcessMeta, ProcessStore, QueueClass};
 ///
-/// # async fn example() -> adk_kernel::Result<()> {
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> adk_kernel::Result<()> {
 /// let store = InMemoryProcessStore::new();
 /// store.put(ProcessMeta::new("run-1", QueueClass::Background, ProcessKind::Goal)).await?;
 /// store.set_queue("run-1", QueueClass::Interactive).await?;
