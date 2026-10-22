@@ -191,9 +191,9 @@ const RESPONSE_CREATED: &str = "event: response.created\ndata: {\"type\":\"respo
 
 /// Asserts that a call against no response, and a complete response whose body stalls, both
 /// time out.
+// Gated on the providers whose tests call it; Gemini's stall tests use their own helpers.
 #[cfg(any(
     feature = "openai",
-    feature = "gemini",
     feature = "groq",
     feature = "deepseek",
     feature = "azure-ai",

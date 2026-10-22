@@ -1155,7 +1155,10 @@ mod bridges {
                     }
                 }
             }
-            let sha256 = crate::web::hex_sha256(&raw);
+            let sha256: String = {
+                use sha2::Digest;
+                sha2::Sha256::digest(&raw).iter().map(|b| format!("{b:02x}")).collect()
+            };
             let truncated = text.len() > RESOURCE_TEXT_MAX;
             if truncated {
                 let end = text.floor_char_boundary(RESOURCE_TEXT_MAX);
