@@ -17,7 +17,9 @@ pub use elicitation::{
     ElicitationScopeGuard, ElicitationScopes,
 };
 pub use http::McpHttpClientBuilder;
-pub use manager::{McpServerConfig, McpServerManager, RestartPolicy, ServerStatus};
+pub use manager::{
+    McpServerConfig, McpServerManager, RestartPolicy, ServerStatus, ServerStatusTransition,
+};
 pub use reconnect::{
     ConnectionFactory, ConnectionRefresher, RefreshConfig, RetryResult, SimpleClient,
     should_refresh_connection,

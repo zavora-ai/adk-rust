@@ -39,6 +39,42 @@ pub enum ServerStatus {
     FailedToStart,
 }
 
+/// One change of a managed server's [`ServerStatus`], published as `(id, from, to)` on the
+/// manager's status channel (spec 3.2 §10 T1).
+///
+/// [`McpServerManager::subscribe_status_transitions`](super::McpServerManager::subscribe_status_transitions)
+/// delivers one for every change the manager records, in the order they happen. `from` and
+/// `to` always differ.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_tool::mcp::{ServerStatus, ServerStatusTransition};
+///
+/// let crashed = ServerStatusTransition {
+///     id: "email".to_string(),
+///     from: ServerStatus::Running,
+///     to: ServerStatus::Crashed,
+/// };
+/// assert_eq!(
+///     serde_json::to_value(&crashed).unwrap(),
+///     serde_json::json!({ "id": "email", "from": "Running", "to": "Crashed" })
+/// );
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerStatusTransition {
+    /// ID of the server whose status changed.
+    pub id: String,
+    /// Status the server left.
+    pub from: ServerStatus,
+    /// Status the server entered.
+    pub to: ServerStatus,
+}
+
+/// Sending half of the manager's status channel.
+pub(crate) type StatusSender = tokio::sync::broadcast::Sender<ServerStatusTransition>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
