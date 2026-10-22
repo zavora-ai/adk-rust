@@ -101,14 +101,17 @@ impl PostgresProcessStore {
     /// Returns [`KernelError::Store`] when a statement fails, or when the database was
     /// migrated by a newer release.
     pub async fn migrate(&self) -> Result<()> {
-        migrate_locked(self.pool.clone()).await
+        migrate_locked(self.pool.clone(), REGISTRY_TABLE, MIGRATIONS).await
     }
 }
 
-/// Runs the migrations under the advisory lock. Boxed so the future is checked for `Send`
-/// here, with concrete lifetimes, rather than inside callers' `async_trait` methods.
-fn migrate_locked(
+/// Runs `migrations` recorded in `registry` under an advisory lock keyed by `registry`.
+/// Boxed so the future is checked for `Send` here, with concrete lifetimes, rather than
+/// inside callers' `async_trait` methods.
+pub(super) fn migrate_locked(
     pool: sqlx::PgPool,
+    registry: &'static str,
+    migrations: &'static [(i64, &'static str, &'static str)],
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
     use sqlx::Connection as _;
 
@@ -117,7 +120,7 @@ fn migrate_locked(
         reason: format!("could not {action}: {error}"),
     };
     Box::pin(async move {
-        let key = REGISTRY_TABLE
+        let key = registry
             .bytes()
             .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
                 (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
@@ -133,8 +136,8 @@ fn migrate_locked(
             .map_err(|error| store_error("take the migration lock", &error))?;
         let result = adk_session::migration::pg_runner::run_sql_migrations(
             &pool,
-            REGISTRY_TABLE,
-            MIGRATIONS,
+            registry,
+            migrations,
             || async { Ok(false) },
         )
         .await

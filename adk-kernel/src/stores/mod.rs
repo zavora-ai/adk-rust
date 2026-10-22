@@ -13,8 +13,12 @@
 //! | PostgreSQL | `PostgresProcessStore` | `postgres` | the URL of `adk-rust serve --store` |
 //! | Redis | `RedisProcessStore` | `redis` | the URL of `adk-rust serve --store` |
 //!
+//! Phase 2 adds the [`AgendaStore`](crate::AgendaStore) on the same four backends
+//! ([`InMemoryAgendaStore`], `SqliteAgendaStore`, `PostgresAgendaStore`, `RedisAgendaStore`,
+//! suite `agenda_store_conformance_tests!`).
+//!
 //! There is no file backend (§13 Q8). MongoDB, Firestore and Neo4j backends are phase 4,
-//! and the agenda, driver, partition and ledger stores arrive with their phases.
+//! and the driver, partition and ledger stores arrive with their phases.
 
 use async_trait::async_trait;
 use chrono::NaiveDate;
@@ -30,6 +34,10 @@ use crate::sched::QueueClass;
 use crate::wake::WakeSet;
 
 mod agenda_memory;
+#[cfg(feature = "redis")]
+mod agenda_redis;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+pub(crate) mod agenda_sql;
 mod memory;
 #[cfg(feature = "postgres")]
 mod postgres;
@@ -41,6 +49,12 @@ mod sql;
 mod sqlite;
 
 pub use agenda_memory::InMemoryAgendaStore;
+#[cfg(feature = "redis")]
+pub use agenda_redis::RedisAgendaStore;
+#[cfg(feature = "postgres")]
+pub use agenda_sql::PostgresAgendaStore;
+#[cfg(feature = "sqlite")]
+pub use agenda_sql::SqliteAgendaStore;
 pub use memory::InMemoryProcessStore;
 #[cfg(feature = "postgres")]
 pub use postgres::PostgresProcessStore;

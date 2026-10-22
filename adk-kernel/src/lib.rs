@@ -113,9 +113,15 @@ pub use process::{
 };
 pub use sched::{QueueClass, QuietHours, Quotas};
 #[cfg(feature = "postgres")]
+pub use stores::PostgresAgendaStore;
+#[cfg(feature = "postgres")]
 pub use stores::PostgresProcessStore;
 #[cfg(feature = "redis")]
+pub use stores::RedisAgendaStore;
+#[cfg(feature = "redis")]
 pub use stores::RedisProcessStore;
+#[cfg(feature = "sqlite")]
+pub use stores::SqliteAgendaStore;
 #[cfg(feature = "sqlite")]
 pub use stores::SqliteProcessStore;
 pub use stores::{
