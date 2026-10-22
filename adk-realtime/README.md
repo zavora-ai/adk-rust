@@ -319,8 +319,13 @@ the runners take them from `tool_governance` on their builders.
 | `voice(str)` | Voice, such as `"alloy"` |
 | `server_vad()`, `vad(VadConfig)` | Server-side VAD with defaults, or custom VAD |
 | `modalities(vec)` | Output modalities, such as `["text", "audio"]` |
+| `transcription()` | Transcribe the user's speech (and, on Gemini Live, the model's), so spoken turns are saved |
 | `on_audio`, `on_transcript`, `on_speech_started`, `on_speech_stopped` | Event callbacks |
 | `avatar(AvatarConfig)`, `avatar_provider(provider)` | Video avatar (`video-avatar`) |
+
+Under `Runner`, the agent saves each of the user's spoken turns (with `transcription()`) as a
+user event ahead of the model's reply: on OpenAI when its transcript completes, on Gemini Live,
+which never completes a transcript, when the model's reply starts or ends.
 
 ## Events
 
@@ -334,7 +339,7 @@ the runners take them from `tool_governance` on their builders.
 | `FunctionCallDelta`, `FunctionCallDone` | Tool call arguments, completed tool call |
 | `ResponseCreated`, `ResponseDone` | Response started, response completed |
 | `ToolConfirmationRequested` | A tool call held for a confirmation decision (emitted by the integrated runner, not a provider) |
-| `SpeechStarted`, `SpeechStopped` | VAD detected speech or silence |
+| `SpeechStarted`, `SpeechStopped` | VAD detected speech or silence (OpenAI `speech_started` / `speech_stopped`, Gemini Live `voiceActivity`) |
 | `Error` | Provider error |
 | `Unknown` | An event type this version does not model |
 

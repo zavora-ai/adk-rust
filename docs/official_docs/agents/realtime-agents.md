@@ -370,9 +370,25 @@ let decoded = AudioChunk::from_base64(&base64, format)?;
 | `InputTranscriptDelta` | Transcript of the user's input audio |
 | `FunctionCallDone` | Tool call request |
 | `ResponseDone` | Response completed |
-| `SpeechStarted` | VAD detected speech start |
-| `SpeechStopped` | VAD detected speech end |
+| `SpeechStarted` | VAD detected speech start (OpenAI `speech_started`, Gemini Live `voiceActivity` `ACTIVITY_START`) |
+| `SpeechStopped` | VAD detected speech end (OpenAI `speech_stopped`, Gemini Live `voiceActivity` `ACTIVITY_END`) |
 | `Error` | Error occurred |
+
+### Session history
+
+Under `Runner`, the session holds both sides of the conversation. The run's text message is
+saved by the runner. With `transcription()` on the builder, which asks the provider to
+transcribe the user (and, on Gemini Live, the model), each of the user's spoken turns is saved
+as a user event (author `user`, `provider_metadata["adk.realtime.transcript"] = "input"`) ahead
+of the model's reply:
+
+| Provider | A spoken turn is saved |
+|----------|------------------------|
+| OpenAI | When its `InputTranscriptCompleted` arrives |
+| Gemini Live, which streams `InputTranscriptDelta`s and never completes them | When the model's reply starts or ends |
+| Either | At the end of the session, if the model has not replied |
+
+The model's replies are saved as final text and transcript events authored by the agent.
 
 ### Client Events
 

@@ -66,10 +66,9 @@ pub(crate) fn realtime_model(
     })?;
     match model.provider {
         Some(Provider::Model(ModelProvider::Gemini)) => {
-            // The Live API's setup takes the `models/` resource name, not the bare id.
             let live = adk_realtime::gemini::GeminiRealtimeModel::new(
                 adk_realtime::gemini::GeminiLiveBackend::studio(key),
-                adk_realtime::gemini::DEFAULT_MODEL,
+                adk_model::catalog::GEMINI_LIVE_DEFAULT,
             );
             Ok(RealtimeChoice {
                 id: live.model_id().to_string(),

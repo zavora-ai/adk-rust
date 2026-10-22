@@ -58,6 +58,13 @@ fn gemini_model() -> anyhow::Result<BoxedModel> {
   `GeminiLiveBackend::studio` connects to AI Studio's `v1alpha` endpoint.
 - **Model names differ by endpoint**: `gemini-live-2.5-flash-native-audio` is the Vertex AI
   name; AI Studio answers it with an error.
+- **Bare ids**: AI Studio's setup takes the resource name `models/{id}` and closes the socket
+  with 1007 on a bare id, so `GeminiRealtimeModel::new` adds the prefix: `gemini-3.1-flash-live-preview`
+  and `models/gemini-3.1-flash-live-preview` name the same model, and `model_id()` reports the
+  prefixed name. Vertex AI names are sent as given.
+- **Voice activity**: the server's `voiceActivity` messages arrive as `ServerEvent::SpeechStarted`
+  (`ACTIVITY_START`) and `ServerEvent::SpeechStopped` (`ACTIVITY_END`), with the offset into the
+  audio stream in `audio_start_ms` / `audio_end_ms`, so barge-in handlers work as on OpenAI.
 - **Audio**: 16 kHz PCM16 in, 24 kHz PCM16 out.
 - **Voices**: `Kore` and the other Gemini voices; `with_voice("Kore")`.
 - **Language**: `with_language("en-US")` pins the spoken language

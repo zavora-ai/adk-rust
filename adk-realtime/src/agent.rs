@@ -91,6 +91,7 @@ pub struct RealtimeAgent {
     voice: Option<String>,
     vad_config: Option<VadConfig>,
     modalities: Vec<String>,
+    transcription: bool,
 
     // Tools (same as LlmAgent)
     tools: Vec<Arc<dyn Tool>>,
@@ -170,6 +171,7 @@ pub struct RealtimeAgentBuilder {
     voice: Option<String>,
     vad_config: Option<VadConfig>,
     modalities: Vec<String>,
+    transcription: bool,
     tools: Vec<Arc<dyn Tool>>,
     toolsets: Vec<Arc<dyn Toolset>>,
     sub_agents: Vec<Arc<dyn Agent>>,
@@ -209,6 +211,7 @@ impl RealtimeAgentBuilder {
             voice: None,
             vad_config: None,
             modalities: vec!["text".to_string(), "audio".to_string()],
+            transcription: false,
             tools: Vec::new(),
             toolsets: Vec::new(),
             sub_agents: Vec::new(),
@@ -297,6 +300,25 @@ impl RealtimeAgentBuilder {
     /// Set output modalities (e.g., ["text", "audio"]).
     pub fn modalities(mut self, modalities: Vec<String>) -> Self {
         self.modalities = modalities;
+        self
+    }
+
+    /// Transcribe the user's speech, as [`RealtimeConfig::with_transcription`] does, so each
+    /// spoken turn is saved to the session as a user event. On Gemini Live this also
+    /// transcribes the model's speech, so its spoken replies are saved as text.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_realtime::RealtimeAgent;
+    /// use adk_realtime::model::BoxedModel;
+    ///
+    /// fn voice_agent(model: BoxedModel) -> adk_core::Result<RealtimeAgent> {
+    ///     RealtimeAgent::builder("voice").model(model).transcription().build()
+    /// }
+    /// ```
+    pub fn transcription(mut self) -> Self {
+        self.transcription = true;
         self
     }
 
@@ -521,6 +543,7 @@ impl RealtimeAgentBuilder {
             voice: self.voice,
             vad_config: self.vad_config,
             modalities: self.modalities,
+            transcription: self.transcription,
             tools: self.tools,
             toolsets: self.toolsets,
             sub_agents: self.sub_agents,
@@ -634,6 +657,9 @@ impl RealtimeAgent {
         config.voice = self.voice.clone();
         config.turn_detection = self.vad_config.clone();
         config.modalities = Some(self.modalities.clone());
+        if self.transcription {
+            config = config.with_transcription();
+        }
 
         // Convert ADK tools to realtime tool definitions
         let tool_defs: Vec<ToolDefinition> = resolved_tools
@@ -999,12 +1025,55 @@ impl Agent for RealtimeAgent {
             let mut pending_text = std::collections::HashMap::<String, String>::new();
             let mut pending_transcript = std::collections::HashMap::<String, String>::new();
             let mut oversized_audio = std::collections::HashSet::<String>::new();
+            // The user's input transcripts streamed so far, by item, not yet saved.
+            let mut user_transcripts = Vec::<(String, String)>::new();
             loop {
                 let event = session.next_event().await;
 
                 match event {
                     Some(Ok(server_event)) => {
+                        // A transcript streamed without an item id (Gemini Live) is never
+                        // completed by the provider: it ends where the model's turn starts or
+                        // ends, so it is saved ahead of the model's reply to it.
+                        if matches!(
+                            server_event,
+                            ServerEvent::ResponseCreated { .. }
+                                | ServerEvent::AudioDelta { .. }
+                                | ServerEvent::TextDelta { .. }
+                                | ServerEvent::TranscriptDelta { .. }
+                                | ServerEvent::FunctionCallDone { .. }
+                                | ServerEvent::ResponseDone { .. }
+                        ) && let Some(index) =
+                            user_transcripts.iter().position(|(item_id, _)| item_id.is_empty())
+                        {
+                            let (_, text) = user_transcripts.remove(index);
+                            if !text.trim().is_empty() {
+                                yield Ok(user_turn(&invocation_id, text));
+                            }
+                        }
                         match server_event {
+                            ServerEvent::InputTranscriptDelta { item_id, delta, .. } => {
+                                match user_transcripts.iter_mut().find(|(id, _)| *id == item_id) {
+                                    Some((_, text)) => text.push_str(&delta),
+                                    None => user_transcripts.push((item_id, delta)),
+                                }
+                            }
+
+                            ServerEvent::InputTranscriptCompleted { item_id, transcript, .. } => {
+                                let streamed = user_transcripts
+                                    .iter()
+                                    .position(|(id, _)| *id == item_id)
+                                    .map(|index| user_transcripts.remove(index).1);
+                                let text = if transcript.trim().is_empty() {
+                                    streamed.unwrap_or_default()
+                                } else {
+                                    transcript
+                                };
+                                if !text.trim().is_empty() {
+                                    yield Ok(user_turn(&invocation_id, text));
+                                }
+                            }
+
                             ServerEvent::AudioDelta { delta, item_id, .. } => {
                                 // Route audio through avatar provider if active
                                 #[cfg(feature = "video-avatar")]
@@ -1411,6 +1480,14 @@ impl Agent for RealtimeAgent {
                 }
             }
 
+            // What the user said last is kept even when the session ended before the model
+            // answered it.
+            for (_, text) in user_transcripts.drain(..) {
+                if !text.trim().is_empty() {
+                    yield Ok(user_turn(&invocation_id, text));
+                }
+            }
+
             // ===== STOP AVATAR SESSION (cleanup) =====
             #[cfg(feature = "video-avatar")]
             {
@@ -1465,6 +1542,16 @@ impl Agent for RealtimeAgent {
 
         Ok(Box::pin(s))
     }
+}
+
+/// The user's spoken turn, saved as the runner saves a user message: authored `user`, in the
+/// run's invocation, marked as an input transcript.
+fn user_turn(invocation_id: &str, text: String) -> Event {
+    let mut event = Event::new(invocation_id);
+    event.author = "user".to_string();
+    event.provider_metadata.insert("adk.realtime.transcript".to_string(), "input".to_string());
+    event.llm_response.content = Some(Content::new("user").with_text(text));
+    event
 }
 
 fn pcm16_mono_wav(pcm: &[u8], sample_rate: u32) -> Vec<u8> {

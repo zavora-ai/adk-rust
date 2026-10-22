@@ -499,6 +499,9 @@ impl GeminiRealtimeSession {
     }
 
     /// Connect to Gemini Live API using the specified backend.
+    ///
+    /// On AI Studio a bare model id such as `gemini-3.1-flash-live-preview` is sent as
+    /// `models/gemini-3.1-flash-live-preview`, the resource name the setup requires.
     pub async fn connect(
         backend: GeminiLiveBackend,
         model: &str,
@@ -523,6 +526,7 @@ impl GeminiRealtimeSession {
         schema_dialect: adk_gemini::GeminiSchemaDialect,
     ) -> Result<Self> {
         adk_core::ensure_crypto_provider();
+        let model = live_model_name(&backend, model);
         let ws_stream = match &backend {
             GeminiLiveBackend::Studio { api_key } => {
                 let url = format!(
@@ -637,7 +641,7 @@ impl GeminiRealtimeSession {
             last_usage: Arc::new(ParkingMutex::new(None)),
         };
 
-        session.send_setup(model, config).await?;
+        session.send_setup(&model, config).await?;
         Ok(session)
     }
 
@@ -944,6 +948,19 @@ impl GeminiRealtimeSession {
         let value: Value = serde_json::from_str(raw)
             .map_err(|e| RealtimeError::protocol(format!("Parse error: {}, raw: {}", e, raw)))?;
 
+        // `voiceActivity` is outside the message's union, so it arrives beside the
+        // `serverContent.speechState` that carries nothing else.
+        let Some(activity) = voice_activity_event(&value) else {
+            return self.translate_gemini_message(value);
+        };
+        let rest = self.translate_gemini_message(value)?;
+        Ok(std::iter::once(activity)
+            .chain(rest.into_iter().filter(|event| !matches!(event, ServerEvent::Unknown)))
+            .collect())
+    }
+
+    /// Translate one parsed Gemini server message, apart from its `voiceActivity`.
+    fn translate_gemini_message(&self, value: Value) -> Result<Vec<ServerEvent>> {
         // Check for setup completion
         if let Some(_setup_complete) = value.get("setupComplete") {
             return Ok(vec![ServerEvent::SessionCreated {
@@ -1394,6 +1411,43 @@ pub fn build_vertex_live_url(region: &str, project_id: &str) -> Result<String> {
          google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent\
          ?project_id={project_id}",
     ))
+}
+
+/// The `setup.model` resource name for `model` on `backend`.
+///
+/// AI Studio accepts only `models/{model}` and closes the socket with 1007 ("unexpected model
+/// name format") on a bare id, so a bare id gains the prefix there. A name with a collection
+/// (`models/…`, `tunedModels/…`) and every Vertex AI name pass unchanged.
+pub(crate) fn live_model_name(backend: &GeminiLiveBackend, model: &str) -> String {
+    match backend {
+        GeminiLiveBackend::Studio { .. } if !model.contains('/') => format!("models/{model}"),
+        _ => model.to_string(),
+    }
+}
+
+/// The speech event a server message's `voiceActivity` reports, if it reports one.
+///
+/// The server's activity detection sends `voiceActivity {type, audioOffset}` at the user's
+/// speech onset (`ACTIVITY_START`) and end (`ACTIVITY_END`), whether or not the model is
+/// speaking, so it maps to [`ServerEvent::SpeechStarted`] / [`ServerEvent::SpeechStopped`]
+/// as OpenAI's `input_audio_buffer.speech_started` / `speech_stopped` do. `audioOffset`, a
+/// protobuf duration such as `"7.280s"`, is measured from the start of the audio stream.
+fn voice_activity_event(value: &Value) -> Option<ServerEvent> {
+    let activity = value.get("voiceActivity")?;
+    let offset_ms = activity
+        .get("audioOffset")
+        .and_then(Value::as_str)
+        .and_then(|offset| offset.strip_suffix('s')?.parse::<f64>().ok())
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+        .map_or(0, |seconds| (seconds * 1000.0).round() as u64);
+    let event_id = uuid::Uuid::new_v4().to_string();
+    match activity.get("type").and_then(Value::as_str)? {
+        "ACTIVITY_START" => {
+            Some(ServerEvent::SpeechStarted { event_id, audio_start_ms: offset_ms })
+        }
+        "ACTIVITY_END" => Some(ServerEvent::SpeechStopped { event_id, audio_end_ms: offset_ms }),
+        _ => None,
+    }
 }
 
 /// One camera or screen frame as `realtimeInput.video`.
@@ -2195,5 +2249,123 @@ mod tests {
 
         assert!(decl.get("parameters").is_none(), "legacy field used: {frame}");
         assert_eq!(decl["parametersJsonSchema"]["additionalProperties"], json!(false));
+    }
+
+    /// AI Studio closes the socket with 1007 ("unexpected model name format") on a bare model
+    /// id, so the setup names the model `models/{id}`; a name with a collection is sent as given.
+    #[test]
+    fn a_bare_studio_model_id_is_sent_as_its_resource_name() {
+        let studio = GeminiLiveBackend::studio("key");
+        for (given, sent) in [
+            ("gemini-3.1-flash-live-preview", "models/gemini-3.1-flash-live-preview"),
+            ("models/gemini-3.1-flash-live-preview", "models/gemini-3.1-flash-live-preview"),
+            ("tunedModels/live-1", "tunedModels/live-1"),
+        ] {
+            let msg = GeminiRealtimeSession::build_setup_message(
+                &live_model_name(&studio, given),
+                RealtimeConfig::default(),
+                adk_gemini::GeminiSchemaDialect::default(),
+            );
+            let frame = serde_json::to_value(&msg).unwrap();
+            assert_eq!(frame["setup"]["model"], json!(sent), "{given}");
+        }
+    }
+
+    /// Vertex AI names publisher models by its own resource path, so its ids are not rewritten.
+    #[cfg(feature = "vertex-live")]
+    #[test]
+    fn vertex_model_names_pass_unchanged() {
+        let vertex = GeminiLiveBackend::Vertex {
+            credentials: google_cloud_auth::credentials::anonymous::Builder::new().build(),
+            region: "us-central1".to_string(),
+            project_id: "project".to_string(),
+        };
+        for name in [
+            "gemini-3.1-flash-live-preview",
+            "projects/project/locations/us-central1/publishers/google/models/gemini-live",
+        ] {
+            assert_eq!(live_model_name(&vertex, name), name);
+        }
+    }
+
+    /// Frames recorded from Gemini Live (`gemini-3.1-flash-live-preview`): the user starts
+    /// speaking while the model answers, the server interrupts the model, transcribes the
+    /// user, and reports the end of the speech. The activity reaches callers as the speech
+    /// events OpenAI sends, with the offset into the audio stream.
+    #[tokio::test]
+    async fn voice_activity_is_reported_as_speech_started_and_stopped() {
+        let (session, mut server) = session_on_loopback(ActivityDetection::Automatic).await;
+        for frame in [
+            r#"{"serverContent":{"speechState":"SPEECH"},"voiceActivity":{"type":"ACTIVITY_START","audioOffset":"7.280s"}}"#,
+            r#"{"serverContent":{"interrupted":true}}"#,
+            r#"{"serverContent":{"turnComplete":true},"usageMetadata":{"totalTokenCount":579}}"#,
+            r#"{"serverContent":{"inputTranscription":{"text":"Stop, please. What is 2 + 2?"}}}"#,
+            r#"{"serverContent":{"speechState":"NON_SPEECH"},"voiceActivity":{"type":"ACTIVITY_END","audioOffset":"10.640s"}}"#,
+        ] {
+            server.send(Message::Text(frame.into())).await.unwrap();
+        }
+
+        let mut events = Vec::new();
+        while events.len() < 4 {
+            let event =
+                tokio::time::timeout(std::time::Duration::from_secs(5), session.next_event())
+                    .await
+                    .expect("timed out waiting for an event")
+                    .expect("session ended")
+                    .expect("event");
+            if !matches!(event, ServerEvent::Unknown) {
+                events.push(event);
+            }
+        }
+
+        assert!(
+            matches!(
+                events.as_slice(),
+                [
+                    ServerEvent::SpeechStarted { audio_start_ms: 7280, .. },
+                    ServerEvent::ResponseDone { .. },
+                    ServerEvent::InputTranscriptDelta { delta, .. },
+                    ServerEvent::SpeechStopped { audio_end_ms: 10640, .. },
+                ] if delta == "Stop, please. What is 2 + 2?"
+            ),
+            "{events:?}"
+        );
+    }
+
+    /// A message that carries `voiceActivity` beside content keeps both, activity first; an
+    /// unspecified activity is not a speech event, and a missing offset reads as zero.
+    #[tokio::test]
+    async fn voice_activity_beside_content_keeps_both() {
+        let (session, _server) = session_on_loopback(ActivityDetection::Automatic).await;
+        let events = session
+            .translate_gemini_event(
+                r#"{"serverContent":{"inputTranscription":{"text":"hi"}},"voiceActivity":{"type":"ACTIVITY_END","audioOffset":"1.5s"}}"#,
+            )
+            .unwrap();
+        assert!(
+            matches!(
+                events.as_slice(),
+                [
+                    ServerEvent::SpeechStopped { audio_end_ms: 1500, .. },
+                    ServerEvent::InputTranscriptDelta { delta, .. },
+                ] if delta == "hi"
+            ),
+            "{events:?}"
+        );
+
+        for frame in [
+            r#"{"voiceActivity":{"type":"TYPE_UNSPECIFIED","audioOffset":"1s"}}"#,
+            r#"{"voiceActivity":{"audioOffset":"1s"}}"#,
+        ] {
+            let events = session.translate_gemini_event(frame).unwrap();
+            assert!(matches!(events.as_slice(), [ServerEvent::Unknown]), "{frame}: {events:?}");
+        }
+        let events = session
+            .translate_gemini_event(r#"{"voiceActivity":{"type":"ACTIVITY_START"}}"#)
+            .unwrap();
+        assert!(
+            matches!(events.as_slice(), [ServerEvent::SpeechStarted { audio_start_ms: 0, .. }]),
+            "{events:?}"
+        );
     }
 }

@@ -7,7 +7,7 @@ use crate::model::RealtimeModel;
 use crate::session::BoxedSession;
 use async_trait::async_trait;
 
-use super::session::{GeminiLiveBackend, GeminiRealtimeSession};
+use super::session::{GeminiLiveBackend, GeminiRealtimeSession, live_model_name};
 use super::{DEFAULT_MODEL, GEMINI_VOICES};
 
 /// Gemini Live model for creating realtime sessions.
@@ -19,7 +19,7 @@ use super::{DEFAULT_MODEL, GEMINI_VOICES};
 /// use adk_realtime::RealtimeModel;
 ///
 /// let backend = GeminiLiveBackend::studio("your-key");
-/// let model = GeminiRealtimeModel::new(backend, "models/gemini-3.1-flash-live-preview");
+/// let model = GeminiRealtimeModel::new(backend, "gemini-3.1-flash-live-preview");
 /// let session = model.connect(config).await?;
 /// ```
 #[derive(Debug, Clone)]
@@ -31,8 +31,24 @@ pub struct GeminiRealtimeModel {
 
 impl GeminiRealtimeModel {
     /// Create a new Gemini Live model.
+    ///
+    /// On AI Studio the model is named either way, `gemini-3.1-flash-live-preview` or
+    /// `models/gemini-3.1-flash-live-preview`: a bare id gains the `models/` prefix the Live
+    /// API's setup requires, and [`model_id`](RealtimeModel::model_id) reports that name.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_realtime::RealtimeModel;
+    /// use adk_realtime::gemini::{GeminiLiveBackend, GeminiRealtimeModel};
+    ///
+    /// let backend = GeminiLiveBackend::studio("api-key");
+    /// let model = GeminiRealtimeModel::new(backend, "gemini-3.1-flash-live-preview");
+    /// assert_eq!(model.model_id(), "models/gemini-3.1-flash-live-preview");
+    /// ```
     pub fn new(backend: GeminiLiveBackend, model_id: impl Into<String>) -> Self {
-        Self { backend, model_id: model_id.into(), schema_dialect: Default::default() }
+        let model_id = live_model_name(&backend, &model_id.into());
+        Self { backend, model_id, schema_dialect: Default::default() }
     }
 
     /// Create with the default Live model.
@@ -85,5 +101,18 @@ impl RealtimeModel for GeminiRealtimeModel {
         )
         .await?;
         Ok(Box::new(session))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bare_studio_id_reports_the_resource_name_it_connects_with() {
+        for id in ["gemini-3.1-flash-live-preview", "models/gemini-3.1-flash-live-preview"] {
+            let model = GeminiRealtimeModel::new(GeminiLiveBackend::studio("key"), id);
+            assert_eq!(model.model_id(), "models/gemini-3.1-flash-live-preview", "{id}");
+        }
     }
 }

@@ -258,12 +258,59 @@ pub(crate) fn gemini_error_to_adk(e: &adk_gemini::ClientError) -> adk_core::AdkE
         _ => None,
     };
     let err = crate::error_metadata::with_code(err, provider_code.as_deref());
-    match e {
+    let header = match e {
         adk_gemini::ClientError::BadResponse { retry_after: Some(header), .. } => {
-            crate::retry::with_retry_after(err, crate::retry::parse_retry_after(header))
+            crate::retry::parse_retry_after(header)
         }
-        _ => err,
+        _ => None,
+    };
+    crate::retry::with_retry_after(err, header.or_else(|| retry_info_delay(e)))
+}
+
+/// The delay a `google.rpc.RetryInfo` detail of the error asks for: the Gemini API reports
+/// the wait a quota needs there (`"retryDelay": "37s"`), not in a `Retry-After` header.
+fn retry_info_delay(error: &adk_gemini::ClientError) -> Option<std::time::Duration> {
+    let details: Vec<serde_json::Value> = match error {
+        adk_gemini::ClientError::BadResponse { description: Some(body), .. }
+        | adk_gemini::ClientError::ErrorInResponse { description: body, .. } => {
+            if body.len() > crate::error_metadata::MAX_BODY_LEN {
+                return None;
+            }
+            let body: serde_json::Value = serde_json::from_str(body).ok()?;
+            let error =
+                body.get("error").or_else(|| body.get(0).and_then(|item| item.get("error")))?;
+            error.get("details")?.as_array()?.clone()
+        }
+        #[cfg(feature = "gemini-vertex")]
+        adk_gemini::ClientError::GoogleCloudRequest { source } => source
+            .status()?
+            .details
+            .iter()
+            .filter_map(|detail| serde_json::to_value(detail).ok())
+            .collect(),
+        _ => return None,
+    };
+    details
+        .iter()
+        .filter(|detail| {
+            detail["@type"].as_str().is_some_and(|kind| kind.ends_with("google.rpc.RetryInfo"))
+        })
+        .find_map(|detail| parse_rpc_duration(detail["retryDelay"].as_str()?))
+}
+
+/// Parses a protobuf `Duration` in its JSON form (`"12s"`, `"1.5s"`), rounded up to whole
+/// milliseconds so a retry never starts early. Negative or malformed values are `None`.
+fn parse_rpc_duration(value: &str) -> Option<std::time::Duration> {
+    let value = value.strip_suffix('s')?;
+    let (seconds, fraction) = value.split_once('.').unwrap_or((value, ""));
+    let digits = |text: &str| text.bytes().all(|byte| byte.is_ascii_digit());
+    if seconds.is_empty() || !digits(seconds) || fraction.len() > 9 || !digits(fraction) {
+        return None;
     }
+    let nanos: u32 = format!("{fraction:0<9}").parse().ok()?;
+    let delay = std::time::Duration::new(seconds.parse().ok()?, nanos);
+    let millis = u64::try_from(delay.as_nanos().div_ceil(1_000_000)).ok()?;
+    Some(std::time::Duration::from_millis(millis))
 }
 
 /// Whether a google-cloud-gax error without a status is a failed connection or
@@ -2566,6 +2613,67 @@ mod tests {
         assert_eq!(error.details.metadata["provider_error_code"], "RESOURCE_EXHAUSTED");
     }
 
+    fn quota_body(retry_delay: &str) -> String {
+        serde_json::json!({"error": {
+            "code": 429,
+            "message": "You exceeded your current quota.",
+            "status": "RESOURCE_EXHAUSTED",
+            "details": [
+                {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": []},
+                {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": retry_delay}
+            ]
+        }})
+        .to_string()
+    }
+
+    #[test]
+    fn retry_info_delay_is_the_retry_hint() {
+        for (delay, expected) in [
+            ("12s", Some(Duration::from_secs(12))),
+            ("1.5s", Some(Duration::from_millis(1500))),
+            ("0.000001s", Some(Duration::from_millis(1))),
+            ("0s", Some(Duration::ZERO)),
+            ("-1s", None),
+            ("12", None),
+            ("1.5.0s", None),
+            ("1.0000000001s", None),
+            ("s", None),
+            ("soon", None),
+        ] {
+            let error = gemini_error_to_adk(&adk_gemini::ClientError::BadResponse {
+                retry_after: None,
+                code: 429,
+                description: Some(quota_body(delay)),
+            });
+            assert_eq!(error.retry.retry_after(), expected, "{delay}");
+        }
+
+        // The header is the server's explicit answer; the body is the fallback.
+        let error = gemini_error_to_adk(&adk_gemini::ClientError::BadResponse {
+            retry_after: Some("3".into()),
+            code: 429,
+            description: Some(quota_body("40s")),
+        });
+        assert_eq!(error.retry.retry_after(), Some(Duration::from_secs(3)));
+
+        // An error object inside a successful response carries the same detail.
+        let error = gemini_error_to_adk(&adk_gemini::ClientError::ErrorInResponse {
+            code: Some(429),
+            status: Some("RESOURCE_EXHAUSTED".into()),
+            message: None,
+            description: quota_body("7s"),
+        });
+        assert_eq!(error.retry.retry_after(), Some(Duration::from_secs(7)));
+
+        // A non-retryable error carries no hint.
+        let error = gemini_error_to_adk(&adk_gemini::ClientError::BadResponse {
+            retry_after: None,
+            code: 400,
+            description: Some(quota_body("12s")),
+        });
+        assert_eq!(error.retry.retry_after(), None);
+    }
+
     #[test]
     fn local_config_error_has_no_upstream_status() {
         let error = gemini_error_to_adk(&adk_gemini::ClientError::InvalidGenerationConfig {
@@ -3407,6 +3515,26 @@ mod vertex_transport_tests {
         assert_eq!(mapped.code, "model.gemini.rate_limited");
         assert_eq!(mapped.details.upstream_status_code, None);
         assert_eq!(mapped.details.metadata["provider_error_code"], "RATE_LIMITED");
+    }
+
+    #[test]
+    fn retry_info_on_the_status_is_the_retry_hint() {
+        let detail: StatusDetails = serde_json::from_value(serde_json::json!({
+            "@type": "type.googleapis.com/google.rpc.RetryInfo",
+            "retryDelay": "2.5s"
+        }))
+        .expect("valid RetryInfo detail");
+        let status = Status::default()
+            .set_code(Code::ResourceExhausted)
+            .set_message("quota")
+            .set_details([detail]);
+        let error = adk_gemini::ClientError::GoogleCloudRequest {
+            source: GaxError::service_with_http_metadata(status, Some(429), None),
+        };
+        assert_eq!(
+            gemini_error_to_adk(&error).retry.retry_after(),
+            Some(std::time::Duration::from_millis(2500))
+        );
     }
 
     #[test]

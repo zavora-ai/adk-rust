@@ -934,6 +934,7 @@ dependencies = [
  "adk-guardrail",
  "adk-memory",
  "adk-plugin",
+ "adk-runner",
  "adk-session",
  "anyhow",
  "async-openai",

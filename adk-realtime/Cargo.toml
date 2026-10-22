@@ -98,6 +98,8 @@ url = "2.5"
 parking_lot = "0.12.5"
 
 [dev-dependencies]
+adk-runner = { path = "../adk-runner" }
+adk-session = { path = "../adk-session" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "test-util"] }
 dotenvy = "0.15"
 proptest = "1.5"

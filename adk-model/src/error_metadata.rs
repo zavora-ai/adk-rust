@@ -18,7 +18,7 @@ pub(crate) const PROVIDER_ERROR_CODE: &str = "provider_error_code";
 
 /// Bodies above this size are not parsed for a code.
 #[cfg(any(feature = "azure-ai", feature = "deepseek", feature = "gemini", feature = "openai"))]
-const MAX_BODY_LEN: usize = 64 * 1024;
+pub(crate) const MAX_BODY_LEN: usize = 64 * 1024;
 
 fn valid_code(code: &str) -> bool {
     !code.is_empty()
