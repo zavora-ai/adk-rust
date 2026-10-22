@@ -57,6 +57,7 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--web` / `--no-web` | Declares the web tools (on by default) or none at all (spec 3.1 §7.20) |
 | `--allow-domain HOST` | A host `web_fetch` reads without approval: exact, or `*.example.com`; repeatable |
 | `--search provider\|off\|searxng\|deepseek` | Where web search runs (spec 3.1 §7.20): `provider` (the default) is the built-in search of the provider the model's client serves; `searxng` and `deepseek` replace it with the governed `web_search` over a SearXNG instance (`[web] searxng_url`, else `SEARXNG_URL`) or DeepSeek's Search API (`DEEPSEEK_API_KEY`); `off` declares none. The banner's `Search` line and `/web` name the path |
+| `--checkpointer URL` | Where plans and goal graphs are checkpointed: `sqlite://`, `postgres://`, `redis://`, `mongodb://`, `neo4j://` or `firestore://` (spec 3.1 §7.11); without it `[plan] checkpointer` in the user config, else the store the sessions are in. Not with `--ephemeral` |
 
 > **Note:** `--pack computer-use` and `--pack payments` refuse at start: a desktop runtime and a merchant service are connections only the library API takes (spec 3.1 §7.16, §7.24).
 
@@ -102,6 +103,9 @@ searxng_url = "http://localhost:8888"
 [ultracode]                  # spec 3.1 §7.10; see Ultracode
 max_rounds = 2
 
+[plan]                       # the user config only (spec 3.1 §7.11)
+checkpointer = "postgres://plans@db/harness"
+
 [[hooks]]                    # spec 3.1 §7.22; see Hooks
 event = "post_edit"
 command = "cargo fmt"
@@ -112,7 +116,10 @@ command = "cargo fmt"
 not permissions. `[store]` names where the store key lives and is read from the user config
 only; a project file setting it is ignored with a note. `[web]` names where web search runs:
 a project file may set `search = "off"`, and any other `search` or a `searxng_url` there is
-ignored with a note, since it would choose where the agent's queries go. `[[hooks]]` tables are hooks on
+ignored with a note, since it would choose where the agent's queries go. `[plan] checkpointer` is read from the
+user config only: a checkpointer location is not a permission, but a workspace file naming one would send
+plan state to a server the repository chose, so the flag wins, then the user config, then
+the store the sessions are in. `[[hooks]]` tables are hooks on
 tool events ([Hooks](hooks.md#in-the-cli)): the user config's run before the workspace's,
 and the workspace's run only once the workspace is trusted.
 
@@ -218,9 +225,12 @@ records them.
 
 ## Sessions and `harness.db`
 
-Sessions, held calls, durable runs, modes, standing rules and long-term facts live in one
-SQLite file,
-`<config dir>/adk-rust/harness.db`, created readable by you only. Sessions belong to the OS
+Sessions, held calls, durable runs, modes, standing rules, long-term facts and plan
+checkpoints live in one SQLite file,
+`<config dir>/adk-rust/harness.db`, created readable by you only. An approved plan therefore
+runs in the next process, and the banner's `Plans` line, or the `plans` line of `code` and
+`goal`, says where plans are kept. `serve --store` moves them with the other stores; see
+[Running replicas](serving.md#running-replicas). Sessions belong to the OS
 user and the app `adk-rust`. A session records the workspace it started in and refuses to
 continue from another `--dir`. `--ephemeral` keeps everything in memory.
 
@@ -234,15 +244,16 @@ adk-rust rules rm 2
 ```
 
 `rules add --operator --source mcp:github list_issues` pins any declaration of a publisher's
-tool rather than the current one, for tools you maintain yourself.
+tool rather than the current one, for tools you maintain yourself. `--store <url>` manages
+the rules of served replicas that share that store instead of `harness.db`.
 
 ## The encrypted store
 
 With a store key, every payload in `harness.db` is sealed before it reaches the file
 (spec 3.1 §7.12, §9.2 I57): session state and events through `EncryptedSession`, held calls
 and decisions through `EncryptedApprovalStore`, and the mode, rule, shell-ledger, goal and
-fact stores through the same `adk-enc:v1:` AES-256-GCM envelope, each ciphertext bound to
-its row. Identifiers, timestamps and status columns stay plaintext for indexing. A database
+fact stores and plan checkpoints through the same `adk-enc:v1:` AES-256-GCM envelope, each
+ciphertext bound to its row; a plan checkpointer named by `--checkpointer` is sealed too. Identifiers, timestamps and status columns stay plaintext for indexing. A database
 written under a key refuses to open without it or with another, and never falls back to
 plaintext; the key never enters a prompt, a session or the audit log.
 

@@ -62,8 +62,10 @@ gate: each is decided once.
 
 ### Checkpoints and rewind
 
-The graph is checkpointed in the harness's checkpointer — `plan_checkpointer(..)`, in memory
-by default; SQLite in the CLI — so a step that finished survives process loss. To run the
+The graph is checkpointed in the harness's checkpointer — `plan_checkpointer(..)` or
+`plan_checkpoint_store(url)`, in memory by default; in the CLI, the store the sessions are in
+(`harness.db`, or `serve --store`) unless `--checkpointer` names another — so an approved plan
+and a step that finished survive process loss. To run the
 steps after one again, rewind to it:
 
 ```rust,no_run
@@ -115,7 +117,11 @@ async fn start(harness: &Harness, user: &UserId, session: &SessionId) -> adk_cor
 | Engine | Shape | Default |
 |---|---|---|
 | `GoalEngine::Loop` | `LoopAgent` over the harness agent and `UntilCheckAgent`; a held call resumes at the right sub-agent through `workflow_positions` | without a plan checkpointer |
-| `GoalEngine::Graph` | a checkpointed graph: `iterate` → `check` → (`__end__` \| `iterate`) | with `plan_checkpointer(..)` |
+| `GoalEngine::Graph` | a checkpointed graph: `iterate` → `check` → (`__end__` \| `iterate`) | with `plan_checkpointer(..)`; `adk-rust serve` |
+
+`adk-rust` keeps `Loop` for the REPL, `code`, `goal` and `ultracode`, where goals are durable
+runs, and `serve` runs goals on the `Graph` engine over its plan checkpointer (spec 3.1
+§7.11).
 
 `UntilCheckAgent` checks the kill switch, runs `until` through the harness bash tool's
 launcher (the OS sandbox when one is active) for up to the goal's `check_timeout`, which may

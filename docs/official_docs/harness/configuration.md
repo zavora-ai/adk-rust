@@ -32,8 +32,8 @@ required; everything else has a default.
 | Method | Default | Effect |
 |---|---|---|
 | `mode(HarnessMode)` | `Ask` | The mode of sessions with no mode record |
-| `mode_store(store)` | in memory | Where session modes are kept |
-| `standing_rules(store)` | in memory | Where standing rules are kept |
+| `mode_store(store)` | in memory | Where session modes are kept: file, SQLite, PostgreSQL or Redis stores |
+| `standing_rules(store)` | in memory | Where standing rules are kept: file, SQLite, PostgreSQL or Redis stores |
 | `operator_policy(policy)` | none | An operator `ToolPolicy`; the stricter decision wins |
 | `prompter(prompter)` | none | Asks a person on interactive surfaces |
 | `confirmation_handler(handler)` | the prompting handler | Replaces the confirmation handler |
@@ -71,7 +71,8 @@ See [Shell and sandbox](shell-and-sandbox.md) and [Durability](durability.md).
 | `without_default_members()` | off | Leaves out `explore` and `general` |
 | `member_registry(registry)`, `team_policy(policy)`, `member_model(llm)` | none | Discovery, the team's budget and termination, and the members' model |
 | `plan_graph(bool)` | `true` with feature `graph` | Compiles approved plans with steps into a checkpointed graph |
-| `plan_checkpointer(checkpointer)` | in memory | Where plan graphs are checkpointed |
+| `plan_checkpointer(checkpointer)` | in memory: plans do not survive a restart | Where plan graphs and the `Graph` goal engine are checkpointed |
+| `plan_checkpoint_store(url).await?` | — | `plan_checkpointer` over the store a URL names: `sqlite://`, `postgres://`, `redis://`, `mongodb://`, `neo4j://`, `firestore://` (spec 3.1 §13 Q5) |
 | `goal_store(store)`, `goal_engine(GoalEngine)` | in memory; `Loop`, or `Graph` with a plan checkpointer | Where goals are kept and how they iterate |
 | `memory(MemoryConfig)` | off | Working notes (feature `memory`) |
 | `long_term_memory(config)`, `fact_store(store)`, `fact_index(index)`, `memory_embedder(embedder)` | off; in memory; a local lexical index; none | Long-term facts with provenance (feature `memory`) |
@@ -224,7 +225,9 @@ On `adk-harness`:
 | `memory-embeddings` | off | OpenAI and Gemini embedders for the fact index |
 | `memory-embeddings-local` | off | `RagEmbedder::local()`: an in-process ONNX embedder (`BAAI/bge-small-en-v1.5`); `ort` downloads the onnxruntime binary at build time |
 | `encrypted` | off | The store envelope: `StoreKeyring`, `StoreKeySource`, sealed sessions, approvals and SQLite stores, key rotation (spec 3.1 §7.12) |
-| `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores |
+| `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores, and `sqlite://` plan checkpoints |
+| `postgres`, `redis` | off | Mode and standing-rule stores replicas share, `postgres://` and `redis://` plan checkpoints, and `adk-session`'s stores on the same backend (spec 3.1 §13 Q2) |
+| `mongodb`, `neo4j`, `firestore` | off | `mongodb://`, `neo4j://` and `firestore://` plan checkpoints |
 | `ambient` | off | Goals started by cron, file-watch and webhook triggers |
 | `team-acp`, `team-a2a` | off | ACP-compatible coding agents and remote A2A agents as members |
 | `docker` | off | The container shell, `ShellIsolation::Container` (see [Shell and sandbox](shell-and-sandbox.md#the-container-shell)) |

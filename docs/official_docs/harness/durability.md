@@ -13,11 +13,16 @@ new one over the same SQLite file.
 | Loosening cancels held calls | `Harness::set_mode` answers every held call "cancelled by mode change" before writing; a held `rm` runs zero times after switching to Auto | `a_held_rm_in_ask_runs_zero_times_after_switching_to_auto` |
 | A plan step survives process loss | The plan graph is checkpointed; after a restart the gate is decided in the new process and only the remaining step runs | `a_plan_step_survives_process_loss` |
 | Only one process works a run | `DurableWorker` claims runs under fenced leases; two workers over one store complete the run once | `a_durable_goal_survives_killing_the_process` |
+| An approved plan runs after a restart | Plans are checkpointed in the store `plan_checkpoint_store(url)` names; a new process over the same database finds the plan and runs every step | `an_approved_plan_runs_after_a_restart` (`checkpoint_store_tests.rs`) |
+| The `Graph` goal engine continues its thread after a restart | The goal's graph is checkpointed in the same store; the restarted process decides the held call and finishes on the first process's thread | `the_goal_graph_continues_its_thread_after_a_restart` (`checkpoint_store_tests.rs`) |
 
 ## One backend per deployment
 
 Sessions, approvals, the action ledger, modes, goals, durable runs and plan checkpoints can
-share one SQLite file:
+share one SQLite file. `plan_checkpoint_store(url)` opens the plan checkpointer from a store
+URL, `adk_harness::checkpointer_from_url`, so it can name the same database (spec 3.1 §7.11,
+§13 Q5); without it or `plan_checkpointer(..)`, plans live in memory and do not survive a
+restart:
 
 ```rust,no_run
 use std::sync::Arc;
@@ -66,6 +71,46 @@ async fn open(model: Arc<dyn Llm>, url: &str) -> Result<Harness, Box<dyn std::er
 > `edit_file` call approved after a restart fails with "must be read with read_file before
 > it can be edited" until the model reads the file again in the new process.
 
+## Shared backends
+
+Replicas of a served harness share PostgreSQL or Redis instead of a file (spec 3.1 §13 Q2):
+
+| Store | PostgreSQL (feature `postgres`) | Redis (feature `redis`) |
+|---|---|---|
+| Modes | `PostgresModeStore` | `RedisModeStore` |
+| Standing rules | `PostgresStandingRuleStore` | `RedisStandingRuleStore` |
+| Plan and goal checkpoints | `checkpointer_from_url("postgres://…")` | `checkpointer_from_url("redis://…")` |
+
+Sessions, approvals and durable runs come from `adk-session`'s stores on the same backend,
+which the features turn on. Both rule stores keep a version per app that every grant and
+revocation increments with the change, and answer `rules_for` from a cache only while the
+stored version matches, so a revocation through one replica is refused by every replica from
+its next call (spec 3.1 §9.2 I4). `mongodb`, `neo4j` and `firestore` add those checkpointers to
+`checkpointer_from_url`. See [Running replicas](serving.md#running-replicas).
+
+```rust,no_run
+use std::sync::Arc;
+
+use adk_core::Llm;
+use adk_harness::{HarnessAgent, PostgresModeStore, PostgresStandingRuleStore};
+
+async fn replica(model: Arc<dyn Llm>, url: &str) -> adk_core::Result<HarnessAgent> {
+    let pool = sqlx::PgPool::connect(url).await.map_err(|error| adk_core::AdkError::config(error.to_string()))?;
+    let modes = PostgresModeStore::new(pool.clone());
+    modes.migrate().await?;
+    let rules = PostgresStandingRuleStore::new(pool);
+    rules.migrate().await?;
+    HarnessAgent::builder("harness")
+        .model(model)
+        .workspace(adk_devtools::Workspace::new(".").allow_bash(true))
+        .mode_store(Arc::new(modes))
+        .standing_rules(Arc::new(rules))
+        .plan_checkpoint_store(url)
+        .await?
+        .build()
+}
+```
+
 ## The encrypted store
 
 Feature `encrypted` seals every payload of the harness's stores at rest (spec 3.1 §7.12,
@@ -84,6 +129,11 @@ columns stay plaintext for indexing.
 | A wrong or missing key fails the open, never a plaintext fallback | `SqliteStoreMarker` records the key id; each store refuses an envelope it has no key for and a plaintext row while a key is configured | `encrypted_store_a_database_written_under_a_key_refuses_to_open_without_it` |
 | Rotation retires the old key | `rewrap` on each store re-seals rows under the new key; `compact` vacuums the file so freed pages carry no plaintext; afterwards the old key opens nothing | `encrypted_store_rotation_reseals_every_row_and_the_old_key_opens_nothing` |
 | A store can be encrypted in place | `rewrap` seals rows written before any key (sessions and approvals with legacy migration on) | `encrypted_store_rotation_seals_rows_written_before_the_key` |
+
+Plan checkpoints seal the same way: `SealedCheckpointer` wraps any checkpointer and seals
+each checkpoint's state, metadata, child ledger and pending writes into one envelope bound
+to its thread and checkpoint ids, and `rewrap_sqlite` re-seals the `graph_checkpoints` table
+of a SQLite database under a new key.
 
 `encrypted_store_conformance_tests!(keyring = …)` generates the four cases over a temporary
 `harness.db`. `StoreRotation` describes a rotation and produces the
