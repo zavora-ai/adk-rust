@@ -163,6 +163,9 @@ pub async fn act(target: &KernelTarget, pid: &str, action: Action) -> Result<()>
 /// `adk-rust freeze`.
 pub async fn freeze(target: &KernelTarget, reason: Option<&str>) -> Result<()> {
     let answer = client(target).await?.freeze(reason).await?;
+    if let Some(error) = &answer.audit_error {
+        eprintln!("warning: the freeze's audit record could not be written: {error}");
+    }
     println!(
         "frozen ({}); {} running process(es) parked on this replica, every replica parks its \
          own. Lift it with `adk-rust unfreeze`.",

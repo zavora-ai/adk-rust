@@ -618,9 +618,6 @@ pub struct UpArgs {
     /// postgres://… or redis://… (default: harness.db)
     #[arg(long, value_name = "URL", conflicts_with = "ephemeral")]
     pub store: Option<String>,
-    /// Turn the consolidation tick off (spec 3.2 §7.5); no tick runs in this build
-    #[arg(long)]
-    pub no_consolidation: bool,
     #[command(flatten)]
     pub harness: adk_cli::harness::HarnessArgs,
 }

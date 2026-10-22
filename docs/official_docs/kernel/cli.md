@@ -53,7 +53,6 @@ adk-rust up --home /srv/kernel                     # socket and harness.db under
 | `--bind HOST:PORT` | `[kernel] bind`, else `127.0.0.1:8080` | Anything but loopback needs `--auth-token` (K-I18) |
 | `--auth-token T` | `$ADK_SERVE_TOKEN` | Bearer token HTTP callers present |
 | `--store URL` | `harness.db` | `postgres://…` or `redis://…`: every store, the kernel's included, shared by replicas |
-| `--no-consolidation` | — | Accepted; no consolidation tick runs in this build |
 | `--install`, `--uninstall` | — | Service installation is not in this build: run `up` under launchd, systemd or a container supervisor |
 
 On Windows the kernel serves HTTP only: the named-pipe transport is a later deliverable, so

@@ -104,7 +104,9 @@ regardless:
 | `target` | The pid, session or spawned target |
 | `pid` | The new process, on `spawn` |
 
-`freeze` and `unfreeze` also write `governance.freeze` and `governance.unfreeze`.
+`freeze` and `unfreeze` also write `governance.freeze` and `governance.unfreeze`. When the
+freeze's own record fails, the freeze still takes effect, the kernel logs a warning, and the
+answer carries the failure in `auditError`.
 
 ## From code
 
