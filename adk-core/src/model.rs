@@ -228,6 +228,27 @@ pub struct GenerateContentConfig {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cached_content: Option<String>,
 
+    /// The reasoning effort of this call (spec 3.1 §7.23, §10 C4).
+    ///
+    /// A set value wins over the effort the client was built with: Anthropic sends it as
+    /// `output_config.effort` with adaptive thinking, OpenAI as `reasoning_effort` (Chat
+    /// Completions) or `reasoning.effort` (Responses), Gemini as `thinking_level`, and
+    /// OpenRouter and DeepSeek as their reasoning effort. A provider or model with no effort
+    /// control ignores it and logs at debug level. `None` keeps the client's own
+    /// configuration.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_core::{Effort, GenerateContentConfig};
+    ///
+    /// let config = GenerateContentConfig { effort: Some(Effort::High), ..Default::default() };
+    /// assert_eq!(serde_json::to_value(&config).unwrap()["effort"], "high");
+    /// assert!(serde_json::to_value(GenerateContentConfig::default()).unwrap().get("effort").is_none());
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
+
     /// Provider-specific request options keyed by provider namespace.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extensions: serde_json::Map<String, serde_json::Value>,
@@ -804,6 +825,7 @@ mod tests {
             })),
             response_modalities: Some(vec!["TEXT".to_string(), "IMAGE".to_string()]),
             cached_content: Some("cachedContents/abc123".to_string()),
+            effort: Some(Effort::Medium),
             extensions,
         };
 
@@ -823,6 +845,18 @@ mod tests {
         assert_eq!(decoded.cached_content, config.cached_content);
         assert_eq!(decoded.extensions, config.extensions);
         assert_eq!(decoded.response_modalities, config.response_modalities);
+        assert_eq!(decoded.effort, config.effort);
+    }
+
+    #[test]
+    fn a_config_without_effort_reads_and_writes_as_before() {
+        let legacy: GenerateContentConfig =
+            serde_json::from_value(serde_json::json!({ "temperature": 0.2 })).unwrap();
+        assert_eq!(legacy.effort, None);
+        assert_eq!(serde_json::to_value(&legacy).unwrap().get("effort"), None);
+        let set: GenerateContentConfig =
+            serde_json::from_value(serde_json::json!({ "effort": "low" })).unwrap();
+        assert_eq!(set.effort, Some(Effort::Low));
     }
 
     #[test]
