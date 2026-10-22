@@ -172,7 +172,8 @@ pub struct HarnessAgentBuilder {
     last_todos: Option<Arc<Mutex<TodoList>>>,
     web: Option<crate::web::WebConfig>,
     search_provider: Option<Arc<dyn crate::web::SearchProvider>>,
-    provider_web_tools: crate::web::ProviderWebTools,
+    /// `None`: the model provider's search when `web` is set (spec 3.1 §7.20).
+    provider_web_tools: Option<crate::web::ProviderWebTools>,
     mcp_interaction: crate::mcp::McpInteractionConfig,
     #[cfg(feature = "mcp")]
     mcp_servers: Vec<crate::mcp::McpServerSet>,
@@ -262,7 +263,7 @@ impl HarnessAgentBuilder {
             last_todos: None,
             web: None,
             search_provider: None,
-            provider_web_tools: crate::web::ProviderWebTools::default(),
+            provider_web_tools: None,
             mcp_interaction: crate::mcp::McpInteractionConfig::default(),
             #[cfg(feature = "mcp")]
             mcp_servers: Vec::new(),
@@ -286,9 +287,10 @@ impl HarnessAgentBuilder {
         }
     }
 
-    /// Governed web access (spec 3.1 §7.20): `web_fetch`, and `web_search` when a
-    /// [`search_provider`](Self::search_provider) is set, under `config`'s allowlist and
-    /// caps. Without feature `web` the configuration is kept and no tool is added.
+    /// Governed web access (spec 3.1 §7.20): `web_fetch` under `config`'s allowlist and
+    /// caps, and web search — the built-in search of the provider the model's client serves,
+    /// or the governed `web_search` when a [`search_provider`](Self::search_provider) is set.
+    /// Without feature `web` the configuration is kept and no tool is added.
     ///
     /// # Example
     ///
@@ -304,20 +306,40 @@ impl HarnessAgentBuilder {
         self
     }
 
-    /// The search backend behind `web_search` (spec 3.1 §7.20); none by default, so
-    /// `web_search` is declared only when one is set.
+    /// The search backend behind the governed `web_search` (spec 3.1 §7.20); none by
+    /// default. A configured provider replaces the model provider's built-in search, so
+    /// every search runs under the policy, screening and a per-call record.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let harness = HarnessAgent::builder("harness")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .web(WebConfig::default())
+    ///     .search_provider(Arc::new(SearxngSearch::new("http://localhost:8888")?))
+    ///     .build()?;
+    /// assert!(harness.info().tools.contains(&"web_search".to_string()));
+    /// ```
     pub fn search_provider(mut self, provider: Arc<dyn crate::web::SearchProvider>) -> Self {
         self.search_provider = Some(provider);
         self
     }
 
-    /// Provider-executed search and URL tools (spec 3.1 §7.20); all off by default.
+    /// Provider-executed search and URL tools (spec 3.1 §7.20). Without this call a
+    /// harness with [`web`](Self::web) declares
+    /// [`ProviderWebTools::provider_default`](crate::web::ProviderWebTools::provider_default)
+    /// — the search built-in of the provider the model's client serves — unless a
+    /// [`search_provider`](Self::search_provider) is set; one without `web` declares none.
+    /// [`ProviderWebTools::off`](crate::web::ProviderWebTools::off) turns them off.
     ///
-    /// An enabled tool is attached for the harness model's provider only, carries the
-    /// allowlist where the provider supports one, is declared only to a run starting in
-    /// Ask or Auto, and is recorded as `harness.web.provider_enabled` once per run (I49).
+    /// An enabled tool is attached for the provider the model's client serves only
+    /// ([`adk_core::Llm::native_web_search`]), carries the allowlist where the provider
+    /// supports one, is declared only to a run starting in Ask or Auto, is recorded as
+    /// `harness.web.provider_enabled` once per run, and what it searched is recorded as
+    /// `harness.web.searched` after each response (I49).
     pub fn provider_web_tools(mut self, tools: crate::web::ProviderWebTools) -> Self {
-        self.provider_web_tools = tools;
+        self.provider_web_tools = Some(tools);
         self
     }
 
@@ -1114,7 +1136,9 @@ impl HarnessAgentBuilder {
                 )));
             }
         }
-        if self.search_provider.is_some() && self.provider_web_tools.anthropic_web_search {
+        if self.search_provider.is_some()
+            && self.provider_web_tools.is_some_and(|tools| tools.anthropic_web_search)
+        {
             return Err(AdkError::config(
                 "the governed web_search and Anthropic's provider web_search share one tool name; \
                  set a search provider or enable anthropic_web_search, not both (spec 3.1 §7.20)",
@@ -1486,21 +1510,52 @@ impl HarnessAgentBuilder {
         }
         let toolset = Arc::new(toolset);
 
-        // Provider-executed search and URL tools, for the model's provider only, declared
-        // to runs starting in Ask or Auto (spec 3.1 §7.20, I49).
+        // Provider-executed search and URL tools, for the provider the model's client
+        // serves only, declared to runs starting in Ask or Auto; by default the provider's
+        // search when web is on, replaced by a configured search provider (spec 3.1 §7.20,
+        // I49).
         #[cfg(feature = "web")]
-        let provider_web = if self.provider_web_tools.any() {
-            let allowlist =
-                self.web.as_ref().map(|web| web.allowed_domains.clone()).unwrap_or_default();
-            Some(Arc::new(crate::web::provider::ProviderWebToolset::new(
-                self.provider_web_tools,
-                model.name(),
-                allowlist,
-                mode_store.clone(),
-                self.mode,
-            )?))
-        } else {
-            None
+        let (provider_web, web_search_path) = {
+            let tools = self.provider_web_tools.unwrap_or(if self.web.is_some() {
+                crate::web::ProviderWebTools::provider_default()
+            } else {
+                crate::web::ProviderWebTools::off()
+            });
+            let toolset = if tools.any() {
+                let allowlist =
+                    self.web.as_ref().map(|web| web.allowed_domains.clone()).unwrap_or_default();
+                Some(crate::web::provider::ProviderWebToolset::new(
+                    tools,
+                    model.as_ref(),
+                    allowlist,
+                    self.search_provider.is_some(),
+                    mode_store.clone(),
+                    self.mode,
+                )?)
+            } else {
+                None
+            };
+            let path = match (&self.search_provider, &self.web) {
+                (Some(provider), Some(_)) => {
+                    crate::web::WebSearchPath::Governed { provider: provider.name().to_string() }
+                }
+                _ => match toolset.as_ref().and_then(|toolset| toolset.search_path()) {
+                    Some(path) => path,
+                    None if self.web.is_none() => {
+                        crate::web::WebSearchPath::None { reason: "web is off".into() }
+                    }
+                    None => crate::web::WebSearchPath::None {
+                        reason: "provider search is off and no search provider is configured"
+                            .into(),
+                    },
+                },
+            };
+            let toolset = toolset.filter(|toolset| !toolset.tool_names().is_empty()).map(Arc::new);
+            (toolset, path)
+        };
+        #[cfg(not(feature = "web"))]
+        let web_search_path = crate::web::WebSearchPath::None {
+            reason: "adk-harness is built without feature web".into(),
         };
         #[cfg(feature = "web")]
         let provider_web_names: BTreeSet<String> =
@@ -1673,8 +1728,20 @@ impl HarnessAgentBuilder {
         } else {
             non_waivable
         };
+        // A provider that refuses its built-in web tools gets the request again without
+        // them (spec 3.1 §7.20).
+        #[cfg(feature = "web")]
+        let agent_model: Arc<dyn Llm> = match &provider_web {
+            Some(provider_web) => Arc::new(crate::web::provider::ProviderSearchFallback::new(
+                model.clone(),
+                provider_web.clone(),
+            )),
+            None => model.clone(),
+        };
+        #[cfg(not(feature = "web"))]
+        let agent_model = model.clone();
         let mut builder = LlmAgentBuilder::new(self.name.clone())
-            .model(model.clone())
+            .model(agent_model)
             .description(self.description.unwrap_or_else(|| {
                 "A governed harness that reads, edits and runs code in the workspace under approvals."
                     .to_string()
@@ -1821,6 +1888,7 @@ impl HarnessAgentBuilder {
             tools: tool_names,
             effort: self.effort,
             context_caching: self.context_caching,
+            web_search: web_search_path,
         };
         let _ = (self.default_members, self.member_model, self.plan_graph);
         Ok(HarnessAgent {

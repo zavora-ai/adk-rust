@@ -105,6 +105,12 @@ pub struct HarnessArgs {
     /// Host fetched without approval: exact, or *.example.com (repeatable)
     #[arg(long = "allow-domain", value_name = "HOST")]
     pub allow_domains: Vec<String>,
+
+    /// Where web search runs: provider (the model provider's built-in search, the
+    /// default), off, searxng (SEARXNG_URL or `[web] searxng_url`) or deepseek
+    /// (DEEPSEEK_API_KEY); spec 3.1 §7.20
+    #[arg(long, value_parser = parse_search, value_name = "SEARCH")]
+    pub search: Option<SearchArg>,
     /// Reasoning effort of this session's model clients: low, medium or high
     /// (default: the `[effort]` policy, medium in ask; spec 3.1 §7.23)
     #[arg(long, value_parser = parse_effort, value_name = "LEVEL")]
@@ -216,6 +222,68 @@ impl MemberArg {
     }
 }
 
+/// Where web search runs: `--search` and `[web] search` (spec 3.1 §7.20, §8.1).
+///
+/// A configured search provider replaces the model provider's built-in search with the
+/// governed `web_search` tool: policy, screening and a per-call record.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_cli::harness::SearchArg;
+///
+/// assert_eq!("provider".parse::<SearchArg>(), Ok(SearchArg::Provider));
+/// assert_eq!("searxng".parse::<SearchArg>(), Ok(SearchArg::Searxng));
+/// assert_eq!(SearchArg::default(), SearchArg::Provider);
+/// assert!("bing".parse::<SearchArg>().is_err());
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SearchArg {
+    /// The built-in search of the provider the model's client serves (Gemini, Anthropic,
+    /// OpenAI Responses, DeepSeek Responses); none for a provider without one.
+    #[default]
+    Provider,
+    /// No web search.
+    Off,
+    /// The governed `web_search` through a SearXNG instance: `[web] searxng_url` in the
+    /// user config, else `SEARXNG_URL`.
+    Searxng,
+    /// The governed `web_search` through DeepSeek's Search API, keyed from
+    /// `DEEPSEEK_API_KEY`.
+    DeepSeek,
+}
+
+impl std::str::FromStr for SearchArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "provider" => Ok(Self::Provider),
+            "off" | "none" => Ok(Self::Off),
+            "searxng" => Ok(Self::Searxng),
+            "deepseek" => Ok(Self::DeepSeek),
+            other => {
+                Err(format!("unknown search '{other}'; use provider, off, searxng or deepseek"))
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for SearchArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Provider => "provider",
+            Self::Off => "off",
+            Self::Searxng => "searxng",
+            Self::DeepSeek => "deepseek",
+        })
+    }
+}
+
+fn parse_search(value: &str) -> std::result::Result<SearchArg, String> {
+    value.parse()
+}
+
 fn parse_mode(value: &str) -> std::result::Result<HarnessMode, String> {
     match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
         "read-only" | "readonly" => Ok(HarnessMode::ReadOnly),
@@ -255,7 +323,8 @@ struct ConfigFile {
     trust: Option<bool>,
     packs: Option<Vec<String>>,
     members: Option<Vec<String>>,
-    web: Option<bool>,
+    /// `web = true|false`, or a `[web]` table (spec 3.1 §7.20).
+    web: Option<WebKey>,
     allow_domains: Option<Vec<String>>,
     /// `[effort]`: the reasoning effort per mode and role (spec 3.1 §7.23).
     effort: Option<EffortPolicy>,
@@ -267,6 +336,42 @@ struct ConfigFile {
     #[serde(default)]
     #[allow(dead_code)]
     hooks: Vec<toml::Value>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
+}
+
+/// `web` in `harness.toml`: whether web tools are declared, or the `[web]` table.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum WebKey {
+    Enabled(bool),
+    Table(WebTable),
+}
+
+impl WebKey {
+    fn enabled(&self) -> Option<bool> {
+        match self {
+            Self::Enabled(enabled) => Some(*enabled),
+            Self::Table(_) => None,
+        }
+    }
+
+    fn table(&self) -> Option<&WebTable> {
+        match self {
+            Self::Enabled(_) => None,
+            Self::Table(table) => Some(table),
+        }
+    }
+}
+
+/// The `[web]` table: where web search runs (spec 3.1 §7.20).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct WebTable {
+    /// `provider`, `off`, `searxng` or `deepseek`.
+    search: Option<String>,
+    /// The SearXNG instance `search = "searxng"` queries.
+    searxng_url: Option<String>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
 }
@@ -343,6 +448,10 @@ pub struct ResolvedHarnessArgs {
     pub web: bool,
     /// `--allow-domain`: hosts fetched without approval.
     pub allow_domains: Vec<String>,
+    /// `--search` / `[web] search`: where web search runs (spec 3.1 §7.20).
+    pub search: SearchArg,
+    /// `[web] searxng_url` of the user config.
+    pub searxng_url: Option<String>,
     /// Long-term memory: on unless `--no-memory` or `--ephemeral`.
     pub memory: bool,
     /// The reasoning effort per mode and role (spec 3.1 §7.23): `--effort` sets every
@@ -421,6 +530,8 @@ impl HarnessArgs {
         let mut members = Vec::new();
         let mut web = true;
         let mut allow_domains: Vec<String> = Vec::new();
+        let mut search = SearchArg::default();
+        let mut searxng_url = None;
         let mut effort = EffortPolicy::default();
         let mut effort_explicit = false;
         let mut store_key = None;
@@ -441,8 +552,18 @@ impl HarnessArgs {
             for member in user.members.iter().flatten() {
                 members.push(parse_member(member).map_err(|error| config_error(&origin, &error))?);
             }
-            if let Some(value) = user.web {
+            if let Some(value) = user.web.as_ref().and_then(WebKey::enabled) {
                 web = value;
+            }
+            if let Some(table) = user.web.as_ref().and_then(WebKey::table) {
+                if let Some(value) = &table.search {
+                    search =
+                        value.parse().map_err(|error: String| config_error(&origin, &error))?;
+                }
+                searxng_url = table.searxng_url.clone();
+                for key in table.unknown.keys() {
+                    notes.push(format!("{origin}: unknown key `web.{key}` ignored"));
+                }
             }
             allow_domains.extend(user.allow_domains.iter().flatten().cloned());
             if let Some(policy) = user.effort {
@@ -476,8 +597,32 @@ impl HarnessArgs {
             if project.fail_if_unavailable == Some(true) {
                 fail_if_unavailable = true;
             }
-            if project.web == Some(false) {
+            if project.web.as_ref().and_then(WebKey::enabled) == Some(false) {
                 web = false;
+            }
+            // A workspace may turn search off; it may not choose where queries go.
+            if let Some(table) = project.web.as_ref().and_then(WebKey::table) {
+                if let Some(value) = &table.search {
+                    let requested: SearchArg =
+                        value.parse().map_err(|error: String| config_error(origin, &error))?;
+                    if requested == SearchArg::Off {
+                        search = SearchArg::Off;
+                    } else if requested != search {
+                        notes.push(loosening_note(
+                            "web.search",
+                            "it would choose where the agent's queries go",
+                        ));
+                    }
+                }
+                if table.searxng_url.is_some() {
+                    notes.push(loosening_note(
+                        "web.searxng_url",
+                        "it would choose where the agent's queries go",
+                    ));
+                }
+                for key in table.unknown.keys() {
+                    notes.push(format!("{origin}: unknown key `web.{key}` ignored"));
+                }
             }
             // Effort costs money, not permissions: a project may set it; flags win.
             if let Some(policy) = project.effort {
@@ -528,6 +673,9 @@ impl HarnessArgs {
             web = true;
         }
         allow_domains.extend(self.allow_domains.iter().cloned());
+        if let Some(flag) = self.search {
+            search = flag;
+        }
         if let Some(level) = self.effort {
             effort = EffortPolicy::uniform(level);
             effort_explicit = true;
@@ -555,6 +703,8 @@ impl HarnessArgs {
             memory: !self.no_memory && !self.ephemeral,
             web,
             allow_domains,
+            search,
+            searxng_url,
             effort,
             effort_explicit,
             store_key,
@@ -615,6 +765,8 @@ mod tests {
                 memory: true,
                 web: true,
                 allow_domains: vec![],
+                search: SearchArg::Provider,
+                searxng_url: None,
                 effort: EffortPolicy::default(),
                 effort_explicit: false,
                 store_key: None,
@@ -751,6 +903,47 @@ mod tests {
             .resolve(HarnessMode::Ask, None)
             .unwrap_err();
         assert!(error.to_string().contains("--sandbox"), "{error}");
+    }
+
+    #[test]
+    fn search_defaults_to_the_provider_and_the_flag_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("user.toml");
+        write(&user, "[web]\nsearch = \"searxng\"\nsearxng_url = \"http://localhost:8888\"\n");
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, None).unwrap();
+        assert_eq!((resolved.search, resolved.searxng_url), (SearchArg::Provider, None));
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap();
+        assert_eq!(resolved.search, SearchArg::Searxng);
+        assert_eq!(resolved.searxng_url.as_deref(), Some("http://localhost:8888"));
+        assert!(resolved.web, "a [web] table leaves web on");
+        assert!(resolved.notes.is_empty(), "{:?}", resolved.notes);
+        let resolved = HarnessArgs { search: Some(SearchArg::Off), ..args_in(dir.path()) }
+            .resolve(HarnessMode::Ask, Some(&user))
+            .unwrap();
+        assert_eq!(resolved.search, SearchArg::Off);
+        // `web = false` keeps its meaning beside the table form.
+        write(&user, "web = false\n");
+        assert!(!args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap().web);
+        write(&user, "[web]\nsearch = \"bing\"\n");
+        let error = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap_err();
+        assert!(error.to_string().contains("unknown search 'bing'"), "{error}");
+    }
+
+    #[test]
+    fn a_project_may_turn_search_off_but_never_choose_where_queries_go() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join(PROJECT_CONFIG_FILE),
+            "[web]\nsearch = \"deepseek\"\nsearxng_url = \"http://collector.example\"\n",
+        );
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, None).unwrap();
+        assert_eq!((resolved.search, resolved.searxng_url), (SearchArg::Provider, None));
+        assert_eq!(resolved.notes.len(), 2, "{:?}", resolved.notes);
+        assert!(resolved.notes.iter().all(|note| note.contains("where the agent's queries go")));
+        write(&dir.path().join(PROJECT_CONFIG_FILE), "[web]\nsearch = \"off\"\n");
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, None).unwrap();
+        assert_eq!(resolved.search, SearchArg::Off);
+        assert!(resolved.notes.is_empty(), "{:?}", resolved.notes);
     }
 
     #[test]

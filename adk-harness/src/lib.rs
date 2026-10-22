@@ -29,7 +29,7 @@
 //! | `hooks::HookSpec`, `hooks::HookSet`, `hooks::HookRunner` (feature `hooks`) | §7.22 |
 //! | `packs::managed::{HarnessDef, HarnessResolver}` (feature `managed`) | §7.18 |
 //! | [`coding::CodingAgent`] | §7.19 |
-//! | [`WebConfig`], [`SearchProvider`], [`ProviderWebTools`], `web_fetch`, `web_search` (feature `web`) | §7.20 |
+//! | [`WebConfig`], [`SearchProvider`], [`ProviderWebTools`], [`WebSearchPath`], `web_fetch`, `web_search`, `SearxngSearch`, `DeepSeekSearch` (feature `web`) | §7.20 |
 //! | [`McpInteractionConfig`], `HarnessElicitationHandler`, `HarnessSamplingHandler`, `mcp_*_resource` (feature `mcp`) | §7.21 |
 //! | [`EffortPolicy`], [`Effort`] | §7.23 |
 //! | `encrypted::{StoreKeySource, StoreKeyring, StoreEnvelope, StoreRotation}` (feature `encrypted`) | §7.12 |
@@ -219,4 +219,7 @@ pub use tools::{MemoryRememberTool, MemorySearchTool};
 #[cfg(feature = "web")]
 pub use tools::{WEB_TURN_CAP_CODE, WebFetchTool, WebSearchTool};
 pub use toolset::HarnessToolset;
+pub use web::WebSearchPath;
+#[cfg(feature = "web")]
+pub use web::{DeepSeekSearch, SearxngSearch};
 pub use web::{ProviderWebTools, SearchHit, SearchProvider, WebConfig};

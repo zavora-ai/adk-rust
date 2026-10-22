@@ -63,6 +63,8 @@ pub struct HarnessInfo {
     pub effort: crate::posture::EffortPolicy,
     /// Whether a `cache_capable` model gets the runner's explicit context cache.
     pub context_caching: bool,
+    /// Which path `web_search` takes (spec 3.1 §7.20).
+    pub web_search: crate::web::WebSearchPath,
 }
 
 /// Project instructions with the trust they load under.
@@ -677,6 +679,13 @@ impl Agent for HarnessAgent {
             mcp.ensure_started(self.runtime.workspace_trusted()).await;
         }
         let events = self.run_governed(ctx.clone()).await?;
+        // What a provider-executed search ran is recorded after each response
+        // (spec 3.1 §7.20).
+        #[cfg(feature = "web")]
+        let events = match &self.runtime.provider_web {
+            Some(provider_web) => provider_web.record_searches(ctx.clone(), events),
+            None => events,
+        };
         Ok(self.with_mode_mirror(&ctx, events).await)
     }
 }

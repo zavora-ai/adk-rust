@@ -101,8 +101,7 @@ pub async fn fixture(
     fixture_in(dir, responses, configure).await
 }
 
-/// A harness whose scripted model reports `model_name`, so provider-specific wiring
-/// (spec 3.1 §7.20 provider web tools) sees a provider-shaped name.
+/// A harness whose scripted model reports `model_name`.
 #[allow(dead_code)]
 pub async fn fixture_named(
     model_name: &str,
@@ -111,6 +110,16 @@ pub async fn fixture_named(
 ) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     fixture_with_model(dir, Arc::new(ScriptedLlm::new(model_name, responses)), configure).await
+}
+
+/// A harness over `model`, such as a scripted model that reports a provider's built-in
+/// search (spec 3.1 §7.20).
+pub async fn fixture_on(
+    model: ScriptedLlm,
+    configure: impl FnOnce(HarnessAgentBuilder) -> HarnessAgentBuilder,
+) -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
+    fixture_with_model(dir, Arc::new(model), configure).await
 }
 
 pub async fn fixture_in(

@@ -27,6 +27,8 @@ mod html;
 pub(crate) mod provider;
 #[cfg(feature = "web")]
 mod screen;
+#[cfg(feature = "web")]
+mod search;
 
 pub use domain::{
     ParsedUrl, UrlRefusal, domain_matches, host_allowlisted, is_private_host, is_private_ip,
@@ -44,6 +46,8 @@ pub use screen::{
     INJECTION_LABEL, INJECTION_PHRASES, SECRET_REDACTION, Screened, has_secret, redact_secrets,
     screen,
 };
+#[cfg(feature = "web")]
+pub use search::{DeepSeekSearch, SearxngSearch};
 
 /// Configuration of the web tools (spec 3.1 §7.20).
 ///
@@ -168,20 +172,34 @@ pub trait SearchProvider: fmt::Debug + Send + Sync {
     -> Result<Vec<SearchHit>>;
 }
 
-/// Which provider-executed search and URL tools the operator enabled (spec 3.1 §7.20
-/// "Provider-native search and fetch"). All off by default.
+/// Which provider-executed search and URL tools the harness declares (spec 3.1 §7.20
+/// "Provider-native search and fetch").
+///
+/// The default, [`provider_default`](Self::provider_default), is the search built-in of the
+/// provider the harness model's client serves ([`adk_core::Llm::native_web_search`]):
+/// Gemini `google_search`, Anthropic `web_search`, OpenAI Responses `web_search` or
+/// DeepSeek Responses `web_search`. A configured
+/// [`SearchProvider`](crate::HarnessAgentBuilder::search_provider) replaces it with the
+/// governed `web_search`; [`off`](Self::off) declares none. The per-provider flags stay for
+/// explicit control and attach only for the provider the model's client serves.
 ///
 /// # Example
 ///
 /// ```rust
 /// use adk_harness::web::ProviderWebTools;
 ///
-/// let tools = ProviderWebTools::default();
-/// assert!(!tools.any());
+/// assert_eq!(ProviderWebTools::default(), ProviderWebTools::provider_default());
+/// assert!(ProviderWebTools::provider_default().native_search);
+/// assert!(!ProviderWebTools::off().any());
+/// let explicit = ProviderWebTools { gemini_url_context: true, ..ProviderWebTools::off() };
+/// assert!(explicit.any() && !explicit.native_search);
 /// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProviderWebTools {
+    /// The search built-in of the provider the harness model's client serves, whichever
+    /// it is; replaced by a configured search provider.
+    pub native_search: bool,
     /// Anthropic `web_search`, with the allowlist forwarded.
     pub anthropic_web_search: bool,
     /// OpenAI `web_search`, with the allowlist forwarded.
@@ -192,13 +210,108 @@ pub struct ProviderWebTools {
     pub gemini_url_context: bool,
 }
 
+impl Default for ProviderWebTools {
+    fn default() -> Self {
+        Self::provider_default()
+    }
+}
+
 impl ProviderWebTools {
+    /// The model provider's own search and nothing else: what a harness with
+    /// [`web`](crate::HarnessAgentBuilder::web) declares unless told otherwise.
+    pub fn provider_default() -> Self {
+        Self { native_search: true, ..Self::off() }
+    }
+
+    /// No provider-executed tool: `web_search` exists only through a configured search
+    /// provider.
+    pub fn off() -> Self {
+        Self {
+            native_search: false,
+            anthropic_web_search: false,
+            openai_web_search: false,
+            gemini_google_search: false,
+            gemini_url_context: false,
+        }
+    }
+
     /// Whether any provider tool is enabled.
     pub fn any(&self) -> bool {
-        self.anthropic_web_search
+        self.native_search
+            || self.anthropic_web_search
             || self.openai_web_search
             || self.gemini_google_search
             || self.gemini_url_context
+    }
+}
+
+/// Which path `web_search` takes in a built harness (spec 3.1 §7.20), as
+/// [`HarnessInfo::web_search`](crate::HarnessInfo::web_search) reports it.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::web::WebSearchPath;
+///
+/// let path = WebSearchPath::Provider {
+///     provider: "gemini".into(),
+///     tool: "google_search".into(),
+///     allowlist: None,
+///     allowlist_supported: false,
+/// };
+/// assert_eq!(
+///     path.to_string(),
+///     "gemini google_search, run by the provider: every domain (gemini takes no allowlist)"
+/// );
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "path")]
+pub enum WebSearchPath {
+    /// The model provider's built-in search, declared to runs that start in Ask or Auto.
+    #[serde(rename_all = "camelCase")]
+    Provider {
+        /// The provider that runs the search.
+        provider: String,
+        /// The built-in tool declared.
+        tool: String,
+        /// The allowlist forwarded to the provider.
+        allowlist: Option<Vec<String>>,
+        /// Whether the provider takes an allowlist at all.
+        allowlist_supported: bool,
+    },
+    /// The governed `web_search` over the operator's search provider.
+    Governed {
+        /// The search provider's name.
+        provider: String,
+    },
+    /// No `web_search`, and why.
+    None {
+        /// Why no search is declared.
+        reason: String,
+    },
+}
+
+impl fmt::Display for WebSearchPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Provider { provider, tool, allowlist: Some(domains), .. } => write!(
+                f,
+                "{provider} {tool}, run by the provider: allowlist {}",
+                domains.join(", ")
+            ),
+            Self::Provider { provider, tool, allowlist: None, allowlist_supported: false } => {
+                write!(
+                    f,
+                    "{provider} {tool}, run by the provider: every domain ({provider} takes no \
+                     allowlist)"
+                )
+            }
+            Self::Provider { provider, tool, allowlist: None, allowlist_supported: true } => {
+                write!(f, "{provider} {tool}, run by the provider: every domain")
+            }
+            Self::Governed { provider } => write!(f, "web_search through {provider} (governed)"),
+            Self::None { reason } => write!(f, "off ({reason})"),
+        }
     }
 }
 

@@ -54,6 +54,9 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--effort low\|medium\|high` | The reasoning effort of this session's model clients (spec 3.1 §7.23); without it the `[effort]` policy applies per mode: plan high, everything else medium |
 | `--store-key keychain:<entry>\|secret:<provider>/<name>\|env:<VAR>` | Where the key sealing `harness.db` is kept (spec 3.1 §7.12); without it `[store] key` in the user config, else the store is plaintext |
 | `--no-hooks` | Runs no hooks, the workspace's included (spec 3.1 §7.22); `/hooks` lists the effective set |
+| `--web` / `--no-web` | Declares the web tools (on by default) or none at all (spec 3.1 §7.20) |
+| `--allow-domain HOST` | A host `web_fetch` reads without approval: exact, or `*.example.com`; repeatable |
+| `--search provider\|off\|searxng\|deepseek` | Where web search runs (spec 3.1 §7.20): `provider` (the default) is the built-in search of the provider the model's client serves; `searxng` and `deepseek` replace it with the governed `web_search` over a SearXNG instance (`[web] searxng_url`, else `SEARXNG_URL`) or DeepSeek's Search API (`DEEPSEEK_API_KEY`); `off` declares none. The banner's `Search` line and `/web` name the path |
 
 > **Note:** `--pack computer-use` and `--pack payments` refuse at start: a desktop runtime and a merchant service are connections only the library API takes (spec 3.1 §7.16, §7.24).
 
@@ -92,6 +95,10 @@ distiller = "low"
 [store]                      # the user config only (spec 3.1 §7.12)
 key = "keychain:adk-rust"
 
+[web]                        # spec 3.1 §7.20; `web = false` turns the web tools off instead
+search = "searxng"           # provider (default), off, searxng or deepseek
+searxng_url = "http://localhost:8888"
+
 [[hooks]]                    # spec 3.1 §7.22; see Hooks
 event = "post_edit"
 command = "cargo fmt"
@@ -100,7 +107,9 @@ command = "cargo fmt"
 `[effort]` names a level per mode (`read_only`, `plan`, `ask`, `auto`) and per role
 (`members`, `distiller`, `sampling`); a project file may set it, since effort costs money,
 not permissions. `[store]` names where the store key lives and is read from the user config
-only; a project file setting it is ignored with a note. `[[hooks]]` tables are hooks on
+only; a project file setting it is ignored with a note. `[web]` names where web search runs:
+a project file may set `search = "off"`, and any other `search` or a `searxng_url` there is
+ignored with a note, since it would choose where the agent's queries go. `[[hooks]]` tables are hooks on
 tool events ([Hooks](hooks.md#in-the-cli)): the user config's run before the workspace's,
 and the workspace's run only once the workspace is trusted.
 

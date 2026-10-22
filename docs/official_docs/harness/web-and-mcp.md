@@ -10,7 +10,7 @@ enter the context only through a `Read` tool or an explicit `@server:resource` m
 
 | Feature | Default | Adds |
 |---|---|---|
-| `web` | off in the library, on in `adk-rust` | `web_fetch`, `web_search` (with a `SearchProvider`), screening, `ProviderWebTools` |
+| `web` | off in the library, on in `adk-rust` | `web_fetch`, web search (the model provider's built-in search, or `web_search` over a `SearchProvider`), screening, `ProviderWebTools`, `SearxngSearch`, `DeepSeekSearch` |
 | `mcp` | off in the library, on in `adk-rust` | the elicitation, sampling and resource bridges; `mcp_list_resources`, `mcp_read_resource` |
 | `web-fixture` | off | a loopback HTTP server stands in for the web in tests; never on in `adk-rust` |
 
@@ -25,7 +25,8 @@ The umbrella crate forwards them as `harness-web` and `harness-mcp`.
 | `web_fetch` | `{ url, max_bytes?, as?: "text" \| "markdown" }` | `Web { allowlisted }` from the URL's host | One `GET`; the body becomes text; the result carries the url, final url, status, content type, byte count and SHA-256 |
 | `web_search` | `{ query, limit?: ≤ 10, site?: host }` | `Web { allowlisted }` from `site`, other when absent | Runs the operator's `SearchProvider`; returns `[{ title, url, snippet }]` in the same block; fetches no page |
 
-`web_search` is declared only when a `SearchProvider` is set.
+The governed `web_search` is declared only when a `SearchProvider` is set; without one, web
+search is the model provider's built-in search ([Web search](#web-search)).
 
 ### Mode table rows
 
@@ -77,28 +78,94 @@ let harness = HarnessAgent::builder("harness")
 | Screening | Injection patterns (imperatives addressed to the agent, tool-call syntax, role markers) label the line `[screened: injection-pattern]`; secret patterns are replaced by `[redacted: secret-pattern]`; both before the result is stored, and recorded as `harness.web.screened` |
 | Exfiltration | A URL over `max_url_len`, whose query or fragment matches a secret pattern or carries more than 256 bytes outside the path, is refused before any request; so is a query over `max_query_len` or matching a secret pattern; the record carries a digest, never the value |
 
-### Provider-native search
+### Web search
 
-`ProviderWebTools` is all off. An enabled tool is attached for the harness model's provider
-only, declared to a run that starts in Ask or Auto, carries `allowed_domains` where the
-provider supports one (Anthropic and OpenAI `web_search`; Gemini `google_search` and
-`url_context` have none, so every domain), and is recorded as `harness.web.provider_enabled`
-once per run. The request names which path is governed. A tightening to ReadOnly or Plan
-while one is live ends the turn with `harness.web.provider_tightened`. These tools run
-inside the model: no policy, ledger, screening or per-call record covers them.
+`HarnessAgentBuilder::web(..)` turns web search on with `web_fetch`. Search runs on one of
+two paths, chosen at build (spec 3.1 §7.20):
+
+| Configuration | Path | Governed |
+|---|---|---|
+| `.web(..)` alone (the default) | The search built-in of the provider the model's client serves | No: the search runs inside the model; the run records it afterwards |
+| `.web(..)` and `.search_provider(..)` | The governed `web_search` over that provider | Yes: policy, screening and a per-call record |
+| `.web(..)` and `.provider_web_tools(ProviderWebTools::off())` | None | — |
+| No `.web(..)` | None, unless `.provider_web_tools(..)` asks for a built-in explicitly | — |
+
+A configured search provider always wins over the model provider's built-in search.
+`HarnessInfo::web_search` reports the path as a `WebSearchPath`; `adk-rust` prints it on
+the `Search` line of the banner and under `/web`.
+
+#### The provider's built-in search
+
+The provider is read from the model's client through `Llm::native_web_search()`, never
+from what the model writes:
+
+| Client | Built-in | Declared as | Allowlist |
+|---|---|---|---|
+| `GeminiModel` (`generateContent`, Gemini API or Vertex AI) | `GoogleSearchTool` | `google_search` | None: every domain, and the request banner says Gemini takes no allowlist |
+| `GeminiModel` on the Interactions transport | None | — | The transport refuses a built-in tool beside function tools |
+| `AnthropicClient` on `api.anthropic.com` | `WebSearchTool` | `web_search` | `allowed_domains` |
+| `AnthropicClient` on DeepSeek's Anthropic endpoint (`https://api.deepseek.com/anthropic`) | `WebSearchTool` | `web_search` | None documented: every domain |
+| `OpenAIResponsesClient` on `api.openai.com` | `OpenAIWebSearchTool` | `openai_web_search` | `filters.allowed_domains` |
+| `OpenAIResponsesClient` on `https://api.deepseek.com` with `deepseek-v4-pro` | `DeepSeekWebSearchTool` | `deepseek_web_search` | None documented: every domain |
+| `OpenAIClient` (Chat Completions), `DeepSeekClient`, `OllamaModel`, `GroqClient`, `BedrockClient`, mistral.rs, any other endpoint | None | — | Configure a search provider |
+
+DeepSeek runs its search on the Responses endpoint for `deepseek-v4-pro` (`deepseek-flash`
+ignores the tool) and on its Anthropic-compatible endpoint; its Chat Completions endpoint,
+which `DeepSeekClient` uses, accepts function tools only
+([Responses API](https://api-docs.deepseek.com/guides/responses_api),
+[Anthropic API](https://api-docs.deepseek.com/guides/anthropic_api)).
+
+The guards (spec 3.1 §9.2 I49):
+
+| Guard | Mechanism |
+|---|---|
+| Mode | Declared only to a run that starts in Ask or Auto; ReadOnly and Plan keep the Web class denial (I13). A tightening to ReadOnly or Plan while one is live ends the turn with `harness.web.provider_tightened` |
+| Allowlist | `WebConfig::allowed_domains` is forwarded where the provider takes one; the request banner says when the provider cannot |
+| Banner | Each request of the run names the live built-ins and says `web_fetch` is the governed path |
+| Refusal | A provider that refuses a request because it declares a built-in (no search quota on the account, no permission, a model without the tool: a rate-limit, forbidden, invalid-input or unsupported error before the first response) gets the request once more without the built-ins; when that succeeds they stay off for the harness and a warning names the reason |
+| Records | `harness.web.provider_enabled` once per run; after each model response that carries a provider search, `harness.web.searched` with `source: "provider"`, the queries (secret patterns redacted) and their digests, the cited URLs and their hosts |
+
+Gemini reports its queries in `groundingMetadata.webSearchQueries` and its sources as
+grounding chunks, whose URLs are Google's redirect links; Anthropic in `server_tool_use`
+and `web_search_tool_result` blocks; OpenAI and DeepSeek in `web_search_call` items.
 
 ```rust
 use adk_harness::ProviderWebTools;
 
+// Turn the built-in search off, and add Gemini's URL context explicitly.
 let builder = builder.provider_web_tools(ProviderWebTools {
-    anthropic_web_search: true,
-    ..ProviderWebTools::default()
+    gemini_url_context: true,
+    ..ProviderWebTools::off()
 });
 ```
 
-Every other provider-executed builtin passed to `.tool(..)` is refused at build: search and
-URL context are enabled here, computer use through its pack, and the rest have no governed
-form.
+`ProviderWebTools::provider_default()` (also `Default`) is the provider's search alone. The
+per-provider flags attach only for the provider the model's client serves. Every other
+provider-executed builtin passed to `.tool(..)` is refused at build: search and URL context
+are enabled here, computer use through its pack, and the rest have no governed form.
+
+#### A search provider
+
+| Provider | Configure | Behaviour |
+|---|---|---|
+| `SearxngSearch::new(url)` | The instance's base URL; the instance lists `json` under `search.formats` in `settings.yml` | `GET <url>/search?q=…&format=json`; no key |
+| `DeepSeekSearch::from_env()` / `DeepSeekSearch::new(key)` | `DEEPSEEK_API_KEY` | `POST https://api.deepseek.com/v1/tools/search` ([Search API](https://api-docs.deepseek.com/guides/search)); the hit's snippet is DeepSeek's `summary` |
+| Your own `SearchProvider` | — | `name()` and `search(query, limit, site)` |
+
+```rust
+use std::sync::Arc;
+use adk_harness::{HarnessAgent, SearxngSearch, WebConfig};
+
+let harness = HarnessAgent::builder("harness")
+    .model(model)
+    .workspace(adk_devtools::Workspace::new("."))
+    .web(WebConfig::default())
+    .search_provider(Arc::new(SearxngSearch::new("http://localhost:8888")?))
+    .build()?;
+```
+
+A `site` restricts results with the `site:` operator both providers read. The harness caps,
+screens and delimits what a provider returns, as for every governed search.
 
 ## MCP interaction
 

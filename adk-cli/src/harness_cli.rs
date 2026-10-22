@@ -8,7 +8,7 @@ use std::sync::Arc;
 use adk_cli::console::ConsoleIo;
 use adk_cli::harness::{
     BearerTokenExtractor, ConsolePrompter, HarnessArgs, HarnessLauncher, OPERATOR_SCOPE,
-    ResolvedHarnessArgs, TurnOutcome,
+    ResolvedHarnessArgs, SearchArg, TurnOutcome,
 };
 use adk_core::{
     ApprovalPolicy, ApprovalService, ApproverSelector, Effort, Llm, StoreApprovalService,
@@ -270,6 +270,28 @@ impl Setup {
                 allowed_domains: self.resolved.allow_domains.clone(),
                 ..adk_harness::WebConfig::default()
             });
+            // Web search (spec 3.1 §7.20): the model provider's built-in search unless the
+            // user chose a search provider, which replaces it with the governed web_search.
+            builder = match self.resolved.search {
+                SearchArg::Provider => builder,
+                SearchArg::Off => builder.provider_web_tools(adk_harness::ProviderWebTools::off()),
+                SearchArg::Searxng => {
+                    let url = self
+                        .resolved
+                        .searxng_url
+                        .clone()
+                        .or_else(|| std::env::var("SEARXNG_URL").ok())
+                        .filter(|url| !url.trim().is_empty())
+                        .context(
+                            "--search searxng needs the instance: set `searxng_url` under [web] \
+                             in your user config, or SEARXNG_URL",
+                        )?;
+                    builder.search_provider(Arc::new(adk_harness::SearxngSearch::new(url)?))
+                }
+                SearchArg::DeepSeek => {
+                    builder.search_provider(Arc::new(adk_harness::DeepSeekSearch::from_env()?))
+                }
+            };
         }
         // Servers the workspace declares in `.mcp.json` start once the workspace is trusted
         // (spec 3.1 §7.21, I3).
@@ -309,6 +331,7 @@ impl Setup {
             (true, Some(set)) => Some(format!("{} (/hooks lists them)", set.hooks.len())),
             (true, None) => None,
         };
+        let search = agent.info().web_search.to_string();
         let mut launcher = HarnessLauncher::new(agent)
             .app_name(APP_NAME)
             .with_session_service(self.sessions())
@@ -318,6 +341,7 @@ impl Setup {
         if let Some(hooks) = hooks {
             launcher = launcher.with_status_line("Hooks", hooks);
         }
+        launcher = launcher.with_status_line("Search", search);
         if self.resolved.mode_explicit {
             launcher = launcher.with_mode(self.resolved.mode);
         }

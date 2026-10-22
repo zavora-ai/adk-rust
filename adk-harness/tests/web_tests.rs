@@ -9,13 +9,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use adk_core::{Result, ToolPolicy, ToolPolicyRequest};
+use adk_core::{NativeWebSearch, NativeWebSearchTool, Result, ToolPolicy, ToolPolicyRequest};
 use adk_harness::web::{
     INJECTION_LABEL, ProviderWebTools, SECRET_REDACTION, SearchHit, SearchProvider, WebConfig,
     fixture,
 };
 use adk_harness::{HarnessMode, PromptAnswer, RulePredicate, WEB_TURN_CAP_CODE};
-use adk_model::ScriptedResponse;
+use adk_model::{ScriptedLlm, ScriptedResponse};
 use common::{Outcome, fixture as harness, outcome, response_of};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -511,9 +511,9 @@ async fn provider_web_tools_are_declared_only_to_ask_or_auto_runs_with_the_allow
     for (mode, declared) in
         [(HarnessMode::Ask, true), (HarnessMode::ReadOnly, false), (HarnessMode::Plan, false)]
     {
-        let f = common::fixture_named("claude-sonnet-5-5", vec![done()], |b| {
+        let f = common::fixture_on(anthropic_model(vec![done()]), |b| {
             b.mode(mode).web(web(&["docs.rs", "*.rust-lang.org"])).provider_web_tools(
-                ProviderWebTools { anthropic_web_search: true, ..ProviderWebTools::default() },
+                ProviderWebTools { anthropic_web_search: true, ..ProviderWebTools::off() },
             )
         })
         .await;
@@ -554,21 +554,36 @@ async fn provider_web_tools_are_declared_only_to_ask_or_auto_runs_with_the_allow
             assert!(f.records("harness.web.provider_enabled").is_empty());
         }
     }
-    // Off by default: no provider tool is declared without the operator's flag.
-    let f = common::fixture_named("claude-sonnet-5-5", vec![done()], |b| b.web(web(&["docs.rs"])))
-        .await;
+    // Off on request: no provider tool is declared.
+    let f = common::fixture_on(anthropic_model(vec![done()]), |b| {
+        b.web(web(&["docs.rs"])).provider_web_tools(ProviderWebTools::off())
+    })
+    .await;
     f.send("hello").await;
     assert!(!f.model.requests()[0].tools.contains_key("web_search"));
-    // A provider tool enabled for another provider's model is not attached.
-    let f = common::fixture_named("gpt-5.6-terra", vec![done()], |b| {
+    // A provider tool enabled for a model whose client serves another provider is not
+    // attached.
+    let openai = ScriptedLlm::new("gpt-5.6-terra", vec![done()]).with_native_web_search(
+        NativeWebSearch::new("openai", NativeWebSearchTool::OpenAiWebSearch, true),
+    );
+    let f = common::fixture_on(openai, |b| {
         b.web(web(&[])).provider_web_tools(ProviderWebTools {
             anthropic_web_search: true,
-            ..ProviderWebTools::default()
+            ..ProviderWebTools::off()
         })
     })
     .await;
     f.send("hello").await;
     assert!(!f.model.requests()[0].tools.contains_key("web_search"));
+}
+
+/// A scripted model whose client serves Anthropic's `web_search`.
+fn anthropic_model(responses: Vec<ScriptedResponse>) -> ScriptedLlm {
+    ScriptedLlm::new("claude-sonnet-5-5", responses).with_native_web_search(NativeWebSearch::new(
+        "anthropic",
+        NativeWebSearchTool::AnthropicWebSearch,
+        true,
+    ))
 }
 
 #[tokio::test]
@@ -589,7 +604,7 @@ async fn builtins_are_refused_at_build_and_web_search_name_collision_is_refused(
         .search_provider(Arc::new(FixedSearch))
         .provider_web_tools(ProviderWebTools {
             anthropic_web_search: true,
-            ..ProviderWebTools::default()
+            ..ProviderWebTools::off()
         })
         .build()
         .err()

@@ -13,10 +13,10 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use adk_core::{
-    Llm, LlmRequest, LlmResponseStream, RunBudget, SpendKey, SpendLedger, SpendPeriod, UsageMetadata,
-    vendor_for_model,
+    Llm, LlmRequest, LlmResponseStream, NativeWebSearch, Part, RunBudget, SpendKey, SpendLedger, SpendPeriod,
+    UsageMetadata, vendor_for_model,
 };
-use adk_harness::web::{INJECTION_LABEL, ProviderWebTools, SECRET_REDACTION, WebConfig, fixture};
+use adk_harness::web::{INJECTION_LABEL, ProviderWebTools, SECRET_REDACTION, WebConfig, WebSearchPath, fixture};
 use adk_harness::{HarnessMode, McpInteractionConfig, McpServerSet, PromptAnswer, RulePredicate};
 use adk_model::ScriptedResponse;
 use adk_tool::mcp::McpServerConfig;
@@ -35,7 +35,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::{Checks, Env, Outcome, Subject, call, done, outcome, responses, scripted};
 
 pub const SCRIPTED: &[&str] = &["web_fetch_allowlist_and_screening", "mcp_elicitation_and_sampling"];
-pub const LIVE: &[&str] = &["live_web_allowlist"];
+pub const LIVE: &[&str] = &["live_web_allowlist", "live_provider_search"];
+
+/// The names the provider-executed search built-ins declare under (spec 3.1 §7.20).
+const PROVIDER_SEARCH_TOOLS: &[&str] = &["google_search", "web_search", "openai_web_search", "deepseek_web_search"];
 
 /// The environment variable under which this binary runs as the scripted MCP server.
 pub const MCP_SERVER_ENV: &str = "HARNESS_EXAMPLE_MCP_SERVER";
@@ -62,6 +65,7 @@ pub async fn run_scripted(name: &str, subject: Subject) -> Option<Result<Checks>
 pub async fn run_live(name: &str, model: Arc<dyn Llm>) -> Option<Result<Checks>> {
     Some(match name {
         "live_web_allowlist" => live_web_allowlist(model).await,
+        "live_provider_search" => live_provider_search(model).await,
         _ => return None,
     })
 }
@@ -404,17 +408,25 @@ impl Llm for Recording {
         self.requests.lock().unwrap().push(request.clone());
         self.inner.generate_content(request, stream).await
     }
+
+    fn native_web_search(&self) -> Option<NativeWebSearch> {
+        self.inner.native_web_search()
+    }
 }
 
 /// H12 live: in Ask, a fetch of a docs page is held and prompted; "always allow docs.rs"
 /// creates a `DomainIn` rule; the second fetch runs with zero prompts; a fetch of another
-/// domain still prompts. Provider-native search stays off until the operator enables it; on
-/// Anthropic the allowlist is forwarded in the request, which the run prints.
+/// domain still prompts. Provider search is turned off here, so only `web_fetch` reads the
+/// web; `live_provider_search` covers the default.
 async fn live_web_allowlist(model: Arc<dyn Llm>) -> Result<Checks> {
     let mut checks = Checks::default();
     let recording = Arc::new(Recording { inner: model.clone(), requests: Mutex::new(Vec::new()) });
     let env = Env::new(Subject::Harness, recording.clone(), |b| {
-        b.mode(HarnessMode::Ask).web(WebConfig::default()).without_default_members().max_iterations(8)
+        b.mode(HarnessMode::Ask)
+            .web(WebConfig::default())
+            .provider_web_tools(ProviderWebTools::off())
+            .without_default_members()
+            .max_iterations(8)
     })
     .await?;
     env.session("alice", "s1").await?;
@@ -434,29 +446,81 @@ async fn live_web_allowlist(model: Arc<dyn Llm>) -> Result<Checks> {
     env.prompter.then(|_| PromptAnswer::Deny { message: Some("not this host".into()) });
     let events = env.send("alice", "s1", "Now fetch https://www.rust-lang.org/ the same way and name one heading.").await?;
     checks.check("another domain still prompts (denied)", env.prompter.count() == 2 && outcome(&events, "web_fetch") == Outcome::Denied);
-    let declared_search = recording.requests.lock().unwrap().iter().any(|r| r.tools.contains_key("web_search") || r.tools.contains_key("google_search") || r.tools.contains_key("openai_web_search"));
-    checks.check("provider-native search stays off until enabled", !declared_search);
+    let declared_search = recording.requests.lock().unwrap().iter().any(|r| PROVIDER_SEARCH_TOOLS.iter().any(|tool| r.tools.contains_key(*tool)));
+    checks.check("provider search off on request: only web_fetch reads the web", !declared_search);
+    Ok(checks)
+}
 
-    if vendor_for_model(model.name()) == "anthropic" {
-        let recording = Arc::new(Recording { inner: model.clone(), requests: Mutex::new(Vec::new()) });
-        let env = Env::new(Subject::Harness, recording.clone(), |b| {
-            b.mode(HarnessMode::Ask)
-                .web(WebConfig { allowed_domains: vec!["docs.rs".into()], ..WebConfig::default() })
-                .provider_web_tools(ProviderWebTools { anthropic_web_search: true, ..ProviderWebTools::default() })
-                .without_default_members()
-                .max_iterations(4)
-        })
+/// H12 live, provider search (spec 3.1 §7.20, I49): with only `web` configured, the harness
+/// declares the search built-in of the provider the model's client serves, with the allowlist
+/// where the provider takes one; a search question runs it inside the model, and
+/// `harness.web.searched` lists what it searched afterwards. A client that serves no search
+/// gets none, and the harness says why.
+async fn live_provider_search(model: Arc<dyn Llm>) -> Result<Checks> {
+    let mut checks = Checks::default();
+    let native = model.native_web_search();
+    let recording = Arc::new(Recording { inner: model.clone(), requests: Mutex::new(Vec::new()) });
+    let allowlist = vec!["rust-lang.org".to_string(), "blog.rust-lang.org".to_string()];
+    let env = Env::new(Subject::Harness, recording.clone(), |b| {
+        b.mode(HarnessMode::Ask)
+            .web(WebConfig { allowed_domains: allowlist.clone(), ..WebConfig::default() })
+            .without_default_members()
+            .max_iterations(4)
+    })
+    .await?;
+    let path = env.harness.as_ref().map(|harness| harness.agent().info().web_search.clone());
+    println!("      web search: {}", path.as_ref().map(ToString::to_string).unwrap_or_default());
+    env.session("alice", "s1").await?;
+    let events = env
+        .send(
+            "alice",
+            "s1",
+            "Search the web: what is the version number of the latest stable Rust release? Answer in one \
+             sentence and name the page you used. Do not use web_fetch.",
+        )
         .await?;
-        env.session("alice", "s2").await?;
-        env.send("alice", "s2", "Reply with the single word ok.").await?;
-        let requests = recording.requests.lock().unwrap();
-        let declaration = requests.iter().find_map(|r| r.tools.get("web_search").cloned());
-        println!("      anthropic request tools[web_search] = {}", declaration.clone().map(|d| d.to_string()).unwrap_or_else(|| "(absent)".into()));
-        checks.check(
-            "on Anthropic the allowlist is forwarded in the request",
-            declaration.is_some_and(|d| d["x-adk-anthropic-tool"]["allowed_domains"] == json!(["docs.rs"])),
-        );
-        checks.check("harness.web.provider_enabled recorded once per run", env.records("harness.web.provider_enabled") == 1);
+    let requests = recording.requests.lock().unwrap().clone();
+    let declared: Vec<String> = requests
+        .first()
+        .map(|request| PROVIDER_SEARCH_TOOLS.iter().filter(|tool| request.tools.contains_key(**tool)).map(|tool| tool.to_string()).collect())
+        .unwrap_or_default();
+    println!("      provider search declared: {declared:?}");
+    let Some(native) = native else {
+        checks.check("a client without native search declares none", declared.is_empty());
+        checks.check("the harness says why", matches!(path, Some(WebSearchPath::None { .. })));
+        return Ok(checks);
+    };
+    checks.check(format!("{}'s search is declared by default", native.provider), declared.len() == 1);
+    if native.allowed_domains {
+        let declaration = requests.first().and_then(|request| request.tools.get(&declared[0]).cloned()).unwrap_or_default();
+        println!("      declaration: {declaration}");
+        checks.check("the allowlist is forwarded in the request", declaration.to_string().contains("blog.rust-lang.org"));
     }
+    let answer: String = events
+        .iter()
+        .filter(|event| !event.llm_response.partial)
+        .filter_map(|event| event.llm_response.content.as_ref())
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    println!("      answer: {}", answer.trim());
+    let searched: Vec<_> = env.audit.records().into_iter().filter(|record| record.action == "harness.web.searched").collect();
+    for record in &searched {
+        println!(
+            "      harness.web.searched: source={} provider={} tool={} queries={} results={} hosts={}",
+            record.ext["source"], record.ext["provider"], record.ext["tool"], record.ext["queries"], record.ext["results"], record.ext["hosts"]
+        );
+    }
+    checks.check(
+        "the provider's search ran and harness.web.searched lists its queries",
+        searched.iter().any(|record| {
+            record.ext.get("source") == Some(&json!("provider"))
+                && record.ext.get("queries").and_then(Value::as_array).is_some_and(|queries| !queries.is_empty())
+        }),
+    );
+    checks.check("harness.web.provider_enabled recorded once per run", env.records("harness.web.provider_enabled") == 1);
     Ok(checks)
 }

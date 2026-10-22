@@ -119,7 +119,7 @@ effective set, and `on_hold` and `on_stop` notes are shown at the console. See
 | `auth` | on | `adk-auth` |
 | `memory` | on | working notes and long-term facts (`adk-memory`, `adk-guardrail`) |
 | `memory-embeddings` | off | `RagEmbedder`: `adk-rag`'s OpenAI and Gemini embedders for long-term facts |
-| `web` | off | `web_fetch`, `web_search`, screening and `ProviderWebTools` (`reqwest`, `adk-guardrail`); on in `adk-rust` |
+| `web` | off | `web_fetch`; web search through the model provider's built-in search by default, or the governed `web_search` over a `SearchProvider` (`SearxngSearch`, `DeepSeekSearch`); screening and `ProviderWebTools` (`reqwest`, `adk-guardrail`); on in `adk-rust` |
 | `mcp` | off | MCP elicitation, sampling and resource bridges (`adk-tool/mcp`, `adk-tool/mcp-sampling`); on in `adk-rust` |
 | `web-fixture` | off | a loopback HTTP server stands in for the web in tests; never on in `adk-rust` |
 | `hooks` | off | `toml`; `[[hooks]]` from `.adk/harness.toml`, the user config and the builder, run through the shell's launcher (spec 3.1 §7.22) |

@@ -80,6 +80,17 @@ See [Shell and sandbox](shell-and-sandbox.md) and [Durability](durability.md).
 
 See [Team](team.md), [Plans and goals](plan-and-goals.md) and [Memory](memory.md).
 
+### Web
+
+| Method | Default | Effect |
+|---|---|---|
+| `web(WebConfig)` | off | `web_fetch` under the allowlist and caps, and web search (feature `web`) |
+| `search_provider(provider)` | none | The governed `web_search` over `provider` (`SearxngSearch`, `DeepSeekSearch` or your own); replaces the model provider's built-in search |
+| `provider_web_tools(ProviderWebTools)` | `ProviderWebTools::provider_default()` with `web`, else none | The provider-executed built-ins: by default the search of the provider the model's client serves (`Llm::native_web_search`); `ProviderWebTools::off()` declares none |
+
+`HarnessInfo::web_search` reports which path search takes. See
+[Web access and MCP](web-and-mcp.md#web-search).
+
 ### Budget, identity and observability
 
 | Method | Default | Effect |

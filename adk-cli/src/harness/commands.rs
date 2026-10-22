@@ -498,6 +498,7 @@ async fn web(shared: &Shared, args: &str) -> Result<String> {
             } else {
                 out.push_str(&format!("Allowlist (no prompt): {}", allowlist.join(", ")));
             }
+            out.push_str(&format!("\nSearch: {}", harness.agent().info().web_search));
             Ok(out)
         }
         (Some("allow"), Some(host)) => {
