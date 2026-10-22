@@ -132,10 +132,10 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         .with_app_name(APP_NAME)
         .with_home(&home)
         .with_worker(worker)
-        .with_governance(governance.clone())
         .with_control(control_plane());
     let mut kernel = Kernel::builder()
         .config(config)
+        .governance(governance.clone())
         .run_store(run_store.clone())
         .process_store(stores.processes)
         .schedule_store(stores.schedules)

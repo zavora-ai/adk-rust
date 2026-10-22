@@ -283,7 +283,7 @@ pub async fn repl(client: ControlClient, session: Option<String>) -> Result<()> 
 pub enum Followed {
     /// Nothing runs in the session any more; the process followed, when one was, as it
     /// finished.
-    Done(Option<Process>),
+    Done(Option<Box<Process>>),
     /// Calls wait for a decision and no one at this surface gave one.
     Held(usize),
     /// The person pressed Ctrl-C; the kernel carries on.
@@ -335,7 +335,8 @@ pub async fn follow(
                     .processes(&ProcessesQuery::default())
                     .await?
                     .into_iter()
-                    .find(|process| process.meta.pid == pid),
+                    .find(|process| process.meta.pid == pid)
+                    .map(Box::new),
                 None => None,
             };
             return Ok(Followed::Done(finished));
@@ -421,11 +422,10 @@ fn render(events: &[Event], with_user: bool) {
         for part in &content.parts {
             match part {
                 Part::Text { text } if text.trim().is_empty() => {}
-                Part::Text { text } if event.author == "user" => {
-                    if with_user {
-                        println!("\x1b[36mYou >\x1b[0m {}", escape_control(text.trim()));
-                    }
+                Part::Text { text } if event.author == "user" && with_user => {
+                    println!("\x1b[36mYou >\x1b[0m {}", escape_control(text.trim()));
                 }
+                Part::Text { .. } if event.author == "user" => {}
                 Part::Text { text } => println!("{}", escape_control(text.trim_end())),
                 Part::FunctionCall { name, args, .. } => println!(
                     "\x1b[2m· {} {}\x1b[0m",
