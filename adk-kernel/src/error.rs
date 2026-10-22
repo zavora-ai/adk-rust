@@ -13,8 +13,6 @@ use crate::kernel::KernelState;
 /// Result of a fallible kernel operation (spec 3.2 §7.1).
 pub type Result<T, E = KernelError> = std::result::Result<T, E>;
 
-/// Error code of [`KernelError::Unimplemented`].
-pub const UNIMPLEMENTED_CODE: &str = "kernel.unimplemented";
 /// Error code of [`KernelError::NotFound`].
 pub const NOT_FOUND_CODE: &str = "kernel.not_found";
 /// Error code of [`KernelError::InvalidState`].
@@ -55,17 +53,6 @@ pub const SERDE_CODE: &str = "kernel.serde";
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum KernelError {
-    /// The item exists in the public API but its implementation has not landed in this
-    /// build. No release carries one.
-    #[error(
-        "{item} is not implemented in this build of adk-kernel; build from a revision where \
-         spec 3.2 phase 1 is complete"
-    )]
-    Unimplemented {
-        /// The path of the item, such as `kernel::Kernel::start`.
-        item: &'static str,
-    },
-
     /// No process has this id.
     #[error(
         "no process {pid}: list the processes with `adk-rust ps` or `GET /api/kernel/processes`"
@@ -164,7 +151,6 @@ impl KernelError {
     /// ```
     pub fn code(&self) -> &'static str {
         match self {
-            Self::Unimplemented { .. } => UNIMPLEMENTED_CODE,
             Self::NotFound { .. } => NOT_FOUND_CODE,
             Self::InvalidState { .. } => INVALID_STATE_CODE,
             Self::Frozen { .. } => FROZEN_CODE,
@@ -182,7 +168,6 @@ impl KernelError {
     /// The error's category, which sets the HTTP status a control-plane route answers.
     pub fn category(&self) -> ErrorCategory {
         match self {
-            Self::Unimplemented { .. } => ErrorCategory::Unsupported,
             Self::NotFound { .. } => ErrorCategory::NotFound,
             Self::InvalidState { .. } | Self::Lifecycle { .. } => ErrorCategory::Conflict,
             Self::Frozen { .. } | Self::Store { .. } | Self::ControlPlane { .. } => {

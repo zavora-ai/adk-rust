@@ -13,8 +13,9 @@
 //!
 //! | Route ([`paths`], under `/api`) | Purpose |
 //! |---|---|
-//! | `GET /kernel/health` | [`KernelHealth`] |
+//! | `GET /kernel/health` | [`KernelHealth`](crate::KernelHealth) |
 //! | `GET /kernel/processes` | the process table, each process with its [`ProcessView`](crate::ProcessView) ([`api::ProcessesQuery`]) |
+//! | `POST /kernel/processes` | start a process of a registered target as the caller ([`api::SpawnRequest`]): a turn a surface sends, or a sleeper with a wake set |
 //! | `POST /kernel/processes/{pid}/{kill,nice,suspend,resume}` | [`ProcessTable`](crate::ProcessTable) actions |
 //! | `GET /kernel/events` | the event bus as server-sent events, from a cursor ([`api::EventsQuery`]) |
 //! | `POST /kernel/attach/{session}` | a surface attaches to a session: transcript cursor, pending holds, process |
@@ -22,8 +23,34 @@
 //!
 //! The approvals inbox, `/api/runs`, `/api/cron`, `/api/admin/freeze` and `/hooks/{name}`
 //! are the existing server routes, unchanged; `POST /api/admin/freeze` delegates to
-//! [`Kernel::freeze`] through the kernel's `FreezeDelegate` (§10 S4). Agenda, driver,
-//! partition and `/proc` routes arrive with their phases.
+//! [`Kernel::freeze`] through the kernel's `FreezeDelegate` (§10 S4). The socket serves the
+//! approvals inbox beside the kernel routes when the kernel has an approval service, so a
+//! held call is decided over the socket as over HTTP. Agenda, driver, partition and `/proc`
+//! routes arrive with their phases.
+//!
+//! # Authentication and audit
+//!
+//! Every route needs an authenticated caller: the `Option<RequestContext>` the server's auth
+//! middleware puts in the request extensions must be `Some`, or the route answers `401`.
+//!
+//! | Transport | Caller |
+//! |---|---|
+//! | Socket | The OS user, with the `operator` scope, when the peer's uid is the socket owner's; any other peer is refused |
+//! | HTTP merged into `ServerBuilder` | Whatever the server's `RequestContextExtractor` admits: `LoopbackOperatorExtractor`, `BearerTokenExtractor` or an SSO extractor |
+//! | [`ControlPlaneConfig::http`] with an extractor | The extractor's subject |
+//! | [`ControlPlaneConfig::http`] on loopback without one | Loopback peers as the OS user with the `operator` scope |
+//! | [`ControlPlaneConfig::http`] beyond loopback without one | Refused at start (K-I18) |
+//!
+//! The routes that change the kernel — `spawn`, `kill`, `nice`, `suspend`, `resume`,
+//! `freeze`, `unfreeze` — need the `operator` scope (`403` otherwise), which the socket and a
+//! loopback bind grant. `attach` reads only the caller's own sessions.
+//!
+//! Every action that changes the kernel or reads a session writes a `kernel.control` record
+//! with `subject`, `transport`, `action` and `target` to the kernel's audit trail before it
+//! acts (K-I16; `spawn` records the new `pid` once it exists and cancels the process when
+//! the record fails), and is refused when the record cannot be written under
+//! `AuditFailureMode::Block`, except `freeze`, which takes effect regardless. Reads of the
+//! process table, the health and the event stream are authenticated and not recorded.
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -34,18 +61,19 @@ use adk_core::AdkError;
 use adk_server::auth_bridge::RequestContextExtractor;
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{KernelError, Result};
-use crate::kernel::{Kernel, KernelHealth};
+use crate::kernel::Kernel;
 
 pub mod api;
 mod client;
+mod routes;
 mod server;
+#[cfg(test)]
+mod tests;
 
 pub use client::ControlClient;
 pub use server::ControlPlane;
@@ -58,7 +86,7 @@ pub mod paths {
     pub const API_PREFIX: &str = "/api";
     /// `GET`: the kernel's health.
     pub const HEALTH: &str = "/kernel/health";
-    /// `GET`: the process table.
+    /// `GET`: the process table; `POST`: start a process.
     pub const PROCESSES: &str = "/kernel/processes";
     /// `POST`: kill a process.
     pub const KILL: &str = "/kernel/processes/{pid}/kill";
@@ -217,18 +245,7 @@ pub enum ControlTransport {
 /// # }
 /// ```
 pub fn router(kernel: Kernel) -> Router {
-    Router::new()
-        .route(paths::HEALTH, get(health))
-        .route(paths::PROCESSES, get(processes))
-        .route(paths::KILL, post(kill))
-        .route(paths::NICE, post(nice))
-        .route(paths::SUSPEND, post(suspend))
-        .route(paths::RESUME, post(resume))
-        .route(paths::EVENTS, get(events))
-        .route(paths::ATTACH, post(attach))
-        .route(paths::FREEZE, post(freeze))
-        .route(paths::UNFREEZE, post(unfreeze))
-        .with_state(kernel)
+    routes::routes(Arc::new(kernel))
 }
 
 impl IntoResponse for KernelError {
@@ -238,71 +255,4 @@ impl IntoResponse for KernelError {
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         (status, Json(error.to_problem_json())).into_response()
     }
-}
-
-async fn health(State(kernel): State<Kernel>) -> Json<KernelHealth> {
-    Json(kernel.health())
-}
-
-async fn processes(
-    State(_kernel): State<Kernel>,
-    Query(_query): Query<api::ProcessesQuery>,
-) -> Result<Json<api::ProcessesResponse>> {
-    Err(KernelError::Unimplemented { item: "control::processes" })
-}
-
-async fn kill(
-    State(_kernel): State<Kernel>,
-    UrlPath(_pid): UrlPath<String>,
-    Json(_request): Json<api::KillRequest>,
-) -> Result<Json<api::ProcessResponse>> {
-    Err(KernelError::Unimplemented { item: "control::kill" })
-}
-
-async fn nice(
-    State(_kernel): State<Kernel>,
-    UrlPath(_pid): UrlPath<String>,
-    Json(_request): Json<api::NiceRequest>,
-) -> Result<Json<api::ProcessResponse>> {
-    Err(KernelError::Unimplemented { item: "control::nice" })
-}
-
-async fn suspend(
-    State(_kernel): State<Kernel>,
-    UrlPath(_pid): UrlPath<String>,
-) -> Result<Json<api::ProcessResponse>> {
-    Err(KernelError::Unimplemented { item: "control::suspend" })
-}
-
-async fn resume(
-    State(_kernel): State<Kernel>,
-    UrlPath(_pid): UrlPath<String>,
-) -> Result<Json<api::ProcessResponse>> {
-    Err(KernelError::Unimplemented { item: "control::resume" })
-}
-
-async fn events(
-    State(_kernel): State<Kernel>,
-    Query(_query): Query<api::EventsQuery>,
-) -> Result<Response> {
-    Err(KernelError::Unimplemented { item: "control::events" })
-}
-
-async fn attach(
-    State(_kernel): State<Kernel>,
-    UrlPath(_session): UrlPath<String>,
-    Json(_request): Json<api::AttachRequest>,
-) -> Result<Json<api::AttachResponse>> {
-    Err(KernelError::Unimplemented { item: "control::attach" })
-}
-
-async fn freeze(
-    State(_kernel): State<Kernel>,
-    Json(_request): Json<api::FreezeRequest>,
-) -> Result<Json<api::FreezeResponse>> {
-    Err(KernelError::Unimplemented { item: "control::freeze" })
-}
-
-async fn unfreeze(State(_kernel): State<Kernel>) -> Result<Json<api::FreezeResponse>> {
-    Err(KernelError::Unimplemented { item: "control::unfreeze" })
 }

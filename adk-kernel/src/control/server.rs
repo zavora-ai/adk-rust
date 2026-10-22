@@ -1,21 +1,45 @@
 //! The control plane's listeners (spec 3.2 §7.11).
 
+use std::collections::HashMap;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
+use adk_core::RequestContext;
+use adk_server::approvals::{ApprovalEndpoints, approvals_router};
+use adk_server::auth_bridge::{RequestContextError, RequestContextExtractor};
+use axum::Router;
+use axum::body::Body;
+use axum::extract::ConnectInfo;
+use axum::http::Request;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
+use super::routes::{ControlBackend, OPERATOR_SCOPE, routes};
+use super::{ControlPlaneConfig, ControlTransport, paths};
 use crate::error::{KernelError, Result};
 use crate::kernel::Kernel;
 
+/// How long [`ControlPlane::shutdown`] lets requests in flight finish; an event stream
+/// never does, so it is cut after this.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
 /// The running listeners of a kernel's control plane (spec 3.2 §7.11): the Unix socket
 /// and, when [`ControlPlaneConfig::http`](super::ControlPlaneConfig::http) is set, an HTTP
-/// bind, both serving [`router`](super::router) under `/api`.
+/// bind, both serving [`router`](super::router) under `/api`, with the approvals inbox
+/// beside it when the kernel has an approval service.
 ///
-/// The socket is created owner-only and every request on it carries the OS user as an
-/// authenticated subject; HTTP requests carry the configured extractor's subject (K-I16).
-/// [`Kernel::start`] starts it and [`Kernel::stop`] shuts it down.
+/// The socket is created owner-only and admits only peers running as its owner, each as
+/// the OS user with the `operator` scope; HTTP requests carry the configured extractor's
+/// subject, or, on a loopback bind without one, loopback peers as the OS user (K-I16).
+/// A non-loopback bind without an extractor is refused (K-I18). The socket needs a Unix
+/// platform: off Unix, `start` with a socket configured answers
+/// [`KernelError::ControlPlane`], and the control plane is served over HTTP alone (the
+/// named pipe is §10 W2). [`Kernel::start`] starts it and [`Kernel::stop`] shuts it down.
 ///
 /// # Example
 ///
@@ -32,9 +56,8 @@ use crate::kernel::Kernel;
 pub struct ControlPlane {
     socket: Option<PathBuf>,
     http: Option<SocketAddr>,
-    // Unimplemented: awaited by `shutdown` once feat/kernel-cli lands (spec 3.2 §7.11).
-    #[allow(dead_code)]
     tasks: Vec<JoinHandle<()>>,
+    stop: CancellationToken,
 }
 
 impl fmt::Debug for ControlPlane {
@@ -52,9 +75,40 @@ impl ControlPlane {
     /// # Errors
     ///
     /// Returns [`KernelError::Config`] for a refused configuration (K-I18) and
-    /// [`KernelError::ControlPlane`] when the socket path or bind is taken.
-    pub async fn start(_kernel: &Kernel) -> Result<Self> {
-        Err(KernelError::Unimplemented { item: "control::ControlPlane::start" })
+    /// [`KernelError::ControlPlane`] when the socket path or bind is taken, or when a socket
+    /// is configured on a platform without Unix sockets.
+    pub async fn start(kernel: &Kernel) -> Result<Self> {
+        let config = kernel.config();
+        Self::serve(Arc::new(kernel.clone()), &config.control, &config.home).await
+    }
+
+    /// Serves `backend` as `config` says, the socket path relative to `home`.
+    pub(crate) async fn serve(
+        backend: Arc<dyn ControlBackend>,
+        config: &ControlPlaneConfig,
+        home: &Path,
+    ) -> Result<Self> {
+        config.validate()?;
+        let mut plane =
+            Self { socket: None, http: None, tasks: Vec::new(), stop: CancellationToken::new() };
+        let api = api(&backend);
+        if let Some(path) = config.socket_path(home) {
+            // A failure drops `plane`, which stops whatever already listens.
+            plane.tasks.push(serve_socket(&path, api.clone(), plane.stop.clone()).await?);
+            plane.socket = Some(path);
+        }
+        if let Some(addr) = config.http {
+            let (local, task) =
+                serve_http(addr, api, config.extractor.clone(), plane.stop.clone()).await?;
+            plane.tasks.push(task);
+            plane.http = Some(local);
+        }
+        tracing::info!(
+            control.socket = ?plane.socket,
+            control.http = ?plane.http,
+            "kernel control plane listening"
+        );
+        Ok(plane)
     }
 
     /// The socket's path, when one is served.
@@ -62,7 +116,8 @@ impl ControlPlane {
         self.socket.as_deref()
     }
 
-    /// The HTTP address, when one is served.
+    /// The HTTP address, when one is served: the bound address, so a configured port 0
+    /// reads as the port the system chose.
     pub fn http_addr(&self) -> Option<SocketAddr> {
         self.http
     }
@@ -72,7 +127,271 @@ impl ControlPlane {
     /// # Errors
     ///
     /// Returns [`KernelError::Io`] when the socket cannot be removed.
-    pub async fn shutdown(self) -> Result<()> {
-        Err(KernelError::Unimplemented { item: "control::ControlPlane::shutdown" })
+    pub async fn shutdown(mut self) -> Result<()> {
+        self.stop.cancel();
+        for task in std::mem::take(&mut self.tasks) {
+            let abort = task.abort_handle();
+            if tokio::time::timeout(SHUTDOWN_GRACE, task).await.is_err() {
+                abort.abort();
+            }
+        }
+        match self.socket.take() {
+            Some(path) => remove_socket(&path),
+            None => Ok(()),
+        }
     }
+}
+
+impl Drop for ControlPlane {
+    fn drop(&mut self) {
+        self.stop.cancel();
+        for task in &self.tasks {
+            task.abort();
+        }
+        if let Some(path) = self.socket.take()
+            && let Err(error) = remove_socket(&path)
+        {
+            tracing::warn!(error = %error, socket.path = %path.display(), "could not remove the kernel socket");
+        }
+    }
+}
+
+fn remove_socket(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// The kernel routes under `/api`, with the approvals inbox when the backend has an
+/// approval service.
+fn api(backend: &Arc<dyn ControlBackend>) -> Router {
+    let mut routes = routes(backend.clone());
+    if let Some(service) = backend.approvals() {
+        routes = routes.merge(approvals_router(ApprovalEndpoints::new(service.clone())));
+    }
+    Router::new().nest(paths::API_PREFIX, routes)
+}
+
+/// The OS user the kernel runs as, the subject of the socket and of loopback peers.
+pub(crate) fn os_user() -> String {
+    ["USER", "USERNAME"]
+        .into_iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|user| !user.trim().is_empty())
+        .unwrap_or_else(|| "user".to_string())
+}
+
+fn operator(user_id: &str) -> RequestContext {
+    RequestContext {
+        user_id: user_id.to_string(),
+        scopes: vec![OPERATOR_SCOPE.to_string()],
+        metadata: HashMap::new(),
+    }
+}
+
+/// Marks a request authenticated as `context` over `transport`, as the server's auth
+/// middleware marks one, and runs it.
+async fn admit(
+    mut request: Request<Body>,
+    next: Next,
+    context: RequestContext,
+    transport: ControlTransport,
+) -> Response {
+    request.extensions_mut().insert(Some(context));
+    request.extensions_mut().insert(transport);
+    next.run(request).await
+}
+
+/// The uid of a socket peer, from its credentials.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy)]
+struct PeerUid(Option<u32>);
+
+#[cfg(unix)]
+impl
+    axum::extract::connect_info::Connected<
+        axum::serve::IncomingStream<'_, tokio::net::UnixListener>,
+    > for PeerUid
+{
+    fn connect_info(stream: axum::serve::IncomingStream<'_, tokio::net::UnixListener>) -> Self {
+        Self(stream.io().peer_cred().ok().map(|credentials| credentials.uid()))
+    }
+}
+
+/// The subject of a socket peer of uid `peer` on a socket `owner` owns: the OS user `user`
+/// with the `operator` scope when the uids match, else refused.
+#[cfg(unix)]
+pub(crate) fn socket_subject(peer: Option<u32>, owner: u32, user: &str) -> Result<RequestContext> {
+    match peer {
+        Some(uid) if uid == owner => Ok(operator(user)),
+        _ => Err(KernelError::Unauthorized {
+            reason: "the kernel socket admits only the OS user that runs the kernel".into(),
+        }),
+    }
+}
+
+/// Serves `api` on a socket at `path`, created owner-only, admitting peers of its owner's
+/// uid as the OS user.
+#[cfg(unix)]
+async fn serve_socket(path: &Path, api: Router, stop: CancellationToken) -> Result<JoinHandle<()>> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    prepare_socket_path(path).await?;
+    let listener =
+        tokio::net::UnixListener::bind(path).map_err(|error| KernelError::ControlPlane {
+            reason: format!(
+                "could not listen on {}: {error}; a socket path is limited to about 100 bytes, \
+                 so choose a shorter kernel home if it is longer",
+                path.display()
+            ),
+        })?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    // The kernel created the socket, so its owner is the uid the kernel runs as.
+    let owner = std::fs::metadata(path)?.uid();
+    let user = os_user();
+    let app = api.layer(middleware::from_fn(move |request: Request<Body>, next: Next| {
+        let user = user.clone();
+        async move {
+            let peer = request
+                .extensions()
+                .get::<ConnectInfo<PeerUid>>()
+                .and_then(|ConnectInfo(PeerUid(uid))| *uid);
+            match socket_subject(peer, owner, &user) {
+                Ok(context) => admit(request, next, context, ControlTransport::Socket).await,
+                Err(error) => error.into_response(),
+            }
+        }
+    }));
+    let service = app.into_make_service_with_connect_info::<PeerUid>();
+    Ok(tokio::spawn(async move {
+        if let Err(error) =
+            axum::serve(listener, service).with_graceful_shutdown(stop.cancelled_owned()).await
+        {
+            tracing::error!(error = %error, "the kernel control socket stopped");
+        }
+    }))
+}
+
+/// Clears a stale socket left by a kernel that did not stop cleanly, and refuses a path
+/// another kernel answers on or that is not a socket.
+#[cfg(unix)]
+async fn prepare_socket_path(path: &Path) -> Result<()> {
+    use std::os::unix::fs::FileTypeExt;
+
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_socket() {
+        return Err(KernelError::ControlPlane {
+            reason: format!(
+                "{} exists and is not a socket; move it away, or give the kernel another home",
+                path.display()
+            ),
+        });
+    }
+    match tokio::net::UnixStream::connect(path).await {
+        Ok(_) => Err(KernelError::ControlPlane {
+            reason: format!(
+                "a kernel already listens on {}: attach to it with `adk-rust attach`, or stop \
+                 it before starting another with the same home",
+                path.display()
+            ),
+        }),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+            ) =>
+        {
+            tracing::info!(socket.path = %path.display(), "removing a stale kernel socket");
+            remove_socket(path)
+        }
+        Err(error) => Err(KernelError::ControlPlane {
+            reason: format!("could not check the kernel socket {}: {error}", path.display()),
+        }),
+    }
+}
+
+#[cfg(not(unix))]
+async fn serve_socket(
+    path: &Path,
+    _api: Router,
+    _stop: CancellationToken,
+) -> Result<JoinHandle<()>> {
+    Err(KernelError::ControlPlane {
+        reason: format!(
+            "the local control socket {} needs a Unix platform; the Windows named pipe is spec \
+             3.2 §10 W2. Serve the control plane over HTTP without a socket \
+             (ControlPlaneConfig::without_socket and with_http, or `adk-rust up --bind`)",
+            path.display()
+        ),
+    })
+}
+
+/// Serves `api` over HTTP on `addr`, authenticating with `extractor`, or admitting loopback
+/// peers as the OS user when there is none (a non-loopback bind without one never gets
+/// here: `ControlPlaneConfig::validate` refuses it).
+async fn serve_http(
+    addr: SocketAddr,
+    api: Router,
+    extractor: Option<Arc<dyn RequestContextExtractor>>,
+    stop: CancellationToken,
+) -> Result<(SocketAddr, JoinHandle<()>)> {
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|error| {
+        KernelError::ControlPlane { reason: format!("could not listen on {addr}: {error}") }
+    })?;
+    let local = listener.local_addr()?;
+    let user = os_user();
+    let app = api.layer(middleware::from_fn(move |request: Request<Body>, next: Next| {
+        let extractor = extractor.clone();
+        let user = user.clone();
+        async move {
+            let (parts, body) = request.into_parts();
+            let context = match &extractor {
+                Some(extractor) => match extractor.extract(&parts).await {
+                    Ok(context) => context,
+                    Err(error @ RequestContextError::ExtractionFailed(_)) => {
+                        return KernelError::ControlPlane { reason: error.to_string() }
+                            .into_response();
+                    }
+                    Err(error) => {
+                        return KernelError::Unauthorized { reason: error.to_string() }
+                            .into_response();
+                    }
+                },
+                None => {
+                    let loopback = parts
+                        .extensions
+                        .get::<ConnectInfo<SocketAddr>>()
+                        .is_some_and(|ConnectInfo(peer)| peer.ip().is_loopback());
+                    if !loopback {
+                        return KernelError::Unauthorized {
+                            reason: "only loopback peers are admitted without a bearer token \
+                                     or SSO"
+                                .into(),
+                        }
+                        .into_response();
+                    }
+                    operator(&user)
+                }
+            };
+            admit(Request::from_parts(parts, body), next, context, ControlTransport::Http).await
+        }
+    }));
+    let service = app.into_make_service_with_connect_info::<SocketAddr>();
+    let task = tokio::spawn(async move {
+        if let Err(error) =
+            axum::serve(listener, service).with_graceful_shutdown(stop.cancelled_owned()).await
+        {
+            tracing::error!(error = %error, "the kernel control plane's HTTP listener stopped");
+        }
+    });
+    Ok((local, task))
 }

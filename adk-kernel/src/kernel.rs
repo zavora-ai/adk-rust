@@ -829,8 +829,6 @@ impl Kernel {
     }
 }
 
-// Unimplemented: the control plane reads these once feat/kernel-cli lands (spec 3.2 §7.11).
-#[allow(dead_code)]
 impl Kernel {
     /// The session service `attach` reads transcripts and holds from (spec 3.2 §7.11).
     pub(crate) fn session_service(&self) -> Option<&Arc<dyn SessionService>> {
