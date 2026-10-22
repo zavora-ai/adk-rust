@@ -1,7 +1,9 @@
 //! Properties of the supervisor under random operation sequences (spec 3.2 §9.2, §11):
-//! a `Waiting` process never holds a lease (K-I2), and a freeze is monotone — within one
-//! second of `freeze` returning no process is `Running`, and no model call is made until
-//! `unfreeze` (K-I8).
+//! a `Waiting` process never holds a lease (K-I2); a process spawned asleep makes no model
+//! call until it is resumed, however slowly the side table is written; and a freeze is
+//! monotone — within one second of `freeze` returning no process is `Running`, and no model
+//! call is made until `unfreeze` (K-I8). Each case runs over a process store whose writes
+//! take a generated 0–120 ms.
 
 mod common;
 
@@ -49,7 +51,7 @@ async fn all_runs(world: &World) -> Vec<adk_core::RunRecord> {
     world.runs.list(RunFilter::default()).await.unwrap()
 }
 
-async fn check(ops: Vec<Op>) {
+async fn check(ops: Vec<Op>, write_delay: Duration) {
     let mut script = Vec::new();
     for _ in 0..64 {
         script.push(ScriptedResponse::function_call("step", json!({})));
@@ -58,9 +60,13 @@ async fn check(ops: Vec<Op>) {
     let world = World::new(script);
     world.release.add_permits(10_000);
     let control = GovernanceControl::new();
-    let kernel = world.kernel("k1", &control);
+    let slow: std::sync::Arc<dyn adk_kernel::ProcessStore> =
+        std::sync::Arc::new(SlowPuts { inner: world.processes.clone(), delay: write_delay });
+    let kernel = world.kernel_with("k1", &control, |builder| builder.process_store(slow));
     kernel.start().await.unwrap();
     let mut pids: Vec<String> = Vec::new();
+    // Sleepers no `Resume` has touched: they must never call the model.
+    let mut asleep: Vec<String> = Vec::new();
     // Model calls when the freeze took hold, while frozen.
     let mut frozen_at: Option<usize> = None;
     for op in ops {
@@ -74,6 +80,9 @@ async fn check(ops: Vec<Op>) {
                 if let Ok(process) =
                     kernel.processes().spawn(run_on(QueueClass::Interactive, "go"), spec).await
                 {
+                    if matches!(op, Op::SpawnAsleep) {
+                        asleep.push(process.meta.pid.clone());
+                    }
                     pids.push(process.meta.pid);
                 }
             }
@@ -84,6 +93,7 @@ async fn check(ops: Vec<Op>) {
             }
             Op::Resume(n) => {
                 if let Some(pid) = pick(n) {
+                    asleep.retain(|sleeper| *sleeper != pid);
                     let _ = kernel.processes().resume(&pid).await;
                 }
             }
@@ -134,6 +144,14 @@ async fn check(ops: Vec<Op>) {
         if let Some(calls) = frozen_at {
             assert_eq!(world.model_calls(), calls, "a model call was made while frozen (K-I8)");
         }
+        for pid in &asleep {
+            assert!(!made_a_model_call(&world, pid).await, "sleeper {pid} called the model (K-I2)");
+        }
+    }
+    // Give a sleeper that would wrongly run time to reach the model.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    for pid in &asleep {
+        assert!(!made_a_model_call(&world, pid).await, "sleeper {pid} called the model (K-I2)");
     }
     if frozen_at.is_some() {
         kernel.unfreeze(operator()).await.unwrap();
@@ -145,14 +163,15 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: 100, ..ProptestConfig::default() })]
 
     #[test]
-    fn waiting_processes_hold_no_lease_and_nothing_runs_while_frozen(
-        ops in prop::collection::vec(op(), 1..8)
+    fn waiting_processes_hold_no_lease_sleepers_stay_asleep_and_nothing_runs_while_frozen(
+        ops in prop::collection::vec(op(), 1..8),
+        write_delay_ms in 0u64..120,
     ) {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .build()
             .unwrap();
-        runtime.block_on(check(ops));
+        runtime.block_on(check(ops, Duration::from_millis(write_delay_ms)));
     }
 }

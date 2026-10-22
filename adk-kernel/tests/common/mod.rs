@@ -184,3 +184,88 @@ pub async fn tool_called(world: &World, n: usize) {
     })
     .await;
 }
+
+/// A `ProcessStore` whose writes take `delay`, as a remote store's might, so a test can
+/// check that no correctness depends on a row being written before a worker claims.
+pub struct SlowPuts {
+    pub inner: Arc<dyn ProcessStore>,
+    pub delay: Duration,
+}
+
+#[async_trait]
+impl ProcessStore for SlowPuts {
+    async fn put(&self, meta: adk_kernel::ProcessMeta) -> adk_kernel::Result<()> {
+        tokio::time::sleep(self.delay).await;
+        self.inner.put(meta).await
+    }
+
+    async fn get(&self, pid: &str) -> adk_kernel::Result<Option<adk_kernel::ProcessMeta>> {
+        self.inner.get(pid).await
+    }
+
+    async fn list(
+        &self,
+        filter: &adk_kernel::ProcessFilter,
+    ) -> adk_kernel::Result<Vec<adk_kernel::ProcessMeta>> {
+        self.inner.list(filter).await
+    }
+
+    async fn set_wake(
+        &self,
+        pid: &str,
+        wake: Option<adk_kernel::WakeSet>,
+    ) -> adk_kernel::Result<()> {
+        tokio::time::sleep(self.delay).await;
+        self.inner.set_wake(pid, wake).await
+    }
+
+    async fn set_queue(&self, pid: &str, queue: QueueClass) -> adk_kernel::Result<()> {
+        self.inner.set_queue(pid, queue).await
+    }
+
+    async fn delete(&self, pid: &str) -> adk_kernel::Result<bool> {
+        self.inner.delete(pid).await
+    }
+
+    async fn set_suspend_requested(&self, pid: &str, requested: bool) -> adk_kernel::Result<()> {
+        tokio::time::sleep(self.delay).await;
+        self.inner.set_suspend_requested(pid, requested).await
+    }
+
+    async fn add_spend(
+        &self,
+        pid: &str,
+        partition: &adk_kernel::PartitionId,
+        day: chrono::NaiveDate,
+        delta: adk_kernel::SpendDelta,
+    ) -> adk_kernel::Result<()> {
+        self.inner.add_spend(pid, partition, day, delta).await
+    }
+
+    async fn spend(
+        &self,
+        scope: &adk_kernel::stores::SpendScope,
+        from: chrono::NaiveDate,
+        to_inclusive: chrono::NaiveDate,
+    ) -> adk_kernel::Result<u64> {
+        self.inner.spend(scope, from, to_inclusive).await
+    }
+}
+
+/// Whether the session of `pid` holds a model turn.
+pub async fn made_a_model_call(world: &World, pid: &str) -> bool {
+    let session = world
+        .sessions
+        .get(adk_session::GetRequest {
+            app_name: APP.into(),
+            user_id: "alice".into(),
+            session_id: format!("run-{pid}"),
+            num_recent_events: None,
+            after: None,
+        })
+        .await;
+    let Ok(session) = session else { return false };
+    session.events().all().iter().any(|event| {
+        event.llm_response.content.as_ref().is_some_and(|content| content.role == "model")
+    })
+}

@@ -5,7 +5,6 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
 
 use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind, AuditTrail};
 use adk_core::{
@@ -30,13 +29,26 @@ use crate::wake::KERNEL_WAKE_TARGET;
 /// it without depending on the harness (spec 3.2 §6 D-1).
 pub(crate) const GOAL_TARGET: &str = "harness.goal";
 
-/// How long a spawned sleeper stays unclaimable, so its side-table row, which asks the
-/// claim to park it before its first model call, is written before any worker claims it.
-pub(crate) const SPAWN_GRACE: Duration = Duration::from_millis(250);
+/// The idempotency-key prefix of a run [`ProcessTable::spawn`](crate::ProcessTable::spawn)
+/// enqueued asleep. The run itself carries the intent, so its first claim parks it before
+/// its first model call however long its side-table row takes to write.
+pub(crate) const ASLEEP_KEY_PREFIX: &str = "kernel:asleep:";
+/// The idempotency-key prefix of a run `spawn` enqueued awake.
+pub(crate) const SPAWN_KEY_PREFIX: &str = "kernel:spawn:";
 
-/// How long a claim waits for the side-table row of a run `spawn` is still writing.
-const META_WAIT: Duration = Duration::from_millis(25);
-const META_RETRIES: u32 = 4;
+/// Whether `ProcessTable::spawn` enqueued `run`, so `spawn`, not a hook, writes its row.
+pub(crate) fn spawned_by_kernel(run: &RunRecord) -> bool {
+    run.idempotency_key
+        .as_deref()
+        .is_some_and(|key| key.starts_with(ASLEEP_KEY_PREFIX) || key.starts_with(SPAWN_KEY_PREFIX))
+}
+
+/// Whether `run` was spawned asleep and has not parked yet: it has no checkpoint, so no
+/// attempt reached its first model-call boundary.
+pub(crate) fn spawned_asleep(run: &RunRecord) -> bool {
+    run.checkpoint.is_none()
+        && run.idempotency_key.as_deref().is_some_and(|key| key.starts_with(ASLEEP_KEY_PREFIX))
+}
 
 /// How many spend samples a running process keeps for its burn rate.
 const SAMPLES: usize = 64;
@@ -116,24 +128,15 @@ impl Supervision {
         ProcessMeta::new(run.run_id.clone(), QueueClass::from_name(&run.queue), kind)
     }
 
-    /// The stored side table of `run`, or `None`; with `wait`, a missing row is read again
-    /// a few times first, for a run `spawn` enqueued and is still describing.
-    pub(crate) async fn stored_meta(&self, run: &RunRecord, wait: bool) -> Option<ProcessMeta> {
-        let attempts = if wait { META_RETRIES } else { 1 };
-        for attempt in 0..attempts {
-            match self.processes.get(&run.run_id).await {
-                Ok(Some(meta)) => return Some(meta),
-                Ok(None) => {}
-                Err(error) => {
-                    tracing::warn!(run.id = %run.run_id, error = %error, "could not read the process side table");
-                    return None;
-                }
-            }
-            if attempt + 1 < attempts {
-                tokio::time::sleep(META_WAIT).await;
+    /// The stored side table of `run`, or `None`.
+    pub(crate) async fn stored_meta(&self, run: &RunRecord) -> Option<ProcessMeta> {
+        match self.processes.get(&run.run_id).await {
+            Ok(meta) => meta,
+            Err(error) => {
+                tracing::warn!(run.id = %run.run_id, error = %error, "could not read the process side table");
+                None
             }
         }
-        None
     }
 
     /// Writes `meta`, logging a failure: a hook cannot fail the attempt it observes.
@@ -485,7 +488,7 @@ impl std::fmt::Debug for KernelHooks {
 impl WorkerHooks for KernelHooks {
     async fn on_claim(&self, run: &RunRecord) {
         let sup = &self.sup;
-        let stored = sup.stored_meta(run, true).await;
+        let stored = sup.stored_meta(run).await;
         let persisted = stored.is_some();
         let mut meta = stored.unwrap_or_else(|| Supervision::infer_meta(run));
         let from = if meta.wake.is_some() || meta.suspended_by.is_some() || run.attempt > 1 {
@@ -493,12 +496,14 @@ impl WorkerHooks for KernelHooks {
         } else {
             RunState::Queued
         };
-        let mut changed = !persisted;
-        if meta.suspend_requested || sup.draining.load(Ordering::SeqCst) {
+        // A run `spawn` enqueued gets its row from `spawn`, which may still be writing it; an
+        // inferred row written here could replace it.
+        let mut changed = !persisted && !spawned_by_kernel(run);
+        if spawned_asleep(run) || meta.suspend_requested || sup.draining.load(Ordering::SeqCst) {
             // A sleeper's first claim, a suspension asked while it queued, or a drain:
             // the attempt parks at its first model-call boundary.
             sup.suspend_local(&run.run_id);
-        } else {
+        } else if persisted {
             // Woken: the wake set fired or the suspension was lifted.
             changed |= meta.wake.take().is_some();
             changed |= meta.suspended_by.take().is_some();
@@ -533,8 +538,20 @@ impl WorkerHooks for KernelHooks {
     async fn on_park(&self, run: &RunRecord, reason: ParkReason) {
         let sup = &self.sup;
         sup.release(&run.run_id).await;
-        let mut meta =
-            sup.stored_meta(run, false).await.unwrap_or_else(|| Supervision::infer_meta(run));
+        let stored = sup.stored_meta(run).await;
+        if stored.is_none() && spawned_by_kernel(run) {
+            // `spawn` has not written the row yet; the row it writes is the sleeper's, and
+            // the 250 ms mirror clears its pending request now that the run parked.
+            let label = if reason == ParkReason::Suspended { "asleep" } else { "parked" };
+            sup.publish(KernelEvent::Process {
+                pid: run.run_id.clone(),
+                from: RunState::Running,
+                to: RunState::Waiting,
+                reason: Some(label.to_string()),
+            });
+            return;
+        }
+        let mut meta = stored.unwrap_or_else(|| Supervision::infer_meta(run));
         let draining = sup.draining.load(Ordering::SeqCst);
         let label = match reason {
             ParkReason::Suspended => {
@@ -585,7 +602,7 @@ impl WorkerHooks for KernelHooks {
         }
         sup.release(&run.run_id).await;
         if run.state.is_terminal()
-            && let Some(mut meta) = sup.stored_meta(run, false).await
+            && let Some(mut meta) = sup.stored_meta(run).await
             && (meta.suspend_requested || meta.suspended_by.is_some() || meta.wake.is_some())
         {
             meta.suspend_requested = false;

@@ -36,7 +36,7 @@ use crate::error::{KernelError, Result};
 use crate::partition::PartitionId;
 use crate::sched::QueueClass;
 use crate::stores::{ProcessFilter, ProcessStore, SpendScope};
-use crate::supervise::{SPAWN_GRACE, Supervision, transcript_counts};
+use crate::supervise::{ASLEEP_KEY_PREFIX, SPAWN_KEY_PREFIX, Supervision, transcript_counts};
 use crate::wake::WakeSet;
 
 /// A process as `ps` shows it: the run, the kernel's side table and the live view
@@ -801,7 +801,11 @@ impl ProcessTable {
     /// the run's queue. With [`ProcessSpec::wake`] the process starts asleep: it parks
     /// `Waiting` on its wake set before its first model call and holds no lease (K-I2).
     ///
-    /// An `idempotency_key` already held in the queue returns the existing process.
+    /// The run's idempotency key is prefixed `kernel:asleep:` for a sleeper and
+    /// `kernel:spawn:` otherwise, before the caller's key or a generated one: the prefix
+    /// carries the sleep intent to the worker's claim, so a sleeper never depends on its
+    /// side-table row being written first. A key already held in the queue returns the
+    /// existing process.
     ///
     /// # Errors
     ///
@@ -810,11 +814,12 @@ impl ProcessTable {
     pub async fn spawn(&self, mut run: NewRun, spec: ProcessSpec) -> Result<Process> {
         self.refuse_while_frozen()?;
         let asleep = spec.wake.is_some();
-        if asleep {
-            let grace = Utc::now()
-                + chrono::Duration::from_std(SPAWN_GRACE).unwrap_or(chrono::Duration::zero());
-            run.not_before = Some(run.not_before.map_or(grace, |at| at.max(grace)));
-        }
+        // The key carries the sleep intent to the claim, so a sleeper parks before its first
+        // model call however long its row below takes to write; the caller's key follows
+        // the prefix, so a repeated spawn still finds its run.
+        let prefix = if asleep { ASLEEP_KEY_PREFIX } else { SPAWN_KEY_PREFIX };
+        let key = run.idempotency_key.take().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        run.idempotency_key = Some(format!("{prefix}{key}"));
         let record = match self.runs.enqueue(run).await? {
             Enqueued::Created(record) => record,
             Enqueued::Existing(record) => {
