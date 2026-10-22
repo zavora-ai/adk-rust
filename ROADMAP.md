@@ -187,6 +187,21 @@ Gaps that remain open after the fixes in #848–#877: from the October 2026 revi
 | On Neo4j, a paused client keeps its transaction's locks indefinitely | A per-transaction timeout once the driver supports one; until then the server's `db.transaction.timeout` bounds it | #865 |
 | No run-level switch keeps a run out of the caller's trace | A `RunConfig` switch; the `NoSubscriber` recipe in the telemetry docs covers it today | #859 |
 
+### HarnessAgent follow-ups
+
+Items spec 3.1 lists after its delivery phases ([§12](docs/design/spec-3.1-harness-agent.md#12-phased-delivery) phase 6) and the open points its implementation recorded.
+
+| Gap | Fix | Origin |
+|-----|-----|--------|
+| `adk_agent::coding` carries no deprecation attribute although `adk_harness::coding` replaces it | `#[deprecated]` on `adk_agent::coding`, pointing at the harness preset and the migration guide | spec 3.1 §12 phase 6 |
+| An IDE's "allow always" over ACP is answered once and forgotten | Map the ACP permission option to a standing rule for that user and tool | spec 3.1 §12 phase 6 |
+| An approved plan graph cannot be viewed outside the harness | Export the plan graph as Mermaid and DOT | spec 3.1 §12 phase 6 |
+| Long-term facts are only superseded or forgotten one at a time | Consolidation: merge duplicate facts and expire stale `assumed` ones on the distiller model | spec 3.1 §12 phase 6 |
+| `adk-harness` ships at the Beta tier | Stable review of its public API once 3.0.0 has field use | spec 3.1 §12 phase 6 |
+| An MCP elicitation parked in the approvals inbox cannot survive a restart, because the MCP call is still in flight | Resumable MCP calls under the agent kernel, so the parked elicitation is a durable checkpoint | spec 3.1 §7.21 |
+| A fetched PDF reaches the model as a text stub | Deliver it as an inline document part through the multimodal read path | spec 3.1 §7.20, §10 D6 |
+| A symlink swapped in between the harness's protected-path decision and the tool's own open is followed when it points inside the workspace | Decide and open on the same descriptor, so the decision covers the file that is opened | spec 3.1 §10 D4 |
+
 ### Build, CI and supply chain
 
 | Gap | Fix | Origin |
