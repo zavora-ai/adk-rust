@@ -182,7 +182,9 @@ impl Fixture {
 
 /// Collects a run's events, failing on a stream error.
 pub async fn collect(stream: adk_core::EventStream) -> Vec<Event> {
-    let results = tokio::time::timeout(Duration::from_secs(20), stream.collect::<Vec<_>>())
+    // Generous enough for the live browser test, which drives a real Chrome on a shared CI
+    // runner; scripted runs finish in milliseconds either way.
+    let results = tokio::time::timeout(Duration::from_secs(90), stream.collect::<Vec<_>>())
         .await
         .expect("the run must finish");
     results.into_iter().map(|result| result.expect("event")).collect()

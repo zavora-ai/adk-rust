@@ -19,8 +19,34 @@ use adk_sandbox::{ProcessBackend, SandboxBackend, SandboxError};
 /// Generates arbitrary environment variable names (alphanumeric + underscore).
 #[cfg(not(windows))]
 fn arb_env_key() -> impl Strategy<Value = String> {
-    "[A-Z][A-Z0-9_]{1,15}".prop_filter("avoid PATH and system vars", |k| {
-        !matches!(k.as_str(), "PATH" | "HOME" | "USER" | "SHELL" | "TERM" | "LANG" | "PWD")
+    // Variables a POSIX shell sets or resets at startup, so a wrapper shell may
+    // overwrite the value passed in (e.g. `IFS` becomes " \t\n").
+    "[A-Z][A-Z0-9_]{1,15}".prop_filter("avoid PATH, system and shell-managed vars", |k| {
+        !matches!(
+            k.as_str(),
+            "PATH"
+                | "HOME"
+                | "USER"
+                | "SHELL"
+                | "TERM"
+                | "LANG"
+                | "PWD"
+                | "OLDPWD"
+                | "IFS"
+                | "PS1"
+                | "PS2"
+                | "PS4"
+                | "PPID"
+                | "OPTIND"
+                | "OPTARG"
+                | "LINENO"
+                | "ENV"
+                | "CDPATH"
+                | "SHLVL"
+                | "BASH_ENV"
+                | "HOSTNAME"
+                | "MAILCHECK"
+        )
     })
 }
 
