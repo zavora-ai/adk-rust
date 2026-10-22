@@ -324,19 +324,32 @@ pub async fn follow(
     let mut said_frozen = false;
     loop {
         let request = AttachRequest { after: *cursor, ..AttachRequest::default() };
-        let attached = client.attach(session, &request).await?;
+        let attached = match client.attach(session, &request).await {
+            Ok(attached) => attached,
+            // A new session exists once the kernel's worker claims its first turn.
+            Err(error) if error.category() == ErrorCategory::NotFound && pid.is_some() => {
+                let process = match pid {
+                    Some(pid) => process_of(client, pid).await?,
+                    None => None,
+                };
+                if let Some(process) = process.filter(|process| process.run.state.is_terminal()) {
+                    return Ok(Followed::Done(Some(Box::new(process))));
+                }
+                tokio::select! {
+                    () = tokio::time::sleep(FOLLOW_INTERVAL) => {}
+                    _ = tokio::signal::ctrl_c() => return Ok(Followed::Detached),
+                }
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
         render(&attached.transcript, false);
         if attached.cursor.is_some() {
             *cursor = attached.cursor;
         }
         let Some(process) = attached.process else {
             let finished = match pid {
-                Some(pid) => client
-                    .processes(&ProcessesQuery::default())
-                    .await?
-                    .into_iter()
-                    .find(|process| process.meta.pid == pid)
-                    .map(Box::new),
+                Some(pid) => process_of(client, pid).await?.map(Box::new),
                 None => None,
             };
             return Ok(Followed::Done(finished));
@@ -364,6 +377,12 @@ pub async fn follow(
             _ = tokio::signal::ctrl_c() => return Ok(Followed::Detached),
         }
     }
+}
+
+/// The process `pid` as the kernel lists it now.
+async fn process_of(client: &ControlClient, pid: &str) -> Result<Option<Process>> {
+    let processes = client.processes(&ProcessesQuery::default()).await?;
+    Ok(processes.into_iter().find(|process| process.meta.pid == pid))
 }
 
 /// Asks at `console` about each pending call of `session` not asked about yet, and decides
