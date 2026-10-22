@@ -320,11 +320,13 @@ pub enum Commands {
         resume: bool,
     },
 
-    /// Ultracode: fan out to parallel specialist reviewers and iterate.
+    /// Ultracode: implement, then review with specialist reviewers and iterate.
     ///
-    /// Implements the task in your mode, then runs correctness/edge-case/style reviewers
-    /// in read-only mode in parallel, synthesizes their verdicts, and revises until they
-    /// approve. Example: `adk-rust ultracode "add a /health endpoint"`
+    /// Implements the task in your mode, then routes the review once, on the change: parallel
+    /// independent reviewers (graph) or one board whose reviewers read each other
+    /// (blackboard), all read-only. It synthesizes their verdicts and revises until they
+    /// approve, within a model-call budget. Example: `adk-rust ultracode "add a /health
+    /// endpoint"`
     Ultracode {
         /// The task to implement and review.
         task: String,
@@ -339,9 +341,32 @@ pub enum Commands {
         #[arg(short, long, default_value = ".")]
         dir: String,
 
-        /// Maximum number of review→revise rounds.
-        #[arg(long, default_value_t = 2)]
-        max_rounds: i64,
+        /// Maximum number of review→revise rounds (default 2; at most 5 with the harness)
+        #[arg(long, value_name = "N")]
+        max_rounds: Option<i64>,
+
+        /// Review architecture: auto (routed on the change), graph (parallel reviewers) or
+        /// blackboard (one board); default auto
+        #[cfg(feature = "harness")]
+        #[arg(long, value_enum, value_name = "ARCH")]
+        architecture: Option<adk_cli::harness::ultracode::ArchitectureChoice>,
+
+        /// How auto chooses: model (one closed-schema call, the heuristic when it fails) or
+        /// heuristic; default model
+        #[cfg(feature = "harness")]
+        #[arg(long, value_enum, value_name = "MODE")]
+        router: Option<adk_cli::harness::ultracode::RouterMode>,
+
+        /// Most model calls of the whole run (default 400, at most 2000)
+        #[cfg(feature = "harness")]
+        #[arg(long, value_name = "N")]
+        max_model_calls: Option<u64>,
+
+        /// Write the run's audit records, their chain verification and the router's raw
+        /// answer to FILE
+        #[cfg(feature = "harness")]
+        #[arg(long, value_name = "FILE")]
+        receipt: Option<std::path::PathBuf>,
     },
 
     /// Harness sessions kept in harness.db
@@ -1171,6 +1196,56 @@ mod tests {
         let order: Vec<_> =
             Provider::all().iter().copied().filter(|p| compiled.contains(p)).collect();
         assert_eq!(compiled, order, "menu order follows ModelProvider::all");
+    }
+
+    #[cfg(feature = "harness")]
+    #[test]
+    fn ultracode_flags_parse() {
+        use adk_cli::harness::ultracode::{ArchitectureChoice, RouterMode};
+
+        let parsed = parse(&[
+            "adk-rust",
+            "ultracode",
+            "fix it",
+            "--architecture",
+            "blackboard",
+            "--router",
+            "heuristic",
+            "--max-model-calls",
+            "300",
+            "--max-rounds",
+            "3",
+            "--receipt",
+            "out/receipt.json",
+        ]);
+        let Some(Commands::Ultracode {
+            task,
+            max_rounds,
+            architecture,
+            router,
+            max_model_calls,
+            receipt,
+            ..
+        }) = parsed.command
+        else {
+            panic!("not ultracode");
+        };
+        assert_eq!(task, "fix it");
+        assert_eq!(
+            (max_rounds, architecture, router, max_model_calls),
+            (Some(3), Some(ArchitectureChoice::Blackboard), Some(RouterMode::Heuristic), Some(300))
+        );
+        assert_eq!(receipt.as_deref(), Some(std::path::Path::new("out/receipt.json")));
+        let Some(Commands::Ultracode { max_rounds, architecture, .. }) =
+            parse(&["adk-rust", "ultracode", "fix it"]).command
+        else {
+            panic!("not ultracode");
+        };
+        assert_eq!((max_rounds, architecture), (None, None));
+        assert!(
+            Cli::try_parse_from(["adk-rust", "ultracode", "x", "--architecture", "council"])
+                .is_err()
+        );
     }
 
     #[cfg(feature = "scripted-model")]

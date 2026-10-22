@@ -79,6 +79,11 @@ struct ConfigFile {
     #[serde(default)]
     #[allow(dead_code)]
     hooks: Vec<toml::Value>,
+    /// The `[ultracode]` table is read by `adk-rust ultracode` (spec 3.1 §7.10), so it is
+    /// neither applied here nor reported as unknown.
+    #[serde(default)]
+    #[allow(dead_code)]
+    ultracode: Option<toml::Value>,
     #[serde(flatten)]
     other: BTreeMap<String, toml::Value>,
 }
@@ -215,6 +220,12 @@ mod tests {
             crate::IsolationStatus::Host,
             "sandbox = true must request the OS sandbox"
         );
+    }
+
+    #[test]
+    fn the_ultracode_table_is_known() {
+        let config = HarnessConfig::from_toml("[ultracode]\nmax_rounds = 1\n").unwrap();
+        assert!(config.notes.is_empty(), "{:?}", config.notes);
     }
 
     #[test]

@@ -553,3 +553,244 @@ fn slash_commands_show_and_change_the_session() {
     terminal.expect("/approvals");
     terminal.finish();
 }
+
+// --- ultracode (spec 3.1 §7.10 "Adaptive review", §8.1) ---------------------------------
+
+/// Every file under `root`, relative and sorted.
+fn files(root: &Path) -> Vec<String> {
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else {
+                out.push(path.strip_prefix(root).unwrap().display().to_string());
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+fn write(path: &Path, text: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+/// Runs `adk-rust ultracode TASK` unattended in auto mode with a receipt; returns the output
+/// and the receipt.
+fn ultracode(
+    ws: &Path,
+    home: &Path,
+    task: &str,
+    script: &str,
+    extra: &[&str],
+) -> (std::process::Output, serde_json::Value) {
+    let receipt = home.join("receipt.json");
+    let dir = dir_arg(ws);
+    let receipt_arg = receipt.display().to_string();
+    let mut args = vec![
+        "ultracode",
+        task,
+        "--ephemeral",
+        "--mode",
+        "auto",
+        "--yes",
+        "--dir",
+        &dir,
+        "--receipt",
+        &receipt_arg,
+        "--model-script",
+        script,
+    ];
+    args.extend_from_slice(extra);
+    let output = run(&args, home, ws);
+    let text = std::fs::read_to_string(&receipt).unwrap_or_else(|_| {
+        panic!("no receipt:\n{}", common::text(&output));
+    });
+    (output, serde_json::from_str(&text).unwrap())
+}
+
+const APPROVE: &str = r#"{"text": "VERDICT: approve"}"#;
+
+fn script(head: &[&str], approvals: usize) -> String {
+    let mut replies: Vec<&str> = head.to_vec();
+    replies.extend(std::iter::repeat_n(APPROVE, approvals));
+    format!("[{}]", replies.join(",\n"))
+}
+
+#[test]
+fn ultracode_routes_a_security_change_to_a_board() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    write(&ws.path().join(".adk/harness.toml"), "[ultracode]\nmax_board_rounds = 1\n");
+    let before = files(ws.path());
+    let script = script(
+        &[
+            r#"{"call": {"name": "write_file", "args": {"path": "src/auth/token.rs", "content": "pub fn expiry() -> u64 { 3600 }\n"}}}"#,
+            r#"{"text": "Done."}"#,
+        ],
+        4,
+    );
+    let (output, receipt) =
+        ultracode(ws.path(), home.path(), "make tokens expire after an hour", &script, &[]);
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{shown}");
+    assert!(shown.contains("route: blackboard (sensitive)"), "{shown}");
+    let routed = &receipt["routed"];
+    assert_eq!(routed["rule"], "sensitive", "{receipt:#}");
+    assert_eq!(
+        routed["plan"]["reviewers"],
+        serde_json::json!(["correctness", "edge-cases", "security", "style"])
+    );
+    assert_eq!(routed["plan"]["boardRounds"], 1);
+    assert!(routed.get("router").is_none(), "no router call");
+    assert_eq!(receipt["chainVerified"], true);
+    assert_eq!(receipt["finished"]["decision"], "approved", "{receipt:#}");
+    assert_eq!(receipt["reviewed"][0]["architecture"], "blackboard");
+    assert_eq!(receipt["reviewed"][0]["workspaceUnchanged"], true);
+    let mut expected = before;
+    expected.push("src/auth/token.rs".to_string());
+    expected.sort();
+    assert_eq!(files(ws.path()), expected, "only the implementer changed the workspace");
+    assert_eq!(
+        adk_cli::harness::ultracode::replay(routed).map(|plan| plan.architecture.to_string()),
+        Ok("blackboard".to_string())
+    );
+}
+
+#[test]
+fn ultracode_takes_the_model_route_and_records_it() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    for package in ["crates/greet", "crates/app"] {
+        write(&ws.path().join(package).join("Cargo.toml"), "[package]\nname = \"x\"\n");
+    }
+    let script = script(
+        &[
+            r#"{"calls": [
+                {"name": "write_file", "args": {"path": "crates/greet/src/lib.rs", "content": "pub trait Greeter {}\n"}},
+                {"name": "write_file", "args": {"path": "crates/app/src/main.rs", "content": "fn main() {}\n"}}
+            ]}"#,
+            r#"{"text": "Done."}"#,
+            r#"{"text": "{\"architecture\":\"blackboard\",\"specialists\":[\"api-compat\"],\"boardRounds\":1,\"rationale\":\"one trait spans two crates\"}"}"#,
+        ],
+        4,
+    );
+    let (output, receipt) =
+        ultracode(ws.path(), home.path(), "add a Greeter trait and use it", &script, &[]);
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{shown}");
+    assert!(shown.contains("route: blackboard (model)"), "{shown}");
+    assert!(shown.contains("why: one trait spans two crates"), "{shown}");
+    let routed = &receipt["routed"];
+    assert_eq!((&routed["rule"], &routed["source"]), (&"model".into(), &"model".into()));
+    assert_eq!(routed["inputs"]["change"]["packagesTouched"], 2);
+    assert_eq!(
+        routed["plan"]["reviewers"],
+        serde_json::json!(["correctness", "edge-cases", "api-compat", "style"])
+    );
+    assert!(routed["router"]["answerDigest"].as_str().unwrap().starts_with("sha256:"));
+    assert!(receipt["routerAnswer"].as_str().unwrap().contains("one trait spans two crates"));
+    let plan = adk_cli::harness::ultracode::replay(routed).unwrap();
+    assert_eq!(serde_json::to_value(&plan).unwrap(), routed["plan"]);
+    assert_eq!(receipt["finished"]["modelCalls"], 2 + 1 + 4);
+    assert_eq!(receipt["chainVerified"], true);
+}
+
+#[test]
+fn ultracode_invalid_router_answer_falls_back() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let script = script(
+        &[
+            r#"{"call": {"name": "write_file", "args": {"path": "src/lib.rs", "content": "pub fn last(v: &[u8]) -> Option<u8> { v.last().copied() }\n"}}}"#,
+            r#"{"text": "Done."}"#,
+            r#"{"text": "I would review this with a graph."}"#,
+        ],
+        3,
+    );
+    let (output, receipt) =
+        ultracode(ws.path(), home.path(), "fix the off-by-one in last()", &script, &[]);
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{shown}");
+    assert!(shown.contains("route: graph (heuristic: router.unparseable)"), "{shown}");
+    let routed = &receipt["routed"];
+    assert_eq!(routed["fallback"]["code"], "router.unparseable");
+    assert!(routed["router"]["answer"].is_null(), "an invalid answer is not applied");
+    assert!(routed["router"]["answerDigest"].is_string(), "its digest is recorded");
+    assert_eq!(receipt["finished"]["decision"], "approved", "{receipt:#}");
+    assert_eq!(receipt["reviewed"][0]["verdicts"].as_array().unwrap().len(), 3);
+    assert!(adk_cli::harness::ultracode::replay(routed).is_ok());
+}
+
+#[test]
+fn ultracode_architecture_flag_skips_the_router() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let script = script(
+        &[
+            r#"{"call": {"name": "write_file", "args": {"path": "src/lib.rs", "content": "pub fn one() -> u8 { 1 }\n"}}}"#,
+            r#"{"text": "Done."}"#,
+        ],
+        3,
+    );
+    let (output, receipt) =
+        ultracode(ws.path(), home.path(), "add one()", &script, &["--architecture", "graph"]);
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{shown}");
+    assert_eq!(receipt["routed"]["rule"], "override");
+    assert_eq!(receipt["started"]["source"], "flag");
+    // A router call would have taken a reviewer's reply, and that reviewer would fail.
+    assert_eq!(receipt["finished"]["decision"], "approved", "{shown}");
+    assert_eq!(receipt["finished"]["modelCalls"], 2 + 3);
+}
+
+#[test]
+fn ultracode_project_file_cannot_force_the_board() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    write(&ws.path().join(".adk/harness.toml"), "[ultracode]\narchitecture = \"blackboard\"\n");
+    let script = script(
+        &[
+            r#"{"call": {"name": "write_file", "args": {"path": "src/lib.rs", "content": "pub fn two() -> u8 { 2 }\n"}}}"#,
+            r#"{"text": "Done."}"#,
+        ],
+        3,
+    );
+    let (output, receipt) =
+        ultracode(ws.path(), home.path(), "add two()", &script, &["--router", "heuristic"]);
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{shown}");
+    assert!(shown.contains("`ultracode.architecture` ignored"), "{shown}");
+    assert_eq!(receipt["routed"]["rule"], "heuristic");
+    assert_eq!(receipt["started"]["requested"], "auto");
+}
+
+#[test]
+fn ultracode_budget_cap_finalizes_before_revise() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    write(
+        &ws.path().join(".adk/harness.toml"),
+        "[ultracode]\nimplement_model_calls = 4\nreviewer_model_calls = 2\nmax_model_calls = 12\n",
+    );
+    let script = r#"[
+        {"call": {"name": "write_file", "args": {"path": "src/lib.rs", "content": "pub fn three() -> u8 { 3 }\n"}}},
+        {"text": "Done."},
+        {"text": "VERDICT: changes\n- name it better"},
+        {"text": "VERDICT: changes\n- handle overflow"},
+        {"text": "VERDICT: changes\n- add a doc comment"}
+    ]"#;
+    let (output, receipt) =
+        ultracode(ws.path(), home.path(), "add three()", script, &["--router", "heuristic"]);
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(0), "{shown}");
+    assert_eq!(receipt["finished"]["decision"], "budgetExhausted", "{shown}");
+    assert_eq!(receipt["finished"]["rounds"], 1);
+    assert_eq!(receipt["finished"]["modelCalls"], 5);
+    assert_eq!(receipt["started"]["limits"]["maxModelCalls"], 12);
+    assert!(!shown.contains("━━ revise ━━"), "no revise starts: {shown}");
+}

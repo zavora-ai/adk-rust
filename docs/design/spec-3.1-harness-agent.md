@@ -619,12 +619,43 @@ What the team gives that the old `SpawnSubagentTool` design did not:
 | Stopping | `TeamTerminationPolicy` (389-403): escalation, final authors, text markers |
 | Who can be delegated to | `TeamAgentRegistry::{candidates, resolve, authorize}` ([`discovery.rs:61-76`](../../adk-agent/src/team/discovery.rs)) |
 | State leakage | `state_write_keys: []`; delegate state writes are rejected ([`agent_tool.rs:1149-1157`](../../adk-tool/src/agent_tool.rs)) |
-| Group work | `BlackboardSpec` with round-robin or model-selected speakers ([`team/blackboard.rs:42-51`](../../adk-agent/src/team/blackboard.rs)) for review rounds |
+| Group work | `BlackboardSpec` with round-robin or model-selected speakers ([`team/blackboard.rs:42-51`](../../adk-agent/src/team/blackboard.rs)) for review rounds. A speaker sees what the other speakers said, called and got back as other-agent context, never as its own turns. `HarnessTeam::review_round_with` sets a round's history and `TeamBudget`; `HarnessAgent::governed_root` runs a round as a runner root under the harness layer. A selector `LlmAgent` is not offered `transfer_to_agent` under a blackboard context, so `ultracode` uses round-robin only |
 | Observability | The team publishes its topology; the embedded UI renders it live |
 
 **External harnesses as members.** An ACP member wraps `adk-acp`'s client (`AcpAgentTool`, [`adk-acp/src/tool.rs:59`](../../adk-acp/src/tool.rs); `AcpToolset`, [`adk-acp/src/toolset.rs:27`](../../adk-acp/src/toolset.rs)) so Claude Code, Codex or Kiro run as isolated members whose tool calls surface through the ACP permission bridge and are decided by the same `HarnessPolicy`; an A2A member wraps `RemoteA2aAgent` ([`remote_agent.rs:47-52`](../../adk-server/src/a2a/remote_agent.rs)) so a remote ADK agent, or any A2A agent, runs under the team budget. Both appear in the delegation chain and the audit trail like any member.
 
 Read-before-edit tracking is scoped per (session, agent) through D2 so members sharing a `Workspace` do not share read state. Member todos stay in the member's isolated session. Members have no `exit_plan_mode`, `memory_write` or nested delegation.
+
+**Adaptive review (`ultracode`).** The implementer runs one turn in the user's mode; the review is then routed once to one of two architectures, and the plan holds for the run.
+
+| Architecture | Review stage | Bound per stage |
+|---|---|---|
+| `graph` | Parallel independent reviewers: one fresh `HarnessAgent` per focus, ReadOnly, `without_shell` | `reviewer_model_calls` per reviewer |
+| `blackboard` | One round-robin board of ReadOnly members of a ReadOnly, shell-less harness; history `Full`; `boardRounds` rounds; seats left without a verdict by a failed board go to independent reviewers | `board_model_calls`, with the `TeamBudget` chained to it |
+
+| Rule (`ultracode-route/1`, first match) | Condition | Plan | Model calls |
+|---|---|---|---|
+| `override` | `--architecture graph\|blackboard`, or `architecture` in a config file | That architecture | 0 |
+| `unchanged` | The first turn held, failed, was interrupted or changed no file | `graph` over correctness, edge-cases and style | 0 |
+| `sensitive` | A changed path is protected (I29), has a security-vocabulary component, or matches `sensitive_paths` | `blackboard` | 0 |
+| `model` | Router mode `model` | The member model's closed-schema answer, validated whole against the caps and floors | 1: no tools, 4,000 tokens, 20 s |
+| `heuristic` | Router mode `heuristic`, or the `model` call failed or its answer is invalid | A pure score over the recorded signals | 0 |
+
+| Floor or limit | Value |
+|---|---|
+| Roster | Always correctness, edge-cases and style; a sensitive change adds `security` under every rule, in style's seat only when `max_reviewers` is 3 |
+| Router choice | The architecture, up to `max_reviewers − 3` specialists (security, performance, tests, api-compat, concurrency) and the board rounds; never the review rounds |
+| Signals | Keyword features of the task and a metadata snapshot of the workspace before and after the first turn; no file contents, no `git` |
+| Board verdict | Each seat's last turn, per focus; any `changes` means changes |
+
+| `[ultracode]` key | Default | Ceiling | In `.adk/harness.toml` |
+|---|---|---|---|
+| `architecture` | `auto` | — | `graph` only |
+| `router` | `model` | — | `heuristic` only |
+| `max_rounds`, `max_reviewers`, `max_board_rounds` | 2, 4, 2 | 5, 6, 3 | Lower only; floors 1, 3, 1 |
+| `implement_model_calls`, `reviewer_model_calls`, `board_model_calls` | 100, 20, 48 | 500, 50, 150 | Lower only |
+| `max_model_calls` | 400 | 2,000 | Lower only |
+| `sensitive_paths` | `[]` | — | Append only |
 
 ### 7.11 Plan mode, the plan graph and the goal engine
 
@@ -996,7 +1027,7 @@ The approval the person answers is the harness prompt, or the approvals inbox en
 | `adk-rust chat` | The plain agent, unchanged |
 | `adk-rust code "task"` | One harness turn; exit code 3 means calls are held (prints the session id) |
 | `adk-rust goal "g" --until CMD` | Durable goal in SQLite; `--resume` restores the conversation too |
-| `adk-rust ultracode "task"` | The review graph on the harness: implement/revise in the user's mode, reviewers in ReadOnly |
+| `adk-rust ultracode "task"` | Implements in the user's mode, then routes the review to the parallel graph or a Blackboard board ([§7.10](#710-team-subagents-and-external-harnesses)); reviewers are ReadOnly and shell-less in both. `--architecture auto\|graph\|blackboard` (default `auto`), `--router model\|heuristic`, `--max-model-calls N`, `--receipt FILE` (the run's `harness.ultracode.*` records, the chain verification and the raw router answer) |
 | `adk-rust serve` | The harness in Plan mode with `/api/approvals` and background runs; loopback-only unless `--auth-token`; `--agent chat` keeps the old behaviour |
 | `adk-rust --voice` | The voice surface (feature `voice`, 3.1.x) |
 | `adk-rust sessions …`, `rules …`, `approvals … [--server URL --token T]` | Management commands |
@@ -1118,6 +1149,8 @@ Secrets come from `adk-auth` secret providers; nothing in the image. A served ha
 
 **Browser and computer use.** I58 The browser pack attaches no tool that runs model-written code in the page or hands it a host file; every navigation is decided by the URL's host under the §7.20 rules and refused before the browser moves when the target is private or the URL carries a secret; text the browser returns reaches the model only inside a delimited untrusted block, screened as fetched text is; typed text that matches a secret pattern is refused. I59 A desktop action runs only through adk-computer-use's reference graph, once, after a one-shot harness approval bound to the runtime's action and policy digests; no standing rule, `tool_approvals` entry or hook authorizes one; a digest or description that differs from the previewed action runs nothing. I60 A pack's tools are registered harness classes decided by the mode table on every call; in ReadOnly and Plan no pack tool changes page or desktop state; a member gets a pack's `Read` tools only.
 
+**Adaptive review.** I61 An `ultracode` reviewer, independent or on a board, is ReadOnly and shell-less and runs under the layer of a ReadOnly harness that records into the run's audit trail; only the implementer changes the workspace, in the user's mode. I62 The review plan is a pure function of its `harness.ultracode.routed` record — signals, limits, rule version and validated model answer; a model answer selects only closed-enum values within the caps and above the floors, and applies whole or not at all; no router text reaches an agent prompt; the record commits before the first review stage. I63 A step starts only when its own budget fits in what remains of `max_model_calls`; a missing, failed or unparseable verdict is never an approval.
+
 ### 9.3 Audit records
 
 Actor from `AuditActor::new(acting, invocation_id)` ([`audit_log.rs:288`](../../adk-core/src/audit_log.rs)); `ext.sessionId` as `ToolGate::record` sets it ([`governance.rs:1421-1432`](../../adk-core/src/governance.rs)); kind `Other` for `harness.*` actions ([`audit_log.rs:138-158`](../../adk-core/src/audit_log.rs)); written through `ctx.run_config().audit` ([`tool.rs:371`](../../adk-core/src/tool.rs)).
@@ -1153,6 +1186,10 @@ Actor from `AuditActor::new(acting, invocation_id)` ([`audit_log.rs:288`](../../
 | Instruction files loaded / changed; workspace trust | `harness.instructions.*`, `harness.workspace.trust` | files [{logicalPath, sha256, bytes, scope, trusted}], rootDigest, decision, by | instruction provider; trust prompt |
 | Skill activated | `harness.skill.activated` | skillId, hash, sourcePath, allowedTools | `load_skill` wrapper |
 | Sandbox unavailable; held calls cancelled | `harness.sandbox.unavailable`, `harness.held.cancelled` | requested, error; callIds, reason | build and per call; mode loosening, freeze |
+| ultracode started | `harness.ultracode.started` | runId, taskDigest, requested, source, routerMode, limits, worstCaseModelCalls, modelCallBound, notes | before the first turn, write-ahead |
+| ultracode routed | `harness.ultracode.routed` | runId, taskDigest, routerVersion, rule, source, fallback {code, errors}, plan {architecture, reviewers, boardRounds, reviewRounds}, inputs {features, change, repo, limits}, heuristic {score, triggers, plan}, router {model, effort, promptDigest, schemaDigest, answerDigest, answer, rationale}, usage | after the first turn, write-ahead of the first review stage |
+| ultracode stage reviewed | `harness.ultracode.reviewed` | runId, round, architecture, verdicts [{focus, verdict}], status, fallback, modelCalls, notesDigest, workspaceUnchanged | after each review stage |
+| ultracode finished | `harness.ultracode.finished` | runId, rounds, decision, architecture, modelCalls, heldCalls | end of run |
 
 Records go to `adk_auth::signed_audit::AuditLog` (hash chain, Merkle tree, signed checkpoints) through `Runner::builder().audit_log` ([`adk-runner/src/builder.rs:481`](../../adk-runner/src/builder.rs)), not `FileAuditSink`, whose verification cannot detect a truncated tail or an edited last line ([`adk-auth/src/audit.rs:665-699`](../../adk-auth/src/audit.rs)).
 
@@ -1250,7 +1287,7 @@ Total for 3.1.0 (phases 0–4): roughly 32–39 engineer-weeks; with the packs, 
 1. Should an approved `exit_plan_mode` default to `ask` only, with `auto` requiring a second explicit confirmation in the CLI?
 2. Multi-replica servers: the SQLite mode and rule stores are per host; shared backends through `adk-session` are a 3.2 item. Acceptable for 3.1?
 3. Should `auto_allow_sandboxed` exist in the 3.1.0 API as "off and refuses to turn on until S3 is present", or be omitted until S3 lands?
-4. Should a `BlackboardSpec` review round (model-selected speakers) replace the `ultracode` fan-out graph, or coexist with it?
+4. **Decided** (owner): coexist. `ultracode` routes each run to the fan-out graph or a round-robin board by the rules of [§7.10](#710-team-subagents-and-external-harnesses).
 5. Should the plan graph's checkpointer default to the session backend on the server, or always to SQLite beside the harness store?
 6. ~~C4 adds a public field to the literally constructible `GenerateContentConfig`: ship per-mode effort with the semver exception recorded, or wait for the next major and apply effort per session until then (§7.23)?~~ **Decided (owner):** the field ships in 3.0.0, a major release, so effort applies per call (§7.23 "Mechanism", §10 C4).
 7. ~~Should adk-cli ship a default `SearchProvider` for `web_search` (a hosted search API needs a key; a self-hosted SearXNG needs a service), or require the operator to configure one (§7.20)?~~ **Decided 2026-10-22 (owner):** web search uses the model provider's built-in search first — Gemini, Anthropic, OpenAI Responses and DeepSeek — and the user may configure a provider instead (`--search searxng|deepseek`, `search_provider(..)`), which replaces it; providers without a built-in search get web search only through a configured provider (§7.20).

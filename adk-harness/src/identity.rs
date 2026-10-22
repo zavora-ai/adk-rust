@@ -727,6 +727,42 @@ impl EphemeralAuditLog {
         self.signer.verifier_key()
     }
 
+    /// The records in the log, in order (spec 3.1 §9.3).
+    ///
+    /// # Errors
+    ///
+    /// Returns the store's error, or a configuration error for a record that does not
+    /// parse.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::audit_log::{AuditRecordDraft, AuditRecordKind, AuditRecorder};
+    /// use adk_harness::EphemeralAuditLog;
+    ///
+    /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+    /// let log = EphemeralAuditLog::new().unwrap();
+    /// log.record(AuditRecordDraft::new(AuditRecordKind::ToolCall, "search")).await.unwrap();
+    /// let records = log.records().await.unwrap();
+    /// assert_eq!(records[0].action, "search");
+    /// # });
+    /// ```
+    pub async fn records(&self) -> Result<Vec<adk_core::audit_log::AuditRecord>> {
+        use adk_core::audit_log::AuditLogStore as _;
+        let size = self.store.size(EPHEMERAL_LOG_ID).await?;
+        self.store
+            .read(EPHEMERAL_LOG_ID, 0..size)
+            .await?
+            .into_iter()
+            .filter_map(|entry| entry.record)
+            .map(|text| {
+                serde_json::from_str(&text).map_err(|error| {
+                    AdkError::config(format!("an audit record does not parse: {error}"))
+                })
+            })
+            .collect()
+    }
+
     /// Signs a checkpoint and verifies the whole log against it: hash chain, Merkle tree
     /// and signature.
     ///

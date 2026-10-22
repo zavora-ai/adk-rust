@@ -22,7 +22,7 @@ adk-rust                       # the harness REPL, ask mode
 | `adk-rust chat` | The plain chat agent, without workspace tools |
 | `adk-rust code "task"` | One harness turn; exit code `3` means calls are held for a decision (the session id is printed) |
 | `adk-rust goal "goal" --until CMD` | Runs the harness goal engine until `CMD` exits 0, as a durable run in `harness.db`; `--resume` continues the goal in its session |
-| `adk-rust ultracode "task"` | Implements in your mode, reviews with three read-only reviewers in parallel, revises until they approve |
+| `adk-rust ultracode "task"` | Implements in your mode, routes the review to parallel read-only reviewers or a read-only Blackboard board, revises until they approve; see [Ultracode](#ultracode) |
 | `adk-rust serve` | The harness in plan mode behind the HTTP server with the approval inbox; see [Serving the harness](serving.md) |
 | `adk-rust sessions list\|show\|rm` | Your harness sessions |
 | `adk-rust rules list\|add\|rm` | Your standing rules |
@@ -98,6 +98,9 @@ key = "keychain:adk-rust"
 [web]                        # spec 3.1 §7.20; `web = false` turns the web tools off instead
 search = "searxng"           # provider (default), off, searxng or deepseek
 searxng_url = "http://localhost:8888"
+
+[ultracode]                  # spec 3.1 §7.10; see Ultracode
+max_rounds = 2
 
 [[hooks]]                    # spec 3.1 §7.22; see Hooks
 event = "post_edit"
@@ -347,6 +350,103 @@ harness goal store, mirrored to the session as `harness:goal`.
 its whole conversation. Goals need ask or auto mode. Exit codes: `0` met, `1` budget
 exhausted, `3` calls held, `130` interrupted. With `--ephemeral` the goal runs in the
 command's process only and cannot be resumed.
+
+## Ultracode
+
+```bash
+adk-rust ultracode "make session tokens expire after an hour" --mode auto --receipt receipt.json
+```
+
+`adk-rust ultracode` implements the task in one turn in your mode, through the same
+launcher, prompter and governed path as `code`. It then routes the review once, on the
+change that turn made, and keeps that plan for the run (spec 3.1 §7.10):
+
+| Architecture | A review stage | Bound per stage |
+|---|---|---|
+| `graph` | One fresh read-only, shell-less harness per reviewer, in parallel | `reviewer_model_calls` per reviewer |
+| `blackboard` | One round-robin board of read-only members of a read-only, shell-less harness; each seat reads what the others said, called and got back; `boardRounds` rounds | `board_model_calls` |
+
+After each stage the verdicts are synthesized: every reviewer approving finishes the run;
+otherwise the implementer revises with the notes and the next stage reviews again, up to
+`max_rounds` stages. A reviewer with no `VERDICT` line, a failed reviewer and a board seat
+that never spoke are not approvals.
+
+### Routing
+
+The first rule that matches decides (`ultracode-route/1`):
+
+| Rule | When | Plan | Model calls |
+|---|---|---|---|
+| `override` | `--architecture graph\|blackboard`, or `architecture` in a config file | That architecture | 0 |
+| `unchanged` | The first turn held, failed, was interrupted or changed no file | `graph` over correctness, edge-cases and style | 0 |
+| `sensitive` | A changed path is protected, has a security-vocabulary component (`auth`, `crypto`, `token`, `secret`, `policy`, `sandbox`, …) or matches `sensitive_paths` | `blackboard` with a `security` seat | 0 |
+| `model` | Router mode `model` (the default) | The member model's answer to a closed schema, validated whole | 1: no tools, 4,000 tokens, 20 seconds |
+| `heuristic` | Router mode `heuristic`, or the model call failed or answered anything invalid | A score over the signals | 0 |
+
+| Floor or limit | Value |
+|---|---|
+| Roster | Always correctness, edge-cases and style; a sensitive change adds `security`, in style's seat only when `max_reviewers` is 3 |
+| What the router chooses | The architecture, up to `max_reviewers − 3` specialists (`security`, `performance`, `tests`, `api-compat`, `concurrency`) and the board rounds; never the review rounds |
+| Signals | Keywords of the task, and file paths, sizes and modification times before and after the first turn; no file contents, no `git` |
+| The model's rationale | Printed after `why:` and recorded; never part of any agent's prompt |
+
+A router answer is at most 4 KiB, one JSON object (a code fence is accepted), and applies
+whole or not at all; the fallback is recorded with one of `router.call_failed`,
+`router.timeout`, `router.budget_exceeded`, `router.unparseable`, `router.schema_invalid` or
+`router.over_limit`:
+
+```text
+route: graph (heuristic: router.unparseable) · reviewers correctness, edge-cases, style · board rounds 1 · review rounds 2
+why: heuristic score 2 (packages>=2)
+```
+
+### Flags
+
+| Flag | Effect |
+|---|---|
+| `--architecture auto\|graph\|blackboard` | `auto` (the default) routes; the others fix the architecture |
+| `--router model\|heuristic` | How `auto` chooses; `model` is the default |
+| `--max-rounds N` | Review stages, 1 to 5; default 2 |
+| `--max-model-calls N` | The whole run's model calls, up to 2,000; default 400 |
+| `--receipt FILE` | Writes the run's `harness.ultracode.*` records, the verification of the run's signed audit log and the router's raw answer |
+
+### Budget
+
+Every step has its own `RunBudget`: an implement or revise turn `implement_model_calls`, an
+independent reviewer `reviewer_model_calls`, a board `board_model_calls`, the router one
+call. A review stage starts only when what remains of `max_model_calls` covers it, and a
+revise only when it covers the revise and the next stage; otherwise the run ends with the
+decision `budgetExhausted`. At start, one implement turn, the router and three reviewers must
+fit in `max_model_calls`, or the command says what to change.
+
+### The `[ultracode]` table
+
+| Key | Default | Ceiling | In `.adk/harness.toml` |
+|---|---|---|---|
+| `architecture` | `auto` | — | `graph` only |
+| `router` | `model` | — | `heuristic` only |
+| `max_rounds`, `max_reviewers`, `max_board_rounds` | 2, 4, 2 | 5, 6, 3 | Lower only; floors 1, 3, 1 |
+| `implement_model_calls`, `reviewer_model_calls`, `board_model_calls` | 100, 20, 48 | 500, 50, 150 | Lower only |
+| `max_model_calls` | 400 | 2,000 | Lower only |
+| `sensitive_paths` | `[]` | — | Append only |
+
+In the user config a value beyond a ceiling or floor is clamped, with a note. Flags win, and
+a flag beyond a ceiling is an error that names it.
+
+### Records and the receipt
+
+One signed audit log holds the run: the implementer's, reviewers' and board's governed calls
+and these records, kind `harness`, actor `urn:adk:agent:adk-rust/ultracode`:
+
+| Record | Written |
+|---|---|
+| `harness.ultracode.started` | Before the first turn: the limits, the requested architecture and its source, the worst case and the bound |
+| `harness.ultracode.routed` | Before the first review: the rule, the plan, the inputs, the heuristic's trace, the router call by digest and its validated answer |
+| `harness.ultracode.reviewed` | After each stage: the verdicts, the board's status and fallback seats, the stage's model calls, whether the workspace is unchanged |
+| `harness.ultracode.finished` | At the end: rounds, decision, model calls, held calls |
+
+`adk_cli::harness::ultracode::replay(&receipt["routed"])` recomputes the plan from the
+recorded inputs and fails when it differs. Exit codes: `0`, or `3` when calls are held.
 
 ## Embedding the REPL
 

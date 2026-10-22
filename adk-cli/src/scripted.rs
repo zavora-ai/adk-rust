@@ -28,6 +28,9 @@ struct Call {
 }
 
 /// The model `--model-script` describes: a JSON array of replies, inline or in a file.
+///
+/// Every reply reports a nominal 20 tokens of usage at no cost, as a provider does, so
+/// token budgets such as the `ultracode` router's can be held to it.
 pub fn model(script: &str) -> Result<Arc<dyn Llm>> {
     let json = if script.trim_start().starts_with('[') {
         script.to_string()
@@ -38,12 +41,22 @@ pub fn model(script: &str) -> Result<Arc<dyn Llm>> {
     let replies: Vec<Reply> = serde_json::from_str(&json).context(
         "--model-script must be a JSON array of {\"text\"}, {\"call\"} or {\"calls\"} replies",
     )?;
-    let script = replies.into_iter().map(|reply| match reply {
-        Reply::Text(text) => ScriptedResponse::text(text),
-        Reply::Call(call) => ScriptedResponse::function_call(call.name, call.args),
-        Reply::Calls(calls) => {
-            ScriptedResponse::function_calls(calls.into_iter().map(|call| (call.name, call.args)))
+    let usage = adk_core::UsageMetadata {
+        prompt_token_count: 10,
+        candidates_token_count: 10,
+        total_token_count: 20,
+        cost: Some(0.0),
+        ..adk_core::UsageMetadata::default()
+    };
+    let script = replies.into_iter().map(|reply| {
+        match reply {
+            Reply::Text(text) => ScriptedResponse::text(text),
+            Reply::Call(call) => ScriptedResponse::function_call(call.name, call.args),
+            Reply::Calls(calls) => ScriptedResponse::function_calls(
+                calls.into_iter().map(|call| (call.name, call.args)),
+            ),
         }
+        .with_usage(usage.clone())
     });
     Ok(Arc::new(ScriptedLlm::new("scripted", script)))
 }

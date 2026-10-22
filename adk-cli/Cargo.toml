@@ -70,6 +70,7 @@ serde.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
 dirs = "7"
 toml.workspace = true
+thiserror.workspace = true
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native"] }
@@ -144,6 +145,8 @@ voice-desktop = ["voice", "adk-audio/desktop-audio"]
 [dev-dependencies]
 # The scripted realtime provider the `--voice` end-to-end test writes its script with.
 adk-realtime = { path = "../adk-realtime", features = ["scripted"] }
+# Paused time for the router timeout test
+tokio = { workspace = true, features = ["full", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
 axum = "0.8"
 google-cloud-auth = { version = "1.8", default-features = false, features = ["default-rustls-provider"] }

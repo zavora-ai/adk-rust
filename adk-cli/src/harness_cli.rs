@@ -6,11 +6,19 @@ use std::path::Path;
 use std::sync::Arc;
 
 use adk_cli::console::ConsoleIo;
+use adk_cli::harness::ultracode::{
+    ArchitectureChoice, BoardStatus, Focus, IndependentReviewer, RepoSignals, ReviewBoard,
+    RouteDecision, RouteInputs, RouterMode, Rule, SettingSource, TaskFeatures, TurnStatus,
+    UltracodeAudit, UltracodeFlags, UltracodeLimits, Verdict, WorkspaceSnapshot, route,
+};
 use adk_cli::harness::{
     BearerTokenExtractor, ConsolePrompter, HarnessArgs, HarnessLauncher, OPERATOR_SCOPE,
     ResolvedHarnessArgs, SearchArg, TurnOutcome,
 };
-use adk_core::{ApprovalPolicy, ApprovalService, ApproverSelector, Effort, StoreApprovalService};
+use adk_core::audit_log::AuditRecorder;
+use adk_core::{
+    ApprovalPolicy, ApprovalService, ApproverSelector, Effort, Llm, RunBudget, StoreApprovalService,
+};
 use adk_devtools::Workspace;
 use adk_harness::{
     ApprovalPrompter, FileWorkspaceTrustStore, GOAL_STATE_KEY, GoalSpec, GoalState, GoalStatus,
@@ -55,6 +63,14 @@ struct Setup {
 #[derive(Clone)]
 struct Models {
     harness: BuiltModel,
+}
+
+/// What an `ultracode` implementer adds to a harness agent (spec 3.1 §7.10): its turn's
+/// `RunBudget` and the run's audit log.
+#[derive(Default)]
+struct AgentExtras {
+    budget: Option<RunBudget>,
+    audit: Option<Arc<dyn AuditRecorder>>,
 }
 
 /// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
@@ -149,10 +165,20 @@ impl Setup {
         prompter: Option<Arc<dyn ApprovalPrompter>>,
         approval_service: Option<Arc<dyn ApprovalService>>,
     ) -> Result<HarnessAgent> {
-        self.agent_with(self.resolved.effort, name, mode, sandbox, prompter, approval_service)
+        self.agent_with(
+            self.resolved.effort,
+            name,
+            mode,
+            sandbox,
+            prompter,
+            approval_service,
+            AgentExtras::default(),
+        )
     }
 
-    /// [`agent`](Self::agent) at the effort `policy`, which `/effort` replaces.
+    /// [`agent`](Self::agent) at the effort `policy`, which `/effort` replaces, with
+    /// `extras`.
+    #[allow(clippy::too_many_arguments)]
     fn agent_with(
         &self,
         effort: adk_harness::EffortPolicy,
@@ -161,6 +187,7 @@ impl Setup {
         sandbox: bool,
         prompter: Option<Arc<dyn ApprovalPrompter>>,
         approval_service: Option<Arc<dyn ApprovalService>>,
+        extras: AgentExtras,
     ) -> Result<HarnessAgent> {
         let workspace = Workspace::new(&self.resolved.workspace).allow_bash(true);
         let mut builder = HarnessAgent::builder(name)
@@ -263,6 +290,14 @@ impl Setup {
                 }
             };
         }
+        // `ultracode` bounds each implement turn and records into its run's log (spec 3.1
+        // §7.10, I63).
+        if let Some(budget) = extras.budget {
+            builder = builder.budget(budget);
+        }
+        if let Some(recorder) = extras.audit {
+            builder = builder.audit_log(recorder);
+        }
         // Servers the workspace declares in `.mcp.json` start once the workspace is trusted
         // (spec 3.1 §7.21, I3).
         if let Some(servers) = workspace_mcp_servers(&self.resolved.workspace)? {
@@ -296,6 +331,12 @@ impl Setup {
 
     /// A launcher for `agent` over this setup's sessions, user and session choice.
     async fn launcher(&self, agent: HarnessAgent) -> Result<HarnessLauncher> {
+        let session = self.session_id().await?;
+        Ok(self.launcher_in(agent, session))
+    }
+
+    /// A launcher for `agent` over this setup's sessions and user, in `session`.
+    fn launcher_in(&self, agent: HarnessAgent, session: Option<String>) -> HarnessLauncher {
         let hooks = match (self.resolved.hooks, agent.runtime().hooks()) {
             (false, _) => Some("off (--no-hooks)".to_string()),
             (true, Some(set)) => Some(format!("{} (/hooks lists them)", set.hooks.len())),
@@ -315,7 +356,7 @@ impl Setup {
         if self.resolved.mode_explicit {
             launcher = launcher.with_mode(self.resolved.mode);
         }
-        if let Some(session) = self.session_id().await? {
+        if let Some(session) = session {
             launcher = launcher.with_session_id(session);
         }
         launcher = launcher.with_status_line(
@@ -340,7 +381,7 @@ impl Setup {
         for note in &self.resolved.notes {
             launcher = launcher.with_banner_note(note.clone());
         }
-        Ok(launcher)
+        launcher
     }
 
     /// The prompter of a one-shot command: `--yes`, the terminal, or none, which holds
@@ -572,6 +613,7 @@ pub async fn repl(
                         setup.resolved.sandbox,
                         Some(prompter),
                         None,
+                        AgentExtras::default(),
                     )
                     .map_err(|error| adk_core::AdkError::config(error.to_string()))
             })
@@ -899,85 +941,463 @@ fn write_goal_mirror(path: &Path, state: &GoalState) -> Result<()> {
     Ok(())
 }
 
-/// `adk-rust ultracode` on the harness (spec 3.1 §8.1).
+/// `adk-rust ultracode` beyond the shared flags (spec 3.1 §8.1).
+pub struct UltracodeArgs {
+    pub task: String,
+    /// `--max-rounds`.
+    pub max_rounds: Option<i64>,
+    /// `--architecture`.
+    pub architecture: Option<ArchitectureChoice>,
+    /// `--router`.
+    pub router: Option<RouterMode>,
+    /// `--max-model-calls`.
+    pub max_model_calls: Option<u64>,
+    /// `--receipt`.
+    pub receipt: Option<std::path::PathBuf>,
+}
+
+/// `sha256:<hex>` of `bytes`.
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+/// `adk-rust ultracode` on the harness (spec 3.1 §7.10, §8.1): one implement turn in the
+/// user's mode, the review routed once to the parallel graph or a Blackboard board, then
+/// review and revise under the run's model-call budget, every step in one audit log.
 pub async fn ultracode(
     model: ResolvedModel,
     instruction: Option<String>,
     args: HarnessArgs,
-    task: String,
-    max_rounds: i64,
+    ultra: UltracodeArgs,
 ) -> Result<i32> {
     let setup = Arc::new(Setup::new(model, instruction, args, HarnessMode::Ask).await?);
     setup.print_notes();
+    let flags = UltracodeFlags {
+        architecture: ultra.architecture,
+        router: ultra.router,
+        max_rounds: ultra.max_rounds,
+        max_model_calls: ultra.max_model_calls,
+    };
+    let limits =
+        UltracodeLimits::resolve(user_config().as_deref(), &setup.resolved.workspace, &flags)?;
+    for note in &limits.notes {
+        println!("note: {note}");
+    }
+    let task = ultra.task;
+    let run_id = uuid::Uuid::new_v4().to_string();
+    // One signed log per run: the implementer's, the reviewers' and the board's records and
+    // the run's own, in one hash chain (spec 3.1 §9.3).
+    let log = Arc::new(adk_harness::EphemeralAuditLog::new()?);
+    let recorder: Arc<dyn AuditRecorder> = log.clone();
+    let session_id = match setup.session_id().await? {
+        Some(session) => session,
+        None => uuid::Uuid::new_v4().to_string(),
+    };
     let console = ConsoleIo::terminal()?;
     let prompter = setup.unattended_prompter(&console);
-    let agent =
-        setup.agent(APP_NAME, setup.resolved.mode, setup.resolved.sandbox, prompter, None)?;
-    let launcher = setup.launcher(agent).await?.with_console(console);
+    let agent = setup.agent_with(
+        setup.resolved.effort,
+        APP_NAME,
+        setup.resolved.mode,
+        setup.resolved.sandbox,
+        prompter,
+        None,
+        AgentExtras {
+            budget: Some(RunBudget::new().max_model_calls(limits.implement_model_calls)),
+            audit: Some(recorder.clone()),
+        },
+    )?;
+    let runtime = agent.runtime().clone();
+    let launcher = setup.launcher_in(agent, Some(session_id.clone())).with_console(console);
+    let audit = UltracodeAudit::new(recorder.clone(), &setup.user, &run_id, session_id);
+    let task_digest = sha256(task.as_bytes());
+    audit
+        .record(
+            "harness.ultracode.started",
+            json!({
+                "runId": run_id,
+                "taskDigest": task_digest,
+                "requested": limits.architecture,
+                "source": limits.architecture_source,
+                "routerMode": limits.router,
+                "limits": limits,
+                "worstCaseModelCalls": limits.worst_case_model_calls(),
+                "modelCallBound": limits.model_call_bound(),
+                "notes": limits.notes,
+            }),
+        )
+        .await?;
+
+    let workspace = setup.resolved.workspace.clone();
+    println!("ultracode ({}) on {}", setup.model_id, workspace.display());
+    println!("task: {task}");
+    println!(
+        "budget: at most {} model calls (worst case {}) · max rounds {}\n",
+        limits.model_call_bound(),
+        limits.worst_case_model_calls(),
+        limits.max_rounds
+    );
+
+    let roles = RoleModels {
+        router: setup.models.harness.llm.clone(),
+        reviewers: std::collections::BTreeMap::new(),
+        default_reviewer: setup.models.harness.llm.clone(),
+        board: setup.models.harness.llm.clone(),
+    };
     let agents = Arc::new(HarnessUltra {
         setup: setup.clone(),
         implementer: tokio::sync::Mutex::new(launcher),
+        implementer_runtime: runtime,
         held: std::sync::Mutex::new(None),
+        last_turn: std::sync::Mutex::new(TurnStatus::Completed),
+        after_turn: tokio::sync::Mutex::new(None),
+        roles,
+        limits: limits.clone(),
+        recorder,
+        audit: audit.clone(),
+        run_id: run_id.clone(),
+        calls: std::sync::atomic::AtomicU64::new(0),
+        charged: std::sync::atomic::AtomicU64::new(0),
     });
-    ultra::run_with(
-        agents.clone(),
-        &setup.model_id,
-        &setup.resolved.workspace.display().to_string(),
-        task,
-        max_rounds,
-    )
-    .await?;
+
+    let before = snapshot(&workspace).await;
+    println!("━━ implement ━━");
+    agents.implement(&task).await;
+    let after = agents.after_turn.lock().await.clone().unwrap_or_default();
+    let mut change = before.diff(&after, &limits.sensitive_paths);
+    change.first_turn = *agents.last_turn.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let inputs = RouteInputs {
+        features: TaskFeatures::extract(&task),
+        change,
+        repo: RepoSignals::from_snapshot(&after),
+        limits: limits.clone(),
+    };
+    let mut decision = route(&agents.roles.router, &task, inputs).await;
+    if let Some(router) = decision.router.as_mut() {
+        router.effort = Some(setup.resolved.effort.members.to_string());
+    }
+    agents.charged.store(decision.usage.model_calls, std::sync::atomic::Ordering::SeqCst);
+    // Write-ahead: no review starts unless the routing decision is on record (I62).
+    audit.record("harness.ultracode.routed", decision.record_ext(&run_id, &task_digest)).await?;
+    print_route(&decision, &limits);
+
+    let plan = ultra::ReviewLoop::from(&decision.plan);
+    let budget = ultra::UltraBudget {
+        max_model_calls: limits.max_model_calls,
+        implement_model_calls: limits.implement_model_calls,
+        reviewer_model_calls: limits.reviewer_model_calls,
+        board_model_calls: limits.board_model_calls,
+    };
+    let outcome =
+        ultra::run_plan(agents.clone(), &plan, &budget, &task, decision.usage.model_calls).await?;
     let held = agents.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+    audit
+        .record(
+            "harness.ultracode.finished",
+            json!({
+                "runId": run_id,
+                "rounds": outcome.rounds,
+                "decision": outcome.decision,
+                "architecture": decision.plan.architecture,
+                "modelCalls": agents.model_calls() + decision.usage.model_calls,
+                "heldCalls": held.as_ref().map_or(0, |outcome| outcome.held.len()),
+            }),
+        )
+        .await?;
+    if let Some(path) = &ultra.receipt {
+        let raw = decision.router.as_ref().and_then(|router| router.raw.clone());
+        write_receipt(path, &log, &run_id, raw).await?;
+        println!("receipt: {}", path.display());
+    }
     Ok(match held {
         Some(outcome) => held_exit(&outcome, persistent(&setup)),
         None => 0,
     })
 }
 
-/// Implements in the user's mode in one session; reviews in read-only mode.
+/// A metadata snapshot of `workspace`, taken off the async runtime.
+async fn snapshot(workspace: &Path) -> WorkspaceSnapshot {
+    let root = workspace.to_path_buf();
+    tokio::task::spawn_blocking(move || WorkspaceSnapshot::capture(&root)).await.unwrap_or_default()
+}
+
+/// Prints the routed plan and why it was chosen; a model's rationale is escaped and shown
+/// here only, never to an agent (spec 3.1 §9.2 I62).
+fn print_route(decision: &RouteDecision, limits: &UltracodeLimits) {
+    let plan = &decision.plan;
+    let rule = match &decision.fallback {
+        Some(fallback) => format!("{}: {}", decision.rule, fallback.code),
+        None => decision.rule.to_string(),
+    };
+    let reviewers: Vec<&str> = plan.reviewers.iter().map(|focus| focus.name()).collect();
+    println!(
+        "route: {} ({rule}) · reviewers {} · board rounds {} · review rounds {}",
+        plan.architecture,
+        reviewers.join(", "),
+        plan.board_rounds,
+        plan.review_rounds
+    );
+    let change = &decision.inputs.change;
+    let why = match decision.rule {
+        Rule::Override => format!(
+            "{} set the architecture to {}",
+            match limits.architecture_source {
+                SettingSource::Flag => "--architecture",
+                SettingSource::ProjectConfig => adk_cli::harness::PROJECT_CONFIG_FILE,
+                SettingSource::UserConfig | SettingSource::Default => "your config",
+            },
+            limits.architecture
+        ),
+        Rule::Unchanged => match change.first_turn {
+            TurnStatus::Completed => {
+                "the first turn changed no file; the fixed review applies".to_string()
+            }
+            status => format!("the first turn ended {status:?}; the fixed review applies"),
+        },
+        Rule::Sensitive => {
+            let path = change
+                .protected
+                .iter()
+                .chain(&change.security)
+                .chain(&change.sensitive_matched)
+                .next()
+                .cloned()
+                .unwrap_or_default();
+            format!("a sensitive path changed: {}", adk_harness::escape_control(&path))
+        }
+        Rule::Model => {
+            decision.router.as_ref().and_then(|router| router.rationale.clone()).unwrap_or_default()
+        }
+        Rule::Heuristic => format!(
+            "heuristic score {} ({})",
+            decision.heuristic.score,
+            if decision.heuristic.triggers.is_empty() {
+                "no trigger".to_string()
+            } else {
+                decision.heuristic.triggers.join(", ")
+            }
+        ),
+    };
+    println!("why: {why}\n");
+}
+
+/// Writes the `--receipt` file atomically: the run's `harness.ultracode.*` records, the
+/// verification of the whole signed log, and the router's raw answer.
+async fn write_receipt(
+    path: &Path,
+    log: &adk_harness::EphemeralAuditLog,
+    run_id: &str,
+    router_answer: Option<String>,
+) -> Result<()> {
+    let verified = log.verify().await?;
+    let records: Vec<adk_core::audit_log::AuditRecord> = log
+        .records()
+        .await?
+        .into_iter()
+        .filter(|record| record.action.starts_with("harness.ultracode."))
+        .collect();
+    let ext = |record: &adk_core::audit_log::AuditRecord| {
+        serde_json::Value::Object(record.ext.clone().into_iter().collect())
+    };
+    let one = |action: &str| records.iter().find(|record| record.action == action).map(ext);
+    let reviewed: Vec<serde_json::Value> = records
+        .iter()
+        .filter(|record| record.action == "harness.ultracode.reviewed")
+        .map(ext)
+        .collect();
+    let receipt = json!({
+        "runId": run_id,
+        "chainVerified": verified,
+        "verifierKey": log.verifier_key(),
+        "started": one("harness.ultracode.started"),
+        "routed": one("harness.ultracode.routed"),
+        "reviewed": reviewed,
+        "finished": one("harness.ultracode.finished"),
+        "records": records,
+        "routerAnswer": router_answer,
+    });
+    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+    std::fs::write(&tmp, serde_json::to_string_pretty(&receipt)?)
+        .with_context(|| format!("failed to write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
+}
+
+/// The models of each `ultracode` role (spec 3.1 §7.10): the router is the member model at
+/// the members' effort; reviewers and the board use the harness model, per focus when one
+/// is set.
+struct RoleModels {
+    router: Arc<dyn Llm>,
+    reviewers: std::collections::BTreeMap<Focus, Arc<dyn Llm>>,
+    default_reviewer: Arc<dyn Llm>,
+    board: Arc<dyn Llm>,
+}
+
+impl RoleModels {
+    fn reviewer(&self, focus: &str) -> Arc<dyn Llm> {
+        Focus::from_name(focus)
+            .and_then(|focus| self.reviewers.get(&focus))
+            .cloned()
+            .unwrap_or_else(|| self.default_reviewer.clone())
+    }
+}
+
+/// Implements in the user's mode in one session; reviews in read-only mode, independently
+/// or on a board; counts every model call against the run (spec 3.1 §9.2 I61, I63).
 struct HarnessUltra {
     setup: Arc<Setup>,
     implementer: tokio::sync::Mutex<HarnessLauncher>,
+    /// The implementer's runtime, whose spend counts its model calls.
+    implementer_runtime: adk_harness::HarnessRuntime,
     held: std::sync::Mutex<Option<TurnOutcome>>,
+    last_turn: std::sync::Mutex<TurnStatus>,
+    /// The workspace after the latest implement or revise turn, which the review stage
+    /// that follows must leave as it is (spec 3.1 §9.2 I61).
+    after_turn: tokio::sync::Mutex<Option<WorkspaceSnapshot>>,
+    roles: RoleModels,
+    limits: UltracodeLimits,
+    recorder: Arc<dyn AuditRecorder>,
+    audit: UltracodeAudit,
+    run_id: String,
+    /// Model calls of the implementer, reviewers and boards.
+    calls: std::sync::atomic::AtomicU64,
+    /// Model calls made outside the agents: the router's.
+    charged: std::sync::atomic::AtomicU64,
+}
+
+impl HarnessUltra {
+    fn reviewer(&self, focus: &str) -> IndependentReviewer {
+        IndependentReviewer::new(self.roles.reviewer(focus), &self.setup.resolved.workspace)
+            .guidance(self.setup.instruction.clone())
+            .audit_log(self.recorder.clone())
+            .user(self.setup.user.clone())
+            .model_calls(self.limits.reviewer_model_calls)
+    }
+
+    fn charge(&self, calls: u64) {
+        self.calls.fetch_add(calls, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 #[async_trait]
 impl UltraAgents for HarnessUltra {
     async fn implement(&self, prompt: &str) {
+        let before = self.implementer_runtime.spend(None).model_calls;
         let mut launcher = self.implementer.lock().await;
-        match launcher.run_once(prompt).await {
+        let turn = launcher.run_once(prompt).await;
+        // The turn's streamed text ends without a newline.
+        println!();
+        let status = match turn {
             Ok(outcome) if !outcome.held.is_empty() => {
                 println!("  {} call(s) held for a decision", outcome.held.len());
                 *self.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
                     Some(outcome);
+                TurnStatus::Held
             }
-            Ok(_) => {}
-            Err(error) => println!("  implement failed: {error}"),
-        }
+            Ok(outcome) if outcome.interrupted => TurnStatus::Interrupted,
+            Ok(outcome) if outcome.ended_by_denial => TurnStatus::Failed,
+            Ok(_) => TurnStatus::Completed,
+            Err(error) => {
+                println!("  implement failed: {error}");
+                TurnStatus::Failed
+            }
+        };
+        *self.last_turn.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = status;
+        let after = self.implementer_runtime.spend(None).model_calls;
+        self.charge(after.saturating_sub(before));
+        *self.after_turn.lock().await = Some(snapshot(&self.setup.resolved.workspace).await);
     }
 
     async fn review(&self, focus: &str, desc: &str, prompt: &str) -> String {
-        let reviewer = async {
-            let instruction =
-                ultra::review_instruction(focus, desc, self.setup.instruction.as_deref());
-            let workspace = Workspace::new(&self.setup.resolved.workspace);
-            let agent = HarnessAgent::builder(format!("review-{focus}"))
-                .model(self.setup.models.harness.llm.clone())
-                .effort(self.setup.resolved.effort)
-                .workspace(workspace)
-                .mode(HarnessMode::ReadOnly)
-                .without_shell()
-                .instruction(instruction)
-                .build()?;
-            let mut launcher = HarnessLauncher::new(agent)
-                .app_name(APP_NAME)
-                .with_user_id(self.setup.user.clone())
-                .with_session_service(Arc::new(InMemorySessionService::new()))
-                .with_console(ConsoleIo::scripted([], false))
-                .quiet();
-            launcher.run_once(prompt).await.map(|outcome| outcome.text)
-        };
-        reviewer.await.unwrap_or_else(|error: adk_core::AdkError| format!("review failed: {error}"))
+        let run = self.reviewer(focus).run(focus, desc, prompt).await;
+        self.charge(run.model_calls);
+        run.text
+    }
+
+    async fn review_board(&self, plan: &ultra::ReviewLoop, prompt: &str) -> ultra::BoardStage {
+        let roster: Vec<Focus> =
+            plan.reviewers.iter().filter_map(|(focus, _)| Focus::from_name(focus)).collect();
+        println!("━━ review board ━━ {} seat(s), {} round(s)", roster.len(), plan.board_rounds);
+        let used = self.model_calls() + self.charged.load(std::sync::atomic::Ordering::SeqCst);
+        let remaining = self.limits.max_model_calls.saturating_sub(used);
+        let fallback = self.reviewer(Focus::Correctness.name());
+        let outcome = ReviewBoard::new(self.roles.board.clone(), &self.setup.resolved.workspace)
+            .guidance(self.setup.instruction.clone())
+            .audit_log(self.recorder.clone())
+            .roster(roster)
+            .rounds(plan.board_rounds)
+            .model_calls(self.limits.board_model_calls)
+            .user(self.setup.user.clone())
+            .fallback(fallback, remaining)
+            .run(prompt)
+            .await;
+        self.charge(outcome.model_calls);
+        if let Some(code) = &outcome.error_code {
+            println!("  board ended with {code}");
+        }
+        ultra::BoardStage {
+            seats: outcome
+                .seats
+                .iter()
+                .map(|seat| ultra::SeatReview {
+                    focus: seat.focus.name().to_string(),
+                    review: match seat.verdict {
+                        Verdict::Approve => ultra::Review::Approve,
+                        Verdict::Changes => ultra::Review::Changes,
+                        Verdict::Failed => ultra::Review::Failed,
+                    },
+                    notes: seat.notes.clone(),
+                })
+                .collect(),
+            status: match outcome.status {
+                BoardStatus::Completed => "completed",
+                BoardStatus::Failed => "failed",
+                BoardStatus::BudgetExhausted => "budgetExhausted",
+            }
+            .to_string(),
+            fallback: outcome.fallback.iter().map(|focus| focus.name().to_string()).collect(),
+        }
+    }
+
+    fn model_calls(&self) -> u64 {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    async fn stage_reviewed(&self, stage: &ultra::StageReport) -> Result<()> {
+        let notes: Vec<&str> = stage.seats.iter().map(|seat| seat.notes.as_str()).collect();
+        let now = snapshot(&self.setup.resolved.workspace).await;
+        let unchanged = self.after_turn.lock().await.as_ref().map(|turn| *turn == now);
+        self.audit
+            .record(
+                "harness.ultracode.reviewed",
+                json!({
+                    "runId": self.run_id,
+                    "round": stage.round,
+                    "architecture": if stage.board { "blackboard" } else { "graph" },
+                    "verdicts": stage.seats.iter().map(|seat| json!({
+                        "focus": seat.focus,
+                        "verdict": match seat.review {
+                            ultra::Review::Approve => "approve",
+                            ultra::Review::Changes => "changes",
+                            ultra::Review::Failed => "failed",
+                        },
+                    })).collect::<Vec<_>>(),
+                    "status": stage.status,
+                    "fallback": stage.fallback,
+                    "modelCalls": stage.model_calls,
+                    "notesDigest": sha256(notes.join("\n").as_bytes()),
+                    "workspaceUnchanged": unchanged,
+                }),
+            )
+            .await
+            .map_err(Into::into)
     }
 }
 

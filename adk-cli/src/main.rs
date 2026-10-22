@@ -114,17 +114,26 @@ async fn main() -> Result<()> {
             .await
         }
         #[cfg(feature = "harness")]
-        Some(Commands::Ultracode { task, harness, max_rounds }) => {
+        Some(Commands::Ultracode {
+            task,
+            harness,
+            max_rounds,
+            architecture,
+            router,
+            max_model_calls,
+            receipt,
+        }) => {
             let model = resolve_model(&options).await?;
+            let ultra = harness_cli::UltracodeArgs {
+                task,
+                max_rounds,
+                architecture,
+                router,
+                max_model_calls,
+                receipt,
+            };
             exit_with(
-                harness_cli::ultracode(
-                    model,
-                    options.instruction.clone(),
-                    harness,
-                    task,
-                    max_rounds,
-                )
-                .await?,
+                harness_cli::ultracode(model, options.instruction.clone(), harness, ultra).await?,
             )
         }
         #[cfg(not(feature = "harness"))]
@@ -135,7 +144,7 @@ async fn main() -> Result<()> {
                 root: std::path::PathBuf::from(&dir),
                 instruction: options.instruction,
             });
-            ultra::run_with(agents, &model.id, &dir, task, max_rounds).await
+            ultra::run_with(agents, &model.id, &dir, task, max_rounds.unwrap_or(2)).await.map(drop)
         }
         #[cfg(all(feature = "harness", feature = "persist"))]
         Some(Commands::Sessions { command }) => manage::sessions(command).await,

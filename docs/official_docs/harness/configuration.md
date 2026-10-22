@@ -116,6 +116,7 @@ works in, so it may only tighten (spec 3.1 §9.2 I3):
 | `sandbox = true` | Runs `bash` in the OS sandbox |
 | `fail_if_unavailable = true` | Refuses to build without the sandbox |
 | `[deploy]` | Not by the harness: deployment tooling reads it |
+| `[ultracode]` | Not by the harness: `adk-rust ultracode` reads it, tighten-only — see below |
 | `yes`, `allow_unsandboxed`, `trust`, `packs`, `members` | Never: they would loosen what the agent may do. Set them in code |
 
 Ignored keys and a looser mode are logged as warnings and listed in `HarnessConfig::notes`.
@@ -147,6 +148,42 @@ fn main() -> anyhow::Result<()> {
 
 The CLI reads the same file with the same rule, plus `<config dir>/adk-rust/harness.toml`
 for settings only you may make; see [Configuration files](cli.md#configuration-files).
+
+### `[ultracode]`
+
+`adk-rust ultracode` ([Ultracode](cli.md#ultracode)) reads its limits from an `[ultracode]`
+table: the defaults, then the user config, then `.adk/harness.toml`, then the flags, which
+win (spec 3.1 §7.10).
+
+| Key | Default | Ceiling | In `.adk/harness.toml` |
+|---|---|---|---|
+| `architecture` | `auto` | — | `graph` only |
+| `router` | `model` | — | `heuristic` only |
+| `max_rounds` | 2 | 5 | Lower only; floor 1 |
+| `max_reviewers` | 4 | 6 | Lower only; floor 3 |
+| `max_board_rounds` | 2 | 3 | Lower only; floor 1 |
+| `implement_model_calls` | 100 | 500 | Lower only |
+| `reviewer_model_calls` | 20 | 50 | Lower only |
+| `board_model_calls` | 48 | 150 | Lower only |
+| `max_model_calls` | 400 | 2,000 | Lower only |
+| `sensitive_paths` | `[]` | — | Append only |
+
+```toml
+[ultracode]
+architecture = "graph"          # a workspace may pin the parallel graph, never the board
+router = "heuristic"            # a workspace may turn the router's model call off
+max_rounds = 1
+max_model_calls = 200
+sensitive_paths = ["migrations/*", "src/billing/*"]
+```
+
+A workspace value that would loosen a limit, or choose `blackboard` or `auto` over your
+setting, is ignored with a note, and a value below a floor is raised to it. In the user
+config a value beyond a ceiling or floor is clamped, with a note. A flag beyond a ceiling
+is an error that names the ceiling.
+
+`UltracodeLimits::resolve` (`adk_cli::harness::ultracode`) applies the same rules for a
+program of your own.
 
 ## Features
 

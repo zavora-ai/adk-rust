@@ -339,6 +339,11 @@ struct ConfigFile {
     #[serde(default)]
     #[allow(dead_code)]
     hooks: Vec<toml::Value>,
+    /// `[ultracode]` (spec 3.1 §7.10): read by `adk-rust ultracode` through
+    /// `UltracodeLimits::resolve`, so it is neither applied here nor reported as unknown.
+    #[serde(default)]
+    #[allow(dead_code)]
+    ultracode: Option<toml::Value>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
 }
@@ -728,7 +733,7 @@ fn config_error(origin: &str, error: &str) -> AdkError {
     AdkError::config(format!("{origin}: {error}"))
 }
 
-fn loosening_note(key: &str, why: &str) -> String {
+pub(crate) fn loosening_note(key: &str, why: &str) -> String {
     format!(
         "{PROJECT_CONFIG_FILE}: `{key}` ignored — {why}, and workspace files may only tighten. \
          Set it in your user config or pass the flag"
@@ -880,6 +885,23 @@ mod tests {
                 resolved.notes
             );
         }
+    }
+
+    #[test]
+    fn ultracode_table_is_not_an_unknown_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("user.toml");
+        write(&user, "[ultracode]\nmax_rounds = 3\n");
+        write(
+            &dir.path().join(PROJECT_CONFIG_FILE),
+            "[ultracode]\narchitecture = \"graph\"\nmax_model_calls = 200\n",
+        );
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap();
+        assert!(
+            !resolved.notes.iter().any(|note| note.contains("ultracode")),
+            "[ultracode] is read by `adk-rust ultracode`: {:?}",
+            resolved.notes
+        );
     }
 
     #[test]

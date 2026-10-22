@@ -66,3 +66,9 @@ test-group = "durability-gates-firestore"
 [[profile.default.overrides]]
 filter = "package(adk-durability-gates)"
 slow-timeout = { period = "60s", terminate-after = 3 }
+
+# The live ultracode runs drive a real model through a whole implement-and-review run per
+# provider, then build the fixture.
+[[profile.default.overrides]]
+filter = "binary(harness_ultracode_live)"
+slow-timeout = { period = "120s", terminate-after = 10 }

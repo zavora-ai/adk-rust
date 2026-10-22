@@ -71,6 +71,7 @@ dependencies = [
  "rustyline",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tokio-util",
  "toml",

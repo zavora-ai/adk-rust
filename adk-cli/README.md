@@ -108,7 +108,7 @@ adk-rust chat         Interactive REPL with the plain chat agent
 adk-rust serve        Serve the harness (plan mode, approval inbox); `--agent chat` serves chat
 adk-rust code         One harness turn on a task; exit 3 when calls are held
 adk-rust goal         Harness turns until a success-condition command exits 0
-adk-rust ultracode    Implement, then review with parallel read-only reviewers
+adk-rust ultracode    Implement, then route the review to parallel reviewers or a review board
 adk-rust sessions     Harness sessions (list/show/rm)
 adk-rust rules        Standing rules (list/add/rm)
 adk-rust approvals    Held calls (list/approve/deny), locally or with --server
@@ -148,6 +148,26 @@ Settings also come from `.adk/harness.toml` in the workspace (which can only tig
 `adk-rust/harness.toml` in the config directory, `[[hooks]]` tables included; flags win.
 Tab completes slash commands and `@server:uri` mentions. See
 [The harness in your terminal](../docs/official_docs/harness/cli.md).
+
+### `adk-rust ultracode` options
+
+`ultracode` implements in your mode, then routes the review once, on the change: parallel
+independent reviewers (`graph`) or one round-robin board whose reviewers read each other
+(`blackboard`), read-only and shell-less in both (spec 3.1 §7.10). A security-sensitive or
+protected path routes to the board with a `security` seat; otherwise one closed-schema call
+to the member model chooses, with a deterministic heuristic when it fails.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--architecture` | `auto` | `auto`, `graph` or `blackboard` |
+| `--router` | `model` | How `auto` chooses: `model` or `heuristic` |
+| `--max-rounds` | 2 | Review stages, at most 5 |
+| `--max-model-calls` | 400 | The run's model calls, at most 2,000 |
+| `--receipt FILE` | none | The run's `harness.ultracode.*` records, the audit-log verification and the router's raw answer |
+
+The `[ultracode]` table in either config file sets the same limits and the per-step
+budgets; `.adk/harness.toml` can only lower them. See
+[Ultracode](../docs/official_docs/harness/cli.md#ultracode).
 
 ### `adk-rust chat` options
 
