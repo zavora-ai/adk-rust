@@ -1,0 +1,88 @@
+[package]
+name = "adk-kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Agent kernel for ADK-Rust: a resident supervisor with a process model, wake sources, an event bus and a control plane over durable runs"
+repository.workspace = true
+documentation = "https://docs.rs/adk-kernel"
+keywords = ["adk", "agent", "kernel", "durable", "supervisor"]
+categories = ["asynchronous", "development-tools"]
+
+# Feature set of spec 3.2 §7.1. Features of later phases are declared empty until their
+# phase lands: `drivers` (phase 3), `service`, `proc-baselines` (phase 4), `channels`,
+# `managed` (phase 5).
+[features]
+default = ["sqlite", "webhooks", "drivers", "service", "proc"]
+# SQLite backends for the kernel-owned stores, on the pool of `harness.db` with distinct
+# migration tables (spec 3.2 §7.1, §13 Q8).
+sqlite = ["dep:sqlx", "sqlx/sqlite"]
+# Shared kernel stores for replicas, opened from the URL of `adk-rust serve --store`
+# (spec 3.2 §7.1, §13 Q8).
+postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs"]
+redis = ["dep:fred"]
+# Webhook wake sources through `WebhookIngress` (spec 3.2 §7.4).
+webhooks = ["adk-core/webhooks", "adk-server/webhook-ingress"]
+# Supervised MCP drivers (spec 3.2 §7.7, phase 3); empty until then.
+drivers = []
+# launchd, systemd and Windows service installation (spec 3.2 §7.12, phase 4); empty until then.
+service = []
+# The live `ps`/`top` aggregates' OTel GenAI histograms (spec 3.2 §7.10, §13 Q4); the
+# content-free ledger joins it in phase 4.
+proc = ["dep:adk-telemetry", "dep:opentelemetry"]
+# 28-day baselines over `adk-eval`'s ledger statistics (spec 3.2 §7.10, phase 4); empty until then.
+proc-baselines = ["proc"]
+# Channel wake sources (spec 3.2 §7.4, phase 5); empty until then.
+channels = []
+# The `adk-managed` bridge (spec 3.2 §7.13, phase 5); empty until then.
+managed = []
+# The `conformance` module: suites for kernel store backends (spec 3.2 §11).
+conformance = ["tokio/rt"]
+
+[dependencies]
+adk-core.workspace = true
+adk-agent = { workspace = true, features = ["ambient"] }
+adk-runner.workspace = true
+adk-session.workspace = true
+adk-server = { workspace = true, features = ["background", "approvals"] }
+adk-telemetry = { workspace = true, optional = true }
+async-trait.workspace = true
+# The control plane's router, served on the Unix socket and merged into `ServerBuilder`.
+axum = "0.8"
+chrono.workspace = true
+dirs = "7"
+fred = { version = "10", optional = true, features = ["i-scripts"] }
+futures.workspace = true
+# The control-plane client over the Unix socket.
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+opentelemetry = { workspace = true, optional = true }
+# The control-plane client over HTTP.
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx = { workspace = true, optional = true, features = ["runtime-tokio", "chrono", "json"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "net", "fs", "signal"] }
+tokio-stream.workspace = true
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# Internal dev-deps are path-only (no version) so cargo strips them from the published
+# manifest. The self dependency lets the crate's own tests run the conformance suites.
+adk-kernel = { path = ".", features = ["conformance"] }
+# ScriptedLlm for the scenario tests on a real DurableWorker.
+adk-model = { path = "../adk-model", default-features = false }
+adk-session = { path = "../adk-session", features = ["sqlite"] }
+proptest = "1.5"
+sqlx = { workspace = true, features = ["runtime-tokio", "sqlite"] }
+tempfile = "3"
+tokio = { workspace = true, features = ["full"] }
+
+[package.metadata.docs.rs]
+all-features = true

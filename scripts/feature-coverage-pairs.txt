@@ -90,6 +90,11 @@
 2 adk-cli voice,scripted-model
 # adk-cli without the harness: the chat agent and the legacy `code`, `goal` and `ultracode`.
 2 adk-cli gemini no-default
+# The kernel's shared process stores for replicas (spec 3.2 §13 Q8); the live-server
+# conformance suites run in the postgres job.
+2 adk-kernel postgres,redis
+# The kernel without SQLite, webhooks or the histograms, with its conformance suites.
+2 adk-kernel conformance no-default
 
 # Shard 3 — adk-graph, adk-managed, adk-code.
 # No workspace member enables these four; four clippy failures and two uncompilable doc
