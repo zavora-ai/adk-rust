@@ -11,7 +11,10 @@ description = "Scripted and live scenarios for the adk-harness HarnessAgent (spe
 adk-core = { path = "../../adk-core" }
 adk-agent = { path = "../../adk-agent", features = ["coding"] }
 adk-devtools = { path = "../../adk-devtools" }
-adk-harness = { path = "../../adk-harness", default-features = false, features = ["runner", "skills", "sandbox", "memory", "team", "team-acp", "graph", "sqlite", "web", "web-fixture", "mcp", "hooks", "payments", "docker", "managed", "browser", "computer-use"] }
+adk-harness = { path = "../../adk-harness", default-features = false, features = ["runner", "skills", "sandbox", "memory", "team", "team-acp", "graph", "sqlite", "web", "web-fixture", "mcp", "hooks", "payments", "docker", "managed", "browser", "computer-use", "voice"] }
+# H5: the voice surface over Gemini Live or the OpenAI Realtime API, and the scripted
+# realtime provider of the scripted scenario.
+adk-realtime = { path = "../../adk-realtime", features = ["integration", "scripted", "gemini", "openai"] }
 # The H10 pack scenarios: adk-browser's toolset for the baseline, adk-computer-use's contracts
 # for the in-process desktop runtime.
 adk-browser = { path = "../../adk-browser" }

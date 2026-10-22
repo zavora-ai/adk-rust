@@ -38,6 +38,7 @@ mod payments;
 mod sandbox;
 mod surfaces;
 mod team_graph;
+mod voice;
 mod web_mcp;
 
 const APP: &str = "harness-example";
@@ -1000,9 +1001,12 @@ async fn run_scripted(name: &str, subject: Subject) -> Result<Checks> {
                                 Some(result) => result,
                                 None => match surfaces::run_scripted(other, subject).await {
                                     Some(result) => result,
-                                    None => match packs::run_scripted(other, subject).await {
+                                    None => match voice::run_scripted(other, subject).await {
                                         Some(result) => result,
-                                        None => bail!("unknown scenario {other}"),
+                                        None => match packs::run_scripted(other, subject).await {
+                                            Some(result) => result,
+                                            None => bail!("unknown scenario {other}"),
+                                        },
                                     },
                                 },
                             },
@@ -1047,7 +1051,7 @@ async fn main() -> Result<()> {
                 println!("| — | {provider} | — | skipped: no key |");
                 continue;
             };
-            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).chain(web_mcp::LIVE).chain(hooks::LIVE).chain(payments::LIVE).chain(sandbox::LIVE).chain(surfaces::LIVE).chain(packs::LIVE).copied() {
+            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).chain(web_mcp::LIVE).chain(hooks::LIVE).chain(payments::LIVE).chain(sandbox::LIVE).chain(surfaces::LIVE).chain(packs::LIVE).chain(voice::LIVE).copied() {
                 if !selected.is_empty() && !selected.contains(&scenario) {
                     continue;
                 }
@@ -1069,9 +1073,12 @@ async fn main() -> Result<()> {
                                     Some(result) => result,
                                     None => match sandbox::run_live(other, model.clone()).await {
                                         Some(result) => result,
-                                        None => match packs::run_live(other, model.clone()).await {
+                                        None => match voice::run_live(other, &model_name, model.clone()).await {
                                             Some(result) => result,
-                                            None => surfaces::run_live(other, &model_name, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                                            None => match packs::run_live(other, model.clone()).await {
+                                                Some(result) => result,
+                                                None => surfaces::run_live(other, &model_name, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                                            },
                                         },
                                     },
                                 },
@@ -1080,11 +1087,14 @@ async fn main() -> Result<()> {
                     },
                 };
                 let result = match &checks {
-                    Ok(checks) if checks.passed() => "PASS".to_string(),
-                    Ok(checks) => format!("FAIL: {}", checks.failures().join("; ")),
+                    Ok(checks) => match checks.skipped_reason() {
+                        Some(reason) => format!("skipped: {reason}"),
+                        None if checks.passed() => "PASS".to_string(),
+                        None => format!("FAIL: {}", checks.failures().join("; ")),
+                    },
                     Err(error) => format!("ERROR: {error}"),
                 };
-                failed |= !result.starts_with("PASS");
+                failed |= !(result.starts_with("PASS") || result.starts_with("skipped"));
                 println!("| {scenario} | {provider} | {model_name} | {result} |");
             }
         }
@@ -1100,6 +1110,7 @@ async fn main() -> Result<()> {
             .chain(sandbox::SCRIPTED)
             .chain(surfaces::SCRIPTED)
             .chain(packs::SCRIPTED)
+            .chain(voice::SCRIPTED)
         {
             if !selected.is_empty() && !selected.contains(name) {
                 continue;
