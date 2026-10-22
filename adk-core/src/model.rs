@@ -60,6 +60,41 @@ pub trait Llm: Send + Sync {
         let _ = request;
         None
     }
+
+    /// The provider-executed web search this model's transport serves, if any (spec 3.1
+    /// §7.20 "Provider-native search and fetch").
+    ///
+    /// Read from the client, never from the model's output: an agent that wants the
+    /// provider's search declares the built-in tool this names, and a model that returns
+    /// `None` gets web search only through a tool the application runs itself.
+    ///
+    /// The default returns `None`. Wrappers forward to the model they wrap.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Llm, LlmRequest, LlmResponseStream, NativeWebSearch, NativeWebSearchTool};
+    ///
+    /// struct Hosted;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Llm for Hosted {
+    ///     fn name(&self) -> &str {
+    ///         "hosted"
+    ///     }
+    ///     async fn generate_content(&self, _: LlmRequest, _: bool) -> adk_core::Result<LlmResponseStream> {
+    ///         unimplemented!()
+    ///     }
+    ///     fn native_web_search(&self) -> Option<NativeWebSearch> {
+    ///         Some(NativeWebSearch::new("anthropic", NativeWebSearchTool::AnthropicWebSearch, true))
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(Hosted.native_web_search().unwrap().provider, "anthropic");
+    /// ```
+    fn native_web_search(&self) -> Option<NativeWebSearch> {
+        None
+    }
 }
 
 /// A request to an LLM provider.
@@ -474,6 +509,62 @@ impl BuiltinToolUse {
     /// Creates a record of `count` uses of `kind`.
     pub fn new(kind: impl Into<String>, count: u32) -> Self {
         Self { kind: kind.into(), count }
+    }
+}
+
+/// The wire form of a provider-executed web search tool (spec 3.1 §7.20).
+///
+/// Each variant names the `adk-tool` built-in that declares it.
+///
+/// | Variant | Built-in | Request entry |
+/// |---------|----------|---------------|
+/// | `GoogleSearch` | `GoogleSearchTool` | Gemini `tools[].google_search` |
+/// | `AnthropicWebSearch` | `WebSearchTool` | Messages `web_search_20250305` server tool |
+/// | `OpenAiWebSearch` | `OpenAIWebSearchTool` | Responses `{"type": "web_search"}` |
+/// | `DeepSeekWebSearch` | `DeepSeekWebSearchTool` | DeepSeek Responses `{"type": "web_search"}` |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum NativeWebSearchTool {
+    /// Gemini `google_search` grounding.
+    GoogleSearch,
+    /// The Anthropic Messages `web_search` server tool.
+    AnthropicWebSearch,
+    /// The OpenAI Responses `web_search` tool.
+    OpenAiWebSearch,
+    /// The `web_search` tool of DeepSeek's Responses endpoint.
+    DeepSeekWebSearch,
+}
+
+/// The provider-executed web search a model's transport serves (spec 3.1 §7.20), as
+/// [`Llm::native_web_search`] reports it.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{NativeWebSearch, NativeWebSearchTool};
+///
+/// let search = NativeWebSearch::new("gemini", NativeWebSearchTool::GoogleSearch, false);
+/// assert_eq!(search.provider, "gemini");
+/// assert!(!search.allowed_domains, "google_search takes no domain allowlist");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[non_exhaustive]
+pub struct NativeWebSearch {
+    /// Provider that runs the search, such as `"gemini"`, `"anthropic"`, `"openai"` or
+    /// `"deepseek"`.
+    pub provider: &'static str,
+    /// The tool the request declares.
+    pub tool: NativeWebSearchTool,
+    /// Whether the provider honours a domain allowlist on the tool.
+    pub allowed_domains: bool,
+}
+
+impl NativeWebSearch {
+    /// Describes the search `provider` runs through `tool`, with or without a domain
+    /// allowlist.
+    pub fn new(provider: &'static str, tool: NativeWebSearchTool, allowed_domains: bool) -> Self {
+        Self { provider, tool, allowed_domains }
     }
 }
 

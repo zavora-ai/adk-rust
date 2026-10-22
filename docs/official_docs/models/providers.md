@@ -495,6 +495,38 @@ async fn main() -> anyhow::Result<()> {
 DeepSeek retired `deepseek-chat`, `deepseek-reasoner`, and the `deepseek-v4-flash` alias on
 2026-07-24. With thinking on, the reasoning arrives as `Part::Thinking`.
 
+### Web search
+
+`DeepSeekClient` speaks Chat Completions, which accepts function tools only. DeepSeek runs
+web search on its other endpoints:
+
+| Endpoint | Client | Tool | Models |
+|---|---|---|---|
+| Responses, `https://api.deepseek.com` ([guide](https://api-docs.deepseek.com/guides/responses_api)) | `OpenAIResponsesClient` (feature `openai`) | `DeepSeekWebSearchTool`, `{"type": "web_search"}` | `deepseek-v4-pro`; `deepseek-flash` ignores the tool |
+| Anthropic-compatible, `https://api.deepseek.com/anthropic` ([guide](https://api-docs.deepseek.com/guides/anthropic_api)) | `AnthropicClient` (feature `anthropic`) | `WebSearchTool`, `web_search_20250305` | Both |
+| Search API, `https://api.deepseek.com/v1/tools/search` ([guide](https://api-docs.deepseek.com/guides/search)) | `adk_harness::DeepSeekSearch` | The harness's governed `web_search` | Any model |
+
+Neither endpoint documents a domain allowlist for the tool. Both clients report the search
+from `Llm::native_web_search()`, which the harness reads to attach it by default.
+
+```rust
+use adk_rust::prelude::*;
+use adk_rust::model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig};
+use adk_tool::DeepSeekWebSearchTool;
+use std::sync::Arc;
+
+fn build() -> anyhow::Result<LlmAgent> {
+    let api_key = std::env::var("DEEPSEEK_API_KEY")?;
+    let model = OpenAIResponsesClient::new(
+        OpenAIResponsesConfig::new(api_key, "deepseek-v4-pro").with_base_url("https://api.deepseek.com"),
+    )?;
+    Ok(LlmAgentBuilder::new("researcher")
+        .model(Arc::new(model))
+        .tool(Arc::new(DeepSeekWebSearchTool::new()))
+        .build()?)
+}
+```
+
 ---
 
 ## Groq

@@ -2,8 +2,8 @@ use adk_core::{
     CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Tool, ToolContext,
 };
 use adk_tool::{
-    AnthropicBashTool20250124, AnthropicTextEditorTool20250728, ExitLoopTool, GoogleSearchTool,
-    OpenAIWebSearchTool, WebSearchTool,
+    AnthropicBashTool20250124, AnthropicTextEditorTool20250728, DeepSeekWebSearchTool,
+    ExitLoopTool, GoogleSearchTool, OpenAIWebSearchTool, WebSearchTool,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -112,6 +112,23 @@ fn test_native_declarations_are_exposed() {
 
     let anthropic_decl = WebSearchTool::new().declaration();
     assert_eq!(anthropic_decl["x-adk-anthropic-tool"]["type"], "web_search_20250305");
+}
+
+#[tokio::test]
+async fn deepseek_web_search_is_a_provider_executed_responses_tool() {
+    let tool = DeepSeekWebSearchTool::new();
+    assert!(tool.is_builtin());
+    assert_eq!(tool.effect(), adk_core::ToolEffect::ReadOnly);
+    assert_eq!(
+        tool.declaration(),
+        json!({
+            "name": "deepseek_web_search",
+            "description": "Searches the web for current information (DeepSeek server-side).",
+            "x-adk-openai-tool": { "type": "web_search" },
+        })
+    );
+    let ctx = Arc::new(MockToolContext::new()) as Arc<dyn ToolContext>;
+    assert!(tool.execute(ctx, json!({})).await.is_err(), "it never runs locally");
 }
 
 #[test]

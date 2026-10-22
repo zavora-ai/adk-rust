@@ -708,6 +708,10 @@ impl Llm for MeteredLlm {
     fn max_cost_micro_usd(&self, request: &LlmRequest) -> Option<u64> {
         self.inner.max_cost_micro_usd(request)
     }
+
+    fn native_web_search(&self) -> Option<crate::NativeWebSearch> {
+        self.inner.native_web_search()
+    }
 }
 
 #[cfg(test)]
@@ -734,5 +738,39 @@ mod tests {
         });
         assert_eq!(LlmSpendEstimate::per_call(7).estimate(&request), 7);
         assert_eq!(LlmSpendEstimate::default().estimate(&request), 50_000);
+    }
+
+    struct Searching;
+
+    #[async_trait]
+    impl Llm for Searching {
+        fn name(&self) -> &str {
+            "searching"
+        }
+
+        async fn generate_content(&self, _: LlmRequest, _: bool) -> Result<LlmResponseStream> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        fn native_web_search(&self) -> Option<crate::NativeWebSearch> {
+            Some(crate::NativeWebSearch::new(
+                "gemini",
+                crate::NativeWebSearchTool::GoogleSearch,
+                false,
+            ))
+        }
+    }
+
+    #[test]
+    fn the_metered_wrapper_reports_the_native_search_of_the_model_it_wraps() {
+        let metered = MeteredLlm::new(Arc::new(Searching));
+        assert_eq!(
+            metered.native_web_search(),
+            Some(crate::NativeWebSearch::new(
+                "gemini",
+                crate::NativeWebSearchTool::GoogleSearch,
+                false
+            ))
+        );
     }
 }

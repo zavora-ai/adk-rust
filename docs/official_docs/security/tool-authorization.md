@@ -217,6 +217,7 @@ let policy = DeclarativePolicy::builder()
 | `GeminiCodeExecutionTool` | Gemini | `gemini_code_execution` | `NonIdempotent` | `{"code_execution": {}}` |
 | `GeminiComputerUseTool` | Gemini | `gemini_computer_use` | `NonIdempotent` | `{"computer_use": {...}}` |
 | `OpenAIWebSearchTool` | OpenAI Responses | `openai_web_search` | `ReadOnly` | `{"type": "web_search", "filters": {"allowed_domains": [...]}, ...}` |
+| `DeepSeekWebSearchTool` | DeepSeek Responses | `deepseek_web_search` | `ReadOnly` | `{"type": "web_search"}` |
 | `OpenAIFileSearchTool` | OpenAI Responses | `openai_file_search` | `ReadOnly` | `{"type": "file_search", "vector_store_ids": [...], ...}` |
 | `OpenAICodeInterpreterTool` | OpenAI Responses | `openai_code_interpreter` | `NonIdempotent` | `{"type": "code_interpreter", "container": ...}` |
 | `OpenAIImageGenerationTool` | OpenAI Responses | `openai_image_generation` | `NonIdempotent` | `{"type": "image_generation", ...}` |

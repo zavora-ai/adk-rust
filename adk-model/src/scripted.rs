@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use adk_core::{
     AdkError, Content, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part, Result, UsageMetadata,
+    LlmResponseStream, NativeWebSearch, Part, Result, UsageMetadata,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -163,6 +163,7 @@ pub struct ScriptedLlm {
     name: String,
     script: Mutex<VecDeque<ScriptedResponse>>,
     requests: Mutex<Vec<LlmRequest>>,
+    native_web_search: Option<NativeWebSearch>,
 }
 
 impl ScriptedLlm {
@@ -178,7 +179,27 @@ impl ScriptedLlm {
             name: name.into(),
             script: Mutex::new(script.into_iter().map(Into::into).collect()),
             requests: Mutex::new(Vec::new()),
+            native_web_search: None,
         }
+    }
+
+    /// Reports `search` from [`Llm::native_web_search`], so a test stands in for a client
+    /// whose transport serves that provider's built-in search (spec 3.1 §7.20).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Llm, NativeWebSearch, NativeWebSearchTool};
+    /// use adk_model::{ScriptedLlm, ScriptedResponse};
+    ///
+    /// let search = NativeWebSearch::new("gemini", NativeWebSearchTool::GoogleSearch, false);
+    /// let llm = ScriptedLlm::new("gemini-3.5-flash-lite", Vec::<ScriptedResponse>::new())
+    ///     .with_native_web_search(search);
+    /// assert_eq!(llm.native_web_search(), Some(search));
+    /// ```
+    pub fn with_native_web_search(mut self, search: NativeWebSearch) -> Self {
+        self.native_web_search = Some(search);
+        self
     }
 
     /// Appends a reply to the end of the script.
@@ -221,6 +242,10 @@ impl std::fmt::Debug for ScriptedLlm {
 impl Llm for ScriptedLlm {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn native_web_search(&self) -> Option<NativeWebSearch> {
+        self.native_web_search
     }
 
     async fn generate_content(

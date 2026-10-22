@@ -139,12 +139,13 @@ pub use async_trait::async_trait;
 pub use builtin::{
     AnthropicBashTool20241022, AnthropicBashTool20250124, AnthropicTextEditorTool20250124,
     AnthropicTextEditorTool20250429, AnthropicTextEditorTool20250728, BypassBuiltinTool,
-    BypassMultiToolsLimit, ExitLoopTool, GeminiCodeExecutionTool, GeminiComputerEnvironment,
-    GeminiComputerUseTool, GeminiFileSearchTool, GoogleMapsContext, GoogleMapsTool,
-    GoogleSearchTool, LoadArtifactsTool, OpenAIApplyPatchTool, OpenAIApproximateLocation,
-    OpenAICodeInterpreterTool, OpenAIComputerEnvironment, OpenAIComputerUseTool,
-    OpenAIFileSearchTool, OpenAIImageGenerationTool, OpenAILocalShellTool, OpenAIMcpTool,
-    OpenAIShellTool, OpenAIWebSearchTool, UrlContextTool, WebSearchTool, WebSearchUserLocation,
+    BypassMultiToolsLimit, DeepSeekWebSearchTool, ExitLoopTool, GeminiCodeExecutionTool,
+    GeminiComputerEnvironment, GeminiComputerUseTool, GeminiFileSearchTool, GoogleMapsContext,
+    GoogleMapsTool, GoogleSearchTool, LoadArtifactsTool, OpenAIApplyPatchTool,
+    OpenAIApproximateLocation, OpenAICodeInterpreterTool, OpenAIComputerEnvironment,
+    OpenAIComputerUseTool, OpenAIFileSearchTool, OpenAIImageGenerationTool, OpenAILocalShellTool,
+    OpenAIMcpTool, OpenAIShellTool, OpenAIWebSearchTool, UrlContextTool, WebSearchTool,
+    WebSearchUserLocation,
 };
 #[cfg(feature = "example-store")]
 pub use example_store::{ExampleStoreClient, ExampleStoreConfig, ExampleStoreProvider};

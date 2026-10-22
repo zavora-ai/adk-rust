@@ -2102,6 +2102,20 @@ impl Llm for GeminiModel {
         self.transport == GeminiTransport::Interactions
     }
 
+    // generateContent serves `google_search` beside function tools on both backends, with
+    // no domain allowlist; the Interactions transport refuses that mix (spec 3.1 §7.20).
+    fn native_web_search(&self) -> Option<adk_core::NativeWebSearch> {
+        #[cfg(feature = "gemini-interactions")]
+        if self.transport == GeminiTransport::Interactions {
+            return None;
+        }
+        Some(adk_core::NativeWebSearch::new(
+            "gemini",
+            adk_core::NativeWebSearchTool::GoogleSearch,
+            false,
+        ))
+    }
+
     // Named distinctly from the agent layer's `call_llm` span (which carries
     // the gcp.vertex.agent.* attributes and is what trace exporters capture):
     // this is the model-transport layer, so traces show one `call_llm` per

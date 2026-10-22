@@ -16,6 +16,7 @@ Provider-native tools are declared through the normal `Tool` API, so you can mix
 | `GeminiCodeExecutionTool` | Gemini native code execution | Server-side Python execution |
 | `WebSearchTool` | Anthropic native web search | Claude server-side web search; `with_dynamic_filtering()` declares `web_search_20260209`, and `with_allowed_callers(["direct"])` turns its dynamic filtering off |
 | `OpenAIWebSearchTool` | OpenAI Responses web search | OpenAI-hosted retrieval |
+| `DeepSeekWebSearchTool` | DeepSeek Responses web search | DeepSeek server-side search with `deepseek-v4-pro` on `OpenAIResponsesClient` at `https://api.deepseek.com` |
 | `AgentTool` | Wrap agents as callable tools | Agent composition and delegation |
 | `ExitLoopTool` | Loop termination | Controlling LoopAgent iterations |
 | `LoadArtifactsTool` | Artifact loading | Accessing stored binary data |

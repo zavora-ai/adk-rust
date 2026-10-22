@@ -655,6 +655,26 @@ impl Llm for AnthropicClient {
         &ADAPTER
     }
 
+    // Anthropic's API runs the `web_search` server tool with `allowed_domains`; DeepSeek's
+    // Anthropic-compatible endpoint runs it with no documented allowlist
+    // (https://api-docs.deepseek.com/guides/anthropic_api); no other endpoint is assumed
+    // to (spec 3.1 §7.20).
+    fn native_web_search(&self) -> Option<adk_core::NativeWebSearch> {
+        let tool = adk_core::NativeWebSearchTool::AnthropicWebSearch;
+        match self.config.base_url.as_deref().map(crate::provider::url_host) {
+            None => Some(adk_core::NativeWebSearch::new("anthropic", tool, true)),
+            Some(host) => match host.as_deref() {
+                Some("api.anthropic.com") => {
+                    Some(adk_core::NativeWebSearch::new("anthropic", tool, true))
+                }
+                Some("api.deepseek.com") => {
+                    Some(adk_core::NativeWebSearch::new("deepseek", tool, false))
+                }
+                _ => None,
+            },
+        }
+    }
+
     #[tracing::instrument(
         name = "model.generate_content",
         skip_all,

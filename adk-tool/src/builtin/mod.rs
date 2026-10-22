@@ -1,5 +1,6 @@
 mod anthropic;
 mod bypass;
+mod deepseek;
 mod exit_loop;
 mod gemini_extra;
 mod google_search;
@@ -13,6 +14,7 @@ pub use anthropic::{
     AnthropicTextEditorTool20250429, AnthropicTextEditorTool20250728,
 };
 pub use bypass::{BypassBuiltinTool, BypassMultiToolsLimit};
+pub use deepseek::DeepSeekWebSearchTool;
 pub use exit_loop::ExitLoopTool;
 pub use gemini_extra::{
     GeminiCodeExecutionTool, GeminiComputerEnvironment, GeminiComputerUseTool,

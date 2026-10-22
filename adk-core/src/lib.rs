@@ -287,6 +287,7 @@ pub use model::{
     FinishReason, GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream,
     UsageMetadata, nullable_count,
 };
+pub use model::{NativeWebSearch, NativeWebSearchTool};
 pub use policy::{
     ArgPredicate, DeclarativePolicy, DeclarativePolicyBuilder, PolicyCall, PolicyDecision,
     PolicyRule, StrictestPolicy, ToolPolicy, ToolPolicyRequest,

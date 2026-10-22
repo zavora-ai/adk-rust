@@ -112,10 +112,36 @@ impl FromStr for ModelProvider {
     }
 }
 
+/// The host of `url` in lowercase, without scheme, user information, port or path; the
+/// endpoint a client sends to decides which provider-native tools it serves
+/// (spec 3.1 §7.20).
+#[cfg(any(feature = "anthropic", feature = "openai"))]
+pub(crate) fn url_host(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = host.split(':').next()?.trim_end_matches('.').to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
+}
+
 #[cfg(test)]
 mod tests {
     use super::ModelProvider;
     use std::str::FromStr;
+
+    #[cfg(any(feature = "anthropic", feature = "openai"))]
+    #[test]
+    fn url_host_is_the_lowercase_host_alone() {
+        use super::url_host;
+        assert_eq!(
+            url_host("https://API.DeepSeek.com/anthropic").as_deref(),
+            Some("api.deepseek.com")
+        );
+        assert_eq!(url_host("https://api.openai.com/v1").as_deref(), Some("api.openai.com"));
+        assert_eq!(url_host("http://user@localhost:8080/v1").as_deref(), Some("localhost"));
+        assert_eq!(url_host("https://api.anthropic.com.").as_deref(), Some("api.anthropic.com"));
+        assert_eq!(url_host("https://"), None);
+    }
 
     #[test]
     fn provider_roundtrips_from_machine_name() {
