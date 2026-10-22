@@ -249,6 +249,8 @@ jobs:
   # other PR-tier job runs them. The pgvector image is postgres:17 plus the extension,
   # which the pgvector and memory suites need. Service containers cannot mount files,
   # so the TLS server is started by a step. scripts/test-postgres.sh lists the suites.
+  # The Redis service serves the harness's shared mode and rule stores, whose replicas
+  # are the same suites' Redis leg.
   postgres:
     needs: [fmt, scope]
     if: needs.scope.outputs.docs_only != 'true'
@@ -263,9 +265,16 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       DATABASE_URL_TLS: postgres://postgres:postgres@localhost:5433/postgres
+      REDIS_URL: redis://localhost:6379
       NEXTEST_PROFILE: ci
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -289,6 +298,16 @@ jobs:
       env:
         PG_TLS_ROOT_CERT: ${{ runner.temp }}/pg-tls/ca.crt
       run: bash scripts/test-postgres.sh
+
+    # The feature set matches the adk-harness suite of scripts/test-postgres.sh, so the
+    # build is reused.
+    - name: Run the harness's Redis store suites
+      if: ${{ !cancelled() }}
+      run: >-
+        cargo nextest run --profile ci -p adk-harness
+        --features memory,postgres,redis
+        --run-ignored only --no-fail-fast
+        --test shared_store_redis_tests
 
   # ── Docs: documentation coverage for Stable-tier crates ──────
   docs:
