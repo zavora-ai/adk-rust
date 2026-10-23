@@ -1,6 +1,8 @@
 //! `GeminiModel` sends every `GenerateContentConfig` field Gemini's `generationConfig` has,
 //! and returns requested log probabilities in `provider_metadata["logprobs"]`.
 
+#![cfg(feature = "gemini")]
+
 use adk_core::{Content, GenerateContentConfig, Llm, LlmRequest, LlmResponse};
 use adk_model::GeminiModel;
 use futures::StreamExt;

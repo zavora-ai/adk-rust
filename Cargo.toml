@@ -151,6 +151,7 @@ tracing-subscriber = "0.3"
 opentelemetry = "0.32"
 # Unify rustls crypto provider to 'aws-lc-rs' across the workspace.
 rustls = { version = "0.23", features = ["aws-lc-rs"] }
+rustls-platform-verifier = "0.7"
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots", "connect"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-native-roots", "multipart"] }
 toml = "0.8"

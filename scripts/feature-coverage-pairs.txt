@@ -141,6 +141,9 @@
 # ran the Ollama, Groq, DeepSeek, Bedrock or Azure AI tests: a stale Ollama usage test sat
 # failing on main.
 4 adk-model all-providers
+# Exercise OpenAI with and without the optional Responses WebSocket transport.
+4 adk-model openai no-default
+4 adk-model openai-ws no-default
 4 adk-model openrouter
 # OpenCode Go and Zen routing over the OpenAI, Anthropic and Gemini clients.
 4 adk-model opencode

@@ -206,9 +206,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 accepts up to `XHigh`. `OpenAIResponsesConfig::with_reasoning_effort` takes the original
 three-value `ReasoningEffort` (`Low`, `Medium`, `High`).
 
-`OpenAIResponsesClient` always uses HTTP. For WebSocket mode, use `openai::WsTransport` from the
-`openai-ws` feature. `ResponsesTransport` and `OpenAIResponsesConfig::with_transport` were removed
-in 3.0: the option was never read.
+HTTP is the default. With `openai-ws`, call
+`OpenAIResponsesClient::with_websocket(WsOptions::default())` to prefer a persistent socket for
+streaming generations. Request adapters and header observers apply to both transports.
+The final adapted `background: true` selects HTTP, including streaming background requests.
+The first HTTP fallback reuses the WebSocket attempt's adapted body and headers; each later
+HTTP retry adapts the original request again.
+`preconnect()` performs only the handshake; the transport closes an unused socket after
+`WsOptions::preconnect_timeout` (25 seconds by default). The socket URL appends `/responses` to
+the base path, so `https://gw.example/openai` uses `wss://gw.example/openai/responses`.
+Create helper clients without `with_websocket` to keep their generations on HTTP.
+`WsOptions` exposes connection deadlines and capability observations; socket reuse compares the
+complete adapted headers. The standalone `WsTransport` API remains
+available for typed Responses requests. The default `first_event_timeout` is 15 seconds;
+control frames do not extend it. HTTP fallback is disabled by default. Set
+`WsOptions { fallback_to_http: true, ..Default::default() }` to explicitly allow fallback
+before the first provider event. This may generate and bill twice if the server already
+accepted the original request. With fallback disabled, uncertain delivery failures are
+returned without automatic retry. After any provider event acknowledges acceptance, a lost socket or read timeout is
+reported without automatically resending the generation. An explicit provider failure keeps
+its normal error and retry classification.
+
+Secure WebSocket connections use the platform certificate verifier and the same crypto provider
+selection as the default Responses HTTP client. Certificate rejection is a definitive WebSocket
+refusal; callers can remember it after a successful HTTP fallback.
 
 #### Background mode
 

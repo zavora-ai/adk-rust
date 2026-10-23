@@ -3,10 +3,11 @@
 //! This enforcer confines a shell on Windows with a **restricted token plus explicit ACL
 //! grants**, following the restricted-token ladder (as Codex does); AppContainer stays out of
 //! scope. It runs the command under a token built with `CreateRestrictedToken` — every group
-//! that widens access deny-only, `Administrators` included, a restricting SID set that admits only what the policy
-//! allows — and grants the restricting `RESTRICTED` SID explicit access to the workspace and
-//! scratch paths the [`SandboxPolicy`] names. A Job Object kills every descendant with the
-//! call.
+//! that widens access and the user's own SID deny-only, `Administrators` included. Public
+//! runtime files remain readable through the token's enabled groups; owner-only private
+//! files do not. A write-restricting SID set and explicit `RESTRICTED`/logon grants constrain
+//! writes to the policy's paths and existing matching ACLs. A Job Object kills every
+//! descendant with the call.
 //!
 //! # Why it does not plug into the generic `wrap_command`/`configure_command` path
 //!
@@ -23,10 +24,10 @@
 //!
 //! | Aspect | Behaviour |
 //! |--------|-----------|
-//! | Write outside the granted paths | Denied — the restricted-SID access check fails off the granted paths, except where a path grants write access to `Everyone` or `Users` |
-//! | Write inside a read-write path | Allowed — `RESTRICTED` is granted there and the path keeps the user's own entry |
-//! | Read of a path the policy does not grant and that grants neither `Everyone` nor `Users` (a user's profile) | Denied by the restricted-SID check |
-//! | System binaries and DLLs (`System32` grants `Users`) | Readable, so the shell can start programs (`Everyone` and `Users` are restricting SIDs) |
+//! | Writes | Require both normal access and a `RESTRICTED` or logon ACL grant; ordinary `Users`/`Everyone` write access is insufficient |
+//! | Write inside a read-write path | Allowed — `RESTRICTED` and the logon SID are granted there |
+//! | Owner-only private files outside the policy | Denied — the user SID is deny-only |
+//! | Public files, including system DLLs and `cmd.exe` | Readable through enabled groups such as `Users` and `Everyone`; reads are not a path allowlist |
 //! | Descendant processes | Killed with the call's Job Object |
 //! | Network | **Not enforced** — Windows offers no per-process network filter without AppContainer |
 //! | Integrity level | Left at the token's default; Low/Untrusted integrity needs the granted paths labelled and is a later rung |
@@ -351,41 +352,42 @@ mod token {
     /// What `CreateRestrictedToken` is given.
     #[derive(Debug, PartialEq, Eq)]
     pub(super) struct TokenPlan {
-        /// Groups made deny-only.
+        /// SIDs made deny-only, including the user SID.
         pub(super) deny_only: Vec<Sid>,
-        /// The restricting SIDs every access must also pass.
+        /// The restricting SIDs every write must also pass.
         pub(super) restricting: Vec<Sid>,
         /// The SIDs the token's default DACL grants full access. The objects the sandboxed
         /// process creates — its child processes and their threads among them — take this
-        /// DACL, so it must admit a restricting SID or the process could not open its own
-        /// children.
+        /// DACL, so it must admit the enabled logon SID and a write-restricting SID for
+        /// descendants to query and control their own objects.
         pub(super) default_dacl: Vec<Sid>,
     }
 
     /// The plan for a token with `groups`.
     ///
-    /// Every group becomes deny-only — `Administrators` and any other group that widens
-    /// access — except those the shell needs to start and run: `Everyone`, `Users`,
-    /// `Authenticated Users`, `INTERACTIVE`, the logon SID (window station and desktop), and
-    /// integrity labels, which cannot be disabled. The restricting SIDs are `Everyone` and
-    /// `Users`, so the shell can open the system binaries it starts (`System32` grants read
-    /// and execute to `Users`, not `Everyone`), `RESTRICTED`, which the policy's paths are
-    /// granted, and the logon SID. The default DACL grants the user, `SYSTEM`, `RESTRICTED` and the
-    /// logon SID. Returns `None` when the token has no logon SID.
+    /// The user SID and every widening group become deny-only, except the groups the shell
+    /// needs to read public runtime files: `Everyone`, `Users`, `Authenticated Users`,
+    /// `INTERACTIVE`, the logon SID, and integrity labels, which cannot be disabled.
+    /// Owner-only private reads therefore fail the normal access check. With
+    /// `WRITE_RESTRICTED`, writes must additionally pass `RESTRICTED` or the logon SID;
+    /// public `Users`/`Everyone` grants cannot authorize writes. The default DACL grants the
+    /// user, `SYSTEM`, `RESTRICTED` and the logon SID so descendants can use their own objects.
+    /// Returns `None` when the token has no logon SID.
     pub(super) fn plan(user: &Sid, groups: &[TokenGroup]) -> Option<TokenPlan> {
         let keep = [Sid::everyone(), Sid::users(), Sid::authenticated_users(), Sid::interactive()];
         let is_logon = |g: &TokenGroup| g.attributes & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID;
         let logon = groups.iter().find(|g| is_logon(g))?.sid.clone();
-        let deny_only = groups
+        let mut deny_only: Vec<_> = groups
             .iter()
             .filter(|g| {
                 !is_logon(g) && g.attributes & SE_GROUP_INTEGRITY == 0 && !keep.contains(&g.sid)
             })
             .map(|g| g.sid.clone())
             .collect();
+        deny_only.push(user.clone());
         Some(TokenPlan {
             deny_only,
-            restricting: vec![Sid::everyone(), Sid::users(), Sid::restricted(), logon.clone()],
+            restricting: vec![Sid::restricted(), logon.clone()],
             default_dacl: vec![user.clone(), Sid::system(), Sid::restricted(), logon],
         })
     }
@@ -414,7 +416,7 @@ mod imp {
         GetTokenInformation, NO_INHERITANCE, PSID, SID_AND_ATTRIBUTES,
         SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetTokenInformation, TOKEN_ADJUST_DEFAULT,
         TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY,
-        TOKEN_USER, TokenDefaultDacl, TokenGroups, TokenUser,
+        TOKEN_USER, TokenDefaultDacl, TokenGroups, TokenUser, WRITE_RESTRICTED,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
@@ -583,7 +585,8 @@ mod imp {
     }
 
     /// Builds the restricted token from `plan` (see [`token::plan`]), with every privilege
-    /// but change-notify removed.
+    /// but change-notify removed and restricting SIDs applied to writes. The deny-only user
+    /// SID keeps owner-only reads confined without denying public Windows runtime reads.
     fn restricted_token(source: HANDLE, plan: &TokenPlan) -> Result<Handle, SandboxError> {
         let attrs = |sids: &[Sid]| -> Vec<SID_AND_ATTRIBUTES> {
             sids.iter().map(|sid| SID_AND_ATTRIBUTES { Sid: psid(sid), Attributes: 0 }).collect()
@@ -596,7 +599,7 @@ mod imp {
         let ok = unsafe {
             CreateRestrictedToken(
                 source,
-                DISABLE_MAX_PRIVILEGE,
+                DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED,
                 deny.len() as u32,
                 deny.as_ptr(),
                 0,
@@ -819,11 +822,12 @@ mod imp {
         })?;
         let token = restricted_token(process_token.0, &plan)?;
 
-        // Grant the restricting RESTRICTED SID access to each allowed path, so the restricted
-        // token's second access check passes there and nowhere else.
-        let restricted = Sid::restricted();
+        // The enabled logon SID satisfies normal access after the user SID becomes deny-only.
+        // Both grants retain the policy's mode; only these SIDs can satisfy the write check.
         for entry in grants {
-            grant_path(&entry.path, entry.mode, psid(&restricted))?;
+            for sid in &plan.restricting {
+                grant_path(&entry.path, entry.mode, psid(sid))?;
+            }
         }
 
         let job = create_job()?;
@@ -1018,13 +1022,8 @@ mod tests {
         assert_eq!(
             plan,
             token::TokenPlan {
-                deny_only: vec![token::Sid::administrators(), organisation],
-                restricting: vec![
-                    token::Sid::everyone(),
-                    token::Sid::users(),
-                    token::Sid::restricted(),
-                    logon.clone()
-                ],
+                deny_only: vec![token::Sid::administrators(), organisation, user.clone()],
+                restricting: vec![token::Sid::restricted(), logon.clone()],
                 default_dacl: vec![user, token::Sid::system(), token::Sid::restricted(), logon],
             }
         );

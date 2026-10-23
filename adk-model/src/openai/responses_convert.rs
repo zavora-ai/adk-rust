@@ -33,14 +33,25 @@ pub fn contents_to_input_items(contents: &[Content]) -> Vec<InputItem> {
 
 /// Returns true when the request includes any OpenAI-native tool declarations.
 pub fn request_uses_native_tools(request: &LlmRequest) -> bool {
-    request.tools.values().any(|decl| decl.get("x-adk-openai-tool").is_some())
+    request.tools.values().filter_map(|decl| decl.get("x-adk-openai-tool")).any(native_tool)
         || request
             .config
             .as_ref()
             .and_then(|config| config.extensions.get("openai"))
             .and_then(|value| value.get("built_in_tools"))
             .and_then(serde_json::Value::as_array)
-            .is_some_and(|tools| !tools.is_empty())
+            .is_some_and(|tools| tools.iter().any(native_tool))
+}
+
+#[cfg(feature = "openai-ws")]
+pub(super) fn uses_native_tools(body: &serde_json::Value) -> bool {
+    body.get("tools")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|tools| tools.iter().any(native_tool))
+}
+
+fn native_tool(tool: &serde_json::Value) -> bool {
+    tool.get("type").and_then(serde_json::Value::as_str) != Some("function")
 }
 
 fn request_uses_computer_use_tool(request: &LlmRequest) -> bool {

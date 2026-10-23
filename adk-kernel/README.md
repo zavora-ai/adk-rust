@@ -226,6 +226,7 @@ approved by mounting it (spec 3.2 §7.7, K-I13, K-I14):
 |---|---|
 | `DriverManifest`, `EffectClass` | Command, environment, partitions, sandbox, restart policy, and each tool's effect class; unknown tools are `other`; a workspace's manifest may only restrict (`restrict_with`, `load_manifests`) |
 | Launcher | `sandbox = "os"` runs the server through `adk_sandbox::sandbox::sandboxed_command`, else records `Unsandboxed { reason }`; the environment is cleared to an allowlist; each `secret://` value is minted by the `CredentialBroker` into a `0600` file named by `<NAME>_FILE` |
+| Runtime reads | The Linux bubblewrap root includes existing system directories and `/nix/store` read-only for executable interpreters and libraries; manifest write grants stay scoped |
 | Supervision | One `McpServerManager` per driver; its status channel becomes `KernelEvent::Driver` and `kernel.driver.*` records; crashes restart with backoff |
 | Pinning | The first listing after approval pins each tool's declaration digest; a differing one is stale: `NeedsReapproval`, the harness's rules pinned to it stop matching, `DriverPolicy` asks before every call; `reapprove` pins the new declarations and moves the re-approving person's rules |
 | Parked calls | A call the server answers with a question parks as a held call, its `DriverPark` stored as the run's checkpoint; the decision, in this process or after a restart, re-issues it once |

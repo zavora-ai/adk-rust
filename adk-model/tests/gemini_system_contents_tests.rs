@@ -4,6 +4,8 @@
 //! transport keeps them as user turns so requests stay compatible with
 //! context caching, which already carries a system instruction.
 
+#![cfg(feature = "gemini")]
+
 use adk_core::{Content, Llm, LlmRequest};
 use adk_model::GeminiModel;
 use futures::StreamExt;

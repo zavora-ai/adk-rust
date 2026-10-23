@@ -1,5 +1,7 @@
 //! Property-based tests for core-to-Gemini multimodal conversion.
 
+#![cfg(feature = "gemini")]
+
 use adk_core::{FileDataPart, FunctionResponseData, InlineDataPart};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use proptest::prelude::*;

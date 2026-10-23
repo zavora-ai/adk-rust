@@ -593,7 +593,8 @@ async fn main() -> anyhow::Result<()> {
 | `response.incomplete` at `max_output_tokens` or `content_filter` | A final chunk with `FinishReason::MaxTokens` or `FinishReason::Safety` |
 | Other `incomplete`, `response.cancelled`, or `response.failed` | The errors in [Failed and unfinished responses](#failed-and-unfinished-responses) |
 | An event, including a completed response, that does not match the Responses schema | `model.openai_responses.parse` |
-| `error` event | `model.openai_responses.ws_error`, categorized by the event's documented code or its `status` |
+| `error` event | `model.openai_responses.ws_error`, categorized by the event's documented code or its `status`. Before any other event of the response the socket stays reusable; after the response has started the socket closes, so no later frame reaches the next request |
+| Request that is not a JSON object or cannot be serialized | `model.openai_responses.ws_serialize`, `InvalidInput` |
 | Event type this version does not know, carrying a terminal `response.status` | Ends the response by that status |
 | Handshake | Retried under `RetryConfig` for network errors, 408, 429, and 5xx; any other 4xx (for example 401) and an invalid URL fail at once with the status's category |
 
@@ -602,9 +603,47 @@ async fn main() -> anyhow::Result<()> {
 A response continued with `previous_response_id` after a reconnect needs `store = true`:
 the connection-local cache of an unstored response is lost with the old connection.
 
-`OpenAIResponsesClient` always uses HTTP. The former `OpenAIResponsesConfig::with_transport`
-option and the `ResponsesTransport` enum were never read and are removed; use `WsTransport`
-for WebSocket mode.
+`OpenAIResponsesClient` defaults to HTTP. Its `with_websocket(WsOptions::default())` builder
+selects a persistent socket for foreground streaming generations, using the same request adapter, header
+observer and response projection as HTTP. `preconnect()` opens only the handshake. It applies
+the request adapter to a minimal body for the handshake headers; body rewrites such as `max`
+reasoning apply to the generation. The transport closes an unused socket after
+`WsOptions::preconnect_timeout` (25 seconds by default), so the caller needs no cleanup of its
+own. Create helper clients without `with_websocket` to keep them on HTTP. Socket reuse compares the complete adapted headers, including authorization. `WsOptions`
+lets the caller observe transport outcomes and own capability policy. Use `WsTransport` for
+standalone typed Responses requests.
+
+The final adapted `background: true` selects HTTP and preserves both background and streaming
+fields. The first HTTP fallback shares the WebSocket attempt's adapted body and headers.
+Later HTTP retries start from the original request and run the adapter again.
+
+The socket URL is the HTTP base URL with a `ws`/`wss` scheme and `/responses` appended:
+`https://api.openai.com/v1` becomes `wss://api.openai.com/v1/responses`, and a gateway path
+without `/v1` keeps its own path, so `https://gw.example/openai` becomes
+`wss://gw.example/openai/responses`. A base URL that already ends in `/responses` is used as is,
+and a bare host uses `/v1/responses`.
+
+Both transports treat only non-function entries of `x-adk-openai-tool` declarations and
+`built_in_tools` as native tools. A provider declaration of `"type": "function"` streams like an
+ordinary function tool.
+
+`WsOptions::first_event_timeout` defaults to 15 seconds. Ping and pong frames do not
+extend this deadline. HTTP fallback is disabled by default. Opt in with
+`WsOptions { fallback_to_http: true, ..Default::default() }` to allow HTTP fallback before
+the first provider event. The server may already have accepted the WebSocket request,
+so opting in can generate and bill twice. With fallback disabled, uncertain delivery
+failures are returned without automatic retry.
+After any provider event confirms acceptance, a socket delivery failure or read timeout is
+reported without automatically resending the generation. Explicit provider failures retain
+their error and retry classification.
+
+System and environment proxy rules, including `NO_PROXY`, match the HTTP client's policy.
+A destination that requires a proxy uses HTTP; a bypassed destination can use WebSocket.
+
+Secure WebSocket connections use the platform certificate verifier and the default HTTP client's
+crypto provider selection through `adk_core::ensure_crypto_provider()`, preserving a
+caller-installed provider. A certificate rejection is a definitive refusal; capability policy can
+remember it after a successful HTTP fallback.
 
 `examples/gemini_ws_outcomes` runs each WebSocket case against a scripted local server and,
 when `OPENAI_API_KEY` is set, against the live endpoint:

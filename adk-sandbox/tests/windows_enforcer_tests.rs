@@ -141,3 +141,150 @@ fn a_timeout_terminates_the_job() {
         run_for(&workspace, "for /l %i in (1,1,2000000000) do @rem", Duration::from_secs(2));
     assert_eq!(outcome, ConfinedOutcome { exit_code: None, timed_out: true });
 }
+
+#[test]
+fn public_reads_do_not_grant_writes() {
+    for (sid, readable) in [("S-1-5-32-545", true), ("S-1-1-0", true), ("S-1-15-2-2", false)] {
+        let (_root, base, workspace) = layout();
+        let outside = private_dir(&base, "outside");
+        let status = std::process::Command::new("icacls")
+            .arg(&outside)
+            .args(["/grant", &format!("*{sid}:(OI)(CI)M")])
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("icacls runs");
+        assert!(status.success(), "the external directory has the requested public ACL");
+
+        run(
+            &workspace,
+            r"echo control> control.txt & type ..\outside\probe.txt > seen.txt 2> read-error.txt & echo changed> ..\outside\written.txt 2> write-error.txt",
+        );
+
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("control.txt")).unwrap().trim(),
+            "control"
+        );
+        let seen = std::fs::read_to_string(workspace.join("seen.txt")).unwrap();
+        assert_eq!(seen.contains("host"), readable, "read access for {sid}: {seen:?}");
+        assert!(!outside.join("written.txt").exists(), "public {sid} access permitted a write");
+        assert_eq!(std::fs::read_to_string(outside.join("probe.txt")).unwrap(), "host");
+    }
+}
+
+#[test]
+fn readonly_paths_reject_writes() {
+    let (_root, base, workspace) = layout();
+    let readonly = private_dir(&base, "readonly");
+    let policy =
+        SandboxPolicyBuilder::new().allow_read_write(&workspace).allow_read(&readonly).build();
+    let outcome = WindowsEnforcer::new()
+        .run_confined(
+            &policy,
+            "cmd.exe".as_ref(),
+            &[
+                OsString::from("/c"),
+                OsString::from(
+                    r"type ..\readonly\probe.txt > seen.txt & echo changed> ..\readonly\probe.txt 2> write-error.txt & echo new> ..\readonly\new.txt 2> create-error.txt",
+                ),
+            ],
+            &workspace,
+            Some(Duration::from_secs(30)),
+        )
+        .expect("the confined command runs");
+    assert!(!outcome.timed_out, "{outcome:?}");
+    assert_eq!(std::fs::read_to_string(workspace.join("seen.txt")).unwrap().trim(), "host");
+    assert_eq!(std::fs::read_to_string(readonly.join("probe.txt")).unwrap(), "host");
+    assert!(!readonly.join("new.txt").exists(), "a read-only path admitted file creation");
+}
+
+#[test]
+fn private_owner_cannot_rewrite_acl() {
+    const PRIVATE_FILE: &str = "ADK_WINDOWS_PRIVATE_FILE";
+    if let Some(path) = std::env::var_os(PRIVATE_FILE) {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::{
+            ERROR_ACCESS_DENIED, GetLastError, INVALID_HANDLE_VALUE,
+        };
+        use windows_sys::Win32::Security::Authorization::{SE_FILE_OBJECT, SetNamedSecurityInfoW};
+        use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+        use windows_sys::Win32::Storage::FileSystem::{
+            CreateFileW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+            WRITE_DAC,
+        };
+
+        let mut wide: Vec<u16> = path.encode_wide().chain(Some(0)).collect();
+        // SAFETY: the path is NUL-terminated and the other pointer parameters are optional.
+        let handle = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                WRITE_DAC,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        // SAFETY: GetLastError reads this thread's last Win32 error.
+        let error = unsafe { GetLastError() };
+        if handle != INVALID_HANDLE_VALUE {
+            // SAFETY: an unexpectedly successful open still returns an owned handle.
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+        }
+        assert_eq!(handle, INVALID_HANDLE_VALUE, "ownership allowed WRITE_DAC");
+        assert_eq!(error, ERROR_ACCESS_DENIED);
+
+        // SAFETY: the private fixture is owned by this test. A null DACL would remove its
+        // protection, so this direct attempt must fail even though the caller owns the file.
+        let status = unsafe {
+            SetNamedSecurityInfoW(
+                wide.as_mut_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(status, ERROR_ACCESS_DENIED, "ownership allowed replacing the private DACL");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            std::fs::write(&path, "changed").unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        std::fs::write("permissions-checked.txt", "checked")
+            .expect("the writable control succeeds");
+        return;
+    }
+
+    let (root, base, workspace) = layout();
+    private_dir(&base, "private");
+    let private = root.path().join("private").join("probe.txt");
+    let executable = std::env::current_exe().expect("the test executable exists");
+    let mut policy =
+        SandboxPolicyBuilder::new().allow_read_write(&workspace).allow_read(&executable).build();
+    policy.env.insert(PRIVATE_FILE.into(), private.display().to_string());
+    let outcome = WindowsEnforcer::new()
+        .run_confined(
+            &policy,
+            executable.as_os_str(),
+            &[
+                OsString::from("--exact"),
+                OsString::from("private_owner_cannot_rewrite_acl"),
+                OsString::from("--nocapture"),
+            ],
+            &workspace,
+            Some(Duration::from_secs(30)),
+        )
+        .expect("the confined test actor runs");
+    assert_eq!(outcome.exit_code, Some(0), "{outcome:?}");
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("permissions-checked.txt")).unwrap(),
+        "checked"
+    );
+    assert_eq!(std::fs::read_to_string(private).unwrap(), "host");
+}

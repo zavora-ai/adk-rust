@@ -17,6 +17,8 @@
 //!
 //! **Validates: Requirements 1.1, 2.1, 3.1, 3.2, 3.3**
 
+#![cfg(feature = "gemini")]
+
 use proptest::prelude::*;
 
 /// The set of built-in tool names that Gemini recognises as server-side tools.
