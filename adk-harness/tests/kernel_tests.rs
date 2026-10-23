@@ -281,3 +281,99 @@ async fn a_process_sleeping_on_an_approval_wakes_when_the_decision_lands() {
     assert_eq!(f.model.requests().len(), 1);
     kernel.stop().await.unwrap();
 }
+
+/// `propose_followup` (spec 3.2 §7.5): in every mode a turn's proposal becomes a `Proposed`
+/// agenda item whose origin is the proposing run. ReadOnly and Plan hold it; in Ask nothing
+/// runs until the inbox approves it, then it runs as a `Proposed` process whose parent is
+/// the proposing turn; in Auto the partition's policy schedules it at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn propose_followup_is_a_proposed_item_in_every_mode_and_ask_waits_for_the_inbox() {
+    for mode in HarnessMode::ALL {
+        let propose = ScriptedResponse::function_call(
+            "propose_followup",
+            json!({ "title": "Re-run the tests", "rationale": "the dependency bump lands tonight" }),
+        );
+        let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+        let service: Arc<dyn ApprovalService> = Arc::new(
+            StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+                .with_run_store(Arc::clone(&runs)),
+        );
+        let f = fixture(vec![propose, text("Proposed."), text("Re-ran the tests.")], |b| {
+            b.mode(mode).without_default_members().approval_service(Arc::clone(&service))
+        })
+        .await;
+        let (kernel, f, processes) = kernel(f, &runs);
+        kernel.start().await.unwrap();
+
+        let turn = kernel
+            .processes()
+            .spawn(
+                NewRun::new("interactive", APP, f.user.as_ref(), APP, json!({ "text": "bump it" }))
+                    .with_session_id(f.session.as_ref()),
+                ProcessSpec::new(ProcessKind::Interactive),
+            )
+            .await
+            .unwrap();
+        in_state(&runs, &turn.meta.pid, RunState::Completed).await;
+        let items = kernel.agenda().list(&adk_kernel::AgendaFilter::default()).await.unwrap();
+        assert_eq!(items.len(), 1, "{mode}: one item");
+        let item = items[0].clone();
+        assert_eq!(
+            item.origin,
+            adk_kernel::AgendaOrigin::Agent { pid: turn.meta.pid.clone(), confidence: 1.0 },
+            "{mode}"
+        );
+        let followup = || async {
+            processes
+                .list(&ProcessFilter::default())
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|meta| meta.agenda_item.as_deref() == Some(item.id.as_str()))
+        };
+        let inbox = f.harness.agent().runtime().approval_service().unwrap().clone();
+        let request = inbox.get(&format!("agenda_{}", item.id)).await.unwrap();
+
+        if mode != HarnessMode::Auto {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            let held = kernel.agenda().get(&item.id).await.unwrap().unwrap();
+            assert_eq!(held.state, adk_kernel::AgendaState::Proposed, "{mode}: still proposed");
+            assert!(followup().await.is_none(), "{mode}: nothing runs (K-I10)");
+            assert_eq!(f.model.requests().len(), 2, "{mode}: no model call for the follow-up");
+            assert_eq!(request.is_some(), mode == HarnessMode::Ask, "{mode}: only Ask asks");
+        }
+        if mode == HarnessMode::Ask {
+            let request = request.unwrap();
+            inbox
+                .decide(
+                    &request.id,
+                    request.version,
+                    ApprovalDecision::approve(SubjectRef::human(f.user.as_ref())),
+                )
+                .await
+                .unwrap();
+        }
+        if matches!(mode, HarnessMode::Ask | HarnessMode::Auto) {
+            let done = eventually(&format!("{mode}: the follow-up done"), || async {
+                kernel
+                    .agenda()
+                    .get(&item.id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .filter(|item| item.state == adk_kernel::AgendaState::Done)
+            })
+            .await;
+            assert_eq!(done.title, "Re-run the tests");
+            let meta = followup().await.expect("the follow-up's process");
+            assert_eq!(meta.kind, ProcessKind::Proposed);
+            assert_eq!(meta.parent.as_deref(), Some(turn.meta.pid.as_str()));
+            assert_eq!(f.model.requests().len(), 3, "{mode}");
+            // The follow-up's session ran in the proposing session's mode (K-I7).
+            let session = adk_kernel::agenda::item_session(&item.id);
+            let follow_mode = f.harness.mode(&f.user, &session_id(&session)).await;
+            assert_eq!(follow_mode.unwrap(), mode);
+        }
+        kernel.stop().await.unwrap();
+    }
+}
