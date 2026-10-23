@@ -44,7 +44,7 @@
 //! `docs/design/coding-agent.md`). The policy vocabulary is aligned with
 //! `adk-code`'s `SandboxPolicy`.
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod beneath;
 mod error;
 mod launcher;

@@ -6,9 +6,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use adk_core::ToolContext;
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use tokio::io::AsyncWriteExt;
 
+#[cfg(windows)]
+use crate::beneath::write_beneath;
 use crate::error::DevToolError;
 
 /// A workspace roots every file/search/shell operation at a directory and
@@ -411,8 +413,9 @@ impl Workspace {
     /// On Unix the file is opened beneath the root without following a symlink on any
     /// component, so a link swapped onto the path after the check fails the read; and a
     /// file with more than one hard link is refused, since another link to it can lie
-    /// outside the workspace (spec 3.1 §10 D4, §9.2 I28). Windows reads the path as
-    /// checked, without either guarantee.
+    /// outside the workspace (spec 3.1 §10 D4, §9.2 I28). On Windows the opened handle
+    /// is refused when it is a symlink or a junction, or when its final path is not the
+    /// checked target, and the same hard-link refusal applies (spec 3.2 §10 W6).
     pub(crate) async fn read_contained(&self, target: &Path) -> Result<String, DevToolError> {
         let bytes = self.read_contained_bytes(target).await?;
         // The same error `read_to_string` reports, on every platform.
@@ -431,13 +434,16 @@ impl Workspace {
         &self,
         target: &Path,
     ) -> Result<Vec<u8>, DevToolError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
+            #[cfg(unix)]
             use std::io::Read as _;
+            #[cfg(unix)]
             use std::os::unix::fs::MetadataExt as _;
 
             let relative = self.beneath_root(target)?;
             let root = self.root.clone();
+            #[cfg(unix)]
             let read =
                 tokio::task::spawn_blocking(move || -> std::io::Result<Result<Vec<u8>, u64>> {
                     let dir = crate::beneath::open_root(&root)?;
@@ -455,6 +461,13 @@ impl Workspace {
                 .map_err(|error| {
                     DevToolError::Other(format!("the read did not complete: {error}"))
                 })?;
+            #[cfg(windows)]
+            let read =
+                tokio::task::spawn_blocking(move || crate::beneath::read_beneath(&root, &relative))
+                    .await
+                    .map_err(|error| {
+                        DevToolError::Other(format!("the read did not complete: {error}"))
+                    })?;
             match read {
                 Ok(Ok(contents)) => Ok(contents),
                 Ok(Err(links)) => Err(DevToolError::Other(format!(
@@ -465,7 +478,7 @@ impl Workspace {
                 Err(error) => Err(self.open_error(target, error)),
             }
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             Ok(tokio::fs::read(target).await?)
         }
@@ -481,13 +494,18 @@ impl Workspace {
     /// write instead of redirecting it (spec 3.1 §10 D4). A file with more than one
     /// hard link is replaced, keeping its permissions, rather than truncated:
     /// truncating writes through every link, including one outside the workspace.
-    /// Windows re-checks the canonical parent before the open instead.
+    ///
+    /// On Windows each directory on the path is opened, or created, without following a
+    /// link on it and held open until the write ends, and the file is opened without
+    /// truncation; the handle is refused when it is a symlink or a junction or when its
+    /// final path is not the checked target, and it is truncated only after those checks
+    /// (spec 3.2 §10 W6).
     pub(crate) async fn write_contained(
         &self,
         target: &Path,
         contents: &[u8],
     ) -> Result<(), DevToolError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             let relative = self.beneath_root(target)?;
             let Some(name) = relative.file_name().map(std::ffi::OsStr::to_os_string) else {
@@ -502,7 +520,7 @@ impl Workspace {
                 })?
                 .map_err(|error| self.open_error(target, error))
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let escape = || DevToolError::PathEscape(self.display(target));
             let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else {
@@ -525,7 +543,7 @@ impl Workspace {
     }
 
     /// `target` relative to the root, which every target the check returns lies under.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn beneath_root(&self, target: &Path) -> Result<PathBuf, DevToolError> {
         target
             .strip_prefix(&self.root)
@@ -534,7 +552,7 @@ impl Workspace {
     }
 
     /// Reports an open that refused a symlink as an escape, and any other failure as I/O.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn open_error(&self, target: &Path, error: std::io::Error) -> DevToolError {
         if crate::beneath::is_symlink_refusal(&error) {
             DevToolError::PathEscape(self.display(target))
@@ -754,7 +772,7 @@ mod tests {
         assert!(ws.resolve("ok/file.rs").is_ok());
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn a_symlink_planted_after_resolve_is_not_followed() {
         let temp = tempfile::tempdir().unwrap();
@@ -769,7 +787,7 @@ mod tests {
             [("dangling", outside.join("planted.txt")), ("existing", outside.join("existing.txt"))]
         {
             let resolved = ws.resolve(name).expect("the path does not exist yet");
-            std::os::unix::fs::symlink(&target, root.join(name)).unwrap();
+            let Some(()) = link(&target, &root.join(name)) else { return };
 
             let result = ws.write_contained(&resolved, b"payload").await;
 
@@ -782,9 +800,10 @@ mod tests {
         assert_eq!(std::fs::read_to_string(outside.join("existing.txt")).unwrap(), "host");
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn writing_a_hard_linked_file_leaves_the_other_link_unchanged() {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
 
         let temp = tempfile::tempdir().unwrap();
@@ -793,6 +812,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(&outside, "host").unwrap();
         std::fs::hard_link(&outside, root.join("linked.txt")).unwrap();
+        #[cfg(unix)]
         std::fs::set_permissions(root.join("linked.txt"), std::fs::Permissions::from_mode(0o640))
             .unwrap();
         let ws = Workspace::new(&root);
@@ -802,21 +822,24 @@ mod tests {
 
         assert_eq!(std::fs::read_to_string(root.join("linked.txt")).unwrap(), "rewritten");
         assert_eq!(std::fs::read_to_string(&outside).unwrap(), "host");
-        let mode = std::fs::metadata(root.join("linked.txt")).unwrap().permissions().mode();
-        assert_eq!(mode & 0o7777, 0o640);
+        #[cfg(unix)]
+        {
+            let mode = std::fs::metadata(root.join("linked.txt")).unwrap().permissions().mode();
+            assert_eq!(mode & 0o7777, 0o640);
+        }
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1, "no temporary file is left");
     }
 
     /// A workspace with `notes.md`, an `AGENTS.md` beside it, a `docs/` directory, and a
     /// host directory outside the root.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     struct SwapFixture {
         _temp: tempfile::TempDir,
         root: PathBuf,
         outside: PathBuf,
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn swap_fixture() -> SwapFixture {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("workspace");
@@ -831,18 +854,73 @@ mod tests {
         SwapFixture { _temp: temp, root, outside }
     }
 
-    /// Replaces `path` with a symlink to `target`, as a concurrent process would.
-    #[cfg(unix)]
-    fn swap_for_link(path: &Path, target: &Path) {
+    /// Replaces `path` with a link to `target`, as a concurrent process would; `None`
+    /// when [`link`] cannot make one.
+    #[cfg(any(unix, windows))]
+    fn swap_for_link(path: &Path, target: &Path) -> Option<()> {
         let staged = path.with_extension("swap");
-        std::os::unix::fs::symlink(target, &staged).unwrap();
+        link(target, &staged)?;
         if path.is_dir() {
             std::fs::rename(path, path.with_extension("moved")).unwrap();
         }
         std::fs::rename(&staged, path).unwrap();
+        Some(())
     }
 
-    #[cfg(unix)]
+    /// Makes `at` a link to `target`: a symlink on Unix, and on Windows a junction to a
+    /// directory or a symlink to anything else.
+    ///
+    /// `None` when Windows refuses the symlink because creating one needs Developer Mode
+    /// or an elevated shell; the caller then skips its test. CI always has the privilege,
+    /// so there the refusal fails the test instead.
+    #[cfg(any(unix, windows))]
+    fn link(target: &Path, at: &Path) -> Option<()> {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, at).unwrap();
+        #[cfg(windows)]
+        if target.is_dir() {
+            junction(target, at);
+        } else {
+            return privileged(std::os::windows::fs::symlink_file(target, at));
+        }
+        Some(())
+    }
+
+    /// Makes `at` a junction (a mount point) to the directory `target`, which needs no
+    /// privilege.
+    #[cfg(windows)]
+    fn junction(target: &Path, at: &Path) {
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(at)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(
+            made.status.success(),
+            "mklink /J failed: {}",
+            String::from_utf8_lossy(&made.stdout)
+        );
+    }
+
+    /// `Some` when a Windows symlink was made, `None` when the process lacks the privilege
+    /// outside CI.
+    #[cfg(windows)]
+    fn privileged(made: std::io::Result<()>) -> Option<()> {
+        let not_held = windows_sys::Win32::Foundation::ERROR_PRIVILEGE_NOT_HELD as i32;
+        match made {
+            Ok(()) => Some(()),
+            Err(error)
+                if error.raw_os_error() == Some(not_held) && std::env::var_os("CI").is_none() =>
+            {
+                eprintln!("skipped: creating a symlink needs Developer Mode or an elevated shell");
+                None
+            }
+            Err(error) => panic!("could not create a symlink: {error}"),
+        }
+    }
+
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn a_file_swapped_for_a_link_inside_the_root_after_the_check_is_not_written() {
         // The harness decides on the target a path resolves to; a link swapped in
@@ -850,7 +928,9 @@ mod tests {
         let f = swap_fixture();
         let ws = Workspace::new(&f.root);
         let (_, target) = ws.resolve_target("notes.md").unwrap();
-        swap_for_link(&f.root.join("notes.md"), &f.root.join("AGENTS.md"));
+        let Some(()) = swap_for_link(&f.root.join("notes.md"), &f.root.join("AGENTS.md")) else {
+            return;
+        };
 
         let result = ws.write_contained(&target, b"rewritten").await;
 
@@ -858,27 +938,30 @@ mod tests {
         assert_eq!(std::fs::read_to_string(f.root.join("AGENTS.md")).unwrap(), "instructions");
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn a_file_swapped_for_a_link_outside_the_root_after_the_check_is_not_read() {
         let f = swap_fixture();
         let ws = Workspace::new(&f.root);
         let (_, target) = ws.resolve_target("notes.md").unwrap();
-        swap_for_link(&f.root.join("notes.md"), &f.outside.join("secret.txt"));
+        let Some(()) = swap_for_link(&f.root.join("notes.md"), &f.outside.join("secret.txt"))
+        else {
+            return;
+        };
 
         let result = ws.read_contained(&target).await;
 
         assert!(matches!(result, Err(DevToolError::PathEscape(_))), "{result:?}");
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn a_directory_swapped_for_a_link_after_the_check_is_not_followed() {
         let f = swap_fixture();
         let ws = Workspace::new(&f.root);
         let (_, read_target) = ws.resolve_target("docs/guide.md").unwrap();
         let (_, write_target) = ws.resolve_target("docs/new.md").unwrap();
-        swap_for_link(&f.root.join("docs"), &f.outside);
+        swap_for_link(&f.root.join("docs"), &f.outside).unwrap();
 
         let read = ws.read_contained(&read_target).await;
         let write = ws.write_contained(&write_target, b"planted").await;
@@ -888,13 +971,13 @@ mod tests {
         assert!(!f.outside.join("new.md").exists(), "the write landed outside the root");
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn a_missing_directory_planted_as_a_link_after_the_check_is_not_followed() {
         let f = swap_fixture();
         let ws = Workspace::new(&f.root);
         let (_, target) = ws.resolve_target("build/out/report.md").unwrap();
-        std::os::unix::fs::symlink(&f.outside, f.root.join("build")).unwrap();
+        link(&f.outside, &f.root.join("build")).unwrap();
 
         let result = ws.write_contained(&target, b"planted").await;
 
@@ -902,11 +985,11 @@ mod tests {
         assert!(!f.outside.join("out").exists(), "a directory was created outside the root");
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn the_checked_target_is_read_and_written_through_an_inside_link() {
         let f = swap_fixture();
-        std::os::unix::fs::symlink(f.root.join("notes.md"), f.root.join("alias.md")).unwrap();
+        let Some(()) = link(&f.root.join("notes.md"), &f.root.join("alias.md")) else { return };
         let ws = Workspace::new(&f.root);
         let (lexical, target) = ws.resolve_target("alias.md").unwrap();
         assert_eq!(lexical, ws.root().join("alias.md"));
@@ -920,7 +1003,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(f.root.join("new/dir/file.md")).unwrap(), "made");
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn a_file_with_more_than_one_hard_link_is_not_read() {
         let f = swap_fixture();
@@ -934,6 +1017,77 @@ mod tests {
             panic!("a hard-linked file was read: {result:?}");
         };
         assert!(message.contains("2 hard links"), "{message}");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_directory_swapped_for_a_directory_symlink_after_the_check_is_not_followed() {
+        // `link` makes a junction for a directory; a directory symlink carries the other
+        // name-surrogate tag.
+        let f = swap_fixture();
+        let ws = Workspace::new(&f.root);
+        let (_, read_target) = ws.resolve_target("docs/guide.md").unwrap();
+        let (_, write_target) = ws.resolve_target("docs/new.md").unwrap();
+        let docs = f.root.join("docs");
+        let staged = docs.with_extension("swap");
+        let Some(()) = privileged(std::os::windows::fs::symlink_dir(&f.outside, &staged)) else {
+            return;
+        };
+        std::fs::rename(&docs, docs.with_extension("moved")).unwrap();
+        std::fs::rename(&staged, &docs).unwrap();
+
+        let read = ws.read_contained(&read_target).await;
+        let write = ws.write_contained(&write_target, b"planted").await;
+
+        assert!(matches!(read, Err(DevToolError::PathEscape(_))), "{read:?}");
+        assert!(matches!(write, Err(DevToolError::PathEscape(_))), "{write:?}");
+        assert!(!f.outside.join("new.md").exists(), "the write landed outside the root");
+    }
+
+    /// A WOF-compressed file is backed by `IO_REPARSE_TAG_WOF`, an in-place tag like a
+    /// cloud placeholder's. A real placeholder needs a cloud sync provider registered and
+    /// connected through the Cloud Filter API, which a unit test cannot stand up.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn an_in_place_reparse_point_is_read_and_written() {
+        use std::os::windows::ffi::OsStrExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{WOF_PROVIDER_FILE, WofIsExternalFile};
+
+        let f = swap_fixture();
+        let packed = f.root.join("packed.txt");
+        let text = "an in-place reparse point keeps its data with its filter\n".repeat(32_768);
+        std::fs::write(&packed, &text).unwrap();
+        let compact = std::process::Command::new("compact.exe")
+            .args(["/C", "/EXE:XPRESS4K"])
+            .arg(&packed)
+            .output()
+            .unwrap();
+        // Whether the file is WOF-backed is asked of WOF itself.
+        let wide: Vec<u16> = packed.as_os_str().encode_wide().chain(Some(0)).collect();
+        let (mut external, mut provider) = (0, 0);
+        // SAFETY: `wide` is NUL-terminated and the out-pointers are writable; no file
+        // information is requested.
+        let asked = unsafe {
+            WofIsExternalFile(
+                wide.as_ptr(),
+                &raw mut external,
+                &raw mut provider,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(
+            asked >= 0 && external != 0 && provider == WOF_PROVIDER_FILE,
+            "compact did not back the file with WOF: {}",
+            String::from_utf8_lossy(&compact.stdout)
+        );
+        let ws = Workspace::new(&f.root);
+        let (_, target) = ws.resolve_target("packed.txt").unwrap();
+
+        assert_eq!(ws.read_contained(&target).await.unwrap(), text);
+        ws.write_contained(&target, b"rewritten").await.unwrap();
+
+        assert_eq!(std::fs::read_to_string(&packed).unwrap(), "rewritten");
     }
 
     /// A tool context that names a session and an agent.
