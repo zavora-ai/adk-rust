@@ -212,8 +212,23 @@ impl Workdir {
     /// enforcer exists with the work directory readable and writable; `extra` adds TOML keys
     /// before the tools table.
     pub fn manifest(&self, id: &str, extra: &str) -> DriverManifest {
+        self.manifest_with(id, &std::env::current_exe().unwrap(), &[], extra)
+    }
+
+    /// [`Workdir::manifest`] started through `command`, which runs this test binary, with
+    /// `read` readable besides the work directory.
+    pub fn manifest_with(
+        &self,
+        id: &str,
+        command: &Path,
+        read: &[&Path],
+        extra: &str,
+    ) -> DriverManifest {
         let quote = |text: &str| format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""));
-        let exe = std::env::current_exe().unwrap().display().to_string();
+        let readable: Vec<String> = std::iter::once(self.path())
+            .chain(read.iter().copied())
+            .map(|path| quote(&path.display().to_string()))
+            .collect();
         let toml = format!(
             "id = \"{id}\"\n\
              command = {}\n\
@@ -221,7 +236,7 @@ impl Workdir {
              protocol = \"discover\"\n\
              env = {{ {SERVER_ENV} = \"1\", {LOG_ENV} = {}, {DECLARATION_ENV} = {} }}\n\
              restart = {{ max_attempts = 5, initial_delay_ms = 100, max_delay_ms = 400, backoff_multiplier = 2.0 }}\n\
-             allow_read = [{dir}]\n\
+             allow_read = [{}]\n\
              allow_write = [{dir}]\n\
              {extra}\n\
              [tools]\n\
@@ -230,9 +245,10 @@ impl Workdir {
              write_file = \"write_local\"\n\
              env_report = \"read\"\n\
              crash = \"other\"\n",
-            quote(&exe),
+            quote(&command.display().to_string()),
             quote(&self.log().display().to_string()),
             quote(&self.declaration().display().to_string()),
+            readable.join(", "),
             dir = quote(&self.path().display().to_string()),
         );
         DriverManifest::from_toml(&toml).unwrap()
