@@ -542,12 +542,25 @@ jobs:
     # adk-code spawns rustc from a cleared environment and adk-devtools resolves
     # workspace paths; both carry Windows-only behaviour that the compile-only build
     # cannot exercise and that the merge tier otherwise reports only after landing.
+    # adk-devtools' suite includes the Job Object and handle-verified open tests
+    # (spec 3.2 §10 W1, W6).
     # adk-managed's durable round trips drive two runtime replicas over one set of
     # SQLite files, whose rollback journals make every write slow on Windows.
+    # PowerShell fails a step on its last command's exit code only, so each earlier
+    # command's is checked.
     - name: Run the Windows-sensitive crate tests
       run: |
-        cargo test -p adk-code -p adk-devtools
+        cargo test -p adk-code -p adk-devtools --no-fail-fast
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         cargo test -p adk-managed --test durable_round_trip_tests
+
+    # The owner-only DACLs that stand in for mode 0600 (spec 3.2 §10 W4): the harness
+    # store files and the CLI's session store.
+    - name: Run the Windows owner-only file tests
+      run: |
+        cargo test -p adk-harness --lib fsutil::tests
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cargo test -p adk-cli --bin adk-rust sessions::tests
 
     - name: Build summary
       if: always()

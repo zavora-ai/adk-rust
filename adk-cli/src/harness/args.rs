@@ -352,6 +352,11 @@ struct ConfigFile {
     #[serde(default)]
     #[allow(dead_code)]
     ultracode: Option<toml::Value>,
+    /// `[kernel]` (spec 3.2 §8.2): read by `adk-rust up` through `KernelSettings::resolve`,
+    /// so it is neither applied here nor reported as unknown.
+    #[serde(default)]
+    #[allow(dead_code)]
+    kernel: Option<toml::Value>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
 }

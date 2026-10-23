@@ -548,7 +548,7 @@ let score = scorer.score("expected text", "actual text").await?;
 | `ci-helpers` | `quick-xml` | JUnit XML report generation |
 | `statistics` | `statrs` | Wilcoxon signed-rank test for A/B comparison |
 
-All other features (structured judge, cost tracker, trace analyzer, baselines, annotations, test generator, conversation scorer) work without any additional feature flags.
+All other features (structured judge, cost tracker, trace analyzer, baselines, ledger statistics, annotations, test generator, conversation scorer) work without any additional feature flags.
 
 ## Running Evaluations in CI
 
@@ -746,6 +746,128 @@ for line in sys.stdin:
     request = json.loads(line)
     reply = {"text": f"You said: {request['user_text']}", "tool_calls": []}
     print(json.dumps(reply), flush=True)
+```
+
+### Gating on Ledger Drift with `cargo adk eval --ledger`
+
+The agent kernel keeps a content-free activity ledger: one row per intent, tool call, approval, wake and similar event, with a timestamp, a duration and a hashed subject, never a payload. `adk_eval::ledger` holds the statistics over it as pure functions, with no I/O and no model, and `cargo adk eval --ledger` runs them over an exported ledger as a CI regression gate — for example over the ledger of a nightly scenario run, so a cost, latency or routine drift fails the build.
+
+| Rule | Value |
+|------|-------|
+| Baseline | Median and MAD over the 28 days before the last 14, per dimension and day class (weekday, weekend) |
+| Warm-up | 14 days with a value in the baseline window before a dimension can deviate |
+| Comparison windows | The medians of the last 7 and the last 14 days; a day class deviates only when both windows do |
+| Deviation | `\|recent − baseline median\| > max(2.5 × MAD, floor)`, a floor per dimension |
+| Meaningful | Two dimensions deviating, or one deviating for 10 days running |
+| Cooldown | 7 days per dimension after an observation includes it (`DriftState`); the gate does not apply it, so a regression keeps failing while it lasts |
+
+The baseline window ends the day before the 14-day window starts, so a drift inside the comparison windows does not move the baseline it is measured against. The first possible deviation is therefore on the 28th day of a ledger.
+
+**Export format.** One JSON object per line, camelCase, with the ledger's columns. Fields the gate does not know are ignored.
+
+```json
+{"ts":"2026-10-22T19:20:04+03:00","partition":"default","agent":"assistant","kind":"tool_call","effect":"read_only","durationMs":182,"subjectHash":"hmac-sha256:5f2c9a…","meta":{"attempt":1},"traceId":"4bf92f35…"}
+```
+
+| Field | Required | Content |
+|-------|----------|---------|
+| `ts` | Yes | RFC 3339 with an offset; the row's day and time of day are read in that offset, so export local time |
+| `partition`, `agent` | Yes | Where the activity happened and which agent acted |
+| `kind` | Yes | `intent`, `tool_call`, `approval`, `rejection`, `observation`, `wake`, `proposal`, or another kind |
+| `effect` | No | The action's effect class, such as `read_only` |
+| `durationMs` | No | How long the action took |
+| `subjectHash` | No | An HMAC of the subject, never the subject |
+| `meta` | No | A small object; its numeric values feed the statistics |
+| `traceId` | No | The trace the row belongs to |
+
+**Dimensions.** The gate derives one value per dimension per day with rows. A day without rows has no value, not zero.
+
+| Dimension | Daily value | Default floor |
+|-----------|-------------|---------------|
+| `activity.first_minute` | Minute of the day of the first row | 45 |
+| `activity.last_minute` | Minute of the day of the last row | 45 |
+| `<kind>.count` | Rows of that kind; 0 on a day with rows of other kinds only | 0 |
+| `<kind>.duration_ms` | Median `durationMs` of that kind's rows | 0 |
+| `<kind>.meta.<key>` | Sum of that kind's numeric `meta` values under `key` | 0 |
+
+```bash
+cargo adk eval --ledger ledger.jsonl --floor tool_call.duration_ms=50
+cargo adk eval --ledger ledger.jsonl --format json --output ledger-report.json
+```
+
+| Flag | Meaning | Default |
+|------|---------|---------|
+| `--ledger` | The export to check; takes the place of the eval-set path and `--agent-cmd` | — |
+| `--floor` | `DIMENSION=VALUE`, repeatable; a dimension the export does not have is an error | The table above |
+| `--format` | `table` or `json`; `junit` is refused | `table` |
+| `--output` | Write the report to a file instead of stdout | stdout |
+
+The command tests the export's last day and exits with status 0 when it has no meaningful deviation, and 1 when it has one. An export that cannot be parsed, has no rows, or is too short for any dimension to finish its warm-up — under 28 days — is an error, also status 1, so the gate cannot pass unchecked.
+
+The report over six weeks whose last two weeks' weekdays finish two hours later with twice the tool calls, with `--floor tool_call.duration_ms=50` (rows abbreviated):
+
+```text
+Dimension                Class       Median        MAD  Threshold     Last 7    Last 14  Result
+activity.last_minute     weekday     1052.5        2.3       45.0     1158.7     1158.8  DEVIATES (10 days)
+tool_call.count          weekday        4.0        0.0        0.0        8.0        8.0  DEVIATES (10 days)
+tool_call.duration_ms    weekday      192.2       12.2       50.0      201.5      193.2  ok
+
+FAIL: meaningful deviation: activity.last_minute for 10 days, tool_call.count for 10 days
+```
+
+> **Note:** A floor of 0 leaves the threshold to the MAD alone. A dimension that does not vary — a scripted run's tool-call count — deviates on any change, which is what a regression gate wants; a noisy dimension whose baseline happens to be tight deviates on ordinary noise. Set a floor for noisy dimensions such as durations, in the dimension's own unit.
+
+The same functions run in Rust, over an export or over daily series a caller aggregates itself:
+
+```toml
+[dependencies]
+adk-eval = "3.0.0"
+chrono = "0.4"
+```
+
+```rust
+use std::collections::BTreeMap;
+
+use adk_eval::ledger::{
+    DailyValue, DeviationConfig, DriftState, assess, check_series, daily_series, parse_jsonl,
+};
+use chrono::NaiveDate;
+
+/// Fails when an exported ledger's last day has a meaningful drift.
+fn gate(export: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let series = daily_series(&parse_jsonl(export)?);
+    let config = DeviationConfig::default().with_floor("tool_call.duration_ms", 50.0);
+    if let Some(assessment) = assess(&series, &config) {
+        for run in &assessment.runs {
+            println!("{} has deviated for {} days", run.dimension, run.days);
+        }
+        if assessment.meaningful {
+            return Err("meaningful drift".into());
+        }
+    }
+    Ok(())
+}
+
+/// One daily tick: test today and carry the runs and cooldowns to the next tick.
+fn tick(
+    state: &DriftState,
+    series: &BTreeMap<String, Vec<DailyValue>>,
+    today: NaiveDate,
+) -> DriftState {
+    let report = check_series(series, today, &DeviationConfig::default());
+    let step = state.advance(today, &report.deviating());
+    for dimension in &step.observed {
+        println!("observation: {dimension} differs from its baseline");
+    }
+    step.state
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    gate(&std::fs::read_to_string("ledger.jsonl")?)?;
+    let today = NaiveDate::from_ymd_opt(2026, 10, 22).ok_or("invalid date")?;
+    let _next = tick(&DriftState::default(), &BTreeMap::new(), today);
+    Ok(())
+}
 ```
 
 ## Best Practices

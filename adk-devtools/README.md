@@ -84,9 +84,12 @@ check found without following a symlink on any component (`openat2` with `RESOLV
 RESOLVE_NO_SYMLINKS` on Linux, a component-by-component `O_NOFOLLOW` walk elsewhere), so a file
 or directory swapped for a symlink after the check fails the call. `read_file` and `edit_file`
 refuse a file with more than one hard link; writing one replaces it, keeping its permissions,
-instead of truncating it, so a link outside the workspace keeps its contents. Windows keeps the
-path checks without the descriptor-relative opens or the link-count refusal. A timed-out or
-cancelled `bash` call kills the command's whole process group.
+instead of truncating it, so a link outside the workspace keeps its contents. On Windows each
+open is verified on its handle: opened with `FILE_FLAG_OPEN_REPARSE_POINT`, it is refused when it
+is a symlink or a junction or when `GetFinalPathNameByHandleW` names anything but the checked
+target beneath the root, while in-place reparse points such as WOF-compressed files and cloud
+placeholders are not refused; the hard-link refusal applies there too. A timed-out or cancelled `bash` call kills the
+command's whole process group, or on Windows its Job Object.
 
 Exclusion patterns match, ignoring case, the path relative to the root or any one of its
 components, so `.env` also covers `config/.env`; `read_file` checks the path a symlink resolves
@@ -100,8 +103,10 @@ provider API keys from the agent process with `env`; adding a credential to the 
 `inherit_env(true)`, exposes it again. Standard input is `/dev/null`, and the command starts in a
 new session with no controlling terminal, leading its own process group. When the shell exits,
 the rest of the group is killed, so `sleep 300 &` or a server started in the background does not
-outlive the call; a process that starts its own session or group escapes this. Pass
-`bash_kill_group_on_exit(false)` to let background processes keep running.
+outlive the call; a process that starts its own session or group escapes this. On Windows the
+command starts suspended and runs only once it is in a Job Object, which none of its descendants
+can leave, and the job is killed at the same points. Pass `bash_kill_group_on_exit(false)` to let
+background processes keep running.
 
 ### Command launchers
 

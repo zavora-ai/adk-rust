@@ -108,9 +108,20 @@ let ws = Workspace::new("./my-repo")
   rather than truncating it, so a link from outside the workspace keeps its
   contents.
 
-  On Windows the file tools re-check the canonical parent before the open and do
-  not refuse hard-linked files; neither the descriptor-relative opens nor the
-  link count are available there.
+  On Windows the same three tools verify each open on the handle it returns. The
+  target is opened with `FILE_FLAG_OPEN_REPARSE_POINT`, without truncation, and the
+  call fails with the escape error when the handle is a symlink or a junction — a
+  name-surrogate reparse point — or when `GetFinalPathNameByHandleW` names anything
+  but the checked target beneath the root's own final path. `write_file` opens or
+  creates each directory on the path the same way and holds it open until the write
+  ends, so none can be renamed or replaced by a link meanwhile, and truncates the file
+  only after every check. The hard-link refusal applies as on Unix.
+
+  | Windows entry on the path | Result |
+  |---------------------------|--------|
+  | A symlink or junction swapped in after the check | The call fails; nothing is read or created through it |
+  | An in-place reparse point: a WOF-compressed file, a cloud placeholder (OneDrive Files On-Demand) | Not refused; it is reopened through its handle, so its filter serves the content |
+  | A volume mounted in a folder without a drive letter | The call fails: the final path cannot be named |
 - **Read-only mode** — `Workspace::read_only(..)` hides the mutating tools
   entirely (the model only ever sees `read_file`/`glob`/`grep`).
 - **`bash` environment is cleared** — the command receives only `PATH`, `HOME`, `LANG`,
@@ -132,6 +143,10 @@ let ws = Workspace::new("./my-repo")
   wait for it to close its output. A process that starts its own session or group
   escapes the kill. `Workspace::bash_kill_group_on_exit(false)` lets background
   processes keep running; a timeout or a cancelled call still kills the group.
+  On Windows the command starts suspended and runs only once it is in a **Job
+  Object**, so everything it starts belongs to the job and none of it can leave; the
+  job's processes are killed where Unix kills the group, and when the agent process
+  exits during the call.
 
 ### Secret files
 
@@ -177,9 +192,9 @@ timeout and a cleared environment, and only when the workspace allows it
 
 | Enforced | Not enforced |
 |----------|--------------|
-| File tools cannot resolve outside the root, including through symlinks and, on Unix, symlinks swapped in after the check; they do not read hard-linked files | `bash` can still use absolute paths — the working directory is not an OS boundary |
+| File tools cannot resolve outside the root, including through symlinks, and on Windows junctions, swapped in after the check; they do not read hard-linked files | `bash` can still use absolute paths — the working directory is not an OS boundary |
 | The command cannot read the agent's environment variables | The command can reach the network |
-| A timeout, a cancelled call or the shell's exit kills the command's process group | A descendant that calls `setsid` or `setpgid` leaves the group and survives |
+| A timeout, a cancelled call or the shell's exit kills the command's process group, or on Windows its Job Object | On Unix, a descendant that calls `setsid` or `setpgid` leaves the group and survives |
 | The command has no controlling terminal and reads `/dev/null` | Nothing limits the command's own memory or CPU |
 | Captured output is capped per stream as it is read | `bash` can read excluded secret files; exclusion applies to the file tools |
 
@@ -227,7 +242,9 @@ fn bash_tool() -> BashTool {
 ```
 
 The launcher must not set a process group or session on the command: the tool
-starts it with `setsid`, which fails for a process that already leads a group.
+starts it with `setsid`, which fails for a process that already leads a group. On
+Windows the tool replaces the command's creation flags with `CREATE_SUSPENDED`, so
+the process runs only once it is in the call's Job Object.
 
 So it is path-contained, environment-isolated, and bounded, but **not** OS-isolated. The policy vocabulary aligns with `adk-code`'s `SandboxPolicy`; for
 strong isolation, run `bash` behind a containerized executor (see the

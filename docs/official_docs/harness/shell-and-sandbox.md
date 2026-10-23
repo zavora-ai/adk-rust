@@ -232,11 +232,12 @@ replay of it is refused without a prompt.
 |---|---|---|---|---|
 | Standard input is `/dev/null` | yes | yes | yes | no standard input |
 | New session, no controlling terminal | `setsid` | `setsid` | `setsid` and `--new-session` | no terminal is attached |
-| Background processes die when the command exits | process-group kill | process-group kill | the PID namespace ends with `bwrap` | every process but the container's own is killed when the command exits |
+| Background processes die when the command exits | process-group kill; on Windows the command's Job Object | process-group kill | the PID namespace ends with `bwrap` | every process but the container's own is killed when the command exits |
 | A freeze kills the running command | within 250 ms of the poll | within 250 ms of the poll | within 250 ms of the poll | the container is stopped within 250 ms of the poll |
 
 A process that starts its own session (`setsid`) leaves the process group and survives the
-group kill on the host and under Seatbelt; bubblewrap's PID namespace still ends it.
+group kill on the host and under Seatbelt; bubblewrap's PID namespace still ends it. On a
+Windows host no process the command starts can leave its Job Object.
 
 ## Audit records
 

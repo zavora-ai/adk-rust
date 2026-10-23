@@ -202,9 +202,14 @@ pub async fn memory(command: MemoryCommands) -> Result<()> {
                     options.write(true).create(true).truncate(true);
                     #[cfg(unix)]
                     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+                    #[cfg(not(windows))]
+                    let created = options.open(&path);
+                    // A DACL granting the owner alone access stands in for mode 0600
+                    // (spec 3.2 §10 W4).
+                    #[cfg(windows)]
+                    let created = crate::owner_only::create_or_truncate(&path);
                     std::io::Write::write_all(
-                        &mut options
-                            .open(&path)
+                        &mut created
                             .with_context(|| format!("failed to create {}", path.display()))?,
                         text.as_bytes(),
                     )?;

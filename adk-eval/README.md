@@ -23,6 +23,7 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 - **Cost & Latency Tracking**: Token usage extraction, dollar cost estimation, latency recording
 - **Trace Analysis**: Detect redundant tool calls, execution loops, compute efficiency scores
 - **Regression Baselines**: Save/load metric snapshots, detect quality degradation
+- **Ledger Statistics**: Median/MAD baselines per dimension and day class, warm-up, windowed deviation test, and drift runs with cooldowns over a content-free activity ledger (`ledger`), also run as `cargo adk eval --ledger`
 - **JUnit XML Output**: CI-friendly report generation (feature: `ci-helpers`)
 - **Human Annotation**: JSONL export/import workflow for human review
 - **A/B Comparison**: Statistical significance testing with Wilcoxon signed-rank (feature: `statistics`)
@@ -31,7 +32,7 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 - **Prompt Optimizer**: `PromptOptimizer::optimize_candidates` iterates on an agent's instruction against an eval set, evaluating the agent built from each proposal (`InstructionCandidates`)
 - **User Personas**: simulated users for multi-turn evaluation (feature: `personas`)
 - **Conversation Metrics**: Multi-turn scoring for context retention, goal completion, coherence, topic drift
-- **CI Integration**: Eval sets run from integration tests or `cargo adk eval --agent-cmd`, with JUnit XML and baseline regression checks
+- **CI Integration**: Eval sets run from integration tests or `cargo adk eval --agent-cmd`, with JUnit XML and baseline regression checks; `cargo adk eval --ledger` gates on drift in an exported activity ledger
 
 ## Quick Start
 
@@ -426,6 +427,26 @@ fn main() -> adk_eval::Result<()> {
 ```
 
 A baseline metric or case with no score in the new run, such as a case that errored, is a regression with `current_value: None`. A missing baseline file is an error rather than an empty result.
+
+### Ledger Statistics
+
+`adk_eval::ledger` compares the last 7 and 14 days of each dimension of an activity ledger with the median and MAD of the 28 days before them, per weekday and weekend class, and reports a deviation when `|recent − median| > max(2.5 × MAD, floor)` after a 14-day warm-up. Two deviating dimensions, or one for 10 days, are a meaningful drift. Everything is a pure function, with no I/O and no model.
+
+```rust
+use adk_eval::ledger::{DeviationConfig, assess, daily_series, parse_jsonl};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let export = std::fs::read_to_string("ledger.jsonl")?;
+    let series = daily_series(&parse_jsonl(&export)?);
+    let config = DeviationConfig::default().with_floor("tool_call.duration_ms", 50.0);
+    if let Some(assessment) = assess(&series, &config) {
+        assert!(!assessment.meaningful, "drift: {:?}", assessment.runs);
+    }
+    Ok(())
+}
+```
+
+`cargo adk eval --ledger ledger.jsonl` runs the same assessment as a CI gate; see the [evaluation guide](../docs/official_docs/evaluation/evaluation.md#gating-on-ledger-drift-with-cargo-adk-eval---ledger) for the export format, the dimensions and their floors.
 
 ### JUnit XML (CI Integration)
 
