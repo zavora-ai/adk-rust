@@ -15,7 +15,9 @@ use crate::workspace::Workspace;
 ///
 /// The returned command must not set a process group or a session: `BashTool` starts it in
 /// a new session (`setsid`), which fails for a process that already leads a group. It also
-/// replaces the command's standard streams and sets `kill_on_drop`.
+/// replaces the command's standard streams and sets `kill_on_drop`. On Windows it replaces
+/// the command's creation flags with `CREATE_SUSPENDED`, so the process runs only once it is
+/// in the call's Job Object (spec 3.2 §10 W1).
 ///
 /// Implements spec 3.1 §10 D1.
 ///

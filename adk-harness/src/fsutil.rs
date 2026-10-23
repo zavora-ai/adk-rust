@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Result};
 use sha2::{Digest, Sha256};
 
+#[cfg(windows)]
+pub(crate) mod owner_only;
+
 /// `~/.adk`, the root of the per-user harness files.
 pub(crate) fn adk_home() -> Result<PathBuf> {
     dirs::home_dir().map(|home| home.join(".adk")).ok_or_else(|| {
@@ -48,7 +51,8 @@ pub(crate) async fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
 }
 
 /// Writes `bytes` to a private temporary sibling of `path` and renames it into place, so
-/// a reader never sees a partial file. The file is `0600` on Unix.
+/// a reader never sees a partial file. The file is `0600` on Unix, and on Windows it has a
+/// DACL that grants its owner alone access (spec 3.2 §10 W4).
 pub(crate) async fn write_atomic_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().ok_or_else(|| AdkError::config("store path has no parent"))?;
     tokio::fs::create_dir_all(parent).await.map_err(|error| io_error(parent, "create", &error))?;
@@ -60,7 +64,16 @@ pub(crate) async fn write_atomic_private(path: &Path, bytes: &[u8]) -> Result<()
     options.mode(0o600);
     let result = async {
         use tokio::io::AsyncWriteExt as _;
+        #[cfg(not(windows))]
         let mut file = options.open(&temp).await?;
+        #[cfg(windows)]
+        let mut file = {
+            let temp = temp.clone();
+            tokio::task::spawn_blocking(move || owner_only::create_new(&temp))
+                .await
+                .map_err(std::io::Error::other)?
+                .map(tokio::fs::File::from_std)?
+        };
         file.write_all(bytes).await?;
         file.sync_all().await?;
         drop(file);
@@ -234,7 +247,10 @@ pub(crate) fn write_atomic_private_sync(path: &Path, bytes: &[u8]) -> Result<()>
         options.mode(0o600);
     }
     let result = (|| {
+        #[cfg(not(windows))]
         let mut file = options.open(&temp)?;
+        #[cfg(windows)]
+        let mut file = owner_only::create_new(&temp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
@@ -245,4 +261,32 @@ pub(crate) fn write_atomic_private_sync(path: &Path, bytes: &[u8]) -> Result<()>
         return Err(io_error(path, "write", &error));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every harness file store writes through these two helpers.
+    #[tokio::test]
+    async fn a_store_file_is_readable_by_its_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sync, async_) = (dir.path().join("sync.json"), dir.path().join("async.json"));
+
+        write_atomic_private_sync(&sync, b"{}").unwrap();
+        write_atomic_private(&async_, b"{}").await.unwrap();
+
+        for path in [&sync, &async_] {
+            assert_eq!(std::fs::read(path).unwrap(), b"{}");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let mode = std::fs::metadata(path).unwrap().permissions().mode();
+                assert_eq!(mode & 0o777, 0o600, "{}", path.display());
+            }
+            #[cfg(windows)]
+            assert!(owner_only::is_owner_only(path).unwrap(), "{}", path.display());
+        }
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "no temporary file is left");
+    }
 }

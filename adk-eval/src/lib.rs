@@ -15,6 +15,8 @@
 //!   fail closed when they cannot be judged
 //! - **Analysis**: structured judge, cost and latency tracking, trace analysis, regression
 //!   baselines, human annotation, test generation, and conversation metrics
+//! - **Ledger statistics**: per-dimension median/MAD baselines and drift detection over a
+//!   content-free activity ledger ([`ledger`]), the statistics behind `cargo adk eval --ledger`
 //!
 //! | Feature | Enables |
 //! |---------|---------|
@@ -64,6 +66,7 @@ pub mod annotation;
 pub mod baseline;
 pub mod conversation_scorer;
 pub mod cost_tracker;
+pub mod ledger;
 pub mod pricing;
 pub mod structured_judge;
 pub mod test_generator;
@@ -105,6 +108,9 @@ pub use annotation::{AnnotationRecord, AnnotationStore, HumanVerdict};
 pub use baseline::{Baseline, BaselineStore, Regression};
 pub use conversation_scorer::{ConversationMetrics, ConversationScorer, ConversationScorerConfig};
 pub use cost_tracker::{CostMetrics, CostTracker};
+pub use ledger::{
+    DailyValue, DayClass, DeviationConfig, DeviationReport, DriftState, LedgerAssessment, LedgerRow,
+};
 pub use pricing::ModelPricing;
 pub use structured_judge::{
     JudgeRubric, ScalePoint, StructuredJudge, StructuredJudgeConfig, StructuredVerdict, Verdict,

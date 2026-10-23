@@ -505,7 +505,15 @@ impl CredentialedTool {
                 .map_err(io)?;
             file.write_all(helper_script(&tokens).as_bytes()).map_err(io)?;
         }
-        #[cfg(not(unix))]
+        // A DACL granting the owner alone access stands in for the Unix modes (spec 3.2 §10
+        // W4).
+        #[cfg(windows)]
+        {
+            use std::io::Write as _;
+            let mut file = crate::fsutil::owner_only::create_new(&path).map_err(io)?;
+            file.write_all(helper_script(&tokens).as_bytes()).map_err(io)?;
+        }
+        #[cfg(not(any(unix, windows)))]
         std::fs::write(&path, helper_script(&tokens)).map_err(io)?;
         Ok(path)
     }

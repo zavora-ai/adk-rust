@@ -735,7 +735,8 @@ pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
         .config(HarnessConfig::discover(".")?) // .adk/harness.toml
         .build()?;
 
-    // `cargo run` is the REPL; `cargo run -- serve` serves the harness on 127.0.0.1:8080.
+    // `cargo run` is the REPL; `cargo run -- serve` serves the harness on 127.0.0.1:8080;
+    // `cargo run -- up` runs it as the agent kernel there.
     HarnessLauncher::new(harness)
         .with_session_service(sessions)
         .with_console(console)
@@ -943,6 +944,19 @@ cargo run -- serve --port 8080
 
 serves the harness on `127.0.0.1:8080`; approvals are asked in the terminal that runs
 the server.
+
+## The agent kernel
+
+```bash
+cargo run -- up --port 8080
+```
+
+runs the harness as the agent kernel (spec 3.2): each turn a durable process the kernel's
+workers run, a control plane on a socket under your config directory and on
+`127.0.0.1:8080/api/kernel`, and `POST /api/admin/freeze` parking what runs. Processes,
+schedules and the kill switch are kept in memory here; `adk-rust up` keeps them in
+`harness.db`. Reach the kernel with `adk-rust ps --server http://127.0.0.1:8080` and the
+other kernel commands.
 
 ## Resources
 
