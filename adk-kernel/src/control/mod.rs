@@ -1,9 +1,9 @@
 //! The control plane (spec 3.2 §7.11).
 //!
-//! One API, two transports in phase 1: a Unix domain socket at the kernel home (macOS,
-//! Linux), which trusts the OS user, and HTTP on loopback or, with authentication, on the
-//! network. The named pipe on Windows is §10 W2 (phase 4). Surfaces hold no state (K-I17);
-//! every control action carries an authenticated subject and is audited as `kernel.control`
+//! One API, three transports: a Unix domain socket at the kernel home (macOS, Linux) or a
+//! named pipe named after it (Windows, §10 W2), each of which trusts the OS user, and HTTP on
+//! loopback or, with authentication, on the network. Surfaces hold no state (K-I17); every
+//! control action carries an authenticated subject and is audited as `kernel.control`
 //! (K-I16).
 //!
 //! [`router`] is the API. `adk-rust up` merges it into `ServerBuilder` with
@@ -38,6 +38,7 @@
 //! | Transport | Caller |
 //! |---|---|
 //! | Socket | The OS user, with the `operator` scope, when the peer's uid is the socket owner's; any other peer is refused |
+//! | Named pipe (Windows) | The OS user, with the `operator` scope, when the token the client opened the pipe with is the kernel's user; the pipe's DACL admits that user alone, and any other client is refused |
 //! | HTTP merged into `ServerBuilder` | Whatever the server's `RequestContextExtractor` admits: `LoopbackOperatorExtractor`, `BearerTokenExtractor` or an SSO extractor |
 //! | [`ControlPlaneConfig::http`] with an extractor | The extractor's subject |
 //! | [`ControlPlaneConfig::http`] on loopback without one | Loopback peers as the OS user with the `operator` scope |
@@ -45,8 +46,8 @@
 //!
 //! The routes that change the kernel — `spawn`, `kill`, `nice`, `suspend`, `resume`,
 //! `freeze`, `unfreeze`, and the agenda's `approve`, `reject` and `schedule` — need the
-//! `operator` scope (`403` otherwise), which the socket and a
-//! loopback bind grant. `attach` reads only the caller's own sessions.
+//! `operator` scope (`403` otherwise), which the socket, the pipe and a loopback bind grant.
+//! `attach` reads only the caller's own sessions.
 //!
 //! Every action that changes the kernel or reads a session writes a `kernel.control` record
 //! with `subject`, `transport`, `action` and `target` to the kernel's audit trail before it
@@ -73,6 +74,8 @@ use crate::kernel::Kernel;
 
 pub mod api;
 mod client;
+#[cfg(windows)]
+mod pipe;
 mod routes;
 mod server;
 #[cfg(test)]
@@ -197,6 +200,28 @@ impl ControlPlaneConfig {
         self.socket.as_ref().map(|socket| home.join(socket))
     }
 
+    /// The named pipe Windows serves in place of the socket (spec 3.2 §10 W2), or `None`
+    /// when no socket is served: `\\.\pipe\adk-rust-kernel-<tag>`, where the tag is
+    /// derived from the absolute socket path, so each kernel home has its own pipe. Pipe
+    /// names are not files, so the name is computed the same way on every platform.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::path::Path;
+    /// use adk_kernel::control::ControlPlaneConfig;
+    ///
+    /// let config = ControlPlaneConfig::default();
+    /// let pipe = config.pipe_name(Path::new("/home/a/.config/adk-rust")).unwrap();
+    /// assert!(pipe.starts_with(r"\\.\pipe\adk-rust-kernel-"));
+    /// assert_ne!(Some(pipe), config.pipe_name(Path::new("/srv/kernel")));
+    /// assert_eq!(config.without_socket().pipe_name(Path::new("/srv/kernel")), None);
+    /// ```
+    pub fn pipe_name(&self, home: &Path) -> Option<String> {
+        let socket = self.socket_path(home)?;
+        Some(format!(r"\\.\pipe\adk-rust-kernel-{}", crate::path_tag(&socket)))
+    }
+
     /// Refuses a non-loopback HTTP bind without an extractor (K-I18).
     ///
     /// # Errors
@@ -251,6 +276,8 @@ pub enum ControlTransport {
     Socket,
     /// HTTP.
     Http,
+    /// The named pipe on Windows (spec 3.2 §10 W2).
+    Pipe,
 }
 
 /// The control plane's routes over `kernel` (spec 3.2 §7.11), relative to the `/api`

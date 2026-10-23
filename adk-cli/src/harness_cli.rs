@@ -33,7 +33,11 @@ use serde_json::json;
 use crate::ultra::{self, UltraAgents};
 use crate::{BuiltModel, ResolvedModel};
 
+mod service;
 mod up;
+#[cfg(windows)]
+pub use service::run_windows_service;
+pub use service::{install_service, print_service, uninstall_service};
 pub use up::up;
 
 /// Exit code of a run that left calls held for a decision (spec 3.1 §8.1).

@@ -11,7 +11,7 @@ mod kernel_cli;
 mod legacy;
 #[cfg(all(feature = "harness", feature = "persist"))]
 mod manage;
-#[cfg(all(windows, any(feature = "audit", feature = "persist")))]
+#[cfg(all(windows, any(feature = "audit", feature = "persist", feature = "harness")))]
 mod owner_only;
 #[cfg(feature = "vertex-agent-registry")]
 mod registry;
@@ -168,7 +168,21 @@ async fn main() -> Result<()> {
         }
         #[cfg(feature = "harness")]
         Some(Commands::Up(mut up)) => {
+            #[cfg(windows)]
+            if let Some(name) = up.windows_service.take() {
+                return harness_cli::run_windows_service(name, options, *up).await;
+            }
+            if up.uninstall {
+                return harness_cli::uninstall_service(&up);
+            }
+            if up.print {
+                return harness_cli::print_service(&up);
+            }
+            // First-run setup saves the provider key where the installed service reads it.
             let model = resolve_model(&options).await?;
+            if up.install {
+                return harness_cli::install_service(&up).await;
+            }
             up.auth_token = up.auth_token.or_else(|| std::env::var("ADK_SERVE_TOKEN").ok());
             harness_cli::up(model, options.instruction.clone(), *up).await
         }

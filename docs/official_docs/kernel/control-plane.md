@@ -1,7 +1,8 @@
 # The Kernel Control Plane
 
-Every surface reaches the [agent kernel](index.md) through one API on two transports: the
-Unix socket at the kernel home, and HTTP (spec 3.2 §7.11). Surfaces hold no state:
+Every surface reaches the [agent kernel](index.md) through one API on three transports: the
+Unix socket at the kernel home, a named pipe named after it on Windows, and HTTP (spec 3.2
+§7.11). Surfaces hold no state:
 disconnecting one changes nothing in the process table (K-I17).
 
 ## Transports and authentication
@@ -12,6 +13,7 @@ the `operator` scope.
 | Transport | Caller | `operator` |
 |---|---|---|
 | Socket `<home>/kernel.sock` | The OS user, when the peer's uid is the socket owner's; created `0600`, any other peer is refused | Yes |
+| Named pipe `\\.\pipe\adk-rust-kernel-<tag>` (Windows) | The OS user, when the token the client opened the pipe with is the kernel's user; any other client is refused | Yes |
 | HTTP on loopback (`adk-rust up` default) | Loopback peers as the OS user (`LoopbackOperatorExtractor`) | Yes |
 | HTTP with `--auth-token` | `Authorization: Bearer <token>` (`BearerTokenExtractor`) | Yes |
 | HTTP with an SSO extractor | The extractor's subject | When the extractor grants it |
@@ -25,8 +27,21 @@ the `operator` scope.
 | `409 kernel.invalid_state` | The process is in a state the action does not apply to, such as resuming one a freeze parked |
 | `422` | A body field the route does not take, such as `userId` on a spawn |
 
-The socket needs a Unix platform. On Windows the control plane is served over HTTP alone;
-the named pipe is a later deliverable.
+### The named pipe on Windows
+
+Windows has the named pipe where Unix has the socket (spec 3.2 §10 W2, W4). Pipe names are
+not files, so the name carries a tag derived from the kernel home's socket path
+(`ControlPlaneConfig::pipe_name`), and each guard below stands in for what the home
+directory and mode `0600` give the socket:
+
+| Guard | What it stops |
+|---|---|
+| A protected DACL with one entry, full access for the user the kernel runs as, who also owns the pipe | Any other account opening the pipe or creating an instance of it |
+| The server reads the client's first message, impersonates it at identification level and compares its token's user with its own | A client of another identity the DACL let through |
+| The client uses the pipe only when the kernel's user owns it | Another account's process that took the name first answering in the kernel's place |
+| The first instance is created with `FILE_FLAG_FIRST_PIPE_INSTANCE`; remote clients are rejected | Joining a pipe someone else created; callers from another machine |
+
+A second kernel on the same home is refused while the first answers, as on the socket.
 
 ## Routes
 
@@ -48,7 +63,7 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 | `GET /kernel/drivers` | The mounted [drivers](drivers.md) with their state | — | — |
 | `POST /kernel/drivers/{id}/mount` | `{"manifest": "<toml>"}` answers what the mount approves; with `"confirm": true` mounts it as the caller | Yes | `drivers.mount` |
 | `POST /kernel/drivers/{id}/{unmount,restart,reapprove}` | Unmount, restart, re-approve as the caller | Yes | `drivers.unmount`, `drivers.restart`, `drivers.reapprove` |
-| `/approvals…` | The approvals inbox, unchanged; the socket serves it too | Per inbox rules | Inbox records |
+| `/approvals…` | The approvals inbox, unchanged; the socket and the pipe serve it too | Per inbox rules | Inbox records |
 
 On HTTP the server's own routes stay beside them: `/api/runs` (submissions land on the
 `interactive` queue), `/api/admin/freeze` (delegates to `Kernel::freeze` and reports
@@ -102,7 +117,7 @@ regardless:
 | `action` | `kernel.control` |
 | `actor` | The caller as a `human` subject |
 | `subject` | `{"kind": "human", "id": "<user>"}` |
-| `transport` | `socket` or `http` |
+| `transport` | `socket`, `pipe` or `http` |
 | `action` (ext) | `spawn`, `kill`, `nice`, `suspend`, `resume`, `freeze`, `unfreeze` or `attach` |
 | `target` | The pid, session or spawned target |
 | `pid` | The new process, on `spawn` |
@@ -113,7 +128,8 @@ answer carries the failure in `auditError`.
 
 ## From code
 
-`adk_kernel::control::ControlClient` speaks the API over either transport:
+`adk_kernel::control::ControlClient` speaks the API over every transport;
+`ControlClient::connect_local` finds the socket, or the pipe on Windows:
 
 ```rust
 use adk_kernel::control::ControlClient;
@@ -139,5 +155,5 @@ async fn list(home: &std::path::Path) -> adk_kernel::Result<()> {
 
 To serve the control plane from your own server, merge `adk_kernel::control::router(kernel)`
 with `ServerBuilder::add_api_routes` and register the kernel with
-`ServerBuilder::with_freeze_delegate`; `ControlPlane::start` serves it on the socket and, with
-`ControlPlaneConfig::with_http`, on a bind of its own.
+`ServerBuilder::with_freeze_delegate`; `ControlPlane::start` serves it on the socket (the pipe
+on Windows) and, with `ControlPlaneConfig::with_http`, on a bind of its own.

@@ -375,11 +375,13 @@ pub enum Commands {
         receipt: Option<std::path::PathBuf>,
     },
 
-    /// Run the harness as the agent kernel, in the foreground: a worker per queue, wake
-    /// sources, the process table, and a control plane on a local socket and HTTP.
+    /// Run the harness as the agent kernel, in the foreground or as a service: a worker per
+    /// queue, wake sources, the process table, and a control plane on a local socket (a
+    /// named pipe on Windows) and HTTP.
     ///
     /// Example: `adk-rust up --mode ask`, then `adk-rust ps` or `adk-rust attach` from
-    /// another terminal (spec 3.2 §8.1).
+    /// another terminal; `adk-rust up --mode ask --install` keeps it running as a service
+    /// (spec 3.2 §8.1, §7.12).
     #[cfg(feature = "harness")]
     Up(Box<UpArgs>),
 
@@ -654,13 +656,21 @@ pub struct ChatArgs {
 #[cfg(feature = "harness")]
 #[derive(clap::Args, Debug, Clone)]
 pub struct UpArgs {
-    /// Install the kernel as a launchd agent, systemd user unit or Windows service; not in
-    /// this build — run `adk-rust up` in the foreground or under your own supervisor
+    /// Install the kernel as a service that runs `adk-rust up` with these flags as you: a
+    /// launchd agent (macOS), a systemd user unit (Linux) or a Windows service (an elevated
+    /// shell and your password); it logs to `<home>/kernel.log` and restarts on failure
     #[arg(long, conflicts_with = "uninstall")]
     pub install: bool,
-    /// Remove the installed service; not in this build
+    /// Stop and remove the service --install set up for this kernel home
     #[arg(long)]
     pub uninstall: bool,
+    /// With --install: print the service definition instead of installing it
+    #[arg(long, requires = "install")]
+    pub print: bool,
+    /// Run as the Windows service NAME, which the service control manager starts
+    #[cfg(windows)]
+    #[arg(long, value_name = "NAME", hide = true)]
+    pub windows_service: Option<String>,
     /// The kernel home: its socket and harness.db (default: `[kernel] home` in the user
     /// config, else the config directory's adk-rust)
     #[arg(long, value_name = "DIR")]

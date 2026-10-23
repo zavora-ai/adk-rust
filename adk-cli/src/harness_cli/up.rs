@@ -26,7 +26,7 @@ use crate::ResolvedModel;
 use crate::cli::UpArgs;
 
 /// Where `up` listens over HTTP when neither `--bind` nor `[kernel] bind` says.
-const DEFAULT_BIND: &str = "127.0.0.1:8080";
+pub(super) const DEFAULT_BIND: &str = "127.0.0.1:8080";
 
 /// The kernel's own stores, in the backend the harness's stores are in.
 struct KernelStores {
@@ -43,12 +43,6 @@ struct KernelStores {
 
 /// `adk-rust up` (spec 3.2 §8.1): runs until Ctrl-C or `SIGTERM`, then drains and stops.
 pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -> Result<()> {
-    if up.install || up.uninstall {
-        bail!(
-            "service installation (spec 3.2 §7.12) is not in this build: run `adk-rust up` in \
-             the foreground, or under launchd, systemd or a container's supervisor"
-        );
-    }
     let UpArgs { home, bind, auth_token, store, harness, .. } = up;
     // Only `max_concurrent_runs` of a workspace's [kernel] table applies, so the directory
     // the workspace resolves from is enough here.
@@ -168,7 +162,9 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             .with_app_name(APP_NAME)
             .with_home(&home)
             .with_worker(worker)
-            .with_control(control_plane())
+            // The socket at the kernel home, or on Windows the named pipe named after it
+            // (spec 3.2 §10 W2).
+            .with_control(ControlPlaneConfig::default())
             .with_clock(Arc::new(adk_core::SystemClock)),
     );
     let mut kernel = harness
@@ -242,22 +238,13 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
 
 /// The kernel home when neither `--home` nor `[kernel] home` names one: the directory
 /// `harness.db` is in.
-fn default_home() -> Result<PathBuf> {
+pub(super) fn default_home() -> Result<PathBuf> {
     #[cfg(feature = "persist")]
     return crate::sessions::default_dir();
     #[cfg(not(feature = "persist"))]
     Ok(dirs::config_dir()
         .context("could not determine the config directory; pass --home")?
         .join("adk-rust"))
-}
-
-/// The socket at the kernel home, where Unix sockets exist; off Unix the control plane is
-/// HTTP only until the named pipe (spec 3.2 §10 W2).
-fn control_plane() -> ControlPlaneConfig {
-    let config = ControlPlaneConfig::default();
-    #[cfg(not(unix))]
-    let config = config.without_socket();
-    config
 }
 
 /// The approval and run stores `serve` uses: the `--store` backend, `harness.db`, or memory.
@@ -471,15 +458,47 @@ fn kernel_id(home: &Path) -> Result<String> {
     }
 }
 
-/// Writes `contents` to a new owner-only file at `path`.
+/// Writes `contents` to a new owner-only file at `path`: mode `0600` on Unix, a DACL granting
+/// the owner alone access on Windows (spec 3.2 §10 W4).
 #[cfg(feature = "audit")]
 fn write_private(path: &Path, contents: &str) -> Result<()> {
     use std::io::Write;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut file =
-        options.open(path).with_context(|| format!("failed to create {}", path.display()))?;
+    #[cfg(not(windows))]
+    let created = {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        options.open(path)
+    };
+    #[cfg(windows)]
+    let created = crate::owner_only::create_new(path);
+    let mut file = created.with_context(|| format!("failed to create {}", path.display()))?;
     writeln!(file, "{contents}").with_context(|| format!("failed to write {}", path.display()))
+}
+
+#[cfg(all(test, feature = "audit"))]
+mod tests {
+    use super::*;
+
+    /// The replica id and the audit signing key in the kernel home are readable by their
+    /// owner only (spec 3.2 §10 W4).
+    #[test]
+    fn the_kernel_home_files_are_owner_only() {
+        let home = tempfile::tempdir().unwrap();
+        let id = kernel_id(home.path()).unwrap();
+        assert_eq!(kernel_id(home.path()).unwrap(), id, "the id survives a restart");
+        let key = home.path().join("kernel-audit.key");
+        write_private(&key, "secret").unwrap();
+        for path in [home.path().join("kernel-id"), key] {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o600, "{}", path.display());
+            }
+            #[cfg(windows)]
+            assert!(crate::owner_only::is_owner_only(&path).unwrap(), "{}", path.display());
+        }
+    }
 }

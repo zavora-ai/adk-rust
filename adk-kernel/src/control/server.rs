@@ -28,18 +28,20 @@ use crate::kernel::Kernel;
 /// never does, so it is cut after this.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
-/// The running listeners of a kernel's control plane (spec 3.2 §7.11): the Unix socket
-/// and, when [`ControlPlaneConfig::http`](super::ControlPlaneConfig::http) is set, an HTTP
-/// bind, both serving [`router`](super::router) under `/api`, with the approvals inbox
-/// beside it when the kernel has an approval service.
+/// The running listeners of a kernel's control plane (spec 3.2 §7.11): the Unix socket, or
+/// on Windows the named pipe [`ControlPlaneConfig::pipe_name`] names (§10 W2), and, when
+/// [`ControlPlaneConfig::http`](super::ControlPlaneConfig::http) is set, an HTTP bind, all
+/// serving [`router`](super::router) under `/api`, with the approvals inbox beside it when
+/// the kernel has an approval service.
 ///
 /// The socket is created owner-only and admits only peers running as its owner, each as
-/// the OS user with the `operator` scope; HTTP requests carry the configured extractor's
-/// subject, or, on a loopback bind without one, loopback peers as the OS user (K-I16).
-/// A non-loopback bind without an extractor is refused (K-I18). The socket needs a Unix
-/// platform: off Unix, `start` with a socket configured answers
-/// [`KernelError::ControlPlane`], and the control plane is served over HTTP alone (the
-/// named pipe is §10 W2). [`Kernel::start`] starts it and [`Kernel::stop`] shuts it down.
+/// the OS user with the `operator` scope. The pipe carries a protected DACL that admits its
+/// owner, the user the kernel runs as, alone (§10 W4), and admits a connection only when the
+/// token the client opened it with is that user's. HTTP requests carry the configured
+/// extractor's subject, or, on a loopback bind without one, loopback peers as the OS user
+/// (K-I16). A non-loopback bind without an extractor is refused (K-I18). On a platform with
+/// neither, `start` with a socket configured answers [`KernelError::ControlPlane`].
+/// [`Kernel::start`] starts it and [`Kernel::stop`] shuts it down.
 ///
 /// # Example
 ///
@@ -55,6 +57,7 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 /// ```
 pub struct ControlPlane {
     socket: Option<PathBuf>,
+    pipe: Option<String>,
     http: Option<SocketAddr>,
     tasks: Vec<JoinHandle<()>>,
     stop: CancellationToken,
@@ -64,6 +67,7 @@ impl fmt::Debug for ControlPlane {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ControlPlane")
             .field("socket", &self.socket)
+            .field("pipe", &self.pipe)
             .field("http", &self.http)
             .finish_non_exhaustive()
     }
@@ -75,8 +79,8 @@ impl ControlPlane {
     /// # Errors
     ///
     /// Returns [`KernelError::Config`] for a refused configuration (K-I18) and
-    /// [`KernelError::ControlPlane`] when the socket path or bind is taken, or when a socket
-    /// is configured on a platform without Unix sockets.
+    /// [`KernelError::ControlPlane`] when the socket path, pipe or bind is taken, or when a
+    /// socket is configured on a platform with neither Unix sockets nor named pipes.
     pub async fn start(kernel: &Kernel) -> Result<Self> {
         let config = kernel.config();
         Self::serve(Arc::new(kernel.clone()), &config.control, &config.home).await
@@ -89,9 +93,20 @@ impl ControlPlane {
         home: &Path,
     ) -> Result<Self> {
         config.validate()?;
-        let mut plane =
-            Self { socket: None, http: None, tasks: Vec::new(), stop: CancellationToken::new() };
+        let mut plane = Self {
+            socket: None,
+            pipe: None,
+            http: None,
+            tasks: Vec::new(),
+            stop: CancellationToken::new(),
+        };
         let api = api(&backend);
+        #[cfg(windows)]
+        if let Some(name) = config.pipe_name(home) {
+            plane.tasks.push(super::pipe::serve(&name, api.clone(), plane.stop.clone()).await?);
+            plane.pipe = Some(name);
+        }
+        #[cfg(not(windows))]
         if let Some(path) = config.socket_path(home) {
             // A failure drops `plane`, which stops whatever already listens.
             plane.tasks.push(serve_socket(&path, api.clone(), plane.stop.clone()).await?);
@@ -105,6 +120,7 @@ impl ControlPlane {
         }
         tracing::info!(
             control.socket = ?plane.socket,
+            control.pipe = ?plane.pipe,
             control.http = ?plane.http,
             "kernel control plane listening"
         );
@@ -114,6 +130,11 @@ impl ControlPlane {
     /// The socket's path, when one is served.
     pub fn socket_path(&self) -> Option<&Path> {
         self.socket.as_deref()
+    }
+
+    /// The named pipe's name, when one is served (Windows; spec 3.2 §10 W2).
+    pub fn pipe_name(&self) -> Option<&str> {
+        self.pipe.as_deref()
     }
 
     /// The HTTP address, when one is served: the bound address, so a configured port 0
@@ -166,7 +187,7 @@ fn remove_socket(path: &Path) -> Result<()> {
 
 /// The kernel routes under `/api`, with the approvals inbox when the backend has an
 /// approval service.
-fn api(backend: &Arc<dyn ControlBackend>) -> Router {
+pub(super) fn api(backend: &Arc<dyn ControlBackend>) -> Router {
     let mut routes = routes(backend.clone());
     if let Some(service) = backend.approvals() {
         routes = routes.merge(approvals_router(ApprovalEndpoints::new(service.clone())));
@@ -183,7 +204,7 @@ pub(crate) fn os_user() -> String {
         .unwrap_or_else(|| "user".to_string())
 }
 
-fn operator(user_id: &str) -> RequestContext {
+pub(super) fn operator(user_id: &str) -> RequestContext {
     RequestContext {
         user_id: user_id.to_string(),
         scopes: vec![OPERATOR_SCOPE.to_string()],
@@ -193,7 +214,7 @@ fn operator(user_id: &str) -> RequestContext {
 
 /// Marks a request authenticated as `context` over `transport`, as the server's auth
 /// middleware marks one, and runs it.
-async fn admit(
+pub(super) async fn admit(
     mut request: Request<Body>,
     next: Next,
     context: RequestContext,
@@ -319,7 +340,7 @@ async fn prepare_socket_path(path: &Path) -> Result<()> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 async fn serve_socket(
     path: &Path,
     _api: Router,
@@ -327,9 +348,9 @@ async fn serve_socket(
 ) -> Result<JoinHandle<()>> {
     Err(KernelError::ControlPlane {
         reason: format!(
-            "the local control socket {} needs a Unix platform; the Windows named pipe is spec \
-             3.2 §10 W2. Serve the control plane over HTTP without a socket \
-             (ControlPlaneConfig::without_socket and with_http, or `adk-rust up --bind`)",
+            "the local control socket {} needs Unix sockets or Windows named pipes. Serve the \
+             control plane over HTTP without a socket (ControlPlaneConfig::without_socket and \
+             with_http, or `adk-rust up --bind`)",
             path.display()
         ),
     })

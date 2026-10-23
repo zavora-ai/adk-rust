@@ -789,7 +789,8 @@ impl Kernel {
         first_error.map_or(Ok(()), Err)
     }
 
-    /// Waits for `SIGTERM` or Ctrl-C, then [`drain`](Self::drain)s for
+    /// Waits for `SIGTERM` or Ctrl-C — or, in a Windows service, the service manager's stop
+    /// (spec 3.2 §10 W3) — then [`drain`](Self::drain)s for
     /// [`SIGTERM_DRAIN`](Self::SIGTERM_DRAIN) and [`stop`](Self::stop)s.
     ///
     /// # Errors
@@ -806,7 +807,12 @@ impl Kernel {
                 _ = terminate.recv() => {}
             }
         }
-        #[cfg(not(unix))]
+        #[cfg(all(not(unix), feature = "service"))]
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result?,
+            () = crate::service::stop_requested() => {}
+        }
+        #[cfg(all(not(unix), not(feature = "service")))]
         tokio::signal::ctrl_c().await?;
         tracing::info!("shutdown signal received; draining the kernel");
         if matches!(self.state(), KernelState::Running | KernelState::Paused) {

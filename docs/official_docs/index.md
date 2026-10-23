@@ -81,8 +81,9 @@ The always-on form of the harness (`adk-kernel`, spec 3.2): durable processes th
 
 - [Overview](kernel/index.md) - What `adk-rust up` runs: workers per queue, the process table, the event bus, freezing, using the kernel from code
 - [Kernel Commands](kernel/cli.md) - `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`, `freeze`, `unfreeze`, `events`, `goal` on a running kernel, `[kernel]` in `harness.toml`
-- [The Control Plane](kernel/control-plane.md) - The socket and HTTP transports, the auth matrix, routes, `kernel.control` audit records, `ControlClient`
+- [The Control Plane](kernel/control-plane.md) - The socket, named-pipe and HTTP transports, the auth matrix, routes, `kernel.control` audit records, `ControlClient`
 - [Drivers](kernel/drivers.md) - MCP servers the kernel supervises under approved manifests: effect classes, the OS sandbox, brokered secrets, re-approval of changed tools, parked calls across a restart
+- [Running the Kernel as a Service](kernel/service.md) - `adk-rust up --install`, `--uninstall` and `--print`: a launchd agent, a systemd user unit or a Windows service that runs as you
 
 ## Realtime & Multimodal
 

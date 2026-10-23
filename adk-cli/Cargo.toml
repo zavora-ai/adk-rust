@@ -81,10 +81,11 @@ keyring = { version = "3.6.3", default-features = false, features = ["apple-nati
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
 
-# Owner-only DACLs on the session store, the audit signing key and exported memory, where
-# Unix uses mode 0600 (spec 3.2 §10 W4).
+# Owner-only DACLs on the session store, the audit signing key, exported memory and the
+# kernel's home files, where Unix uses mode 0600 (spec 3.2 §10 W4); the console without echo
+# for the Windows service's password (§10 W3).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_SystemServices", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_SystemServices", "Win32_System_Threading"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }

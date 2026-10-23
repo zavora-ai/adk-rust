@@ -12,7 +12,7 @@ keywords = ["adk", "agent", "kernel", "durable", "supervisor"]
 categories = ["asynchronous", "development-tools"]
 
 # Feature set of spec 3.2 §7.1. Features of later phases are declared empty until their
-# phase lands: `service`, `proc-baselines` (phase 4), `channels`, `managed` (phase 5).
+# phase lands: `proc-baselines` (phase 4), `channels`, `managed` (phase 5).
 [features]
 default = ["sqlite", "webhooks", "drivers", "service", "proc"]
 # SQLite backends for the kernel-owned stores, on the pool of `harness.db` with distinct
@@ -36,8 +36,9 @@ drivers = [
     "dep:toml",
     "dep:url",
 ]
-# launchd, systemd and Windows service installation (spec 3.2 §7.12, phase 4); empty until then.
-service = []
+# launchd, systemd and Windows service installation (spec 3.2 §7.12, §10 W3): the `service`
+# module, with `windows-service` on Windows.
+service = ["dep:windows-service"]
 # The live `ps`/`top` aggregates' OTel GenAI histograms (spec 3.2 §7.10, §13 Q4); the
 # content-free ledger joins it in phase 4.
 proc = ["dep:adk-telemetry", "dep:opentelemetry"]
@@ -66,15 +67,17 @@ chrono.workspace = true
 dirs = "7"
 fred = { version = "10", optional = true, features = ["i-scripts"] }
 futures.workspace = true
-# The control-plane client over the Unix socket.
+# The control-plane client over the Unix socket, and the named-pipe server on Windows.
 http-body-util = "0.1"
-hyper = { version = "1", features = ["client", "http1"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+hyper = { version = "1", features = ["client", "http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
 opentelemetry = { workspace = true, optional = true }
 # The control-plane client over HTTP.
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# The named pipe's and the service's names, derived from the kernel home.
+sha2.workspace = true
 sqlx = { workspace = true, optional = true, features = ["runtime-tokio", "chrono", "json"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "net", "fs", "signal"] }
@@ -86,6 +89,12 @@ tracing.workspace = true
 # `secret://` references in driver manifests, resolved through the credential broker.
 url = { version = "2.5", optional = true }
 uuid.workspace = true
+
+# The named pipe's owner-only security descriptor and its client check (spec 3.2 §10 W2,
+# W4), and the Windows service's account and logon right (W3).
+[target.'cfg(windows)'.dependencies]
+windows-service = { version = "0.8.1", optional = true }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authentication_Identity", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_Threading"] }
 
 [dev-dependencies]
 # Internal dev-deps are path-only (no version) so cargo strips them from the published

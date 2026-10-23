@@ -385,6 +385,118 @@ fn the_socket_refuses_a_peer_of_another_uid() {
     }
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn the_pipe_admits_the_os_user_and_records_every_action() {
+    use std::os::windows::io::AsRawHandle as _;
+
+    let fake = Fake::new();
+    let pid = fake.spawn(&os_user(), "s-1", RunState::Running).await;
+    let home = tempfile::tempdir().unwrap();
+    let plane = ControlPlane::serve(fake.clone(), &ControlPlaneConfig::default(), home.path())
+        .await
+        .unwrap();
+    let name = ControlPlaneConfig::default().pipe_name(home.path()).unwrap();
+    assert_eq!(plane.pipe_name(), Some(name.as_str()));
+    assert_eq!((plane.socket_path(), plane.http_addr()), (None, None));
+    let raw = super::pipe::open(&name).await.unwrap();
+    assert!(
+        super::pipe::testing::is_owner_only(raw.as_raw_handle()).unwrap(),
+        "the pipe is owned by the kernel's user and admits that user alone"
+    );
+    drop(raw);
+
+    let client =
+        ControlClient::connect_local(home.path()).await.unwrap().expect("a kernel answers");
+    assert_eq!(client.endpoint(), format!("pipe:{name}"));
+    assert!(!client.health().await.unwrap().frozen);
+    let killed = client.kill(&pid, Some("runaway")).await.unwrap();
+    assert_eq!(
+        (killed.run.state, killed.run.error.as_deref()),
+        (RunState::Cancelled, Some("runaway"))
+    );
+    let records = fake.control_records();
+    assert_eq!(records.len(), 1, "reads are not recorded, the kill is");
+    assert_eq!(transport_of(&records[0]), "pipe");
+    assert_eq!(records[0].ext["subject"], json!({ "kind": "human", "id": os_user() }));
+
+    // A second kernel on the same home is refused while the first answers.
+    let error = ControlPlane::serve(fake.clone(), &ControlPlaneConfig::default(), home.path())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("already listens"), "{error}");
+
+    plane.shutdown().await.unwrap();
+    assert!(ControlClient::connect_local(home.path()).await.unwrap().is_none());
+}
+
+/// Opens the pipe `name` from a thread impersonating the anonymous logon, a token whose
+/// SID is not the kernel's user's, and answers what `GET /api/kernel/health` gets.
+#[cfg(windows)]
+async fn health_as_anonymous(name: &str) -> std::io::Result<String> {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use windows_sys::Win32::Security::{ImpersonateAnonymousToken, RevertToSelf};
+    use windows_sys::Win32::System::Threading::GetCurrentThread;
+
+    let name = name.to_string();
+    let mut pipe = tokio::task::spawn_blocking(move || {
+        // SAFETY: impersonates on this thread only, and reverts before it returns.
+        assert_ne!(unsafe { ImpersonateAnonymousToken(GetCurrentThread()) }, 0);
+        let opened = tokio::net::windows::named_pipe::ClientOptions::new().open(&name);
+        // SAFETY: reverts the impersonation above.
+        assert_ne!(unsafe { RevertToSelf() }, 0);
+        opened
+    })
+    .await
+    .unwrap()?;
+    let request = format!(
+        "GET {}{} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n",
+        paths::API_PREFIX,
+        paths::HEALTH
+    );
+    pipe.write_all(request.as_bytes()).await?;
+    let mut answer = String::new();
+    pipe.read_to_string(&mut answer).await?;
+    Ok(answer)
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn the_pipe_refuses_a_client_of_another_identity() {
+    use super::pipe::Descriptor;
+    use super::server::api;
+
+    // The owner-only DACL refuses another identity at open.
+    let fake = Fake::new();
+    let home = tempfile::tempdir().unwrap();
+    let plane = ControlPlane::serve(fake.clone(), &ControlPlaneConfig::default(), home.path())
+        .await
+        .unwrap();
+    let name = plane.pipe_name().unwrap().to_string();
+    let error = health_as_anonymous(&name).await.unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied, "{error}");
+    plane.shutdown().await.unwrap();
+
+    // Behind a DACL that lets anyone open it, the token check still refuses another
+    // identity and admits the kernel's user.
+    let name = format!(r"\\.\pipe\adk-rust-kernel-test-{}", uuid::Uuid::new_v4().simple());
+    // Owned by the user, so the client's owner check passes; open to everyone, the anonymous
+    // logon included, at any integrity level, the anonymous token's being untrusted.
+    let sid = crate::win::UserSid::current().unwrap().to_sid_string().unwrap();
+    let open =
+        Descriptor::from_sddl(&format!("O:{sid}D:(A;;FA;;;WD)(A;;FA;;;AN)S:(ML;;NW;;;S-1-16-0)"))
+            .unwrap();
+    let stop = tokio_util::sync::CancellationToken::new();
+    let backend: std::sync::Arc<dyn ControlBackend> = fake.clone();
+    let task = super::pipe::serve_with(&name, api(&backend), stop.clone(), open).await.unwrap();
+    let answer = health_as_anonymous(&name).await.unwrap();
+    assert!(answer.starts_with("HTTP/1.1 401"), "{answer}");
+    let owner = ControlClient::pipe(name.clone());
+    assert!(!owner.health().await.unwrap().frozen);
+    stop.cancel();
+    task.await.unwrap();
+}
+
 #[tokio::test]
 async fn loopback_http_admits_loopback_peers_as_the_os_user() {
     let fake = Fake::new();
@@ -750,9 +862,9 @@ async fn spawn_runs_a_registered_target_as_the_caller() {
     plane.shutdown().await.unwrap();
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tokio::test]
-async fn a_held_call_is_decided_over_the_socket() {
+async fn a_held_call_is_decided_over_the_local_transport() {
     use adk_core::{
         ApprovalAction, ApprovalPolicy, ApprovalRequest, ApprovalScope, ApproverSelector,
     };

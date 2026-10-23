@@ -760,7 +760,8 @@ impl HarnessLauncher {
 }
 
 /// Serves `app` on `listener` with `kernel` resident: the kernel starts before the first
-/// request and drains and stops on Ctrl-C or `SIGTERM` (spec 3.2 §7.2, §8.1).
+/// request and drains and stops on Ctrl-C, `SIGTERM` or a Windows service stop (spec 3.2
+/// §7.2, §8.1, §10 W3).
 async fn serve_resident(
     kernel: adk_kernel::Kernel,
     listener: tokio::net::TcpListener,
@@ -771,6 +772,11 @@ async fn serve_resident(
     kernel.start().await.map_err(AdkError::from)?;
     let config = kernel.config();
     println!("ADK-Rust kernel up on http://{addr}");
+    #[cfg(windows)]
+    if let Some(pipe) = config.control.pipe_name(&config.home) {
+        println!("  pipe {pipe}");
+    }
+    #[cfg(not(windows))]
     if let Some(socket) = config.control.socket_path(&config.home) {
         println!("  socket {}", socket.display());
     }
@@ -783,10 +789,17 @@ async fn serve_resident(
     println!("Press Ctrl+C to drain and stop\n");
     let server = tokio::spawn(async move {
         axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-            .with_graceful_shutdown(shutdown_signal())
+            .with_graceful_shutdown(async {
+                // A Windows service is stopped by its manager, not by a signal (spec 3.2
+                // §10 W3); elsewhere `stop_requested` never resolves.
+                tokio::select! {
+                    () = shutdown_signal() => {}
+                    () = adk_kernel::service::stop_requested() => {}
+                }
+            })
             .await
     });
-    // Both wait for the same signal: the server stops accepting, the kernel drains.
+    // Both wait for the same stop: the server stops accepting, the kernel drains.
     let stopped = kernel.shutdown_on_signal().await.map_err(AdkError::from);
     let served = server.await.map_err(|e| AdkError::config(format!("server task failed: {e}")))?;
     served.map_err(|e| AdkError::config(format!("server error: {e}")))?;

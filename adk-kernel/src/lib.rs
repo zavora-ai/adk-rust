@@ -35,11 +35,11 @@
 //! | [`PartitionId`], [`PartitionMode`] | §7.8 (the phase-1 part) |
 //! | [`control`]: [`ControlPlaneConfig`](control::ControlPlaneConfig), [`router`](control::router), [`ControlPlane`](control::ControlPlane), [`ControlClient`](control::ControlClient), [`api`](control::api) | §7.11 |
 //! | [`audit`] action names | §9.3 |
+//! | `service` (feature `service`): `ServiceDefinition`, `install`, `uninstall`, `run_as_service` (Windows) | §7.12, §10 W3 |
 //! | `conformance` (feature `conformance`) | §11 |
 //!
 //! Agenda and proactivity (§7.5) and attention and resources (§7.9) are phase 2; drivers
-//! (§7.7) and partitions (§7.8) phase 3;
-//! `/proc` baselines (§7.10) and service installation (§7.12) phase 4; the managed form
+//! (§7.7) and partitions (§7.8) phase 3; `/proc` baselines (§7.10) phase 4; the managed form
 //! (§7.13) and channel wakes phase 5. Each adds to these types without changing them.
 //!
 //! # Features
@@ -50,7 +50,7 @@
 //! | `postgres`, `redis` | off | `PostgresProcessStore`, `RedisProcessStore`, opened from the URL of `adk-rust serve --store` |
 //! | `webhooks` | on | `webhook_wake_hook` over `adk-server`'s `WebhookIngress` |
 //! | `drivers` | on | [`drivers`]: manifests, the driver store, the supervisor over `adk-tool`'s MCP manager, the stdio launcher on `adk-sandbox` |
-//! | `service` | on | Empty until phase 4 |
+//! | `service` | on | The `service` module: `adk-rust up` as a launchd agent, a systemd user unit or a Windows service (`windows-service` on Windows) |
 //! | `proc` | on | The OTel GenAI histograms of the live aggregates; the ledger in phase 4 |
 //! | `proc-baselines` | off | Empty until phase 4 (implies `proc`) |
 //! | `channels`, `managed` | off | Empty until phase 5 |
@@ -95,9 +95,13 @@ pub mod process;
 pub mod review;
 pub mod sched;
 mod serde_util;
+#[cfg(feature = "service")]
+pub mod service;
 pub mod stores;
 mod supervise;
 pub mod wake;
+#[cfg(windows)]
+mod win;
 
 pub use agenda::{
     AGENDA_TOOL_NAME, Agenda, AgendaFilter, AgendaHandle, AgendaItem, AgendaOrigin, AgendaState,
@@ -142,3 +146,15 @@ pub use wake::{
     KernelWakeExecutor, RunFinishedWakeSource, Trigger, Wake, WakeEvent, WakeOutcome, WakeRouter,
     WakeSet, WakeSource, kernel_wake_run, keys, queue_wake_ingress,
 };
+
+/// A short, stable tag of `path`: sixteen hex digits of the SHA-256 of its absolute form,
+/// lowercased on Windows, whose paths ignore case. It names a kernel home's pipe and service
+/// (spec 3.2 §10 W2, §7.12), so a client and the kernel derive the same name from one home.
+pub(crate) fn path_tag(path: &std::path::Path) -> String {
+    use sha2::Digest as _;
+
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let text = path.to_string_lossy();
+    let text = if cfg!(windows) { text.to_lowercase() } else { text.into_owned() };
+    sha2::Sha256::digest(text.as_bytes())[..8].iter().map(|byte| format!("{byte:02x}")).collect()
+}

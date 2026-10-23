@@ -35,6 +35,8 @@ pub const AGENDA_NOT_FOUND_CODE: &str = "kernel.agenda_not_found";
 pub const AGENDA_STATE_CODE: &str = "kernel.agenda_state";
 /// Error code of [`KernelError::Quota`].
 pub const QUOTA_CODE: &str = "kernel.quota";
+/// Error code of [`KernelError::Service`].
+pub const SERVICE_CODE: &str = "kernel.service";
 /// Error code of [`KernelError::Io`].
 pub const IO_CODE: &str = "kernel.io";
 /// Error code of [`KernelError::Serde`].
@@ -163,6 +165,13 @@ pub enum KernelError {
         reason: String,
     },
 
+    /// Installing, removing or running the kernel as a service failed (spec 3.2 §7.12).
+    #[error("kernel service: {reason}")]
+    Service {
+        /// What failed and how to fix it.
+        reason: String,
+    },
+
     /// An error from an `adk-core` or `adk-server` API the kernel composes.
     #[error(transparent)]
     Core(#[from] AdkError),
@@ -201,6 +210,7 @@ impl KernelError {
             Self::AgendaNotFound { .. } => AGENDA_NOT_FOUND_CODE,
             Self::AgendaState { .. } => AGENDA_STATE_CODE,
             Self::Quota { .. } => QUOTA_CODE,
+            Self::Service { .. } => SERVICE_CODE,
             Self::Core(error) => error.code,
             Self::Io(_) => IO_CODE,
             Self::Serde(_) => SERDE_CODE,
@@ -215,9 +225,10 @@ impl KernelError {
                 ErrorCategory::Conflict
             }
             Self::Quota { .. } => ErrorCategory::ResourceExhausted,
-            Self::Frozen { .. } | Self::Store { .. } | Self::ControlPlane { .. } => {
-                ErrorCategory::Unavailable
-            }
+            Self::Frozen { .. }
+            | Self::Store { .. }
+            | Self::ControlPlane { .. }
+            | Self::Service { .. } => ErrorCategory::Unavailable,
             Self::Config { .. } => ErrorCategory::InvalidInput,
             Self::Unauthorized { .. } => ErrorCategory::Unauthorized,
             Self::Core(error) => error.category,

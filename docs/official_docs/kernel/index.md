@@ -34,7 +34,7 @@ non-loopback refusal, the `--store` backend — and adds the kernel:
 | Scheduler | `DurableScheduler` over the schedule store, ticking every second |
 | Process table | The durable runs plus the kernel's side table: parent, partition, queue, kind, wake set, suspension |
 | Event bus | Every process change, wake, hold, decision and governance change, numbered by cursor |
-| Control plane | `/api/kernel/...` on the Unix socket at the kernel home and on HTTP, beside the approvals inbox |
+| Control plane | `/api/kernel/...` on the Unix socket at the kernel home (a named pipe on Windows) and on HTTP, beside the approvals inbox |
 | Kill switch | `GovernanceControl` mirrored from the store every 250 ms, so a freeze reaches every replica within a second |
 | Audit | One signed log per replica (`kernel-<id>`), holding the harness's tool-call records and the kernel's `kernel.*` records |
 
@@ -44,7 +44,8 @@ non-loopback refusal, the `--store` backend — and adds the kernel:
 | HTTP | `127.0.0.1:8080` (`--bind`); anything but loopback needs `--auth-token` |
 | Mode | `plan`, as `serve`; `--mode ask` lets the agent edit and run commands after approval |
 | Stores | `harness.db`, shared with the REPL and `serve`; `--store postgres://…` or `redis://…` for replicas |
-| Shutdown | Ctrl-C or `SIGTERM`: the HTTP server stops accepting, the kernel drains for 30 s and stops |
+| Shutdown | Ctrl-C, `SIGTERM` or a Windows service stop: the HTTP server stops accepting, the kernel drains for 30 s and stops |
+| Service | `adk-rust up --install` runs it as a launchd agent, a systemd user unit or a Windows service, as you ([service installation](service.md)) |
 
 Nothing is lost on a hard kill: a run's lease expires and the next claim resumes it from its
 checkpoint.
@@ -108,6 +109,7 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 | `postgres`, `redis` | off | The kernel's stores in the backend replicas share |
 | `webhooks` | on | Webhook wake sources over `WebhookIngress` |
 | `proc` | on | The live aggregates' OTel GenAI histograms |
+| `service` | on | `adk_kernel::service`: launchd, systemd and Windows service installation |
 | `conformance` | off | `process_store_conformance_tests!` for a new store backend |
 
 ## Read next
@@ -115,3 +117,5 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 - [Kernel commands](cli.md): `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`,
   `freeze`, `unfreeze`, `events`, and `goal` on a running kernel
 - [The control plane](control-plane.md): transports, authentication, routes and audit records
+- [Running the kernel as a service](service.md): `up --install`, `--uninstall` and `--print`
+  on macOS, Linux and Windows

@@ -32,8 +32,9 @@ const APPROVALS: &str = "/approvals";
 /// How long a call other than [`events`](ControlClient::events) waits for the kernel.
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A client of a running kernel's control plane (spec 3.2 §7.11), over its Unix socket or
-/// HTTP. Surfaces hold no state (K-I17): every call reads the kernel.
+/// A client of a running kernel's control plane (spec 3.2 §7.11), over its Unix socket, its
+/// named pipe on Windows (§10 W2) or HTTP. Surfaces hold no state (K-I17): every call reads
+/// the kernel.
 ///
 /// # Example
 ///
@@ -60,7 +61,12 @@ pub struct ControlClient {
 #[derive(Debug, Clone)]
 enum Transport {
     Socket(PathBuf),
-    Http { base: String, client: reqwest::Client },
+    #[cfg(windows)]
+    Pipe(String),
+    Http {
+        base: String,
+        client: reqwest::Client,
+    },
 }
 
 /// A response's status and body.
@@ -86,6 +92,14 @@ impl ControlClient {
         Self { transport: Transport::Socket(path.into()), token: None }
     }
 
+    /// A client of the kernel listening on the named pipe `name` (Windows; spec 3.2 §10 W2),
+    /// as [`ControlPlaneConfig::pipe_name`] names it. The client talks to the pipe only when
+    /// its owner is the user running the client.
+    #[cfg(windows)]
+    pub fn pipe(name: impl Into<String>) -> Self {
+        Self { transport: Transport::Pipe(name.into()), token: None }
+    }
+
     /// A client of the kernel serving HTTP at `base_url`, the routes under its `/api`.
     pub fn http(base_url: impl Into<String>) -> Self {
         let base = base_url.into().trim_end_matches('/').to_string();
@@ -99,27 +113,50 @@ impl ControlClient {
         self
     }
 
-    /// Where the client connects: `unix:<path>` or the base URL.
+    /// Where the client connects: `unix:<path>`, `pipe:<name>` or the base URL.
     pub fn endpoint(&self) -> String {
         match &self.transport {
             Transport::Socket(path) => format!("unix:{}", path.display()),
+            #[cfg(windows)]
+            Transport::Pipe(name) => format!("pipe:{name}"),
             Transport::Http { base, .. } => base.clone(),
         }
     }
 
-    /// A client of the kernel running at `home`, or `None` when none answers on its socket.
+    /// A client of the kernel running at `home`, or `None` when none answers on its socket,
+    /// or on Windows its named pipe (spec 3.2 §10 W2).
     ///
-    /// A socket left by a kernel that did not stop cleanly counts as none. Off Unix there is
-    /// no local socket (the named pipe is spec 3.2 §10 W2), so this is always `None`.
+    /// A socket left by a kernel that did not stop cleanly counts as none; a pipe goes away
+    /// with its kernel.
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::ControlPlane`] when the socket exists but cannot be read.
+    /// Returns [`KernelError::ControlPlane`] when the socket or pipe exists but this user may
+    /// not use it: another account owns it, or its permissions refuse this user.
     pub async fn connect_local(home: &Path) -> Result<Option<Self>> {
-        let Some(path) = ControlPlaneConfig::default().socket_path(home) else {
-            return Ok(None);
-        };
-        connect_local_socket(path).await
+        #[cfg(windows)]
+        {
+            let Some(name) = ControlPlaneConfig::default().pipe_name(home) else {
+                return Ok(None);
+            };
+            match super::pipe::answers(&name).await {
+                Ok(true) => Ok(Some(Self::pipe(name))),
+                Ok(false) => Ok(None),
+                Err(error) => Err(KernelError::ControlPlane {
+                    reason: format!(
+                        "the kernel pipe {name} exists but cannot be used: {error}; it admits \
+                         only the OS user that runs the kernel"
+                    ),
+                }),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let Some(path) = ControlPlaneConfig::default().socket_path(home) else {
+                return Ok(None);
+            };
+            connect_local_socket(path).await
+        }
     }
 
     /// `GET /kernel/health`.
@@ -523,8 +560,8 @@ impl ControlClient {
                     .boxed();
                 Ok(Answer { status, body })
             }
-            Transport::Socket(socket) => {
-                let send = socket_request(socket, method, &path, self.token.as_deref(), body);
+            local => {
+                let send = local_request(local, method, &path, self.token.as_deref(), body);
                 let answer = match timeout {
                     Some(timeout) => tokio::time::timeout(timeout, send)
                         .await
@@ -568,33 +605,41 @@ async fn connect_local_socket(path: PathBuf) -> Result<Option<ControlClient>> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(windows)))]
 async fn connect_local_socket(_path: PathBuf) -> Result<Option<ControlClient>> {
     Ok(None)
 }
 
 /// One HTTP/1.1 exchange over the socket at `socket`.
 #[cfg(unix)]
-async fn socket_request(
+async fn socket_exchange(
     socket: &Path,
+    request: hyper::Request<http_body_util::Full<Bytes>>,
+) -> std::result::Result<hyper::Response<hyper::body::Incoming>, String> {
+    let stream =
+        tokio::net::UnixStream::connect(socket).await.map_err(|error| error.to_string())?;
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(stream))
+            .await
+            .map_err(|error| error.to_string())?;
+    tokio::spawn(async move {
+        if let Err(error) = connection.await {
+            tracing::debug!(error = %error, "kernel socket connection closed");
+        }
+    });
+    sender.send_request(request).await.map_err(|error| error.to_string())
+}
+
+/// One HTTP/1.1 exchange over the local transport `local`: the socket, or the pipe.
+async fn local_request(
+    local: &Transport,
     method: Method,
     path: &str,
     token: Option<&str>,
     body: Option<Vec<u8>>,
 ) -> std::result::Result<Answer, String> {
     use http_body_util::{BodyStream, Full};
-    use hyper_util::rt::TokioIo;
 
-    let stream =
-        tokio::net::UnixStream::connect(socket).await.map_err(|error| error.to_string())?;
-    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-        .await
-        .map_err(|error| error.to_string())?;
-    tokio::spawn(async move {
-        if let Err(error) = connection.await {
-            tracing::debug!(error = %error, "kernel socket connection closed");
-        }
-    });
     let mut request =
         hyper::Request::builder().method(method).uri(path).header(hyper::header::HOST, "localhost");
     if let Some(token) = token {
@@ -606,7 +651,24 @@ async fn socket_request(
     let request = request
         .body(Full::new(Bytes::from(body.unwrap_or_default())))
         .map_err(|error| error.to_string())?;
-    let response = sender.send_request(request).await.map_err(|error| error.to_string())?;
+    let response = match local {
+        #[cfg(unix)]
+        Transport::Socket(socket) => socket_exchange(socket, request).await?,
+        #[cfg(not(unix))]
+        Transport::Socket(socket) => {
+            let _ = request;
+            return Err(format!(
+                "the local control socket {} needs a Unix platform; on Windows the kernel \
+                 serves a named pipe, which ControlClient::connect_local finds",
+                socket.display()
+            ));
+        }
+        #[cfg(windows)]
+        Transport::Pipe(name) => super::pipe::request(name, request).await?,
+        Transport::Http { base, .. } => {
+            return Err(format!("{base} is reached over HTTP, not over a local transport"));
+        }
+    };
     let status = response.status();
     let body = BodyStream::new(response.into_body())
         .filter_map(|frame| async move {
@@ -619,21 +681,6 @@ async fn socket_request(
         })
         .boxed();
     Ok(Answer { status, body })
-}
-
-#[cfg(not(unix))]
-async fn socket_request(
-    socket: &Path,
-    _method: Method,
-    _path: &str,
-    _token: Option<&str>,
-    _body: Option<Vec<u8>>,
-) -> std::result::Result<Answer, String> {
-    Err(format!(
-        "the local control socket {} needs a Unix platform; the Windows named pipe is spec 3.2 \
-         §10 W2, so reach the kernel over HTTP with ControlClient::http",
-        socket.display()
-    ))
 }
 
 /// The error a kernel's non-success answer carries: its problem document, the server's
@@ -698,6 +745,7 @@ fn known_code(code: &str) -> &'static str {
         error::STORE_CODE,
         error::CONTROL_PLANE_CODE,
         error::UNAUTHORIZED_CODE,
+        error::SERVICE_CODE,
         error::IO_CODE,
         error::SERDE_CODE,
     ]

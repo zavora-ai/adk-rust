@@ -7,6 +7,7 @@ own (spec 3.2 §8.1, K-I17).
 | Command | Does |
 |---|---|
 | `adk-rust up [--home DIR] [--bind HOST:PORT] [--auth-token T] [--store URL]` | Starts the kernel with the harness; the harness flags (`--mode`, `--dir`, `--sandbox`, …) apply |
+| `adk-rust up --install [--print]` / `--uninstall` | Installs the kernel as a launchd agent, a systemd user unit or a Windows service that runs as you, logs to `<home>/kernel.log` and restarts on failure; `--print` shows the definition without installing; `--uninstall` removes it ([service installation](service.md)) |
 | `adk-rust attach [--session ID]` | A REPL whose turns the kernel runs |
 | `adk-rust` | Attaches when a kernel runs at the default home; otherwise the in-process REPL |
 | `adk-rust ps [--partition P] [--state S] [--limit N]` | The process table |
@@ -29,12 +30,12 @@ Every control command takes the same three options:
 
 | Option | Reaches |
 |---|---|
-| (none) | The socket at `<config dir>/adk-rust/kernel.sock` |
-| `--home DIR` | The socket of the kernel started with `up --home DIR` |
+| (none) | The socket at `<config dir>/adk-rust/kernel.sock`, or on Windows the named pipe of that home |
+| `--home DIR` | The socket, or the named pipe, of the kernel started with `up --home DIR` |
 | `--server URL [--token T]` | A kernel's HTTP control plane; the token defaults to `$ADK_SERVE_TOKEN` |
 
-The socket admits only the OS user that runs the kernel. Without a kernel the command says
-so and exits non-zero:
+The socket and the pipe admit only the OS user that runs the kernel. Without a kernel the
+command says so and exits non-zero:
 
 ```text
 $ adk-rust ps
@@ -70,15 +71,17 @@ Press Ctrl+C to drain and stop
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--home DIR` | `[kernel] home`, else `<config dir>/adk-rust` | The socket, `harness.db`, the replica id and its audit signing key |
+| `--home DIR` | `[kernel] home`, else `<config dir>/adk-rust` | The socket, `harness.db`, the replica id and its audit signing key, and an installed service's `kernel.log` |
 | `--bind HOST:PORT` | `[kernel] bind`, else `127.0.0.1:8080` | Anything but loopback needs `--auth-token` (K-I18) |
 | `--auth-token T` | `$ADK_SERVE_TOKEN` | Bearer token HTTP callers present |
 | `--store URL` | `harness.db` | `postgres://…` or `redis://…`: every store, the kernel's included, shared by replicas |
 | `--no-memory`, `--no-consolidation` | memory and the tick on | Long-term memory stays on under `up`; the consolidation tick runs in ask and auto mode ([Long-term memory](../harness/memory.md#consolidation)) |
-| `--install`, `--uninstall` | — | Service installation is not in this build: run `up` under launchd, systemd or a container supervisor |
+| `--install` | — | Installs the kernel as a service with the other flags, as you; refuses `--api-key`, `--auth-token`, a non-loopback `--bind` and a `--store` URL with a password ([service installation](service.md)) |
+| `--print` | — | With `--install`: prints the service definition instead of installing it |
+| `--uninstall` | — | Stops and removes the service of this kernel home; the home and its stores stay |
 
-On Windows the kernel serves HTTP only: the named-pipe transport is a later deliverable, so
-control commands there take `--server`.
+On Windows the kernel serves a named pipe in place of the socket, so the control commands
+there reach it without `--server`.
 
 ### `[kernel]` in `harness.toml`
 

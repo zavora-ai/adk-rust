@@ -25,6 +25,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 /// Creates `path` for writing with an owner-only DACL; fails when it exists.
+#[cfg(any(feature = "audit", feature = "persist"))]
 pub(crate) fn create_new(path: &Path) -> io::Result<File> {
     create(path, CREATE_NEW)
 }
@@ -34,6 +35,17 @@ pub(crate) fn create_new(path: &Path) -> io::Result<File> {
 #[cfg(all(feature = "harness", feature = "persist"))]
 pub(crate) fn create_or_truncate(path: &Path) -> io::Result<File> {
     create(path, windows_sys::Win32::Storage::FileSystem::CREATE_ALWAYS)
+}
+
+/// Opens `path` for appending, and creates it with an owner-only DACL when it does not
+/// exist: the kernel service's log (spec 3.2 §7.12, §10 W4).
+#[cfg(feature = "harness")]
+pub(crate) fn open_append(path: &Path) -> io::Result<File> {
+    use std::io::{Seek as _, SeekFrom};
+
+    let mut file = create(path, windows_sys::Win32::Storage::FileSystem::OPEN_ALWAYS)?;
+    file.seek(SeekFrom::End(0))?;
+    Ok(file)
 }
 /// Opens `path` for writing with `disposition`, giving a file the call creates an
 /// owner-only DACL.
@@ -133,7 +145,7 @@ fn user_sid(user: &[u64]) -> PSID {
 
 /// Whether `path` carries the DACL `create` gives a file: protected, with one entry that
 /// grants the current user full access.
-#[cfg(all(test, feature = "persist"))]
+#[cfg(all(test, any(feature = "audit", feature = "persist")))]
 pub(crate) fn is_owner_only(path: &Path) -> io::Result<bool> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};

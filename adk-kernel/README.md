@@ -82,7 +82,8 @@ builds a kernel from a harness (`Harness::kernel`).
 | Wakes | `WakeSet`s on sleeping processes and standing `Trigger`s, matched by the `WakeRouter`; every event becomes one `kernel.wake` run keyed by the event, so a redelivery wakes nothing |
 | Event bus | `KernelEvent`s to subscribers, with replay from a cursor, and to `EventSink`s such as `AuditSink` |
 | Kill switch | `Kernel::freeze` parks every running process on every replica; `Kernel::unfreeze` resumes exactly the processes the freeze parked |
-| Control plane | `control::router` on a Unix socket and loopback HTTP, merged into `ServerBuilder` by `adk-rust up`; `ControlClient` for terminals |
+| Control plane | `control::router` on a Unix socket (a named pipe on Windows) and loopback HTTP, merged into `ServerBuilder` by `adk-rust up`; `ControlClient` for terminals |
+| Service | `service::install` keeps `adk-rust up` running as the user: a launchd agent, a systemd user unit or a Windows service, logging to `<home>/kernel.log` and restarting on failure |
 | Agenda | `Kernel::agenda`: proposals (`propose`, `approve`, `reject`, `schedule`) under a `ProactivityPolicy` — held, put to the approvals inbox, or scheduled by the partition's mode, bounded by open items, a daily budget and quiet hours; the harness's `propose_followup` lands here |
 | Admission | Before a claimed process's first model call: per-partition `Quotas`, `QuietHours`, the day's spend, and preemption of the youngest background process by a human turn at quota |
 | Consolidation tick | With `ProactivityPolicy::consolidation` and a `Consolidator` per partition (`KernelBuilder::consolidator`), a `Maintenance` process (`kernel.consolidation`) on the `maintenance` queue once `admit_tick` holds: new material, `min_interval`, `debounce` idle, outside quiet hours, within `budget_share` of the daily proactive budget and `max_tokens_per_tick`; its proposals are `Consolidation` agenda items a person approves in every mode |
@@ -211,7 +212,7 @@ replica enqueued.
 | `resume` | Claims again and wakes what a drain parked | `kernel.resumed` |
 | `drain(timeout)` | Suspends running processes at their next checkpoint, then stops claiming; on timeout the leases lapse | `kernel.drained` |
 | `stop` | Drains, stops the sources and closes the control plane | `kernel.stopped` |
-| `shutdown_on_signal` | `SIGTERM` or Ctrl-C: `drain(30 s)`, then `stop` | as above |
+| `shutdown_on_signal` | `SIGTERM`, Ctrl-C or a Windows service stop: `drain(30 s)`, then `stop` | as above |
 | `freeze`, `unfreeze` | `GovernanceControl::freeze_recorded` and `unfreeze_recorded` | `governance.freeze`, `governance.unfreeze` |
 
 A hard kill loses nothing: the lease expires, and the next claim resumes the session from
@@ -248,6 +249,18 @@ let tools = drivers.toolset_for(&PartitionId::new("work"), &["email".to_string()
 # }
 ```
 
+## Local transport and service installation
+
+| Platform | Control plane | Trust rule | Service form |
+|---|---|---|---|
+| macOS, Linux | Unix socket `<home>/kernel.sock`, mode `0600` | The peer's uid is the socket owner's | launchd agent, systemd user unit |
+| Windows | Named pipe `\\.\pipe\adk-rust-kernel-<tag>`, the tag derived from the home | A protected DACL admits only the user the kernel runs as, who owns the pipe; the token the client opened it with must be that user's; the client refuses a pipe another account owns | Windows service under the user's account |
+
+`ControlClient::connect_local(home)` finds either. `service::ServiceDefinition::render`
+shows any platform's definition without installing; `service::install` and
+`service::uninstall` act on the current platform, and `service::run_as_service` is the
+Windows service's entry point.
+
 ## Replicas
 
 Kernels share one run store, process store and governance store. Give each replica
@@ -275,7 +288,7 @@ second.
 | `proc` | on | The OpenTelemetry GenAI histograms of the live process aggregates |
 | `conformance` | off | The `conformance` module |
 | `drivers` | on | `drivers`: manifests, the driver store, the supervisor over `adk-tool`'s MCP manager, the stdio launcher on `adk-sandbox`'s enforcers |
-| `service` | on | Reserved for service installation; empty in this release |
+| `service` | on | The `service` module; `windows-service` on Windows |
 | `proc-baselines`, `channels`, `managed` | off | Reserved for later phases of spec 3.2; empty in this release |
 
 ## Tests
@@ -291,6 +304,8 @@ second.
 | `tests/driver_park_restart.rs` | An agent run's driver call parked on its server's question survives a kernel restart: answered in the inbox, it completes with the tool executed once; a call approved before its question is not asked about again |
 | `tests/driver_sandbox_tests.rs` | A driver under `sandbox = "os"` cannot write outside its allowed paths (Seatbelt, bubblewrap in the `sandbox-linux` job) |
 | `tests/driver_*_property_tests.rs` | Any declaration change makes a pinned tool stale; a re-issued round never executes a completed call twice under the action ledger |
+| `src/control/tests.rs` | The auth matrix on every transport: socket peers of another uid refused; on Windows the pipe's owner-only descriptor, its owner admitted, and a client of another identity refused by the DACL and, behind an open DACL, by the token check |
+| `src/service/tests.rs` | The launchd plist, systemd unit and Windows service rendered for each platform on every platform; `plutil` accepts the plist; the log is created `0600`. Real installs run in `.github/workflows/kernel-service.yml` |
 
 ## License
 
