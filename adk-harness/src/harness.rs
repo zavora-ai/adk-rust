@@ -127,7 +127,16 @@ impl Harness {
             .app_name(app_name.clone())
             .agent(agent.clone())
             .session_service(sessions.clone());
-        let runner = agent.configure_runner(builder).build()?;
+        let builder = agent.configure_runner(builder);
+        // Every agent of a partition's harness carries its class and tenant (spec 3.2 §7.8).
+        #[cfg(feature = "kernel")]
+        let builder = match agent.partition() {
+            Some(partition) => builder.identity_source(
+                partition.identity_source(&app_name, adk_core::Agent::name(agent.as_ref())),
+            ),
+            None => builder,
+        };
+        let runner = builder.build()?;
         #[cfg(feature = "memory")]
         attach_facts(&agent, &runner, &sessions, &app_name);
         Ok(Self {
@@ -857,7 +866,7 @@ impl Harness {
             self.goal_queue.clone(),
             self.app_name.clone(),
             user.to_string(),
-            GOAL_TARGET,
+            self.goal_target_name(),
             json!({ "text": record.spec.prompt() }),
         )
         .with_session_id(session.to_string())
@@ -918,7 +927,8 @@ impl Harness {
 
     /// The durable-run target and runner a `DurableWorker` runs goals with
     /// (`DurableWorker::with_agent`, spec 3.1 §7.11): [`GOAL_TARGET`] and this harness's
-    /// runner, whose harness continues a session's running goal on every turn.
+    /// runner, whose harness continues a session's running goal on every turn. A partition's
+    /// harness runs goals as `harness.goal@<partition>` (spec 3.2 §7.8).
     ///
     /// # Example
     ///
@@ -927,7 +937,16 @@ impl Harness {
     /// assert_eq!(target, "harness.goal");
     /// ```
     pub fn goal_target(&self) -> (String, Arc<Runner>) {
-        (GOAL_TARGET.to_string(), self.runner.clone())
+        (self.goal_target_name(), self.runner.clone())
+    }
+
+    /// [`GOAL_TARGET`], or `harness.goal@<partition>` for a partition's harness.
+    fn goal_target_name(&self) -> String {
+        #[cfg(feature = "kernel")]
+        if let Some(partition) = self.agent.partition() {
+            return crate::partition::partition_target(GOAL_TARGET, &partition.id);
+        }
+        GOAL_TARGET.to_string()
     }
 
     /// The session service the harness runner uses.
@@ -1053,10 +1072,12 @@ impl Harness {
     pub async fn facts(&self, user: &UserId) -> Result<Vec<crate::facts::MemoryFact>> {
         let facts = self.facts_runtime()?;
         let scope = facts.scope(&self.app_name, user.as_ref());
-        let filter = crate::facts::FactFilter {
-            live_only: false,
-            ..crate::facts::FactFilter::recall(&scope)
+        // A partition's harness lists its own scope only (spec 3.2 K-I15).
+        let base = match facts.confined {
+            true => crate::facts::FactFilter::exactly(&scope),
+            false => crate::facts::FactFilter::recall(&scope),
         };
+        let filter = crate::facts::FactFilter { live_only: false, ..base };
         facts.store.list(filter).await
     }
 

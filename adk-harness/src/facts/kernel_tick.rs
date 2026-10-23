@@ -185,10 +185,15 @@ impl Consolidator for HarnessConsolidator {
             .filter(|(_, upto)| last_tick.is_none_or(|last| *upto > last))
             .count();
         let scope = self.facts.scope(&self.app, &self.user);
+        let readable = if self.facts.confined {
+            FactFilter::exactly(&scope)
+        } else {
+            FactFilter::recall(&scope)
+        };
         let new_facts = self
             .facts
             .store
-            .list(FactFilter { live_only: false, since: last_tick, ..FactFilter::recall(&scope) })
+            .list(FactFilter { live_only: false, since: last_tick, ..readable })
             .await?
             .into_iter()
             .filter(|fact| fact.provenance.tick.is_none())

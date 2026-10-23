@@ -14,9 +14,9 @@ use crate::mode::HarnessMode;
 use crate::policy::has_harness_layer;
 
 /// Confidence of a fact the model proposes with `memory_remember`.
-const REMEMBER_CONFIDENCE: f32 = 0.5;
+pub(crate) const REMEMBER_CONFIDENCE: f32 = 0.5;
 /// Most facts one `memory_search` returns.
-const SEARCH_MAX: usize = 20;
+pub(crate) const SEARCH_MAX: usize = 20;
 
 fn unavailable(message: &str) -> AdkError {
     AdkError::new(
@@ -36,7 +36,7 @@ fn invalid(message: impl Into<String>) -> AdkError {
     )
 }
 
-fn describe(fact: &MemoryFact) -> Value {
+pub(crate) fn describe(fact: &MemoryFact) -> Value {
     json!({
         "id": fact.id,
         "status": fact.status.label(),

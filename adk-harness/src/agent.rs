@@ -141,6 +141,9 @@ pub struct HarnessRuntime {
     /// §7.10).
     #[cfg(feature = "kernel")]
     pub(crate) kernel_ledger: adk_kernel::proc::LateLedgerSink,
+    /// The partition the harness was built for and its policy (spec 3.2 §7.8).
+    #[cfg(feature = "kernel")]
+    pub(crate) partition: Option<crate::partition::PartitionWiring>,
     /// Provider-executed search and URL tools, when the operator enabled any (spec 3.1 §7.20).
     #[cfg(feature = "web")]
     pub(crate) provider_web: Option<Arc<crate::web::provider::ProviderWebToolset>>,
@@ -587,6 +590,25 @@ impl HarnessAgent {
     /// What the harness is.
     pub fn info(&self) -> &HarnessInfo {
         &self.info
+    }
+
+    /// The partition the harness was built for (spec 3.2 §7.8,
+    /// [`HarnessAgentBuilder::partition`](crate::HarnessAgentBuilder::partition)).
+    #[cfg(feature = "kernel")]
+    pub fn partition(&self) -> Option<&adk_kernel::Partition> {
+        self.runtime.partition.as_ref().map(|wiring| &wiring.partition)
+    }
+
+    /// The partition's policy, when the harness was built for one: what decides its
+    /// crossings (spec 3.2 §7.8, K-I15).
+    #[cfg(feature = "kernel")]
+    pub fn partition_policy(&self) -> Option<&adk_kernel::PartitionPolicy> {
+        self.runtime.partition.as_ref().map(|wiring| &wiring.policy)
+    }
+
+    #[cfg(feature = "kernel")]
+    pub(crate) fn partition_wiring(&self) -> Option<&crate::partition::PartitionWiring> {
+        self.runtime.partition.as_ref()
     }
 
     /// A run config carrying the harness layer and the confirmation handler, for callers

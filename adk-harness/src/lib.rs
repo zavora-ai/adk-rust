@@ -90,6 +90,8 @@ mod mode;
 #[cfg(feature = "observe")]
 mod observe;
 pub mod packs;
+#[cfg(feature = "kernel")]
+mod partition;
 #[cfg(feature = "graph")]
 mod plan_graph;
 mod policy;
@@ -221,6 +223,11 @@ pub use packs::voice::{
     DecisionSource, SpokenDecision, VOICE_AUDIT_DECIDED, VOICE_AUDIT_HELD, VOICE_AUDIT_REFUSED,
     VOICE_AUDIT_RESUMED, VOICE_FROZEN_CODE, VOICE_NOT_PARKED_CODE, VoiceConfig, VoiceEvent,
     VoiceSurface, parse_spoken_decision,
+};
+#[cfg(feature = "kernel")]
+pub use partition::{
+    CrossingAnswer, CrossingPrompt, PARTITION_MEMORY_REMEMBER, PARTITION_MEMORY_SEARCH,
+    partition_target,
 };
 #[cfg(feature = "graph")]
 pub use plan_graph::{

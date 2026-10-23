@@ -226,6 +226,11 @@ impl Harness {
     /// `background` queue when the harness was given
     /// `with_goal_queue(adk_kernel::QueueClass::BACKGROUND)`.
     ///
+    /// A partition's harness registers its runner as its partition's targets,
+    /// `<app>@<partition>` and `harness.goal@<partition>`, bound to the partition, with the
+    /// partition table its policy reads ([`host_partition`](Self::host_partition)); add the
+    /// other partitions' harnesses with `host_partition` (spec 3.2 §7.8).
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -249,10 +254,14 @@ impl Harness {
         });
         runtime.goals.until.book().set_parker(progress.clone());
         let source = runtime.kernel_approvals.bind();
-        let mut builder = adk_kernel::Kernel::builder()
-            .config(KernelConfig::default().with_app_name(self.app_name()))
-            .agent(self.app_name(), runner.clone())
-            .agent(target, runner.clone())
+        let builder = adk_kernel::Kernel::builder()
+            .config(KernelConfig::default().with_app_name(self.app_name()));
+        // A partition's harness runs as its partition's targets (spec 3.2 §7.8).
+        let builder = match self.agent().partition() {
+            Some(_) => self.host_partition(builder),
+            None => builder.agent(self.app_name(), runner.clone()).agent(target, runner.clone()),
+        };
+        let mut builder = builder
             .session_service(self.sessions().clone())
             .governance(runner.governance().clone())
             .progress_source(progress)
