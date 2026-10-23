@@ -47,6 +47,23 @@ adk-rust up --store postgres://harness:…@db/harness --bind 0.0.0.0:8081 --auth
 adk-rust up --home /srv/kernel                     # socket and harness.db under /srv/kernel
 ```
 
+```text
+$ adk-rust up --mode ask
+  store harness.db: sessions, approvals, runs, processes, schedules
+  plans checkpointed in harness.db
+ADK-Rust kernel up on http://127.0.0.1:8080
+  socket /Users/ana/Library/Application Support/adk-rust/kernel.sock
+  home /Users/ana/Library/Application Support/adk-rust
+  mode ask · shell host (full user permissions, network)
+  queues interactive, background, maintenance
+  control: adk-rust ps | top | attach | kill | suspend | resume | freeze | events
+  approvals: GET /api/approvals, POST /api/approvals/{id}/decide
+Press Ctrl+C to drain and stop
+```
+
+> **Note:** a Unix socket path is limited to about 100 bytes, so a deep `--home` is refused
+> at start with that remedy; choose a short kernel home.
+
 | Flag | Default | Notes |
 |---|---|---|
 | `--home DIR` | `[kernel] home`, else `<config dir>/adk-rust` | The socket, `harness.db`, the replica id and its audit signing key |
@@ -109,7 +126,7 @@ approved
 ```text
 $ adk-rust ps
 PID                                   STATE      KIND           QUEUE            AGE      TODAY      CALLS  NOTE
-6c2f9a1e-0b7d-4c55-9e0a-3f1d2b8c7a64  waiting    goal           background     3m12s    $0.0123        4/9  suspended: freeze · goal 3/10, check exit 1
+78136dc9-e826-4b4f-b6f5-8d369c8cfb75  waiting    interactive    interactive       1s    $0.0000        0/0  asleep on 1 wake(s)
 ```
 
 | Column | Source |
@@ -117,7 +134,7 @@ PID                                   STATE      KIND           QUEUE           
 | `AGE` | Since the last state change: a sleeper's time asleep, a parked run's wait |
 | `TODAY` | Spend today (UTC) from the spend ledger |
 | `CALLS` | Model calls / tool calls |
-| `NOTE` | Suspension, sleep, goal progress and last check, loop-guard verdict, a failure's error |
+| `NOTE` | Suspension (`suspended: freeze`), sleep (`asleep on N wake(s)`), goal progress and last check (`goal 3/10, check exit 1`), loop-guard verdict, a failure's error |
 
 `top` adds `BURN/MIN` and `BY 24:00` (the spend projected to the end of the UTC day at the
 current rate) and lists only unfinished processes, highest burn first.
@@ -140,9 +157,12 @@ own, then follows it:
 ## `adk-rust events`
 
 ```text
-$ adk-rust events --follow
-#41     10:42:07  process    6c2f… running → waiting (frozen)
-#42     10:42:07  governance frozen (incident 12)
+$ adk-rust events
+#1      00:32:39  health     kernel running
+#2      00:32:40  process    78136dc9-e826-4b4f-b6f5-8d369c8cfb75 queued → queued (spawned asleep)
+#3      00:32:40  process    78136dc9-e826-4b4f-b6f5-8d369c8cfb75 waiting → running (claimed)
+#4      00:32:40  process    78136dc9-e826-4b4f-b6f5-8d369c8cfb75 running → waiting (asleep)
+#5      00:32:42  process    78136dc9-e826-4b4f-b6f5-8d369c8cfb75 waiting → cancelled (killed by ana over the kernel control plane)
 ```
 
 Without `--follow` the command prints what the kernel still holds after `--after` (default:
