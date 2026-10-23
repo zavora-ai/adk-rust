@@ -223,7 +223,7 @@ zwu4qZLzhb2lbYJkhqUVd7RS2SAPmggiFWFGeL5A3gc=
 
 | Task | How |
 |------|-----|
-| Generate a key | `adk-rust audit keygen audit.example.com --out audit` writes `audit.key` (mode 0600) and `audit.vkey` |
+| Generate a key | `adk-rust audit keygen audit.example.com --out audit` writes `audit.key` (mode 0600 on Unix, a DACL granting only its owner access on Windows) and `audit.vkey` |
 | Load a key | `Ed25519Signer::from_note_key(...)`; implement `AuditSigner` to sign with a KMS or HSM |
 | Rotate a key | `log.rotate_signer(next, actor)` appends a `key_rotated` record naming both verifier keys and signs the next checkpoint with both |
 | Trust after rotation | A verifier that trusts the old key learns the new one from the dual-signed checkpoint and retires the old one for later checkpoints |

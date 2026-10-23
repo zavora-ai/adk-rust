@@ -179,7 +179,8 @@ budgets; `.adk/harness.toml` can only lower them. See
 | `--ephemeral` | Keep the conversation in memory only; nothing is written to disk |
 
 With the `persist` feature, conversations are kept in `adk-rust/harness.db` in the platform
-config directory, created readable by its owner only, under the OS user name. The banner
+config directory, created readable by its owner only (mode 0600 on Unix, an owner-only DACL on
+Windows), under the OS user name. The banner
 shows the session id.
 
 ### `adk-rust serve` options
