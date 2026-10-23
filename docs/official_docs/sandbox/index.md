@@ -276,7 +276,7 @@ with rules and `allow_network = false` blocks all network access and logs a warn
 
 | Aspect | Behaviour |
 |--------|-----------|
-| Token | Privileges removed (`DISABLE_MAX_PRIVILEGE`); `BUILTIN\Users` and Authenticated Users deny-only; restricting SIDs `Everyone`, `RESTRICTED` and the logon SID |
+| Token | Privileges removed (`DISABLE_MAX_PRIVILEGE`); every group deny-only, `Administrators` included, except `Everyone`, `BUILTIN\Users`, Authenticated Users, `INTERACTIVE`, the logon SID and integrity labels, which the shell needs to start; restricting SIDs `Everyone`, `RESTRICTED` and the logon SID |
 | Paths | `RESTRICTED` is granted on each policy path — full access for read-write, read and execute for read-only — added to the path's existing ACL |
 | Writes | Refused outside the granted paths |
 | Reads | Refused for ungranted paths that are not world-readable; world-readable files, such as system DLLs, stay readable so the process can start |

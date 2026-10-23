@@ -2,8 +2,8 @@
 //!
 //! This enforcer confines a shell on Windows with a **restricted token plus explicit ACL
 //! grants**, following the restricted-token ladder (as Codex does); AppContainer stays out of
-//! scope. It runs the command under a token built with `CreateRestrictedToken` — deny-only
-//! SIDs for the user's broad groups, a restricting SID set that admits only what the policy
+//! scope. It runs the command under a token built with `CreateRestrictedToken` — every group
+//! that widens access deny-only, `Administrators` included, a restricting SID set that admits only what the policy
 //! allows — and grants the restricting `RESTRICTED` SID explicit access to the workspace and
 //! scratch paths the [`SandboxPolicy`] names. A Job Object kills every descendant with the
 //! call.
