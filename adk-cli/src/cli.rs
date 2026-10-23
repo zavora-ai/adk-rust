@@ -838,6 +838,19 @@ pub enum MemoryCommands {
         /// Every project, and superseded and forgotten facts too
         #[arg(long)]
         all: bool,
+        /// Only facts of this source: consolidation (written by the kernel's consolidation
+        /// tick, with its ticks), user_stated, user_confirmed, agent_inferred, tool_observed
+        /// or imported
+        #[arg(long, value_parser = [
+            "consolidation", "user_stated", "user_confirmed", "agent_inferred", "tool_observed", "imported",
+        ])]
+        source: Option<String>,
+    },
+    /// Revert a consolidation tick's status changes: what it superseded or forgot is assumed
+    /// again, and what it wrote is forgotten (spec 3.2 §7.5)
+    Undo {
+        /// Tick id, or a unique prefix of it, as `memory list --source consolidation` shows
+        tick: String,
     },
     /// Show one fact with its provenance
     Show {

@@ -80,6 +80,9 @@ struct Models {
 struct AgentExtras {
     budget: Option<RunBudget>,
     audit: Option<Arc<dyn AuditRecorder>>,
+    /// Long-term memory with an approval service: `adk-rust up`, the user's own kernel,
+    /// keeps it, where `serve` turns it off (spec 3.2 §8.1).
+    memory_with_inbox: bool,
 }
 
 /// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
@@ -275,8 +278,9 @@ impl Setup {
                 .shell_ledger(db.ledger.clone())
                 .approval_store(db.approvals.clone())
                 .goal_store(db.goals.clone());
-            // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2).
-            if self.resolved.memory && approval_service.is_none() {
+            // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2), on in
+            // `adk-rust up`, the user's own kernel (spec 3.2 §8.1).
+            if self.resolved.memory && (approval_service.is_none() || extras.memory_with_inbox) {
                 builder = builder
                     .long_term_memory(adk_harness::LongTermMemoryConfig::default())
                     .fact_store(db.facts.clone());
@@ -505,7 +509,9 @@ impl Setup {
              are recalled in later sessions. What you said is \"known\"; what the agent \
              inferred is \"assumed\" until you confirm it. {recall}\n/memory lists them, \
              /memory forget ID removes one, `adk-rust memory export` writes them out, and \
-             --no-memory turns memory off. This notice is shown once.\n",
+             --no-memory turns memory off. Under `adk-rust up` in ask or auto mode, a \
+             consolidation tick also tidies assumed facts after new sessions — `adk-rust memory \
+             undo TICK` reverts one, --no-consolidation turns it off. This notice is shown once.\n",
             dir.join("harness.db").display()
         );
         let _ = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&marker, "shown\n"));
@@ -1287,6 +1293,7 @@ pub async fn ultracode(
         AgentExtras {
             budget: Some(RunBudget::new().max_model_calls(limits.implement_model_calls)),
             audit: Some(recorder.clone()),
+            memory_with_inbox: false,
         },
     )?;
     let runtime = agent.runtime().clone();

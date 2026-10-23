@@ -148,7 +148,33 @@ pub async fn memory(command: MemoryCommands) -> Result<()> {
     };
     let by = adk_core::principal::SubjectRef::human(user.clone());
     match command {
-        MemoryCommands::List { dir, all } => {
+        MemoryCommands::List { source: Some(source), .. } if source == "consolidation" => {
+            // The ticks, newest first, then the facts they wrote (spec 3.2 §7.5).
+            let ticks = store.consolidations(APP_NAME, &user).await?;
+            if ticks.is_empty() {
+                println!(
+                    "No consolidation tick has run. `adk-rust up` runs one in ask and auto mode \
+                     once there is new material."
+                );
+            }
+            for tick in &ticks {
+                println!("{}", tick_line(tick));
+            }
+            let mut facts: Vec<MemoryFact> = store
+                .list(mine())
+                .await?
+                .into_iter()
+                .filter(|fact| fact.provenance.tick.is_some())
+                .collect();
+            facts.sort_by_key(|fact| !fact.status.is_live());
+            if !facts.is_empty() {
+                println!();
+            }
+            for fact in &facts {
+                println!("{}", fact_line(fact));
+            }
+        }
+        MemoryCommands::List { dir, all, source } => {
             let filter = if all {
                 mine()
             } else {
@@ -163,6 +189,9 @@ pub async fn memory(command: MemoryCommands) -> Result<()> {
                 }
             };
             let mut facts = store.list(filter).await?;
+            if let Some(source) = &source {
+                facts.retain(|fact| fact.provenance.source.as_str() == source);
+            }
             facts.sort_by_key(|fact| fact.status != FactStatus::Known);
             if facts.is_empty() {
                 println!(
@@ -173,6 +202,18 @@ pub async fn memory(command: MemoryCommands) -> Result<()> {
             for fact in &facts {
                 println!("{}", fact_line(fact));
             }
+        }
+        MemoryCommands::Undo { tick } => {
+            let undone =
+                adk_harness::undo_consolidation(store.as_ref(), APP_NAME, &user, tick.trim(), &by)
+                    .await?;
+            println!(
+                "undid tick {}: {} fact(s) assumed again, {} it wrote forgotten, {} kept (changed since)",
+                undone.tick_id,
+                undone.restored.len(),
+                undone.forgotten.len(),
+                undone.kept.len()
+            );
         }
         MemoryCommands::Show { id } => {
             let fact = find(store.list(mine()).await?, &id)?;
@@ -258,6 +299,26 @@ pub async fn memory(command: MemoryCommands) -> Result<()> {
 }
 
 /// One line describing `fact`: id, status, kind, date, source and session, then its text.
+/// One consolidation tick as `memory list --source consolidation` shows it: ids and counts.
+fn tick_line(tick: &adk_harness::ConsolidationRecord) -> String {
+    let mut line = format!(
+        "tick {} {} · {} superseded · {} forgotten · {} merged · {} distilled",
+        tick.tick_id,
+        tick.at.format("%Y-%m-%d %H:%M"),
+        tick.superseded().count(),
+        tick.forgotten().count(),
+        tick.merged.len(),
+        tick.distilled.len()
+    );
+    if let Some(refused) = &tick.refused {
+        line.push_str(&format!(" · refused: {}", one_line(refused, 120)));
+    }
+    if tick.undone_at.is_some() {
+        line.push_str(" · undone");
+    }
+    line
+}
+
 fn fact_line(fact: &adk_harness::MemoryFact) -> String {
     let scope = if fact.scope.project.is_some() { "project" } else { "all projects" };
     let session = &fact.provenance.session_id;

@@ -94,6 +94,11 @@ pub struct HarnessArgs {
     #[arg(long)]
     pub no_memory: bool,
 
+    /// Turn the kernel's consolidation tick off: `adk-rust up` neither distils missed
+    /// sessions nor tidies assumed facts (spec 3.2 §7.5)
+    #[arg(long)]
+    pub no_consolidation: bool,
+
     /// Declare web_fetch (on by default in this binary; spec 3.1 §7.20)
     #[arg(long, conflicts_with = "no_web")]
     pub web: bool,
@@ -482,6 +487,9 @@ pub struct ResolvedHarnessArgs {
     pub searxng_url: Option<String>,
     /// Long-term memory: on unless `--no-memory` or `--ephemeral`.
     pub memory: bool,
+    /// The kernel's consolidation tick: allowed unless `--no-consolidation`, and only with
+    /// long-term memory (spec 3.2 §7.5).
+    pub consolidation: bool,
     /// The reasoning effort per mode and role (spec 3.1 §7.23): `--effort` sets every
     /// level, else the `[effort]` tables, else the defaults.
     pub effort: EffortPolicy,
@@ -746,6 +754,7 @@ impl HarnessArgs {
             packs,
             members,
             memory: !self.no_memory && !self.ephemeral,
+            consolidation: !self.no_memory && !self.ephemeral && !self.no_consolidation,
             web,
             allow_domains,
             search,
@@ -809,6 +818,7 @@ mod tests {
                 packs: vec![],
                 members: vec![],
                 memory: true,
+                consolidation: true,
                 web: true,
                 allow_domains: vec![],
                 search: SearchArg::Provider,

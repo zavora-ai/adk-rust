@@ -24,6 +24,13 @@ use super::args::PROJECT_CONFIG_FILE;
 /// | `[kernel.proactivity] approval` | `follow_mode`, `always_ask` or `never` | Applies only when stricter |
 /// | `[kernel.proactivity] review_days` | The daily review's period | Applies only when shorter |
 /// | `[kernel.quotas] max_running`, `max_queued`, `daily_spend_cap_usd` | Every partition's quotas | Each applies only when lower |
+/// | `[kernel.consolidation] enabled` | `false` turns the tick off | `false` turns it off |
+/// | `[kernel.consolidation] min_new_sessions`, `min_new_facts`, `min_interval_minutes`, `debounce_minutes` | The tick's admission gates | Ignored, with a note |
+/// | `[kernel.consolidation] max_tokens_per_tick` | The tick's token cap | Applies only when lower |
+///
+/// The consolidation tick is on in the CLI's Ask and Auto partitions with long-term memory
+/// and off otherwise ([`enable_consolidation`](Self::enable_consolidation), spec 3.2 §13 Q1);
+/// `--no-consolidation` turns it off.
 ///
 /// The partitions and drivers directory of the table arrive with their phases; until then
 /// they are reported as unknown keys. Flags win over both files (spec 3.2 §7.5, §7.9).
@@ -67,6 +74,13 @@ pub struct KernelSettings {
     pub review_period: Option<std::time::Duration>,
     /// Every partition's quotas.
     pub quotas: adk_kernel::Quotas,
+    /// Whether the consolidation tick runs: set by
+    /// [`enable_consolidation`](Self::enable_consolidation).
+    pub consolidation: bool,
+    /// `[kernel.consolidation] enabled = false` in either file.
+    pub consolidation_disabled: bool,
+    /// `[kernel.consolidation]` overrides of the tick's defaults.
+    pub tick: TickSettings,
     /// Settings a file made that were ignored, and why.
     pub notes: Vec<String>,
 }
@@ -81,8 +95,60 @@ struct KernelTable {
     quiet_hours: Option<String>,
     proactivity: Option<ProactivityTable>,
     quotas: Option<QuotasTable>,
+    consolidation: Option<ConsolidationTable>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
+}
+
+/// `[kernel.consolidation]` overrides of the consolidation tick's defaults (spec 3.2 §7.5).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TickSettings {
+    /// Distilled sessions that admit a tick; `None` keeps 3.
+    pub min_new_sessions: Option<usize>,
+    /// New facts that admit a tick; `None` keeps 25.
+    pub min_new_facts: Option<usize>,
+    /// Least time between ticks; `None` keeps 6 h.
+    pub min_interval: Option<std::time::Duration>,
+    /// Least idle time before a tick; `None` keeps 30 min.
+    pub debounce: Option<std::time::Duration>,
+    /// The tick's token cap; `None` keeps the default.
+    pub max_tokens_per_tick: Option<u64>,
+}
+
+impl TickSettings {
+    /// The tick with these overrides.
+    pub fn tick(&self) -> adk_kernel::ConsolidationTick {
+        let mut tick = adk_kernel::ConsolidationTick::default();
+        if let Some(sessions) = self.min_new_sessions {
+            tick = tick.with_min_new_sessions(sessions);
+        }
+        if let Some(facts) = self.min_new_facts {
+            tick = tick.with_min_new_facts(facts);
+        }
+        if let Some(interval) = self.min_interval {
+            tick = tick.with_min_interval(interval);
+        }
+        if let Some(debounce) = self.debounce {
+            tick = tick.with_debounce(debounce);
+        }
+        if let Some(tokens) = self.max_tokens_per_tick {
+            tick = tick.with_max_tokens_per_tick(tokens);
+        }
+        tick
+    }
+}
+
+/// `[kernel.consolidation]` as written.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ConsolidationTable {
+    enabled: Option<bool>,
+    min_new_sessions: Option<usize>,
+    min_new_facts: Option<usize>,
+    min_interval_minutes: Option<u64>,
+    debounce_minutes: Option<u64>,
+    max_tokens_per_tick: Option<u64>,
 }
 
 /// `[kernel.proactivity]` as written.
@@ -165,7 +231,20 @@ impl KernelSettings {
         if let Some(quiet) = self.workspace_quiet_hours {
             policy = policy.with_quiet_hours(quiet);
         }
+        if self.consolidation {
+            policy = policy.with_consolidation(self.tick.tick());
+        }
         policy
+    }
+
+    /// Turns the consolidation tick on for a partition in `mode` when long-term memory and
+    /// the tick are `allowed`: on in Ask and Auto, off in ReadOnly and Plan and when a file
+    /// sets `enabled = false` (spec 3.2 §7.5, §13 Q1). Returns whether it is on.
+    pub fn enable_consolidation(&mut self, mode: adk_harness::HarnessMode, allowed: bool) -> bool {
+        self.consolidation = allowed
+            && !self.consolidation_disabled
+            && matches!(mode, adk_harness::HarnessMode::Ask | adk_harness::HarnessMode::Auto);
+        self.consolidation
     }
 
     /// `config` with these settings' proactivity, quiet hours and quotas.
@@ -232,6 +311,18 @@ impl KernelSettings {
             settings.quotas.max_queued = positive(&origin, quotas.max_queued)?;
             settings.quotas.daily_spend_cap =
                 micro_usd(&origin, "quotas.daily_spend_cap_usd", quotas.daily_spend_cap_usd)?;
+            let tick = user.consolidation.unwrap_or_default();
+            settings.consolidation_disabled = tick.enabled == Some(false);
+            let minutes = |value: Option<u64>| {
+                value.map(|minutes| std::time::Duration::from_secs(minutes * 60))
+            };
+            settings.tick = TickSettings {
+                min_new_sessions: tick.min_new_sessions,
+                min_new_facts: tick.min_new_facts,
+                min_interval: minutes(tick.min_interval_minutes),
+                debounce: minutes(tick.debounce_minutes),
+                max_tokens_per_tick: tick.max_tokens_per_tick,
+            };
             for key in user.unknown.keys() {
                 settings.notes.push(format!("{origin}: unknown key `kernel.{key}` ignored"));
             }
@@ -317,6 +408,29 @@ impl KernelSettings {
                 settings.quotas.daily_spend_cap,
                 cap,
             );
+            let tick = project.consolidation.unwrap_or_default();
+            if tick.enabled == Some(false) {
+                settings.consolidation_disabled = true;
+            }
+            settings.tick.max_tokens_per_tick = lower(
+                notes,
+                origin,
+                "consolidation.max_tokens_per_tick",
+                settings.tick.max_tokens_per_tick,
+                tick.max_tokens_per_tick,
+            );
+            for (key, set) in [
+                ("min_new_sessions", tick.min_new_sessions.is_some()),
+                ("min_new_facts", tick.min_new_facts.is_some()),
+                ("min_interval_minutes", tick.min_interval_minutes.is_some()),
+                ("debounce_minutes", tick.debounce_minutes.is_some()),
+            ] {
+                if set {
+                    notes.push(format!(
+                        "{origin}: `kernel.consolidation.{key}` ignored — when the tick runs is set in your user config"
+                    ));
+                }
+            }
             for key in project.unknown.keys() {
                 settings.notes.push(format!("{origin}: unknown key `kernel.{key}` ignored"));
             }
@@ -448,6 +562,50 @@ mod tests {
             Some(adk_kernel::ProactiveApproval::Never),
             "proactivity off"
         );
+    }
+
+    #[test]
+    fn the_tick_is_on_in_ask_and_auto_with_memory_and_a_workspace_may_turn_it_off() {
+        use adk_harness::HarnessMode;
+        let (dir, user) = files(
+            "[kernel.consolidation]\nmin_new_facts = 1\ndebounce_minutes = 0\nmax_tokens_per_tick = 9000\n",
+            "",
+        );
+        let mut settings = KernelSettings::resolve(Some(&user), dir.path()).unwrap();
+        for (mode, allowed, on) in [
+            (HarnessMode::Ask, true, true),
+            (HarnessMode::Auto, true, true),
+            (HarnessMode::Plan, true, false),
+            (HarnessMode::ReadOnly, true, false),
+            (HarnessMode::Ask, false, false),
+        ] {
+            assert_eq!(
+                settings.enable_consolidation(mode, allowed),
+                on,
+                "{mode} allowed={allowed}"
+            );
+        }
+        settings.enable_consolidation(HarnessMode::Ask, true);
+        let tick = settings.proactivity().consolidation.expect("on");
+        assert_eq!(
+            (tick.min_new_facts, tick.debounce, tick.max_tokens_per_tick),
+            (1, std::time::Duration::ZERO, 9_000)
+        );
+        assert_eq!(tick.min_new_sessions, 3, "unset keys keep the defaults");
+
+        let (dir, user) =
+            files("", "[kernel.consolidation]\nenabled = false\ndebounce_minutes = 0\n");
+        let mut settings = KernelSettings::resolve(Some(&user), dir.path()).unwrap();
+        assert!(
+            !settings.enable_consolidation(HarnessMode::Auto, true),
+            "the workspace turned it off"
+        );
+        assert!(
+            settings.notes.iter().any(|note| note.contains("debounce_minutes")),
+            "{:?}",
+            settings.notes
+        );
+        assert!(settings.proactivity().consolidation.is_none());
     }
 
     #[test]

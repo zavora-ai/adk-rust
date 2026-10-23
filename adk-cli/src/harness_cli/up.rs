@@ -54,7 +54,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         Some(dir) => dir.clone(),
         None => std::env::current_dir().context("no current directory")?,
     };
-    let settings = KernelSettings::resolve(user_config().as_deref(), &workspace)?;
+    let mut settings = KernelSettings::resolve(user_config().as_deref(), &workspace)?;
     let home = match home.or_else(|| settings.home.clone()) {
         Some(home) => home,
         None => default_home()?,
@@ -75,6 +75,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         Setup::open(model, instruction, harness, HarnessMode::Plan, store.as_deref(), Some(&home))
             .await?;
     setup.print_notes();
+    setup.memory_notice();
     for note in &settings.notes {
         println!("note: {note}");
     }
@@ -115,7 +116,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         setup.resolved.sandbox,
         None,
         Some(service),
-        AgentExtras { budget: None, audit },
+        AgentExtras { budget: None, audit, memory_with_inbox: true },
     )?);
     let runner = adk_runner::Runner::builder()
         .app_name(APP_NAME)
@@ -134,6 +135,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     if let Some(max) = settings.max_concurrent_runs {
         worker = worker.with_max_concurrent_runs(max);
     }
+    // The consolidation tick: on in Ask and Auto with long-term memory (spec 3.2 §13 Q1).
+    let tick = settings.enable_consolidation(
+        setup.resolved.mode,
+        setup.resolved.consolidation && setup.memory_on(),
+    );
     // The run store reads the system clock too, so leases, `not_before` and wake times agree.
     let config = settings.apply(
         KernelConfig::default()
@@ -143,13 +149,25 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             .with_control(control_plane())
             .with_clock(Arc::new(adk_core::SystemClock)),
     );
-    let kernel = harness
+    let mut kernel = harness
         .kernel()
         .config(config)
         .process_store(stores.processes)
         .agenda_store(stores.agenda)
-        .schedule_store(stores.schedules)
-        .build()?;
+        .schedule_store(stores.schedules);
+    if tick {
+        // The tick distils this workspace's sessions, and the kernel's own, which name none.
+        let recorded = setup.resolved.workspace.display().to_string();
+        let user = adk_core::UserId::new(setup.user.clone())?;
+        let consolidator = harness.consolidator(&user)?.with_session_filter(Arc::new(
+            move |state: &dyn adk_session::State| match state.get("harness:workspace") {
+                Some(value) => value.as_str() == Some(recorded.as_str()),
+                None => true,
+            },
+        ));
+        kernel = kernel.consolidator(adk_kernel::PartitionId::default(), Arc::new(consolidator));
+    }
+    let kernel = kernel.build()?;
     // The inbox decides through the harness's approval service, which wakes the kernel's
     // approval sleepers; the service the builder was given would not.
     let decisions = agent
@@ -185,6 +203,14 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     }
     println!("  store {}: sessions, approvals, runs, processes, agenda, schedules", stores.label);
     println!("  plans {}", setup.plans_note());
+    println!(
+        "  tick  {}",
+        if tick {
+            "consolidation on: distils missed sessions and tidies assumed facts (--no-consolidation turns it off)"
+        } else {
+            "consolidation off"
+        }
+    );
     launcher.run_serve_directly(bind.port()).await.map_err(Into::into)
 }
 
