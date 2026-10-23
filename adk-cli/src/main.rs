@@ -39,8 +39,23 @@ use clap::Parser;
 use cli::{AgentOptions, ChatArgs, Cli, Commands, Provider, ThinkingMode};
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// The stack the commands run on. Debug builds of the argument parser and the command
+/// futures outgrow the 1 MiB Windows gives a process's main thread, so every platform runs
+/// them with the 8 MiB Linux and macOS give theirs.
+const COMMAND_STACK: usize = 8 * 1024 * 1024;
+
+fn main() -> Result<()> {
+    std::thread::Builder::new()
+        .name("main".into())
+        .stack_size(COMMAND_STACK)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(run())
+        })?
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+async fn run() -> Result<()> {
     let parsed = Cli::parse();
     #[cfg(feature = "voice")]
     let voice = parsed.voice.clone();
