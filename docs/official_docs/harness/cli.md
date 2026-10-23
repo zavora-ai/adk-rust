@@ -349,17 +349,22 @@ finished tick superseded or forgot assumed again and forgets what it wrote; and
 `--no-consolidation` turns the tick off.
 
 A tick after `adk-rust up` restarted from a hard kill distils the session the kill cut off.
-With two live facts in the scope, the loss cap refuses the passes' changes, and `memory undo`
-forgets the fact the tick wrote:
+Its fact repeats one the turn remembered, and the tick supersedes the older one. `memory undo`
+makes the superseded fact assumed again and forgets the one the tick wrote:
 
 ```text
 $ adk-rust memory list --source consolidation
-tick 6096bbbd-bef0-4735-888f-877f00cce938 2026-10-23 08:35 · 0 superseded · 0 forgotten · 0 merged · 1 distilled · refused: the passes would change the status of 2 of the 2 live facts of one scope, more than max_loss_fraction 0.25
+tick bcf8b12e-ed34-4c37-b6a6-c055c58ac795 2026-10-23 15:21 · 1 superseded · 0 forgotten · 0 merged · 1 distilled
 
-01M5KYCVQZ8PCBZQC6K7CF0DYJ assumed · preference · 2026-10-23 · agent_inferred in session tick-live-1 · all projects
-    The project uses pnpm instead of npm, and tests are run using pnpm test.
-$ adk-rust memory undo 6096bbbd
-undid tick 6096bbbd-bef0-4735-888f-877f00cce938: 0 fact(s) assumed again, 1 it wrote forgotten, 0 kept (changed since)
+01M5MNNJ8B8N09ADVX8CP3WP6P assumed · project_fact · 2026-10-23 · agent_inferred in session tick-live-1 · project
+    The project exclusively uses pnpm instead of npm, and tests are executed using pnpm test.
+$ adk-rust memory list --all
+01M5MNNJ8B8N09ADVX8CP3WP6P assumed · project_fact · 2026-10-23 · agent_inferred in session tick-live-1 · project
+    The project exclusively uses pnpm instead of npm, and tests are executed using pnpm test.
+01M5MN18T9860AKG9X4Z0SV90R superseded · project_fact · 2026-10-23 · agent_inferred in session tick-live-1 · project
+    we always use pnpm, never npm, and the tests run with pnpm test
+$ adk-rust memory undo bcf8b12e
+undid tick bcf8b12e-ed34-4c37-b6a6-c055c58ac795: 1 fact(s) assumed again, 1 it wrote forgotten, 0 kept (changed since)
 ```
 
 ## Goals
