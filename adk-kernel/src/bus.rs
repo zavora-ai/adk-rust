@@ -10,8 +10,9 @@
 //! Phase 1's sinks are the control plane's SSE stream (`GET /kernel/events`, a subscriber)
 //! and the signed audit log ([`AuditSink`]) for the events that are audit records (§9.3).
 //! `Driver` events come from the MCP manager's status channel (spec 3.2 §10 T1), never
-//! polled. Channel notifiers and outbound webhooks arrive with later phases, as do the
-//! `Agenda` and `Observation` events.
+//! polled. Channel notifiers and outbound webhooks arrive with later phases. With a
+//! ledger (feature `proc`), the kernel's ledger sink writes a content-free row for every
+//! event but `Health` (spec 3.2 §7.10).
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -148,6 +149,13 @@ pub enum KernelEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    /// A baseline pass recorded an observation (spec 3.2 §7.10, feature `proc-baselines`).
+    Observation {
+        /// The observation.
+        id: String,
+        /// Its partition.
+        partition: PartitionId,
+    },
     /// The kill switch changed.
     Governance {
         /// Whether execution is frozen.
@@ -173,6 +181,7 @@ impl KernelEvent {
             Self::Agenda { .. } => "agenda",
             Self::Review(_) => "review",
             Self::Driver { .. } => "driver",
+            Self::Observation { .. } => "observation",
             Self::Governance { .. } => "governance",
             Self::Health(_) => "health",
         }

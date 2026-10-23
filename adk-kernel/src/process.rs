@@ -584,6 +584,12 @@ pub trait ProgressSource: Send + Sync {
     /// processes, so a source that detects a condition that should park a process — a goal
     /// that stopped making progress (spec 3.2 §7.3, §10 HK3) — can suspend it at once.
     fn attach(&self, _processes: ProcessHandle) {}
+
+    /// Called by [`Kernel::start`](crate::Kernel::start) with the kernel's ledger when it
+    /// keeps one (spec 3.2 §7.10, feature `proc`), so the hosted runtime writes its own
+    /// activity: the harness writes its tool events and audit records through it.
+    #[cfg(feature = "proc")]
+    fn attach_ledger(&self, _ledger: Arc<dyn crate::proc::LedgerSink>) {}
 }
 
 /// A handle on a running kernel's processes that does not keep the kernel alive, given to

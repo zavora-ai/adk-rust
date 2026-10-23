@@ -64,6 +64,9 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 | `POST /kernel/drivers/{id}/mount` | `{"manifest": "<toml>"}` answers what the mount approves; with `"confirm": true` mounts it as the caller | Yes | `drivers.mount` |
 | `POST /kernel/drivers/{id}/{unmount,restart,reapprove}` | Unmount, restart, re-approve as the caller | Yes | `drivers.unmount`, `drivers.restart`, `drivers.reapprove` |
 | `/approvals…` | The approvals inbox, unchanged; the socket and the pipe serve it too | Per inbox rules | Inbox records |
+| `GET /kernel/proc/ledger?partition=&kind=&agent=&from=&to=&after=&limit=&format=` | A page of the activity ledger, or JSONL with `format=jsonl` ([`/proc`](proc.md)) | Yes | `proc.ledger` |
+| `GET /kernel/proc/baselines`, `GET /kernel/proc/observations?partition=&since=&limit=` | Each partition's last baseline pass; the observations | Yes | — |
+| `/approvals…` | The approvals inbox, unchanged; the socket serves it too | Per inbox rules | Inbox records |
 
 On HTTP the server's own routes stay beside them: `/api/runs` (submissions land on the
 `interactive` queue), `/api/admin/freeze` (delegates to `Kernel::freeze` and reports

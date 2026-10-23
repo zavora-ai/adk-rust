@@ -10,9 +10,10 @@
 //! | [`ProcessStore`](crate::ProcessStore) | [`ProcessStoreHarness`] | [`process_store_conformance_tests!`](crate::process_store_conformance_tests) | [`process_store`] |
 //! | [`AgendaStore`](crate::AgendaStore) | [`AgendaStoreHarness`] | [`agenda_store_conformance_tests!`](crate::agenda_store_conformance_tests) | [`agenda_store`] |
 //! | [`DriverStore`](crate::drivers::DriverStore) (feature `drivers`) | `DriverStoreHarness` | `driver_store_conformance_tests!` | `driver_store` |
+//! | `proc::LedgerStore` (feature `proc`) | `LedgerStoreHarness` | `ledger_store_conformance_tests!` | `ledger_store` |
 //!
 //! In-memory and SQLite run on the PR tier; PostgreSQL and Redis run in the CI `postgres`
-//! job, `#[ignore]`d elsewhere. The partition and ledger suites arrive with their
+//! job, `#[ignore]`d elsewhere. The partition suite arrives with its
 //! stores.
 //!
 //! A harness opens the backend; each call to `open` returns a new handle over the same
@@ -47,11 +48,15 @@
 pub mod agenda_store;
 #[cfg(feature = "drivers")]
 pub mod driver_store;
+#[cfg(feature = "proc")]
+pub mod ledger_store;
 pub mod process_store;
 
 pub use agenda_store::AgendaStoreHarness;
 #[cfg(feature = "drivers")]
 pub use driver_store::DriverStoreHarness;
+#[cfg(feature = "proc")]
+pub use ledger_store::LedgerStoreHarness;
 pub use process_store::ProcessStoreHarness;
 
 /// Generates one test per [`agenda_store`] case for an [`AgendaStoreHarness`] (spec 3.2
@@ -101,6 +106,53 @@ macro_rules! agenda_store_conformance_tests {
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn agenda_store_concurrent_writers() {
             $crate::conformance::agenda_store::concurrent_writers(&$harness).await;
+        }
+    };
+}
+
+/// Generates one test per `ledger_store` case for a `LedgerStoreHarness` (spec 3.2 §7.10,
+/// §11; feature `proc`).
+///
+/// Used as [`process_store_conformance_tests!`](crate::process_store_conformance_tests) is;
+/// see the [module documentation](crate::conformance).
+#[cfg(feature = "proc")]
+#[macro_export]
+macro_rules! ledger_store_conformance_tests {
+    ($(#[$attr:meta])* harness = $harness:expr $(,)?) => {
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn ledger_store_append_round_trips() {
+            $crate::conformance::ledger_store::append_round_trips(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn ledger_store_list_filters_and_pages() {
+            $crate::conformance::ledger_store::list_filters_and_pages(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn ledger_store_records_survive_a_restart() {
+            $crate::conformance::ledger_store::records_survive_a_restart(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn ledger_store_concurrent_appends() {
+            $crate::conformance::ledger_store::concurrent_appends(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn ledger_store_sustained_appends() {
+            $crate::conformance::ledger_store::sustained_appends(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn ledger_store_observations_replace_and_order() {
+            $crate::conformance::ledger_store::observations_replace_and_order(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn ledger_store_pass_states_round_trip() {
+            $crate::conformance::ledger_store::pass_states_round_trip(&$harness).await;
         }
     };
 }

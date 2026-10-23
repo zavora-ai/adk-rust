@@ -16,15 +16,18 @@
 //! | [`driver_tool_kind`]: `EffectClass` → [`ToolKind::External`], the manifest's class over any `readOnlyHint` | §7.7, §10 HK1 |
 //! | [`DriverClasses`], [`HarnessAgentBuilder::kernel_drivers`]: a partition's drivers with their classes and the kernel's driver policy | §7.7, §7.8 |
 //! | [`HarnessRulePins`]: standing rules carried to re-approved driver declarations | §7.7, K-I14 |
+//! | The harness's activity in the kernel's content-free ledger: each run's `intent`, each tool call with its effect class and duration, and its audit records — `harness.spend`, the loop guard, approvals, denials and the rest — through `LedgerAuditTap` | §7.10 |
 
 use std::sync::{Arc, OnceLock, RwLock};
 
+use adk_core::audit_log::AuditTrail;
 use adk_core::{
     AdkError, ApprovalCall, ApprovalDecision, ApprovalDelegation, ApprovalEventKind,
     ApprovalNotification, ApprovalNotifier, ApprovalRequest, ApprovalService, ApprovalState,
     ApprovalStore, ApprovalTick, ErrorCategory, ErrorComponent, InboxPage, InboxQuery, Result,
     RunCheckpointRef, RunRecord, SubjectRef, Tool, ToolContext, ToolEffect,
 };
+use adk_kernel::proc::{LateLedgerSink, LedgerAuditTap, LedgerSink};
 use adk_kernel::{
     AgendaHandle, AgendaItem, AgendaOrigin, ApprovalWakeSource, GoalProgress, KernelBuilder,
     KernelConfig, PartitionMode, PlanRef, ProcessHandle, ProgressSource, ProposalOutcome, RuleAge,
@@ -242,6 +245,7 @@ impl Harness {
             #[cfg(feature = "observe")]
             trails: runtime.run_trails.clone(),
             processes: RwLock::new(None),
+            ledger: runtime.kernel_ledger.clone(),
         });
         runtime.goals.until.book().set_parker(progress.clone());
         let source = runtime.kernel_approvals.bind();
@@ -293,6 +297,8 @@ struct HarnessProgress {
     #[cfg(feature = "observe")]
     trails: Arc<crate::observe::RunTrails>,
     processes: RwLock<Option<ProcessHandle>>,
+    /// Where the harness writes its activity; bound to the kernel's ledger at start.
+    ledger: LateLedgerSink,
 }
 
 #[async_trait]
@@ -331,6 +337,19 @@ impl ProgressSource for HarnessProgress {
     fn attach(&self, processes: ProcessHandle) {
         *self.processes.write().unwrap_or_else(|e| e.into_inner()) = Some(processes);
     }
+
+    fn attach_ledger(&self, ledger: Arc<dyn LedgerSink>) {
+        if !self.ledger.bind(ledger) {
+            tracing::debug!("the harness already writes to a kernel's ledger; keeping it");
+        }
+    }
+}
+
+/// `trail` with every record also written to the kernel's ledger once bound (spec 3.2
+/// §7.10): the record first, then its content-free row.
+pub(crate) fn tap_audit(trail: AuditTrail, ledger: &LateLedgerSink) -> AuditTrail {
+    let tap = LedgerAuditTap::new(trail.recorder().clone(), Arc::new(ledger.clone()));
+    AuditTrail::new(Arc::new(tap)).with_failure_mode(trail.failure_mode())
 }
 
 #[async_trait]
@@ -340,6 +359,96 @@ impl GoalParker for HarnessProgress {
         match processes {
             Some(processes) => processes.suspend(run_id).await.map_err(Into::into),
             None => Ok(false),
+        }
+    }
+}
+
+/// The rows one harness run writes to the kernel's ledger (spec 3.2 §7.10): its `intent`
+/// when it starts, and each tool call when its response arrives, with the tool's effect
+/// class, the time it took and, as the subject the ledger hashes, the call's fingerprint.
+#[cfg(feature = "observe")]
+pub(crate) struct ToolEvents {
+    sink: LateLedgerSink,
+    effects: Arc<std::collections::HashMap<String, String>>,
+    agent: String,
+    trace: Option<String>,
+    started: std::collections::HashMap<String, (String, String, DateTime<Utc>)>,
+}
+
+#[cfg(feature = "observe")]
+impl ToolEvents {
+    /// The rows of a run of `agent` in `invocation`, or `None` until a kernel's ledger is
+    /// bound.
+    pub(crate) fn new(
+        sink: &LateLedgerSink,
+        effects: &Arc<std::collections::HashMap<String, String>>,
+        agent: &str,
+        invocation: &str,
+    ) -> Option<Self> {
+        sink.is_bound().then(|| Self {
+            sink: sink.clone(),
+            effects: Arc::clone(effects),
+            agent: adk_kernel::proc::label(agent, 128),
+            trace: ((1..=64).contains(&invocation.len())
+                && invocation.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+            .then(|| invocation.to_string()),
+            started: std::collections::HashMap::new(),
+        })
+    }
+
+    async fn record(&self, activity: adk_kernel::proc::Activity) {
+        let activity = match &self.trace {
+            Some(trace) => activity.with_trace_id(trace.clone()),
+            None => activity,
+        };
+        if let Err(error) = self.sink.record(activity).await {
+            tracing::warn!(error = %error, "could not write a harness ledger row");
+        }
+    }
+
+    /// The run started.
+    pub(crate) async fn intent(&self) {
+        self.record(adk_kernel::proc::Activity::new(
+            adk_kernel::proc::LedgerKind::Intent,
+            self.agent.clone(),
+        ))
+        .await;
+    }
+
+    /// Notes the calls `event` makes and writes a row for each response it carries.
+    pub(crate) async fn observe(&mut self, event: &adk_core::Event) {
+        if event.llm_response.partial {
+            return;
+        }
+        let Some(content) = &event.llm_response.content else { return };
+        for part in &content.parts {
+            match part {
+                adk_core::Part::FunctionCall { name, args, id, .. } => {
+                    if self.started.len() > 1024 {
+                        self.started.clear();
+                    }
+                    let key = id.clone().unwrap_or_else(|| name.clone());
+                    let fingerprint = adk_core::tool_call_fingerprint(name, args);
+                    self.started.insert(key, (name.clone(), fingerprint, event.timestamp));
+                }
+                adk_core::Part::FunctionResponse { function_response, id, .. } => {
+                    let key = id.clone().unwrap_or_else(|| function_response.name.clone());
+                    let Some((name, fingerprint, at)) = self.started.remove(&key) else {
+                        continue;
+                    };
+                    let mut activity = adk_kernel::proc::Activity::new(
+                        adk_kernel::proc::LedgerKind::ToolCall,
+                        self.agent.clone(),
+                    )
+                    .with_duration((event.timestamp - at).to_std().unwrap_or_default())
+                    .with_subject(fingerprint);
+                    if let Some(effect) = self.effects.get(&name) {
+                        activity = activity.with_effect(effect.clone());
+                    }
+                    self.record(activity).await;
+                }
+                _ => {}
+            }
         }
     }
 }

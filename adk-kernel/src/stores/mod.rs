@@ -21,8 +21,12 @@
 //! the same four backends: `InMemoryDriverStore`, `SqliteDriverStore`,
 //! `PostgresDriverStore` and `RedisDriverStore` (spec 3.2 §7.7).
 //!
+//! The ledger store (`proc::LedgerStore`, feature `proc`) runs on the same four backends:
+//! `InMemoryLedgerStore`, `SqliteLedgerStore`, `PostgresLedgerStore` and `RedisLedgerStore`
+//! (spec 3.2 §7.10, suite `ledger_store_conformance_tests!`).
+//!
 //! There is no file backend (§13 Q8). MongoDB, Firestore and Neo4j backends are phase 4,
-//! and the partition and ledger stores arrive with their phases.
+//! and the partition store arrives with its phase.
 
 use async_trait::async_trait;
 use chrono::NaiveDate;
@@ -52,6 +56,12 @@ mod driver_redis;
 mod driver_sql;
 #[cfg(all(feature = "drivers", feature = "sqlite"))]
 mod driver_sqlite;
+#[cfg(feature = "proc")]
+mod ledger_memory;
+#[cfg(all(feature = "proc", feature = "redis"))]
+mod ledger_redis;
+#[cfg(all(feature = "proc", any(feature = "sqlite", feature = "postgres")))]
+pub(crate) mod ledger_sql;
 mod memory;
 #[cfg(feature = "postgres")]
 mod postgres;
@@ -77,6 +87,14 @@ pub use driver_postgres::PostgresDriverStore;
 pub use driver_redis::RedisDriverStore;
 #[cfg(all(feature = "drivers", feature = "sqlite"))]
 pub use driver_sqlite::SqliteDriverStore;
+#[cfg(feature = "proc")]
+pub use ledger_memory::InMemoryLedgerStore;
+#[cfg(all(feature = "proc", feature = "redis"))]
+pub use ledger_redis::RedisLedgerStore;
+#[cfg(all(feature = "proc", feature = "postgres"))]
+pub use ledger_sql::PostgresLedgerStore;
+#[cfg(all(feature = "proc", feature = "sqlite"))]
+pub use ledger_sql::SqliteLedgerStore;
 pub use memory::InMemoryProcessStore;
 #[cfg(feature = "postgres")]
 pub use postgres::PostgresProcessStore;

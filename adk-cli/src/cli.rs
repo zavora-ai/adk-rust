@@ -549,6 +549,40 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
+    /// The kernel's self-observation: its content-free activity ledger, each partition's
+    /// baselines, and the observations it offered as questions (spec 3.2 §7.10)
+    ///
+    /// Example: `adk-rust proc`, `adk-rust proc ledger --export ledger.jsonl`, then
+    /// `cargo adk eval --ledger ledger.jsonl`.
+    #[cfg(feature = "harness")]
+    Proc {
+        /// What to show
+        #[arg(value_enum, default_value_t = ProcView::Observations)]
+        view: ProcView,
+        /// Only this partition
+        #[arg(long)]
+        partition: Option<String>,
+        /// `ledger`: only rows of these kinds, comma-separated, such as tool_call,intent
+        #[arg(long)]
+        kind: Option<String>,
+        /// `ledger`: only rows of this agent
+        #[arg(long)]
+        agent: Option<String>,
+        /// `ledger`: only rows since this instant (RFC 3339) or day (YYYY-MM-DD); default
+        /// the last 24 hours, or the whole ledger with --export
+        #[arg(long)]
+        since: Option<String>,
+        /// At most this many rows or observations
+        #[arg(long)]
+        limit: Option<usize>,
+        /// `ledger`: write every row as JSONL to this file (`-` for standard output), the
+        /// format `cargo adk eval --ledger` reads
+        #[arg(long, value_name = "FILE")]
+        export: Option<std::path::PathBuf>,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
     /// Harness sessions kept in harness.db
     #[cfg(all(feature = "harness", feature = "persist"))]
     Sessions {
@@ -789,6 +823,18 @@ pub enum DriversCommands {
         /// Driver id
         id: String,
     },
+}
+
+/// What `adk-rust proc` shows (spec 3.2 §7.10, §8.1).
+#[cfg(feature = "harness")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ProcView {
+    /// The content-free activity ledger
+    Ledger,
+    /// Each partition's 28-day baselines and deviation tests
+    Baselines,
+    /// The observations offered as questions
+    Observations,
 }
 
 /// Parses a run state as the run store names it: `waiting`, `running`, ….

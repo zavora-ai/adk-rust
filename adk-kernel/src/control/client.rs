@@ -382,6 +382,82 @@ impl ControlClient {
         self.call(Method::POST, paths::UNFREEZE.to_string(), Some(&())).await
     }
 
+    /// `GET /kernel/proc/ledger` as JSON: one page of the activity ledger (spec 3.2 §7.10).
+    /// Page on with `params.after` set to the answer's `next`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `403` without the `operator` scope.
+    #[cfg(feature = "proc")]
+    pub async fn ledger(
+        &self,
+        params: &super::api::LedgerParams,
+    ) -> Result<super::api::LedgerResponse> {
+        let mut pairs = Vec::new();
+        let mut pair = |key: &str, value: Option<String>| {
+            if let Some(value) = value {
+                pairs.push(format!("{key}={}", encode(&value)));
+            }
+        };
+        pair("partition", params.partition.as_ref().map(|p| p.as_str().to_string()));
+        pair("kind", params.kind.clone());
+        pair("agent", params.agent.clone());
+        pair("from", params.from.map(|from| from.to_rfc3339()));
+        pair("to", params.to.map(|to| to.to_rfc3339()));
+        pair("after", params.after.map(|after| after.to_string()));
+        pair("limit", params.limit.map(|limit| limit.to_string()));
+        let path = match pairs.is_empty() {
+            true => paths::PROC_LEDGER.to_string(),
+            false => format!("{}?{}", paths::PROC_LEDGER, pairs.join("&")),
+        };
+        self.call(Method::GET, path, None::<&()>).await
+    }
+
+    /// `GET /kernel/proc/baselines`: each partition's last baseline pass (spec 3.2 §7.10).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    #[cfg(feature = "proc")]
+    pub async fn baselines(&self) -> Result<Vec<crate::proc::PassState>> {
+        let answer: super::api::BaselinesResponse =
+            self.call(Method::GET, paths::PROC_BASELINES.to_string(), None::<&()>).await?;
+        Ok(answer.partitions)
+    }
+
+    /// `GET /kernel/proc/observations`: the observations the kernel offered, newest first
+    /// (spec 3.2 §7.10).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    #[cfg(feature = "proc")]
+    pub async fn observations(
+        &self,
+        params: &super::api::ObservationsParams,
+    ) -> Result<Vec<crate::proc::Observation>> {
+        let mut pairs = Vec::new();
+        if let Some(partition) = &params.partition {
+            pairs.push(format!("partition={}", encode(partition.as_str())));
+        }
+        if let Some(since) = params.since {
+            pairs.push(format!("since={since}"));
+        }
+        if let Some(limit) = params.limit {
+            pairs.push(format!("limit={limit}"));
+        }
+        let path = match pairs.is_empty() {
+            true => paths::PROC_OBSERVATIONS.to_string(),
+            false => format!("{}?{}", paths::PROC_OBSERVATIONS, pairs.join("&")),
+        };
+        let answer: super::api::ObservationsResponse =
+            self.call(Method::GET, path, None::<&()>).await?;
+        Ok(answer.observations)
+    }
+
     /// `GET /kernel/events`: the event bus from just after `after`, then live.
     ///
     /// # Errors

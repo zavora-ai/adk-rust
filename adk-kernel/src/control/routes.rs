@@ -76,6 +76,12 @@ pub(crate) trait ControlBackend: Send + Sync + 'static {
     fn drivers(&self) -> Option<crate::drivers::DriverSupervisor> {
         None
     }
+
+    /// The activity ledger (spec 3.2 §7.10); `None` on a backend without one.
+    #[cfg(feature = "proc")]
+    fn ledger(&self) -> Option<crate::proc::Ledger> {
+        None
+    }
 }
 
 #[async_trait]
@@ -168,6 +174,11 @@ impl ControlBackend for Kernel {
     fn drivers(&self) -> Option<crate::drivers::DriverSupervisor> {
         Kernel::drivers(self).cloned()
     }
+
+    #[cfg(feature = "proc")]
+    fn ledger(&self) -> Option<crate::proc::Ledger> {
+        Kernel::ledger(self).cloned()
+    }
 }
 
 /// The routes over `backend`, relative to `/api`.
@@ -194,6 +205,11 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         .route(paths::DRIVER_UNMOUNT, post(drivers::unmount))
         .route(paths::DRIVER_RESTART, post(drivers::restart))
         .route(paths::DRIVER_REAPPROVE, post(drivers::reapprove));
+    #[cfg(feature = "proc")]
+    let router = router
+        .route(paths::PROC_LEDGER, get(proc_ledger))
+        .route(paths::PROC_BASELINES, get(proc_baselines))
+        .route(paths::PROC_OBSERVATIONS, get(proc_observations));
     router.with_state(backend)
 }
 
@@ -719,4 +735,78 @@ mod drivers {
         drivers.reapprove(&id, &caller.subject().id).await?;
         Ok(Json(DriverResponse { driver: view(&drivers, &id).await? }))
     }
+}
+
+/// The ledger of `backend`, or a `Config` error naming why there is none.
+#[cfg(feature = "proc")]
+fn ledger_of(backend: &dyn ControlBackend) -> Result<crate::proc::Ledger> {
+    backend.ledger().ok_or_else(|| KernelError::Config {
+        reason: "this kernel keeps no activity ledger: build it with KernelBuilder::ledger, as \
+                 `adk-rust up` does"
+            .into(),
+    })
+}
+
+/// `GET /kernel/proc/ledger` (spec 3.2 §7.10): a page of rows as JSON, or as JSONL with the
+/// next cursor in `x-ledger-next`. Operator only, and recorded: the ledger leaves the host
+/// only through here.
+#[cfg(feature = "proc")]
+async fn proc_ledger(
+    State(backend): Backend,
+    caller: Caller,
+    Query(params): Query<super::api::LedgerParams>,
+) -> Result<Response> {
+    use super::api::{LedgerFormat, LedgerResponse};
+
+    caller.require_operator("read the activity ledger")?;
+    let ledger = ledger_of(backend.as_ref())?;
+    let format = params.format.unwrap_or_default();
+    record(backend.as_ref(), &caller, "proc.ledger", None, &[("format", json!(format))]).await?;
+    let query = params.to_query();
+    let entries = ledger.store().list(&query).await?;
+    let next = match query.limit {
+        Some(limit) if entries.len() >= limit => entries.last().map(|entry| entry.seq),
+        _ => None,
+    };
+    match format {
+        LedgerFormat::Json => Ok(Json(LedgerResponse { entries, next }).into_response()),
+        LedgerFormat::Jsonl => {
+            let mut body = String::new();
+            for entry in &entries {
+                body.push_str(&entry.to_jsonl()?);
+                body.push('\n');
+            }
+            let mut response = ([("content-type", "application/x-ndjson")], body).into_response();
+            if let Some(next) = next
+                && let Ok(value) = axum::http::HeaderValue::from_str(&next.to_string())
+            {
+                response.headers_mut().insert("x-ledger-next", value);
+            }
+            Ok(response)
+        }
+    }
+}
+
+/// `GET /kernel/proc/baselines` (spec 3.2 §7.10): each partition's last pass.
+#[cfg(feature = "proc")]
+async fn proc_baselines(
+    State(backend): Backend,
+    caller: Caller,
+) -> Result<Json<super::api::BaselinesResponse>> {
+    caller.require_operator("read the baselines")?;
+    let partitions = ledger_of(backend.as_ref())?.store().pass_states().await?;
+    Ok(Json(super::api::BaselinesResponse { partitions }))
+}
+
+/// `GET /kernel/proc/observations` (spec 3.2 §7.10): the observations offered, newest first.
+#[cfg(feature = "proc")]
+async fn proc_observations(
+    State(backend): Backend,
+    caller: Caller,
+    Query(params): Query<super::api::ObservationsParams>,
+) -> Result<Json<super::api::ObservationsResponse>> {
+    caller.require_operator("read the observations")?;
+    let observations =
+        ledger_of(backend.as_ref())?.store().observations(&params.to_query()).await?;
+    Ok(Json(super::api::ObservationsResponse { observations }))
 }

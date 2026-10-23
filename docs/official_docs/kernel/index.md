@@ -37,10 +37,11 @@ non-loopback refusal, the `--store` backend — and adds the kernel:
 | Control plane | `/api/kernel/...` on the Unix socket at the kernel home (a named pipe on Windows) and on HTTP, beside the approvals inbox |
 | Kill switch | `GovernanceControl` mirrored from the store every 250 ms, so a freeze reaches every replica within a second |
 | Audit | One signed log per replica (`kernel-<id>`), holding the harness's tool-call records and the kernel's `kernel.*` records |
+| Activity ledger | Content-free rows of what the agents did, beside the other stores, and the daily baseline pass ([`/proc`](proc.md)) |
 
 | Default | Value |
 |---|---|
-| Kernel home | `<config dir>/adk-rust`: `kernel.sock`, `harness.db`, `kernel-id`, `kernel-audit.key` |
+| Kernel home | `<config dir>/adk-rust`: `kernel.sock`, `harness.db`, `kernel-id`, `kernel-audit.key`, `ledger.key` |
 | HTTP | `127.0.0.1:8080` (`--bind`); anything but loopback needs `--auth-token` |
 | Mode | `plan`, as `serve`; `--mode ask` lets the agent edit and run commands after approval |
 | Stores | `harness.db`, shared with the REPL and `serve`; `--store postgres://…` or `redis://…` for replicas |
@@ -108,7 +109,8 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 | `sqlite` | on | `SqliteProcessStore` on the `harness.db` pool |
 | `postgres`, `redis` | off | The kernel's stores in the backend replicas share |
 | `webhooks` | on | Webhook wake sources over `WebhookIngress` |
-| `proc` | on | The live aggregates' OTel GenAI histograms |
+| `proc` | on | The content-free activity ledger and its stores; the live aggregates' OTel GenAI histograms |
+| `proc-baselines` | off | The daily baselines and observations ([`/proc`](proc.md)) |
 | `service` | on | `adk_kernel::service`: launchd, systemd and Windows service installation |
 | `conformance` | off | `process_store_conformance_tests!` for a new store backend |
 | `managed` | off | The managed form: `KernelDef` in a managed definition and one kernel per tenant ([managed form](managed.md)) |
@@ -121,3 +123,5 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 - [Running the kernel as a service](service.md): `up --install`, `--uninstall` and `--print`
   on macOS, Linux and Windows
 - [The managed form](managed.md): one kernel per tenant on the managed runtime
+- [Self-observation: `/proc`](proc.md): the content-free activity ledger, baselines and
+  observations

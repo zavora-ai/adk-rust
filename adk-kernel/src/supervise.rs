@@ -148,6 +148,9 @@ pub(crate) struct Supervision {
     /// The names of the router's [`Trigger`](crate::Trigger)s, whose runs the router
     /// records itself.
     pub(crate) triggers: BTreeSet<String>,
+    /// The daily baseline pass the maintenance tick enqueues (spec 3.2 §7.10).
+    #[cfg(feature = "proc-baselines")]
+    pub(crate) proc: Option<Arc<crate::proc::baselines::ProcRuntime>>,
 }
 
 impl std::fmt::Debug for Supervision {

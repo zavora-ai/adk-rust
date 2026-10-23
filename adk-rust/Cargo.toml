@@ -70,6 +70,8 @@ full = [
     "graph-time-travel",
     "harness",
     "harness-kernel",
+    # The kernel's daily baselines and observations (spec 3.2 §7.10, §13 Q4).
+    "adk-kernel?/proc-baselines",
 ]
 
 # Gemini Enterprise Agent Platform — every Vertex/EAP integration except

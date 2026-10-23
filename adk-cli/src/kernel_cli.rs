@@ -1,6 +1,6 @@
 //! The running kernel's commands over its control plane (spec 3.2 §7.11, §8.1): `attach`,
 //! `ps`, `top`, `kill`, `nice`, `suspend`, `resume`, `freeze`, `unfreeze`, `events`,
-//! `agenda` and `wake`, and the REPL `adk-rust` opens on a running kernel. Surfaces hold no state (K-I17): every command
+//! `agenda`, `wake` and `proc`, and the REPL `adk-rust` opens on a running kernel. Surfaces hold no state (K-I17): every command
 //! reads the kernel, and detaching changes nothing in its process table.
 
 use std::collections::HashSet;
@@ -12,7 +12,11 @@ use adk_cli::console::{ConsoleInput, ConsoleIo};
 use adk_core::{ApprovalAction, ApprovalState, ErrorCategory, Event, Part, RunState};
 use adk_harness::escape_control;
 use adk_kernel::control::ControlClient;
-use adk_kernel::control::api::{AgendaQuery, AttachRequest, ProcessesQuery, SpawnRequest};
+use adk_kernel::control::api::{
+    AgendaQuery, AttachRequest, LedgerParams, ObservationsParams, ProcessesQuery, SpawnRequest,
+};
+use adk_kernel::proc::baselines::BaselineSnapshot;
+use adk_kernel::proc::{Direction, Phrasing};
 use adk_kernel::{
     AgendaItem, AgendaState, AgendaStateKind, EventRecord, KernelEvent, PartitionId, Process,
     ProcessKind, QueueClass, Suspension, WakeSet,
@@ -21,7 +25,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 
-use crate::cli::{DriversCommands, KernelTarget};
+use crate::cli::{DriversCommands, KernelTarget, ProcView};
 use adk_kernel::drivers::{DriverIsolation, DriverManifest, DriverProposal, DriverView};
 
 /// The target a turn sent from the REPL runs: the harness, as `adk-rust up` registers it.
@@ -1004,6 +1008,9 @@ fn event_line(record: &EventRecord) -> String {
             report.frozen.len(),
             age(report.review_period)
         ),
+        KernelEvent::Observation { id, partition } => {
+            format!("{partition} observation {id}: `adk-rust proc` shows its question")
+        }
         other => other.name().to_string(),
     };
     format!(
@@ -1134,4 +1141,217 @@ mod tests {
         assert!(shown.contains("suspended: freeze · goal 3/10, check exit 1"), "{shown}");
         assert!(shown.contains("background"), "{shown}");
     }
+}
+
+/// What `adk-rust proc` selects (spec 3.2 §7.10, §8.1).
+#[derive(Debug, Clone, Default)]
+pub struct ProcQuery {
+    pub partition: Option<String>,
+    pub kind: Option<String>,
+    pub agent: Option<String>,
+    pub since: Option<String>,
+    pub limit: Option<usize>,
+    pub export: Option<PathBuf>,
+}
+
+/// `adk-rust proc [ledger|baselines|observations]` (spec 3.2 §7.10, §8.1).
+pub async fn proc(target: &KernelTarget, view: ProcView, query: ProcQuery) -> Result<()> {
+    let client = client(target).await?;
+    match view {
+        ProcView::Ledger => proc_ledger(&client, query).await,
+        ProcView::Baselines => proc_baselines(&client, query.partition.as_deref()).await,
+        ProcView::Observations => {
+            let params = ObservationsParams {
+                partition: query.partition.map(PartitionId::from),
+                limit: Some(query.limit.unwrap_or(20)),
+                ..ObservationsParams::default()
+            };
+            let observations = client.observations(&params).await?;
+            if observations.is_empty() {
+                println!(
+                    "No observations. The kernel offers one when a partition's routine changes \
+                     for long enough against its 28-day baseline."
+                );
+            }
+            for observation in observations {
+                let worded = match &observation.phrasing {
+                    Phrasing::Model { model } => format!("worded by {model}"),
+                    _ => "worded by the kernel".to_string(),
+                };
+                println!(
+                    "{}  {}  {}",
+                    observation.as_of,
+                    observation.partition,
+                    escape_control(&observation.question)
+                );
+                for dimension in &observation.dimensions {
+                    let arrow = match dimension.direction {
+                        Direction::Higher => "up",
+                        _ => "down",
+                    };
+                    let days = if dimension.days == 1 { "day" } else { "days" };
+                    println!(
+                        "    {} {arrow} since {} ({} {days})",
+                        dimension.dimension, dimension.since, dimension.days
+                    );
+                }
+                println!("    {worded}; id {}", observation.id);
+            }
+            Ok(())
+        }
+    }
+}
+
+/// The instant `--since` names: an RFC 3339 instant, or the start of a day in UTC.
+fn since(value: &str) -> Result<DateTime<Utc>> {
+    if let Ok(instant) = DateTime::parse_from_rfc3339(value) {
+        return Ok(instant.with_timezone(&Utc));
+    }
+    let day = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .with_context(|| format!("--since {value}: use an RFC 3339 instant or YYYY-MM-DD"))?;
+    Ok(day.and_time(chrono::NaiveTime::MIN).and_utc())
+}
+
+async fn proc_ledger(client: &ControlClient, query: ProcQuery) -> Result<()> {
+    let from = match (&query.since, &query.export) {
+        (Some(value), _) => Some(since(value)?),
+        (None, Some(_)) => None,
+        (None, None) => Some(Utc::now() - chrono::Duration::hours(24)),
+    };
+    let mut params = LedgerParams {
+        partition: query.partition.map(PartitionId::from),
+        kind: query.kind,
+        agent: query.agent,
+        from,
+        ..LedgerParams::default()
+    };
+    if let Some(path) = query.export {
+        use std::io::Write as _;
+        let mut out: Box<dyn std::io::Write> = if path.as_os_str() == "-" {
+            Box::new(std::io::stdout().lock())
+        } else {
+            Box::new(std::io::BufWriter::new(
+                std::fs::File::create(&path)
+                    .with_context(|| format!("could not create {}", path.display()))?,
+            ))
+        };
+        params.limit = Some(LedgerParams::MAX_LIMIT);
+        let mut rows = 0_usize;
+        loop {
+            let page = client.ledger(&params).await?;
+            for entry in &page.entries {
+                writeln!(out, "{}", entry.to_jsonl()?)?;
+            }
+            rows += page.entries.len();
+            if query.limit.is_some_and(|limit| rows >= limit) {
+                break;
+            }
+            match page.next {
+                Some(next) => params.after = Some(next),
+                None => break,
+            }
+        }
+        out.flush()?;
+        if path.as_os_str() != "-" {
+            eprintln!(
+                "exported {rows} ledger rows to {}; check them with `cargo adk eval --ledger {}`",
+                path.display(),
+                path.display()
+            );
+        }
+        return Ok(());
+    }
+    params.limit = Some(query.limit.unwrap_or(100));
+    let page = client.ledger(&params).await?;
+    if page.entries.is_empty() {
+        println!("No ledger rows in that window.");
+        return Ok(());
+    }
+    println!(
+        "{:<26}  {:<10}  {:<12}  {:<16}  {:>8}  AGENT",
+        "TIME", "PARTITION", "KIND", "EFFECT", "MS"
+    );
+    for entry in &page.entries {
+        println!(
+            "{:<26}  {:<10}  {:<12}  {:<16}  {:>8}  {}",
+            entry.ts.format("%Y-%m-%d %H:%M:%S %:z"),
+            entry.partition,
+            entry.kind,
+            entry.effect.as_deref().unwrap_or("-"),
+            entry.duration_ms.map_or_else(|| "-".to_string(), |ms| ms.to_string()),
+            entry.agent
+        );
+    }
+    if page.next.is_some() {
+        println!("… more rows: raise --limit, or write them all with --export FILE");
+    }
+    Ok(())
+}
+
+/// A dimension's value as it reads: minutes of the day as a time, others as numbers.
+fn dimension_value(dimension: &str, value: f64) -> String {
+    if dimension.ends_with("_minute") {
+        let minutes = value.round().clamp(0.0, 1439.0) as u32;
+        format!("{:02}:{:02}", minutes / 60, minutes % 60)
+    } else if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.1}")
+    }
+}
+
+async fn proc_baselines(client: &ControlClient, partition: Option<&str>) -> Result<()> {
+    let states = client.baselines().await?;
+    let states: Vec<_> = states
+        .into_iter()
+        .filter(|state| partition.is_none_or(|partition| state.partition.as_str() == partition))
+        .collect();
+    if states.is_empty() {
+        println!("No baselines yet: the kernel tests each day once it has ended.");
+        return Ok(());
+    }
+    for state in states {
+        println!("{} — tested through {}", state.partition, state.last_day);
+        let Ok(snapshot) = serde_json::from_value::<BaselineSnapshot>(state.baselines) else {
+            println!("    (no baselines recorded)");
+            continue;
+        };
+        println!(
+            "    {:<28}  {:<8}  {:>8}  {:>7}  {:>8}  {:>8}  STATE",
+            "DIMENSION", "DAYS", "MEDIAN", "MAD", "LAST 7", "LAST 14"
+        );
+        for test in &snapshot.dimensions {
+            for class in &test.classes {
+                let Some(baseline) = class.baseline else { continue };
+                let window = |days: u32| {
+                    class
+                        .windows
+                        .iter()
+                        .find(|window| window.days == days)
+                        .and_then(|window| window.recent_median)
+                        .map_or_else(
+                            || "-".to_string(),
+                            |value| dimension_value(&test.dimension, value),
+                        )
+                };
+                let state = if class.deviating {
+                    "changed"
+                } else if !test.warm_up.is_complete() {
+                    "learning"
+                } else {
+                    "usual"
+                };
+                println!(
+                    "    {:<28}  {:<8}  {:>8}  {:>7}  {:>8}  {:>8}  {state}",
+                    test.dimension,
+                    format!("{:?}", class.class).to_lowercase(),
+                    dimension_value(&test.dimension, baseline.median),
+                    format!("{:.1}", baseline.mad),
+                    window(7),
+                    window(14)
+                );
+            }
+        }
+    }
+    Ok(())
 }

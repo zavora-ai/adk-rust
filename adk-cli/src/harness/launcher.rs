@@ -784,7 +784,9 @@ async fn serve_resident(
     println!("  mode {} · shell {}", info.default_mode, terminal_safe(&info.isolation.to_string()));
     let queues: Vec<&str> = config.queues.iter().map(adk_kernel::QueueClass::as_str).collect();
     println!("  queues {}", queues.join(", "));
-    println!("  control: adk-rust ps | top | attach | kill | suspend | resume | freeze | events");
+    println!(
+        "  control: adk-rust ps | top | attach | kill | suspend | resume | freeze | events | proc"
+    );
     println!("  approvals: GET /api/approvals, POST /api/approvals/{{id}}/decide");
     println!("Press Ctrl+C to drain and stop\n");
     let server = tokio::spawn(async move {

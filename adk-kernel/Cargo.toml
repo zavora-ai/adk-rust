@@ -12,7 +12,7 @@ keywords = ["adk", "agent", "kernel", "durable", "supervisor"]
 categories = ["asynchronous", "development-tools"]
 
 # Feature set of spec 3.2 §7.1. Features of later phases are declared empty until their
-# phase lands: `proc-baselines` (phase 4), `channels` (phase 5).
+# phase lands: `channels` (phase 5).
 [features]
 default = ["sqlite", "webhooks", "drivers", "service", "proc"]
 # SQLite backends for the kernel-owned stores, on the pool of `harness.db` with distinct
@@ -39,11 +39,13 @@ drivers = [
 # launchd, systemd and Windows service installation (spec 3.2 §7.12, §10 W3): the `service`
 # module, with `windows-service` on Windows.
 service = ["dep:windows-service"]
-# The live `ps`/`top` aggregates' OTel GenAI histograms (spec 3.2 §7.10, §13 Q4); the
-# content-free ledger joins it in phase 4.
-proc = ["dep:adk-telemetry", "dep:opentelemetry"]
-# 28-day baselines over `adk-eval`'s ledger statistics (spec 3.2 §7.10, phase 4); empty until then.
-proc-baselines = ["proc"]
+# The content-free activity ledger with its subject HMACs, and the live `ps`/`top`
+# aggregates' OTel GenAI histograms (spec 3.2 §7.10, §13 Q4).
+proc = ["dep:adk-telemetry", "dep:opentelemetry", "dep:hmac", "dep:hex", "dep:getrandom"]
+# The daily 28-day baselines and observations over `adk-eval`'s ledger statistics (spec 3.2
+# §7.10, §13 Q4). The only edge to `adk-eval`, which pulls `adk-runner`, `adk-session` and
+# `adk-model` into a build.
+proc-baselines = ["proc", "dep:adk-eval"]
 # Channel wake sources (spec 3.2 §7.4, phase 5); empty until then.
 channels = []
 # The managed form (spec 3.2 §7.13, §10 M1): `KernelDef` under the `adk.kernel` metadata
@@ -58,6 +60,7 @@ adk-agent = { workspace = true, features = ["ambient"] }
 adk-runner.workspace = true
 adk-session.workspace = true
 adk-server = { workspace = true, features = ["background", "approvals"] }
+adk-eval = { workspace = true, optional = true }
 adk-telemetry = { workspace = true, optional = true }
 adk-tool = { workspace = true, optional = true }
 adk-sandbox = { workspace = true, optional = true }
@@ -69,6 +72,11 @@ chrono.workspace = true
 dirs = "7"
 fred = { version = "10", optional = true, features = ["i-scripts"] }
 futures.workspace = true
+# The ledger key's random bytes (feature `proc`).
+getrandom = { version = "0.3", optional = true }
+hex = { workspace = true, optional = true }
+# The ledger's subject HMACs (feature `proc`).
+hmac = { version = "0.12", optional = true }
 # The control-plane client over the Unix socket, and the named-pipe server on Windows.
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1", "server"] }

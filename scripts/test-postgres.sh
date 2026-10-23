@@ -73,6 +73,7 @@ suite "adk-graph" -p adk-graph --features postgres --test checkpointer_conforman
 suite "adk-kernel" -p adk-kernel --features postgres,redis --test process_store_postgres \
     --test agenda_store_postgres \
     --test driver_store_postgres
+    --test ledger_store_postgres
 
 suite "adk-auth" -p adk-auth --features postgres-audit --test audit_postgres_tests
 

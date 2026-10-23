@@ -32,7 +32,7 @@ team-a2a = ["team", "dep:adk-server"]
 ambient = ["runner", "adk-agent/ambient"]
 # The Agent Kernel glue (spec 3.2 §10 HK1, HK3, §13 Q6): `Harness::kernel`, the partition
 # mode mapping, goal progress and stall parking. Opt-in; adk-cli's `harness` enables it.
-kernel = ["runner", "dep:adk-kernel"]
+kernel = ["runner", "dep:adk-kernel", "adk-kernel/proc"]
 # Plan graph and goal engine (spec 3.1 §7.11).
 graph = ["dep:adk-graph", "adk-graph/time-travel", "adk-graph/action"]
 # OS sandbox for the shell (spec 3.1 §7.9).

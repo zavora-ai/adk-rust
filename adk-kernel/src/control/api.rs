@@ -447,3 +447,179 @@ pub struct UnmountDriverResponse {
     /// Whether a driver of that id was mounted.
     pub unmounted: bool,
 }
+
+/// How `GET /kernel/proc/ledger` answers (spec 3.2 §7.10, §7.11).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::control::api::LedgerFormat;
+///
+/// assert_eq!(serde_json::to_value(LedgerFormat::Jsonl).unwrap(), "jsonl");
+/// ```
+#[cfg(feature = "proc")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LedgerFormat {
+    /// A [`LedgerResponse`] page.
+    #[default]
+    Json,
+    /// One row per line, the JSONL `cargo adk eval --ledger` reads
+    /// (`application/x-ndjson`); the next page's cursor is the `x-ledger-next` header.
+    Jsonl,
+}
+
+/// `GET /kernel/proc/ledger` query: `adk-rust proc ledger` (spec 3.2 §7.10, §7.11, §8.1).
+///
+/// `limit` defaults to [`LedgerParams::DEFAULT_LIMIT`] and is capped at
+/// [`LedgerParams::MAX_LIMIT`]; page on with `after` set to the last row's `seq`.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::control::api::LedgerParams;
+///
+/// let params = LedgerParams { kind: Some("tool_call,intent".into()), after: Some(40), ..LedgerParams::default() };
+/// let query = params.to_query();
+/// assert_eq!(query.kinds, ["tool_call", "intent"]);
+/// assert_eq!(query.limit, Some(LedgerParams::DEFAULT_LIMIT));
+/// ```
+#[cfg(feature = "proc")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerParams {
+    /// Only rows of this partition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition: Option<PartitionId>,
+    /// Only rows of these kinds, comma-separated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Only rows of this agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Only rows at or after this instant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<DateTime<Utc>>,
+    /// Only rows before this instant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<DateTime<Utc>>,
+    /// Only rows after this sequence number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<u64>,
+    /// At most this many rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    /// JSON page or JSONL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<LedgerFormat>,
+}
+
+#[cfg(feature = "proc")]
+impl LedgerParams {
+    /// Rows a page holds when the query names no limit.
+    pub const DEFAULT_LIMIT: usize = 500;
+    /// Most rows one page holds.
+    pub const MAX_LIMIT: usize = 5_000;
+
+    /// The store query the parameters select.
+    pub fn to_query(&self) -> crate::proc::LedgerQuery {
+        let mut query = crate::proc::LedgerQuery::default()
+            .limit(self.limit.unwrap_or(Self::DEFAULT_LIMIT).clamp(1, Self::MAX_LIMIT));
+        if let Some(partition) = &self.partition {
+            query = query.partition(partition.clone());
+        }
+        for kind in self.kind.iter().flat_map(|kinds| kinds.split(',')) {
+            let kind = kind.trim();
+            if !kind.is_empty() {
+                query = query.kind(kind);
+            }
+        }
+        if let Some(agent) = &self.agent {
+            query = query.agent(agent.clone());
+        }
+        if let Some(from) = self.from {
+            query = query.from(from);
+        }
+        if let Some(to) = self.to {
+            query = query.to(to);
+        }
+        if let Some(after) = self.after {
+            query = query.after(after);
+        }
+        query
+    }
+}
+
+/// `GET /kernel/proc/ledger` answer.
+#[cfg(feature = "proc")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerResponse {
+    /// The rows, in sequence order.
+    pub entries: Vec<crate::proc::LedgerEntry>,
+    /// The cursor of the next page, when this one is full.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<u64>,
+}
+
+/// `GET /kernel/proc/baselines` answer: each partition's last pass (spec 3.2 §7.10).
+#[cfg(feature = "proc")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaselinesResponse {
+    /// One state per partition the pass has tested, by partition; its `baselines` holds
+    /// every dimension's baseline and deviation test on `lastDay`.
+    pub partitions: Vec<crate::proc::PassState>,
+}
+
+/// `GET /kernel/proc/observations` query (spec 3.2 §7.10, §7.11).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::control::api::ObservationsParams;
+///
+/// let params = ObservationsParams { limit: Some(3), ..ObservationsParams::default() };
+/// assert_eq!(params.to_query().limit, Some(3));
+/// ```
+#[cfg(feature = "proc")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObservationsParams {
+    /// Only observations of this partition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition: Option<PartitionId>,
+    /// Only observations of this day or later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<chrono::NaiveDate>,
+    /// At most this many.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+#[cfg(feature = "proc")]
+impl ObservationsParams {
+    /// The store query the parameters select.
+    pub fn to_query(&self) -> crate::proc::ObservationQuery {
+        let mut query = crate::proc::ObservationQuery::default();
+        if let Some(partition) = &self.partition {
+            query = query.partition(partition.clone());
+        }
+        if let Some(since) = self.since {
+            query = query.since(since);
+        }
+        if let Some(limit) = self.limit {
+            query = query.limit(limit);
+        }
+        query
+    }
+}
+
+/// `GET /kernel/proc/observations` answer.
+#[cfg(feature = "proc")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObservationsResponse {
+    /// The observations, newest day first.
+    pub observations: Vec<crate::proc::Observation>,
+}

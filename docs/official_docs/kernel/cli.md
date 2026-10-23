@@ -19,6 +19,7 @@ own (spec 3.2 §8.1, K-I17).
 | `adk-rust wake --file GLOB\|--cron EXPR\|--webhook NAME -- "task"` | A sleeping process that runs the task when it wakes |
 | `adk-rust freeze [--reason R]` / `unfreeze` | The kill switch, on every replica |
 | `adk-rust events [--follow] [--after CURSOR] [--json]` | The event bus |
+| `adk-rust proc [ledger\|baselines\|observations]` | The activity ledger (`--export FILE` for JSONL), each partition's baselines, the observations ([`/proc`](proc.md)) |
 | `adk-rust goal TEXT --until CMD` | With a kernel running, enqueues the goal on its `background` queue and follows it |
 | `adk-rust drivers list\|mount FILE [--yes]\|unmount ID\|restart ID\|reapprove ID` | The kernel's [drivers](drivers.md): MCP servers it supervises under the manifests you mounted |
 
@@ -54,14 +55,14 @@ adk-rust up --home /srv/kernel                     # socket and harness.db under
 
 ```text
 $ adk-rust up --mode ask
-  store harness.db: sessions, approvals, runs, processes, schedules
+  store harness.db: sessions, approvals, runs, processes, schedules, the activity ledger
   plans checkpointed in harness.db
 ADK-Rust kernel up on http://127.0.0.1:8080
   socket /Users/ana/Library/Application Support/adk-rust/kernel.sock
   home /Users/ana/Library/Application Support/adk-rust
   mode ask · shell host (full user permissions, network)
   queues interactive, background, maintenance
-  control: adk-rust ps | top | attach | kill | suspend | resume | freeze | events
+  control: adk-rust ps | top | attach | kill | suspend | resume | freeze | events | proc
   approvals: GET /api/approvals, POST /api/approvals/{id}/decide
 Press Ctrl+C to drain and stop
 ```

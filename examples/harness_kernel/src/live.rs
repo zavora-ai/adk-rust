@@ -1,6 +1,7 @@
-//! K3, K4, K5 and K6 on a live model through the `adk-rust up` binary (spec 3.2 §11): the kernel
-//! runs as its own process, and this one reaches it over the control plane like any other
-//! surface. Keys come from the environment the binary inherits and are never printed.
+//! K3, K4, K5, K6 and K10 on a live model through the `adk-rust up` binary (spec 3.2 §11):
+//! the kernel runs as its own process, and this one reaches it over the control plane like
+//! any other surface. Keys come from the environment the binary inherits and are never
+//! printed.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -33,6 +34,7 @@ pub async fn run(name: &str, bin: &Path, provider: &str, model: &str) -> Result<
         "live_k4_a_proposal_waits_for_approval" => k4(bin, provider, model).await,
         "live_k6_supervised_driver" => k6(bin, provider, model).await,
         "live_parked_question_after_restart" => parked_question(bin, provider, model).await,
+        "live_k10_proc" => k10(bin, provider, model).await,
         other => bail!("unknown scenario {other}"),
     }
 }
@@ -48,8 +50,25 @@ struct Up {
 
 impl Up {
     async fn start(bin: &Path, provider: &str, model: &str, mode: &str) -> Result<Self> {
+        Self::start_seeded(bin, provider, model, mode, |_| async { Ok(()) }).await
+    }
+
+    /// Starts `adk-rust up` after `seed` wrote what the kernel home holds before it.
+    async fn start_seeded<F, Fut>(
+        bin: &Path,
+        provider: &str,
+        model: &str,
+        mode: &str,
+        seed: F,
+    ) -> Result<Self>
+    where
+        F: FnOnce(PathBuf) -> Fut,
+        Fut: std::future::Future<Output = Result<()>>,
+    {
         let root = tempfile::tempdir()?;
         let (home, workspace) = (root.path().join("kernel"), root.path().join("ws"));
+        std::fs::create_dir_all(&home)?;
+        seed(home.clone()).await?;
         std::fs::create_dir_all(&workspace)?;
         std::fs::write(workspace.join("README.md"), "a project\n")?;
         Self::boot(bin, provider, model, mode, root, home, workspace).await
@@ -638,4 +657,183 @@ async fn futures_next(
 ) -> Option<adk_kernel::Result<adk_kernel::EventRecord>> {
     use futures::StreamExt as _;
     events.next().await
+}
+
+/// Six weeks of a person's working days ending yesterday, written to the ledger in
+/// `home`'s `harness.db` under the key in `home`, as a kernel that ran them would have: four
+/// weeks ending around 17:30 with twelve tool calls, then two of late finishes ending around
+/// 20:30 with twenty-four.
+async fn seed_routine(home: PathBuf) -> Result<()> {
+    use adk_kernel::proc::{Activity, Ledger, LedgerKey, LedgerKind, LedgerSink};
+    use chrono::{Datelike as _, Days, Local, TimeZone as _, Weekday};
+
+    let url = format!("sqlite://{}?mode=rwc", home.join("harness.db").display());
+    let sessions = adk_session::SqliteSessionService::new(&url).await?;
+    sessions.migrate().await?;
+    let store =
+        std::sync::Arc::new(adk_kernel::proc::SqliteLedgerStore::new(sessions.pool().clone()));
+    store.migrate().await?;
+    let ledger = Ledger::new(store, LedgerKey::load_or_create(&home.join(LedgerKey::FILE))?);
+    let agent = "urn:adk:agent:adk-rust/harness";
+    let yesterday = Local::now().date_naive().pred_opt().context("a yesterday")?;
+    for back in (0..42u64).rev() {
+        let day = yesterday - Days::new(back);
+        let late = back < 14;
+        let (calls, last) = match day.weekday() {
+            Weekday::Sat | Weekday::Sun => (2, 11 * 60 + 30),
+            _ if late => (24, 20 * 60 + 30),
+            _ => (12, 17 * 60 + 30),
+        };
+        let at = |minute: u32| -> Result<chrono::DateTime<chrono::Utc>> {
+            let time = day.and_hms_opt(minute / 60, minute % 60, 0).context("a time")?;
+            Ok(Local.from_local_datetime(&time).earliest().context("a local time")?.to_utc())
+        };
+        let first = 9 * 60;
+        ledger.record(Activity::new(LedgerKind::Intent, agent).at(at(first)?)).await?;
+        for call in 1..=calls {
+            let minute = first + (last - first) * call / (calls + 1);
+            ledger
+                .record(
+                    Activity::new(LedgerKind::ToolCall, agent)
+                        .with_effect("read_only")
+                        .with_duration(Duration::from_millis(120 + u64::from(call) * 7))
+                        .with_subject(format!("read_file\u{1f}{{\"path\":\"notes/{day}.md\"}}"))
+                        .at(at(minute)?),
+                )
+                .await?;
+        }
+        ledger.record(Activity::new(LedgerKind::Intent, agent).at(at(last)?)).await?;
+    }
+    Ok(())
+}
+
+/// K10 live (spec 3.2 §5, §7.10): the kernel keeps a content-free ledger of a live turn,
+/// runs the pass of the day that ended over six weeks of history, and the live model words
+/// what the deterministic test found as a neutral question; the ledger exports as the JSONL
+/// `cargo adk eval --ledger` reads.
+async fn k10(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
+    use adk_kernel::control::api::{LedgerParams, ObservationsParams};
+    use adk_kernel::proc::{LedgerEntry, Phrasing, is_neutral_question};
+
+    let mut checks = Checks::default();
+    let up = Up::start_seeded(bin, provider, model, "ask", seed_routine).await?;
+    let client = up.client().await?;
+
+    // A live turn: its activity reaches the ledger, its content does not.
+    let request = SpawnRequest::new(
+        "adk-rust",
+        json!({ "text": "Use the read_file tool to read README.md, then say in one short sentence what it describes." }),
+    )
+    .with_session_id("k10-live");
+    let pid = client.spawn(&request).await?.meta.pid;
+    let finished = until(Duration::from_secs(180), || {
+        let client = client.clone();
+        let pid = pid.clone();
+        async move {
+            let processes = client.processes(&ProcessesQuery::default()).await?;
+            Ok(processes
+                .iter()
+                .any(|process| process.meta.pid == pid && process.run.state.is_terminal()))
+        }
+    })
+    .await?;
+    checks.check("the live turn completed", finished);
+    let today = chrono::Utc::now() - chrono::Duration::hours(1);
+    let rows = until(Duration::from_secs(10), || {
+        let client = client.clone();
+        async move {
+            let page = client
+                .ledger(&LedgerParams { from: Some(today), ..LedgerParams::default() })
+                .await?;
+            let kinds: Vec<&str> = page.entries.iter().map(|row| row.kind.as_str()).collect();
+            Ok(["intent", "tool_call", "turn", "process"].iter().all(|kind| kinds.contains(kind)))
+        }
+    })
+    .await?;
+    checks.check("the turn's intent, tool call, turn and process rows are in the ledger", rows);
+    let page =
+        client.ledger(&LedgerParams { from: Some(today), ..LedgerParams::default() }).await?;
+    let tool = page.entries.iter().find(|row| row.kind == "tool_call");
+    checks.check(
+        "its tool call has an effect class, a duration and a hashed subject",
+        tool.is_some_and(|row| {
+            row.effect.as_deref() == Some("read_only")
+                && row.duration_ms.is_some()
+                && row.subject_hash.as_deref().is_some_and(|hash| hash.starts_with("hmac-sha256:"))
+        }),
+    );
+    let lines: Vec<String> =
+        page.entries.iter().map(LedgerEntry::to_jsonl).collect::<Result<_, _>>()?;
+    checks.check(
+        "no row holds the prompt, the file or the answer",
+        lines.iter().all(|line| {
+            !line.contains("README") && !line.contains("a project") && !line.contains("describes")
+        }),
+    );
+
+    // The day that ended: the pass over six weeks, worded by the live model.
+    let observed = until(Duration::from_secs(120), || {
+        let client = client.clone();
+        async move { Ok(!client.observations(&ObservationsParams::default()).await?.is_empty()) }
+    })
+    .await?;
+    checks.check("the pass of the day that ended recorded an observation", observed);
+    let observations = client.observations(&ObservationsParams::default()).await?;
+    for observation in &observations {
+        println!("    {} [{:?}] {}", observation.as_of, observation.phrasing, observation.question);
+    }
+    checks.check(
+        "every observation is a neutral question",
+        !observations.is_empty()
+            && observations.iter().all(|observation| is_neutral_question(&observation.question)),
+    );
+    let worded = observations
+        .iter()
+        .any(|observation| matches!(observation.phrasing, Phrasing::Model { .. }));
+    if !worded {
+        // Why the kernel fell back to its template, from its own log.
+        for line in up.log().lines().filter(|line| line.contains("observation")) {
+            println!("    log: {line}");
+        }
+    }
+    checks.check("the live model worded it", worded);
+    checks.check(
+        "it names the late finishes",
+        observations.iter().any(|observation| {
+            observation
+                .dimensions
+                .iter()
+                .any(|dimension| dimension.dimension == "activity.last_minute")
+        }),
+    );
+
+    // The export, through the binary as a person runs it.
+    let export = up.root.path().join("ledger.jsonl");
+    let status = Command::new(bin)
+        .args(["proc", "ledger", "--home"])
+        .arg(&up.home)
+        .arg("--export")
+        .arg(&export)
+        .env("RUST_LOG", "warn")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    let exported = std::fs::read_to_string(&export).unwrap_or_default();
+    let parsed: Vec<LedgerEntry> =
+        exported.lines().filter_map(|line| serde_json::from_str(line).ok()).collect();
+    checks.check(
+        "`adk-rust proc ledger --export` writes every row as JSONL",
+        status.success() && parsed.len() == exported.lines().count() && parsed.len() > 400,
+    );
+    let shown = Command::new(bin)
+        .args(["proc", "--home"])
+        .arg(&up.home)
+        .env("RUST_LOG", "warn")
+        .output()?;
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    checks.check(
+        "`adk-rust proc` offers the observation's question",
+        observations.iter().any(|observation| shown.contains(&observation.question)),
+    );
+    Ok(checks)
 }

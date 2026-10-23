@@ -44,6 +44,8 @@ struct Fake {
     asked_after: Mutex<Vec<Option<u64>>>,
     #[cfg(feature = "drivers")]
     drivers: Option<crate::drivers::DriverSupervisor>,
+    #[cfg(feature = "proc")]
+    ledger: crate::proc::Ledger,
 }
 
 impl Fake {
@@ -63,6 +65,11 @@ impl Fake {
             asked_after: Mutex::new(Vec::new()),
             #[cfg(feature = "drivers")]
             drivers: None,
+            #[cfg(feature = "proc")]
+            ledger: crate::proc::Ledger::new(
+                Arc::new(crate::proc::InMemoryLedgerStore::new()),
+                crate::proc::LedgerKey::from_bytes([4; 32]),
+            ),
         })
     }
 
@@ -248,6 +255,11 @@ impl ControlBackend for Fake {
     #[cfg(feature = "drivers")]
     fn drivers(&self) -> Option<crate::drivers::DriverSupervisor> {
         self.drivers.clone()
+    }
+
+    #[cfg(feature = "proc")]
+    fn ledger(&self) -> Option<crate::proc::Ledger> {
+        Some(self.ledger.clone())
     }
 }
 
@@ -1058,5 +1070,108 @@ async fn a_driver_mounts_only_once_the_operator_confirms_the_proposal() {
     assert!(operator.unmount_driver("email").await.unwrap());
     assert!(!operator.unmount_driver("email").await.unwrap());
     assert!(viewer.drivers().await.unwrap().is_empty());
+    plane.shutdown().await.unwrap();
+}
+
+#[cfg(feature = "proc")]
+#[tokio::test]
+async fn the_proc_routes_page_and_export_the_ledger_for_an_operator_only() {
+    use crate::proc::{
+        Activity, Direction, LedgerEntry, LedgerKind, LedgerSink, Observation, ObservedDimension,
+        PassState, Phrasing,
+    };
+
+    let fake = Fake::new();
+    for n in 0..5_u64 {
+        let kind = if n % 2 == 0 { LedgerKind::ToolCall } else { LedgerKind::Intent };
+        fake.ledger
+            .record(
+                Activity::new(kind, "harness")
+                    .with_subject("cat ~/.ssh/id_ed25519")
+                    .with_count("n", n),
+            )
+            .await
+            .unwrap();
+    }
+    let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 22).unwrap();
+    let observation = Observation {
+        id: Observation::id_for(&"default".into(), day),
+        partition: "default".into(),
+        as_of: day,
+        dimensions: vec![ObservedDimension::new(
+            "activity.last_minute",
+            Direction::Higher,
+            day,
+            10,
+        )],
+        windows: vec![7, 14],
+        question: "Your routine has changed over the last two weeks. Would you like to review \
+                   what changed?"
+            .into(),
+        phrasing: Phrasing::Template,
+        created_at: chrono::Utc::now(),
+    };
+    fake.ledger.store().put_observation(observation.clone()).await.unwrap();
+    let state = PassState::new("default", day, chrono::Utc::now());
+    fake.ledger.store().put_pass_state(state.clone()).await.unwrap();
+
+    let config = ControlPlaneConfig::default()
+        .with_http(loopback())
+        .with_extractor(Arc::new(TokenExtractor));
+    let (plane, client) = http_plane(&fake, config).await;
+    let operator = client.clone().with_bearer_token("right");
+    let viewer = client.with_bearer_token("viewer");
+
+    // A JSON page, then the next from its cursor.
+    let params = super::api::LedgerParams { limit: Some(2), ..Default::default() };
+    let first = operator.ledger(&params).await.unwrap();
+    assert_eq!(first.entries.len(), 2);
+    assert_eq!(first.next, Some(first.entries[1].seq));
+    let rest = operator
+        .ledger(&super::api::LedgerParams { after: first.next, ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(rest.entries.len(), 3);
+    assert_eq!(rest.next, None);
+    let tools = operator
+        .ledger(&super::api::LedgerParams { kind: Some("tool_call".into()), ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(tools.entries.len(), 3);
+
+    // The JSONL export: one row per line, the cursor in a header, no subject in the clear.
+    let url = format!(
+        "http://{}{}{}?format=jsonl&limit=3",
+        plane.http_addr().unwrap(),
+        paths::API_PREFIX,
+        paths::PROC_LEDGER
+    );
+    let answer = reqwest::Client::new().get(&url).bearer_auth("right").send().await.unwrap();
+    assert_eq!(answer.headers()["content-type"], "application/x-ndjson");
+    let next: u64 = answer.headers()["x-ledger-next"].to_str().unwrap().parse().unwrap();
+    let body = answer.text().await.unwrap();
+    assert!(!body.contains("id_ed25519"), "{body}");
+    let lines: Vec<LedgerEntry> =
+        body.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    assert_eq!(lines.len(), 3);
+    assert_eq!(next, lines[2].seq);
+
+    let records = fake.control_records();
+    assert_eq!(records.len(), 4, "every ledger read is recorded");
+    assert!(records.iter().all(|record| record.ext["action"] == "proc.ledger"));
+    assert_eq!(records[3].ext["format"], "jsonl");
+
+    assert_eq!(operator.observations(&Default::default()).await.unwrap(), [observation]);
+    assert_eq!(operator.baselines().await.unwrap(), [state]);
+
+    for error in [
+        viewer.ledger(&Default::default()).await.unwrap_err(),
+        viewer.observations(&Default::default()).await.unwrap_err(),
+        viewer.baselines().await.map(|_| ()).unwrap_err(),
+    ] {
+        let error = adk_core::AdkError::from(error);
+        assert_eq!(error.http_status_code(), 403, "{}", error.message);
+    }
+    assert_eq!(fake.control_records().len(), 4, "a refused read writes no record");
     plane.shutdown().await.unwrap();
 }

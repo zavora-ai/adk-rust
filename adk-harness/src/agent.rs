@@ -137,6 +137,10 @@ pub struct HarnessRuntime {
     /// §7.5).
     #[cfg(feature = "kernel")]
     pub(crate) kernel_agenda: adk_kernel::AgendaHandle,
+    /// The kernel's ledger, bound when a kernel built by `Harness::kernel` starts (spec 3.2
+    /// §7.10).
+    #[cfg(feature = "kernel")]
+    pub(crate) kernel_ledger: adk_kernel::proc::LateLedgerSink,
     /// Provider-executed search and URL tools, when the operator enabled any (spec 3.1 §7.20).
     #[cfg(feature = "web")]
     pub(crate) provider_web: Option<Arc<crate::web::provider::ProviderWebToolset>>,
@@ -404,6 +408,23 @@ impl HarnessLayer<'_> {
         if compose_policy
             && config.tool_policy.as_deref().and_then(composed_layer_owner) != Some(owner)
         {
+            // A runner's own audit log also feeds a bound kernel ledger (spec 3.2 §7.10);
+            // the harness's trail was tapped when it was built. Before the policy binds it.
+            #[cfg(feature = "kernel")]
+            if runtime.kernel_ledger.is_bound()
+                && let Some(trail) = config.audit.take()
+            {
+                let address = |trail: &adk_core::audit_log::AuditTrail| {
+                    Arc::as_ptr(trail.recorder()).cast::<()>() as usize
+                };
+                let ours =
+                    runtime.audit.as_ref().is_some_and(|own| address(own) == address(&trail));
+                config.audit = Some(if ours {
+                    trail
+                } else {
+                    crate::kernel::tap_audit(trail, &runtime.kernel_ledger)
+                });
+            }
             let mut layers: Vec<Arc<dyn ToolPolicy>> = Vec::new();
             if let Some(existing) = config.tool_policy.take() {
                 layers.push(existing);

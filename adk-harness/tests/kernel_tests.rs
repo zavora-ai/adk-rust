@@ -377,3 +377,85 @@ async fn propose_followup_is_a_proposed_item_in_every_mode_and_ask_waits_for_the
         kernel.stop().await.unwrap();
     }
 }
+
+/// Under a kernel with a ledger, a harness run writes its activity — its intent, the tool
+/// call with its effect class and duration, the turn its `harness.spend` record describes —
+/// beside the kernel's process rows, and no row holds the run's content (spec 3.2 §7.10,
+/// K-I19).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_harness_writes_its_activity_to_the_kernels_ledger() {
+    use adk_kernel::proc::{InMemoryLedgerStore, Ledger, LedgerKey, LedgerQuery, LedgerStore};
+
+    let f = fixture(
+        vec![
+            ScriptedResponse::function_call("read_file", json!({ "path": "salary.md" })),
+            text("PAYLOAD-ANSWER read it"),
+        ],
+        |b| b.mode(HarnessMode::Auto).without_default_members(),
+    )
+    .await;
+    std::fs::write(f.path("salary.md"), "PAYLOAD-SALARY 120000").unwrap();
+    let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+    let store = Arc::new(InMemoryLedgerStore::new());
+    let Fixture { dir, model, harness, audit, user, session } = f;
+    let harness = harness.with_run_store(Arc::clone(&runs));
+    let kernel = harness
+        .kernel()
+        .config(
+            KernelConfig::default()
+                .with_app_name(APP)
+                .with_scheduler_tick(Duration::from_millis(50))
+                .with_control(ControlPlaneConfig::default().without_socket()),
+        )
+        .ledger(Ledger::new(store.clone(), LedgerKey::from_bytes([2; 32])))
+        .build()
+        .unwrap();
+    let f = Fixture { dir, model, harness, audit, user, session };
+    kernel.start().await.unwrap();
+    let turn = kernel
+        .processes()
+        .spawn(
+            NewRun::new(
+                "interactive",
+                APP,
+                f.user.as_ref(),
+                APP,
+                json!({ "text": "PAYLOAD-PROMPT read salary.md" }),
+            )
+            .with_session_id(f.session.as_ref()),
+            ProcessSpec::new(ProcessKind::Interactive),
+        )
+        .await
+        .unwrap();
+    in_state(&runs, &turn.meta.pid, RunState::Completed).await;
+    let rows = eventually("the ledger rows of the turn", || async {
+        let rows = store.list(&LedgerQuery::default()).await.unwrap();
+        let kinds: Vec<&str> = rows.iter().map(|row| row.kind.as_str()).collect();
+        (["intent", "tool_call", "turn"].iter().all(|kind| kinds.contains(kind))
+            && rows
+                .iter()
+                .any(|row| row.kind == "process" && row.effect.as_deref() == Some("completed")))
+        .then_some(rows)
+    })
+    .await;
+
+    let tool = rows.iter().find(|row| row.kind == "tool_call").unwrap();
+    assert_eq!(tool.effect.as_deref(), Some("read_only"));
+    assert!(tool.duration_ms.is_some() && tool.subject_hash.is_some() && tool.trace_id.is_some());
+    let harness_agent = format!("urn:adk:agent:{APP}/harness");
+    assert_eq!(tool.agent, harness_agent);
+    let intent = rows.iter().find(|row| row.kind == "intent").unwrap();
+    assert_eq!((&intent.agent, &intent.trace_id), (&harness_agent, &tool.trace_id));
+    let spent = rows.iter().find(|row| row.kind == "turn").unwrap();
+    assert_eq!(spent.meta["model_calls"], 2);
+    let finished = rows
+        .iter()
+        .find(|row| row.kind == "process" && row.effect.as_deref() == Some("completed"))
+        .unwrap();
+    assert!(finished.duration_ms.is_some(), "the time the process ran");
+    for row in &rows {
+        let line = row.to_jsonl().unwrap();
+        assert!(!line.contains("PAYLOAD") && !line.contains("salary"), "{line}");
+    }
+    kernel.stop().await.unwrap();
+}

@@ -259,6 +259,10 @@ async fn run() -> Result<()> {
         }
         #[cfg(feature = "harness")]
         Some(Commands::Drivers { command, kernel }) => kernel_cli::drivers(&kernel, command).await,
+        Some(Commands::Proc { view, partition, kind, agent, since, limit, export, kernel }) => {
+            let query = kernel_cli::ProcQuery { partition, kind, agent, since, limit, export };
+            kernel_cli::proc(&kernel, view, query).await
+        }
         #[cfg(all(feature = "harness", feature = "persist"))]
         Some(Commands::Sessions { command }) => manage::sessions(command).await,
         #[cfg(all(feature = "harness", feature = "persist"))]

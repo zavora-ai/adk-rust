@@ -357,6 +357,7 @@ version = "3.0.0"
 dependencies = [
  "adk-agent",
  "adk-core",
+ "adk-eval",
  "adk-runner",
  "adk-sandbox",
  "adk-server",
@@ -368,6 +369,9 @@ dependencies = [
  "chrono",
  "dirs 7.0.0",
  "futures",
+ "getrandom 0.3.4",
+ "hex",
+ "hmac 0.12.1",
  "http-body-util",
  "hyper",
  "hyper-util",

@@ -100,6 +100,11 @@
 2 adk-kernel conformance no-default
 # Service installation alone (spec 3.2 §7.12): definitions render without SQLite or webhooks.
 2 adk-kernel service no-default
+# The ledger alone (spec 3.2 §7.10): no SQLite, no webhooks, its in-memory suite.
+2 adk-kernel proc,conformance no-default
+# The daily baseline pass and scenario K10, the kernel's only adk-eval edge (spec 3.2
+# §7.10, §13 Q4); adk-cli turns it on, so this also covers it without the CLI.
+2 adk-kernel proc-baselines
 
 # Shard 3 — adk-graph, adk-managed, adk-code.
 # No workspace member enables these four; four clippy failures and two uncompilable doc

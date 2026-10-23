@@ -60,12 +60,12 @@ adk-rust memory undo <tick-id>
 | Agenda | Where an agent's proposed follow-ups wait for your decision. Proposals from the consolidation tick need a person in every mode, including `auto` |
 | Kill switch | `freeze` parks running processes on every replica sharing the store; `unfreeze` resumes exactly the ones it parked |
 | Control plane | How terminals and apps reach the kernel: an owner-only local socket, plus an HTTP API on loopback, or beyond it with authentication |
-| Stores | Processes, schedules and the agenda live in SQLite (`harness.db`) or a shared PostgreSQL or Redis backend, so a crash or restart resumes work instead of losing it |
+| Self-observation (`/proc`) | A content-free ledger of what your agents did — kinds, durations and hashed subjects, never what they read or wrote. Once a day the kernel compares your routine with its last four weeks and, when it changes for long enough, asks you about it in plain words (`adk-rust proc`) |
+| Stores | Processes, schedules, the agenda and the ledger live in SQLite (`harness.db`) or a shared PostgreSQL or Redis backend, so a crash or restart resumes work instead of losing it |
 
 Every tool call a kernel process makes still goes through the harness's modes, standing rules
-and approvals. Drivers (sandboxed MCP servers), partitions (separate work and home
-compartments), `/proc` self-observation and installation as a login service are the remaining
-parts of spec 3.2.
+and approvals. Partitions (separate work and home compartments), channel wake sources and
+the managed form are the remaining parts of spec 3.2.
 
 ## How it is built
 
@@ -278,6 +278,27 @@ second.
 `process_store_conformance_tests!`, `agenda_store_conformance_tests!` and `driver_store_conformance_tests!` (feature
 `conformance`) check a backend against the contract the kernel relies on.
 
+## `/proc`: the activity ledger and baselines
+
+With `KernelBuilder::ledger(Ledger::new(store, key))` the kernel keeps a content-free
+activity ledger (feature `proc`): one append-only table of `ts, partition, agent, kind,
+effect, duration_ms, subject_hash, meta, trace_id` rows, written for every `KernelEvent` and,
+through the `LedgerSink` the kernel hands its `ProgressSource` at start, by the hosted
+harness from its tool events and audit records. A row holds labels, counts, durations and an
+HMAC of its subject under a `LedgerKey` kept in the kernel home — never a payload, a prompt or
+a secret (spec 3.2 K-I19).
+
+| Store | Backends |
+|---|---|
+| `LedgerStore` | `InMemoryLedgerStore`; `SqliteLedgerStore` (`sqlite`); `PostgresLedgerStore` (`postgres`); `RedisLedgerStore` (`redis`); suite `ledger_store_conformance_tests!` |
+
+With `proc-baselines`, the maintenance tick runs the daily `kernel.proc` pass over
+`adk-eval`'s ledger statistics — 28-day median and MAD baselines, a 14-day warm-up, the 7-
+and 14-day deviation test, two dimensions or one for ten days, a 7-day cooldown — and
+records each change as an `Observation` worded as a neutral question (`LlmPhraser`, or the
+kernel's template). `GET /api/kernel/proc/ledger|baselines|observations` serve them; see
+[Self-observation: `/proc`](../docs/official_docs/kernel/proc.md).
+
 ## Features
 
 | Feature | Default | Pulls in |
@@ -285,12 +306,13 @@ second.
 | `sqlite` | on | `SqliteProcessStore`, `SqliteAgendaStore` |
 | `postgres`, `redis` | off | `PostgresProcessStore`, `PostgresAgendaStore`, `RedisProcessStore`, `RedisAgendaStore` |
 | `webhooks` | on | `webhook_wake_hook` over `adk-server`'s `WebhookIngress` |
-| `proc` | on | The OpenTelemetry GenAI histograms of the live process aggregates |
+| `proc` | on | The activity ledger (`proc`), its stores and `/api/kernel/proc/*`; the OpenTelemetry GenAI histograms of the live process aggregates |
+| `proc-baselines` | off | The daily baseline pass and observations over `adk-eval`'s ledger statistics (implies `proc`; on in adk-cli and the umbrella's `full`) |
 | `conformance` | off | The `conformance` module |
 | `drivers` | on | `drivers`: manifests, the driver store, the supervisor over `adk-tool`'s MCP manager, the stdio launcher on `adk-sandbox`'s enforcers |
 | `service` | on | The `service` module; `windows-service` on Windows |
 | `managed` | off | `managed`: `KernelDef` under the `adk.kernel` metadata key of a managed definition, and `TenantKernel`, one kernel per tenant over its `ManagedStores` on `adk-managed`'s runtime (Experimental) |
-| `proc-baselines`, `channels` | off | Reserved for later phases of spec 3.2; empty in this release |
+| `channels` | off | Reserved for a later phase of spec 3.2; empty in this release |
 
 ## Tests
 
@@ -300,7 +322,7 @@ second.
 | `tests/supervisor_tests.rs`, `tests/supervisor_property_tests.rs` | The process actions, lifecycle and spend attribution; sleepers never call the model and freezes stop everything within a second, with process-store writes delayed up to 120 ms |
 | `tests/wake_*.rs` | Matching, keys, expiry, reconciliation and each wake source |
 | `tests/proactivity_scenarios.rs` | K4: in Ask a follow-up waits in the inbox and nothing runs until it is approved, edited or rejected; in Auto it runs after quiet hours within the daily budget, a proposal past `max_proposed_open` is rejected with a reason on the bus, and an over-budget process sleeps until the budget replenishes. K8: three background runs at a quota of three, a typed message runs at once, the youngest background run parks and is requeued, no tool runs twice and the quota is never exceeded. A consolidation item waits for a person in Auto |
-| `tests/process_store_*.rs`, `tests/agenda_store*.rs`, `tests/driver_store_*.rs` | The conformance suites on every backend; PostgreSQL and Redis run `#[ignore]`d against a server (`scripts/test-postgres.sh`) |
+| `tests/process_store_*.rs`, `tests/agenda_store*.rs`, `tests/driver_store_*.rs`, `tests/ledger_store_*.rs` | The conformance suites on every backend; PostgreSQL and Redis run `#[ignore]`d against a server (`scripts/test-postgres.sh`) |
 | `tests/driver_scenarios.rs` | K6 on a real stdio MCP server: mount, crash and restart with backoff, a redeclared tool stale and `NeedsReapproval`, re-approval; a `secret://` value reaches the server as a file and never in its environment |
 | `tests/driver_park_restart.rs` | An agent run's driver call parked on its server's question survives a kernel restart: answered in the inbox, it completes with the tool executed once; a call approved before its question is not asked about again |
 | `tests/driver_sandbox_tests.rs` | A driver under `sandbox = "os"` cannot write outside its allowed paths (Seatbelt, bubblewrap in the `sandbox-linux` job) |
@@ -308,6 +330,8 @@ second.
 | `src/control/tests.rs` | The auth matrix on every transport: socket peers of another uid refused; on Windows the pipe's owner-only descriptor, its owner admitted, and a client of another identity refused by the DACL and, behind an open DACL, by the token check |
 | `src/service/tests.rs` | The launchd plist, systemd unit and Windows service rendered for each platform on every platform; `plutil` accepts the plist; the log is created `0600`. Real installs run in `.github/workflows/kernel-service.yml` |
 | `tests/managed_def_fixtures.rs`, `tests/managed_tenants.rs`, `tests/managed_tenant_property_tests.rs` (feature `managed`) | The kernel block's golden fixtures and refusals; a definition round-trips through the managed state store; a cron wake for one tenant runs on its stores only; a held call runs once after the tenant's approval; no wake, process or approval crosses tenants |
+| `tests/k10_baselines.rs` | K10 on a manual clock: six weeks of a routine whose last two end late yield one observation on the tenth day of the change, none in the warm-up or the cooldown, and again after it; none without `proc-baselines` |
+| `tests/proc_property_tests.rs` | K-I19: no ledger row carries a payload of the event or audit record that produced it |
 
 ## License
 

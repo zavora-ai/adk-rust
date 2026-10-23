@@ -22,12 +22,14 @@
 //! | `POST /kernel/freeze`, `POST /kernel/unfreeze` | [`Kernel::freeze`] and [`Kernel::unfreeze`] |
 //! | `GET /kernel/agenda` | the agenda ([`api::AgendaQuery`]) |
 //! | `POST /kernel/agenda/{id}/{approve,reject,schedule}` | [`Agenda`](crate::Agenda) actions as the caller ([`api::RejectRequest`], [`api::ScheduleRequest`]) |
+//! | `GET /kernel/proc/ledger` (feature `proc`) | the content-free ledger, paged by `seq`, as JSON or as the JSONL `cargo adk eval --ledger` reads |
+//! | `GET /kernel/proc/baselines`, `GET /kernel/proc/observations` (feature `proc`) | each partition's last baseline pass, and the observations it offered |
 //!
 //! The approvals inbox, `/api/runs`, `/api/cron`, `/api/admin/freeze` and `/hooks/{name}`
 //! are the existing server routes, unchanged; `POST /api/admin/freeze` delegates to
 //! [`Kernel::freeze`] through the kernel's `FreezeDelegate` (§10 S4). The socket serves the
 //! approvals inbox beside the kernel routes when the kernel has an approval service, so a
-//! held call is decided over the socket as over HTTP. Driver, partition and `/proc` routes
+//! held call is decided over the socket as over HTTP. Driver and partition routes
 //! arrive with their phases.
 //!
 //! # Authentication and audit
@@ -45,9 +47,11 @@
 //! | [`ControlPlaneConfig::http`] beyond loopback without one | Refused at start (K-I18) |
 //!
 //! The routes that change the kernel — `spawn`, `kill`, `nice`, `suspend`, `resume`,
-//! `freeze`, `unfreeze`, and the agenda's `approve`, `reject` and `schedule` — need the
-//! `operator` scope (`403` otherwise), which the socket, the pipe and a loopback bind grant.
-//! `attach` reads only the caller's own sessions.
+//! `freeze`, `unfreeze`, and the agenda's `approve`, `reject` and `schedule` — and the
+//! `/proc` routes, which describe the user's activity, need the `operator` scope (`403`
+//! otherwise), which the socket, the pipe and a loopback bind grant. `attach` reads only the
+//! caller's own sessions. A ledger read is recorded as `kernel.control` with action
+//! `proc.ledger`: the ledger leaves the host only through it.
 //!
 //! Every action that changes the kernel or reads a session writes a `kernel.control` record
 //! with `subject`, `transport`, `action` and `target` to the kernel's audit trail before it
@@ -128,6 +132,12 @@ pub mod paths {
     pub const DRIVER_RESTART: &str = "/kernel/drivers/{id}/restart";
     /// `POST`: re-approve a driver's changed declarations.
     pub const DRIVER_REAPPROVE: &str = "/kernel/drivers/{id}/reapprove";
+    /// `GET`: the activity ledger (spec 3.2 §7.10).
+    pub const PROC_LEDGER: &str = "/kernel/proc/ledger";
+    /// `GET`: each partition's baselines (spec 3.2 §7.10).
+    pub const PROC_BASELINES: &str = "/kernel/proc/baselines";
+    /// `GET`: the observations (spec 3.2 §7.10).
+    pub const PROC_OBSERVATIONS: &str = "/kernel/proc/observations";
 }
 
 /// Where the control plane listens and how it authenticates HTTP callers (spec 3.2 §7.11).

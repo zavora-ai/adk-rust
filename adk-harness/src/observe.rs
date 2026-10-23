@@ -585,6 +585,8 @@ pub(crate) fn observe_run(
     if let Some(tracker) = &tracker {
         trails.usage_begin(&session_key, tracker.clone());
     }
+    #[cfg(feature = "kernel")]
+    let tools = trails.tool_events(acting.agent.id.as_str(), ctx.invocation_id());
     struct Finish {
         audit: Option<HarnessAudit>,
         tracker: Option<Arc<BudgetTracker>>,
@@ -675,33 +677,50 @@ pub(crate) fn observe_run(
         tokens: TurnTokens::default(),
         settled: false,
     };
-    let state = (events, Some(finish), span);
-    Box::pin(futures::stream::unfold(state, |(mut events, mut finish, span)| async move {
-        let next = events.next().instrument(span.clone()).await;
-        match next {
-            Some(Ok(event)) => {
-                if let Some(finish) = finish.as_mut() {
-                    finish.observe(&event);
-                }
-                Some((Ok(event), (events, finish, span)))
+    #[cfg(not(feature = "kernel"))]
+    let tools: Option<()> = None;
+    let state = (events, Some(finish), span, tools, true);
+    Box::pin(futures::stream::unfold(
+        state,
+        |(mut events, mut finish, span, tools, first)| async move {
+            #[cfg(feature = "kernel")]
+            let mut tools = tools;
+            #[cfg(not(feature = "kernel"))]
+            let _ = first;
+            #[cfg(feature = "kernel")]
+            if first && let Some(tools) = &tools {
+                tools.intent().await;
             }
-            Some(Err(error)) => {
-                if let Some(finish) = finish
-                    && let Err(audit_error) = finish.run().instrument(span.clone()).await
-                {
-                    tracing::warn!(error = %audit_error, "could not record harness.spend");
+            let next = events.next().instrument(span.clone()).await;
+            match next {
+                Some(Ok(event)) => {
+                    if let Some(finish) = finish.as_mut() {
+                        finish.observe(&event);
+                    }
+                    #[cfg(feature = "kernel")]
+                    if let Some(tools) = tools.as_mut() {
+                        tools.observe(&event).await;
+                    }
+                    Some((Ok(event), (events, finish, span, tools, false)))
                 }
-                Some((Err(error), (events, None, span)))
-            }
-            None => match finish {
-                Some(finish) => match finish.run().instrument(span.clone()).await {
-                    Ok(()) => None,
-                    Err(error) => Some((Err(error), (events, None, span))),
+                Some(Err(error)) => {
+                    if let Some(finish) = finish
+                        && let Err(audit_error) = finish.run().instrument(span.clone()).await
+                    {
+                        tracing::warn!(error = %audit_error, "could not record harness.spend");
+                    }
+                    Some((Err(error), (events, None, span, tools, false)))
+                }
+                None => match finish {
+                    Some(finish) => match finish.run().instrument(span.clone()).await {
+                        Ok(()) => None,
+                        Err(error) => Some((Err(error), (events, None, span, tools, false))),
+                    },
+                    None => None,
                 },
-                None => None,
-            },
-        }
-    }))
+            }
+        },
+    ))
 }
 
 /// A session's usage: what its finished harness runs used, and its run in flight (spec 3.2
@@ -723,6 +742,10 @@ pub(crate) struct RunTrails {
     trails: Mutex<HashMap<(String, String, String), AuditTrail>>,
     usage: Mutex<HashMap<(String, String, String), SessionUsage>>,
     verdicts: Mutex<HashMap<(String, String, String), String>>,
+    /// The kernel's ledger and each tool's effect class, for the rows a run writes
+    /// (spec 3.2 §7.10).
+    #[cfg(feature = "kernel")]
+    ledger: OnceLock<(adk_kernel::proc::LateLedgerSink, Arc<HashMap<String, String>>)>,
 }
 
 impl std::fmt::Debug for RunTrails {
@@ -736,6 +759,31 @@ fn session_key(app: &str, user: &str, session: &str) -> (String, String, String)
 }
 
 impl RunTrails {
+    /// Writes each run's `intent` and tool calls to `ledger` once a kernel binds it, with
+    /// the effect class each of `tools` declares (spec 3.2 §7.10).
+    #[cfg(feature = "kernel")]
+    pub(crate) fn attach_ledger(
+        &self,
+        ledger: adk_kernel::proc::LateLedgerSink,
+        tools: &[Arc<dyn adk_core::Tool>],
+    ) {
+        let effects = tools
+            .iter()
+            .filter_map(|tool| {
+                let effect = serde_json::to_value(tool.effect()).ok()?.as_str()?.to_string();
+                Some((tool.name().to_string(), effect))
+            })
+            .collect();
+        let _ = self.ledger.set((ledger, Arc::new(effects)));
+    }
+
+    /// The ledger rows of a run of `agent` in `invocation`, when a kernel's ledger is bound.
+    #[cfg(feature = "kernel")]
+    fn tool_events(&self, agent: &str, invocation: &str) -> Option<crate::kernel::ToolEvents> {
+        let (sink, effects) = self.ledger.get()?;
+        crate::kernel::ToolEvents::new(sink, effects, agent, invocation)
+    }
+
     /// Counts `tracker` as the session's run in flight.
     fn usage_begin(&self, key: &(String, String, String), tracker: Arc<BudgetTracker>) {
         let mut usage = self.usage.lock().unwrap_or_else(|e| e.into_inner());

@@ -17,8 +17,9 @@
 //! | [`AGENDA_PROPOSED`], [`AGENDA_APPROVED`], [`AGENDA_REJECTED`], [`AGENDA_SCHEDULED`], [`AGENDA_EXPIRED`] | `item`, `partition`, `origin`, `by`, `budget`, `reason` |
 //! | [`REVIEW`] | `partition`, `reviewPeriodMs`, `rules`, `sleepers`, `frozen` (ids and ages), `ask` |
 //! | [`DRIVER_MOUNTED`], [`DRIVER_UNMOUNTED`], [`DRIVER_STARTED`], [`DRIVER_CRASHED`], [`DRIVER_RESTARTED`], [`DRIVER_STALE`], [`DRIVER_REAPPROVED`] | `driverId`, `commandDigest`, `partitions`, `effectClasses`, `digests`, `attempt` |
+//! | [`OBSERVATION`] | `id`, `partition`, `dimensions`, `windows` — no value that identifies content |
 //!
-//! The partition and observation actions of §9.3 arrive with their phases.
+//! The partition actions of §9.3 arrive with their phase.
 //!
 //! # Example
 //!
@@ -83,3 +84,5 @@ pub const DRIVER_RESTARTED: &str = "kernel.driver.restarted";
 pub const DRIVER_STALE: &str = "kernel.driver.stale";
 /// A driver's changed declarations were approved and pinned.
 pub const DRIVER_REAPPROVED: &str = "kernel.driver.reapproved";
+/// A baseline pass recorded an observation (spec 3.2 §7.10, feature `proc-baselines`).
+pub const OBSERVATION: &str = "kernel.observation";

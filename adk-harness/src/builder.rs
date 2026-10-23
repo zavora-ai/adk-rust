@@ -130,6 +130,8 @@ pub struct HarnessAgentBuilder {
     kernel_approvals: Arc<crate::kernel::LateApprovalNotifier>,
     #[cfg(feature = "kernel")]
     kernel_agenda: adk_kernel::AgendaHandle,
+    #[cfg(feature = "kernel")]
+    kernel_ledger: adk_kernel::proc::LateLedgerSink,
     action_ledger: Option<Arc<dyn ActionLedger>>,
     confirmation_timeout: Duration,
     shell: ShellConfig,
@@ -228,6 +230,8 @@ impl HarnessAgentBuilder {
             kernel_approvals: Arc::default(),
             #[cfg(feature = "kernel")]
             kernel_agenda: adk_kernel::AgendaHandle::default(),
+            #[cfg(feature = "kernel")]
+            kernel_ledger: adk_kernel::proc::LateLedgerSink::new(),
             action_ledger: None,
             confirmation_timeout: Duration::from_secs(300),
             shell: ShellConfig::default(),
@@ -1468,6 +1472,11 @@ impl HarnessAgentBuilder {
             resolver
         });
         let harness_audit = crate::agent::harness_audit_trail(self.audit_log)?;
+        // Under a kernel, every audit record also writes its content-free ledger row
+        // (spec 3.2 §7.10).
+        #[cfg(feature = "kernel")]
+        let harness_audit =
+            harness_audit.map(|trail| crate::kernel::tap_audit(trail, &self.kernel_ledger));
         #[cfg(feature = "memory")]
         let facts = {
             #[cfg(feature = "auth")]
@@ -1616,6 +1625,9 @@ impl HarnessAgentBuilder {
         let mut toolset = HarnessToolset::new(tools, mode_store.clone(), self.mode)
             .with_observers(&observers)
             .with_effort(self.effort);
+        // Under a kernel, each run's tool calls write their ledger rows (spec 3.2 §7.10).
+        #[cfg(all(feature = "kernel", feature = "observe"))]
+        run_trails.attach_ledger(self.kernel_ledger.clone(), &toolset.all_tools());
         #[cfg(feature = "docker")]
         if let Some(pool) = container_pool {
             toolset = toolset.with_containers(pool);
@@ -2056,6 +2068,8 @@ impl HarnessAgentBuilder {
                 kernel_approvals: self.kernel_approvals,
                 #[cfg(feature = "kernel")]
                 kernel_agenda: self.kernel_agenda,
+                #[cfg(feature = "kernel")]
+                kernel_ledger: self.kernel_ledger,
                 #[cfg(feature = "web")]
                 provider_web,
                 #[cfg(feature = "mcp")]

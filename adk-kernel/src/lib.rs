@@ -32,6 +32,7 @@
 //! | [`ReviewReport`], [`StandingRuleSource`], [`RuleAge`], [`StaleRule`], [`AgedProcess`] | §7.4, §9.1 |
 //! | [`QueueClass`], [`QuietHours`], [`Quotas`] | §7.9 |
 //! | [`drivers`]: `DriverManifest`, [`EffectClass`](drivers::EffectClass), `DriverStore`, `DriverSupervisor`, `DriverPolicy` (feature `drivers`) | §7.7 |
+//! | `proc` (feature `proc`): `Ledger`, `LedgerEntry`, `LedgerStore` on every backend, `LedgerSink`, `LedgerAuditTap`; `proc::baselines` (feature `proc-baselines`): `BaselinePass`, `BaselinePolicy`, `ObservationPhraser`, `Observation` | §7.10 |
 //! | [`PartitionId`], [`PartitionMode`] | §7.8 (the phase-1 part) |
 //! | [`control`]: [`ControlPlaneConfig`](control::ControlPlaneConfig), [`router`](control::router), [`ControlPlane`](control::ControlPlane), [`ControlClient`](control::ControlClient), [`api`](control::api) | §7.11 |
 //! | [`audit`] action names | §9.3 |
@@ -40,8 +41,8 @@
 //! | `managed` (feature `managed`): `KernelDef`, `TenantKernel`, `KernelResolver`, `ManagedKernels` | §7.13, §10 M1 |
 //!
 //! Agenda and proactivity (§7.5) and attention and resources (§7.9) are phase 2; drivers
-//! (§7.7) and partitions (§7.8) phase 3; `/proc` baselines (§7.10) phase 4; channel wakes
-//! phase 5. Each adds to these types without changing them.
+//! (§7.7) and partitions (§7.8) phase 3; channel wakes phase 5. Each adds to these types
+//! without changing them.
 //!
 //! # Features
 //!
@@ -52,8 +53,8 @@
 //! | `webhooks` | on | `webhook_wake_hook` over `adk-server`'s `WebhookIngress` |
 //! | `drivers` | on | [`drivers`]: manifests, the driver store, the supervisor over `adk-tool`'s MCP manager, the stdio launcher on `adk-sandbox` |
 //! | `service` | on | The `service` module: `adk-rust up` as a launchd agent, a systemd user unit or a Windows service (`windows-service` on Windows) |
-//! | `proc` | on | The OTel GenAI histograms of the live aggregates; the ledger in phase 4 |
-//! | `proc-baselines` | off | Empty until phase 4 (implies `proc`) |
+//! | `proc` | on | The content-free activity ledger (`proc`), its stores and `GET /api/kernel/proc/*`; the OTel GenAI histograms of the live aggregates |
+//! | `proc-baselines` | off | The daily baseline pass and observations over `adk-eval`'s ledger statistics (implies `proc`; the only `adk-eval` edge) |
 //! | `channels` | off | Empty until phase 5 |
 //! | `managed` | off | The managed form: `KernelDef` in a managed definition, one kernel per tenant (`adk-managed`) |
 //! | `conformance` | off | The `conformance` module |
@@ -95,6 +96,8 @@ pub mod kernel;
 #[cfg(feature = "managed")]
 pub mod managed;
 pub mod partition;
+#[cfg(feature = "proc")]
+pub mod proc;
 pub mod process;
 pub mod review;
 pub mod sched;
