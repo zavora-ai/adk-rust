@@ -19,6 +19,8 @@ cargo run -- k5_one_job_many_windows
 | Scenario | What passes |
 |---|---|
 | `k1_leave_it_running` | K1 without service installation, on a manual clock the run store and the kernel share: a nightly audit is scheduled two hours ahead, the kernel stops, the clock moves eight hours on while it is down, and the kernel boots again; nothing ran while it was down, the next boot runs the missed firing exactly once, the run completes, the file is written once, `ps` shows the process `Completed`, and the replica's signed audit log verifies across the restart once it signs a checkpoint |
+| `k4_it_proposes_its_own_work` | K4: in Ask, a turn's `propose_followup` call puts a `proposed` item on the agenda and in the inbox (approve, edit, reject) and nothing runs for a second; a phone on loopback HTTP approves it; it runs as a `Proposed` process whose parent is the proposing turn, and `kernel.agenda.proposed` and `.approved` are audited. In Auto at 23:00, on a manual clock, the policy schedules it, nothing starts inside the 22:00–07:00 quiet hours, and it runs at 07:01 |
+| `k8_a_message_preempts_background_work` | K8: three background jobs hold their first model call at a quota of three; a typed question runs and completes at once; the youngest job is preempted by it, parks at its next checkpoint, is requeued (`kernel.process.suspended`, `.requeued`) and completes with its read run once; every job completes; sampling shows at most three admitted processes |
 | `k5_one_job_many_windows` | K5: a turn spawned from a terminal on the socket holds its `bash` call; the terminal goes away; a phone on loopback HTTP approves the call from the inbox; the run resumes and the command runs once with no terminal attached; a new shell attaches and sees the same process, completed, and the call's answer in the transcript; the spawn and the attach are recorded as `kernel.control` with their transport |
 
 ## Live scenarios
@@ -40,4 +42,5 @@ is skipped.
 | Scenario | What passes |
 |---|---|
 | `live_k5_approve_from_another_process` | `up --mode ask`: the model's `bash` call is held; the client that started the turn disconnects; `adk-rust approvals --server … approve` in another process approves it over HTTP; the turn completes, the command ran exactly once, and a new client attaching sees the call in the transcript |
+| `live_k4_a_proposal_waits_for_approval` | `up --mode ask`: the model calls `propose_followup`; the item waits `proposed` and nothing runs; `adk-rust agenda approve <prefix>` in another process approves it; the follow-up runs as a `Proposed` process whose parent is the proposing turn and completes, any call it holds in Ask rejected by the scenario as an operator would; it answers in its own session |
 | `live_k3_file_change_wakes` | `up --mode ask`: a process spawned asleep on a `notes.md` file wake makes no model call; saving the file wakes it within two seconds; the turn reads the file with `read_file` and answers with its codeword |

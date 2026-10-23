@@ -1,4 +1,4 @@
-//! K3 and K5 on a live model through the `adk-rust up` binary (spec 3.2 §11): the kernel
+//! K3, K4 and K5 on a live model through the `adk-rust up` binary (spec 3.2 §11): the kernel
 //! runs as its own process, and this one reaches it over the control plane like any other
 //! surface. Keys come from the environment the binary inherits and are never printed.
 
@@ -30,6 +30,7 @@ pub async fn run(name: &str, bin: &Path, provider: &str, model: &str) -> Result<
     match name {
         "live_k5_approve_from_another_process" => k5(bin, provider, model).await,
         "live_k3_file_change_wakes" => k3(bin, provider, model).await,
+        "live_k4_a_proposal_waits_for_approval" => k4(bin, provider, model).await,
         other => bail!("unknown scenario {other}"),
     }
 }
@@ -302,4 +303,125 @@ async fn k3(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
     );
     checks.check("and answered from it", text.to_lowercase().contains("heliotrope"));
     Ok(checks)
+}
+
+/// K4 live: the model proposes a follow-up with `propose_followup`; in Ask it waits on the
+/// agenda and nothing runs until another process approves it with `adk-rust agenda
+/// approve`; then it runs as a `Proposed` process whose parent is the proposing turn.
+async fn k4(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
+    let mut checks = Checks::default();
+    let up = Up::start(bin, provider, model, "ask").await?;
+    let client = up.client().await?;
+    let request = SpawnRequest::new(
+        "adk-rust",
+        json!({ "text": "The dependency bump lands tonight. Do not do anything about it now. \
+            Call the propose_followup tool once, with the title \"Write a status note about the dependency bump\" \
+            and a one-sentence rationale, asking for a reply-only note that needs no tools. \
+            Then reply with the single word: proposed" }),
+    )
+    .with_session_id("k4-live");
+    let pid = client.spawn(&request).await?.meta.pid;
+    let item = |client: ControlClient, pid: String| async move {
+        let items = client.agenda(&adk_kernel::control::api::AgendaQuery::default()).await?;
+        Ok::<_, anyhow::Error>(items.into_iter().find(|item| item.proposer() == Some(pid.as_str())))
+    };
+    let proposed = until(Duration::from_secs(120), || {
+        let (client, pid) = (client.clone(), pid.clone());
+        async move { Ok(item(client, pid).await?.is_some()) }
+    })
+    .await?;
+    checks.check("the model proposed a follow-up", proposed);
+    let Some(proposal) = item(client.clone(), pid.clone()).await? else { return Ok(checks) };
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let followup = |client: ControlClient, id: String| async move {
+        let processes = client.processes(&ProcessesQuery::default()).await?;
+        Ok::<_, anyhow::Error>(
+            processes
+                .into_iter()
+                .find(|process| process.meta.agenda_item.as_deref() == Some(id.as_str())),
+        )
+    };
+    let held = item(client.clone(), pid.clone()).await?;
+    checks.check(
+        "in Ask it waits proposed and nothing runs",
+        held.is_some_and(|item| item.state == adk_kernel::AgendaState::Proposed)
+            && followup(client.clone(), proposal.id.clone()).await?.is_none(),
+    );
+    let mut list = Command::new(bin);
+    list.args(["agenda", "--home"]).arg(&up.home).stdin(Stdio::null());
+    isolate(&mut list, up.root.path());
+    let listed = list.output()?;
+    println!("    $ adk-rust agenda\n{}", indent(&String::from_utf8_lossy(&listed.stdout)));
+    let mut approve = Command::new(bin);
+    approve
+        .args(["agenda", "--home"])
+        .arg(&up.home)
+        .args(["approve", &proposal.id[..8]])
+        .stdin(Stdio::null());
+    isolate(&mut approve, up.root.path());
+    let approved = approve.output()?;
+    checks.check(
+        "another process approved it with `adk-rust agenda approve`",
+        approved.status.success(),
+    );
+    println!(
+        "    $ adk-rust agenda approve {}\n{}",
+        &proposal.id[..8],
+        indent(&String::from_utf8_lossy(&approved.stdout))
+    );
+    // The follow-up runs in Ask too (K-I7): a call it holds waits for a person, who
+    // rejects it here, as the inbox's operator would.
+    let follow_session = adk_kernel::agenda::item_session(&proposal.id);
+    let rejected = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let done = until(Duration::from_secs(240), || {
+        let (client, pid) = (client.clone(), pid.clone());
+        let (follow_session, rejected) = (follow_session.clone(), rejected.clone());
+        async move {
+            for held in client.approvals().await? {
+                if held.scope.session_id == follow_session {
+                    let action = adk_core::ApprovalAction::Reject;
+                    client.decide(&held.id, held.version, action, Some("not now")).await?;
+                    rejected.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            Ok(item(client, pid)
+                .await?
+                .is_some_and(|item| item.state == adk_kernel::AgendaState::Done))
+        }
+    })
+    .await?;
+    checks.check("the follow-up ran", done);
+    let rejected = rejected.load(std::sync::atomic::Ordering::SeqCst);
+    if rejected > 0 {
+        println!("    (the follow-up held {rejected} call(s) for a person, in Ask; rejected)");
+    }
+    let process = followup(client.clone(), proposal.id.clone()).await?;
+    checks.check(
+        "as a `Proposed` process whose parent is the proposing turn",
+        process.as_ref().is_some_and(|process| {
+            process.meta.kind == adk_kernel::ProcessKind::Proposed
+                && process.meta.parent.as_deref() == Some(pid.as_str())
+                && process.run.state == adk_core::RunState::Completed
+        }),
+    );
+    if let Some(process) = &process {
+        let session = process.run.session_id.clone().unwrap_or_default();
+        let attached = client.attach(&session, &AttachRequest::default()).await?;
+        let (text, calls) = transcript_text(&attached.transcript);
+        checks.check("the follow-up answered in its own session", !text.trim().is_empty());
+        if !done {
+            let held: Vec<&str> =
+                attached.pending.iter().map(|request| request.tool_name.as_str()).collect();
+            println!(
+                "    (follow-up {} is {:?}; held calls {held:?}; calls made {calls:?})",
+                process.meta.pid, process.run.state
+            );
+        }
+    }
+    Ok(checks)
+}
+
+/// `text` indented for the scenario's output.
+fn indent(text: &str) -> String {
+    text.lines().map(|line| format!("      {line}")).collect::<Vec<_>>().join("\n")
 }

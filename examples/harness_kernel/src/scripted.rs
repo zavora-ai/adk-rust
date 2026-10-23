@@ -1,4 +1,4 @@
-//! K1 and K5 on `ScriptedLlm` with a real kernel (spec 3.2 §5, §11): the kernel's durable
+//! K1, K4, K5 and K8 on `ScriptedLlm` with a real kernel (spec 3.2 §5, §11): the kernel's durable
 //! workers, its scheduler, SQLite stores in `harness.db`, and its control plane on a socket
 //! and loopback HTTP, composed as `adk-rust up` composes them, through `Harness::kernel`.
 
@@ -35,7 +35,9 @@ const APP: &str = "adk-rust";
 pub async fn run(name: &str) -> Result<Checks> {
     match name {
         "k1_leave_it_running" => k1_leave_it_running().await,
+        "k4_it_proposes_its_own_work" => k4_it_proposes_its_own_work().await,
         "k5_one_job_many_windows" => k5_one_job_many_windows().await,
+        "k8_a_message_preempts_background_work" => k8_a_message_preempts_background_work().await,
         other => bail!("unknown scenario {other}"),
     }
 }
@@ -47,6 +49,7 @@ struct Stores {
     approvals: Arc<SqliteApprovalStore>,
     schedules: Arc<SqliteScheduleStore>,
     processes: Arc<adk_kernel::SqliteProcessStore>,
+    agenda: Arc<adk_kernel::SqliteAgendaStore>,
     logs: Arc<SqliteAuditLogStore>,
 }
 
@@ -66,6 +69,8 @@ async fn stores(home: &Path, clock: Arc<dyn Clock>) -> Result<Stores> {
     schedules.migrate().await?;
     let processes = adk_kernel::SqliteProcessStore::new(pool.clone());
     processes.migrate().await?;
+    let agenda = adk_kernel::SqliteAgendaStore::new(pool.clone());
+    agenda.migrate().await?;
     let logs = SqliteAuditLogStore::from_pool(pool);
     logs.migrate().await?;
     Ok(Stores {
@@ -74,6 +79,7 @@ async fn stores(home: &Path, clock: Arc<dyn Clock>) -> Result<Stores> {
         approvals: Arc::new(approvals),
         schedules: Arc::new(schedules),
         processes: Arc::new(processes),
+        agenda: Arc::new(agenda),
         logs: Arc::new(logs),
     })
 }
@@ -84,11 +90,15 @@ fn scripted(replies: Vec<ScriptedResponse>) -> Arc<ScriptedLlm> {
 
 /// How one boot of the kernel runs.
 struct Boot {
-    model: Arc<ScriptedLlm>,
+    model: Arc<dyn adk_core::Llm>,
     mode: HarnessMode,
     control: ControlPlaneConfig,
     audit: Arc<dyn AuditRecorder>,
     clock: Arc<dyn Clock>,
+    /// The kernel's proactivity policy (spec 3.2 §7.5); `None` keeps the default.
+    proactivity: Option<adk_kernel::ProactivityPolicy>,
+    /// Every partition's quotas (spec 3.2 §7.9); `None` sets none.
+    quotas: Option<adk_kernel::Quotas>,
 }
 
 /// One boot of the kernel over `stores`: the harness, held calls routed to the `operator`
@@ -129,11 +139,14 @@ fn boot(stores: &Stores, home: &Path, workspace: &Path, boot: Boot) -> Result<Ke
         .with_home(home)
         .with_scheduler_tick(Duration::from_millis(250))
         .with_control(boot.control)
-        .with_clock(boot.clock);
+        .with_clock(boot.clock)
+        .with_proactivity(boot.proactivity.unwrap_or_default())
+        .with_quotas(boot.quotas.unwrap_or_default());
     Ok(harness
         .kernel()
         .config(config)
         .process_store(stores.processes.clone())
+        .agenda_store(stores.agenda.clone())
         .schedule_store(stores.schedules.clone())
         .build()?)
 }
@@ -185,6 +198,8 @@ async fn k1_leave_it_running() -> Result<Checks> {
             control: control.clone(),
             audit: Arc::new(log),
             clock: clock.clone(),
+            proactivity: None,
+            quotas: None,
         };
         let kernel = boot(&stores, &home, &workspace, first)?;
         kernel.start().await?;
@@ -220,6 +235,8 @@ async fn k1_leave_it_running() -> Result<Checks> {
         control,
         audit: log.clone(),
         clock,
+        proactivity: None,
+        quotas: None,
     };
     let kernel = boot(&stores, &home, &workspace, second)?;
     kernel.start().await?;
@@ -313,6 +330,8 @@ async fn k5_one_job_many_windows() -> Result<Checks> {
         control: ControlPlaneConfig::default().with_http(addr),
         audit: Arc::new(recorder.clone()),
         clock,
+        proactivity: None,
+        quotas: None,
     };
     let kernel = boot(&stores, &home, &workspace, setup)?;
     kernel.start().await?;
@@ -390,6 +409,417 @@ async fn k5_one_job_many_windows() -> Result<Checks> {
         "the spawn and the attaches are recorded with their transport",
         controls.contains(&("spawn".into(), "socket".into()))
             && controls.contains(&("attach".into(), "socket".into())),
+    );
+    kernel.stop().await?;
+    Ok(checks)
+}
+
+/// The `propose_followup` call a turn makes, then its answer.
+fn proposing(title: &str) -> Vec<ScriptedResponse> {
+    vec![
+        ScriptedResponse::function_call(
+            "propose_followup",
+            json!({ "title": title, "rationale": "the dependency bump lands tonight" }),
+        ),
+        ScriptedResponse::text("I proposed a follow-up."),
+        ScriptedResponse::text("Re-ran the tests: they pass."),
+    ]
+}
+
+/// The agenda item `pid` proposed, and the process it became, if any.
+async fn followup_of(
+    client: &ControlClient,
+    pid: &str,
+) -> Result<Option<(adk_kernel::AgendaItem, Option<adk_kernel::Process>)>> {
+    let items = client.agenda(&adk_kernel::control::api::AgendaQuery::default()).await?;
+    let Some(item) = items.into_iter().find(|item| item.proposer() == Some(pid)) else {
+        return Ok(None);
+    };
+    let processes = client.processes(&ProcessesQuery::default()).await?;
+    let process = processes
+        .into_iter()
+        .find(|process| process.meta.agenda_item.as_deref() == Some(item.id.as_str()));
+    Ok(Some((item, process)))
+}
+
+/// K4 (spec 3.2 §5): the agent proposes "re-run the tests after the dependency bump
+/// lands". In Ask the proposal is `Proposed` in the agenda and the inbox, and nothing runs
+/// until a person approves it from another surface; then it runs as a `Proposed` process
+/// whose parent is the proposing turn. In Auto it is scheduled by the policy and runs only
+/// once quiet hours end, on a clock the kernel and the run store share.
+async fn k4_it_proposes_its_own_work() -> Result<Checks> {
+    let mut checks = Checks::default();
+    let dir = tempfile::tempdir()?;
+    let (home, workspace) = (dir.path().join("home"), dir.path().join("ws"));
+    std::fs::create_dir_all(&workspace)?;
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let ask_stores = stores(&home, clock.clone()).await?;
+    let addr = free_port()?;
+    let recorder = InMemoryAuditRecorder::new();
+    let ask = Boot {
+        model: scripted(proposing("Re-run the tests after the dependency bump lands")),
+        mode: HarnessMode::Ask,
+        control: ControlPlaneConfig::default().with_http(addr),
+        audit: Arc::new(recorder.clone()),
+        clock,
+        proactivity: None,
+        quotas: None,
+    };
+    let kernel = boot(&ask_stores, &home, &workspace, ask)?;
+    kernel.start().await?;
+    let terminal = ControlClient::connect_local(&home).await?.context("the kernel's socket")?;
+    let request =
+        SpawnRequest::new(APP, json!({ "text": "bump the dependency" })).with_session_id("k4-ask");
+    let pid = terminal.spawn(&request).await?.meta.pid;
+    let proposed = until(Duration::from_secs(20), || {
+        let terminal = terminal.clone();
+        let pid = pid.clone();
+        async move { Ok(followup_of(&terminal, &pid).await?.is_some()) }
+    })
+    .await?;
+    checks.check("the turn's proposal is on the agenda", proposed);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let followup = followup_of(&terminal, &pid).await?;
+    checks.check(
+        "in Ask it stays proposed and nothing runs before a decision",
+        followup.as_ref().is_some_and(|(item, process)| {
+            item.state == adk_kernel::AgendaState::Proposed && process.is_none()
+        }),
+    );
+    let phone = ControlClient::http(format!("http://{addr}"));
+    let inbox = phone.approvals().await?;
+    let request = inbox.iter().find(|item| item.tool_name == adk_kernel::AGENDA_TOOL_NAME);
+    checks.check(
+        "the inbox asks for it with approve, edit and reject",
+        request.is_some_and(|item| {
+            item.allowed_actions
+                == [ApprovalAction::Approve, ApprovalAction::Edit, ApprovalAction::Reject]
+        }),
+    );
+    if let Some(item) = request {
+        phone.decide(&item.id, item.version, ApprovalAction::Approve, None).await?;
+    }
+    let done = until(Duration::from_secs(20), || {
+        let phone = phone.clone();
+        let pid = pid.clone();
+        async move {
+            Ok(followup_of(&phone, &pid)
+                .await?
+                .is_some_and(|(item, _)| item.state == adk_kernel::AgendaState::Done))
+        }
+    })
+    .await?;
+    let followup = followup_of(&phone, &pid).await?;
+    checks.check("approved from the phone, the follow-up ran", done);
+    checks.check(
+        "it ran as a `Proposed` process whose parent is the proposing turn",
+        followup.as_ref().and_then(|(_, process)| process.as_ref()).is_some_and(|process| {
+            process.meta.kind == adk_kernel::ProcessKind::Proposed
+                && process.meta.parent.as_deref() == Some(pid.as_str())
+                && process.run.state == RunState::Completed
+        }),
+    );
+    let actions: Vec<String> = recorder.records().into_iter().map(|record| record.action).collect();
+    checks.check(
+        "the proposal and the approval are audited",
+        [adk_kernel::audit::AGENDA_PROPOSED, adk_kernel::audit::AGENDA_APPROVED]
+            .iter()
+            .all(|action| actions.iter().any(|recorded| recorded == action)),
+    );
+    kernel.stop().await?;
+
+    // Auto, at night: the policy schedules the follow-up for when quiet hours end.
+    let night = Utc::now().date_naive().and_hms_opt(23, 0, 0).context("23:00")?.and_utc();
+    let manual = Arc::new(ManualClock::new(night));
+    let clock: Arc<dyn Clock> = manual.clone();
+    let home = dir.path().join("home-auto");
+    let auto_stores = stores(&home, clock.clone()).await?;
+    let quiet = "22:00-07:00".parse::<adk_kernel::QuietHours>()?.with_utc_offset_minutes(0);
+    let auto = Boot {
+        model: scripted(proposing("Re-run the tests")),
+        mode: HarnessMode::Auto,
+        control: ControlPlaneConfig::default().without_socket(),
+        audit: Arc::new(InMemoryAuditRecorder::new()),
+        clock,
+        proactivity: Some(adk_kernel::ProactivityPolicy::default().with_quiet_hours(quiet)),
+        quotas: None,
+    };
+    let kernel = boot(&auto_stores, &home, &workspace, auto)?;
+    kernel.start().await?;
+    let turn = kernel
+        .processes()
+        .spawn(
+            NewRun::new("interactive", APP, "ana", APP, json!({ "text": "bump the dependency" }))
+                .with_session_id("k4-auto"),
+            adk_kernel::ProcessSpec::new(adk_kernel::ProcessKind::Interactive),
+        )
+        .await?;
+    let scheduled = until(Duration::from_secs(20), || async {
+        let items = kernel.agenda().list(&adk_kernel::AgendaFilter::default()).await?;
+        Ok(items.iter().any(|item| matches!(item.state, adk_kernel::AgendaState::Scheduled { .. })))
+    })
+    .await?;
+    checks.check("in Auto the policy schedules the proposal", scheduled);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let item = kernel.agenda().list(&adk_kernel::AgendaFilter::default()).await?.pop();
+    checks.check(
+        "nothing starts inside quiet hours",
+        item.as_ref()
+            .is_some_and(|item| matches!(item.state, adk_kernel::AgendaState::Scheduled { .. })),
+    );
+    manual.advance(Duration::from_secs(8 * 60 * 60 + 60)); // 07:01
+    let done = until(Duration::from_secs(20), || async {
+        let items = kernel.agenda().list(&adk_kernel::AgendaFilter::default()).await?;
+        Ok(items.iter().any(|item| item.state == adk_kernel::AgendaState::Done))
+    })
+    .await?;
+    checks.check("it runs once quiet hours end", done);
+    let parent = kernel
+        .processes()
+        .ps(ProcessFilter::default())
+        .await?
+        .into_iter()
+        .find(|process| process.meta.kind == adk_kernel::ProcessKind::Proposed);
+    checks.check(
+        "its parent is the proposing turn",
+        parent
+            .is_some_and(|process| process.meta.parent.as_deref() == Some(turn.meta.pid.as_str())),
+    );
+    kernel.stop().await?;
+    Ok(checks)
+}
+
+/// A model whose answers follow the turn's first line: each prompt key has its own script,
+/// and the first call of a held key waits until the scenario releases it.
+struct PromptModel {
+    scripts: Vec<(&'static str, Arc<ScriptedLlm>, Arc<tokio::sync::Semaphore>, bool)>,
+    waiting: std::sync::atomic::AtomicUsize,
+}
+
+impl PromptModel {
+    fn release(&self, key: &str) {
+        if let Some((_, _, gate, _)) = self.scripts.iter().find(|(name, ..)| *name == key) {
+            gate.add_permits(1);
+        }
+    }
+
+    fn calls(&self, key: &str) -> usize {
+        self.scripts
+            .iter()
+            .find(|(name, ..)| *name == key)
+            .map_or(0, |(_, model, ..)| model.requests().len())
+    }
+}
+
+#[adk_core::async_trait]
+impl adk_core::Llm for PromptModel {
+    fn name(&self) -> &str {
+        "scripted"
+    }
+
+    async fn generate_content(
+        &self,
+        request: adk_core::LlmRequest,
+        stream: bool,
+    ) -> adk_core::Result<adk_core::LlmResponseStream> {
+        let prompt = request
+            .contents
+            .iter()
+            .filter(|content| content.role == "user")
+            .flat_map(|content| content.parts.iter())
+            .find_map(|part| match part {
+                adk_core::Part::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let Some((_, model, gate, held)) =
+            self.scripts.iter().find(|(key, ..)| prompt.contains(key))
+        else {
+            return Err(adk_core::AdkError::model(format!("no script for {prompt:?}")));
+        };
+        if *held && model.requests().is_empty() {
+            self.waiting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            gate.acquire()
+                .await
+                .map_err(|error| adk_core::AdkError::model(error.to_string()))?
+                .forget();
+            self.waiting.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        model.generate_content(request, stream).await
+    }
+}
+
+/// K8 (spec 3.2 §5): three background jobs run at the partition's quota of three; a typed
+/// message starts at once, the youngest job parks at its next checkpoint and is requeued
+/// when the message's run finishes, its read runs once, and the partition never runs more
+/// than three admitted processes.
+async fn k8_a_message_preempts_background_work() -> Result<Checks> {
+    let mut checks = Checks::default();
+    let dir = tempfile::tempdir()?;
+    let (home, workspace) = (dir.path().join("home"), dir.path().join("ws"));
+    std::fs::create_dir_all(&workspace)?;
+    std::fs::write(workspace.join("README.md"), "a project\n")?;
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let stores = stores(&home, clock.clone()).await?;
+    let job = |answer: &str| {
+        scripted(vec![
+            ScriptedResponse::function_call("read_file", json!({ "path": "README.md" })),
+            ScriptedResponse::text(answer),
+        ])
+    };
+    let gate = || Arc::new(tokio::sync::Semaphore::new(0));
+    let model = Arc::new(PromptModel {
+        scripts: vec![
+            ("job-0", job("job 0 done"), gate(), true),
+            ("job-1", job("job 1 done"), gate(), true),
+            ("job-2", job("job 2 done"), gate(), true),
+            (
+                "question",
+                scripted(vec![ScriptedResponse::text("Here is the answer.")]),
+                gate(),
+                false,
+            ),
+        ],
+        waiting: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let recorder = InMemoryAuditRecorder::new();
+    let setup = Boot {
+        model: model.clone(),
+        mode: HarnessMode::Ask,
+        control: ControlPlaneConfig::default().without_socket(),
+        audit: Arc::new(recorder.clone()),
+        clock,
+        proactivity: None,
+        quotas: Some(adk_kernel::Quotas::new().with_max_running(3)),
+    };
+    let kernel = boot(&stores, &home, &workspace, setup)?;
+    kernel.start().await?;
+
+    // Samples the admitted processes: running, and not on their way to park.
+    let sampling = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let sampler = {
+        let (kernel, sampling, peak) = (kernel.clone(), sampling.clone(), peak.clone());
+        tokio::spawn(async move {
+            while sampling.load(std::sync::atomic::Ordering::SeqCst) {
+                if let Ok(processes) = kernel.processes().ps(ProcessFilter::default()).await {
+                    let admitted = processes
+                        .iter()
+                        .filter(|process| {
+                            process.run.state == RunState::Running
+                                && process.run.target != adk_kernel::KERNEL_WAKE_TARGET
+                                && process.meta.wake.is_none()
+                                && !process.meta.suspend_requested
+                                && process.meta.suspended_by.is_none()
+                        })
+                        .count();
+                    peak.fetch_max(admitted, std::sync::atomic::Ordering::SeqCst);
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+    };
+
+    let mut jobs = Vec::new();
+    for n in 0..3 {
+        let run = NewRun::new(
+            "background",
+            APP,
+            "ana",
+            APP,
+            json!({ "text": format!("job-{n}: tidy the docs") }),
+        )
+        .with_session_id(format!("k8-job-{n}"));
+        let process = kernel
+            .processes()
+            .spawn(run, adk_kernel::ProcessSpec::new(adk_kernel::ProcessKind::Goal))
+            .await?;
+        jobs.push(process.meta.pid);
+        let started = until(Duration::from_secs(20), || async {
+            Ok(model.waiting.load(std::sync::atomic::Ordering::SeqCst) == n + 1)
+        })
+        .await?;
+        if !started {
+            bail!("background job {n} did not reach its first model call");
+        }
+    }
+    checks.check("three background jobs run at the quota of three", true);
+
+    let typed = std::time::Instant::now();
+    let message = kernel
+        .processes()
+        .spawn(
+            NewRun::new(
+                "interactive",
+                APP,
+                "ana",
+                APP,
+                json!({ "text": "question: what changed?" }),
+            )
+            .with_session_id("k8-message"),
+            adk_kernel::ProcessSpec::new(adk_kernel::ProcessKind::Interactive),
+        )
+        .await?
+        .meta
+        .pid;
+    let answered = until(Duration::from_secs(10), || async {
+        Ok(stores.runs.get(&message).await?.is_some_and(|run| run.state == RunState::Completed))
+    })
+    .await?;
+    checks.check(
+        "the message's run starts at once and completes while the jobs still run",
+        answered && typed.elapsed() < Duration::from_secs(3),
+    );
+    let youngest = jobs[2].clone();
+    let preempted = kernel.processes().get(&youngest).await?;
+    checks.check(
+        "the youngest job is preempted by the message",
+        preempted.is_some_and(|process| {
+            process.meta.suspended_by
+                == Some(adk_kernel::Suspension::Preempted { by: message.clone() })
+        }),
+    );
+
+    // The youngest job reaches its checkpoint, parks, and is requeued: the message finished.
+    model.release("job-2");
+    let requeued = until(Duration::from_secs(20), || async {
+        Ok(stores.runs.get(&youngest).await?.is_some_and(|run| run.state == RunState::Completed))
+    })
+    .await?;
+    for key in ["job-0", "job-1"] {
+        model.release(key);
+    }
+    let finished = until(Duration::from_secs(20), || async {
+        let mut all = true;
+        for pid in &jobs[..2] {
+            all &= stores.runs.get(pid).await?.is_some_and(|run| run.state == RunState::Completed);
+        }
+        Ok(all)
+    })
+    .await?;
+    sampling.store(false, std::sync::atomic::Ordering::SeqCst);
+    sampler.await?;
+    let records: Vec<_> = recorder.records();
+    let parked = records.iter().any(|record| {
+        record.action == adk_kernel::audit::PROCESS_SUSPENDED
+            && record.ext.get("pid").and_then(|pid| pid.as_str()) == Some(youngest.as_str())
+    });
+    let requeue_record = records.iter().any(|record| {
+        record.action == adk_kernel::audit::PROCESS_REQUEUED
+            && record.ext.get("pid").and_then(|pid| pid.as_str()) == Some(youngest.as_str())
+    });
+    checks.check(
+        "the youngest job parked at its checkpoint and was requeued",
+        parked && requeue_record && requeued,
+    );
+    checks.check("every job completed", finished);
+    checks.check(
+        "the preempted job's read ran once (two model calls, one read)",
+        model.calls("job-2") == 2,
+    );
+    checks.check(
+        "the partition never ran more than three admitted processes",
+        peak.load(std::sync::atomic::Ordering::SeqCst) <= 3,
     );
     kernel.stop().await?;
     Ok(checks)

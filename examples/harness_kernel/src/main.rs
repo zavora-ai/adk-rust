@@ -40,13 +40,25 @@ const SCRIPTED: &[(&str, &str)] = &[
         "a schedule fires only while `adk-rust serve` runs; nothing keeps it across a restart",
     ),
     (
+        "k4_it_proposes_its_own_work",
+        "there is no agenda: a follow-up the agent mentions is prose nobody schedules or approves",
+    ),
+    (
+        "k8_a_message_preempts_background_work",
+        "a typed message queues behind background work; nothing bounds a partition or parks a run for a human turn",
+    ),
+    (
         "k5_one_job_many_windows",
         "a turn belongs to the terminal that runs it; there is no control plane to attach to",
     ),
 ];
 
 /// The live scenarios.
-const LIVE: &[&str] = &["live_k5_approve_from_another_process", "live_k3_file_change_wakes"];
+const LIVE: &[&str] = &[
+    "live_k5_approve_from_another_process",
+    "live_k3_file_change_wakes",
+    "live_k4_a_proposal_waits_for_approval",
+];
 
 fn verdict(result: &Result<Checks>) -> String {
     match result {
