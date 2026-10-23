@@ -334,8 +334,9 @@ proptest! {
         })?;
     }
 
-    /// The loss cap: the passes change at most `max(1, ⌊max_loss_fraction × live⌋)` of each
-    /// scope's live facts, and a refused tick changes nothing.
+    /// The loss cap: the passes lose at most `max(1, ⌊max_loss_fraction × live⌋)` of each
+    /// scope's live facts — one per pass-1 supersession or expiry, and per merge the facts
+    /// it supersedes less the one it writes — and a refused tick changes nothing.
     #[test]
     fn no_tick_crosses_the_loss_cap(case in case(false)) {
         let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -344,19 +345,37 @@ proptest! {
             let record = tick(&seeded, &case).await;
             for scope in &record.scopes {
                 let live = seeded.facts.iter().filter(|fact| fact.scope == *scope).count();
-                let changed = record
-                    .changes
+                let in_scope: Vec<_> =
+                    record.changes.iter().filter(|change| change.scope == *scope).collect();
+                let pass_one = in_scope
                     .iter()
-                    .filter(|change| change.scope == *scope)
                     .filter(|change| {
-                        matches!(
-                            change.reason,
-                            ChangeReason::Duplicate | ChangeReason::Expired | ChangeReason::Merged
-                        )
+                        matches!(change.reason, ChangeReason::Duplicate | ChangeReason::Expired)
                     })
                     .count();
+                // Per merge target, the facts it superseded; a target the tick wrote kept
+                // their content, so that merge lost one fact fewer.
+                let mut merges: HashMap<&str, usize> = HashMap::new();
+                for change in &in_scope {
+                    if let (ChangeReason::Merged, FactStatus::Superseded { by }) =
+                        (&change.reason, &change.to)
+                    {
+                        *merges.entry(by.as_str()).or_default() += 1;
+                    }
+                }
+                let merged: usize = merges
+                    .iter()
+                    .map(|(by, superseded)| {
+                        if record.merged.iter().any(|id| id == by) {
+                            superseded - 1
+                        } else {
+                            *superseded
+                        }
+                    })
+                    .sum();
+                let lost = pass_one + merged;
                 let cap = ((case.max_loss_fraction * live as f32).floor() as usize).max(1);
-                prop_assert!(changed <= cap, "{changed} of {live} under {}", case.max_loss_fraction);
+                prop_assert!(lost <= cap, "{lost} of {live} under {}", case.max_loss_fraction);
             }
             if record.refused.is_some() {
                 prop_assert!(record.changes.is_empty() && record.merged.is_empty());

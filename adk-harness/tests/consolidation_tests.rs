@@ -529,9 +529,9 @@ async fn a_tick_over_the_loss_cap_applies_nothing() {
     assert_eq!((record.refused.as_deref(), record.superseded().count()), (None, 2));
 }
 
-/// The loss cap is `max(1, ⌊max_loss_fraction × live⌋)` changes per scope: a new user's
+/// The loss cap is `max(1, ⌊max_loss_fraction × live⌋)` lost facts per scope: a new user's
 /// two-fact scope collapses its one duplicate pair, while a ten-fact scope, whose share is
-/// two, still refuses three changes whole.
+/// two, still refuses three pass-1 supersessions whole.
 #[tokio::test]
 async fn the_loss_cap_lets_a_small_scope_collapse_one_duplicate() {
     // Pair `i` lies in dimensions 2i and 2i+1 at cosine 0.95, orthogonal to every other pair.
@@ -570,6 +570,83 @@ async fn the_loss_cap_lets_a_small_scope_collapse_one_duplicate() {
     assert!(record.refused.as_deref().is_some_and(|why| why.contains("3 of the 10")), "{record:?}");
     assert!(record.changes.is_empty());
     for fact in &seeded {
+        assert_eq!(large.get(fact).await, *fact);
+    }
+}
+
+/// A merge loses the facts it supersedes less the one it writes: a two-fact scope merges
+/// its one similar pair, while a ten-fact scope whose four-fact cluster would lose three,
+/// more than its share of two, refuses the merge whole.
+#[tokio::test]
+async fn a_merge_counts_the_facts_it_loses_against_the_loss_cap() {
+    let small = World::new();
+    let a = small
+        .seed("build with make release", FactStatus::Assumed, 2, Some(0.9), at_cosine(1.0))
+        .await;
+    let b = small
+        .seed("the release build runs make", FactStatus::Assumed, 1, Some(0.9), at_cosine(0.85))
+        .await;
+    let distiller = Arc::new(ScriptedLlm::new(
+        "distiller",
+        vec![merge("Release builds run `make release`", &[&a.id, &b.id], &[&a.id, &b.id])],
+    ));
+    let harness = small.harness(&idle(), &distiller);
+    let record = harness.consolidate_memory(&alice(), ConsolidationRequest::new()).await.unwrap();
+    assert_eq!((record.refused.as_deref(), record.merged.len()), (None, 1), "{record:?}");
+    for source in [&a, &b] {
+        assert_eq!(
+            small.get(source).await.status,
+            FactStatus::Superseded { by: record.merged[0].clone() }
+        );
+    }
+
+    // A head and three older facts at cosine 0.85 to it and 0.72 to each other: one
+    // cluster, no pass-1 duplicate.
+    let large = World::new();
+    let spoke = |axis: usize| {
+        let mut vector = vec![0.85, 0.0, 0.0, 0.0];
+        vector[axis] = (1.0_f32 - 0.85 * 0.85).sqrt();
+        vector
+    };
+    let mut cluster = vec![
+        large
+            .seed(
+                "deploys go out on fridays",
+                FactStatus::Assumed,
+                1,
+                Some(0.9),
+                vec![1.0, 0.0, 0.0, 0.0],
+            )
+            .await,
+    ];
+    for axis in 1..4 {
+        cluster.push(
+            large
+                .seed(
+                    &format!("deploy rule {axis}"),
+                    FactStatus::Assumed,
+                    2,
+                    Some(0.9),
+                    spoke(axis),
+                )
+                .await,
+        );
+    }
+    large.fillers(6).await;
+    let ids: Vec<&str> = cluster.iter().map(|fact| fact.id.as_str()).collect();
+    let distiller = Arc::new(ScriptedLlm::new(
+        "distiller",
+        vec![merge("Deploys go out on Fridays", &ids, &ids)],
+    ));
+    let harness = large.harness(&idle(), &distiller);
+    let record = harness.consolidate_memory(&alice(), ConsolidationRequest::new()).await.unwrap();
+    assert_eq!(distiller.requests().len(), 1, "the cluster went to the model");
+    assert!(
+        record.refused.as_deref().is_some_and(|why| why.contains("lose 3 of the 10")),
+        "{record:?}"
+    );
+    assert!(record.changes.is_empty() && record.merged.is_empty());
+    for fact in &cluster {
         assert_eq!(large.get(fact).await, *fact);
     }
 }

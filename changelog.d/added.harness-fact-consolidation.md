@@ -7,8 +7,9 @@
   facts on the distiller model, the merged fact listing its sources in
   `Provenance::source_ids`. `Known` facts are never superseded, merged or expired, an
   `Assumed` fact naming a `Known` one is stored beside it, and the passes apply nothing past
-  `max(1, ⌊max_loss_fraction × live facts⌋)` status changes in a scope (`max_loss_fraction`
-  0.25), so a small scope can still collapse one duplicate. Each tick keeps a `ConsolidationRecord`
+  `max(1, ⌊max_loss_fraction × live facts⌋)` lost live facts in a scope (`max_loss_fraction`
+  0.25): one per pass-1 supersession or expiry, and per merge the facts it supersedes less
+  the one it writes, so a small scope can still collapse one duplicate. Each tick keeps a `ConsolidationRecord`
   in the fact store and writes one `harness.memory.consolidated` audit record;
   `Harness::undo_consolidation` and `undo_consolidation` revert a finished tick
   (`ConsolidationRecord::finished_at`); one still running is refused.
