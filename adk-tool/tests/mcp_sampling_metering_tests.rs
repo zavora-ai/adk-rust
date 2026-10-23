@@ -38,11 +38,15 @@ impl ServerHandler for SamplingServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
         let schema = json!({ "type": "object" }).as_object().cloned().unwrap_or_default();
-        Ok(ListToolsResult::with_all_items(vec![rmcp::model::Tool::new(
-            "summarize",
-            "Summarizes with the client's model.",
-            Arc::new(schema),
-        )]))
+        // Read-only, so a call lost with its connection may be re-issued (spec 3.2 §10 T2).
+        Ok(ListToolsResult::with_all_items(vec![
+            rmcp::model::Tool::new(
+                "summarize",
+                "Summarizes with the client's model.",
+                Arc::new(schema),
+            )
+            .with_annotations(rmcp::model::ToolAnnotations::new().read_only(true)),
+        ]))
     }
 
     async fn call_tool(
@@ -291,4 +295,102 @@ async fn sampling_outside_a_run_uses_the_attached_scope_or_is_unmetered() {
     assert_eq!(tracker.usage().model_calls, 1);
     let key = SpendKey::org("acme").with_agent("background-sync");
     assert_eq!(ledger.spent(&key, SpendPeriod::Lifetime).await.unwrap(), 1_500);
+}
+
+// --- A managed server in its own process (spec 3.2 §7.7) ----------------------------------
+
+/// Names the mode when this binary runs as the stdio [`SamplingServer`].
+const SERVER_ENV: &str = "ADK_TOOL_MCP_SAMPLING_TEST_SERVER";
+
+/// Serves [`SamplingServer`] over stdio when [`SERVER_ENV`] is set.
+#[tokio::test]
+#[ignore = "runs only as the stdio MCP server the manager tests start"]
+async fn stdio_sampling_server() {
+    if std::env::var(SERVER_ENV).is_err() {
+        return;
+    }
+    let running = SamplingServer.serve((tokio::io::stdin(), tokio::io::stdout())).await.unwrap();
+    let _ = running.waiting().await;
+}
+
+/// A manager running [`SamplingServer`] as `summarizer`, sampling on [`PricedModel`].
+async fn managed_summarizer(calls: Arc<AtomicUsize>) -> adk_tool::mcp::McpServerManager {
+    let config = adk_tool::mcp::McpServerConfig {
+        command: std::env::current_exe().unwrap().display().to_string(),
+        args: ["stdio_sampling_server", "--exact", "--ignored", "--quiet", "--test-threads=1"]
+            .map(str::to_string)
+            .to_vec(),
+        env: [(SERVER_ENV.to_string(), "1".to_string())].into(),
+        ..Default::default()
+    };
+    let manager = adk_tool::mcp::McpServerManager::new([("summarizer".to_string(), config)].into())
+        .with_sampling_handler(Arc::new(LlmSamplingHandler::new(Arc::new(PricedModel { calls }))));
+    manager.start_server("summarizer").await.expect("the stdio server starts");
+    manager
+}
+
+/// A run's budget and ledger, and a tool context inside it.
+fn metered_run() -> (Arc<BudgetTracker>, Arc<InMemorySpendLedger>, Arc<dyn ToolContext>) {
+    let tracker = Arc::new(BudgetTracker::new(RunBudget::new().max_model_calls(5)));
+    let ledger = Arc::new(InMemorySpendLedger::default());
+    let mut config = RunConfig::builder().spend_ledger(ledger.clone()).build();
+    config.budget_tracker = Some(tracker.clone());
+    (tracker, ledger, RunToolContext::new(Some(config)) as Arc<dyn ToolContext>)
+}
+
+fn vendor_key() -> SpendKey {
+    SpendKey::org("acme").with_agent("urn:adk:agent:acme/researcher").with_vendor("sampler-vendor")
+}
+
+#[tokio::test]
+async fn a_managed_call_for_a_run_meters_its_sampling_against_the_run() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let manager = managed_summarizer(calls.clone()).await;
+    let (tracker, ledger, ctx) = metered_run();
+
+    let outcome = manager
+        .call_tool_resumable("summarizer", ctx, "summarize", Default::default())
+        .await
+        .expect("the call completes");
+
+    let adk_tool::mcp::McpCallOutcome::Completed(value) = outcome else {
+        panic!("the call parked: {outcome:?}")
+    };
+    assert!(value.to_string().contains("short summary"), "{value}");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let usage = tracker.usage();
+    assert_eq!((usage.model_calls, usage.total_tokens, usage.cost_micro_usd), (1, 30, 1_500));
+    assert_eq!(ledger.spent(&vendor_key(), SpendPeriod::Lifetime).await.unwrap(), 1_500);
+    manager.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_managed_reissue_for_a_run_meters_its_sampling_against_the_run() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let manager = managed_summarizer(calls.clone()).await;
+    // A legacy call lost with its connection; the tool is read-only, so it runs again.
+    let parked: adk_tool::mcp::ParkedMcpCall = serde_json::from_value(json!({
+        "serverId": "summarizer",
+        "toolName": "summarize",
+        "arguments": {},
+        "callId": "call-1",
+        "inputRequestsDigest": adk_tool::mcp::ParkedMcpCall::digest_input_requests(&Default::default()),
+        "inputRounds": 0,
+        "kind": "legacy"
+    }))
+    .unwrap();
+
+    // Without the run's context the re-issue samples unmetered.
+    let (tracker, _, _) = metered_run();
+    manager.reissue_parked_call(&parked, Default::default()).await.expect("re-issued");
+    assert_eq!((calls.load(Ordering::SeqCst), tracker.usage().model_calls), (1, 0));
+
+    let (tracker, ledger, ctx) = metered_run();
+    let outcome =
+        manager.reissue_parked_call_for(ctx, &parked, Default::default()).await.expect("re-issued");
+    assert!(matches!(outcome, adk_tool::mcp::McpCallOutcome::Completed(_)), "{outcome:?}");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(tracker.usage().model_calls, 1);
+    assert_eq!(ledger.spent(&vendor_key(), SpendPeriod::Lifetime).await.unwrap(), 1_500);
+    manager.shutdown().await.unwrap();
 }

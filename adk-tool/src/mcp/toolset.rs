@@ -1350,6 +1350,28 @@ where
         }
     }
 
+    /// Enters the scopes an agent's call made with `ctx` runs in, as a tool of this toolset
+    /// enters them: sampling requests the server sends meanwhile count against the run, and
+    /// elicitations belong to the call (spec 3.2 §7.7). The scopes end with the guard.
+    pub(crate) fn enter_call_scopes(&self, ctx: &dyn ToolContext) -> CallScopes {
+        #[cfg(feature = "mcp-sampling")]
+        let sampling = ctx
+            .run_config()
+            .map(|config| {
+                adk_core::ModelCallScope::for_run(config, ctx.app_name(), ctx.agent_name())
+            })
+            .filter(|scope| !scope.is_unmetered())
+            .map(|scope| self.client.sampling_scopes.enter(scope));
+        CallScopes {
+            #[cfg(feature = "mcp-sampling")]
+            _sampling: sampling,
+            _elicitation: self
+                .client
+                .elicitation_scopes
+                .enter(super::elicitation::ElicitationScope::for_call(ctx)),
+        }
+    }
+
     /// A tool for `name` without its declaration, for calls made outside discovery.
     ///
     /// Fails without contacting the server when the filter excludes `name`.
@@ -2121,6 +2143,14 @@ enum InputMode {
     Answer,
     /// By ending the call with its parked form.
     Park,
+}
+
+/// The scopes of an agent's call, entered by [`McpToolset::enter_call_scopes`]; they end
+/// when this is dropped.
+pub(crate) struct CallScopes {
+    #[cfg(feature = "mcp-sampling")]
+    _sampling: Option<crate::sampling::SamplingScopeGuard>,
+    _elicitation: super::elicitation::ElicitationScopeGuard,
 }
 
 /// A call's identity and input policy, kept across its rounds.

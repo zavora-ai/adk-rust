@@ -950,6 +950,64 @@ impl McpServerManager {
         self.running_toolset(&parked.server_id).await?.reissue(parked, responses).await
     }
 
+    /// Calls tool `name` on running server `id` for an agent's call, ending it with its
+    /// parked form when the server needs input (spec 3.2 §7.7, §10 T2).
+    ///
+    /// This is [`McpToolset::call_tool_resumable`] on the server's connection, run in the
+    /// scopes the call's tool would enter: sampling requests the server sends meanwhile
+    /// count against `ctx`'s run, and elicitations belong to the call. The call id is
+    /// `ctx`'s function call id.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` when the server is unknown or not running, and as
+    /// [`McpToolset::call_tool_resumable`] does.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// match manager.call_tool_resumable("email", ctx, "send_draft", arguments).await? {
+    ///     McpCallOutcome::Completed(value) => Ok(value),
+    ///     McpCallOutcome::Parked(parked) => park(parked).await,
+    /// }
+    /// ```
+    pub async fn call_tool_resumable(
+        &self,
+        id: &str,
+        ctx: Arc<dyn adk_core::ToolContext>,
+        name: &str,
+        arguments: serde_json::Map<String, serde_json::Value>,
+    ) -> adk_core::Result<super::super::McpCallOutcome> {
+        let toolset = self.running_toolset(id).await?;
+        let _scopes = toolset.enter_call_scopes(ctx.as_ref());
+        let call_id = Some(ctx.function_call_id()).filter(|call_id| !call_id.is_empty());
+        toolset.call_tool_resumable(call_id, name, arguments).await
+    }
+
+    /// [`reissue_parked_call`](Self::reissue_parked_call) for an agent's call, run in the
+    /// scopes the call's tool would enter, as
+    /// [`call_tool_resumable`](Self::call_tool_resumable) runs (spec 3.2 §7.7, §10 T2).
+    ///
+    /// # Errors
+    ///
+    /// As [`reissue_parked_call`](Self::reissue_parked_call).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let outcome = manager.reissue_parked_call_for(ctx, &parked, responses).await?;
+    /// ```
+    pub async fn reissue_parked_call_for(
+        &self,
+        ctx: Arc<dyn adk_core::ToolContext>,
+        parked: &super::super::ParkedMcpCall,
+        responses: rmcp::model::InputResponses,
+    ) -> adk_core::Result<super::super::McpCallOutcome> {
+        let toolset = self.running_toolset(&parked.server_id).await?;
+        let _scopes = toolset.enter_call_scopes(ctx.as_ref());
+        toolset.reissue(parked, responses).await
+    }
+
     /// Return a map of all server IDs to their current [`ServerStatus`].
     ///
     /// # Example

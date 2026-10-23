@@ -643,7 +643,10 @@ call at its first question instead of answering it in process, a handler answeri
 process reads the call with `ParkedMcpCall::current()`, and `McpToolset::reissue` (or
 `McpServerManager::reissue_parked_call`) resumes it: a new `tools/call` with
 `inputResponses` and the stored state, `tasks/get` and `tasks/update` for a task, and for
-a legacy call a second run only when the tool declares `readOnlyHint` or `idempotentHint`.
+a legacy call a second run only when the tool declares `readOnlyHint` or `idempotentHint`. On a
+managed server, `McpServerManager::call_tool_resumable` and
+`McpServerManager::reissue_parked_call_for` make the call or the re-issue for an agent's
+tool call, so the server's sampling counts against that run.
 
 ### MCP Auto-Reconnect (Connection Resilience)
 
