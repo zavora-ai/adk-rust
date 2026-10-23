@@ -1,6 +1,6 @@
 //! K1 and K5 on `ScriptedLlm` with a real kernel (spec 3.2 §5, §11): the kernel's durable
 //! workers, its scheduler, SQLite stores in `harness.db`, and its control plane on a socket
-//! and loopback HTTP, composed as `adk-rust up` composes them.
+//! and loopback HTTP, composed as `adk-rust up` composes them, through `Harness::kernel`.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -8,16 +8,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use adk_auth::signed_audit::{AuditExport, AuditLog, AuditSigner, Ed25519Signer, NoteVerifier};
-use adk_core::audit_log::{AuditRecorder, AuditTrail, InMemoryAuditRecorder};
+use adk_core::audit_log::{AuditRecorder, InMemoryAuditRecorder};
 use adk_core::{
-    ApprovalAction, ApprovalPolicy, ApprovalService, ApproverSelector, DurableRunStore,
-    MissedFirePolicy, NewRun, RunFilter, RunState, Schedule, ScheduleSpec, ScheduleStore,
-    StoreApprovalService,
+    ApprovalAction, ApprovalPolicy, ApprovalService, ApproverSelector, Clock, DurableRunStore,
+    ManualClock, MissedFirePolicy, NewRun, RunFilter, RunState, Schedule, ScheduleSpec,
+    ScheduleStore, StoreApprovalService, SystemClock,
 };
-use adk_harness::{HarnessAgent, HarnessMode, InstructionsConfig};
+use adk_harness::{Harness, HarnessAgent, HarnessMode, InstructionsConfig};
 use adk_kernel::control::api::{AttachRequest, ProcessesQuery, SpawnRequest};
 use adk_kernel::control::{ControlClient, ControlPlaneConfig};
-use adk_kernel::{Kernel, KernelConfig, ProcessFilter};
+use adk_kernel::{Kernel, KernelConfig, ProcessFilter, QueueClass};
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_session::{
     SqliteApprovalStore, SqliteAuditLogStore, SqliteRunStore, SqliteScheduleStore,
@@ -50,13 +50,15 @@ struct Stores {
     logs: Arc<SqliteAuditLogStore>,
 }
 
-async fn stores(home: &Path) -> Result<Stores> {
+/// The stores of `home`, the run store on `clock`, the clock the kernel reads too: the run
+/// store decides leases and `not_before`, the kernel wake times and due schedules.
+async fn stores(home: &Path, clock: Arc<dyn Clock>) -> Result<Stores> {
     std::fs::create_dir_all(home)?;
     let url = format!("sqlite://{}?mode=rwc", home.join("harness.db").display());
     let sessions = SqliteSessionService::new(&url).await?;
     sessions.migrate().await?;
     let pool = sessions.pool().clone();
-    let runs = SqliteRunStore::from_pool(pool.clone());
+    let runs = SqliteRunStore::from_pool(pool.clone()).with_clock(clock);
     runs.migrate().await?;
     let approvals = SqliteApprovalStore::from_pool(pool.clone());
     approvals.migrate().await?;
@@ -80,59 +82,59 @@ fn scripted(replies: Vec<ScriptedResponse>) -> Arc<ScriptedLlm> {
     Arc::new(ScriptedLlm::new("scripted", replies))
 }
 
-/// One boot of the kernel over `stores`: the harness on `model` in `mode`, held calls
-/// routed to the `operator` group, the control plane as `control` says.
-fn boot(
-    stores: &Stores,
-    home: &Path,
-    workspace: &Path,
+/// How one boot of the kernel runs.
+struct Boot {
     model: Arc<ScriptedLlm>,
     mode: HarnessMode,
     control: ControlPlaneConfig,
     audit: Arc<dyn AuditRecorder>,
-) -> Result<Kernel> {
+    clock: Arc<dyn Clock>,
+}
+
+/// One boot of the kernel over `stores`: the harness, held calls routed to the `operator`
+/// group, built with `Harness::kernel` (spec 3.2 §10 HK1) as `adk-rust up` builds it.
+fn boot(stores: &Stores, home: &Path, workspace: &Path, boot: Boot) -> Result<Kernel> {
     let routing = ApprovalPolicy::new([ApproverSelector::group("operator")]).allow_self_approval();
     let service: Arc<dyn ApprovalService> = Arc::new(
         StoreApprovalService::new(stores.approvals.clone())
             .with_router(routing)
             .with_run_store(stores.runs.clone()),
     );
-    let agent = HarnessAgent::builder(APP)
-        .model(model)
-        .workspace(adk_devtools::Workspace::new(workspace).allow_bash(true))
-        .project_instructions(InstructionsConfig {
-            user_file: None,
-            ..InstructionsConfig::default()
-        })
-        .without_default_members()
-        .mode(mode)
-        .approval_store(stores.approvals.clone())
-        .approval_service(service.clone())
-        .audit_log(audit.clone())
-        .build()?;
-    let runner = Arc::new(
-        adk_runner::Runner::builder()
-            .app_name(APP)
-            .agent(agent.agent())
-            .session_service(stores.sessions.clone())
-            .approval_store(agent.runtime().approval_store().clone())
+    let agent = Arc::new(
+        HarnessAgent::builder(APP)
+            .model(boot.model)
+            .workspace(adk_devtools::Workspace::new(workspace).allow_bash(true))
+            .project_instructions(InstructionsConfig {
+                user_file: None,
+                ..InstructionsConfig::default()
+            })
+            .without_default_members()
+            .mode(boot.mode)
+            .approval_store(stores.approvals.clone())
+            .approval_service(service)
+            .audit_log(boot.audit)
             .build()?,
     );
+    let runner = adk_runner::Runner::builder()
+        .app_name(APP)
+        .agent(agent.agent())
+        .session_service(stores.sessions.clone())
+        .approval_store(agent.runtime().approval_store().clone())
+        .build()?;
+    let harness = Harness::with_runner(agent, runner)?
+        .with_run_store(stores.runs.clone())
+        .with_goal_queue(QueueClass::BACKGROUND);
     let config = KernelConfig::default()
         .with_app_name(APP)
         .with_home(home)
         .with_scheduler_tick(Duration::from_millis(250))
-        .with_control(control);
-    Ok(Kernel::builder()
+        .with_control(boot.control)
+        .with_clock(boot.clock);
+    Ok(harness
+        .kernel()
         .config(config)
-        .run_store(stores.runs.clone())
         .process_store(stores.processes.clone())
         .schedule_store(stores.schedules.clone())
-        .approval_service(service)
-        .session_service(stores.sessions.clone())
-        .audit(AuditTrail::new(audit))
-        .agent(APP, runner.clone())
-        .agent(adk_harness::GOAL_TARGET, runner)
         .build()?)
 }
 
@@ -152,33 +154,39 @@ where
     Ok(false)
 }
 
+/// The runs of the nightly schedule.
+async fn nightly(stores: &Stores) -> Result<Vec<adk_core::RunRecord>> {
+    Ok(stores.runs.list(RunFilter::default().session_id("nightly")).await?)
+}
+
 /// K1 without service installation (spec 3.2 §5): a nightly audit is scheduled, the host
-/// goes down before its time and comes back after it; the next boot runs it once, the
-/// process table shows it `Completed`, and the signed audit log verifies.
+/// goes down before its time and comes back the next morning; the next boot runs it once,
+/// the process table shows it `Completed`, and the signed audit log verifies. The night
+/// passes on a manual clock the run store and the kernel share.
 async fn k1_leave_it_running() -> Result<Checks> {
     let mut checks = Checks::default();
     let dir = tempfile::tempdir()?;
     let (home, workspace) = (dir.path().join("home"), dir.path().join("ws"));
     std::fs::create_dir_all(&workspace)?;
-    let stores = stores(&home).await?;
+    let manual = Arc::new(ManualClock::new(Utc::now()));
+    let clock: Arc<dyn Clock> = manual.clone();
+    let stores = stores(&home, clock.clone()).await?;
     let signer = Arc::new(Ed25519Signer::generate("kernel-k1")?);
     let control = ControlPlaneConfig::default().without_socket();
-    let fire_at = Utc::now() + chrono::Duration::seconds(3);
+    let fire_at = clock.now() + chrono::Duration::hours(2);
 
-    // First boot: the schedule is recorded, then the host goes down before its time.
+    // First boot, in the evening: the schedule is recorded, then the host goes down.
     {
-        let log: Arc<dyn AuditRecorder> = Arc::new(
-            AuditLog::builder(stores.logs.clone(), "kernel-k1", signer.clone()).open().await?,
-        );
-        let kernel = boot(
-            &stores,
-            &home,
-            &workspace,
-            scripted(Vec::new()),
-            HarnessMode::Auto,
-            control.clone(),
-            log,
-        )?;
+        let log =
+            AuditLog::builder(stores.logs.clone(), "kernel-k1", signer.clone()).open().await?;
+        let first = Boot {
+            model: scripted(Vec::new()),
+            mode: HarnessMode::Auto,
+            control: control.clone(),
+            audit: Arc::new(log),
+            clock: clock.clone(),
+        };
+        let kernel = boot(&stores, &home, &workspace, first)?;
         kernel.start().await?;
         let run =
             NewRun::new("background", APP, "ana", APP, json!({ "text": "audit the repository" }))
@@ -188,46 +196,40 @@ async fn k1_leave_it_running() -> Result<Checks> {
             ScheduleSpec::At(fire_at),
             run,
             MissedFirePolicy::FireOnce,
-        );
+        )
+        .with_next_fire_at(fire_at);
         stores.schedules.upsert(schedule).await?;
         kernel.stop().await?;
     }
-    tokio::time::sleep(
-        (fire_at - Utc::now()).to_std().unwrap_or_default() + Duration::from_secs(1),
-    )
-    .await;
-    let fired = |stores: &Stores| {
-        let runs = stores.runs.clone();
-        async move {
-            let runs = runs.list(RunFilter::default().session_id("nightly")).await?;
-            Ok::<_, anyhow::Error>(runs)
-        }
-    };
-    checks.check("nothing ran while the host was down", fired(&stores).await?.is_empty());
+    // The host is down overnight, through the schedule's time.
+    manual.advance(Duration::from_secs(8 * 60 * 60));
+    checks.check("nothing ran while the host was down", nightly(&stores).await?.is_empty());
 
-    // Second boot, after the schedule's time: the missed firing runs once.
+    // Second boot, the next morning: the missed firing runs once.
     let log =
         Arc::new(AuditLog::builder(stores.logs.clone(), "kernel-k1", signer.clone()).open().await?);
-    let model = scripted(vec![
-        ScriptedResponse::function_call(
-            "write_file",
-            json!({ "path": "audit.txt", "content": "audited" }),
-        ),
-        ScriptedResponse::text("audited"),
-    ]);
-    let kernel = boot(&stores, &home, &workspace, model, HarnessMode::Auto, control, log.clone())?;
+    let second = Boot {
+        model: scripted(vec![
+            ScriptedResponse::function_call(
+                "write_file",
+                json!({ "path": "audit.txt", "content": "audited" }),
+            ),
+            ScriptedResponse::text("audited"),
+        ]),
+        mode: HarnessMode::Auto,
+        control,
+        audit: log.clone(),
+        clock,
+    };
+    let kernel = boot(&stores, &home, &workspace, second)?;
     kernel.start().await?;
-    let completed = until(Duration::from_secs(30), || {
-        let runs = stores.runs.clone();
-        async move {
-            let runs = runs.list(RunFilter::default().session_id("nightly")).await?;
-            Ok(runs.iter().any(|run| run.state.is_terminal()))
-        }
+    let completed = until(Duration::from_secs(30), || async {
+        Ok(nightly(&stores).await?.iter().any(|run| run.state.is_terminal()))
     })
     .await?;
     // A second firing would show up within a few scheduler ticks.
     tokio::time::sleep(Duration::from_secs(2)).await;
-    let runs = fired(&stores).await?;
+    let runs = nightly(&stores).await?;
     checks.check("the next boot ran the missed firing", completed);
     checks.check("it ran exactly once", runs.len() == 1);
     checks.check(
@@ -248,6 +250,9 @@ async fn k1_leave_it_running() -> Result<Checks> {
         }),
     );
     kernel.stop().await?;
+    // The replica signs a checkpoint over what it recorded, as it does every 256 records or
+    // every minute.
+    log.checkpoint().await?;
     let verifier: NoteVerifier = signer.verifier_key().parse().context("verifier key")?;
     let export = AuditExport::from_store(stores.logs.as_ref(), "kernel-k1").await?;
     let report = export.verify(&[verifier]);
@@ -265,6 +270,18 @@ async fn k1_leave_it_running() -> Result<Checks> {
     Ok(checks)
 }
 
+/// The calls `session` holds, or none while the kernel's worker has not created it yet.
+async fn pending_in(
+    client: &ControlClient,
+    session: &str,
+) -> Result<Vec<adk_core::ToolConfirmationRequest>> {
+    match client.attach(session, &AttachRequest::default()).await {
+        Ok(attached) => Ok(attached.pending),
+        Err(error) if error.category() == adk_core::ErrorCategory::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// A free loopback port for the kernel's HTTP control plane.
 fn free_port() -> Result<SocketAddr> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
@@ -280,22 +297,24 @@ async fn k5_one_job_many_windows() -> Result<Checks> {
     let dir = tempfile::tempdir()?;
     let (home, workspace) = (dir.path().join("home"), dir.path().join("ws"));
     std::fs::create_dir_all(&workspace)?;
-    let stores = stores(&home).await?;
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let stores = stores(&home, clock.clone()).await?;
     let addr = free_port()?;
     let recorder = InMemoryAuditRecorder::new();
-    let model = scripted(vec![
-        ScriptedResponse::function_call("bash", json!({ "command": "echo once >> marker.txt" })),
-        ScriptedResponse::text("done"),
-    ]);
-    let kernel = boot(
-        &stores,
-        &home,
-        &workspace,
-        model,
-        HarnessMode::Ask,
-        ControlPlaneConfig::default().with_http(addr),
-        Arc::new(recorder.clone()),
-    )?;
+    let setup = Boot {
+        model: scripted(vec![
+            ScriptedResponse::function_call(
+                "bash",
+                json!({ "command": "echo once >> marker.txt" }),
+            ),
+            ScriptedResponse::text("done"),
+        ]),
+        mode: HarnessMode::Ask,
+        control: ControlPlaneConfig::default().with_http(addr),
+        audit: Arc::new(recorder.clone()),
+        clock,
+    };
+    let kernel = boot(&stores, &home, &workspace, setup)?;
     kernel.start().await?;
 
     // The terminal, on the socket.
@@ -303,14 +322,11 @@ async fn k5_one_job_many_windows() -> Result<Checks> {
     let request =
         SpawnRequest::new(APP, json!({ "text": "run the marker command" })).with_session_id("k5");
     let pid = terminal.spawn(&request).await?.meta.pid;
-    let held =
-        until(Duration::from_secs(20), || {
-            let terminal = terminal.clone();
-            async move {
-                Ok(!terminal.attach("k5", &AttachRequest::default()).await?.pending.is_empty())
-            }
-        })
-        .await?;
+    let held = until(Duration::from_secs(20), || {
+        let terminal = terminal.clone();
+        async move { Ok(!pending_in(&terminal, "k5").await?.is_empty()) }
+    })
+    .await?;
     checks.check("the bash call is held for a decision", held);
     checks.check("nothing ran before the decision", !workspace.join("marker.txt").exists());
     // The laptop lid closes.

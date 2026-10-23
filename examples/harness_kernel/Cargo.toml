@@ -11,7 +11,7 @@ description = "Scripted and live scenarios for the adk-kernel agent kernel (spec
 adk-auth = { path = "../../adk-auth", features = ["signed-audit"] }
 adk-core = { path = "../../adk-core" }
 adk-devtools = { path = "../../adk-devtools" }
-adk-harness = { path = "../../adk-harness", features = ["sqlite"] }
+adk-harness = { path = "../../adk-harness", features = ["sqlite", "kernel"] }
 adk-kernel = { path = "../../adk-kernel" }
 # ScriptedLlm for the scripted scenarios; the live ones run the `adk-rust up` binary.
 adk-model = { path = "../../adk-model", default-features = false }

@@ -167,7 +167,12 @@ async fn k5(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
     let held = until(Duration::from_secs(120), || {
         let terminal = terminal.clone();
         async move {
-            Ok(!terminal.attach("k5-live", &AttachRequest::default()).await?.pending.is_empty())
+            match terminal.attach("k5-live", &AttachRequest::default()).await {
+                Ok(attached) => Ok(!attached.pending.is_empty()),
+                // The session exists once the kernel's worker claims the turn.
+                Err(error) if error.category() == adk_core::ErrorCategory::NotFound => Ok(false),
+                Err(error) => Err(error.into()),
+            }
         }
     })
     .await?;

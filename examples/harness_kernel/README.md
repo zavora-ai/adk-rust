@@ -7,8 +7,8 @@ asserted on stores, processes, files and audit records, never on model prose.
 
 No keys needed. Each scenario boots a real kernel — a durable worker per queue, the
 scheduler, SQLite stores in `harness.db` and the control plane — over a harness on a
-scripted model, composed as `adk-rust up` composes it, and prints a main-versus-branch
-table. `main` has no kernel, so its cells read `not run, expected: …`, stating what `main`
+scripted model, built with `Harness::kernel` as `adk-rust up` builds it, and prints a
+main-versus-branch table. `main` has no kernel, so its cells read `not run, expected: …`, stating what `main`
 does instead.
 
 ```bash
@@ -18,7 +18,7 @@ cargo run -- k5_one_job_many_windows
 
 | Scenario | What passes |
 |---|---|
-| `k1_leave_it_running` | K1 without service installation: a nightly audit is scheduled, the kernel stops before its time and boots again after it; nothing ran while it was down, the next boot runs the missed firing exactly once, the run completes, the file is written once, `ps` shows the process `Completed`, and the signed audit log verifies across the restart |
+| `k1_leave_it_running` | K1 without service installation, on a manual clock the run store and the kernel share: a nightly audit is scheduled two hours ahead, the kernel stops, the clock moves eight hours on while it is down, and the kernel boots again; nothing ran while it was down, the next boot runs the missed firing exactly once, the run completes, the file is written once, `ps` shows the process `Completed`, and the replica's signed audit log verifies across the restart once it signs a checkpoint |
 | `k5_one_job_many_windows` | K5: a turn spawned from a terminal on the socket holds its `bash` call; the terminal goes away; a phone on loopback HTTP approves the call from the inbox; the run resumes and the command runs once with no terminal attached; a new shell attaches and sees the same process, completed, and the call's answer in the transcript; the spawn and the attach are recorded as `kernel.control` with their transport |
 
 ## Live scenarios
