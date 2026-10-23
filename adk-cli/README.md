@@ -125,6 +125,9 @@ adk-rust up           The harness as the agent kernel, in the foreground
 adk-rust attach       A REPL on the running kernel; `adk-rust` attaches when one runs
 adk-rust ps / top     The kernel's processes; `top` by burn rate, refreshing
 adk-rust kill / suspend / resume PID   Act on a process
+adk-rust nice PID QUEUE                Move a queued or sleeping process to another queue
+adk-rust agenda       Follow-ups proposed for later (list/approve/reject/schedule)
+adk-rust wake         A sleeping process woken by a file change, a cron time or a webhook
 adk-rust freeze / unfreeze             The kill switch, on every replica
 adk-rust events       The kernel's event bus (`--follow`)
 adk-rust skills       Skill tooling (list/validate/match)

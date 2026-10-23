@@ -31,6 +31,7 @@ const DEFAULT_BIND: &str = "127.0.0.1:8080";
 /// The kernel's own stores, in the backend the harness's stores are in.
 struct KernelStores {
     processes: Arc<dyn ProcessStore>,
+    agenda: Arc<dyn adk_kernel::AgendaStore>,
     schedules: Arc<dyn ScheduleStore>,
     /// The kill switch's shared state; `None` keeps it in this process.
     governance: Option<Arc<dyn GovernanceStateStore>>,
@@ -134,16 +135,19 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         worker = worker.with_max_concurrent_runs(max);
     }
     // The run store reads the system clock too, so leases, `not_before` and wake times agree.
-    let config = KernelConfig::default()
-        .with_app_name(APP_NAME)
-        .with_home(&home)
-        .with_worker(worker)
-        .with_control(control_plane())
-        .with_clock(Arc::new(adk_core::SystemClock));
+    let config = settings.apply(
+        KernelConfig::default()
+            .with_app_name(APP_NAME)
+            .with_home(&home)
+            .with_worker(worker)
+            .with_control(control_plane())
+            .with_clock(Arc::new(adk_core::SystemClock)),
+    );
     let kernel = harness
         .kernel()
         .config(config)
         .process_store(stores.processes)
+        .agenda_store(stores.agenda)
         .schedule_store(stores.schedules)
         .build()?;
     // The inbox decides through the harness's approval service, which wakes the kernel's
@@ -179,7 +183,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             setup.user.clone(),
         )));
     }
-    println!("  store {}: sessions, approvals, runs, processes, schedules", stores.label);
+    println!("  store {}: sessions, approvals, runs, processes, agenda, schedules", stores.label);
     println!("  plans {}", setup.plans_note());
     launcher.run_serve_directly(bind.port()).await.map_err(Into::into)
 }
@@ -229,12 +233,15 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
     if let Some(db) = &setup.db {
         let processes = adk_kernel::SqliteProcessStore::new(db.pool.clone());
         processes.migrate().await?;
+        let agenda = adk_kernel::SqliteAgendaStore::new(db.pool.clone());
+        agenda.migrate().await?;
         let schedules = adk_session::SqliteScheduleStore::from_pool(db.pool.clone());
         schedules.migrate().await?;
         let governance = adk_session::SqliteGovernanceStateStore::from_pool(db.pool.clone());
         governance.migrate().await?;
         return Ok(KernelStores {
             processes: Arc::new(processes),
+            agenda: Arc::new(agenda),
             schedules: Arc::new(schedules),
             governance: Some(Arc::new(governance)),
             label: "harness.db".into(),
@@ -243,6 +250,7 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
     let _ = setup;
     Ok(KernelStores {
         processes: Arc::new(adk_kernel::InMemoryProcessStore::new()),
+        agenda: Arc::new(adk_kernel::InMemoryAgendaStore::new()),
         schedules: Arc::new(adk_core::InMemoryScheduleStore::new()),
         governance: None,
         label: "memory (--ephemeral): nothing outlives the kernel".into(),
@@ -257,12 +265,15 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
         Some("postgres" | "postgresql") => {
             let processes = adk_kernel::PostgresProcessStore::connect(url).await?;
             processes.migrate().await?;
+            let agenda = adk_kernel::PostgresAgendaStore::new(processes.pool().clone());
+            agenda.migrate().await?;
             let schedules = adk_session::PostgresScheduleStore::new(url).await?;
             schedules.migrate().await?;
             let governance = adk_session::PostgresGovernanceStateStore::new(url).await?;
             governance.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
+                agenda: Arc::new(agenda),
                 schedules: Arc::new(schedules),
                 governance: Some(Arc::new(governance)),
                 label,
@@ -272,12 +283,15 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
         Some("redis" | "rediss") => {
             let processes = adk_kernel::RedisProcessStore::connect(url).await?;
             processes.migrate().await?;
+            let agenda = adk_kernel::RedisAgendaStore::from_client(processes.client().clone());
+            agenda.migrate().await?;
             let schedules = adk_session::RedisScheduleStore::new(url).await?;
             schedules.migrate().await?;
             let governance = adk_session::RedisGovernanceStateStore::new(url).await?;
             governance.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
+                agenda: Arc::new(agenda),
                 schedules: Arc::new(schedules),
                 governance: Some(Arc::new(governance)),
                 label,

@@ -488,6 +488,56 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
+    /// Move a queued or sleeping process to another queue: interactive, background or
+    /// maintenance. The moved process gets a new pid.
+    #[cfg(feature = "harness")]
+    Nice {
+        /// Process id, or a unique prefix of it
+        pid: String,
+        /// The queue: interactive, background, maintenance or a named one
+        #[arg(value_parser = parse_queue)]
+        queue: adk_kernel::QueueClass,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
+    /// The kernel's agenda: follow-ups proposed for later, and what became of them
+    ///
+    /// Example: `adk-rust agenda`, then `adk-rust agenda approve 3f2a` (spec 3.2 §8.1).
+    #[cfg(feature = "harness")]
+    Agenda {
+        #[command(subcommand)]
+        command: Option<AgendaCommand>,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
+    /// Create a sleeping process that runs a task when a file changes, a cron schedule
+    /// fires, or a webhook delivers
+    ///
+    /// Example: `adk-rust wake --file Cargo.lock -- "audit the new dependencies"`.
+    #[cfg(feature = "harness")]
+    Wake {
+        /// Wake when a file matching this pattern changes, relative to the current
+        /// directory: Cargo.lock, src/*.rs
+        #[arg(long, value_name = "GLOB")]
+        file: Option<String>,
+        /// Wake each time this cron expression (UTC) fires, until killed
+        #[arg(long, value_name = "EXPR")]
+        cron: Option<String>,
+        /// Wake when this webhook delivers to an ingress on the kernel's store
+        #[arg(long, value_name = "NAME")]
+        webhook: Option<String>,
+        /// Run the task in this session (default: a new one)
+        #[arg(long)]
+        session: Option<String>,
+        /// The task, after `--`
+        #[arg(last = true, required = true, value_name = "TASK")]
+        task: Vec<String>,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
     /// Harness sessions kept in harness.db
     #[cfg(all(feature = "harness", feature = "persist"))]
     Sessions {
@@ -638,6 +688,55 @@ pub struct KernelTarget {
     /// Bearer token for --server (default: $ADK_SERVE_TOKEN)
     #[arg(long)]
     pub token: Option<String>,
+}
+
+/// `adk-rust agenda` subcommands (spec 3.2 §8.1).
+#[cfg(feature = "harness")]
+#[derive(clap::Subcommand, Debug, Clone)]
+pub enum AgendaCommand {
+    /// The items, oldest first (the default)
+    List {
+        /// Only items of this partition
+        #[arg(long)]
+        partition: Option<String>,
+        /// Only items in this state: proposed, approved, scheduled, running, done,
+        /// rejected or expired
+        #[arg(long)]
+        state: Option<adk_kernel::AgendaStateKind>,
+        /// At most this many items
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// Approve a proposed item; it runs once admitted
+    Approve {
+        /// Item id, or a unique prefix of it
+        id: String,
+    },
+    /// Reject a proposed or approved item
+    Reject {
+        /// Item id, or a unique prefix of it
+        id: String,
+        /// Why; recorded on the event and in the audit record
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Run an item at a time: approves a proposed item first
+    Schedule {
+        /// Item id, or a unique prefix of it
+        id: String,
+        /// When: an RFC 3339 time, HH:MM (local), or +30m, +2h, +1d
+        #[arg(long, value_name = "TIME", conflicts_with = "cron")]
+        at: Option<String>,
+        /// At the next time this cron expression (UTC) fires
+        #[arg(long, value_name = "EXPR")]
+        cron: Option<String>,
+    },
+}
+
+/// Parses a queue class: `interactive`, `background`, `maintenance` or a named queue.
+#[cfg(feature = "harness")]
+fn parse_queue(value: &str) -> Result<adk_kernel::QueueClass, String> {
+    value.parse().map_err(|error: adk_kernel::KernelError| error.to_string())
 }
 
 /// Parses a run state as the run store names it: `waiting`, `running`, ….

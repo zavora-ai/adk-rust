@@ -204,6 +204,30 @@ async fn main() -> Result<()> {
         Some(Commands::Events { follow, after, json, kernel }) => {
             kernel_cli::events(&kernel, follow, after, json).await
         }
+        #[cfg(feature = "harness")]
+        Some(Commands::Nice { pid, queue, kernel }) => kernel_cli::nice(&kernel, &pid, queue).await,
+        #[cfg(feature = "harness")]
+        Some(Commands::Agenda { command, kernel }) => match command {
+            None => kernel_cli::agenda_list(&kernel, None, None, None).await,
+            Some(cli::AgendaCommand::List { partition, state, limit }) => {
+                kernel_cli::agenda_list(&kernel, partition, state, limit).await
+            }
+            Some(cli::AgendaCommand::Approve { id }) => {
+                kernel_cli::agenda_act(&kernel, &id, kernel_cli::AgendaAction::Approve).await
+            }
+            Some(cli::AgendaCommand::Reject { id, reason }) => {
+                kernel_cli::agenda_act(&kernel, &id, kernel_cli::AgendaAction::Reject(reason)).await
+            }
+            Some(cli::AgendaCommand::Schedule { id, at, cron }) => {
+                let wake = kernel_cli::schedule_wake(at.as_deref(), cron.as_deref())?;
+                kernel_cli::agenda_act(&kernel, &id, kernel_cli::AgendaAction::Schedule(wake)).await
+            }
+        },
+        #[cfg(feature = "harness")]
+        Some(Commands::Wake { file, cron, webhook, session, task, kernel }) => {
+            let on = kernel_cli::wake_on(file.as_deref(), cron.as_deref(), webhook.as_deref())?;
+            kernel_cli::wake(&kernel, on, &task.join(" "), session).await
+        }
         #[cfg(all(feature = "harness", feature = "persist"))]
         Some(Commands::Sessions { command }) => manage::sessions(command).await,
         #[cfg(all(feature = "harness", feature = "persist"))]

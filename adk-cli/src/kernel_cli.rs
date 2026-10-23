@@ -1,6 +1,6 @@
 //! The running kernel's commands over its control plane (spec 3.2 §7.11, §8.1): `attach`,
-//! `ps`, `top`, `kill`, `suspend`, `resume`, `freeze`, `unfreeze` and `events`, and the
-//! REPL `adk-rust` opens on a running kernel. Surfaces hold no state (K-I17): every command
+//! `ps`, `top`, `kill`, `nice`, `suspend`, `resume`, `freeze`, `unfreeze`, `events`,
+//! `agenda` and `wake`, and the REPL `adk-rust` opens on a running kernel. Surfaces hold no state (K-I17): every command
 //! reads the kernel, and detaching changes nothing in its process table.
 
 use std::collections::HashSet;
@@ -12,8 +12,11 @@ use adk_cli::console::{ConsoleInput, ConsoleIo};
 use adk_core::{ApprovalAction, ApprovalState, ErrorCategory, Event, Part, RunState};
 use adk_harness::escape_control;
 use adk_kernel::control::ControlClient;
-use adk_kernel::control::api::{AttachRequest, ProcessesQuery, SpawnRequest};
-use adk_kernel::{EventRecord, KernelEvent, PartitionId, Process, Suspension};
+use adk_kernel::control::api::{AgendaQuery, AttachRequest, ProcessesQuery, SpawnRequest};
+use adk_kernel::{
+    AgendaItem, AgendaState, AgendaStateKind, EventRecord, KernelEvent, PartitionId, Process,
+    ProcessKind, QueueClass, Suspension, WakeSet,
+};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
@@ -158,6 +161,247 @@ pub async fn act(target: &KernelTarget, pid: &str, action: Action) -> Result<()>
     };
     println!("{verb} {pid}: now {}{}", state_name(process.run.state), note(&process));
     Ok(())
+}
+
+/// `adk-rust nice`: moves a queued or sleeping process to `queue`. The run store has no
+/// queue change, so the moved process has a new pid.
+pub async fn nice(target: &KernelTarget, pid: &str, queue: QueueClass) -> Result<()> {
+    let client = client(target).await?;
+    let pid = resolve_pid(&client, pid).await?;
+    let moved = client.nice(&pid, queue.clone()).await?;
+    println!("moved {pid} to {queue}: now {} ({})", moved.meta.pid, state_name(moved.run.state));
+    Ok(())
+}
+
+/// What `adk-rust wake` sleeps on, as the command line gave it.
+pub struct WakeOn {
+    /// The wake set.
+    pub wake: WakeSet,
+    /// The process kind it records.
+    pub kind: ProcessKind,
+    /// What `wake` prints about it.
+    pub described: String,
+}
+
+/// `adk-rust wake`: a process asleep on `on` that runs `task` when it wakes (spec 3.2 §8.1).
+pub async fn wake(
+    target: &KernelTarget,
+    on: WakeOn,
+    task: &str,
+    session: Option<String>,
+) -> Result<()> {
+    let client = client(target).await?;
+    let mut request = SpawnRequest::new(APP_TARGET, serde_json::json!({ "text": task }))
+        .with_queue(QueueClass::Background)
+        .with_kind(on.kind)
+        .with_wake(on.wake);
+    if let Some(session) = session {
+        request = request.with_session_id(session);
+    }
+    let process = client.spawn(&request).await?;
+    println!("{} sleeps until {}; `adk-rust ps` shows it.", process.meta.pid, on.described);
+    Ok(())
+}
+
+/// The wake set of `adk-rust wake`: one of `file` (a glob, relative to the current
+/// directory), `cron` (an expression in UTC; the kernel wakes the process at each
+/// occurrence, re-arming it after every run) or `webhook` (a hook an ingress on the
+/// kernel's store serves).
+pub fn wake_on(file: Option<&str>, cron: Option<&str>, webhook: Option<&str>) -> Result<WakeOn> {
+    match (file, cron, webhook) {
+        (Some(glob), None, None) => {
+            let cwd = std::env::current_dir().context("no current directory")?;
+            let path = cwd.join(glob);
+            let (root, pattern) = match (path.parent(), path.file_name()) {
+                (Some(root), Some(name)) => {
+                    (root.to_path_buf(), name.to_string_lossy().into_owned())
+                }
+                _ => bail!(
+                    "--file {glob}: give a file name or pattern, such as Cargo.lock or src/*.rs"
+                ),
+            };
+            let root = std::fs::canonicalize(&root)
+                .with_context(|| format!("--file {glob}: {} does not exist", root.display()))?;
+            let described = format!("{pattern} changes under {}", root.display());
+            Ok(WakeOn {
+                wake: WakeSet::any_of([adk_kernel::Wake::FileChange {
+                    root,
+                    glob: pattern,
+                    debounce: adk_kernel::FileWakeSource::DEFAULT_DEBOUNCE,
+                }]),
+                kind: ProcessKind::Triggered { source: "file".into() },
+                described,
+            })
+        }
+        (None, Some(expr), None) => {
+            // Checked here, so a typo fails now rather than never waking.
+            let at = next_occurrence(expr)?;
+            Ok(WakeOn {
+                wake: WakeSet::any_of([adk_kernel::Wake::Cron {
+                    expr: expr.to_string(),
+                    missed: adk_core::MissedFirePolicy::Skip,
+                }]),
+                kind: ProcessKind::Scheduled,
+                described: format!(
+                    "`{expr}` (UTC) fires, first at {}, and again after each run until killed",
+                    at.format("%Y-%m-%d %H:%M:%S")
+                ),
+            })
+        }
+        (None, None, Some(hook)) => Ok(WakeOn {
+            wake: WakeSet::any_of([adk_kernel::Wake::Webhook { hook: hook.to_string() }]),
+            kind: ProcessKind::Triggered { source: format!("hook:{hook}") },
+            described: format!(
+                "the webhook `{hook}` delivers (an ingress serving /hooks/{hook} on this kernel's store)"
+            ),
+        }),
+        _ => bail!("give exactly one of --file GLOB, --cron EXPR or --webhook NAME"),
+    }
+}
+
+/// The wake set of `adk-rust agenda schedule`: `--at` an instant, or `--cron` its next
+/// occurrence in UTC.
+pub fn schedule_wake(at: Option<&str>, cron: Option<&str>) -> Result<WakeSet> {
+    let at = match (at, cron) {
+        (Some(at), None) => parse_at(at, Utc::now())?,
+        (None, Some(expr)) => next_occurrence(expr)?,
+        _ => bail!("give exactly one of --at TIME or --cron EXPR"),
+    };
+    Ok(WakeSet::any_of([adk_kernel::Wake::At(at)]))
+}
+
+/// The next time the cron expression `expr` fires, in UTC.
+fn next_occurrence(expr: &str) -> Result<DateTime<Utc>> {
+    let spec =
+        adk_core::schedule::ScheduleSpec::Cron { expr: expr.to_string(), timezone: "UTC".into() };
+    spec.next_after(Utc::now())
+        .map_err(|error| anyhow::anyhow!("--cron {expr}: {error}"))?
+        .with_context(|| format!("--cron {expr} never fires again"))
+}
+
+/// An instant: RFC 3339 (`2026-10-24T07:00:00Z`), `HH:MM` local time (today, or tomorrow
+/// once it passed), or `+30m`, `+2h`, `+1d` from `now`.
+fn parse_at(text: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
+    let text = text.trim();
+    if let Ok(at) = DateTime::parse_from_rfc3339(text) {
+        return Ok(at.with_timezone(&Utc));
+    }
+    if let Some(offset) = text.strip_prefix('+') {
+        let (number, unit) = offset.split_at(offset.len().saturating_sub(1));
+        let number: i64 =
+            number.parse().with_context(|| format!("--at {text}: write +30m, +2h or +1d"))?;
+        let step = match unit {
+            "m" => chrono::Duration::minutes(number),
+            "h" => chrono::Duration::hours(number),
+            "d" => chrono::Duration::days(number),
+            _ => bail!("--at {text}: write +30m, +2h or +1d"),
+        };
+        return Ok(now + step);
+    }
+    if let Ok(time) = chrono::NaiveTime::parse_from_str(text, "%H:%M") {
+        use chrono::TimeZone as _;
+        let local_now = now.with_timezone(&chrono::Local);
+        for days in 0..=1 {
+            let date = local_now.date_naive() + chrono::Days::new(days);
+            if let Some(at) = chrono::Local.from_local_datetime(&date.and_time(time)).earliest()
+                && at.with_timezone(&Utc) > now
+            {
+                return Ok(at.with_timezone(&Utc));
+            }
+        }
+    }
+    bail!("--at {text}: write an RFC 3339 time (2026-10-24T07:00:00Z), HH:MM, or +30m, +2h, +1d")
+}
+
+/// What `adk-rust agenda approve`, `reject` and `schedule` do.
+pub enum AgendaAction {
+    Approve,
+    Reject(Option<String>),
+    Schedule(WakeSet),
+}
+
+/// `adk-rust agenda` and `agenda list` (spec 3.2 §8.1).
+pub async fn agenda_list(
+    target: &KernelTarget,
+    partition: Option<String>,
+    state: Option<AgendaStateKind>,
+    limit: Option<usize>,
+) -> Result<()> {
+    let client = client(target).await?;
+    let query = AgendaQuery { partition: partition.map(PartitionId::from), state, limit };
+    let items = client.agenda(&query).await?;
+    if items.is_empty() {
+        println!("The agenda is empty.");
+        return Ok(());
+    }
+    println!("{:<36}  {:<10}  {:<13}  {:>7}  TITLE", "ID", "STATE", "ORIGIN", "AGE");
+    let now = Utc::now();
+    for item in &items {
+        let age_of = (now - item.created_at).to_std().unwrap_or_default();
+        println!(
+            "{:<36}  {:<10}  {:<13}  {:>7}  {}",
+            item.id,
+            item.state.kind().as_str(),
+            item.origin.kind(),
+            age(age_of),
+            escape_control(&one_line(&item.title))
+        );
+    }
+    let waiting = items.iter().filter(|item| item.state == AgendaState::Proposed).count();
+    if waiting > 0 {
+        println!(
+            "
+{waiting} proposed: `adk-rust agenda approve ID`, `reject ID` or `schedule ID --at TIME`."
+        );
+    }
+    Ok(())
+}
+
+/// `adk-rust agenda approve`, `reject` and `schedule`.
+pub async fn agenda_act(target: &KernelTarget, id: &str, action: AgendaAction) -> Result<()> {
+    let client = client(target).await?;
+    let id = resolve_item(&client, id).await?;
+    let (verb, item) = match action {
+        AgendaAction::Approve => ("approved", client.approve_item(&id).await?),
+        AgendaAction::Reject(reason) => {
+            ("rejected", client.reject_item(&id, reason.as_deref()).await?)
+        }
+        AgendaAction::Schedule(wake) => ("scheduled", client.schedule_item(&id, wake).await?),
+    };
+    println!("{verb} {id}: now {}", item_state(&item));
+    Ok(())
+}
+
+/// An item's state as `agenda` shows it.
+fn item_state(item: &AgendaItem) -> String {
+    match &item.state {
+        AgendaState::Scheduled { wake } => format!("scheduled on {} wake(s)", wake.any_of.len()),
+        AgendaState::Running { pid } => format!("running as {pid}"),
+        other => other.kind().to_string(),
+    }
+}
+
+/// The id of the agenda item `id` names: itself, or the one item whose id starts with it.
+async fn resolve_item(client: &ControlClient, id: &str) -> Result<String> {
+    let items = client.agenda(&AgendaQuery::default()).await?;
+    if items.iter().any(|item| item.id == id) {
+        return Ok(id.to_string());
+    }
+    let matching: Vec<&str> = items
+        .iter()
+        .map(|item| item.id.as_str())
+        .filter(|candidate| candidate.starts_with(id))
+        .collect();
+    match matching.as_slice() {
+        [one] => Ok((*one).to_string()),
+        // The kernel answers an unknown id with the remedy.
+        [] => Ok(id.to_string()),
+        many => bail!(
+            "{id} matches {} agenda items ({}); give more of the id",
+            many.len(),
+            many.join(", ")
+        ),
+    }
 }
 
 /// `adk-rust freeze`.
@@ -571,6 +815,20 @@ fn event_line(record: &EventRecord) -> String {
         }
         KernelEvent::Governance { frozen: false, .. } => "unfrozen".to_string(),
         KernelEvent::Health(health) => format!("kernel {}", health.state),
+        KernelEvent::Agenda { item, from, to, reason } => format!(
+            "{item} {} → {}{}",
+            from.kind(),
+            to.kind(),
+            reason.as_deref().map(|reason| format!(" ({reason})")).unwrap_or_default()
+        ),
+        KernelEvent::Review(report) => format!(
+            "{}: {} rule(s), {} sleeper(s), {} freeze(s) older than {}",
+            report.partition,
+            report.rules.len(),
+            report.sleepers.len(),
+            report.frozen.len(),
+            age(report.review_period)
+        ),
         other => other.name().to_string(),
     };
     format!(
@@ -614,6 +872,34 @@ fn one_line(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schedule_times_read_three_ways() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-23T09:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(
+            parse_at("2026-10-24T07:00:00Z", now).unwrap().to_rfc3339(),
+            "2026-10-24T07:00:00+00:00"
+        );
+        assert_eq!(parse_at("+90m", now).unwrap(), now + chrono::Duration::minutes(90));
+        assert_eq!(parse_at("+1d", now).unwrap(), now + chrono::Duration::days(1));
+        let local = parse_at("07:00", now).unwrap();
+        assert!(local > now && local - now <= chrono::Duration::days(1), "the next 07:00");
+        assert!(parse_at("tomorrow", now).is_err());
+        assert!(parse_at("+5y", now).is_err());
+        let wake = schedule_wake(None, Some("0 0 3 * * *")).unwrap();
+        assert!(matches!(wake.any_of.as_slice(), [adk_kernel::Wake::At(_)]));
+        assert!(schedule_wake(Some("+1h"), Some("0 0 3 * * *")).is_err());
+        assert!(wake_on(None, None, None).is_err());
+        let cron = wake_on(None, Some("0 0 8 * * Mon-Fri"), None).unwrap();
+        assert!(
+            matches!(cron.wake.any_of.as_slice(), [adk_kernel::Wake::Cron { expr, .. }] if expr == "0 0 8 * * Mon-Fri")
+        );
+        assert!(wake_on(None, Some("not cron"), None).is_err(), "a bad expression fails at once");
+        let hook = wake_on(None, None, Some("github")).unwrap();
+        assert_eq!(hook.wake.any_of, [adk_kernel::Wake::Webhook { hook: "github".into() }]);
+    }
 
     #[test]
     fn ages_and_amounts_read_at_a_glance() {
