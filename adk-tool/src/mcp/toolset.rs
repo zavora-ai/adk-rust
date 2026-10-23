@@ -10,6 +10,7 @@ use super::discovery::{
     ListError, McpDiscoveryLimits, escape_for_display, list_pages, list_tools, unroutable_name,
     within,
 };
+use super::parked::{McpCallOutcome, ParkedCallKind, ParkedMcpCall};
 use super::reconnect::{
     DEFAULT_RETRY_TOOL_CALLS, is_auth_rejection, is_connection_closed, should_retry_mcp_operation,
 };
@@ -63,6 +64,10 @@ const CLOSE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// The error code of a request made through a toolset after [`Toolset::close`].
 const CLOSED_CODE: &str = "tool.mcp.closed";
+
+/// The error code of a parked legacy call that is not re-issued because it is not retry-safe
+/// (spec 3.2 §10 T2).
+const NOT_RUN_CODE: &str = "tool.mcp.not_run";
 
 /// The error for a request made through toolset `toolset` after it was closed.
 fn closed_error(toolset: &str) -> AdkError {
@@ -1123,6 +1128,232 @@ where
         name: &str,
         arguments: serde_json::Map<String, Value>,
     ) -> Result<Value> {
+        self.direct_tool(name).await?.execute_value(Value::Object(arguments), None).await
+    }
+
+    /// Calls MCP tool `name`, ending the call with its parked form when the server needs
+    /// input instead of answering it in process (spec 3.2 §10 T2).
+    ///
+    /// A server that answers `input_required` with input requests, or a task that reports
+    /// `input_required`, parks the call: the result is [`McpCallOutcome::Parked`], nothing
+    /// waits in this process, and a parked task keeps waiting on the server and is not
+    /// cancelled by [`cancel_pending_tasks`](Self::cancel_pending_tasks). Persist the
+    /// [`ParkedMcpCall`], ask the person, and pass the answers to
+    /// [`reissue`](Self::reissue) — from this toolset or one built after a restart. A
+    /// state-only `input_required` asks nothing and is retried in place, as in every call. A
+    /// server before 2026-07-28 asks with `elicitation/create` while the call runs, which the
+    /// connection's handler answers in process (see [`ParkedMcpCall::current`]). `call_id` is
+    /// recorded in the parked call.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` without contacting the server when the toolset's
+    /// [filter](Self::with_filter) excludes `name`, when the call fails, and when it takes more
+    /// than [`McpTaskConfig::max_input_rounds`] input rounds.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_tool::mcp::{McpCallOutcome, McpToolset};
+    ///
+    /// async fn send(toolset: &McpToolset) -> adk_core::Result<Option<String>> {
+    ///     let arguments = serde_json::json!({ "draftId": "d-7" }).as_object().unwrap().clone();
+    ///     Ok(match toolset.call_tool_resumable(Some("call-1"), "send_draft", arguments).await? {
+    ///         McpCallOutcome::Completed(value) => Some(value.to_string()),
+    ///         // Persist it beside the approval that asks the person.
+    ///         McpCallOutcome::Parked(parked) => {
+    ///             let _checkpoint = serde_json::to_string(&parked).unwrap();
+    ///             None
+    ///         }
+    ///     })
+    /// }
+    /// ```
+    pub async fn call_tool_resumable(
+        &self,
+        call_id: Option<&str>,
+        name: &str,
+        arguments: serde_json::Map<String, Value>,
+    ) -> Result<McpCallOutcome> {
+        let tool = self.direct_tool(name).await?;
+        let params = tool.call_params(Value::Object(arguments))?;
+        let spec = CallSpec {
+            call_id: call_id.map(str::to_string),
+            mode: InputMode::Park,
+            input_rounds: 0,
+        };
+        tool.run(params, &spec).await
+    }
+
+    /// Re-issues a parked call with the answers to its input requests (spec 3.2 §7.7, §10 T2).
+    ///
+    /// `responses` maps keys of [`ParkedMcpCall::input_requests`] to the answers, as
+    /// `inputResponses` carry them (an elicitation's answer is its `ElicitResult` as JSON).
+    /// What happens depends on [`ParkedMcpCall::kind`]:
+    ///
+    /// | Kind | Re-issue |
+    /// |---|---|
+    /// | [`Mrtr`](ParkedCallKind::Mrtr) | A new `tools/call` with `inputResponses` and the stored `requestState`. The server ended the first request at `input_required`, so this is the call's first execution |
+    /// | [`Task`](ParkedCallKind::Task) | `tasks/get` on the stored task; outstanding requests equal to the parked ones are answered through `tasks/update`, and polling continues until the task ends. Needs task support on this toolset |
+    /// | [`Legacy`](ParkedCallKind::Legacy) | Refused as not run unless the tool the server publishes now declares `readOnlyHint` or `idempotentHint`; then the original call runs again, without `responses`, and its new questions park again |
+    ///
+    /// A server that answers with new input requests — for example because the
+    /// `requestState` lapsed — parks the call again: the result is
+    /// [`McpCallOutcome::Parked`] with the next round, under
+    /// [`McpTaskConfig::max_input_rounds`] counted across re-issues.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` when `parked` names another toolset, its input requests do
+    /// not match their digest, `responses` answers a request it does not hold, the
+    /// [filter](Self::with_filter) excludes the tool, a task is re-issued on a toolset or
+    /// server without task support, or the call fails. A `Legacy` call that is not
+    /// retry-safe fails with code `tool.mcp.not_run` without contacting the tool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_tool::mcp::{McpCallOutcome, McpToolset, ParkedMcpCall};
+    /// use rmcp::model::{ElicitResult, ElicitationAction, InputResponses};
+    ///
+    /// async fn resume(toolset: &McpToolset, checkpoint: &str) -> adk_core::Result<McpCallOutcome> {
+    ///     let parked: ParkedMcpCall = serde_json::from_str(checkpoint).unwrap();
+    ///     let approved = ElicitResult::new(ElicitationAction::Accept);
+    ///     let responses: InputResponses = parked
+    ///         .input_requests
+    ///         .keys()
+    ///         .map(|key| (key.clone(), serde_json::to_value(&approved).unwrap()))
+    ///         .collect();
+    ///     toolset.reissue(&parked, responses).await
+    /// }
+    /// ```
+    pub async fn reissue(
+        &self,
+        parked: &ParkedMcpCall,
+        responses: InputResponses,
+    ) -> Result<McpCallOutcome> {
+        let refused = |reason: String| {
+            AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::InvalidInput,
+                "tool.mcp.reissue_refused",
+                format!(
+                    "parked call of MCP tool '{}' was not re-issued: {reason}",
+                    escape_for_display(&parked.tool_name)
+                ),
+            )
+        };
+        if parked.server_id != self.name {
+            return Err(refused(format!(
+                "it was made through toolset '{}', not '{}'; re-issue it on that server's toolset",
+                parked.server_id, self.name
+            )));
+        }
+        if !parked.is_intact() {
+            return Err(refused(
+                "its input requests do not match their digest, so the answers cannot be bound \
+                 to them"
+                    .to_string(),
+            ));
+        }
+        if let Some(key) = responses.keys().find(|key| !parked.input_requests.contains_key(*key)) {
+            return Err(refused(format!(
+                "the answer '{}' has no input request of that key",
+                escape_for_display(key)
+            )));
+        }
+
+        let mut tool = self.direct_tool(&parked.tool_name).await?;
+        let mut params =
+            tool.call_params(Value::Object(parked.arguments.clone().unwrap_or_default()))?;
+        let spec = CallSpec {
+            call_id: parked.call_id.clone(),
+            mode: InputMode::Park,
+            input_rounds: parked.input_rounds,
+        };
+        match &parked.kind {
+            ParkedCallKind::Mrtr => {
+                params.input_responses = (!responses.is_empty()).then_some(responses);
+                params.request_state = parked.request_state.clone();
+                tool.run(params, &spec).await
+            }
+            ParkedCallKind::Task { task_id } => {
+                if !tool.task_config.enable_tasks || !tool.server_supports_tasks {
+                    return Err(refused(format!(
+                        "task '{}' needs task support on toolset '{}' and its server; build the \
+                         toolset with `McpToolset::with_task_support(McpTaskConfig::enabled())` \
+                         on a connection that declares the tasks extension",
+                        escape_for_display(task_id),
+                        self.name
+                    )));
+                }
+                // Answers bind to the questions they were given for: a request the server
+                // changed or added is asked again.
+                let answered = parked
+                    .input_requests
+                    .iter()
+                    .filter_map(|(key, request)| {
+                        responses
+                            .get(key)
+                            .map(|answer| (key.clone(), (request.clone(), answer.clone())))
+                    })
+                    .collect();
+                let peer = self.client.open_connection(&self.name).await?.peer().clone();
+                let cancel_on_drop =
+                    CancelOnDrop { peer: Some(peer), target: CancelTarget::Task(task_id.clone()) };
+                self.active_tasks.lock().await.insert(task_id.clone());
+                let mut call = ParkedMcpCall::of_call(&self.name, &params, spec.call_id.as_deref());
+                call.input_rounds = parked.input_rounds;
+                let outcome =
+                    tool.poll_task(task_id.clone(), None, spec.mode, call, answered).await;
+                cancel_on_drop.disarm();
+                outcome.map_err(|error| AdkError::tool(format!("Task execution failed: {error}")))
+            }
+            ParkedCallKind::Legacy => {
+                // The tool's effect as the server publishes it now decides the replay.
+                let connection = self.client.open_connection(&self.name).await?;
+                let listed = tokio::time::timeout(
+                    self.discovery_limits.timeout,
+                    list_tools(connection.peer(), self.discovery_limits.max_pages),
+                )
+                .await
+                .map_err(|_| ListError::Timeout {
+                    method: "tools/list",
+                    timeout: self.discovery_limits.timeout,
+                })
+                .and_then(|listed| listed)
+                .map_err(|error| {
+                    AdkError::tool(format!(
+                        "Failed to list MCP tools from '{}': {error}",
+                        self.name
+                    ))
+                })?;
+                tool.annotations = listed
+                    .into_iter()
+                    .find(|listed| listed.name == parked.tool_name)
+                    .and_then(|listed| listed.annotations);
+                if !mcp_tool_effect(tool.annotations.as_ref()).is_retry_safe() {
+                    return Err(AdkError::new(
+                        ErrorComponent::Tool,
+                        ErrorCategory::Cancelled,
+                        NOT_RUN_CODE,
+                        format!(
+                            "MCP tool '{}' was not run: its call to server '{}' was lost with the \
+                             connection, and the tool declares neither readOnlyHint nor \
+                             idempotentHint, so running it again could repeat its effect",
+                            escape_for_display(&parked.tool_name),
+                            self.name
+                        ),
+                    ));
+                }
+                tool.run(params, &spec).await
+            }
+        }
+    }
+
+    /// A tool for `name` without its declaration, for calls made outside discovery.
+    ///
+    /// Fails without contacting the server when the filter excludes `name`.
+    async fn direct_tool(&self, name: &str) -> Result<McpTool<S>> {
         if let Some(filter) = &self.tool_filter
             && !filter(name)
         {
@@ -1138,7 +1369,7 @@ where
             .await?
             .peer_info()
             .is_some_and(|info| info.capabilities.supports_tasks());
-        McpTool {
+        Ok(McpTool {
             name: name.into(),
             origin: format!("mcp:{}", self.name),
             description: String::new(),
@@ -1155,9 +1386,7 @@ where
             active_tasks: self.active_tasks.clone(),
             mrtr_handler: self.mrtr_handler.clone(),
             resource_subscriptions: self.resource_subscriptions.clone(),
-        }
-        .execute_value(Value::Object(arguments))
-        .await
+        })
     }
 
     /// Cancels every remote task this toolset started and has not seen finish.
@@ -1885,6 +2114,24 @@ impl McpToolset<super::elicitation::AdkClientHandler> {
     }
 }
 
+/// How a call answers the server's input requests (spec 3.2 §10 T2).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InputMode {
+    /// Through the connection's handler, in process: the single-process fast path.
+    Answer,
+    /// By ending the call with its parked form.
+    Park,
+}
+
+/// A call's identity and input policy, kept across its rounds.
+struct CallSpec {
+    /// The agent's function call ID, recorded in the parked form.
+    call_id: Option<String>,
+    mode: InputMode,
+    /// Input rounds taken before this attempt; nonzero for a re-issue.
+    input_rounds: usize,
+}
+
 /// Individual MCP tool wrapper that implements the ADK `Tool` trait.
 ///
 /// This struct wraps an MCP tool and proxies execution calls to the MCP server.
@@ -1925,7 +2172,21 @@ where
         self.origin.strip_prefix("mcp:").unwrap_or(&self.origin)
     }
 
-    async fn execute_value(&self, args: Value) -> Result<Value> {
+    /// Runs one call whose input the connection's handler answers in process.
+    async fn execute_value(&self, args: Value, call_id: Option<String>) -> Result<Value> {
+        let params = self.call_params(args)?;
+        let spec = CallSpec { call_id, mode: InputMode::Answer, input_rounds: 0 };
+        match self.run(params, &spec).await? {
+            McpCallOutcome::Completed(value) => Ok(value),
+            McpCallOutcome::Parked(_) => Err(AdkError::tool(format!(
+                "MCP tool '{}' parked a call whose input is answered in process",
+                self.name
+            ))),
+        }
+    }
+
+    /// The `tools/call` parameters for `args`, which must be an object or null.
+    fn call_params(&self, args: Value) -> Result<CallToolRequestParams> {
         let mut params = CallToolRequestParams::new(self.name.clone());
         if !(args.is_null() || args == json!({})) {
             match args {
@@ -1933,10 +2194,17 @@ where
                 _ => return Err(AdkError::tool("Tool arguments must be an object")),
             }
         }
+        Ok(params)
+    }
 
+    /// Runs the call `params` describes to its outcome under `spec`.
+    async fn run(&self, params: CallToolRequestParams, spec: &CallSpec) -> Result<McpCallOutcome> {
         // SEP-2663 moved the task decision to the server, so one request shape
         // covers both modes and the response says which one happened.
-        let (response, peer) = self.call_tool_with_retry(params).await?;
+        let mut call =
+            ParkedMcpCall::of_call(self.toolset_name(), &params, spec.call_id.as_deref());
+        let (response, peer, input_rounds) = self.call_tool_with_retry(params, spec).await?;
+        call.input_rounds = input_rounds;
         let result = match response {
             CallToolResponse::Complete(result) => result,
             CallToolResponse::Task(created) => {
@@ -1971,10 +2239,27 @@ where
                     )));
                 }
                 debug!(tool = self.name, task_id, "MCP server materialized a task");
-                let outcome = self.poll_task(created.task).await;
+                let outcome = self
+                    .poll_task(
+                        task_id,
+                        created.task.poll_interval_ms,
+                        spec.mode,
+                        call,
+                        BTreeMap::new(),
+                    )
+                    .await;
                 cancel_on_drop.disarm();
                 return outcome
                     .map_err(|error| AdkError::tool(format!("Task execution failed: {error}")));
+            }
+            // `call_tool_with_retry` returns input requests only to a call that parks.
+            CallToolResponse::InputRequired(required) if spec.mode == InputMode::Park => {
+                return Ok(McpCallOutcome::Parked(call.waiting(
+                    ParkedCallKind::Mrtr,
+                    required.request_state,
+                    required.input_requests.unwrap_or_default(),
+                    input_rounds,
+                )));
             }
             CallToolResponse::InputRequired(_) => {
                 return Err(AdkError::tool(format!(
@@ -1992,10 +2277,10 @@ where
 
         if result.is_error.unwrap_or(false) {
             debug!(tool = self.name, "MCP server answered the call with isError");
-            return Ok(server_error_response(&self.name, &result));
+            return Ok(McpCallOutcome::Completed(server_error_response(&self.name, &result)));
         }
 
-        call_tool_result_to_adk_value(&result).map_err(|error| {
+        call_tool_result_to_adk_value(&result).map(McpCallOutcome::Completed).map_err(|error| {
             AdkError::tool(format!("MCP tool '{}' result invalid: {error}", self.name))
         })
     }
@@ -2007,17 +2292,21 @@ where
     /// task response outright, which would break every server that
     /// materializes a task.
     ///
-    /// Returns the response with the peer of the connection that answered it.
+    /// Returns the response with the peer of the connection that answered it and the input
+    /// rounds the call has taken. A call that parks gets an `input_required` with input
+    /// requests back instead of having them answered.
     async fn call_tool_with_retry(
         &self,
         mut params: CallToolRequestParams,
-    ) -> Result<(CallToolResponse, Peer<RoleClient>)> {
+        spec: &CallSpec,
+    ) -> Result<(CallToolResponse, Peer<RoleClient>, usize)> {
         let has_connection_factory = self.connection_factory.is_some();
         let metadata_allows_replay = mcp_tool_effect(self.annotations.as_ref()).is_retry_safe();
         let replay_allowed = self.retry_tool_calls || metadata_allows_replay;
         let mut attempt = 0u32;
+        let call = ParkedMcpCall::of_call(self.toolset_name(), &params, spec.call_id.as_deref());
 
-        let mut input_rounds = 0usize;
+        let mut input_rounds = spec.input_rounds;
         let mut state_only_rounds = 0u32;
         loop {
             let (connection, _) = self
@@ -2028,10 +2317,18 @@ where
                     &self.resource_subscriptions,
                 )
                 .await?;
+            // A legacy `elicitation/create` arriving meanwhile belongs to this call.
+            let in_flight = self.client.elicitation_scopes.enter_call(call.clone().waiting(
+                ParkedCallKind::Legacy,
+                None,
+                InputRequests::new(),
+                input_rounds,
+            ));
             let call_result = send_tool_call(connection.peer(), params.clone()).await;
+            drop(in_flight);
 
             match call_result {
-                Ok(CallToolResponse::InputRequired(required)) => {
+                Ok(CallToolResponse::InputRequired(mut required)) => {
                     input_rounds += 1;
                     if input_rounds > self.task_config.max_input_rounds {
                         return Err(AdkError::tool(format!(
@@ -2040,7 +2337,8 @@ where
                         )));
                     }
                     // The same checks rmcp's `call_tool` applies to each round.
-                    let requests = required.input_requests.filter(|requests| !requests.is_empty());
+                    let requests =
+                        required.input_requests.take().filter(|requests| !requests.is_empty());
                     if requests.is_none() && required.request_state.is_none() {
                         return Err(AdkError::tool(format!(
                             "MCP tool '{}' returned input_required with neither input requests \
@@ -2049,9 +2347,23 @@ where
                         )));
                     }
                     let responses = match requests {
+                        Some(requests) if spec.mode == InputMode::Park => {
+                            required.input_requests = Some(requests);
+                            return Ok((
+                                CallToolResponse::InputRequired(required),
+                                connection.peer().clone(),
+                                input_rounds,
+                            ));
+                        }
                         Some(requests) => {
                             state_only_rounds = 0;
-                            self.fulfill_input(requests).await.map_err(|error| {
+                            let parked = call.clone().waiting(
+                                ParkedCallKind::Mrtr,
+                                required.request_state.clone(),
+                                requests.clone(),
+                                input_rounds,
+                            );
+                            parked.within(self.fulfill_input(requests)).await.map_err(|error| {
                                 AdkError::tool(format!(
                                     "MCP tool '{}' input request failed: {error}",
                                     self.name
@@ -2070,7 +2382,7 @@ where
                     params.request_state = required.request_state;
                     attempt = 0;
                 }
-                Ok(result) => return Ok((result, connection.peer().clone())),
+                Ok(result) => return Ok((result, connection.peer().clone(), input_rounds)),
                 Err(error) => {
                     if !should_retry_mcp_operation(
                         &error,
@@ -2160,6 +2472,23 @@ where
         client.send_request(request).await.map_err(|error| TaskError::PollFailed(error.to_string()))
     }
 
+    /// Answers task `task_id`'s input requests through `tasks/update`.
+    async fn update_task(
+        &self,
+        task_id: &str,
+        responses: InputResponses,
+    ) -> std::result::Result<(), TaskError> {
+        let request = ClientRequest::UpdateTaskRequest(UpdateTaskRequest::new(
+            UpdateTaskParams::new(task_id, responses),
+        ));
+        match self.send_task_request(request).await? {
+            ServerResult::TaskAckResult(_) => Ok(()),
+            response => Err(TaskError::PollFailed(format!(
+                "tasks/update returned an unexpected response: {response:?}"
+            ))),
+        }
+    }
+
     /// Requests cancellation once; the pending-task set keeps the task until a
     /// status confirms it.
     async fn cancel_task(&self, task_id: &str) {
@@ -2181,18 +2510,23 @@ where
     }
 
     /// Poll a protocol-level MCP task until completion or timeout.
+    ///
+    /// `call` is the call the task runs, with the input rounds taken so far; `answered` holds
+    /// answers to re-send while the server still lists their requests. A call that parks
+    /// returns its parked form when the task asks something not yet answered.
     async fn poll_task(
         &self,
-        initial_task: rmcp::model::Task,
-    ) -> std::result::Result<Value, TaskError> {
-        let task_id = initial_task.task_id;
+        task_id: String,
+        poll_interval_ms: Option<u64>,
+        mode: InputMode,
+        call: ParkedMcpCall,
+        mut answered: BTreeMap<String, (InputRequest, Value)>,
+    ) -> std::result::Result<McpCallOutcome, TaskError> {
         let mut poll_interval_ms =
-            initial_task.poll_interval_ms.unwrap_or(self.task_config.poll_interval_ms).max(1);
+            poll_interval_ms.unwrap_or(self.task_config.poll_interval_ms).max(1);
         let start = Instant::now();
         let mut attempts = 0u32;
-        let mut input_rounds = 0;
-        // Answers already sent, re-sent while the server still lists their requests.
-        let mut answered: BTreeMap<String, (InputRequest, Value)> = BTreeMap::new();
+        let mut input_rounds = call.input_rounds;
 
         loop {
             if let Some(timeout_ms) = self.task_config.timeout_ms {
@@ -2246,9 +2580,13 @@ where
                         })?;
                     if call_result.is_error == Some(true) {
                         debug!(task_id, "MCP task completed with an isError result");
-                        return Ok(server_error_response(&self.name, &call_result));
+                        return Ok(McpCallOutcome::Completed(server_error_response(
+                            &self.name,
+                            &call_result,
+                        )));
                     }
                     return call_tool_result_to_adk_value(&call_result)
+                        .map(McpCallOutcome::Completed)
                         .map_err(TaskError::PollFailed);
                 }
                 TaskPayload::Failed { error } => {
@@ -2292,8 +2630,22 @@ where
                                 self.task_config.max_input_rounds
                             )));
                         }
-                        let received =
-                            self.fulfill_input(pending).await.map_err(TaskError::PollFailed)?;
+                        let kind = ParkedCallKind::Task { task_id: task_id.clone() };
+                        let parked =
+                            call.clone().waiting(kind, None, pending.clone(), input_rounds);
+                        if mode == InputMode::Park {
+                            if !responses.is_empty() {
+                                self.update_task(&task_id, responses).await?;
+                            }
+                            // The task waits for its answers durably; it is no longer this
+                            // toolset's to cancel.
+                            self.active_tasks.lock().await.remove(&task_id);
+                            return Ok(McpCallOutcome::Parked(parked));
+                        }
+                        let received = parked
+                            .within(self.fulfill_input(pending))
+                            .await
+                            .map_err(TaskError::PollFailed)?;
                         for (key, response) in received {
                             answered.insert(
                                 key.clone(),
@@ -2302,17 +2654,7 @@ where
                             responses.insert(key, response);
                         }
                     }
-                    let request = ClientRequest::UpdateTaskRequest(UpdateTaskRequest::new(
-                        UpdateTaskParams::new(&task_id, responses),
-                    ));
-                    match self.send_task_request(request).await? {
-                        ServerResult::TaskAckResult(_) => {}
-                        response => {
-                            return Err(TaskError::PollFailed(format!(
-                                "tasks/update returned an unexpected response: {response:?}"
-                            )));
-                        }
-                    }
+                    self.update_task(&task_id, responses).await?;
                 }
                 TaskPayload::Working => {
                     debug!(task_id, "MCP task is still working");
@@ -2393,7 +2735,8 @@ where
             .client
             .elicitation_scopes
             .enter(super::elicitation::ElicitationScope::for_call(ctx.as_ref()));
-        self.execute_value(args).await
+        let call_id = Some(ctx.function_call_id().to_string()).filter(|id| !id.is_empty());
+        self.execute_value(args, call_id).await
     }
 }
 
