@@ -38,10 +38,12 @@ fn print_renders_the_platform_definition_and_installs_nothing() {
         adk(&["up", "--install", "--print", "--home", home_arg, "--mode", "ask"], dir.path());
     assert!(output.status.success(), "{}", text(&output));
     let definition = String::from_utf8_lossy(&output.stdout);
-    assert!(definition.contains("adk-rust-kernel-"), "{definition}");
+    // The plist's label and the Windows service carry the service's name; a systemd unit's
+    // name is its file name, so the unit's text does not.
     if cfg!(target_os = "macos") {
         assert!(definition.starts_with("<?xml"), "{definition}");
         for expected in [
+            "<key>Label</key>\n    <string>adk-rust-kernel-".to_string(),
             format!("<string>{home_arg}</string>"),
             "<string>up</string>".to_string(),
             "<string>--mode</string>\n        <string>ask</string>".to_string(),
