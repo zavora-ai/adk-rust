@@ -181,3 +181,80 @@ async fn a_partitions_quotas_and_quiet_hours_apply_beside_the_kernels() {
         assert_eq!(run.not_before.is_some_and(|at| at > now), quiet, "{partition}: {run:?}");
     }
 }
+
+/// Spec 3.2 §7.8: the daily review reports a crossing that recurs, in the partition it comes
+/// from, with partition membership as the remedy; one below the threshold, or older than the
+/// window, is not reported, and the review waives nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_daily_review_reports_recurring_crossings_with_membership_as_the_remedy() {
+    use adk_kernel::{
+        CrossingRecord, CrossingResource, KernelEvent, RecurringCrossing, ReviewReport,
+    };
+
+    let world = World::answer();
+    let control = GovernanceControl::new();
+    let recorder = InMemoryAuditRecorder::new();
+    let partitions = Partitions::in_memory();
+    let now = chrono::Utc::now();
+    let crossing = |i: usize, from: &str, to: &str, name: &str, hours_ago: i64| {
+        serde_json::from_value::<CrossingRecord>(json!({
+            "id": format!("c-{from}-{name}-{i}"),
+            "at": now - chrono::Duration::hours(hours_ago),
+            "run": format!("run-{i}"),
+            "agent": "urn:adk:agent:adk-rust/harness",
+            "from": from, "to": to, "resource": "driver", "name": name, "access": "read",
+            "tool": format!("{to}__{name}"), "fingerprint": "sha256:00", "outcome": "denied"
+        }))
+        .unwrap()
+    };
+    let threshold = ReviewReport::CROSSING_THRESHOLD;
+    let mut records = Vec::new();
+    for i in 0..threshold {
+        records.push(crossing(i, "home", "work", "calendar", i as i64));
+        if i + 1 < threshold {
+            records.push(crossing(i, "work", "home", "photos", i as i64));
+        }
+        // Older than the window.
+        records.push(crossing(i, "work", "home", "notes", 24 * 8));
+    }
+    for record in records {
+        partitions.store().record_crossing(record).await.unwrap();
+    }
+    let kernel = world.kernel_with("k1", &control, |builder| {
+        builder.partitions(partitions.clone()).audit(AuditTrail::new(Arc::new(recorder.clone())))
+    });
+    let mut events = kernel.events();
+    kernel.start().await.unwrap();
+
+    let mut reports = Vec::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while let Ok(Some(record)) = tokio::time::timeout_at(deadline, events.recv()).await {
+        if let KernelEvent::Review(report) = record.event {
+            reports.push(report);
+        }
+    }
+    kernel.stop().await.unwrap();
+    assert_eq!(reports.len(), 1, "only home's crossings recur: {reports:?}");
+    let report = &reports[0];
+    assert_eq!(report.partition, PartitionId::new("home"));
+    assert_eq!(
+        report.crossings,
+        [RecurringCrossing::new("home", "work", CrossingResource::Driver, "calendar", threshold)]
+    );
+    assert!(
+        report.crossing_remedies()[0].contains("move calendar into home, or merge home and work")
+    );
+    let audited: Vec<_> = recorder
+        .records()
+        .into_iter()
+        .filter(|record| record.action == adk_kernel::audit::REVIEW)
+        .collect();
+    assert_eq!(audited.len(), 1);
+    assert_eq!(audited[0].ext["crossings"][0]["name"], "calendar");
+    assert!(audited[0].ext["remedies"][0].as_str().unwrap().contains("never waived"));
+    assert_eq!(
+        partitions.store().crossings(&adk_kernel::CrossingFilter::default()).await.unwrap().len(),
+        3 * threshold - 1,
+        "the review records and changes no crossing"
+    );
+}

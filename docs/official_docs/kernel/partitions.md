@@ -24,6 +24,8 @@ drivers or sessions, except the coordinator, and only under an approval no stand
 | `defaultMode` | `ask` | The mode of the partition's harness: `read_only`, `plan`, `ask`, `auto` |
 | `memoryScope` | the id | The project of the partition's long-term facts and project-scoped memory |
 | `drivers` | none | The ids of the drivers mounted for the partition |
+| `quotas` | none | `maxRunning`, `maxQueued`, `dailySpendCap` (micro-USD) for the partition's processes; each applies beside the kernel's quota, the lower of the two |
+| `quietHours` | none | A window in which no proactive or maintenance process of the partition starts, held beside the kernel's windows |
 | `crossPartition` | `deny` | `deny`: no crossing into or out of the partition; `coordinator_with_approval`: the coordinator may cross, each crossing under approval |
 | `blockedCrossings` | none | Partitions this partition's coordinator may no longer cross into ("deny and block") |
 
@@ -106,6 +108,9 @@ What the builder sets for the partition:
 | Mode | The partition's `defaultMode` is the harness mode; call `partition` after `mode`, which it replaces |
 | Identity | Every agent of the harness's runner, team members included, acts as `urn:adk:agent:{app}/{agent}` with the partition's class and tenant and the attribute `adk.partition`, through the runner's identity source (`Partition::identity_source`) |
 | Long-term facts | `FactScope.project` is the partition's `memoryScope` for every kind, preferences included. Recall, `memory_search` and the person's fact listing read that scope only, never a user-wide fact, and a fact of another partition cannot be superseded by id |
+| Sessions | The harness marks each session it runs as its partition's (`harness:partition`, `PARTITION_STATE_KEY`) and refuses, with `harness.partition_session`, a session another partition's harness ran |
+| Consolidation | The partition's consolidation tick works on the partition's facts only, never a user-wide fact |
+| Follow-ups | `propose_followup` puts the item on the partition's agenda; approved, it runs as a process of the partition on its harness |
 | Working notes | A memory root of the partition's own: `<base>/partitions/<memoryScope>/…`, and `<workspace>/.adk/memory/partitions/<memoryScope>/…` for the project layout |
 | Project-scoped memory | `Partition::scope_memory` confines an `adk_core::Memory` to the partition's project; a search or a write naming another project is refused, and a memory without project scoping is refused outright |
 | Drivers | `partition_drivers(toolset)`: the toolset of the drivers mounted for the partition — a driver whose manifest lists the partition and whose id is in `drivers` |
@@ -120,6 +125,25 @@ What the builder sets for the partition:
 `[[kernel.partitions]]` in the user config makes `adk-rust up` run one harness per partition,
 and `adk-rust partitions` lists and changes the table; see
 [kernel commands](cli.md#partitions).
+
+```toml
+[kernel]
+coordinator = "home"
+
+[[kernel.partitions]]
+id = "home"
+cross_partition = "coordinator_with_approval"
+quiet_hours = "22:00-07:00"
+
+[[kernel.partitions]]
+id = "work"
+mode = "auto"
+cross_partition = "coordinator_with_approval"
+quotas = { max_running = 2, daily_spend_cap_usd = 1.5 }
+```
+
+With long-term memory and consolidation on, each partition in Ask or Auto gets a consolidation
+tick of its own, which distils only the sessions its partition's harness ran.
 
 ## Hosting partitions on a kernel
 
@@ -216,6 +240,12 @@ remedy as partition membership: move the resource, or merge the partitions, neve
 ("partition home crossed into work › calendar 14 times; if it needs it this often, move
 calendar into home, or merge home and work").
 
+The kernel's daily review ([proactivity](proactivity.md#the-daily-review)) lists, in the report
+of the partition the requests come from, each crossing that recurs at least
+`ReviewReport::CROSSING_THRESHOLD` (5) times in `ReviewReport::CROSSING_WINDOW` (7 days), with
+its remedy (`ReviewReport::crossing_remedies`). The review changes no partition and waives no
+crossing.
+
 ## Audit records
 
 | Action | When | Fields |
@@ -283,7 +313,7 @@ adk_kernel::partition_store_conformance_tests! { harness = InMemory }
 | Limit | Detail |
 |---|---|
 | Global memory entries | `Partition::scope_memory` searches through the memory's project scoping, which also returns entries written with no project. A partition writes none; entries another writer stored globally stay visible |
-| A harness used without the kernel | The kernel refuses a process continuing another partition's session; `Harness::send` called directly takes the session it is given |
+| A session no partition's harness has run | The first partition harness to run it marks it as its own, so a session an unpartitioned harness ran before partitions existed joins whichever partition continues it first |
 
 ## Read next
 

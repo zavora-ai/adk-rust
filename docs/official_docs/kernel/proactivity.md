@@ -99,9 +99,10 @@ Once a UTC day the kernel's maintenance tick reviews what may have drifted, per 
 | `rules` | Standing rules with no expiry granted longer ago than `review_period`, with an ask to renew each with an expiry or revoke it |
 | `sleepers` | Processes `Waiting` — asleep, suspended or parked — for longer than the period |
 | `frozen` | Processes a freeze parked longer ago than the period |
+| `crossings` | Crossings out of the partition that recur at least 5 times in 7 days, with partition membership as the remedy ([partitions](partitions.md#recurring-crossings)) |
 
 A non-empty review is a `KernelEvent::Review` on the bus and one `kernel.review` audit record
-with ids and ages only. The review never revokes a rule or wakes, suspends or kills a process;
+with ids, ages, resource names and counts only. The review never revokes a rule or wakes, suspends or kills a process;
 a person decides. The kernel reads standing rules through `StandingRuleSource`, which
 `Harness::kernel` implements over the harness's rule store
 (`KernelBuilder::standing_rules`).

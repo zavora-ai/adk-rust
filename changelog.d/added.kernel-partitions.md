@@ -1,8 +1,8 @@
 - **Partitions and crossings** (`adk-kernel`, `adk-harness`, `adk-core`; spec 3.2 §7.8,
   §13 Q3, K-I15): areas of a user's life or teams kept apart, each run by a harness of its
   own, with work across them only through the coordinator and under approval.
-  - `Partition` (class, tenant, mode, memory scope, drivers, `CrossPartition`, blocked
-    crossings) in a `PartitionStore` on in-memory, SQLite, PostgreSQL and Redis, with
+  - `Partition` (class, tenant, mode, memory scope, drivers, quotas, quiet hours,
+    `CrossPartition`, blocked crossings) in a `PartitionStore` on in-memory, SQLite, PostgreSQL and Redis, with
     `partition_store_conformance_tests!`; `Partitions` writes `kernel.partition.created` and
     `kernel.partition.changed` and keeps the crossing ledger.
   - `HarnessAgentBuilder::partition` builds a partition's harness: its mode, its class and
@@ -29,9 +29,20 @@
     durable run's in the `PartitionStore`, released when the kernel's worker finishes it; an
     invocation's in memory, released when it ends. A driver tool reused as a read must also
     declare itself read-only, so `Financial` and `PublishPublic` calls are never reused.
+  - A partition's quotas and quiet hours apply beside the kernel's at admission, at spawn, to
+    follow-ups and to the consolidation tick: each quota the lower one, every window held.
+  - A partition's harness marks the sessions it runs (`PARTITION_STATE_KEY`) and refuses one
+    another partition's harness ran (`harness.partition_session`); its consolidation tick
+    works on the partition's facts only; its `propose_followup` items are on the partition's
+    agenda and run on its harness.
+  - The daily review (`ReviewReport::crossings`, `crossing_remedies`) reports crossings that
+    recur, with partition membership as the remedy, in the `KernelEvent::Review` and the
+    `kernel.review` record.
   - `adk-rust up` with `[[kernel.partitions]]` and `coordinator` in the user config runs one
-    harness per partition (`adk-rust@<partition>`), with long-term memory on for partitions;
-    `adk-rust partitions [list|add|set-mode P MODE]` lists and changes the table (`adk-cli`).
+    harness per partition (`adk-rust@<partition>`), with long-term memory on for partitions
+    and a consolidation tick per partition in Ask or Auto that distils only that partition's
+    sessions; `adk-rust partitions [list|add|set-mode P MODE]` lists and changes the table
+    (`adk-cli`).
   - `examples/harness_kernel`: K7 scripted (`k7_partitions`) and live through `adk-rust up`
     (`live_k7_partitions`).
   - `PolicyCall::durable_run_id` (`adk-core`): the governed path tells a policy which durable

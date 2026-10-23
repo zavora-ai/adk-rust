@@ -162,6 +162,8 @@ mode = "auto"
 memory_scope = "work"
 drivers = ["calendar"]
 cross_partition = "coordinator_with_approval"
+quiet_hours = "19:00-08:00"
+quotas = { max_running = 2, max_queued = 10, daily_spend_cap_usd = 1.5 }
 ```
 
 | Key of an entry | Default |
@@ -172,13 +174,16 @@ cross_partition = "coordinator_with_approval"
 | `mode` | `ask` |
 | `memory_scope` | the id |
 | `drivers` | none |
+| `quiet_hours` | none; `HH:MM-HH:MM`, local time, held beside the kernel's |
+| `quotas` | none; `max_running`, `max_queued`, `daily_spend_cap_usd`, each applied beside the kernel's quota, the lower one |
 | `cross_partition` | `deny` |
 
 At start, `up` adds each entry the partition table lacks; an entry the table already holds
 keeps the table's record, which `adk-rust partitions` changes, and `up` notes the difference.
 Each partition's harness runs as the targets `adk-rust@<partition>` and
 `harness.goal@<partition>`; the coordinator's also runs `adk-rust` and `harness.goal`, so
-`attach`, `goal` and `/api/runs` reach it.
+`attach`, `goal` and `/api/runs` reach it. With the consolidation tick on, each partition in Ask
+or Auto ticks on its own, distilling only the sessions its harness ran.
 
 ## `adk-rust attach` and the REPL on a kernel
 

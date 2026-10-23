@@ -1142,6 +1142,7 @@ impl Supervision {
             rules: Vec::new(),
             sleepers: Vec::new(),
             frozen: Vec::new(),
+            crossings: Vec::new(),
         };
         let mut reports: BTreeMap<PartitionId, crate::review::ReviewReport> =
             std::iter::once(PartitionId::default())
@@ -1162,7 +1163,30 @@ impl Supervision {
                 entry.sleepers.push(aged);
             }
         }
-        // Standing rules carry no partition until partitions land (phase 3).
+        // Crossings that recur are reported in the partition they come from (spec 3.2 §7.8).
+        let since = chrono::Duration::from_std(crate::review::ReviewReport::CROSSING_WINDOW)
+            .ok()
+            .and_then(|window| now.checked_sub_signed(window))
+            .unwrap_or(now);
+        match self
+            .partitions
+            .recurring_crossings(since, crate::review::ReviewReport::CROSSING_THRESHOLD)
+            .await
+        {
+            Ok(recurring) => {
+                for crossing in recurring {
+                    reports
+                        .entry(crossing.from.clone())
+                        .or_insert_with(|| empty(&crossing.from))
+                        .crossings
+                        .push(crossing);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "could not read the crossing ledger for the review")
+            }
+        }
+        // Standing rules carry no partition: the default partition's report lists them.
         if let Some(source) = &self.rule_source {
             let users: std::collections::BTreeSet<String> =
                 match self.runs.list(RunFilter::default().app_name(self.app_name.clone())).await {
@@ -1197,12 +1221,14 @@ impl Supervision {
                 review.rules = report.rules.len(),
                 review.sleepers = report.sleepers.len(),
                 review.frozen = report.frozen.len(),
-                "review found work older than the review period"
+                review.crossings = report.crossings.len(),
+                "review found work older than the review period or recurring crossings"
             );
             let mut fields = serde_json::to_value(&report).unwrap_or_default();
             if let Value::Object(map) = &mut fields {
                 map.remove("at");
                 map.insert("ask".into(), json!(report.renewal_ask()));
+                map.insert("remedies".into(), json!(report.crossing_remedies()));
             }
             self.record(audit::REVIEW, self.actor_for(None), fields).await;
             self.publish(KernelEvent::Review(report));

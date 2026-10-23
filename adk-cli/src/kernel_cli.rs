@@ -1116,12 +1116,13 @@ fn event_line(record: &EventRecord) -> String {
             reason.as_deref().map(|reason| format!(" ({reason})")).unwrap_or_default()
         ),
         KernelEvent::Review(report) => format!(
-            "{}: {} rule(s), {} sleeper(s), {} freeze(s) older than {}",
+            "{}: {} rule(s), {} sleeper(s), {} freeze(s) older than {}; {} recurring crossing(s)",
             report.partition,
             report.rules.len(),
             report.sleepers.len(),
             report.frozen.len(),
-            age(report.review_period)
+            age(report.review_period),
+            report.crossings.len()
         ),
         KernelEvent::Observation { id, partition } => {
             format!("{partition} observation {id}: `adk-rust proc` shows its question")

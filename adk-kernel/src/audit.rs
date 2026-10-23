@@ -15,7 +15,7 @@
 //! | [`WAKE`] | `source`, `key`, `matchedPid` or `newPid`, `deduplicated` |
 //! | [`CONTROL`] | `subject`, `transport`, `action`, `target` |
 //! | [`AGENDA_PROPOSED`], [`AGENDA_APPROVED`], [`AGENDA_REJECTED`], [`AGENDA_SCHEDULED`], [`AGENDA_EXPIRED`] | `item`, `partition`, `origin`, `by`, `budget`, `reason` |
-//! | [`REVIEW`] | `partition`, `reviewPeriodMs`, `rules`, `sleepers`, `frozen` (ids and ages), `ask` |
+//! | [`REVIEW`] | `partition`, `reviewPeriodMs`, `rules`, `sleepers`, `frozen` (ids and ages), `ask`, `crossings` (`from`, `to`, `resource`, `name`, `count`), `remedies` |
 //! | [`DRIVER_MOUNTED`], [`DRIVER_UNMOUNTED`], [`DRIVER_STARTED`], [`DRIVER_CRASHED`], [`DRIVER_RESTARTED`], [`DRIVER_STALE`], [`DRIVER_REAPPROVED`] | `driverId`, `commandDigest`, `partitions`, `effectClasses`, `digests`, `attempt` |
 //! | [`OBSERVATION`] | `id`, `partition`, `dimensions`, `windows` — no value that identifies content |
 //! | [`CHANNEL`] | `surface`, `origin`, `channel`, `account`, `action`, `target` (spec 3.3 §11) |
@@ -68,8 +68,8 @@ pub const AGENDA_REJECTED: &str = "kernel.agenda.rejected";
 pub const AGENDA_SCHEDULED: &str = "kernel.agenda.scheduled";
 /// An agenda item expired before it ran.
 pub const AGENDA_EXPIRED: &str = "kernel.agenda.expired";
-/// The daily review of standing rules, sleepers and freezes older than the review period
-/// (spec 3.2 §7.4, §9.1).
+/// The daily review of standing rules, sleepers and freezes older than the review period,
+/// and of recurring crossings (spec 3.2 §7.4, §7.8, §9.1).
 pub const REVIEW: &str = "kernel.review";
 /// A driver's manifest was approved and mounted (spec 3.2 §7.7).
 pub const DRIVER_MOUNTED: &str = "kernel.driver.mounted";
