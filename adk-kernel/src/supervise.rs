@@ -46,9 +46,10 @@ pub(crate) fn spawned_by_kernel(run: &RunRecord) -> bool {
 /// Whether a claim of `run` must park it before its first model call (K-I2): its process
 /// sleeps until a wake consumes its wake set. The process row says so once `spawn` wrote
 /// it, and the run's key until then. A run can become claimable without a wake — a freeze
-/// hands a claimed run back, a lost lease is recovered — so neither a checkpoint nor a
-/// cleared sleep request means the process was woken; only the consumed wake set does,
-/// and every wake clears it before it makes the run claimable.
+/// hands a claimed run back, a resume after a drain wakes what the drain parked, a lost
+/// lease is recovered — so neither a checkpoint nor a cleared sleep request means the
+/// process was woken; only the consumed wake set does, and every wake clears it before it
+/// makes the run claimable.
 pub(crate) fn asleep_at_claim(run: &RunRecord, stored: Option<&ProcessMeta>) -> bool {
     match stored {
         Some(meta) => meta.wake.is_some(),
