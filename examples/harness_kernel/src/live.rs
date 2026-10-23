@@ -235,7 +235,7 @@ async fn k5(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
 /// within two seconds, and the turn reads the file.
 async fn k3(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
     let mut checks = Checks::default();
-    let up = Up::start(bin, provider, model, "plan").await?;
+    let up = Up::start(bin, provider, model, "ask").await?;
     let client = up.client().await?;
     let wake = WakeSet::any_of([Wake::FileChange {
         root: up.workspace.clone(),
@@ -285,6 +285,16 @@ async fn k3(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
     .await?;
     let attached = client.attach("k3-live", &AttachRequest::default()).await?;
     let (text, calls) = transcript_text(&attached.transcript);
+    if !finished {
+        let processes = client.processes(&ProcessesQuery::default()).await?;
+        let process = processes.iter().find(|process| process.meta.pid == pid);
+        println!(
+            "    state {:?}, error {:?}, held {:?}, calls {calls:?}",
+            process.map(|process| process.run.state),
+            process.and_then(|process| process.run.error.clone()),
+            attached.pending.iter().map(|request| request.tool_name.clone()).collect::<Vec<_>>(),
+        );
+    }
     checks.check("the woken turn completed", finished);
     checks.check(
         "it read the file",

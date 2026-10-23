@@ -40,4 +40,4 @@ is skipped.
 | Scenario | What passes |
 |---|---|
 | `live_k5_approve_from_another_process` | `up --mode ask`: the model's `bash` call is held; the client that started the turn disconnects; `adk-rust approvals --server … approve` in another process approves it over HTTP; the turn completes, the command ran exactly once, and a new client attaching sees the call in the transcript |
-| `live_k3_file_change_wakes` | `up --mode plan`: a process spawned asleep on a `notes.md` file wake makes no model call; saving the file wakes it within two seconds; the turn reads the file with `read_file` and answers with its codeword |
+| `live_k3_file_change_wakes` | `up --mode ask`: a process spawned asleep on a `notes.md` file wake makes no model call; saving the file wakes it within two seconds; the turn reads the file with `read_file` and answers with its codeword |
