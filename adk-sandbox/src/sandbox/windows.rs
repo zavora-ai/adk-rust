@@ -324,6 +324,11 @@ mod token {
             Self::well_known(5, &[12])
         }
 
+        /// `NT AUTHORITY\SYSTEM`, S-1-5-18.
+        pub(super) fn system() -> Self {
+            Self::well_known(5, &[18])
+        }
+
         /// `BUILTIN\Users`, S-1-5-32-545.
         pub(super) fn users() -> Self {
             Self::well_known(5, &[32, 545])
@@ -350,6 +355,11 @@ mod token {
         pub(super) deny_only: Vec<Sid>,
         /// The restricting SIDs every access must also pass.
         pub(super) restricting: Vec<Sid>,
+        /// The SIDs the token's default DACL grants full access. The objects the sandboxed
+        /// process creates — its child processes and their threads among them — take this
+        /// DACL, so it must admit a restricting SID or the process could not open its own
+        /// children.
+        pub(super) default_dacl: Vec<Sid>,
     }
 
     /// The plan for a token with `groups`.
@@ -359,8 +369,9 @@ mod token {
     /// `Authenticated Users`, `INTERACTIVE`, the logon SID (window station and desktop), and
     /// integrity labels, which cannot be disabled. The restricting SIDs are `Everyone`, so
     /// world-readable system files load, `RESTRICTED`, which the policy's paths are granted,
-    /// and the logon SID. Returns `None` when the token has no logon SID.
-    pub(super) fn plan(groups: &[TokenGroup]) -> Option<TokenPlan> {
+    /// and the logon SID. The default DACL grants the user, `SYSTEM`, `RESTRICTED` and the
+    /// logon SID. Returns `None` when the token has no logon SID.
+    pub(super) fn plan(user: &Sid, groups: &[TokenGroup]) -> Option<TokenPlan> {
         let keep = [Sid::everyone(), Sid::users(), Sid::authenticated_users(), Sid::interactive()];
         let is_logon = |g: &TokenGroup| g.attributes & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID;
         let logon = groups.iter().find(|g| is_logon(g))?.sid.clone();
@@ -371,7 +382,11 @@ mod token {
             })
             .map(|g| g.sid.clone())
             .collect();
-        Some(TokenPlan { deny_only, restricting: vec![Sid::everyone(), Sid::restricted(), logon] })
+        Some(TokenPlan {
+            deny_only,
+            restricting: vec![Sid::everyone(), Sid::restricted(), logon.clone()],
+            default_dacl: vec![user.clone(), Sid::system(), Sid::restricted(), logon],
+        })
     }
 }
 
@@ -385,18 +400,20 @@ mod imp {
     use std::time::Duration;
 
     use windows_sys::Win32::Foundation::{
-        CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_FAILED,
-        WAIT_OBJECT_0, WAIT_TIMEOUT,
+        CloseHandle, GENERIC_ALL, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+        WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::Security::Authorization::{
         EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, NO_MULTIPLE_TRUSTEE,
         SE_FILE_OBJECT, SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID,
-        TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
+        TRUSTEE_IS_UNKNOWN, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
     };
     use windows_sys::Win32::Security::{
         ACL, CreateRestrictedToken, DACL_SECURITY_INFORMATION, DISABLE_MAX_PRIVILEGE, GetLengthSid,
-        GetTokenInformation, PSID, SID_AND_ATTRIBUTES, SUB_CONTAINERS_AND_OBJECTS_INHERIT,
-        TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY, TokenGroups,
+        GetTokenInformation, NO_INHERITANCE, PSID, SID_AND_ATTRIBUTES,
+        SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetTokenInformation, TOKEN_ADJUST_DEFAULT,
+        TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY,
+        TOKEN_USER, TokenDefaultDacl, TokenGroups, TokenUser,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
@@ -449,7 +466,7 @@ mod imp {
         let ok = unsafe {
             OpenProcessToken(
                 GetCurrentProcess(),
-                TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_QUERY,
+                TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_QUERY | TOKEN_ADJUST_DEFAULT,
                 &mut token,
             )
         };
@@ -459,35 +476,107 @@ mod imp {
         Ok(Handle(token))
     }
 
-    /// The token's groups, each SID copied into owned storage.
-    fn token_groups(token: HANDLE) -> Result<Vec<TokenGroup>, SandboxError> {
+    /// Reads `class` from `token` into `u64`-aligned storage.
+    fn token_information(
+        token: HANDLE,
+        class: windows_sys::Win32::Security::TOKEN_INFORMATION_CLASS,
+    ) -> Result<Vec<u64>, SandboxError> {
         let mut needed: u32 = 0;
         // SAFETY: a null buffer asks only for the size, written to `needed`.
-        unsafe { GetTokenInformation(token, TokenGroups, std::ptr::null_mut(), 0, &mut needed) };
+        unsafe { GetTokenInformation(token, class, std::ptr::null_mut(), 0, &mut needed) };
         if needed == 0 {
             return Err(last_error("GetTokenInformation(size)"));
         }
-        // `u64` storage keeps the `TOKEN_GROUPS` aligned.
         let mut buf = vec![0u64; (needed as usize).div_ceil(8)];
         // SAFETY: `buf` holds at least `needed` writable bytes.
         let ok = unsafe {
-            GetTokenInformation(token, TokenGroups, buf.as_mut_ptr().cast(), needed, &mut needed)
+            GetTokenInformation(token, class, buf.as_mut_ptr().cast(), needed, &mut needed)
         };
         if ok == 0 {
             return Err(last_error("GetTokenInformation"));
         }
+        Ok(buf)
+    }
+
+    /// A copy of the SID at `sid`.
+    ///
+    /// # Safety
+    ///
+    /// `sid` must point at a valid SID.
+    unsafe fn copy_sid(sid: PSID) -> Sid {
+        // SAFETY: the caller guarantees `sid` is a valid SID of `GetLengthSid` bytes.
+        let bytes =
+            unsafe { std::slice::from_raw_parts(sid.cast::<u8>(), GetLengthSid(sid) as usize) };
+        Sid::from_bytes(bytes)
+    }
+
+    /// The token's user SID.
+    fn token_user(token: HANDLE) -> Result<Sid, SandboxError> {
+        let buf = token_information(token, TokenUser)?;
+        // SAFETY: `buf` holds a `TOKEN_USER` whose SID points into `buf`.
+        Ok(unsafe { copy_sid((*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid) })
+    }
+
+    /// Sets the token's default DACL to grant `sids` full access.
+    fn set_default_dacl(token: HANDLE, sids: &[Sid]) -> Result<(), SandboxError> {
+        let entries: Vec<EXPLICIT_ACCESS_W> = sids
+            .iter()
+            .map(|sid| EXPLICIT_ACCESS_W {
+                grfAccessPermissions: GENERIC_ALL,
+                grfAccessMode: GRANT_ACCESS,
+                grfInheritance: NO_INHERITANCE,
+                Trustee: TRUSTEE_W {
+                    pMultipleTrustee: std::ptr::null_mut(),
+                    MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+                    TrusteeForm: TRUSTEE_IS_SID,
+                    TrusteeType: TRUSTEE_IS_UNKNOWN,
+                    ptstrName: psid(sid).cast(),
+                },
+            })
+            .collect();
+        let mut acl: *mut ACL = std::ptr::null_mut();
+        // SAFETY: `entries` is readable for its length and its SIDs outlive the call; no old
+        // ACL is merged; the ACL the call allocates is freed below.
+        let status = unsafe {
+            SetEntriesInAclW(entries.len() as u32, entries.as_ptr(), std::ptr::null(), &mut acl)
+        };
+        if status != 0 {
+            return Err(SandboxError::EnforcerFailed {
+                enforcer: ENFORCER_NAME.to_string(),
+                message: format!("SetEntriesInAclW(default DACL) failed (os error {status})"),
+            });
+        }
+        let _acl = LocalGuard(acl.cast());
+        let info = TOKEN_DEFAULT_DACL { DefaultDacl: acl };
+        // SAFETY: `info` is readable for its own size and points at a valid ACL.
+        let ok = unsafe {
+            SetTokenInformation(
+                token,
+                TokenDefaultDacl,
+                (&raw const info).cast(),
+                size_of::<TOKEN_DEFAULT_DACL>() as u32,
+            )
+        };
+        if ok == 0 {
+            return Err(last_error("SetTokenInformation(TokenDefaultDacl)"));
+        }
+        Ok(())
+    }
+
+    /// The token's groups, each SID copied into owned storage.
+    fn token_groups(token: HANDLE) -> Result<Vec<TokenGroup>, SandboxError> {
+        let buf = token_information(token, TokenGroups)?;
         // SAFETY: `buf` holds a `TOKEN_GROUPS` as `GetTokenInformation` wrote it.
         let groups = unsafe { &*buf.as_ptr().cast::<TOKEN_GROUPS>() };
         let entries = groups.Groups.as_ptr();
         let mut out = Vec::with_capacity(groups.GroupCount as usize);
         for i in 0..groups.GroupCount as usize {
-            // SAFETY: `i` is within `GroupCount`, so the entry is part of the buffer.
+            // SAFETY: `i` is within `GroupCount`, so the entry is part of the buffer, and its
+            // SID points into `buf`.
             let entry = unsafe { &*entries.add(i) };
-            // SAFETY: `entry.Sid` points into `buf` at a valid SID of `GetLengthSid` bytes.
-            let bytes = unsafe {
-                std::slice::from_raw_parts(entry.Sid.cast::<u8>(), GetLengthSid(entry.Sid) as usize)
-            };
-            out.push(TokenGroup { sid: Sid::from_bytes(bytes), attributes: entry.Attributes });
+            // SAFETY: as above, the entry's SID is valid.
+            let sid = unsafe { copy_sid(entry.Sid) };
+            out.push(TokenGroup { sid, attributes: entry.Attributes });
         }
         Ok(out)
     }
@@ -519,7 +608,9 @@ mod imp {
         if ok == 0 {
             return Err(last_error("CreateRestrictedToken"));
         }
-        Ok(Handle(token))
+        let token = Handle(token);
+        set_default_dacl(token.0, &plan.default_dacl)?;
+        Ok(token)
     }
 
     /// Grants `restricted_sid` the access `mode` needs on `path`, merged into the path's
@@ -719,8 +810,9 @@ mod imp {
         timeout: Option<Duration>,
     ) -> Result<ConfinedOutcome, SandboxError> {
         let process_token = open_process_token()?;
+        let user = token_user(process_token.0)?;
         let groups = token_groups(process_token.0)?;
-        let plan = token::plan(&groups).ok_or_else(|| SandboxError::EnforcerFailed {
+        let plan = token::plan(&user, &groups).ok_or_else(|| SandboxError::EnforcerFailed {
             enforcer: ENFORCER_NAME.to_string(),
             message: "the process token carries no logon SID".to_string(),
         })?;
@@ -920,19 +1012,21 @@ mod tests {
             group(organisation.clone(), 7),
             group(medium_label, token::SE_GROUP_INTEGRITY | 0x40),
         ];
-        let plan = token::plan(&groups).expect("the token has a logon SID");
+        let user = token::Sid::from_bytes(&[1, 2, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0, 0xE9, 3, 0, 0]);
+        let plan = token::plan(&user, &groups).expect("the token has a logon SID");
         assert_eq!(
             plan,
             token::TokenPlan {
                 deny_only: vec![token::Sid::administrators(), organisation],
-                restricting: vec![token::Sid::everyone(), token::Sid::restricted(), logon],
+                restricting: vec![token::Sid::everyone(), token::Sid::restricted(), logon.clone()],
+                default_dacl: vec![user, token::Sid::system(), token::Sid::restricted(), logon],
             }
         );
     }
 
     #[test]
     fn a_token_without_a_logon_sid_has_no_plan() {
-        assert_eq!(token::plan(&[group(token::Sid::everyone(), 7)]), None);
+        assert_eq!(token::plan(&token::Sid::system(), &[group(token::Sid::everyone(), 7)]), None);
     }
 
     #[test]

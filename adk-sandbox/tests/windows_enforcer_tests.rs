@@ -57,6 +57,17 @@ fn private_dir(base: &Path, name: &str) -> PathBuf {
     dir
 }
 
+/// The workspace's files and their contents, for a failure message.
+fn listing(workspace: &Path) -> String {
+    let mut out = String::new();
+    for entry in std::fs::read_dir(workspace).into_iter().flatten().flatten() {
+        let content = std::fs::read_to_string(entry.path()).unwrap_or_default();
+        let content: String = content.chars().take(400).collect();
+        out.push_str(&format!("{}: {content:?}\n", entry.file_name().to_string_lossy()));
+    }
+    out
+}
+
 #[test]
 fn the_shell_writes_inside_the_workspace() {
     let (_root, _base, workspace) = layout();
@@ -93,6 +104,16 @@ fn the_shell_cannot_read_a_path_the_policy_does_not_grant() {
     assert!(!seen.contains("ungranted-content"), "the ungranted file was read: {seen}");
 }
 
+/// A sandboxed shell starts child processes, which inherit the restricted token: the token's
+/// default DACL must let the shell open the processes it creates.
+#[test]
+fn the_shell_starts_a_child_process() {
+    let (_root, _base, workspace) = layout();
+    let outcome = run(&workspace, "cmd /c echo child^> child.txt 2> spawn-err.txt");
+    let child = std::fs::read_to_string(workspace.join("child.txt")).unwrap_or_default();
+    assert_eq!(child.trim(), "child", "{outcome:?}\n{}", listing(&workspace));
+}
+
 #[test]
 fn no_descendant_outlives_the_call() {
     let (_root, _base, workspace) = layout();
@@ -100,12 +121,14 @@ fn no_descendant_outlives_the_call() {
     // enough for it to start, then exits, and the call's job is terminated.
     let outcome = run(
         &workspace,
-        "start /b cmd /c for /l %i in (1,1,2000000000) do @echo x^>^> tick.txt \
+        "start /b cmd /c for /l %i in (1,1,2000000000) do @echo x^>^> tick.txt 2> start-err.txt \
          & for /l %j in (1,1,1000000) do @rem",
     );
     assert!(!outcome.timed_out, "{outcome:?}");
     let tick = workspace.join("tick.txt");
-    let size = std::fs::metadata(&tick).expect("the background shell ran").len();
+    let size = std::fs::metadata(&tick)
+        .unwrap_or_else(|e| panic!("the background shell ran: {e}\n{}", listing(&workspace)))
+        .len();
     std::thread::sleep(Duration::from_secs(3));
     let later = std::fs::metadata(&tick).expect("tick.txt").len();
     assert_eq!(size, later, "a descendant kept running after the call");
