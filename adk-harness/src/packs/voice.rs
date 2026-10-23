@@ -17,6 +17,13 @@
 //! write is off, and recalled context enters only through the harness's own instruction
 //! (I40), so its memory injection is off too. Transcripts are persisted as session events.
 //!
+//! Under the `kernel` feature the surface also answers kernel processes parked on a held call
+//! (spec 3.2 §7.11): `VoiceSurface::with_parked_processes` gives it the kernel's process
+//! table and approval service, a spoken answer to an offered process is decided through that
+//! service — whose run store wakes the parked run — and a process a freeze parked is refused,
+//! since only `unfreeze` wakes it (K-I21). The surface's own realtime-session holds are
+//! answered first, as before.
+//!
 //! The run config the surface governs calls with carries no confirmation handler: a handler
 //! answers inside the call, which would block the event loop that carries the user's spoken
 //! answer, so every call needing a decision is held and resumed instead. A spoken decision
@@ -31,6 +38,11 @@ use adk_core::audit_log::AuditActor;
 use adk_core::{
     AdkError, ApprovalScope, ApprovalStore, RequestContext, Result, RunConfig, ToolApproval,
     ToolConfirmationRequest,
+};
+#[cfg(feature = "kernel")]
+use adk_core::{
+    ApprovalDecision, ApprovalRequest, ApprovalService, InboxQuery, RunCheckpointRef, RunState,
+    SubjectRef,
 };
 use adk_realtime::config::RealtimeConfig;
 use adk_realtime::integration::{IntegratedRealtimeRunner, IntegrationConfig, ResumedToolCall};
@@ -54,6 +66,17 @@ pub const VOICE_AUDIT_HELD: &str = "harness.voice.held";
 pub const VOICE_AUDIT_DECIDED: &str = "harness.voice.decided";
 /// Action of the audit record written when a decided call has run.
 pub const VOICE_AUDIT_RESUMED: &str = "harness.voice.resumed";
+/// Action of the audit record written when a spoken decision on a parked kernel process is
+/// refused, as for a process a freeze parked (spec 3.2 §7.11, K-I21).
+pub const VOICE_AUDIT_REFUSED: &str = "harness.voice.refused";
+
+/// The error code of a decision on a kernel process a freeze parked: only `unfreeze` wakes it
+/// (spec 3.2 §7.11, K-I21).
+pub const VOICE_FROZEN_CODE: &str = "harness.voice.frozen";
+
+/// The error code of a decision on a process that is not parked on a held call the voice
+/// user may decide (spec 3.2 §7.11).
+pub const VOICE_NOT_PARKED_CODE: &str = "harness.voice.not_parked";
 
 /// How often the surface asks the approval store whether the inbox decided a held call.
 const INBOX_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -213,7 +236,8 @@ pub enum VoiceEvent {
     },
     /// A held call was decided.
     Decided {
-        /// The provider's call ID.
+        /// The provider's call ID; for a parked kernel process decided by voice, the
+        /// process's pid (spec 3.2 §7.11).
         call_id: String,
         /// The decision.
         decision: SpokenDecision,
@@ -267,6 +291,37 @@ pub struct VoiceSurface {
     pending: Mutex<VecDeque<VoiceEvent>>,
     inbox_checked: Mutex<Instant>,
     audit: Option<HarnessAudit>,
+    /// The groups the voice user decides parked processes in: the request context's scopes.
+    #[cfg(feature = "kernel")]
+    approver_groups: Vec<String>,
+    #[cfg(feature = "kernel")]
+    parked: Option<ParkedAnswers>,
+    /// Kernel processes offered for the user's spoken answer, oldest first.
+    #[cfg(feature = "kernel")]
+    offered: Mutex<Vec<String>>,
+}
+
+/// What the surface answers parked kernel processes through (spec 3.2 §7.11).
+#[cfg(feature = "kernel")]
+#[derive(Clone)]
+struct ParkedAnswers {
+    processes: adk_kernel::ProcessTable,
+    approvals: Arc<dyn ApprovalService>,
+}
+
+/// A kernel process parked on a held call, with the inbox request that decides it (spec 3.2
+/// §7.11).
+#[cfg(feature = "kernel")]
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct ParkedProcess {
+    /// The process: its durable run's id.
+    pub pid: String,
+    /// The pending request in the approvals inbox; its run id is the process's.
+    pub request: ApprovalRequest,
+    /// Whether a freeze parked the process: then only `unfreeze` wakes it and no voice
+    /// decision is taken (K-I21).
+    pub frozen: bool,
 }
 
 impl std::fmt::Debug for VoiceSurface {
@@ -346,6 +401,12 @@ impl VoiceSurface {
             realtime = realtime.with_voice(voice.clone());
         }
 
+        #[cfg(feature = "kernel")]
+        let approver_groups = config
+            .request_context
+            .as_ref()
+            .map(|context| context.scopes.clone())
+            .unwrap_or_default();
         let mut builder = IntegratedRealtimeRunner::builder()
             .model(model)
             .identity(&config.app_name, &user_id, &session_id)
@@ -381,6 +442,12 @@ impl VoiceSurface {
             pending: Mutex::new(VecDeque::new()),
             inbox_checked: Mutex::new(Instant::now()),
             audit,
+            #[cfg(feature = "kernel")]
+            approver_groups,
+            #[cfg(feature = "kernel")]
+            parked: None,
+            #[cfg(feature = "kernel")]
+            offered: Mutex::new(Vec::new()),
         })
     }
 
@@ -504,13 +571,25 @@ impl VoiceSurface {
                 ServerEvent::InputTranscriptCompleted { item_id, content_index, transcript } => {
                     let oldest =
                         self.held.lock().unwrap_or_else(|e| e.into_inner()).first().cloned();
-                    if let (Some(held), Some(decision)) =
-                        (oldest, parse_spoken_decision(&transcript))
-                        && let Err(error) = self
-                            .apply(&held, decision, DecisionSource::Voice, Some(&transcript))
-                            .await
-                    {
-                        return Some(Err(error));
+                    let decision = parse_spoken_decision(&transcript);
+                    match (oldest, decision) {
+                        (Some(held), Some(decision)) => {
+                            if let Err(error) = self
+                                .apply(&held, decision, DecisionSource::Voice, Some(&transcript))
+                                .await
+                            {
+                                return Some(Err(error));
+                            }
+                        }
+                        // The session's own holds come first; an offered kernel process
+                        // takes a plain answer only when none waits (spec 3.2 §7.11).
+                        #[cfg(feature = "kernel")]
+                        (None, Some(decision)) => {
+                            if let Err(error) = self.answer_offered(decision, &transcript).await {
+                                return Some(Err(error));
+                            }
+                        }
+                        _ => {}
                     }
                     // The transcript itself is reported first; a decision and the resumed
                     // call follow.
@@ -746,6 +825,270 @@ impl VoiceSurface {
             )
             .await
     }
+}
+
+#[cfg(feature = "kernel")]
+impl VoiceSurface {
+    /// Answers kernel processes parked on a held call through `approvals`, the approval
+    /// service the kernel's processes submit their holds to (spec 3.2 §7.11).
+    ///
+    /// Build `approvals` with `StoreApprovalService::with_run_store` over the kernel's run
+    /// store, so a decision wakes the parked run. The voice user decides as
+    /// `SubjectRef::human(user_id)`, a member of the request context's scopes, as the
+    /// approvals REST maps a caller. The session's own held calls are answered first.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let surface = VoiceSurface::open(harness, realtime, sessions, "ana", "voice-1", config)?
+    ///     .with_parked_processes(kernel.processes().clone(), approvals);
+    /// for parked in surface.parked_processes().await? {
+    ///     println!("{} waits on {}", parked.pid, parked.request.tool_name);
+    /// }
+    /// ```
+    #[must_use]
+    pub fn with_parked_processes(
+        mut self,
+        processes: adk_kernel::ProcessTable,
+        approvals: Arc<dyn ApprovalService>,
+    ) -> Self {
+        self.parked = Some(ParkedAnswers { processes, approvals });
+        self
+    }
+
+    /// The kernel processes parked on a held call the voice user may decide, oldest first;
+    /// a process a freeze parked is listed with [`ParkedProcess::frozen`] set.
+    ///
+    /// # Errors
+    ///
+    /// `harness.voice.no_kernel` without [`with_parked_processes`](Self::with_parked_processes);
+    /// the approval service's or the process table's error otherwise.
+    pub async fn parked_processes(&self) -> Result<Vec<ParkedProcess>> {
+        let parked = self.parked_answers()?;
+        let mut query = InboxQuery::for_approver(self.approver(), self.approver_groups.clone());
+        let mut found = Vec::new();
+        loop {
+            let page = parked.approvals.inbox(query.clone()).await?;
+            for request in page.items {
+                let Some(pid) = request.run_id.clone() else { continue };
+                if let Some(process) = parked_state(parked, &pid).await? {
+                    found.push(ParkedProcess { pid, request, frozen: process });
+                }
+            }
+            match page.next_cursor {
+                Some(cursor) => query.cursor = Some(cursor),
+                None => return Ok(found),
+            }
+        }
+    }
+
+    /// Offers parked process `pid` for the user's spoken answer: the next plain yes or no,
+    /// while no call of this session is held, decides it (spec 3.2 §7.11). Ask the user
+    /// about it — with [`say`](Self::say), or on the screen — after offering it.
+    ///
+    /// # Errors
+    ///
+    /// [`VOICE_FROZEN_CODE`] for a process a freeze parked, [`VOICE_NOT_PARKED_CODE`] for one
+    /// not parked on a request the voice user may decide.
+    pub async fn offer_parked(&self, pid: &str) -> Result<ParkedProcess> {
+        let parked = self.parked_process(pid).await?;
+        let mut offered = self.offered.lock().unwrap_or_else(|e| e.into_inner());
+        if !offered.iter().any(|offered| offered == pid) {
+            offered.push(pid.to_string());
+        }
+        Ok(parked)
+    }
+
+    /// The processes offered and not yet decided, oldest first.
+    pub fn offered_processes(&self) -> Vec<String> {
+        self.offered.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Decides the held call parked process `pid` waits on, through the kernel's approval
+    /// service, whose run store wakes the process (spec 3.2 §7.11). Returns the decided
+    /// request.
+    ///
+    /// # Errors
+    ///
+    /// [`VOICE_FROZEN_CODE`] for a process a freeze parked, which only `unfreeze` wakes
+    /// (K-I21); [`VOICE_NOT_PARKED_CODE`] for one not parked on a request the voice user may
+    /// decide; the approval service's error, such as `approval.not_an_approver`.
+    pub async fn decide_process(
+        &self,
+        pid: &str,
+        decision: SpokenDecision,
+    ) -> Result<ApprovalRequest> {
+        self.decide_parked(pid, decision, DecisionSource::Inbox, None).await
+    }
+
+    /// Applies a spoken `decision` to the oldest offered process, reporting it as
+    /// [`VoiceEvent::Decided`] by voice.
+    async fn answer_offered(&self, decision: SpokenDecision, transcript: &str) -> Result<()> {
+        let Some(pid) = self.offered.lock().unwrap_or_else(|e| e.into_inner()).first().cloned()
+        else {
+            return Ok(());
+        };
+        self.decide_parked(&pid, decision, DecisionSource::Voice, Some(transcript)).await?;
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).push_back(VoiceEvent::Decided {
+            call_id: pid,
+            decision,
+            by: DecisionSource::Voice,
+        });
+        Ok(())
+    }
+
+    async fn decide_parked(
+        &self,
+        pid: &str,
+        decision: SpokenDecision,
+        by: DecisionSource,
+        transcript: Option<&str>,
+    ) -> Result<ApprovalRequest> {
+        let answers = self.parked_answers()?.clone();
+        let parked = match self.parked_process(pid).await {
+            Ok(parked) => parked,
+            Err(error) => {
+                self.withdraw(pid);
+                if error.code == VOICE_FROZEN_CODE {
+                    self.record_refused(pid, &error, transcript).await?;
+                }
+                return Err(error);
+            }
+        };
+        let approver = self.approver();
+        let approval = match decision {
+            SpokenDecision::Approve => ApprovalDecision::approve(approver),
+            SpokenDecision::Deny => ApprovalDecision::reject(approver, "the user said no"),
+        }
+        .with_groups(self.approver_groups.clone());
+        let decided =
+            answers.approvals.decide(&parked.request.id, parked.request.version, approval).await?;
+        self.withdraw(pid);
+        if let Some(audit) = &self.audit {
+            audit
+                .record(
+                    VOICE_AUDIT_DECIDED,
+                    json!({
+                        "pid": pid,
+                        "approvalId": decided.id,
+                        "tool": decided.tool_name,
+                        "fingerprintDigest": digest(&decided.fingerprint),
+                        "decision": decision,
+                        "by": by,
+                        "transcriptDigest": transcript.map(digest),
+                    }),
+                )
+                .await?;
+        }
+        Ok(decided)
+    }
+
+    /// `pid` as a parked process the voice user may decide, or why not.
+    async fn parked_process(&self, pid: &str) -> Result<ParkedProcess> {
+        let answers = self.parked_answers()?;
+        let frozen = match parked_state(answers, pid).await? {
+            Some(true) => {
+                return Err(AdkError::new(
+                    adk_core::ErrorComponent::Agent,
+                    adk_core::ErrorCategory::Forbidden,
+                    VOICE_FROZEN_CODE,
+                    format!(
+                        "process {pid} was parked by a freeze: only unfreeze wakes it, so no \
+                         voice decision is taken (spec 3.2 K-I21)"
+                    ),
+                ));
+            }
+            Some(false) => false,
+            None => return Err(not_parked(pid, "it is not waiting on a held call")),
+        };
+        let mut query = InboxQuery::for_approver(self.approver(), self.approver_groups.clone());
+        loop {
+            let page = answers.approvals.inbox(query.clone()).await?;
+            if let Some(request) =
+                page.items.into_iter().find(|request| request.run_id.as_deref() == Some(pid))
+            {
+                return Ok(ParkedProcess { pid: pid.to_string(), request, frozen });
+            }
+            match page.next_cursor {
+                Some(cursor) => query.cursor = Some(cursor),
+                None => {
+                    return Err(not_parked(
+                        pid,
+                        "no pending request names it in the voice user's inbox",
+                    ));
+                }
+            }
+        }
+    }
+
+    fn parked_answers(&self) -> Result<&ParkedAnswers> {
+        self.parked.as_ref().ok_or_else(|| {
+            AdkError::new(
+                adk_core::ErrorComponent::Agent,
+                adk_core::ErrorCategory::InvalidInput,
+                "harness.voice.no_kernel",
+                "the voice surface answers kernel processes only after \
+                 VoiceSurface::with_parked_processes",
+            )
+        })
+    }
+
+    fn approver(&self) -> SubjectRef {
+        SubjectRef::human(self.scope.user_id.clone())
+    }
+
+    fn withdraw(&self, pid: &str) {
+        self.offered.lock().unwrap_or_else(|e| e.into_inner()).retain(|offered| offered != pid);
+    }
+
+    async fn record_refused(
+        &self,
+        pid: &str,
+        error: &AdkError,
+        transcript: Option<&str>,
+    ) -> Result<()> {
+        let Some(audit) = &self.audit else {
+            return Ok(());
+        };
+        audit
+            .record(
+                VOICE_AUDIT_REFUSED,
+                json!({
+                    "pid": pid,
+                    "code": error.code,
+                    "transcriptDigest": transcript.map(digest),
+                }),
+            )
+            .await
+    }
+}
+
+/// Whether process `pid` is parked on a held call: `Some(frozen)` while it waits `Waiting`
+/// on a held call or after a freeze, `None` otherwise.
+#[cfg(feature = "kernel")]
+async fn parked_state(parked: &ParkedAnswers, pid: &str) -> Result<Option<bool>> {
+    let Some(process) = parked.processes.get(pid).await.map_err(AdkError::from)? else {
+        return Ok(None);
+    };
+    if process.run.state != RunState::Waiting {
+        return Ok(None);
+    }
+    if process.meta.suspended_by == Some(adk_kernel::Suspension::Freeze) {
+        return Ok(Some(true));
+    }
+    let awaiting =
+        matches!(process.run.checkpoint, Some(RunCheckpointRef::AwaitingApproval { .. }));
+    Ok((awaiting && process.meta.suspended_by.is_none()).then_some(false))
+}
+
+#[cfg(feature = "kernel")]
+fn not_parked(pid: &str, why: &str) -> AdkError {
+    AdkError::new(
+        adk_core::ErrorComponent::Agent,
+        adk_core::ErrorCategory::NotFound,
+        VOICE_NOT_PARKED_CODE,
+        format!("process {pid} is not parked on a call the voice user may decide: {why}"),
+    )
 }
 
 /// The realtime instruction: the harness prompt, the environment, the workspace's

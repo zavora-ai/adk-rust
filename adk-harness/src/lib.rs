@@ -38,6 +38,7 @@
 //! | `packs::browser::BrowserPack` (feature `browser`) | §7.24 |
 //! | `packs::computer_use::ComputerUsePack` (feature `computer-use`) | §7.24 |
 //! | `packs::voice::{VoiceSurface, VoiceConfig, VoiceEvent, SpokenDecision}` (feature `voice`) | §7.17 |
+//! | `VoiceSurface::with_parked_processes`, `ParkedProcess` (features `voice` and `kernel`) | spec 3.2 §7.11 |
 //!
 //! # Example
 //!
@@ -204,10 +205,13 @@ pub use packs::browser::{
 pub use packs::computer_use::{COMPUTER_USE_TOOL_NAMES, ComputerUsePack};
 #[cfg(feature = "payments")]
 pub use packs::payments::{PAYMENT_AUDIT_ACTION, PAYMENT_TOOL_NAMES, PaymentMandate, PaymentsPack};
+#[cfg(all(feature = "voice", feature = "kernel"))]
+pub use packs::voice::ParkedProcess;
 #[cfg(feature = "voice")]
 pub use packs::voice::{
-    DecisionSource, SpokenDecision, VOICE_AUDIT_DECIDED, VOICE_AUDIT_HELD, VOICE_AUDIT_RESUMED,
-    VoiceConfig, VoiceEvent, VoiceSurface, parse_spoken_decision,
+    DecisionSource, SpokenDecision, VOICE_AUDIT_DECIDED, VOICE_AUDIT_HELD, VOICE_AUDIT_REFUSED,
+    VOICE_AUDIT_RESUMED, VOICE_FROZEN_CODE, VOICE_NOT_PARKED_CODE, VoiceConfig, VoiceEvent,
+    VoiceSurface, parse_spoken_decision,
 };
 #[cfg(feature = "graph")]
 pub use plan_graph::{
