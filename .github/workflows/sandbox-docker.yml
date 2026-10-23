@@ -19,6 +19,7 @@ on:
       - 'examples/harness_agent/src/sandbox.rs'
       - '.github/workflows/sandbox-docker.yml'
       - '.github/actions/setup-rust/**'
+      - '.github/actions/apt-install/**'
   workflow_dispatch:
 
 permissions:
@@ -52,8 +53,12 @@ jobs:
 
     # The harness_agent example links libdbus-sys through its keychain support.
     - name: Install system dependencies
+      # A stalled apt mirror once held jobs for the full six-hour limit; the action bounds and
+      # retries each apt attempt, and the step timeout bounds the whole install.
       timeout-minutes: 10
-      run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 update && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 install -y libdbus-1-dev
+      uses: ./.github/actions/apt-install
+      with:
+        packages: libdbus-1-dev
 
     # The tests create containers from this image and never pull it themselves.
     - name: Pull the test image

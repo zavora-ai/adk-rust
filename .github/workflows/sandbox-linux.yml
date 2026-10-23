@@ -20,6 +20,7 @@ on:
       - 'adk-harness/tests/shell_sandbox_tests.rs'
       - '.github/workflows/sandbox-linux.yml'
       - '.github/actions/setup-rust/**'
+      - '.github/actions/apt-install/**'
   workflow_dispatch:
 
 permissions:
@@ -53,10 +54,16 @@ jobs:
       with:
         tool: cargo-nextest
 
-    - name: Install bubblewrap and allow unprivileged user namespaces
+    - name: Install bubblewrap
+      # A stalled apt mirror once held jobs for the full six-hour limit; the action bounds and
+      # retries each apt attempt, and the step timeout bounds the whole install.
+      timeout-minutes: 10
+      uses: ./.github/actions/apt-install
+      with:
+        packages: bubblewrap
+
+    - name: Allow unprivileged user namespaces
       run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends bubblewrap
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
         bwrap --version
 
