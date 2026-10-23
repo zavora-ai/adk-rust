@@ -67,7 +67,7 @@ OS-level sandbox enforcement restricts child processes at the kernel level. This
 |----------|----------|-------------|
 | macOS | Seatbelt (`sandbox-exec`) | Deny-by-default profile: the system runtime plus the policy's paths are readable, only the policy's read-write paths are writable, network and fork only when allowed |
 | Linux | bubblewrap (`bwrap`) | Filesystem namespace isolation (whitelist mounts); a seccomp filter denies process creation unless allowed |
-| Windows | AppContainer | **Not implemented** — the enforcer reports itself unavailable |
+| Windows | Restricted token (`restricted-token`) | A restricted token plus ACL grants on the policy's paths, in a Job Object, through `WindowsEnforcer::run_confined`; not through `sandboxed_command` (see below) |
 
 Enforcement is proven on a real Linux runner by the `Sandbox Linux` workflow
 (`.github/workflows/sandbox-linux.yml`): it installs bubblewrap on `ubuntu-24.04`, sets
@@ -272,7 +272,19 @@ the profile as escaped string literals, so a directory name cannot add directive
 bubblewrap has no domain-level control, so `allow_domain` cannot be enforced. A policy
 with rules and `allow_network = false` blocks all network access and logs a warning.
 
-**Windows (AppContainer):** Not implemented. The design is token-based ACLs — a restricted SID with no access by default, then ACLs granted on specific paths — but container creation, ACLs, capabilities, and job-object cleanup are absent, so `probe()` returns `EnforcerUnavailable`. Run without an enforcer on Windows, or use macOS or Linux where enforcement is real.
+**Windows (restricted token):** the first Windows tier (spec 3.2 §10 W5). `WindowsEnforcer::run_confined` starts the command with `CreateProcessAsUserW` under a restricted token and holds it in a Job Object; AppContainer is not used.
+
+| Aspect | Behaviour |
+|--------|-----------|
+| Token | Privileges removed (`DISABLE_MAX_PRIVILEGE`); `BUILTIN\Users` and Authenticated Users deny-only; restricting SIDs `Everyone`, `RESTRICTED` and the logon SID |
+| Paths | `RESTRICTED` is granted on each policy path — full access for read-write, read and execute for read-only — added to the path's existing ACL |
+| Writes | Refused outside the granted paths |
+| Reads | Refused for ungranted paths that are not world-readable; world-readable files, such as system DLLs, stay readable so the process can start |
+| Descendants | Killed with the call's Job Object, also on a timeout |
+| Network | **Not enforced** — Windows has no per-process network control without AppContainer |
+| Integrity level | Not lowered |
+
+A restricted token is set when the process is created, so it cannot be attached to a `tokio::process::Command` that the caller spawns. `probe()` therefore returns `EnforcerUnavailable` and `configure_command()` returns `EnforcerFailed`, naming `run_confined`: `sandboxed_command`, `ProcessBackend::with_sandbox` and the harness shell do not confine on Windows and report so. The PR tier's `windows` job runs the enforcer's tests.
 
 ## Workspace Clients
 

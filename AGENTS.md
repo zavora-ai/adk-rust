@@ -101,8 +101,9 @@ bash-only, so use `./scripts/setup-dev.ps1`. Use the MSVC toolchain
 compiler; `.cargo/config.toml` pins `rust-lld` as the linker, which ships with
 rustup. Four further constraints:
 
-- `adk-sandbox`'s Windows AppContainer enforcer is unimplemented and reports
-  itself unavailable — `sandbox-windows` compiles but does not enforce.
+- `adk-sandbox`'s Windows enforcer is a restricted-token tier that confines only
+  through `WindowsEnforcer::run_confined`; its `probe` reports the generic
+  `sandboxed_command` path unavailable, so the harness shell stays degraded.
 - Nine tests shell out to `bash`, `sh`, or `python3` and fail with
   `program not found` without them. Git for Windows installs a shell but leaves
   `C:\Program Files\Git\bin` off `PATH` (only `Git\cmd` is added), and the
@@ -364,7 +365,7 @@ adk-kernel/      Agent kernel (spec 3.2): Kernel supervisor with a DurableWorker
 adk-bench/       Benchmarking framework: framework-level runtime performance with real LLM APIs
                  and cross-framework (Python ADK) comparison
 adk-sandbox/     Sandboxed execution environments — process/WASM backends, OS-level sandbox profiles
-                 (Seatbelt on macOS, bubblewrap on Linux; Windows AppContainer unimplemented)
+                 (Seatbelt on macOS, bubblewrap on Linux, a restricted-token tier on Windows)
 adk-audio/       Audio processing, STT/TTS providers, Deepgram streaming, desktop audio
                  (capture/playback/VAD), ONNX models (Whisper, Moonshine, Kokoro, Chatterbox)
 adk-rag/         Retrieval-augmented generation pipelines

@@ -49,7 +49,7 @@ pub enum SandboxError {
     /// The sandbox enforcer failed to apply the profile.
     #[error("enforcer '{enforcer}' failed: {message}")]
     EnforcerFailed {
-        /// The enforcer name (e.g., "seatbelt", "bubblewrap", "appcontainer").
+        /// The enforcer name (e.g., "seatbelt", "bubblewrap", "restricted-token").
         enforcer: String,
         /// A descriptive message explaining what failed.
         message: String,

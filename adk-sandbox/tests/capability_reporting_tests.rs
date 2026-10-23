@@ -60,8 +60,7 @@ fn the_macos_profile_is_deny_default_and_reports_read_isolation() {
     assert!(caps.enforced_limits.network_isolation);
 }
 
-// The Windows enforcer type only exists when compiling for Windows with
-// `sandbox-windows`, so its `probe` change cannot be exercised from this host. It now
-// returns `EnforcerUnavailable` naming AppContainer, instead of succeeding on a link-time
-// symbol check while `configure_command` still fails — a probe that passes where execution
-// cannot is worse than one that says so.
+// The Windows restricted-token enforcer (spec 3.2 §10 W5) confines only through
+// `WindowsEnforcer::run_confined`; its `probe` returns `EnforcerUnavailable` for the generic
+// path, since a restricted token cannot be set on a `tokio::process::Command`. Its unit tests
+// and `windows_enforcer_tests.rs` cover it.

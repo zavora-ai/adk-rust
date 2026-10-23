@@ -80,7 +80,7 @@ Autonomous agents that do vertically integrated tasks well, demonstrating:
 | Anthropic Managed Agents | 🚧 | `adk-anthropic` managed-agents feature |
 | Gemini Interactions API | 🚧 | `adk-gemini` interactions feature — server-side history, step timeline |
 | Action nodes | ✅ | `adk-action` — 14 deterministic node types for graph workflows |
-| Sandbox execution | ✅ | `adk-sandbox` — process/WASM backends, OS-level profiles (Seatbelt, bubblewrap, AppContainer) |
+| Sandbox execution | ✅ | `adk-sandbox` — process/WASM backends, OS-level profiles (Seatbelt, bubblewrap, Windows restricted token) |
 | Audio ONNX models | ✅ | `adk-audio` — Whisper, Moonshine, Kokoro, Chatterbox, Qwen3-TTS |
 
 ---

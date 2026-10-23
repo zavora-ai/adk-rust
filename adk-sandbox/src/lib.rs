@@ -41,7 +41,7 @@
 //! |-----------|--------------------------------------|---------|
 //! | `process` | Subprocess execution via tokio       | ✅      |
 //! | `wasm`    | In-process WASM execution via wasmtime | ❌    |
-//! | `sandbox-macos`, `sandbox-linux`, `sandbox-windows` | OS enforcers for `ProcessBackend` (Seatbelt, bubblewrap; the Windows AppContainer enforcer reports itself unavailable) | ❌ |
+//! | `sandbox-macos`, `sandbox-linux`, `sandbox-windows` | OS enforcers for `ProcessBackend` (Seatbelt, bubblewrap; the Windows restricted-token enforcer confines only through `WindowsEnforcer::run_confined`) | ❌ |
 //! | `sandbox-native` | All three enforcers; only the target platform's compiles | ❌ |
 //! | `workspace` | Workspace lifecycle and `LocalUnixClient` | ❌ |
 //! | `workspace-docker` | `DockerClient` (implies `workspace`) | ❌ |

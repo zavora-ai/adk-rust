@@ -26,8 +26,10 @@ and the sandbox again on every call:
 | Enforcer available at build, unavailable at a call | The call is refused with `harness.sandbox_unavailable` and a `harness.sandbox.unavailable` record; it never falls back to the host |
 | A session's container cannot be provisioned or started, or lets a protected path be written | The same refusal, with the reason in the record |
 
-The Windows AppContainer enforcer is not implemented, so on Windows the shell is `Host`, or
-`Degraded` when a sandbox is requested.
+On Windows the shell is `Host`, or `Degraded` when a sandbox is requested. The
+`restricted-token` enforcer confines commands it starts itself (`WindowsEnforcer::run_confined`),
+but a restricted token cannot be attached to the command the `bash` tool spawns, so its probe
+reports the shell's path as unavailable and the reason names it.
 
 ## Turning the sandbox on
 

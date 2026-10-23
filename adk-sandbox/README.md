@@ -33,7 +33,7 @@ adk-rust = { version = "3.0", features = ["sandbox"] }
 | `wasm`    | In-process WASM execution via `wasmtime`   | ❌      | `wasmtime`, `wasmtime-wasi` |
 | `sandbox-macos` | macOS Seatbelt enforcement          | ❌      | None               |
 | `sandbox-linux` | Linux bubblewrap enforcement        | ❌      | None (external `bwrap` binary) |
-| `sandbox-windows` | Windows AppContainer enforcement  | ❌      | `windows-sys`      |
+| `sandbox-windows` | Windows restricted-token enforcement | ❌      | `windows-sys`      |
 | `sandbox-native` | All three enforcers; only the target platform's compiles | ❌ | All of the above |
 | `workspace` | Workspace lifecycle + `LocalUnixClient` | ❌   | `tar`, `uuid`      |
 | `workspace-docker` | `DockerClient` (implies `workspace`) | ❌ | `bollard`, `futures` |
@@ -136,7 +136,7 @@ Under an enforcer, `ProcessBackend` runs each execution in a fresh scratch direc
 |---------|----------|----------|--------------------|
 | `sandbox-macos` | macOS | Seatbelt (`sandbox-exec`) | None |
 | `sandbox-linux` | Linux | bubblewrap (`bwrap`) | None (external binary) |
-| `sandbox-windows` | Windows | AppContainer | `windows-sys` |
+| `sandbox-windows` | Windows | Restricted token (`WindowsEnforcer::run_confined`) | `windows-sys` |
 | `sandbox-native` | Auto-detect | Platform-appropriate | All of the above |
 
 ### Usage
@@ -244,15 +244,15 @@ does not exist yet cannot be protected this way.
 
 ### Platform Differences
 
-| Aspect | macOS Seatbelt | Linux bubblewrap | Windows AppContainer |
+| Aspect | macOS Seatbelt | Linux bubblewrap | Windows restricted token |
 |--------|---------------|-----------------|---------------------|
-| Strategy | Deny-default profile plus the system runtime | Whitelist (mount only what's needed) | Not implemented — the enforcer reports itself unavailable |
-| Reads | System runtime and policy paths; home directories, `/tmp`, and `$TMPDIR` are unreadable unless allowed | Only bound paths exist | — |
-| Writes | Only policy read-write paths (and `/dev/null`) | Only `--bind` paths writable | — |
-| Network | Denied unless `allow_network` | `--unshare-net` namespace | — |
-| Process spawning | `process-fork` granted only with `allow_process_spawn` | seccomp filter fails `fork`, `vfork`, and non-thread `clone` (x86-64, AArch64) | — |
-| Terminal | The caller's session | Always a new session (`--new-session`) with no controlling terminal | — |
-| Domain rules (`allow_domain`) | Not enforceable; all network blocked | Not enforceable; all network blocked | — |
+| Strategy | Deny-default profile plus the system runtime | Whitelist (mount only what's needed) | Restricted token plus ACL grants, through `WindowsEnforcer::run_confined` only; `probe` reports the `sandboxed_command` path unavailable |
+| Reads | System runtime and policy paths; home directories, `/tmp`, and `$TMPDIR` are unreadable unless allowed | Only bound paths exist | Ungranted paths that are not world-readable are refused; world-readable files stay readable |
+| Writes | Only policy read-write paths (and `/dev/null`) | Only `--bind` paths writable | Only policy paths (`RESTRICTED` is granted there) |
+| Network | Denied unless `allow_network` | `--unshare-net` namespace | Not enforced |
+| Process spawning | `process-fork` granted only with `allow_process_spawn` | seccomp filter fails `fork`, `vfork`, and non-thread `clone` (x86-64, AArch64) | Not restricted; every descendant is killed with the call's Job Object |
+| Terminal | The caller's session | Always a new session (`--new-session`) with no controlling terminal | No console is attached; standard streams are not captured |
+| Domain rules (`allow_domain`) | Not enforceable; all network blocked | Not enforceable; all network blocked | Not enforceable; network not restricted |
 
 The Seatbelt system runtime covers `/bin`, `/sbin`, `/usr`, `/System`, `/Library/Apple`, `/Library/Frameworks`, `/opt/homebrew`, `/private/etc` (minus `master.passwd` and `sudoers`), the dyld cache, and time zone data. File metadata (existence, size, timestamps) is readable everywhere because path resolution needs it; file contents are not. Programs installed elsewhere — a rustup toolchain, a pyenv interpreter, Xcode — need their directories passed to `allow_read`.
 

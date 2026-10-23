@@ -364,7 +364,7 @@ checks an agent definition without building. `cargo adk templates` and
 | `adk-eval` | Agent evaluation | Test definitions, trajectory validation, LLM-judged scoring, rubrics |
 | `adk-guardrail` | Runtime validation | Input/output checks, PII redaction, and argument-level tool allow/deny/revision |
 | `adk-auth` | Access control | Role-based permissions, declarative scope-based security, SSO/OAuth, audit logging |
-| `adk-sandbox` | Sandboxed code execution | Process/WASM backends, OS-level sandbox profiles (Seatbelt on macOS, bubblewrap on Linux; Windows AppContainer not implemented) |
+| `adk-sandbox` | Sandboxed code execution | Process/WASM backends, OS-level sandbox profiles (Seatbelt on macOS, bubblewrap on Linux, a restricted-token tier on Windows) |
 | `adk-telemetry` | Observability | OpenTelemetry tracing, structured logging, and Google Cloud export |
 | `adk-managed` | Managed agent runtime (Experimental) | Provider-neutral agent execution, event replay, custom tool calls and confirmations parked on durable runs; sessions survive process loss with durable stores |
 | `adk-enterprise` | Enterprise client SDK (Experimental) | HTTP/SSE client for managed agent service, zero runtime deps |

@@ -196,6 +196,9 @@
 # Linux-only and feature-gated: nothing built it until a container run found the
 # bubblewrap probe could never succeed and its property tests did not compile.
 6 adk-sandbox sandbox-linux
+# The Windows restricted-token enforcer (spec 3.2 §10 W5): its grant mapping and probe compile
+# and are tested on every host; the Win32 launch runs on the PR tier's `windows` job.
+6 adk-sandbox sandbox-windows
 # `DockerClient` and its host-config and bind-mount tests: no workspace member enables
 # `workspace-docker`; the tests that need a Docker daemon are ignored.
 6 adk-sandbox workspace-docker

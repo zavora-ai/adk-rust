@@ -11,7 +11,10 @@ pub mod macos;
 #[cfg(all(feature = "sandbox-linux", target_os = "linux"))]
 pub mod linux;
 
-#[cfg(all(feature = "sandbox-windows", target_os = "windows"))]
+// The restricted-token enforcer's platform-neutral surface (the policy-to-grant mapping and
+// the honest probe) compiles wherever the feature is on, so it is unit-tested on every host;
+// the Win32 launch is gated to Windows inside the module (spec 3.2 §10 W5).
+#[cfg(any(test, feature = "sandbox-windows"))]
 pub mod windows;
 
 #[cfg(any(test, all(feature = "sandbox-linux", target_os = "linux")))]
@@ -82,7 +85,7 @@ pub struct AllowedPath {
 ///
 /// Declares intent for per-domain network filtering. **No enforcer can apply
 /// it:** Seatbelt network filters accept only `*` or `localhost` as the host,
-/// and bubblewrap and AppContainer have no domain-level control. Network access
+/// and bubblewrap and the Windows restricted token have no domain-level control. Network access
 /// is binary everywhere (all or nothing via `allow_network`), and rules present
 /// with `allow_network = false` block all network access and log a
 /// `tracing::warn`.
@@ -168,7 +171,7 @@ pub struct SandboxPolicy {
     /// |----------|-----------|
     /// | Seatbelt (macOS) | `process-fork` is not granted |
     /// | bubblewrap (Linux) | seccomp filter failing `fork`, `vfork`, and non-thread `clone` (x86-64 and AArch64) |
-    /// | AppContainer (Windows) | Not implemented |
+    /// | Restricted token (Windows) | Not restricted |
     ///
     /// A shell running more than one external command forks, so `sh -c` scripts
     /// usually need this enabled.
@@ -259,8 +262,8 @@ impl SandboxPolicyBuilder {
     /// Pass an empty slice for `ports` to mean all ports on the domain.
     ///
     /// **Platform support:** not enforced on any platform. Seatbelt network
-    /// filters accept only `*` or `localhost` as the host, and bubblewrap and
-    /// AppContainer have no domain-level control. If any rules are present but
+    /// filters accept only `*` or `localhost` as the host, and bubblewrap and the
+    /// Windows restricted token have no domain-level control. If any rules are present but
     /// `allow_network` is false, all network access is blocked.
     ///
     /// # Example
@@ -321,13 +324,13 @@ impl Default for SandboxPolicyBuilder {
 ///
 /// # Windows Exception
 ///
-/// On Windows, `WindowsEnforcer` does NOT wrap the command — it configures
-/// the process token via Win32 APIs. Its `wrap_command` returns the original
-/// program and args unchanged, and `configure_command` applies the
-/// AppContainer restrictions via `Command::creation_flags()` and
-/// pre-spawn setup.
+/// On Windows, `WindowsEnforcer` confines a command with a restricted token, which
+/// is set when the process is created and so cannot be attached to a
+/// `tokio::process::Command`. Its `wrap_command` returns the original program and
+/// args unchanged, and its `probe` and `configure_command` fail, naming
+/// `WindowsEnforcer::run_confined` as the path that confines (spec 3.2 §10 W5).
 pub trait SandboxEnforcer: Send + Sync {
-    /// Returns the enforcer name (e.g., "seatbelt", "bubblewrap", "appcontainer").
+    /// Returns the enforcer name (e.g., "seatbelt", "bubblewrap", "restricted-token").
     fn name(&self) -> &str;
 
     /// Checks whether the enforcer is functional on the current system.
@@ -355,8 +358,8 @@ pub trait SandboxEnforcer: Send + Sync {
     /// Must be called on the Command constructed from `wrap_command()` output,
     /// after its program and arguments are final. The default implementation is
     /// a no-op. Linux uses it to install the process-creation seccomp program
-    /// that the wrapped arguments reference; Windows sets AppContainer process
-    /// attributes via `creation_flags()` and `raw_attribute()`.
+    /// that the wrapped arguments reference; the Windows enforcer fails here, since a
+    /// restricted token cannot be set on a `tokio::process::Command`.
     fn configure_command(
         &self,
         _cmd: &mut tokio::process::Command,

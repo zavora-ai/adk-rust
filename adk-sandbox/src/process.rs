@@ -179,7 +179,7 @@ pub enum IsolationClass {
     /// The OS applies no further restriction: the code can read the host filesystem and
     /// reach the network. This is what [`ProcessBackend::default`] provides.
     SubprocessOnly,
-    /// A child process wrapped by an OS enforcer — Seatbelt, bubblewrap, or AppContainer
+    /// A child process wrapped by an OS enforcer — Seatbelt or bubblewrap
     /// — under a [`SandboxPolicy`].
     OsEnforced,
 }
@@ -208,7 +208,8 @@ impl ProcessBackend {
     ///
     /// All executions through this backend will be sandboxed with the given
     /// policy. The enforcer wraps commands with platform-specific restrictions
-    /// (Seatbelt on macOS, bubblewrap on Linux, AppContainer on Windows).
+    /// (Seatbelt on macOS, bubblewrap on Linux). The Windows restricted-token enforcer
+    /// cannot be applied here and fails the execution.
     ///
     /// Each execution runs in a fresh scratch directory holding its source file
     /// and compiler output. That directory becomes the working directory and is
