@@ -50,7 +50,10 @@ fn shared() -> &'static Shared {
         let store = Arc::new(InMemoryDriverStore::new());
         let tool = runtime.block_on(async {
             let drivers = DriverSupervisor::builder(store.clone()).home(work.path()).build();
-            drivers.mount(work.manifest("notes", ""), "alice").await.unwrap();
+            drivers
+                .mount(work.manifest("notes", driver_support::UNSANDBOXED), "alice")
+                .await
+                .unwrap();
             let ctx = RunContext::new(None, "setup", "setup");
             let tools = drivers
                 .toolset_for(&PartitionId::default(), &["notes".to_string()])

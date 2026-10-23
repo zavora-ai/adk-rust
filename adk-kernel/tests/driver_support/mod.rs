@@ -22,6 +22,9 @@ use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Value, json};
 
+/// The manifest key of a test whose subject is not the OS sandbox, so its setup runs the
+/// same on a host with an enforcer and one without.
+pub const UNSANDBOXED: &str = "sandbox = \"unsandboxed\"";
 /// Set in the server's environment by the manifest.
 pub const SERVER_ENV: &str = "ADK_KERNEL_DRIVER_TEST_SERVER";
 /// A file the server appends one line to per execution of `send_note`.

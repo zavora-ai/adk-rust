@@ -169,7 +169,10 @@ async fn a_parked_elicitation_is_answered_after_a_kernel_restart_and_runs_once()
     let world = World::new().await;
     let (kernel, drivers) = world.kernel("first");
     kernel.start().await.unwrap();
-    drivers.mount(world.work.manifest("notes", ""), "alice").await.unwrap();
+    drivers
+        .mount(world.work.manifest("notes", driver_support::UNSANDBOXED), "alice")
+        .await
+        .unwrap();
 
     let run = NewRun::new(QueueClass::INTERACTIVE, APP, "alice", APP, json!({ "text": "send it" }));
     let pid = kernel
@@ -255,7 +258,10 @@ async fn a_call_approved_before_its_question_is_not_asked_again_after_a_restart(
     let service = world.service();
     let (kernel, drivers) = world.kernel_with("first", true);
     kernel.start().await.unwrap();
-    drivers.mount(world.work.manifest("notes", ""), "alice").await.unwrap();
+    drivers
+        .mount(world.work.manifest("notes", driver_support::UNSANDBOXED), "alice")
+        .await
+        .unwrap();
     let run = NewRun::new(QueueClass::INTERACTIVE, APP, "alice", APP, json!({ "text": "send it" }));
     let pid = kernel
         .processes()
