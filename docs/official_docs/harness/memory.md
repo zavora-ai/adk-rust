@@ -302,7 +302,7 @@ passes over each scope — the project's facts and the user-wide ones — one ki
 | Distillation | One per session | Sessions cut off before `distill_idle`, or run where no per-session distiller saw them, are distilled with verified-quote promotion off: every fact is `assumed` |
 | Pass 1 | None | An `assumed` fact whose cosine similarity to a newer `assumed` fact is at least `dedup_score` becomes `superseded` by it; an `assumed` fact never used or recalled, with a confidence under `expire_confidence` and older than `assumed_ttl`, becomes `forgotten` (reason `expired`) |
 | Pass 2 | One per cluster | `assumed` facts at a similarity of 0.80 up to `dedup_score` (`CONSOLIDATION_CLUSTER_SCORE`), of one kind, go to the distiller model at the `distiller` effort with structured output `{ merged_text, source_ids, supersedes }`; the merged fact is `assumed`, source `agent_inferred`, its provenance listing `source_ids`, and the facts it names in `supersedes` become `superseded` by it |
-| Loss cap | — | When the passes would change the status of more than `max_loss_fraction` of a scope's live facts, they apply nothing and the record says why |
+| Loss cap | — | When the passes would change the status of more than `max(1, ⌊max_loss_fraction × live facts⌋)` of a scope's facts, they apply nothing and the record says why; the cap stops mass loss, and a small scope may still collapse one duplicate |
 
 | Rule | Mechanism |
 |---|---|
@@ -319,7 +319,7 @@ passes over each scope — the project's facts and the user-wide ones — one ki
 | `expire_confidence` | 0.5 | Pass 1 expires unused facts with a confidence under it; a fact without a confidence is not expired |
 | `assumed_ttl` | 90 days | Pass 1 expires unused facts older than it |
 | `max_clusters_per_tick` | 20 | Most clusters pass 2 sends to the model |
-| `max_loss_fraction` | 0.25 | Most of a scope's live facts the passes may change |
+| `max_loss_fraction` | 0.25 | Most of a scope's live facts the passes may change, rounded down, and at least one |
 | `max_tokens_per_tick` | 50,000 | Most tokens distillation and pass 2 spend together; the call that crosses it is kept, and no call starts after it |
 
 #### The tick under a kernel

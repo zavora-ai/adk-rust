@@ -55,7 +55,7 @@ use crate::wake::KERNEL_WAKE_TARGET;
 /// | `expire_confidence` | 0.5 | Pass 1 expires unused `Assumed` facts under this confidence |
 /// | `assumed_ttl` | 90 days | and older than this |
 /// | `max_clusters_per_tick` | 20 | Most clusters pass 2 sends to the model in one tick |
-/// | `max_loss_fraction` | 0.25 | Most of a scope's live facts one tick may change the status of |
+/// | `max_loss_fraction` | 0.25 | Most of a scope's live facts one tick may change the status of, rounded down, and at least one |
 ///
 /// A tick is admitted only when the partition has new material **and** `min_interval` has
 /// passed **and** the partition has been idle for `debounce`, outside quiet hours and under
@@ -113,8 +113,9 @@ pub struct ConsolidationTick {
     pub assumed_ttl: Duration,
     /// The most clusters pass 2 sends to the model in one tick (20).
     pub max_clusters_per_tick: usize,
-    /// The most of a scope's live facts one tick may change the status of (0.25); a result
-    /// over it is refused whole.
+    /// The most of a scope's live facts one tick may change the status of (0.25), rounded
+    /// down and at least one fact, so a small scope can still collapse one duplicate; a
+    /// result over it is refused whole.
     pub max_loss_fraction: f32,
 }
 

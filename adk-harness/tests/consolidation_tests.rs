@@ -529,6 +529,51 @@ async fn a_tick_over_the_loss_cap_applies_nothing() {
     assert_eq!((record.refused.as_deref(), record.superseded().count()), (None, 2));
 }
 
+/// The loss cap is `max(1, ⌊max_loss_fraction × live⌋)` changes per scope: a new user's
+/// two-fact scope collapses its one duplicate pair, while a ten-fact scope, whose share is
+/// two, still refuses three changes whole.
+#[tokio::test]
+async fn the_loss_cap_lets_a_small_scope_collapse_one_duplicate() {
+    // Pair `i` lies in dimensions 2i and 2i+1 at cosine 0.95, orthogonal to every other pair.
+    let pair = |i: usize| {
+        let mut older = vec![0.0; 6];
+        let mut newer = vec![0.0; 6];
+        older[2 * i] = 1.0;
+        newer[2 * i] = 0.95;
+        newer[2 * i + 1] = (1.0_f32 - 0.95 * 0.95).sqrt();
+        (older, newer)
+    };
+
+    let small = World::new();
+    let (older, newer) = pair(0);
+    let first = small.seed("Use pnpm, not npm", FactStatus::Assumed, 2, Some(0.9), older).await;
+    let second =
+        small.seed("We use pnpm, never npm", FactStatus::Assumed, 1, Some(0.9), newer).await;
+    let harness = small.harness(&idle(), &idle());
+    let record = harness.consolidate_memory(&alice(), ConsolidationRequest::new()).await.unwrap();
+    assert_eq!((record.refused.as_deref(), record.superseded().count()), (None, 1), "{record:?}");
+    assert_eq!(small.get(&first).await.status, FactStatus::Superseded { by: second.id.clone() });
+
+    let large = World::new();
+    let mut seeded = Vec::new();
+    for i in 0..3 {
+        let (older, newer) = pair(i);
+        seeded
+            .push(large.seed(&format!("rule {i}"), FactStatus::Assumed, 2, Some(0.9), older).await);
+        seeded.push(
+            large.seed(&format!("rule {i} again"), FactStatus::Assumed, 1, Some(0.9), newer).await,
+        );
+    }
+    large.fillers(4).await;
+    let harness = large.harness(&idle(), &idle());
+    let record = harness.consolidate_memory(&alice(), ConsolidationRequest::new()).await.unwrap();
+    assert!(record.refused.as_deref().is_some_and(|why| why.contains("3 of the 10")), "{record:?}");
+    assert!(record.changes.is_empty());
+    for fact in &seeded {
+        assert_eq!(large.get(fact).await, *fact);
+    }
+}
+
 /// `max_tokens_per_tick` (§7.5): once the tick's tokens are spent, pass 2 sends no more
 /// clusters.
 #[tokio::test]

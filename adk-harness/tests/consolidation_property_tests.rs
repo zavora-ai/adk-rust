@@ -334,8 +334,8 @@ proptest! {
         })?;
     }
 
-    /// The loss cap: the passes change at most `max_loss_fraction` of each scope's live
-    /// facts, and a refused tick changes nothing.
+    /// The loss cap: the passes change at most `max(1, ⌊max_loss_fraction × live⌋)` of each
+    /// scope's live facts, and a refused tick changes nothing.
     #[test]
     fn no_tick_crosses_the_loss_cap(case in case(false)) {
         let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -355,10 +355,8 @@ proptest! {
                         )
                     })
                     .count();
-                prop_assert!(
-                    changed as f64 <= f64::from(case.max_loss_fraction) * live as f64,
-                    "{changed} of {live} under {}", case.max_loss_fraction
-                );
+                let cap = ((case.max_loss_fraction * live as f32).floor() as usize).max(1);
+                prop_assert!(changed <= cap, "{changed} of {live} under {}", case.max_loss_fraction);
             }
             if record.refused.is_some() {
                 prop_assert!(record.changes.is_empty() && record.merged.is_empty());

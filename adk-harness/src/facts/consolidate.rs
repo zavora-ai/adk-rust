@@ -71,7 +71,7 @@ pub struct ConsolidationConfig {
     /// Most clusters pass 2 sends to the model in one tick.
     pub max_clusters_per_tick: usize,
     /// The passes apply nothing when they would change the status of more than this share
-    /// of a scope's live facts.
+    /// of a scope's live facts, rounded down, and at least one fact.
     pub max_loss_fraction: f32,
     /// Most tokens the tick's model calls spend: distillation and pass 2 together.
     pub max_tokens_per_tick: u64,
@@ -748,11 +748,12 @@ pub(crate) fn plan_merge(
     })
 }
 
-/// Whether changing `changes` of a scope's `live` facts stays within `max_loss_fraction`
-/// (spec 3.2 §7.5).
+/// The most status changes the passes may make in a scope of `live` facts (spec 3.2
+/// §7.5): `max(1, ⌊max_loss_fraction × live⌋)`. The cap stops mass loss; a scope too small
+/// for one change in its share may still collapse one duplicate.
 #[cfg(feature = "runner")]
-pub(crate) fn within_loss_cap(live: usize, changes: usize, max_loss_fraction: f32) -> bool {
-    changes as f64 <= f64::from(max_loss_fraction) * live as f64
+pub(crate) fn loss_cap(live: usize, max_loss_fraction: f32) -> usize {
+    ((max_loss_fraction * live as f32).floor() as usize).max(1)
 }
 
 #[cfg(all(test, feature = "runner"))]
@@ -909,13 +910,11 @@ mod tests {
     }
 
     #[test]
-    fn the_loss_cap_is_a_share_of_live_facts() {
-        assert!(within_loss_cap(4, 1, 0.25));
-        assert!(!within_loss_cap(4, 2, 0.25));
-        assert!(within_loss_cap(0, 0, 0.25));
-        assert!(!within_loss_cap(3, 1, 0.25));
-        assert!(within_loss_cap(100, 25, 0.25));
-        assert!(!within_loss_cap(100, 26, 0.25));
+    fn the_loss_cap_is_a_share_of_live_facts_and_at_least_one() {
+        let caps: Vec<usize> =
+            [0, 2, 3, 4, 7, 8, 10, 100].into_iter().map(|live| loss_cap(live, 0.25)).collect();
+        assert_eq!(caps, vec![1, 1, 1, 1, 1, 2, 2, 25]);
+        assert_eq!((loss_cap(10, 0.7), loss_cap(10, 0.0), loss_cap(10, 1.0)), (7, 1, 10));
     }
 }
 
@@ -930,7 +929,7 @@ mod tick {
 
     use super::{
         ChangeReason, ConsolidationRecord, ConsolidationRequest, FactChange, PlannedMerge,
-        ScopeFacts, SessionDistillation, clusters, pass_one, plan_merge, within_loss_cap,
+        ScopeFacts, SessionDistillation, clusters, loss_cap, pass_one, plan_merge,
     };
     use crate::audit::HarnessAudit;
     use crate::facts::runtime::{FactsRuntime, harness_subject};
@@ -1124,10 +1123,11 @@ mod tick {
                 let live = plan.facts.live.len();
                 let changed = plan.changes.len()
                     + plan.merges.iter().map(|merge| merge.supersedes().len()).sum::<usize>();
-                if !within_loss_cap(live, changed, config.max_loss_fraction) {
+                let cap = loss_cap(live, config.max_loss_fraction);
+                if changed > cap {
                     record.refused = Some(format!(
                         "the passes would change the status of {changed} of the {live} live \
-                         facts of one scope, more than max_loss_fraction {}",
+                         facts of one scope, more than the {cap} max_loss_fraction {} allows",
                         config.max_loss_fraction
                     ));
                     break;
