@@ -98,6 +98,8 @@
 2 adk-kernel postgres,redis
 # The kernel without SQLite, webhooks or the histograms, with its conformance suites.
 2 adk-kernel conformance no-default
+# Service installation alone (spec 3.2 §7.12): definitions render without SQLite or webhooks.
+2 adk-kernel service no-default
 
 # Shard 3 — adk-graph, adk-managed, adk-code.
 # No workspace member enables these four; four clippy failures and two uncompilable doc

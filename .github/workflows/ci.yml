@@ -578,6 +578,18 @@ jobs:
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         cargo test -p adk-cli --bin adk-rust sessions::tests
 
+    # The kernel's named pipe — its owner-only descriptor, the client token check, another
+    # identity refused — the control plane over it, the Windows service definition, and the
+    # kernel home's owner-only files (spec 3.2 §10 W2, W3, W4). Installing the service for real
+    # runs in kernel-service.yml.
+    - name: Run the kernel pipe and service tests
+      run: |
+        cargo test -p adk-kernel --lib -- control:: service::
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cargo test -p adk-cli --bin adk-rust -- harness_cli::service:: harness_cli::up::
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cargo test -p adk-cli --test kernel_service_cli
+
     - name: Build summary
       if: always()
       run: echo "### 🪟 Windows build and sandbox portability smoke passed" >> $env:GITHUB_STEP_SUMMARY

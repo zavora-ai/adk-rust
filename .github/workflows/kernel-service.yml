@@ -1,0 +1,148 @@
+name: Kernel Service
+
+# Installs `adk-rust up --install` for real on each platform (spec 3.2 §7.12, §10 W3, §11
+# cross-platform): a systemd user unit on Linux, a launchd agent on macOS and a Windows service
+# under the runner's account. Each job builds the CLI with the scripted model, then
+# scripts/kernel-service-smoke.{sh,ps1} installs the service, proves the kernel answers on its
+# socket or named pipe, logs to an owner-only file, comes back after a kill -9 and after a
+# restart with its process table intact, and is removed by --uninstall. The PR tier renders
+# every definition (`--install --print`, golden tests) on all three platforms; installing is
+# slow and changes the runner, so it runs here: on a pull request that touches the service
+# or the local control transports, on every push to main that does, and on demand. It is not
+# part of `pr-gate`.
+#
+# The reboot step of scenario K1 is not run: a GitHub-hosted runner does not resume a job
+# after the host restarts.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'adk-kernel/src/service/**'
+      - 'adk-kernel/src/control/**'
+      - 'adk-kernel/src/win.rs'
+      - 'adk-cli/src/harness_cli/service.rs'
+      - 'adk-cli/src/harness_cli/up.rs'
+      - 'adk-cli/src/harness/launcher.rs'
+      - 'adk-cli/src/owner_only.rs'
+      - 'scripts/kernel-service-smoke.sh'
+      - 'scripts/kernel-service-smoke.ps1'
+      - '.github/workflows/kernel-service.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'adk-kernel/src/service/**'
+      - 'adk-kernel/src/control/**'
+      - 'adk-kernel/src/win.rs'
+      - 'adk-cli/src/harness_cli/service.rs'
+      - 'adk-cli/src/harness_cli/up.rs'
+      - 'adk-cli/src/harness/launcher.rs'
+      - 'adk-cli/src/owner_only.rs'
+      - 'scripts/kernel-service-smoke.sh'
+      - 'scripts/kernel-service-smoke.ps1'
+      - '.github/workflows/kernel-service.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+concurrency:
+  group: kernel-service-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  systemd:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        neutralize-wild: 'true'
+        cache-key: kernel-service-linux
+
+    - name: Install system dependencies
+      timeout-minutes: 10
+      uses: ./.github/actions/apt-install
+      with:
+        packages: libdbus-1-dev pkg-config
+
+    - name: Build adk-rust with the scripted model
+      run: cargo build -p adk-cli --bin adk-rust --features scripted-model
+
+    # A user manager runs for a user with a session or with lingering on; the runner's job has
+    # no login session, so lingering starts one.
+    - name: Start the runner's systemd user manager
+      run: |
+        sudo loginctl enable-linger "$USER"
+        runtime="/run/user/$(id -u)"
+        echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
+        for _ in $(seq 30); do [ -S "$runtime/systemd/private" ] && break; sleep 1; done
+        XDG_RUNTIME_DIR="$runtime" systemctl --user is-system-running --wait || true
+
+    - name: Install, kill, restart and uninstall the kernel's systemd user unit
+      run: bash scripts/kernel-service-smoke.sh target/debug/adk-rust
+
+  launchd:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        neutralize-wild: 'false'
+        cache-key: kernel-service-macos
+
+    - name: Build adk-rust with the scripted model
+      run: cargo build -p adk-cli --bin adk-rust --features scripted-model
+
+    - name: Install, kill, restart and uninstall the kernel's launchd agent
+      run: bash scripts/kernel-service-smoke.sh target/debug/adk-rust
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        neutralize-wild: 'false'
+        cache-key: kernel-service-windows
+
+    - name: Install cmake
+      uses: lukka/get-cmake@a89e43e22a96abafcd7a62db652a65ecd33052c9 # v4.4.4
+
+    - name: Build adk-rust with the scripted model
+      run: cargo build -p adk-cli --bin adk-rust --features scripted-model
+
+    # The named pipe the installed kernel serves, the same tests the PR tier's `windows` job
+    # runs: owner-only descriptor, token check, another identity refused.
+    - name: Run the kernel pipe tests
+      run: |
+        cargo test -p adk-kernel --lib -- control:: service::
+
+    # A service under a user's account logs on with that account's password, which the
+    # runner's account does not have until it is given one.
+    - name: Give the runner's account a password the service can log on with
+      shell: pwsh
+      run: |
+        $password = 'Adk-' + [guid]::NewGuid().ToString('N') + '!a1'
+        Write-Output "::add-mask::$password"
+        net user $env:USERNAME $password | Out-Null
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        "ADK_SERVICE_PASSWORD=$password" >> $env:GITHUB_ENV
+
+    - name: Install, kill, restart and uninstall the kernel's Windows service
+      shell: pwsh
+      run: ./scripts/kernel-service-smoke.ps1 -Binary target/debug/adk-rust.exe
