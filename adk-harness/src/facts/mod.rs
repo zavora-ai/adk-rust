@@ -31,6 +31,8 @@ pub(crate) mod writer;
 
 pub mod conformance;
 
+#[cfg(feature = "runner")]
+pub(crate) use consolidate::authenticated_sessions;
 pub use consolidate::{
     BesideKnown, CONSOLIDATION_CLUSTER_SCORE, ChangeReason, ConsolidationConfig,
     ConsolidationRecord, ConsolidationRequest, ConsolidationUndo, FactChange, SessionDistillation,

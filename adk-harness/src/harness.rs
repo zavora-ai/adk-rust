@@ -1129,7 +1129,10 @@ impl Harness {
     /// The store's distillation cursor records how far each session was read, by this
     /// entry and by the per-session distiller, so no session is distilled twice. Skipped:
     /// a session read up to its last event, one this process will still distil, one active
-    /// within `distill_idle` of `at`, and one in ReadOnly or Plan mode. `budget` bounds the
+    /// within `distill_idle` of `at`, and one in ReadOnly or Plan mode. On a harness that
+    /// requires authenticated identity, a session this process holds no turn of is distilled
+    /// only when its latest run in the run store ([`with_run_store`](Self::with_run_store))
+    /// was authenticated (I42). `budget` bounds the
     /// model calls of all sessions together; without one, each session's run has the
     /// harness's budget or two model calls.
     ///
@@ -1151,8 +1154,16 @@ impl Harness {
         at: chrono::DateTime<chrono::Utc>,
         budget: Option<adk_core::RunBudget>,
     ) -> Result<crate::facts::SessionDistillation> {
-        self.facts_runtime()?
-            .distill_sessions(&self.app_name, user.as_ref(), sessions, at, budget)
+        let facts = self.facts_runtime()?;
+        let authenticated = crate::facts::authenticated_sessions(
+            self.run_store.as_ref(),
+            &self.app_name,
+            user.as_ref(),
+            sessions,
+        )
+        .await;
+        facts
+            .distill_sessions(&self.app_name, user.as_ref(), sessions, &authenticated, at, budget)
             .await
     }
 
@@ -1187,7 +1198,15 @@ impl Harness {
         user: &UserId,
         request: crate::facts::ConsolidationRequest,
     ) -> Result<crate::facts::ConsolidationRecord> {
-        self.facts_runtime()?.consolidate(&self.app_name, user.as_ref(), request).await
+        let facts = self.facts_runtime()?;
+        let authenticated = crate::facts::authenticated_sessions(
+            self.run_store.as_ref(),
+            &self.app_name,
+            user.as_ref(),
+            &request.sessions,
+        )
+        .await;
+        facts.consolidate(&self.app_name, user.as_ref(), request, &authenticated).await
     }
 
     /// `user`'s consolidation records, newest first (spec 3.2 §7.5).

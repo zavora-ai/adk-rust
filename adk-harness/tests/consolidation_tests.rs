@@ -18,8 +18,8 @@ use adk_core::principal::SubjectRef;
 use adk_core::{SessionId, UsageMetadata, UserId};
 use adk_harness::{
     BesideKnown, ChangeReason, ConsolidationConfig, ConsolidationRequest, FactFilter, FactKind,
-    FactScope, FactSource, FactStatus, FactStore, Harness, HarnessAgent, HarnessMode,
-    InMemoryFactStore, LongTermMemoryConfig, MemoryFact, Provenance, project_slug,
+    FactScope, FactSource, FactStatus, FactStore, Harness, HarnessAgent, HarnessAgentBuilder,
+    HarnessMode, InMemoryFactStore, LongTermMemoryConfig, MemoryFact, Provenance, project_slug,
 };
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_runner::Runner;
@@ -52,8 +52,18 @@ impl World {
 
     /// A harness over this world: a new process over the same stores.
     fn harness(&self, model: &Arc<ScriptedLlm>, distiller: &Arc<ScriptedLlm>) -> Harness {
+        self.harness_with(model, distiller, |builder| builder)
+    }
+
+    /// As [`harness`](Self::harness), its agent builder passed through `configure`.
+    fn harness_with(
+        &self,
+        model: &Arc<ScriptedLlm>,
+        distiller: &Arc<ScriptedLlm>,
+        configure: impl FnOnce(HarnessAgentBuilder) -> HarnessAgentBuilder,
+    ) -> Harness {
         let agent = Arc::new(
-            HarnessAgent::builder("harness")
+            configure(HarnessAgent::builder("harness"))
                 .model(model.clone())
                 .workspace(adk_devtools::Workspace::new(self.dir.path()))
                 .project_instructions(common::no_user_file())
@@ -245,6 +255,61 @@ async fn the_distillation_entry_stores_a_quoted_fact_as_assumed() {
         .unwrap();
     assert!(again.sessions.is_empty(), "{again:?}");
     assert_eq!(distiller.requests().len(), 1);
+}
+
+/// I42 across a restart: on a served harness, the process that ran a turn takes the turn's
+/// authentication with it, so a session a restart cut off is distilled only when its latest
+/// durable run was authenticated. Without a run store a served harness distils neither, as
+/// on `main`.
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn a_served_harness_distils_a_cut_off_session_only_when_its_run_was_authenticated() {
+    let world = World::new();
+    let ok = || ScriptedResponse::text("ok");
+    // Process 1 is cut off before idle: neither session reaches the distiller.
+    let first = world.harness(&Arc::new(ScriptedLlm::new("m", vec![ok(), ok()])), &idle());
+    send(&first, "signed", "Always run cargo fmt before you commit.").await;
+    send(&first, "anonymous", "Always deploy on Fridays.").await;
+    drop(first);
+    let sessions = ["signed".to_string(), "anonymous".to_string()];
+    let at = Utc::now() + chrono::Duration::hours(2);
+    let served = |distiller: &Arc<ScriptedLlm>| {
+        world.harness_with(&idle(), distiller, HarnessAgentBuilder::require_authenticated_identity)
+    };
+
+    let blind = Arc::new(ScriptedLlm::new("distiller", Vec::<ScriptedResponse>::new()));
+    let report = served(&blind).distill_sessions(&alice(), &sessions, at, None).await.unwrap();
+    assert_eq!((report.sessions, report.skipped), (vec![], sessions.to_vec()));
+    assert!(blind.requests().is_empty());
+
+    let runs = Arc::new(adk_core::InMemoryRunStore::new());
+    for (session, authenticated) in [("signed", true), ("anonymous", false)] {
+        let mut run = adk_core::NewRun::new("interactive", APP, "alice", APP, json!({}))
+            .with_session_id(session);
+        run.authenticated = authenticated;
+        adk_core::DurableRunStore::enqueue(runs.as_ref(), run).await.unwrap();
+    }
+    let distiller = Arc::new(ScriptedLlm::new(
+        "distiller",
+        vec![distilled(json!([{ "text": "Run cargo fmt before committing",
+                                "kind": "project_fact", "source": "user_stated",
+                                "confidence": 0.9 }]))],
+    ));
+    let report = served(&distiller)
+        .with_run_store(runs)
+        .distill_sessions(&alice(), &sessions, at, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        (report.sessions, report.skipped),
+        (vec!["signed".to_string()], vec!["anonymous".to_string()])
+    );
+    assert_eq!(distiller.requests().len(), 1);
+    let stored = world.store.get(&report.stored[0]).await.unwrap().unwrap();
+    assert_eq!(
+        (stored.status, stored.provenance.session_id.as_str()),
+        (FactStatus::Assumed, "signed")
+    );
 }
 
 /// K-I22: an `Assumed` fact that names a `Known` one in `supersedes` is stored beside it,

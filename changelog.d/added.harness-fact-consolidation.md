@@ -10,7 +10,9 @@
   `max_loss_fraction` (0.25) of a scope's live facts. Each tick keeps a `ConsolidationRecord`
   in the fact store and writes one `harness.memory.consolidated` audit record;
   `Harness::undo_consolidation` and `undo_consolidation` revert a tick.
-  `Harness::distill_sessions` is the distillation entry on its own. `FactStore` gains
+  `Harness::distill_sessions` is the distillation entry on its own; on a harness that
+  requires authenticated identity, it distils a session that ran in an earlier
+  process only when the session's latest run in the harness's run store was authenticated. `FactStore` gains
   `distilled_sessions`, `mark_distilled`, `put_consolidation`, `consolidations` and
   `restore_assumed`, implemented by the in-memory, file and SQLite stores, and
   `fact_store_conformance_tests!` three cases for them.

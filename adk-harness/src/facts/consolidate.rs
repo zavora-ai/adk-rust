@@ -901,7 +901,11 @@ mod tests {
 }
 
 #[cfg(feature = "runner")]
+pub(crate) use tick::authenticated_sessions;
+
+#[cfg(feature = "runner")]
 mod tick {
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     use adk_core::audit_log::AuditActor;
@@ -932,6 +936,40 @@ mod tick {
         error.code == "harness.memory.fact_not_live"
     }
 
+    /// Those of `sessions` whose latest durable run in `runs` was authenticated (I42): what
+    /// distillation reads for a session this process holds no turn of, such as one a
+    /// restart cut off. The run store decides, never the caller.
+    pub(crate) async fn authenticated_sessions(
+        runs: Option<&Arc<dyn adk_core::DurableRunStore>>,
+        app: &str,
+        user: &str,
+        sessions: &[String],
+    ) -> HashSet<String> {
+        let mut authenticated = HashSet::new();
+        let Some(runs) = runs else { return authenticated };
+        for session in sessions {
+            let filter = adk_core::RunFilter::default()
+                .app_name(app)
+                .user_id(user)
+                .session_id(session.as_str());
+            match runs.list(filter).await {
+                Ok(found) => {
+                    if found
+                        .iter()
+                        .max_by_key(|run| run.created_at)
+                        .is_some_and(|run| run.authenticated)
+                    {
+                        authenticated.insert(session.clone());
+                    }
+                }
+                Err(error) => {
+                    tracing::debug!(error = %error, "the runs of a session to distil are not readable")
+                }
+            }
+        }
+        authenticated
+    }
+
     impl FactsRuntime {
         /// The public distillation entry (spec 3.2 §10 HK2) outside a tick.
         pub(crate) async fn distill_sessions(
@@ -939,12 +977,22 @@ mod tick {
             app: &str,
             user: &str,
             sessions: &[String],
+            authenticated: &HashSet<String>,
             now: DateTime<Utc>,
             budget: Option<RunBudget>,
         ) -> Result<SessionDistillation> {
             let _one_at_a_time = self.distilling.lock().await;
             let parent = budget.map(|budget| Arc::new(BudgetTracker::new(budget)));
-            self.distill_unreached(app, user, sessions, now, &TickWrites::new(None), parent).await
+            self.distill_unreached(
+                app,
+                user,
+                sessions,
+                authenticated,
+                now,
+                &TickWrites::new(None),
+                parent,
+            )
+            .await
         }
 
         /// The live facts of exactly `scope` and their vectors; `Assumed` facts without a
@@ -1016,6 +1064,7 @@ mod tick {
             app: &str,
             user: &str,
             request: ConsolidationRequest,
+            authenticated: &HashSet<String>,
         ) -> Result<ConsolidationRecord> {
             let config = request.config.clone();
             let now = request.at.unwrap_or_else(Utc::now);
@@ -1045,6 +1094,7 @@ mod tick {
                     app,
                     user,
                     &request.sessions,
+                    authenticated,
                     now,
                     &writes,
                     Some(tracker.clone()),

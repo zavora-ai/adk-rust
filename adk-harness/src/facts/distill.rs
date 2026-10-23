@@ -474,7 +474,9 @@ impl FactsRuntime {
     /// HK2): sessions the store's cursor shows read up to their last event, sessions this
     /// process will still distil, sessions active within `distill_idle` of `now`, and
     /// sessions in ReadOnly or Plan mode (I45) are skipped. Verified-quote promotion is
-    /// off, so every fact is `Assumed` (K-I12). A session whose run fails is skipped and
+    /// off, so every fact is `Assumed` (K-I12). On a harness that requires authenticated
+    /// identity (I42), a session this process holds no turn of is distilled only when it is
+    /// in `authenticated_runs`. A session whose run fails is skipped and
     /// left for the next call; the budget running out ends the call. The caller holds
     /// `distilling`.
     pub(crate) async fn distill_unreached(
@@ -482,6 +484,7 @@ impl FactsRuntime {
         app: &str,
         user: &str,
         sessions: &[String],
+        authenticated_runs: &std::collections::HashSet<String>,
         now: chrono::DateTime<chrono::Utc>,
         tick: &TickWrites,
         parent: Option<Arc<BudgetTracker>>,
@@ -503,7 +506,12 @@ impl FactsRuntime {
                 tracks.get(&key).map(|track| (track.pending_turns, track.authenticated))
             };
             let due_here = !self.is_closed() && track.is_some_and(|(pending, _)| pending > 0);
-            let authenticated = track.is_some_and(|(_, authenticated)| authenticated);
+            // A session this process holds no turn of, as after a restart, is authenticated
+            // when its latest durable run was.
+            let authenticated = track.map_or_else(
+                || authenticated_runs.contains(session.as_str()),
+                |(_, authenticated)| authenticated,
+            );
             if !self.config.distill
                 || due_here
                 || (self.require_authenticated && !authenticated)

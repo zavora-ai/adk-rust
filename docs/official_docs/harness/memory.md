@@ -311,6 +311,7 @@ passes over each scope — the project's facts and the user-wide ones — one ki
 | Similarity alone never resolves a contradiction | During a tick, only a fact that names `supersedes` or a `correction` fact supersedes another; pass 1 collapses only facts at or above `dedup_score` |
 | Nothing is deleted | Superseded and forgotten facts keep their history (`valid_to`), so undo is a status change |
 | No session is distilled twice | The store keeps a cursor of how far distillation read each session; the per-session distiller moves it too |
+| An unauthenticated session teaches nothing, across a restart too (I42) | With `require_authenticated_identity`, a session that ran in an earlier process is distilled only when its latest run in the harness's run store (`Harness::with_run_store`) was authenticated; without a run store it is skipped |
 
 | `ConsolidationConfig` | Default | Effect |
 |---|---|---|

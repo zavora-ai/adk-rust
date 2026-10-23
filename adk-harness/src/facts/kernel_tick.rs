@@ -58,6 +58,9 @@ pub struct HarnessConsolidator {
     app: String,
     user: String,
     filter: Option<SessionStateFilter>,
+    /// The harness's durable run store, which says whether a session's latest run was
+    /// authenticated when this process holds no turn of it.
+    runs: Option<Arc<dyn adk_core::DurableRunStore>>,
 }
 
 impl std::fmt::Debug for HarnessConsolidator {
@@ -222,7 +225,14 @@ impl Consolidator for HarnessConsolidator {
             .with_config(config)
             .with_budget(run.budget.clone())
             .at(run.at);
-        let record = self.facts.consolidate(&self.app, &self.user, request).await?;
+        let authenticated = super::consolidate::authenticated_sessions(
+            self.runs.as_ref(),
+            &self.app,
+            &self.user,
+            &run.sessions,
+        )
+        .await;
+        let record = self.facts.consolidate(&self.app, &self.user, request, &authenticated).await?;
         let mut outcome = TickOutcome::new(&record.tick_id)
             .with_counts(
                 record.superseded().count(),
@@ -276,6 +286,7 @@ impl Harness {
             app: self.app_name().to_string(),
             user: user.to_string(),
             filter: None,
+            runs: self.run_store().cloned(),
         })
     }
 }
