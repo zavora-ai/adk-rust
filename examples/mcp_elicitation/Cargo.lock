@@ -319,6 +319,7 @@ dependencies = [
  "adk-eval",
  "adk-graph",
  "adk-guardrail",
+ "adk-kernel",
  "adk-memory",
  "adk-rag",
  "adk-runner",
