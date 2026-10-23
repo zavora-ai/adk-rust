@@ -127,6 +127,8 @@ pub struct HarnessAgentBuilder {
     approval_service: Option<Arc<dyn ApprovalService>>,
     #[cfg(feature = "kernel")]
     kernel_approvals: Arc<crate::kernel::LateApprovalNotifier>,
+    #[cfg(feature = "kernel")]
+    kernel_agenda: adk_kernel::AgendaHandle,
     action_ledger: Option<Arc<dyn ActionLedger>>,
     confirmation_timeout: Duration,
     shell: ShellConfig,
@@ -222,6 +224,8 @@ impl HarnessAgentBuilder {
             approval_service: None,
             #[cfg(feature = "kernel")]
             kernel_approvals: Arc::default(),
+            #[cfg(feature = "kernel")]
+            kernel_agenda: adk_kernel::AgendaHandle::default(),
             action_ledger: None,
             confirmation_timeout: Duration::from_secs(300),
             shell: ShellConfig::default(),
@@ -1408,6 +1412,13 @@ impl HarnessAgentBuilder {
             None => plan_exit,
         };
         tools.push(Arc::new(plan_exit));
+        // Follow-ups go on the agenda of the kernel hosting the harness (spec 3.2 §7.5).
+        #[cfg(feature = "kernel")]
+        tools.push(Arc::new(crate::kernel::ProposeFollowupTool::new(
+            self.kernel_agenda.clone(),
+            mode_store.clone(),
+            self.mode,
+        )));
         #[cfg(feature = "memory")]
         let memory_resolver = self.memory.clone().map(|config| {
             let resolver =
@@ -2004,6 +2015,8 @@ impl HarnessAgentBuilder {
                 goals,
                 #[cfg(feature = "kernel")]
                 kernel_approvals: self.kernel_approvals,
+                #[cfg(feature = "kernel")]
+                kernel_agenda: self.kernel_agenda,
                 #[cfg(feature = "web")]
                 provider_web,
                 #[cfg(feature = "mcp")]

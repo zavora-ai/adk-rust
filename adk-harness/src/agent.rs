@@ -133,6 +133,10 @@ pub struct HarnessRuntime {
     /// Reports approval outcomes to the kernel built by `Harness::kernel` (spec 3.2 §7.4).
     #[cfg(feature = "kernel")]
     pub(crate) kernel_approvals: Arc<crate::kernel::LateApprovalNotifier>,
+    /// The agenda of the kernel built by `Harness::kernel`, for `propose_followup` (spec 3.2
+    /// §7.5).
+    #[cfg(feature = "kernel")]
+    pub(crate) kernel_agenda: adk_kernel::AgendaHandle,
     /// Provider-executed search and URL tools, when the operator enabled any (spec 3.1 §7.20).
     #[cfg(feature = "web")]
     pub(crate) provider_web: Option<Arc<crate::web::provider::ProviderWebToolset>>,

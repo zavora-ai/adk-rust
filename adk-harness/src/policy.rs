@@ -263,6 +263,9 @@ impl ToolClassRegistry {
         }
         registry.register("write_todos", ToolKind::Todo);
         registry.register("update_todo", ToolKind::Todo);
+        // Allowed in every mode: proposing is free, running is governed (spec 3.2 §7.5).
+        #[cfg(feature = "kernel")]
+        registry.register(crate::kernel::PROPOSE_FOLLOWUP, ToolKind::Todo);
         registry.register("exit_plan_mode", ToolKind::PlanExit);
         registry.register("write_file", ToolKind::Edit);
         registry.register("edit_file", ToolKind::Edit);

@@ -11,24 +11,30 @@
 //! | Goal progress, the loop guard's verdict and each session's usage for the kernel's process view | §7.3, §7.10, §10 HK3 |
 //! | Parking a goal that stopped making progress, `Waiting` and suspended manually, with `harness.goal.stalled` | §7.3, §10 HK3 |
 //! | Decisions on the harness's approval service waking the kernel's approval sleepers | §7.4 |
+//! | `propose_followup`, class `Todo`: an agent's follow-up as a `Proposed` agenda item | §7.5 |
 
 use std::sync::{Arc, OnceLock, RwLock};
 
 use adk_core::{
-    ApprovalCall, ApprovalDecision, ApprovalDelegation, ApprovalEventKind, ApprovalNotification,
-    ApprovalNotifier, ApprovalRequest, ApprovalService, ApprovalState, ApprovalStore, ApprovalTick,
-    InboxPage, InboxQuery, Result, RunCheckpointRef, RunRecord, SubjectRef,
+    AdkError, ApprovalCall, ApprovalDecision, ApprovalDelegation, ApprovalEventKind,
+    ApprovalNotification, ApprovalNotifier, ApprovalRequest, ApprovalService, ApprovalState,
+    ApprovalStore, ApprovalTick, ErrorCategory, ErrorComponent, InboxPage, InboxQuery, Result,
+    RunCheckpointRef, RunRecord, SubjectRef, Tool, ToolContext, ToolEffect,
 };
 use adk_kernel::{
-    ApprovalWakeSource, GoalProgress, KernelBuilder, KernelConfig, PartitionMode, ProcessHandle,
-    ProgressSource, RunUsage,
+    AgendaHandle, AgendaItem, AgendaOrigin, ApprovalWakeSource, GoalProgress, KernelBuilder,
+    KernelConfig, PartitionMode, PlanRef, ProcessHandle, ProgressSource, ProposalOutcome, RunUsage,
+    Wake,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde_json::{Value, json};
 
 use crate::goal::{GoalBook, GoalParker, GoalStore};
 use crate::harness::Harness;
-use crate::mode::HarnessMode;
+use crate::mode::{HarnessMode, ModeRecord, ModeSource, ModeStore};
+use crate::policy::has_harness_layer;
+use crate::tools::PlanStep;
 
 impl From<PartitionMode> for HarnessMode {
     /// A partition's mode is the harness mode of the same name (spec 3.2 §10 HK1); a mode a
@@ -89,7 +95,8 @@ impl Harness {
             .session_service(self.sessions().clone())
             .governance(runner.governance().clone())
             .progress_source(progress)
-            .wake_source(source);
+            .wake_source(source)
+            .agenda_handle(runtime.kernel_agenda.clone());
         if let Some(service) = runtime.approval_service() {
             builder = builder.approval_service(service.clone());
         }
@@ -308,6 +315,218 @@ impl ApprovalService for NotifyingApprovals {
 
     fn approval_store(&self) -> Option<Arc<dyn ApprovalStore>> {
         self.inner.approval_store()
+    }
+}
+
+/// The name of the tool an agent proposes follow-up work with (spec 3.2 §7.5).
+pub(crate) const PROPOSE_FOLLOWUP: &str = "propose_followup";
+
+/// The most characters of a follow-up's title.
+const TITLE_MAX_CHARS: usize = 200;
+/// The most characters of a follow-up's rationale.
+const RATIONALE_MAX_CHARS: usize = 2_000;
+
+/// The kernel's mode for a session in `mode`; the one-to-one inverse of
+/// `From<PartitionMode> for HarnessMode`.
+fn partition_mode(mode: HarnessMode) -> PartitionMode {
+    match mode {
+        HarnessMode::ReadOnly => PartitionMode::ReadOnly,
+        HarnessMode::Plan => PartitionMode::Plan,
+        HarnessMode::Ask => PartitionMode::Ask,
+        HarnessMode::Auto => PartitionMode::Auto,
+    }
+}
+
+fn invalid(message: impl Into<String>) -> AdkError {
+    AdkError::new(
+        ErrorComponent::Tool,
+        ErrorCategory::InvalidInput,
+        "harness.followup.invalid",
+        message,
+    )
+}
+
+/// `propose_followup { title, rationale, when?, steps? }` (spec 3.2 §7.5): proposes work
+/// for later as an agenda item in state `Proposed`, its only effect. Registered as class
+/// `Todo`, so it is allowed in every mode; running the item is governed by the kernel's
+/// agenda — held in ReadOnly and Plan, put to the inbox in Ask, scheduled in Auto — and by
+/// its quiet hours and daily budget.
+///
+/// The follow-up runs in a session of its own whose mode is recorded as this session's at
+/// the time of the proposal, so its process never runs above the proposing run's mode
+/// (K-I7). Without a kernel hosting the harness the tool answers that none runs.
+pub(crate) struct ProposeFollowupTool {
+    agenda: AgendaHandle,
+    modes: (Arc<dyn ModeStore>, HarnessMode),
+}
+
+impl ProposeFollowupTool {
+    pub(crate) fn new(
+        agenda: AgendaHandle,
+        mode_store: Arc<dyn ModeStore>,
+        default_mode: HarnessMode,
+    ) -> Self {
+        Self { agenda, modes: (mode_store, default_mode) }
+    }
+
+    async fn mode(&self, ctx: &dyn ToolContext) -> HarnessMode {
+        let (store, default_mode) = &self.modes;
+        match store.get(ctx.app_name(), ctx.user_id(), ctx.session_id()).await {
+            Ok(Some(record)) => record.mode_for_invocation(ctx.invocation_id()),
+            Ok(None) => *default_mode,
+            Err(error) => {
+                tracing::warn!(error = %error, "mode store unavailable; the follow-up is proposed read-only");
+                HarnessMode::ReadOnly
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for ProposeFollowupTool {
+    fn name(&self) -> &str {
+        PROPOSE_FOLLOWUP
+    }
+
+    fn description(&self) -> &str {
+        "Propose follow-up work to do later, outside this conversation: a title, why it is \
+         worth doing, optionally when to do it and the steps. The proposal goes on the \
+         agenda; it runs only once approved (by the user, or by an Auto-mode policy), outside \
+         quiet hours and within the daily budget. Proposing does nothing else."
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "title": { "type": "string", "description": "What to do, in a short line." },
+                "rationale": { "type": "string", "description": "Why it is worth doing, and what triggers it." },
+                "when": {
+                    "type": "object",
+                    "description": "When to run it; omit to run once approved. One of: {\"at\": \"<RFC 3339 time>\"}, {\"cron\": {\"expr\": \"<cron>\", \"missed\": \"skip\"}}, {\"fileChange\": {\"root\": \"<dir>\", \"glob\": \"<pattern>\", \"debounceMs\": 500}}, {\"runFinished\": {\"pid\": \"<process id>\"}}."
+                },
+                "steps": {
+                    "type": "array",
+                    "description": "The plan, when there is one.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string" },
+                            "title": { "type": "string" },
+                            "instruction": { "type": "string" },
+                            "depends_on": { "type": "array", "items": { "type": "string" } }
+                        },
+                        "required": ["id", "title", "instruction"]
+                    }
+                }
+            },
+            "required": ["title", "rationale"]
+        }))
+    }
+
+    fn effect(&self) -> ToolEffect {
+        // A resumed run never proposes the same follow-up twice.
+        ToolEffect::NonIdempotent
+    }
+
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        let config = ctx
+            .run_config()
+            .ok_or_else(|| AdkError::tool("propose_followup runs only inside a harness run"))?;
+        if !config.tool_policy.as_deref().is_some_and(has_harness_layer) {
+            return Err(AdkError::tool(
+                "propose_followup refuses to run without the harness policy in the run config",
+            ));
+        }
+        let text = |field: &str, max: usize| -> Result<String> {
+            let value = args
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| invalid(format!("propose_followup needs a non-empty '{field}'")))?;
+            if value.chars().count() > max {
+                return Err(invalid(format!("'{field}' is longer than {max} characters")));
+            }
+            Ok(value.to_string())
+        };
+        let title = text("title", TITLE_MAX_CHARS)?;
+        let rationale = text("rationale", RATIONALE_MAX_CHARS)?;
+        let when: Option<Wake> = match args.get("when") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(serde_json::from_value(value.clone()).map_err(|error| {
+                invalid(format!("'when' is not a wake this kernel knows: {error}"))
+            })?),
+        };
+        let steps: Option<Vec<PlanStep>> = match args.get("steps") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(
+                serde_json::from_value(value.clone())
+                    .map_err(|error| invalid(format!("'steps' are not plan steps: {error}")))?,
+            ),
+        };
+        let Some(agenda) = self.agenda.get() else {
+            return Ok(json!({
+                "error": "no agent kernel hosts this harness, so nothing can be proposed for later; \
+                          the user can start one with `adk-rust up`"
+            }));
+        };
+        let mode = self.mode(ctx.as_ref()).await;
+        let pid = config
+            .durable_run_id
+            .clone()
+            .unwrap_or_else(|| format!("invocation:{}", ctx.invocation_id()));
+        let mut item = AgendaItem::new(
+            uuid::Uuid::new_v4().to_string(),
+            SubjectRef::human(ctx.user_id()),
+            title,
+            rationale,
+            AgendaOrigin::Agent { pid, confidence: 1.0 },
+            Utc::now(),
+        );
+        if let Some(when) = when {
+            item = item.with_when(when);
+        }
+        if let Some(steps) = steps.filter(|steps| !steps.is_empty()) {
+            let steps: Vec<Value> =
+                steps.iter().filter_map(|step| serde_json::to_value(step).ok()).collect();
+            let digest =
+                crate::fsutil::hex_digest(Value::from(steps.clone()).to_string().as_bytes());
+            item = item.with_plan(PlanRef::new(format!("sha256:{digest}"), steps));
+        }
+        // The follow-up's session starts in this session's mode, before any process can
+        // read it, so the follow-up never runs above the proposing run's mode (K-I7).
+        let (store, _) = &self.modes;
+        store
+            .set(
+                ctx.app_name(),
+                ctx.user_id(),
+                &adk_kernel::agenda::item_session(&item.id),
+                ModeRecord::new(mode, ModeSource::SystemTighten),
+            )
+            .await?;
+        let outcome = agenda.propose(item, partition_mode(mode)).await.map_err(AdkError::from)?;
+        Ok(match outcome {
+            ProposalOutcome::Held { item } => json!({
+                "proposed": item.id,
+                "state": "proposed",
+                "note": format!("held on the agenda for the user: this session is in {mode} mode"),
+            }),
+            ProposalOutcome::AwaitingApproval { item, request_id } => json!({
+                "proposed": item.id,
+                "state": "proposed",
+                "awaitingApproval": request_id,
+            }),
+            ProposalOutcome::Scheduled { item, pid } => json!({
+                "proposed": item.id,
+                "state": "scheduled",
+                "pid": pid,
+            }),
+            ProposalOutcome::Rejected { reason } => json!({
+                "error": format!("the follow-up was not proposed: {reason}"),
+            }),
+            other => json!({ "outcome": other }),
+        })
     }
 }
 
