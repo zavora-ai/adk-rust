@@ -8,7 +8,7 @@
 | **Grounding commit** | `origin/main` @ `a24ebd8d` — every `file:line` reference below is against this commit |
 | **Affected crates** | NEW `adk-harness`; additive changes in `adk-core`, `adk-devtools`, `adk-sandbox`, `adk-cli`, `cargo-adk`, `adk-rust`; deprecation in `adk-agent` |
 | **Stability** | `adk-harness` enters at **Beta** ([STABILITY.md](../../STABILITY.md)) |
-| **Amended** | 2026-10-20: §7.15 long-term memory (working notes plus long-term facts with provenance), grounded at `origin/main` @ `3884d9e8`; 2026-10-20: [§7.20](#720-external-content-under-governance-feature-web) external content, [§7.21](#721-mcp-interaction-feature-mcp) MCP interaction, [§7.22](#722-hooks-feature-hooks) hooks, [§7.23](#723-model-posture) model posture, the encrypted store (§7.12, §8.1), multimodal reads (§10 D6) and the local posture of H10, grounded at `origin/main` @ `5846e20c`; 2026-10-22: [§7.24](#724-browser-and-computer-use-packs-features-browser-computer-use) browser and computer-use packs, grounded at `origin/main` @ `5bd328f6`; 2026-10-22: web search defaults to the model provider's built-in search, a configured `SearchProvider` replaces it ([§7.20](#720-external-content-under-governance-feature-web), I49, §13 question 7 decided), grounded at `origin/main` @ `42ad5496`; 2026-10-22: per-call effort ([§7.23](#723-model-posture), §10 C4; open question 6 decided), grounded at `origin/main` @ `42ad5496` |
+| **Amended** | 2026-10-20: §7.15 long-term memory (working notes plus long-term facts with provenance), grounded at `origin/main` @ `3884d9e8`; 2026-10-20: [§7.20](#720-external-content-under-governance-feature-web) external content, [§7.21](#721-mcp-interaction-feature-mcp) MCP interaction, [§7.22](#722-hooks-feature-hooks) hooks, [§7.23](#723-model-posture) model posture, the encrypted store (§7.12, §8.1), multimodal reads (§10 D6) and the local posture of H10, grounded at `origin/main` @ `5846e20c`; 2026-10-22: [§7.24](#724-browser-and-computer-use-packs-features-browser-computer-use) browser and computer-use packs, grounded at `origin/main` @ `5bd328f6`; 2026-10-22: web search defaults to the model provider's built-in search, a configured `SearchProvider` replaces it ([§7.20](#720-external-content-under-governance-feature-web), I49, §13 question 7 decided), grounded at `origin/main` @ `42ad5496`; 2026-10-22: per-call effort ([§7.23](#723-model-posture), §10 C4; open question 6 decided), grounded at `origin/main` @ `42ad5496`; 2026-10-23: [§7.25](#725-harness-self-knowledge)–[§7.33](#733-fixes-from-the-2026-10-23-sessions) from a live session: harness self-knowledge, change sets and `apply_patch`, snapshots and rewind (amending spec 3.3 §7.10), language servers, background shells, git classes, worktree members, search scope and fact embedding (proposed), and nine fixes; I64–I73; §10 C6, A2, D7–D11, MD1, KN1, W1, AC1, L4; §13 questions 8–14; grounded at `origin/main` @ `6d42708d` |
 | **Extended by** | [`spec-3.2-agent-kernel.md`](spec-3.2-agent-kernel.md): the always-on form of the harness; `kernel` becomes a default feature of `adk-harness` |
 | **Surfaces** | [`spec-3.3-harness-ui.md`](spec-3.3-harness-ui.md): what each surface shows and how it answers (the console, web client, ACP, AG-UI and notifiers); it changes two statements here, recorded in its §10: a confirmation that times out parks the call when an approval store exists (§7.5), and the bundled web UI is authenticated and answers approvals (§8.2) |
 | **Self-improvement** | [`spec-3.4-self-improving-harness.md`](spec-3.4-self-improving-harness.md): the opt-in maintenance loop; it widens the protected-path list of §9.2 I29 to the evaluator, CI, release and governance paths, keys workspace trust (§7.7) to file content, and corrects §7.13's claim that spend is keyed per subject |
@@ -177,6 +177,12 @@ adk-harness/src/
   posture.rs         EffortPolicy, context caching defaults
   packs/{browser,computer_use,payments,voice,managed}.rs                        [feature each]
   presets/coding.rs  CodingAgent preset
+  manifest.rs        HarnessManifest, the <harness> block, harness_help (§7.25)       [help-docs]
+  changeset.rs       change-set cards, before-hash binding, apply_patch wiring (§7.26)
+  snapshot.rs        SnapshotStore, RewindPlan, rewind (§7.27)
+  lsp.rs             diagnostics block, lsp, lsp_rename (§7.28)                       [lsp]
+  shell/background.rs ShellSupervisor, shell_output, shell_kill (§7.29)
+  git.rs             Vcs classes, hygiene checks, untrusted gh output (§7.30)
   prompt.rs          HARNESS_SYSTEM_PROMPT
 ```
 
@@ -204,6 +210,8 @@ adk-harness/src/
 | `postgres`, `redis` | off | Mode and standing-rule stores every replica of a served harness shares, `postgres://` and `redis://` plan checkpoints, and `adk-session`'s stores on the same backend (§13 Q2, Q5) |
 | `mongodb`, `neo4j`, `firestore` | off | `mongodb://`, `neo4j://` and `firestore://` plan checkpoints (§13 Q5) |
 | `browser`, `computer-use`, `payments`, `voice`, `managed` | off | the packs of §7.16–§7.18 and [§7.24](#724-browser-and-computer-use-packs-features-browser-computer-use) |
+| `lsp` | off | `adk-devtools/lsp`: diagnostics after edits, `lsp`, `lsp_rename` ([§7.28](#728-language-servers-feature-lsp)) |
+| `help-docs` | off | the `docs/official_docs/harness` pages embedded for `harness_help` ([§7.25](#725-harness-self-knowledge)); on in adk-cli |
 
 The umbrella `adk-rust` gets `harness = ["dep:adk-harness"]`, included in `full` ([§8.4](#84-umbrella-adk-rust)).
 
@@ -274,6 +282,12 @@ impl HarnessAgentBuilder {
     pub fn compaction(self, c: EventsCompactionConfig) -> Self;           // interval 10, overlap 4
     pub fn without_compaction(self) -> Self;
     pub fn customize_llm(self, f: impl FnOnce(LlmAgentBuilder) -> LlmAgentBuilder + Send + 'static) -> Self;
+    pub fn surface(self, s: SurfaceManifest) -> Self;                     // §7.25; SurfaceManifest::library()
+    pub fn read_ledger(self, l: Arc<dyn adk_devtools::ReadLedger>) -> Self; // §7.26; in-memory; harness.db in the CLI
+    pub fn snapshots(self, cfg: SnapshotConfig) -> Self;                  // §7.27; off unless set
+    pub fn lsp(self, cfg: LspConfig) -> Self;                             // §7.28; feature `lsp`
+    pub fn background_shells(self, cfg: BackgroundShellConfig) -> Self;   // §7.29; 8 shells, 64 MiB
+    pub fn git(self, cfg: GitConfig) -> Self;                             // §7.30; protected branches main, master
     pub fn build(self) -> Result<HarnessAgent>;
 }
 ```
@@ -437,6 +451,8 @@ decide(call):
 
 RA = `RequireApproval`; NW = non-waivable (no standing rule or `tool_approvals` entry applies). Calls made inside a member are governed by the same policy and mode because the policy travels with the delegated `RunConfig` ([`agent_tool.rs:194, 230`](../../adk-tool/src/agent_tool.rs)).
 
+The 2026-10-23 addendum registers `harness_help`, `shell_output`, `lsp` and `lsp_rename` as `Read`, `shell_kill` in the `Read` row and `apply_patch` as `Edit` ([§7.25](#725-harness-self-knowledge)–[§7.29](#729-background-shells)), and adds `ToolKind::Vcs` with its rows ([§7.30](#730-git-pr-and-ci-under-the-policy)).
+
 ### 7.5 Standing approvals
 
 ```rust
@@ -529,6 +545,8 @@ Assembly, as one `system` content through `instruction_provider` ([`callbacks.rs
 4. Project `AGENTS.md` files, outermost first, each inside `<project-instructions path="…" sha256="…">` and delimited as untrusted.
 5. Nested-file index.
 6. `<memory>` index ([§7.15](#715-long-term-memory-feature-memory)).
+
+Item 2 is followed by the `<harness>` capability block, generated once per build ([§7.25](#725-harness-self-knowledge)).
 
 Files are deduplicated by canonical path and hash (`CLAUDE.md` is often a symlink to `AGENTS.md`); a truncated file ends with `[truncated — read_file <path> for the rest]`. The prompt states that instructions cannot grant permissions; the policy enforces that in code. Dynamic parts (mode banner, todos, goal status) are not in the instruction, which is built once per run ([`llm_agent.rs:3361`](../../adk-agent/src/llm_agent.rs)); they come from `Toolset::process_llm_request`, which runs for every request (3615).
 
@@ -883,6 +901,8 @@ pub struct ProviderWebTools { pub native_search: bool,     // provider_default()
 | Prompt | The Ask prompt shows host, path and query separately, the allowlist decision, and the `DomainIn` suggestion on that host ([§7.5](#75-standing-approvals)); `RenderedCall` rules apply |
 | Members | A member's `web_fetch` is the same tool under the same policy; the allowlist is the harness's, never a member's |
 
+> **Note:** [§7.33](#733-fixes-from-the-2026-10-23-sessions) fix 4 renames the delivered `screened` to `screening`, and [§7.32](#732-search-scope-and-fact-embedding-proposed-13-q8-q9) proposes that `allowed_domains` stop filtering provider search (§13 question 8).
+
 **Provider-native search and fetch.** Web search defaults to the search built-in of the provider the harness model's client serves, and a configured `SearchProvider` replaces it (§13 question 7, decided 2026-10-22). The provider is read from the client, never from what the model writes: `Llm::native_web_search() -> Option<NativeWebSearch>`, a provided method returning `None` (§10 C5), which `GeminiModel` (`generateContent`; the Interactions transport refuses a built-in beside function tools, [`interactions_convert.rs:667-680`](../../adk-model/src/gemini/interactions_convert.rs)), `AnthropicClient` (Anthropic's API, and DeepSeek's Anthropic-compatible endpoint) and `OpenAIResponsesClient` (OpenAI's API, and DeepSeek's Responses endpoint for `deepseek-v4-pro`) override; Chat Completions clients, `DeepSeekClient`, Ollama, Groq, Bedrock, mistral.rs and any other endpoint report none. With `web(..)` set and no `provider_web_tools(..)`, the harness declares `ProviderWebTools::provider_default()`, the matching builtin alone: Gemini `google_search` ([`google_search.rs:96-98`](../../adk-tool/src/builtin/google_search.rs)), Anthropic `web_search` with `with_allowed_domains` ([`web_search.rs:80-85`](../../adk-tool/src/builtin/web_search.rs)), OpenAI `web_search` with `filters.allowed_domains` ([`openai.rs:95-101, 115-123`](../../adk-tool/src/builtin/openai.rs)), or DeepSeek's Responses `{"type": "web_search"}` (`DeepSeekWebSearchTool`, §10 T3). `WebConfig::allowed_domains` is forwarded where the provider takes an allowlist; Gemini and DeepSeek document none, so the search covers every domain and the request banner says the provider takes no allowlist. A `search_provider(..)` replaces the default with the governed `web_search`; `ProviderWebTools::off()` declares none; a harness without `web(..)` declares none unless `provider_web_tools(..)` asks; the per-provider flags stay for explicit control and attach only for the provider the client serves. Anthropic `web_fetch` (`web_fetch_20250910`, [`adk-anthropic/src/types/web_fetch_tool_20250910.rs:9-36`](../../adk-anthropic/src/types/web_fetch_tool_20250910.rs)) has no adk-tool wrapper and stays off. `HarnessInfo::web_search` reports the path (`WebSearchPath::Provider`, `Governed` or `None` with the reason, which the CLI banner prints). A provider can refuse a request only because it declares a built-in (no search quota on the account, no permission, a model without the tool); a rate-limit, forbidden, invalid-input or unsupported error before the first response gets the same request once more without the provider tools and the banner, and when that succeeds the tools stay off for the harness and a warning names the reason, so the default never makes the harness unusable. Provider tools run inside the model outside the governed path: no policy, ledger, screening or per-call hold. They are attached only to a run that starts in Ask or Auto, `harness.web.provider_enabled` is recorded once per run, the prompt names which path is governed, after each model response that carries a provider search the queries and cited URLs (Anthropic `server_tool_use` and `web_search_tool_result`, OpenAI and DeepSeek `web_search_call`, Gemini `groundingMetadata.webSearchQueries` and grounding chunks) are recorded as `harness.web.searched` with `source: provider`, and a `SystemTighten` to ReadOnly or Plan ends the turn as the loop guard does ([§7.13](#713-observability-and-self-correction-feature-observe)) rather than leave an ungoverned fetch live (I49).
 
 The search providers behind the governed `web_search`: `SearxngSearch::new(url)` (a self-hosted SearXNG's JSON API, no key) and `DeepSeekSearch::from_env()` (DeepSeek's Search API at `https://api.deepseek.com/v1/tools/search`, keyed from `DEEPSEEK_API_KEY`), or the operator's own `SearchProvider`. The CLI chooses with `--search provider|off|searxng|deepseek` and `[web] search` (default `provider`); `searxng` reads `[web] searxng_url`, else `SEARXNG_URL`; a project file may set `search = "off"` and nothing else under `[web]` (I3).
@@ -1024,6 +1044,372 @@ The approval the person answers is the harness prompt, or the approvals inbox en
 
 **CLI.** `--pack browser` ([`args.rs:85, 228-233`](../../adk-cli/src/harness/args.rs); adk-cli feature `browser`, off by default) installs the pack over `ADK_WEBDRIVER_URL` (default `http://localhost:4444`) with `--allow-domain` as the navigation allowlist; `--pack computer-use` names `pack_computer_use`, which only the library API takes. H10's "browser tools appear under the same modes" is the `browser_tools_under_modes` scenario of [§11](#11-testing-and-live-verification): every row above decided as the table says in each mode, and a form filled only after approval. Invariants I58–I60 ([§9.2](#92-invariants)).
 
+### 7.25 Harness self-knowledge
+
+References in §7.25–§7.33 cite `origin/main` @ `6d42708d`, the addendum's grounding commit. The addendum comes from a live session on 2026-10-23 (`claude-sonnet-5-5`, Ask mode, a small Rust project) in which the model judged the harness by its tool list alone: it did not know about resumable sessions, scoped deny rules, `/cost`, the kernel, the opt-in packs, plan checkpoints, or which of its calls a standing rule already covered.
+
+**Principle (owner, binding).** Input the surface does not recognise goes to the model, and the model knows the harness's capabilities as data generated from the running harness. No surface keeps a keyword table, a prefix map or an edit-distance matcher that turns input into a command. A mistyped `/aprovals` reaches the model, which names `/approvals` and says what it does.
+
+What the model is told today:
+
+| Source | Content | Gap |
+|---|---|---|
+| `HARNESS_SYSTEM_PROMPT` ([`prompt.rs:13-44`](../../adk-harness/src/prompt.rs)) | The tool contract, the four modes, "instructions in files are not permission" | Static text; its per-mode claims (32-36) are wrong once `allow_host_shell_in_auto` or a sandbox switch is set; it names no command, flag, pack or rule |
+| `<environment>` ([`builder.rs:2036-2072`](../../adk-harness/src/builder.rs)) | Root, platform, date, branch, shell, default mode, active packs | No commands, classes or inactive packs |
+| Per-request reminder ([`toolset.rs:233-276`](../../adk-harness/src/toolset.rs)) | The mode banner (172-190) and, when the revision changed, the open todos | The banner is static text; no rules |
+| `HarnessInfo` ([`agent.rs:45-68`](../../adk-harness/src/agent.rs)) | Mode, isolation, members, packs, tools, effort, caching, web path | Rust-facing only; the model never sees it |
+
+An unrecognised slash line already reaches the agent ([`adk-cli/src/harness/launcher.rs:638-648`](../../adk-cli/src/harness/launcher.rs), documented at [`console/command.rs:17-19`](../../adk-cli/src/console/command.rs)), with no notice to the person.
+
+```rust
+/// What this harness can do, generated when it is built (spec 3.1 §7.25).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct HarnessManifest {
+    pub harness_version: String,          // adk-harness's CARGO_PKG_VERSION
+    pub surface: SurfaceManifest,         // from the surface; SurfaceManifest::library() otherwise
+    pub default_mode: HarnessMode,
+    pub classes: Vec<ClassEntry>,         // every class this harness registers, with its tools
+    pub members: Vec<MemberEntry>,        // name, kind (local, acp, a2a, agent), tools (read-only, full), workspace (§7.31)
+    pub packs: Vec<PackEntry>,            // active, or compiled in and off with the flag that turns it on
+    pub web: WebSearchPath,               // §7.20, with the search filter of §7.32
+    pub memory: MemoryEntry,              // working notes, long-term facts, the embedder (§7.32)
+    pub safety: Vec<SafetyEntry>,         // what each safety mechanism covers in this build
+    pub languages: Vec<LanguageEntry>,    // §7.28: extensions with a server available, and whether it runs
+    pub help_topics: Vec<String>,         // what harness_help can read
+}
+pub struct ClassEntry { pub class: String, pub tools: Vec<String>, pub decisions: [ModeDecision; 4] } // ReadOnly, Plan, Ask, Auto
+pub enum ModeDecision { Allow, Ask, AskEveryTime /* non-waivable */, Deny }
+pub struct SurfaceManifest {
+    pub name: String,                     // "adk-rust", "adk-rust serve", "acp", "library"
+    pub version: String,
+    pub commands: Vec<CommandEntry>,      // what a person types: slash commands, subcommands, flags
+    pub kernel: Option<KernelEntry>,      // compiled in; whether this session runs under it
+}
+pub struct CommandEntry { pub kind: CommandKind /* Slash | Subcommand | Flag */, pub name: String, pub summary: String, pub usage: Option<String> }
+pub struct SafetyEntry { pub mechanism: String, pub covers: String, pub does_not_cover: String }
+
+impl HarnessAgentBuilder { pub fn surface(self, s: SurfaceManifest) -> Self; }
+impl HarnessAgent { pub fn manifest(&self) -> &HarnessManifest; }
+impl HarnessManifest { pub fn render(&self) -> String; }   // the <harness> block
+```
+
+| Field | Generated from |
+|---|---|
+| `classes` | `ToolClassRegistry` ([`policy.rs:250-283`](../../adk-harness/src/policy.rs)) and `MODE_TABLE` (638-662), each cell resolved under the build's `PolicySwitches` (`ModeCell::resolve`, 587-622), so a class line says what happens in this harness, not in the abstract table |
+| `members`, `packs`, `web`, `default_mode` | `HarnessInfo` ([`agent.rs:45-68`](../../adk-harness/src/agent.rs)) and the compiled features |
+| `surface.commands` | adk-cli: the `COMMANDS` table ([`commands.rs:20-55`](../../adk-cli/src/harness/commands.rs)), the built-ins `/help`, `/clear` and `/exit`, and the clap tree `<Cli as CommandFactory>::command()` ([`cli.rs:113-118`](../../adk-cli/src/cli.rs)): every subcommand with its `about`, and the flags of the REPL, `rules add`, `memory`, `sessions`, `up` and `wake` with their help lines. The ACP server fills `SessionControls::available_commands` ([`adk-acp/src/server/modes.rs:89, 137`](../../adk-acp/src/server/modes.rs)) from the same list |
+| `memory` | The §7.15 configuration and the embedder §7.32 selects |
+| `safety` | The mechanisms compiled and configured: action ledger, sandbox, snapshots (§7.27), plan rewind. Without §7.27 the entry reads "rewind restores the plan graph's position only; no file is restored" ([`plan_graph.rs:532-581`](../../adk-harness/src/plan_graph.rs)), so the model never promises an undo that does not happen |
+
+**Delivery.**
+
+| Part | Where | Why |
+|---|---|---|
+| Capability block `<harness>` | The system instruction, after `<environment>` (§7.7 item 2a); rendered once at build, sorted, with no timestamp and no session data, at most 6 KiB (about 1,500 tokens); a longer block ends with the sections it cut and `harness_help <topic>` | The content changes only when the harness is rebuilt, so it sits in the byte-stable prefix of I56, where a cache read costs a tenth of an input token or less; the same text in the reminder would cost a full input token on every request |
+| Standing-rules digest | The per-request reminder ([`toolset.rs:257-274`](../../adk-harness/src/toolset.rs)), on every request while a rule applies | Rules change mid-session; the reminder is rebuilt per request and never saved, so a rule granted mid-batch shows on the next model call and never touches the cached prefix |
+| `harness_help { topic? }` | A tool, class `Read`, always declared | Detail on demand without a large block |
+
+The block's generated lines say what each class does in each mode here, so the model can predict which of its calls will prompt; that slash commands are typed by the person and the model cannot run one, so when a message looks like a mistyped command the model names the closest command from the list and says what it does, and never claims a command ran; and what each safety mechanism covers. An illustrative rendering:
+
+```text
+<harness version="3.0.0" surface="adk-rust 3.0.0">
+Classes (read-only | plan | ask | auto):
+  read: read_file glob grep harness_help lsp shell_output .... allow | allow | allow | allow
+  edit: write_file edit_file apply_patch ...................... deny  | deny  | ask   | allow
+  edit, protected path (AGENTS.md, .git/**, .adk/**, ...) ...... deny  | deny  | ask every time | ask every time
+  shell (host) bash ........................................... deny  | deny  | ask   | ask
+  git destructive (reset --hard, clean -f, push --force) ...... deny  | deny  | ask every time | ask every time
+Standing rules can turn "ask" into allow or deny; the reminder lists the ones that apply.
+Commands the person types (you cannot run them; name the closest one when input looks mistyped):
+  /approvals  Calls in this session waiting for a decision
+  /rules      List your standing rules; /rules rm N revokes one
+  ...
+  adk-rust --continue        Continue the most recent session
+  adk-rust rules add TOOL    Remember a decision; --deny REASON refuses instead
+  adk-rust up                Run the harness as the agent kernel
+Packs: browser (off: --pack browser), payments (not compiled)
+Safety: snapshots before each turn cover the whole workspace, shell writes included;
+  /rewind restores files, transcript and plan; not undone: pushes, payments, webhooks.
+</harness>
+```
+
+The rules digest:
+
+```text
+Standing rules for you here; a call one matches runs or is refused without asking:
+- [3] allow bash: commands starting "cargo test" (every session)
+- [5] deny edit_file: within migrations/ (this session): "schema changes go through review"
+(+4 more; /rules lists them)
+```
+
+| Rule | Mechanism |
+|---|---|
+| What is listed | Rules that apply to this (app, user, session) and whose origin pin matches a declared tool; deny before allow, then by number |
+| Cap | 20 rules or 1 KiB, then `(+N more; /rules lists them)` |
+| Secrets | Labels pass `redact_secrets` ([`web/screen.rs:150`](../../adk-harness/src/web/screen.rs)); a deny reason is quoted and cut at 80 characters |
+| Wording | States coverage only; it never suggests a tool or a command shape because it avoids a prompt |
+
+`harness_help` returns plain text inside `<harness-help topic="…" version="…">`, at most 32 KiB, and reads nothing from the workspace or the network:
+
+| `topic` | Returns |
+|---|---|
+| none | The topic list and the block |
+| `commands` | The full `/help` text |
+| `cli <subcommand>` | That subcommand's clap long help |
+| a page name (`modes-and-approvals`, `durability`, …) | The page of `docs/official_docs/harness/` shipped in the binary through `include_str!` (feature `help-docs`, on in adk-cli) |
+| `manifest` | The manifest as JSON |
+
+**Prompt.** `HARNESS_SYSTEM_PROMPT` keeps the mode contract and drops its per-mode decision claims ([`prompt.rs:32-36`](../../adk-harness/src/prompt.rs)), which the block now states from the table; `mode_banner` ([`toolset.rs:172-190`](../../adk-harness/src/toolset.rs)) names the mode and refers to the block's class lines.
+
+**Unrecognised input.** The REPL keeps sending a slash line no command matches to the agent as typed, and first prints one dim line to the person: `no command /aprovals: sent to the agent`. No surface rewrites, completes or rejects such a line by keyword.
+
+**Drift.** adk-cli tests assert that every `COMMANDS` entry, every built-in and every clap subcommand appears in its `SurfaceManifest`; adk-harness tests assert that every registered tool appears in a class entry, and that the rendered block is byte-identical across two builds with the same configuration and across the turns of a scripted run (the I56 property of §11). The `adk-eval` suite gains a nightly rubric case, `capability_questions`, on three providers: a mistyped slash command, "can I resume this later?" and "stop it ever editing migrations/" are answered with `/approvals`, `--continue` and `rules add edit_file --path-within migrations --deny …`.
+
+Invariants I64 and I65 ([§9.2](#92-invariants)).
+
+### 7.26 Change sets: one review per batch, `apply_patch` and the before-hash
+
+A held edit is approved today as escaped JSON (`RenderedCall`, [`approvals/prompt.rs:239-241`](../../adk-harness/src/approvals/prompt.rs)), one prompt per call and at most 20 per turn (`DEFAULT_PROMPTS_PER_TURN`, 294). `edit_file` checks only that this session and agent read the path ([`adk-devtools/src/tools/edit.rs:66-67`](../../adk-devtools/src/tools/edit.rs)); the tracker records paths without content, in process memory ([`workspace.rs:569-582, 603-662`](../../adk-devtools/src/workspace.rs)); `write_file` sets no precondition ([`write.rs:52-67`](../../adk-devtools/src/tools/write.rs)). Members share one workspace at a default concurrency of 4 ([`team.rs:457`](../../adk-harness/src/team.rs)), so one member can overwrite another's edit and nothing notices. Spec 3.3 §7.10 designs a `DiffPreview` for one held call ([3.3 §7.10](spec-3.3-harness-ui.md#710-diff-before-write-and-honest-rewind)); this section extends it to a batch and binds every approved write to the content it was reviewed against.
+
+| Part | Behaviour |
+|---|---|
+| Before-hash precondition | `edit_file`, `write_file` and `apply_patch` take `expect_sha256` (per file for `apply_patch`), checked under the descriptor the write goes through (D4); a mismatch writes nothing and is answered `harness.edit.stale`, category `Conflict`, with the path and "read it again" (the model sees the reason, §7.33 fix 6) |
+| Read records with content | A read records the sha256 of what was read, and a write by the agent the sha256 of what it wrote; `edit_file` without `expect_sha256` uses that digest as its precondition, so an edit of a file that changed since it was read is stale; records persist in the harness store (§10 D7), keyed by (app, user, session, agent, path) |
+| Change-set card | Two or more Edit-class calls of one model turn that need approval are reviewed as one diff and decided once |
+| `apply_patch` | A multi-file patch checked whole, then written all or nothing |
+| `edit_file { path, edits: [{ old_string, new_string, replace_all? }] }` | Several replacements in one file, applied together or not at all |
+
+**The card.**
+
+1. `LlmAgent` hands the confirmation handler the model turn's batch before dispatch, after the batch's budget reservation ([`llm_agent.rs:4593-4598`](../../adk-agent/src/llm_agent.rs)): `ToolConfirmationHandler::batch_started(&self, calls: &[BatchCall])`, a provided no-op (§10 C6, A2).
+2. On the batch's first held Edit-class request, `PromptingConfirmationHandler` re-checks every Edit-class call of the batch against the policy (the governed-false evaluation it already runs, [`approvals/prompt.rs:450-481`](../../adk-harness/src/approvals/prompt.rs)) and composes them in call order over an in-memory overlay of the workspace, read through `Workspace` with its confinement and exclusions, so successive edits to one file compose. A call that would fail (no match, an escape) is shown failing and answered with that reason without running.
+3. One card: a unified diff per file with line numbers, each file's before and after sha256, and the change-set digest, sha256 over the sorted (path, before, after) triples. A non-waivable row (a protected path, I29) is not merged in: it is prompted on its own after the card. Calls a standing rule allows are not held, so they are not in the card; the card lists them as "N more edits run under rules".
+4. One answer: approve all, approve the selected files, deny all with a reason, or edit — `$VISUAL` opens the combined diff and the result becomes per-call arguments that the policy re-checks (§7.5).
+5. Each approved call is answered `ApproveWithArgs(args + expect_sha256)` with its file's hash at that point of the composition — the batch's base for the first call on a file, the intermediate hash for the next — so the call's fingerprint and its precondition both bind the reviewed content. The handler keeps the batch's decisions and answers its later requests from them, whichever dispatch strategy runs the calls; a request whose arguments differ from the composed ones is prompted on its own.
+6. `harness.changeset.decided` records the digest, the files, the call ids and the answer.
+
+Surfaces without a live prompter park each held call as today; spec 3.3's `DecisionCard` groups the pending Edit-class approvals of one invocation into one card computed the same way, and its decision carries `expect_sha256` per call in `edited_args` from the preview it displayed (`ApprovalAction::Edit`, [`adk-core/src/approval.rs:102-111`](../../adk-core/src/approval.rs)), which tightens 3.3 S-I14 and S-I15 from "computed from the current file" to "executed only against the file shown". The calls of a batch still execute one at a time: a stale call refuses only itself, earlier calls stay written, and the turn's snapshot (§7.27) is the undo; `apply_patch` is the all-or-nothing unit.
+
+**`apply_patch`** (adk-devtools, §10 D8).
+
+| Aspect | Rule |
+|---|---|
+| Format | The `*** Begin Patch` envelope: `*** Add File: <path>`, `*** Delete File: <path>`, `*** Update File: <path>` with an optional `*** Move to: <path>`, `@@` context anchors, context lines, no line numbers |
+| Check | The whole patch is parsed and every hunk located before any write: an exact match, then a whitespace-only tolerance (trailing whitespace, line endings), never an ambiguous or fuzzy match; a hunk that does not apply fails the call with its file, the hunk and the nearest candidate lines; each file may carry `expect_sha256` |
+| Apply | Each file goes to a temporary sibling under the D4 descriptor rules and is renamed into place; on any failure the files already renamed are restored from their in-memory originals; each file keeps its line endings |
+| Report | `{ files: [{ path, op, beforeSha256, afterSha256 }] }` |
+| Policy | Class `Edit`; the policy reads every target path from the headers, the source and destination of a move included, as it reads `/path` today ([`policy.rs:1222-1224`](../../adk-harness/src/policy.rs)); a protected path anywhere makes the call non-waivable; a `PathWithin` rule matches only when every path is within its directory |
+| Ledger, hooks | `NonIdempotent`; `PostEdit` runs once per file with both digests |
+| Transport | The patch text travels in the arguments, never through a shell |
+
+adk-sandbox's `LocalUnixSession::apply_patch` ([`local_unix.rs:247-283`](../../adk-sandbox/src/workspace/local_unix.rs)) is not reused: it writes the patch into the workspace and applies it with `patch -p0`, without atomicity. The provider's `apply_patch` builtin (`OpenAIApplyPatchTool`, [`adk-tool/src/builtin/openai.rs:663-708`](../../adk-tool/src/builtin/openai.rs)) stays refused at build like every unmanaged builtin ([`builder.rs:1183-1199`](../../adk-harness/src/builder.rs)). All three edit tools are declared for every model, so the tool surface is one per process (I56); the block names the preferred multi-file tool per model family (§13 Q12).
+
+**A resumed edit after process loss** (§7.33 fix 5). A goal parked on a held `edit_file`, approved from a new process, fails today because the read record lived in the old process. Two fixes were weighed:
+
+| Option | Covers | Weakness |
+|---|---|---|
+| Bind at hold time: the harness records the file's digest when the call is held, and a resumed call whose file still matches counts as read | Held calls only | Binds to content the approver may never have seen (a decision can come days later); a crash between an unheld read and edit still fails; needs hold-time plumbing for every park path |
+| **Persist digest-bearing read records with the session** (chosen) | Held calls, crash-resumed runs, kernel processes moved between workers | One store write per read |
+
+The persisted record says what was read, and the decision-time `expect_sha256` of the card or the 3.3 preview says what was approved; a file that changed in between is refused as stale on resume, never edited against content nobody reviewed.
+
+Invariants I66 and I67.
+
+### 7.27 Snapshots and rewind (amends spec 3.3 §7.10)
+
+`PlanGraphs::rewind` forks the plan graph's thread and restores no file ([`plan_graph.rs:532-581`](../../adk-harness/src/plan_graph.rs)); neither `Harness` nor the console exposes a rewind; the action ledger keeps digests, not content ([`ledger.rs:1-9`](../../adk-harness/src/ledger.rs), [`adk-core/src/action_ledger.rs:129-147`](../../adk-core/src/action_ledger.rs)). Spec 3.3 §7.10 designs `/rewind` over "the files the harness wrote (from `harness.bash.*` and the devtools audit records)", which misses whatever a command wrote. This section replaces that source with whole-tree snapshots; 3.3 §7.10's renderers, `RewindPlan` row and S-I16 stand otherwise.
+
+| Aspect | Rule |
+|---|---|
+| When | Before each user turn (the first model call of a run that carries a user message), before each plan-graph step, before a `Vcs` `Destructive` call (§7.30), and before a rewind, so the rewind itself can be redone |
+| What | The whole tree under the workspace root, so command writes are covered. The walker is ultracode's `WorkspaceSnapshot` ([`ultracode/signals.rs:233-245`](../../adk-cli/src/harness/ultracode/signals.rs)) moved into adk-harness, with a stat cache (size, mtime, inode) so an unchanged file is not read again. It honours `.gitignore` and `Workspace::exclude_globs`; never opens `.git`; skips `target`, `node_modules` and the other build directories, and files over `max_file_bytes` (8 MiB), which the snapshot lists as not covered; and stops at `max_files` (50,000), marking the snapshot partial |
+| Where | `<config dir>/adk-rust/snapshots/<sha256 of the canonical root>/`, beside `harness.db` (the kernel home under `adk-rust up`): content-addressed objects, with each snapshot's manifest in `harness.db`. Never in the user's `.git`, never inside the workspace; objects sealed with the §7.12 envelope when a store key is configured |
+| Retention | The last `keep_turns` (50) snapshots per session and `max_bytes` (2 GiB) per workspace, oldest first; objects no manifest references are collected; a session's snapshots go with the session |
+| Git | Not needed: a directory with no repository is snapshotted the same way |
+
+```rust
+pub struct SnapshotConfig { pub keep_turns: u32, pub max_bytes: u64, pub max_files: usize, pub max_file_bytes: u64, pub skip_dirs: Vec<String> }
+pub enum RewindTarget { Turn(u32), PlanStep(String), Snapshot(String) }
+impl HarnessAgentBuilder { pub fn snapshots(self, cfg: SnapshotConfig) -> Self; }   // off unless set; on in adk-cli
+impl Harness {
+    pub async fn rewind_plan(&self, user: &UserId, session: &SessionId, to: RewindTarget) -> Result<RewindPlan>;
+    pub async fn rewind(&self, user: &UserId, session: &SessionId, plan: &RewindPlan) -> Result<RewindReport>;
+}
+```
+
+The `RewindPlan` is the difference between the target snapshot and the current tree:
+
+| Entry | Content |
+|---|---|
+| Restore, recreate, delete | Files modified, deleted or created since the target |
+| Conflicts | Files changed since the most recent snapshot that no harness file tool wrote — a command or the person changed them; each is shown and restored only when chosen |
+| Protected | Protected paths among the above (I29), restored only under the non-waivable approval the rewind's confirmation carries |
+| Not covered | Files the snapshot skipped (size, exclusions, a partial walk), listed, never touched |
+| Not undone | Every ledgered `NonIdempotent` action after the target (3.3 D-8): pushes, payments, webhooks, and background shells still running (§7.29) |
+| Transcript | The session forked at the target turn, as 3.3 §7.10 states |
+| Plan | `PlanGraphs::rewind` to the step ([`plan_graph.rs:543`](../../adk-harness/src/plan_graph.rs)); the two rewinds are one command |
+
+The plan is shown and confirmed once; `harness.rewind` records it; `/redo` restores the snapshot taken before the rewind. Console: `/rewind` lists the session's turns with their changed-file counts, `/rewind <n>` shows the plan and asks once, `/redo`; `adk-rust sessions rewind <id> <n>` does the same outside the REPL. Snapshots are on in adk-cli (`--no-snapshots`, `[snapshots] enabled = false`), off in the library until `snapshots(..)` is set, and per host on a served harness (§13 Q11).
+
+Invariant I68.
+
+### 7.28 Language servers (feature `lsp`)
+
+No language-server code or dependency exists in the workspace. Three stages, each usable without the next:
+
+| Stage | Surface | Class |
+|---|---|---|
+| 1 Diagnostics after edits | `write_file`, `edit_file` and `apply_patch` results gain a `<diagnostics>` block for each edited file | Part of the edit's result |
+| 2 Navigation | `lsp { op, path, line?, character?, query? }`, `op` one of `definition`, `references`, `hover`, `document_symbols`, `workspace_symbols`, `implementation` | `Read` |
+| 3 Rename | `lsp_rename { path, line, character, new_name }` returns the server's `WorkspaceEdit` as an `apply_patch` envelope and writes nothing | `Read`; the write is the model's `apply_patch`, reviewed as a change set (§7.26) |
+
+| Rule | Mechanism |
+|---|---|
+| Start | Lazily, on the first read or edit of a file whose extension a server serves; in a trusted workspace only (§7.7), because starting rust-analyzer runs build scripts and proc macros; from a binary on `PATH`, never downloaded; through `sandboxed_command` (§10 S1) as spec 3.2's drivers start, with a read-only workspace, no network, `CARGO_NET_OFFLINE=true` and its own build directory in the session scratch (`rust-analyzer.cargo.targetDir`), so it never takes the workspace's `Cargo.lock` or `target` lock. Without an active enforcer it stays off unless the user config sets `[lsp] allow_unsandboxed = true` |
+| Supervision | `LanguageServerPool` in adk-devtools (§10 D11): restart with backoff in the shape of the MCP manager's `RestartPolicy`, a 30 s request timeout, at most 50 open documents (least recently used closed first), servers killed on `Harness::close`, and a pid registry shared with background shells (§7.29) so the next start reaps orphans |
+| Freshness | A diagnostic reaches the model only when the server published it for the post-edit document version, or after the server reported its check finished after the edit; otherwise the block says `pending` and lists nothing. The wait is bounded: 3 s per file, 8 s per call |
+| Volume | Errors only; at most 20 per file and 5 other files; project-wide diagnostics are never pushed into a turn |
+| Configuration | A built-in table — `rust-analyzer` for `.rs`, `typescript-language-server` for `.ts`, `.tsx` and `.js`, `pyright-langserver` for `.py`, `gopls` for `.go` — and `[lsp.servers.<name>] { command, args, extensions, init_options }` in the user config; `.adk/harness.toml` may only disable a server (I3) |
+| Results | Locations relative to the root, at most 200; files outside the root are named, never read |
+| Self-knowledge | The manifest's `languages` lists each extension with a server available and whether it runs (§7.25) |
+
+**Gate.** adk-cli turns `lsp` on by default only after the `adk-eval` suite shows the diagnostics block beating a `PostEdit` hook that runs `cargo check --message-format=json` on the §11 fix scenarios; until then the hook is the documented zero-server baseline for Rust and `--lsp` opts in (§13 Q10). Serena or `mcp-language-server` stay reachable as spec 3.2 drivers, their tools classed by the manifest's effect classes, for languages the built-in table lacks.
+
+Invariant I69.
+
+### 7.29 Background shells
+
+`bash` blocks until its command exits; the process group is killed when the shell exits (D3, `kill_group_on_exit`, [`adk-devtools/src/workspace.rs:118`](../../adk-devtools/src/workspace.rs)); the default timeout is 120 s (113); no call returns a handle or reads output later. A dev server, a watcher or a long build cannot run while the agent keeps working.
+
+| Tool | Declaration | Class | Behaviour |
+|---|---|---|---|
+| `bash` | `{ command, timeout_secs?, run_in_background?: bool, description?: string, … }`; the new fields are always declared | The class of the same command in the foreground | With `run_in_background: true`, returns `{ shell_id, status: "running" }` at once; the model is told it will be notified and must not poll |
+| `shell_output` | `{ shell_id, tail_lines?, offset?, limit?, pattern? }` | `Read` | Status, exit code, duration and the requested slice of the output, at most 30,000 characters; also reads the full output of a foreground call cut by §7.33 fix 8 |
+| `shell_kill` | `{ shell_id }` | In the `Read` row: allowed in every mode, since it only removes an effect | Kills the group of a shell of this session; never another session's |
+
+The declaration change makes existing `bash` rules stale once, recorded as `harness.rule.stale` (I8).
+
+| Rule | Mechanism |
+|---|---|
+| Decision | Exactly the foreground decision: the same class, the same `ShellPrefix` rules, the same isolation digest (I9); a background call is never looser |
+| Spawn | A `ShellSupervisor` per (app, user, session) spawns through the devtools tool (`BashTool::spawn`, §10 D10) with the same launcher, environment and stdin `/dev/null` (I22); stdout and stderr go to `<session scratch>/shells/<shell_id>.log`, outside the workspace |
+| Duplicates | A command identical to one still running in the session returns the running `shell_id` |
+| Ledger | `begin` before the spawn; `complete` with `{ started: shell_id }`, so a re-issued call is answered from its record and never starts a second server |
+| Governance | The supervisor polls the kill switch every 250 ms, as the foreground tool does ([`tools/shell.rs:28, 500-516`](../../adk-harness/src/tools/shell.rs)), and kills every shell on a freeze (I20) |
+| Lifetime | Every shell is killed at session end, on `Harness::close` and when the process exits; a pid registry with each process's start time in `harness.db` lets the next start reap what a crash left behind, without killing a reused pid |
+| Limits | 8 running shells per session; an output file over 64 MiB kills its shell; no lifetime limit in an attended REPL; 30 min by default and 2 h at most in kernel, goal and served runs (`BackgroundShellConfig`) |
+| Completion | A finished or killed shell is listed in the per-request reminder until `shell_output` reads it or `shell_kill` removes it: `shell 3 ("cargo watch") exited 101 after 4m12s; last line: "error[E0308]: mismatched types"; shell_output 3`. The notice is data, never an instruction |
+| Kernel | Under `adk-rust up`, `Wake::ShellExited { shell_id }` and `KernelEvent::Shell` (§10 KN1) wake a sleeping process when its build finishes; a shell is not a kernel process, because it is not durable |
+| Foreground timeout | A foreground call that reaches its timeout moves to the background under the same decision instead of being killed; its result says so and names the `shell_id` |
+| People | The live stream reaches the person's surface through `emit_progress` as today; `/shells` lists each shell with its command, age and state; the model reads output only through `shell_output` |
+| Isolation | Under the OS sandbox a background command suits builds, tests and watchers: bwrap unshares the network per call, so a server started there is unreachable from later commands, and Seatbelt binds no port without network. Servers run on the host, with approval, or in the container shell, which keeps one network namespace per session (§7.9). The capability block says which applies (§7.25) |
+
+Nothing streams into the model's context, and there is no PTY or `write_stdin`: standard input stays `/dev/null` by design. Invariant I70.
+
+### 7.30 Git, PR and CI under the policy
+
+No harness tool knows git: `git` and `gh` run through `bash` under the shell class, and the OS sandbox keeps all of `.git` read-only (§7.33 fix 7). The choice between the three forms the brief names:
+
+| Option | For | Against |
+|---|---|---|
+| Native tool suite (`git_commit`, `git_push`, `gh_pr_create`, …) | Typed arguments | Models already drive `git` and `gh` well; a second surface to keep equal to the CLIs |
+| GitHub MCP server as a spec 3.2 driver | Breadth across repositories, issues and Actions | Tool definitions cost roughly 14,000 to 55,000 tokens; content from public repositories reaches the model as data an attacker controls; the governed classes come from a manifest the user maintains |
+| A pack | Opt-in footprint | Git is core to a coding harness, not optional |
+| **Policy classes over `git` and `gh` inside `bash`** (chosen) | Enforcement in `decide()`, not in prompt text that the model can route around; the same rules, ledger, sandbox and credentials as any command | A parser is new attack surface; whatever it cannot parse keeps the shell class |
+
+The GitHub MCP server stays an opt-in driver (`--read-only`, lockdown mode, scoped toolsets), and spec 3.4's `GitHubToolset` (3.4 §10 G1) stays the typed submission tool of the self-improvement profile.
+
+`ToolKind` gains `Vcs { class: VcsClass, isolation: Isolation }`, with `VcsClass { Read, WriteLocal, Destructive, SendExternal, PublishPublic }` (both `Copy`, as `ToolKind` requires). A `bash` command whose plain words ([`plain_shell_words`, `approvals/matcher.rs:360`](../../adk-harness/src/approvals/matcher.rs)) start with `git` or `gh` gets one; a command that is not plain words, an alias, or an unknown subcommand keeps the shell class.
+
+| `VcsClass` | Commands |
+|---|---|
+| `Read` | `git status`, `diff`, `log`, `show`, `blame`, `branch --list`, `rev-parse`, `ls-files`; `gh pr view`, `pr diff`, `pr checks`, `issue view`, `run view` (including `--log-failed`), `api` with `GET` |
+| `WriteLocal` | `git add <paths>`, `commit` (without `--amend` or `--no-verify`), `switch -c`, `checkout -b`, `stash push`, `fetch`, `pull --ff-only` |
+| `Destructive` | `git reset --hard`, `checkout -- <paths>`, `restore`, `clean -f…`, `branch -D`, `rebase`, `commit --amend`, `stash drop`/`clear`, `update-ref`, `reflog expire`, `gc --prune`, `worktree remove --force`, any `--no-verify`; `git -c …`, `--git-dir`, `--work-tree` and `--exec-path`, which can run code or leave the root |
+| `SendExternal` | `git push` without force or deletion; `gh pr create`, `pr edit`, `pr ready` |
+| `PublishPublic` | `gh pr comment`, `pr review`, `pr merge`, `issue comment`, `issue create`, `release create`, `api` with `POST`, `PATCH`, `PUT` or `DELETE`; a comment can trigger automation such as deploy bots |
+
+| Class | ReadOnly | Plan | Ask | Auto |
+|---|---|---|---|---|
+| `Read`, OS sandbox or container | Deny | Allow (read-only policy, no network) | Allow (read-only policy, no network; §13 Q13) | Allow (read-only policy) |
+| `Read`, host | Deny | Deny | RA | as Shell, host |
+| `WriteLocal` | as the shell row of its isolation | | | |
+| `Destructive` | Deny | Deny | RA (NW) | RA (NW) |
+| `SendExternal` | Deny | Deny | RA | RA |
+| `PublishPublic` | Deny | Deny | RA (NW) | RA (NW) |
+
+| Rule | Mechanism |
+|---|---|
+| Hard deny | A force-push (`--force`, `--force-with-lease`, a `+` refspec, `--mirror`) or a deletion (`--delete`, a `:ref` refspec) of a protected branch: the remote's default branch (from `refs/remotes/<remote>/HEAD`) and `[git] protected_branches` (default `main`, `master`), unless the operator config allows it (§7.4 step 1) |
+| Rules | `RulePredicate::GitPush { remote, branch }` (a glob) makes "always allow pushing `feat/*` to `origin`" one standing rule; `Read` commands take `ShellPrefix` rules as today; `Destructive` and `PublishPublic` are never rule-eligible |
+| Hygiene | After authorization and before the spawn, `bash` refuses `git add` of a path matching `Workspace::exclude_globs` (`.env`, `*.pem`, `id_*`), and runs `git diff --cached` before `commit` and the outgoing diff before `push` under the read-only policy, refusing on an I30 secret-pattern match as `harness.git.secret_staged` with the file and line, never the value |
+| Untrusted GitHub text | The output of a `gh` `Read` command — PR bodies, review comments, CI logs — is screened ([`web/screen.rs:200`](../../adk-harness/src/web/screen.rs)) and delivered inside `<untrusted-content source="github" …>`, as `web_fetch` delivers a page (I47) |
+| Credentials | `git` and `gh` get per-call broker tokens through the credential helper and the per-call environment ([`identity.rs:257-276, 330-360`](../../adk-harness/src/identity.rs); §7.14); the shell environment allowlist never passes an ambient `GH_TOKEN` or `GITHUB_TOKEN` |
+| Snapshot | A turn snapshot is taken before a `Destructive` call (§7.27) |
+
+**Watching a PR or CI** (kernel). `adk-rust wake --pr <n>` or `--commit <sha>` registers either a GitHub webhook on the ingress, which needs an `X-Hub-Signature-256` verifier beside the Standard Webhooks one it has today ([`adk-server/src/webhooks/ingress.rs:1-18`](../../adk-server/src/webhooks/ingress.rs); §10 W1), or, without a public endpoint, a polling `GitHubChecksSource` keyed by the commit SHA through the broker (§10 KN1). Each failed check or new review comment starts one governed run as the `Service` subject; in Ask its push waits in the approvals inbox; the comment text enters as untrusted content.
+
+Invariant I71.
+
+### 7.31 Worktree isolation for members
+
+Members share the harness workspace today ([`team.rs:457`](../../adk-harness/src/team.rs); an ACP member's working directory is its root, 693-694), a `Full` member keeps the write tools ([`toolset.rs:138-157`](../../adk-harness/src/toolset.rs)), and the team runs 4 delegations at once by default. The read-digest precondition of §7.26 lands first and turns a silent overwrite between members into `harness.edit.stale`; worktrees then let members write in parallel without meeting at all.
+
+`MemberSpec` gains `workspace: MemberWorkspace` — `Shared` (the default, and right for read-only members such as `explore`) or `Worktree` — with `MemberSpec::isolated()`, and adk-cli takes `--member name=acp:codex,worktree`.
+
+| Aspect | Rule |
+|---|---|
+| Creation | By the harness on the host at delegation, never through the model's `bash` (`.git` is protected): in a git repository, `git worktree add --detach` at `HEAD` under `<config dir>/adk-rust/worktrees/<root digest>/<member>-<call id>`, then the parent's uncommitted and untracked, non-ignored files copied from the current tree (the §7.27 walker), so the member starts from what the person sees; outside git, a copy of the latest snapshot |
+| Setup | Ignored files listed in `.worktreeinclude` are copied too, secrets only when listed; build output follows `[team] worktree_target` (§13 Q14) |
+| Confinement | The member's `Workspace` and its read-write sandbox policy are rooted at the worktree; the parent's root is not writable to it; its read records are its own (D2); an ACP member's working directory is the worktree |
+| Return | The member's result carries a change set: its diff against the base, presented to the parent as a §7.26 card; nothing merges on its own |
+| Apply | An `apply_patch` of the change set under the parent's mode, with each file's base hash: a hunk applies where the parent's file still matches the base; anything else is shown as a conflict, never resolved silently |
+| Cleanup | The worktree is removed (`git worktree remove`, then `prune`) once its change set is applied or discarded; one with unapplied changes is never removed before its diff is kept in the snapshot store; at most `max_worktrees` (4) and `max_bytes` per workspace; a stale `git worktree lock` from a killed process is cleared at the next start |
+| Audit | `harness.member.worktree.created`, `.returned`, `.applied`, `.discarded` |
+
+A member in a worktree commits nothing: its change set is the unit the parent reviews. Invariant I72.
+
+### 7.32 Search scope and fact embedding (proposed; §13 Q8, Q9)
+
+**Search.** The builder hands the fetch allowlist `WebConfig::allowed_domains` to the provider search ([`builder.rs:1601-1611`](../../adk-harness/src/builder.rs)), which forwards it to Anthropic and OpenAI ([`web/provider.rs:64-97`](../../adk-harness/src/web/provider.rs)), while Gemini and DeepSeek search every domain (§7.20). One setting therefore means "hosts fetched without approval" for `web_fetch` and "the only domains searched" for two providers out of four. The proposal keeps §13 Q7 — provider search on, every domain — and separates the two meanings:
+
+| Setting | Meaning |
+|---|---|
+| `WebConfig::allowed_domains` | Hosts `web_fetch` and the browser pack's navigation reach without approval; never forwarded to a search |
+| `WebConfig::search_domains: Option<SearchDomains>`, `SearchDomains::{Allowed(Vec<String>), Blocked(Vec<String>)}` | A search filter, forwarded where the provider takes one; where it does not (Gemini, DeepSeek), the banner and the capability block say so |
+| Operator ceiling | `[web] search = "off"` or `search_domains` in the operator or user configuration; a workspace file may only narrow them (I3) |
+
+The banner states the search path and its filter, never the fetch allowlist. A known cost is recorded: provider search is declared only to runs that start in Ask or Auto (I49), so the tool list changes when a session crosses between Plan and Ask, and Anthropic's prompt cache is written again once per crossing.
+
+**Fact embedding.** adk-cli picks the embedder at [`harness_cli.rs:528-567`](../../adk-cli/src/harness_cli.rs): the local ONNX model only for a local chat provider; else the chat provider's own embeddings (Gemini, OpenAI); else whichever `GOOGLE_API_KEY`, `GEMINI_API_KEY` or `OPENAI_API_KEY` is in the environment. Every turn's recall query — the user's message, the open todos and the current plan step ([`facts/recall.rs:57-58`](../../adk-harness/src/facts/recall.rs)) — is embedded ([`facts/index.rs:154-160`](../../adk-harness/src/facts/index.rs)), so with an Anthropic chat model and a Google key in the environment each user message also goes to Google, and the notice naming the embedder shows once per machine (the marker file, `harness_cli.rs:497-517`). The proposal:
+
+| Chat provider | Embedder |
+|---|---|
+| Local (Ollama, mistral.rs) | The local ONNX model |
+| Embeds (Gemini, OpenAI) | That provider: the data already goes there |
+| No embeddings (Anthropic, DeepSeek, Groq, Bedrock, OpenRouter, …) | The local ONNX model (`memory-local` is a default feature, [`adk-cli/Cargo.toml:93, 152`](../../adk-cli/Cargo.toml)) |
+| Local model unavailable | Lexical recall; never another provider |
+| Explicit `[memory] embedder = "local" \| "gemini" \| "openai" \| "lexical"` or `--embedder` | As configured; a second provider is used only this way |
+
+The session banner names the embedder in every session. Stored vectors carry the embedder's id, and recall re-embeds a fact whose id differs, instead of comparing vectors from different models that happen to share a length ([`index.rs:168-172`](../../adk-harness/src/facts/index.rs)). Invariant I73.
+
+### 7.33 Fixes from the 2026-10-23 sessions
+
+| # | Defect | Where | Fix | Regression test |
+|---|---|---|---|---|
+| 1 | A rule offered as "edit_file: anywhere in the workspace (this session) (this session)" | The suggestion's label carries its scope ([`approvals/rule.rs:688, 704`](../../adk-harness/src/approvals/rule.rs)) and the console appends it again ([`adk-cli/src/harness/prompter.rs:175-180`](../../adk-cli/src/harness/prompter.rs)) | Labels state what the rule matches and never the scope; every surface renders the scope from `RuleSuggestion::scope` | The console transcript of an edit prompt names the scope once |
+| 2a | A command's streamed output printed before its `[approved] bash` line | The decision label is printed when the function response arrives, after the command ran ([`adk-cli/src/launcher.rs:1319-1327`](../../adk-cli/src/launcher.rs)), while progress chunks print as they come | The console prompter prints `[approved] <tool>` when the person answers, and fix 3's line covers rule hits; the response event prints a decision only when it was taken elsewhere (the inbox, a resumed run); the first progress chunk of a call carries a `[<tool> <short call id>]` header from `TOOL_PROGRESS_CALL_ID_KEY` ([`adk-core/src/event.rs:20-24`](../../adk-core/src/event.rs)) | A scripted held `bash` prints the decision line before its first output line |
+| 2b | A provider search's `[server-tool-call]` lines printed after the answer they produced | The Anthropic stream drops `server_tool_use` blocks while streaming ([`adk-model/src/anthropic/streaming.rs:57-67`](../../adk-model/src/anthropic/streaming.rs)) and yields them only in the complete message (121-126); the console skips partial server tool calls (`launcher.rs:1316`) and prints them from the complete event (1402) | adk-model yields each `server_tool_use` and `web_search_tool_result` block as a partial response at its `content_block_stop`; the console prints a server tool call once, at its first chunk, keyed by its id (§10 MD1) | A recorded stream renders the search line before the answer text |
+| 3 | A call allowed by a rule granted earlier in the same batch shows no "allowed by rule N" line | The handler's re-check returns a bare approval ([`approvals/prompt.rs:481`](../../adk-harness/src/approvals/prompt.rs)); the policy records a rule hit only in tracing and audit ([`policy.rs:1314-1323`](../../adk-harness/src/policy.rs)); `Evaluated` carries no rule id (721-726) | `Evaluated` gains the rule id; `ApprovalPrompter::rule_applied(&self, hit: &RuleHit)` is a provided no-op ([`approvals/prompt.rs:43-46`](../../adk-harness/src/approvals/prompt.rs)) that the policy's allow-by-rule path and the re-check call; the console prints `[allowed by rule N] <tool>: <label>` | A batch whose first prompt grants a rule prints the line for the second call |
+| 4 | `web_fetch` returns `"screened": false`, which reads as "not screened" but means nothing was flagged; a PDF's `false` means not screened at all | [`tools/web.rs:217-225, 226-240, 274`](../../adk-harness/src/tools/web.rs); `web_search` (498); the browser pack ([`packs/browser.rs:410`](../../adk-harness/src/packs/browser.rs)) | `screened: bool` becomes `screening: "clean" \| "labelled" \| "redacted" \| "labelled, redacted" \| "not_screened"`, from `Screened::action` ([`web/screen.rs:86-100`](../../adk-harness/src/web/screen.rs)) with `none` read as `clean`; `harness.web.fetched` and `harness.browser.acted` carry the same field; 3.0.0 is unreleased, so the rename is free | Each delivery shape asserts its `screening` value |
+| 5 | An approved `edit_file` resumed in a new process fails (`live_durable_goal`, `claude-sonnet-5-5` and `gemini-3.5-flash-lite`; the scenario passes only because the model falls back to `write_file`) | `edit_file` requires a read record ([`edit.rs:66-67`](../../adk-devtools/src/tools/edit.rs)) that lives in process memory ([`workspace.rs:569-582, 603-662`](../../adk-devtools/src/workspace.rs)) | Digest-bearing read records persist with the session in the harness store (§7.26, §10 D7), and the decision's `expect_sha256` binds what was approved | Park a goal on a held edit, drop the process, approve from a new one: the edit runs once |
+| 6 | The model sees `tool 'edit_file' failed: tool.internal (tool.legacy)` with no reason | Every devtools error but `Excluded` maps to `AdkError::tool` ([`adk-devtools/src/error.rs:72-80`](../../adk-devtools/src/error.rs)), which is `Internal` with code `tool.legacy` ([`adk-core/src/error.rs:436-438`](../../adk-core/src/error.rs)); `LlmAgent` hides tool error messages by default ([`adk-agent/src/llm_agent.rs:970`](../../adk-agent/src/llm_agent.rs)) and shows them only for rejection categories ([`adk-core/src/tool_response.rs:80-93`](../../adk-core/src/tool_response.rs); [`error.rs:140-150`](../../adk-core/src/error.rs)) | The errors a model can act on become rejection categories with codes (§10 D9): `NotRead` → `Conflict` `devtools.not_read` ("read src/lib.rs before editing it"); `Stale` → `Conflict` `devtools.stale`; `NoMatch` and `Ambiguous` → `InvalidInput` `devtools.no_match`, `devtools.ambiguous`; `PathEscape` → `Forbidden` `devtools.path_escape`; `ReadOnly` and `BashDisabled` → `Forbidden` `devtools.read_only`, `devtools.bash_disabled`; an I/O not-found → `NotFound` `devtools.not_found`; `Other` (bad arguments, a bad pattern) → `InvalidInput` `devtools.invalid_argument`; `Timeout` keeps `Timeout`; other I/O stays `Internal` and hidden | Each variant's code and the text the model receives |
+| 7 | Every sandboxed `git add` or `git commit` fails: the sandbox keeps all of `.git` read-only ([`adk-harness/src/shell/protect.rs:22-35`](../../adk-harness/src/shell/protect.rs)), so `index.lock` cannot be created and each commit needs the unsandboxed retry | `SANDBOX_PROTECTED_PATHS` | The sandbox protects `.git/hooks`, `.git/config`, `.git/info` and `.git/modules/*/{hooks,config,info}` instead of `.git`, which closes the code-execution routes and leaves the index, refs and objects writable; in a linked worktree `.git` is a file naming the gitdir, which stays read-only, and the main repository's `hooks`, `config` and `info` stay read-only; file tools keep all of `.git/**` protected ([`approvals/matcher.rs:396`](../../adk-harness/src/approvals/matcher.rs)); history the sandbox can now rewrite is covered by the `Destructive` class (§7.30) and the reflog | A sandboxed `git commit` succeeds; a sandboxed write to `.git/hooks/pre-commit` fails |
+| 8 | `bash` returns up to 1 MiB of stdout and 1 MiB of stderr inline, from the start only | `max_output_bytes` ([`adk-devtools/src/workspace.rs:114`](../../adk-devtools/src/workspace.rs)); `capture` keeps the first bytes and discards the rest ([`bash.rs:342-381`](../../adk-devtools/src/tools/bash.rs)); `bound_output` marks the cut (387-396) | At most 30,000 characters inline per call: the first 10,000 and the last 20,000, with a marker naming the bytes left out and an `output_id`; the full output is kept in the session scratch and read with `shell_output` (§7.29); the capture cap stays as a disk bound (§10 D10) | A 5 MiB output returns its head and tail, and `shell_output` reads the middle |
+| 9 | A REPL session that does not end cleanly teaches long-term memory nothing: `/memory` shows no fact from it, because the plain REPL distils at idle, on close and every 20 turns, and only `adk-rust up`'s consolidation tick catches sessions those missed | The per-session distiller (§7.15.2); the public entry `Harness::distill_sessions` with its cursor ([`harness.rs:1131-1166`](../../adk-harness/src/harness.rs); `FactStore::distilled_sessions` and `mark_distilled`, [`facts/store.rs:72-96`](../../adk-harness/src/facts/store.rs)) | At the next start the REPL lists this user's sessions recorded for this workspace (`harness:workspace`, [`adk-cli/src/harness/launcher.rs:34`](../../adk-cli/src/harness/launcher.rs)) whose cursor stops short of their last event, and distils the five most recent through `distill_sessions` — spec 3.2's HK2 entry, verified-quote promotion off, so the facts are `Assumed` — in the background, under the session-end distillation's budget; the memory notice says "facts from 2 earlier sessions that ended without saving were added as assumed; /memory lists them" | A session killed mid-run is distilled at the next start, once |
+
 ## 8. Surfaces
 
 ### 8.1 adk-cli: the binary is the harness
@@ -1050,6 +1436,8 @@ Model and setup: every command goes through `setup::resolve` ([`setup.rs:104`](.
 **Local posture** (H10). The defaults above are the ones on `main` ([`adk-cli/Cargo.toml:74`](../../adk-cli/Cargo.toml)) and leave `ollama` opt-in (80) while no feature names `adk-mistralrs` anywhere, so "local mistral.rs" was a claim. The amendment adds `ollama` to the default features (a `reqwest` client to a local endpoint; no build cost) and an opt-in `mistralrs = ["dep:adk-mistralrs"]` that runs `MistralRsModel` in process ([`adk-mistralrs/src/client.rs:36, 385`](../../adk-mistralrs/src/client.rs); mistral.rs 0.8 with its model loaders, a heavy build, GPU through `cuda` or `metal`), forwarded by the umbrella as `cli-mistralrs` ([§8.4](#84-umbrella-adk-rust)). `--provider ollama|mistralrs --model <id or path>` selects them and `compiled_providers()` lists them ([`cli.rs:73, 85`](../../adk-cli/src/cli.rs)). With `--sandbox`, `--store-key` and the local embedder of [§7.15.2](#7152-long-term-facts), nothing leaves the machine but the local model endpoint; the H10 pass condition asserts it on the sandbox's network policy and the audit records.
 
 Console: one rustyline reader thread (`ConsoleIo`) serves both the REPL ([`launcher.rs:357-363, 417-478`](../../adk-cli/src/launcher.rs)) and the prompter, so Ctrl-C at a prompt cannot leave a blocking stdin read behind; `ConsolePrompter` implements `ApprovalPrompter` with `[y] allow once  [a] always allow…  [n] deny (reason)  [e] edit args  [?] details`; `[e]` opens `$VISUAL`/`$EDITOR` on the JSON arguments; Ctrl-C denies and cancels; the console raises `tool_confirmation_timeout` to one hour. `StreamPrinter::handle_event` ([`launcher.rs:773-781`](../../adk-cli/src/launcher.rs)) also renders `actions.tool_confirmation` and `tool_confirmation_decision`. Slash commands through a data-driven `ConsoleCommand`: `/mode`, `/sandbox on|off|status`, `/todos`, `/rules [rm N]`, `/approvals`, `/plan`, `/cost`, `/team`, `/session`, `/skills`, `/memory`, `/web [allow <host>]`, `/mcp [resources <server>]` with `@server:resource` completion ([§7.21](#721-mcp-interaction-feature-mcp)), `/hooks`, `/effort`. The banner shows workspace, mode, isolation, members, session id.
+
+**Addendum (2026-10-23).** An unrecognised slash line prints `no command /x: sent to the agent` before the turn ([§7.25](#725-harness-self-knowledge)); `/rewind [n]` and `/redo` ([§7.27](#727-snapshots-and-rewind-amends-spec-33-710)), `/shells` ([§7.29](#729-background-shells)) and `adk-rust sessions rewind <id> <n>`; flags `--no-snapshots`, `--lsp`, `--embedder local|gemini|openai|lexical` ([§7.32](#732-search-scope-and-fact-embedding-proposed-13-q8-q9)) and `--member name=…,worktree` ([§7.31](#731-worktree-isolation-for-members)); `[snapshots]`, `[lsp]`, `[git]`, `[shells]` and `[memory] embedder` in the user config, which `.adk/harness.toml` may only narrow (I3). At start the REPL distils the sessions of this user and workspace that ended without distillation ([§7.33](#733-fixes-from-the-2026-10-23-sessions) fix 9).
 
 `Launcher` additions (adk-core types only): `with_run_config`, `with_tool_policy`, `with_confirmation_handler`, `with_user_id` (today hard-coded `"user"`, 336), `with_session_id` (resume-or-create; today always new, 346-353), `with_console_command`, `with_approval_service`, `with_background_runs`. Harness glue lives in `adk_cli::harness` behind a default-on `harness` feature.
 
@@ -1160,6 +1548,14 @@ Secrets come from `adk-auth` secret providers; nothing in the image. A served ha
 
 **Adaptive review.** I61 An `ultracode` reviewer, independent or on a board, is ReadOnly and shell-less and runs under the layer of a ReadOnly harness that records into the run's audit trail; only the implementer changes the workspace, in the user's mode. I62 The review plan is a pure function of its `harness.ultracode.routed` record — signals, limits, rule version and validated model answer — and, after an escalation, of its `harness.ultracode.escalated` record; a model answer selects only closed-enum values within the caps and above the floors, and applies whole or not at all; no router text reaches an agent prompt; each record commits before the first review stage it governs; an escalation only adds the `security` seat. I63 A step starts only when its own budget fits in what remains of `max_model_calls`; a missing, failed or unparseable verdict is never an approval.
 
+**Self-knowledge.** I64 The capability block, the standing-rules digest, the background-shell notices and `harness_help` are information: `decide()` reads none of them, and none grants, changes the mode or answers a call. The block is generated from the built harness and the commands its surface registers — never from session state, tool output, model text or the text of a workspace file — and is byte-identical across the runs of a process with the same configuration. I65 Input a surface does not recognise reaches the model as typed, with a notice to the person; no surface maps input to a command by keyword, prefix or edit distance; the model cannot invoke a surface command; `harness_help` reads only what the binary ships or the surface generates.
+
+**Change sets and rewind.** I66 An Edit-class call writes only when each file's current sha256 equals the hash its decision or its read record bound; otherwise it writes nothing and is answered `harness.edit.stale`. I67 `apply_patch` checks the whole patch before writing and writes all of its files or none; a protected path anywhere in it makes the call non-waivable; a standing rule matches it only when the rule covers every path. I68 Snapshots live outside the workspace beside `harness.db`, never in the user's `.git`, sealed under the store key when one is configured; a rewind changes only paths inside the root without following a symlink, shows every file changed outside the harness's file tools since the latest snapshot as a conflict before touching it, and lists every ledgered non-idempotent action after its target as not undone.
+
+**Developer tooling.** I69 A language server starts only in a trusted workspace, from a binary on `PATH`, under the sandbox launcher with a read-only workspace, no network and its own build directory, unless the user config allows it unsandboxed; a diagnostic reaches the model only when it is newer than the edit it follows; `lsp` and `lsp_rename` write nothing. I70 A background shell is decided exactly as the same command in the foreground; none outlives its session, `Harness::close`, the process or a freeze; their number and output are capped; a completion notice is data. I71 A `Vcs` class never decides looser than the shell row of the same isolation, except `Read` under the read-only sandbox policy; `Destructive` and `PublishPublic` calls are non-waivable; a force-push or deletion of a protected branch is denied; a commit or push whose diff matches a secret pattern is refused; text read from GitHub reaches the model only as untrusted content. I72 A worktree member writes only inside its worktree; its changes reach the parent's workspace only as a change set the parent's policy decides; a worktree with unapplied changes is never removed before its diff is kept.
+
+**Data boundaries** (with §13 questions 8 and 9 decided as recommended). I73 The fetch allowlist is never forwarded as a search filter; facts and recall queries are embedded only by the local model or the chat provider's own embedder unless the user configured another, and the session banner names the embedder in every session.
+
 ### 9.3 Audit records
 
 Actor from `AuditActor::new(acting, invocation_id)` ([`audit_log.rs:288`](../../adk-core/src/audit_log.rs)); `ext.sessionId` as `ToolGate::record` sets it ([`governance.rs:1421-1432`](../../adk-core/src/governance.rs)); kind `Other` for `harness.*` actions ([`audit_log.rs:138-158`](../../adk-core/src/audit_log.rs)); written through `ctx.run_config().audit` ([`tool.rs:371`](../../adk-core/src/tool.rs)).
@@ -1200,6 +1596,16 @@ Actor from `AuditActor::new(acting, invocation_id)` ([`audit_log.rs:288`](../../
 | ultracode escalated | `harness.ultracode.escalated` | runId, taskDigest, routerVersion, round, change (since the run began; `firstTurn` is the revise turn's outcome), from, plan | after a revise that made the change sensitive, write-ahead of the next review stage |
 | ultracode stage reviewed | `harness.ultracode.reviewed` | runId, round, architecture, verdicts [{focus, verdict}], status, fallback, modelCalls, notesDigest, workspaceUnchanged | after each review stage |
 | ultracode finished | `harness.ultracode.finished` | runId, rounds, decision, architecture, escalated, modelCalls, heldCalls | end of run |
+| Capability block built | `harness.capabilities.built` | manifestDigest, blockBytes, commands, classes, helpDocsDigest | build (§7.25) |
+| Change set decided | `harness.changeset.decided` | changesetDigest, files [{path, beforeSha256, afterSha256}], callIds, decision, selected, by, surface | prompter; inbox (§7.26) |
+| Stale edit refused | `harness.edit.stale` | functionCallId, tool, path, expectedSha256, actualSha256, source (changeset, preview, read) | edit tools (§7.26) |
+| Patch applied | `harness.patch.applied` | functionCallId, files [{path, op, beforeSha256, afterSha256}], rolledBack | `apply_patch`, write-ahead (§7.26) |
+| Snapshot taken; rewind | `harness.snapshot.taken`, `harness.rewind` | snapshotId, kind (turn, step, destructive, rewind), files, bytesNew, partial, notCovered; target, restored, recreated, deleted, conflictsChosen, effectsNotUndone (ledger keys), transcriptForkedAt, planThread | snapshot store; `Harness::rewind`, write-ahead (§7.27) |
+| Language server | `harness.lsp.started` / `.stopped` | server, binaryDigest, extensions, enforcer, reason | pool (§7.28) |
+| Background shell | `harness.bash.begin` / `.end` with `background` and `shellId`; `harness.bash.killed` | shellId, by (model, person, freeze, close, cap, session end), exitCode | supervisor (§7.29) |
+| Git refused | `harness.git.refused` | functionCallId, subcommand, class, reason (secretStaged, protectedBranch, excludedPath), file, line | policy; `bash` (§7.30) |
+| Member worktree | `harness.member.worktree.created` / `.returned` / `.applied` / `.discarded` | member, worktreeId, baseCommit, filesChanged, conflicts, keptAs | team (§7.31) |
+| Missed sessions distilled | `harness.memory.distilled` with `catchUp: true` | as `harness.memory.distilled` | REPL start (§7.33 fix 9) |
 
 Records go to `adk_auth::signed_audit::AuditLog` (hash chain, Merkle tree, signed checkpoints) through `Runner::builder().audit_log` ([`adk-runner/src/builder.rs:481`](../../adk-runner/src/builder.rs)), not `FileAuditSink`, whose verification cannot detect a truncated tail or an edited last line ([`adk-auth/src/audit.rs:665-699`](../../adk-auth/src/audit.rs)).
 
@@ -1241,6 +1647,18 @@ Records go to `adk_auth::signed_audit::AuditLog` (hash chain, Merkle tree, signe
 | L3 | adk-cli | `ollama` in the default features ([`adk-cli/Cargo.toml:74, 80`](../../adk-cli/Cargo.toml)); opt-in `mistralrs = ["dep:adk-mistralrs"]`; `--web`, `--allow-domain`, `--search`, `--effort`, `--no-hooks`, `--store-key`; `adk-rust store status\|rotate-key`; `[web]`, `[[hooks]]`, `[effort]` and `[store]` tables in `harness.toml` ([`adk-cli/src/harness/args.rs:12, 18`](../../adk-cli/src/harness/args.rs)); `/web`, `/mcp`, `/hooks`, `/effort` and `@server:resource` in the console; the `searxng` and `deepseek` search providers (`SearxngSearch`, `DeepSeekSearch` in adk-harness; question 7 decided) | §8.1 |
 | C5 (required for the provider search default) | adk-core, adk-model | Provided method `Llm::native_web_search(&self) -> Option<NativeWebSearch>` (default `None`; `MeteredLlm` forwards) with `#[non_exhaustive] pub struct NativeWebSearch { pub provider: &'static str, pub tool: NativeWebSearchTool, pub allowed_domains: bool }` and `#[non_exhaustive] pub enum NativeWebSearchTool { GoogleSearch, AnthropicWebSearch, OpenAiWebSearch, DeepSeekWebSearch }`; overridden by `GeminiModel`, `AnthropicClient` and `OpenAIResponsesClient` by transport and endpoint host; `ScriptedLlm::with_native_web_search` | §7.20: the provider comes from the client, not from the model's name or output |
 | T3 | adk-tool | `DeepSeekWebSearchTool`: `deepseek_web_search`, `is_builtin`, `ReadOnly`, declaring `x-adk-openai-tool: {"type": "web_search"}` for DeepSeek's Responses endpoint ([DeepSeek Responses API](https://api-docs.deepseek.com/guides/responses_api)) | §7.20 |
+| C6 (required for the change-set card) | adk-core | Provided method `ToolConfirmationHandler::batch_started(&self, calls: &[BatchCall<'_>])`, default no-op, with `#[non_exhaustive] pub struct BatchCall<'a> { pub name: &'a str, pub function_call_id: Option<&'a str>, pub args: &'a Value, pub origin: Option<&'a ToolOrigin> }` | §7.26: the card needs the model turn's batch before the first hold |
+| A2 | adk-agent | `LlmAgent` calls `batch_started` once per model turn, after the batch's budget reservation ([`llm_agent.rs:4593-4598`](../../adk-agent/src/llm_agent.rs)) | §7.26 |
+| D7 (required) | adk-devtools | Read records carry the content sha256, and the agent's own writes update them; a `ReadLedger` trait (in-memory by default, `Workspace::with_read_ledger`) so a host persists them ([`workspace.rs:569-582, 603-662`](../../adk-devtools/src/workspace.rs)); `expect_sha256` on `edit_file` and `write_file`, checked under the D4 descriptor; `edit_file { edits: [..] }`; `DevToolError::Stale` | §7.26, §7.33 fix 5 |
+| D8 | adk-devtools | `ApplyPatchTool` (`apply_patch`): the envelope parser, the whole-patch check, the all-or-nothing apply, per-file digests | §7.26 |
+| D9 (required) | adk-devtools | `From<DevToolError> for AdkError` maps the errors a model can act on to rejection categories with `devtools.*` codes ([`error.rs:63-83`](../../adk-devtools/src/error.rs)) | §7.33 fix 6 |
+| D10 | adk-devtools | `BashTool::spawn` for background commands (group handle, output file, kill); inline output of at most 30,000 characters, head and tail, with the full output kept for the caller ([`bash.rs:342-396`](../../adk-devtools/src/tools/bash.rs), [`workspace.rs:114`](../../adk-devtools/src/workspace.rs)) | §7.29, §7.33 fix 8 |
+| D11 | adk-devtools | Feature `lsp`: `LanguageServerPool` over stdio JSON-RPC (`lsp-types`), started through a launcher the host supplies, with version-tracked diagnostics, a request timeout and a document LRU | §7.28 |
+| MD1 | adk-model | The Anthropic stream yields each `server_tool_use` and `web_search_tool_result` block as a partial response at its `content_block_stop` ([`anthropic/streaming.rs:57-67, 121-126`](../../adk-model/src/anthropic/streaming.rs)) | §7.33 fix 2b |
+| KN1 | adk-kernel | `Wake::ShellExited { shell_id }` beside the variants of [`wake.rs:97-150`](../../adk-kernel/src/wake.rs), `KernelEvent::Shell`, and a polling `GitHubChecksSource` keyed by commit SHA | §7.29, §7.30 |
+| W1 | adk-server | A GitHub `X-Hub-Signature-256` (HMAC-SHA256) verifier on the webhook ingress beside Standard Webhooks ([`webhooks/ingress.rs:1-18`](../../adk-server/src/webhooks/ingress.rs)) | §7.30 |
+| AC1 | adk-acp | The harness's ACP server answers `SessionControls::available_commands` ([`server/modes.rs:137`](../../adk-acp/src/server/modes.rs)) from the `SurfaceManifest` | §7.25 |
+| L4 | adk-cli | `SurfaceManifest` from `COMMANDS` and the clap tree; the "sent to the agent" notice; `/rewind`, `/redo`, `/shells`, `sessions rewind`; `--no-snapshots`, `--lsp`, `--embedder`, `--member …,worktree`; `[snapshots]`, `[lsp]`, `[git]`, `[shells]`, `[memory] embedder`; fixes 1–3; the embedder order of §7.32; the missed-session catch-up (fix 9) | §7.25–§7.33 |
 | L1, G1 | adk-cli, cargo-adk | §8.1, §8.3 | Surfaces |
 
 The 3.0 defects the harness must not inherit, and how the design avoids them:
@@ -1271,10 +1689,13 @@ The 3.0 defects the harness must not inherit, and how the design avoids them:
 | External content, MCP, hooks, posture, store | adk-harness | Unit: URL parsing and private-range refusal (IPv4, IPv6, mapped, `.local`), redirect re-classification, size and length caps, HTML-to-text (scripts and hidden elements dropped, closing tag neutralized), injection and secret screening, `DomainIn` suggestions; elicitation schema rendering and answer validation; sampling request mapping (no tools, cap, delimited system prompt); hook outcome parsing (`allow` is `Continue`), matcher globs, timeouts; effort mapping per provider; envelope round trip and rotation. Property: a delivered page never carries an unlabelled injection match or an unredacted secret; no request leaves for a private target or a URL over the cap; a hook outcome is never Allow; the request prefix is byte-identical across the turns of a scripted run whatever the mode, todos and facts do; `Web { allowlisted }` is monotone in the mode lattice (P3). Conformance: `encrypted_store_conformance_tests!` over every wrapped store, including a scan of `harness.db` for the fixture's sentinels. Integration (scripted): H12 (allowlisted fetch runs, other host held, injection page produces no call, elicitation prompts and parks, sampling metered under the server's key); H13 (`allow` hook ignored, deny hook denies in Auto, untrusted workspace hook does not run); `read_file` on a PNG returns an inline part and a stub on a text-only model; rows written under a rotated key read back. Live: H12 on three providers against a local HTTP fixture and a scripted MCP server; H10 fully local on Ollama with the sandbox's network denied |
 | adk-cli | unit + binary tests with `--features scripted-model` | clap parsing and aliases; `compiled_providers`; `ConsolePrompter` over scripted `ConsoleIo` (once, always, deny with reason, edit, Ctrl-C, no TTY); `StreamPrinter` renders held calls; `code --mode plan` writes nothing; exit 3 on held calls; `goal --resume` restores history; `build_app`: 401 without extractor, loopback admitted, held → decide → resume executes once |
 | Templates | cargo-adk + CI script | §8.3 |
+| Addendum (§7.25–§7.33) | adk-harness, adk-devtools, adk-cli | Unit: manifest generation and drift (every `COMMANDS` entry, built-in, clap subcommand and registered tool listed), block byte-stability, the rules digest's cap and redaction; change-set composition (successive edits to one file, a failing call, protected rows kept apart), `expect_sha256` under the descriptor; the `apply_patch` parser and matcher on a fixture suite (exact, whitespace-only, ambiguous refused, line endings kept, a failing later hunk restoring earlier files); `Vcs` classification of every listed subcommand, `-c` and `--git-dir`, a force-push to a protected branch; snapshot exclusions and the stat cache; the devtools error mapping. Property: a stale file is never written; `apply_patch` leaves every file at its before or after digest; the block is byte-identical whatever the session does; a `Vcs` decision is never looser than the shell row except `Read` in the sandbox. Integration (scripted): `capability_questions`, `unknown_slash_goes_to_model`, `changeset_one_approval`, `resumed_edit_after_restart` (fix 5), `rewind_restores_shell_writes`, `background_shell_notice`, `git_destructive_held`, `worktree_member_changeset`, `memory_catch_up_after_crash` (fix 9). Live: `live_self_knowledge`, `live_changeset` and `live_durable_goal` with `edit_file` on three providers |
 
 **`examples/harness_agent`** (standalone crate; results in a main-vs-branch table). Scripted scenarios, no keys: `mode_matrix`, `ask_allow_once`, `always_allow_creates_standing_rule` (prefix rule matches `cargo test --quiet`, not `cargo publish`, not another user), `rule_stale_after_redeclaration` (H2), `edit_args_rechecked_by_policy`, `todos_isolated_per_session`, `served_held_call_resumes_via_approvals` (executes once), `goal_resumes_after_crash` (H1), `ledger_prevents_double_bash` (H1), `plan_graph_rewind` (H4), `team_budget_stops_run` (H3), `acp_member_governed` (H3, scripted ACP server), `loop_guard_parks_run` (H7), `payment_requires_approval` (H8, payments test harness), `sandbox_fail_if_unavailable`, `unsandboxed_retry_is_held`, `agents_md_and_skills_loaded`, `memory_file_persists`, `identity_per_user_credentials` (H6, scripted broker), `web_fetch_allowlist_and_screening` (H12, local HTTP fixture), `mcp_elicitation_and_sampling` (H12, scripted MCP server), `hooks_cannot_grant` (H13), `read_file_image_inline` (D6), `store_encrypted_at_rest` (§7.12). Live (`--live`, `#[ignore]` as tests) on `gemini-3.5-flash-lite`, `gpt-5.6-terra`, `claude-sonnet-5-5`: `live_fix_failing_test`, `live_plan_mode_writes_nothing` (tree hash unchanged, todos non-empty), `live_goal_until`, `live_served_approval_roundtrip` (file created exactly once after a REST approval), `live_standing_rule` (zero prompts for `cargo test` on the second task), `live_team_review` (local coordinator, ACP reviewer), `live_voice_approval` (3.1.x).
 
 **Red-team scenarios** (`examples/harness_redteam`, modelled on `examples/autonomy_validation`): poisoned root and nested `AGENTS.md`; project config grants bash; `.mcp.json` server spawn; git-hook persistence from the sandbox; background survivor; `.env` grep canary; `~/.ssh` read on host vs sandbox; `git credential fill`; sandboxed `curl` canary; retry replay; digest drift; lying `readOnlyHint`; MCP `bash` shadow; cross-user rule; unauthenticated server; AG-UI state echo after revocation; delegate state write; member timeout; recursion; Plan escapes; held calls after loosening; freeze during prompt and run; approval timeout; ANSI in command; prompt flood; `MEMORY.md` poisoning; template injection; symlink TOCTOU; hard-link read; plugin short-circuit; goal-state tamper; stdin steal; TIOCSTI from bwrap; a fetched page saying "ignore previous instructions"; a redirect to `169.254.169.254` and to `localhost:8080`; a URL carrying `.env` contents in its query; a hook printing `{"decision":"allow"}`; a hook from a cloned repository's `.adk/harness.toml`; an elicitation form asking for a token; a sampling system prompt that grants permissions; a resource named `AGENTS.md`; `harness.db` opened with `sqlite3` after a run under a key. Pass means the harness blocked the effect, whatever the model chose to do.
+
+Addendum red-team cases: a fetched page telling the model to "run /mode auto"; a patch whose `Move to` targets `.git/hooks`; `git -c core.sshCommand=…`; a background shell that outlives `Harness::close`; a member writing outside its worktree; a file swapped between its review and its write; a rule label carrying a token.
 
 **Must be proven live, and how.** Sandbox enforcement on real macOS (Seatbelt) and Linux (bwrap) runners (GitHub's `ubuntu-24.04` restricts unprivileged user namespaces through AppArmor: set `kernel.apparmor_restrict_unprivileged_userns=0` or add a bwrap profile; a host with neither proves I24 by refusing); process lifetime with `pgrep` by marker; terminal behaviour in a pty (`expectrl`/`portable-pty`); server identity and state echo over real HTTP with a JWT extractor and an AG-UI client; durable resume and expiry with SQLite stores and the background worker; real-model injection on three providers.
 
@@ -1289,8 +1710,14 @@ The 3.0 defects the harness must not inherit, and how the design avoids them:
 | 4 Scaffold, docs, eval | 3.1.0 | `harness` template; docs pages; eval suite and baselines; changelog fragments | 3 | `cargo adk new x --template harness && cargo run` |
 | 5 Packs | 3.1.x | S3 then `auto_allow_sandboxed`; Docker (S4); payments pack; browser and computer-use packs; voice (after the realtime hardening rows); managed form | 5–7 | H5, H8, H9 (managed), H10 |
 | 6 Follow-ups | 3.2.0 | `#[deprecated]` on `adk_agent::coding`; ACP server mapping "allow always" to a standing rule; Mermaid/DOT export; memory consolidation; shared mode/rule stores on Postgres/Redis; Stable review | 2–3 | IDE use; multi-replica servers |
+| 7 Addendum: fixes and self-knowledge | 3.0.0 | §7.33 fixes 1–9 (D9, MD1, L4); §7.25 (manifest, block, rules digest, `harness_help`, notice, AC1); §7.32 once §13 questions 8 and 9 are decided | 3–4 | Fixes 5, 6 and 9 fail on `origin/main` and pass; `capability_questions` |
+| 8 Addendum: change safety | 3.0.0 | §7.26 (C6, A2, D7, D8), §7.27 snapshots and rewind with spec 3.3 §7.10's renderers | 5–6 | One approval for a five-file change; a rewind restores a file `sed -i` changed |
+| 9 Addendum: shells and git | 3.0.0 | §7.29 (D10, KN1), §7.30 (classes, hygiene, untrusted `gh` text, W1) | 4–5 | A dev server in the background; a held `git reset --hard`; a refused force-push to `main` |
+| 10 Addendum: language servers, worktrees | 3.0.0; `lsp` on by default only after its eval (§13 Q10) | §7.28 stages 1–3 (D11), §7.31 | 6–9 | Diagnostics against the `cargo check` hook; two `Full` members in parallel without an overwrite |
 
 Total for 3.1.0 (phases 0–4): roughly 32–39 engineer-weeks; with the packs, 37–46. Estimates are for one engineer and carry the usual uncertainty.
+
+The addendum's phases 7–10 add roughly 18–24 engineer-weeks. Phase 7 needs none of the others; §7.31 needs §7.26.
 
 ## 13. Open questions
 
@@ -1301,6 +1728,13 @@ Total for 3.1.0 (phases 0–4): roughly 32–39 engineer-weeks; with the packs, 
 5. **Decided (2026-10-22): the checkpointer defaults to the backend in use and is configurable, never hard-coded.** `HarnessAgentBuilder::plan_checkpoint_store(url)` opens it from a store URL through `checkpointer_from_url`; adk-cli uses the store its sessions are in (`harness.db`, or `serve --store`), overridable with `--checkpointer` and the user config's `[plan] checkpointer`, in memory only with `--ephemeral` ([§7.11](#711-plan-mode-the-plan-graph-and-the-goal-engine)).
 6. ~~C4 adds a public field to the literally constructible `GenerateContentConfig`: ship per-mode effort with the semver exception recorded, or wait for the next major and apply effort per session until then (§7.23)?~~ **Decided (owner):** the field ships in 3.0.0, a major release, so effort applies per call (§7.23 "Mechanism", §10 C4).
 7. ~~Should adk-cli ship a default `SearchProvider` for `web_search` (a hosted search API needs a key; a self-hosted SearXNG needs a service), or require the operator to configure one (§7.20)?~~ **Decided 2026-10-22 (owner):** web search uses the model provider's built-in search first — Gemini, Anthropic, OpenAI Responses and DeepSeek — and the user may configure a provider instead (`--search searxng|deepseek`, `search_provider(..)`), which replaces it; providers without a built-in search get web search only through a configured provider (§7.20).
+8. **Provider search scope** ([§7.32](#732-search-scope-and-fact-embedding-proposed-13-q8-q9)). With no `[web]` allowlist the banner says provider search covers every domain. Should native search default to the web allowlist, or stay as decided? **Recommendation:** stay as decided — every domain — and stop forwarding `allowed_domains` to search, which today narrows Anthropic and OpenAI search to the fetch allowlist and leaves Gemini and DeepSeek unfiltered; add the separate `search_domains` filter and an operator ceiling. Claude Code and Codex both keep search filters apart from their fetch and network allowlists.
+9. **Fact embedder** ([§7.32](#732-search-scope-and-fact-embedding-proposed-13-q8-q9)). Facts are embedded with Gemini while the chat model is Anthropic, because a Google key was in the environment. Should the default be the local embedder when the chat provider offers no embeddings? **Recommendation:** yes: the local model whenever the chat provider has none, another provider only when configured and named in every session banner, and vectors tagged with their embedder. The recall query embeds every user message ([`facts/recall.rs:57-58`](../../adk-harness/src/facts/recall.rs)), so this is a data-boundary fix, not a preference.
+10. **`lsp` default** ([§7.28](#728-language-servers-feature-lsp)). Should adk-cli turn language servers on by default? **Recommendation:** not until the `adk-eval` comparison against a `cargo check` `PostEdit` hook shows a gain; Codex's maintainers report little benefit from their experiment, OpenCode keeps servers off by default, and stale diagnostics are the most reported failure. `--lsp` opts in meanwhile.
+11. **Snapshot defaults** ([§7.27](#727-snapshots-and-rewind-amends-spec-33-710)). On in adk-cli with 50 turns and 2 GiB per workspace, off in the library, per host on a served harness? **Recommendation:** yes, with the capability block stating when a snapshot was partial so the model never promises more than it covers.
+12. **Edit tools per model** ([§7.26](#726-change-sets-one-review-per-batch-apply_patch-and-the-before-hash)). Declare `write_file`, `edit_file` and `apply_patch` for every model, or `apply_patch` only for OpenAI models as OpenCode does? **Recommendation:** declare all three for every model — one tool surface per process (I56) and one policy — and name the preferred multi-file tool per model family in the block, as data the eval suite can revise.
+13. **Sandboxed `git` reads in Ask** ([§7.30](#730-git-pr-and-ci-under-the-policy)). `Vcs` `Read` under an active sandbox runs without a prompt in Ask, a decision looser than the shell row. Accept? **Recommendation:** yes, only with an active enforcer and under the read-only policy with no network, where nothing the command runs can change the workspace; on the host it stays `RequireApproval`.
+14. **Worktree build output** ([§7.31](#731-worktree-isolation-for-members)). A shared `CARGO_TARGET_DIR` per workspace, or one per member worktree? **Recommendation:** shared by default (`[team] worktree_target = "shared"`): a Rust `target` directory runs to gigabytes, and cargo's lock serializes concurrent builds rather than corrupting them; `own` opts in.
 
 ## 14. Appendix: grounding against current APIs (`origin/main` @ `a24ebd8d`)
 
@@ -1323,5 +1757,6 @@ Total for 3.1.0 (phases 0–4): roughly 32–39 engineer-weeks; with the packs, 
 | Memory (at `3884d9e8`) | `MemoryService` [`service.rs:51`](../../adk-memory/src/service.rs) (`search` 59, `add_entry_to_project` 145, `delete_entries_in_project` 162), `SearchRequest` 13, `MemoryEntry` 6; `EmbeddingProvider` [`embedding.rs:11`](../../adk-memory/src/embedding.rs); lexical scoring [`inmemory.rs:25-27`](../../adk-memory/src/inmemory.rs); SQLite FTS5 [`sqlite.rs:83-89`](../../adk-memory/src/sqlite.rs); graph memory validity [`graph.rs:23-25`](../../adk-memory/src/graph.rs); `PreloadMemoryTool` [`preload_memory.rs:43, 116`](../../adk-tool/src/memory/preload_memory.rs), `LoadMemoryTool` [`load_memory.rs:35`](../../adk-tool/src/memory/load_memory.rs); `adk-rag` embedders [`openai.rs:129`](../../adk-rag/src/openai.rs), [`gemini.rs:101`](../../adk-rag/src/gemini.rs), trait [`embedding.rs:24`](../../adk-rag/src/embedding.rs); `PiiRedactor` [`pii.rs:39-58`](../../adk-guardrail/src/pii.rs); `FileMemory` [`adk-harness/src/memory.rs:311`](../../adk-harness/src/memory.rs), `project_slug` 220; memory tools [`tools/memory.rs:120, 179`](../../adk-harness/src/tools/memory.rs) |
 | Web, MCP, hooks, posture, store (at `5846e20c`) | Provider-executed tools [`web_search.rs:64-68, 165-180`](../../adk-tool/src/builtin/web_search.rs), [`url_context.rs:12, 67-93`](../../adk-tool/src/builtin/url_context.rs), [`google_search.rs:12, 74-100`](../../adk-tool/src/builtin/google_search.rs), [`openai.rs:75-128`](../../adk-tool/src/builtin/openai.rs), exports [`builtin/mod.rs:11-30`](../../adk-tool/src/builtin/mod.rs), `is_builtin` [`tool.rs:77`](../../adk-core/src/tool.rs); `ArgPredicate::DomainIn` [`policy.rs:407-420, 444-451, 468-485`](../../adk-core/src/policy.rs); `ContentFilter` [`content.rs:8-70`](../../adk-guardrail/src/content.rs), `ResultTextGuardrail` [`tool.rs:435-442`](../../adk-guardrail/src/tool.rs); MCP `ElicitationHandler` [`elicitation.rs:66-120`](../../adk-tool/src/mcp/elicitation.rs), `AdkClientHandler` 130-146, sampling scopes 262-279; `SamplingHandler` [`sampling/mod.rs:83, 167, 380`](../../adk-tool/src/sampling/mod.rs); resources [`toolset.rs:1243-1312`](../../adk-tool/src/mcp/toolset.rs), [`manager.rs:369, 390, 676-694`](../../adk-tool/src/mcp/manager/manager.rs); `ModelCallScope` [`metering.rs:399, 446-467`](../../adk-core/src/metering.rs); `ApprovalRequest` [`approval.rs:102-111, 496-545`](../../adk-core/src/approval.rs); `CommandLauncher` [`launcher.rs:57-93`](../../adk-devtools/src/launcher.rs); `InlineDataPart` [`types.rs:6, 25-37, 210-221`](../../adk-core/src/types.rs); `read_file` [`read.rs:12, 71`](../../adk-devtools/src/tools/read.rs); effort [`anthropic/config.rs:9-21, 28-40`](../../adk-model/src/anthropic/config.rs), [`openai/config.rs:29-43`](../../adk-model/src/openai/config.rs), [`generation/model.rs:751-765`](../../adk-gemini/src/generation/model.rs), `GenerateContentConfig` [`model.rs:85-113`](../../adk-core/src/model.rs); caching [`model.rs:212-266`](../../adk-core/src/model.rs), [`runner.rs:473-476, 633-634`](../../adk-runner/src/runner.rs), [`anthropic/config.rs:104, 204`](../../adk-model/src/anthropic/config.rs), [`bedrock/config.rs:97, 106`](../../adk-model/src/bedrock/config.rs); harness requests [`toolset.rs:27-30, 165-196`](../../adk-harness/src/toolset.rs), compaction [`builder.rs:598-608, 986-992`](../../adk-harness/src/builder.rs), builtin refusal 655-662; `EncryptedSession` [`encrypted.rs:1-25, 130, 256`](../../adk-session/src/encrypted.rs), `EncryptionKey` [`encryption_key.rs:28-74`](../../adk-session/src/encryption_key.rs); `SecretProvider` [`provider.rs:27-37`](../../adk-auth/src/secrets/provider.rs); `harness.db` [`sessions.rs:1-18, 66-95`](../../adk-cli/src/sessions.rs); keyring [`adk-cli/Cargo.toml:65-71`](../../adk-cli/Cargo.toml); features [`adk-cli/Cargo.toml:74, 80`](../../adk-cli/Cargo.toml), [`adk-rust/Cargo.toml:112, 170`](../../adk-rust/Cargo.toml), [`Cargo.toml:203`](../../Cargo.toml); `MistralRsModel` [`client.rs:36, 385`](../../adk-mistralrs/src/client.rs); `ort` pin [`adk-audio/Cargo.toml:58-60, 108`](../../adk-audio/Cargo.toml); `EmbeddingProvider` [`adk-rag/src/embedding.rs:24-33`](../../adk-rag/src/embedding.rs); content-keyed trust [`agent.rs:73-85`](../../adk-harness/src/agent.rs); protected paths [`matcher.rs:396`](../../adk-harness/src/approvals/matcher.rs), [`protect.rs:22-35`](../../adk-harness/src/shell/protect.rs) |
 | Surfaces | `Commands` [`cli.rs:54-167`](../../adk-cli/src/cli.rs); `Launcher` [`launcher.rs:159-619`](../../adk-cli/src/launcher.rs); `setup::resolve` [`setup.rs:104`](../../adk-cli/src/setup.rs); `ServerBuilder` [`rest/mod.rs:468-746`](../../adk-server/src/rest/mod.rs); per-request runner [`runtime.rs:1356-1379`](../../adk-server/src/rest/controllers/runtime.rs); `serve_agent_engine` [`entrypoint.rs:268`](../../adk-server/src/agent_engine/entrypoint.rs); templates [`registry.rs:177+`](../../cargo-adk/src/registry.rs), [`codegen.rs:180, 224`](../../cargo-adk/src/codegen.rs); `RemoteA2aAgent` [`remote_agent.rs:47`](../../adk-server/src/a2a/remote_agent.rs); `AcpAgentTool` [`tool.rs:59`](../../adk-acp/src/tool.rs), `AcpToolset` [`toolset.rs:27`](../../adk-acp/src/toolset.rs) |
+| Addendum (at `6d42708d`) | Prompt and reminder [`prompt.rs:13-44`](../../adk-harness/src/prompt.rs), [`builder.rs:1738-1779, 1959-1973, 2036-2072`](../../adk-harness/src/builder.rs), [`toolset.rs:172-190, 233-276`](../../adk-harness/src/toolset.rs); `HarnessInfo` [`agent.rs:45-68`](../../adk-harness/src/agent.rs); classes [`policy.rs:41-64, 162-207, 250-283, 587-662, 721-726, 1222-1224, 1314-1323`](../../adk-harness/src/policy.rs); console [`launcher.rs:1313-1327, 1402`](../../adk-cli/src/launcher.rs), [`harness/launcher.rs:638-648`](../../adk-cli/src/harness/launcher.rs), [`commands.rs:20-55`](../../adk-cli/src/harness/commands.rs), [`cli.rs:113-118`](../../adk-cli/src/cli.rs); devtools [`edit.rs:66-67`](../../adk-devtools/src/tools/edit.rs), [`write.rs:52-67`](../../adk-devtools/src/tools/write.rs), [`workspace.rs:113-118, 569-582, 603-662`](../../adk-devtools/src/workspace.rs), [`bash.rs:342-396`](../../adk-devtools/src/tools/bash.rs), [`error.rs:63-83`](../../adk-devtools/src/error.rs); errors [`error.rs:140-150, 436-438`](../../adk-core/src/error.rs), [`tool_response.rs:80-93`](../../adk-core/src/tool_response.rs); plan rewind [`plan_graph.rs:532-581`](../../adk-harness/src/plan_graph.rs); sandbox paths [`protect.rs:22-35`](../../adk-harness/src/shell/protect.rs); web [`web/provider.rs:64-97`](../../adk-harness/src/web/provider.rs), [`tools/web.rs:217-274`](../../adk-harness/src/tools/web.rs); memory [`recall.rs:57-58`](../../adk-harness/src/facts/recall.rs), [`index.rs:154-172`](../../adk-harness/src/facts/index.rs), [`harness_cli.rs:528-567`](../../adk-cli/src/harness_cli.rs), [`harness.rs:1131-1166`](../../adk-harness/src/harness.rs); kernel and ingress [`wake.rs:97-150`](../../adk-kernel/src/wake.rs), [`ingress.rs:1-18`](../../adk-server/src/webhooks/ingress.rs) |
 
 **Net new code:** the `adk-harness` crate (policy, stores, matcher, prompter, toolset and tools, launchers, instructions, team lowering, plan compiler, goal engine, observability and identity wiring, memory, web tools and screening, MCP bridges, hooks, posture, packs, preset), the CLI harness glue, the `harness` template, and the additive changes in [§10](#10-changes-outside-the-new-crate). Everything else is wiring of APIs that exist at `a24ebd8d`.
