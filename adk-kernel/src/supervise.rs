@@ -151,6 +151,11 @@ pub(crate) struct Supervision {
     /// The daily baseline pass the maintenance tick enqueues (spec 3.2 §7.10).
     #[cfg(feature = "proc-baselines")]
     pub(crate) proc: Option<Arc<crate::proc::baselines::ProcRuntime>>,
+    /// The partition each partition agent's target runs (spec 3.2 §7.8,
+    /// [`KernelBuilder::partition_agent`](crate::KernelBuilder::partition_agent)).
+    pub(crate) partition_targets: BTreeMap<String, PartitionId>,
+    /// The partition table, whose run grants a finished run releases (spec 3.2 §13 Q3).
+    pub(crate) partitions: crate::partition::Partitions,
 }
 
 impl std::fmt::Debug for Supervision {
@@ -187,6 +192,80 @@ impl Supervision {
             ProcessKind::Interactive
         };
         ProcessMeta::new(run.run_id.clone(), QueueClass::from_name(&run.queue), kind)
+    }
+
+    /// [`infer_meta`](Self::infer_meta) in the partition `run`'s target is bound to (spec
+    /// 3.2 §7.8).
+    pub(crate) fn inferred_meta(&self, run: &RunRecord) -> ProcessMeta {
+        let mut meta = Self::infer_meta(run);
+        if let Some(partition) = self.partition_targets.get(&run.target) {
+            meta.partition = partition.clone();
+        }
+        meta
+    }
+
+    /// The partition a process of `target` runs in when `asked` is requested: the target's
+    /// partition when it is bound to one and `asked` is it or the default, `asked` for a
+    /// target bound to none (spec 3.2 §7.8, K-I15).
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::Config`](crate::KernelError::Config) when `target` runs another
+    /// partition's agent.
+    pub(crate) fn partition_for(
+        &self,
+        target: &str,
+        asked: PartitionId,
+    ) -> crate::error::Result<PartitionId> {
+        match self.partition_targets.get(target) {
+            None => Ok(asked),
+            Some(bound) if *bound == asked || asked.as_str() == PartitionId::DEFAULT => {
+                Ok(bound.clone())
+            }
+            Some(bound) => Err(crate::error::KernelError::Config {
+                reason: format!(
+                    "target `{target}` runs the agent of partition `{bound}`, so a process of \
+                     partition `{asked}` cannot run it; spawn it with that partition's target \
+                     (spec 3.2 K-I15)"
+                ),
+            }),
+        }
+    }
+
+    /// Refuses a run of a partition agent's target that continues a session another
+    /// partition's agent ran, so no agent reads another partition's transcript (spec 3.2
+    /// K-I15).
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::Config`](crate::KernelError::Config) naming the other partition, or
+    /// the run store's error.
+    pub(crate) async fn check_session_partition(
+        &self,
+        run: &adk_core::NewRun,
+        partition: &PartitionId,
+    ) -> crate::error::Result<()> {
+        let Some(session) = &run.session_id else { return Ok(()) };
+        if self.partition_targets.is_empty() {
+            return Ok(());
+        }
+        let filter = adk_core::RunFilter::default()
+            .app_name(&run.app_name)
+            .user_id(&run.user_id)
+            .session_id(session);
+        for earlier in self.runs.list(filter).await? {
+            if let Some(other) = self.partition_targets.get(&earlier.target)
+                && other != partition
+            {
+                return Err(crate::error::KernelError::Config {
+                    reason: format!(
+                        "session `{session}` belongs to partition `{other}`; a process of \
+                         partition `{partition}` cannot continue it (spec 3.2 K-I15)"
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// The stored side table of `run`, or `None`.
@@ -1312,7 +1391,7 @@ impl WorkerHooks for KernelHooks {
         }
         let persisted = stored.is_some();
         let asleep = asleep_at_claim(run, stored.as_ref());
-        let mut meta = stored.unwrap_or_else(|| Supervision::infer_meta(run));
+        let mut meta = stored.unwrap_or_else(|| sup.inferred_meta(run));
         let from = if meta.wake.is_some() || meta.suspended_by.is_some() || run.attempt > 1 {
             RunState::Waiting
         } else {
@@ -1384,7 +1463,7 @@ impl WorkerHooks for KernelHooks {
             });
             return;
         }
-        let mut meta = stored.unwrap_or_else(|| Supervision::infer_meta(run));
+        let mut meta = stored.unwrap_or_else(|| sup.inferred_meta(run));
         let draining = sup.draining.load(Ordering::SeqCst);
         let label = match reason {
             ParkReason::Suspended => {
@@ -1442,6 +1521,13 @@ impl WorkerHooks for KernelHooks {
             self.run_finished.on_finish(run).await;
         }
         sup.release(&run.run_id).await;
+        // A finished run's approved crossing reads end with it (spec 3.2 §13 Q3).
+        if run.state.is_terminal() {
+            let finished = crate::partition::CrossingRun::Durable(run.run_id.clone());
+            if let Err(error) = sup.partitions.release_run(&finished).await {
+                tracing::warn!(run.id = %run.run_id, error = %error, "could not release the run's crossing grants");
+            }
+        }
         if run.state.is_terminal()
             && let Some(mut meta) = sup.stored_meta(run).await
             && (meta.suspend_requested || meta.suspended_by.is_some() || meta.wake.is_some())

@@ -628,3 +628,28 @@ pub struct ObservationsResponse {
     /// The observations, newest day first.
     pub observations: Vec<crate::proc::Observation>,
 }
+
+/// `GET /kernel/partitions` answer (spec 3.2 §7.8, §7.11).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartitionsResponse {
+    /// Every partition, ordered by id.
+    pub partitions: Vec<crate::partition::Partition>,
+}
+
+/// `POST /kernel/partitions` and `POST /kernel/partitions/{id}/mode` answer: the partition
+/// after the change (spec 3.2 §7.8).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartitionResponse {
+    /// The partition.
+    pub partition: crate::partition::Partition,
+}
+
+/// `POST /kernel/partitions/{id}/mode` body (spec 3.2 §8.1 `partitions set-mode`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartitionModeRequest {
+    /// The partition's new mode.
+    pub mode: crate::partition::PartitionMode,
+}

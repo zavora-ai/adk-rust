@@ -203,6 +203,21 @@ reconciled on start. A local event reaches `Running` in under 2 s: in-process so
 enqueue and claim at once, and the tick claims wake runs an external ingress or another
 replica enqueued.
 
+## Partitions
+
+A `Partition` is a policy class, a memory scope and a driver set, run by its own harness
+(spec 3.2 §7.8). `Partitions` keeps the table and the crossing ledger in a `PartitionStore`
+(in-memory, SQLite, PostgreSQL, Redis; `partition_store_conformance_tests!`).
+
+| Part | What it does |
+|---|---|
+| `Partition::identity_source` | Every agent of the partition's runner acts with the partition's class and tenant, so `PolicyRule::for_class` rules apply |
+| `Partition::scope_memory` | Confines an `adk_core::Memory` to the partition's project |
+| `PartitionPolicy` | Denies a request reaching another partition unless the coordinator makes it, then requires a non-waivable approval; an approved read holds for the rest of its run, keyed by the crossing fingerprint (the call's fingerprint with the target partition and resource class) |
+| `CrossingTool` | Offers the coordinator another partition's driver or session tool as a crossing |
+| `KernelBuilder::partition_agent` | Hosts a partition's runner as a target bound to its partition: a process of another partition cannot run it or continue its sessions |
+| Audit | `kernel.partition.created`, `kernel.partition.changed`, and `kernel.partition.crossing` for every crossing, with a digest of its fingerprint |
+
 ## Lifecycle
 
 | Call | Effect | Audit record |

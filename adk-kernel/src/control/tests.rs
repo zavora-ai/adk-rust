@@ -261,6 +261,30 @@ impl ControlBackend for Fake {
     fn ledger(&self) -> Option<crate::proc::Ledger> {
         Some(self.ledger.clone())
     }
+
+    async fn partitions(&self) -> Result<Vec<crate::partition::Partition>> {
+        Ok(vec![
+            crate::partition::Partition::new("home", "home"),
+            crate::partition::Partition::new("work", "work").with_driver("calendar"),
+        ])
+    }
+
+    async fn put_partition(
+        &self,
+        partition: crate::partition::Partition,
+        _by: AuditActor,
+    ) -> Result<crate::partition::Partition> {
+        Ok(partition)
+    }
+
+    async fn set_partition_mode(
+        &self,
+        id: crate::partition::PartitionId,
+        mode: crate::partition::PartitionMode,
+        _by: AuditActor,
+    ) -> Result<crate::partition::Partition> {
+        Ok(crate::partition::Partition::new(id, "class").with_mode(mode))
+    }
 }
 
 /// Admits `Bearer right` as `phone`, an operator, and `Bearer viewer` as `viewer`, who is
@@ -618,6 +642,36 @@ async fn ps_nice_and_errors_round_trip() {
     let error = adk_core::AdkError::from(client.suspend("no-such-run").await.unwrap_err());
     assert_eq!((error.code, error.http_status_code()), (crate::error::NOT_FOUND_CODE, 404));
     assert!(error.message.contains("adk-rust ps"), "{}", error.message);
+    plane.shutdown().await.unwrap();
+}
+
+/// Spec 3.2 §7.8, §7.11: the partition table is read by any authenticated caller, without a
+/// control record.
+#[tokio::test]
+async fn partitions_are_listed_to_an_authenticated_caller() {
+    let fake = Fake::new();
+    let (plane, client) =
+        http_plane(&fake, ControlPlaneConfig::default().with_http(loopback())).await;
+    let partitions = client.partitions().await.unwrap();
+    let ids: Vec<&str> = partitions.iter().map(|partition| partition.id.as_str()).collect();
+    assert_eq!(ids, ["home", "work"]);
+    assert_eq!(partitions[1].drivers, ["calendar"]);
+    assert!(fake.recorder.records().is_empty(), "a read is not recorded");
+
+    // The writes need the operator scope, which a loopback bind grants, and are recorded.
+    let put =
+        client.put_partition(&crate::partition::Partition::new("team", "team")).await.unwrap();
+    assert_eq!(put.id.as_str(), "team");
+    let moded =
+        client.set_partition_mode("work", crate::partition::PartitionMode::Auto).await.unwrap();
+    assert_eq!(moded.default_mode, crate::partition::PartitionMode::Auto);
+    let actions: Vec<String> = fake
+        .recorder
+        .records()
+        .iter()
+        .map(|record| record.ext["action"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(actions, ["partition.put", "partition.mode"]);
     plane.shutdown().await.unwrap();
 }
 

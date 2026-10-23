@@ -22,17 +22,19 @@
 //! | `POST /kernel/freeze`, `POST /kernel/unfreeze` | [`Kernel::freeze`] and [`Kernel::unfreeze`] |
 //! | `GET /kernel/agenda` | the agenda ([`api::AgendaQuery`]) |
 //! | `POST /kernel/agenda/{id}/{approve,reject,schedule}` | [`Agenda`](crate::Agenda) actions as the caller ([`api::RejectRequest`], [`api::ScheduleRequest`]) |
+//! | `GET /kernel/drivers`, `POST /kernel/drivers/{id}/{mount,unmount,restart,reapprove}` (feature `drivers`) | the mounted drivers; a mount shown, then approved with `confirm` (`api::MountDriverRequest`, spec 3.2 §7.7) |
 //! | `GET /kernel/proc/ledger` (feature `proc`) | the content-free ledger, paged by `seq`, as JSON or as the JSONL `cargo adk eval --ledger` reads |
 //! | `GET /kernel/proc/baselines`, `GET /kernel/proc/observations` (feature `proc`) | each partition's last baseline pass, and the observations it offered |
 //! | `POST /kernel/pairing`, `POST /kernel/pairing/claim`, `GET /kernel/devices`, `POST /kernel/devices/{id}/revoke` | device pairing (spec 3.3 §10 K2), when [`ControlPlaneConfig::with_pairing`] sets it; see [`pairing`](crate::pairing) |
 //! | `POST /kernel/channels/pair`, `GET /kernel/channels`, `POST /kernel/channels/{id}/revoke` (feature `channels`) | chat accounts' pairings (spec 3.3 §10 K1) |
+//! | `GET /kernel/partitions` | the partition table ([`api::PartitionsResponse`], spec 3.2 §7.8) |
+//! | `POST /kernel/partitions`, `POST /kernel/partitions/{id}/mode` | create or replace a partition; set its mode ([`api::PartitionModeRequest`]) |
 //!
 //! The approvals inbox, `/api/runs`, `/api/cron`, `/api/admin/freeze` and `/hooks/{name}`
 //! are the existing server routes, unchanged; `POST /api/admin/freeze` delegates to
 //! [`Kernel::freeze`] through the kernel's `FreezeDelegate` (§10 S4). The socket serves the
 //! approvals inbox beside the kernel routes when the kernel has an approval service, so a
-//! held call is decided over the socket as over HTTP. Driver and partition routes
-//! arrive with their phases.
+//! held call is decided over the socket as over HTTP.
 //!
 //! # Authentication and audit
 //!
@@ -49,11 +51,11 @@
 //! | [`ControlPlaneConfig::http`] beyond loopback without one | Refused at start (K-I18) |
 //!
 //! The routes that change the kernel — `spawn`, `kill`, `nice`, `suspend`, `resume`,
-//! `freeze`, `unfreeze`, and the agenda's `approve`, `reject` and `schedule` — and the
-//! `/proc` routes, which describe the user's activity, need the `operator` scope (`403`
-//! otherwise), which the socket, the pipe and a loopback bind grant. `attach` reads only the
-//! caller's own sessions. A ledger read is recorded as `kernel.control` with action
-//! `proc.ledger`: the ledger leaves the host only through it.
+//! `freeze`, `unfreeze`, the agenda's `approve`, `reject` and `schedule`, the driver actions
+//! and the partition writes — and the `/proc` routes, which describe the user's activity,
+//! need the `operator` scope (`403` otherwise), which the socket, the pipe and a loopback
+//! bind grant. `attach` reads only the caller's own sessions. A ledger read is recorded as
+//! `kernel.control` with action `proc.ledger`: the ledger leaves the host only through it.
 //!
 //! A paired device's token (spec 3.3 §10 K2, S-I7) admits it as the person who paired it,
 //! only to the routes its scopes open (`read`, `decide`, `stop`; never `unfreeze`), whatever
@@ -65,7 +67,8 @@
 //! acts (K-I16; `spawn` records the new `pid` once it exists and cancels the process when
 //! the record fails), and is refused when the record cannot be written under
 //! `AuditFailureMode::Block`, except `freeze`, which takes effect regardless. Reads of the
-//! process table, the health and the event stream are authenticated and not recorded.
+//! process table, the partition table, the health and the event stream are authenticated
+//! and not recorded.
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -160,6 +163,10 @@ pub mod paths {
     pub const CHANNEL_PAIR: &str = "/kernel/channels/pair";
     /// `POST`: remove a paired chat account (spec 3.3 §10 K1).
     pub const CHANNEL_REVOKE: &str = "/kernel/channels/{id}/revoke";
+    /// `GET`: the partition table; `POST`: create or replace a partition (spec 3.2 §7.8).
+    pub const PARTITIONS: &str = "/kernel/partitions";
+    /// `POST`: set a partition's mode (spec 3.2 §7.8, §8.1 `partitions set-mode`).
+    pub const PARTITION_MODE: &str = "/kernel/partitions/{id}/mode";
 }
 
 /// Where the control plane listens and how it authenticates HTTP callers (spec 3.2 §7.11).

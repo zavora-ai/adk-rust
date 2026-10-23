@@ -62,7 +62,7 @@ use crate::bus::{EventBus, EventSink, EventSubscriber, KernelEvent};
 use crate::consolidation::{ConsolidationExecutor, ConsolidationTicker, Consolidator};
 use crate::control::{ControlPlane, ControlPlaneConfig};
 use crate::error::{KernelError, Result};
-use crate::partition::PartitionId;
+use crate::partition::{PartitionId, Partitions};
 #[cfg(feature = "proc")]
 use crate::proc::{Ledger, LedgerEventSink};
 use crate::process::{ProcessHandle, ProcessTable, ProgressSource, Suspension};
@@ -415,6 +415,7 @@ struct KernelInner {
     sup: Arc<Supervision>,
     processes: ProcessTable,
     agenda: Agenda,
+    partitions: Partitions,
     router: WakeRouter,
     schedules: Option<Arc<dyn ScheduleStore>>,
     approvals: Option<Arc<dyn ApprovalService>>,
@@ -876,6 +877,16 @@ impl Kernel {
     /// The agenda (spec 3.2 §7.5).
     pub fn agenda(&self) -> &Agenda {
         &self.inner.agenda
+    }
+
+    /// The partition table and its crossings (spec 3.2 §7.8).
+    pub fn partitions(&self) -> &Partitions {
+        &self.inner.partitions
+    }
+
+    /// The partition the target `target` is bound to, when it is a partition agent's.
+    pub fn partition_of_target(&self, target: &str) -> Option<&PartitionId> {
+        self.inner.sup.partition_targets.get(target)
     }
 
     /// The event bus.
@@ -1432,6 +1443,8 @@ pub struct KernelBuilder {
     baselines: Option<crate::proc::baselines::BaselinePolicy>,
     #[cfg(feature = "proc-baselines")]
     phraser: Option<Arc<dyn crate::proc::baselines::ObservationPhraser>>,
+    partitions: Option<Partitions>,
+    partition_targets: BTreeMap<String, PartitionId>,
 }
 
 impl fmt::Debug for KernelBuilder {
@@ -1666,6 +1679,32 @@ impl KernelBuilder {
         self
     }
 
+    /// Sets the partition table (spec 3.2 §7.8). Defaults to one in memory. Give the kernel
+    /// the [`Partitions`] its partition harnesses were built with, so their policies, the
+    /// control plane and the daily review read one table.
+    #[must_use]
+    pub fn partitions(mut self, partitions: Partitions) -> Self {
+        self.partitions = Some(partitions);
+        self
+    }
+
+    /// Hosts `runner`, the harness of partition `partition`, as the target `target`, bound to
+    /// the partition (spec 3.2 §7.8, K-I15): a process of another partition cannot run it,
+    /// a spawn of it in the default partition runs in `partition`, and a run of it enqueued
+    /// outside the kernel is listed in `partition`.
+    #[must_use]
+    pub fn partition_agent(
+        mut self,
+        partition: impl Into<PartitionId>,
+        target: impl Into<String>,
+        runner: Arc<Runner>,
+    ) -> Self {
+        let target = target.into();
+        self.partition_targets.insert(target.clone(), partition.into());
+        self.agents.insert(target, runner);
+        self
+    }
+
     /// Builds the kernel. Nothing runs until [`Kernel::start`].
     ///
     /// # Errors
@@ -1694,6 +1733,10 @@ impl KernelBuilder {
         }
         let processes: Arc<dyn ProcessStore> =
             self.processes.unwrap_or_else(|| Arc::new(InMemoryProcessStore::new()));
+        let partitions = self.partitions.unwrap_or_else(Partitions::in_memory);
+        if let Some(trail) = &self.audit {
+            partitions.attach_audit(trail.clone());
+        }
         let bus = EventBus::default();
         for sink in self.sinks {
             bus.add_sink(sink);
@@ -1765,6 +1808,8 @@ impl KernelBuilder {
             triggers: trigger_names,
             #[cfg(feature = "proc-baselines")]
             proc: proc.clone(),
+            partition_targets: self.partition_targets,
+            partitions: partitions.clone(),
         });
         let run_finished = Arc::new(RunFinishedWakeSource::new());
         let hooks =
@@ -1826,6 +1871,7 @@ impl KernelBuilder {
                 sup,
                 processes,
                 agenda,
+                partitions,
                 router,
                 schedules: self.schedules,
                 approvals: self.approvals,

@@ -19,8 +19,8 @@
 //! | [`DRIVER_MOUNTED`], [`DRIVER_UNMOUNTED`], [`DRIVER_STARTED`], [`DRIVER_CRASHED`], [`DRIVER_RESTARTED`], [`DRIVER_STALE`], [`DRIVER_REAPPROVED`] | `driverId`, `commandDigest`, `partitions`, `effectClasses`, `digests`, `attempt` |
 //! | [`OBSERVATION`] | `id`, `partition`, `dimensions`, `windows` — no value that identifies content |
 //! | [`CHANNEL`] | `surface`, `origin`, `channel`, `account`, `action`, `target` (spec 3.3 §11) |
-//!
-//! The partition actions of §9.3 arrive with their phase.
+//! | [`PARTITION_CREATED`], [`PARTITION_CHANGED`] | `partition`, `fields`, `from`, `to` |
+//! | [`PARTITION_CROSSING`] | `partition`, `to`, `resource`, `name`, `access`, `outcome`, `run`, `tool`, `fingerprintDigest`, `reason`, `by` |
 //!
 //! # Example
 //!
@@ -91,3 +91,9 @@ pub const OBSERVATION: &str = "kernel.observation";
 /// message, a decision card, an answer, a stop or a refused resume, with `surface: chat`,
 /// `origin`, `channel`, `account`, `action` and `target` (feature `channels`).
 pub const CHANNEL: &str = "kernel.channel";
+/// A partition was created (spec 3.2 §7.8).
+pub const PARTITION_CREATED: &str = "kernel.partition.created";
+/// A partition's record changed: its mode, memory scope, drivers, crossings or blocks.
+pub const PARTITION_CHANGED: &str = "kernel.partition.changed";
+/// A request reached, or tried to reach, another partition (K-I15).
+pub const PARTITION_CROSSING: &str = "kernel.partition.crossing";
