@@ -239,6 +239,44 @@ pub struct ToolClassRegistry {
     classes: BTreeMap<String, ToolKind>,
     /// Hosts the web tools reach without approval (spec 3.1 §7.20).
     web_allowlist: Vec<String>,
+    /// Classes of tools that publishers the harness does not own declare through a
+    /// trusted manifest (spec 3.2 §7.7).
+    origin_classes: Vec<Arc<dyn OriginClasses>>,
+}
+
+/// Classes tools of a publisher the harness does not own, from a declaration the user
+/// approved rather than from the tool's own hints (spec 3.2 §7.7, 3.1 I12).
+///
+/// The kernel's drivers are classed this way: each driver tool's class comes from the
+/// manifest the user approved at mount (`adk-harness`'s `kernel` feature).
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_core::{ToolEffect, ToolOrigin};
+/// use adk_harness::{Isolation, OriginClasses, ToolClassRegistry, ToolKind};
+/// use serde_json::json;
+///
+/// #[derive(Debug)]
+/// struct Approved;
+///
+/// impl OriginClasses for Approved {
+///     fn class_of(&self, source: &str, _tool: &str) -> Option<ToolKind> {
+///         (source == "driver:notes")
+///             .then_some(ToolKind::External { effect: ToolEffect::ReadOnly, trusted_origin: true })
+///     }
+/// }
+///
+/// let registry = ToolClassRegistry::harness_defaults("harness").with_origin_classes(Arc::new(Approved));
+/// let origin = ToolOrigin::new("driver:notes", &json!({ "name": "read" }), None);
+/// let kind = registry.classify("harness", "read", Some(&origin), &json!({}), ToolEffect::NonIdempotent, Isolation::Host, false);
+/// assert_eq!(kind, ToolKind::External { effect: ToolEffect::ReadOnly, trusted_origin: true });
+/// ```
+pub trait OriginClasses: std::fmt::Debug + Send + Sync {
+    /// The class of a call to `tool` that `source` publishes, or `None` when `source` is
+    /// not one this classes.
+    fn class_of(&self, source: &str, tool: &str) -> Option<ToolKind>;
 }
 
 impl ToolClassRegistry {
@@ -306,6 +344,14 @@ impl ToolClassRegistry {
         domains: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         self.web_allowlist = domains.into_iter().map(|d| d.into().to_ascii_lowercase()).collect();
+        self
+    }
+
+    /// Classes the tools of publishers `classes` knows by their approved declarations
+    /// (spec 3.2 §7.7); consulted for every origin other than the harness's own.
+    #[must_use]
+    pub fn with_origin_classes(mut self, classes: Arc<dyn OriginClasses>) -> Self {
+        self.origin_classes.push(classes);
         self
     }
 
@@ -381,6 +427,14 @@ impl ToolClassRegistry {
                 Some(kind) => return *kind,
                 None => {}
             }
+        }
+        if let Some(origin) = origin.filter(|origin| origin.source != STATIC_TOOL_ORIGIN)
+            && let Some(kind) = self
+                .origin_classes
+                .iter()
+                .find_map(|classes| classes.class_of(&origin.source, tool))
+        {
+            return kind;
         }
         let trusted_origin = match origin {
             Some(origin) if origin.source == STATIC_TOOL_ORIGIN => true,

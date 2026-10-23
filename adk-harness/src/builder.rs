@@ -121,6 +121,7 @@ pub struct HarnessAgentBuilder {
     standing_rules: Option<Arc<dyn StandingRuleStore>>,
     shell_ledger: Option<Arc<dyn ShellLedger>>,
     operator_policy: Option<Arc<dyn ToolPolicy>>,
+    origin_classes: Vec<Arc<dyn crate::policy::OriginClasses>>,
     prompter: Option<Arc<dyn ApprovalPrompter>>,
     confirmation_handler: Option<Arc<dyn ToolConfirmationHandler>>,
     approval_store: Option<Arc<dyn ApprovalStore>>,
@@ -218,6 +219,7 @@ impl HarnessAgentBuilder {
             standing_rules: None,
             shell_ledger: None,
             operator_policy: None,
+            origin_classes: Vec::new(),
             prompter: None,
             confirmation_handler: None,
             approval_store: None,
@@ -457,6 +459,23 @@ impl HarnessAgentBuilder {
     /// An operator policy, composed with the harness policy; the stricter decision wins.
     pub fn operator_policy(mut self, policy: Arc<dyn ToolPolicy>) -> Self {
         self.operator_policy = Some(policy);
+        self
+    }
+
+    /// Adds `policy` to the operator policy, the stricter decision winning, so a later
+    /// [`operator_policy`](Self::operator_policy) or addition keeps it (spec 3.2 §7.7, K-I6).
+    pub fn add_operator_policy(mut self, policy: Arc<dyn ToolPolicy>) -> Self {
+        self.operator_policy = Some(match self.operator_policy.take() {
+            Some(existing) => Arc::new(adk_core::StrictestPolicy::new(vec![existing, policy])),
+            None => policy,
+        });
+        self
+    }
+
+    /// Classes the tools of publishers `classes` knows by their approved declarations,
+    /// such as the kernel's drivers (spec 3.2 §7.7).
+    pub fn tool_classes(mut self, classes: Arc<dyn crate::policy::OriginClasses>) -> Self {
+        self.origin_classes.push(classes);
         self
     }
 
@@ -1240,6 +1259,9 @@ impl HarnessAgentBuilder {
         let mut registry = ToolClassRegistry::harness_defaults(&self.name).with_web_allowlist(
             self.web.as_ref().map(|web| web.allowed_domains.clone()).unwrap_or_default(),
         );
+        for classes in &self.origin_classes {
+            registry = registry.with_origin_classes(classes.clone());
+        }
         // The payments pack (spec 3.1 §7.16): every payment tool name is class Payment,
         // declared or not, so a lookalike attached as an extra never classes as External.
         #[cfg(feature = "payments")]

@@ -13,6 +13,9 @@
 //! | Decisions on the harness's approval service waking the kernel's approval sleepers | §7.4 |
 //! | `propose_followup`, class `Todo`: an agent's follow-up as a `Proposed` agenda item | §7.5 |
 //! | The standing rules the kernel's daily review checks for renewal | §9.1 |
+//! | [`driver_tool_kind`]: `EffectClass` → [`ToolKind::External`], the manifest's class over any `readOnlyHint` | §7.7, §10 HK1 |
+//! | [`DriverClasses`], [`HarnessAgentBuilder::kernel_drivers`]: a partition's drivers with their classes and the kernel's driver policy | §7.7, §7.8 |
+//! | [`HarnessRulePins`]: standing rules carried to re-approved driver declarations | §7.7, K-I14 |
 
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -31,11 +34,12 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
-use crate::approvals::StandingRuleStore;
+use crate::approvals::{OriginPin, StandingRuleStore};
+use crate::builder::HarnessAgentBuilder;
 use crate::goal::{GoalBook, GoalParker, GoalStore};
 use crate::harness::Harness;
 use crate::mode::{HarnessMode, ModeRecord, ModeSource, ModeStore};
-use crate::policy::has_harness_layer;
+use crate::policy::{OriginClasses, ToolKind, has_harness_layer};
 use crate::tools::PlanStep;
 
 impl From<PartitionMode> for HarnessMode {
@@ -49,6 +53,157 @@ impl From<PartitionMode> for HarnessMode {
             PartitionMode::Auto => HarnessMode::Auto,
             _ => HarnessMode::ReadOnly,
         }
+    }
+}
+
+/// The harness class of a driver tool of `class` (spec 3.2 §7.7, §10 HK1).
+///
+/// The manifest the user approved is the source of truth, so a server's own `readOnlyHint`
+/// never grants anything (3.1 I12): `read` is a trusted read-only external tool, and every
+/// other class a trusted external tool with effects, which the mode table asks about in
+/// Ask and Auto and refuses in ReadOnly and Plan. `publish_public` and `financial` map the
+/// same way; the kernel's driver policy, which [`HarnessAgentBuilder::kernel_drivers`]
+/// composes with the harness's, asks before every call of them, so no mode, standing rule
+/// or earlier approval allows one (K-I9).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::ToolEffect;
+/// use adk_harness::{ToolKind, driver_tool_kind};
+/// use adk_kernel::drivers::EffectClass;
+///
+/// assert_eq!(
+///     driver_tool_kind(EffectClass::Read),
+///     ToolKind::External { effect: ToolEffect::ReadOnly, trusted_origin: true }
+/// );
+/// assert_eq!(
+///     driver_tool_kind(EffectClass::SendExternal),
+///     ToolKind::External { effect: ToolEffect::NonIdempotent, trusted_origin: true }
+/// );
+/// ```
+pub fn driver_tool_kind(class: adk_kernel::drivers::EffectClass) -> ToolKind {
+    ToolKind::External { effect: class.tool_effect(), trusted_origin: true }
+}
+
+/// Classes the kernel's driver tools by their approved manifests (spec 3.2 §7.7).
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_harness::{DriverClasses, OriginClasses};
+/// use adk_kernel::drivers::DriverSupervisor;
+/// use adk_kernel::stores::InMemoryDriverStore;
+///
+/// let drivers = DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new())).build();
+/// let classes = DriverClasses::new(drivers);
+/// assert_eq!(classes.class_of("driver:email", "send_draft"), None); // not mounted
+/// assert_eq!(classes.class_of("mcp:email", "send_draft"), None); // not a driver
+/// ```
+#[derive(Debug, Clone)]
+pub struct DriverClasses {
+    drivers: adk_kernel::drivers::DriverSupervisor,
+}
+
+impl DriverClasses {
+    /// The classes of `drivers`' mounted manifests.
+    pub fn new(drivers: adk_kernel::drivers::DriverSupervisor) -> Self {
+        Self { drivers }
+    }
+}
+
+impl OriginClasses for DriverClasses {
+    fn class_of(&self, source: &str, tool: &str) -> Option<ToolKind> {
+        self.drivers.class_of(source, tool).map(driver_tool_kind)
+    }
+}
+
+impl HarnessAgentBuilder {
+    /// Mounts the kernel's drivers for `partition` (spec 3.2 §7.7, §7.8): the tools of the
+    /// drivers whose manifest lists `partition` and whose id is in `drivers` — the
+    /// partition's own driver list — classed by their manifests, with the kernel's driver
+    /// policy composed with the harness's, the stricter decision winning (K-I6).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let agent = HarnessAgent::builder("work")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .kernel_drivers(&drivers, &partition.id, &partition.drivers)
+    ///     .build()?;
+    /// ```
+    pub fn kernel_drivers(
+        self,
+        drivers: &adk_kernel::drivers::DriverSupervisor,
+        partition: &adk_kernel::PartitionId,
+        ids: &[String],
+    ) -> Self {
+        self.toolset(drivers.toolset_for(partition, ids))
+            .tool_classes(Arc::new(DriverClasses::new(drivers.clone())))
+            .add_operator_policy(drivers.policy())
+    }
+}
+
+/// Moves a person's standing rules onto a driver tool's re-approved declaration
+/// (spec 3.2 §7.7, K-I14): each of the subject's rules in the app pinned exactly to the old
+/// declaration of the tool is granted again, pinned to the new one.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let drivers = DriverSupervisor::builder(store).rule_pins(harness.driver_rule_pins()).build();
+/// ```
+#[derive(Debug, Clone)]
+pub struct HarnessRulePins {
+    app_name: String,
+    rules: Arc<dyn StandingRuleStore>,
+}
+
+impl HarnessRulePins {
+    /// Re-pins the rules of `app_name` in `rules`.
+    pub fn new(app_name: impl Into<String>, rules: Arc<dyn StandingRuleStore>) -> Self {
+        Self { app_name: app_name.into(), rules }
+    }
+}
+
+#[async_trait]
+impl adk_kernel::drivers::StandingRulePins for HarnessRulePins {
+    async fn repin(
+        &self,
+        subject: &str,
+        source: &str,
+        tool: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<usize> {
+        let mut moved = 0;
+        for mut rule in self.rules.list(&self.app_name, subject).await? {
+            let pinned = matches!(
+                &rule.origin,
+                OriginPin::Exact { source: pinned, declaration_digest } if pinned == source && declaration_digest == from
+            );
+            if !pinned || rule.tool != tool {
+                continue;
+            }
+            rule.origin =
+                OriginPin::Exact { source: source.to_string(), declaration_digest: to.to_string() };
+            self.rules.grant(rule).await?;
+            moved += 1;
+        }
+        Ok(moved)
+    }
+}
+
+impl Harness {
+    /// Carries this harness's standing rules to re-approved driver declarations; pass it
+    /// to `DriverSupervisorBuilder::rule_pins` (spec 3.2 §7.7).
+    pub fn driver_rule_pins(&self) -> Arc<dyn adk_kernel::drivers::StandingRulePins> {
+        Arc::new(HarnessRulePins::new(
+            self.app_name(),
+            self.agent().runtime().standing_rules().clone(),
+        ))
     }
 }
 

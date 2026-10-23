@@ -166,6 +166,8 @@ pub use instructions::{
     InstructionFile, InstructionScope, InstructionsConfig, ProjectInstructions, TrustDecision,
     WorkspaceTrust, WorkspaceTrustStore,
 };
+#[cfg(feature = "kernel")]
+pub use kernel::{DriverClasses, HarnessRulePins, driver_tool_kind};
 pub use mcp::McpInteractionConfig;
 #[cfg(feature = "mcp")]
 pub use mcp::{
@@ -212,6 +214,7 @@ pub use plan_graph::{
     ActivePlan, PLAN_GATE_TOOL, PlanGraphShape, PlanGraphs, PlanRunStatus, compile_plan,
     plan_review_node, plan_step_node,
 };
+pub use policy::OriginClasses;
 pub use policy::{
     HARNESS_POLICY_REF, HarnessPolicy, Isolation, MODE_TABLE, ModeCell, PolicySwitches,
     TableDecision, TableRow, ToolClassRegistry, ToolKind, apply_rule, decision_cell,
