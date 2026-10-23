@@ -153,8 +153,25 @@ impl HarnessLauncher {
     /// A launcher for `agent`, running as user `"user"` in the app named after the agent,
     /// with in-memory sessions, until configured otherwise.
     pub fn new(agent: HarnessAgent) -> Self {
+        Self::shared(Arc::new(agent))
+    }
+
+    /// [`new`](Self::new) for an agent other parts of the program hold too, such as the
+    /// `Harness` a resident kernel is built from with `Harness::kernel` (spec 3.2 §10 HK1):
+    /// the served inbox then decides through the same agent's approval service, which wakes
+    /// the kernel's approval sleepers.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let agent = Arc::new(harness_agent);
+    /// let harness = Harness::with_runner(agent.clone(), runner)?;
+    /// let kernel = harness.kernel().build()?;
+    /// HarnessLauncher::shared(agent).with_kernel(kernel).run_serve_directly(8080).await?;
+    /// ```
+    pub fn shared(agent: Arc<HarnessAgent>) -> Self {
         Self {
-            agent: Arc::new(agent),
+            agent,
             app_name: None,
             session_service: None,
             user_id: "user".to_string(),
@@ -433,34 +450,37 @@ impl HarnessLauncher {
         let runs: Arc<dyn DurableRunStore> =
             self.run_store.clone().unwrap_or_else(|| Arc::new(adk_core::InMemoryRunStore::new()));
         self.run_store = Some(runs.clone());
-        let runtime = self.agent.runtime();
         let root: Arc<dyn Agent> = self.agent.clone();
-        let runner = Arc::new(
-            Runner::builder()
-                .app_name(&app_name)
-                .agent(root)
-                .session_service(sessions.clone())
-                .approval_store(runtime.approval_store().clone())
-                .build()?,
-        );
-        let home = dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join(&app_name);
-        let mut builder = adk_kernel::Kernel::builder()
-            .config(adk_kernel::KernelConfig::default().with_app_name(&app_name).with_home(home))
-            .run_store(runs.clone())
+        let runner = Runner::builder()
+            .app_name(&app_name)
+            .agent(root)
             .session_service(sessions)
-            .agent(app_name.clone(), runner.clone())
-            .agent(adk_harness::GOAL_TARGET, runner.clone());
-        if let Some(service) = &self.approval_service {
-            builder = builder.approval_service(service.clone());
+            .approval_store(self.agent.runtime().approval_store().clone())
+            .build()?;
+        // The harness glue registers the runner, its services and the goal progress
+        // (spec 3.2 §10 HK1).
+        let harness = Harness::with_runner(self.agent.clone(), runner)?
+            .with_run_store(runs.clone())
+            .with_goal_queue(adk_kernel::QueueClass::BACKGROUND);
+        let home = dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join(&app_name);
+        let kernel = harness
+            .kernel()
+            .config(adk_kernel::KernelConfig::default().with_app_name(&app_name).with_home(home))
+            .build()
+            .map_err(AdkError::from)?;
+        // Decisions go through the harness's service, which wakes the kernel's approval
+        // sleepers.
+        if let Some(service) = self.agent.runtime().approval_service() {
+            self.approval_service = Some(service.clone());
         }
-        let kernel = builder.build().map_err(AdkError::from)?;
         if self.background_runs.is_none() {
+            let (target, runner) = harness.goal_target();
             self.background_runs = Some(
                 BackgroundState::new()
                     .with_run_store(runs)
                     .with_app_name(&app_name)
                     .with_agent(app_name, runner.clone())
-                    .with_agent(adk_harness::GOAL_TARGET, runner)
+                    .with_agent(target, runner)
                     .with_worker_config(
                         adk_server::background::DurableWorkerConfig::default()
                             .with_queue(adk_kernel::QueueClass::INTERACTIVE),

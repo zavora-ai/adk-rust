@@ -8,5 +8,7 @@
   `freeze`, `unfreeze` and `events` reach it over the socket or `--server`; `goal`
   enqueues on its background queue. A `[kernel]` table in `harness.toml` sets the home,
   bind and per-queue concurrency, which a workspace file may only lower.
-  `HarnessLauncher::with_kernel` gives library users the resident form and
-  `cargo run -- up`.
+  `HarnessLauncher::with_kernel` and `HarnessLauncher::shared` give library users the
+  resident form, and the `harness` template's `cargo run -- up` runs it.
+- **`harness-kernel` feature** (`adk-rust`, spec 3.2 §8.2): `adk_rust::kernel` re-exports
+  `adk-kernel` and turns on `adk-harness`'s `kernel` glue; it is part of `full`.

@@ -550,8 +550,15 @@ fn event_line(record: &EventRecord) -> String {
             state_name(*to),
             reason.as_deref().map(|reason| format!(" ({reason})")).unwrap_or_default()
         ),
-        KernelEvent::Wake { pid, source, key } => {
-            format!("{source} {key} → {}", pid.as_deref().unwrap_or("nothing"))
+        KernelEvent::Wake { pid, source, key, outcome } => {
+            let what = match outcome {
+                Some(adk_kernel::WakeOutcome::Woke { .. }) => " (woke)",
+                Some(adk_kernel::WakeOutcome::Spawned { .. }) => " (spawned)",
+                Some(adk_kernel::WakeOutcome::Deduplicated { .. }) => " (already used)",
+                Some(adk_kernel::WakeOutcome::Expired { .. }) => " (expired)",
+                _ => "",
+            };
+            format!("{source} {key} → {}{what}", pid.as_deref().unwrap_or("nothing"))
         }
         KernelEvent::Held { pid, request } => format!("{pid} holds {}", request.tool_name),
         KernelEvent::Decided { pid, by, .. } => format!("{pid} decided by {}", by.id),

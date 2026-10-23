@@ -169,7 +169,7 @@ harness-encrypted = ["harness", "adk-harness/encrypted"]
 harness-memory-local = ["harness", "adk-harness/memory-embeddings-local"]
 # The agent kernel, the harness's always-on form (spec 3.2 §8.2): `adk_rust::kernel`, and
 # with `cli` the `adk-rust up` composition through `HarnessLauncher::with_kernel`.
-harness-kernel = ["harness", "dep:adk-kernel"]
+harness-kernel = ["harness", "dep:adk-kernel", "adk-harness/kernel"]
 
 # Managed agent runtime (feature-gated, experimental). The provider features below also
 # let its `DefaultModelResolver` construct that provider's models.

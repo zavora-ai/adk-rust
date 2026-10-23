@@ -17,7 +17,7 @@ use adk_core::{
 };
 use adk_harness::HarnessMode;
 use adk_kernel::control::ControlPlaneConfig;
-use adk_kernel::{Kernel, KernelConfig, ProcessStore, QueueClass};
+use adk_kernel::{KernelConfig, ProcessStore, QueueClass};
 use adk_server::background::{BackgroundState, DurableWorkerConfig};
 use anyhow::{Context, Result, bail};
 
@@ -96,73 +96,80 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             .with_router(routing)
             .with_run_store(run_store.clone()),
     );
+    let stores = kernel_stores(&setup, store.as_deref()).await?;
+    // One kill switch for the runner, the kernel and the server, mirrored from the store
+    // replicas share (K-I8).
+    let governance = match &stores.governance {
+        Some(state) => KernelConfig::mirrored_governance(state.clone()),
+        None => GovernanceControl::new(),
+    };
     let audit = kernel_audit(&home, &setup, store.as_deref()).await?;
-    let agent = setup.agent_with(
+    if let Some(recorder) = &audit {
+        governance.attach_audit(AuditTrail::new(recorder.clone()));
+    }
+    let agent = Arc::new(setup.agent_with(
         setup.resolved.effort,
         APP_NAME,
         setup.resolved.mode,
         setup.resolved.sandbox,
         None,
-        Some(service.clone()),
-        AgentExtras { budget: None, audit: audit.clone() },
-    )?;
-    let runner = Arc::new(
-        adk_runner::Runner::builder()
-            .app_name(APP_NAME)
-            .agent(agent.agent())
-            .session_service(setup.sessions())
-            .approval_store(agent.runtime().approval_store().clone())
-            .build()?,
-    );
-
-    let stores = kernel_stores(&setup, store.as_deref()).await?;
-    let governance = match &stores.governance {
-        Some(state) => KernelConfig::mirrored_governance(state.clone()),
-        None => GovernanceControl::new(),
-    };
-    let trail = audit.map(AuditTrail::new);
-    if let Some(trail) = &trail {
-        governance.attach_audit(trail.clone());
-    }
+        Some(service),
+        AgentExtras { budget: None, audit },
+    )?);
+    let runner = adk_runner::Runner::builder()
+        .app_name(APP_NAME)
+        .agent(agent.agent())
+        .session_service(setup.sessions())
+        .approval_store(agent.runtime().approval_store().clone())
+        .governance(governance.clone())
+        .build()?;
+    // The harness glue registers the runner as `adk-rust` and `harness.goal`, with the
+    // harness's sessions, approval service, kill switch, audit trail and goal progress
+    // (spec 3.2 §10 HK1); goals land on the background queue.
+    let harness = adk_harness::Harness::with_runner(agent.clone(), runner)?
+        .with_run_store(run_store.clone())
+        .with_goal_queue(QueueClass::BACKGROUND);
     let mut worker = DurableWorkerConfig::default();
     if let Some(max) = settings.max_concurrent_runs {
         worker = worker.with_max_concurrent_runs(max);
     }
+    // The run store reads the system clock too, so leases, `not_before` and wake times agree.
     let config = KernelConfig::default()
         .with_app_name(APP_NAME)
         .with_home(&home)
         .with_worker(worker)
-        .with_control(control_plane());
-    let mut kernel = Kernel::builder()
+        .with_control(control_plane())
+        .with_clock(Arc::new(adk_core::SystemClock));
+    let kernel = harness
+        .kernel()
         .config(config)
-        .governance(governance.clone())
-        .run_store(run_store.clone())
         .process_store(stores.processes)
         .schedule_store(stores.schedules)
-        .approval_service(service.clone())
-        .session_service(setup.sessions())
-        .agent(APP_NAME, runner.clone())
-        .agent(adk_harness::GOAL_TARGET, runner.clone());
-    if let Some(trail) = trail {
-        kernel = kernel.audit(trail);
-    }
-    let kernel = kernel.build()?;
+        .build()?;
+    // The inbox decides through the harness's approval service, which wakes the kernel's
+    // approval sleepers; the service the builder was given would not.
+    let decisions = agent
+        .runtime()
+        .approval_service()
+        .cloned()
+        .context("the served harness has an approval service")?;
 
     // `/api/runs` submissions land on the interactive queue, where the kernel's worker
     // claims them; the server runs no worker of its own.
+    let (target, runner) = harness.goal_target();
     let background = BackgroundState::new()
         .with_run_store(run_store)
         .with_app_name(APP_NAME)
         .with_agent(APP_NAME, runner.clone())
-        .with_agent(adk_harness::GOAL_TARGET, runner)
+        .with_agent(target, runner)
         .with_worker_config(DurableWorkerConfig::default().with_queue(QueueClass::INTERACTIVE))
         .with_embedded_worker(false)
         .with_governance(governance);
-    let mut launcher = HarnessLauncher::new(agent)
+    let mut launcher = HarnessLauncher::shared(agent)
         .app_name(APP_NAME)
         .with_session_service(setup.sessions())
         .with_user_id(setup.user.clone())
-        .with_approval_service(service)
+        .with_approval_service(decisions)
         .with_background_runs(background)
         .with_bind_address(bind.ip())
         .with_kernel(kernel);

@@ -133,7 +133,7 @@ firestore = ["adk-harness?/firestore"]
 # `serve` run on the harness; `sessions`, `rules` and `approvals` manage it (spec 3.1 §8.1);
 # `up` runs it as the agent kernel, and `attach`, `ps`, `top`, `kill`, `suspend`, `resume`,
 # `freeze`, `unfreeze` and `events` reach the running kernel (spec 3.2 §8.1, §13 Q6)
-harness = ["dep:adk-harness", "dep:adk-kernel", "adk-harness?/memory-embeddings", "adk-harness?/web", "adk-harness?/mcp", "adk-harness?/hooks", "dep:reqwest", "dep:sha2", "dep:uuid", "dep:chrono"]
+harness = ["dep:adk-harness", "dep:adk-kernel", "adk-harness?/kernel", "adk-harness?/memory-embeddings", "adk-harness?/web", "adk-harness?/mcp", "adk-harness?/hooks", "dep:reqwest", "dep:sha2", "dep:uuid", "dep:chrono"]
 # `--store-key`, `[store] key`, `adk-rust store status|rotate-key`: harness.db sealed under
 # one keyring from the OS keychain, a secret provider or the environment (spec 3.1 §7.12)
 encrypted = ["adk-harness?/encrypted", "adk-session/encrypted-session", "dep:sqlx"]
