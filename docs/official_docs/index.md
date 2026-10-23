@@ -84,6 +84,7 @@ The always-on form of the harness (`adk-kernel`, spec 3.2): durable processes th
 - [The Control Plane](kernel/control-plane.md) - The socket, named-pipe and HTTP transports, the auth matrix, routes, `kernel.control` audit records, `ControlClient`
 - [Drivers](kernel/drivers.md) - MCP servers the kernel supervises under approved manifests: effect classes, the OS sandbox, brokered secrets, re-approval of changed tools, parked calls across a restart
 - [Running the Kernel as a Service](kernel/service.md) - `adk-rust up --install`, `--uninstall` and `--print`: a launchd agent, a systemd user unit or a Windows service that runs as you
+- [The Managed Form](kernel/managed.md) - One kernel per tenant on the managed runtime: `KernelDef` beside `adk.harness`, wake sets, the tenant's proactivity policy, the managed approval path, voice decisions on parked processes
 
 ## Realtime & Multimodal
 

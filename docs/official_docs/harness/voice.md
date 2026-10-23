@@ -91,6 +91,66 @@ both ([the CLI](#the-cli)).
 A spoken decision is allow-once or deny. A standing rule is created only at the console or in
 the inbox (I2): a transcript is not the authenticated human action a rule requires.
 
+## Parked kernel processes
+
+With features `voice` and `kernel`, the surface also answers processes the
+[agent kernel](../kernel/index.md) parked on a held call (spec 3.2 §7.11): a background goal's
+write, a webhook-woken run's command. It decides them through the kernel's approval service,
+whose run store wakes the parked run, and never through its own realtime session.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{ApprovalService, RequestContext};
+use adk_harness::{HarnessAgent, VoiceConfig, VoiceSurface};
+use adk_kernel::Kernel;
+use adk_realtime::model::BoxedModel;
+use adk_session::SessionService;
+
+async fn answer_parked(
+    harness: Arc<HarnessAgent>,
+    realtime: BoxedModel,
+    sessions: Arc<dyn SessionService>,
+    kernel: &Kernel,
+    approvals: Arc<dyn ApprovalService>,
+) -> adk_core::Result<()> {
+    let context = RequestContext {
+        user_id: "ana".into(),
+        scopes: vec!["operator".into()],
+        metadata: Default::default(),
+    };
+    let surface = VoiceSurface::open(
+        harness,
+        realtime,
+        sessions,
+        "ana",
+        "voice-1",
+        VoiceConfig::new("adk-rust").with_request_context(context),
+    )?
+    .with_parked_processes(kernel.processes().clone(), approvals);
+    surface.connect().await?;
+    if let Some(parked) = surface.parked_processes().await?.into_iter().find(|p| !p.frozen) {
+        surface.offer_parked(&parked.pid).await?;
+        surface
+            .say(&format!("A background task wants to run {}. Ask me to approve it.", parked.request.tool_name))
+            .await?;
+    }
+    Ok(())
+}
+```
+
+| Method | Behaviour |
+|---|---|
+| `with_parked_processes(processes, approvals)` | Answers the kernel's processes through `approvals`, built with `StoreApprovalService::with_run_store` over the kernel's run store. The voice user decides as `SubjectRef::human(user_id)` in the request context's scopes, as the approvals REST maps a caller |
+| `parked_processes()` | The processes waiting on a request in the voice user's inbox, oldest first; a freeze-parked one carries `frozen: true` |
+| `offer_parked(pid)` | Puts the process up for the user's next plain yes or no while no call of the session is held; the decision is `VoiceEvent::Decided` with the pid as `call_id` and `by: voice` |
+| `decide_process(pid, decision)` | The same decision from code |
+
+The session's own held calls are answered first. A process a freeze parked is refused with
+`harness.voice.frozen` and a `harness.voice.refused` record, from `offer_parked`,
+`decide_process` and a spoken answer alike: only `unfreeze` wakes it (K-I21). A process not
+parked on a request the voice user may decide is refused with `harness.voice.not_parked`.
+
 ## The CLI
 
 ```bash
@@ -125,6 +185,8 @@ end to end, which is what CI and the scripted tests use.
 | `adk-realtime/tests/realtime_metering_tests.rs` | OpenAI and Gemini usage priced and committed; the estimate without pricing; a cap refuses the response |
 | `adk-realtime/tests/integration_output_guardrails_tests.rs` | A transform rewrites the persisted transcript; a block interrupts and persists nothing |
 | `examples/harness_agent` `voice_spoken_approval`, `live_voice_approval` | The H5 scenario scripted, and live on Gemini Live with a recorded answer |
+| `adk-harness/tests/voice_kernel_tests.rs` | A scripted spoken yes wakes a kernel process parked on a held write, which runs once; a freeze-parked process is refused, stays parked with its request pending, and resumes only on unfreeze |
+| `examples/harness_kernel` `v1_voice_answers_a_parked_process`, `live_voice_parked_process` | A parked process decided by voice, scripted and live on Gemini Live with a recorded answer |
 
 The scripted provider is `adk_realtime::scripted::ScriptedRealtimeModel` (feature `scripted`).
 
