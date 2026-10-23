@@ -257,6 +257,124 @@ fn strip_unc_prefix(path: &std::path::Path) -> PathBuf {
     }
 }
 
+/// The restricted token's group plan, in binary SIDs so it is computed and tested on every
+/// host (spec 3.2 §10 W5).
+mod token {
+    #![cfg_attr(not(all(target_os = "windows", feature = "sandbox-windows")), allow(dead_code))]
+
+    /// `SE_GROUP_LOGON_ID`: both bits mark the logon session's SID.
+    pub(super) const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
+    /// `SE_GROUP_INTEGRITY`: a mandatory integrity label, which cannot be made deny-only.
+    pub(super) const SE_GROUP_INTEGRITY: u32 = 0x0000_0020;
+
+    /// A security identifier in binary form, in word-aligned storage as Win32 expects.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub(super) struct Sid {
+        words: Vec<u32>,
+        len: usize,
+    }
+
+    impl Sid {
+        /// A SID from its binary form.
+        pub(super) fn from_bytes(bytes: &[u8]) -> Self {
+            let mut words = vec![0u32; bytes.len().div_ceil(4)];
+            for (i, byte) in bytes.iter().enumerate() {
+                words[i / 4] |= u32::from(*byte) << (8 * (i % 4));
+            }
+            Self { words, len: bytes.len() }
+        }
+
+        /// `S-1-<authority>-<sub...>`, for the well-known SIDs below.
+        fn well_known(authority: u8, subs: &[u32]) -> Self {
+            let mut bytes = vec![1, subs.len() as u8, 0, 0, 0, 0, 0, authority];
+            for sub in subs {
+                bytes.extend_from_slice(&sub.to_le_bytes());
+            }
+            Self::from_bytes(&bytes)
+        }
+
+        /// The SID's bytes.
+        #[cfg(test)]
+        pub(super) fn as_bytes(&self) -> Vec<u8> {
+            (0..self.len).map(|i| (self.words[i / 4] >> (8 * (i % 4))) as u8).collect()
+        }
+
+        /// A pointer to the SID for Win32 calls, valid while `self` lives.
+        pub(super) fn as_ptr(&self) -> *const u32 {
+            self.words.as_ptr()
+        }
+
+        /// `Everyone`, S-1-1-0.
+        pub(super) fn everyone() -> Self {
+            Self::well_known(1, &[0])
+        }
+
+        /// `NT AUTHORITY\INTERACTIVE`, S-1-5-4.
+        pub(super) fn interactive() -> Self {
+            Self::well_known(5, &[4])
+        }
+
+        /// `NT AUTHORITY\Authenticated Users`, S-1-5-11.
+        pub(super) fn authenticated_users() -> Self {
+            Self::well_known(5, &[11])
+        }
+
+        /// `NT AUTHORITY\RESTRICTED`, S-1-5-12.
+        pub(super) fn restricted() -> Self {
+            Self::well_known(5, &[12])
+        }
+
+        /// `BUILTIN\Users`, S-1-5-32-545.
+        pub(super) fn users() -> Self {
+            Self::well_known(5, &[32, 545])
+        }
+
+        /// `BUILTIN\Administrators`, S-1-5-32-544.
+        #[cfg(test)]
+        pub(super) fn administrators() -> Self {
+            Self::well_known(5, &[32, 544])
+        }
+    }
+
+    /// One group of the caller's token.
+    #[derive(Clone, Debug)]
+    pub(super) struct TokenGroup {
+        pub(super) sid: Sid,
+        pub(super) attributes: u32,
+    }
+
+    /// What `CreateRestrictedToken` is given.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(super) struct TokenPlan {
+        /// Groups made deny-only.
+        pub(super) deny_only: Vec<Sid>,
+        /// The restricting SIDs every access must also pass.
+        pub(super) restricting: Vec<Sid>,
+    }
+
+    /// The plan for a token with `groups`.
+    ///
+    /// Every group becomes deny-only — `Administrators` and any other group that widens
+    /// access — except those the shell needs to start and run: `Everyone`, `Users`,
+    /// `Authenticated Users`, `INTERACTIVE`, the logon SID (window station and desktop), and
+    /// integrity labels, which cannot be disabled. The restricting SIDs are `Everyone`, so
+    /// world-readable system files load, `RESTRICTED`, which the policy's paths are granted,
+    /// and the logon SID. Returns `None` when the token has no logon SID.
+    pub(super) fn plan(groups: &[TokenGroup]) -> Option<TokenPlan> {
+        let keep = [Sid::everyone(), Sid::users(), Sid::authenticated_users(), Sid::interactive()];
+        let is_logon = |g: &TokenGroup| g.attributes & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID;
+        let logon = groups.iter().find(|g| is_logon(g))?.sid.clone();
+        let deny_only = groups
+            .iter()
+            .filter(|g| {
+                !is_logon(g) && g.attributes & SE_GROUP_INTEGRITY == 0 && !keep.contains(&g.sid)
+            })
+            .map(|g| g.sid.clone())
+            .collect();
+        Some(TokenPlan { deny_only, restricting: vec![Sid::everyone(), Sid::restricted(), logon] })
+    }
+}
+
 #[cfg(all(target_os = "windows", feature = "sandbox-windows"))]
 mod imp {
     //! The Win32 implementation of the restricted-token launch.
@@ -276,9 +394,8 @@ mod imp {
         TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
     };
     use windows_sys::Win32::Security::{
-        ACL, AllocateAndInitializeSid, CopySid, CreateRestrictedToken, DACL_SECURITY_INFORMATION,
-        DISABLE_MAX_PRIVILEGE, FreeSid, GetLengthSid, GetTokenInformation, PSID,
-        SID_AND_ATTRIBUTES, SID_IDENTIFIER_AUTHORITY, SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        ACL, CreateRestrictedToken, DACL_SECURITY_INFORMATION, DISABLE_MAX_PRIVILEGE, GetLengthSid,
+        GetTokenInformation, PSID, SID_AND_ATTRIBUTES, SUB_CONTAINERS_AND_OBJECTS_INHERIT,
         TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY, TokenGroups,
     };
     use windows_sys::Win32::Storage::FileSystem::{
@@ -295,6 +412,7 @@ mod imp {
         STARTUPINFOW, WaitForSingleObject,
     };
 
+    use super::token::{self, Sid, TokenGroup, TokenPlan};
     use super::{ConfinedOutcome, ENFORCER_NAME, strip_unc_prefix};
     use crate::error::SandboxError;
     use crate::sandbox::{AccessMode, AllowedPath, SandboxPolicy};
@@ -310,17 +428,6 @@ mod imp {
         }
     }
 
-    /// Owns a SID from `AllocateAndInitializeSid` and frees it on drop.
-    struct AllocatedSid(PSID);
-    impl Drop for AllocatedSid {
-        fn drop(&mut self) {
-            if !self.0.is_null() {
-                // SAFETY: the SID came from `AllocateAndInitializeSid` and is freed once.
-                unsafe { FreeSid(self.0) };
-            }
-        }
-    }
-
     fn last_error(call: &str) -> SandboxError {
         // SAFETY: `GetLastError` reads thread-local state and is always safe.
         let code = unsafe { GetLastError() };
@@ -330,43 +437,9 @@ mod imp {
         }
     }
 
-    /// Allocates a well-known SID from an authority and sub-authorities.
-    fn sid(authority: [u8; 6], sub: &[u32]) -> Result<AllocatedSid, SandboxError> {
-        let ident = SID_IDENTIFIER_AUTHORITY { Value: authority };
-        let mut out: PSID = std::ptr::null_mut();
-        let s = |i: usize| sub.get(i).copied().unwrap_or(0);
-        // SAFETY: `ident` is readable, `out` is writable, and the sub-authority count matches
-        // the slots passed.
-        let ok = unsafe {
-            AllocateAndInitializeSid(
-                &ident,
-                sub.len() as u8,
-                s(0),
-                s(1),
-                s(2),
-                s(3),
-                s(4),
-                s(5),
-                s(6),
-                s(7),
-                &mut out,
-            )
-        };
-        if ok == 0 {
-            return Err(last_error("AllocateAndInitializeSid"));
-        }
-        Ok(AllocatedSid(out))
+    fn psid(sid: &Sid) -> PSID {
+        sid.as_ptr() as PSID
     }
-
-    const SECURITY_WORLD_SID_AUTHORITY: [u8; 6] = [0, 0, 0, 0, 0, 1];
-    const SECURITY_NT_AUTHORITY: [u8; 6] = [0, 0, 0, 0, 0, 5];
-    const SECURITY_WORLD_RID: u32 = 0;
-    const SECURITY_RESTRICTED_CODE_RID: u32 = 12;
-    const SECURITY_AUTHENTICATED_USER_RID: u32 = 11;
-    const SECURITY_BUILTIN_DOMAIN_RID: u32 = 32;
-    const DOMAIN_ALIAS_RID_USERS: u32 = 545;
-    /// `SE_GROUP_LOGON_ID`, as the `u32` mask `SID_AND_ATTRIBUTES::Attributes` carries.
-    const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
 
     /// The current process's primary token, opened with the rights
     /// `CreateRestrictedToken`/`CreateProcessAsUserW` need.
@@ -386,18 +459,17 @@ mod imp {
         Ok(Handle(token))
     }
 
-    /// A copy of the token's logon SID (the group carrying `SE_GROUP_LOGON_ID`), in owned
-    /// storage. The logon SID keeps the window-station and desktop access the restricted
-    /// process needs to start.
-    fn logon_sid(token: HANDLE) -> Result<Vec<u8>, SandboxError> {
+    /// The token's groups, each SID copied into owned storage.
+    fn token_groups(token: HANDLE) -> Result<Vec<TokenGroup>, SandboxError> {
         let mut needed: u32 = 0;
         // SAFETY: a null buffer asks only for the size, written to `needed`.
         unsafe { GetTokenInformation(token, TokenGroups, std::ptr::null_mut(), 0, &mut needed) };
         if needed == 0 {
             return Err(last_error("GetTokenInformation(size)"));
         }
-        let mut buf = vec![0u8; needed as usize];
-        // SAFETY: `buf` holds `needed` writable bytes.
+        // `u64` storage keeps the `TOKEN_GROUPS` aligned.
+        let mut buf = vec![0u64; (needed as usize).div_ceil(8)];
+        // SAFETY: `buf` holds at least `needed` writable bytes.
         let ok = unsafe {
             GetTokenInformation(token, TokenGroups, buf.as_mut_ptr().cast(), needed, &mut needed)
         };
@@ -407,58 +479,40 @@ mod imp {
         // SAFETY: `buf` holds a `TOKEN_GROUPS` as `GetTokenInformation` wrote it.
         let groups = unsafe { &*buf.as_ptr().cast::<TOKEN_GROUPS>() };
         let entries = groups.Groups.as_ptr();
+        let mut out = Vec::with_capacity(groups.GroupCount as usize);
         for i in 0..groups.GroupCount as usize {
             // SAFETY: `i` is within `GroupCount`, so the entry is part of the buffer.
             let entry = unsafe { &*entries.add(i) };
-            if entry.Attributes & SE_GROUP_LOGON_ID != 0 {
-                // SAFETY: `entry.Sid` points into `buf` and is a valid SID.
-                let len = unsafe { GetLengthSid(entry.Sid) } as usize;
-                let mut copy = vec![0u8; len];
-                // SAFETY: `copy` holds `len` bytes and `entry.Sid` is a valid SID of that length.
-                let ok = unsafe { CopySid(len as u32, copy.as_mut_ptr().cast(), entry.Sid) };
-                if ok == 0 {
-                    return Err(last_error("CopySid"));
-                }
-                return Ok(copy);
-            }
+            // SAFETY: `entry.Sid` points into `buf` at a valid SID of `GetLengthSid` bytes.
+            let bytes = unsafe {
+                std::slice::from_raw_parts(entry.Sid.cast::<u8>(), GetLengthSid(entry.Sid) as usize)
+            };
+            out.push(TokenGroup { sid: Sid::from_bytes(bytes), attributes: entry.Attributes });
         }
-        Err(SandboxError::EnforcerFailed {
-            enforcer: ENFORCER_NAME.to_string(),
-            message: "the process token carries no logon SID".to_string(),
-        })
+        Ok(out)
     }
 
-    /// Builds the restricted token: deny-only broad groups, restricting SIDs that admit only
-    /// world-readable code, the `RESTRICTED` marker and the logon SID.
-    ///
-    /// Returns the token and the `RESTRICTED` SID storage (kept alive for the ACL grants).
-    fn restricted_token(
-        source: HANDLE,
-        restricted_sid: PSID,
-        world_sid: PSID,
-        logon: &[u8],
-        deny: &[PSID],
-    ) -> Result<Handle, SandboxError> {
-        let deny_attrs: Vec<SID_AND_ATTRIBUTES> =
-            deny.iter().map(|&s| SID_AND_ATTRIBUTES { Sid: s, Attributes: 0 }).collect();
-        let restrict_attrs = [
-            SID_AND_ATTRIBUTES { Sid: world_sid, Attributes: 0 },
-            SID_AND_ATTRIBUTES { Sid: restricted_sid, Attributes: 0 },
-            SID_AND_ATTRIBUTES { Sid: logon.as_ptr() as PSID, Attributes: 0 },
-        ];
+    /// Builds the restricted token from `plan` (see [`token::plan`]), with every privilege
+    /// but change-notify removed.
+    fn restricted_token(source: HANDLE, plan: &TokenPlan) -> Result<Handle, SandboxError> {
+        let attrs = |sids: &[Sid]| -> Vec<SID_AND_ATTRIBUTES> {
+            sids.iter().map(|sid| SID_AND_ATTRIBUTES { Sid: psid(sid), Attributes: 0 }).collect()
+        };
+        let deny = attrs(&plan.deny_only);
+        let restrict = attrs(&plan.restricting);
         let mut token: HANDLE = std::ptr::null_mut();
-        // SAFETY: the SID arrays are readable for their stated counts, `source` is open, and
-        // `token` is writable. The logon SID pointer is valid for the duration of the call.
+        // SAFETY: the SID arrays are readable for their stated counts and point into `plan`,
+        // which outlives the call; `source` is open and `token` is writable.
         let ok = unsafe {
             CreateRestrictedToken(
                 source,
                 DISABLE_MAX_PRIVILEGE,
-                deny_attrs.len() as u32,
-                deny_attrs.as_ptr(),
+                deny.len() as u32,
+                deny.as_ptr(),
                 0,
                 std::ptr::null(),
-                restrict_attrs.len() as u32,
-                restrict_attrs.as_ptr(),
+                restrict.len() as u32,
+                restrict.as_ptr(),
                 &mut token,
             )
         };
@@ -665,26 +719,18 @@ mod imp {
         timeout: Option<Duration>,
     ) -> Result<ConfinedOutcome, SandboxError> {
         let process_token = open_process_token()?;
-        let logon = logon_sid(process_token.0)?;
-
-        let world = sid(SECURITY_WORLD_SID_AUTHORITY, &[SECURITY_WORLD_RID])?;
-        let restricted = sid(SECURITY_NT_AUTHORITY, &[SECURITY_RESTRICTED_CODE_RID])?;
-        let users =
-            sid(SECURITY_NT_AUTHORITY, &[SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_USERS])?;
-        let authenticated = sid(SECURITY_NT_AUTHORITY, &[SECURITY_AUTHENTICATED_USER_RID])?;
-
-        let token = restricted_token(
-            process_token.0,
-            restricted.0,
-            world.0,
-            &logon,
-            &[users.0, authenticated.0],
-        )?;
+        let groups = token_groups(process_token.0)?;
+        let plan = token::plan(&groups).ok_or_else(|| SandboxError::EnforcerFailed {
+            enforcer: ENFORCER_NAME.to_string(),
+            message: "the process token carries no logon SID".to_string(),
+        })?;
+        let token = restricted_token(process_token.0, &plan)?;
 
         // Grant the restricting RESTRICTED SID access to each allowed path, so the restricted
         // token's second access check passes there and nowhere else.
+        let restricted = Sid::restricted();
         for entry in grants {
-            grant_path(&entry.path, entry.mode, restricted.0)?;
+            grant_path(&entry.path, entry.mode, psid(&restricted))?;
         }
 
         let job = create_job()?;
@@ -838,6 +884,55 @@ mod tests {
         // promoted; the mapping itself does not drop it, the grant step resolves it. Here we
         // just assert the mapping is stable and single-entry.
         assert_eq!(grants.len(), 1);
+    }
+
+    fn group(sid: token::Sid, attributes: u32) -> token::TokenGroup {
+        token::TokenGroup { sid, attributes }
+    }
+
+    #[test]
+    fn well_known_sids_have_their_binary_form() {
+        assert_eq!(token::Sid::everyone().as_bytes(), [1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]);
+        assert_eq!(token::Sid::restricted().as_bytes(), [1, 1, 0, 0, 0, 0, 0, 5, 12, 0, 0, 0]);
+        assert_eq!(
+            token::Sid::users().as_bytes(),
+            [1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 0x21, 0x02, 0, 0]
+        );
+        let logon = [1, 3, 0, 0, 0, 0, 0, 5, 5, 0, 0, 0, 1, 2, 0, 0, 3, 4, 0, 0];
+        assert_eq!(token::Sid::from_bytes(&logon).as_bytes(), logon);
+    }
+
+    /// An elevated administrator's token: Administrators and an organisation group become
+    /// deny-only; the groups a shell needs, the logon SID and the integrity label do not.
+    #[test]
+    fn the_plan_makes_every_widening_group_deny_only() {
+        let logon =
+            token::Sid::from_bytes(&[1, 3, 0, 0, 0, 0, 0, 5, 5, 0, 0, 0, 7, 0, 0, 0, 9, 0, 0, 0]);
+        let organisation = token::Sid::from_bytes(&[1, 1, 0, 0, 0, 0, 0, 5, 15, 0, 0, 0]);
+        let medium_label = token::Sid::from_bytes(&[1, 1, 0, 0, 0, 0, 0, 16, 0, 0x20, 0, 0]);
+        let groups = [
+            group(token::Sid::everyone(), 7),
+            group(token::Sid::administrators(), 0xF),
+            group(token::Sid::users(), 7),
+            group(token::Sid::interactive(), 7),
+            group(logon.clone(), token::SE_GROUP_LOGON_ID | 7),
+            group(token::Sid::authenticated_users(), 7),
+            group(organisation.clone(), 7),
+            group(medium_label, token::SE_GROUP_INTEGRITY | 0x40),
+        ];
+        let plan = token::plan(&groups).expect("the token has a logon SID");
+        assert_eq!(
+            plan,
+            token::TokenPlan {
+                deny_only: vec![token::Sid::administrators(), organisation],
+                restricting: vec![token::Sid::everyone(), token::Sid::restricted(), logon],
+            }
+        );
+    }
+
+    #[test]
+    fn a_token_without_a_logon_sid_has_no_plan() {
+        assert_eq!(token::plan(&[group(token::Sid::everyone(), 7)]), None);
     }
 
     #[test]
