@@ -11,14 +11,19 @@ description = "Scripted and live scenarios for the adk-kernel agent kernel (spec
 adk-auth = { path = "../../adk-auth", features = ["signed-audit"] }
 adk-core = { path = "../../adk-core" }
 adk-devtools = { path = "../../adk-devtools" }
-adk-harness = { path = "../../adk-harness", features = ["sqlite", "kernel"] }
-adk-kernel = { path = "../../adk-kernel" }
+adk-harness = { path = "../../adk-harness", features = ["sqlite", "kernel", "managed", "voice"] }
+adk-kernel = { path = "../../adk-kernel", features = ["managed"] }
+# The managed form's tenants (spec 3.2 §7.13), and their live models.
+adk-managed = { path = "../../adk-managed", features = ["gemini", "anthropic"] }
+# The voice surface over Gemini Live, and the scripted realtime provider (spec 3.2 §7.11).
+adk-realtime = { path = "../../adk-realtime", features = ["integration", "scripted", "gemini"] }
 # ScriptedLlm for the scripted scenarios; the live ones run the `adk-rust up` binary.
 adk-model = { path = "../../adk-model", default-features = false }
 adk-tool = { path = "../../adk-tool", features = ["mcp"] }
 adk-runner = { path = "../../adk-runner" }
 adk-session = { path = "../../adk-session", features = ["sqlite"] }
 anyhow = "1.0"
+async-trait = "0.1"
 # The notes driver the K6 and parked-question scenarios mount, served by this binary.
 rmcp = { version = "3.1", features = ["server", "client", "elicitation"] }
 chrono = "0.4"

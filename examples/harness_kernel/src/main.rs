@@ -4,10 +4,14 @@
 //! the scheduler, SQLite stores, drivers and the control plane on a socket and loopback HTTP.
 //! Live (`--live`): K3, K5, K6 and a parked driver question answered after a restart,
 //! through the `adk-rust up` binary on a real model.
+//! The managed form (spec 3.2 §7.13) and voice decisions on parked processes (§7.11) run in
+//! process, scripted and live.
 
 mod live;
+mod managed;
 mod notes_driver;
 mod scripted;
+mod voice;
 
 use std::path::PathBuf;
 
@@ -66,6 +70,8 @@ const LIVE: &[&str] = &[
     "live_k4_a_proposal_waits_for_approval",
     "live_k6_supervised_driver",
     "live_parked_question_after_restart",
+    "live_managed_tenant_approval",
+    "live_voice_parked_process",
 ];
 
 fn verdict(result: &Result<Checks>) -> String {
@@ -106,8 +112,15 @@ async fn main() -> Result<()> {
     println!("adk-kernel scenarios (spec 3.2 §5, §11)\n");
     let mut failed = false;
     if live {
+        let in_process = |name: &str| managed::LIVE.contains(&name) || voice::LIVE.contains(&name);
+        let needs_bin = LIVE
+            .iter()
+            .copied()
+            .filter(|name| selected.is_empty() || selected.contains(name))
+            .any(|name| !in_process(name));
         let bin = match bin.or_else(|| std::env::var("ADK_RUST_BIN").ok()) {
             Some(bin) => PathBuf::from(bin),
+            None if !needs_bin => PathBuf::new(),
             None => bail!(
                 "the live scenarios run the `adk-rust` binary: pass --bin PATH or set ADK_RUST_BIN \
                  (build it with `cargo build -p adk-cli --bin adk-rust`)"
@@ -127,7 +140,13 @@ async fn main() -> Result<()> {
                 LIVE.iter().copied().filter(|name| selected.is_empty() || selected.contains(name))
             {
                 println!("  {scenario} on {model}");
-                let result = live::run(scenario, &bin, provider, model).await;
+                let result = match (
+                    managed::run_live(scenario, provider, model).await,
+                    voice::run_live(scenario, provider, model).await,
+                ) {
+                    (Some(result), _) | (None, Some(result)) => result,
+                    (None, None) => live::run(scenario, &bin, provider, model).await,
+                };
                 let shown = verdict(&result);
                 failed |= !shown.starts_with("PASS");
                 rows.push(format!("| `{scenario}` | {provider} | {model} | {shown} |"));
@@ -141,11 +160,17 @@ async fn main() -> Result<()> {
         let mut rows = Vec::new();
         for (name, on_main) in SCRIPTED
             .iter()
+            .chain(managed::SCRIPTED)
+            .chain(voice::SCRIPTED)
             .copied()
             .filter(|(name, _)| selected.is_empty() || selected.contains(name))
         {
             println!("  {name}");
-            let result = scripted::run(name).await;
+            let result = match (managed::run_scripted(name).await, voice::run_scripted(name).await)
+            {
+                (Some(result), _) | (None, Some(result)) => result,
+                (None, None) => scripted::run(name).await,
+            };
             let shown = verdict(&result);
             failed |= !shown.starts_with("PASS");
             rows.push(format!("| `{name}` | not run, expected: {on_main} | {shown} |"));

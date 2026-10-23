@@ -381,6 +381,7 @@ version = "3.0.0"
 dependencies = [
  "adk-agent",
  "adk-core",
+ "adk-managed",
  "adk-runner",
  "adk-sandbox",
  "adk-server",
