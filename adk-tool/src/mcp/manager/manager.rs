@@ -926,6 +926,30 @@ impl McpServerManager {
         self.running_toolset(id).await?.get_prompt(name, arguments).await
     }
 
+    /// Re-issues a parked call on the running server it names (spec 3.2 §7.7, §10 T2).
+    ///
+    /// The call's [`server_id`](super::super::ParkedMcpCall::server_id) is the managed
+    /// server's ID; see [`McpToolset::reissue`] for what happens per kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` when the server is unknown or not running, and as
+    /// [`McpToolset::reissue`] does.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let parked: ParkedMcpCall = serde_json::from_str(&checkpoint)?;
+    /// let outcome = manager.reissue_parked_call(&parked, responses).await?;
+    /// ```
+    pub async fn reissue_parked_call(
+        &self,
+        parked: &super::super::ParkedMcpCall,
+        responses: rmcp::model::InputResponses,
+    ) -> adk_core::Result<super::super::McpCallOutcome> {
+        self.running_toolset(&parked.server_id).await?.reissue(parked, responses).await
+    }
+
     /// Return a map of all server IDs to their current [`ServerStatus`].
     ///
     /// # Example

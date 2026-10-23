@@ -60,7 +60,7 @@ achievable reduction is the advertised surface, not the feature count.
 | media | 2 | `audio` / `audio-onnx` | 9 demoted |
 | graph | 1 | `graph` | 6 demoted to members |
 | mcp | 1 | `mcp` / `mcp-http` | 2 demoted |
-| harness | 1 | `harness` | the `harness-*` packs and add-ons are members (spec 3.1 §8.4); `harness-encrypted` links `adk-session`'s envelope and the OS keychain, `harness-memory-local` links the `ort` runtime (spec 3.1 §7.12, §7.15.2) |
+| harness | 1 | `harness` | the `harness-*` packs and add-ons are members (spec 3.1 §8.4); `harness-encrypted` links `adk-session`'s envelope and the OS keychain, `harness-memory-local` links the `ort` runtime (spec 3.1 §7.12, §7.15.2); `harness-kernel` links `adk-kernel`, the agent kernel (spec 3.2 §8.2) |
 | gcp | 0 | `gemini-agent-platform` | all 11 demoted; already bundled |
 | code | — | `code-tools` | 3 demoted |
 

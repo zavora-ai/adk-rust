@@ -1,0 +1,22 @@
+name: 'Install apt packages'
+description: >-
+  Installs Ubuntu packages on a GitHub-hosted runner without letting a slow
+  mirror hold the job. Packages dpkg already reports installed are skipped.
+  `apt-get update` (3 tries of 45 s) and the archive download (4 tries of 90 s)
+  are each bounded and retried, keeping what earlier tries fetched, and dpkg
+  installs from the local cache once every archive is present. Callers keep a
+  step-level `timeout-minutes` as the overall bound.
+
+inputs:
+  packages:
+    description: 'Whitespace-separated list of apt packages to install.'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install apt packages
+      shell: bash
+      env:
+        APT_PACKAGES: ${{ inputs.packages }}
+      run: bash "$GITHUB_ACTION_PATH/apt-install.sh"

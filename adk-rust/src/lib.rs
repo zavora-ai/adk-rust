@@ -58,8 +58,8 @@
 //! # Enterprise — standard + realtime, browser, rag, payments, awp
 //! adk-rust = { version = "3.0.0", features = ["enterprise"] }
 //!
-//! # Full — enterprise + audio, code, sandbox, code-tools, the harness, and the
-//! # graph-functional, graph-node-cache, graph-delta, and graph-time-travel capabilities
+//! # Full — enterprise + audio, code, sandbox, code-tools, the harness and its kernel, and
+//! # the graph-functional, graph-node-cache, graph-delta, and graph-time-travel capabilities
 //! adk-rust = { version = "3.0.0", features = ["full"] }
 //!
 //! # Custom — pick exactly what you need
@@ -447,6 +447,7 @@
 //! | `audio` | Audio processing | full |
 //! | `graph-functional`, `graph-node-cache`, `graph-delta`, `graph-time-travel` | Graph capabilities | full |
 //! | `harness` | The governed, durable harness agent (`adk-harness`) | full |
+//! | `harness-kernel` | The agent kernel, the harness's always-on form (`adk-kernel`) | full |
 //! | `harness-browser`, `harness-computer-use`, `harness-payments`, `harness-voice`, `harness-managed` | Harness packs | opt-in |
 //! | `cli` | CLI launcher with serve mode | opt-in |
 //! | `managed-runtime` | Managed agent runtime (`adk-managed`) | opt-in |
@@ -1138,6 +1139,33 @@ pub mod harness {
     #[cfg(feature = "cli")]
     pub use adk_cli::harness::{ConsolePrompter, HarnessLauncher};
     pub use adk_harness::*;
+}
+
+/// The agent kernel, the always-on form of the harness (spec 3.2 §8.2).
+///
+/// Everything `adk-kernel` exports: the [`Kernel`](kernel::Kernel) supervisor and its
+/// builder, the process table, wake sources, the event bus and the
+/// [`control`](kernel::control) plane `adk-rust up` serves.
+///
+/// Available with feature: `harness-kernel` (included in `full`)
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_rust::kernel::{Kernel, KernelConfig, QueueClass};
+///
+/// let kernel = Kernel::builder()
+///     .config(KernelConfig::default().with_app_name("ops"))
+///     .run_store(Arc::new(adk_rust::InMemoryRunStore::new()))
+///     .build()
+///     .unwrap();
+/// assert_eq!(kernel.config().queues, QueueClass::defaults());
+/// ```
+#[cfg(feature = "harness-kernel")]
+#[cfg_attr(docsrs, doc(cfg(feature = "harness-kernel")))]
+pub mod kernel {
+    pub use adk_kernel::*;
 }
 
 // ============================================================================

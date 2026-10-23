@@ -69,6 +69,7 @@ full = [
     "graph-delta",
     "graph-time-travel",
     "harness",
+    "harness-kernel",
 ]
 
 # Gemini Enterprise Agent Platform — every Vertex/EAP integration except
@@ -166,6 +167,9 @@ harness-hooks = ["harness", "adk-harness/hooks"]
 # The encrypted store of spec 3.1 §7.12 and the local ONNX embedder of §7.15.2.
 harness-encrypted = ["harness", "adk-harness/encrypted"]
 harness-memory-local = ["harness", "adk-harness/memory-embeddings-local"]
+# The agent kernel, the harness's always-on form (spec 3.2 §8.2): `adk_rust::kernel`, and
+# with `cli` the `adk-rust up` composition through `HarnessLauncher::with_kernel`.
+harness-kernel = ["harness", "dep:adk-kernel", "adk-harness/kernel"]
 
 # Managed agent runtime (feature-gated, experimental). The provider features below also
 # let its `DefaultModelResolver` construct that provider's models.
@@ -391,6 +395,7 @@ adk-acp = { workspace = true, optional = true }
 adk-managed = { workspace = true, optional = true }
 adk-enterprise = { workspace = true, optional = true }
 adk-harness = { workspace = true, optional = true }
+adk-kernel = { workspace = true, optional = true }
 adk-mistralrs = { workspace = true, optional = true }
 
 # Re-export common dependencies

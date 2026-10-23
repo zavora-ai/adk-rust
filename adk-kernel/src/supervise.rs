@@ -43,11 +43,20 @@ pub(crate) fn spawned_by_kernel(run: &RunRecord) -> bool {
         .is_some_and(|key| key.starts_with(ASLEEP_KEY_PREFIX) || key.starts_with(SPAWN_KEY_PREFIX))
 }
 
-/// Whether `run` was spawned asleep and has not parked yet: it has no checkpoint, so no
-/// attempt reached its first model-call boundary.
-pub(crate) fn spawned_asleep(run: &RunRecord) -> bool {
-    run.checkpoint.is_none()
-        && run.idempotency_key.as_deref().is_some_and(|key| key.starts_with(ASLEEP_KEY_PREFIX))
+/// Whether a claim of `run` must park it before its first model call (K-I2): its process
+/// sleeps until a wake consumes its wake set. The process row says so once `spawn` wrote
+/// it, and the run's key until then. A run can become claimable without a wake — a freeze
+/// hands a claimed run back, a resume after a drain wakes what the drain parked, a lost
+/// lease is recovered — so neither a checkpoint nor a cleared sleep request means the
+/// process was woken; only the consumed wake set does, and every wake clears it before it
+/// makes the run claimable.
+pub(crate) fn asleep_at_claim(run: &RunRecord, stored: Option<&ProcessMeta>) -> bool {
+    match stored {
+        Some(meta) => meta.wake.is_some(),
+        None => {
+            run.idempotency_key.as_deref().is_some_and(|key| key.starts_with(ASLEEP_KEY_PREFIX))
+        }
+    }
 }
 
 /// How many spend samples a running process keeps for its burn rate.
@@ -516,6 +525,7 @@ impl WorkerHooks for KernelHooks {
         let sup = &self.sup;
         let stored = sup.stored_meta(run).await;
         let persisted = stored.is_some();
+        let asleep = asleep_at_claim(run, stored.as_ref());
         let mut meta = stored.unwrap_or_else(|| Supervision::infer_meta(run));
         let from = if meta.wake.is_some() || meta.suspended_by.is_some() || run.attempt > 1 {
             RunState::Waiting
@@ -525,13 +535,12 @@ impl WorkerHooks for KernelHooks {
         // A run `spawn` enqueued gets its row from `spawn`, which may still be writing it; an
         // inferred row written here could replace it.
         let mut changed = !persisted && !spawned_by_kernel(run);
-        if spawned_asleep(run) || meta.suspend_requested || sup.draining.load(Ordering::SeqCst) {
-            // A sleeper's first claim, a suspension asked while it queued, or a drain:
-            // the attempt parks at its first model-call boundary.
+        if asleep || meta.suspend_requested || sup.draining.load(Ordering::SeqCst) {
+            // A sleeper, a suspension asked while it queued, or a drain: the attempt parks
+            // at its first model-call boundary.
             sup.suspend_local(&run.run_id);
         } else if persisted {
-            // Woken: the wake set fired or the suspension was lifted.
-            changed |= meta.wake.take().is_some();
+            // Woken, or its suspension lifted: the wake set is already consumed.
             changed |= meta.suspended_by.take().is_some();
         }
         if changed {

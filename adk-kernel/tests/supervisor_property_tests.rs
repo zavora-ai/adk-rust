@@ -51,6 +51,29 @@ async fn all_runs(world: &World) -> Vec<adk_core::RunRecord> {
     world.runs.list(RunFilter::default()).await.unwrap()
 }
 
+/// K-I8: within one second of a freeze no process is `Running`. A claim that raced the
+/// freeze holds its run `Running` for the instant before the worker hands it back
+/// unstarted, so the check waits out that instant; the model-call count stays exact.
+async fn nothing_runs_within_a_second(world: &World) {
+    let started = tokio::time::Instant::now();
+    loop {
+        let running: Vec<String> = all_runs(world)
+            .await
+            .into_iter()
+            .filter(|run| run.state == RunState::Running)
+            .map(|run| run.run_id)
+            .collect();
+        if running.is_empty() {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{running:?} still running a second after the freeze (K-I8)"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 async fn check(ops: Vec<Op>, write_delay: Duration) {
     let mut script = Vec::new();
     for _ in 0..64 {
@@ -104,23 +127,7 @@ async fn check(ops: Vec<Op>, write_delay: Duration) {
             }
             Op::Freeze => {
                 kernel.freeze("property", operator()).await.unwrap();
-                // K-I8: every running process stops within one second.
-                let started = tokio::time::Instant::now();
-                loop {
-                    let running = all_runs(&world)
-                        .await
-                        .into_iter()
-                        .filter(|run| run.state == RunState::Running)
-                        .count();
-                    if running == 0 {
-                        break;
-                    }
-                    assert!(
-                        started.elapsed() < Duration::from_secs(1),
-                        "{running} processes still running a second after the freeze"
-                    );
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
+                nothing_runs_within_a_second(&world).await;
                 frozen_at.get_or_insert(world.model_calls());
             }
             Op::Unfreeze => {
@@ -137,9 +144,9 @@ async fn check(ops: Vec<Op>, write_delay: Duration) {
                     run.run_id
                 );
             }
-            if frozen_at.is_some() {
-                assert_ne!(run.state, RunState::Running, "run {} runs while frozen", run.run_id);
-            }
+        }
+        if frozen_at.is_some() {
+            nothing_runs_within_a_second(&world).await;
         }
         if let Some(calls) = frozen_at {
             assert_eq!(world.model_calls(), calls, "a model call was made while frozen (K-I8)");
@@ -160,18 +167,43 @@ async fn check(ops: Vec<Op>, write_delay: Duration) {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 100, ..ProptestConfig::default() })]
+    // `PROPTEST_CASES` raises the count for a soak run.
+    #![proptest_config(ProptestConfig {
+        cases: std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|cases| cases.parse().ok())
+            .unwrap_or(100),
+        ..ProptestConfig::default()
+    })]
 
     #[test]
     fn waiting_processes_hold_no_lease_sleepers_stay_asleep_and_nothing_runs_while_frozen(
         ops in prop::collection::vec(op(), 1..8),
         write_delay_ms in 0u64..120,
     ) {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(check(ops, Duration::from_millis(write_delay_ms)));
+        run(ops, Duration::from_millis(write_delay_ms));
     }
+}
+
+fn run(ops: Vec<Op>, write_delay: Duration) {
+    let runtime =
+        tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    runtime.block_on(check(ops, write_delay));
+}
+
+/// The case the property shrank to on 793c621a, a sleeper that called the model: replayed
+/// on every run, since the repository ignores proptest's seed files.
+#[test]
+fn a_sleeper_spawned_then_frozen_suspended_and_unfrozen_stays_asleep() {
+    run(vec![Op::SpawnAsleep, Op::Freeze, Op::Suspend(0), Op::Unfreeze], Duration::ZERO);
+}
+
+/// A case a 2000-case run found: the resumed process's claim races the freeze, holds the
+/// run `Running` for an instant, and the worker hands it back unstarted.
+#[test]
+fn a_claim_that_races_the_freeze_is_handed_back_without_running() {
+    run(
+        vec![Op::Settle, Op::SpawnAsleep, Op::Suspend(0), Op::Resume(0), Op::Freeze],
+        Duration::from_millis(49),
+    );
 }

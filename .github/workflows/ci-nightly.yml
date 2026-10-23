@@ -144,14 +144,16 @@ jobs:
         neutralize-wild: ${{ matrix.neutralize-wild }}
 
     # espeak-ng is required by adk-audio's `kokoro` backend. glib is required by
-    # the WebRTC transport in adk-realtime's `full` feature.
+    # the WebRTC transport in adk-realtime's `full` feature. On Linux, cmake comes
+    # from the runner image, whose /usr/local/bin precedes apt's /usr/bin on PATH.
     - name: Install system dependencies (Linux)
-      # A stalled apt mirror once held jobs for the full six-hour limit; bound the step and let apt retry.
+      # A stalled apt mirror once held jobs for the full six-hour limit; the action bounds and
+      # retries each apt attempt, and the step timeout bounds the whole install.
       timeout-minutes: 10
       if: runner.os == 'Linux'
-      run: |
-        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 update
-        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 install -y cmake protobuf-compiler libespeak-ng-dev libglib2.0-dev
+      uses: ./.github/actions/apt-install
+      with:
+        packages: protobuf-compiler libespeak-ng-dev libglib2.0-dev
 
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'
@@ -382,11 +384,12 @@ jobs:
         neutralize-wild: 'true'
 
     - name: Install system dependencies (Linux)
-      # A stalled apt mirror once held jobs for the full six-hour limit; bound the step and let apt retry.
+      # A stalled apt mirror once held jobs for the full six-hour limit; the action bounds and
+      # retries each apt attempt, and the step timeout bounds the whole install.
       timeout-minutes: 10
-      run: |
-        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 update
-        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300 install -y cmake protobuf-compiler
+      uses: ./.github/actions/apt-install
+      with:
+        packages: protobuf-compiler
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28

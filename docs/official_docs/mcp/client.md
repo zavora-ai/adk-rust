@@ -420,6 +420,67 @@ through the connection's handler: elicitation always, and sampling or roots only
 when the client declared them. `McpServerManager` declares the extension for a
 server whose configuration sets `taskConfig.enableTasks`.
 
+## Parked calls and re-issue
+
+A call waiting for a person's answer survives a restart as a `ParkedMcpCall`: a
+serializable payload holding the server ID (the toolset's name), the tool name,
+the arguments, the agent's call ID, the server's `requestState`, the input
+requests with their digest, the input rounds taken, and a `kind`. Persist it
+beside the approval that asks the person, and re-issue it with the answers on
+wake — in the same process or in the next one.
+
+| `kind` | Produced when | `reissue` does |
+|--------|---------------|----------------|
+| `mrtr` | A `2026-07-28` server answers `input_required` with input requests | A new `tools/call` with `inputResponses` and the stored `requestState`. The server ended the first request at `input_required`, so this is the call's first execution |
+| `task { taskId }` | A task reports `input_required` | `tasks/get` on the stored task; outstanding requests equal to the parked ones are answered through `tasks/update`, and polling continues until the task ends |
+| `legacy` | A server before `2026-07-28` sends `elicitation/create` while the call runs on the live connection | Refused with code `tool.mcp.not_run` unless the tool the server publishes now declares `readOnlyHint` or `idempotentHint`; then the call runs again and its new question parks again |
+
+A server that answers a re-issue with new input requests — for example because
+its `requestState` lapsed — parks the call again, under `max_input_rounds`
+counted across re-issues.
+
+`call_tool_resumable` ends a call at its first question instead of answering it
+in process, and `reissue` resumes it:
+
+```rust
+use adk_tool::mcp::{McpCallOutcome, McpToolset, ParkedMcpCall};
+use rmcp::model::{ElicitResult, ElicitationAction, InputResponses};
+use serde_json::json;
+
+async fn send(toolset: &McpToolset) -> adk_core::Result<Option<String>> {
+    let arguments = json!({ "draftId": "d-7" }).as_object().unwrap().clone();
+    match toolset.call_tool_resumable(Some("call-1"), "send_draft", arguments).await? {
+        McpCallOutcome::Completed(value) => Ok(Some(value.to_string())),
+        McpCallOutcome::Parked(parked) => {
+            // Persist this beside the approval; ask the person.
+            let _checkpoint = serde_json::to_string(&parked).unwrap();
+            Ok(None)
+        }
+    }
+}
+
+async fn resume(toolset: &McpToolset, checkpoint: &str) -> adk_core::Result<McpCallOutcome> {
+    let parked: ParkedMcpCall = serde_json::from_str(checkpoint).unwrap();
+    let approved = serde_json::to_value(ElicitResult::new(ElicitationAction::Accept)).unwrap();
+    let responses: InputResponses =
+        parked.input_requests.keys().map(|key| (key.clone(), approved.clone())).collect();
+    toolset.reissue(&parked, responses).await
+}
+```
+
+Calls whose input the connection's handler answers in process — every agent
+tool call — stay the single-process fast path. While the handler answers, it
+reads the call's parked form with `ParkedMcpCall::current()`, so a handler that
+parks the question in an approval inbox can persist the call beside it; a
+legacy `elicitation/create` is attributed to the latest call in flight on the
+connection. A parked task is no longer cancelled by `cancel_pending_tasks` or
+`close`: it waits on the server for its answers. `McpServerManager::reissue_parked_call`
+re-issues a call on the running managed server it names.
+
+`reissue` refuses a parked call made through another toolset, one whose input
+requests no longer match their digest, and an answer to a request it does not
+hold, without contacting the server.
+
 ## Remote Streamable HTTP
 
 ```rust
