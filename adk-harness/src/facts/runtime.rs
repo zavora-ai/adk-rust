@@ -93,6 +93,10 @@ pub(crate) struct FactsRuntime {
     pub(crate) sessions: Mutex<HashMap<SessionKey, SessionTrack>>,
     #[cfg(feature = "runner")]
     pub(crate) attached: OnceLock<Attached>,
+    /// The harness's durable run store, which says whether a session that ran in an
+    /// earlier process was authenticated (I42; spec 3.2 §10 HK2).
+    #[cfg(feature = "runner")]
+    pub(crate) runs: Mutex<Option<Arc<dyn adk_core::DurableRunStore>>>,
     #[cfg_attr(not(feature = "runner"), allow(dead_code))] // read by distillation
     pub(crate) distilling: tokio::sync::Mutex<()>,
     #[cfg_attr(not(feature = "runner"), allow(dead_code))] // read by distillation
@@ -149,6 +153,8 @@ impl FactsRuntime {
             sessions: Mutex::new(HashMap::new()),
             #[cfg(feature = "runner")]
             attached: OnceLock::new(),
+            #[cfg(feature = "runner")]
+            runs: Mutex::new(None),
             distilling: tokio::sync::Mutex::new(()),
             closed: AtomicBool::new(false),
         }

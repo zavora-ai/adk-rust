@@ -475,8 +475,9 @@ impl FactsRuntime {
     /// process will still distil, sessions active within `distill_idle` of `now`, and
     /// sessions in ReadOnly or Plan mode (I45) are skipped. Verified-quote promotion is
     /// off, so every fact is `Assumed` (K-I12). On a harness that requires authenticated
-    /// identity (I42), a session this process holds no turn of is distilled only when it is
-    /// in `authenticated_runs`. A session whose run fails is skipped and
+    /// identity (I42), a session that ran in an earlier process is distilled only when its
+    /// latest run in the harness's run store was authenticated. A session whose run fails is
+    /// skipped and
     /// left for the next call; the budget running out ends the call. The caller holds
     /// `distilling`.
     pub(crate) async fn distill_unreached(
@@ -484,7 +485,6 @@ impl FactsRuntime {
         app: &str,
         user: &str,
         sessions: &[String],
-        authenticated_runs: &std::collections::HashSet<String>,
         now: chrono::DateTime<chrono::Utc>,
         tick: &TickWrites,
         parent: Option<Arc<BudgetTracker>>,
@@ -506,12 +506,33 @@ impl FactsRuntime {
                 tracks.get(&key).map(|track| (track.pending_turns, track.authenticated))
             };
             let due_here = !self.is_closed() && track.is_some_and(|(pending, _)| pending > 0);
-            // A session this process holds no turn of, as after a restart, is authenticated
-            // when its latest durable run was.
-            let authenticated = track.map_or_else(
-                || authenticated_runs.contains(session.as_str()),
-                |(_, authenticated)| authenticated,
-            );
+            let authenticated = match track {
+                Some((_, authenticated)) => authenticated,
+                // A session that ran in an earlier process, as one a restart cut off: the
+                // process took the turn's authentication with it, so the session's latest
+                // durable run decides.
+                None if self.require_authenticated => {
+                    let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let filter = adk_core::RunFilter::default()
+                        .app_name(app)
+                        .user_id(user)
+                        .session_id(session.as_str());
+                    match runs {
+                        Some(runs) => match runs.list(filter).await {
+                            Ok(found) => found
+                                .iter()
+                                .max_by_key(|run| run.created_at)
+                                .is_some_and(|run| run.authenticated),
+                            Err(error) => {
+                                tracing::debug!(error = %error, "the runs of a session to distil are not readable");
+                                false
+                            }
+                        },
+                        None => false,
+                    }
+                }
+                None => false,
+            };
             if !self.config.distill
                 || due_here
                 || (self.require_authenticated && !authenticated)
