@@ -1,4 +1,4 @@
-//! K3, K4, K5, K6 and K10 on a live model through the `adk-rust up` binary (spec 3.2 §11):
+//! K3, K4, K5, K6, K7 and K10 on a live model through the `adk-rust up` binary (spec 3.2 §11):
 //! the kernel runs as its own process, and this one reaches it over the control plane like
 //! any other surface. Keys come from the environment the binary inherits and are never
 //! printed.
@@ -35,6 +35,7 @@ pub async fn run(name: &str, bin: &Path, provider: &str, model: &str) -> Result<
         "live_k6_supervised_driver" => k6(bin, provider, model).await,
         "live_parked_question_after_restart" => parked_question(bin, provider, model).await,
         "live_k10_proc" => k10(bin, provider, model).await,
+        "live_k7_partitions" => k7(bin, provider, model).await,
         other => bail!("unknown scenario {other}"),
     }
 }
@@ -53,6 +54,22 @@ struct Up {
 impl Up {
     async fn start(bin: &Path, provider: &str, model: &str, mode: &str) -> Result<Self> {
         Self::start_seeded(bin, provider, model, mode, false, |_| async { Ok(()) }).await
+    }
+
+    /// `up` with the user config `config` and long-term memory on.
+    async fn start_with(bin: &Path, provider: &str, model: &str, mode: &str, config: &str) -> Result<Self> {
+        let config = config.to_string();
+        Self::start_seeded(bin, provider, model, mode, true, move |home| async move {
+            let root = home.parent().context("the kernel home's parent")?;
+            // The config directory on macOS, and on Linux under XDG_CONFIG_HOME.
+            for dir in ["user/Library/Application Support/adk-rust", "user/.config/adk-rust"] {
+                let dir = root.join(dir);
+                std::fs::create_dir_all(&dir)?;
+                std::fs::write(dir.join("harness.toml"), &config)?;
+            }
+            Ok(())
+        })
+        .await
     }
 
     /// Starts `adk-rust up` after `seed` wrote what the kernel home holds before it, with
@@ -927,6 +944,155 @@ async fn k10(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
     checks.check(
         "`adk-rust proc` offers the observation's question",
         observations.iter().any(|observation| shown.contains(&observation.question)),
+    );
+    Ok(checks)
+}
+
+/// The partitions K7 runs: home, whose harness is the coordinator, and work.
+const PARTITIONS: &str = "[kernel]
+coordinator = \"home\"
+
+[[kernel.partitions]]
+id = \"home\"
+class = \"home-agents\"
+cross_partition = \"coordinator_with_approval\"
+
+[[kernel.partitions]]
+id = \"work\"
+class = \"work-agents\"
+cross_partition = \"coordinator_with_approval\"
+";
+
+/// Spawns a turn of `target` in `session` and waits for it to leave `queued` and `running`.
+async fn turn(
+    client: &ControlClient,
+    target: &str,
+    session: &str,
+    text: &str,
+) -> Result<(String, adk_core::RunState)> {
+    let request = SpawnRequest::new(target, json!({ "text": text })).with_session_id(session);
+    let pid = client.spawn(&request).await?.meta.pid;
+    let mut state = adk_core::RunState::Queued;
+    until(Duration::from_secs(180), || {
+        let (client, pid) = (client.clone(), pid.clone());
+        async move {
+            let processes = client.processes(&ProcessesQuery::default()).await?;
+            let found = processes.iter().find(|process| process.meta.pid == pid);
+            Ok(found.is_some_and(|process| {
+                !matches!(
+                    process.run.state,
+                    adk_core::RunState::Queued | adk_core::RunState::Running
+                )
+            }))
+        }
+    })
+    .await?;
+    let processes = client.processes(&ProcessesQuery::default()).await?;
+    if let Some(process) = processes.iter().find(|process| process.meta.pid == pid) {
+        state = process.run.state;
+    }
+    Ok((pid, state))
+}
+
+/// K7 live: `up` runs one harness per partition. The work agent's read of a home fact is
+/// denied at the policy; the coordinator's read of a work fact parks until it is approved in
+/// the inbox, and its identical second read runs without asking; the crossings are in the
+/// partition table's ledger.
+async fn k7(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
+    use adk_kernel::{CrossingFilter, CrossingOutcome, PartitionStore as _};
+
+    let mut checks = Checks::default();
+    let up = Up::start_with(bin, provider, model, "ask", PARTITIONS).await?;
+    let client = up.client().await?;
+    let partitions = client.partitions().await?;
+    checks.check(
+        "up runs the configured partitions",
+        partitions.iter().map(|partition| partition.id.as_str()).collect::<Vec<_>>()
+            == ["home", "work"],
+    );
+    let seed = "Please remember this for later sessions, using memory_remember: ";
+    turn(
+        &client,
+        "adk-rust@work",
+        "w-seed",
+        &format!("{seed}the team standup is at 9:30 every weekday. Then reply OK."),
+    )
+    .await?;
+    turn(
+        &client,
+        "adk-rust@home",
+        "h-seed",
+        &format!("{seed}my dentist appointment is on Tuesday at 3pm. Then reply OK."),
+    )
+    .await?;
+
+    let (_, asked) = turn(
+        &client,
+        "adk-rust@work",
+        "w-ask",
+        "When is my dentist appointment? It is in my home partition: look it up with partition_memory_search, partition home.",
+    )
+    .await?;
+    checks.check("the work agent's turn completes", asked == adk_core::RunState::Completed);
+
+    let (pid, parked) = turn(
+        &client,
+        "adk-rust@home",
+        "h-ask",
+        "When is the team standup at work? Look it up with partition_memory_search (partition work, query standup). After you get the result, run exactly the same search once more to confirm it, then answer.",
+    )
+    .await?;
+    checks.check(
+        "the coordinator's crossing parks its process",
+        parked == adk_core::RunState::Waiting,
+    );
+    let items = client.approvals().await?;
+    let held: Vec<_> = items.iter().filter(|item| item.scope.session_id == "h-ask").collect();
+    checks.check("one crossing waits in the inbox", held.len() == 1);
+    if let Some(item) = held.first() {
+        client.decide(&item.id, item.version, adk_core::ApprovalAction::Approve, None).await?;
+    }
+    let finished = until(Duration::from_secs(180), || {
+        let (client, pid) = (client.clone(), pid.clone());
+        async move {
+            let processes = client.processes(&ProcessesQuery::default()).await?;
+            Ok(processes
+                .iter()
+                .any(|process| process.meta.pid == pid && process.run.state.is_terminal()))
+        }
+    })
+    .await?;
+    checks.check("the approved process completes", finished);
+    checks.check(
+        "with no second approval",
+        client.approvals().await?.iter().all(|item| item.scope.session_id != "h-ask"),
+    );
+    let attached = client.attach("h-ask", &AttachRequest::default()).await?;
+    let (text, _) = transcript_text(&attached.transcript);
+    checks.check("the coordinator answered from work's memory", text.contains("9:30"));
+
+    let url = format!("sqlite://{}?mode=rwc", up.home.join("harness.db").display());
+    let sessions = adk_session::SqliteSessionService::new(&url).await?;
+    let ledger = adk_kernel::SqlitePartitionStore::new(sessions.pool().clone())
+        .crossings(&CrossingFilter::default())
+        .await?;
+    let outcomes = |from: &str| -> Vec<CrossingOutcome> {
+        ledger
+            .iter()
+            .filter(|record| record.from.as_str() == from)
+            .map(|record| record.outcome)
+            .collect()
+    };
+    checks.check(
+        "the work agent's crossing was denied at the policy",
+        outcomes("work") == [CrossingOutcome::Denied],
+    );
+    let coordinator = outcomes("home");
+    checks.check(
+        "the coordinator's crossing was held, approved, then let through for the run",
+        coordinator.first() == Some(&CrossingOutcome::Held)
+            && coordinator.get(1) == Some(&CrossingOutcome::Approved)
+            && coordinator[2..].iter().all(|outcome| *outcome == CrossingOutcome::RunGrant),
     );
     Ok(checks)
 }
