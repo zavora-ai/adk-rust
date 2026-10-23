@@ -651,10 +651,12 @@ fn invalid(message: impl Into<String>) -> AdkError {
 ///
 /// The follow-up runs in a session of its own whose mode is recorded as this session's at
 /// the time of the proposal, so its process never runs above the proposing run's mode
-/// (K-I7). Without a kernel hosting the harness the tool answers that none runs.
+/// (K-I7). A partition's harness proposes into its partition (spec 3.2 §7.8). Without a
+/// kernel hosting the harness the tool answers that none runs.
 pub(crate) struct ProposeFollowupTool {
     agenda: AgendaHandle,
     modes: (Arc<dyn ModeStore>, HarnessMode),
+    partition: Option<adk_kernel::PartitionId>,
 }
 
 impl ProposeFollowupTool {
@@ -662,8 +664,9 @@ impl ProposeFollowupTool {
         agenda: AgendaHandle,
         mode_store: Arc<dyn ModeStore>,
         default_mode: HarnessMode,
+        partition: Option<adk_kernel::PartitionId>,
     ) -> Self {
-        Self { agenda, modes: (mode_store, default_mode) }
+        Self { agenda, modes: (mode_store, default_mode), partition }
     }
 
     async fn mode(&self, ctx: &dyn ToolContext) -> HarnessMode {
@@ -781,6 +784,9 @@ impl Tool for ProposeFollowupTool {
             AgendaOrigin::Agent { pid, confidence: 1.0 },
             Utc::now(),
         );
+        if let Some(partition) = &self.partition {
+            item = item.with_partition(partition.clone());
+        }
         if let Some(when) = when {
             item = item.with_when(when);
         }

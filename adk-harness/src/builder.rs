@@ -1612,6 +1612,7 @@ impl HarnessAgentBuilder {
             self.kernel_agenda.clone(),
             mode_store.clone(),
             self.mode,
+            partition.as_ref().map(|wired| wired.wiring.partition.id.clone()),
         )));
         #[cfg(feature = "memory")]
         let memory_resolver = self.memory.clone().map(|config| {

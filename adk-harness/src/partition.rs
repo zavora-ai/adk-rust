@@ -371,8 +371,8 @@ impl Harness {
 
     /// Hosts this partition's harness on `kernel` (spec 3.2 §7.8): its runner as the
     /// targets `<app>@<partition>` and `harness.goal@<partition>`, bound to the partition,
-    /// so a process of another partition cannot run it. A harness built without a
-    /// partition is returned `kernel` unchanged.
+    /// so a process of another partition cannot run it, and its `propose_followup` on the
+    /// kernel's agenda. A harness built without a partition is returned `kernel` unchanged.
     ///
     /// # Example
     ///
@@ -390,6 +390,7 @@ impl Harness {
             .partition_agent(id.clone(), partition_target(self.app_name(), &id), runner.clone())
             .partition_agent(id, goal, runner)
             .partitions(wiring.policy.partitions().clone())
+            .agenda_handle(self.agent().runtime().kernel_agenda.clone())
     }
 }
 

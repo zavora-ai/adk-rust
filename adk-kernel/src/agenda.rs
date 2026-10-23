@@ -1436,8 +1436,24 @@ impl Agenda {
             Some(pid) => sup.runs.get(pid).await?,
             None => None,
         };
-        let target =
-            proposer.as_ref().map_or_else(|| sup.app_name.clone(), |run| run.target.clone());
+        // Without the proposing run, the app's target runs the follow-up, unless the item's
+        // partition has agents of its own and the app's is not one: then the first of them,
+        // by name, does (spec 3.2 §7.8).
+        let target = match &proposer {
+            Some(run) => run.target.clone(),
+            None => {
+                let own: Vec<&String> = sup
+                    .partition_targets
+                    .iter()
+                    .filter(|(_, bound)| **bound == item.partition)
+                    .map(|(target, _)| target)
+                    .collect();
+                match own.first() {
+                    Some(first) if !own.contains(&&sup.app_name) => (*first).clone(),
+                    _ => sup.app_name.clone(),
+                }
+            }
+        };
         let mut run = NewRun::new(
             QueueClass::BACKGROUND,
             sup.app_name.clone(),

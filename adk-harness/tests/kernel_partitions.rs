@@ -658,3 +658,106 @@ async fn k7_the_kernel_hosts_both_partitions_and_the_coordinators_crossing_parks
     );
     kernel.stop().await.unwrap();
 }
+
+/// Spec 3.2 §7.5, §7.8: a partition's follow-up is on its partition's agenda and, once
+/// approved, runs as a process of that partition on its harness — proposed by a kernel
+/// process, or by a run outside the kernel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_partitions_followup_is_on_its_agenda_and_runs_its_partitions_harness() {
+    let mut world = World::new().await;
+    let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+    let propose = |title: &str| {
+        ScriptedResponse::function_call(
+            "propose_followup",
+            json!({ "title": title, "rationale": "the release lands tonight" }),
+        )
+    };
+    let (home, _) = world.harness("home", true, Vec::new(), |builder| builder).await;
+    let (work, _) = world
+        .harness(
+            "work",
+            false,
+            vec![
+                propose("Check the release notes"),
+                text("Proposed."),
+                text("The notes read well."),
+                propose("Check the changelog"),
+                text("Proposed."),
+                text("The changelog reads well."),
+            ],
+            |builder| builder,
+        )
+        .await;
+    let home = home.with_run_store(Arc::clone(&runs));
+    let work = work.with_run_store(Arc::clone(&runs));
+    let kernel = work
+        .host_partition(home.kernel())
+        .config(
+            KernelConfig::default()
+                .with_app_name(APP)
+                .with_scheduler_tick(Duration::from_millis(50))
+                .with_control(ControlPlaneConfig::default().without_socket()),
+        )
+        .build()
+        .unwrap();
+    kernel.start().await.unwrap();
+    let work_target = adk_harness::partition_target(APP, &PartitionId::new("work"));
+    let alice = adk_core::principal::SubjectRef::human("alice");
+
+    let followup_of = |title: &'static str| {
+        let kernel = kernel.clone();
+        async move {
+            let items = kernel
+                .agenda()
+                .list(&adk_kernel::AgendaFilter::default().partition("work"))
+                .await
+                .unwrap();
+            items.into_iter().find(|item| item.title == title)
+        }
+    };
+    let ran = |id: String| {
+        let kernel = kernel.clone();
+        async move {
+            eventually("the follow-up's process to complete", || async {
+                let processes = kernel.processes().ps(ProcessFilter::default()).await.unwrap();
+                processes.into_iter().find(|process| {
+                    process.meta.agenda_item.as_deref() == Some(id.as_str())
+                        && process.run.state == RunState::Completed
+                })
+            })
+            .await
+        }
+    };
+
+    // Proposed by a kernel process of work.
+    let turn = kernel
+        .processes()
+        .spawn(turn(&work_target, "w1", "ship it"), ProcessSpec::new(ProcessKind::Interactive))
+        .await
+        .unwrap();
+    in_state(&runs, &turn.meta.pid, RunState::Completed).await;
+    let item = followup_of("Check the release notes").await.expect("on work's agenda");
+    kernel.agenda().approve(&item.id, &alice).await.unwrap();
+    let process = ran(item.id.clone()).await;
+    assert_eq!(process.meta.partition, PartitionId::new("work"));
+    assert_eq!(process.run.target, work_target);
+    assert_eq!(process.meta.parent.as_deref(), Some(turn.meta.pid.as_str()));
+
+    // Proposed by a run outside the kernel: the follow-up still runs work's harness.
+    send(&work, "w2", "ship the changelog").await;
+    let item = followup_of("Check the changelog").await.expect("on work's agenda");
+    kernel.agenda().approve(&item.id, &alice).await.unwrap();
+    let process = ran(item.id.clone()).await;
+    assert_eq!(process.meta.partition, PartitionId::new("work"));
+    assert_eq!(process.run.target, work_target, "not the coordinator's target");
+    assert!(
+        kernel
+            .agenda()
+            .list(&adk_kernel::AgendaFilter::default().partition("home"))
+            .await
+            .unwrap()
+            .is_empty(),
+        "nothing landed on home's agenda"
+    );
+    kernel.stop().await.unwrap();
+}
