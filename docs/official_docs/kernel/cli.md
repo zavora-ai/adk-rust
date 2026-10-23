@@ -73,6 +73,7 @@ Press Ctrl+C to drain and stop
 | `--bind HOST:PORT` | `[kernel] bind`, else `127.0.0.1:8080` | Anything but loopback needs `--auth-token` (K-I18) |
 | `--auth-token T` | `$ADK_SERVE_TOKEN` | Bearer token HTTP callers present |
 | `--store URL` | `harness.db` | `postgres://…` or `redis://…`: every store, the kernel's included, shared by replicas |
+| `--no-memory`, `--no-consolidation` | memory and the tick on | Long-term memory stays on under `up`; the consolidation tick runs in ask and auto mode ([Long-term memory](../harness/memory.md#consolidation)) |
 | `--install`, `--uninstall` | — | Service installation is not in this build: run `up` under launchd, systemd or a container supervisor |
 
 On Windows the kernel serves HTTP only: the named-pipe transport is a later deliverable, so
@@ -100,6 +101,14 @@ review_days = 90
 max_running = 3
 max_queued = 20
 daily_spend_cap_usd = 5.0
+
+[kernel.consolidation]
+enabled = true
+min_new_sessions = 3
+min_new_facts = 25
+min_interval_minutes = 360
+debounce_minutes = 30
+max_tokens_per_tick = 50000
 ```
 
 | Key | User config | Workspace file |
@@ -111,6 +120,9 @@ daily_spend_cap_usd = 5.0
 | `proactivity.max_proposed_open`, `daily_budget_usd`, `review_days` | Apply | Apply only when lower |
 | `proactivity.approval` | Applies | Applies only when stricter: `never` over `always_ask` over `follow_mode`; `never` turns proactivity off |
 | `quotas.max_running`, `max_queued`, `daily_spend_cap_usd` | Apply to every partition | Apply only when lower |
+| `consolidation.enabled` | `false` turns the tick off | `false` turns it off |
+| `consolidation.min_new_sessions`, `min_new_facts`, `min_interval_minutes`, `debounce_minutes` | The tick's admission gates | Ignored, with a note |
+| `consolidation.max_tokens_per_tick` | The tick's token cap | Applies only when lower |
 
 See [Proactivity](proactivity.md) and [Scheduling](scheduling.md) for what each does.
 

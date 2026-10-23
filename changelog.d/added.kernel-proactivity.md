@@ -28,3 +28,12 @@
   - With the `kernel` feature, the harness declares `propose_followup { title, rationale,
     when?, steps? }`, class `Todo` in every mode; the follow-up runs in its own session in
     the proposing session's mode.
+  - A sleeper's cron wake is fired by the kernel on its clock, and a process spawned
+    asleep on a cron wake recurs: after each run its successor sleeps on the same set.
+  - `adk-cli`: `adk-rust agenda [list|approve|reject|schedule --at|--cron]`, `nice PID
+    QUEUE`, `wake --file|--cron|--webhook -- "task"`; `adk-rust up` keeps the agenda in
+    `harness.db` or the `--store` backend, keeps long-term memory on, runs the consolidation
+    tick in its Ask and Auto partitions (`--no-consolidation` turns it off), and reads
+    `[kernel] quiet_hours`, `[kernel.proactivity]`, `[kernel.quotas]` and
+    `[kernel.consolidation]` from `harness.toml`, which a workspace may only restrict;
+    `adk-rust memory list --source consolidation` and `memory undo TICK`.

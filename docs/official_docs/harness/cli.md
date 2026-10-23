@@ -26,7 +26,7 @@ adk-rust                       # the harness REPL, ask mode
 | `adk-rust serve` | The harness in plan mode behind the HTTP server with the approval inbox; see [Serving the harness](serving.md) |
 | `adk-rust sessions list\|show\|rm` | Your harness sessions |
 | `adk-rust rules list\|add\|rm` | Your standing rules |
-| `adk-rust memory list\|show\|forget\|accept\|export\|import` | The long-term facts the harness learned; see [Long-term memory](#long-term-memory) |
+| `adk-rust memory list\|show\|forget\|accept\|export\|import\|undo` | The long-term facts the harness learned; see [Long-term memory](#long-term-memory) |
 | `adk-rust approvals list\|approve\|deny` | Calls waiting for a decision, here or on a served harness with `--server URL --token T` |
 | `adk-rust store status\|rotate-key` | The key `harness.db` is sealed under and which stores are wrapped; rotation to a new key (spec 3.1 §7.12); see [The encrypted store](#the-encrypted-store) |
 
@@ -51,6 +51,7 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--pack browser\|computer-use\|payments` | Adds a pack: `browser` installs the browser pack over the WebDriver at `ADK_WEBDRIVER_URL` (default `http://localhost:4444`; adk-cli feature `browser`), see [Browser and computer use](packs.md); `computer-use` and `payments` name the library API |
 | `--member NAME=explore\|general` | Adds a team member |
 | `--no-memory` | Turns long-term memory off: nothing is recalled or learned |
+| `--no-consolidation` | Turns the kernel's consolidation tick off under `adk-rust up` ([Long-term memory](memory.md#consolidation)) |
 | `--effort low\|medium\|high` | The reasoning effort of every model call in this session, whatever the mode or role (spec 3.1 §7.23); without it the `[effort]` policy applies per mode: plan high, members low, everything else medium |
 | `--store-key keychain:<entry>\|secret:<provider>/<name>\|env:<VAR>` | Where the key sealing `harness.db` is kept (spec 3.1 §7.12); without it `[store] key` in the user config, else the store is plaintext |
 | `--no-hooks` | Runs no hooks, the workspace's included (spec 3.1 §7.22); `/hooks` lists the effective set |
@@ -336,7 +337,15 @@ adk-rust memory accept 01M5D9            # confirm an assumed fact: it becomes k
 adk-rust memory forget 01M5D9            # never recalled again; kept as history
 adk-rust memory export --out facts.jsonl # every fact, as JSON lines with provenance
 adk-rust memory import facts.jsonl       # imported facts arrive assumed
+adk-rust memory list --source consolidation  # the consolidation ticks, and the facts they wrote
+adk-rust memory undo 199b579a            # revert one tick's status changes
 ```
+
+Under `adk-rust up` in ask or auto mode, the kernel's consolidation tick distils the sessions
+the per-session distiller never reached and tidies assumed facts (see
+[Consolidation](memory.md#consolidation)); `memory list --source consolidation` shows each
+tick and the facts it wrote, `memory undo TICK` makes what it superseded or forgot assumed
+again and forgets what it wrote, and `--no-consolidation` turns the tick off.
 
 ## Goals
 

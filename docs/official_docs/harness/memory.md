@@ -347,6 +347,11 @@ fn with_tick(harness: &Harness, user: &UserId) -> adk_core::Result<Kernel> {
 }
 ```
 
+`adk-rust up` registers `Harness::consolidator` for the OS user, filtered to the sessions of
+its workspace and the kernel's own, and turns the tick on in ask and auto mode with long-term
+memory; `--no-consolidation`, or `[kernel.consolidation] enabled = false` in `harness.toml`,
+turns it off ([Kernel commands](../kernel/cli.md)).
+
 The kernel evaluates the gate on its scheduler tick, at most once a minute of its clock, and
 admits a tick only when every row holds:
 
