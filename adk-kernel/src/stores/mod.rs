@@ -17,7 +17,7 @@
 //! ([`InMemoryAgendaStore`], `SqliteAgendaStore`, `PostgresAgendaStore`, `RedisAgendaStore`,
 //! suite `agenda_store_conformance_tests!`).
 //!
-//! The driver store ([`DriverStore`](crate::drivers::DriverStore), feature `drivers`) runs on
+//! The driver store (`drivers::DriverStore`, feature `drivers`) runs on
 //! the same four backends: `InMemoryDriverStore`, `SqliteDriverStore`,
 //! `PostgresDriverStore` and `RedisDriverStore` (spec 3.2 §7.7).
 //!

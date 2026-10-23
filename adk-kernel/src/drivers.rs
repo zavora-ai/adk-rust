@@ -4,16 +4,27 @@
 //! | Item | Spec |
 //! |---|---|
 //! | [`EffectClass`], [`DriverState`] | §7.7, §7.6 |
-//! | [`DriverManifest`], [`DriverSandbox`], [`DriverLifecycle`], [`DriverAccess`], [`load_manifests`] (feature `drivers`) | §7.7 |
-//! | [`DriverStore`], [`DriverRecord`], [`DriverPark`], [`DriverIsolation`] (feature `drivers`) | §7.7, §9.3, §13 Q8, Q9 |
-//! | [`DriverSupervisor`], [`DriverSupervisorBuilder`], [`DriverProposal`], [`DriverView`], [`StandingRulePins`] (feature `drivers`) | §7.7, K-I13, K-I14 |
-//! | [`DriverPolicy`] (feature `drivers`) | §7.7, K-I9, K-I14 |
+// The items of these rows exist only with the `drivers` feature, so they link only with it.
+#![cfg_attr(
+    feature = "drivers",
+    doc = r#"| [`DriverManifest`], [`DriverSandbox`], [`DriverLifecycle`], [`DriverAccess`], [`load_manifests`] (feature `drivers`) | §7.7 |
+| [`DriverStore`], [`DriverRecord`], [`DriverPark`], [`DriverIsolation`] (feature `drivers`) | §7.7, §9.3, §13 Q8, Q9 |
+| [`DriverSupervisor`], [`DriverSupervisorBuilder`], [`DriverProposal`], [`DriverView`], [`StandingRulePins`] (feature `drivers`) | §7.7, K-I13, K-I14 |
+| [`DriverPolicy`] (feature `drivers`) | §7.7, K-I9, K-I14 |"#
+)]
+#![cfg_attr(
+    not(feature = "drivers"),
+    doc = r#"| `DriverManifest`, `DriverSandbox`, `DriverLifecycle`, `DriverAccess`, `load_manifests` (feature `drivers`) | §7.7 |
+| `DriverStore`, `DriverRecord`, `DriverPark`, `DriverIsolation` (feature `drivers`) | §7.7, §9.3, §13 Q8, Q9 |
+| `DriverSupervisor`, `DriverSupervisorBuilder`, `DriverProposal`, `DriverView`, `StandingRulePins` (feature `drivers`) | §7.7, K-I13, K-I14 |
+| `DriverPolicy` (feature `drivers`) | §7.7, K-I9, K-I14 |"#
+)]
 //!
 //! A driver's lifecycle:
 //!
-//! 1. **Mount.** [`DriverSupervisor::propose`] shows what the person approves — the command
+//! 1. **Mount.** `DriverSupervisor::propose` shows what the person approves — the command
 //!    line, the partitions, the effect classes, the sandbox and the secrets it names — and
-//!    [`DriverSupervisor::mount`] records the approval (`kernel.driver.mounted`). Nothing runs
+//!    `DriverSupervisor::mount` records the approval (`kernel.driver.mounted`). Nothing runs
 //!    before it (K-I13).
 //! 2. **Start.** Lazily when a partition's agent lists the driver's tools, or at mount for
 //!    `lifecycle = "eager"`. The stdio launcher runs the server under the OS sandbox where an
@@ -25,12 +36,12 @@
 //!    [`KernelEvent::Driver`](crate::KernelEvent::Driver) events and `kernel.driver.*`
 //!    records; a crash restarts with the manifest's backoff.
 //! 4. **Stale.** A tool whose declaration differs from its pin is stale: the harness's
-//!    standing rules pinned to the old declaration stop matching, [`DriverPolicy`] asks
+//!    standing rules pinned to the old declaration stop matching, `DriverPolicy` asks
 //!    before every call of it, and the driver is `NeedsReapproval` (K-I14) until
-//!    [`DriverSupervisor::reapprove`] pins the new declarations and carries the re-approving
+//!    `DriverSupervisor::reapprove` pins the new declarations and carries the re-approving
 //!    person's rules forward.
 //! 5. **Park.** A call the server answers with a question ends as a held call: the
-//!    [`DriverPark`] is stored beside the approval as the run's checkpoint, the run parks,
+//!    `DriverPark` is stored beside the approval as the run's checkpoint, the run parks,
 //!    and the decision — after any restart — dispatches the call again, which re-issues it
 //!    with the answers (spec 3.2 §13 Q9).
 
