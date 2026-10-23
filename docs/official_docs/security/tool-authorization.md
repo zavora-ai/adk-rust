@@ -564,7 +564,7 @@ static map.
 A `ToolConfirmationHandler` is asked about each call with its final arguments while the run
 waits. Calls in one batch are decided concurrently, so a handler that prompts on a shared
 device serializes its own prompts. A `decide` that takes longer than
-`RunConfig::tool_confirmation_timeout` (default five minutes) denies the call:
+`RunConfig::tool_confirmation_timeout` (default `Some(Duration::from_secs(300))`) denies the call:
 
 ```rust
 use adk_core::RunConfig;
@@ -576,6 +576,10 @@ let config = RunConfig::builder()
     .tool_confirmation_timeout(Duration::from_secs(120))
     .build();
 ```
+
+Set `RunConfig::tool_confirmation_timeout = None` only when the handler owns its deadline.
+The handler must settle expiry and approval through the same decision owner, including
+any durable commit, before returning a decision. Batch abandonment still cancels the wait.
 
 ### Editing a Call in the Handler
 

@@ -247,8 +247,8 @@ does not exist yet cannot be protected this way.
 | Aspect | macOS Seatbelt | Linux bubblewrap | Windows restricted token |
 |--------|---------------|-----------------|---------------------|
 | Strategy | Deny-default profile plus the system runtime | Whitelist (mount only what's needed) | Restricted token plus ACL grants, through `WindowsEnforcer::run_confined` only; `probe` reports the `sandboxed_command` path unavailable |
-| Reads | System runtime and policy paths; home directories, `/tmp`, and `$TMPDIR` are unreadable unless allowed | Only bound paths exist | Ungranted paths that grant neither `Everyone` nor `Users` are refused; system binaries stay readable |
-| Writes | Only policy read-write paths (and `/dev/null`) | Only `--bind` paths writable | Policy paths (`RESTRICTED` is granted there), and paths that grant `Everyone` or `Users` write access |
+| Reads | System runtime and policy paths; home directories, `/tmp`, and `$TMPDIR` are unreadable unless allowed | Only bound paths exist | Owner-only private files need a policy grant; files readable by enabled public groups such as `Users` or `Everyone` remain readable |
+| Writes | Only policy read-write paths (and `/dev/null`) | Only `--bind` paths writable | Require a policy grant or an existing `RESTRICTED`/logon ACL; public `Users`/`Everyone` write access is insufficient |
 | Network | Denied unless `allow_network` | `--unshare-net` namespace | Not enforced |
 | Process spawning | `process-fork` granted only with `allow_process_spawn` | seccomp filter fails `fork`, `vfork`, and non-thread `clone` (x86-64, AArch64) | Not restricted; every descendant is killed with the call's Job Object |
 | Terminal | The caller's session | Always a new session (`--new-session`) with no controlling terminal | No console is attached; standard streams are not captured |

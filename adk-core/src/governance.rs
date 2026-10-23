@@ -24,8 +24,8 @@
 //! ([`RunConfig::tool_confirmation_decisions`]), a decision keyed by fingerprint
 //! ([`RunConfig::tool_approvals`]), the run's [`ApprovalStore`], and the live
 //! [`ToolConfirmationHandler`](crate::ToolConfirmationHandler), asked through
-//! [`decide_approval`](crate::ToolConfirmationHandler::decide_approval), which is bounded by
-//! [`RunConfig::tool_confirmation_timeout`] and denies when it expires.
+//! [`decide_approval`](crate::ToolConfirmationHandler::decide_approval), which denies on
+//! expiry when [`RunConfig::tool_confirmation_timeout`] is configured.
 //!
 //! A call held without a decision is answered with a [`confirmation_pending_response`]
 //! and stays held across runs. At the start of a later run the agent finds its held
@@ -1767,8 +1767,8 @@ async fn record_held_call(
 /// review — asks here, so the escalation is answered like a call held before execution:
 /// by a decision for the call ID (bound to the request's fingerprint), a live approval
 /// keyed by fingerprint ([`RunConfig::tool_approvals`]), a decision in the run's
-/// [`ApprovalStore`], which this call consumes, or the confirmation handler, bounded by
-/// [`RunConfig::tool_confirmation_timeout`]. Build `request` with the acting context and
+/// [`ApprovalStore`], which this call consumes, or the confirmation handler, bounded when
+/// [`RunConfig::tool_confirmation_timeout`] is configured. Build `request` with the acting context and
 /// the tool's [`ToolOrigin`], so the decision binds to the agent and the tool that asked.
 ///
 /// Without a decision, `request` is recorded as pending in the approval store and
@@ -2085,8 +2085,14 @@ async fn resolve_confirmation(
     let Some(handler) = config.tool_confirmation_handler.as_ref() else {
         return Ok(None);
     };
-    let timeout = config.tool_confirmation_timeout;
-    let decide = Box::pin(tokio::time::timeout(timeout, handler.decide_approval(request)));
+    let decide = Box::pin(async {
+        match config.tool_confirmation_timeout {
+            Some(timeout) => tokio::time::timeout(timeout, handler.decide_approval(request))
+                .await
+                .map_err(|_| timeout),
+            None => Ok(handler.decide_approval(request).await),
+        }
+    });
     let decided = match gate.abandon.clone() {
         Some(mut abandon) => {
             let abandoned = Box::pin(async move {
@@ -2111,7 +2117,7 @@ async fn resolve_confirmation(
     match decided {
         Ok(Ok(approval)) => Ok(Some((approval, "handler"))),
         Ok(Err(error)) => Err(error),
-        Err(_) => {
+        Err(timeout) => {
             tracing::warn!(
                 tool.name = %request.tool_name,
                 timeout_secs = timeout.as_secs(),
@@ -3188,14 +3194,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_abandon_signal_releases_a_waiting_handler() {
-        let config = RunConfig::builder().tool_confirmation_handler(Arc::new(NeverDecides)).build();
-        let (failed, signal) = tokio::sync::watch::channel(false);
-        let gate = gate(&config).with_abandon_signal(signal);
+    async fn handler_can_own_its_deadline() {
+        #[derive(Debug)]
+        struct Committing(Arc<tokio::sync::Notify>);
+        #[async_trait]
+        impl ToolConfirmationHandler for Committing {
+            async fn decide(
+                &self,
+                _request: &ToolConfirmationRequest,
+            ) -> Result<ToolConfirmationDecision> {
+                self.0.notified().await;
+                Ok(ToolConfirmationDecision::Approve)
+            }
+        }
+        assert_eq!(
+            RunConfig::default().tool_confirmation_timeout,
+            Some(crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT)
+        );
+        let committed = Arc::new(tokio::sync::Notify::new());
+        let mut config = RunConfig::builder()
+            .tool_confirmation_handler(Arc::new(Committing(committed.clone())))
+            .tool_confirmation_timeout(Duration::from_millis(10))
+            .build();
+        config.tool_confirmation_timeout = None;
+        let gate = gate(&config);
         let call = GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
         let waiting = authorize_tool_call(&gate, call);
-        failed.send_replace(true);
-        assert!(waiting.await.unwrap_err().to_string().contains("abandoned"));
+        tokio::pin!(waiting);
+        assert!(tokio::time::timeout(Duration::from_millis(30), &mut waiting).await.is_err());
+        committed.notify_one();
+        assert!(matches!(
+            waiting.await.unwrap(),
+            ToolAuthorization::Execute {
+                confirmation: Some(ToolConfirmationDecision::Approve),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_abandon_signal_releases_a_waiting_handler() {
+        for timeout in [Some(crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT), None] {
+            let config = RunConfig {
+                tool_confirmation_timeout: timeout,
+                ..RunConfig::builder().tool_confirmation_handler(Arc::new(NeverDecides)).build()
+            };
+            let (failed, signal) = tokio::sync::watch::channel(false);
+            let gate = gate(&config).with_abandon_signal(signal);
+            let call = GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
+            let waiting = authorize_tool_call(&gate, call);
+            failed.send_replace(true);
+            assert!(waiting.await.unwrap_err().to_string().contains("abandoned"));
+        }
     }
 
     #[tokio::test]

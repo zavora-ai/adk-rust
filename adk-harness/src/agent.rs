@@ -466,8 +466,8 @@ impl HarnessLayer<'_> {
             );
         }
 
-        if config.tool_confirmation_timeout == DEFAULT_TOOL_CONFIRMATION_TIMEOUT {
-            config.tool_confirmation_timeout = runtime.confirmation_timeout;
+        if config.tool_confirmation_timeout == Some(DEFAULT_TOOL_CONFIRMATION_TIMEOUT) {
+            config.tool_confirmation_timeout = Some(runtime.confirmation_timeout);
         }
         if config.budget.is_none()
             && let Some(budget) = &runtime.budget

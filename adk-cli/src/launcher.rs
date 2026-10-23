@@ -705,8 +705,8 @@ impl Launcher {
                 Some(Arc::new(ConsoleConfirmationHandler::new(console.clone())));
         }
         // A person reads and answers the prompt; the library default suits services.
-        if config.tool_confirmation_timeout == DEFAULT_TOOL_CONFIRMATION_TIMEOUT {
-            config.tool_confirmation_timeout = CONSOLE_CONFIRMATION_TIMEOUT;
+        if config.tool_confirmation_timeout == Some(DEFAULT_TOOL_CONFIRMATION_TIMEOUT) {
+            config.tool_confirmation_timeout = Some(CONSOLE_CONFIRMATION_TIMEOUT);
         }
         config
     }
@@ -2169,14 +2169,14 @@ mod tests {
     fn console_runs_always_have_a_handler_and_a_human_timeout() {
         let config = test_launcher().console_run_config(&console());
         assert!(config.tool_confirmation_handler.is_some());
-        assert_eq!(config.tool_confirmation_timeout, CONSOLE_CONFIRMATION_TIMEOUT);
+        assert_eq!(config.tool_confirmation_timeout, Some(CONSOLE_CONFIRMATION_TIMEOUT));
         assert!(config.tool_policy.is_none());
 
         let chosen = Duration::from_secs(5);
         let config = test_launcher()
             .with_run_config(RunConfig::builder().tool_confirmation_timeout(chosen).build())
             .console_run_config(&console());
-        assert_eq!(config.tool_confirmation_timeout, chosen);
+        assert_eq!(config.tool_confirmation_timeout, Some(chosen));
     }
 
     #[tokio::test]

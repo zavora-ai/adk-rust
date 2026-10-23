@@ -1349,7 +1349,8 @@ impl ToolConfirmationRequest {
 /// concurrently, so a handler that prompts on a shared device such as a terminal
 /// serializes its own prompts. The governed path asks through
 /// [`decide_approval`](Self::decide_approval), which calls `decide` unless overridden. A
-/// decision that takes longer than [`RunConfig::tool_confirmation_timeout`] denies the call.
+/// decision that takes longer than a configured [`RunConfig::tool_confirmation_timeout`]
+/// denies the call. A `None` timeout delegates its deadline to the handler.
 /// An error ends the turn after running tools finish; decisions still waiting in the same
 /// batch are dropped.
 #[async_trait]
@@ -1598,7 +1599,8 @@ pub struct RunConfig {
     /// How long the [`tool_confirmation_handler`](Self::tool_confirmation_handler) may take
     /// to decide one call before it is denied. Defaults to
     /// [`DEFAULT_TOOL_CONFIRMATION_TIMEOUT`](crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT).
-    pub tool_confirmation_timeout: std::time::Duration,
+    /// `None` delegates the deadline to the handler, which must settle its own waits.
+    pub tool_confirmation_timeout: Option<std::time::Duration>,
     /// Ledger that model calls and payment tools reserve budget against.
     ///
     /// When set, every model call of the run reserves its upper-bound cost
@@ -1667,7 +1669,7 @@ impl Default for RunConfig {
             approval_service: None,
             durable_run_id: None,
             request_context: None,
-            tool_confirmation_timeout: crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT,
+            tool_confirmation_timeout: Some(crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT),
             spend_ledger: None,
             llm_spend_estimate: None,
             audit: None,
@@ -1963,7 +1965,7 @@ impl RunConfigBuilder {
 
     /// Sets how long the confirmation handler may take to decide one call.
     pub fn tool_confirmation_timeout(mut self, timeout: std::time::Duration) -> Self {
-        self.config.tool_confirmation_timeout = timeout;
+        self.config.tool_confirmation_timeout = Some(timeout);
         self
     }
 

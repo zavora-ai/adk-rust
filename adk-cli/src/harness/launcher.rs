@@ -837,7 +837,7 @@ pub(crate) fn harness_for(
     let runtime = agent.runtime();
     let config = RunConfig {
         tool_confirmation_handler: runtime.confirmation_handler().cloned(),
-        tool_confirmation_timeout: CONSOLE_CONFIRMATION_TIMEOUT,
+        tool_confirmation_timeout: Some(CONSOLE_CONFIRMATION_TIMEOUT),
         ..RunConfig::default()
     };
     let root: Arc<dyn Agent> = agent.clone();

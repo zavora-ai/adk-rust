@@ -117,6 +117,10 @@ values of its manifest's `env`, and a file variable per secret. Under `sandbox =
 `HOME` and `TMPDIR` are a scratch directory at `<kernel home>/drivers/run/<id>/home`, the
 only place it may write besides `allow_write`.
 
+The Linux bubblewrap root also exposes existing system directories and `/nix/store`
+read-only, so Nix-built drivers can load their ELF interpreter and shared libraries.
+These runtime reads do not grant writes outside the scratch directory and `allow_write`.
+
 When no enforcer runs on the host — a Linux host without bubblewrap, for example — the
 driver runs unsandboxed and `drivers list` says why. `KernelConfig::fail_if_sandbox_unavailable` refuses
 to start it instead.
