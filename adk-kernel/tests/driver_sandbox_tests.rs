@@ -10,6 +10,7 @@
 
 mod driver_support;
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use adk_core::ReadonlyContext;
@@ -85,13 +86,31 @@ async fn assert_confined(work: &Workdir, manifest: DriverManifest) -> DriverIsol
     isolation
 }
 
+/// The directories the sandbox opened for the driver's program, as its isolation records
+/// them.
+fn program_paths(isolation: &DriverIsolation) -> Vec<PathBuf> {
+    match isolation {
+        DriverIsolation::OsSandbox { program_paths, .. } => program_paths.clone(),
+        other => panic!("not sandboxed: {other:?}"),
+    }
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_sandboxed_driver_cannot_write_outside_its_allowed_paths() {
     if !enforcer_available() {
         return;
     }
     let work = Workdir::new();
-    assert_confined(&work, work.manifest("notes", "sandbox = \"os\"")).await;
+    let isolation = assert_confined(&work, work.manifest("notes", "sandbox = \"os\"")).await;
+    let exe = canonical(&std::env::current_exe().unwrap());
+    assert!(
+        program_paths(&isolation).contains(&exe.parent().unwrap().to_path_buf()),
+        "the program's directory is recorded: {isolation:?}"
+    );
 }
 
 /// A program installed as a link in a directory of links — `~/.cargo/bin`, `/opt/<app>/bin`,
@@ -106,7 +125,12 @@ async fn a_driver_reached_through_a_link_outside_the_system_directories_starts()
     let exe = std::env::current_exe().unwrap();
     let link = links.path().join("notes-server");
     std::os::unix::fs::symlink(&exe, &link).unwrap();
-    assert_confined(&work, work.manifest_with("notes", &link, &[], "sandbox = \"os\"")).await;
+    let isolation =
+        assert_confined(&work, work.manifest_with("notes", &link, &[], "sandbox = \"os\"")).await;
+    assert!(
+        program_paths(&isolation).contains(&canonical(&exe).parent().unwrap().to_path_buf()),
+        "the link's target directory is opened: {isolation:?}"
+    );
 }
 
 /// A script whose interpreter lives outside the system directories, as a server run by a
@@ -131,7 +155,19 @@ async fn a_script_driver_whose_interpreter_is_outside_the_system_directories_sta
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let exe_dir = exe.parent().unwrap();
-    assert_confined(&work, work.manifest_with("notes", &script, &[exe_dir], "sandbox = \"os\""))
-        .await;
+    // The binary the script runs is a file the server reads, so the manifest lists it, and
+    // its loader: under a Nix toolchain that is the store.
+    let mut read = vec![exe.parent().unwrap()];
+    if Path::new("/nix/store").is_dir() {
+        read.push(Path::new("/nix/store"));
+    }
+    let isolation =
+        assert_confined(&work, work.manifest_with("notes", &script, &read, "sandbox = \"os\""))
+            .await;
+    let opened = program_paths(&isolation);
+    assert!(
+        opened.contains(&canonical(toolchain.path())),
+        "the interpreter's directory is opened: {isolation:?}"
+    );
+    assert!(opened.contains(&canonical(scripts.path())), "and the script's: {isolation:?}");
 }

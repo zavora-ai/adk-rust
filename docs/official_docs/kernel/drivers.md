@@ -117,6 +117,19 @@ values of its manifest's `env`, and a file variable per secret. Under `sandbox =
 `HOME` and `TMPDIR` are a scratch directory at `<kernel home>/drivers/run/<id>/home`, the
 only place it may write besides `allow_write`.
 
+The sandbox runs the file the command resolves to, through any link, and opens read-only
+what that program needs to start, outside the system directories every sandbox reads:
+
+| Program | Opened read-only |
+|---|---|
+| Any | Its directory |
+| A script | Its `#!` interpreter's directory, and for `#!/usr/bin/env NAME`, the directory of the `NAME` that `PATH` finds |
+| An ELF program | Its dynamic loader's directory and its `RUNPATH` or `RPATH` directories; a loader or library in `/nix/store` opens the store |
+
+The directories are recorded on the driver's isolation (`programPaths`) and in its
+`kernel.driver.started` record. A server that reads files beyond them, such as a package
+tree next to its entry point, lists them in `allow_read`.
+
 When no enforcer runs on the host — a Linux host without bubblewrap, for example — the
 driver runs unsandboxed and `drivers list` says why. `KernelConfig::fail_if_sandbox_unavailable` refuses
 to start it instead.

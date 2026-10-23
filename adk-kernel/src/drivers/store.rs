@@ -31,6 +31,11 @@ pub enum DriverIsolation {
     OsSandbox {
         /// The enforcer: `seatbelt`, `bubblewrap`.
         enforcer: String,
+        /// The directories opened read-only for the driver's program outside the system
+        /// directories: its own, a script's interpreter's, and an ELF program's dynamic
+        /// loader's and run paths.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        program_paths: Vec<std::path::PathBuf>,
     },
     /// On the host with the user's permissions; recorded with why.
     Unsandboxed {

@@ -524,7 +524,7 @@ pub async fn drivers(target: &KernelTarget, command: DriversCommands) -> Result<
 fn driver_line(driver: &DriverView) -> String {
     let record = &driver.record;
     let isolation = match &record.isolation {
-        Some(DriverIsolation::OsSandbox { enforcer }) => format!("sandboxed ({enforcer})"),
+        Some(DriverIsolation::OsSandbox { enforcer, .. }) => format!("sandboxed ({enforcer})"),
         Some(DriverIsolation::Unsandboxed { reason }) => format!("unsandboxed: {reason}"),
         Some(_) => "isolated".to_string(),
         None => format!("{} (not started)", record.manifest.sandbox.as_str()),

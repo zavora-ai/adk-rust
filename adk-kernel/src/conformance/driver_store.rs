@@ -190,7 +190,10 @@ async fn own_ids(store: &dyn DriverStore, ids: &[String]) -> Vec<String> {
 pub async fn put_get_round_trip(harness: &dyn DriverStoreHarness) {
     let store = harness.open().await;
     let cases = [
-        (DriverSandbox::Os, DriverIsolation::OsSandbox { enforcer: "seatbelt".into() }),
+        (
+            DriverSandbox::Os,
+            DriverIsolation::OsSandbox { enforcer: "seatbelt".into(), program_paths: Vec::new() },
+        ),
         (
             DriverSandbox::Container,
             DriverIsolation::Unsandboxed { reason: "no container ü".into() },
@@ -213,7 +216,7 @@ pub async fn put_replaces(harness: &dyn DriverStoreHarness) {
     let first = full_record(
         &id,
         DriverSandbox::Os,
-        DriverIsolation::OsSandbox { enforcer: "seatbelt".into() },
+        DriverIsolation::OsSandbox { enforcer: "seatbelt".into(), program_paths: Vec::new() },
     );
     store.put(first.clone()).await.expect("put");
     let mut second = first.clone();
@@ -237,7 +240,10 @@ pub async fn list_orders_by_id(harness: &dyn DriverStoreHarness) {
         let record = full_record(
             id,
             DriverSandbox::Os,
-            DriverIsolation::OsSandbox { enforcer: "bubblewrap".into() },
+            DriverIsolation::OsSandbox {
+                enforcer: "bubblewrap".into(),
+                program_paths: vec!["/opt/mcp/bin".into()],
+            },
         );
         store.put(record).await.expect("put");
     }
@@ -268,7 +274,7 @@ pub async fn delete(harness: &dyn DriverStoreHarness) {
         .put(full_record(
             &id,
             DriverSandbox::Os,
-            DriverIsolation::OsSandbox { enforcer: "seatbelt".into() },
+            DriverIsolation::OsSandbox { enforcer: "seatbelt".into(), program_paths: Vec::new() },
         ))
         .await
         .expect("put");
@@ -291,7 +297,7 @@ pub async fn records_survive_a_restart(harness: &dyn DriverStoreHarness) {
     let record = full_record(
         &id,
         DriverSandbox::Os,
-        DriverIsolation::OsSandbox { enforcer: "seatbelt".into() },
+        DriverIsolation::OsSandbox { enforcer: "seatbelt".into(), program_paths: Vec::new() },
     );
     let held = park(&id, &scope, "call-1", json!({ "task": { "taskId": "t-1" } }));
     {
@@ -325,7 +331,10 @@ pub async fn concurrent_writers(harness: &dyn DriverStoreHarness) {
             let record = full_record(
                 &id,
                 DriverSandbox::Os,
-                DriverIsolation::OsSandbox { enforcer: "seatbelt".into() },
+                DriverIsolation::OsSandbox {
+                    enforcer: "seatbelt".into(),
+                    program_paths: Vec::new(),
+                },
             );
             store.put(record).await.expect("put");
             store
