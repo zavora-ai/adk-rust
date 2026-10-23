@@ -1249,7 +1249,7 @@ fn spawn_maintenance(
             }
             // A preemptor that finished on another replica, a slot freed there, a new day.
             sup.requeue_preempted(None).await;
-            if sup.quotas.max_running.is_some() {
+            if sup.caps_running().await {
                 sup.admit_waiters().await;
             }
             let today = sup.clock.now().date_naive();

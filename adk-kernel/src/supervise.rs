@@ -648,15 +648,57 @@ impl Supervision {
         self.proactivity.daily_budget.max_cost_micro_usd
     }
 
-    /// Every quiet-hours window that applies: the kernel's and the proactivity policy's.
-    fn quiet_windows(&self) -> Vec<QuietHours> {
-        self.quiet_hours.iter().chain(self.proactivity.quiet_hours.iter()).copied().collect()
+    /// Every quiet-hours window that applies in `partition`: the kernel's, the proactivity
+    /// policy's and the partition's own (spec 3.2 §7.8, §7.9).
+    pub(crate) async fn quiet_windows(&self, partition: &PartitionId) -> Vec<QuietHours> {
+        let mut windows: Vec<QuietHours> =
+            self.quiet_hours.iter().chain(self.proactivity.quiet_hours.iter()).copied().collect();
+        if let Some(record) = self.partition_record(partition).await {
+            windows.extend(record.quiet_hours);
+        }
+        windows
     }
 
-    /// The earliest instant at or after `now` outside every quiet-hours window: when a
-    /// proactive process may start (spec 3.2 §7.9).
-    pub(crate) fn quiet_release(&self, now: DateTime<Utc>) -> DateTime<Utc> {
-        let quiet = self.quiet_windows();
+    /// The quotas of `partition`: the kernel's, each lowered by the partition's own (spec
+    /// 3.2 §7.8, §7.9).
+    pub(crate) async fn quotas_of(&self, partition: &PartitionId) -> Quotas {
+        match self.partition_record(partition).await {
+            Some(record) => self.quotas.stricter(&record.quotas),
+            None => self.quotas.clone(),
+        }
+    }
+
+    /// Whether the kernel or a partition caps the processes running at once.
+    pub(crate) async fn caps_running(&self) -> bool {
+        self.quotas.max_running.is_some()
+            || self.partitions.list().await.is_ok_and(|partitions| {
+                partitions.iter().any(|partition| partition.quotas.max_running.is_some())
+            })
+    }
+
+    /// The stored record of `partition`; `None` without one or when the store fails, so
+    /// the kernel's own limits apply.
+    async fn partition_record(
+        &self,
+        partition: &PartitionId,
+    ) -> Option<crate::partition::Partition> {
+        match self.partitions.get(partition).await {
+            Ok(record) => record,
+            Err(error) => {
+                tracing::warn!(partition = %partition, error = %error, "could not read the partition's record; the kernel's limits apply");
+                None
+            }
+        }
+    }
+
+    /// The earliest instant at or after `now` outside every quiet-hours window of
+    /// `partition`: when a proactive process may start there (spec 3.2 §7.9).
+    pub(crate) async fn quiet_release(
+        &self,
+        partition: &PartitionId,
+        now: DateTime<Utc>,
+    ) -> DateTime<Utc> {
+        let quiet = self.quiet_windows(partition).await;
         let probe = AdmissionInput {
             class: ProcessClass::Proactive,
             approval_woken: false,
@@ -726,11 +768,12 @@ impl Supervision {
             return Admission::Admit;
         }
         let class = class_of(run, meta);
-        let quiet = self.quiet_windows();
+        let quiet = self.quiet_windows(&meta.partition).await;
+        let quotas = self.quotas_of(&meta.partition).await;
         let _gate = self.admission.lock().await;
         let (running, background) = self.admitted(&meta.partition, &run.run_id).await;
         let budgeted = class != ProcessClass::Interactive
-            && (self.quotas.daily_spend_cap.is_some()
+            && (quotas.daily_spend_cap.is_some()
                 || (class == ProcessClass::Proactive && self.daily_budget_cost().is_some()));
         let (partition_spent, proactive_spent, need) = if budgeted {
             (
@@ -753,7 +796,7 @@ impl Supervision {
             ),
             now: self.clock.now(),
             quiet_hours: &quiet,
-            quotas: &self.quotas,
+            quotas: &quotas,
             running,
             preemptible: !background.is_empty(),
             partition_spent,
@@ -889,10 +932,10 @@ impl Supervision {
         }
         let mut woken = 0;
         for (partition, mut waiters) in waiting {
+            let quotas = self.quotas_of(&partition).await;
             let _gate = self.admission.lock().await;
             let (running, _) = self.admitted(&partition, "").await;
-            let free =
-                self.quotas.max_running.map_or(usize::MAX, |max| max.saturating_sub(running));
+            let free = quotas.max_running.map_or(usize::MAX, |max| max.saturating_sub(running));
             waiters.sort_by(|(a, x), (b, y)| {
                 let human = |meta: &ProcessMeta, run: &RunRecord| {
                     class_of(run, meta) != ProcessClass::Interactive
@@ -944,14 +987,14 @@ impl Supervision {
             // Without a cap there is nothing to replenish: such a sleeper waits on its other
             // wakes.
             let budget = if proactive { self.daily_budget_cost() } else { None };
-            if self.quotas.daily_spend_cap.is_none() && budget.is_none() {
+            let cap = self.quotas_of(&partition).await.daily_spend_cap;
+            if cap.is_none() && budget.is_none() {
                 continue;
             }
             let fits = |cap: Option<u64>, spent: u64| {
                 cap.is_none_or(|cap| spent.saturating_add(need.max(1)) <= cap)
             };
-            let mut room =
-                fits(self.quotas.daily_spend_cap, self.partition_spent(&partition).await);
+            let mut room = fits(cap, self.partition_spent(&partition).await);
             if budget.is_some() {
                 room &= fits(budget, self.proactive_spent(&partition).await);
             }
@@ -1503,7 +1546,7 @@ impl WorkerHooks for KernelHooks {
         }
         // A slot may have freed in the partition, and a preempted process whose preemptor
         // already finished goes back to its queue (spec 3.2 §7.9).
-        if sup.quotas.max_running.is_some() {
+        if sup.caps_running().await {
             sup.admit_waiters().await;
         }
         if matches!(meta.suspended_by, Some(Suspension::Preempted { .. })) {
@@ -1550,7 +1593,7 @@ impl WorkerHooks for KernelHooks {
             // The processes this one preempted go back to their queue, and a slot freed
             // (spec 3.2 §7.9); the item this one ran is done (§7.5).
             sup.requeue_preempted(Some(&run.run_id)).await;
-            if sup.quotas.max_running.is_some() {
+            if sup.caps_running().await {
                 sup.admit_waiters().await;
             }
             if let Some(meta) = sup.stored_meta(run).await {

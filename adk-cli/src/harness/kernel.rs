@@ -35,8 +35,10 @@ use super::args::PROJECT_CONFIG_FILE;
 ///
 /// A `[[kernel.partitions]]` entry has `id`, and optionally `class` (default the id),
 /// `tenant`, `mode` (`read_only`, `plan`, `ask`, `auto`; default `ask`), `memory_scope`
-/// (default the id), `drivers` and `cross_partition` (`deny`, the default, or
-/// `coordinator_with_approval`).
+/// (default the id), `drivers`, `quiet_hours` (`HH:MM-HH:MM`, local), `quotas` (an inline
+/// table of `max_running`, `max_queued`, `daily_spend_cap_usd`) and `cross_partition`
+/// (`deny`, the default, or `coordinator_with_approval`). A partition's quiet hours and
+/// quotas apply beside the kernel's: every window holds, and each quota is the lower one.
 ///
 /// The drivers directory of the table arrives with its phase; until then it is reported
 /// as an unknown key. Flags win over both files (spec 3.2 §7.5, §7.8, §7.9).
@@ -107,6 +109,8 @@ struct PartitionTable {
     memory_scope: Option<String>,
     #[serde(default)]
     drivers: Vec<String>,
+    quiet_hours: Option<String>,
+    quotas: Option<QuotasTable>,
     cross_partition: Option<String>,
 }
 
@@ -128,6 +132,23 @@ impl PartitionTable {
         }
         for driver in &self.drivers {
             partition = partition.with_driver(driver.clone());
+        }
+        if let Some(window) = &self.quiet_hours {
+            partition = partition.with_quiet_hours(window.parse().map_err(invalid)?);
+        }
+        if let Some(quotas) = &self.quotas {
+            let mut limits = adk_kernel::Quotas::new();
+            if let Some(max) = positive(origin, quotas.max_running)? {
+                limits = limits.with_max_running(max);
+            }
+            if let Some(max) = positive(origin, quotas.max_queued)? {
+                limits = limits.with_max_queued(max);
+            }
+            let cap = "partitions.quotas.daily_spend_cap_usd";
+            if let Some(cap) = micro_usd(origin, cap, quotas.daily_spend_cap_usd)? {
+                limits = limits.with_daily_spend_cap(cap);
+            }
+            partition = partition.with_quotas(limits);
         }
         if let Some(cross) = &self.cross_partition {
             partition = partition.with_cross_partition(cross.parse().map_err(invalid)?);
@@ -693,18 +714,24 @@ mod tests {
         let (dir, user) = files(
             "[kernel]\ncoordinator = \"home\"\n\
              [[kernel.partitions]]\nid = \"home\"\ncross_partition = \"coordinator_with_approval\"\n\
+             quiet_hours = \"22:00-07:00\"\n\
              [[kernel.partitions]]\nid = \"work\"\nclass = \"work-agents\"\nmode = \"auto\"\n\
-             memory_scope = \"job\"\ndrivers = [\"calendar\"]\ncross_partition = \"coordinator_with_approval\"\n",
+             memory_scope = \"job\"\ndrivers = [\"calendar\"]\ncross_partition = \"coordinator_with_approval\"\n\
+             quotas = { max_running = 2, daily_spend_cap_usd = 1.5 }\n",
             "[kernel]\ncoordinator = \"work\"\n[[kernel.partitions]]\nid = \"evil\"\n",
         );
         let settings = KernelSettings::resolve(Some(&user), dir.path()).unwrap();
         let expected = vec![
             adk_kernel::Partition::new("home", "home")
+                .with_quiet_hours("22:00-07:00".parse().unwrap())
                 .with_cross_partition(adk_kernel::CrossPartition::CoordinatorWithApproval),
             adk_kernel::Partition::new("work", "work-agents")
                 .with_mode(adk_kernel::PartitionMode::Auto)
                 .with_memory_scope("job")
                 .with_driver("calendar")
+                .with_quotas(
+                    adk_kernel::Quotas::new().with_max_running(2).with_daily_spend_cap(1_500_000),
+                )
                 .with_cross_partition(adk_kernel::CrossPartition::CoordinatorWithApproval),
         ];
         assert_eq!(settings.partitions, expected);
@@ -730,6 +757,9 @@ mod tests {
             "[[kernel.partitions]]\nid = \"home\"\ncross_partition = \"maybe\"\n",
             "[[kernel.partitions]]\nid = \"\"\n",
             "[[kernel.partitions]]\nid = \"home\"\ncolour = \"blue\"\n",
+            "[[kernel.partitions]]\nid = \"home\"\nquiet_hours = \"late\"\n",
+            "[[kernel.partitions]]\nid = \"home\"\nquotas = { max_running = 0 }\n",
+            "[[kernel.partitions]]\nid = \"home\"\nquotas = { max_parallel = 2 }\n",
         ] {
             let (dir, user_path) = files(user, "");
             assert!(KernelSettings::resolve(Some(&user_path), dir.path()).is_err(), "{user}");

@@ -833,7 +833,7 @@ impl ProcessTable {
             // A partition agent's target runs only its own partition (spec 3.2 §7.8, K-I15).
             spec.partition = sup.partition_for(&run.target, spec.partition)?;
             sup.check_session_partition(&run, &spec.partition).await?;
-            if let Some(max) = sup.quotas.max_queued {
+            if let Some(max) = sup.quotas_of(&spec.partition).await.max_queued {
                 let queued = sup.queued_in(&spec.partition).await;
                 if queued >= max {
                     return Err(KernelError::Quota {

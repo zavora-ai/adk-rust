@@ -1431,7 +1431,7 @@ impl Agenda {
             (Some(set), Some(at)) => Some(set.with_expiry(at, crate::wake::ExpiryAction::Cancel)),
             (set, _) => set,
         };
-        let release = sup.quiet_release(now);
+        let release = sup.quiet_release(&item.partition, now).await;
         let proposer = match item.proposer() {
             Some(pid) => sup.runs.get(pid).await?,
             None => None,

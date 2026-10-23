@@ -889,7 +889,7 @@ impl ConsolidationExecutor {
         })?;
         let now = self.sup.clock.now();
         // Spawned just before a window opened: no proactive process starts inside it (K-I11).
-        if self.sup.quiet_release(now) > now {
+        if self.sup.quiet_release(&input.partition, now).await > now {
             return Ok(json!({ "tickId": run_id, "skipped": "quiet_hours" }));
         }
         let consolidator = self.consolidators.get(&input.partition).ok_or_else(|| {
@@ -1060,13 +1060,7 @@ impl ConsolidationTicker {
         } else {
             0
         };
-        let quiet: Vec<QuietHours> = self
-            .sup
-            .quiet_hours
-            .iter()
-            .chain(self.sup.proactivity.quiet_hours.iter())
-            .copied()
-            .collect();
+        let quiet = self.sup.quiet_windows(partition).await;
         let inputs = TickInputs::new(now, material.clone())
             .with_busy(self.busy(partition).await)
             .with_quiet_hours(quiet)

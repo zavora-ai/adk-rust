@@ -87,6 +87,19 @@ fn full(id: &PartitionId) -> Partition {
         .with_memory_scope(unique("scope"))
         .with_driver("calendar")
         .with_driver(unique("driver"))
+        .with_quotas(
+            crate::sched::Quotas::new()
+                .with_max_running(2)
+                .with_max_queued(9)
+                .with_daily_spend_cap(1_500_000),
+        )
+        .with_quiet_hours(
+            crate::sched::QuietHours::new(
+                chrono::NaiveTime::from_hms_opt(22, 0, 0).expect("time"),
+                chrono::NaiveTime::from_hms_opt(6, 30, 0).expect("time"),
+            )
+            .with_utc_offset_minutes(-300),
+        )
         .with_cross_partition(CrossPartition::CoordinatorWithApproval)
         .with_blocked_crossing(partition_id())
 }

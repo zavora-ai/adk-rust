@@ -32,6 +32,7 @@ use serde_json::{Value, json};
 
 use crate::audit;
 use crate::error::{KernelError, NOT_FOUND_CODE, Result};
+use crate::sched::{QuietHours, Quotas};
 
 mod crossing;
 
@@ -233,24 +234,34 @@ fn ask() -> PartitionMode {
     PartitionMode::Ask
 }
 
+fn unlimited(quotas: &Quotas) -> bool {
+    *quotas == Quotas::default()
+}
+
 /// A partition (spec 3.2 §7.8): a policy class plus a memory scope plus a driver set, run by
 /// its own `HarnessAgent` built with [`default_mode`](Self::default_mode).
 ///
-/// The quotas and quiet hours of §7.9 join the record with the scheduling of phase 2.
+/// Its [`quotas`](Self::quotas) and [`quiet_hours`](Self::quiet_hours) apply beside the
+/// kernel's (spec 3.2 §7.9): each quota is the lower of the two, and every quiet-hours window
+/// holds.
 ///
 /// # Example
 ///
 /// ```rust
-/// use adk_kernel::{CrossPartition, Partition, PartitionMode};
+/// use adk_kernel::{CrossPartition, Partition, PartitionMode, QuietHours, Quotas};
 ///
 /// let work = Partition::new("work", "work")
 ///     .with_mode(PartitionMode::Auto)
 ///     .with_driver("calendar")
+///     .with_quotas(Quotas::new().with_max_running(2))
+///     .with_quiet_hours("19:00-08:00".parse::<QuietHours>().unwrap())
 ///     .with_cross_partition(CrossPartition::CoordinatorWithApproval);
 /// assert_eq!(work.memory_scope, "work");
 /// assert_eq!(work.drivers, ["calendar"]);
 /// let wire = serde_json::to_value(&work).unwrap();
 /// assert_eq!(wire["defaultMode"], "auto");
+/// assert_eq!(wire["quotas"]["maxRunning"], 2);
+/// assert_eq!(wire["quietHours"]["start"], "19:00");
 /// assert_eq!(wire["crossPartition"], "coordinator_with_approval");
 /// assert_eq!(serde_json::from_value::<Partition>(wire).unwrap(), work);
 /// ```
@@ -277,6 +288,14 @@ pub struct Partition {
     /// and its id is here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drivers: Vec<String>,
+    /// The partition's own quotas (spec 3.2 §7.9): each applies beside the kernel's, the
+    /// lower of the two. Defaults to none.
+    #[serde(default, skip_serializing_if = "unlimited")]
+    pub quotas: Quotas,
+    /// The partition's own quiet hours, which hold beside the kernel's: no proactive or
+    /// maintenance process of the partition starts inside them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiet_hours: Option<QuietHours>,
     /// Whether the partition takes part in crossings. Defaults to [`CrossPartition::Deny`].
     #[serde(default)]
     pub cross_partition: CrossPartition,
@@ -302,6 +321,8 @@ impl Partition {
             tenant: None,
             default_mode: PartitionMode::Ask,
             drivers: Vec::new(),
+            quotas: Quotas::default(),
+            quiet_hours: None,
             cross_partition: CrossPartition::Deny,
             blocked_crossings: BTreeSet::new(),
         }
@@ -332,6 +353,20 @@ impl Partition {
     #[must_use]
     pub fn with_driver(mut self, driver: impl Into<String>) -> Self {
         self.drivers.push(driver.into());
+        self
+    }
+
+    /// Sets the partition's own quotas.
+    #[must_use]
+    pub fn with_quotas(mut self, quotas: Quotas) -> Self {
+        self.quotas = quotas;
+        self
+    }
+
+    /// Sets the partition's own quiet hours.
+    #[must_use]
+    pub fn with_quiet_hours(mut self, quiet_hours: QuietHours) -> Self {
+        self.quiet_hours = Some(quiet_hours);
         self
     }
 
