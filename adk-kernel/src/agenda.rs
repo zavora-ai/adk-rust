@@ -607,14 +607,14 @@ pub trait AgendaStore: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::Store`](crate::KernelError::Store) when the backend fails.
+    /// Returns [`KernelError::Store`] when the backend fails.
     async fn put(&self, item: AgendaItem) -> Result<()>;
 
     /// The item `id`, or `None`.
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::Store`](crate::KernelError::Store) when the backend fails.
+    /// Returns [`KernelError::Store`] when the backend fails.
     async fn get(&self, id: &str) -> Result<Option<AgendaItem>>;
 
     /// The items `filter` selects, oldest first (by `created_at`, then id), at most
@@ -622,7 +622,7 @@ pub trait AgendaStore: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::Store`](crate::KernelError::Store) when the backend fails.
+    /// Returns [`KernelError::Store`] when the backend fails.
     async fn list(&self, filter: &AgendaFilter) -> Result<Vec<AgendaItem>>;
 
     /// Writes `item` over the stored item with its id when the stored item's state is of
@@ -631,14 +631,14 @@ pub trait AgendaStore: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::Store`](crate::KernelError::Store) when the backend fails.
+    /// Returns [`KernelError::Store`] when the backend fails.
     async fn transition(&self, item: AgendaItem, from: AgendaStateKind) -> Result<bool>;
 
     /// Deletes the item `id`; `false` when there was none.
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::Store`](crate::KernelError::Store) when the backend fails.
+    /// Returns [`KernelError::Store`] when the backend fails.
     async fn delete(&self, id: &str) -> Result<bool>;
 }
 
@@ -803,7 +803,7 @@ pub(crate) fn route(
 /// | Call | Effect |
 /// |---|---|
 /// | [`propose`](Self::propose) | Checks the [`ProactivityPolicy`], records the item `Proposed`, and routes it: held, to the inbox, or — in an Auto partition following its mode — approved and scheduled |
-/// | [`approve`](Self::approve) | `Proposed` → `Approved` → `Scheduled`: a sleeping [`ProcessKind::Proposed`](crate::ProcessKind::Proposed) process whose parent is the proposing run |
+/// | [`approve`](Self::approve) | `Proposed` → `Approved` → `Scheduled`: a [`ProcessKind::Proposed`] process whose parent is the proposing run |
 /// | [`reject`](Self::reject) | `Proposed` or `Approved` → `Rejected` |
 /// | [`schedule`](Self::schedule) | Puts the item's process to sleep on a wake set, approving a proposed item first |
 ///
