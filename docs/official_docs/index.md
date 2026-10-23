@@ -75,6 +75,14 @@ The governed, durable harness agent (`adk-harness`, spec 3.1): modes, approvals,
 - [Harness Payments](harness/payments.md) - The payments pack: `adk-payments` tools as class `Payment`, one non-waivable approval per call, mandate guardrails, spend ledger, `harness.payment` with the journal receipt
 - [Harness Voice](harness/voice.md) - The voice surface: the harness as the agent of an `IntegratedRealtimeRunner`, held calls surfaced as realtime events, spoken or inbox approvals, `harness.voice.*` in one audit trail
 
+## Agent Kernel
+
+The always-on form of the harness (`adk-kernel`, spec 3.2): durable processes that sleep for free and wake on events, a kill switch across replicas, and a control plane every surface attaches to.
+
+- [Overview](kernel/index.md) - What `adk-rust up` runs: workers per queue, the process table, the event bus, freezing, using the kernel from code
+- [Kernel Commands](kernel/cli.md) - `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`, `freeze`, `unfreeze`, `events`, `goal` on a running kernel, `[kernel]` in `harness.toml`
+- [The Control Plane](kernel/control-plane.md) - The socket and HTTP transports, the auth matrix, routes, `kernel.control` audit records, `ControlClient`
+
 ## Realtime & Multimodal
 
 A dedicated, newcomer-friendly guide to building voice + multimodal agents — architecture, concepts, and runnable examples.

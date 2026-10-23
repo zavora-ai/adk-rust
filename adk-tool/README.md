@@ -636,6 +636,15 @@ falls back only on `METHOD_NOT_FOUND`. The default is `initialize`.
 Stateless MRTR elicitation is driven automatically and
 bounded by `maxInputRounds`; opaque `requestState` is echoed without inspection.
 
+A call waiting for an answer survives a restart as a serializable `ParkedMcpCall`
+(server, tool, arguments, call ID, `requestState`, input requests and their digest, and a
+`kind` of `mrtr`, `task { taskId }` or `legacy`). `McpToolset::call_tool_resumable` ends a
+call at its first question instead of answering it in process, a handler answering in
+process reads the call with `ParkedMcpCall::current()`, and `McpToolset::reissue` (or
+`McpServerManager::reissue_parked_call`) resumes it: a new `tools/call` with
+`inputResponses` and the stored state, `tasks/get` and `tasks/update` for a task, and for
+a legacy call a second run only when the tool declares `readOnlyHint` or `idempotentHint`.
+
 ### MCP Auto-Reconnect (Connection Resilience)
 
 A `ConnectionFactory` creates the same concrete `rmcp::RunningService` again after a

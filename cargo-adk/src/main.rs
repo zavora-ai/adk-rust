@@ -18,6 +18,7 @@
 //! cargo adk deploy                          # deploy to platform
 //! cargo adk deploy --stream-output          # deploy with JSON event streaming
 //! cargo adk eval tests/ --agent-cmd "target/release/my-agent --eval"  # run eval sets
+//! cargo adk eval --ledger ledger.jsonl      # gate on drift in an exported activity ledger
 //! ```
 
 use clap::{Parser, Subcommand};
@@ -30,6 +31,7 @@ use cargo_adk::composition::{DryRunFile, DryRunOutput, resolve_composition};
 use cargo_adk::registry::TemplateRegistry;
 
 mod eval_cmd;
+mod ledger_gate;
 
 const ADK_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -183,14 +185,35 @@ enum AdkCommand {
     /// request `{"case_id","turn","user_text","session_id"}`, response
     /// `{"text","tool_calls":[{"name","args"}]}` or `{"error"}`. Every turn of a case shares
     /// a session_id. Logs go to stderr.
+    ///
+    /// `--ledger <export.jsonl>` instead runs the ledger statistics over an exported activity
+    /// ledger and exits non-zero on a meaningful deviation of its last day from the baseline.
     Eval {
         /// Path to a .test.json file, or a directory of them
-        path: PathBuf,
+        #[arg(required_unless_present = "ledger")]
+        path: Option<PathBuf>,
 
         /// Shell command that starts the agent under test (run with `sh -c`, or `cmd /C` on
         /// Windows)
-        #[arg(long)]
-        agent_cmd: String,
+        #[arg(long, required_unless_present = "ledger")]
+        agent_cmd: Option<String>,
+
+        /// Exported activity ledger (JSONL, one row per line) to check for drift instead of
+        /// running eval sets
+        #[arg(
+            long,
+            value_name = "EXPORT.JSONL",
+            conflicts_with_all = [
+                "path", "agent_cmd", "criteria", "judge_model", "save_baseline",
+                "check_regression", "baseline", "tolerance", "turn_timeout",
+            ]
+        )]
+        ledger: Option<PathBuf>,
+
+        /// Floor of one ledger dimension's deviation test, as DIMENSION=VALUE (repeatable;
+        /// --ledger only)
+        #[arg(long = "floor", value_name = "DIMENSION=VALUE", requires = "ledger")]
+        floors: Vec<String>,
 
         /// EvaluationCriteria JSON file (default: tool_trajectory_score 1.0 and
         /// response_similarity 0.8)
@@ -471,9 +494,20 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        AdkCommand::Eval { ledger: Some(ledger), floors, format, output, .. } => {
+            let options = ledger_gate::LedgerGateOptions { ledger, floors, format, output };
+            match ledger_gate::run_ledger_gate(&options) {
+                Ok(true) => {}
+                Ok(false) => std::process::exit(1),
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         AdkCommand::Eval {
-            path,
-            agent_cmd,
+            path: Some(path),
+            agent_cmd: Some(agent_cmd),
             criteria,
             judge_model,
             save_baseline,
@@ -483,6 +517,8 @@ fn main() {
             format,
             output,
             turn_timeout,
+            ledger: None,
+            floors: _,
         } => {
             let options = eval_cmd::EvalOptions {
                 path,
@@ -509,6 +545,11 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+        }
+        // clap requires a path and --agent-cmd whenever --ledger is absent.
+        AdkCommand::Eval { .. } => {
+            eprintln!("Error: cargo adk eval needs a path and --agent-cmd, or --ledger");
+            std::process::exit(2);
         }
         AdkCommand::Bench {
             model,

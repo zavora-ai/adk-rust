@@ -42,6 +42,9 @@ adk-deploy.workspace = true
 adk-graph = { workspace = true, features = ["time-travel"] }
 # The harness REPL, `code`, `goal`, `ultracode` and `serve` (spec 3.1 §8.1)
 adk-harness = { workspace = true, optional = true }
+# `adk-rust up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`, `freeze`, `unfreeze` and
+# `events`: the agent kernel and its control plane (spec 3.2 §8.1)
+adk-kernel = { workspace = true, optional = true }
 adk-browser = { workspace = true, optional = true }
 # `--provider mistralrs`: local inference in process (spec 3.1 §8.1); a heavy build
 adk-mistralrs = { workspace = true, optional = true }
@@ -77,6 +80,11 @@ keyring = { version = "3.6.3", default-features = false, features = ["apple-nati
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
+
+# Owner-only DACLs on the session store, the audit signing key and exported memory, where
+# Unix uses mode 0600 (spec 3.2 §10 W4).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_SystemServices", "Win32_System_Threading"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
@@ -114,21 +122,23 @@ audit = ["dep:adk-auth"]
 audit-sql = ["audit", "adk-session/sqlite", "adk-session/postgres"]
 # Sessions, approvals, durable runs, modes and standing rules in SQLite at
 # <config dir>/adk-rust/harness.db
-persist = ["adk-session/sqlite", "adk-harness?/sqlite"]
+persist = ["adk-session/sqlite", "adk-harness?/sqlite", "dep:sqlx"]
 # `adk-rust serve --store postgres://…`: sessions, approvals, durable runs, modes, standing
 # rules and plan checkpoints in one PostgreSQL database every replica shares, and
 # `--checkpointer postgres://…` (spec 3.1 §8.2, §7.11, §13 Q2, Q5)
-postgres = ["adk-harness?/postgres", "adk-session/postgres", "adk-graph/postgres", "dep:sqlx", "sqlx/postgres"]
+postgres = ["adk-harness?/postgres", "adk-kernel?/postgres", "adk-session/postgres", "adk-graph/postgres", "dep:sqlx", "sqlx/postgres"]
 # `adk-rust serve --store redis://…`: the same stores on one Redis server, and
 # `--checkpointer redis://…`
-redis = ["adk-harness?/redis", "adk-session/redis"]
+redis = ["adk-harness?/redis", "adk-kernel?/redis", "adk-session/redis"]
 # `--checkpointer mongodb://…`, `neo4j://…` or `firestore://…` (spec 3.1 §7.11, §13 Q5)
 mongodb = ["adk-harness?/mongodb"]
 neo4j = ["adk-harness?/neo4j"]
 firestore = ["adk-harness?/firestore"]
 # `adk-rust` with no subcommand is the harness REPL; `code`, `goal`, `ultracode` and
-# `serve` run on the harness; `sessions`, `rules` and `approvals` manage it (spec 3.1 §8.1)
-harness = ["dep:adk-harness", "adk-harness?/memory-embeddings", "adk-harness?/web", "adk-harness?/mcp", "adk-harness?/hooks", "dep:reqwest", "dep:sha2", "dep:uuid", "dep:chrono"]
+# `serve` run on the harness; `sessions`, `rules` and `approvals` manage it (spec 3.1 §8.1);
+# `up` runs it as the agent kernel, and `attach`, `ps`, `top`, `kill`, `suspend`, `resume`,
+# `freeze`, `unfreeze` and `events` reach the running kernel (spec 3.2 §8.1, §13 Q6)
+harness = ["dep:adk-harness", "dep:adk-kernel", "adk-harness?/kernel", "adk-harness?/memory-embeddings", "adk-harness?/web", "adk-harness?/mcp", "adk-harness?/hooks", "dep:reqwest", "dep:sha2", "dep:uuid", "dep:chrono"]
 # `--store-key`, `[store] key`, `adk-rust store status|rotate-key`: harness.db sealed under
 # one keyring from the OS keychain, a secret provider or the environment (spec 3.1 §7.12)
 encrypted = ["adk-harness?/encrypted", "adk-session/encrypted-session", "dep:sqlx"]
@@ -169,3 +179,7 @@ sha2 = "0.10"
 [target.'cfg(unix)'.dev-dependencies]
 # openpty for the console end-to-end tests, which drive the binary in a pseudo-terminal
 libc = "0.2"
+
+# Reads a file's DACL back in the owner-only session store test.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Security_Authorization"] }

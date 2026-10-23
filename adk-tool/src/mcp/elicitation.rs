@@ -14,13 +14,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::FutureExt;
 use rmcp::model::{
-    ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability, ElicitationSchema,
-    FormElicitationCapability, InitializeRequestParams, InputRequest, InputRequests,
-    InputResponses, UrlElicitationCapability,
+    ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability,
+    ElicitationSchema, FormElicitationCapability, InitializeRequestParams, InputRequest,
+    InputRequests, InputResponses, UrlElicitationCapability,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleClient};
 use serde_json::Value;
 
+use super::parked::{ParkedCallKind, ParkedMcpCall};
 use super::resource_notifications::{
     ResourceNotificationHandler, dispatch_resource_list_changed, dispatch_resource_updated,
 };
@@ -236,6 +237,9 @@ pub struct ElicitationScopes {
     active: std::sync::Mutex<Vec<(u64, ElicitationScope)>>,
     fallback: std::sync::Mutex<Option<ElicitationScope>>,
     next_id: AtomicU64,
+    /// Calls awaiting their `tools/call` response, which a legacy `elicitation/create`
+    /// belongs to (spec 3.2 §10 T2).
+    calls: std::sync::Mutex<Vec<(u64, ParkedMcpCall)>>,
 }
 
 impl ElicitationScopes {
@@ -270,6 +274,37 @@ impl ElicitationScopes {
         }
         drop(active);
         self.fallback()
+    }
+}
+
+impl ElicitationScopes {
+    /// Registers `call` as awaiting its response until the returned guard is dropped.
+    pub(crate) fn enter_call(self: &Arc<Self>, call: ParkedMcpCall) -> InFlightCall {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((id, call));
+        InFlightCall { scopes: Arc::clone(self), id }
+    }
+
+    /// The call a legacy elicitation arriving now belongs to: the latest one registered.
+    fn resolve_call(&self) -> Option<ParkedMcpCall> {
+        let calls = self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        calls.last().map(|(_, call)| call.clone())
+    }
+}
+
+/// Unregisters a call registered with [`ElicitationScopes::enter_call`] when dropped.
+pub(crate) struct InFlightCall {
+    scopes: Arc<ElicitationScopes>,
+    id: u64,
+}
+
+impl Drop for InFlightCall {
+    fn drop(&mut self) {
+        self.scopes
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|(id, _)| *id != self.id);
     }
 }
 
@@ -659,9 +694,28 @@ impl rmcp::handler::client::ClientHandler for AdkClientHandler {
     async fn create_elicitation(
         &self,
         request: ElicitRequestParams,
-        _context: RequestContext<RoleClient>,
+        context: RequestContext<RoleClient>,
     ) -> Result<ElicitResult, rmcp::ErrorData> {
-        Ok(self.handle_elicitation(request).await)
+        // A server before 2026-07-28 asks while one of the toolset's calls awaits its
+        // response; the handler sees that call's parked form (spec 3.2 §10 T2).
+        let legacy = ParkedMcpCall::current()
+            .is_none()
+            .then(|| self.elicitation_scopes().resolve_call())
+            .flatten()
+            .map(|call| {
+                let rounds = call.input_rounds;
+                let question = InputRequest::Elicitation(ElicitRequest::new(request.clone()));
+                call.waiting(
+                    ParkedCallKind::Legacy,
+                    None,
+                    [(context.id.to_string(), question)].into(),
+                    rounds,
+                )
+            });
+        Ok(match legacy {
+            Some(call) => call.within(self.handle_elicitation(request)).await,
+            None => self.handle_elicitation(request).await,
+        })
     }
 
     async fn on_resource_updated(

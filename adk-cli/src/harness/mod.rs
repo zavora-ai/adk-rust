@@ -7,6 +7,7 @@
 //! | [`ConsolePrompter`] | §8.1, §7.5 approvals at the terminal, `[a] always allow` |
 //! | [`HarnessLauncher`], [`TurnOutcome`] | §8.1 REPL, slash commands, one-turn runs, goals; §8.2 serve |
 //! | [`LoopbackOperatorExtractor`], [`BearerTokenExtractor`] | §8.2 request identity |
+//! | [`HarnessLauncher::with_kernel`], [`KernelSettings`] | spec 3.2 §8.1, §8.2: the resident form on the agent kernel and the `[kernel]` table |
 //! | `/api/rules` on a served harness | §7.5, §8.2 standing rules over authenticated REST |
 //! | [`ultracode`] | §7.10, §8.1 adaptive `ultracode`: the review router, the board, the limits |
 //!
@@ -32,6 +33,7 @@
 mod args;
 mod commands;
 mod goal;
+mod kernel;
 mod launcher;
 mod prompter;
 mod rules;
@@ -41,6 +43,7 @@ pub mod ultracode;
 pub use args::{
     HarnessArgs, MemberArg, MemberKindArg, PROJECT_CONFIG_FILE, ResolvedHarnessArgs, SearchArg,
 };
+pub use kernel::KernelSettings;
 pub use launcher::{HarnessEffortRebuild, HarnessLauncher, HarnessRebuild, TurnOutcome};
 pub use prompter::ConsolePrompter;
 pub use serve::{BearerTokenExtractor, LoopbackOperatorExtractor, OPERATOR_SCOPE};
