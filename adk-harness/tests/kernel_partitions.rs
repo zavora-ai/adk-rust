@@ -182,6 +182,111 @@ async fn a_work_agents_read_of_a_home_fact_is_denied_at_the_policy() {
     assert!(records[0].ext["by"].as_str().unwrap().starts_with("urn:adk:agent:"));
 }
 
+/// K-I15: a partition's harness marks each session it runs as its partition's, and another
+/// partition's harness refuses that session, so neither reads the other's transcript.
+#[tokio::test]
+async fn a_partitions_session_is_marked_and_another_partitions_harness_refuses_it() {
+    use futures::StreamExt as _;
+
+    let mut world = World::new().await;
+    let (home, _) = world.harness("home", false, vec![text("Noted.")], |builder| builder).await;
+    let (work, model) = world.harness("work", false, vec![text("unused")], |builder| builder).await;
+    send(&home, "shared", "my dentist appointment is on tuesday").await;
+    let state = |session: &str| {
+        let sessions = world.sessions.clone();
+        let session = session.to_string();
+        async move {
+            sessions
+                .get(adk_session::GetRequest {
+                    app_name: APP.into(),
+                    user_id: "alice".into(),
+                    session_id: session,
+                    num_recent_events: None,
+                    after: None,
+                })
+                .await
+                .unwrap()
+                .state()
+                .get(adk_harness::PARTITION_STATE_KEY)
+        }
+    };
+    assert_eq!(state("shared").await, Some(json!("home")));
+
+    let user = user("alice");
+    let session =
+        work.open_session(&user, Some(&adk_core::SessionId::new("shared").unwrap())).await.unwrap();
+    let refused = match work.send(&user, &session, "when is my dentist appointment?").await {
+        Err(error) => error,
+        Ok(stream) => {
+            let events: Vec<_> = stream.collect().await;
+            events
+                .into_iter()
+                .find_map(Result::err)
+                .expect("the work harness refuses home's session")
+        }
+    };
+    assert_eq!(refused.code, adk_harness::PARTITION_SESSION_CODE, "{refused}");
+    assert!(model.requests().is_empty(), "no model call reads the session");
+    assert_eq!(state("shared").await, Some(json!("home")), "the mark is unchanged");
+
+    send(&work, "w-own", "hello").await;
+    assert_eq!(state("w-own").await, Some(json!("work")));
+}
+
+/// K-I15: a partition's consolidation tick works on its partition's facts only; a stale
+/// user-wide assumption, which every partition could read on an unpartitioned harness, is
+/// left alone, as is the other partition's.
+#[tokio::test]
+async fn a_partitions_consolidation_tick_touches_only_its_own_facts() {
+    let mut world = World::new().await;
+    let stale = |project: Option<&str>, text: &str| {
+        let mut fact = MemoryFact::new(
+            FactScope::new(APP, "alice", project.map(str::to_string)),
+            FactKind::ProjectFact,
+            text,
+            FactStatus::Assumed,
+            Provenance::new(FactSource::AgentInferred, "s0", "inv-0"),
+        );
+        fact.valid_from = chrono::Utc::now() - chrono::Duration::days(100);
+        fact.confidence = Some(0.3);
+        fact
+    };
+    let mut seeded = Vec::new();
+    for (project, text) in [
+        (Some("home"), "the spare key is under the mat"),
+        (None, "the user prefers tea"),
+        (Some("work"), "the build cache lives in /tmp/build"),
+    ] {
+        seeded.push(world.facts.put(stale(project, text)).await.unwrap());
+    }
+    // Known facts no pass touches, so one expiry stays within the loss cap.
+    for i in 0..4 {
+        let mut filler = stale(Some("home"), &format!("filler fact {i}"));
+        filler.status = FactStatus::Known;
+        world.facts.put(filler).await.unwrap();
+    }
+    let (home, _) = world.harness("home", false, Vec::new(), |builder| builder).await;
+
+    let record = home
+        .consolidate_memory(
+            &adk_core::UserId::new("alice").unwrap(),
+            adk_harness::ConsolidationRequest::new(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(record.scopes, vec![FactScope::new(APP, "alice", Some("home".into()))]);
+    assert_eq!(record.refused, None);
+    let status = |fact: &MemoryFact| {
+        let facts = world.facts.clone();
+        let id = fact.id.clone();
+        async move { facts.get(&id).await.unwrap().unwrap().status }
+    };
+    assert_eq!(status(&seeded[0]).await, FactStatus::Forgotten, "home's own stale fact");
+    assert_eq!(status(&seeded[1]).await, FactStatus::Assumed, "the user-wide fact");
+    assert_eq!(status(&seeded[2]).await, FactStatus::Assumed, "work's fact");
+}
+
 /// Spec 3.1 §7.14, 3.2 §7.8: every agent of a partition's harness acts with the partition's
 /// class, through the runner's identity source, so a `PolicyRule::for_class` rule applies to
 /// one partition's agents and not another's.

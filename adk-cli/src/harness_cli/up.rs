@@ -196,11 +196,17 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     if let Some(max) = settings.max_concurrent_runs {
         worker = worker.with_max_concurrent_runs(max);
     }
-    // The consolidation tick: on in Ask and Auto with long-term memory (spec 3.2 §13 Q1).
-    let tick = settings.enable_consolidation(
-        setup.resolved.mode,
-        setup.resolved.consolidation && setup.memory_on(),
-    );
+    // The consolidation tick: on in Ask and Auto with long-term memory (spec 3.2 §13 Q1),
+    // for each partition in its own mode.
+    let allowed = setup.resolved.consolidation && setup.memory_on();
+    let mut ticking = Vec::new();
+    for hosted in &hosted {
+        if settings.enable_consolidation(hosted.agent.info().default_mode, allowed) {
+            ticking.push(hosted);
+        }
+    }
+    let tick = !ticking.is_empty();
+    settings.consolidation = tick;
     // The run store reads the system clock too, so leases, `not_before` and wake times agree.
     let config = settings.apply(
         KernelConfig::default()
@@ -261,18 +267,16 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         .drivers(drivers)
         .ledger(Ledger::new(stores.ledger, key))
         .observation_phraser(phraser);
-    // A partitioned kernel runs no tick until each partition's distils only its own sessions.
-    if tick && table.is_none() {
-        // The tick distils this workspace's sessions, and the kernel's own, which name none.
-        let recorded = setup.resolved.workspace.display().to_string();
-        let user = adk_core::UserId::new(setup.user.clone())?;
-        let consolidator = primary.harness.consolidator(&user)?.with_session_filter(Arc::new(
-            move |state: &dyn adk_session::State| match state.get("harness:workspace") {
-                Some(value) => value.as_str() == Some(recorded.as_str()),
-                None => true,
-            },
-        ));
-        kernel = kernel.consolidator(adk_kernel::PartitionId::default(), Arc::new(consolidator));
+    // Each tick distils this workspace's sessions of its own partition, and the kernel's own,
+    // which name no workspace; an unpartitioned kernel's tick skips every partition's
+    // (spec 3.2 §7.5, K-I15).
+    let recorded = setup.resolved.workspace.display().to_string();
+    let user = adk_core::UserId::new(setup.user.clone())?;
+    for hosted in ticking {
+        let filter = tick_sessions(recorded.clone(), hosted.partition.clone());
+        let consolidator = hosted.harness.consolidator(&user)?.with_session_filter(filter);
+        kernel = kernel
+            .consolidator(hosted.partition.clone().unwrap_or_default(), Arc::new(consolidator));
     }
     if setup.memory_on() {
         // The pass's observations are put to the user; a confirmed one is remembered.
@@ -366,6 +370,25 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         }
     );
     launcher.run_serve_directly(bind.port()).await.map_err(Into::into)
+}
+
+/// The sessions a tick of `partition` distils: those of the workspace `recorded`, or naming
+/// none, that `partition`'s harness ran — with no partition, those no partition's harness
+/// ran (spec 3.2 §7.5, K-I15).
+fn tick_sessions(
+    recorded: String,
+    partition: Option<adk_kernel::PartitionId>,
+) -> adk_harness::SessionStateFilter {
+    Arc::new(move |state: &dyn adk_session::State| {
+        let workspace = match state.get("harness:workspace") {
+            Some(value) => value.as_str() == Some(recorded.as_str()),
+            None => true,
+        };
+        let ran = state.get(adk_harness::PARTITION_STATE_KEY);
+        workspace
+            && ran.as_ref().and_then(serde_json::Value::as_str)
+                == partition.as_ref().map(adk_kernel::PartitionId::as_str)
+    })
 }
 
 /// One harness `up` hosts: its agent, the harness over its runner, and its partition.
@@ -769,5 +792,53 @@ mod tests {
             #[cfg(windows)]
             assert!(crate::owner_only::is_owner_only(&path).unwrap(), "{}", path.display());
         }
+    }
+}
+
+#[cfg(test)]
+mod tick_tests {
+    use std::collections::HashMap;
+
+    use serde_json::{Value, json};
+
+    use super::tick_sessions;
+
+    struct State(HashMap<String, Value>);
+
+    impl adk_session::State for State {
+        fn get(&self, key: &str) -> Option<Value> {
+            self.0.get(key).cloned()
+        }
+
+        fn set(&mut self, key: String, value: Value) {
+            self.0.insert(key, value);
+        }
+
+        fn all(&self) -> HashMap<String, Value> {
+            self.0.clone()
+        }
+    }
+
+    #[test]
+    fn a_tick_distils_only_its_own_partitions_sessions() {
+        let state = |entries: &[(&str, Value)]| {
+            State(entries.iter().map(|(key, value)| (key.to_string(), value.clone())).collect())
+        };
+        let workspace = ("harness:workspace", json!("/ws"));
+        let home = ("harness:partition", json!("home"));
+        let work = ("harness:partition", json!("work"));
+        let home_tick = tick_sessions("/ws".into(), Some("home".into()));
+        let plain_tick = tick_sessions("/ws".into(), None);
+        assert!(home_tick(&state(&[workspace.clone(), home.clone()])));
+        assert!(
+            home_tick(&state(std::slice::from_ref(&home))),
+            "a kernel session names no workspace"
+        );
+        assert!(!home_tick(&state(&[workspace.clone(), work.clone()])), "work's session");
+        assert!(!home_tick(&state(std::slice::from_ref(&workspace))), "no partition's session");
+        assert!(!home_tick(&state(&[("harness:workspace", json!("/other")), home])));
+        assert!(plain_tick(&state(std::slice::from_ref(&workspace))));
+        assert!(plain_tick(&state(&[])));
+        assert!(!plain_tick(&state(&[workspace, work])), "a partition's session");
     }
 }

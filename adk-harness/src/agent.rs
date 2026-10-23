@@ -759,6 +759,12 @@ impl Agent for HarnessAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        // A partition's harness runs only its own partition's sessions (spec 3.2 K-I15).
+        #[cfg(feature = "kernel")]
+        let mark = match self.partition_wiring() {
+            Some(wiring) => wiring.session_mark(ctx.as_ref(), self.name())?,
+            None => None,
+        };
         // A run that starts in Ask or Auto with a provider-executed web tool declared
         // records that an ungoverned fetch path was live (spec 3.1 §7.20, I49).
         #[cfg(feature = "web")]
@@ -779,7 +785,16 @@ impl Agent for HarnessAgent {
             Some(provider_web) => provider_web.record_searches(ctx.clone(), events),
             None => events,
         };
-        Ok(self.with_mode_mirror(&ctx, events).await)
+        let events = self.with_mode_mirror(&ctx, events).await;
+        #[cfg(feature = "kernel")]
+        let events = match mark {
+            Some(mark) => {
+                use futures::StreamExt as _;
+                Box::pin(futures::stream::iter([Ok(mark)]).chain(events)) as EventStream
+            }
+            None => events,
+        };
+        Ok(events)
     }
 }
 

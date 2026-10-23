@@ -227,7 +227,7 @@ pub use packs::voice::{
 #[cfg(feature = "kernel")]
 pub use partition::{
     CrossingAnswer, CrossingPrompt, PARTITION_MEMORY_REMEMBER, PARTITION_MEMORY_SEARCH,
-    partition_target,
+    PARTITION_SESSION_CODE, PARTITION_STATE_KEY, partition_target,
 };
 #[cfg(feature = "graph")]
 pub use plan_graph::{

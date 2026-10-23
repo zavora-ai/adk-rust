@@ -38,6 +38,28 @@ pub const PARTITION_MEMORY_SEARCH: &str = "partition_memory_search";
 /// a write crossing, class `MemoryPropose`.
 pub const PARTITION_MEMORY_REMEMBER: &str = "partition_memory_remember";
 
+/// The session state key naming the partition whose harness ran the session (spec 3.2
+/// §7.8, K-I15): a partition's harness writes it on its first run of a session and refuses a
+/// session another partition's harness ran, and a consolidation tick distils only its own
+/// partition's sessions.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_harness::PARTITION_STATE_KEY, "harness:partition");
+/// ```
+pub const PARTITION_STATE_KEY: &str = "harness:partition";
+
+/// The error code of a run a partition's harness refuses because another partition's
+/// harness ran its session (spec 3.2 K-I15).
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_harness::PARTITION_SESSION_CODE, "harness.partition_session");
+/// ```
+pub const PARTITION_SESSION_CODE: &str = "harness.partition_session";
+
 /// The kernel target of the harness `base` (the app's target, or `harness.goal`) in
 /// `partition`: `<base>@<partition>` (spec 3.2 §7.8).
 ///
@@ -188,6 +210,44 @@ impl PartitionWiring {
         crate::memory::MemoryConfig {
             layout: crate::memory::MemoryLayout::PerUser { base },
             ..config
+        }
+    }
+
+    /// The event that marks `ctx`'s session as this partition's on the harness's first run
+    /// of it, or `None` when it already is (spec 3.2 K-I15).
+    ///
+    /// # Errors
+    ///
+    /// `Forbidden` ([`PARTITION_SESSION_CODE`]) when another partition's harness ran the
+    /// session.
+    pub(crate) fn session_mark(
+        &self,
+        ctx: &dyn adk_core::InvocationContext,
+        author: &str,
+    ) -> Result<Option<adk_core::Event>> {
+        let id = self.partition.id.as_str();
+        match ctx.session().state().get(PARTITION_STATE_KEY) {
+            Some(owner) if owner.as_str() == Some(id) => Ok(None),
+            Some(owner) => Err(AdkError::new(
+                adk_core::ErrorComponent::Agent,
+                adk_core::ErrorCategory::Forbidden,
+                PARTITION_SESSION_CODE,
+                format!(
+                    "session '{}' belongs to partition {owner}; the harness of partition '{id}' \
+                     cannot continue it (spec 3.2 K-I15); start a new session",
+                    ctx.session_id()
+                ),
+            )),
+            None => {
+                let mut event = adk_core::Event::new(ctx.invocation_id());
+                event.author = author.to_string();
+                event.branch = ctx.branch().to_string();
+                event
+                    .actions
+                    .state_delta
+                    .insert(PARTITION_STATE_KEY.to_string(), serde_json::json!(id));
+                Ok(Some(event))
+            }
         }
     }
 
