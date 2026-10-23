@@ -1554,4 +1554,30 @@ mod tests {
         let help = <Cli as clap::CommandFactory>::command().render_long_help().to_string();
         assert!(!help.contains("model-script") && !help.contains("approval-fixture"), "{help}");
     }
+
+    #[cfg(all(feature = "harness", feature = "persist"))]
+    #[test]
+    fn memory_lists_consolidation_ticks_undoes_one_and_up_turns_the_tick_off() {
+        let memory = |args: &[&str]| match parse(args).command {
+            Some(Commands::Memory { command }) => command,
+            _ => panic!("{args:?} is not a memory command"),
+        };
+        assert_eq!(
+            memory(&["adk-rust", "memory", "list", "--source", "consolidation"]),
+            MemoryCommands::List { dir: None, all: false, source: Some("consolidation".into()) }
+        );
+        assert_eq!(
+            memory(&["adk-rust", "memory", "undo", "01J9"]),
+            MemoryCommands::Undo { tick: "01J9".into() }
+        );
+        assert!(
+            Cli::try_parse_from(["adk-rust", "memory", "list", "--source", "dream"]).is_err(),
+            "an unknown source should not parse"
+        );
+        let Some(Commands::Up(up)) = parse(&["adk-rust", "up", "--no-consolidation"]).command
+        else {
+            panic!("up should parse");
+        };
+        assert!(up.harness.no_consolidation && !up.harness.no_memory);
+    }
 }

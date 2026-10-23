@@ -298,7 +298,6 @@ pub async fn memory(command: MemoryCommands) -> Result<()> {
     Ok(())
 }
 
-/// One line describing `fact`: id, status, kind, date, source and session, then its text.
 /// One consolidation tick as `memory list --source consolidation` shows it: ids and counts.
 fn tick_line(tick: &adk_harness::ConsolidationRecord) -> String {
     let mut line = format!(
@@ -319,6 +318,7 @@ fn tick_line(tick: &adk_harness::ConsolidationRecord) -> String {
     line
 }
 
+/// One line describing `fact`: id, status, kind, date, source and session, then its text.
 fn fact_line(fact: &adk_harness::MemoryFact) -> String {
     let scope = if fact.scope.project.is_some() { "project" } else { "all projects" };
     let session = &fact.provenance.session_id;
