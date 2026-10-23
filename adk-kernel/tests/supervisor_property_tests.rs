@@ -174,11 +174,19 @@ proptest! {
         ops in prop::collection::vec(op(), 1..8),
         write_delay_ms in 0u64..120,
     ) {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(check(ops, Duration::from_millis(write_delay_ms)));
+        run(ops, Duration::from_millis(write_delay_ms));
     }
+}
+
+fn run(ops: Vec<Op>, write_delay: Duration) {
+    let runtime =
+        tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    runtime.block_on(check(ops, write_delay));
+}
+
+/// The case the property shrank to on 793c621a, a sleeper that called the model: replayed
+/// on every run, since the repository ignores proptest's seed files.
+#[test]
+fn a_sleeper_spawned_then_frozen_suspended_and_unfrozen_stays_asleep() {
+    run(vec![Op::SpawnAsleep, Op::Freeze, Op::Suspend(0), Op::Unfreeze], Duration::ZERO);
 }

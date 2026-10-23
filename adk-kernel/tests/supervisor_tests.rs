@@ -623,8 +623,7 @@ async fn a_queued_sleeper_resumed_before_its_first_claim_runs() {
     let world = World::answer();
     let control = GovernanceControl::new();
     let kernel = world.kernel("k1", &control);
-    kernel.start().await.unwrap();
-    kernel.pause().await.unwrap();
+    // Spawned and resumed before the kernel starts, so nothing claims it in between.
     let pid = kernel
         .processes()
         .spawn(run_on(QueueClass::Interactive, "now"), sleeper())
@@ -632,10 +631,10 @@ async fn a_queued_sleeper_resumed_before_its_first_claim_runs() {
         .unwrap()
         .meta
         .pid;
+    kernel.processes().resume(&pid).await.unwrap();
     assert_eq!(world.runs.get(&pid).await.unwrap().unwrap().state, RunState::Queued);
 
-    kernel.processes().resume(&pid).await.unwrap();
-    kernel.resume().await.unwrap();
+    kernel.start().await.unwrap();
     in_state(&world.runs, &pid, RunState::Completed).await;
     assert_eq!(world.model_calls(), 1);
     kernel.stop().await.unwrap();
