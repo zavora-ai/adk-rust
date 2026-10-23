@@ -37,6 +37,64 @@ successful restart resets the count, and the server is marked `FailedToStart`
 once that many restarts in a row fail. `disable_server` moves a server in any
 state to `Disabled`, and `start_server` starts any server that is not disabled.
 
+## Status transitions
+
+`subscribe_status_transitions` returns a `tokio::sync::broadcast::Receiver` of
+`ServerStatusTransition { id, from, to }`. The manager publishes one wherever it
+changes a server's status — every arrow in the diagram above — while it holds
+the registry lock, so each server's transitions arrive in the order they
+happened. Nothing is polled.
+
+```rust
+use adk_tool::mcp::{McpServerManager, ServerStatus};
+use tokio::sync::broadcast::error::RecvError;
+
+async fn watch(manager: &McpServerManager) {
+    let mut transitions = manager.subscribe_status_transitions();
+    // The receiver sees only later transitions; this is the state they start from.
+    let mut statuses = manager.all_statuses().await;
+    loop {
+        match transitions.recv().await {
+            Ok(transition) => {
+                if transition.to == ServerStatus::Crashed {
+                    tracing::warn!(server.id = transition.id, "MCP server crashed");
+                }
+                statuses.insert(transition.id, transition.to);
+            }
+            // More than STATUS_CHANNEL_CAPACITY (256) transitions behind.
+            Err(RecvError::Lagged(_)) => statuses = manager.all_statuses().await,
+            Err(RecvError::Closed) => break,
+        }
+    }
+}
+```
+
+`FailedToStart` is the exhausted state. The monitor retries a `Crashed` or
+`FailedToStart` server only while its `restartPolicy` has attempts left, so a
+`FailedToStart` entered by a server without a policy, or after
+`maxRestartAttempts` failed restarts since the server last ran, is followed by
+no further transition until the application starts the server again.
+
+## Stdio launcher
+
+By default the manager spawns `command` with `args` and `env`. A launcher set
+with `with_stdio_launcher` builds the `tokio::process::Command` for every start
+instead, automatic restarts included — for example to run the server inside an
+OS sandbox. It receives the server's `McpServerConfig`; rmcp pipes the
+command's stdin and stdout for the MCP connection. An error from the launcher
+fails that start with the error unchanged and leaves the server
+`FailedToStart`.
+
+```rust
+use adk_tool::mcp::McpServerManager;
+
+let manager = McpServerManager::from_json_file("mcp.json")?.with_stdio_launcher(|config| {
+    let mut command = tokio::process::Command::new("/usr/bin/nice");
+    command.arg(&config.command).args(&config.args).envs(&config.env);
+    Ok(command)
+});
+```
+
 ## Configuration
 
 ```json
