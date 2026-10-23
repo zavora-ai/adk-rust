@@ -48,7 +48,12 @@ fn create_private(path: &Path) -> Result<()> {
     options.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    match options.open(path) {
+    #[cfg(not(windows))]
+    let created = options.open(path);
+    // A DACL granting the owner alone access stands in for mode 0600 (spec 3.2 §10 W4).
+    #[cfg(windows)]
+    let created = crate::owner_only::create_new(path);
+    match created {
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(error) => Err(error).with_context(|| format!("failed to create {}", path.display())),
@@ -294,6 +299,8 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         }
+        #[cfg(windows)]
+        assert!(crate::owner_only::is_owner_only(&path).unwrap(), "the store is not owner-only");
 
         let url = sqlite_url(&path);
         let store = SqliteSessionService::new(&url).await.unwrap();

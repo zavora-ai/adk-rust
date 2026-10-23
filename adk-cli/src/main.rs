@@ -11,6 +11,8 @@ mod kernel_cli;
 mod legacy;
 #[cfg(all(feature = "harness", feature = "persist"))]
 mod manage;
+#[cfg(all(windows, any(feature = "audit", feature = "persist")))]
+mod owner_only;
 #[cfg(feature = "vertex-agent-registry")]
 mod registry;
 #[cfg(feature = "scripted-model")]

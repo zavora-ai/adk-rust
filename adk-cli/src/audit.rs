@@ -102,7 +102,12 @@ fn write_secret(path: &str, contents: &str) -> Result<()> {
     options.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut file = options.open(path).with_context(|| format!("creating {path}"))?;
+    #[cfg(not(windows))]
+    let created = options.open(path);
+    // A DACL granting the owner alone access stands in for mode 0600 (spec 3.2 §10 W4).
+    #[cfg(windows)]
+    let created = crate::owner_only::create_new(std::path::Path::new(path));
+    let mut file = created.with_context(|| format!("creating {path}"))?;
     writeln!(file, "{contents}").with_context(|| format!("writing {path}"))?;
     Ok(())
 }

@@ -26,6 +26,6 @@ pub(crate) mod status;
 mod toolset_impl;
 
 pub use config::{McpLifecycleMode, McpServerConfig, RestartPolicy};
-pub use status::ServerStatus;
+pub use status::{ServerStatus, ServerStatusTransition};
 
 pub use manager::McpServerManager;

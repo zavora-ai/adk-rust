@@ -6,7 +6,7 @@
 use super::super::elicitation::AdkClientHandler;
 use super::super::toolset::McpToolset;
 use super::config::{McpServerConfig, RestartPolicy};
-use super::status::ServerStatus;
+use super::status::{ServerStatus, ServerStatusTransition, StatusSender};
 
 /// Tracks exponential backoff state for auto-restart attempts.
 ///
@@ -95,6 +95,19 @@ impl McpServerEntry {
             generation: 0,
             start_gate: std::sync::Arc::default(),
             startup_cancel: tokio_util::sync::CancellationToken::new(),
+        }
+    }
+
+    /// Moves server `id` to `to`, publishing the transition on `events` when the status
+    /// changes (spec 3.2 §10 T1).
+    ///
+    /// Callers hold the registry's write lock, so the channel's order is the order of the
+    /// changes.
+    pub fn set_status(&mut self, id: &str, to: ServerStatus, events: &StatusSender) {
+        let from = std::mem::replace(&mut self.status, to);
+        if from != to {
+            // Without a subscriber `send` fails; the change itself is already recorded.
+            let _ = events.send(ServerStatusTransition { id: id.to_string(), from, to });
         }
     }
 }

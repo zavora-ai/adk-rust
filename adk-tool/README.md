@@ -404,6 +404,12 @@ async fn run(model: Arc<dyn Llm>) -> adk_core::Result<()> {
 - **Monitoring** — `start_monitoring()` checks running servers every
   `with_health_check_interval` (default 30 seconds), marks a server whose connection closed
   `Crashed`, and restarts it with exponential backoff when it has a `restartPolicy`.
+- **Status transitions** — `subscribe_status_transitions()` delivers every status change as
+  `ServerStatusTransition { id, from, to }`, in order, without polling. `FailedToStart` after the
+  restart policy's attempts is the exhausted state.
+- **Stdio launcher** — `with_stdio_launcher(|config| ...)` builds the `tokio::process::Command` of
+  every start, restarts included, in place of the configured command (for example inside an OS
+  sandbox). Without one the configured `command`, `args` and `env` are spawned.
 - **Name collisions** — a tool name published by more than one server is exposed as
   `{server_id}__{tool_name}`. When a prefixed name still collides, the first server in ID order
   keeps it and the later tool is skipped with a warning; a prefixed name over 64 bytes is skipped.

@@ -81,6 +81,11 @@ keyring = { version = "3.6.3", default-features = false, features = ["apple-nati
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
 
+# Owner-only DACLs on the session store, the audit signing key and exported memory, where
+# Unix uses mode 0600 (spec 3.2 §10 W4).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_SystemServices", "Win32_System_Threading"] }
+
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 
@@ -174,3 +179,7 @@ sha2 = "0.10"
 [target.'cfg(unix)'.dev-dependencies]
 # openpty for the console end-to-end tests, which drive the binary in a pseudo-terminal
 libc = "0.2"
+
+# Reads a file's DACL back in the owner-only session store test.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Security_Authorization"] }

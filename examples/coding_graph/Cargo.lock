@@ -64,6 +64,7 @@ dependencies = [
  "tokio",
  "tracing",
  "walkdir",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -130,6 +131,7 @@ dependencies = [
  "tracing",
  "unicode-normalization",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

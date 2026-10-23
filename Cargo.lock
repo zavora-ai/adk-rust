@@ -365,6 +365,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid 1.25.0",
+ "windows-sys 0.61.2",
  "zip 9.0.4",
 ]
 
@@ -510,6 +511,7 @@ dependencies = [
  "tokio",
  "tracing",
  "walkdir",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -735,6 +737,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-normalization",
  "uuid 1.25.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
