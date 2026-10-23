@@ -1094,5 +1094,31 @@ async fn k7(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
             && coordinator.get(1) == Some(&CrossingOutcome::Approved)
             && coordinator[2..].iter().all(|outcome| *outcome == CrossingOutcome::RunGrant),
     );
+
+    // The `partitions` command, from another process.
+    let partitions_cli = |args: &[&str]| -> Result<std::process::Output> {
+        let mut command = Command::new(bin);
+        command.arg("partitions").args(args).arg("--home").arg(&up.home).stdin(Stdio::null());
+        isolate(&mut command, up.root.path());
+        Ok(command.output()?)
+    };
+    let listed = partitions_cli(&[])?;
+    let shown = String::from_utf8_lossy(&listed.stdout).to_string();
+    println!("    $ adk-rust partitions\n{}", indent(&shown));
+    checks.check(
+        "`adk-rust partitions` lists both partitions",
+        listed.status.success() && shown.contains("home-agents") && shown.contains("work-agents"),
+    );
+    let set = partitions_cli(&["set-mode", "work", "plan"])?;
+    let work_mode = client
+        .partitions()
+        .await?
+        .into_iter()
+        .find(|partition| partition.id.as_str() == "work")
+        .map(|partition| partition.default_mode);
+    checks.check(
+        "`adk-rust partitions set-mode work plan` changes the table",
+        set.status.success() && work_mode == Some(adk_kernel::PartitionMode::Plan),
+    );
     Ok(checks)
 }
