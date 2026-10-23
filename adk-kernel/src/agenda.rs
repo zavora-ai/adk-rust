@@ -1193,7 +1193,7 @@ impl Agenda {
     /// question, its rationale the statement a confirmation remembers, expiring unanswered
     /// after the longest comparison window. `None` when the partition has no audience, the
     /// audience names nobody, or the item exists already (another replica filed it).
-    #[cfg(feature = "proc")]
+    #[cfg(feature = "proc-baselines")]
     pub(crate) async fn offer(
         &self,
         observation: &crate::proc::Observation,
