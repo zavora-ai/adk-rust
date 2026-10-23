@@ -917,17 +917,26 @@ impl WakeRouter {
         Ok(sleepers)
     }
 
-    /// Wakes `meta`'s process and consumes its wake set. The wake comes first, so a failure
-    /// in between leaves a woken process with a stale set rather than a sleeper nothing can
-    /// wake. A sleep request still recorded — a spawn writes it, and a row written after
-    /// the sleeper parked keeps it until the mirror clears it — is cleared before the wake,
-    /// so the claim that follows does not park the process again.
+    /// Wakes `meta`'s process and consumes its wake set. The row is marked awake before the
+    /// run is claimable — a sleep request still recorded cleared, then the wake set — since
+    /// the claim reads the wake set to tell a sleeper from a woken process (K-I2). A failed
+    /// wake restores the set, so the process stays a sleeper its next wake can reach.
     async fn wake_sleeper(&self, meta: &ProcessMeta, run: &RunRecord) -> Result<()> {
         if meta.suspend_requested {
             self.processes.set_suspend_requested(&meta.pid, false).await?;
         }
-        self.runs.wake(&run.run_id).await?;
-        self.processes.set_wake(&meta.pid, None).await
+        self.processes.set_wake(&meta.pid, None).await?;
+        if let Err(error) = self.runs.wake(&run.run_id).await {
+            if let Err(restore) = self.processes.set_wake(&meta.pid, meta.wake.clone()).await {
+                tracing::warn!(
+                    process.pid = %meta.pid,
+                    error = %restore,
+                    "could not restore the wake set of a process whose wake failed"
+                );
+            }
+            return Err(error.into());
+        }
+        Ok(())
     }
 
     /// Enqueues `trigger`'s run for `event` and records its process.

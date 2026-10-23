@@ -6,7 +6,7 @@
 mod common;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use adk_core::audit_log::AuditActor;
@@ -519,5 +519,176 @@ async fn a_sleeper_woken_before_its_sleep_request_clears_runs_rather_than_parkin
     assert_eq!(outcomes, [WakeOutcome::Woke { pid: pid.clone() }]);
     in_state(&world.runs, &pid, RunState::Completed).await;
     assert_eq!(world.model_calls(), 1, "the woken sleeper ran its turn");
+    kernel.stop().await.unwrap();
+}
+
+/// Freezes the kernel's control from inside the first claim of a run — after the worker's
+/// own check and before the runner's — so the freeze hands the run back unstarted after
+/// its checkpoint was recorded.
+struct FreezeOnFirstClaim {
+    control: GovernanceControl,
+    armed: AtomicBool,
+}
+
+#[async_trait]
+impl ProgressSource for FreezeOnFirstClaim {
+    async fn usage(&self, _run: &RunRecord) -> adk_kernel::Result<Option<RunUsage>> {
+        if self.armed.swap(false, Ordering::SeqCst) {
+            self.control.freeze("drill");
+        }
+        Ok(None)
+    }
+}
+
+/// A sleeper whose first claim a freeze handed back, checkpointed and claimable, with its
+/// sleep request cleared by `clear`; the kernel is frozen.
+async fn handed_back_sleeper<F, Fut>(world: &World, clear: F) -> (adk_kernel::Kernel, String)
+where
+    F: FnOnce(adk_kernel::Kernel, String) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let control = GovernanceControl::new();
+    let freeze =
+        Arc::new(FreezeOnFirstClaim { control: control.clone(), armed: AtomicBool::new(true) });
+    let kernel = world.kernel_with("k1", &control, |builder| builder.progress_source(freeze));
+    kernel.start().await.unwrap();
+    let pid = kernel
+        .processes()
+        .spawn(run_on(QueueClass::Interactive, "later"), sleeper())
+        .await
+        .unwrap()
+        .meta
+        .pid;
+    let handed_back = eventually("the freeze to hand the sleeper back", || async {
+        world.runs.get(&pid).await.ok().flatten().filter(|run| {
+            run.state == RunState::Waiting && run.checkpoint.is_some() && run.not_before.is_some()
+        })
+    })
+    .await;
+    assert_eq!(handed_back.lease_owner, None);
+    clear(kernel.clone(), pid.clone()).await;
+    assert!(!meta(world, &pid).await.suspend_requested);
+    (kernel, pid)
+}
+
+/// After the unfreeze, the sleeper is claimed again and parks before its first model call;
+/// only a resume runs it.
+async fn stays_asleep_until_resumed(world: &World, kernel: &adk_kernel::Kernel, pid: &str) {
+    kernel.unfreeze(operator()).await.unwrap();
+    // Claimed again: parked once more, or, wrongly, run to its end.
+    let reclaimed = eventually("the sleeper's next claim to end", || async {
+        world.runs.get(pid).await.ok().flatten().filter(|run| {
+            run.state.is_terminal() || (run.state == RunState::Waiting && run.not_before.is_none())
+        })
+    })
+    .await;
+    assert_eq!(world.model_calls(), 0, "a sleeper the freeze handed back called the model (K-I2)");
+    assert_eq!((reclaimed.state, reclaimed.lease_owner), (RunState::Waiting, None));
+    assert!(meta(world, pid).await.wake.is_some(), "the sleeper keeps its wake set");
+
+    kernel.processes().resume(pid).await.unwrap();
+    in_state(&world.runs, pid, RunState::Completed).await;
+    assert_eq!(world.model_calls(), 1);
+    kernel.stop().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sleeper_a_freeze_handed_back_and_a_suspend_cleared_stays_asleep_after_the_unfreeze() {
+    let world = World::answer();
+    let (kernel, pid) = handed_back_sleeper(&world, |kernel, pid| async move {
+        kernel.processes().suspend(&pid).await.unwrap();
+    })
+    .await;
+    stays_asleep_until_resumed(&world, &kernel, &pid).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sleeper_a_freeze_handed_back_stays_asleep_after_the_mirror_clears_its_request() {
+    let world = World::answer();
+    let (kernel, pid) = handed_back_sleeper(&world, |_, pid| {
+        let processes = Arc::clone(&world.processes);
+        async move {
+            eventually("the mirror to clear the sleep request", || async {
+                (!processes.get(&pid).await.unwrap()?.suspend_requested).then_some(())
+            })
+            .await;
+        }
+    })
+    .await;
+    stays_asleep_until_resumed(&world, &kernel, &pid).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_queued_sleeper_resumed_before_its_first_claim_runs() {
+    let world = World::answer();
+    let control = GovernanceControl::new();
+    let kernel = world.kernel("k1", &control);
+    kernel.start().await.unwrap();
+    kernel.pause().await.unwrap();
+    let pid = kernel
+        .processes()
+        .spawn(run_on(QueueClass::Interactive, "now"), sleeper())
+        .await
+        .unwrap()
+        .meta
+        .pid;
+    assert_eq!(world.runs.get(&pid).await.unwrap().unwrap().state, RunState::Queued);
+
+    kernel.processes().resume(&pid).await.unwrap();
+    kernel.resume().await.unwrap();
+    in_state(&world.runs, &pid, RunState::Completed).await;
+    assert_eq!(world.model_calls(), 1);
+    kernel.stop().await.unwrap();
+}
+
+/// Starts a drain from inside the first claim of a run, so the run parks while the kernel
+/// drains.
+struct DrainOnFirstClaim {
+    kernel: Arc<std::sync::OnceLock<adk_kernel::Kernel>>,
+    armed: AtomicBool,
+}
+
+#[async_trait]
+impl ProgressSource for DrainOnFirstClaim {
+    async fn usage(&self, _run: &RunRecord) -> adk_kernel::Result<Option<RunUsage>> {
+        if self.armed.swap(false, Ordering::SeqCst) {
+            let kernel = self.kernel.get().expect("the test sets the kernel").clone();
+            tokio::spawn(async move { kernel.drain(Duration::from_secs(5)).await });
+            // The drain marks the kernel draining at once; the run parks after this returns.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Ok(None)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sleeper_that_parks_during_a_drain_stays_asleep_when_the_kernel_resumes() {
+    let world = World::answer();
+    let control = GovernanceControl::new();
+    let slot = Arc::new(std::sync::OnceLock::new());
+    let drain =
+        Arc::new(DrainOnFirstClaim { kernel: Arc::clone(&slot), armed: AtomicBool::new(true) });
+    let kernel = world.kernel_with("k1", &control, |builder| builder.progress_source(drain));
+    let _ = slot.set(kernel.clone());
+    kernel.start().await.unwrap();
+    let pid = kernel
+        .processes()
+        .spawn(run_on(QueueClass::Interactive, "later"), sleeper())
+        .await
+        .unwrap()
+        .meta
+        .pid;
+    eventually("the drain to finish", || async {
+        (kernel.health().state == KernelState::Paused).then_some(())
+    })
+    .await;
+    in_state(&world.runs, &pid, RunState::Waiting).await;
+
+    kernel.resume().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(world.model_calls(), 0, "a sleeper the drain parked called the model (K-I2)");
+    let run = world.runs.get(&pid).await.unwrap().unwrap();
+    assert_eq!((run.state, run.lease_owner), (RunState::Waiting, None));
+    assert!(meta(&world, &pid).await.wake.is_some(), "the sleeper keeps its wake set");
     kernel.stop().await.unwrap();
 }

@@ -160,7 +160,14 @@ async fn check(ops: Vec<Op>, write_delay: Duration) {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 100, ..ProptestConfig::default() })]
+    // `PROPTEST_CASES` raises the count for a soak run.
+    #![proptest_config(ProptestConfig {
+        cases: std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|cases| cases.parse().ok())
+            .unwrap_or(100),
+        ..ProptestConfig::default()
+    })]
 
     #[test]
     fn waiting_processes_hold_no_lease_sleepers_stay_asleep_and_nothing_runs_while_frozen(
