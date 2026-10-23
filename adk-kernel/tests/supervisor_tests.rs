@@ -691,3 +691,152 @@ async fn a_sleeper_that_parks_during_a_drain_stays_asleep_when_the_kernel_resume
     assert!(meta(&world, &pid).await.wake.is_some(), "the sleeper keeps its wake set");
     kernel.stop().await.unwrap();
 }
+
+/// A run store that, once armed, freezes the control as a claim on the interactive queue
+/// returns a run: the worker read the control before the freeze and claims after it, the
+/// window a claim races a freeze in.
+struct FreezeAsClaimed {
+    inner: Arc<dyn adk_core::DurableRunStore>,
+    control: GovernanceControl,
+    armed: AtomicBool,
+    raced: AtomicBool,
+}
+
+#[async_trait]
+impl adk_core::DurableRunStore for FreezeAsClaimed {
+    async fn enqueue(&self, run: adk_core::NewRun) -> adk_core::Result<adk_core::Enqueued> {
+        self.inner.enqueue(run).await
+    }
+
+    async fn claim(
+        &self,
+        queue: &str,
+        worker: &str,
+        ttl: Duration,
+    ) -> adk_core::Result<Option<adk_core::ClaimedRun>> {
+        let claimed = self.inner.claim(queue, worker, ttl).await?;
+        if claimed.is_some()
+            && queue == QueueClass::INTERACTIVE
+            && self.armed.swap(false, Ordering::SeqCst)
+        {
+            self.control.freeze("drill");
+            self.raced.store(true, Ordering::SeqCst);
+        }
+        Ok(claimed)
+    }
+
+    async fn heartbeat(&self, run_id: &str, epoch: u64, ttl: Duration) -> adk_core::Result<bool> {
+        self.inner.heartbeat(run_id, epoch, ttl).await
+    }
+
+    async fn set_checkpoint(
+        &self,
+        run_id: &str,
+        epoch: u64,
+        checkpoint: adk_core::RunCheckpointRef,
+    ) -> adk_core::Result<()> {
+        self.inner.set_checkpoint(run_id, epoch, checkpoint).await
+    }
+
+    async fn wait(
+        &self,
+        run_id: &str,
+        epoch: u64,
+        until: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> adk_core::Result<()> {
+        self.inner.wait(run_id, epoch, until).await
+    }
+
+    async fn wake(&self, run_id: &str) -> adk_core::Result<()> {
+        self.inner.wake(run_id).await
+    }
+
+    async fn finish(
+        &self,
+        run_id: &str,
+        epoch: u64,
+        outcome: adk_core::RunOutcome,
+    ) -> adk_core::Result<RunRecord> {
+        self.inner.finish(run_id, epoch, outcome).await
+    }
+
+    async fn request_cancel(&self, run_id: &str) -> adk_core::Result<()> {
+        self.inner.request_cancel(run_id).await
+    }
+
+    async fn get(&self, run_id: &str) -> adk_core::Result<Option<RunRecord>> {
+        self.inner.get(run_id).await
+    }
+
+    async fn list(&self, filter: adk_core::RunFilter) -> adk_core::Result<Vec<RunRecord>> {
+        self.inner.list(filter).await
+    }
+
+    async fn prune(&self, finished_before: chrono::DateTime<chrono::Utc>) -> adk_core::Result<u64> {
+        self.inner.prune(finished_before).await
+    }
+}
+
+/// The interleaving behind "run … runs while frozen" after `SpawnAsleep`, `Suspend`,
+/// `Resume`, `Freeze`: the resumed process's claim lands after the freeze, so its run is
+/// `Running` while frozen until the worker hands it back unstarted — no claim hook, no
+/// model call — well inside K-I8's second. The unfreeze runs it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_claim_that_races_a_freeze_is_handed_back_before_it_starts() {
+    let mut world = World::answer();
+    let control = GovernanceControl::new();
+    let store = Arc::new(FreezeAsClaimed {
+        inner: Arc::clone(&world.runs),
+        control: control.clone(),
+        armed: AtomicBool::new(false),
+        raced: AtomicBool::new(false),
+    });
+    world.runs = store.clone();
+    let kernel = world.kernel("k1", &control);
+    let mut events = kernel.events();
+    kernel.start().await.unwrap();
+    let pid = kernel
+        .processes()
+        .spawn(run_on(QueueClass::Interactive, "go"), sleeper())
+        .await
+        .unwrap()
+        .meta
+        .pid;
+    let asleep = in_state(&world.runs, &pid, RunState::Waiting).await;
+    kernel.processes().suspend(&pid).await.unwrap();
+
+    store.armed.store(true, Ordering::SeqCst);
+    kernel.processes().resume(&pid).await.unwrap();
+    let raced = eventually("the claim that returns after the freeze", || async {
+        store.raced.load(Ordering::SeqCst).then(tokio::time::Instant::now)
+    })
+    .await;
+    let handed_back = eventually("the racing claim's hand-back", || async {
+        world.runs.get(&pid).await.ok().flatten().filter(|run| {
+            run.lease_epoch > asleep.lease_epoch
+                && run.state == RunState::Waiting
+                && run.lease_owner.is_none()
+        })
+    })
+    .await;
+    assert!(raced.elapsed() < Duration::from_secs(1), "handed back in {:?}", raced.elapsed());
+    assert_eq!(handed_back.attempt, 1, "the hand-back counts no attempt");
+    assert_eq!(world.model_calls(), 0, "the racing claim never started the run");
+    let mut claims = 0;
+    while let Ok(Some(record)) =
+        tokio::time::timeout(Duration::from_millis(100), events.recv()).await
+    {
+        if let KernelEvent::Process { pid: event_pid, reason: Some(reason), .. } = record.event
+            && event_pid == pid
+            && reason == "claimed"
+        {
+            claims += 1;
+        }
+    }
+    assert_eq!(claims, 1, "only the sleeper's first claim reached the claim hook");
+
+    kernel.unfreeze(operator()).await.unwrap();
+    in_state(&world.runs, &pid, RunState::Completed).await;
+    assert_eq!(world.model_calls(), 1);
+    kernel.stop().await.unwrap();
+}
