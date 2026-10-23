@@ -9,6 +9,66 @@ durable-run machinery of `adk-core` and `adk-server`
 [![Documentation](https://docs.rs/adk-kernel/badge.svg)](https://docs.rs/adk-kernel)
 [![License](https://img.shields.io/crates/l/adk-kernel.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
 
+## What it is
+
+The kernel is a background program, started with `adk-rust up`, that keeps your agents
+running when no terminal is open. It does for agents what an operating system does for
+programs: it starts them, lets them sleep, wakes them when something happens, makes them take
+turns, and stops all of them with one switch.
+
+### A day with the kernel
+
+```bash
+# 1. Start the kernel in a project. In ask mode, edits and commands wait for your approval.
+adk-rust up --mode ask
+
+# 2. In another terminal, give an agent a job that waits for something to happen.
+#    It becomes a sleeping process: no lease, no model calls, no cost while it waits.
+adk-rust wake --file notes.md -- "summarise what changed in notes.md"
+adk-rust ps
+
+# 3. Save notes.md. The kernel wakes the process; it reads the file and does the job.
+
+# 4. A command the agent wants to run waits in the approvals inbox. Decide it from any
+#    terminal, or from another machine with --server and --token against a kernel served
+#    with --auth-token.
+adk-rust approvals list
+adk-rust approvals approve <id>
+
+# 5. Follow-up work the agent suggests lands on the agenda and runs only once you approve it.
+adk-rust agenda
+adk-rust agenda approve <id>
+
+# 6. One switch parks every running process at a safe point; unfreeze resumes them where they
+#    stopped, and a call with side effects that already completed does not run again.
+adk-rust freeze
+adk-rust unfreeze
+
+# 7. Once there is new material and the project has been idle a while (never inside quiet
+#    hours), a consolidation tick merges duplicate memories and expires stale guesses. It never
+#    changes a fact you confirmed, and a tick can be reversed.
+adk-rust memory undo <tick-id>
+```
+
+### The parts, in plain terms
+
+| Part | What it does |
+|---|---|
+| Processes | Each agent job is a process you list (`ps`), watch (`top`), suspend, resume, re-prioritise (`nice`) or `kill` |
+| Wake sources | What wakes a sleeping process: a file change, a cron schedule, a webhook, an approval being decided, another process finishing |
+| Scheduler | Three queues — your typed turns first, then background work, then maintenance. Quotas, a daily budget and quiet hours bound background work, and a typed turn takes a busy slot from it |
+| Agenda | Where an agent's proposed follow-ups wait for your decision. Proposals from the consolidation tick need a person in every mode, including `auto` |
+| Kill switch | `freeze` parks running processes on every replica sharing the store; `unfreeze` resumes exactly the ones it parked |
+| Control plane | How terminals and apps reach the kernel: an owner-only local socket, plus an HTTP API on loopback, or beyond it with authentication |
+| Stores | Processes, schedules and the agenda live in SQLite (`harness.db`) or a shared PostgreSQL or Redis backend, so a crash or restart resumes work instead of losing it |
+
+Every tool call a kernel process makes still goes through the harness's modes, standing rules
+and approvals. Drivers (sandboxed MCP servers), partitions (separate work and home
+compartments), `/proc` self-observation and installation as a login service are the remaining
+parts of spec 3.2.
+
+## How it is built
+
 A process is a durable run. Asleep is `Waiting` with a recorded wake set and no lease, every
 wake is a governed run, and the kernel owns the state that terminals attach to. `adk-kernel`
 hosts any `Arc<Runner>` and depends on no harness type; the `kernel` feature of `adk-harness`
