@@ -83,6 +83,9 @@ struct AgentExtras {
     /// Long-term memory with an approval service: `adk-rust up`, the user's own kernel,
     /// keeps it, where `serve` turns it off (spec 3.2 §8.1).
     memory_with_inbox: bool,
+    /// The kernel's drivers whose manifests list the default partition, classed by their
+    /// manifests and under the kernel's driver policy (spec 3.2 §7.7).
+    drivers: Option<adk_kernel::drivers::DriverSupervisor>,
 }
 
 /// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
@@ -369,6 +372,12 @@ impl Setup {
         }
         if let Some(recorder) = extras.audit {
             builder = builder.audit_log(recorder);
+        }
+        if let Some(drivers) = extras.drivers {
+            builder = builder
+                .toolset(drivers.toolset_for_manifests(&adk_kernel::PartitionId::default()))
+                .tool_classes(Arc::new(adk_harness::DriverClasses::new(drivers.clone())))
+                .add_operator_policy(drivers.policy());
         }
         // Servers the workspace declares in `.mcp.json` start once the workspace is trusted
         // (spec 3.1 §7.21, I3).
@@ -1294,6 +1303,7 @@ pub async fn ultracode(
             budget: Some(RunBudget::new().max_model_calls(limits.implement_model_calls)),
             audit: Some(recorder.clone()),
             memory_with_inbox: false,
+            ..AgentExtras::default()
         },
     )?;
     let runtime = agent.runtime().clone();

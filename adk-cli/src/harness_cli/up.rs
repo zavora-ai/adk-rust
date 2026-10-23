@@ -33,6 +33,8 @@ struct KernelStores {
     processes: Arc<dyn ProcessStore>,
     agenda: Arc<dyn adk_kernel::AgendaStore>,
     schedules: Arc<dyn ScheduleStore>,
+    /// Mounted drivers and their parked calls (spec 3.2 §7.7).
+    drivers: Arc<dyn adk_kernel::drivers::DriverStore>,
     /// The kill switch's shared state; `None` keeps it in this process.
     governance: Option<Arc<dyn GovernanceStateStore>>,
     /// Where they are, for the banner.
@@ -109,6 +111,19 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     if let Some(recorder) = &audit {
         governance.attach_audit(AuditTrail::new(recorder.clone()));
     }
+    // Drivers (spec 3.2 §7.7): supervised MCP servers under the manifests the user mounted,
+    // kept beside the kernel's other stores; their tools reach the harness with the classes
+    // the manifests give them. A driver that may sample does so on the harness model,
+    // metered against the run that called it.
+    let sampling_model = setup.models.harness.llm.clone();
+    let drivers = adk_kernel::drivers::DriverSupervisor::builder(stores.drivers.clone())
+        .app_name(APP_NAME)
+        .home(&home)
+        .sampling_handlers(move |_| {
+            Some(Arc::new(adk_tool::sampling::LlmSamplingHandler::new(sampling_model.clone()))
+                as Arc<dyn adk_tool::sampling::SamplingHandler>)
+        })
+        .build();
     let agent = Arc::new(setup.agent_with(
         setup.resolved.effort,
         APP_NAME,
@@ -116,7 +131,12 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         setup.resolved.sandbox,
         None,
         Some(service),
-        AgentExtras { budget: None, audit, memory_with_inbox: true },
+        AgentExtras {
+            budget: None,
+            audit,
+            memory_with_inbox: true,
+            drivers: Some(drivers.clone()),
+        },
     )?);
     let runner = adk_runner::Runner::builder()
         .app_name(APP_NAME)
@@ -131,6 +151,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     let harness = adk_harness::Harness::with_runner(agent.clone(), runner)?
         .with_run_store(run_store.clone())
         .with_goal_queue(QueueClass::BACKGROUND);
+    // Re-approving a driver carries the re-approving person's standing rules forward.
+    drivers.set_rule_pins(harness.driver_rule_pins());
     let mut worker = DurableWorkerConfig::default();
     if let Some(max) = settings.max_concurrent_runs {
         worker = worker.with_max_concurrent_runs(max);
@@ -154,7 +176,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         .config(config)
         .process_store(stores.processes)
         .agenda_store(stores.agenda)
-        .schedule_store(stores.schedules);
+        .schedule_store(stores.schedules)
+        .drivers(drivers);
     if tick {
         // The tick distils this workspace's sessions, and the kernel's own, which name none.
         let recorded = setup.resolved.workspace.display().to_string();
@@ -201,7 +224,10 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             setup.user.clone(),
         )));
     }
-    println!("  store {}: sessions, approvals, runs, processes, agenda, schedules", stores.label);
+    println!(
+        "  store {}: sessions, approvals, runs, processes, agenda, schedules, drivers",
+        stores.label
+    );
     println!("  plans {}", setup.plans_note());
     println!(
         "  tick  {}",
@@ -265,10 +291,13 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
         schedules.migrate().await?;
         let governance = adk_session::SqliteGovernanceStateStore::from_pool(db.pool.clone());
         governance.migrate().await?;
+        let drivers = adk_kernel::stores::SqliteDriverStore::new(db.pool.clone());
+        drivers.migrate().await?;
         return Ok(KernelStores {
             processes: Arc::new(processes),
             agenda: Arc::new(agenda),
             schedules: Arc::new(schedules),
+            drivers: Arc::new(drivers),
             governance: Some(Arc::new(governance)),
             label: "harness.db".into(),
         });
@@ -278,6 +307,7 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
         processes: Arc::new(adk_kernel::InMemoryProcessStore::new()),
         agenda: Arc::new(adk_kernel::InMemoryAgendaStore::new()),
         schedules: Arc::new(adk_core::InMemoryScheduleStore::new()),
+        drivers: Arc::new(adk_kernel::stores::InMemoryDriverStore::new()),
         governance: None,
         label: "memory (--ephemeral): nothing outlives the kernel".into(),
     })
@@ -297,10 +327,13 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             schedules.migrate().await?;
             let governance = adk_session::PostgresGovernanceStateStore::new(url).await?;
             governance.migrate().await?;
+            let drivers = adk_kernel::stores::PostgresDriverStore::connect(url).await?;
+            drivers.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
                 agenda: Arc::new(agenda),
                 schedules: Arc::new(schedules),
+                drivers: Arc::new(drivers),
                 governance: Some(Arc::new(governance)),
                 label,
             })
@@ -315,10 +348,13 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             schedules.migrate().await?;
             let governance = adk_session::RedisGovernanceStateStore::new(url).await?;
             governance.migrate().await?;
+            let drivers = adk_kernel::stores::RedisDriverStore::connect(url).await?;
+            drivers.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
                 agenda: Arc::new(agenda),
                 schedules: Arc::new(schedules),
+                drivers: Arc::new(drivers),
                 governance: Some(Arc::new(governance)),
                 label,
             })

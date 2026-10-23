@@ -228,6 +228,8 @@ async fn main() -> Result<()> {
             let on = kernel_cli::wake_on(file.as_deref(), cron.as_deref(), webhook.as_deref())?;
             kernel_cli::wake(&kernel, on, &task.join(" "), session).await
         }
+        #[cfg(feature = "harness")]
+        Some(Commands::Drivers { command, kernel }) => kernel_cli::drivers(&kernel, command).await,
         #[cfg(all(feature = "harness", feature = "persist"))]
         Some(Commands::Sessions { command }) => manage::sessions(command).await,
         #[cfg(all(feature = "harness", feature = "persist"))]

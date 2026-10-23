@@ -21,7 +21,8 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 
-use crate::cli::KernelTarget;
+use crate::cli::{DriversCommands, KernelTarget};
+use adk_kernel::drivers::{DriverIsolation, DriverManifest, DriverProposal, DriverView};
 
 /// The target a turn sent from the REPL runs: the harness, as `adk-rust up` registers it.
 const APP_TARGET: &str = "adk-rust";
@@ -458,6 +459,180 @@ pub async fn events(
             None => return Ok(()),
         }
     }
+}
+
+/// `adk-rust drivers` (spec 3.2 §7.7, §8.1).
+pub async fn drivers(target: &KernelTarget, command: DriversCommands) -> Result<()> {
+    let client = client(target).await?;
+    match command {
+        DriversCommands::List => {
+            let drivers = client.drivers().await?;
+            if drivers.is_empty() {
+                println!("No drivers mounted. Mount one with `adk-rust drivers mount <file>`.");
+                return Ok(());
+            }
+            for driver in &drivers {
+                println!("{}", driver_line(driver));
+            }
+        }
+        DriversCommands::Mount { file, yes } => {
+            let mut manifest = DriverManifest::from_file(&file)?;
+            // A workspace's manifest of the same driver may only restrict it (spec 3.2 §7.7).
+            let project = std::env::current_dir()?.join(".adk").join("drivers");
+            if let Some(narrower) =
+                adk_kernel::drivers::load_dir(&project)?.into_iter().find(|m| m.id == manifest.id)
+            {
+                manifest = manifest.restrict_with(&narrower)?;
+                println!("restricted by {}", project.display());
+            }
+            let text = std::fs::read_to_string(&file)?;
+            let toml = if manifest == DriverManifest::from_toml(&text)? {
+                text
+            } else {
+                restricted_toml(&manifest)?
+            };
+            let shown = client.mount_driver(&manifest.id, &toml, false).await?;
+            print_proposal(&shown.proposal);
+            if !yes && !confirm("Mount this driver?")? {
+                println!("Not mounted.");
+                return Ok(());
+            }
+            let mounted = client.mount_driver(&manifest.id, &toml, true).await?;
+            match mounted.mounted {
+                Some(driver) => println!("mounted {}", driver_line(&driver)),
+                None => bail!("the kernel did not mount {}", manifest.id),
+            }
+        }
+        DriversCommands::Unmount { id } => {
+            if client.unmount_driver(&id).await? {
+                println!("unmounted {id}");
+            } else {
+                bail!("no driver {id} is mounted");
+            }
+        }
+        DriversCommands::Restart { id } => {
+            println!("restarted {}", driver_line(&client.restart_driver(&id).await?));
+        }
+        DriversCommands::Reapprove { id } => {
+            println!("re-approved {}", driver_line(&client.reapprove_driver(&id).await?));
+        }
+    }
+    Ok(())
+}
+
+/// One driver as `drivers list` shows it.
+fn driver_line(driver: &DriverView) -> String {
+    let record = &driver.record;
+    let isolation = match &record.isolation {
+        Some(DriverIsolation::OsSandbox { enforcer }) => format!("sandboxed ({enforcer})"),
+        Some(DriverIsolation::Unsandboxed { reason }) => format!("unsandboxed: {reason}"),
+        Some(_) => "isolated".to_string(),
+        None => format!("{} (not started)", record.manifest.sandbox.as_str()),
+    };
+    let partitions: Vec<&str> =
+        record.manifest.partitions.iter().map(PartitionId::as_str).collect();
+    let mut line = format!(
+        "{:<16} {:<16} [{}] {}  {}",
+        record.id(),
+        driver.state.as_str(),
+        partitions.join(","),
+        isolation,
+        escape_control(&driver.command_line)
+    );
+    if !record.stale.is_empty() {
+        let stale: Vec<&str> = record.stale.keys().map(String::as_str).collect();
+        line.push_str(&format!(
+            "\n  changed since approval: {} — `adk-rust drivers reapprove {}`",
+            stale.join(", "),
+            record.id()
+        ));
+    }
+    line
+}
+
+/// What a mount asks the person to approve.
+fn print_proposal(proposal: &DriverProposal) {
+    println!("driver {}", proposal.id);
+    println!("  command     {}", escape_control(&proposal.command_line));
+    let partitions: Vec<&str> = proposal.partitions.iter().map(PartitionId::as_str).collect();
+    println!("  partitions  {}", partitions.join(", "));
+    println!("  sandbox     {}", proposal.sandbox.as_str());
+    println!("  network     {}", if proposal.access.allow_network { "allowed" } else { "denied" });
+    for (name, reference) in &proposal.secrets {
+        println!("  secret      {name} ← {reference} (through the credential broker)");
+    }
+    println!("  tools (any other tool is `{}`):", proposal.unlisted_tools);
+    for (tool, class) in &proposal.effect_classes {
+        println!("    {tool:<24} {class}");
+    }
+    if proposal.sampling {
+        println!("  may sample the harness model");
+    }
+}
+
+/// Asks a yes/no question on the terminal; no answer is no.
+fn confirm(question: &str) -> Result<bool> {
+    use std::io::Write as _;
+    if !std::io::stdin().is_terminal() {
+        bail!("{question} needs an answer: run in a terminal or pass --yes");
+    }
+    print!("{question} [y/N] ");
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    Ok(matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+}
+
+/// The TOML of a manifest a workspace restricted, as the kernel reads one.
+fn restricted_toml(manifest: &DriverManifest) -> Result<String> {
+    let mut table = toml::Table::new();
+    let mut put = |key: &str, value: toml::Value| {
+        table.insert(key.to_string(), value);
+    };
+    let strings = |items: Vec<String>| {
+        toml::Value::Array(items.into_iter().map(toml::Value::String).collect())
+    };
+    put("id", toml::Value::String(manifest.id.clone()));
+    put("command", toml::Value::String(manifest.server.command.clone()));
+    put("args", strings(manifest.server.args.clone()));
+    put("env", toml::Value::try_from(&manifest.server.env)?);
+    put(
+        "partitions",
+        strings(manifest.partitions.iter().map(|p| p.as_str().to_string()).collect()),
+    );
+    put("lifecycle", toml::Value::try_from(manifest.lifecycle)?);
+    put("protocol", toml::Value::try_from(manifest.server.lifecycle)?);
+    put("sandbox", toml::Value::String(manifest.sandbox.as_str().to_string()));
+    let paths = |items: &[std::path::PathBuf]| {
+        strings(items.iter().map(|p| p.display().to_string()).collect())
+    };
+    put("allow_read", paths(&manifest.access.allow_read));
+    put("allow_write", paths(&manifest.access.allow_write));
+    put("allow_network", toml::Value::Boolean(manifest.access.allow_network));
+    put("sampling", toml::Value::Boolean(manifest.sampling));
+    put("data_classes", strings(manifest.data_classes.clone()));
+    if let Some(restart) = &manifest.server.restart_policy {
+        let mut policy = toml::Table::new();
+        policy.insert(
+            "max_attempts".into(),
+            toml::Value::Integer(restart.max_restart_attempts.into()),
+        );
+        policy.insert(
+            "initial_delay_ms".into(),
+            toml::Value::Integer(restart.initial_delay_ms.try_into()?),
+        );
+        policy
+            .insert("max_delay_ms".into(), toml::Value::Integer(restart.max_delay_ms.try_into()?));
+        policy.insert("backoff_multiplier".into(), toml::Value::Float(restart.backoff_multiplier));
+        put("restart", toml::Value::Table(policy));
+    }
+    let tools: toml::Table = manifest
+        .tools
+        .iter()
+        .map(|(tool, class)| (tool.clone(), toml::Value::String(class.as_str().to_string())))
+        .collect();
+    put("tools", toml::Value::Table(tools));
+    Ok(toml::to_string(&table)?)
 }
 
 /// `adk-rust attach`: the REPL on the running kernel.
@@ -899,6 +1074,27 @@ mod tests {
         assert!(wake_on(None, Some("not cron"), None).is_err(), "a bad expression fails at once");
         let hook = wake_on(None, None, Some("github")).unwrap();
         assert_eq!(hook.wake.any_of, [adk_kernel::Wake::Webhook { hook: "github".into() }]);
+    }
+
+    #[test]
+    fn a_restricted_manifest_reads_back_as_the_kernel_parses_it() {
+        let user = DriverManifest::from_toml(
+            "id = \"email\"\ncommand = \"mcp-email\"\nargs = [\"--imap\"]\n\
+             env = { EMAIL_TOKEN = \"secret://email/token\" }\npartitions = [\"work\", \"home\"]\n\
+             sandbox = \"unsandboxed\"\nallow_read = [\"/srv/mail\"]\nsampling = true\n\
+             restart = { max_attempts = 3 }\n[tools]\nsend_draft = \"send_external\"\n",
+        )
+        .unwrap();
+        let project = DriverManifest::from_toml(
+            "id = \"email\"\ncommand = \"mcp-email\"\nargs = [\"--imap\"]\n\
+             env = { EMAIL_TOKEN = \"secret://email/token\" }\npartitions = [\"work\"]\n\
+             sandbox = \"os\"\nallow_network = false\nrestart = { max_attempts = 3 }\n\
+             [tools]\nsend_draft = \"publish_public\"\n",
+        )
+        .unwrap();
+        let restricted = user.restrict_with(&project).unwrap();
+        let text = restricted_toml(&restricted).unwrap();
+        assert_eq!(DriverManifest::from_toml(&text).unwrap(), restricted, "{text}");
     }
 
     #[test]

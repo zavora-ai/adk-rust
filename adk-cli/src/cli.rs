@@ -538,6 +538,15 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
+    /// The kernel's drivers: MCP servers it supervises under the manifests you mounted
+    #[cfg(feature = "harness")]
+    Drivers {
+        #[command(subcommand)]
+        command: DriversCommands,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
     /// Harness sessions kept in harness.db
     #[cfg(all(feature = "harness", feature = "persist"))]
     Sessions {
@@ -737,6 +746,39 @@ pub enum AgendaCommand {
 #[cfg(feature = "harness")]
 fn parse_queue(value: &str) -> Result<adk_kernel::QueueClass, String> {
     value.parse().map_err(|error: adk_kernel::KernelError| error.to_string())
+}
+
+/// `adk-rust drivers` (spec 3.2 §7.7, §8.1).
+#[cfg(feature = "harness")]
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum DriversCommands {
+    /// The mounted drivers with their state, sandbox and stale tools
+    List,
+    /// Show what a manifest asks you to approve — the command line, the partitions, the
+    /// effect classes — and mount it once you approve; the workspace's
+    /// `.adk/drivers/<id>.toml`, if any, may only restrict it
+    Mount {
+        /// The manifest file
+        file: std::path::PathBuf,
+        /// Approve without asking
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Stop a driver and forget its manifest and parked calls
+    Unmount {
+        /// Driver id
+        id: String,
+    },
+    /// Restart a driver, minting its secrets again
+    Restart {
+        /// Driver id
+        id: String,
+    },
+    /// Approve a driver's changed tool declarations; your standing rules follow them
+    Reapprove {
+        /// Driver id
+        id: String,
+    },
 }
 
 /// Parses a run state as the run store names it: `waiting`, `running`, ….
