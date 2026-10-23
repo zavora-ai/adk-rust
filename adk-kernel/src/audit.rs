@@ -16,8 +16,9 @@
 //! | [`CONTROL`] | `subject`, `transport`, `action`, `target` |
 //! | [`AGENDA_PROPOSED`], [`AGENDA_APPROVED`], [`AGENDA_REJECTED`], [`AGENDA_SCHEDULED`], [`AGENDA_EXPIRED`] | `item`, `partition`, `origin`, `by`, `budget`, `reason` |
 //! | [`REVIEW`] | `partition`, `reviewPeriodMs`, `rules`, `sleepers`, `frozen` (ids and ages), `ask` |
+//! | [`DRIVER_MOUNTED`], [`DRIVER_UNMOUNTED`], [`DRIVER_STARTED`], [`DRIVER_CRASHED`], [`DRIVER_RESTARTED`], [`DRIVER_STALE`], [`DRIVER_REAPPROVED`] | `driverId`, `commandDigest`, `partitions`, `effectClasses`, `digests`, `attempt` |
 //!
-//! The driver, partition and observation actions of §9.3 arrive with their phases.
+//! The partition and observation actions of §9.3 arrive with their phases.
 //!
 //! # Example
 //!
@@ -68,3 +69,17 @@ pub const AGENDA_EXPIRED: &str = "kernel.agenda.expired";
 /// The daily review of standing rules, sleepers and freezes older than the review period
 /// (spec 3.2 §7.4, §9.1).
 pub const REVIEW: &str = "kernel.review";
+/// A driver's manifest was approved and mounted (spec 3.2 §7.7).
+pub const DRIVER_MOUNTED: &str = "kernel.driver.mounted";
+/// A driver was unmounted.
+pub const DRIVER_UNMOUNTED: &str = "kernel.driver.unmounted";
+/// A driver's server started.
+pub const DRIVER_STARTED: &str = "kernel.driver.started";
+/// A driver's server crashed.
+pub const DRIVER_CRASHED: &str = "kernel.driver.crashed";
+/// A driver's server started again after a crash or a restart.
+pub const DRIVER_RESTARTED: &str = "kernel.driver.restarted";
+/// A driver's tool declares something other than what was approved (K-I14).
+pub const DRIVER_STALE: &str = "kernel.driver.stale";
+/// A driver's changed declarations were approved and pinned.
+pub const DRIVER_REAPPROVED: &str = "kernel.driver.reapproved";

@@ -31,6 +31,7 @@
 //! | [`ConsolidationTick`], [`Consolidator`], [`admit_tick`], [`TickInputs`], [`TickAdmission`], [`TickMaterial`], [`TickRun`], [`TickOutcome`], [`TickProposal`], [`TickSpend`], [`CONSOLIDATION_TARGET`], [`CONSOLIDATION_LABEL`] | §7.5, §13 Q1, Q12 |
 //! | [`ReviewReport`], [`StandingRuleSource`], [`RuleAge`], [`StaleRule`], [`AgedProcess`] | §7.4, §9.1 |
 //! | [`QueueClass`], [`QuietHours`], [`Quotas`] | §7.9 |
+//! | [`drivers`]: `DriverManifest`, [`EffectClass`](drivers::EffectClass), `DriverStore`, `DriverSupervisor`, `DriverPolicy` (feature `drivers`) | §7.7 |
 //! | [`PartitionId`], [`PartitionMode`] | §7.8 (the phase-1 part) |
 //! | [`control`]: [`ControlPlaneConfig`](control::ControlPlaneConfig), [`router`](control::router), [`ControlPlane`](control::ControlPlane), [`ControlClient`](control::ControlClient), [`api`](control::api) | §7.11 |
 //! | [`audit`] action names | §9.3 |
@@ -48,7 +49,7 @@
 //! | `sqlite` | on | `SqliteProcessStore`, on the pool of `harness.db` |
 //! | `postgres`, `redis` | off | `PostgresProcessStore`, `RedisProcessStore`, opened from the URL of `adk-rust serve --store` |
 //! | `webhooks` | on | `webhook_wake_hook` over `adk-server`'s `WebhookIngress` |
-//! | `drivers` | on | Empty until phase 3 |
+//! | `drivers` | on | [`drivers`]: manifests, the driver store, the supervisor over `adk-tool`'s MCP manager, the stdio launcher on `adk-sandbox` |
 //! | `service` | on | Empty until phase 4 |
 //! | `proc` | on | The OTel GenAI histograms of the live aggregates; the ledger in phase 4 |
 //! | `proc-baselines` | off | Empty until phase 4 (implies `proc`) |
@@ -86,6 +87,7 @@ pub mod bus;
 pub mod conformance;
 pub mod consolidation;
 pub mod control;
+pub mod drivers;
 pub mod error;
 pub mod kernel;
 pub mod partition;

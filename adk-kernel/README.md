@@ -86,6 +86,7 @@ builds a kernel from a harness (`Harness::kernel`).
 | Agenda | `Kernel::agenda`: proposals (`propose`, `approve`, `reject`, `schedule`) under a `ProactivityPolicy` — held, put to the approvals inbox, or scheduled by the partition's mode, bounded by open items, a daily budget and quiet hours; the harness's `propose_followup` lands here |
 | Admission | Before a claimed process's first model call: per-partition `Quotas`, `QuietHours`, the day's spend, and preemption of the youngest background process by a human turn at quota |
 | Consolidation tick | With `ProactivityPolicy::consolidation` and a `Consolidator` per partition (`KernelBuilder::consolidator`), a `Maintenance` process (`kernel.consolidation`) on the `maintenance` queue once `admit_tick` holds: new material, `min_interval`, `debounce` idle, outside quiet hours, within `budget_share` of the daily proactive budget and `max_tokens_per_tick`; its proposals are `Consolidation` agenda items a person approves in every mode |
+| Drivers | `drivers::DriverSupervisor`: MCP servers run as supervised child processes under the manifests the user approved, in the OS sandbox, with brokered secrets; a changed tool declaration needs re-approval, and a call parked on its server's question survives a restart by re-issue |
 
 ## Installation
 
@@ -216,6 +217,37 @@ replica enqueued.
 A hard kill loses nothing: the lease expires, and the next claim resumes the session from
 its checkpoint without running a completed call again.
 
+## Drivers
+
+A driver is an MCP server the kernel runs under a `DriverManifest` (TOML) the user
+approved by mounting it (spec 3.2 §7.7, K-I13, K-I14):
+
+| Piece | Behaviour |
+|---|---|
+| `DriverManifest`, `EffectClass` | Command, environment, partitions, sandbox, restart policy, and each tool's effect class; unknown tools are `other`; a workspace's manifest may only restrict (`restrict_with`, `load_manifests`) |
+| Launcher | `sandbox = "os"` runs the server through `adk_sandbox::sandbox::sandboxed_command`, else records `Unsandboxed { reason }`; the environment is cleared to an allowlist; each `secret://` value is minted by the `CredentialBroker` into a `0600` file named by `<NAME>_FILE` |
+| Supervision | One `McpServerManager` per driver; its status channel becomes `KernelEvent::Driver` and `kernel.driver.*` records; crashes restart with backoff |
+| Pinning | The first listing after approval pins each tool's declaration digest; a differing one is stale: `NeedsReapproval`, the harness's rules pinned to it stop matching, `DriverPolicy` asks before every call; `reapprove` pins the new declarations and moves the re-approving person's rules |
+| Parked calls | A call the server answers with a question parks as a held call, its `DriverPark` stored as the run's checkpoint; the decision, in this process or after a restart, re-issues it once |
+| Partitions | `toolset_for(partition, drivers)` serves a driver when its manifest lists the partition and the partition's list names it; `toolset_for_manifests(partition)` by the manifest alone |
+
+```rust,no_run
+use std::sync::Arc;
+use adk_kernel::drivers::{DriverManifest, DriverSupervisor};
+use adk_kernel::stores::InMemoryDriverStore;
+use adk_kernel::{Kernel, PartitionId};
+
+# async fn example(runs: Arc<dyn adk_core::DurableRunStore>) -> adk_kernel::Result<()> {
+let drivers = DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new())).build();
+let kernel = Kernel::builder().run_store(runs).drivers(drivers.clone()).build()?;
+kernel.start().await?;
+drivers.mount(DriverManifest::from_file("email.toml")?, "alice").await?;
+let tools = drivers.toolset_for(&PartitionId::new("work"), &["email".to_string()]);
+# let _ = tools;
+# Ok(())
+# }
+```
+
 ## Replicas
 
 Kernels share one run store, process store and governance store. Give each replica
@@ -227,9 +259,10 @@ second.
 |---|---|
 | `ProcessStore` | `InMemoryProcessStore`; `SqliteProcessStore` (feature `sqlite`, on the pool of `harness.db`); `PostgresProcessStore` (`postgres`); `RedisProcessStore` (`redis`) |
 | `AgendaStore` | `InMemoryAgendaStore`; `SqliteAgendaStore` (`sqlite`); `PostgresAgendaStore` (`postgres`); `RedisAgendaStore` (`redis`) |
+| `DriverStore` | `InMemoryDriverStore`; `SqliteDriverStore`; `PostgresDriverStore`; `RedisDriverStore` (feature `drivers` with the backend's) |
 | Runs, sessions, schedules, approvals, governance state, action ledger | `adk-session`'s stores on the same backend |
 
-`process_store_conformance_tests!` and `agenda_store_conformance_tests!` (feature
+`process_store_conformance_tests!`, `agenda_store_conformance_tests!` and `driver_store_conformance_tests!` (feature
 `conformance`) check a backend against the contract the kernel relies on.
 
 ## Features
@@ -241,7 +274,8 @@ second.
 | `webhooks` | on | `webhook_wake_hook` over `adk-server`'s `WebhookIngress` |
 | `proc` | on | The OpenTelemetry GenAI histograms of the live process aggregates |
 | `conformance` | off | The `conformance` module |
-| `drivers`, `service` | on | Reserved for supervised MCP drivers and service installation; empty in this release |
+| `drivers` | on | `drivers`: manifests, the driver store, the supervisor over `adk-tool`'s MCP manager, the stdio launcher on `adk-sandbox`'s enforcers |
+| `service` | on | Reserved for service installation; empty in this release |
 | `proc-baselines`, `channels`, `managed` | off | Reserved for later phases of spec 3.2; empty in this release |
 
 ## Tests
@@ -252,7 +286,11 @@ second.
 | `tests/supervisor_tests.rs`, `tests/supervisor_property_tests.rs` | The process actions, lifecycle and spend attribution; sleepers never call the model and freezes stop everything within a second, with process-store writes delayed up to 120 ms |
 | `tests/wake_*.rs` | Matching, keys, expiry, reconciliation and each wake source |
 | `tests/proactivity_scenarios.rs` | K4: in Ask a follow-up waits in the inbox and nothing runs until it is approved, edited or rejected; in Auto it runs after quiet hours within the daily budget, a proposal past `max_proposed_open` is rejected with a reason on the bus, and an over-budget process sleeps until the budget replenishes. K8: three background runs at a quota of three, a typed message runs at once, the youngest background run parks and is requeued, no tool runs twice and the quota is never exceeded. A consolidation item waits for a person in Auto |
-| `tests/process_store_*.rs`, `tests/agenda_store*.rs` | The conformance suites on every backend; PostgreSQL and Redis run `#[ignore]`d against a server (`scripts/test-postgres.sh`) |
+| `tests/process_store_*.rs`, `tests/agenda_store*.rs`, `tests/driver_store_*.rs` | The conformance suites on every backend; PostgreSQL and Redis run `#[ignore]`d against a server (`scripts/test-postgres.sh`) |
+| `tests/driver_scenarios.rs` | K6 on a real stdio MCP server: mount, crash and restart with backoff, a redeclared tool stale and `NeedsReapproval`, re-approval; a `secret://` value reaches the server as a file and never in its environment |
+| `tests/driver_park_restart.rs` | An agent run's driver call parked on its server's question survives a kernel restart: answered in the inbox, it completes with the tool executed once; a call approved before its question is not asked about again |
+| `tests/driver_sandbox_tests.rs` | A driver under `sandbox = "os"` cannot write outside its allowed paths (Seatbelt, bubblewrap in the `sandbox-linux` job) |
+| `tests/driver_*_property_tests.rs` | Any declaration change makes a pinned tool stale; a re-issued round never executes a completed call twice under the action ledger |
 
 ## License
 

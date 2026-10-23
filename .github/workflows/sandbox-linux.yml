@@ -1,7 +1,7 @@
 name: Sandbox Linux
 
 # Proves bubblewrap enforcement on a real Linux runner (spec 3.1 §11, "must be proven
-# live"). The PR tier runs the sandbox and harness suites on a runner where the enforcer
+# live"). The PR tier runs the sandbox, harness and kernel driver suites on a runner where the enforcer
 # cannot start — GitHub's ubuntu-24.04 image restricts unprivileged user namespaces
 # through AppArmor and ships no bubblewrap — so every enforcement test there skips with a
 # note. This job installs bubblewrap, lifts the restriction as the spec describes, and
@@ -18,6 +18,8 @@ on:
       - 'adk-sandbox/**'
       - 'adk-harness/src/shell/**'
       - 'adk-harness/tests/shell_sandbox_tests.rs'
+      - 'adk-kernel/src/drivers/**'
+      - 'adk-kernel/tests/driver_sandbox_tests.rs'
       - '.github/workflows/sandbox-linux.yml'
       - '.github/actions/setup-rust/**'
       - '.github/actions/apt-install/**'
@@ -85,6 +87,9 @@ jobs:
 
     - name: Shell sandbox tests (adk-harness)
       run: cargo nextest run -p adk-harness --test shell_sandbox_tests --no-fail-fast
+
+    - name: Driver sandbox tests (adk-kernel)
+      run: cargo nextest run -p adk-kernel --test driver_sandbox_tests --no-fail-fast
 
     - name: Summary
       if: always()

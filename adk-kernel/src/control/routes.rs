@@ -71,6 +71,11 @@ pub(crate) trait ControlBackend: Send + Sync + 'static {
     fn agenda(&self) -> Option<Agenda> {
         None
     }
+    /// The driver supervisor, when the kernel has one (spec 3.2 §7.7).
+    #[cfg(feature = "drivers")]
+    fn drivers(&self) -> Option<crate::drivers::DriverSupervisor> {
+        None
+    }
 }
 
 #[async_trait]
@@ -158,11 +163,16 @@ impl ControlBackend for Kernel {
     fn agenda(&self) -> Option<Agenda> {
         Some(Kernel::agenda(self).clone())
     }
+
+    #[cfg(feature = "drivers")]
+    fn drivers(&self) -> Option<crate::drivers::DriverSupervisor> {
+        Kernel::drivers(self).cloned()
+    }
 }
 
 /// The routes over `backend`, relative to `/api`.
 pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
-    Router::new()
+    let router = Router::new()
         .route(paths::HEALTH, get(health))
         .route(paths::PROCESSES, get(processes).post(spawn))
         .route(paths::KILL, post(kill))
@@ -176,8 +186,15 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         .route(paths::AGENDA, get(agenda))
         .route(paths::AGENDA_APPROVE, post(agenda_approve))
         .route(paths::AGENDA_REJECT, post(agenda_reject))
-        .route(paths::AGENDA_SCHEDULE, post(agenda_schedule))
-        .with_state(backend)
+        .route(paths::AGENDA_SCHEDULE, post(agenda_schedule));
+    #[cfg(feature = "drivers")]
+    let router = router
+        .route(paths::DRIVERS, get(drivers::list))
+        .route(paths::DRIVER_MOUNT, post(drivers::mount))
+        .route(paths::DRIVER_UNMOUNT, post(drivers::unmount))
+        .route(paths::DRIVER_RESTART, post(drivers::restart))
+        .route(paths::DRIVER_REAPPROVE, post(drivers::reapprove));
+    router.with_state(backend)
 }
 
 type Backend = State<Arc<dyn ControlBackend>>;
@@ -600,4 +617,106 @@ async fn agenda_schedule(
     .await?;
     let item = agenda.schedule(&id, request.wake, &caller.subject()).await?;
     Ok(Json(AgendaItemResponse { item }))
+}
+
+/// The driver routes (spec 3.2 §7.7, §7.11): listing for any authenticated caller, every
+/// change for the `operator` scope, each recorded as `kernel.control` with its subject.
+#[cfg(feature = "drivers")]
+mod drivers {
+    use axum::Json;
+    use axum::extract::{Path as UrlPath, State};
+    use serde_json::json;
+
+    use super::{Backend, Caller, record};
+    use crate::control::api::{
+        DriverResponse, DriversResponse, MountDriverRequest, MountDriverResponse,
+        UnmountDriverResponse,
+    };
+    use crate::drivers::{DriverManifest, DriverProposal, DriverSupervisor, DriverView};
+    use crate::error::{KernelError, Result};
+
+    fn supervisor(backend: &dyn super::ControlBackend) -> Result<DriverSupervisor> {
+        backend.drivers().ok_or_else(|| KernelError::Config {
+            reason: "this kernel supervises no drivers; build it with KernelBuilder::drivers"
+                .into(),
+        })
+    }
+
+    async fn view(drivers: &DriverSupervisor, id: &str) -> Result<DriverView> {
+        drivers
+            .drivers()
+            .await?
+            .into_iter()
+            .find(|view| view.record.id() == id)
+            .ok_or_else(|| crate::drivers::not_mounted(id))
+    }
+
+    pub(super) async fn list(
+        State(backend): Backend,
+        _caller: Caller,
+    ) -> Result<Json<DriversResponse>> {
+        let drivers = supervisor(backend.as_ref())?;
+        Ok(Json(DriversResponse { drivers: drivers.drivers().await? }))
+    }
+
+    pub(super) async fn mount(
+        State(backend): Backend,
+        caller: Caller,
+        UrlPath(id): UrlPath<String>,
+        Json(request): Json<MountDriverRequest>,
+    ) -> Result<Json<MountDriverResponse>> {
+        caller.require_operator("mount a driver")?;
+        let drivers = supervisor(backend.as_ref())?;
+        let manifest = DriverManifest::from_toml(&request.manifest)?;
+        if manifest.id != id {
+            return Err(KernelError::Config {
+                reason: format!("the manifest declares driver `{}`, not `{id}`", manifest.id),
+            });
+        }
+        let proposal = DriverProposal::of(&manifest);
+        if !request.confirm {
+            return Ok(Json(MountDriverResponse { proposal, mounted: None }));
+        }
+        let extra = [("commandDigest", json!(proposal.command_digest))];
+        record(backend.as_ref(), &caller, "drivers.mount", Some(&id), &extra).await?;
+        drivers.mount(manifest, &caller.subject().id).await?;
+        let mounted = view(&drivers, &id).await?;
+        Ok(Json(MountDriverResponse { proposal, mounted: Some(mounted) }))
+    }
+
+    pub(super) async fn unmount(
+        State(backend): Backend,
+        caller: Caller,
+        UrlPath(id): UrlPath<String>,
+    ) -> Result<Json<UnmountDriverResponse>> {
+        caller.require_operator("unmount a driver")?;
+        let drivers = supervisor(backend.as_ref())?;
+        record(backend.as_ref(), &caller, "drivers.unmount", Some(&id), &[]).await?;
+        let unmounted = drivers.unmount(&id, &caller.subject().id).await?;
+        Ok(Json(UnmountDriverResponse { unmounted }))
+    }
+
+    pub(super) async fn restart(
+        State(backend): Backend,
+        caller: Caller,
+        UrlPath(id): UrlPath<String>,
+    ) -> Result<Json<DriverResponse>> {
+        caller.require_operator("restart a driver")?;
+        let drivers = supervisor(backend.as_ref())?;
+        record(backend.as_ref(), &caller, "drivers.restart", Some(&id), &[]).await?;
+        drivers.restart(&id).await?;
+        Ok(Json(DriverResponse { driver: view(&drivers, &id).await? }))
+    }
+
+    pub(super) async fn reapprove(
+        State(backend): Backend,
+        caller: Caller,
+        UrlPath(id): UrlPath<String>,
+    ) -> Result<Json<DriverResponse>> {
+        caller.require_operator("re-approve a driver")?;
+        let drivers = supervisor(backend.as_ref())?;
+        record(backend.as_ref(), &caller, "drivers.reapprove", Some(&id), &[]).await?;
+        drivers.reapprove(&id, &caller.subject().id).await?;
+        Ok(Json(DriverResponse { driver: view(&drivers, &id).await? }))
+    }
 }

@@ -251,6 +251,79 @@ impl ControlClient {
         self.process_action(paths::RESUME, pid, &()).await
     }
 
+    /// `GET /kernel/drivers`: the mounted drivers (spec 3.2 §7.7).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    #[cfg(feature = "drivers")]
+    pub async fn drivers(&self) -> Result<Vec<crate::drivers::DriverView>> {
+        let answer: super::api::DriversResponse =
+            self.call(Method::GET, paths::DRIVERS.to_string(), None::<&()>).await?;
+        Ok(answer.drivers)
+    }
+
+    /// `POST /kernel/drivers/{id}/mount`: what mounting `manifest` (its TOML) approves,
+    /// and with `confirm` the mount itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    #[cfg(feature = "drivers")]
+    pub async fn mount_driver(
+        &self,
+        id: &str,
+        manifest: &str,
+        confirm: bool,
+    ) -> Result<super::api::MountDriverResponse> {
+        let mut body = super::api::MountDriverRequest::new(manifest);
+        body.confirm = confirm;
+        let path = paths::DRIVER_MOUNT.replace("{id}", &encode(id));
+        self.call(Method::POST, path, Some(&body)).await
+    }
+
+    /// `POST /kernel/drivers/{id}/unmount`; `false` when no such driver was mounted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    #[cfg(feature = "drivers")]
+    pub async fn unmount_driver(&self, id: &str) -> Result<bool> {
+        let path = paths::DRIVER_UNMOUNT.replace("{id}", &encode(id));
+        let answer: super::api::UnmountDriverResponse =
+            self.call(Method::POST, path, Some(&())).await?;
+        Ok(answer.unmounted)
+    }
+
+    /// `POST /kernel/drivers/{id}/restart`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    #[cfg(feature = "drivers")]
+    pub async fn restart_driver(&self, id: &str) -> Result<crate::drivers::DriverView> {
+        let path = paths::DRIVER_RESTART.replace("{id}", &encode(id));
+        let answer: super::api::DriverResponse = self.call(Method::POST, path, Some(&())).await?;
+        Ok(answer.driver)
+    }
+
+    /// `POST /kernel/drivers/{id}/reapprove`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    #[cfg(feature = "drivers")]
+    pub async fn reapprove_driver(&self, id: &str) -> Result<crate::drivers::DriverView> {
+        let path = paths::DRIVER_REAPPROVE.replace("{id}", &encode(id));
+        let answer: super::api::DriverResponse = self.call(Method::POST, path, Some(&())).await?;
+        Ok(answer.driver)
+    }
+
     /// `POST /kernel/freeze`.
     ///
     /// # Errors

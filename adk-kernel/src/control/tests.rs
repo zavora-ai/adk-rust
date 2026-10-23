@@ -42,6 +42,8 @@ struct Fake {
     bus: EventBus,
     processes: Mutex<BTreeMap<String, Process>>,
     asked_after: Mutex<Vec<Option<u64>>>,
+    #[cfg(feature = "drivers")]
+    drivers: Option<crate::drivers::DriverSupervisor>,
 }
 
 impl Fake {
@@ -59,6 +61,8 @@ impl Fake {
             bus: EventBus::new(16),
             processes: Mutex::new(BTreeMap::new()),
             asked_after: Mutex::new(Vec::new()),
+            #[cfg(feature = "drivers")]
+            drivers: None,
         })
     }
 
@@ -239,6 +243,11 @@ impl ControlBackend for Fake {
     async fn events(&self, after: Option<u64>) -> Result<EventSubscriber> {
         self.asked_after.lock().unwrap().push(after);
         Ok(self.bus.subscribe())
+    }
+
+    #[cfg(feature = "drivers")]
+    fn drivers(&self) -> Option<crate::drivers::DriverSupervisor> {
+        self.drivers.clone()
     }
 }
 
@@ -874,5 +883,68 @@ async fn the_agenda_routes_change_items_only_for_an_operator_and_record_each_cha
         approvals.iter().any(|record| record.ext["by"] == "phone"),
         "the item records its approver"
     );
+    plane.shutdown().await.unwrap();
+}
+
+#[cfg(feature = "drivers")]
+#[tokio::test]
+async fn a_driver_mounts_only_once_the_operator_confirms_the_proposal() {
+    use crate::drivers::{DriverState, EffectClass};
+
+    let mut fake = Fake::new();
+    let drivers = crate::drivers::DriverSupervisor::builder(Arc::new(
+        crate::stores::InMemoryDriverStore::new(),
+    ))
+    .build();
+    Arc::get_mut(&mut fake).unwrap().drivers = Some(drivers.clone());
+    let config = ControlPlaneConfig::default()
+        .with_http(loopback())
+        .with_extractor(Arc::new(TokenExtractor));
+    let (plane, client) = http_plane(&fake, config).await;
+    let operator = client.clone().with_bearer_token("right");
+    let viewer = client.with_bearer_token("viewer");
+    let manifest = "id = \"email\"\ncommand = \"mcp-email\"\nargs = [\"--imap\"]\n\
+                    partitions = [\"work\"]\nsandbox = \"unsandboxed\"\n\
+                    [tools]\nlist_inbox = \"read\"\nsend_draft = \"send_external\"\n";
+
+    // A viewer may list but not mount.
+    assert!(viewer.drivers().await.unwrap().is_empty());
+    let error =
+        adk_core::AdkError::from(viewer.mount_driver("email", manifest, true).await.unwrap_err());
+    assert_eq!(error.http_status_code(), 403);
+
+    // Without `confirm` the kernel only shows what mounting approves.
+    let shown = operator.mount_driver("email", manifest, false).await.unwrap();
+    assert!(shown.mounted.is_none());
+    assert_eq!(shown.proposal.command_line, "mcp-email --imap");
+    assert_eq!(
+        shown.proposal.effect_classes,
+        [
+            ("list_inbox".to_string(), EffectClass::Read),
+            ("send_draft".to_string(), EffectClass::SendExternal)
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert!(drivers.drivers().await.unwrap().is_empty(), "nothing is mounted before the confirm");
+    assert!(fake.control_records().is_empty());
+
+    // A manifest posted under another id is refused.
+    assert!(operator.mount_driver("calendar", manifest, true).await.is_err());
+
+    let mounted = operator.mount_driver("email", manifest, true).await.unwrap().mounted.unwrap();
+    assert_eq!((mounted.record.id(), mounted.state), ("email", DriverState::Stopped));
+    assert_eq!(mounted.record.approved_by, "phone");
+    let records = fake.control_records();
+    let record = records.last().unwrap();
+    assert_eq!(record.ext["action"], "drivers.mount");
+    assert_eq!(record.ext["commandDigest"], json!(shown.proposal.command_digest));
+    assert_eq!(operator.drivers().await.unwrap().len(), 1);
+
+    let error = adk_core::AdkError::from(operator.restart_driver("calendar").await.unwrap_err());
+    assert_eq!(error.http_status_code(), 404);
+    assert!(operator.unmount_driver("email").await.unwrap());
+    assert!(!operator.unmount_driver("email").await.unwrap());
+    assert!(viewer.drivers().await.unwrap().is_empty());
     plane.shutdown().await.unwrap();
 }

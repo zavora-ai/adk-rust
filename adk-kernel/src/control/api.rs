@@ -369,3 +369,81 @@ pub struct ScheduleRequest {
     /// The wake set the item's process sleeps on.
     pub wake: WakeSet,
 }
+
+/// `GET /kernel/drivers` answer (spec 3.2 §7.7, §7.11).
+#[cfg(feature = "drivers")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriversResponse {
+    /// The mounted drivers, ordered by id.
+    pub drivers: Vec<crate::drivers::DriverView>,
+}
+
+/// `POST /kernel/drivers/{id}/mount` body (spec 3.2 §7.7).
+///
+/// Without `confirm` the kernel answers what the mount would approve and mounts nothing;
+/// with it, the caller approves that and the driver is mounted.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::control::api::MountDriverRequest;
+///
+/// let request = MountDriverRequest::new("id = \"fs\"\ncommand = \"mcp-fs\"\n").confirmed();
+/// assert!(request.confirm);
+/// ```
+#[cfg(feature = "drivers")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MountDriverRequest {
+    /// The manifest, as its TOML file holds it.
+    pub manifest: String,
+    /// Whether the caller approves the mount.
+    #[serde(default)]
+    pub confirm: bool,
+}
+
+#[cfg(feature = "drivers")]
+impl MountDriverRequest {
+    /// A request to see what mounting `manifest` approves.
+    pub fn new(manifest: impl Into<String>) -> Self {
+        Self { manifest: manifest.into(), confirm: false }
+    }
+
+    /// The same request, approving the mount.
+    #[must_use]
+    pub fn confirmed(mut self) -> Self {
+        self.confirm = true;
+        self
+    }
+}
+
+/// `POST /kernel/drivers/{id}/mount` answer.
+#[cfg(feature = "drivers")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MountDriverResponse {
+    /// What the mount approves: the command line, the partitions, the effect classes.
+    pub proposal: crate::drivers::DriverProposal,
+    /// The mounted driver, when the request confirmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mounted: Option<crate::drivers::DriverView>,
+}
+
+/// `POST /kernel/drivers/{id}/{restart,reapprove}` answer.
+#[cfg(feature = "drivers")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriverResponse {
+    /// The driver after the action.
+    pub driver: crate::drivers::DriverView,
+}
+
+/// `POST /kernel/drivers/{id}/unmount` answer.
+#[cfg(feature = "drivers")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnmountDriverResponse {
+    /// Whether a driver of that id was mounted.
+    pub unmounted: bool,
+}

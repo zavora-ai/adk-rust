@@ -1,0 +1,221 @@
+//! Drivers on a real stdio MCP server (spec 3.2 §7.7, §11): K6 — mount, crash and restart
+//! with backoff, a redeclared tool going stale and needing re-approval — and secrets that
+//! reach the server as files, never in its environment.
+
+#![cfg(feature = "drivers")]
+
+mod driver_support;
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use adk_core::audit_log::{AuditTrail, InMemoryAuditRecorder};
+use adk_core::{
+    ActingContext, CredentialBroker, InMemoryRunStore, PolicyDecision, ReadonlyContext,
+    RevocationScope, ScopedToken, ToolOrigin, async_trait,
+};
+use adk_kernel::drivers::{DriverPolicy, DriverState, DriverSupervisor, driver_source};
+use adk_kernel::stores::InMemoryDriverStore;
+use adk_kernel::{EventSubscriber, Kernel, KernelConfig, KernelEvent, PartitionId};
+use driver_support::{RunContext, Workdir};
+use serde_json::{Value, json};
+
+#[tokio::test]
+#[ignore = "runs only as the stdio driver the tests start"]
+async fn stdio_driver() {
+    driver_support::serve_stdio().await;
+}
+
+/// Waits for the next `Driver` event of `id` in `state`, for at most ten seconds, and
+/// returns its reason.
+async fn driver_event(
+    events: &mut EventSubscriber,
+    id: &str,
+    state: DriverState,
+) -> Option<String> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let record = events.recv().await.expect("the bus stays open");
+            if let KernelEvent::Driver { id: seen, state: seen_state, reason } = record.event
+                && seen == id
+                && seen_state == state
+            {
+                return reason;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("no {state:?} event for driver {id}"))
+}
+
+fn kernel(dir: &std::path::Path, drivers: &DriverSupervisor, trail: AuditTrail) -> Kernel {
+    Kernel::builder()
+        .config(
+            KernelConfig::default()
+                .with_app_name("adk-rust")
+                .with_home(dir)
+                .with_control(adk_kernel::control::ControlPlaneConfig::default().without_socket()),
+        )
+        .run_store(Arc::new(InMemoryRunStore::new()))
+        .audit(trail)
+        .drivers(drivers.clone())
+        .build()
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn k6_a_driver_restarts_after_a_crash_and_a_redeclared_tool_needs_reapproval() {
+    let work = Workdir::new();
+    let recorder = Arc::new(InMemoryAuditRecorder::new());
+    let drivers = DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new()))
+        .health_check_interval(Duration::from_millis(100))
+        .build();
+    let kernel = kernel(work.path(), &drivers, AuditTrail::new(recorder.clone()));
+    kernel.start().await.unwrap();
+    let mut events = kernel.events();
+
+    // Mount: nothing runs until a partition lists the driver's tools.
+    drivers.mount(work.manifest("notes", ""), "alice").await.unwrap();
+    assert_eq!(drivers.state("notes"), Some(DriverState::Stopped));
+    let toolset = drivers.toolset_for(&PartitionId::default(), &["notes".to_string()]);
+    let ctx = RunContext::new(None, "s1", "call-1");
+    let tools = toolset.tools(ctx.clone() as Arc<dyn ReadonlyContext>).await.unwrap();
+    let mut names: Vec<&str> = tools.iter().map(|tool| tool.name()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["crash", "env_report", "read_note", "send_note", "write_file"]);
+    driver_event(&mut events, "notes", DriverState::Running).await;
+    let pinned = drivers.record("notes").unwrap().manifest.declaration_digests;
+    assert_eq!(pinned.len(), 5, "the first listing after approval pins every tool");
+    for tool in &tools {
+        assert_eq!(tool.origin(), driver_source("notes"));
+    }
+
+    // Another partition does not see the driver, and a partition list without it does not.
+    let elsewhere = drivers.toolset_for(&PartitionId::new("home"), &["notes".to_string()]);
+    assert!(elsewhere.tools(ctx.clone() as Arc<dyn ReadonlyContext>).await.unwrap().is_empty());
+    let unlisted = drivers.toolset_for(&PartitionId::default(), &[]);
+    assert!(unlisted.tools(ctx.clone() as Arc<dyn ReadonlyContext>).await.unwrap().is_empty());
+
+    // Kill: the server exits; the supervisor restarts it with backoff.
+    let crash = tools.iter().find(|tool| tool.name() == "crash").unwrap().clone();
+    let _ = crash.execute(ctx.clone(), json!({})).await;
+    driver_event(&mut events, "notes", DriverState::Crashed).await;
+    let attempt = driver_event(&mut events, "notes", DriverState::Restarting).await;
+    assert_eq!(attempt.as_deref(), Some("restart attempt 1"));
+    driver_event(&mut events, "notes", DriverState::Running).await;
+
+    // Redeclare: the changed tool goes stale and the driver needs re-approval.
+    work.redeclare("now also deletes");
+    drivers.restart("notes").await.unwrap();
+    let reason = driver_event(&mut events, "notes", DriverState::NeedsReapproval).await;
+    assert!(reason.unwrap().contains("read_note"));
+    assert_eq!(drivers.state("notes"), Some(DriverState::NeedsReapproval));
+    let record = drivers.record("notes").unwrap();
+    assert_eq!(record.stale.keys().collect::<Vec<_>>(), ["read_note"]);
+
+    let policy = DriverPolicy::new(drivers.clone());
+    let read_now = record.stale["read_note"].clone();
+    assert!(matches!(
+        policy.decide("notes", "read_note", &read_now),
+        PolicyDecision::RequireApproval { .. }
+    ));
+    assert_eq!(policy.decide("notes", "send_note", &pinned["send_note"]), PolicyDecision::Allow);
+    assert!(matches!(
+        policy.decide("calendar", "read_note", &read_now),
+        PolicyDecision::Deny { .. }
+    ));
+
+    // Re-approve: the new declaration is pinned and the tool is allowed again.
+    let record = drivers.reapprove("notes", "alice").await.unwrap();
+    assert!(record.stale.is_empty());
+    assert_eq!(record.manifest.declaration_digests["read_note"], read_now);
+    let reason = driver_event(&mut events, "notes", DriverState::Running).await;
+    assert_eq!(reason.as_deref(), Some("re-approved by alice"));
+    assert_eq!(policy.decide("notes", "read_note", &read_now), PolicyDecision::Allow);
+    assert_eq!(drivers.state("notes"), Some(DriverState::Running));
+
+    let actions: Vec<String> = recorder.records().into_iter().map(|draft| draft.action).collect();
+    for action in [
+        "kernel.driver.mounted",
+        "kernel.driver.started",
+        "kernel.driver.crashed",
+        "kernel.driver.restarted",
+        "kernel.driver.stale",
+        "kernel.driver.reapproved",
+    ] {
+        assert!(actions.iter().any(|seen| seen == action), "{action} missing from {actions:?}");
+    }
+    kernel.stop().await.unwrap();
+    assert!(!work.path().join("drivers/run/notes").exists(), "the run directory is removed");
+}
+
+/// Mints a fixed secret per resource, for the driver's agent only.
+#[derive(Debug)]
+struct Vault;
+
+#[async_trait]
+impl CredentialBroker for Vault {
+    async fn token_for(
+        &self,
+        acting: &ActingContext,
+        resource: &url::Url,
+        scopes: &[String],
+    ) -> adk_core::Result<ScopedToken> {
+        assert_eq!(acting.agent.id.as_str(), "urn:adk:agent:adk-rust/driver.notes");
+        Ok(ScopedToken::new(
+            acting.agent.id.clone(),
+            "s3cr3t-token-value",
+            resource.clone(),
+            scopes.to_vec(),
+        ))
+    }
+
+    async fn revoke(&self, _scope: &RevocationScope) -> adk_core::Result<u64> {
+        Ok(0)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_secret_reaches_the_driver_as_a_file_and_never_in_its_environment() {
+    let work = Workdir::new();
+    let drivers = DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new()))
+        .credential_broker(Arc::new(Vault))
+        .build();
+    let kernel =
+        kernel(work.path(), &drivers, AuditTrail::new(Arc::new(InMemoryAuditRecorder::new())));
+    kernel.start().await.unwrap();
+    let mut manifest = work.manifest("notes", "");
+    manifest.server.env.insert("NOTES_TOKEN".into(), "secret://notes/token".into());
+    drivers.mount(manifest, "alice").await.unwrap();
+
+    let ctx = RunContext::new(None, "s1", "call-1");
+    let tools = drivers
+        .toolset_for(&PartitionId::default(), &["notes".to_string()])
+        .tools(ctx.clone() as Arc<dyn ReadonlyContext>)
+        .await
+        .unwrap();
+    let report = tools.iter().find(|tool| tool.name() == "env_report").unwrap();
+    let answer = report.execute(ctx, json!({})).await.unwrap();
+    let text = answer["output"]
+        .as_str()
+        .or_else(|| answer.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| answer.to_string());
+    let report: Value = serde_json::from_str(&text).unwrap_or(answer.clone());
+    let env = report["env"].as_object().expect("the server reports its environment");
+
+    assert!(!env.contains_key("NOTES_TOKEN"), "{env:?}");
+    assert!(
+        env.values().all(|value| !value.as_str().unwrap_or_default().contains("s3cr3t")),
+        "the secret reached the environment: {env:?}"
+    );
+    assert!(!env.contains_key("CARGO_MANIFEST_DIR"), "the kernel's environment stays with it");
+    assert_eq!(report["files"]["NOTES_TOKEN_FILE"], "s3cr3t-token-value");
+    let origin = ToolOrigin::of(report_tool(&tools).as_ref());
+    assert_eq!(origin.source, "driver:notes");
+    kernel.stop().await.unwrap();
+}
+
+fn report_tool(tools: &[Arc<dyn adk_core::Tool>]) -> Arc<dyn adk_core::Tool> {
+    tools.iter().find(|tool| tool.name() == "env_report").unwrap().clone()
+}

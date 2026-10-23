@@ -9,7 +9,8 @@
 //!
 //! Phase 1's sinks are the control plane's SSE stream (`GET /kernel/events`, a subscriber)
 //! and the signed audit log ([`AuditSink`]) for the events that are audit records (§9.3).
-//! Channel notifiers and outbound webhooks arrive with later phases, as do the `Driver`,
+//! `Driver` events come from the MCP manager's status channel (spec 3.2 §10 T1), never
+//! polled. Channel notifiers and outbound webhooks arrive with later phases, as do the
 //! `Agenda` and `Observation` events.
 
 use std::collections::VecDeque;
@@ -136,6 +137,17 @@ pub enum KernelEvent {
     /// The maintenance tick's daily review: what is older than the partition's review
     /// period (spec 3.2 §7.4, §9.1).
     Review(ReviewReport),
+    /// A driver's state changed: a status of its MCP server, or `needsReapproval` once a
+    /// tool's declaration differs from the approved one (spec 3.2 §7.6, §7.7).
+    Driver {
+        /// The driver.
+        id: String,
+        /// The state it entered.
+        state: crate::drivers::DriverState,
+        /// Why, such as the tools that changed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     /// The kill switch changed.
     Governance {
         /// Whether execution is frozen.
@@ -160,6 +172,7 @@ impl KernelEvent {
             Self::Spend { .. } => "spend",
             Self::Agenda { .. } => "agenda",
             Self::Review(_) => "review",
+            Self::Driver { .. } => "driver",
             Self::Governance { .. } => "governance",
             Self::Health(_) => "health",
         }

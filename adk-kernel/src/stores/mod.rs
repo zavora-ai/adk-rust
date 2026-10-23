@@ -17,8 +17,12 @@
 //! ([`InMemoryAgendaStore`], `SqliteAgendaStore`, `PostgresAgendaStore`, `RedisAgendaStore`,
 //! suite `agenda_store_conformance_tests!`).
 //!
+//! The driver store ([`DriverStore`](crate::drivers::DriverStore), feature `drivers`) runs on
+//! the same four backends: `InMemoryDriverStore`, `SqliteDriverStore`,
+//! `PostgresDriverStore` and `RedisDriverStore` (spec 3.2 §7.7).
+//!
 //! There is no file backend (§13 Q8). MongoDB, Firestore and Neo4j backends are phase 4,
-//! and the driver, partition and ledger stores arrive with their phases.
+//! and the partition and ledger stores arrive with their phases.
 
 use async_trait::async_trait;
 use chrono::NaiveDate;
@@ -38,6 +42,16 @@ mod agenda_memory;
 mod agenda_redis;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 pub(crate) mod agenda_sql;
+#[cfg(feature = "drivers")]
+mod driver_memory;
+#[cfg(all(feature = "drivers", feature = "postgres"))]
+mod driver_postgres;
+#[cfg(all(feature = "drivers", feature = "redis"))]
+mod driver_redis;
+#[cfg(all(feature = "drivers", any(feature = "sqlite", feature = "postgres")))]
+mod driver_sql;
+#[cfg(all(feature = "drivers", feature = "sqlite"))]
+mod driver_sqlite;
 mod memory;
 #[cfg(feature = "postgres")]
 mod postgres;
@@ -55,6 +69,14 @@ pub use agenda_redis::RedisAgendaStore;
 pub use agenda_sql::PostgresAgendaStore;
 #[cfg(feature = "sqlite")]
 pub use agenda_sql::SqliteAgendaStore;
+#[cfg(feature = "drivers")]
+pub use driver_memory::InMemoryDriverStore;
+#[cfg(all(feature = "drivers", feature = "postgres"))]
+pub use driver_postgres::PostgresDriverStore;
+#[cfg(all(feature = "drivers", feature = "redis"))]
+pub use driver_redis::RedisDriverStore;
+#[cfg(all(feature = "drivers", feature = "sqlite"))]
+pub use driver_sqlite::SqliteDriverStore;
 pub use memory::InMemoryProcessStore;
 #[cfg(feature = "postgres")]
 pub use postgres::PostgresProcessStore;

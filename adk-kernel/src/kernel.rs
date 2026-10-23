@@ -416,6 +416,8 @@ struct KernelInner {
     wake_sources: Vec<Arc<dyn WakeSource>>,
     queue_ingresses: Vec<QueueIngress>,
     consolidation: Option<ConsolidationTicker>,
+    #[cfg(feature = "drivers")]
+    drivers: Option<crate::drivers::DriverSupervisor>,
     runtime: tokio::sync::Mutex<Runtime>,
     status: Arc<RwLock<Status>>,
 }
@@ -532,6 +534,20 @@ impl Kernel {
             sup.wake_suspended(&Suspension::Freeze).await;
         }
         sup.wake_suspended(&Suspension::Drain).await;
+        #[cfg(feature = "drivers")]
+        if let Some(drivers) = &self.inner.drivers {
+            drivers.attach(
+                &sup.bus,
+                sup.audit.as_ref(),
+                &sup.kernel_id,
+                &config.app_name,
+                &config.home,
+                config.fail_if_sandbox_unavailable,
+            );
+            if let Err(error) = drivers.start().await {
+                tracing::warn!(error = %error, "could not load the mounted drivers");
+            }
+        }
         match self.inner.router.reconcile().await {
             Ok(outcomes) if !outcomes.is_empty() => {
                 tracing::info!(
@@ -760,6 +776,10 @@ impl Kernel {
         {
             first_error.get_or_insert(error);
         }
+        #[cfg(feature = "drivers")]
+        if let Some(drivers) = &self.inner.drivers {
+            drivers.shutdown().await;
+        }
         drop(runtime);
         let was = self.state();
         self.set_state(KernelState::Stopped);
@@ -906,6 +926,12 @@ impl Kernel {
     /// (spec 3.2 §7.11, `POST /api/kernel/processes`).
     pub(crate) fn targets(&self) -> Vec<String> {
         self.inner.agents.keys().cloned().collect()
+    }
+
+    /// The driver supervisor, when the kernel was built with one (spec 3.2 §7.7).
+    #[cfg(feature = "drivers")]
+    pub fn drivers(&self) -> Option<&crate::drivers::DriverSupervisor> {
+        self.inner.drivers.as_ref()
     }
 
     /// Whether `target` is a registered agent target or a workflow the executor has.
@@ -1336,6 +1362,8 @@ pub struct KernelBuilder {
     agenda_handles: Vec<AgendaHandle>,
     rule_source: Option<Arc<dyn crate::review::StandingRuleSource>>,
     consolidators: BTreeMap<PartitionId, Arc<dyn Consolidator>>,
+    #[cfg(feature = "drivers")]
+    drivers: Option<crate::drivers::DriverSupervisor>,
 }
 
 impl fmt::Debug for KernelBuilder {
@@ -1511,6 +1539,16 @@ impl KernelBuilder {
         self
     }
 
+    /// Supervises drivers (spec 3.2 §7.7): `Kernel::start` loads the mounted drivers and
+    /// starts the eager ones, `Kernel::stop` stops them, and their state changes reach the
+    /// kernel's bus and audit trail.
+    #[cfg(feature = "drivers")]
+    #[must_use]
+    pub fn drivers(mut self, drivers: crate::drivers::DriverSupervisor) -> Self {
+        self.drivers = Some(drivers);
+        self
+    }
+
     /// Builds the kernel. Nothing runs until [`Kernel::start`].
     ///
     /// # Errors
@@ -1639,6 +1677,8 @@ impl KernelBuilder {
                 wake_sources,
                 queue_ingresses: self.queue_ingresses,
                 consolidation,
+                #[cfg(feature = "drivers")]
+                drivers: self.drivers,
                 runtime: tokio::sync::Mutex::new(Runtime::default()),
                 status: Arc::new(RwLock::new(Status::default())),
             }),

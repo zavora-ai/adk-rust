@@ -115,6 +115,16 @@ pub mod paths {
     pub const AGENDA_REJECT: &str = "/kernel/agenda/{id}/reject";
     /// `POST`: schedule an agenda item on a wake set.
     pub const AGENDA_SCHEDULE: &str = "/kernel/agenda/{id}/schedule";
+    /// `GET`: the mounted drivers (spec 3.2 §7.7).
+    pub const DRIVERS: &str = "/kernel/drivers";
+    /// `POST`: show, or with `confirm`, approve and mount a driver's manifest.
+    pub const DRIVER_MOUNT: &str = "/kernel/drivers/{id}/mount";
+    /// `POST`: unmount a driver.
+    pub const DRIVER_UNMOUNT: &str = "/kernel/drivers/{id}/unmount";
+    /// `POST`: restart a driver.
+    pub const DRIVER_RESTART: &str = "/kernel/drivers/{id}/restart";
+    /// `POST`: re-approve a driver's changed declarations.
+    pub const DRIVER_REAPPROVE: &str = "/kernel/drivers/{id}/reapprove";
 }
 
 /// Where the control plane listens and how it authenticates HTTP callers (spec 3.2 §7.11).
