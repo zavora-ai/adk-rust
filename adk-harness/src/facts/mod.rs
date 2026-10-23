@@ -20,6 +20,8 @@ pub(crate) mod distill;
 #[cfg(any(feature = "memory-embeddings", feature = "memory-embeddings-local"))]
 mod embed;
 mod index;
+#[cfg(feature = "kernel")]
+mod kernel_tick;
 pub(crate) mod recall;
 mod redact;
 pub(crate) mod runtime;
@@ -37,6 +39,8 @@ pub use consolidate::{
 #[cfg(any(feature = "memory-embeddings", feature = "memory-embeddings-local"))]
 pub use embed::RagEmbedder;
 pub use index::{FactIndex, LocalFactIndex, MemoryServiceIndex};
+#[cfg(feature = "kernel")]
+pub use kernel_tick::{HarnessConsolidator, SessionStateFilter};
 pub use redact::redact_fact_text;
 #[cfg(feature = "sqlite")]
 pub use store::SqliteFactStore;

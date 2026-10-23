@@ -146,6 +146,8 @@ pub use facts::{
     LongTermMemoryConfig, MemoryFact, MemoryServiceIndex, Provenance, fact_digest,
     redact_fact_text,
 };
+#[cfg(all(feature = "memory", feature = "kernel"))]
+pub use facts::{HarnessConsolidator, SessionStateFilter};
 pub use fsutil::redact_store_url;
 #[cfg(feature = "graph")]
 pub use goal::GoalEngine;

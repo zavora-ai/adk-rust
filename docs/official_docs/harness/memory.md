@@ -321,6 +321,55 @@ passes over each scope — the project's facts and the user-wide ones — one ki
 | `max_loss_fraction` | 0.25 | Most of a scope's live facts the passes may change |
 | `max_tokens_per_tick` | 50,000 | Most tokens distillation and pass 2 spend together; the call that crosses it is kept, and no call starts after it |
 
+#### The tick under a kernel
+
+Under the Agent Kernel the tick is a `Maintenance` process: a `kernel.consolidation` durable
+run on the `maintenance` queue, with no tools, on the distiller model at the `distiller`
+effort. It is on when `ProactivityPolicy::consolidation` holds a `ConsolidationTick` and a
+`Consolidator` is registered for the partition; `Harness::consolidator(user)` is the
+harness's. The tick is on in the CLI's Ask and Auto partitions, and off in the library and
+on servers.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::UserId;
+use adk_harness::Harness;
+use adk_kernel::{ConsolidationTick, Kernel, KernelConfig, PartitionId, ProactivityPolicy};
+
+fn with_tick(harness: &Harness, user: &UserId) -> adk_core::Result<Kernel> {
+    let policy = ProactivityPolicy::default().with_consolidation(ConsolidationTick::default());
+    Ok(harness
+        .kernel()
+        .config(KernelConfig::default().with_proactivity(policy))
+        .consolidator(PartitionId::default(), Arc::new(harness.consolidator(user)?))
+        .build()?)
+}
+```
+
+The kernel evaluates the gate on its scheduler tick, at most once a minute of its clock, and
+admits a tick only when every row holds:
+
+| Gate | Holds when | Default |
+|---|---|---|
+| Mode | The partition is Ask or Auto | — |
+| New material | `min_new_sessions` sessions distilled or `min_new_facts` facts written since the last tick, the ticks' own aside | 3 sessions, 25 facts |
+| Interval | `min_interval` has passed since the last tick | 6 hours |
+| Debounce | No process of the partition runs, and its sessions have been idle for `debounce` | 30 minutes |
+| Quiet hours | The clock is outside the kernel's and the policy's quiet hours | none |
+| Daily budget | The partition's proactive spend today is under `daily_budget` | unlimited |
+| Share | The ticks' spend today is under `budget_share` of each daily cap | 0.10 |
+
+A bare `schedule` (`ConsolidationTick::with_schedule`, a cron expression in UTC) is an
+explicit setting: a fire time since the last tick replaces new material, interval and
+debounce, and quiet hours and the budgets still hold. An admitted tick's budget is
+`max_tokens_per_tick` at most and the share the day has left; its spend counts toward the
+partition's daily proactive budget. The tick distils the user's sessions updated since the
+last tick that the per-session distiller never reached, and its record's id is the
+process's pid. A tick that stored assumptions beside known facts proposes one agenda item
+of origin `consolidation`, which runs only after a person approves it, in every mode, Auto
+included (spec 3.2 K-I23).
+
 `Harness::consolidate_memory` runs one tick and returns its `ConsolidationRecord`: the
 sessions distilled, the facts written, every status change with its reason, the facts stored
 beside a `known` one, the loss-cap refusal, and the spend. The record is kept in the fact

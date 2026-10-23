@@ -28,7 +28,7 @@
 //! | [`Wake`], [`WakeSet`], [`ExpiryAction`], [`WakeSource`], [`WakeEvent`], [`keys`], [`Trigger`], [`WakeRouter`], [`WakeOutcome`], [`KernelWakeExecutor`], the wake source adapters | §7.4 |
 //! | [`KernelEvent`], [`EventRecord`], [`EventBus`], [`EventSubscriber`], [`EventSink`], [`AuditSink`], [`SpendDelta`] | §7.6 |
 //! | [`Agenda`], [`AgendaHandle`], [`ProposalOutcome`], [`AgendaItem`], [`AgendaState`], [`AgendaStateKind`], [`AgendaOrigin`], [`PlanRef`], [`AgendaStore`], [`AgendaFilter`], [`InMemoryAgendaStore`], [`ProactivityPolicy`], [`ProactiveApproval`] | §7.5 |
-//! | [`ConsolidationTick`] | §7.5, §13 Q1, Q12 |
+//! | [`ConsolidationTick`], [`Consolidator`], [`admit_tick`], [`TickInputs`], [`TickAdmission`], [`TickMaterial`], [`TickRun`], [`TickOutcome`], [`TickProposal`], [`TickSpend`], [`CONSOLIDATION_TARGET`], [`CONSOLIDATION_LABEL`] | §7.5, §13 Q1, Q12 |
 //! | [`ReviewReport`], [`StandingRuleSource`], [`RuleAge`], [`StaleRule`], [`AgedProcess`] | §7.4, §9.1 |
 //! | [`QueueClass`], [`QuietHours`], [`Quotas`] | §7.9 |
 //! | [`PartitionId`], [`PartitionMode`] | §7.8 (the phase-1 part) |
@@ -105,7 +105,10 @@ pub use bus::{
     AuditSink, DEFAULT_EVENT_CAPACITY, EventBus, EventRecord, EventSink, EventSubscriber,
     KernelEvent, SpendDelta,
 };
-pub use consolidation::ConsolidationTick;
+pub use consolidation::{
+    CONSOLIDATION_LABEL, CONSOLIDATION_TARGET, ConsolidationTick, Consolidator, TickAdmission,
+    TickInputs, TickMaterial, TickOutcome, TickProposal, TickRun, TickSpend, admit_tick,
+};
 pub use error::{KernelError, Result};
 pub use kernel::{Kernel, KernelBuilder, KernelConfig, KernelHealth, KernelState, WorkerHealth};
 pub use partition::{PartitionId, PartitionMode};

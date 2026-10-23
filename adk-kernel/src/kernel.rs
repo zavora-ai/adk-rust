@@ -58,8 +58,10 @@ use tokio_util::sync::CancellationToken;
 use crate::agenda::{Agenda, AgendaHandle, AgendaStore, ProactivityPolicy};
 use crate::audit;
 use crate::bus::{EventBus, EventSink, EventSubscriber, KernelEvent};
+use crate::consolidation::{ConsolidationExecutor, ConsolidationTicker, Consolidator};
 use crate::control::{ControlPlane, ControlPlaneConfig};
 use crate::error::{KernelError, Result};
+use crate::partition::PartitionId;
 use crate::process::{ProcessHandle, ProcessTable, ProgressSource, Suspension};
 use crate::sched::{QueueClass, QuietHours, Quotas};
 use crate::stores::ProcessFilter;
@@ -413,6 +415,7 @@ struct KernelInner {
     workflows: Option<Arc<dyn WorkflowExecutor>>,
     wake_sources: Vec<Arc<dyn WakeSource>>,
     queue_ingresses: Vec<QueueIngress>,
+    consolidation: Option<ConsolidationTicker>,
     runtime: tokio::sync::Mutex<Runtime>,
     status: Arc<RwLock<Status>>,
 }
@@ -580,6 +583,7 @@ impl Kernel {
             Arc::clone(&sup),
             self.inner.router.clone(),
             self.inner.agenda.clone(),
+            self.inner.consolidation.clone(),
             Arc::clone(&self.inner.status),
             config.scheduler_tick,
             stop.clone(),
@@ -1143,6 +1147,7 @@ fn spawn_maintenance(
     sup: Arc<Supervision>,
     router: WakeRouter,
     agenda: Agenda,
+    consolidation: Option<ConsolidationTicker>,
     status: Arc<RwLock<Status>>,
     tick: Duration,
     stop: CancellationToken,
@@ -1167,6 +1172,9 @@ fn spawn_maintenance(
             sup.attribute_all().await;
             agenda.tick().await;
             sup.review().await;
+            if let Some(consolidation) = &consolidation {
+                consolidation.tick().await;
+            }
             // A preemptor that finished on another replica, a slot freed there, a new day.
             sup.requeue_preempted(None).await;
             if sup.quotas.max_running.is_some() {
@@ -1326,6 +1334,7 @@ pub struct KernelBuilder {
     agenda: Option<Arc<dyn AgendaStore>>,
     agenda_handles: Vec<AgendaHandle>,
     rule_source: Option<Arc<dyn crate::review::StandingRuleSource>>,
+    consolidators: BTreeMap<PartitionId, Arc<dyn Consolidator>>,
 }
 
 impl fmt::Debug for KernelBuilder {
@@ -1489,6 +1498,18 @@ impl KernelBuilder {
         self
     }
 
+    /// Registers `consolidator` for `partition`: the kernel runs its consolidation tick
+    /// there when [`ProactivityPolicy::consolidation`] is set (spec 3.2 §7.5, §10 HK2).
+    #[must_use]
+    pub fn consolidator(
+        mut self,
+        partition: impl Into<PartitionId>,
+        consolidator: Arc<dyn Consolidator>,
+    ) -> Self {
+        self.consolidators.insert(partition.into(), consolidator);
+        self
+    }
+
     /// Builds the kernel. Nothing runs until [`Kernel::start`].
     ///
     /// # Errors
@@ -1556,8 +1577,21 @@ impl KernelBuilder {
         let run_finished = Arc::new(RunFinishedWakeSource::new());
         let hooks =
             Arc::new(KernelHooks { sup: Arc::clone(&sup), run_finished: run_finished.clone() });
+        // The consolidation tick's workflow sits before the caller's (spec 3.2 §7.5).
+        let consolidators = Arc::new(self.consolidators);
+        let tick_agenda = AgendaHandle::new();
+        let user_workflows = if consolidators.is_empty() {
+            self.workflows.clone()
+        } else {
+            Some(Arc::new(ConsolidationExecutor::new(
+                Arc::clone(&sup),
+                Arc::clone(&consolidators),
+                tick_agenda.clone(),
+                self.workflows.clone(),
+            )) as Arc<dyn WorkflowExecutor>)
+        };
         let workflows = Arc::new(KernelWorkflows {
-            user: self.workflows.clone(),
+            user: user_workflows,
             wake: KernelWakeExecutor::new(router.clone()),
         });
         let workers = config
@@ -1583,9 +1617,11 @@ impl KernelBuilder {
         wake_sources.push(run_finished);
         let processes = ProcessTable::supervised(Arc::clone(&sup), self.spend);
         let agenda = Agenda::new(Arc::clone(&sup), processes.clone(), self.approvals.clone());
-        for handle in &self.agenda_handles {
+        for handle in self.agenda_handles.iter().chain([&tick_agenda]) {
             handle.bind(&agenda);
         }
+        let consolidation = (!consolidators.is_empty())
+            .then(|| ConsolidationTicker::new(Arc::clone(&sup), processes.clone(), consolidators));
         Ok(Kernel {
             inner: Arc::new(KernelInner {
                 config,
@@ -1600,6 +1636,7 @@ impl KernelBuilder {
                 workflows: self.workflows,
                 wake_sources,
                 queue_ingresses: self.queue_ingresses,
+                consolidation,
                 runtime: tokio::sync::Mutex::new(Runtime::default()),
                 status: Arc::new(RwLock::new(Status::default())),
             }),

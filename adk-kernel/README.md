@@ -25,6 +25,7 @@ builds a kernel from a harness (`Harness::kernel`).
 | Control plane | `control::router` on a Unix socket and loopback HTTP, merged into `ServerBuilder` by `adk-rust up`; `ControlClient` for terminals |
 | Agenda | `Kernel::agenda`: proposals (`propose`, `approve`, `reject`, `schedule`) under a `ProactivityPolicy` — held, put to the approvals inbox, or scheduled by the partition's mode, bounded by open items, a daily budget and quiet hours; the harness's `propose_followup` lands here |
 | Admission | Before a claimed process's first model call: per-partition `Quotas`, `QuietHours`, the day's spend, and preemption of the youngest background process by a human turn at quota |
+| Consolidation tick | With `ProactivityPolicy::consolidation` and a `Consolidator` per partition (`KernelBuilder::consolidator`), a `Maintenance` process (`kernel.consolidation`) on the `maintenance` queue once `admit_tick` holds: new material, `min_interval`, `debounce` idle, outside quiet hours, within `budget_share` of the daily proactive budget and `max_tokens_per_tick`; its proposals are `Consolidation` agenda items a person approves in every mode |
 
 ## Installation
 
