@@ -124,6 +124,10 @@ pub(crate) struct Supervision {
     /// Serializes admission decisions on this replica, so two claims never both take the
     /// partition's last slot.
     pub(crate) admission: tokio::sync::Mutex<()>,
+    /// The standing rules the daily review reads (spec 3.2 §9.1).
+    pub(crate) rule_source: Option<Arc<dyn crate::review::StandingRuleSource>>,
+    /// The UTC day this replica last reviewed.
+    pub(crate) reviewed: Mutex<Option<chrono::NaiveDate>>,
 }
 
 impl std::fmt::Debug for Supervision {
@@ -950,6 +954,109 @@ impl Supervision {
         let next = item.with_state(AgendaState::Done);
         if let Err(error) = self.move_item(&next, &from, Some(&reason), None).await {
             tracing::warn!(agenda.item = %id, error = %error, "could not mark an agenda item done");
+        }
+    }
+}
+
+impl Supervision {
+    /// The daily review (spec 3.2 §7.4, §9.1): once per UTC day, for every partition, the
+    /// standing rules without an expiry, the sleepers and the freeze-parked processes older
+    /// than the review period, published and audited when there are any. Changes nothing.
+    pub(crate) async fn review(&self) {
+        let now = self.clock.now();
+        let today = now.date_naive();
+        {
+            let mut reviewed = self.reviewed.lock().unwrap_or_else(|e| e.into_inner());
+            if *reviewed == Some(today) {
+                return;
+            }
+            *reviewed = Some(today);
+        }
+        let period = self.proactivity.review_period;
+        let Some(cutoff) =
+            chrono::Duration::from_std(period).ok().and_then(|age| now.checked_sub_signed(age))
+        else {
+            return;
+        };
+        let age = |since: DateTime<Utc>| (now - since).to_std().unwrap_or_default();
+        let metas = match self.processes.list(&ProcessFilter::default()).await {
+            Ok(metas) => metas,
+            Err(error) => {
+                tracing::warn!(error = %error, "could not list processes for the review");
+                return;
+            }
+        };
+        let empty = |partition: &PartitionId| crate::review::ReviewReport {
+            partition: partition.clone(),
+            review_period: period,
+            at: now,
+            rules: Vec::new(),
+            sleepers: Vec::new(),
+            frozen: Vec::new(),
+        };
+        let mut reports: BTreeMap<PartitionId, crate::review::ReviewReport> =
+            std::iter::once(PartitionId::default())
+                .chain(metas.iter().map(|meta| meta.partition.clone()))
+                .map(|partition| (partition.clone(), empty(&partition)))
+                .collect();
+        for meta in &metas {
+            let Ok(Some(run)) = self.runs.get(&meta.pid).await else { continue };
+            if run.state != RunState::Waiting || is_wake_run(&run) || run.updated_at > cutoff {
+                continue;
+            }
+            let aged =
+                crate::review::AgedProcess { pid: meta.pid.clone(), age: age(run.updated_at) };
+            let Some(entry) = reports.get_mut(&meta.partition) else { continue };
+            if meta.suspended_by == Some(Suspension::Freeze) {
+                entry.frozen.push(aged);
+            } else {
+                entry.sleepers.push(aged);
+            }
+        }
+        // Standing rules carry no partition until partitions land (phase 3).
+        if let Some(source) = &self.rule_source {
+            let users: std::collections::BTreeSet<String> =
+                match self.runs.list(RunFilter::default().app_name(self.app_name.clone())).await {
+                    Ok(runs) => runs.into_iter().map(|run| run.user_id).collect(),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "could not list the users for the review");
+                        Default::default()
+                    }
+                };
+            let Some(entry) = reports.get_mut(&PartitionId::default()) else { return };
+            for user in users {
+                match source.rules(&self.app_name, &user).await {
+                    Ok(rules) => entry.rules.extend(
+                        rules
+                            .into_iter()
+                            .filter(|rule| rule.expires_at.is_none() && rule.created_at <= cutoff)
+                            .map(|rule| crate::review::StaleRule {
+                                id: rule.id,
+                                user: rule.user,
+                                age: age(rule.created_at),
+                            }),
+                    ),
+                    Err(error) => {
+                        tracing::warn!(user = %user, error = %error, "could not read standing rules for the review")
+                    }
+                }
+            }
+        }
+        for report in reports.into_values().filter(|report| !report.is_empty()) {
+            tracing::info!(
+                partition = %report.partition,
+                review.rules = report.rules.len(),
+                review.sleepers = report.sleepers.len(),
+                review.frozen = report.frozen.len(),
+                "review found work older than the review period"
+            );
+            let mut fields = serde_json::to_value(&report).unwrap_or_default();
+            if let Value::Object(map) = &mut fields {
+                map.remove("at");
+                map.insert("ask".into(), json!(report.renewal_ask()));
+            }
+            self.record(audit::REVIEW, self.actor_for(None), fields).await;
+            self.publish(KernelEvent::Review(report));
         }
     }
 }

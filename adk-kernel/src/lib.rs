@@ -29,6 +29,7 @@
 //! | [`KernelEvent`], [`EventRecord`], [`EventBus`], [`EventSubscriber`], [`EventSink`], [`AuditSink`], [`SpendDelta`] | §7.6 |
 //! | [`Agenda`], [`AgendaHandle`], [`ProposalOutcome`], [`AgendaItem`], [`AgendaState`], [`AgendaStateKind`], [`AgendaOrigin`], [`PlanRef`], [`AgendaStore`], [`AgendaFilter`], [`InMemoryAgendaStore`], [`ProactivityPolicy`], [`ProactiveApproval`] | §7.5 |
 //! | [`ConsolidationTick`] | §7.5, §13 Q1, Q12 |
+//! | [`ReviewReport`], [`StandingRuleSource`], [`RuleAge`], [`StaleRule`], [`AgedProcess`] | §7.4, §9.1 |
 //! | [`QueueClass`], [`QuietHours`], [`Quotas`] | §7.9 |
 //! | [`PartitionId`], [`PartitionMode`] | §7.8 (the phase-1 part) |
 //! | [`control`]: [`ControlPlaneConfig`](control::ControlPlaneConfig), [`router`](control::router), [`ControlPlane`](control::ControlPlane), [`ControlClient`](control::ControlClient), [`api`](control::api) | §7.11 |
@@ -89,6 +90,7 @@ pub mod error;
 pub mod kernel;
 pub mod partition;
 pub mod process;
+pub mod review;
 pub mod sched;
 mod serde_util;
 pub mod stores;
@@ -111,6 +113,7 @@ pub use process::{
     GoalProgress, Process, ProcessHandle, ProcessKind, ProcessMeta, ProcessSpec, ProcessTable,
     ProcessView, ProgressSource, RunUsage, Suspension,
 };
+pub use review::{AgedProcess, ReviewReport, RuleAge, StaleRule, StandingRuleSource};
 pub use sched::{QueueClass, QuietHours, Quotas};
 #[cfg(feature = "postgres")]
 pub use stores::PostgresAgendaStore;

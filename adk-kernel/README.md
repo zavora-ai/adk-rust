@@ -23,6 +23,8 @@ builds a kernel from a harness (`Harness::kernel`).
 | Event bus | `KernelEvent`s to subscribers, with replay from a cursor, and to `EventSink`s such as `AuditSink` |
 | Kill switch | `Kernel::freeze` parks every running process on every replica; `Kernel::unfreeze` resumes exactly the processes the freeze parked |
 | Control plane | `control::router` on a Unix socket and loopback HTTP, merged into `ServerBuilder` by `adk-rust up`; `ControlClient` for terminals |
+| Agenda | `Kernel::agenda`: proposals (`propose`, `approve`, `reject`, `schedule`) under a `ProactivityPolicy` — held, put to the approvals inbox, or scheduled by the partition's mode, bounded by open items, a daily budget and quiet hours; the harness's `propose_followup` lands here |
+| Admission | Before a claimed process's first model call: per-partition `Quotas`, `QuietHours`, the day's spend, and preemption of the youngest background process by a human turn at quota |
 
 ## Installation
 
@@ -163,17 +165,18 @@ second.
 | Store | Backends |
 |---|---|
 | `ProcessStore` | `InMemoryProcessStore`; `SqliteProcessStore` (feature `sqlite`, on the pool of `harness.db`); `PostgresProcessStore` (`postgres`); `RedisProcessStore` (`redis`) |
+| `AgendaStore` | `InMemoryAgendaStore`; `SqliteAgendaStore` (`sqlite`); `PostgresAgendaStore` (`postgres`); `RedisAgendaStore` (`redis`) |
 | Runs, sessions, schedules, approvals, governance state, action ledger | `adk-session`'s stores on the same backend |
 
-`process_store_conformance_tests!` (feature `conformance`) checks a `ProcessStore` backend
-against the contract the kernel relies on.
+`process_store_conformance_tests!` and `agenda_store_conformance_tests!` (feature
+`conformance`) check a backend against the contract the kernel relies on.
 
 ## Features
 
 | Feature | Default | Pulls in |
 |---|---|---|
-| `sqlite` | on | `SqliteProcessStore` |
-| `postgres`, `redis` | off | `PostgresProcessStore`, `RedisProcessStore` |
+| `sqlite` | on | `SqliteProcessStore`, `SqliteAgendaStore` |
+| `postgres`, `redis` | off | `PostgresProcessStore`, `PostgresAgendaStore`, `RedisProcessStore`, `RedisAgendaStore` |
 | `webhooks` | on | `webhook_wake_hook` over `adk-server`'s `WebhookIngress` |
 | `proc` | on | The OpenTelemetry GenAI histograms of the live process aggregates |
 | `conformance` | off | The `conformance` module |
@@ -187,7 +190,8 @@ against the contract the kernel relies on.
 | `tests/kernel_scenarios.rs` | K2: ten sleepers on ten kinds of wake set make no model call and hold no lease over a clock-controlled hour. K3: a file save, a signed webhook and a queue message each wake one run in under 2 s, and redeliveries wake nothing. K9: two replicas over one SQLite file, six running processes parked within 1 s of a freeze on both, resumed by the unfreeze with every tool call once. Chaos: a kernel process killed with `SIGKILL` mid-step, restarted, resumes from its checkpoint |
 | `tests/supervisor_tests.rs`, `tests/supervisor_property_tests.rs` | The process actions, lifecycle and spend attribution; sleepers never call the model and freezes stop everything within a second, with process-store writes delayed up to 120 ms |
 | `tests/wake_*.rs` | Matching, keys, expiry, reconciliation and each wake source |
-| `tests/process_store_*.rs` | The conformance suite on every backend; PostgreSQL and Redis run `#[ignore]`d against a server (`scripts/test-postgres.sh`) |
+| `tests/proactivity_scenarios.rs` | K4: in Ask a follow-up waits in the inbox and nothing runs until it is approved, edited or rejected; in Auto it runs after quiet hours within the daily budget, a proposal past `max_proposed_open` is rejected with a reason on the bus, and an over-budget process sleeps until the budget replenishes. K8: three background runs at a quota of three, a typed message runs at once, the youngest background run parks and is requeued, no tool runs twice and the quota is never exceeded. A consolidation item waits for a person in Auto |
+| `tests/process_store_*.rs`, `tests/agenda_store*.rs` | The conformance suites on every backend; PostgreSQL and Redis run `#[ignore]`d against a server (`scripts/test-postgres.sh`) |
 
 ## License
 

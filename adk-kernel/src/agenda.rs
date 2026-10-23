@@ -464,6 +464,8 @@ pub enum ProactiveApproval {
 /// day's remaining proactive spend does not cover. Proactive processes never start inside
 /// `quiet_hours`. `consolidation` turns the consolidation tick on; it is `None` in the
 /// library and on servers, and the CLI sets it in its Ask and Auto partitions.
+/// `review_period` bounds the daily review of standing rules, sleepers and freezes
+/// ([`ReviewReport`](crate::ReviewReport)).
 ///
 /// # Example
 ///
@@ -499,11 +501,19 @@ pub struct ProactivityPolicy {
     /// The consolidation tick; the model and effort come from the harness.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consolidation: Option<ConsolidationTick>,
+    /// How old a standing rule without an expiry, a sleeper or a freeze-parked process gets
+    /// before the maintenance tick's daily review reports it (spec 3.2 §7.4, §9.1); 90 days.
+    #[serde(rename = "reviewPeriodMs", with = "crate::serde_util::millis")]
+    pub review_period: std::time::Duration,
 }
 
 impl ProactivityPolicy {
     /// The default `max_proposed_open`.
     pub const DEFAULT_MAX_PROPOSED_OPEN: usize = 10;
+
+    /// The default `review_period`, 90 days; the spec names the period without a number.
+    pub const DEFAULT_REVIEW_PERIOD: std::time::Duration =
+        std::time::Duration::from_secs(90 * 24 * 60 * 60);
 
     /// The default policy: ten open items, no daily limit, no quiet hours, approval
     /// following the mode, no consolidation tick.
@@ -545,6 +555,13 @@ impl ProactivityPolicy {
         self.consolidation = Some(tick);
         self
     }
+
+    /// Sets the review period.
+    #[must_use]
+    pub fn with_review_period(mut self, period: std::time::Duration) -> Self {
+        self.review_period = period;
+        self
+    }
 }
 
 impl Default for ProactivityPolicy {
@@ -555,6 +572,7 @@ impl Default for ProactivityPolicy {
             quiet_hours: None,
             approval: ProactiveApproval::FollowMode,
             consolidation: None,
+            review_period: Self::DEFAULT_REVIEW_PERIOD,
         }
     }
 }
@@ -787,7 +805,7 @@ pub(crate) fn route(
 /// | [`propose`](Self::propose) | Checks the [`ProactivityPolicy`], records the item `Proposed`, and routes it: held, to the inbox, or — in an Auto partition following its mode — approved and scheduled |
 /// | [`approve`](Self::approve) | `Proposed` → `Approved` → `Scheduled`: a sleeping [`ProcessKind::Proposed`](crate::ProcessKind::Proposed) process whose parent is the proposing run |
 /// | [`reject`](Self::reject) | `Proposed` or `Approved` → `Rejected` |
-/// | [`schedule`](Self::schedule) | Sets the wake set of an approved item's process |
+/// | [`schedule`](Self::schedule) | Puts the item's process to sleep on a wake set, approving a proposed item first |
 ///
 /// Every change is published as a [`KernelEvent::Agenda`](crate::KernelEvent::Agenda) and
 /// audited as `kernel.agenda.*`. Inbox decisions, expiry and finished processes are applied
@@ -1273,17 +1291,39 @@ impl Agenda {
         Ok(rejected)
     }
 
-    /// Schedules item `id` on `wake` as `by` (spec 3.2 §7.5, §8.1 `adk-rust agenda schedule`):
-    /// an `Approved` item gets its process asleep on `wake`; a `Scheduled` one has its
-    /// sleeping process's wake set replaced. Only an approved item is scheduled (K-I10).
+    /// Schedules item `id` on `wake` as `by` (spec 3.2 §7.5, §8.1 `adk-rust agenda schedule
+    /// ID --at|--cron`): a `Proposed` item is approved as by [`approve`](Self::approve) and
+    /// its process created asleep on `wake`; an `Approved` one gets its process asleep on
+    /// `wake`; a `Scheduled` one whose process has not started sleeps on `wake` instead —
+    /// a queued process parks on it when it is claimed.
     ///
     /// # Errors
     ///
     /// Returns [`KernelError::AgendaNotFound`], [`KernelError::AgendaState`] for an item that
-    /// is not approved or scheduled, or a store error.
+    /// is past scheduling or whose process already started, [`KernelError::Unauthorized`]
+    /// when `by` is not a person and the item needs one, or a store error.
     pub async fn schedule(&self, id: &str, wake: WakeSet, by: &SubjectRef) -> Result<AgendaItem> {
-        let item = self.get(id).await?.ok_or_else(|| not_found(id))?;
+        let mut item = self.get(id).await?.ok_or_else(|| not_found(id))?;
         let sup = &self.inner.sup;
+        if item.state == AgendaState::Proposed {
+            if item.origin.needs_a_person() && by.kind != SubjectKind::Human {
+                return Err(KernelError::Unauthorized {
+                    reason: format!(
+                        "agenda item {} came from the consolidation tick, so only a person schedules it (K-I23)",
+                        item.id
+                    ),
+                });
+            }
+            let approved = item.clone().with_state(AgendaState::Approved);
+            if !sup
+                .move_item(&approved, &item.state, Some("approved to schedule"), Some(by))
+                .await?
+            {
+                return Err(wrong_state(&item, "scheduled"));
+            }
+            self.withdraw(id, "scheduled through the agenda").await;
+            item = approved;
+        }
         match &item.state {
             AgendaState::Approved => {
                 let (pid, wake) = self.spawn(&item, Some(wake)).await?;
@@ -1299,10 +1339,8 @@ impl Agenda {
             AgendaState::Scheduled { .. } => {
                 let pid =
                     self.process_of(id).await?.ok_or_else(|| wrong_state(&item, "rescheduled"))?;
-                let run = sup.runs.get(&pid).await?;
-                if run.as_ref().is_none_or(|run| {
-                    run.state != RunState::Waiting && run.state != RunState::Queued
-                }) {
+                let state = sup.runs.get(&pid).await?.map(|run| run.state);
+                if !matches!(state, Some(RunState::Waiting | RunState::Queued)) {
                     return Err(wrong_state(&item, "rescheduled (its process already started)"));
                 }
                 let wake = match item.expires_at {
@@ -1310,6 +1348,10 @@ impl Agenda {
                     None => wake,
                 };
                 sup.processes.set_wake(&pid, Some(wake.clone())).await?;
+                if state == Some(RunState::Queued) {
+                    // Parks at its claim, before its first model call, on the new wake set.
+                    sup.processes.set_suspend_requested(&pid, true).await?;
+                }
                 sup.roots_changed.notify_one();
                 let scheduled = item.clone().with_state(AgendaState::Scheduled { wake });
                 if !sup.move_item(&scheduled, &item.state, Some("rescheduled"), Some(by)).await? {
@@ -1365,6 +1407,14 @@ impl Agenda {
                     let Some(pid) = self.process_of(&item.id).await? else { continue };
                     let Some(run) = sup.runs.get(&pid).await? else { continue };
                     if !run.state.is_terminal() {
+                        // A process still queued past the item's expiry never starts; the
+                        // next tick finds it cancelled and expires the item.
+                        if run.state == RunState::Queued
+                            && matches!(item.state, AgendaState::Scheduled { .. })
+                            && item.expires_at.is_some_and(|at| at <= now)
+                        {
+                            self.inner.processes.kill(&pid, "its agenda item expired").await?;
+                        }
                         continue;
                     }
                     let from = item.state.clone();

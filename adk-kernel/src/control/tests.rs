@@ -783,3 +783,96 @@ async fn a_held_call_is_decided_over_the_socket() {
     assert_eq!(error.http_status_code(), 409, "a stale version is refused");
     plane.shutdown().await.unwrap();
 }
+
+/// The agenda routes on a kernel (spec 3.2 §7.11, K-I16): any authenticated caller lists
+/// the agenda; approving, rejecting and scheduling need the `operator` scope, act as the
+/// caller, and write a `kernel.control` record before they act.
+#[tokio::test]
+async fn the_agenda_routes_change_items_only_for_an_operator_and_record_each_change() {
+    use crate::agenda::{AgendaItem, AgendaOrigin, AgendaState, AgendaStateKind, ProposalOutcome};
+    use crate::control::api::AgendaQuery;
+    use crate::wake::{Wake, WakeSet};
+
+    let recorder = InMemoryAuditRecorder::new();
+    let kernel = crate::Kernel::builder()
+        .config(
+            crate::KernelConfig::default()
+                .with_control(ControlPlaneConfig::default().without_socket()),
+        )
+        .run_store(Arc::new(InMemoryRunStore::new()))
+        .audit(AuditTrail::new(Arc::new(recorder.clone())))
+        .build()
+        .unwrap();
+    let mut ids = Vec::new();
+    for title in ["Re-run the tests", "Tidy the changelog", "Review two contradicting facts"] {
+        let origin = if ids.len() == 2 { AgendaOrigin::Consolidation } else { AgendaOrigin::User };
+        let item = AgendaItem::new(
+            format!("item-{}", ids.len()),
+            adk_core::principal::SubjectRef::human("phone"),
+            title,
+            "because",
+            origin,
+            chrono::Utc::now(),
+        );
+        let outcome = kernel.agenda().propose(item, crate::PartitionMode::Plan).await.unwrap();
+        assert!(matches!(outcome, ProposalOutcome::Held { .. }));
+        ids.push(format!("item-{}", ids.len()));
+    }
+    let config = ControlPlaneConfig::default()
+        .with_http(loopback())
+        .with_extractor(Arc::new(TokenExtractor))
+        .without_socket();
+    let home = tempfile::tempdir().unwrap();
+    let plane = ControlPlane::serve(Arc::new(kernel.clone()), &config, home.path()).await.unwrap();
+    let client = ControlClient::http(format!("http://{}", plane.http_addr().unwrap()));
+    let control = |action: &str| {
+        recorder
+            .records()
+            .into_iter()
+            .filter(|record| {
+                record.action == crate::audit::CONTROL && record.ext["action"] == action
+            })
+            .count()
+    };
+
+    // A viewer reads the agenda and changes nothing.
+    let viewer = client.clone().with_bearer_token("viewer");
+    let listed = viewer
+        .agenda(&AgendaQuery { state: Some(AgendaStateKind::Proposed), ..AgendaQuery::default() })
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 3);
+    let error = viewer.approve_item(&ids[0]).await.unwrap_err();
+    assert_eq!(adk_core::AdkError::from(error).http_status_code(), 403);
+    assert_eq!(control("agenda.approve"), 0, "a refused change records nothing");
+    assert_eq!(kernel.agenda().get(&ids[0]).await.unwrap().unwrap().state, AgendaState::Proposed);
+
+    // An operator approves, rejects and schedules, as itself.
+    let operator = client.with_bearer_token("right");
+    let approved = operator.approve_item(&ids[0]).await.unwrap();
+    assert!(matches!(approved.state, AgendaState::Scheduled { .. }), "{:?}", approved.state);
+    let rejected = operator.reject_item(&ids[1], Some("not this week")).await.unwrap();
+    assert_eq!(rejected.state, AgendaState::Rejected);
+    let at = chrono::Utc::now() + chrono::Duration::hours(2);
+    let scheduled = operator.schedule_item(&ids[2], WakeSet::any_of([Wake::At(at)])).await.unwrap();
+    assert_eq!(
+        scheduled.state,
+        AgendaState::Scheduled { wake: WakeSet::any_of([Wake::At(at)]) },
+        "a person schedules the consolidation item"
+    );
+    let error = operator.approve_item(&ids[1]).await.unwrap_err();
+    assert_eq!(adk_core::AdkError::from(error).http_status_code(), 409, "a rejected item stays so");
+    for action in ["agenda.approve", "agenda.reject", "agenda.schedule"] {
+        assert!(control(action) >= 1, "{action} is recorded");
+    }
+    let approvals: Vec<_> = recorder
+        .records()
+        .into_iter()
+        .filter(|record| record.action == crate::audit::AGENDA_APPROVED)
+        .collect();
+    assert!(
+        approvals.iter().any(|record| record.ext["by"] == "phone"),
+        "the item records its approver"
+    );
+    plane.shutdown().await.unwrap();
+}

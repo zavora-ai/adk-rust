@@ -1136,9 +1136,9 @@ fn spawn_mirror(sup: Arc<Supervision>, stop: CancellationToken) -> JoinHandle<()
 }
 
 /// Every scheduler tick: expires wake sets and fires time wakes, claims wake runs enqueued
-/// from outside the kernel, attributes spend, applies the agenda's decisions and the
-/// admission sweep (preempted processes whose preemptor finished, processes waiting for a
-/// slot, budgets replenished), and measures the store.
+/// from outside the kernel, attributes spend, applies the agenda's decisions, makes the
+/// daily review, runs the admission sweep (preempted processes whose preemptor finished,
+/// processes waiting for a slot, budgets replenished), and measures the store.
 fn spawn_maintenance(
     sup: Arc<Supervision>,
     router: WakeRouter,
@@ -1166,6 +1166,7 @@ fn spawn_maintenance(
             }
             sup.attribute_all().await;
             agenda.tick().await;
+            sup.review().await;
             // A preemptor that finished on another replica, a slot freed there, a new day.
             sup.requeue_preempted(None).await;
             if sup.quotas.max_running.is_some() {
@@ -1324,6 +1325,7 @@ pub struct KernelBuilder {
     queue_ingresses: Vec<QueueIngress>,
     agenda: Option<Arc<dyn AgendaStore>>,
     agenda_handles: Vec<AgendaHandle>,
+    rule_source: Option<Arc<dyn crate::review::StandingRuleSource>>,
 }
 
 impl fmt::Debug for KernelBuilder {
@@ -1479,6 +1481,14 @@ impl KernelBuilder {
         self
     }
 
+    /// Sets where the daily review reads standing rules (spec 3.2 §9.1); `Harness::kernel`
+    /// sets the harness's rule store.
+    #[must_use]
+    pub fn standing_rules(mut self, source: Arc<dyn crate::review::StandingRuleSource>) -> Self {
+        self.rule_source = Some(source);
+        self
+    }
+
     /// Builds the kernel. Nothing runs until [`Kernel::start`].
     ///
     /// # Errors
@@ -1540,6 +1550,8 @@ impl KernelBuilder {
             quotas: config.quotas.clone(),
             agenda: self.agenda.unwrap_or_else(|| Arc::new(InMemoryAgendaStore::new())),
             admission: tokio::sync::Mutex::new(()),
+            rule_source: self.rule_source,
+            reviewed: std::sync::Mutex::new(None),
         });
         let run_finished = Arc::new(RunFinishedWakeSource::new());
         let hooks =

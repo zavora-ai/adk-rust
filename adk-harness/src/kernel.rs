@@ -12,6 +12,7 @@
 //! | Parking a goal that stopped making progress, `Waiting` and suspended manually, with `harness.goal.stalled` | §7.3, §10 HK3 |
 //! | Decisions on the harness's approval service waking the kernel's approval sleepers | §7.4 |
 //! | `propose_followup`, class `Todo`: an agent's follow-up as a `Proposed` agenda item | §7.5 |
+//! | The standing rules the kernel's daily review checks for renewal | §9.1 |
 
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -23,13 +24,14 @@ use adk_core::{
 };
 use adk_kernel::{
     AgendaHandle, AgendaItem, AgendaOrigin, ApprovalWakeSource, GoalProgress, KernelBuilder,
-    KernelConfig, PartitionMode, PlanRef, ProcessHandle, ProgressSource, ProposalOutcome, RunUsage,
-    Wake,
+    KernelConfig, PartitionMode, PlanRef, ProcessHandle, ProgressSource, ProposalOutcome, RuleAge,
+    RunUsage, StandingRuleSource, Wake,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
+use crate::approvals::StandingRuleStore;
 use crate::goal::{GoalBook, GoalParker, GoalStore};
 use crate::harness::Harness;
 use crate::mode::{HarnessMode, ModeRecord, ModeSource, ModeStore};
@@ -96,7 +98,8 @@ impl Harness {
             .governance(runner.governance().clone())
             .progress_source(progress)
             .wake_source(source)
-            .agenda_handle(runtime.kernel_agenda.clone());
+            .agenda_handle(runtime.kernel_agenda.clone())
+            .standing_rules(Arc::new(HarnessRules(runtime.standing_rules.clone())));
         if let Some(service) = runtime.approval_service() {
             builder = builder.approval_service(service.clone());
         }
@@ -315,6 +318,27 @@ impl ApprovalService for NotifyingApprovals {
 
     fn approval_store(&self) -> Option<Arc<dyn ApprovalStore>> {
         self.inner.approval_store()
+    }
+}
+
+/// The harness's standing rules as the kernel's daily review reads them (spec 3.2 §9.1):
+/// ids, owners, grant times and expiries, nothing else.
+struct HarnessRules(Arc<dyn StandingRuleStore>);
+
+#[async_trait]
+impl StandingRuleSource for HarnessRules {
+    async fn rules(&self, app: &str, user: &str) -> adk_kernel::Result<Vec<RuleAge>> {
+        let rules = self.0.list(app, user).await?;
+        Ok(rules
+            .into_iter()
+            .map(|rule| {
+                let age = RuleAge::new(rule.id, user, rule.created_at);
+                match rule.expires_at {
+                    Some(at) => age.with_expiry(at),
+                    None => age,
+                }
+            })
+            .collect())
     }
 }
 

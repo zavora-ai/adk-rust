@@ -30,6 +30,7 @@ use crate::agenda::AgendaState;
 use crate::error::Result;
 use crate::kernel::KernelHealth;
 use crate::partition::PartitionId;
+use crate::review::ReviewReport;
 use crate::wake::WakeOutcome;
 
 /// How many events a subscriber may fall behind before it skips ahead.
@@ -132,6 +133,9 @@ pub enum KernelEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    /// The maintenance tick's daily review: what is older than the partition's review
+    /// period (spec 3.2 §7.4, §9.1).
+    Review(ReviewReport),
     /// The kill switch changed.
     Governance {
         /// Whether execution is frozen.
@@ -155,6 +159,7 @@ impl KernelEvent {
             Self::RuleHit { .. } => "ruleHit",
             Self::Spend { .. } => "spend",
             Self::Agenda { .. } => "agenda",
+            Self::Review(_) => "review",
             Self::Governance { .. } => "governance",
             Self::Health(_) => "health",
         }

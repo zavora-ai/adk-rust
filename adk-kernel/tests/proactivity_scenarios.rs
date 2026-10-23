@@ -611,3 +611,189 @@ async fn k8_a_human_message_preempts_background_work_and_quotas_hold() {
     assert!(requests.len() == 7);
     kernel.stop().await.unwrap();
 }
+
+/// Priority among waiters (spec 3.2 §7.9): at a quota of one held by a human turn, a
+/// background run and then a second human turn wait for the slot; when it frees, the human
+/// turn is admitted first, though the background run waited longer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_waiting_human_turn_takes_a_freed_slot_before_older_background_work() {
+    let world = World::new(vec![
+        ScriptedResponse::function_call("step", json!({})),
+        ScriptedResponse::text("First turn done."),
+        ScriptedResponse::text("Second turn done."),
+        ScriptedResponse::text("Background done."),
+    ]);
+    let control = GovernanceControl::new();
+    let held = Arc::new(Held::default());
+    let kernel = kernel(
+        &world,
+        &control,
+        config(&control, Arc::new(adk_core::SystemClock))
+            .with_quotas(Quotas::new().with_max_running(1)),
+        None,
+        Arc::new(HeldStep(Arc::clone(&held))),
+    );
+    let mut events = kernel.events();
+    kernel.start().await.unwrap();
+    let spawn = |queue: QueueClass, kind: ProcessKind, text: &'static str| {
+        let kernel = kernel.clone();
+        async move {
+            kernel.processes().spawn(run_on(queue, text), ProcessSpec::new(kind)).await.unwrap()
+        }
+    };
+    let first = spawn(QueueClass::Interactive, ProcessKind::Interactive, "first").await;
+    eventually("the first turn in its tool", || async {
+        (held.calls.load(Ordering::SeqCst) == 1).then_some(())
+    })
+    .await;
+    let waiting = |pid: String| {
+        let processes = Arc::clone(&world.processes);
+        let runs = Arc::clone(&world.runs);
+        async move {
+            eventually(&format!("{pid} waiting for a slot"), || async {
+                let meta = processes.get(&pid).await.ok().flatten()?;
+                let run = runs.get(&pid).await.ok().flatten()?;
+                (run.state == RunState::Waiting
+                    && meta.labels.get("kernel.admission").map(String::as_str) == Some("quota"))
+                .then_some(())
+            })
+            .await;
+        }
+    };
+    let background = spawn(QueueClass::Background, ProcessKind::Goal, "background").await;
+    waiting(background.meta.pid.clone()).await;
+    let second = spawn(QueueClass::Interactive, ProcessKind::Interactive, "second").await;
+    waiting(second.meta.pid.clone()).await;
+
+    held.release(&first.meta.pid);
+    in_state(&world.runs, &background.meta.pid, RunState::Completed).await;
+    in_state(&world.runs, &second.meta.pid, RunState::Completed).await;
+    let mut claims = Vec::new();
+    while let Ok(Some(record)) =
+        tokio::time::timeout(Duration::from_millis(100), events.recv()).await
+    {
+        if let KernelEvent::Process { pid, to: RunState::Running, .. } = record.event {
+            claims.push(pid);
+        }
+    }
+    let last = |pid: &str| claims.iter().rposition(|claimed| claimed == pid).unwrap();
+    assert!(
+        last(&second.meta.pid) < last(&background.meta.pid),
+        "the human turn was admitted first: {claims:?}"
+    );
+    kernel.stop().await.unwrap();
+}
+
+/// Standing rules for the review, as a harness would report them.
+struct Rules(Vec<adk_kernel::RuleAge>);
+
+#[async_trait]
+impl adk_kernel::StandingRuleSource for Rules {
+    async fn rules(&self, _app: &str, user: &str) -> adk_kernel::Result<Vec<adk_kernel::RuleAge>> {
+        Ok(self.0.iter().filter(|rule| rule.user == user).cloned().collect())
+    }
+}
+
+/// The next `KernelEvent::Review` on `events` within `wait`, if any.
+async fn next_review(
+    events: &mut adk_kernel::EventSubscriber,
+    wait: Duration,
+) -> Option<adk_kernel::ReviewReport> {
+    let deadline = tokio::time::Instant::now() + wait;
+    while let Ok(Some(record)) = tokio::time::timeout_at(deadline, events.recv()).await {
+        if let KernelEvent::Review(report) = record.event {
+            return Some(report);
+        }
+    }
+    None
+}
+
+/// The daily review (spec 3.2 §7.4, §9.1 permission drift), on the kernel's clock: a
+/// standing rule without an expiry granted longer ago than the review period, a process
+/// asleep longer than it and a process a freeze parked longer ago than it are each
+/// reported, with a renewal ask for the rule, as one event and one `kernel.review` record;
+/// nothing is revoked, woken or killed; and the report repeats no more than daily.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_daily_review_reports_stale_rules_sleepers_and_freezes_once_a_day() {
+    let start = Utc::now();
+    let clock = ManualClock::new(start);
+    let mut world = World::answer();
+    world.runs = Arc::new(InMemoryRunStore::new().with_clock(Arc::new(clock.clone())));
+    let control = GovernanceControl::new();
+    let day = chrono::Duration::days(1);
+    let rules = Rules(vec![
+        adk_kernel::RuleAge::new("rule-stale", "alice", start - day * 10),
+        adk_kernel::RuleAge::new("rule-expiring", "alice", start - day * 10)
+            .with_expiry(start + day * 365),
+        adk_kernel::RuleAge::new("rule-of-bob", "bob", start - day * 400),
+    ]);
+    let recorder = adk_core::audit_log::InMemoryAuditRecorder::new();
+    let policy = ProactivityPolicy::default().with_review_period(Duration::from_secs(30 * 86_400));
+    let kernel = Kernel::builder()
+        .config(config(&control, Arc::new(clock.clone())).with_proactivity(policy))
+        .run_store(Arc::clone(&world.runs))
+        .process_store(Arc::clone(&world.processes) as Arc<dyn ProcessStore>)
+        .session_service(Arc::clone(&world.sessions) as Arc<dyn SessionService>)
+        .agent(TARGET, runner(&world, &control, Arc::new(HeldStep(Arc::default()))))
+        .standing_rules(Arc::new(rules))
+        .audit(adk_core::audit_log::AuditTrail::new(Arc::new(recorder.clone())))
+        .build()
+        .unwrap();
+    let mut events = kernel.events();
+    kernel.start().await.unwrap();
+
+    // Two processes asleep from the start; the second as a freeze would leave it.
+    let mut pids = Vec::new();
+    for text in ["asleep", "frozen"] {
+        let process = kernel
+            .processes()
+            .spawn(
+                run_on(QueueClass::Background, text),
+                ProcessSpec::new(ProcessKind::Goal)
+                    .with_wake(adk_kernel::WakeSet::any_of([Wake::Manual])),
+            )
+            .await
+            .unwrap();
+        in_state(&world.runs, &process.meta.pid, RunState::Waiting).await;
+        pids.push(process.meta.pid);
+    }
+    let mut frozen = world.processes.get(&pids[1]).await.unwrap().unwrap();
+    frozen.wake = None;
+    frozen.suspended_by = Some(Suspension::Freeze);
+    world.processes.put(frozen).await.unwrap();
+
+    // Today nothing is older than thirty days but the rule, which no user of this kernel
+    // owns yet: the first tick's review reports nothing.
+    assert_eq!(next_review(&mut events, Duration::from_millis(300)).await, None);
+
+    // Thirty-one days on: one report with all three.
+    clock.advance(Duration::from_secs(31 * 86_400));
+    let report = next_review(&mut events, Duration::from_secs(3)).await.expect("a review");
+    assert_eq!(report.partition, PartitionId::default());
+    let sleepers: Vec<_> = report.sleepers.iter().map(|aged| aged.pid.clone()).collect();
+    let frozen: Vec<_> = report.frozen.iter().map(|aged| aged.pid.clone()).collect();
+    assert_eq!((sleepers, frozen), (vec![pids[0].clone()], vec![pids[1].clone()]));
+    assert!(report.sleepers[0].age >= Duration::from_secs(31 * 86_400));
+    let rules: Vec<_> = report.rules.iter().map(|rule| rule.id.as_str()).collect();
+    assert_eq!(rules, ["rule-stale"], "only alice runs here; an expiring rule is not asked about");
+    assert!(report.renewal_ask().unwrap().contains("rule-stale"));
+    let records: Vec<_> = recorder
+        .records()
+        .into_iter()
+        .filter(|record| record.action == adk_kernel::audit::REVIEW)
+        .collect();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].ext["rules"][0]["id"], "rule-stale");
+    assert!(records[0].ext["ask"].as_str().unwrap().contains("Renew"));
+    // The review changes nothing.
+    for pid in &pids {
+        assert_eq!(world.runs.get(pid).await.unwrap().unwrap().state, RunState::Waiting);
+    }
+
+    // Later the same day: no second report. The next day: one more.
+    clock.advance(Duration::from_secs(60 * 60));
+    assert_eq!(next_review(&mut events, Duration::from_millis(400)).await, None);
+    clock.advance(Duration::from_secs(86_400));
+    assert!(next_review(&mut events, Duration::from_secs(3)).await.is_some());
+    kernel.stop().await.unwrap();
+}

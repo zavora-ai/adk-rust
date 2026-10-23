@@ -15,6 +15,7 @@
 //! | [`WAKE`] | `source`, `key`, `matchedPid` or `newPid`, `deduplicated` |
 //! | [`CONTROL`] | `subject`, `transport`, `action`, `target` |
 //! | [`AGENDA_PROPOSED`], [`AGENDA_APPROVED`], [`AGENDA_REJECTED`], [`AGENDA_SCHEDULED`], [`AGENDA_EXPIRED`] | `item`, `partition`, `origin`, `by`, `budget`, `reason` |
+//! | [`REVIEW`] | `partition`, `reviewPeriodMs`, `rules`, `sleepers`, `frozen` (ids and ages), `ask` |
 //!
 //! The driver, partition and observation actions of §9.3 arrive with their phases.
 //!
@@ -64,3 +65,6 @@ pub const AGENDA_REJECTED: &str = "kernel.agenda.rejected";
 pub const AGENDA_SCHEDULED: &str = "kernel.agenda.scheduled";
 /// An agenda item expired before it ran.
 pub const AGENDA_EXPIRED: &str = "kernel.agenda.expired";
+/// The daily review of standing rules, sleepers and freezes older than the review period
+/// (spec 3.2 §7.4, §9.1).
+pub const REVIEW: &str = "kernel.review";
