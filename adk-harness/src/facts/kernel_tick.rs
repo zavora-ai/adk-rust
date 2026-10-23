@@ -1,13 +1,16 @@
 //! The harness's side of the kernel's consolidation tick (spec 3.2 §7.5, §10 HK2; features
 //! `kernel` and `memory`): [`HarnessConsolidator`] reports a partition's new material and
-//! runs a tick through [`Harness::consolidate_memory`].
+//! runs a tick through [`Harness::consolidate_memory`]. [`HarnessObservations`] is the
+//! person the kernel's `/proc` observations are put to, and remembers the ones they confirm
+//! (spec 3.2 §7.10).
 
 use std::sync::Arc;
 
 use adk_core::UserId;
+use adk_core::principal::SubjectRef;
 use adk_kernel::{
-    Consolidator, PartitionId, PartitionMode, TickMaterial, TickOutcome, TickProposal, TickRun,
-    TickSpend,
+    AgendaItem, Consolidator, ObservationAudience, PartitionId, PartitionMode, TickMaterial,
+    TickOutcome, TickProposal, TickRun, TickSpend,
 };
 use adk_session::{ListRequest, SessionService};
 use async_trait::async_trait;
@@ -15,7 +18,7 @@ use chrono::{DateTime, Utc};
 
 use super::consolidate::{ConsolidationConfig, ConsolidationRecord, ConsolidationRequest};
 use super::runtime::FactsRuntime;
-use super::types::FactFilter;
+use super::types::{FactFilter, FactKind};
 use crate::harness::Harness;
 use crate::mode::HarnessMode;
 
@@ -277,5 +280,88 @@ impl Harness {
             user: user.to_string(),
             filter: None,
         })
+    }
+}
+
+/// The [`ObservationAudience`] of one user of a harness (spec 3.2 §7.10), registered with
+/// `KernelBuilder::observation_audience`: the kernel puts the partition's observations to
+/// this user, in the harness's mode, and a person's confirmation becomes a user-wide
+/// `Preference` fact, `Known` with source `UserConfirmed` (spec 3.1 §7.15). The same text
+/// already remembered is promoted to `Known` rather than stored twice; a rejected
+/// observation records nothing, so any related fact stays as it was.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let kernel = harness
+///     .kernel()
+///     .observation_audience(PartitionId::default(), Arc::new(harness.observation_audience(&user)?))
+///     .build()?;
+/// ```
+#[derive(Clone)]
+pub struct HarnessObservations {
+    facts: Arc<FactsRuntime>,
+    app: String,
+    user: String,
+}
+
+impl std::fmt::Debug for HarnessObservations {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HarnessObservations").field("app", &self.app).finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl ObservationAudience for HarnessObservations {
+    async fn audience(
+        &self,
+        _partition: &PartitionId,
+    ) -> adk_kernel::Result<Option<(SubjectRef, PartitionMode)>> {
+        Ok(Some((SubjectRef::human(&self.user), partition_mode(self.facts.default_mode))))
+    }
+
+    async fn confirm(&self, item: &AgendaItem, by: &SubjectRef) -> adk_kernel::Result<String> {
+        if item.subject.id != self.user {
+            return Err(adk_kernel::KernelError::Config {
+                reason: format!(
+                    "agenda item {} asks {}, but this harness remembers for {}; register the \
+                     audience of that user",
+                    item.id, item.subject.id, self.user
+                ),
+            });
+        }
+        let scope = self.facts.scope(&self.app, &self.user).user_wide();
+        let fact = self.facts.confirm(by, scope, FactKind::Preference, &item.rationale).await?;
+        Ok(fact.id)
+    }
+}
+
+impl Harness {
+    /// The kernel's [`ObservationAudience`] for `user` in this harness (spec 3.2 §7.10):
+    /// register it with `KernelBuilder::observation_audience` so the daily baseline pass
+    /// puts its observations to `user` as agenda questions and a confirmed one is
+    /// remembered as known.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let audience = harness.observation_audience(&user)?;
+    /// let kernel = harness
+    ///     .kernel()
+    ///     .observation_audience(adk_kernel::PartitionId::default(), Arc::new(audience))
+    ///     .build()?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when long-term memory is off.
+    pub fn observation_audience(&self, user: &UserId) -> adk_core::Result<HarnessObservations> {
+        let facts = self.agent().runtime().toolset().facts().cloned().ok_or_else(|| {
+            adk_core::AdkError::config(
+                "a confirmed observation is remembered in long-term memory, which is off for \
+                 this harness; turn it on with HarnessAgentBuilder::long_term_memory",
+            )
+        })?;
+        Ok(HarnessObservations { facts, app: self.app_name().to_string(), user: user.to_string() })
     }
 }

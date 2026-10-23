@@ -216,6 +216,13 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         ));
         kernel = kernel.consolidator(adk_kernel::PartitionId::default(), Arc::new(consolidator));
     }
+    if setup.memory_on() {
+        // The pass's observations are put to the user; a confirmed one is remembered.
+        let user = adk_core::UserId::new(setup.user.clone())?;
+        let audience = harness.observation_audience(&user)?;
+        kernel =
+            kernel.observation_audience(adk_kernel::PartitionId::default(), Arc::new(audience));
+    }
     let kernel = kernel.build()?;
     // The inbox decides through the harness's approval service, which wakes the kernel's
     // approval sleepers; the service the builder was given would not.

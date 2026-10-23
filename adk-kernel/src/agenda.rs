@@ -7,6 +7,12 @@
 //! (K-I11). An item of [`AgendaOrigin::Consolidation`] needs a person's approval in every
 //! mode, Auto included (K-I23).
 //!
+//! An item of [`AgendaOrigin::Observation`] is a question, answered and never scheduled
+//! (spec 3.2 §7.10): it needs a person in every mode, becomes no process, and closes with
+//! the person's [`AgendaAnswer`]. Confirmed, it is `Done` and the partition's
+//! [`ObservationAudience`] records its statement as a `Known` fact; rejected or withdrawn,
+//! it is `Rejected` and nothing is recorded.
+//!
 //! | State | Meaning |
 //! |---|---|
 //! | [`Proposed`](AgendaState::Proposed) | Waiting for approval, or held by a ReadOnly or Plan partition |
@@ -18,6 +24,7 @@
 //! Items live in an [`AgendaStore`] on every backend the [`ProcessStore`](crate::ProcessStore)
 //! has: in-memory, SQLite, PostgreSQL and Redis.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -103,6 +110,9 @@ pub struct AgendaItem {
     /// is scheduled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<Wake>,
+    /// A person's answer to a question item ([`AgendaOrigin::is_question`]), once given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<AgendaAnswer>,
 }
 
 impl AgendaItem {
@@ -128,6 +138,7 @@ impl AgendaItem {
             created_at,
             expires_at: None,
             when: None,
+            answer: None,
         }
     }
 
@@ -195,6 +206,9 @@ impl AgendaItem {
 /// assert_eq!(AgendaOrigin::Agent { pid: "run-1".into(), confidence: 0.8 }.to_string(), "agent:run-1");
 /// assert!(AgendaOrigin::Consolidation.needs_a_person());
 /// assert!(!AgendaOrigin::User.needs_a_person());
+/// let observation = AgendaOrigin::Observation { id: "obs-20261022-1a2b3c4d".into() };
+/// assert!(observation.needs_a_person() && observation.is_question());
+/// assert!(!AgendaOrigin::Consolidation.is_question());
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -212,7 +226,8 @@ pub enum AgendaOrigin {
     /// The consolidation tick proposed it; it runs only after a person approves it, in
     /// every mode (K-I23).
     Consolidation,
-    /// A `/proc` observation proposed it (spec 3.2 §7.10).
+    /// A `/proc` observation proposed it (spec 3.2 §7.10): a question a person answers in
+    /// every mode, never scheduled.
     Observation {
         /// The observation.
         id: String,
@@ -221,9 +236,17 @@ pub enum AgendaOrigin {
 
 impl AgendaOrigin {
     /// Whether only a person may approve items of this origin, whatever the partition's
-    /// mode and policy: true for [`Consolidation`](Self::Consolidation) (K-I23).
+    /// mode and policy: true for [`Consolidation`](Self::Consolidation) (K-I23) and
+    /// [`Observation`](Self::Observation) (spec 3.2 §7.10).
     pub fn needs_a_person(&self) -> bool {
-        matches!(self, Self::Consolidation)
+        matches!(self, Self::Consolidation | Self::Observation { .. })
+    }
+
+    /// Whether items of this origin are questions a person answers rather than work the
+    /// kernel schedules: true for [`Observation`](Self::Observation) (spec 3.2 §7.10). Such
+    /// an item never becomes a process; approving it confirms it.
+    pub fn is_question(&self) -> bool {
+        matches!(self, Self::Observation { .. })
     }
 
     /// The origin's name: `user`, `agent`, `consolidation` or `observation`.
@@ -245,6 +268,104 @@ impl fmt::Display for AgendaOrigin {
             Self::User | Self::Consolidation => f.write_str(self.kind()),
         }
     }
+}
+
+/// A person's answer to a question item ([`AgendaOrigin::is_question`]), recorded on the
+/// item when it closes (spec 3.2 §7.10).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::principal::SubjectRef;
+/// use adk_kernel::AgendaAnswer;
+///
+/// let answer = AgendaAnswer::new(true, SubjectRef::human("alice"), chrono::Utc::now())
+///     .with_fact("fact-1");
+/// let json = serde_json::to_value(&answer).unwrap();
+/// assert_eq!((json["confirmed"].as_bool(), json["fact"].as_str()), (Some(true), Some("fact-1")));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct AgendaAnswer {
+    /// Whether the person confirmed it; `false` for a rejection or a withdrawn request.
+    pub confirmed: bool,
+    /// Who answered.
+    pub by: SubjectRef,
+    /// When.
+    pub at: DateTime<Utc>,
+    /// The `Known` fact the confirmation recorded, when the partition has an
+    /// [`ObservationAudience`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fact: Option<String>,
+}
+
+impl AgendaAnswer {
+    /// An answer by `by` at `at` that recorded no fact.
+    pub fn new(confirmed: bool, by: SubjectRef, at: DateTime<Utc>) -> Self {
+        Self { confirmed, by, at, fact: None }
+    }
+
+    /// Sets the fact the confirmation recorded.
+    #[must_use]
+    pub fn with_fact(mut self, fact: impl Into<String>) -> Self {
+        self.fact = Some(fact.into());
+        self
+    }
+}
+
+/// Whom a partition's observations are put to, and where a confirmed one is remembered
+/// (spec 3.2 §7.10, spec 3.1 §7.15): the kernel reads no harness type, so the harness
+/// implements this over its long-term memory (`adk_harness::Harness::observation_audience`)
+/// and registers it with
+/// [`KernelBuilder::observation_audience`](crate::KernelBuilder::observation_audience).
+///
+/// The daily baseline pass (feature `proc-baselines`) files each observation of a
+/// partition with an audience as an [`AgendaOrigin::Observation`] item: titled with the
+/// question, its rationale the factual statement the person confirms. A partition without
+/// one keeps its observations at `/api/kernel/proc/observations` and puts no question to
+/// anyone.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::principal::SubjectRef;
+/// use adk_kernel::{AgendaItem, ObservationAudience, PartitionId, PartitionMode};
+///
+/// struct Alice;
+///
+/// #[async_trait::async_trait]
+/// impl ObservationAudience for Alice {
+///     async fn audience(&self, _: &PartitionId) -> adk_kernel::Result<Option<(SubjectRef, PartitionMode)>> {
+///         Ok(Some((SubjectRef::human("alice"), PartitionMode::Ask)))
+///     }
+///     async fn confirm(&self, item: &AgendaItem, _by: &SubjectRef) -> adk_kernel::Result<String> {
+///         Ok(format!("fact-for-{}", item.id))
+///     }
+/// }
+/// ```
+#[async_trait]
+pub trait ObservationAudience: Send + Sync {
+    /// The person `partition`'s observations are put to and the partition's mode now;
+    /// `None` puts them to nobody.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error that kept the audience from answering; the observation stays
+    /// recorded and no item is filed.
+    async fn audience(
+        &self,
+        partition: &PartitionId,
+    ) -> Result<Option<(SubjectRef, PartitionMode)>>;
+
+    /// Records that the person `by` confirmed `item`: its rationale, the observation's
+    /// statement, becomes a `Known` fact of `item.subject` with the person as its source.
+    /// Returns the fact's id.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error that kept the fact from being recorded; the item stays `Proposed`.
+    async fn confirm(&self, item: &AgendaItem, by: &SubjectRef) -> Result<String>;
 }
 
 /// Where an [`AgendaItem`] stands (spec 3.2 §7.5).
@@ -803,9 +924,9 @@ pub(crate) fn route(
 /// | Call | Effect |
 /// |---|---|
 /// | [`propose`](Self::propose) | Checks the [`ProactivityPolicy`], records the item `Proposed`, and routes it: held, to the inbox, or — in an Auto partition following its mode — approved and scheduled |
-/// | [`approve`](Self::approve) | `Proposed` → `Approved` → `Scheduled`: a [`ProcessKind::Proposed`] process whose parent is the proposing run |
+/// | [`approve`](Self::approve) | `Proposed` → `Approved` → `Scheduled`: a [`ProcessKind::Proposed`] process whose parent is the proposing run; for a question, `Proposed` → `Done`, confirmed |
 /// | [`reject`](Self::reject) | `Proposed` or `Approved` → `Rejected` |
-/// | [`schedule`](Self::schedule) | Puts the item's process to sleep on a wake set, approving a proposed item first |
+/// | [`schedule`](Self::schedule) | Puts the item's process to sleep on a wake set, approving a proposed item first; refused for a question |
 ///
 /// Every change is published as a [`KernelEvent::Agenda`](crate::KernelEvent::Agenda) and
 /// audited as `kernel.agenda.*`. Inbox decisions, expiry and finished processes are applied
@@ -841,6 +962,7 @@ struct AgendaInner {
     sup: Arc<Supervision>,
     processes: ProcessTable,
     approvals: Option<Arc<dyn ApprovalService>>,
+    audiences: BTreeMap<PartitionId, Arc<dyn ObservationAudience>>,
 }
 
 impl fmt::Debug for Agenda {
@@ -848,6 +970,7 @@ impl fmt::Debug for Agenda {
         f.debug_struct("Agenda")
             .field("policy", &self.inner.sup.proactivity)
             .field("inbox", &self.inner.approvals.is_some())
+            .field("audiences", &self.inner.audiences.keys().collect::<Vec<_>>())
             .finish_non_exhaustive()
     }
 }
@@ -935,6 +1058,27 @@ fn not_found(id: &str) -> KernelError {
     KernelError::AgendaNotFound { item: id.to_string() }
 }
 
+/// Why a question is never scheduled, as [`KernelError::AgendaState`] names the action.
+const QUESTION_NOT_SCHEDULED: &str = "scheduled: an observation is a question, answered with \
+     `adk-rust agenda approve ID` (confirm) or `adk-rust agenda reject ID`, never scheduled";
+
+/// Why a question never becomes a process.
+const QUESTION_NOT_RUN: &str = "run: an observation is a question and never becomes a process";
+
+/// The refusal of `item`, which only a person `verb`, to anyone else (K-I23, spec 3.2 §7.10).
+fn needs_a_person(item: &AgendaItem, verb: &str) -> KernelError {
+    let why = match &item.origin {
+        AgendaOrigin::Observation { .. } => "is an observation's question".to_string(),
+        other => format!("came from the {} tick", other.kind()),
+    };
+    KernelError::Unauthorized {
+        reason: format!(
+            "agenda item {} {why}, so only a person {verb} it (K-I23, spec 3.2 §7.10)",
+            item.id
+        ),
+    }
+}
+
 fn wrong_state(item: &AgendaItem, action: &'static str) -> KernelError {
     KernelError::AgendaState { item: item.id.clone(), state: item.state.kind(), action }
 }
@@ -944,8 +1088,9 @@ impl Agenda {
         sup: Arc<Supervision>,
         processes: ProcessTable,
         approvals: Option<Arc<dyn ApprovalService>>,
+        audiences: BTreeMap<PartitionId, Arc<dyn ObservationAudience>>,
     ) -> Self {
-        Self { inner: Arc::new(AgendaInner { sup, processes, approvals }) }
+        Self { inner: Arc::new(AgendaInner { sup, processes, approvals, audiences }) }
     }
 
     /// The store the items live in.
@@ -984,8 +1129,9 @@ impl Agenda {
     /// once the day's proactive budget is spent, or whose own budget exceeds the daily one.
     /// Otherwise the item is stored `Proposed` and routed by [`ProactiveApproval`]: held in
     /// ReadOnly and Plan, put to the inbox in Ask, approved and scheduled in Auto. An item
-    /// of [`AgendaOrigin::Consolidation`] goes to the inbox in Auto too (K-I23). Without an
-    /// approval service an Ask proposal is held.
+    /// of [`AgendaOrigin::Consolidation`] or [`AgendaOrigin::Observation`] goes to the inbox
+    /// in Auto too (K-I23, spec 3.2 §7.10); a question costs no budget, so only the open-item
+    /// limit refuses one. Without an approval service an Ask proposal is held.
     ///
     /// # Errors
     ///
@@ -1042,6 +1188,39 @@ impl Agenda {
         }
     }
 
+    /// Files `observation` as a question for its partition's audience (spec 3.2 §7.10): an
+    /// [`AgendaOrigin::Observation`] item with the observation's id, titled with its
+    /// question, its rationale the statement a confirmation remembers, expiring unanswered
+    /// after the longest comparison window. `None` when the partition has no audience, the
+    /// audience names nobody, or the item exists already (another replica filed it).
+    #[cfg(feature = "proc")]
+    pub(crate) async fn offer(
+        &self,
+        observation: &crate::proc::Observation,
+    ) -> Result<Option<ProposalOutcome>> {
+        let Some(audience) = self.inner.audiences.get(&observation.partition) else {
+            return Ok(None);
+        };
+        let Some((person, mode)) = audience.audience(&observation.partition).await? else {
+            return Ok(None);
+        };
+        if self.get(&observation.id).await?.is_some() {
+            return Ok(None);
+        }
+        let open_for = observation.windows.iter().copied().max().unwrap_or(14);
+        let item = AgendaItem::new(
+            observation.id.clone(),
+            person,
+            observation.question.clone(),
+            observation.statement(),
+            AgendaOrigin::Observation { id: observation.id.clone() },
+            observation.created_at,
+        )
+        .with_partition(observation.partition.clone())
+        .with_expiry(observation.created_at + chrono::Duration::days(i64::from(open_for)));
+        self.propose(item, mode).await.map(Some)
+    }
+
     /// Why the policy refuses `item`, or `None`.
     async fn refusal(&self, item: &AgendaItem) -> Result<Option<String>> {
         let sup = &self.inner.sup;
@@ -1056,6 +1235,10 @@ impl Agenda {
                 "partition {} already has {open} open agenda items, the most max_proposed_open ({}) allows",
                 item.partition, policy.max_proposed_open
             )));
+        }
+        // A question becomes no process, so it spends nothing.
+        if item.origin.is_question() {
+            return Ok(None);
         }
         if let Some(cap) = policy.daily_budget.max_cost_micro_usd {
             let need =
@@ -1103,15 +1286,24 @@ impl Agenda {
         .allow_self_approval();
         let id = request_id(&item.id);
         let mut request = ApprovalRequest::new(id.clone(), scope, &call, policy)
-            .with_summary(format!("Agenda follow-up: {}", item.title))
-            .with_risk(ApprovalRisk::Medium)
             .with_redacted_args(args)
-            .with_allowed_actions([
-                ApprovalAction::Approve,
-                ApprovalAction::Edit,
-                ApprovalAction::Reject,
-            ])
             .with_requester(item.subject.clone());
+        // A question is confirmed or rejected as worded; nothing in it runs.
+        request = if item.origin.is_question() {
+            request
+                .with_summary(format!("Observation: {}", item.title))
+                .with_risk(ApprovalRisk::Low)
+                .with_allowed_actions([ApprovalAction::Approve, ApprovalAction::Reject])
+        } else {
+            request
+                .with_summary(format!("Agenda follow-up: {}", item.title))
+                .with_risk(ApprovalRisk::Medium)
+                .with_allowed_actions([
+                    ApprovalAction::Approve,
+                    ApprovalAction::Edit,
+                    ApprovalAction::Reject,
+                ])
+        };
         if let Some(at) = item.expires_at {
             request = request.with_expires_at(at);
         }
@@ -1127,14 +1319,19 @@ impl Agenda {
     /// `Scheduled` (spec 3.2 §7.5, K-I10). An item of [`AgendaOrigin::Consolidation`] needs
     /// a person (K-I23). A pending inbox request for the item is withdrawn.
     ///
+    /// A question ([`AgendaOrigin::is_question`]) is confirmed instead, by a person only:
+    /// the partition's [`ObservationAudience`] records its statement as a `Known` fact, and
+    /// the item is `Done` with the [`AgendaAnswer`]; no process is created (spec 3.2 §7.10).
+    ///
     /// Returns the item as it stands: `Scheduled`, or `Approved` when its process could not
-    /// be created yet (a freeze, a full queue), which the next tick retries.
+    /// be created yet (a freeze, a full queue), which the next tick retries; `Done` for a
+    /// confirmed question.
     ///
     /// # Errors
     ///
     /// Returns [`KernelError::AgendaNotFound`], [`KernelError::AgendaState`] when the item is
     /// not `Proposed`, [`KernelError::Unauthorized`] when `by` is not a person and the item
-    /// needs one, or a store error.
+    /// needs one, the audience's error, or a store error.
     pub async fn approve(&self, id: &str, by: &SubjectRef) -> Result<AgendaItem> {
         let item = self.get(id).await?.ok_or_else(|| not_found(id))?;
         let approved = self.approve_as(item, by, "approved").await?;
@@ -1152,12 +1349,10 @@ impl Agenda {
             return Err(wrong_state(&item, "approved"));
         }
         if item.origin.needs_a_person() && by.kind != SubjectKind::Human {
-            return Err(KernelError::Unauthorized {
-                reason: format!(
-                    "agenda item {} came from the consolidation tick, so only a person approves it (K-I23)",
-                    item.id
-                ),
-            });
+            return Err(needs_a_person(&item, "approves"));
+        }
+        if item.origin.is_question() {
+            return self.answer(item, by, true, reason).await;
         }
         let from = item.state.clone();
         let approved = item.with_state(AgendaState::Approved);
@@ -1166,6 +1361,35 @@ impl Agenda {
             return Err(wrong_state(&current, "approved"));
         }
         Ok(self.start(approved, by).await)
+    }
+
+    /// Closes the question `item` with `by`'s answer (spec 3.2 §7.10): confirmed, the
+    /// partition's audience records it first and the item is `Done`; otherwise it is
+    /// `Rejected` and nothing is recorded.
+    async fn answer(
+        &self,
+        item: AgendaItem,
+        by: &SubjectRef,
+        confirmed: bool,
+        reason: &str,
+    ) -> Result<AgendaItem> {
+        let sup = &self.inner.sup;
+        let mut answer = AgendaAnswer::new(confirmed, by.clone(), sup.clock.now());
+        let mut reason = if confirmed { "confirmed".to_string() } else { reason.to_string() };
+        if confirmed && let Some(audience) = self.inner.audiences.get(&item.partition) {
+            let fact = audience.confirm(&item, by).await?;
+            reason = format!("confirmed; remembered as known fact {fact}");
+            answer = answer.with_fact(fact);
+        }
+        let from = item.state.clone();
+        let mut closed =
+            item.with_state(if confirmed { AgendaState::Done } else { AgendaState::Rejected });
+        closed.answer = Some(answer);
+        if !sup.move_item(&closed, &from, Some(&reason), Some(by)).await? {
+            let current = self.get(&closed.id).await?.ok_or_else(|| not_found(&closed.id))?;
+            return Err(wrong_state(&current, if confirmed { "confirmed" } else { "rejected" }));
+        }
+        Ok(closed)
     }
 
     /// Creates the process of the approved `item`, asleep on its wake (or on the end of
@@ -1197,6 +1421,9 @@ impl Agenda {
     /// the item's own `when`; otherwise awake, with `not_before` at the end of quiet hours
     /// when they hold now. Returns the pid and the wake set the item is scheduled on.
     async fn spawn(&self, item: &AgendaItem, wake: Option<WakeSet>) -> Result<(String, WakeSet)> {
+        if item.origin.is_question() {
+            return Err(wrong_state(item, QUESTION_NOT_RUN));
+        }
         let sup = &self.inner.sup;
         let now = sup.clock.now();
         let asleep = wake.or_else(|| item.when.clone().map(|when| WakeSet::any_of([when])));
@@ -1264,7 +1491,8 @@ impl Agenda {
     }
 
     /// Rejects item `id` as `by`: a `Proposed` or `Approved` item becomes `Rejected`, and a
-    /// pending inbox request for it is withdrawn.
+    /// pending inbox request for it is withdrawn. A question is closed with `by`'s
+    /// [`AgendaAnswer`], and nothing is remembered (spec 3.2 §7.10).
     ///
     /// # Errors
     ///
@@ -1291,6 +1519,9 @@ impl Agenda {
         if !matches!(item.state, AgendaState::Proposed | AgendaState::Approved) {
             return Err(wrong_state(&item, "rejected"));
         }
+        if item.origin.is_question() {
+            return self.answer(item, by, false, reason).await;
+        }
         let from = item.state.clone();
         let rejected = item.with_state(AgendaState::Rejected);
         if !self.inner.sup.move_item(&rejected, &from, Some(reason), Some(by)).await? {
@@ -1309,19 +1540,18 @@ impl Agenda {
     /// # Errors
     ///
     /// Returns [`KernelError::AgendaNotFound`], [`KernelError::AgendaState`] for an item that
-    /// is past scheduling or whose process already started, [`KernelError::Unauthorized`]
-    /// when `by` is not a person and the item needs one, or a store error.
+    /// is past scheduling or whose process already started, and for a question, which is
+    /// answered and never scheduled (spec 3.2 §7.10), [`KernelError::Unauthorized`] when `by`
+    /// is not a person and the item needs one, or a store error.
     pub async fn schedule(&self, id: &str, wake: WakeSet, by: &SubjectRef) -> Result<AgendaItem> {
         let mut item = self.get(id).await?.ok_or_else(|| not_found(id))?;
         let sup = &self.inner.sup;
+        if item.origin.is_question() {
+            return Err(wrong_state(&item, QUESTION_NOT_SCHEDULED));
+        }
         if item.state == AgendaState::Proposed {
             if item.origin.needs_a_person() && by.kind != SubjectKind::Human {
-                return Err(KernelError::Unauthorized {
-                    reason: format!(
-                        "agenda item {} came from the consolidation tick, so only a person schedules it (K-I23)",
-                        item.id
-                    ),
-                });
+                return Err(needs_a_person(&item, "schedules"));
             }
             let approved = item.clone().with_state(AgendaState::Approved);
             if !sup
@@ -1407,7 +1637,7 @@ impl Agenda {
                 AgendaState::Approved => {
                     if item.expires_at.is_some_and(|at| at <= now) {
                         self.expire(item).await?;
-                    } else {
+                    } else if !item.origin.is_question() {
                         let by = SubjectRef::service("kernel");
                         self.start(item, &by).await;
                     }
@@ -1488,6 +1718,11 @@ impl Agenda {
                         Ok(())
                     }
                     Err(KernelError::AgendaState { .. }) => Ok(()),
+                    // The confirmation stays pending in the inbox; the next tick records it.
+                    Err(error) if item.origin.is_question() => {
+                        tracing::warn!(agenda.item = %item.id, error = %error, "could not record a confirmed observation yet; the next tick retries");
+                        Ok(())
+                    }
                     Err(error) => Err(error),
                 }
             }
@@ -1556,16 +1791,20 @@ mod tests {
     }
 
     #[test]
-    fn a_consolidation_item_never_schedules_without_a_person() {
-        let routes: Vec<Route> = MODES
-            .iter()
-            .map(|mode| route(ProactiveApproval::FollowMode, *mode, &AgendaOrigin::Consolidation))
-            .collect();
-        assert_eq!(
-            routes,
-            [Route::Hold, Route::Hold, Route::Ask, Route::Ask],
-            "Auto asks too (K-I23)"
-        );
+    fn consolidation_and_observation_items_never_schedule_without_a_person() {
+        for origin in
+            [AgendaOrigin::Consolidation, AgendaOrigin::Observation { id: "obs-1".into() }]
+        {
+            let routes: Vec<Route> = MODES
+                .iter()
+                .map(|mode| route(ProactiveApproval::FollowMode, *mode, &origin))
+                .collect();
+            assert_eq!(
+                routes,
+                [Route::Hold, Route::Hold, Route::Ask, Route::Ask],
+                "Auto asks too (K-I23, spec 3.2 §7.10): {origin}"
+            );
+        }
     }
 
     fn origin() -> impl Strategy<Value = AgendaOrigin> {
@@ -1582,9 +1821,10 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(256))]
 
         /// Only an Auto partition following its mode schedules a proposal without a person
-        /// (K-I10), and never one of the consolidation tick's (K-I23).
+        /// (K-I10), never one of the consolidation tick's (K-I23), and never a question
+        /// (spec 3.2 §7.10).
         #[test]
-        fn only_auto_follow_mode_schedules_and_never_consolidation(
+        fn only_auto_follow_mode_schedules_and_never_consolidation_or_a_question(
             mode in prop::sample::select(MODES.to_vec()),
             approval in prop::sample::select(vec![ProactiveApproval::FollowMode, ProactiveApproval::AlwaysAsk, ProactiveApproval::Never]),
             origin in origin(),
@@ -1594,6 +1834,7 @@ mod tests {
                 prop_assert_eq!(mode, PartitionMode::Auto);
                 prop_assert_eq!(approval, ProactiveApproval::FollowMode);
                 prop_assert!(!origin.needs_a_person());
+                prop_assert!(!origin.is_question());
             }
         }
     }

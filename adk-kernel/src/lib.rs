@@ -27,7 +27,7 @@
 //! | [`ProcessStore`], [`ProcessFilter`], [`SpendScope`], [`InMemoryProcessStore`], `SqliteProcessStore`, `PostgresProcessStore`, `RedisProcessStore` | §7.3, §13 Q8 |
 //! | [`Wake`], [`WakeSet`], [`ExpiryAction`], [`WakeSource`], [`WakeEvent`], [`keys`], [`Trigger`], [`WakeRouter`], [`WakeOutcome`], [`KernelWakeExecutor`], the wake source adapters | §7.4 |
 //! | [`KernelEvent`], [`EventRecord`], [`EventBus`], [`EventSubscriber`], [`EventSink`], [`AuditSink`], [`SpendDelta`] | §7.6 |
-//! | [`Agenda`], [`AgendaHandle`], [`ProposalOutcome`], [`AgendaItem`], [`AgendaState`], [`AgendaStateKind`], [`AgendaOrigin`], [`PlanRef`], [`AgendaStore`], [`AgendaFilter`], [`InMemoryAgendaStore`], [`ProactivityPolicy`], [`ProactiveApproval`] | §7.5 |
+//! | [`Agenda`], [`AgendaHandle`], [`ProposalOutcome`], [`AgendaItem`], [`AgendaState`], [`AgendaStateKind`], [`AgendaOrigin`], [`AgendaAnswer`], [`ObservationAudience`], [`PlanRef`], [`AgendaStore`], [`AgendaFilter`], [`InMemoryAgendaStore`], [`ProactivityPolicy`], [`ProactiveApproval`] | §7.5 |
 //! | [`ConsolidationTick`], [`Consolidator`], [`admit_tick`], [`TickInputs`], [`TickAdmission`], [`TickMaterial`], [`TickRun`], [`TickOutcome`], [`TickProposal`], [`TickSpend`], [`CONSOLIDATION_TARGET`], [`CONSOLIDATION_LABEL`] | §7.5, §13 Q1, Q12 |
 //! | [`ReviewReport`], [`StandingRuleSource`], [`RuleAge`], [`StaleRule`], [`AgedProcess`] | §7.4, §9.1 |
 //! | [`QueueClass`], [`QuietHours`], [`Quotas`] | §7.9 |
@@ -111,8 +111,9 @@ pub mod wake;
 mod win;
 
 pub use agenda::{
-    AGENDA_TOOL_NAME, Agenda, AgendaFilter, AgendaHandle, AgendaItem, AgendaOrigin, AgendaState,
-    AgendaStateKind, AgendaStore, PlanRef, ProactiveApproval, ProactivityPolicy, ProposalOutcome,
+    AGENDA_TOOL_NAME, Agenda, AgendaAnswer, AgendaFilter, AgendaHandle, AgendaItem, AgendaOrigin,
+    AgendaState, AgendaStateKind, AgendaStore, ObservationAudience, PlanRef, ProactiveApproval,
+    ProactivityPolicy, ProposalOutcome,
 };
 pub use bus::{
     AuditSink, DEFAULT_EVENT_CAPACITY, EventBus, EventRecord, EventSink, EventSubscriber,

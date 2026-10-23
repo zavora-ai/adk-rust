@@ -142,6 +142,57 @@ impl Observation {
         let digest = sha2::Sha256::digest(partition.as_str().as_bytes());
         format!("obs-{}-{}", as_of.format("%Y%m%d"), hex::encode(&digest[..4]))
     }
+
+    /// What the observation found, as a statement a person confirms (spec 3.2 §7.10): the
+    /// day the earliest deviating run began and each dimension's direction against the
+    /// 28-day baseline, built from the dimension names alone. A confirmed observation is
+    /// remembered as this text.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_kernel::proc::{Direction, Observation, ObservedDimension, Phrasing};
+    /// use chrono::NaiveDate;
+    ///
+    /// let day = NaiveDate::from_ymd_opt(2026, 10, 22).unwrap();
+    /// let since = NaiveDate::from_ymd_opt(2026, 10, 13).unwrap();
+    /// let observation = Observation {
+    ///     id: Observation::id_for(&"default".into(), day),
+    ///     partition: "default".into(),
+    ///     as_of: day,
+    ///     dimensions: vec![ObservedDimension::new("activity.last_minute", Direction::Higher, since, 10)],
+    ///     windows: vec![7, 14],
+    ///     question: "Your routine has changed over the last two weeks. Would you like to review what changed?".into(),
+    ///     phrasing: Phrasing::Template,
+    ///     created_at: chrono::Utc::now(),
+    /// };
+    /// assert_eq!(
+    ///     observation.statement(),
+    ///     "Since 2026-10-13, compared with the 28 days before: the day's last activity has been later."
+    /// );
+    /// ```
+    pub fn statement(&self) -> String {
+        let since =
+            self.dimensions.iter().map(|dimension| dimension.since).min().unwrap_or(self.as_of);
+        let clauses: Vec<String> = self
+            .dimensions
+            .iter()
+            .map(|dimension| {
+                let (subject, higher, lower) = wording(&dimension.dimension);
+                let comparison = match dimension.direction {
+                    Direction::Higher => higher,
+                    Direction::Lower => lower,
+                };
+                format!("{subject} has been {comparison}")
+            })
+            .collect();
+        let changed = match clauses.as_slice() {
+            [] => "the routine has changed".to_string(),
+            [one] => one.clone(),
+            [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+        };
+        format!("Since {since}, compared with the 28 days before: {changed}.")
+    }
 }
 
 /// What a baseline pass carries for a partition from one day to the next (spec 3.2

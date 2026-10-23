@@ -352,11 +352,21 @@ pub async fn agenda_list(
             escape_control(&one_line(&item.title))
         );
     }
-    let waiting = items.iter().filter(|item| item.state == AgendaState::Proposed).count();
+    let proposed: Vec<&AgendaItem> =
+        items.iter().filter(|item| item.state == AgendaState::Proposed).collect();
+    let questions = proposed.iter().filter(|item| item.origin.is_question()).count();
+    let waiting = proposed.len() - questions;
     if waiting > 0 {
         println!(
             "
 {waiting} proposed: `adk-rust agenda approve ID`, `reject ID` or `schedule ID --at TIME`."
+        );
+    }
+    if questions > 0 {
+        println!(
+            "
+{questions} observation(s) asked as questions: `adk-rust agenda approve ID` confirms one and \
+             remembers it, `reject ID` dismisses it."
         );
     }
     Ok(())
@@ -373,7 +383,14 @@ pub async fn agenda_act(target: &KernelTarget, id: &str, action: AgendaAction) -
         }
         AgendaAction::Schedule(wake) => ("scheduled", client.schedule_item(&id, wake).await?),
     };
-    println!("{verb} {id}: now {}", item_state(&item));
+    match &item.answer {
+        Some(answer) if answer.confirmed => match &answer.fact {
+            Some(fact) => println!("confirmed {id}: remembered as known fact {fact}"),
+            None => println!("confirmed {id}"),
+        },
+        Some(_) => println!("dismissed {id}: nothing is remembered"),
+        None => println!("{verb} {id}: now {}", item_state(&item)),
+    }
     Ok(())
 }
 

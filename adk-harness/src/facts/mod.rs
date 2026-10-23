@@ -40,7 +40,7 @@ pub use consolidate::{
 pub use embed::RagEmbedder;
 pub use index::{FactIndex, LocalFactIndex, MemoryServiceIndex};
 #[cfg(feature = "kernel")]
-pub use kernel_tick::{HarnessConsolidator, SessionStateFilter};
+pub use kernel_tick::{HarnessConsolidator, HarnessObservations, SessionStateFilter};
 pub use redact::redact_fact_text;
 #[cfg(feature = "sqlite")]
 pub use store::SqliteFactStore;

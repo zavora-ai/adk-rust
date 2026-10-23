@@ -56,7 +56,7 @@ use serde_json::json;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::agenda::{Agenda, AgendaHandle, AgendaStore, ProactivityPolicy};
+use crate::agenda::{Agenda, AgendaHandle, AgendaStore, ObservationAudience, ProactivityPolicy};
 use crate::audit;
 use crate::bus::{EventBus, EventSink, EventSubscriber, KernelEvent};
 use crate::consolidation::{ConsolidationExecutor, ConsolidationTicker, Consolidator};
@@ -1420,6 +1420,7 @@ pub struct KernelBuilder {
     consolidators: BTreeMap<PartitionId, Arc<dyn Consolidator>>,
     #[cfg(feature = "drivers")]
     drivers: Option<crate::drivers::DriverSupervisor>,
+    audiences: BTreeMap<PartitionId, Arc<dyn ObservationAudience>>,
     #[cfg(feature = "proc")]
     ledger: Option<Ledger>,
     #[cfg(feature = "proc-baselines")]
@@ -1611,6 +1612,21 @@ impl KernelBuilder {
         self
     }
 
+    /// Registers `audience` for `partition` (spec 3.2 §7.10): the daily baseline pass puts
+    /// the partition's observations to the person it names as
+    /// [`AgendaOrigin::Observation`](crate::AgendaOrigin::Observation) questions, and a
+    /// confirmation is remembered through it. Without one, observations stay at
+    /// `/api/kernel/proc/observations` and nobody is asked.
+    #[must_use]
+    pub fn observation_audience(
+        mut self,
+        partition: impl Into<PartitionId>,
+        audience: Arc<dyn ObservationAudience>,
+    ) -> Self {
+        self.audiences.insert(partition.into(), audience);
+        self
+    }
+
     /// Keeps the content-free activity ledger in `ledger` (spec 3.2 §7.10, feature `proc`):
     /// every event but `Health` writes its row, the [`ProgressSource`] gets the ledger at
     /// start so the hosted runtime writes its own activity, and rows are stamped on
@@ -1689,6 +1705,8 @@ impl KernelBuilder {
             )));
         }
         let kernel_id = format!("kernel-{}", uuid::Uuid::new_v4());
+        // The kernel's own proposers reach the agenda through this handle, bound below.
+        let kernel_agenda = AgendaHandle::new();
         #[cfg(feature = "proc-baselines")]
         let proc = ledger.as_ref().map(|ledger| {
             let mut pass = crate::proc::baselines::BaselinePass::new(
@@ -1704,6 +1722,7 @@ impl KernelBuilder {
                 self.audit.clone(),
                 kernel_id.clone(),
                 config.app_name.clone(),
+                kernel_agenda.clone(),
             ))
         });
         let router = self
@@ -1747,14 +1766,13 @@ impl KernelBuilder {
             Arc::new(KernelHooks { sup: Arc::clone(&sup), run_finished: run_finished.clone() });
         // The consolidation tick's workflow sits before the caller's (spec 3.2 §7.5).
         let consolidators = Arc::new(self.consolidators);
-        let tick_agenda = AgendaHandle::new();
         let user_workflows = if consolidators.is_empty() {
             self.workflows.clone()
         } else {
             Some(Arc::new(ConsolidationExecutor::new(
                 Arc::clone(&sup),
                 Arc::clone(&consolidators),
-                tick_agenda.clone(),
+                kernel_agenda.clone(),
                 self.workflows.clone(),
             )) as Arc<dyn WorkflowExecutor>)
         };
@@ -1786,8 +1804,13 @@ impl KernelBuilder {
         let mut wake_sources = self.wake_sources;
         wake_sources.push(run_finished);
         let processes = ProcessTable::supervised(Arc::clone(&sup), self.spend);
-        let agenda = Agenda::new(Arc::clone(&sup), processes.clone(), self.approvals.clone());
-        for handle in self.agenda_handles.iter().chain([&tick_agenda]) {
+        let agenda = Agenda::new(
+            Arc::clone(&sup),
+            processes.clone(),
+            self.approvals.clone(),
+            self.audiences,
+        );
+        for handle in self.agenda_handles.iter().chain([&kernel_agenda]) {
             handle.bind(&agenda);
         }
         let consolidation = (!consolidators.is_empty())

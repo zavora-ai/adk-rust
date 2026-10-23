@@ -407,7 +407,58 @@ impl FactsRuntime {
         );
         self.change_status(audit.as_ref(), old, FactStatus::Superseded { by: fact.id.clone() }, by)
             .await?;
-        if let Some(audit) = &audit {
+        self.store_confirmed(audit.as_ref(), fact).await
+    }
+
+    /// Records `text` as a person's confirmation in `scope`: a `Known` fact of `kind` with
+    /// source `UserConfirmed` (spec 3.1 §7.15.2, spec 3.2 §7.10). A live fact of the scope
+    /// with the same text is promoted to `Known` instead, so a confirmation never stores a
+    /// text twice.
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.memory.rejected` for a text that is empty, too long or holds a
+    /// secret, or the store's or audit trail's error.
+    #[cfg(feature = "kernel")]
+    pub(crate) async fn confirm(
+        &self,
+        by: &adk_core::principal::SubjectRef,
+        scope: FactScope,
+        kind: FactKind,
+        text: &str,
+    ) -> Result<MemoryFact> {
+        let text = super::redact::redact_fact_text(text, self.config.max_fact_chars)?;
+        let audit = self.audit_as(by.clone(), "");
+        let digest = fact_digest(&text);
+        let filter = FactFilter {
+            projects: super::types::FactProjects::Only(scope.project.clone()),
+            live_only: true,
+            ..FactFilter::user(&scope.app, &scope.user)
+        };
+        if let Some(same) = self.store.list(filter).await?.into_iter().find(|f| f.digest == digest)
+        {
+            if same.status != FactStatus::Known {
+                self.change_status(audit.as_ref(), &same, FactStatus::Known, by).await?;
+            }
+            return self.owned(&scope.app, &scope.user, &same.id).await;
+        }
+        let fact = MemoryFact::new(
+            scope,
+            kind,
+            text,
+            FactStatus::Known,
+            Provenance::new(FactSource::UserConfirmed, "", ""),
+        );
+        self.store_confirmed(audit.as_ref(), fact).await
+    }
+
+    /// Stores `fact`, a person's, audited as `harness.memory.fact.stored`, and indexes it.
+    async fn store_confirmed(
+        &self,
+        audit: Option<&HarnessAudit>,
+        fact: MemoryFact,
+    ) -> Result<MemoryFact> {
+        if let Some(audit) = audit {
             audit
                 .record(
                     "harness.memory.fact.stored",

@@ -14,6 +14,11 @@
 //! | 42–47 | the late finishes go on | no observation: the seven-day cooldown |
 //! | 48 | the cooldown ends | the question is offered again |
 //!
+//! Each observation is put to the person as an `Observation` agenda item: in their Auto
+//! partition it waits in the inbox and no run starts; a service cannot answer it and it
+//! cannot be scheduled; confirmed, it is `Done` and remembered once through the audience;
+//! rejected, it is `Rejected` and nothing is remembered.
+//!
 //! Without `proc-baselines` the same six weeks yield no pass and no observation at all.
 
 #![cfg(feature = "proc")]
@@ -120,8 +125,15 @@ async fn eventually<T, Fut: std::future::Future<Output = Option<T>>>(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn k10_two_weeks_of_late_finishes_yield_one_observation_after_the_warm_up_and_cooldown() {
     use adk_core::audit_log::{AuditTrail, InMemoryAuditRecorder};
+    use adk_core::{
+        ApprovalAction, ApprovalDecision, ApprovalService, InMemoryApprovalStore,
+        StoreApprovalService, SubjectRef,
+    };
     use adk_kernel::proc::baselines::{BaselineSnapshot, LlmPhraser};
-    use adk_kernel::proc::{Direction, Phrasing, is_neutral_question};
+    use adk_kernel::proc::{Direction, Observation, Phrasing, is_neutral_question};
+    use adk_kernel::{
+        AgendaFilter, AgendaOrigin, AgendaState, KernelError, PartitionId, Wake, WakeSet,
+    };
     use adk_model::{ScriptedLlm, ScriptedResponse};
 
     let clock = ManualClock::new(local(day(0), 7 * 60));
@@ -138,11 +150,18 @@ async fn k10_two_weeks_of_late_finishes_yield_one_observation_after_the_warm_up_
     ));
     let recorder = Arc::new(InMemoryAuditRecorder::new());
     let published = Arc::new(Observed::default());
+    let approvals: Arc<dyn ApprovalService> = Arc::new(
+        StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+            .with_run_store(Arc::clone(&runs)),
+    );
+    let alice = Arc::new(Alice::default());
     let kernel = kernel(&clock, &runs, &ledger, |builder| {
         builder
             .observation_phraser(Arc::new(LlmPhraser::new(model.clone())))
             .audit(AuditTrail::new(recorder.clone()))
             .event_sink(published.clone())
+            .approval_service(Arc::clone(&approvals))
+            .observation_audience(PartitionId::default(), alice.clone())
     });
     kernel.start().await.unwrap();
 
@@ -226,7 +245,112 @@ async fn k10_two_weeks_of_late_finishes_yield_one_observation_after_the_warm_up_
         .collect();
     assert_eq!(passes.len(), 49);
     assert!(passes.iter().all(|run| run.state == adk_core::RunState::Completed));
+
+    // Each observation is a question for alice: in her Auto partition it waits in the
+    // inbox, open, and becomes no run (spec 3.2 §7.10).
+    let items = kernel.agenda().list(&AgendaFilter::default()).await.unwrap();
+    assert_eq!(items.len(), 2);
+    for item in &items {
+        let observation = observations.iter().find(|o| o.id == item.id).unwrap();
+        assert_eq!(item.origin, AgendaOrigin::Observation { id: observation.id.clone() });
+        assert_eq!(item.state, AgendaState::Proposed, "open in Auto");
+        assert_eq!(item.subject, SubjectRef::human("alice"));
+        assert_eq!(
+            (&item.title, &item.rationale),
+            (&observation.question, &observation.statement())
+        );
+        assert!(approvals.get(&format!("agenda_{}", item.id)).await.unwrap().is_some());
+    }
+    let first_asked = Observation::id_for(&PartitionId::default(), day(41));
+    let second_asked = Observation::id_for(&PartitionId::default(), day(48));
+    assert_eq!(
+        kernel.agenda().get(&first_asked).await.unwrap().unwrap().rationale,
+        "Since 2026-10-02, compared with the 28 days before: the day's last activity has been \
+         later."
+    );
+    let error = kernel
+        .agenda()
+        .schedule(&first_asked, WakeSet::any_of([Wake::Manual]), &SubjectRef::human("alice"))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, KernelError::AgendaState { .. }), "{error}");
+    assert!(error.to_string().contains("never scheduled"), "{error}");
+    let error =
+        kernel.agenda().approve(&first_asked, &SubjectRef::service("scheduler")).await.unwrap_err();
+    assert!(matches!(error, KernelError::Unauthorized { .. }), "{error}");
+
+    // Confirmed in the inbox: remembered once, through the audience, and closed.
+    let request = approvals.get(&format!("agenda_{first_asked}")).await.unwrap().unwrap();
+    assert_eq!(request.allowed_actions, [ApprovalAction::Approve, ApprovalAction::Reject]);
+    approvals
+        .decide(&request.id, request.version, ApprovalDecision::approve(SubjectRef::human("alice")))
+        .await
+        .unwrap();
+    let confirmed = eventually("the confirmation", || async {
+        kernel
+            .agenda()
+            .get(&first_asked)
+            .await
+            .unwrap()
+            .filter(|item| item.state == AgendaState::Done)
+    })
+    .await;
+    let answer = confirmed.answer.unwrap();
+    assert!(answer.confirmed);
+    assert_eq!((answer.by, answer.fact.as_deref()), (SubjectRef::human("alice"), Some("fact-1")));
+    assert_eq!(*alice.0.lock().unwrap(), [(first_asked.clone(), "alice".to_string())]);
+
+    // Rejected: closed, and nothing is remembered.
+    let rejected = kernel
+        .agenda()
+        .reject(&second_asked, &SubjectRef::human("alice"), Some("that was a one-off"))
+        .await
+        .unwrap();
+    assert_eq!(rejected.state, AgendaState::Rejected);
+    let answer = rejected.answer.unwrap();
+    assert!(!answer.confirmed && answer.fact.is_none());
+    assert_eq!(alice.0.lock().unwrap().len(), 1, "a rejection remembers nothing");
+
+    // No run but the kernel's own passes and wake-ups, ever.
+    let others: Vec<_> = runs
+        .list(RunFilter::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|run| {
+            ![adk_kernel::proc::baselines::PROC_TARGET, adk_kernel::KERNEL_WAKE_TARGET]
+                .contains(&run.target.as_str())
+        })
+        .map(|run| run.target)
+        .collect();
+    assert!(others.is_empty(), "{others:?}");
     kernel.stop().await.unwrap();
+}
+
+/// Alice, to whom the observations of her Auto partition are put; keeps what she confirms.
+#[cfg(feature = "proc-baselines")]
+#[derive(Default)]
+struct Alice(std::sync::Mutex<Vec<(String, String)>>);
+
+#[cfg(feature = "proc-baselines")]
+#[async_trait::async_trait]
+impl adk_kernel::ObservationAudience for Alice {
+    async fn audience(
+        &self,
+        _partition: &adk_kernel::PartitionId,
+    ) -> adk_kernel::Result<Option<(adk_core::SubjectRef, adk_kernel::PartitionMode)>> {
+        Ok(Some((adk_core::SubjectRef::human("alice"), adk_kernel::PartitionMode::Auto)))
+    }
+
+    async fn confirm(
+        &self,
+        item: &adk_kernel::AgendaItem,
+        by: &adk_core::SubjectRef,
+    ) -> adk_kernel::Result<String> {
+        let mut confirmed = self.0.lock().unwrap();
+        confirmed.push((item.id.clone(), by.id.clone()));
+        Ok(format!("fact-{}", confirmed.len()))
+    }
 }
 
 /// Collects the ids of the `Observation` events the kernel publishes.

@@ -41,6 +41,7 @@ use super::{
     Direction, KERNEL_AGENT, Ledger, LedgerEntry, LedgerKind, LedgerQuery, Observation,
     ObservedDimension, PassState, Phrasing, is_neutral_question, template_question,
 };
+use crate::agenda::AgendaHandle;
 use crate::bus::{EventBus, KernelEvent};
 use crate::error::Result;
 use crate::partition::PartitionId;
@@ -629,6 +630,8 @@ pub(crate) struct ProcRuntime {
     pub(crate) audit: Option<AuditTrail>,
     pub(crate) kernel_id: String,
     pub(crate) app_name: String,
+    /// Where observations are filed as questions.
+    agenda: AgendaHandle,
     /// The last day this replica enqueued a pass for.
     enqueued: Mutex<Option<NaiveDate>>,
 }
@@ -640,8 +643,9 @@ impl ProcRuntime {
         audit: Option<AuditTrail>,
         kernel_id: String,
         app_name: String,
+        agenda: AgendaHandle,
     ) -> Self {
-        Self { pass, bus, audit, kernel_id, app_name, enqueued: Mutex::new(None) }
+        Self { pass, bus, audit, kernel_id, app_name, agenda, enqueued: Mutex::new(None) }
     }
 
     /// On the maintenance tick: enqueues the pass of the local day that ended before `now`,
@@ -686,7 +690,7 @@ impl ProcRuntime {
     }
 
     /// The `kernel.proc` workflow: runs the pass for the run's day, then publishes and
-    /// audits each observation.
+    /// audits each observation and files it as a question for its partition's audience.
     pub(crate) async fn execute(&self, input: Value) -> std::result::Result<Value, String> {
         let as_of: NaiveDate = input
             .get("asOf")
@@ -720,6 +724,11 @@ impl ProcRuntime {
                 if let Err(error) = trail.record(draft).await {
                     tracing::warn!(error = %error, "could not write a kernel.observation record");
                 }
+            }
+            if let Some(agenda) = self.agenda.get()
+                && let Err(error) = agenda.offer(observation).await
+            {
+                tracing::warn!(observation.id = %observation.id, error = %error, "could not put an observation to its partition's audience");
             }
         }
         Ok(json!({
