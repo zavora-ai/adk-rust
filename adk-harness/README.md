@@ -233,21 +233,31 @@ async fn host(harness: &adk_harness::Harness) -> Result<(), Box<dyn std::error::
 
 ## Status
 
-Beta (spec 3.1 phases 1 and 3). The payments pack (§7.16) is implemented
-([guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/payments.md)),
-and so is the voice surface (§7.17,
-[guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/voice.md));
-the managed form (§7.18, feature `managed`) is Experimental, as `adk-managed` is:
-`packs::managed::HarnessDef` declares a harness as a managed agent definition and
-`HarnessResolver` builds it on the managed runtime
-([guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/serving.md#on-the-managed-runtime)).
-The browser and computer-use packs (§7.24) are implemented
-([guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/packs.md));
-the voice pack (§7.17) is refused by the builder with `not yet implemented: spec 3.1 §…`. The [team](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/team.md),
-[plans and goals](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/plan-and-goals.md)
-and [durability](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/durability.md)
-guides cover §7.10–§7.12. Under the container shell (`docker`), hooks with `inherit`
-isolation, goal checks and shell credentials are refused rather than run on the host.
+Beta, as [`STABILITY.md`](https://github.com/zavora-ai/adk-rust/blob/main/STABILITY.md) records.
+The managed form (feature `managed`) is Experimental, as `adk-managed` is.
+
+## Guides
+
+| Topic | Guide |
+|---|---|
+| Modes, approvals and standing rules | [modes and approvals](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/modes-and-approvals.md) |
+| The `adk-rust` commands and the REPL | [CLI](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/cli.md) |
+| Host shell, OS sandbox and container shell; under the container shell, hooks with `inherit` isolation, goal checks and shell credentials are refused rather than run on the host | [shell and sandbox](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/shell-and-sandbox.md) |
+| `harness.toml` and the user config | [configuration](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/configuration.md) |
+| Plans, the plan graph and goals | [plans and goals](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/plan-and-goals.md) |
+| Team members and delegation | [team](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/team.md) |
+| Crash safety and resumption | [durability](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/durability.md) |
+| Working notes, long-term facts and consolidation | [memory](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/memory.md) |
+| Serving over HTTP and on the managed runtime | [serving](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/serving.md) |
+| Identity, permissions and credentials | [identity](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/identity.md) |
+| Spans, spend, loop guard and evaluation | [observability](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/observability.md) |
+| Hooks | [hooks](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/hooks.md) |
+| Web tools and MCP servers | [web and MCP](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/web-and-mcp.md) |
+| Browser and computer-use packs | [packs](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/packs.md) |
+| Payments pack | [payments](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/payments.md) |
+| Voice surface | [voice](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/voice.md) |
+
+[`examples/harness_agent`](https://github.com/zavora-ai/adk-rust/tree/main/examples/harness_agent)
+runs the harness scenarios and
 [`examples/harness_redteam`](https://github.com/zavora-ai/adk-rust/tree/main/examples/harness_redteam)
-runs the shell red-team scenarios; the [shell and sandbox guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/shell-and-sandbox.md)
-covers the sandbox and the container shell.
+the shell red-team scenarios.
