@@ -128,6 +128,9 @@ pub(crate) struct Supervision {
     pub(crate) rule_source: Option<Arc<dyn crate::review::StandingRuleSource>>,
     /// The UTC day this replica last reviewed.
     pub(crate) reviewed: Mutex<Option<chrono::NaiveDate>>,
+    /// The cron expressions of sleepers the kernel fires itself, each with the occurrence
+    /// it last fired, or when it was first needed (spec 3.2 §7.4).
+    pub(crate) crons: Mutex<BTreeMap<String, DateTime<Utc>>>,
 }
 
 impl std::fmt::Debug for Supervision {
@@ -454,6 +457,10 @@ impl Supervision {
         self.local.lock().unwrap_or_else(|e| e.into_inner()).remove(pid);
     }
 }
+
+/// The label of a process spawned asleep on a wake set with a cron wake: the wake set, as
+/// JSON, its successor sleeps on (spec 3.2 §7.4, §8.1 `adk-rust wake --cron`).
+pub(crate) const RECUR_LABEL: &str = "kernel.recur";
 
 /// The label a process deferred by admission carries: `quiet_hours`, `budget` or `quota`
 /// (spec 3.2 §7.9).
@@ -1061,6 +1068,87 @@ impl Supervision {
     }
 }
 
+impl Supervision {
+    /// Fires the cron wakes of sleepers on the kernel's clock (spec 3.2 §7.4): for each
+    /// expression a sleeper's wake set names and no standing trigger uses (a trigger's cron
+    /// expression has its registered `CronWakeSource`), the latest occurrence due since the
+    /// last one fired is submitted as a `kernel.wake` event keyed as a cron source keys it,
+    /// so replicas fire it once. An expression no sleeper names any more is forgotten.
+    pub(crate) async fn fire_crons(&self, router: &crate::wake::WakeRouter) {
+        let now = self.clock.now();
+        let triggered: std::collections::BTreeSet<&str> = router
+            .triggers()
+            .iter()
+            .filter_map(|trigger| match &trigger.wake {
+                Wake::Cron { expr, .. } => Some(expr.as_str()),
+                _ => None,
+            })
+            .collect();
+        let needed: std::collections::BTreeSet<String> =
+            match self.processes.list(&ProcessFilter::default()).await {
+                Ok(metas) => metas
+                    .iter()
+                    .filter_map(|meta| meta.wake.as_ref())
+                    .flat_map(|wake| wake.any_of.iter())
+                    .filter_map(|wake| match wake {
+                        Wake::Cron { expr, .. } if !triggered.contains(expr.as_str()) => {
+                            Some(expr.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                Err(error) => {
+                    tracing::debug!(error = %error, "could not list the sleepers' cron wakes");
+                    return;
+                }
+            };
+        let due: Vec<(String, DateTime<Utc>)> = {
+            let mut crons = self.crons.lock().unwrap_or_else(|e| e.into_inner());
+            crons.retain(|expr, _| needed.contains(expr));
+            let mut due = Vec::new();
+            for expr in &needed {
+                let since = *crons.entry(expr.clone()).or_insert(now);
+                let spec = adk_core::schedule::ScheduleSpec::Cron {
+                    expr: expr.clone(),
+                    timezone: "UTC".into(),
+                };
+                let mut latest = None;
+                let mut cursor = since;
+                while let Ok(Some(next)) = spec.next_after(cursor) {
+                    if next > now {
+                        break;
+                    }
+                    latest = Some(next);
+                    cursor = next;
+                }
+                if let Some(at) = latest {
+                    crons.insert(expr.clone(), at);
+                    due.push((expr.clone(), at));
+                }
+            }
+            due
+        };
+        for (expr, at) in due {
+            let source = format!("kernel:{expr}");
+            let event = crate::wake::WakeEvent::new(
+                source.clone(),
+                crate::wake::keys::cron(&source, at),
+                json!({ "expression": expr, "scheduled_for": at, "catch_up": false }),
+            )
+            .with_at(at);
+            if let Err(error) = router.submit(&event, &self.app_name).await {
+                tracing::warn!(cron = %expr, error = %error, "could not submit a cron wake");
+            }
+        }
+    }
+
+    /// The cron expressions this kernel fires itself.
+    #[cfg(test)]
+    pub(crate) fn watched_crons(&self) -> Vec<String> {
+        self.crons.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect()
+    }
+}
+
 /// The model and tool calls of one process, read from its session (spec 3.2 §7.3, §7.10).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct TranscriptCounts {
@@ -1147,6 +1235,41 @@ pub(crate) struct KernelHooks {
 impl std::fmt::Debug for KernelHooks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("KernelHooks").finish_non_exhaustive()
+    }
+}
+
+impl KernelHooks {
+    /// Spawns the successor of the finished cron sleeper `run`, asleep on `wake`, keyed by
+    /// the finished run so a repeated finish spawns it once.
+    async fn rearm(&self, run: &RunRecord, meta: &ProcessMeta, wake: WakeSet) {
+        let mut next = adk_core::NewRun::new(
+            run.queue.clone(),
+            run.app_name.clone(),
+            run.user_id.clone(),
+            run.target.clone(),
+            run.input.clone(),
+        )
+        .with_max_attempts(run.max_attempts);
+        next.session_id = run.session_id.clone();
+        next.principal = run.principal.clone();
+        next.authenticated = run.authenticated;
+        next.idempotency_key = Some(format!("recur:{}", run.run_id));
+        let mut spec = crate::process::ProcessSpec::new(meta.kind.clone())
+            .with_parent(run.run_id.clone())
+            .with_partition(meta.partition.clone())
+            .with_wake(wake);
+        for (key, value) in &meta.labels {
+            spec = spec.with_label(key.clone(), value.clone());
+        }
+        let table = crate::process::ProcessTable::supervised(Arc::clone(&self.sup), None);
+        match table.spawn(next, spec).await {
+            Ok(successor) => {
+                tracing::info!(process.pid = %run.run_id, successor.pid = %successor.meta.pid, "cron sleeper re-armed")
+            }
+            Err(error) => {
+                tracing::warn!(process.pid = %run.run_id, error = %error, "could not re-arm a cron sleeper")
+            }
+        }
     }
 }
 
@@ -1325,6 +1448,14 @@ impl WorkerHooks for KernelHooks {
             }
             if let Some(meta) = sup.stored_meta(run).await {
                 sup.item_finished(&meta, run.state).await;
+                // A cron sleeper recurs: its successor sleeps on the same wake set. A kill
+                // ends the series.
+                if run.state != RunState::Cancelled
+                    && let Some(wake) = meta.labels.get(RECUR_LABEL)
+                    && let Ok(wake) = serde_json::from_str::<WakeSet>(wake)
+                {
+                    self.rearm(run, &meta, wake).await;
+                }
             }
         }
         #[cfg(feature = "proc")]

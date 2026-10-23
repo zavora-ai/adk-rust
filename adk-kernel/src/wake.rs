@@ -100,7 +100,10 @@ pub const KERNEL_WAKE_TARGET: &str = "kernel.wake";
 pub enum Wake {
     /// At a time: `not_before` on the run.
     At(DateTime<Utc>),
-    /// On a cron schedule (`adk-core/src/schedule.rs`).
+    /// On a cron schedule (`adk-core/src/schedule.rs`), in UTC. A running kernel fires a
+    /// sleeper's cron wake itself, on its clock, unless a standing trigger uses the same
+    /// expression (its `CronWakeSource` does); a process spawned asleep on a set holding one
+    /// recurs: after each run that completes or fails, its successor sleeps on the same set.
     Cron {
         /// The cron expression.
         expr: String,

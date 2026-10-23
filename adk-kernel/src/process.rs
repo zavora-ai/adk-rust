@@ -860,6 +860,13 @@ impl ProcessTable {
                 .into());
             }
         };
+        let mut labels = spec.labels;
+        // A cron sleeper recurs: its successor sleeps on the same set (spec 3.2 §8.1).
+        if let Some(wake) = &spec.wake
+            && wake.any_of.iter().any(|wake| matches!(wake, crate::wake::Wake::Cron { .. }))
+        {
+            labels.insert(crate::supervise::RECUR_LABEL.to_string(), serde_json::to_string(wake)?);
+        }
         let meta = ProcessMeta {
             pid: record.run_id.clone(),
             parent: spec.parent,
@@ -870,7 +877,7 @@ impl ProcessTable {
             suspended_by: None,
             suspend_requested: asleep,
             agenda_item: spec.agenda_item,
-            labels: spec.labels,
+            labels,
         };
         self.processes.put(meta.clone()).await?;
         if let Some(sup) = &self.sup {

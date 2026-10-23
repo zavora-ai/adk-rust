@@ -190,7 +190,9 @@ async fn k2_sleep_is_free_for_an_hour() {
     let db = tempfile::tempdir().unwrap();
     let repo = tempfile::tempdir().unwrap();
     std::fs::write(repo.path().join("Cargo.lock"), "# lockfile\n").unwrap();
-    let start = chrono::Utc::now();
+    // A fixed weekday morning: the kernel fires the daily 02:00 cron sleeper itself, and
+    // the test's two hours never reach it.
+    let start = chrono::DateTime::parse_from_rfc3339("2026-10-21T10:00:00Z").unwrap().to_utc();
     let clock = ManualClock::new(start);
     let stores = open(&db.path().join("kernel.db"), Arc::new(clock.clone())).await;
     let model = Arc::new(ScriptedLlm::new(

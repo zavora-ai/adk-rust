@@ -1158,6 +1158,7 @@ fn spawn_maintenance(
                 () = stop.cancelled() => return,
                 () = tokio::time::sleep(tick) => {}
             }
+            sup.fire_crons(&router).await;
             match router.sweep_expired(sup.clock.now()).await {
                 Ok(outcomes) if !outcomes.is_empty() => sup.nudge(),
                 Ok(_) => {}
@@ -1573,6 +1574,7 @@ impl KernelBuilder {
             admission: tokio::sync::Mutex::new(()),
             rule_source: self.rule_source,
             reviewed: std::sync::Mutex::new(None),
+            crons: std::sync::Mutex::new(BTreeMap::new()),
         });
         let run_finished = Arc::new(RunFinishedWakeSource::new());
         let hooks =
@@ -1700,6 +1702,122 @@ mod tests {
 
         kernel.processes().kill(&process.meta.pid, "not needed").await.unwrap();
         eventually("the root to be dropped", || kernel.inner.sup.watched_roots().is_empty()).await;
+        kernel.stop().await.unwrap();
+    }
+
+    /// A sleeper on a cron wake no registered source covers (spec 3.2 §7.4, §8.1 `wake
+    /// --cron`), on a manual clock: the kernel fires it at each occurrence — the first
+    /// sleeper, then the successor it re-armed — and forgets the expression once the
+    /// series is killed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_cron_sleeper_wakes_at_each_occurrence_until_it_is_killed() {
+        use adk_core::{Llm, ManualClock, RunState};
+        use adk_model::{ScriptedLlm, ScriptedResponse};
+
+        let clock = ManualClock::new(chrono::Utc::now());
+        let runs: Arc<dyn DurableRunStore> =
+            Arc::new(InMemoryRunStore::new().with_clock(Arc::new(clock.clone())));
+        let model = Arc::new(ScriptedLlm::new(
+            "scripted",
+            ["first occurrence", "second occurrence"].map(ScriptedResponse::text),
+        ));
+        let agent = adk_agent::LlmAgentBuilder::new("agent")
+            .model(Arc::clone(&model) as Arc<dyn Llm>)
+            .build()
+            .unwrap();
+        let runner = Arc::new(
+            Runner::builder()
+                .app_name("adk-rust")
+                .agent(Arc::new(agent))
+                .session_service(Arc::new(adk_session::InMemorySessionService::new()))
+                .build()
+                .unwrap(),
+        );
+        let kernel = Kernel::builder()
+            .config(
+                KernelConfig::default()
+                    .with_scheduler_tick(Duration::from_millis(50))
+                    .with_clock(Arc::new(clock.clone()))
+                    .with_control(ControlPlaneConfig::default().without_socket()),
+            )
+            .run_store(Arc::clone(&runs))
+            .agent("adk-rust", runner)
+            .build()
+            .unwrap();
+        kernel.start().await.unwrap();
+        let hourly = "0 0 * * * *";
+        let wake = WakeSet::any_of([Wake::Cron {
+            expr: hourly.into(),
+            missed: adk_core::MissedFirePolicy::Skip,
+        }]);
+        let run =
+            NewRun::new("background", "adk-rust", "alice", "adk-rust", json!({ "text": "x" }));
+        let first = kernel
+            .processes()
+            .spawn(run, ProcessSpec::new(ProcessKind::Scheduled).with_wake(wake.clone()))
+            .await
+            .unwrap()
+            .meta
+            .pid;
+        let state = |pid: String| {
+            let runs = Arc::clone(&runs);
+            async move { runs.get(&pid).await.unwrap().map(|run| run.state) }
+        };
+        let wait_for = |what: &'static str, pid: String, wanted: RunState| async move {
+            let started = tokio::time::Instant::now();
+            while state(pid.clone()).await != Some(wanted) {
+                assert!(started.elapsed() < Duration::from_secs(5), "timed out waiting for {what}");
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+        let successor = |parent: String| {
+            let kernel = kernel.clone();
+            async move {
+                let started = tokio::time::Instant::now();
+                loop {
+                    let processes = kernel.processes().ps(ProcessFilter::default()).await.unwrap();
+                    if let Some(next) =
+                        processes.iter().find(|p| p.meta.parent.as_deref() == Some(parent.as_str()))
+                    {
+                        return next.meta.pid.clone();
+                    }
+                    assert!(
+                        started.elapsed() < Duration::from_secs(5),
+                        "timed out waiting for the successor of {parent}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }
+        };
+        wait_for("the sleeper asleep", first.clone(), RunState::Waiting).await;
+        eventually("the expression to be fired by the kernel", || {
+            kernel.inner.sup.watched_crons() == [hourly]
+        })
+        .await;
+        assert_eq!(model.requests().len(), 0, "asleep until the hour");
+
+        clock.advance(Duration::from_secs(3_601));
+        wait_for("the first occurrence's run", first.clone(), RunState::Completed).await;
+        let second = successor(first.clone()).await;
+        wait_for("the successor asleep", second.clone(), RunState::Waiting).await;
+        let meta = kernel.processes().get(&second).await.unwrap().unwrap().meta;
+        assert_eq!(meta.wake, Some(wake.clone()), "the successor sleeps on the same cron wake");
+
+        clock.advance(Duration::from_secs(3_601));
+        wait_for("the second occurrence's run", second.clone(), RunState::Completed).await;
+        assert_eq!(model.requests().len(), 2, "one run per occurrence");
+        let third = successor(second).await;
+        wait_for("the next successor asleep", third.clone(), RunState::Waiting).await;
+
+        kernel.processes().kill(&third, "the series ends").await.unwrap();
+        eventually("the expression to be dropped", || kernel.inner.sup.watched_crons().is_empty())
+            .await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let processes = kernel.processes().ps(ProcessFilter::default()).await.unwrap();
+        assert!(
+            !processes.iter().any(|p| p.meta.parent.as_deref() == Some(third.as_str())),
+            "a killed sleeper is not re-armed"
+        );
         kernel.stop().await.unwrap();
     }
 }
