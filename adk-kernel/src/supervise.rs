@@ -665,7 +665,13 @@ impl Supervision {
                     && let Some(victim) =
                         youngest_background(background.iter().map(|(pid, at)| (pid.as_str(), *at)))
                 {
+                    // The victim makes no further model call, so its slot is this run's now,
+                    // while it winds down to its checkpoint.
                     self.preempt(victim, &run.run_id).await;
+                    if meta.labels.remove(ADMISSION_LABEL).is_some() {
+                        self.put_meta(meta.clone()).await;
+                    }
+                    return Admission::Admit;
                 }
                 Wake::Manual
             }
@@ -1165,9 +1171,13 @@ impl WorkerHooks for KernelHooks {
             )
             .await;
         }
-        // A slot may have freed in the partition (spec 3.2 §7.9).
+        // A slot may have freed in the partition, and a preempted process whose preemptor
+        // already finished goes back to its queue (spec 3.2 §7.9).
         if sup.quotas.max_running.is_some() {
             sup.admit_waiters().await;
+        }
+        if matches!(meta.suspended_by, Some(Suspension::Preempted { .. })) {
+            sup.requeue_preempted(None).await;
         }
     }
 

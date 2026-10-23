@@ -396,8 +396,9 @@ pub(crate) enum Admission {
     QuietHours { until: DateTime<Utc> },
     /// The day's budget does not cover it: it sleeps until `BudgetReplenished`.
     Budget,
-    /// The partition runs `max_running` processes: it waits for a slot, and an interactive
-    /// one preempts the youngest background process first.
+    /// The partition runs `max_running` processes: it waits for a slot, or, for an
+    /// interactive one when `preempt` is set, takes the slot of the youngest background
+    /// process, which parks at its next checkpoint.
     Quota { preempt: bool },
 }
 
@@ -674,10 +675,12 @@ mod admission_tests {
                                 }
                             }
                             Admission::Quota { preempt: true } => {
-                                // The youngest background run parks, then the slot is taken.
+                                // The youngest background run stops counting; the human
+                                // turn takes its slot.
                                 let victim = running.iter().rposition(|c| *c == ProcessClass::Background);
                                 prop_assert!(victim.is_some());
                                 running.remove(victim.unwrap());
+                                running.push(class);
                             }
                             Admission::Quota { preempt: false } | Admission::Budget => {}
                             Admission::QuietHours { .. } => prop_assert!(false, "no quiet hours set"),
