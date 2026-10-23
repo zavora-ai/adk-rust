@@ -102,7 +102,8 @@ struct Models {
 }
 
 /// What an `ultracode` implementer adds to a harness agent (spec 3.1 §7.10): its turn's
-/// `RunBudget` and the run's audit log.
+/// `RunBudget` and the run's audit log; and what `up` adds for a partition's harness (spec
+/// 3.2 §7.8).
 #[derive(Default)]
 struct AgentExtras {
     budget: Option<RunBudget>,
@@ -113,6 +114,9 @@ struct AgentExtras {
     /// The kernel's drivers whose manifests list the default partition, classed by their
     /// manifests and under the kernel's driver policy (spec 3.2 §7.7).
     drivers: Option<adk_kernel::drivers::DriverSupervisor>,
+    /// The partition the harness runs, the table its policy reads, and whether it is the
+    /// coordinator.
+    partition: Option<(adk_kernel::Partition, adk_kernel::Partitions, bool)>,
 }
 
 /// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
@@ -427,6 +431,14 @@ impl Setup {
                 .toolset(drivers.toolset_for_manifests(&adk_kernel::PartitionId::default()))
                 .tool_classes(Arc::new(adk_harness::DriverClasses::new(drivers.clone())))
                 .add_operator_policy(drivers.policy());
+        }
+        // A partition's harness: its mode, identity, memory scope and crossing policy (spec
+        // 3.2 §7.8).
+        if let Some((partition, table, coordinator)) = extras.partition {
+            builder = builder.partition(partition, table);
+            if coordinator {
+                builder = builder.partition_coordinator();
+            }
         }
         // Servers the workspace declares in `.mcp.json` start once the workspace is trusted
         // (spec 3.1 §7.21, I3).

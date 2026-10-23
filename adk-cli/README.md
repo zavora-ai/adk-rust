@@ -15,7 +15,7 @@ Command-line launcher for Rust Agent Development Kit (ADK-Rust) agents.
   approve them (`adk-rust`, `code`, `goal`, `ultracode`, `serve`), with remembered approvals
   (`rules`), held calls (`approvals`) and sessions (`sessions`) in one SQLite file; the
   harness as the always-on **agent kernel** (spec 3.2: `up`, `attach`, `ps`, `top`, `kill`,
-  `suspend`, `resume`, `freeze`, `unfreeze`, `events`, `proc`); plus a plain chat agent
+  `suspend`, `resume`, `freeze`, `unfreeze`, `events`, `proc`, `partitions`); plus a plain chat agent
   (6 providers), skills, graph checkpoints, signed audit logs, and deploy
 - **`Launcher` library** — embed a REPL and web server into any custom agent binary;
   `HarnessLauncher` does the same for a `HarnessAgent`
@@ -66,7 +66,7 @@ See [The harness in your terminal](../docs/official_docs/harness/cli.md),
 | `gemini`, `openai`, `anthropic` | yes | The Gemini, OpenAI and Anthropic providers |
 | `audit` | yes | `adk-rust audit verify` and `audit keygen` (through `adk-auth`'s `signed-audit`) |
 | `persist` | yes | Sessions, held calls, durable runs, modes and standing rules in SQLite at `adk-rust/harness.db` (through `adk-session`'s and `adk-harness`'s `sqlite`) |
-| `harness` | yes | The harness: `adk-rust` REPL, `code`, `goal`, `ultracode` and `serve` on `adk-harness`, `sessions`, `rules`, `approvals`, and the `adk_cli::harness` module; the agent kernel's `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`, `freeze`, `unfreeze`, `events` and `proc` on `adk-kernel`, with its daily baselines (`proc-baselines`) |
+| `harness` | yes | The harness: `adk-rust` REPL, `code`, `goal`, `ultracode` and `serve` on `adk-harness`, `sessions`, `rules`, `approvals`, and the `adk_cli::harness` module; the agent kernel's `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`, `freeze`, `unfreeze`, `events`, `proc` and `partitions` on `adk-kernel`, with its daily baselines (`proc-baselines`) |
 | `deepseek`, `groq`, `ollama` | no | The other providers |
 | `all-providers` | no | Every provider |
 | `audit-sql` | no | `adk-rust audit export` from SQLite or PostgreSQL audit stores |
@@ -131,6 +131,7 @@ adk-rust wake         A sleeping process woken by a file change, a cron time or 
 adk-rust freeze / unfreeze             The kill switch, on every replica
 adk-rust events       The kernel's event bus (`--follow`)
 adk-rust proc         The kernel's activity ledger, baselines and observations
+adk-rust partitions   The kernel's partitions (list/add/set-mode)
 adk-rust skills       Skill tooling (list/validate/match)
 adk-rust graph        Graph checkpoint inspection (steps/replay/fork/resume)
 adk-rust audit        Signed audit log tools (verify/keygen; export with `audit-sql`)

@@ -1,6 +1,7 @@
 //! The running kernel's commands over its control plane (spec 3.2 §7.11, §8.1): `attach`,
 //! `ps`, `top`, `kill`, `nice`, `suspend`, `resume`, `freeze`, `unfreeze`, `events`,
-//! `agenda`, `wake` and `proc`, and the REPL `adk-rust` opens on a running kernel. Surfaces hold no state (K-I17): every command
+//! `agenda`, `wake`, `proc` and `partitions`, and the REPL `adk-rust` opens on a running
+//! kernel. Surfaces hold no state (K-I17): every command
 //! reads the kernel, and detaching changes nothing in its process table.
 
 use std::collections::HashSet;
@@ -25,7 +26,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 
-use crate::cli::{DriversCommands, KernelTarget, ProcView};
+use crate::cli::{DriversCommands, KernelTarget, PartitionsCommands, ProcView};
 use adk_kernel::drivers::{
     DriverIsolation, DriverManifest, DriverProcessTree, DriverProposal, DriverView,
 };
@@ -99,6 +100,98 @@ pub async fn ps(
         println!("{}", row(process));
     }
     Ok(())
+}
+
+/// `adk-rust partitions [list|add|set-mode P MODE]` (spec 3.2 §7.8, §8.1). A change is
+/// recorded in the kernel's partition table at once; the partition's harness takes it at
+/// the next `adk-rust up`, which builds one harness per partition.
+pub async fn partitions(command: Option<PartitionsCommands>, kernel: KernelTarget) -> Result<()> {
+    let command = command.unwrap_or(PartitionsCommands::List { kernel });
+    match command {
+        PartitionsCommands::List { kernel } => {
+            let partitions = client(&kernel).await?.partitions().await?;
+            if partitions.is_empty() {
+                println!(
+                    "No partitions: one harness serves everything. Add [[kernel.partitions]] to \
+                     your user config, or `adk-rust partitions add <id>`."
+                );
+                return Ok(());
+            }
+            println!("{}", partition_header());
+            for partition in &partitions {
+                println!("{}", partition_row(partition));
+            }
+        }
+        PartitionsCommands::Add {
+            id,
+            class,
+            tenant,
+            mode,
+            memory_scope,
+            drivers,
+            coordinator_crossings,
+            kernel,
+        } => {
+            let mut partition =
+                adk_kernel::Partition::new(id.as_str(), class.unwrap_or_else(|| id.clone()));
+            if let Some(tenant) = tenant {
+                partition = partition.with_tenant(tenant);
+            }
+            if let Some(mode) = mode {
+                partition = partition.with_mode(mode);
+            }
+            if let Some(scope) = memory_scope {
+                partition = partition.with_memory_scope(scope);
+            }
+            for driver in drivers {
+                partition = partition.with_driver(driver);
+            }
+            if coordinator_crossings {
+                partition = partition
+                    .with_cross_partition(adk_kernel::CrossPartition::CoordinatorWithApproval);
+            }
+            partition.validate()?;
+            let stored = client(&kernel).await?.put_partition(&partition).await?;
+            println!("{}", partition_header());
+            println!("{}", partition_row(&stored));
+            println!("Its harness starts at the next `adk-rust up`.");
+        }
+        PartitionsCommands::SetMode { partition, mode, kernel } => {
+            let stored = client(&kernel).await?.set_partition_mode(&partition, mode).await?;
+            println!("{}", partition_header());
+            println!("{}", partition_row(&stored));
+            println!("Its harness takes the mode at the next `adk-rust up`.");
+        }
+    }
+    Ok(())
+}
+
+fn partition_header() -> String {
+    format!(
+        "{:<12} {:<14} {:<10} {:<14} {:<20} {:<26} BLOCKED",
+        "ID", "CLASS", "MODE", "MEMORY", "DRIVERS", "CROSSINGS"
+    )
+}
+
+/// One partition as a `partitions` row; every field is escaped, since a record can come
+/// from another surface.
+fn partition_row(partition: &adk_kernel::Partition) -> String {
+    let list = |items: Vec<String>| match items.is_empty() {
+        true => "-".to_string(),
+        false => items.join(","),
+    };
+    format!(
+        "{:<12} {:<14} {:<10} {:<14} {:<20} {:<26} {}",
+        escape_control(partition.id.as_str()),
+        escape_control(&partition.class),
+        partition.default_mode,
+        escape_control(&partition.memory_scope),
+        escape_control(&list(partition.drivers.clone())),
+        partition.cross_partition,
+        escape_control(&list(
+            partition.blocked_crossings.iter().map(|id| id.to_string()).collect()
+        )),
+    )
 }
 
 /// `adk-rust top`: `ps` of the unfinished processes by burn rate, refreshed every
@@ -1129,6 +1222,36 @@ mod tests {
         let restricted = user.restrict_with(&project).unwrap();
         let text = restricted_toml(&restricted).unwrap();
         assert_eq!(DriverManifest::from_toml(&text).unwrap(), restricted, "{text}");
+    }
+
+    #[test]
+    fn a_partition_row_shows_its_record_with_control_characters_escaped() {
+        let partition = adk_kernel::Partition::new("work", "work-agents\x1b[2K")
+            .with_mode(adk_kernel::PartitionMode::Auto)
+            .with_driver("calendar")
+            .with_driver("mail")
+            .with_cross_partition(adk_kernel::CrossPartition::CoordinatorWithApproval)
+            .with_blocked_crossing("home");
+        let row = partition_row(&partition);
+        for shown in ["work", "auto", "calendar,mail", "coordinator_with_approval", "home"] {
+            assert!(row.contains(shown), "{row}");
+        }
+        assert!(!row.contains('\x1b'), "{row}");
+        assert!(partition_row(&adk_kernel::Partition::new("home", "home")).contains(" - "));
+        assert!(partition_header().starts_with("ID"));
+        // Every column keeps its width, the mode and the crossing setting included.
+        let aligned = partition_row(
+            &adk_kernel::Partition::new("work", "work")
+                .with_mode(adk_kernel::PartitionMode::Auto)
+                .with_cross_partition(adk_kernel::CrossPartition::CoordinatorWithApproval),
+        );
+        let header = partition_header();
+        assert_eq!(aligned.find("auto"), header.find("MODE"), "{aligned}");
+        assert_eq!(
+            aligned.find("coordinator_with_approval"),
+            header.find("CROSSINGS"),
+            "{aligned}"
+        );
     }
 
     #[test]
