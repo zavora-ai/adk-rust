@@ -22,7 +22,7 @@ cargo install cargo-adk
 | `cargo adk build` | Compile the project (`cargo build --release`, or `--debug`) |
 | `cargo adk validate` | Check a YAML agent definition (`--yaml`) or a Rust source file (`--rust`) |
 | `cargo adk deploy` | Build, bundle, and push to a deployment control plane |
-| `cargo adk eval` | Run eval sets against an agent binary |
+| `cargo adk eval` | Run eval sets against an agent binary, or gate on drift in an exported activity ledger |
 | `cargo adk bench` | Run performance benchmarks against real LLM APIs |
 
 ### `cargo adk new` — Scaffold a new agent
@@ -163,6 +163,15 @@ The agent runs as its own process: it reads one JSON request per line on stdin a
 | Error response | `{"error"}` — fails the case |
 
 Responses are scored with `adk_eval::Evaluator` against `--criteria` (an `EvaluationCriteria` JSON file; default an exact tool trajectory and a response similarity of 0.8). LLM-judged criteria need `--judge-model` and the provider's API key. `--tolerance` (default 0.05) is the largest score drop that is not a regression, and `--turn-timeout` (default 300 seconds) bounds each response. The command exits non-zero when a case fails, the agent misbehaves, the baseline is missing for `--check-regression`, or a score regresses. See the [evaluation guide](../docs/official_docs/evaluation/evaluation.md) for every flag and an example agent binary.
+
+#### `cargo adk eval --ledger` — Gate on drift in an activity ledger
+
+```bash
+cargo adk eval --ledger ledger.jsonl --floor tool_call.duration_ms=50
+cargo adk eval --ledger ledger.jsonl --format json --output ledger-report.json
+```
+
+`--ledger` takes an exported activity ledger, one camelCase JSON row per line (`ts`, `partition`, `agent`, `kind`, and optional `effect`, `durationMs`, `subjectHash`, `meta`, `traceId`), in place of the eval-set path and `--agent-cmd`. It derives daily dimensions — first and last activity, rows and median duration per kind, numeric `meta` sums — and tests the export's last day with `adk_eval::ledger`: the last 7 and 14 days against the median and MAD of the 28 days before them, per weekday and weekend, `|recent − median| > max(2.5 × MAD, floor)`. The command exits non-zero on a meaningful deviation (two dimensions, or one for 10 days) and on an export too short to finish the 14-day warm-up. `--floor DIMENSION=VALUE` sets a dimension's floor; the defaults are 45 minutes for the two time-of-day dimensions and 0 for the rest.
 
 ## Templates
 
