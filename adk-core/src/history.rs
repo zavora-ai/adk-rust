@@ -12,6 +12,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{Content, Event, Part};
 
+mod provider;
+pub use provider::{for_provider, provider_origin, with_provider_parts};
+pub(crate) use provider::{is_provider_replay, replay_part};
+
 /// Marks where a quoted payload from another agent starts.
 pub const QUOTED_CONTENT_BEGIN: &str = "<<<BEGIN_QUOTED_AGENT_CONTENT>>>";
 /// Marks where a quoted payload from another agent ends.
@@ -73,6 +77,8 @@ fn canonical(value: &serde_json::Value) -> String {
 pub fn other_agent_context(author: &str, content: &Content) -> Option<Content> {
     let mut parts = vec![Part::Text { text: OTHER_AGENT_CONTEXT_PREAMBLE.to_string() }];
     for part in &content.parts {
+        let Some(part) = part.for_model() else { continue };
+        let part = part.as_ref();
         match part {
             Part::Thinking { .. } => {}
             Part::Text { text } => {
@@ -323,6 +329,31 @@ mod tests {
     use super::*;
     use crate::FunctionResponseData;
     use serde_json::json;
+
+    #[test]
+    fn provider_parts_preserve_order_without_duplicates() {
+        let replay = Part::ServerToolCall {
+            server_tool_call: json!({"type":"reasoning","id":"rs_1","summary":[],
+                "encrypted_content":"opaque +/ bytes"}),
+        };
+        let call = Part::FunctionCall {
+            name: "lookup".into(),
+            args: json!({"query":"example"}),
+            id: Some("call_1".into()),
+            thought_signature: None,
+        };
+        let original = Content { role: "model".into(), parts: vec![call.clone()] };
+        for metadata in [
+            json!({"conversation_history_parts":[replay, call, replay, {"invalid":true}]}),
+            json!({"openai":{"conversation_history_parts":[replay, call, replay]}}),
+        ] {
+            let projected = with_provider_parts(&original, Some(&metadata));
+            assert_eq!(projected.parts, [call.clone(), replay.clone()]);
+            assert_eq!(with_provider_parts(&projected, Some(&metadata)).parts, projected.parts);
+            assert_eq!(original.parts.as_slice(), std::slice::from_ref(&call));
+        }
+        assert_eq!(with_provider_parts(&original, None).parts, original.parts);
+    }
 
     fn call(id: Option<&str>, name: &str) -> Event {
         let mut event = Event::new("inv");

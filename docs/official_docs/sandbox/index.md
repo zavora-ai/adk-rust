@@ -276,13 +276,15 @@ with rules and `allow_network = false` blocks all network access and logs a warn
 
 | Aspect | Behaviour |
 |--------|-----------|
-| Token | Privileges removed (`DISABLE_MAX_PRIVILEGE`); every group deny-only, `Administrators` included, except `Everyone`, `BUILTIN\Users`, Authenticated Users, `INTERACTIVE`, the logon SID and integrity labels, which the shell needs to start; restricting SIDs `Everyone`, `BUILTIN\Users`, `RESTRICTED` and the logon SID |
-| Paths | `RESTRICTED` is granted on each policy path — full access for read-write, read and execute for read-only — added to the path's existing ACL |
-| Writes | Refused outside the granted paths, except paths whose ACL grants write access to `Everyone` or `BUILTIN\Users` |
-| Reads | Refused for ungranted paths whose ACL grants neither `Everyone` nor `BUILTIN\Users`, such as a user's profile; system binaries and DLLs, which grant `Users`, stay readable so the shell can start programs |
+| Token | Privileges removed (`DISABLE_MAX_PRIVILEGE`); the user SID and widening groups, including `Administrators`, are deny-only. Public runtime groups remain enabled. `WRITE_RESTRICTED` applies `RESTRICTED` and the logon SID to writes |
+| Paths | `RESTRICTED` and the logon SID are granted on each policy path — full access for read-write, read and execute for read-only — added to the existing ACL |
+| Writes | Require normal access plus a `RESTRICTED` or logon ACL grant; ordinary public `Users`/`Everyone` write access is insufficient |
+| Reads | Owner-only private files require a policy grant; enabled public groups such as `Users` and `Everyone` still admit public files and system runtime dependencies. Reads are not a path allowlist |
 | Descendants | Killed with the call's Job Object, also on a timeout |
 | Network | **Not enforced** — Windows has no per-process network control without AppContainer |
 | Integrity level | Not lowered |
+
+Path grants are merged into existing ACLs and persist after a call, as before. The logon grant uses the caller's existing logon SID and the declared access mode; it grants no other user or logon access. Reusing a path does not revoke grants from earlier calls.
 
 A restricted token is set when the process is created, so it cannot be attached to a `tokio::process::Command` that the caller spawns. `probe()` therefore returns `EnforcerUnavailable` and `configure_command()` returns `EnforcerFailed`, naming `run_confined`: `sandboxed_command`, `ProcessBackend::with_sandbox` and the harness shell do not confine on Windows and report so. The PR tier's `windows` job runs the enforcer's tests.
 

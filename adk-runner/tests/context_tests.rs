@@ -1284,6 +1284,58 @@ fn text_part(text: &str) -> Part {
 }
 
 #[test]
+fn retains_opaque_provider_parts_between_invocations() {
+    let mutable = MutableSession::new(Arc::new(MockSessionWithState::new()));
+    let replay = Part::ServerToolCall {
+        server_tool_call: serde_json::json!({"type":"reasoning","id":"rs_1","summary":[],
+            "encrypted_content":"opaque +/ bytes"}),
+    };
+    let call = call_part("call-1");
+    let mut event = event_with("ops", "inv-1", "model", vec![call.clone()]);
+    let origin = serde_json::json!({"provider":"responses","model":"model","scope":"owner"});
+    event.llm_response.provider_metadata = Some(serde_json::json!({"provider_origin":origin,
+        "openai":{"conversation_history_parts":[replay, call, replay]}}));
+    let original = serde_json::to_vec(&event).unwrap();
+    mutable.append_event(event);
+    let response = response_part(serde_json::json!({"status":"paid"}), Some("call-1"));
+    mutable.append_event(event_with("ops", "inv-1", "function", vec![response.clone()]));
+    mutable.append_event(event_with("user", "inv-2", "user", vec![text_part("Continue")]));
+
+    let history = mutable.conversation_history_with_context("ops", "");
+    assert_eq!(history.len(), 3);
+    assert_eq!(history[0].parts[0], call);
+    assert!(history[0].parts[1].for_model().is_none());
+    let mut projected = history.clone();
+    adk_core::history::for_provider(&mut projected, &serde_json::from_value(origin).unwrap());
+    assert_eq!(projected[0].parts[1], replay);
+    assert_eq!(history[1].parts, [response]);
+    assert_eq!(history[2].parts, [text_part("Continue")]);
+    let stored = mutable.events_snapshot();
+    assert_eq!(serde_json::to_vec(&stored[0]).unwrap(), original);
+
+    let other = mutable.conversation_history_with_context("report", "");
+    assert!(
+        other.iter().all(|content| !serde_json::to_string(content).unwrap().contains("opaque"))
+    );
+}
+
+#[test]
+fn originless_replay_stays_in_its_invocation() {
+    let mutable = MutableSession::new(Arc::new(MockSessionWithState::new()));
+    let thinking = Part::Thinking { thinking: "Plan".into(), signature: Some("signed".into()) };
+    let mut event = event_with("ops", "inv-1", "model", vec![thinking.clone(), text_part("Done")]);
+    event.llm_response.provider_metadata = Some(serde_json::json!({"openai":{
+        "conversation_history_parts":[{"server_tool_call":{"type":"reasoning","id":"rs_1",
+            "summary":[],"encrypted_content":"opaque"}}]
+    }}));
+    mutable.append_event(event);
+    mutable.append_event(event_with("user", "inv-2", "user", vec![text_part("Continue")]));
+
+    let history = mutable.conversation_history_with_context("ops", "");
+    assert_eq!(history[0].parts, [thinking, text_part("Done")]);
+}
+
+#[test]
 fn a_response_whose_call_was_cut_from_the_window_is_left_out() {
     // A `history_max_events` window that starts on a result whose call it cut.
     let mutable = MutableSession::new(Arc::new(MockSessionWithState::new()));
@@ -1360,4 +1412,29 @@ fn events_on_a_tool_branch_stay_out_of_the_callers_history() {
         let roles: Vec<&str> = history.iter().map(|content| content.role.as_str()).collect();
         assert_eq!(roles, ["user", "model", "function"]);
     }
+}
+
+#[test]
+fn owned_provider_data_stays_private() {
+    let mut event = Event::new("inv");
+    event.author = "assistant".into();
+    event.set_content(Content { role: "model".into(), parts: vec![
+            Part::Text { text: "Visible answer".into() },
+            Part::ServerToolResponse { server_tool_response: serde_json::json!({
+                "type":"anthropic_message", "content":[{"type":"thinking", "thinking":"private-replay", "signature":"private-signature"}]
+            }) },
+        ] });
+    event.llm_response.provider_metadata = Some(serde_json::json!({"provider_origin":{
+        "provider":"anthropic", "model":"model", "scope":"owner"
+    }}));
+    let source = serde_json::to_vec(&event).unwrap();
+    let mutable = MutableSession::new(Arc::new(MockSessionWithState::new()));
+    mutable.append_event(event);
+    let context = mutable.conversation_history_with_context("other", "");
+    let rendered = serde_json::to_string(&context).unwrap();
+    assert!(rendered.contains("Visible answer"));
+    for forbidden in ["private-replay", "private-signature", "__adk_provider_replay"] {
+        assert!(!rendered.contains(forbidden), "{forbidden}: {rendered}");
+    }
+    assert_eq!(serde_json::to_vec(&mutable.events_snapshot()[0]).unwrap(), source);
 }

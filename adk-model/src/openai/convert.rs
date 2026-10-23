@@ -48,6 +48,7 @@ pub fn content_to_messages(
 
 /// Convert an ADK content that carries no function response to one Chat Completions message.
 fn content_to_message(content: &Content, native_pdf: bool) -> ChatCompletionRequestMessage {
+    let content = content.for_model();
     match content.role.as_str() {
         "user" => {
             let has_attachments = content

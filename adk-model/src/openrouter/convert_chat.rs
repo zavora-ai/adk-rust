@@ -117,6 +117,7 @@ pub fn reasoning_replay_from_extension_value(
 }
 
 fn adk_content_to_chat_message(content: &Content) -> Result<OpenRouterChatMessage, AdkError> {
+    let content = content.for_model();
     // A tool-role content without a function response carries only user-visible parts.
     if matches!(content.role.as_str(), "function" | "tool") {
         return adk_content_to_chat_message(&Content {

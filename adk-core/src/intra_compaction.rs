@@ -110,6 +110,9 @@ fn estimate_event_chars(event: &Event) -> usize {
 
 /// Estimate the character count of a single content part.
 fn estimate_part_chars(part: &Part) -> usize {
+    if crate::history::is_provider_replay(part) {
+        return crate::history::replay_part(part).as_ref().map_or(0, estimate_part_chars);
+    }
     match part {
         Part::Text { text } => text.len(),
         Part::Thinking { thinking, .. } => thinking.len(),
@@ -162,6 +165,9 @@ fn estimate_part_chars(part: &Part) -> usize {
 /// assert_eq!(render_part_for_summary(&thought), None);
 /// ```
 pub fn render_part_for_summary(part: &Part) -> Option<String> {
+    if crate::history::is_provider_replay(part) {
+        return None;
+    }
     let json = |value: &serde_json::Value| value.to_string();
     Some(match part {
         Part::Text { text } => text.clone(),
@@ -261,6 +267,21 @@ mod tests {
         let tokens = estimate_tokens(&[event], 4);
         // "get_weather" = 11 chars + {"city":"NYC"} serialized
         assert!(tokens > 0);
+    }
+
+    #[test]
+    fn counts_wrapped_parts() {
+        let original = Content::new("model").with_thinking("Private reasoning").with_text("Answer");
+        let mut event = Event::new("inv-1");
+        event.set_content(original.clone());
+        let expected = estimate_tokens(std::slice::from_ref(&event), 4);
+        event.set_content(crate::history::with_provider_parts(
+            &original,
+            Some(&serde_json::json!({"provider_origin":{
+                "provider":"provider", "model":"model", "scope":"owner"
+            }})),
+        ));
+        assert_eq!(estimate_tokens(&[event], 4), expected);
     }
 
     #[test]

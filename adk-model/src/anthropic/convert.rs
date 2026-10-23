@@ -81,13 +81,14 @@ pub fn content_to_message(
     content: &Content,
     _prompt_caching: bool,
 ) -> Result<MessageParam, ConversionError> {
+    let content = content.for_model();
     let role = match content.role.as_str() {
         "user" | "function" | "tool" => MessageRole::User,
         "model" | "assistant" => MessageRole::Assistant,
         _ => MessageRole::User,
     };
 
-    if let Some(mut blocks) = super::history::restore(content) {
+    if let Some(mut blocks) = super::history::restore(&content) {
         blocks.retain(
             |block| !matches!(block, ContentBlock::Text(text) if text.text.trim().is_empty()),
         );

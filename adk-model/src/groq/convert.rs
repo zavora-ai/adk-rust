@@ -193,6 +193,7 @@ pub fn content_to_messages(content: &Content) -> Vec<Message> {
 
 /// Convert ADK Content to Groq Message.
 pub fn content_to_message(content: &Content) -> Message {
+    let content = content.for_model();
     let role = match content.role.as_str() {
         "model" | "assistant" => "assistant",
         "user" => "user",

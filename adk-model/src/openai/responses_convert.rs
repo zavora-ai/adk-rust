@@ -64,6 +64,7 @@ fn request_uses_computer_use_tool(request: &LlmRequest) -> bool {
 
 /// Convert a single ADK `Content` to one or more `InputItem`s.
 fn content_to_input_items(content: &Content) -> Vec<InputItem> {
+    let content = content.for_model();
     let role = content.role.as_str();
     let mut items = Vec::new();
     let mut reasoning_items = 0;

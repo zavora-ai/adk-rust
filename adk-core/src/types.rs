@@ -340,6 +340,20 @@ pub struct Content {
     pub parts: Vec<Part>,
 }
 
+/// The non-secret ownership of provider-specific replay data.
+///
+/// `scope` identifies an account, authorization and endpoint without credentials.
+/// Token refresh may retain it only when account ownership is established.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderOrigin {
+    /// Provider protocol or implementation.
+    pub provider: String,
+    /// Requested model identifier.
+    pub model: String,
+    /// Application-defined account, authorization and endpoint identity.
+    pub scope: String,
+}
+
 /// A single part of a [`Content`] message.
 ///
 /// Parts can be text, binary data, file references, function calls/responses,
@@ -478,6 +492,25 @@ pub enum Part {
 pub const GENERATED_CALL_ID_PREFIX: &str = "adk-call-";
 
 impl Content {
+    /// Returns provider input with unresolved ownership records omitted.
+    ///
+    /// Apply [`crate::history::for_provider`] first to replay owned opaque data.
+    /// Ordinary text, calls and tool results remain available without projection.
+    pub fn for_model(&self) -> std::borrow::Cow<'_, Self> {
+        if !self.parts.iter().any(crate::history::is_provider_replay) {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        std::borrow::Cow::Owned(Self {
+            role: self.role.clone(),
+            parts: self
+                .parts
+                .iter()
+                .filter_map(Part::for_model)
+                .map(std::borrow::Cow::into_owned)
+                .collect(),
+        })
+    }
+
     /// Gives each function call without an ID a generated one, prefixed with
     /// [`GENERATED_CALL_ID_PREFIX`]. Calls that carry an ID keep it.
     ///
@@ -670,6 +703,11 @@ impl Content {
 }
 
 impl Part {
+    /// Omits internal provider replay records until ownership is projected.
+    pub fn for_model(&self) -> Option<std::borrow::Cow<'_, Self>> {
+        (!crate::history::is_provider_replay(self)).then_some(std::borrow::Cow::Borrowed(self))
+    }
+
     /// Returns the text content if this is a Text part, None otherwise
     pub fn text(&self) -> Option<&str> {
         match self {

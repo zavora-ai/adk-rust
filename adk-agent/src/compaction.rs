@@ -75,6 +75,14 @@ impl LlmEventSummarizer {
                 continue;
             }
             if let Some(content) = &event.llm_response.content {
+                let metadata = event.llm_response.provider_metadata.as_ref();
+                let projected;
+                let content = if adk_core::history::provider_origin(metadata).is_some() {
+                    projected = adk_core::history::with_provider_parts(content, metadata);
+                    &projected
+                } else {
+                    content
+                };
                 for rendered in content.parts.iter().filter_map(render_part) {
                     lines.push(format!("{}: {rendered}", event.author));
                 }

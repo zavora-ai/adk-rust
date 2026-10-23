@@ -183,6 +183,13 @@ impl MutableSession {
             let Some(content) = &event.llm_response.content else {
                 continue;
             };
+            // Bind replay data before rendering any history view, including other-agent context.
+            let metadata = event.llm_response.provider_metadata.as_ref();
+            let content = if adk_core::history::provider_origin(metadata).is_some() {
+                adk_core::history::with_provider_parts(content, metadata)
+            } else {
+                content.clone()
+            };
             let other_agent =
                 agent_name.is_some_and(|name| event.author != "user" && event.author != name);
             let mapped_content = match others {
@@ -190,19 +197,20 @@ impl MutableSession {
                 // never sees responses whose calls another agent made.
                 OtherAgents::Exclude if other_agent => continue,
                 OtherAgents::AsContext if other_agent => {
-                    match adk_core::history::other_agent_context(&event.author, content) {
+                    match adk_core::history::other_agent_context(&event.author, &content) {
                         Some(context) => context,
                         None => continue,
                     }
                 }
                 OtherAgents::Exclude | OtherAgents::AsContext | OtherAgents::AsOwnTurns => {
-                    let mut mapped_content = content.clone();
-                    mapped_content.role = match (event.author.as_str(), content.role.as_str()) {
-                        ("user", _) => "user",
-                        (_, "function" | "tool") => content.role.as_str(),
-                        _ => "model",
-                    }
-                    .to_string();
+                    let mut mapped_content = content;
+                    mapped_content.role =
+                        match (event.author.as_str(), mapped_content.role.as_str()) {
+                            ("user", _) => "user",
+                            (_, "function" | "tool") => mapped_content.role.as_str(),
+                            _ => "model",
+                        }
+                        .to_string();
                     mapped_content
                 }
             };

@@ -399,3 +399,25 @@ async fn a_retryable_stream_error_stays_retryable() {
     assert_eq!(error.details.upstream_status_code, Some(429));
     assert_eq!(error.details.metadata["cause_code"], "model.openai.rate_limited");
 }
+
+#[tokio::test]
+async fn owned_provider_data_stays_private() {
+    let mut event = Event::new("inv");
+    event.author = "assistant".into();
+    event.set_content(Content { role: "model".into(), parts: vec![
+            Part::Text { text: "Visible answer".into() },
+            Part::ServerToolResponse { server_tool_response: serde_json::json!({
+                "type":"anthropic_message", "content":[{"type":"thinking", "thinking":"private-replay", "signature":"private-signature"}]
+            }) },
+        ] });
+    event.llm_response.provider_metadata = Some(serde_json::json!({"provider_origin":{
+        "provider":"anthropic", "model":"model", "scope":"owner"
+    }}));
+    let source = serde_json::to_vec(&event).unwrap();
+    let prompt = summarizer_prompt(std::slice::from_ref(&event)).await;
+    assert!(prompt.contains("Visible answer"));
+    for forbidden in ["private-replay", "private-signature", "__adk_provider_replay"] {
+        assert!(!prompt.contains(forbidden), "{forbidden}: {prompt}");
+    }
+    assert_eq!(serde_json::to_vec(&event).unwrap(), source);
+}

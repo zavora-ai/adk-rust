@@ -23,9 +23,15 @@ impl Llm for Model {
 
     async fn generate_content(
         &self,
-        request: LlmRequest,
+        mut request: LlmRequest,
         _: bool,
     ) -> adk_core::Result<LlmResponseStream> {
+        let origin = adk_core::ProviderOrigin {
+            provider: "fixture".into(),
+            model: self.name().into(),
+            scope: "owner".into(),
+        };
+        adk_core::history::for_provider(&mut request.contents, &origin);
         let mut requests = self.requests.lock().unwrap();
         requests.push(request);
         let paused = self.endless || requests.len() == 1;
@@ -48,7 +54,7 @@ impl Llm for Model {
                 content: Some(content),
                 turn_complete: !paused,
                 provider_metadata: Some(
-                    serde_json::json!({"continue_turn":paused, "content_complete":self.complete}),
+                    serde_json::json!({"continue_turn":paused, "content_complete":self.complete, "provider_origin":origin}),
                 ),
                 ..Default::default()
             }),

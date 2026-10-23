@@ -478,10 +478,10 @@ impl PromptConfig {
             .parts
             .iter()
             .all(|part| matches!(part, Part::Text { text } if text.trim().is_empty()));
-        if session_history.last().is_some_and(|last| {
-            last.role == "model"
-                && !last.parts.iter().any(|part| matches!(part, Part::FunctionCall { .. }))
-        }) {
+        if session_history
+            .last()
+            .is_some_and(|last| last.role == "model" && !last.has_function_calls())
+        {
             let note = if empty_turn { RESUMED_TURN_NOTE } else { CONTINUE_TURN_NOTE };
             session_history.push(Content::new("user").with_text(note));
         }
@@ -690,43 +690,11 @@ impl LlmAgent {
         }
     }
 
-    fn history_parts_from_provider_metadata(
-        provider_metadata: Option<&serde_json::Value>,
-    ) -> Vec<Part> {
-        let Some(provider_metadata) = provider_metadata else {
-            return Vec::new();
-        };
-
-        let history_parts = provider_metadata
-            .get("conversation_history_parts")
-            .or_else(|| {
-                provider_metadata
-                    .get("openai")
-                    .and_then(|openai| openai.get("conversation_history_parts"))
-            })
-            .and_then(serde_json::Value::as_array);
-
-        history_parts
-            .into_iter()
-            .flatten()
-            .filter_map(|value| serde_json::from_value::<Part>(value.clone()).ok())
-            .collect()
-    }
-
     fn continues_turn(metadata: Option<&serde_json::Value>) -> bool {
         metadata
             .and_then(|metadata| metadata.get("continue_turn"))
             .and_then(serde_json::Value::as_bool)
             == Some(true)
-    }
-
-    fn augment_content_for_history(
-        content: &Content,
-        provider_metadata: Option<&serde_json::Value>,
-    ) -> Content {
-        let mut augmented = content.clone();
-        augmented.parts.extend(Self::history_parts_from_provider_metadata(provider_metadata));
-        augmented
     }
 }
 
@@ -4372,7 +4340,7 @@ impl Agent for LlmAgent {
 
                 // Add final content to history
                 if let Some(ref content) = accumulated_content {
-                    conversation_history.push(Self::augment_content_for_history(
+                    conversation_history.push(adk_core::history::with_provider_parts(
                         content,
                         final_provider_metadata.as_ref(),
                     ));

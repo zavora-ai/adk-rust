@@ -74,6 +74,7 @@ pub fn responses_reasoning_items_to_parts(
 fn adk_content_to_response_item(
     content: &Content,
 ) -> Result<OpenRouterResponseInputItem, AdkError> {
+    let content = content.for_model();
     let mut text_fragments = Vec::new();
     let mut structured_parts = Vec::new();
 

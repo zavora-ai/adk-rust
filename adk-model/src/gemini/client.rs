@@ -516,10 +516,6 @@ impl GeminiModel {
         Some(config)
     }
 
-    fn gemini_part_thought_signature(value: &serde_json::Value) -> Option<String> {
-        value.get("thoughtSignature").and_then(serde_json::Value::as_str).map(str::to_string)
-    }
-
     fn validate_request_contract(&self, req: &LlmRequest) -> Result<()> {
         // Server-side RAG grounding is a Vertex AI capability; reject it on
         // the AI Studio backend before any network IO (mirrors the request-
@@ -1451,6 +1447,7 @@ impl GeminiModel {
         let mut fn_call_signatures: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for content in &req.contents {
+            let content = content.for_model();
             if content.role == "model" {
                 for part in &content.parts {
                     if let Part::FunctionCall { name, thought_signature: Some(sig), .. } = part {
@@ -1462,6 +1459,7 @@ impl GeminiModel {
 
         // Add contents using proper builder methods
         for content in &req.contents {
+            let content = content.for_model();
             match content.role.as_str() {
                 // System contents stay leading user turns: a `system_instruction` would
                 // conflict with the context cache, which already carries one.
@@ -1557,13 +1555,6 @@ impl GeminiModel {
                                         _ => {}
                                     }
                                 }
-
-                                gemini_parts.push(adk_gemini::Part::ToolCall {
-                                    tool_call: server_tool_call.clone(),
-                                    thought_signature: Self::gemini_part_thought_signature(
-                                        server_tool_call,
-                                    ),
-                                });
                             }
                             Part::ServerToolResponse { server_tool_response } => {
                                 if let Ok(native_part) = serde_json::from_value::<adk_gemini::Part>(
@@ -1578,13 +1569,6 @@ impl GeminiModel {
                                         _ => {}
                                     }
                                 }
-
-                                gemini_parts.push(adk_gemini::Part::ToolResponse {
-                                    tool_response: server_tool_response.clone(),
-                                    thought_signature: Self::gemini_part_thought_signature(
-                                        server_tool_response,
-                                    ),
-                                });
                             }
                             _ => {}
                         }

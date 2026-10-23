@@ -715,7 +715,7 @@ async fn next_review(
 /// nothing is revoked, woken or killed; and the report repeats no more than daily.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_daily_review_reports_stale_rules_sleepers_and_freezes_once_a_day() {
-    let start = Utc::now();
+    let start = Utc.with_ymd_and_hms(2026, 10, 23, 23, 0, 0).unwrap();
     let clock = ManualClock::new(start);
     let mut world = World::answer();
     world.runs = Arc::new(InMemoryRunStore::new().with_clock(Arc::new(clock.clone())));
@@ -769,6 +769,7 @@ async fn the_daily_review_reports_stale_rules_sleepers_and_freezes_once_a_day() 
     // Thirty-one days on: one report with all three.
     clock.advance(Duration::from_secs(31 * 86_400));
     let report = next_review(&mut events, Duration::from_secs(3)).await.expect("a review");
+    assert_eq!(report.at, start + day * 31);
     assert_eq!(report.partition, PartitionId::default());
     let sleepers: Vec<_> = report.sleepers.iter().map(|aged| aged.pid.clone()).collect();
     let frozen: Vec<_> = report.frozen.iter().map(|aged| aged.pid.clone()).collect();
@@ -790,10 +791,11 @@ async fn the_daily_review_reports_stale_rules_sleepers_and_freezes_once_a_day() 
         assert_eq!(world.runs.get(pid).await.unwrap().unwrap().state, RunState::Waiting);
     }
 
-    // Later the same day: no second report. The next day: one more.
-    clock.advance(Duration::from_secs(60 * 60));
+    // Later the same UTC day: no second report. At midnight: one more.
+    clock.advance(Duration::from_secs(30 * 60));
     assert_eq!(next_review(&mut events, Duration::from_millis(400)).await, None);
-    clock.advance(Duration::from_secs(86_400));
-    assert!(next_review(&mut events, Duration::from_secs(3)).await.is_some());
+    clock.advance(Duration::from_secs(30 * 60));
+    let report = next_review(&mut events, Duration::from_secs(3)).await.expect("a new UTC day");
+    assert_eq!(report.at, start + day * 31 + chrono::Duration::hours(1));
     kernel.stop().await.unwrap();
 }

@@ -303,8 +303,10 @@ pub(crate) async fn prepare(
 }
 
 /// System directories a server reads under bubblewrap, which starts from an empty root:
-/// without them the dynamic loader, libc and the CA certificates are missing.
-const SYSTEM_READ: &[&str] = &["/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc"];
+/// without them the dynamic loader, libc and the CA certificates are missing. Nix-built
+/// programs load their interpreter and libraries from the store rather than `/usr`.
+const SYSTEM_READ: &[&str] =
+    &["/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc", "/nix/store"];
 
 /// Bubblewrap with `/dev`, `/proc` and the symlinked system directories recreated as links.
 ///

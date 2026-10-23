@@ -359,6 +359,14 @@ fn build_summary_prompt(events: &[Event]) -> String {
             continue;
         }
         if let Some(content) = event.content() {
+            let metadata = event.llm_response.provider_metadata.as_ref();
+            let projected;
+            let content = if adk_core::history::provider_origin(metadata).is_some() {
+                projected = adk_core::history::with_provider_parts(content, metadata);
+                &projected
+            } else {
+                content
+            };
             for rendered in
                 content.parts.iter().filter_map(adk_core::intra_compaction::render_part_for_summary)
             {
@@ -604,7 +612,7 @@ pub fn estimate_event_tokens(events: &[Event]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adk_core::{Content, Event};
+    use adk_core::{Content, Event, Part};
 
     fn make_events(count: usize) -> Vec<Event> {
         (0..count)
@@ -986,6 +994,28 @@ mod tests {
         assert!(debug_str.contains("CompactionConfig"));
         assert!(debug_str.contains("32000"));
         assert!(debug_str.contains("max_retries: 2"));
+    }
+
+    #[test]
+    fn owned_provider_data_stays_private() {
+        let mut event = Event::new("inv");
+        event.author = "assistant".into();
+        event.set_content(Content { role: "model".into(), parts: vec![
+            Part::Text { text: "Visible answer".into() },
+            Part::ServerToolResponse { server_tool_response: serde_json::json!({
+                "type":"anthropic_message", "content":[{"type":"thinking", "thinking":"private-replay", "signature":"private-signature"}]
+            }) },
+        ] });
+        event.llm_response.provider_metadata = Some(serde_json::json!({"provider_origin":{
+            "provider":"anthropic", "model":"model", "scope":"owner"
+        }}));
+        let source = serde_json::to_vec(&event).unwrap();
+        let prompt = build_summary_prompt(std::slice::from_ref(&event));
+        assert!(prompt.contains("Visible answer"));
+        for forbidden in ["private-replay", "private-signature", "__adk_provider_replay"] {
+            assert!(!prompt.contains(forbidden), "{forbidden}: {prompt}");
+        }
+        assert_eq!(serde_json::to_vec(&event).unwrap(), source);
     }
 
     #[test]

@@ -451,9 +451,10 @@ fn build_transcript_input(transcript: &[&Content]) -> Input {
 /// remaining content); function content becomes one `function_result` step per
 /// [`Part::FunctionResponse`].
 fn append_steps(content: &Content, steps: &mut Vec<Step>) {
+    let content = content.for_model();
     match content.role.as_str() {
         "user" => {
-            let blocks = content_parts(content);
+            let blocks = content_parts(&content);
             if !blocks.is_empty() {
                 steps.push(Step::UserInput { content: blocks });
             }
