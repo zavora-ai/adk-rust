@@ -477,6 +477,13 @@ connection. A parked task is no longer cancelled by `cancel_pending_tasks` or
 `close`: it waits on the server for its answers. `McpServerManager::reissue_parked_call`
 re-issues a call on the running managed server it names.
 
+On a managed server, `McpServerManager::call_tool_resumable(id, ctx, name, arguments)` and
+`McpServerManager::reissue_parked_call_for(ctx, parked, responses)` make the call, or the
+re-issue, for an agent's tool call `ctx`: they run in the scopes the tool itself would
+enter, so sampling requests the server sends meanwhile count against that run's budget and
+spend ledger, and elicitations belong to the call. The call id is `ctx`'s function call id.
+The agent kernel's [drivers](../kernel/drivers.md) call their servers this way.
+
 `reissue` refuses a parked call made through another toolset, one whose input
 requests no longer match their digest, and an answer to a request it does not
 hold, without contacting the server.

@@ -45,6 +45,9 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 | `GET /kernel/events?after=` | The event bus as server-sent events from a cursor; `Last-Event-ID` wins over `after` | — | — |
 | `POST /kernel/attach/{session}` | Transcript since a cursor, held calls, the process running the session | — | `attach` |
 | `POST /kernel/freeze`, `POST /kernel/unfreeze` | `Kernel::freeze` and `Kernel::unfreeze`; the answer reports `parkedRuns` | Yes | `freeze`, `unfreeze` |
+| `GET /kernel/drivers` | The mounted [drivers](drivers.md) with their state | — | — |
+| `POST /kernel/drivers/{id}/mount` | `{"manifest": "<toml>"}` answers what the mount approves; with `"confirm": true` mounts it as the caller | Yes | `drivers.mount` |
+| `POST /kernel/drivers/{id}/{unmount,restart,reapprove}` | Unmount, restart, re-approve as the caller | Yes | `drivers.unmount`, `drivers.restart`, `drivers.reapprove` |
 | `/approvals…` | The approvals inbox, unchanged; the socket serves it too | Per inbox rules | Inbox records |
 
 On HTTP the server's own routes stay beside them: `/api/runs` (submissions land on the

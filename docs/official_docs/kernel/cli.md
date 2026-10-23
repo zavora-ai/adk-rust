@@ -19,6 +19,7 @@ own (spec 3.2 §8.1, K-I17).
 | `adk-rust freeze [--reason R]` / `unfreeze` | The kill switch, on every replica |
 | `adk-rust events [--follow] [--after CURSOR] [--json]` | The event bus |
 | `adk-rust goal TEXT --until CMD` | With a kernel running, enqueues the goal on its `background` queue and follows it |
+| `adk-rust drivers list\|mount FILE [--yes]\|unmount ID\|restart ID\|reapprove ID` | The kernel's [drivers](drivers.md): MCP servers it supervises under the manifests you mounted |
 
 `PID` is a process id or a unique prefix of one.
 
