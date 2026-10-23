@@ -55,14 +55,15 @@ use serde_json::json;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::agenda::{Agenda, AgendaHandle, AgendaStore, ProactivityPolicy};
 use crate::audit;
 use crate::bus::{EventBus, EventSink, EventSubscriber, KernelEvent};
 use crate::control::{ControlPlane, ControlPlaneConfig};
 use crate::error::{KernelError, Result};
 use crate::process::{ProcessHandle, ProcessTable, ProgressSource, Suspension};
-use crate::sched::QueueClass;
+use crate::sched::{QueueClass, QuietHours, Quotas};
 use crate::stores::ProcessFilter;
-use crate::stores::{InMemoryProcessStore, ProcessStore};
+use crate::stores::{InMemoryAgendaStore, InMemoryProcessStore, ProcessStore};
 use crate::supervise::{KernelHooks, Supervision};
 use crate::wake::{
     FileWakeSource, KernelWakeExecutor, RunFinishedWakeSource, Trigger, Wake, WakeRouter,
@@ -71,7 +72,8 @@ use crate::wake::{
 
 /// How the kernel runs (spec 3.2 §7.2).
 ///
-/// The proactivity policy and quiet hours of §7.2 join in phase 2 (§7.5, §7.9).
+/// `proactivity`, `quiet_hours` and `quotas` apply to every partition (§7.5, §7.9); the
+/// partition records of phase 3 carry their own.
 ///
 /// # Example
 ///
@@ -118,6 +120,16 @@ pub struct KernelConfig {
     /// store the same clock (`SqliteRunStore::with_clock`), since it decides leases and
     /// `not_before`.
     pub clock: Arc<dyn Clock>,
+    /// The proactivity limits of every partition: open proposals, the daily proactive
+    /// budget, quiet hours, how proposals are approved, the consolidation tick (spec 3.2
+    /// §7.5). Defaults to [`ProactivityPolicy::default`].
+    pub proactivity: ProactivityPolicy,
+    /// A local-time window in which no proactive or maintenance process starts, beside the
+    /// proactivity policy's (spec 3.2 §7.2, §7.9). Defaults to none.
+    pub quiet_hours: Option<QuietHours>,
+    /// Every partition's quotas: max running, max queued, the daily spend cap (spec 3.2
+    /// §7.9). Defaults to none.
+    pub quotas: Quotas,
 }
 
 impl Default for KernelConfig {
@@ -132,11 +144,35 @@ impl Default for KernelConfig {
             control: ControlPlaneConfig::default(),
             fail_if_sandbox_unavailable: false,
             clock: Arc::new(SystemClock),
+            proactivity: ProactivityPolicy::default(),
+            quiet_hours: None,
+            quotas: Quotas::default(),
         }
     }
 }
 
 impl KernelConfig {
+    /// Sets the proactivity limits (spec 3.2 §7.5).
+    #[must_use]
+    pub fn with_proactivity(mut self, proactivity: ProactivityPolicy) -> Self {
+        self.proactivity = proactivity;
+        self
+    }
+
+    /// Sets the kernel's quiet hours (spec 3.2 §7.2, §7.9).
+    #[must_use]
+    pub fn with_quiet_hours(mut self, quiet_hours: QuietHours) -> Self {
+        self.quiet_hours = Some(quiet_hours);
+        self
+    }
+
+    /// Sets every partition's quotas (spec 3.2 §7.9).
+    #[must_use]
+    pub fn with_quotas(mut self, quotas: Quotas) -> Self {
+        self.quotas = quotas;
+        self
+    }
+
     /// The mirrored kill switch's poll interval on multi-replica (K-I8): no backend
     /// implements `GovernanceWatch`, so the default 2 s poll would miss the one-second bound.
     pub const GOVERNANCE_POLL: Duration = Duration::from_millis(250);
@@ -368,6 +404,7 @@ struct KernelInner {
     config: KernelConfig,
     sup: Arc<Supervision>,
     processes: ProcessTable,
+    agenda: Agenda,
     router: WakeRouter,
     schedules: Option<Arc<dyn ScheduleStore>>,
     approvals: Option<Arc<dyn ApprovalService>>,
@@ -542,6 +579,7 @@ impl Kernel {
         tasks.push(spawn_maintenance(
             Arc::clone(&sup),
             self.inner.router.clone(),
+            self.inner.agenda.clone(),
             Arc::clone(&self.inner.status),
             config.scheduler_tick,
             stop.clone(),
@@ -789,6 +827,11 @@ impl Kernel {
     /// The process table.
     pub fn processes(&self) -> &ProcessTable {
         &self.inner.processes
+    }
+
+    /// The agenda (spec 3.2 §7.5).
+    pub fn agenda(&self) -> &Agenda {
+        &self.inner.agenda
     }
 
     /// The event bus.
@@ -1093,10 +1136,13 @@ fn spawn_mirror(sup: Arc<Supervision>, stop: CancellationToken) -> JoinHandle<()
 }
 
 /// Every scheduler tick: expires wake sets and fires time wakes, claims wake runs enqueued
-/// from outside the kernel, attributes spend, and measures the store.
+/// from outside the kernel, attributes spend, applies the agenda's decisions and the
+/// admission sweep (preempted processes whose preemptor finished, processes waiting for a
+/// slot, budgets replenished), and measures the store.
 fn spawn_maintenance(
     sup: Arc<Supervision>,
     router: WakeRouter,
+    agenda: Agenda,
     status: Arc<RwLock<Status>>,
     tick: Duration,
     stop: CancellationToken,
@@ -1119,6 +1165,23 @@ fn spawn_maintenance(
                 sup.nudge();
             }
             sup.attribute_all().await;
+            agenda.tick().await;
+            // A preemptor that finished on another replica, a slot freed there, a new day.
+            sup.requeue_preempted(None).await;
+            if sup.quotas.max_running.is_some() {
+                sup.admit_waiters().await;
+            }
+            let today = sup.clock.now().date_naive();
+            for partition in sup.replenished_partitions().await {
+                let event = crate::wake::WakeEvent::new(
+                    "budget",
+                    crate::wake::keys::budget(partition.as_str(), today),
+                    json!({ "partition": partition, "day": today }),
+                );
+                if let Err(error) = router.submit(&event, &sup.app_name).await {
+                    tracing::debug!(partition = %partition, error = %error, "could not submit a budget wake");
+                }
+            }
             let probe = tokio::time::Instant::now();
             let running = sup.running().await;
             let latency = probe.elapsed();
@@ -1259,6 +1322,8 @@ pub struct KernelBuilder {
     sinks: Vec<Arc<dyn EventSink>>,
     progress: Option<Arc<dyn ProgressSource>>,
     queue_ingresses: Vec<QueueIngress>,
+    agenda: Option<Arc<dyn AgendaStore>>,
+    agenda_handles: Vec<AgendaHandle>,
 }
 
 impl fmt::Debug for KernelBuilder {
@@ -1399,6 +1464,21 @@ impl KernelBuilder {
         self
     }
 
+    /// Sets the agenda's store (spec 3.2 §7.5). Defaults to [`InMemoryAgendaStore`].
+    #[must_use]
+    pub fn agenda_store(mut self, store: Arc<dyn AgendaStore>) -> Self {
+        self.agenda = Some(store);
+        self
+    }
+
+    /// Binds `handle` to the built kernel's agenda, so a tool created before the kernel —
+    /// the harness's `propose_followup` — reaches it (spec 3.2 §7.5, §10 HK1).
+    #[must_use]
+    pub fn agenda_handle(mut self, handle: AgendaHandle) -> Self {
+        self.agenda_handles.push(handle);
+        self
+    }
+
     /// Builds the kernel. Nothing runs until [`Kernel::start`].
     ///
     /// # Errors
@@ -1455,6 +1535,11 @@ impl KernelBuilder {
             roots_changed: tokio::sync::Notify::new(),
             watched: std::sync::Mutex::new(BTreeMap::new()),
             clock: Arc::clone(&config.clock),
+            proactivity: config.proactivity.clone(),
+            quiet_hours: config.quiet_hours,
+            quotas: config.quotas.clone(),
+            agenda: self.agenda.unwrap_or_else(|| Arc::new(InMemoryAgendaStore::new())),
+            admission: tokio::sync::Mutex::new(()),
         });
         let run_finished = Arc::new(RunFinishedWakeSource::new());
         let hooks =
@@ -1485,11 +1570,16 @@ impl KernelBuilder {
         let mut wake_sources = self.wake_sources;
         wake_sources.push(run_finished);
         let processes = ProcessTable::supervised(Arc::clone(&sup), self.spend);
+        let agenda = Agenda::new(Arc::clone(&sup), processes.clone(), self.approvals.clone());
+        for handle in &self.agenda_handles {
+            handle.bind(&agenda);
+        }
         Ok(Kernel {
             inner: Arc::new(KernelInner {
                 config,
                 sup,
                 processes,
+                agenda,
                 router,
                 schedules: self.schedules,
                 approvals: self.approvals,

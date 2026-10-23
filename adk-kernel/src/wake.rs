@@ -381,6 +381,12 @@ pub mod keys {
             .unwrap_or_else(|| format!("{state:?}").to_lowercase());
         format!("run:{pid}:{state}")
     }
+
+    /// `budget:<partition>:<UTC day>`: the partition's budget replenished on that day
+    /// (spec 3.2 §7.9), at most one wake per partition and day.
+    pub fn budget(partition: &str, day: chrono::NaiveDate) -> String {
+        format!("budget:{partition}:{day}")
+    }
 }
 
 /// Builds the `kernel.wake` run a webhook or queue delivery enqueues: target
@@ -431,9 +437,9 @@ pub fn kernel_wake_run(event: &WakeEvent, app_name: &str) -> Result<NewRun> {
 /// Whether `wake` fires for `event` (spec 3.2 §7.4 step 2).
 ///
 /// Each kernel source keys its events with its own prefix ([`keys`]); the payload carries
-/// what a variant compares. `At`, `BudgetReplenished` and `Manual` match no event: a time
-/// wake is swept by [`WakeRouter::sweep_expired`], a budget wake has no source until phase 2,
-/// and a manual wake is `adk-rust resume`.
+/// what a variant compares. `At` and `Manual` match no event: a time wake is swept by
+/// [`WakeRouter::sweep_expired`], and a manual wake is `adk-rust resume`. A budget wake
+/// matches the kernel's `budget:` event for its partition (spec 3.2 §7.9).
 fn wake_matches(wake: &Wake, event: &WakeEvent) -> bool {
     let text = |field: &str| event.payload.get(field).and_then(Value::as_str);
     match wake {
@@ -457,7 +463,10 @@ fn wake_matches(wake: &Wake, event: &WakeEvent) -> bool {
         Wake::RunFinished { pid } => {
             event.key.starts_with("run:") && text("pid") == Some(pid.as_str())
         }
-        Wake::At(_) | Wake::BudgetReplenished { .. } | Wake::Manual => false,
+        Wake::BudgetReplenished { partition } => {
+            event.key.starts_with("budget:") && text("partition") == Some(partition.as_str())
+        }
+        Wake::At(_) | Wake::Manual => false,
     }
 }
 
@@ -1761,20 +1770,29 @@ mod tests {
     }
 
     #[test]
-    fn time_budget_and_manual_wakes_match_no_event() {
+    fn time_and_manual_wakes_match_no_event() {
         let any = [
             cron_tick("0 0 2 * * *", false),
             event("hook:github", "hook:github:msg_1", json!({})),
-            event("budget", "budget:default", json!({"partition": "default"})),
+            event("budget", "budget:default:2026-10-23", json!({"partition": "default"})),
             event("manual", "manual:run-1", json!({})),
         ];
-        for wake in [
-            Wake::At(Utc::now()),
-            Wake::BudgetReplenished { partition: PartitionId::default() },
-            Wake::Manual,
-        ] {
+        for wake in [Wake::At(Utc::now()), Wake::Manual] {
             assert!(any.iter().all(|event| !wake_matches(&wake, event)), "{wake:?} matched");
         }
+    }
+
+    #[test]
+    fn a_budget_wake_matches_its_partitions_replenishment_only() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
+        let wake = Wake::BudgetReplenished { partition: PartitionId::new("work") };
+        let work = event("budget", &keys::budget("work", day), json!({"partition": "work"}));
+        let home = event("budget", &keys::budget("home", day), json!({"partition": "home"}));
+        let forged = event("hook:x", "hook:x:1", json!({"partition": "work"}));
+        assert_eq!(keys::budget("work", day), "budget:work:2026-10-23");
+        assert!(wake_matches(&wake, &work));
+        assert!(!wake_matches(&wake, &home));
+        assert!(!wake_matches(&wake, &forged), "only the kernel's budget events match");
     }
 
     #[test]

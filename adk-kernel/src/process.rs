@@ -814,10 +814,25 @@ impl ProcessTable {
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::Frozen`] while the kernel is frozen, the run store's error when
-    /// `run` is invalid or its concurrency key refuses it, or a store error.
+    /// Returns [`KernelError::Frozen`] while the kernel is frozen, [`KernelError::Quota`] when
+    /// the partition already queues its `max_queued` processes (spec 3.2 §7.9), the run
+    /// store's error when `run` is invalid or its concurrency key refuses it, or a store
+    /// error.
     pub async fn spawn(&self, mut run: NewRun, spec: ProcessSpec) -> Result<Process> {
         self.refuse_while_frozen()?;
+        if let Some(sup) = &self.sup
+            && let Some(max) = sup.quotas.max_queued
+        {
+            let queued = sup.queued_in(&spec.partition).await;
+            if queued >= max {
+                return Err(KernelError::Quota {
+                    partition: spec.partition.to_string(),
+                    reason: format!(
+                        "{queued} processes queued, the most max_queued ({max}) allows"
+                    ),
+                });
+            }
+        }
         let asleep = spec.wake.is_some();
         // The key carries the sleep intent to the claim, so a sleeper parks before its first
         // model call however long its row below takes to write; the caller's key follows

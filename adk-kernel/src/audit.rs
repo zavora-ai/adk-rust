@@ -14,8 +14,9 @@
 //! | [`PROCESS_SPAWNED`], [`PROCESS_WOKEN`], [`PROCESS_SUSPENDED`], [`PROCESS_RESUMED`], [`PROCESS_KILLED`], [`PROCESS_REQUEUED`] | `pid`, `parent`, `partition`, `queue`, `kind`, `wake`, `reason`, `by` |
 //! | [`WAKE`] | `source`, `key`, `matchedPid` or `newPid`, `deduplicated` |
 //! | [`CONTROL`] | `subject`, `transport`, `action`, `target` |
+//! | [`AGENDA_PROPOSED`], [`AGENDA_APPROVED`], [`AGENDA_REJECTED`], [`AGENDA_SCHEDULED`], [`AGENDA_EXPIRED`] | `item`, `partition`, `origin`, `by`, `budget`, `reason` |
 //!
-//! The agenda, driver, partition and observation actions of §9.3 arrive with their phases.
+//! The driver, partition and observation actions of §9.3 arrive with their phases.
 //!
 //! # Example
 //!
@@ -53,3 +54,13 @@ pub const PROCESS_REQUEUED: &str = "kernel.process.requeued";
 pub const WAKE: &str = "kernel.wake";
 /// A control-plane action.
 pub const CONTROL: &str = "kernel.control";
+/// An agenda item was proposed (spec 3.2 §7.5).
+pub const AGENDA_PROPOSED: &str = "kernel.agenda.proposed";
+/// An agenda item was approved, by a person or an Auto partition's policy.
+pub const AGENDA_APPROVED: &str = "kernel.agenda.approved";
+/// An agenda item, or a proposal the policy refused, was rejected.
+pub const AGENDA_REJECTED: &str = "kernel.agenda.rejected";
+/// An agenda item's process was created.
+pub const AGENDA_SCHEDULED: &str = "kernel.agenda.scheduled";
+/// An agenda item expired before it ran.
+pub const AGENDA_EXPIRED: &str = "kernel.agenda.expired";

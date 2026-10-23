@@ -27,7 +27,7 @@
 //! | [`ProcessStore`], [`ProcessFilter`], [`SpendScope`], [`InMemoryProcessStore`], `SqliteProcessStore`, `PostgresProcessStore`, `RedisProcessStore` | §7.3, §13 Q8 |
 //! | [`Wake`], [`WakeSet`], [`ExpiryAction`], [`WakeSource`], [`WakeEvent`], [`keys`], [`Trigger`], [`WakeRouter`], [`WakeOutcome`], [`KernelWakeExecutor`], the wake source adapters | §7.4 |
 //! | [`KernelEvent`], [`EventRecord`], [`EventBus`], [`EventSubscriber`], [`EventSink`], [`AuditSink`], [`SpendDelta`] | §7.6 |
-//! | [`AgendaItem`], [`AgendaState`], [`AgendaStateKind`], [`AgendaOrigin`], [`PlanRef`], [`AgendaStore`], [`AgendaFilter`], [`InMemoryAgendaStore`], [`ProactivityPolicy`], [`ProactiveApproval`] | §7.5 |
+//! | [`Agenda`], [`AgendaHandle`], [`ProposalOutcome`], [`AgendaItem`], [`AgendaState`], [`AgendaStateKind`], [`AgendaOrigin`], [`PlanRef`], [`AgendaStore`], [`AgendaFilter`], [`InMemoryAgendaStore`], [`ProactivityPolicy`], [`ProactiveApproval`] | §7.5 |
 //! | [`ConsolidationTick`] | §7.5, §13 Q1, Q12 |
 //! | [`QueueClass`], [`QuietHours`], [`Quotas`] | §7.9 |
 //! | [`PartitionId`], [`PartitionMode`] | §7.8 (the phase-1 part) |
@@ -96,8 +96,8 @@ mod supervise;
 pub mod wake;
 
 pub use agenda::{
-    AgendaFilter, AgendaItem, AgendaOrigin, AgendaState, AgendaStateKind, AgendaStore, PlanRef,
-    ProactiveApproval, ProactivityPolicy,
+    AGENDA_TOOL_NAME, Agenda, AgendaFilter, AgendaHandle, AgendaItem, AgendaOrigin, AgendaState,
+    AgendaStateKind, AgendaStore, PlanRef, ProactiveApproval, ProactivityPolicy, ProposalOutcome,
 };
 pub use bus::{
     AuditSink, DEFAULT_EVENT_CAPACITY, EventBus, EventRecord, EventSink, EventSubscriber,

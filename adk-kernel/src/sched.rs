@@ -350,3 +350,385 @@ impl Quotas {
         self
     }
 }
+
+/// How admission treats a claimed process (spec 3.2 §7.9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ProcessClass {
+    /// A human turn: never held by quiet hours or budgets; preempts background work at
+    /// quota.
+    Interactive,
+    /// Goals, triggered and scheduled work: quotas and the partition's daily spend cap.
+    Background,
+    /// Agenda follow-ups and the kernel's maintenance processes: quotas, the spend cap, the
+    /// daily proactive budget and quiet hours.
+    Proactive,
+}
+
+/// What admission reads about a claimed process and its partition (spec 3.2 §7.9).
+#[derive(Debug, Clone)]
+pub(crate) struct AdmissionInput<'a> {
+    pub(crate) class: ProcessClass,
+    /// The run resumes after a decided approval; quiet hours never hold it.
+    pub(crate) approval_woken: bool,
+    pub(crate) now: DateTime<Utc>,
+    pub(crate) quiet_hours: &'a [QuietHours],
+    pub(crate) quotas: &'a Quotas,
+    /// Admitted processes of the partition running now, this one excluded.
+    pub(crate) running: usize,
+    /// Whether one of them runs on the `background` queue and can be preempted.
+    pub(crate) preemptible: bool,
+    /// The partition's spend today, in micro-USD.
+    pub(crate) partition_spent: u64,
+    /// The partition's proactive spend today, in micro-USD.
+    pub(crate) proactive_spent: u64,
+    /// The cost cap of the daily proactive budget.
+    pub(crate) daily_budget: Option<u64>,
+    /// The cost cap of the process's own budget; 0 without one.
+    pub(crate) need: u64,
+}
+
+/// Admission's answer for a claimed process (spec 3.2 §7.9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Admission {
+    /// It may run.
+    Admit,
+    /// Inside quiet hours: it sleeps until they end.
+    QuietHours { until: DateTime<Utc> },
+    /// The day's budget does not cover it: it sleeps until `BudgetReplenished`.
+    Budget,
+    /// The partition runs `max_running` processes: it waits for a slot, and an interactive
+    /// one preempts the youngest background process first.
+    Quota { preempt: bool },
+}
+
+impl Admission {
+    /// The label value a deferred process carries, `None` when admitted.
+    pub(crate) fn reason(self) -> Option<&'static str> {
+        match self {
+            Self::Admit => None,
+            Self::QuietHours { .. } => Some("quiet_hours"),
+            Self::Budget => Some("budget"),
+            Self::Quota { .. } => Some("quota"),
+        }
+    }
+}
+
+/// Whether `spent` plus `need` stays within `cap`; a process with no budget of its own
+/// needs only that something is left.
+fn covers(cap: Option<u64>, spent: u64, need: u64) -> bool {
+    cap.is_none_or(|cap| spent.saturating_add(need.max(1)) <= cap)
+}
+
+/// Decides whether a claimed process starts now (spec 3.2 §7.9, K-I11): quiet hours first,
+/// then the daily budgets, then the partition's running quota.
+pub(crate) fn admit(input: &AdmissionInput<'_>) -> Admission {
+    if input.class == ProcessClass::Proactive && !input.approval_woken {
+        let mut until = input.now;
+        // A window may end inside another; settle on an instant outside every one.
+        for _ in 0..=input.quiet_hours.len() {
+            let next = input
+                .quiet_hours
+                .iter()
+                .map(|quiet| quiet.release_at(until))
+                .max()
+                .unwrap_or(until);
+            if next == until {
+                break;
+            }
+            until = next;
+        }
+        if until > input.now {
+            return Admission::QuietHours { until };
+        }
+    }
+    if input.class != ProcessClass::Interactive {
+        let within_cap = covers(input.quotas.daily_spend_cap, input.partition_spent, input.need);
+        let within_budget = input.class != ProcessClass::Proactive
+            || covers(input.daily_budget, input.proactive_spent, input.need);
+        if !within_cap || !within_budget {
+            return Admission::Budget;
+        }
+    }
+    if input.quotas.max_running.is_some_and(|max| input.running >= max) {
+        return Admission::Quota {
+            preempt: input.class == ProcessClass::Interactive && input.preemptible,
+        };
+    }
+    Admission::Admit
+}
+
+/// The process an interactive one preempts (spec 3.2 §7.9): the youngest running process on
+/// the `background` queue, by creation time and then id.
+pub(crate) fn youngest_background<'a>(
+    candidates: impl IntoIterator<Item = (&'a str, DateTime<Utc>)>,
+) -> Option<&'a str> {
+    candidates
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)))
+        .map(|(pid, _)| pid)
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use chrono::TimeZone;
+    use proptest::prelude::*;
+
+    use super::*;
+
+    fn at(hour: u32, minute: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 10, 23, hour, minute, 0).unwrap()
+    }
+
+    fn input<'a>(
+        class: ProcessClass,
+        quiet: &'a [QuietHours],
+        quotas: &'a Quotas,
+    ) -> AdmissionInput<'a> {
+        AdmissionInput {
+            class,
+            approval_woken: false,
+            now: at(12, 0),
+            quiet_hours: quiet,
+            quotas,
+            running: 0,
+            preemptible: false,
+            partition_spent: 0,
+            proactive_spent: 0,
+            daily_budget: None,
+            need: 0,
+        }
+    }
+
+    fn night() -> QuietHours {
+        "22:00-07:00".parse::<QuietHours>().unwrap().with_utc_offset_minutes(0)
+    }
+
+    #[test]
+    fn the_admission_table() {
+        let quiet = [night()];
+        let quotas = Quotas::new().with_max_running(3).with_daily_spend_cap(1_000);
+        let base = |class| input(class, &quiet, &quotas);
+
+        // Free partition, daytime: everything runs.
+        for class in [ProcessClass::Interactive, ProcessClass::Background, ProcessClass::Proactive]
+        {
+            assert_eq!(admit(&base(class)), Admission::Admit, "{class:?}");
+        }
+        // Quiet hours hold proactive work only, and never an approval-woken run.
+        let mut late = base(ProcessClass::Proactive);
+        late.now = at(23, 0);
+        assert_eq!(
+            admit(&late),
+            Admission::QuietHours { until: Utc.with_ymd_and_hms(2026, 10, 24, 7, 0, 0).unwrap() }
+        );
+        late.approval_woken = true;
+        assert_eq!(admit(&late), Admission::Admit);
+        for class in [ProcessClass::Interactive, ProcessClass::Background] {
+            let mut late = base(class);
+            late.now = at(23, 0);
+            assert_eq!(admit(&late), Admission::Admit, "{class:?}");
+        }
+        // Partition at quota: background and proactive wait; interactive preempts when it can.
+        for class in [ProcessClass::Background, ProcessClass::Proactive] {
+            let mut full = base(class);
+            full.running = 3;
+            full.preemptible = true;
+            assert_eq!(admit(&full), Admission::Quota { preempt: false }, "{class:?}");
+        }
+        let mut full = base(ProcessClass::Interactive);
+        full.running = 3;
+        assert_eq!(admit(&full), Admission::Quota { preempt: false }, "nothing to preempt");
+        full.preemptible = true;
+        assert_eq!(admit(&full), Admission::Quota { preempt: true });
+        // Spend cap: a background run whose budget the rest of the day does not cover waits.
+        let mut spent = base(ProcessClass::Background);
+        spent.partition_spent = 900;
+        spent.need = 100;
+        assert_eq!(admit(&spent), Admission::Admit, "exactly covered");
+        spent.need = 101;
+        assert_eq!(admit(&spent), Admission::Budget);
+        spent.need = 0;
+        spent.partition_spent = 1_000;
+        assert_eq!(admit(&spent), Admission::Budget, "budget exhausted");
+        let mut human = base(ProcessClass::Interactive);
+        human.partition_spent = 5_000;
+        assert_eq!(admit(&human), Admission::Admit, "a human turn is never held by spend");
+        // Daily proactive budget: proactive only.
+        let mut proactive = base(ProcessClass::Proactive);
+        proactive.daily_budget = Some(500);
+        proactive.proactive_spent = 450;
+        proactive.need = 60;
+        assert_eq!(admit(&proactive), Admission::Budget);
+        let mut background = base(ProcessClass::Background);
+        background.daily_budget = Some(500);
+        background.proactive_spent = 450;
+        background.need = 60;
+        assert_eq!(admit(&background), Admission::Admit, "the proactive budget is not the cap");
+    }
+
+    #[test]
+    fn overlapping_windows_release_outside_both() {
+        let quiet = [
+            "22:00-02:00".parse::<QuietHours>().unwrap().with_utc_offset_minutes(0),
+            "01:00-06:30".parse::<QuietHours>().unwrap().with_utc_offset_minutes(0),
+        ];
+        let quotas = Quotas::new();
+        let mut late = input(ProcessClass::Proactive, &quiet, &quotas);
+        late.now = at(23, 0);
+        assert_eq!(
+            admit(&late),
+            Admission::QuietHours { until: Utc.with_ymd_and_hms(2026, 10, 24, 6, 30, 0).unwrap() }
+        );
+    }
+
+    #[test]
+    fn preemption_takes_the_youngest_background_run() {
+        let runs =
+            [("run-a", at(9, 0)), ("run-c", at(11, 0)), ("run-b", at(11, 0)), ("run-d", at(8, 0))];
+        assert_eq!(youngest_background(runs), Some("run-c"));
+        assert_eq!(youngest_background(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn quiet_hours_boundaries() {
+        let quiet = night();
+        assert!(quiet.contains(at(22, 0)), "the start is inside");
+        assert!(
+            !quiet.contains(Utc.with_ymd_and_hms(2026, 10, 24, 7, 0, 0).unwrap()),
+            "the end is outside"
+        );
+        assert!(!quiet.contains(at(21, 59)));
+        let empty = "09:00-09:00".parse::<QuietHours>().unwrap().with_utc_offset_minutes(0);
+        assert!(!empty.contains(at(9, 0)), "equal times make no window");
+        let east = "22:00-07:00".parse::<QuietHours>().unwrap().with_utc_offset_minutes(180);
+        assert!(east.contains(at(20, 0)), "23:00 at UTC+3");
+        assert_eq!(
+            east.release_at(at(20, 0)),
+            Utc.with_ymd_and_hms(2026, 10, 24, 4, 0, 0).unwrap()
+        );
+        assert!("22-07".parse::<QuietHours>().is_err());
+    }
+
+    fn class() -> impl Strategy<Value = ProcessClass> {
+        prop_oneof![
+            Just(ProcessClass::Interactive),
+            Just(ProcessClass::Background),
+            Just(ProcessClass::Proactive)
+        ]
+    }
+
+    #[derive(Debug, Clone)]
+    enum Step {
+        Claim { class: ProcessClass, need: u64 },
+        Finish(usize),
+        NextDay,
+    }
+
+    fn step() -> impl Strategy<Value = Step> {
+        prop_oneof![
+            4 => (class(), 0u64..400).prop_map(|(class, need)| Step::Claim { class, need }),
+            2 => (0usize..8).prop_map(Step::Finish),
+            1 => Just(Step::NextDay),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// Admission never lets a partition run more than `max_running` processes, nor
+        /// spend past its cap or its daily proactive budget, whatever arrives in what order;
+        /// each admitted process spends at most its budget's cost cap.
+        #[test]
+        fn admission_never_exceeds_quota_or_budget(
+            max_running in 1usize..5,
+            cap in 0u64..2_000,
+            budget in 0u64..1_500,
+            steps in proptest::collection::vec(step(), 1..80),
+        ) {
+            let quotas = Quotas::new().with_max_running(max_running).with_daily_spend_cap(cap);
+            let mut running: Vec<ProcessClass> = Vec::new();
+            let (mut background_spent, mut proactive_spent) = (0u64, 0u64);
+            for step in steps {
+                match step {
+                    Step::Claim { class, need } => {
+                        let decision = admit(&AdmissionInput {
+                            class,
+                            approval_woken: false,
+                            now: at(12, 0),
+                            quiet_hours: &[],
+                            quotas: &quotas,
+                            running: running.len(),
+                            preemptible: running.contains(&ProcessClass::Background),
+                            partition_spent: background_spent + proactive_spent,
+                            proactive_spent,
+                            daily_budget: Some(budget),
+                            need,
+                        });
+                        match decision {
+                            Admission::Admit => {
+                                running.push(class);
+                                match class {
+                                    ProcessClass::Background => background_spent += need,
+                                    ProcessClass::Proactive => proactive_spent += need,
+                                    ProcessClass::Interactive => {}
+                                }
+                            }
+                            Admission::Quota { preempt: true } => {
+                                // The youngest background run parks, then the slot is taken.
+                                let victim = running.iter().rposition(|c| *c == ProcessClass::Background);
+                                prop_assert!(victim.is_some());
+                                running.remove(victim.unwrap());
+                            }
+                            Admission::Quota { preempt: false } | Admission::Budget => {}
+                            Admission::QuietHours { .. } => prop_assert!(false, "no quiet hours set"),
+                        }
+                    }
+                    Step::Finish(index) => {
+                        if !running.is_empty() {
+                            running.remove(index % running.len());
+                        }
+                    }
+                    Step::NextDay => {
+                        background_spent = 0;
+                        proactive_spent = 0;
+                    }
+                }
+                prop_assert!(running.len() <= max_running, "{} running of {max_running}", running.len());
+                prop_assert!(background_spent + proactive_spent <= cap);
+                prop_assert!(proactive_spent <= budget);
+            }
+        }
+
+        /// No proactive process is admitted inside quiet hours, and its release time lies
+        /// outside them; interactive and approval-woken runs are never held by them.
+        #[test]
+        fn no_proactive_process_starts_inside_quiet_hours(
+            start in 0u32..24 * 60,
+            end in 0u32..24 * 60,
+            offset in -12i32 * 60..14 * 60,
+            minute in 0i64..3 * 24 * 60,
+            class in class(),
+            approval_woken in any::<bool>(),
+        ) {
+            let time = |m: u32| NaiveTime::from_hms_opt(m / 60, m % 60, 0).unwrap();
+            let quiet = [QuietHours::new(time(start), time(end)).with_utc_offset_minutes(offset)];
+            let quotas = Quotas::new();
+            let now = at(0, 0) + chrono::Duration::minutes(minute);
+            let mut probe = input(class, &quiet, &quotas);
+            probe.now = now;
+            probe.approval_woken = approval_woken;
+            let decision = admit(&probe);
+            let held = class == ProcessClass::Proactive && !approval_woken && quiet[0].contains(now);
+            match decision {
+                Admission::Admit => prop_assert!(!held),
+                Admission::QuietHours { until } => {
+                    prop_assert!(held);
+                    prop_assert!(until > now);
+                    prop_assert!(!quiet[0].contains(until));
+                    prop_assert!(until - now <= chrono::Duration::days(1));
+                }
+                other => prop_assert!(false, "unexpected {other:?}"),
+            }
+        }
+    }
+}

@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind, AuditTrail};
+use adk_core::principal::SubjectRef;
 use adk_core::{
     Clock, DurableRunStore, GovernanceControl, Part, RunCheckpointRef, RunFilter, RunRecord,
     RunState, SpendKey,
@@ -17,13 +18,18 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
+use crate::agenda::{AgendaItem, AgendaState, AgendaStore, ProactivityPolicy};
 use crate::audit;
 use crate::bus::{EventBus, KernelEvent, SpendDelta};
 use crate::partition::PartitionId;
 use crate::process::{ProcessKind, ProcessMeta, ProgressSource, RunUsage, Suspension};
 use crate::sched::QueueClass;
+use crate::sched::{
+    Admission, AdmissionInput, ProcessClass, QuietHours, Quotas, admit, youngest_background,
+};
 use crate::stores::{ProcessFilter, ProcessStore};
 use crate::wake::KERNEL_WAKE_TARGET;
+use crate::wake::{Wake, WakeSet};
 
 /// The target `adk-harness` runs goals under (`adk_harness::GOAL_TARGET`); the kernel names
 /// it without depending on the harness (spec 3.2 §6 D-1).
@@ -58,6 +64,10 @@ pub(crate) fn asleep_at_claim(run: &RunRecord, stored: Option<&ProcessMeta>) -> 
         }
     }
 }
+
+/// How often, and how many times, a claim waits for the row of a run `spawn` enqueued.
+const SPAWN_ROW_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+const SPAWN_ROW_POLLS: usize = 50;
 
 /// How many spend samples a running process keeps for its burn rate.
 const SAMPLES: usize = 64;
@@ -103,6 +113,17 @@ pub(crate) struct Supervision {
     pub(crate) watched: Mutex<BTreeMap<PathBuf, tokio::task::JoinHandle<()>>>,
     /// The kernel's clock ([`KernelConfig::clock`](crate::KernelConfig::clock)).
     pub(crate) clock: Arc<dyn Clock>,
+    /// Every partition's proactivity limits (spec 3.2 §7.5).
+    pub(crate) proactivity: ProactivityPolicy,
+    /// The kernel's quiet hours, beside the proactivity policy's (spec 3.2 §7.2, §7.9).
+    pub(crate) quiet_hours: Option<QuietHours>,
+    /// Every partition's quotas (spec 3.2 §7.9).
+    pub(crate) quotas: Quotas,
+    /// The agenda's items (spec 3.2 §7.5).
+    pub(crate) agenda: Arc<dyn AgendaStore>,
+    /// Serializes admission decisions on this replica, so two claims never both take the
+    /// partition's last slot.
+    pub(crate) admission: tokio::sync::Mutex<()>,
 }
 
 impl std::fmt::Debug for Supervision {
@@ -430,6 +451,480 @@ impl Supervision {
     }
 }
 
+/// The label a process deferred by admission carries: `quiet_hours`, `budget` or `quota`
+/// (spec 3.2 §7.9).
+pub(crate) const ADMISSION_LABEL: &str = "kernel.admission";
+
+/// Whether `run` is one of the kernel's own `kernel.wake` runs, which admission never
+/// counts or holds.
+fn is_wake_run(run: &RunRecord) -> bool {
+    run.target == KERNEL_WAKE_TARGET
+}
+
+/// How admission treats a process (spec 3.2 §7.9): a human turn on the `interactive`
+/// queue; agenda follow-ups and the kernel's maintenance processes as proactive; the rest
+/// as background.
+pub(crate) fn class_of(run: &RunRecord, meta: &ProcessMeta) -> ProcessClass {
+    match meta.kind {
+        ProcessKind::Interactive => ProcessClass::Interactive,
+        ProcessKind::Proposed | ProcessKind::Maintenance => ProcessClass::Proactive,
+        _ if run.queue == QueueClass::INTERACTIVE => ProcessClass::Interactive,
+        _ => ProcessClass::Background,
+    }
+}
+
+impl Supervision {
+    /// The partition's spend today, in micro-USD, from the kernel's daily totals.
+    pub(crate) async fn partition_spent(&self, partition: &PartitionId) -> u64 {
+        let today = self.clock.now().date_naive();
+        let scope = crate::stores::SpendScope::Partition(partition.clone());
+        self.processes.spend(&scope, today, today).await.unwrap_or_else(|error| {
+            tracing::warn!(partition = %partition, error = %error, "could not read the partition's spend; treating it as spent");
+            u64::MAX
+        })
+    }
+
+    /// The partition's proactive spend today: the daily totals of its agenda and maintenance
+    /// processes, in micro-USD.
+    pub(crate) async fn proactive_spent(&self, partition: &PartitionId) -> u64 {
+        let today = self.clock.now().date_naive();
+        let metas = match self
+            .processes
+            .list(&ProcessFilter::default().partition(partition.clone()))
+            .await
+        {
+            Ok(metas) => metas,
+            Err(error) => {
+                tracing::warn!(partition = %partition, error = %error, "could not list the partition's processes; treating its budget as spent");
+                return u64::MAX;
+            }
+        };
+        let mut total = 0u64;
+        for meta in metas
+            .iter()
+            .filter(|meta| matches!(meta.kind, ProcessKind::Proposed | ProcessKind::Maintenance))
+        {
+            let scope = crate::stores::SpendScope::Process(meta.pid.clone());
+            match self.processes.spend(&scope, today, today).await {
+                Ok(spent) => total = total.saturating_add(spent),
+                Err(error) => {
+                    tracing::warn!(process.pid = %meta.pid, error = %error, "could not read a process's spend; treating the budget as spent");
+                    return u64::MAX;
+                }
+            }
+        }
+        total
+    }
+
+    /// The processes of `partition` queued on the kernel's queues, its `kernel.wake` runs
+    /// aside (spec 3.2 §7.9 `max_queued`).
+    pub(crate) async fn queued_in(&self, partition: &PartitionId) -> usize {
+        let mut queued = 0;
+        for queue in &self.queues {
+            let filter = RunFilter::default().queue(queue.as_str()).states([RunState::Queued]);
+            let Ok(runs) = self.runs.list(filter).await else { continue };
+            for run in runs.iter().filter(|run| !is_wake_run(run)) {
+                let meta = self.stored_meta(run).await.unwrap_or_else(|| Self::infer_meta(run));
+                if meta.partition == *partition {
+                    queued += 1;
+                }
+            }
+        }
+        queued
+    }
+
+    /// The cost cap of the daily proactive budget.
+    fn daily_budget_cost(&self) -> Option<u64> {
+        self.proactivity.daily_budget.max_cost_micro_usd
+    }
+
+    /// Every quiet-hours window that applies: the kernel's and the proactivity policy's.
+    fn quiet_windows(&self) -> Vec<QuietHours> {
+        self.quiet_hours.iter().chain(self.proactivity.quiet_hours.iter()).copied().collect()
+    }
+
+    /// The admitted processes of `partition` running now, `except` excluded: their run is
+    /// `Running`, it is not a `kernel.wake` run, and it is not on its way to park. Returns
+    /// their count and the `background` ones a human turn may preempt, with their creation
+    /// time.
+    async fn admitted(
+        &self,
+        partition: &PartitionId,
+        except: &str,
+    ) -> (usize, Vec<(String, DateTime<Utc>)>) {
+        let mut count = 0;
+        let mut background = Vec::new();
+        for run in self.running().await {
+            if run.run_id == except || is_wake_run(&run) {
+                continue;
+            }
+            let meta = self.stored_meta(&run).await.unwrap_or_else(|| Self::infer_meta(&run));
+            if meta.partition != *partition
+                || meta.wake.is_some()
+                || meta.suspend_requested
+                || meta.suspended_by.is_some()
+            {
+                continue;
+            }
+            count += 1;
+            if run.queue == QueueClass::BACKGROUND {
+                background.push((run.run_id.clone(), run.created_at));
+            }
+        }
+        (count, background)
+    }
+
+    /// The cost cap of the budget of the agenda item `meta` runs; 0 without one.
+    async fn item_need(&self, meta: &ProcessMeta) -> u64 {
+        let Some(id) = &meta.agenda_item else { return 0 };
+        match self.agenda.get(id).await {
+            Ok(Some(item)) => item.budget.and_then(|budget| budget.max_cost_micro_usd).unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    /// Admits the claimed `run` or defers it (spec 3.2 §7.9, K-I11): a deferred process gets
+    /// a wake set — the end of quiet hours, its partition's `BudgetReplenished`, or a slot —
+    /// and the [`ADMISSION_LABEL`], written before the gate is released, and parks at its
+    /// first model-call boundary. An interactive process that finds its partition at quota
+    /// preempts the youngest background process first.
+    pub(crate) async fn admit_claim(&self, run: &RunRecord, meta: &mut ProcessMeta) -> Admission {
+        if is_wake_run(run) {
+            return Admission::Admit;
+        }
+        let class = class_of(run, meta);
+        let quiet = self.quiet_windows();
+        let _gate = self.admission.lock().await;
+        let (running, background) = self.admitted(&meta.partition, &run.run_id).await;
+        let budgeted = class != ProcessClass::Interactive
+            && (self.quotas.daily_spend_cap.is_some()
+                || (class == ProcessClass::Proactive && self.daily_budget_cost().is_some()));
+        let (partition_spent, proactive_spent, need) = if budgeted {
+            (
+                self.partition_spent(&meta.partition).await,
+                if class == ProcessClass::Proactive {
+                    self.proactive_spent(&meta.partition).await
+                } else {
+                    0
+                },
+                self.item_need(meta).await,
+            )
+        } else {
+            (0, 0, 0)
+        };
+        let decision = admit(&AdmissionInput {
+            class,
+            approval_woken: matches!(
+                run.checkpoint,
+                Some(RunCheckpointRef::AwaitingApproval { .. })
+            ),
+            now: self.clock.now(),
+            quiet_hours: &quiet,
+            quotas: &self.quotas,
+            running,
+            preemptible: !background.is_empty(),
+            partition_spent,
+            proactive_spent,
+            daily_budget: self.daily_budget_cost(),
+            need,
+        });
+        let wake = match decision {
+            Admission::Admit => {
+                if meta.labels.remove(ADMISSION_LABEL).is_some() {
+                    self.put_meta(meta.clone()).await;
+                }
+                return decision;
+            }
+            Admission::QuietHours { until } => Wake::At(until),
+            Admission::Budget => Wake::BudgetReplenished { partition: meta.partition.clone() },
+            Admission::Quota { preempt } => {
+                if preempt
+                    && let Some(victim) =
+                        youngest_background(background.iter().map(|(pid, at)| (pid.as_str(), *at)))
+                {
+                    self.preempt(victim, &run.run_id).await;
+                }
+                Wake::Manual
+            }
+        };
+        meta.wake = Some(WakeSet::any_of([wake]));
+        if let Some(reason) = decision.reason() {
+            meta.labels.insert(ADMISSION_LABEL.to_string(), reason.to_string());
+        }
+        self.put_meta(meta.clone()).await;
+        self.suspend_local(&run.run_id);
+        tracing::info!(process.pid = %run.run_id, admission = ?decision, "process deferred by admission");
+        decision
+    }
+
+    /// Suspends `victim` at its next checkpoint for `by`, an interactive process (spec 3.2
+    /// §7.9): `Waiting` with [`Suspension::Preempted`] and a `RunFinished` wake on `by`, so it
+    /// is requeued when `by` finishes.
+    async fn preempt(&self, victim: &str, by: &str) {
+        let Ok(Some(run)) = self.runs.get(victim).await else { return };
+        let mut meta = self.stored_meta(&run).await.unwrap_or_else(|| Self::infer_meta(&run));
+        meta.suspended_by = Some(Suspension::Preempted { by: by.to_string() });
+        meta.wake = Some(WakeSet::any_of([Wake::RunFinished { pid: by.to_string() }]));
+        meta.suspend_requested = true;
+        self.put_meta(meta).await;
+        // Another replica's worker leases it otherwise; its mirror reads the request.
+        self.suspend_local(victim);
+        tracing::info!(process.pid = victim, preempted.by = by, "background process preempted");
+    }
+
+    /// Requeues the processes `by` preempted, now that it finished (spec 3.2 §7.9).
+    pub(crate) async fn requeue_preempted(&self, by: Option<&str>) {
+        let metas = match self.processes.list(&ProcessFilter::default()).await {
+            Ok(metas) => metas,
+            Err(error) => {
+                tracing::debug!(error = %error, "could not list preempted processes");
+                return;
+            }
+        };
+        let mut woken = 0;
+        for mut meta in metas {
+            let Some(Suspension::Preempted { by: preemptor }) = &meta.suspended_by else {
+                continue;
+            };
+            let finished = match by {
+                Some(by) => preemptor == by,
+                None => match self.runs.get(preemptor).await {
+                    Ok(Some(run)) => run.state.is_terminal(),
+                    Ok(None) => true,
+                    Err(_) => false,
+                },
+            };
+            if !finished {
+                continue;
+            }
+            let Ok(Some(run)) = self.runs.get(&meta.pid).await else { continue };
+            if run.state != RunState::Waiting {
+                continue;
+            }
+            let preemptor = preemptor.clone();
+            meta.suspended_by = None;
+            meta.wake = None;
+            meta.suspend_requested = false;
+            self.put_meta(meta.clone()).await;
+            match self.runs.wake(&meta.pid).await {
+                Ok(()) => {
+                    woken += 1;
+                    self.record(
+                        audit::PROCESS_REQUEUED,
+                        self.actor_for(Some(&run)),
+                        Self::process_fields(&meta, Some("preemptor finished"), Some(&preemptor)),
+                    )
+                    .await;
+                }
+                Err(error) => {
+                    tracing::warn!(process.pid = %meta.pid, error = %error, "could not requeue a preempted process")
+                }
+            }
+        }
+        if woken > 0 {
+            self.nudge();
+        }
+    }
+
+    /// Wakes the processes admission holds for a slot, while their partition has one: a
+    /// human turn first, then oldest first (spec 3.2 §7.9).
+    pub(crate) async fn admit_waiters(&self) {
+        let metas = match self.processes.list(&ProcessFilter::default()).await {
+            Ok(metas) => metas,
+            Err(error) => {
+                tracing::debug!(error = %error, "could not list processes waiting for a slot");
+                return;
+            }
+        };
+        let mut waiting: BTreeMap<PartitionId, Vec<(ProcessMeta, RunRecord)>> = BTreeMap::new();
+        for meta in metas {
+            if meta.labels.get(ADMISSION_LABEL).map(String::as_str) != Some("quota")
+                || meta.suspended_by.is_some()
+            {
+                continue;
+            }
+            let Ok(Some(run)) = self.runs.get(&meta.pid).await else { continue };
+            if run.state == RunState::Waiting {
+                waiting.entry(meta.partition.clone()).or_default().push((meta, run));
+            }
+        }
+        let mut woken = 0;
+        for (partition, mut waiters) in waiting {
+            let _gate = self.admission.lock().await;
+            let (running, _) = self.admitted(&partition, "").await;
+            let free =
+                self.quotas.max_running.map_or(usize::MAX, |max| max.saturating_sub(running));
+            waiters.sort_by(|(a, x), (b, y)| {
+                let human = |meta: &ProcessMeta, run: &RunRecord| {
+                    class_of(run, meta) != ProcessClass::Interactive
+                };
+                human(a, x)
+                    .cmp(&human(b, y))
+                    .then(x.created_at.cmp(&y.created_at))
+                    .then(x.run_id.cmp(&y.run_id))
+            });
+            for (mut meta, run) in waiters.into_iter().take(free) {
+                meta.wake = None;
+                meta.labels.remove(ADMISSION_LABEL);
+                self.put_meta(meta.clone()).await;
+                match self.runs.wake(&run.run_id).await {
+                    Ok(()) => woken += 1,
+                    Err(error) => {
+                        tracing::warn!(process.pid = %run.run_id, error = %error, "could not wake a process waiting for a slot")
+                    }
+                }
+            }
+        }
+        if woken > 0 {
+            self.nudge();
+        }
+    }
+
+    /// The partitions with processes asleep on `BudgetReplenished` whose budget has room
+    /// again (spec 3.2 §7.9): a new UTC day, or a cap raised.
+    pub(crate) async fn replenished_partitions(&self) -> Vec<PartitionId> {
+        let metas = match self.processes.list(&ProcessFilter::default()).await {
+            Ok(metas) => metas,
+            Err(_) => return Vec::new(),
+        };
+        let mut partitions: BTreeMap<PartitionId, (bool, u64)> = BTreeMap::new();
+        for meta in &metas {
+            let Some(wake) = &meta.wake else { continue };
+            for wake in &wake.any_of {
+                if let Wake::BudgetReplenished { partition } = wake {
+                    let proactive =
+                        matches!(meta.kind, ProcessKind::Proposed | ProcessKind::Maintenance);
+                    let entry = partitions.entry(partition.clone()).or_insert((false, u64::MAX));
+                    entry.0 |= proactive;
+                    entry.1 = entry.1.min(self.item_need(meta).await);
+                }
+            }
+        }
+        let mut replenished = Vec::new();
+        for (partition, (proactive, need)) in partitions {
+            // Without a cap there is nothing to replenish: such a sleeper waits on its other
+            // wakes.
+            let budget = if proactive { self.daily_budget_cost() } else { None };
+            if self.quotas.daily_spend_cap.is_none() && budget.is_none() {
+                continue;
+            }
+            let fits = |cap: Option<u64>, spent: u64| {
+                cap.is_none_or(|cap| spent.saturating_add(need.max(1)) <= cap)
+            };
+            let mut room =
+                fits(self.quotas.daily_spend_cap, self.partition_spent(&partition).await);
+            if budget.is_some() {
+                room &= fits(budget, self.proactive_spent(&partition).await);
+            }
+            if room {
+                replenished.push(partition);
+            }
+        }
+        replenished
+    }
+
+    /// Moves the stored `item` from a state of `from`'s kind to `item.state`, then publishes
+    /// the change and writes its audit record; `false` when another writer moved it first
+    /// (spec 3.2 §7.5, §9.3).
+    pub(crate) async fn move_item(
+        &self,
+        item: &AgendaItem,
+        from: &AgendaState,
+        reason: Option<&str>,
+        by: Option<&SubjectRef>,
+    ) -> crate::error::Result<bool> {
+        if !self.agenda.transition(item.clone(), from.kind()).await? {
+            return Ok(false);
+        }
+        self.agenda_changed(item, from, reason, by).await;
+        Ok(true)
+    }
+
+    /// Publishes an agenda change and writes the audit record its new state has.
+    pub(crate) async fn agenda_changed(
+        &self,
+        item: &AgendaItem,
+        from: &AgendaState,
+        reason: Option<&str>,
+        by: Option<&SubjectRef>,
+    ) {
+        self.publish(KernelEvent::Agenda {
+            item: item.id.clone(),
+            from: from.clone(),
+            to: item.state.clone(),
+            reason: reason.map(str::to_string),
+        });
+        let action = match (&item.state, from) {
+            (AgendaState::Proposed, AgendaState::Proposed) => Some(audit::AGENDA_PROPOSED),
+            (AgendaState::Approved, _) => Some(audit::AGENDA_APPROVED),
+            (AgendaState::Rejected, _) => Some(audit::AGENDA_REJECTED),
+            (AgendaState::Scheduled { .. }, _) => Some(audit::AGENDA_SCHEDULED),
+            (AgendaState::Expired, _) => Some(audit::AGENDA_EXPIRED),
+            _ => None,
+        };
+        if let Some(action) = action {
+            let mut actor = match by {
+                Some(subject) => AuditActor::subject(subject.clone()),
+                None => AuditActor::default(),
+            };
+            actor.instance = Some(self.kernel_id.clone());
+            let budget = item.budget.as_ref().map(|budget| {
+                json!({
+                    "maxModelCalls": budget.max_model_calls,
+                    "maxTotalTokens": budget.max_total_tokens,
+                    "maxCostMicroUsd": budget.max_cost_micro_usd,
+                })
+            });
+            self.record(
+                action,
+                actor,
+                json!({
+                    "item": item.id,
+                    "partition": item.partition,
+                    "origin": item.origin.to_string(),
+                    "by": by.map(|subject| subject.id.clone()).unwrap_or_else(|| "kernel".to_string()),
+                    "budget": budget,
+                    "reason": reason,
+                }),
+            )
+            .await;
+        }
+    }
+
+    /// Marks the agenda item `meta` runs `Running` once its process is admitted.
+    pub(crate) async fn item_started(&self, meta: &ProcessMeta) {
+        let Some(id) = &meta.agenda_item else { return };
+        let Ok(Some(item)) = self.agenda.get(id).await else { return };
+        if !matches!(item.state, AgendaState::Scheduled { .. }) {
+            return;
+        }
+        let from = item.state.clone();
+        let next = item.with_state(AgendaState::Running { pid: meta.pid.clone() });
+        if let Err(error) = self.move_item(&next, &from, Some("admitted"), None).await {
+            tracing::warn!(agenda.item = %id, error = %error, "could not mark an agenda item running");
+        }
+    }
+
+    /// Marks the agenda item `meta` ran `Done` once its process finished.
+    pub(crate) async fn item_finished(&self, meta: &ProcessMeta, state: RunState) {
+        let Some(id) = &meta.agenda_item else { return };
+        let Ok(Some(item)) = self.agenda.get(id).await else { return };
+        if !matches!(item.state, AgendaState::Scheduled { .. } | AgendaState::Running { .. }) {
+            return;
+        }
+        let from = item.state.clone();
+        let state = serde_json::to_value(state)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        let reason = format!("process {} {state}", meta.pid);
+        let next = item.with_state(AgendaState::Done);
+        if let Err(error) = self.move_item(&next, &from, Some(&reason), None).await {
+            tracing::warn!(agenda.item = %id, error = %error, "could not mark an agenda item done");
+        }
+    }
+}
+
 /// The model and tool calls of one process, read from its session (spec 3.2 §7.3, §7.10).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct TranscriptCounts {
@@ -523,7 +1018,18 @@ impl std::fmt::Debug for KernelHooks {
 impl WorkerHooks for KernelHooks {
     async fn on_claim(&self, run: &RunRecord) {
         let sup = &self.sup;
-        let stored = sup.stored_meta(run).await;
+        let mut stored = sup.stored_meta(run).await;
+        if stored.is_none() && spawned_by_kernel(run) && !asleep_at_claim(run, None) {
+            // `spawn` writes the row right after the enqueue this claim may have overtaken;
+            // admission needs the row's kind and partition, so wait for it briefly.
+            for _ in 0..SPAWN_ROW_POLLS {
+                tokio::time::sleep(SPAWN_ROW_POLL).await;
+                stored = sup.stored_meta(run).await;
+                if stored.is_some() {
+                    break;
+                }
+            }
+        }
         let persisted = stored.is_some();
         let asleep = asleep_at_claim(run, stored.as_ref());
         let mut meta = stored.unwrap_or_else(|| Supervision::infer_meta(run));
@@ -535,16 +1041,28 @@ impl WorkerHooks for KernelHooks {
         // A run `spawn` enqueued gets its row from `spawn`, which may still be writing it; an
         // inferred row written here could replace it.
         let mut changed = !persisted && !spawned_by_kernel(run);
+        let mut admitted = false;
         if asleep || meta.suspend_requested || sup.draining.load(Ordering::SeqCst) {
             // A sleeper, a suspension asked while it queued, or a drain: the attempt parks
             // at its first model-call boundary.
             sup.suspend_local(&run.run_id);
-        } else if persisted {
-            // Woken, or its suspension lifted: the wake set is already consumed.
-            changed |= meta.suspended_by.take().is_some();
+        } else {
+            if persisted {
+                // Woken, or its suspension lifted: the wake set is already consumed.
+                changed |= meta.suspended_by.take().is_some();
+            }
+            if changed {
+                sup.put_meta(meta.clone()).await;
+                changed = false;
+            }
+            // Admission (spec 3.2 §7.9) writes the row itself when it defers the process.
+            admitted = sup.admit_claim(run, &mut meta).await == Admission::Admit;
         }
         if changed {
             sup.put_meta(meta.clone()).await;
+        }
+        if admitted {
+            sup.item_started(&meta).await;
         }
         let baseline = match &sup.progress {
             Some(progress) => progress.usage(run).await.ok().flatten(),
@@ -624,6 +1142,10 @@ impl WorkerHooks for KernelHooks {
             )
             .await;
         }
+        // A slot may have freed in the partition (spec 3.2 §7.9).
+        if sup.quotas.max_running.is_some() {
+            sup.admit_waiters().await;
+        }
     }
 
     async fn on_finish(&self, run: &RunRecord) {
@@ -654,6 +1176,17 @@ impl WorkerHooks for KernelHooks {
             to: run.state,
             reason: run.error.clone(),
         });
+        if run.state.is_terminal() && run.target != KERNEL_WAKE_TARGET {
+            // The processes this one preempted go back to their queue, and a slot freed
+            // (spec 3.2 §7.9); the item this one ran is done (§7.5).
+            sup.requeue_preempted(Some(&run.run_id)).await;
+            if sup.quotas.max_running.is_some() {
+                sup.admit_waiters().await;
+            }
+            if let Some(meta) = sup.stored_meta(run).await {
+                sup.item_finished(&meta, run.state).await;
+            }
+        }
         #[cfg(feature = "proc")]
         if let Some(sessions) = &sup.sessions
             && run.state.is_terminal()

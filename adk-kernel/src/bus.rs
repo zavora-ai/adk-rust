@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::{Notify, broadcast};
 
+use crate::agenda::AgendaState;
 use crate::error::Result;
 use crate::kernel::KernelHealth;
 use crate::partition::PartitionId;
@@ -118,6 +119,19 @@ pub enum KernelEvent {
         /// How much.
         delta: SpendDelta,
     },
+    /// An agenda item changed state (spec 3.2 §7.5); a proposal the policy refused is
+    /// published `proposed` → `rejected` with the reason, though it was never stored.
+    Agenda {
+        /// The item.
+        item: String,
+        /// The state it left.
+        from: AgendaState,
+        /// The state it entered.
+        to: AgendaState,
+        /// Why, such as the limit a refused proposal would exceed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     /// The kill switch changed.
     Governance {
         /// Whether execution is frozen.
@@ -140,6 +154,7 @@ impl KernelEvent {
             Self::Decided { .. } => "decided",
             Self::RuleHit { .. } => "ruleHit",
             Self::Spend { .. } => "spend",
+            Self::Agenda { .. } => "agenda",
             Self::Governance { .. } => "governance",
             Self::Health(_) => "health",
         }

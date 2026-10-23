@@ -29,6 +29,12 @@ pub const STORE_CODE: &str = "kernel.store";
 pub const CONTROL_PLANE_CODE: &str = "kernel.control_plane";
 /// Error code of [`KernelError::Unauthorized`].
 pub const UNAUTHORIZED_CODE: &str = "kernel.unauthorized";
+/// Error code of [`KernelError::AgendaNotFound`].
+pub const AGENDA_NOT_FOUND_CODE: &str = "kernel.agenda_not_found";
+/// Error code of [`KernelError::AgendaState`].
+pub const AGENDA_STATE_CODE: &str = "kernel.agenda_state";
+/// Error code of [`KernelError::Quota`].
+pub const QUOTA_CODE: &str = "kernel.quota";
 /// Error code of [`KernelError::Io`].
 pub const IO_CODE: &str = "kernel.io";
 /// Error code of [`KernelError::Serde`].
@@ -124,6 +130,39 @@ pub enum KernelError {
         reason: String,
     },
 
+    /// No agenda item has this id (spec 3.2 §7.5).
+    #[error(
+        "no agenda item {item}: list the agenda with `adk-rust agenda` or `GET /api/kernel/agenda`"
+    )]
+    AgendaNotFound {
+        /// The item id.
+        item: String,
+    },
+
+    /// The agenda item is in a state the action does not apply to (spec 3.2 §7.5).
+    #[error(
+        "agenda item {item} is {state}, so it cannot be {action}; check it with `adk-rust agenda`"
+    )]
+    AgendaState {
+        /// The item id.
+        item: String,
+        /// The item's state.
+        state: crate::agenda::AgendaStateKind,
+        /// The action refused, such as `approved`.
+        action: &'static str,
+    },
+
+    /// A partition quota refuses the process (spec 3.2 §7.9).
+    #[error(
+        "partition {partition} is at its quota: {reason}; wait for its processes to finish or raise the quota"
+    )]
+    Quota {
+        /// The partition.
+        partition: String,
+        /// Which quota and its value.
+        reason: String,
+    },
+
     /// An error from an `adk-core` or `adk-server` API the kernel composes.
     #[error(transparent)]
     Core(#[from] AdkError),
@@ -159,6 +198,9 @@ impl KernelError {
             Self::Store { .. } => STORE_CODE,
             Self::ControlPlane { .. } => CONTROL_PLANE_CODE,
             Self::Unauthorized { .. } => UNAUTHORIZED_CODE,
+            Self::AgendaNotFound { .. } => AGENDA_NOT_FOUND_CODE,
+            Self::AgendaState { .. } => AGENDA_STATE_CODE,
+            Self::Quota { .. } => QUOTA_CODE,
             Self::Core(error) => error.code,
             Self::Io(_) => IO_CODE,
             Self::Serde(_) => SERDE_CODE,
@@ -168,8 +210,11 @@ impl KernelError {
     /// The error's category, which sets the HTTP status a control-plane route answers.
     pub fn category(&self) -> ErrorCategory {
         match self {
-            Self::NotFound { .. } => ErrorCategory::NotFound,
-            Self::InvalidState { .. } | Self::Lifecycle { .. } => ErrorCategory::Conflict,
+            Self::NotFound { .. } | Self::AgendaNotFound { .. } => ErrorCategory::NotFound,
+            Self::InvalidState { .. } | Self::Lifecycle { .. } | Self::AgendaState { .. } => {
+                ErrorCategory::Conflict
+            }
+            Self::Quota { .. } => ErrorCategory::ResourceExhausted,
             Self::Frozen { .. } | Self::Store { .. } | Self::ControlPlane { .. } => {
                 ErrorCategory::Unavailable
             }
