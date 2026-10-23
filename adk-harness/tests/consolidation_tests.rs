@@ -600,6 +600,15 @@ async fn undo_restores_the_statuses_a_tick_changed() {
     assert!(undone[0].undone_at.is_some());
     let missing = harness.undo_consolidation(&alice(), "nope").await.unwrap_err();
     assert_eq!(missing.code, "harness.memory.tick_not_found");
+
+    // A tick still running, or cut off before it finished, is not undone: what it changes
+    // after the undo would escape it.
+    let running =
+        adk_harness::ConsolidationRecord::new("01JTRUNNING", APP, "alice", "default", Utc::now());
+    world.store.put_consolidation(&running).await.unwrap();
+    let unfinished = harness.undo_consolidation(&alice(), "01JTRUNNING").await.unwrap_err();
+    assert_eq!(unfinished.code, "harness.memory.tick_unfinished");
+    assert_eq!(world.store.consolidations(APP, "alice").await.unwrap()[0].undone_at, None);
 }
 
 /// A store that keeps no consolidation records refuses the tick before it changes anything.

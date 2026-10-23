@@ -307,6 +307,10 @@ pub struct ConsolidationRecord {
     /// Cost in millionths of a US dollar.
     #[serde(default)]
     pub cost_micro_usd: u64,
+    /// When the tick finished; `None` while it runs, and for one cut off, which its kernel
+    /// runs again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<DateTime<Utc>>,
     /// When `undo` reverted it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undone_at: Option<DateTime<Utc>>,
@@ -337,6 +341,7 @@ impl ConsolidationRecord {
             model_calls: 0,
             total_tokens: 0,
             cost_micro_usd: 0,
+            finished_at: None,
             undone_at: None,
         }
     }
@@ -427,7 +432,8 @@ pub async fn find_consolidation(
 /// since the tick is kept and reported in [`ConsolidationUndo::kept`]. Run right after the
 /// tick, `undo` is the identity on the statuses the facts had before it.
 ///
-/// Records the tick as undone; a tick is undone once.
+/// Records the tick as undone; a tick is undone once, and only once it finished, so no
+/// change it makes after the undo escapes it.
 ///
 /// # Example
 ///
@@ -439,6 +445,7 @@ pub async fn find_consolidation(
 /// # Errors
 ///
 /// Returns `harness.memory.tick_not_found` for an unknown tick,
+/// `harness.memory.tick_unfinished` for one that has not finished,
 /// `harness.memory.tick_undone` for one already undone, or the store's error.
 pub async fn undo_consolidation(
     store: &dyn FactStore,
@@ -448,6 +455,18 @@ pub async fn undo_consolidation(
     by: &SubjectRef,
 ) -> Result<ConsolidationUndo> {
     let mut record = find_consolidation(store, app, user, tick_id).await?;
+    if record.finished_at.is_none() {
+        return Err(AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::Conflict,
+            "harness.memory.tick_unfinished",
+            format!(
+                "consolidation tick '{}' has not finished; undo it once it has (a tick cut off \
+                 is run again by its kernel)",
+                record.tick_id
+            ),
+        ));
+    }
     if record.undone_at.is_some() {
         return Err(AdkError::new(
             ErrorComponent::Agent,
@@ -1123,6 +1142,7 @@ mod tick {
             record.model_calls = usage.model_calls;
             record.total_tokens = usage.total_tokens;
             record.cost_micro_usd = usage.cost_micro_usd;
+            record.finished_at = Some(Utc::now());
             self.store.put_consolidation(&record).await?;
             if let Some(audit) = &audit {
                 let ids = |changes: Vec<&FactChange>| {

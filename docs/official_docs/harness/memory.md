@@ -382,7 +382,8 @@ beside a `known` one, the loss-cap refusal, and the spend. The record is kept in
 store; `Harness::consolidations` lists the records, and `Harness::undo_consolidation` (or
 `adk_harness::undo_consolidation` over a store) reverts a tick: the facts it superseded or
 forgot are `assumed` again, the facts it wrote are forgotten, and a fact a person changed
-since is left as it is. `Harness::distill_sessions` runs the distillation step alone. A
+since is left as it is. Only a finished tick (`finished_at` set) is undone; one still running
+is refused with `harness.memory.tick_unfinished`. `Harness::distill_sessions` runs the distillation step alone. A
 fact store keeps records through `put_consolidation`, `consolidations` and
 `restore_assumed`; `InMemoryFactStore`, `FileFactStore` and `SqliteFactStore` implement
 them, and a store that does not refuses a tick before it changes anything.

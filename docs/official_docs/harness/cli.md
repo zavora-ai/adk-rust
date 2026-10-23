@@ -344,8 +344,9 @@ adk-rust memory undo 199b579a            # revert one tick's status changes
 Under `adk-rust up` in ask or auto mode, the kernel's consolidation tick distils the sessions
 the per-session distiller never reached and tidies assumed facts (see
 [Consolidation](memory.md#consolidation)); `memory list --source consolidation` shows each
-tick and the facts it wrote, `memory undo TICK` makes what it superseded or forgot assumed
-again and forgets what it wrote, and `--no-consolidation` turns the tick off.
+tick, `unfinished` while it runs, and the facts it wrote; `memory undo TICK` makes what a
+finished tick superseded or forgot assumed again and forgets what it wrote; and
+`--no-consolidation` turns the tick off.
 
 ## Goals
 

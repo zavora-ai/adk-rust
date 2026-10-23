@@ -312,6 +312,9 @@ fn tick_line(tick: &adk_harness::ConsolidationRecord) -> String {
     if let Some(refused) = &tick.refused {
         line.push_str(&format!(" · refused: {}", one_line(refused, 120)));
     }
+    if tick.finished_at.is_none() {
+        line.push_str(" · unfinished");
+    }
     if tick.undone_at.is_some() {
         line.push_str(" · undone");
     }

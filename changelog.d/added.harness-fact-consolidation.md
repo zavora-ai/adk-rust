@@ -9,7 +9,8 @@
   `Assumed` fact naming a `Known` one is stored beside it, and the passes apply nothing past
   `max_loss_fraction` (0.25) of a scope's live facts. Each tick keeps a `ConsolidationRecord`
   in the fact store and writes one `harness.memory.consolidated` audit record;
-  `Harness::undo_consolidation` and `undo_consolidation` revert a tick.
+  `Harness::undo_consolidation` and `undo_consolidation` revert a finished tick
+  (`ConsolidationRecord::finished_at`); one still running is refused.
   `Harness::distill_sessions` is the distillation entry on its own; on a harness that
   requires authenticated identity, it distils a session that ran in an earlier
   process only when the session's latest run in the harness's run store was authenticated. `FactStore` gains
