@@ -1166,19 +1166,18 @@ impl Agenda {
         }
     }
 
-    /// Creates or finds the process of `item`, asleep on `wake` when given, else on the
-    /// item's own wake or the earliest instant admission would let it start.
+    /// Creates or finds the process of `item` (spec 3.2 §7.5, §7.9): asleep on `wake`, or on
+    /// the item's own `when`; otherwise awake, with `not_before` at the end of quiet hours
+    /// when they hold now. Returns the pid and the wake set the item is scheduled on.
     async fn spawn(&self, item: &AgendaItem, wake: Option<WakeSet>) -> Result<(String, WakeSet)> {
         let sup = &self.inner.sup;
         let now = sup.clock.now();
-        let wake = wake.unwrap_or_else(|| match &item.when {
-            Some(when) => WakeSet::any_of([when.clone()]),
-            None => WakeSet::any_of([Wake::At(now)]),
-        });
-        let wake = match item.expires_at {
-            Some(at) => wake.with_expiry(at, crate::wake::ExpiryAction::Cancel),
-            None => wake,
+        let asleep = wake.or_else(|| item.when.clone().map(|when| WakeSet::any_of([when])));
+        let asleep = match (asleep, item.expires_at) {
+            (Some(set), Some(at)) => Some(set.with_expiry(at, crate::wake::ExpiryAction::Cancel)),
+            (set, _) => set,
         };
+        let release = sup.quiet_release(now);
         let proposer = match item.proposer() {
             Some(pid) => sup.runs.get(pid).await?,
             None => None,
@@ -1194,6 +1193,9 @@ impl Agenda {
         );
         run.session_id = Some(item_session(&item.id));
         run.idempotency_key = Some(format!("agenda:{}", item.id));
+        if asleep.is_none() && release > now {
+            run.not_before = Some(release);
+        }
         if let Some(proposer) = &proposer {
             run.principal = proposer.principal.clone();
             // Auto and standing rules apply only when the proposing run's did (K-I7).
@@ -1201,13 +1203,16 @@ impl Agenda {
         }
         let mut spec = ProcessSpec::new(ProcessKind::Proposed)
             .with_partition(item.partition.clone())
-            .with_wake(wake.clone())
             .with_agenda_item(item.id.clone());
+        if let Some(set) = &asleep {
+            spec = spec.with_wake(set.clone());
+        }
         if let Some(pid) = item.proposer() {
             spec = spec.with_parent(pid);
         }
         let process = self.inner.processes.spawn(run, spec).await?;
-        Ok((process.meta.pid, wake))
+        let scheduled = asleep.unwrap_or_else(|| WakeSet::any_of([Wake::At(release)]));
+        Ok((process.meta.pid, scheduled))
     }
 
     /// The process of item `id`, the run keyed `agenda:<id>`.
@@ -1467,4 +1472,130 @@ fn edit(mut item: AgendaItem, edited: &Value) -> AgendaItem {
         item.expires_at = serde_json::from_value(expires.clone()).ok();
     }
     item
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+    use serde_json::json;
+
+    use super::*;
+
+    const MODES: [PartitionMode; 4] =
+        [PartitionMode::ReadOnly, PartitionMode::Plan, PartitionMode::Ask, PartitionMode::Auto];
+
+    #[test]
+    fn follow_mode_holds_asks_or_schedules_by_the_partitions_mode() {
+        let agent = AgendaOrigin::Agent { pid: "run-1".into(), confidence: 1.0 };
+        let routes: Vec<Route> =
+            MODES.iter().map(|mode| route(ProactiveApproval::FollowMode, *mode, &agent)).collect();
+        assert_eq!(routes, [Route::Hold, Route::Hold, Route::Ask, Route::Schedule]);
+        for mode in MODES {
+            assert_eq!(route(ProactiveApproval::AlwaysAsk, mode, &agent), Route::Ask);
+            assert_eq!(route(ProactiveApproval::Never, mode, &agent), Route::Hold);
+        }
+    }
+
+    #[test]
+    fn a_consolidation_item_never_schedules_without_a_person() {
+        let routes: Vec<Route> = MODES
+            .iter()
+            .map(|mode| route(ProactiveApproval::FollowMode, *mode, &AgendaOrigin::Consolidation))
+            .collect();
+        assert_eq!(
+            routes,
+            [Route::Hold, Route::Hold, Route::Ask, Route::Ask],
+            "Auto asks too (K-I23)"
+        );
+    }
+
+    fn origin() -> impl Strategy<Value = AgendaOrigin> {
+        prop_oneof![
+            Just(AgendaOrigin::User),
+            Just(AgendaOrigin::Consolidation),
+            (0.0f32..=1.0)
+                .prop_map(|confidence| AgendaOrigin::Agent { pid: "run-1".into(), confidence }),
+            Just(AgendaOrigin::Observation { id: "obs-1".into() }),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// Only an Auto partition following its mode schedules a proposal without a person
+        /// (K-I10), and never one of the consolidation tick's (K-I23).
+        #[test]
+        fn only_auto_follow_mode_schedules_and_never_consolidation(
+            mode in prop::sample::select(MODES.to_vec()),
+            approval in prop::sample::select(vec![ProactiveApproval::FollowMode, ProactiveApproval::AlwaysAsk, ProactiveApproval::Never]),
+            origin in origin(),
+        ) {
+            let routed = route(approval, mode, &origin);
+            if routed == Route::Schedule {
+                prop_assert_eq!(mode, PartitionMode::Auto);
+                prop_assert_eq!(approval, ProactiveApproval::FollowMode);
+                prop_assert!(!origin.needs_a_person());
+            }
+        }
+    }
+
+    #[test]
+    fn an_inbox_edit_changes_only_title_rationale_when_and_expiry() {
+        let item = AgendaItem::new(
+            "item-1",
+            SubjectRef::human("alice"),
+            "Old",
+            "Because",
+            AgendaOrigin::Consolidation,
+            Utc::now(),
+        );
+        let edited = edit(
+            item.clone(),
+            &json!({
+                "title": "New",
+                "rationale": "Better reason",
+                "when": { "at": "2026-10-24T07:00:00Z" },
+                "origin": "user",
+                "partition": "home",
+                "subject": { "kind": "human", "id": "mallory" },
+                "budget": { "maxCostMicroUsd": 1 }
+            }),
+        );
+        assert_eq!((edited.title.as_str(), edited.rationale.as_str()), ("New", "Better reason"));
+        assert!(matches!(edited.when, Some(Wake::At(_))));
+        assert_eq!(edited.origin, item.origin, "an edit cannot launder the origin (K-I23)");
+        assert_eq!(
+            edit(item.clone(), &json!({ "title": "  " })).title,
+            "Old",
+            "a blank title is kept"
+        );
+        assert_eq!(
+            (edited.partition, edited.subject, edited.budget),
+            (item.partition, item.subject, item.budget)
+        );
+    }
+
+    #[test]
+    fn the_prompt_names_the_item_and_its_steps() {
+        let item = AgendaItem::new(
+            "item-9",
+            SubjectRef::human("alice"),
+            "Re-run the tests",
+            "The bump landed",
+            AgendaOrigin::User,
+            Utc::now(),
+        )
+        .with_plan(PlanRef::new(
+            "sha256:1",
+            vec![json!({"id": "1", "title": "Test", "instruction": "cargo test"})],
+        ));
+        let text = prompt(&item);
+        assert!(
+            text.contains("item item-9")
+                && text.contains("Re-run the tests")
+                && text.contains("1. Test: cargo test"),
+            "{text}"
+        );
+        assert_eq!(request_id("item-9"), "agenda_item-9");
+    }
 }

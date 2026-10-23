@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::agenda::{AgendaFilter, AgendaItem, AgendaStateKind};
 use crate::partition::PartitionId;
 use crate::process::{Process, ProcessKind};
 use crate::sched::QueueClass;
@@ -282,4 +283,89 @@ pub struct ApprovalItem {
     /// When the request expires.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// `GET /kernel/agenda` query: `adk-rust agenda list` (spec 3.2 §7.11, §8.1).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::AgendaStateKind;
+/// use adk_kernel::control::api::AgendaQuery;
+///
+/// let query = AgendaQuery { state: Some(AgendaStateKind::Proposed), ..AgendaQuery::default() };
+/// assert_eq!(query.to_filter().states, vec![AgendaStateKind::Proposed]);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgendaQuery {
+    /// Only items of this partition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition: Option<PartitionId>,
+    /// Only items in this state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<AgendaStateKind>,
+    /// At most this many items.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+impl AgendaQuery {
+    /// The [`AgendaFilter`] the query selects.
+    pub fn to_filter(&self) -> AgendaFilter {
+        let mut filter = AgendaFilter::default();
+        if let Some(partition) = &self.partition {
+            filter = filter.partition(partition.clone());
+        }
+        if let Some(state) = self.state {
+            filter = filter.states([state]);
+        }
+        if let Some(limit) = self.limit {
+            filter = filter.limit(limit);
+        }
+        filter
+    }
+}
+
+/// `GET /kernel/agenda` answer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgendaResponse {
+    /// The items, oldest first.
+    pub items: Vec<AgendaItem>,
+}
+
+/// The answer of an agenda action: the item after it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgendaItemResponse {
+    /// The item.
+    pub item: AgendaItem,
+}
+
+/// `POST /kernel/agenda/{id}/reject` body.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectRequest {
+    /// Why, recorded on the event and in the audit record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// `POST /kernel/agenda/{id}/schedule` body: `adk-rust agenda schedule ID --at|--cron`.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::{Wake, WakeSet};
+/// use adk_kernel::control::api::ScheduleRequest;
+///
+/// let request = ScheduleRequest { wake: WakeSet::any_of([Wake::At(chrono::Utc::now())]) };
+/// assert!(serde_json::to_value(&request).unwrap()["wake"]["anyOf"].is_array());
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleRequest {
+    /// The wake set the item's process sleeps on.
+    pub wake: WakeSet,
 }

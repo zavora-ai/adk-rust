@@ -20,13 +20,15 @@
 //! | `GET /kernel/events` | the event bus as server-sent events, from a cursor ([`api::EventsQuery`]) |
 //! | `POST /kernel/attach/{session}` | a surface attaches to a session: transcript cursor, pending holds, process |
 //! | `POST /kernel/freeze`, `POST /kernel/unfreeze` | [`Kernel::freeze`] and [`Kernel::unfreeze`] |
+//! | `GET /kernel/agenda` | the agenda ([`api::AgendaQuery`]) |
+//! | `POST /kernel/agenda/{id}/{approve,reject,schedule}` | [`Agenda`](crate::Agenda) actions as the caller ([`api::RejectRequest`], [`api::ScheduleRequest`]) |
 //!
 //! The approvals inbox, `/api/runs`, `/api/cron`, `/api/admin/freeze` and `/hooks/{name}`
 //! are the existing server routes, unchanged; `POST /api/admin/freeze` delegates to
 //! [`Kernel::freeze`] through the kernel's `FreezeDelegate` (§10 S4). The socket serves the
 //! approvals inbox beside the kernel routes when the kernel has an approval service, so a
-//! held call is decided over the socket as over HTTP. Agenda, driver, partition and `/proc`
-//! routes arrive with their phases.
+//! held call is decided over the socket as over HTTP. Driver, partition and `/proc` routes
+//! arrive with their phases.
 //!
 //! # Authentication and audit
 //!
@@ -42,7 +44,8 @@
 //! | [`ControlPlaneConfig::http`] beyond loopback without one | Refused at start (K-I18) |
 //!
 //! The routes that change the kernel — `spawn`, `kill`, `nice`, `suspend`, `resume`,
-//! `freeze`, `unfreeze` — need the `operator` scope (`403` otherwise), which the socket and a
+//! `freeze`, `unfreeze`, and the agenda's `approve`, `reject` and `schedule` — need the
+//! `operator` scope (`403` otherwise), which the socket and a
 //! loopback bind grant. `attach` reads only the caller's own sessions.
 //!
 //! Every action that changes the kernel or reads a session writes a `kernel.control` record
@@ -104,6 +107,14 @@ pub mod paths {
     pub const FREEZE: &str = "/kernel/freeze";
     /// `POST`: lift the freeze.
     pub const UNFREEZE: &str = "/kernel/unfreeze";
+    /// `GET`: the agenda (spec 3.2 §7.5).
+    pub const AGENDA: &str = "/kernel/agenda";
+    /// `POST`: approve an agenda item.
+    pub const AGENDA_APPROVE: &str = "/kernel/agenda/{id}/approve";
+    /// `POST`: reject an agenda item.
+    pub const AGENDA_REJECT: &str = "/kernel/agenda/{id}/reject";
+    /// `POST`: schedule an agenda item on a wake set.
+    pub const AGENDA_SCHEDULE: &str = "/kernel/agenda/{id}/schedule";
 }
 
 /// Where the control plane listens and how it authenticates HTTP callers (spec 3.2 §7.11).

@@ -23,10 +23,12 @@ use futures::StreamExt;
 use serde_json::json;
 
 use super::api::{
-    AttachRequest, AttachResponse, EventsQuery, FreezeRequest, FreezeResponse, KillRequest,
-    NiceRequest, ProcessResponse, ProcessesQuery, ProcessesResponse, SpawnRequest,
+    AgendaItemResponse, AgendaQuery, AgendaResponse, AttachRequest, AttachResponse, EventsQuery,
+    FreezeRequest, FreezeResponse, KillRequest, NiceRequest, ProcessResponse, ProcessesQuery,
+    ProcessesResponse, RejectRequest, ScheduleRequest, SpawnRequest,
 };
 use super::{ControlTransport, paths};
+use crate::agenda::Agenda;
 use crate::audit;
 use crate::bus::EventSubscriber;
 use crate::error::{KernelError, Result, UNAUTHORIZED_CODE};
@@ -65,6 +67,10 @@ pub(crate) trait ControlBackend: Send + Sync + 'static {
     async fn unfreeze(&self, by: AuditActor) -> Result<()>;
     /// The bus from just after `after`, or from now on.
     async fn events(&self, after: Option<u64>) -> Result<EventSubscriber>;
+    /// The agenda (spec 3.2 §7.5); `None` on a backend without one.
+    fn agenda(&self) -> Option<Agenda> {
+        None
+    }
 }
 
 #[async_trait]
@@ -148,6 +154,10 @@ impl ControlBackend for Kernel {
             None => Ok(Kernel::events(self)),
         }
     }
+
+    fn agenda(&self) -> Option<Agenda> {
+        Some(Kernel::agenda(self).clone())
+    }
 }
 
 /// The routes over `backend`, relative to `/api`.
@@ -163,6 +173,10 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         .route(paths::ATTACH, post(attach))
         .route(paths::FREEZE, post(freeze))
         .route(paths::UNFREEZE, post(unfreeze))
+        .route(paths::AGENDA, get(agenda))
+        .route(paths::AGENDA_APPROVE, post(agenda_approve))
+        .route(paths::AGENDA_REJECT, post(agenda_reject))
+        .route(paths::AGENDA_SCHEDULE, post(agenda_schedule))
         .with_state(backend)
 }
 
@@ -525,4 +539,65 @@ async fn unfreeze(State(backend): Backend, caller: Caller) -> Result<Json<Freeze
         parked_runs: None,
         audit_error: None,
     }))
+}
+
+/// The agenda of `backend`, or a `Config` error naming why there is none.
+fn agenda_of(backend: &dyn ControlBackend) -> Result<Agenda> {
+    backend.agenda().ok_or_else(|| KernelError::Config {
+        reason: "this control plane serves no agenda; the agenda routes need a kernel".into(),
+    })
+}
+
+async fn agenda(
+    State(backend): Backend,
+    _caller: Caller,
+    Query(query): Query<AgendaQuery>,
+) -> Result<Json<AgendaResponse>> {
+    let items = agenda_of(backend.as_ref())?.list(&query.to_filter()).await?;
+    Ok(Json(AgendaResponse { items }))
+}
+
+async fn agenda_approve(
+    State(backend): Backend,
+    caller: Caller,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Json<AgendaItemResponse>> {
+    caller.require_operator("approve an agenda item")?;
+    let agenda = agenda_of(backend.as_ref())?;
+    record(backend.as_ref(), &caller, "agenda.approve", Some(&id), &[]).await?;
+    let item = agenda.approve(&id, &caller.subject()).await?;
+    Ok(Json(AgendaItemResponse { item }))
+}
+
+async fn agenda_reject(
+    State(backend): Backend,
+    caller: Caller,
+    UrlPath(id): UrlPath<String>,
+    Json(request): Json<RejectRequest>,
+) -> Result<Json<AgendaItemResponse>> {
+    caller.require_operator("reject an agenda item")?;
+    let agenda = agenda_of(backend.as_ref())?;
+    record(backend.as_ref(), &caller, "agenda.reject", Some(&id), &[]).await?;
+    let item = agenda.reject(&id, &caller.subject(), request.reason.as_deref()).await?;
+    Ok(Json(AgendaItemResponse { item }))
+}
+
+async fn agenda_schedule(
+    State(backend): Backend,
+    caller: Caller,
+    UrlPath(id): UrlPath<String>,
+    Json(request): Json<ScheduleRequest>,
+) -> Result<Json<AgendaItemResponse>> {
+    caller.require_operator("schedule an agenda item")?;
+    let agenda = agenda_of(backend.as_ref())?;
+    record(
+        backend.as_ref(),
+        &caller,
+        "agenda.schedule",
+        Some(&id),
+        &[("wake", json!(request.wake))],
+    )
+    .await?;
+    let item = agenda.schedule(&id, request.wake, &caller.subject()).await?;
+    Ok(Json(AgendaItemResponse { item }))
 }

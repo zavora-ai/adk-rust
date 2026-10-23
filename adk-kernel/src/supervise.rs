@@ -543,6 +543,29 @@ impl Supervision {
         self.quiet_hours.iter().chain(self.proactivity.quiet_hours.iter()).copied().collect()
     }
 
+    /// The earliest instant at or after `now` outside every quiet-hours window: when a
+    /// proactive process may start (spec 3.2 §7.9).
+    pub(crate) fn quiet_release(&self, now: DateTime<Utc>) -> DateTime<Utc> {
+        let quiet = self.quiet_windows();
+        let probe = AdmissionInput {
+            class: ProcessClass::Proactive,
+            approval_woken: false,
+            now,
+            quiet_hours: &quiet,
+            quotas: &Quotas::default(),
+            running: 0,
+            preemptible: false,
+            partition_spent: 0,
+            proactive_spent: 0,
+            daily_budget: None,
+            need: 0,
+        };
+        match admit(&probe) {
+            Admission::QuietHours { until } => until,
+            _ => now,
+        }
+    }
+
     /// The admitted processes of `partition` running now, `except` excluded: their run is
     /// `Running`, it is not a `kernel.wake` run, and it is not on its way to park. Returns
     /// their count and the `background` ones a human turn may preempt, with their creation

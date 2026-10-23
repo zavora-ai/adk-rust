@@ -13,15 +13,18 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::api::{
-    ApprovalItem, AttachRequest, AttachResponse, FreezeRequest, FreezeResponse, KillRequest,
-    NiceRequest, ProcessResponse, ProcessesQuery, ProcessesResponse, SpawnRequest,
+    AgendaItemResponse, AgendaQuery, AgendaResponse, ApprovalItem, AttachRequest, AttachResponse,
+    FreezeRequest, FreezeResponse, KillRequest, NiceRequest, ProcessResponse, ProcessesQuery,
+    ProcessesResponse, RejectRequest, ScheduleRequest, SpawnRequest,
 };
 use super::{ControlPlaneConfig, paths};
+use crate::agenda::AgendaItem;
 use crate::bus::EventRecord;
 use crate::error::{self, KernelError, Result};
 use crate::kernel::KernelHealth;
 use crate::process::Process;
 use crate::sched::QueueClass;
+use crate::wake::WakeSet;
 
 /// The approvals inbox, beside the kernel routes under `/api`.
 const APPROVALS: &str = "/approvals";
@@ -304,6 +307,74 @@ impl ControlClient {
     ) -> Result<AttachResponse> {
         let path = paths::ATTACH.replace("{session}", &encode(session_id));
         self.call(Method::POST, path, Some(request)).await
+    }
+
+    /// `GET /kernel/agenda` (spec 3.2 §7.5, §8.1 `adk-rust agenda list`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    pub async fn agenda(&self, query: &AgendaQuery) -> Result<Vec<AgendaItem>> {
+        let mut pairs = Vec::new();
+        if let Some(partition) = &query.partition {
+            pairs.push(format!("partition={}", encode(partition.as_str())));
+        }
+        if let Some(state) = query.state {
+            pairs.push(format!("state={}", encode(state.as_str())));
+        }
+        if let Some(limit) = query.limit {
+            pairs.push(format!("limit={limit}"));
+        }
+        let path = match pairs.is_empty() {
+            true => paths::AGENDA.to_string(),
+            false => format!("{}?{}", paths::AGENDA, pairs.join("&")),
+        };
+        let answer: AgendaResponse = self.call(Method::GET, path, None::<&()>).await?;
+        Ok(answer.items)
+    }
+
+    /// `POST /kernel/agenda/{id}/approve`: approves the item as the caller, then schedules it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `404` for an unknown item, `409` for one not proposed.
+    pub async fn approve_item(&self, id: &str) -> Result<AgendaItem> {
+        self.agenda_action(paths::AGENDA_APPROVE, id, &()).await
+    }
+
+    /// `POST /kernel/agenda/{id}/reject`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    pub async fn reject_item(&self, id: &str, reason: Option<&str>) -> Result<AgendaItem> {
+        let body = RejectRequest { reason: reason.map(str::to_string) };
+        self.agenda_action(paths::AGENDA_REJECT, id, &body).await
+    }
+
+    /// `POST /kernel/agenda/{id}/schedule`: puts the approved item's process to sleep on
+    /// `wake`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    pub async fn schedule_item(&self, id: &str, wake: WakeSet) -> Result<AgendaItem> {
+        self.agenda_action(paths::AGENDA_SCHEDULE, id, &ScheduleRequest { wake }).await
+    }
+
+    async fn agenda_action(
+        &self,
+        route: &str,
+        id: &str,
+        body: &impl Serialize,
+    ) -> Result<AgendaItem> {
+        let path = route.replace("{id}", &encode(id));
+        let answer: AgendaItemResponse = self.call(Method::POST, path, Some(body)).await?;
+        Ok(answer.item)
     }
 
     async fn process_action(
