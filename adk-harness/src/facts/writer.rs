@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::json;
 
+use super::consolidate::{BesideKnown, ChangeReason, FactChange};
 use super::redact::{find_secret, redact_pii};
 use super::runtime::{FactsRuntime, harness_subject};
 use super::types::{
@@ -52,6 +53,37 @@ pub(crate) struct AdmitContext<'a> {
     /// The user's own messages in the source session; empty for a model's proposal.
     pub(crate) user_messages: &'a [UserMessage],
     pub(crate) audit: Option<HarnessAudit>,
+    /// Set when a consolidation tick distils (spec 3.2 §10 HK2).
+    pub(crate) tick: Option<&'a TickWrites>,
+}
+
+/// What a consolidation tick's distillation wrote, and the rules it admits under
+/// (spec 3.2 §7.5, §10 HK2, §9.2 K-I12, K-I22): verified-quote promotion is off, so every
+/// fact is `Assumed`; an `Assumed` fact that names a `Known` one in `supersedes` is stored
+/// beside it for a person to confirm; only a named `supersedes` or a `Correction` fact
+/// supersedes; and every status change is journaled for `undo`.
+#[derive(Debug, Default)]
+pub(crate) struct TickWrites {
+    /// The tick's id; `None` for a distillation outside a tick.
+    pub(crate) tick_id: Option<String>,
+    pub(crate) changes: std::sync::Mutex<Vec<FactChange>>,
+    pub(crate) beside_known: std::sync::Mutex<Vec<BesideKnown>>,
+}
+
+impl TickWrites {
+    #[cfg(feature = "runner")]
+    pub(crate) fn new(tick_id: Option<String>) -> Self {
+        Self { tick_id, ..Self::default() }
+    }
+
+    fn changed(&self, fact: &MemoryFact, to: FactStatus, reason: ChangeReason) {
+        self.changes.lock().unwrap_or_else(|e| e.into_inner()).push(FactChange {
+            fact: fact.id.clone(),
+            scope: fact.scope.clone(),
+            to,
+            reason,
+        });
+    }
 }
 
 /// What became of a candidate.
@@ -142,10 +174,12 @@ impl FactsRuntime {
             }
         }
 
-        // Provenance: Known only from the user's own words (I41).
+        // Provenance: Known only from the user's own words (I41), and never from a
+        // consolidation tick, whose distillation has quote promotion off (K-I12).
         let verified = candidate
             .quote
             .as_deref()
+            .filter(|_| ctx.tick.is_none())
             .and_then(|quote| verify_quote(quote, raw, ctx.user_messages));
         let (status, source) = match verified {
             Some(_) => (FactStatus::Known, FactSource::UserStated),
@@ -177,6 +211,7 @@ impl FactsRuntime {
         let mut provenance = Provenance::new(source, ctx.session_id, invocation);
         provenance.run_id = ctx.run_id.clone();
         provenance.quote = quote;
+        provenance.tick = ctx.tick.and_then(|tick| tick.tick_id.clone());
         let mut fact = MemoryFact::new(scope.clone(), kind, text, status, provenance);
         if fact.status == FactStatus::Assumed {
             fact.confidence = candidate.confidence.map(|c| c.clamp(0.0, 1.0));
@@ -205,6 +240,7 @@ impl FactsRuntime {
         }
 
         // An explicitly named fact.
+        let mut beside_known = None;
         if let Some(id) = candidate.supersedes.as_deref().filter(|id| !id.trim().is_empty()) {
             let Some(old) = self.store.get(id.trim()).await? else {
                 return Ok(rejected(&fact.text, format!("supersedes unknown fact '{id}'")));
@@ -213,16 +249,27 @@ impl FactsRuntime {
                 return Ok(rejected(&fact.text, format!("supersedes unknown fact '{id}'")));
             }
             if old.status == FactStatus::Known && fact.status != FactStatus::Known {
-                return Ok(rejected(
-                    &fact.text,
-                    "a known fact changes only by the user's own words or a person's correction",
-                ));
+                // A tick records the assumption beside the known fact for a person to
+                // confirm (spec 3.2 K-I22); elsewhere it is refused.
+                if ctx.tick.is_none() {
+                    return Ok(rejected(
+                        &fact.text,
+                        "a known fact changes only by the user's own words or a person's correction",
+                    ));
+                }
+                beside_known = Some(old.id);
+            } else {
+                replaces.push(old);
             }
-            replaces.push(old);
         }
 
-        // A very similar fact of the same kind.
-        let similar = self.index.search(&scope, &fact.text, 5).await.unwrap_or_default();
+        // A very similar fact of the same kind; in a tick, only a correction supersedes by
+        // similarity (spec 3.2 §7.5).
+        let similar = if ctx.tick.is_none() || fact.kind == FactKind::Correction {
+            self.index.search(&scope, &fact.text, 5).await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         for (id, score) in similar {
             if score < self.config.supersede_score || replaces.len() >= SIMILAR_SUPERSEDE_MAX {
                 continue;
@@ -262,6 +309,9 @@ impl FactsRuntime {
                         &harness_subject(),
                     )
                     .await?;
+                    if let Some(tick) = ctx.tick {
+                        tick.changed(victim, FactStatus::Forgotten, ChangeReason::Evicted);
+                    }
                 }
                 None => {
                     return Ok(rejected(
@@ -276,13 +326,11 @@ impl FactsRuntime {
         }
 
         for old in &replaces {
-            self.change_status(
-                ctx.audit.as_ref(),
-                old,
-                FactStatus::Superseded { by: fact.id.clone() },
-                &harness_subject(),
-            )
-            .await?;
+            let status = FactStatus::Superseded { by: fact.id.clone() };
+            self.change_status(ctx.audit.as_ref(), old, status.clone(), &harness_subject()).await?;
+            if let Some(tick) = ctx.tick {
+                tick.changed(old, status, ChangeReason::Superseded);
+            }
         }
         if let Some(audit) = &ctx.audit {
             audit
@@ -303,6 +351,12 @@ impl FactsRuntime {
         let stored = self.store.put(fact).await?;
         if let Err(error) = self.index.upsert(&stored).await {
             tracing::warn!(error = %error, "could not index a fact; recall by search may miss it");
+        }
+        if let (Some(tick), Some(known)) = (ctx.tick, beside_known) {
+            tick.beside_known
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(BesideKnown { fact: stored.id.clone(), known });
         }
         Ok(Admitted::Stored(stored))
     }
@@ -429,6 +483,7 @@ mod tests {
             run_id: None,
             user_messages: said,
             audit: None,
+            tick: None,
         };
         runtime.admit(candidate, &context).await.unwrap()
     }

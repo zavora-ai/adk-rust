@@ -70,6 +70,10 @@ pub(crate) struct FactsRuntime {
     pub(crate) config: LongTermMemoryConfig,
     pub(crate) store: Arc<dyn FactStore>,
     pub(crate) index: Arc<dyn FactIndex>,
+    /// The default index's embedder, which consolidation embeds facts without a stored
+    /// vector with (spec 3.2 §7.5).
+    #[cfg_attr(not(feature = "runner"), allow(dead_code))] // read by consolidation
+    pub(crate) embedder: Option<Arc<dyn adk_memory::EmbeddingProvider>>,
     /// The project of this harness's workspace.
     pub(crate) project: String,
     /// The harness's own agent; members neither recall nor write (spec 3.1 §9.2 I42).
@@ -131,6 +135,7 @@ impl FactsRuntime {
             config,
             store,
             index,
+            embedder: None,
             project,
             root_agent,
             require_authenticated,
@@ -147,6 +152,16 @@ impl FactsRuntime {
             distilling: tokio::sync::Mutex::new(()),
             closed: AtomicBool::new(false),
         }
+    }
+
+    /// This runtime, embedding facts for consolidation with `embedder`.
+    #[must_use]
+    pub(crate) fn with_embedder(
+        mut self,
+        embedder: Option<Arc<dyn adk_memory::EmbeddingProvider>>,
+    ) -> Self {
+        self.embedder = embedder;
+        self
     }
 
     /// The project scope of `user` of `app`.
@@ -233,6 +248,19 @@ impl FactsRuntime {
         status: FactStatus,
         by: &SubjectRef,
     ) -> Result<()> {
+        self.change_status_in(audit, fact, status, by, None).await
+    }
+
+    /// As [`change_status`](Self::change_status), the record naming the consolidation tick
+    /// and the reason when `tick` is `(tick id, reason)` (spec 3.2 §7.5).
+    pub(crate) async fn change_status_in(
+        &self,
+        audit: Option<&HarnessAudit>,
+        fact: &MemoryFact,
+        status: FactStatus,
+        by: &SubjectRef,
+        tick: Option<(&str, &str)>,
+    ) -> Result<()> {
         let action = match &status {
             FactStatus::Known => "harness.memory.fact.promoted",
             FactStatus::Superseded { .. } => "harness.memory.fact.superseded",
@@ -240,21 +268,21 @@ impl FactsRuntime {
             FactStatus::Assumed => "harness.memory.fact.demoted",
         };
         if let Some(audit) = audit {
-            audit
-                .record(
-                    action,
-                    json!({
-                        "factId": fact.id,
-                        "from": fact.status.label(),
-                        "to": status.label(),
-                        "by": by.id,
-                        "supersededBy": match &status {
-                            FactStatus::Superseded { by } => Some(by.clone()),
-                            _ => None,
-                        },
-                    }),
-                )
-                .await?;
+            let mut ext = json!({
+                "factId": fact.id,
+                "from": fact.status.label(),
+                "to": status.label(),
+                "by": by.id,
+                "supersededBy": match &status {
+                    FactStatus::Superseded { by } => Some(by.clone()),
+                    _ => None,
+                },
+            });
+            if let Some((tick_id, reason)) = tick {
+                ext["tickId"] = json!(tick_id);
+                ext["reason"] = json!(reason);
+            }
+            audit.record(action, ext).await?;
         }
         self.store.set_status(&fact.id, status.clone(), by).await?;
         if !status.is_live()

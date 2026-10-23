@@ -2181,19 +2181,24 @@ impl LongTermOptions {
             config.distill_model.clone().unwrap_or(member_model),
             distiller,
         );
-        Ok(Some(Arc::new(crate::facts::runtime::FactsRuntime::new(
-            config,
-            store,
-            index,
-            crate::memory::project_slug(workspace_root),
-            agent.to_string(),
-            require_authenticated,
-            audit,
-            distill_model,
-            budget,
-            mode_store,
-            default_mode,
-        ))))
+        // Consolidation embeds with the default index's embedder (spec 3.2 §7.5).
+        let embedder = if self.index.is_none() { self.embedder.clone() } else { None };
+        Ok(Some(Arc::new(
+            crate::facts::runtime::FactsRuntime::new(
+                config,
+                store,
+                index,
+                crate::memory::project_slug(workspace_root),
+                agent.to_string(),
+                require_authenticated,
+                audit,
+                distill_model,
+                budget,
+                mode_store,
+                default_mode,
+            )
+            .with_embedder(embedder),
+        )))
     }
 }
 

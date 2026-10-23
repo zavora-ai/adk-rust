@@ -1121,6 +1121,128 @@ impl Harness {
         let fact = facts.owned(&self.app_name, user.as_ref(), id).await?;
         facts.correct(&SubjectRef::human(user.to_string()), &fact, &text.into()).await
     }
+
+    /// Distils those of `user`'s `sessions` the per-session distiller never reached, with
+    /// verified-quote promotion off, so every fact it stores is `Assumed` (spec 3.2 §10 HK2,
+    /// §9.2 K-I12): the public distillation entry a consolidation tick runs.
+    ///
+    /// The store's distillation cursor records how far each session was read, by this
+    /// entry and by the per-session distiller, so no session is distilled twice. Skipped:
+    /// a session read up to its last event, one this process will still distil, one active
+    /// within `distill_idle` of `at`, and one in ReadOnly or Plan mode. `budget` bounds the
+    /// model calls of all sessions together; without one, each session's run has the
+    /// harness's budget or two model calls.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let report = harness.distill_sessions(&user, &["s1".into()], chrono::Utc::now(), None).await?;
+    /// assert!(report.stored.len() <= 10);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when long-term memory is off, or the store's error.
+    #[cfg(feature = "memory")]
+    pub async fn distill_sessions(
+        &self,
+        user: &UserId,
+        sessions: &[String],
+        at: chrono::DateTime<chrono::Utc>,
+        budget: Option<adk_core::RunBudget>,
+    ) -> Result<crate::facts::SessionDistillation> {
+        self.facts_runtime()?
+            .distill_sessions(&self.app_name, user.as_ref(), sessions, at, budget)
+            .await
+    }
+
+    /// Runs one consolidation tick over `user`'s facts in this harness's project and the
+    /// user-wide ones (spec 3.2 §7.5, §10 HK2): the sessions in `request` the per-session
+    /// distiller never reached are distilled as [`distill_sessions`](Self::distill_sessions)
+    /// does; pass 1 collapses `Assumed` near-duplicates and expires stale `Assumed` facts
+    /// without a model call; pass 2 merges similar `Assumed` facts on the distiller model.
+    /// `Known` facts are never superseded, merged or expired (K-I22). When the passes would
+    /// change more than `max_loss_fraction` of a scope's live facts, they apply nothing and
+    /// the record says why. The record is kept in the fact store for
+    /// [`undo_consolidation`](Self::undo_consolidation), and one
+    /// `harness.memory.consolidated` audit record lists ids and counts, never text.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let record = harness
+    ///     .consolidate_memory(&user, adk_harness::ConsolidationRequest::new().with_sessions(["s1"]))
+    ///     .await?;
+    /// println!("{} superseded, {} forgotten", record.superseded().count(), record.forgotten().count());
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when long-term memory is off,
+    /// `harness.memory.consolidation_unsupported` for a fact store that keeps no records,
+    /// or the store's or audit trail's error.
+    #[cfg(feature = "memory")]
+    pub async fn consolidate_memory(
+        &self,
+        user: &UserId,
+        request: crate::facts::ConsolidationRequest,
+    ) -> Result<crate::facts::ConsolidationRecord> {
+        self.facts_runtime()?.consolidate(&self.app_name, user.as_ref(), request).await
+    }
+
+    /// `user`'s consolidation records, newest first (spec 3.2 §7.5).
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when long-term memory is off, or the store's error.
+    #[cfg(feature = "memory")]
+    pub async fn consolidations(
+        &self,
+        user: &UserId,
+    ) -> Result<Vec<crate::facts::ConsolidationRecord>> {
+        self.facts_runtime()?.store.consolidations(&self.app_name, user.as_ref()).await
+    }
+
+    /// Reverts `user`'s consolidation tick `tick_id` (an id or a unique prefix) as
+    /// [`undo_consolidation`](crate::undo_consolidation) does, and brings the index in line
+    /// (spec 3.2 §7.5).
+    ///
+    /// # Errors
+    ///
+    /// As [`undo_consolidation`](crate::undo_consolidation), and a configuration error when
+    /// long-term memory is off.
+    #[cfg(feature = "memory")]
+    pub async fn undo_consolidation(
+        &self,
+        user: &UserId,
+        tick_id: &str,
+    ) -> Result<crate::facts::ConsolidationUndo> {
+        let facts = self.facts_runtime()?;
+        let by = SubjectRef::human(user.to_string());
+        let report = crate::facts::undo_consolidation(
+            facts.store.as_ref(),
+            &self.app_name,
+            user.as_ref(),
+            tick_id,
+            &by,
+        )
+        .await?;
+        for id in report.restored.iter().chain(&report.forgotten) {
+            let Some(fact) = facts.store.get(id).await? else {
+                continue;
+            };
+            let indexed = if fact.status.is_live() {
+                facts.index.upsert(&fact).await
+            } else {
+                facts.forget_cached(id);
+                facts.index.remove(&fact).await
+            };
+            if let Err(error) = indexed {
+                tracing::warn!(error = %error, "could not update the fact index after an undo");
+            }
+        }
+        Ok(report)
+    }
 }
 
 /// Lets the agent's long-term memory distil the runner's sessions (spec 3.1 §7.15.2).

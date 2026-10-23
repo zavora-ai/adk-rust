@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
+use super::consolidate::ConsolidationRecord;
 use super::types::{FactFilter, FactScope, FactSource, FactStatus, MemoryFact};
 
 /// The system of record of long-term facts (spec 3.1 §7.15.2).
@@ -25,6 +26,9 @@ use super::types::{FactFilter, FactScope, FactSource, FactStatus, MemoryFact};
 /// | `set_status` | changes a live fact's status; `Superseded` and `Forgotten` set `valid_to`; promoting `Assumed` to `Known` records the source `UserConfirmed`; a fact that is no longer live keeps its status |
 /// | `embeddings` | the vectors of the live facts of exactly `scope` |
 /// | `record_recall` | sets `last_recalled` and bumps `uses` of recalled facts |
+/// | `distilled_sessions`, `mark_distilled` | the cursor of the sessions distillation read, which only moves forward (spec 3.2 §10 HK2) |
+/// | `put_consolidation`, `consolidations` | the records of consolidation ticks, newest first (spec 3.2 §7.5) |
+/// | `restore_assumed` | sets a superseded or forgotten fact back to `Assumed`, clearing `valid_to`: how `undo` reverts a tick |
 ///
 /// [`FactIndex`]: crate::FactIndex
 ///
@@ -63,6 +67,104 @@ pub trait FactStore: Send + Sync {
         let _ = (ids, at);
         Ok(())
     }
+
+    /// The sessions of `user` of `app` that distillation has read, each with the time of
+    /// the last event it read (spec 3.2 §10 HK2): the cursor that keeps a consolidation tick
+    /// from distilling a session the per-session distiller already handled. The default
+    /// keeps no cursor.
+    async fn distilled_sessions(
+        &self,
+        app: &str,
+        user: &str,
+    ) -> Result<Vec<(String, DateTime<Utc>)>> {
+        let _ = (app, user);
+        Ok(Vec::new())
+    }
+
+    /// Records that distillation read session `session` of `user` of `app` up to `upto`;
+    /// an earlier `upto` than the recorded one changes nothing (spec 3.2 §10 HK2). The
+    /// default does nothing.
+    async fn mark_distilled(
+        &self,
+        app: &str,
+        user: &str,
+        session: &str,
+        upto: DateTime<Utc>,
+    ) -> Result<()> {
+        let _ = (app, user, session, upto);
+        Ok(())
+    }
+
+    /// Stores, or replaces, the record of consolidation tick `record.tick_id`
+    /// (spec 3.2 §7.5).
+    ///
+    /// # Errors
+    ///
+    /// The default returns `harness.memory.consolidation_unsupported`: a tick runs only
+    /// on a store that keeps its record, so `undo` can revert it.
+    async fn put_consolidation(&self, record: &ConsolidationRecord) -> Result<()> {
+        let _ = record;
+        Err(consolidation_unsupported())
+    }
+
+    /// The consolidation records of `user` of `app`, newest first (spec 3.2 §7.5). The
+    /// default has none.
+    async fn consolidations(&self, app: &str, user: &str) -> Result<Vec<ConsolidationRecord>> {
+        let _ = (app, user);
+        Ok(Vec::new())
+    }
+
+    /// Sets fact `id`, superseded or forgotten, back to `Assumed` and clears `valid_to`
+    /// (spec 3.2 §7.5): how `undo` reverts a consolidation tick, which changes only
+    /// `Assumed` facts. `by` is the person or service doing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.memory.fact_not_found`, `harness.memory.fact_live` for a fact that
+    /// is live, or, by default, `harness.memory.consolidation_unsupported`.
+    async fn restore_assumed(&self, id: &str, by: &SubjectRef) -> Result<()> {
+        let _ = (id, by);
+        Err(consolidation_unsupported())
+    }
+}
+
+fn consolidation_unsupported() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Agent,
+        ErrorCategory::Unsupported,
+        "harness.memory.consolidation_unsupported",
+        "this fact store keeps no consolidation records, so a tick could not be undone; use \
+         InMemoryFactStore, FileFactStore or SqliteFactStore, or implement \
+         put_consolidation, consolidations and restore_assumed",
+    )
+}
+
+fn still_live(fact: &MemoryFact) -> AdkError {
+    AdkError::new(
+        ErrorComponent::Agent,
+        ErrorCategory::Conflict,
+        "harness.memory.fact_live",
+        format!(
+            "fact '{}' is {}; only a superseded or forgotten fact is restored",
+            fact.id,
+            fact.status.label()
+        ),
+    )
+}
+
+/// Sets a superseded or forgotten `fact` back to `Assumed`.
+pub(crate) fn apply_restore(fact: &mut MemoryFact) -> Result<()> {
+    if fact.status.is_live() {
+        return Err(still_live(fact));
+    }
+    fact.status = FactStatus::Assumed;
+    fact.valid_to = None;
+    Ok(())
+}
+
+/// The key of a session's distillation cursor in the in-memory and file stores.
+fn cursor_key(app: &str, user: &str, session: &str) -> String {
+    format!("{app}\u{1f}{user}\u{1f}{session}")
 }
 
 pub(crate) fn not_found(id: &str) -> AdkError {
@@ -119,6 +221,10 @@ struct Facts {
     facts: HashMap<String, MemoryFact>,
     #[serde(default)]
     embeddings: HashMap<String, Vec<f32>>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    cursors: HashMap<String, DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    ticks: HashMap<String, ConsolidationRecord>,
 }
 
 impl Facts {
@@ -174,6 +280,37 @@ impl Facts {
                 fact.uses = fact.uses.saturating_add(1);
             }
         }
+    }
+
+    fn distilled_sessions(&self, app: &str, user: &str) -> Vec<(String, DateTime<Utc>)> {
+        let prefix = cursor_key(app, user, "");
+        let mut out: Vec<(String, DateTime<Utc>)> = self
+            .cursors
+            .iter()
+            .filter_map(|(key, upto)| Some((key.strip_prefix(&prefix)?.to_string(), *upto)))
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn mark_distilled(&mut self, app: &str, user: &str, session: &str, upto: DateTime<Utc>) {
+        let cursor = self.cursors.entry(cursor_key(app, user, session)).or_insert(upto);
+        *cursor = (*cursor).max(upto);
+    }
+
+    fn consolidations(&self, app: &str, user: &str) -> Vec<ConsolidationRecord> {
+        let mut out: Vec<ConsolidationRecord> = self
+            .ticks
+            .values()
+            .filter(|record| record.app == app && record.user == user)
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| b.tick_id.cmp(&a.tick_id)));
+        out
+    }
+
+    fn restore_assumed(&mut self, id: &str) -> Result<()> {
+        apply_restore(self.facts.get_mut(id).ok_or_else(|| not_found(id))?)
     }
 }
 
@@ -232,6 +369,38 @@ impl FactStore for InMemoryFactStore {
     async fn record_recall(&self, ids: &[String], at: DateTime<Utc>) -> Result<()> {
         self.facts.write().await.record_recall(ids, at);
         Ok(())
+    }
+
+    async fn distilled_sessions(
+        &self,
+        app: &str,
+        user: &str,
+    ) -> Result<Vec<(String, DateTime<Utc>)>> {
+        Ok(self.facts.read().await.distilled_sessions(app, user))
+    }
+
+    async fn mark_distilled(
+        &self,
+        app: &str,
+        user: &str,
+        session: &str,
+        upto: DateTime<Utc>,
+    ) -> Result<()> {
+        self.facts.write().await.mark_distilled(app, user, session, upto);
+        Ok(())
+    }
+
+    async fn put_consolidation(&self, record: &ConsolidationRecord) -> Result<()> {
+        self.facts.write().await.ticks.insert(record.tick_id.clone(), record.clone());
+        Ok(())
+    }
+
+    async fn consolidations(&self, app: &str, user: &str) -> Result<Vec<ConsolidationRecord>> {
+        Ok(self.facts.read().await.consolidations(app, user))
+    }
+
+    async fn restore_assumed(&self, id: &str, _by: &SubjectRef) -> Result<()> {
+        self.facts.write().await.restore_assumed(id)
     }
 }
 
@@ -383,6 +552,47 @@ impl FactStore for FileFactStore {
         }
         Ok(())
     }
+
+    async fn distilled_sessions(
+        &self,
+        app: &str,
+        user: &str,
+    ) -> Result<Vec<(String, DateTime<Utc>)>> {
+        Ok(Self::load(&self.path(app, user)).await?.distilled_sessions(app, user))
+    }
+
+    async fn mark_distilled(
+        &self,
+        app: &str,
+        user: &str,
+        session: &str,
+        upto: DateTime<Utc>,
+    ) -> Result<()> {
+        let _guard = self.lock.lock().await;
+        let path = self.path(app, user);
+        let mut facts = Self::load(&path).await?;
+        facts.mark_distilled(app, user, session, upto);
+        Self::save(&path, &facts).await
+    }
+
+    async fn put_consolidation(&self, record: &ConsolidationRecord) -> Result<()> {
+        let _guard = self.lock.lock().await;
+        let path = self.path(&record.app, &record.user);
+        let mut facts = Self::load(&path).await?;
+        facts.ticks.insert(record.tick_id.clone(), record.clone());
+        Self::save(&path, &facts).await
+    }
+
+    async fn consolidations(&self, app: &str, user: &str) -> Result<Vec<ConsolidationRecord>> {
+        Ok(Self::load(&self.path(app, user)).await?.consolidations(app, user))
+    }
+
+    async fn restore_assumed(&self, id: &str, _by: &SubjectRef) -> Result<()> {
+        let _guard = self.lock.lock().await;
+        let (path, mut facts) = self.find(id).await?.ok_or_else(|| not_found(id))?;
+        facts.restore_assumed(id)?;
+        Self::save(&path, &facts).await
+    }
 }
 
 /// A [`FactStore`] in SQLite (spec 3.1 §7.15.2, feature `sqlite`): the CLI keeps it in
@@ -493,6 +703,12 @@ impl SqliteFactStore {
                 ON adk_harness_facts (app_name, user_id, project, digest)",
             "CREATE TABLE IF NOT EXISTS adk_harness_fact_embeddings (\
                 id TEXT PRIMARY KEY, vector TEXT NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS adk_harness_fact_cursors (\
+                app_name TEXT NOT NULL, user_id TEXT NOT NULL, session_id TEXT NOT NULL, \
+                upto TEXT NOT NULL, PRIMARY KEY (app_name, user_id, session_id))",
+            "CREATE TABLE IF NOT EXISTS adk_harness_fact_ticks (\
+                tick_id TEXT PRIMARY KEY, app_name TEXT NOT NULL, user_id TEXT NOT NULL, \
+                at TEXT NOT NULL, record TEXT NOT NULL)",
         ] {
             sqlx::query(statement).execute(&self.pool).await.map_err(crate::fsutil::db_error)?;
         }
@@ -671,5 +887,110 @@ impl FactStore for SqliteFactStore {
             tx.commit().await.map_err(crate::fsutil::db_error)?;
         }
         Ok(())
+    }
+
+    async fn distilled_sessions(
+        &self,
+        app: &str,
+        user: &str,
+    ) -> Result<Vec<(String, DateTime<Utc>)>> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT session_id, upto FROM adk_harness_fact_cursors \
+             WHERE app_name = ? AND user_id = ? ORDER BY session_id",
+        )
+        .bind(app)
+        .bind(user)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(session, upto)| {
+                let upto = DateTime::parse_from_rfc3339(&upto).ok()?.with_timezone(&Utc);
+                Some((session, upto))
+            })
+            .collect())
+    }
+
+    async fn mark_distilled(
+        &self,
+        app: &str,
+        user: &str,
+        session: &str,
+        upto: DateTime<Utc>,
+    ) -> Result<()> {
+        // A fixed-width UTC timestamp, so text order is time order.
+        let upto = upto.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        sqlx::query(
+            "INSERT INTO adk_harness_fact_cursors (app_name, user_id, session_id, upto) \
+             VALUES (?, ?, ?, ?) ON CONFLICT (app_name, user_id, session_id) \
+             DO UPDATE SET upto = excluded.upto WHERE excluded.upto > adk_harness_fact_cursors.upto",
+        )
+        .bind(app)
+        .bind(user)
+        .bind(session)
+        .bind(upto)
+        .execute(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        Ok(())
+    }
+
+    async fn put_consolidation(&self, record: &ConsolidationRecord) -> Result<()> {
+        let text = serde_json::to_string(record)
+            .map_err(|error| crate::fsutil::serialize_error("consolidation record", &error))?;
+        let text = self.encode(&["consolidation", &record.tick_id], text)?;
+        sqlx::query(
+            "INSERT INTO adk_harness_fact_ticks (tick_id, app_name, user_id, at, record) \
+             VALUES (?, ?, ?, ?, ?) ON CONFLICT (tick_id) DO UPDATE SET record = excluded.record",
+        )
+        .bind(&record.tick_id)
+        .bind(&record.app)
+        .bind(&record.user)
+        .bind(record.at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true))
+        .bind(text)
+        .execute(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        Ok(())
+    }
+
+    async fn consolidations(&self, app: &str, user: &str) -> Result<Vec<ConsolidationRecord>> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT tick_id, record FROM adk_harness_fact_ticks \
+             WHERE app_name = ? AND user_id = ? ORDER BY at DESC, tick_id DESC",
+        )
+        .bind(app)
+        .bind(user)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (tick_id, text) in rows {
+            let text = self.decode(&["consolidation", &tick_id], text)?;
+            out.push(serde_json::from_str(&text).map_err(|error| {
+                AdkError::new(
+                    ErrorComponent::Agent,
+                    ErrorCategory::Internal,
+                    "harness.memory.store_corrupt",
+                    format!("a stored consolidation record does not parse: {error}"),
+                )
+            })?);
+        }
+        Ok(out)
+    }
+
+    async fn restore_assumed(&self, id: &str, _by: &SubjectRef) -> Result<()> {
+        let mut tx = self.pool.begin().await.map_err(crate::fsutil::db_error)?;
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT record FROM adk_harness_facts WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(crate::fsutil::db_error)?;
+        let mut fact = self.decode_fact(id, row.ok_or_else(|| not_found(id))?.0)?;
+        apply_restore(&mut fact)?;
+        self.write(&mut *tx, &fact).await?;
+        tx.commit().await.map_err(crate::fsutil::db_error)
     }
 }

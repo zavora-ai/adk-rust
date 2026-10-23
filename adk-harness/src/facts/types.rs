@@ -264,6 +264,13 @@ pub struct Provenance {
     pub quote: Option<String>,
     /// When it was learned.
     pub at: DateTime<Utc>,
+    /// The facts a consolidation tick merged into this one (spec 3.2 §7.5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_ids: Vec<String>,
+    /// The consolidation tick that wrote it, by distilling a session the per-session
+    /// distiller never reached or by merging facts (spec 3.2 §7.5, §10 HK2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick: Option<String>,
 }
 
 impl Provenance {
@@ -280,6 +287,8 @@ impl Provenance {
             run_id: None,
             quote: None,
             at: Utc::now(),
+            source_ids: Vec::new(),
+            tick: None,
         }
     }
 }

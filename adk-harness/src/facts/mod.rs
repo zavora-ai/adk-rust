@@ -12,7 +12,9 @@
 //! | [`FactIndex`] | finds candidates: [`LocalFactIndex`] (embedded or lexical), [`MemoryServiceIndex`] over any `adk_memory::MemoryService` |
 //! | recall | a `<memory-facts>` block in the untrusted section on the first model call of each user turn |
 //! | writing | `memory_remember` (assumed only), session distillation, verified quotes, human promotion |
+//! | consolidation | the spec 3.2 tick: distillation of missed sessions with quote promotion off, two passes, the loss cap, [`undo_consolidation`] |
 
+mod consolidate;
 #[cfg(feature = "runner")]
 pub(crate) mod distill;
 #[cfg(any(feature = "memory-embeddings", feature = "memory-embeddings-local"))]
@@ -27,6 +29,11 @@ pub(crate) mod writer;
 
 pub mod conformance;
 
+pub use consolidate::{
+    BesideKnown, CONSOLIDATION_CLUSTER_SCORE, ChangeReason, ConsolidationConfig,
+    ConsolidationRecord, ConsolidationRequest, ConsolidationUndo, FactChange, SessionDistillation,
+    find_consolidation, undo_consolidation,
+};
 #[cfg(any(feature = "memory-embeddings", feature = "memory-embeddings-local"))]
 pub use embed::RagEmbedder;
 pub use index::{FactIndex, LocalFactIndex, MemoryServiceIndex};

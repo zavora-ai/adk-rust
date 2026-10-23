@@ -1,5 +1,6 @@
 //! Conformance cases for [`FactStore`](crate::FactStore) and [`FactIndex`](crate::FactIndex)
-//! backends (spec 3.1 §11 "Long-term memory").
+//! backends (spec 3.1 §11 "Long-term memory"; the distillation cursor, consolidation records
+//! and `restore_assumed`, spec 3.2 §7.5, §10 HK2).
 
 /// [`FactStore`](crate::FactStore) cases.
 pub mod fact_store {
@@ -164,6 +165,81 @@ pub mod fact_store {
         assert_eq!(read.uses, stored.uses + 1);
         assert_eq!(read.last_recalled.map(|t| t.timestamp_millis()), Some(at.timestamp_millis()));
     }
+
+    /// The distillation cursor is per (app, user, session) and only moves forward
+    /// (spec 3.2 §10 HK2).
+    pub async fn distillation_cursor_moves_forward(store: &dyn FactStore) {
+        let early = chrono::DateTime::parse_from_rfc3339("2026-10-20T08:00:00.5Z").unwrap();
+        let early = early.with_timezone(&chrono::Utc);
+        let later = early + chrono::Duration::milliseconds(1_250);
+        store.mark_distilled("app", "alice", "s1", early).await.unwrap();
+        store.mark_distilled("app", "alice", "s1", later).await.unwrap();
+        store.mark_distilled("app", "alice", "s1", early).await.unwrap();
+        store.mark_distilled("app", "alice", "s2", early).await.unwrap();
+        store.mark_distilled("app", "bob", "s1", early).await.unwrap();
+        let mut cursors = store.distilled_sessions("app", "alice").await.unwrap();
+        cursors.sort();
+        assert_eq!(cursors, vec![("s1".to_string(), later), ("s2".to_string(), early)]);
+        assert_eq!(store.distilled_sessions("app", "bob").await.unwrap().len(), 1);
+        assert!(store.distilled_sessions("other", "alice").await.unwrap().is_empty());
+    }
+
+    /// Consolidation records round-trip per user, newest first, and a second put replaces
+    /// the first (spec 3.2 §7.5).
+    pub async fn consolidation_records_round_trip(store: &dyn FactStore) {
+        let at = chrono::Utc::now();
+        let mut first = crate::ConsolidationRecord::new("01JTICKA", "app", "alice", "default", at);
+        first.changes.push(crate::FactChange {
+            fact: "01JFACT".into(),
+            scope: FactScope::new("app", "alice", Some("p1".into())),
+            to: FactStatus::Superseded { by: "01JNEW".into() },
+            reason: crate::ChangeReason::Duplicate,
+        });
+        first.merged.push("01JMERGED".into());
+        store.put_consolidation(&first).await.unwrap();
+        let second = crate::ConsolidationRecord::new(
+            "01JTICKB",
+            "app",
+            "alice",
+            "default",
+            at + chrono::Duration::seconds(1),
+        );
+        store.put_consolidation(&second).await.unwrap();
+        store
+            .put_consolidation(&crate::ConsolidationRecord::new("01JTICKC", "app", "bob", "x", at))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.consolidations("app", "alice").await.unwrap(),
+            vec![second.clone(), first.clone()]
+        );
+        first.undone_at = Some(at);
+        store.put_consolidation(&first).await.unwrap();
+        assert_eq!(store.consolidations("app", "alice").await.unwrap(), vec![second, first]);
+        assert!(store.consolidations("other", "alice").await.unwrap().is_empty());
+    }
+
+    /// `restore_assumed` sets a superseded or forgotten fact back to `Assumed` with
+    /// `valid_to` cleared, and refuses a live fact (spec 3.2 §7.5).
+    pub async fn restore_assumed_reverts_a_status(store: &dyn FactStore) {
+        let by = SubjectRef::service("adk-harness");
+        let stored = store.put(fact("alice", Some("p1"), "a", FactStatus::Assumed)).await.unwrap();
+        store
+            .set_status(&stored.id, FactStatus::Superseded { by: "01JNEW".into() }, &by)
+            .await
+            .unwrap();
+        store.restore_assumed(&stored.id, &by).await.unwrap();
+        let read = store.get(&stored.id).await.unwrap().unwrap();
+        assert_eq!((read.status, read.valid_to), (FactStatus::Assumed, None));
+        assert!(store.restore_assumed(&stored.id, &by).await.is_err(), "a live fact");
+        assert!(store.restore_assumed("missing", &by).await.is_err());
+        let scope = FactScope::new("app", "alice", Some("p1".into()));
+        let live = store
+            .list(FactFilter { live_only: true, ..FactFilter::exactly(&scope) })
+            .await
+            .unwrap();
+        assert_eq!(ids(&live), vec![stored.id.as_str()], "listed as live again");
+    }
 }
 
 /// [`FactIndex`](crate::FactIndex) cases. Each takes the index and the store recall reads
@@ -317,6 +393,24 @@ macro_rules! fact_store_conformance_tests {
         async fn fact_store_recall_is_recorded() {
             let store = $store;
             $crate::conformance::fact_store::recall_is_recorded(&store).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test]
+        async fn fact_store_distillation_cursor_moves_forward() {
+            let store = $store;
+            $crate::conformance::fact_store::distillation_cursor_moves_forward(&store).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test]
+        async fn fact_store_consolidation_records_round_trip() {
+            let store = $store;
+            $crate::conformance::fact_store::consolidation_records_round_trip(&store).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test]
+        async fn fact_store_restore_assumed_reverts_a_status() {
+            let store = $store;
+            $crate::conformance::fact_store::restore_assumed_reverts_a_status(&store).await;
         }
     };
 }

@@ -237,6 +237,7 @@ impl Tool for MemoryRememberTool {
             run_id,
             user_messages: &[],
             audit: HarnessAudit::for_tool(ctx.as_ref()),
+            tick: None,
         };
         match self.facts.admit(&candidate, &context).await? {
             Admitted::Stored(fact) => Ok(json!({ "remembered": describe(&fact) })),

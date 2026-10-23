@@ -110,9 +110,9 @@ the user stated from one the agent inferred:
 | Status | Means | Reached by |
 |---|---|---|
 | `known` | The user said it, or a person confirmed it | A quote found verbatim (whitespace normalised, at least two words, sharing a word with the fact) in one of the user's own messages in the session; `Harness::accept_fact`, `/memory accept`, `adk-rust memory accept`; `Harness::correct_fact` |
-| `assumed` | The agent inferred it, or read it in a tool's output | `memory_remember`; a distilled fact without a verified quote; an import |
-| `superseded` | A newer fact replaced it | A fact naming it in `supersedes`, a very similar fact of the same kind (`supersede_score`), a correction |
-| `forgotten` | A person forgot it, or the scope was full | `Harness::forget_fact`, `/memory forget`, `adk-rust memory forget`; eviction of the least-used assumed fact |
+| `assumed` | The agent inferred it, or read it in a tool's output | `memory_remember`; a distilled fact without a verified quote; an import; a fact a [consolidation](#consolidation) distilled or merged |
+| `superseded` | A newer fact replaced it | A fact naming it in `supersedes`, a very similar fact of the same kind (`supersede_score`), a correction; a consolidation collapsing a near-duplicate assumed fact or merging it |
+| `forgotten` | A person forgot it, the scope was full, or it expired | `Harness::forget_fact`, `/memory forget`, `adk-rust memory forget`; eviction of the least-used assumed fact; a consolidation expiring an unused, low-confidence assumed fact |
 
 Model output, tool output, files and other agents produce `assumed` facts at most: a tool
 result that says "the user wants X" is not the user's own message. An assumed fact never
@@ -209,7 +209,7 @@ The `FactStore` is the system of record; a `FactIndex` only finds candidates.
 |---|---|
 | `InMemoryFactStore` | The default; tests |
 | `FileFactStore` | One private JSON file per user under `~/.adk/harness/facts` |
-| `SqliteFactStore` (feature `sqlite`) | Tables `adk_harness_facts` and `adk_harness_fact_embeddings`; the CLI keeps it in `harness.db` |
+| `SqliteFactStore` (feature `sqlite`) | Tables `adk_harness_facts`, `adk_harness_fact_embeddings`, `adk_harness_fact_cursors` (how far distillation read each session) and `adk_harness_fact_ticks` (consolidation records); the CLI keeps it in `harness.db` |
 | `LocalFactIndex` | The default: cosine similarity over embeddings stored with each fact when an embedder is set, the share of query words a fact contains otherwise |
 | `MemoryServiceIndex` | Any `adk_memory::MemoryService` that supports project scoping: pgvector on PostgreSQL, MongoDB, Neo4j, Vertex AI Memory Bank, FTS5 on SQLite, Redis. Each fact is an entry whose `author` is `adk-harness:fact:<id>`, whose text parts are the fact and its id, in the fact's project |
 
@@ -290,6 +290,75 @@ status. `accept_fact` confirms an assumed fact, `forget_fact` forgets one at onc
 `correct_fact` replaces one with a person's text. The console's `/memory` and
 `adk-rust memory` do the same at the terminal; see [The adk-rust CLI](cli.md#long-term-memory).
 
+### Consolidation
+
+Facts are written one at a time, so near-duplicates and stale assumptions accumulate.
+Consolidation is the Agent Kernel's consolidation tick at work on the facts (spec 3.2 §7.5,
+§10 HK2): it distils the sessions the per-session distiller never reached, then runs two
+passes over each scope — the project's facts and the user-wide ones — one kind at a time.
+
+| Step | Model call | Effect |
+|---|---|---|
+| Distillation | One per session | Sessions cut off before `distill_idle`, or run where no per-session distiller saw them, are distilled with verified-quote promotion off: every fact is `assumed` |
+| Pass 1 | None | An `assumed` fact whose cosine similarity to a newer `assumed` fact is at least `dedup_score` becomes `superseded` by it; an `assumed` fact never used or recalled, with a confidence under `expire_confidence` and older than `assumed_ttl`, becomes `forgotten` (reason `expired`) |
+| Pass 2 | One per cluster | `assumed` facts at a similarity of 0.80 up to `dedup_score` (`CONSOLIDATION_CLUSTER_SCORE`), of one kind, go to the distiller model at the `distiller` effort with structured output `{ merged_text, source_ids, supersedes }`; the merged fact is `assumed`, source `agent_inferred`, its provenance listing `source_ids`, and the facts it names in `supersedes` become `superseded` by it |
+| Loss cap | — | When the passes would change the status of more than `max_loss_fraction` of a scope's live facts, they apply nothing and the record says why |
+
+| Rule | Mechanism |
+|---|---|
+| A `known` fact is never superseded, merged or expired (K-I22) | The passes read `assumed` facts only; a merge naming a `known` fact leaves it alone |
+| An `assumed` fact never supersedes a `known` one (K-I22) | A distilled fact naming a `known` fact in `supersedes` is stored beside it, and the record lists the pair for a person to confirm or forget |
+| Similarity alone never resolves a contradiction | During a tick, only a fact that names `supersedes` or a `correction` fact supersedes another; pass 1 collapses only facts at or above `dedup_score` |
+| Nothing is deleted | Superseded and forgotten facts keep their history (`valid_to`), so undo is a status change |
+| No session is distilled twice | The store keeps a cursor of how far distillation read each session; the per-session distiller moves it too |
+
+| `ConsolidationConfig` | Default | Effect |
+|---|---|---|
+| `dedup_score` | 0.92 | Pass 1 collapses `assumed` facts at or above it |
+| `expire_confidence` | 0.5 | Pass 1 expires unused facts with a confidence under it; a fact without a confidence is not expired |
+| `assumed_ttl` | 90 days | Pass 1 expires unused facts older than it |
+| `max_clusters_per_tick` | 20 | Most clusters pass 2 sends to the model |
+| `max_loss_fraction` | 0.25 | Most of a scope's live facts the passes may change |
+| `max_tokens_per_tick` | 50,000 | Most tokens distillation and pass 2 spend together; the call that crosses it is kept, and no call starts after it |
+
+`Harness::consolidate_memory` runs one tick and returns its `ConsolidationRecord`: the
+sessions distilled, the facts written, every status change with its reason, the facts stored
+beside a `known` one, the loss-cap refusal, and the spend. The record is kept in the fact
+store; `Harness::consolidations` lists the records, and `Harness::undo_consolidation` (or
+`adk_harness::undo_consolidation` over a store) reverts a tick: the facts it superseded or
+forgot are `assumed` again, the facts it wrote are forgotten, and a fact a person changed
+since is left as it is. `Harness::distill_sessions` runs the distillation step alone. A
+fact store keeps records through `put_consolidation`, `consolidations` and
+`restore_assumed`; `InMemoryFactStore`, `FileFactStore` and `SqliteFactStore` implement
+them, and a store that does not refuses a tick before it changes anything.
+
+```rust
+use adk_core::UserId;
+use adk_harness::{ConsolidationConfig, ConsolidationRequest, Harness};
+
+async fn consolidate(harness: &Harness, user: &UserId, sessions: Vec<String>) -> adk_core::Result<()> {
+    let record = harness
+        .consolidate_memory(
+            user,
+            ConsolidationRequest::new()
+                .with_sessions(sessions)
+                .with_config(ConsolidationConfig::default()),
+        )
+        .await?;
+    println!(
+        "tick {}: {} superseded, {} forgotten, {} merged",
+        record.tick_id,
+        record.superseded().count(),
+        record.forgotten().count(),
+        record.merged.len()
+    );
+    if record.superseded().count() > 0 {
+        harness.undo_consolidation(user, &record.tick_id).await?;
+    }
+    Ok(())
+}
+```
+
 ### Audit records
 
 Records carry fact ids and digests, never the text (I45).
@@ -297,6 +366,7 @@ Records carry fact ids and digests, never the text (I45).
 | Action | Fields (`ext`) | When |
 |---|---|---|
 | `harness.memory.fact.stored` | `factId`, `kind`, `status`, `source`, `project`, `digest`, `sessionId` | Before a fact is stored |
-| `harness.memory.fact.promoted`, `.superseded`, `.forgotten` | `factId`, `from`, `to`, `by`, `supersededBy` | Before a status changes |
+| `harness.memory.fact.promoted`, `.superseded`, `.forgotten` | `factId`, `from`, `to`, `by`, `supersededBy`; in a consolidation, `tickId` and `reason` (`duplicate`, `expired`, `merged`, `superseded`, `evicted`) | Before a status changes |
 | `harness.memory.recalled` | `factIds`, `queryDigest`, `tokens` | Each recall or `memory_search` that found facts |
 | `harness.memory.distilled` | `sessionId`, `candidates`, `stored`, `rejected` (digest and reason), `modelCalls`, `cost` | After a distillation |
+| `harness.memory.consolidated` | `tickId`, `partition`, `scope`, `superseded`, `forgotten`, `merged`, `distilled`, `besideKnown`, `sessions`, `counts`, `refused`, `modelCalls`, `tokens`, `cost` | Once per consolidation tick |
