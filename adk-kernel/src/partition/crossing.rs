@@ -738,17 +738,15 @@ impl ToolPolicy for PartitionPolicy {
             .as_ref()
             .map(|acting| acting.agent.id.as_str().to_string())
             .unwrap_or_else(|| request.agent_name.clone());
+        let recorded = super::CrossingCall {
+            crossing: &crossing,
+            fingerprint: &fingerprint,
+            run: run.as_str(),
+            agent: &agent,
+            tool: &request.tool_name,
+        };
         let decided = |outcome, reason: Option<String>| {
-            self.partitions.decided(
-                &crossing,
-                &fingerprint,
-                run.as_str(),
-                call.function_call_id,
-                &agent,
-                &request.tool_name,
-                outcome,
-                reason,
-            )
+            self.partitions.decided(&recorded, call.function_call_id, outcome, reason)
         };
         if let Err(reason) =
             self.partitions.admit(&crossing, self.is_coordinator(&request.agent_name)).await

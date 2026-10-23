@@ -694,6 +694,16 @@ const RECORDED_CAP: usize = 4096;
 /// How many invocations' grants are kept in memory before they are all dropped.
 const INVOCATION_GRANTS_CAP: usize = 4096;
 
+/// One call's crossing as the ledger records it: the crossing, its fingerprint, and the
+/// run, agent and tool that made it.
+pub(crate) struct CrossingCall<'a> {
+    pub(crate) crossing: &'a Crossing,
+    pub(crate) fingerprint: &'a str,
+    pub(crate) run: &'a str,
+    pub(crate) agent: &'a str,
+    pub(crate) tool: &'a str,
+}
+
 /// The partition table and its crossings (spec 3.2 §7.8): reads and changes partitions
 /// with `kernel.partition.created` and `kernel.partition.changed` records, builds each
 /// partition's [`PartitionPolicy`], and keeps the crossing ledger the policy and the crossing
@@ -1036,15 +1046,8 @@ impl Partitions {
         if read && self.granted(run, fingerprint).await {
             return Ok(());
         }
-        let record = self.crossing_record(
-            crossing,
-            fingerprint,
-            run.as_str(),
-            agent,
-            tool,
-            CrossingOutcome::Approved,
-            None,
-        );
+        let call = CrossingCall { crossing, fingerprint, run: run.as_str(), agent, tool };
+        let record = self.crossing_record(&call, CrossingOutcome::Approved, None);
         self.inner.store.record_crossing(record.clone()).await?;
         self.audit_crossing(&record).await;
         if read {
@@ -1101,16 +1104,11 @@ impl Partitions {
         Ok(recurring)
     }
 
-    /// Records a decision the policy made about a crossing, once per call and outcome.
-    #[allow(clippy::too_many_arguments)]
+    /// Records a decision the policy made about `call`, once per call id and outcome.
     pub(crate) async fn decided(
         &self,
-        crossing: &Crossing,
-        fingerprint: &str,
-        run: &str,
+        call: &CrossingCall<'_>,
         call_id: Option<&str>,
-        agent: &str,
-        tool: &str,
         outcome: CrossingOutcome,
         reason: Option<String>,
     ) {
@@ -1120,40 +1118,37 @@ impl Partitions {
                 recorded.clear();
             }
             // Keyed by the call, not the run: a prompt's re-check sees no durable run id.
-            if !recorded.insert((crossing::digest(fingerprint), call_id.to_string(), outcome)) {
+            if !recorded.insert((crossing::digest(call.fingerprint), call_id.to_string(), outcome))
+            {
                 return;
             }
         }
-        let record = self.crossing_record(crossing, fingerprint, run, agent, tool, outcome, reason);
+        let record = self.crossing_record(call, outcome, reason);
         if let Err(error) = self.inner.store.record_crossing(record.clone()).await {
             tracing::warn!(error = %error, "could not write a crossing record");
         }
         self.audit_crossing(&record).await;
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn crossing_record(
         &self,
-        crossing: &Crossing,
-        fingerprint: &str,
-        run: &str,
-        agent: &str,
-        tool: &str,
+        call: &CrossingCall<'_>,
         outcome: CrossingOutcome,
         reason: Option<String>,
     ) -> CrossingRecord {
+        let crossing = call.crossing;
         CrossingRecord {
             id: uuid::Uuid::new_v4().to_string(),
             at: self.inner.clock.now(),
-            run: run.to_string(),
-            agent: agent.to_string(),
+            run: call.run.to_string(),
+            agent: call.agent.to_string(),
             from: crossing.from.clone(),
             to: crossing.to.clone(),
             resource: crossing.resource,
             name: crossing.name.clone(),
             access: crossing.access,
-            tool: tool.to_string(),
-            fingerprint: crossing::digest(fingerprint),
+            tool: call.tool.to_string(),
+            fingerprint: crossing::digest(call.fingerprint),
             outcome,
             reason,
         }
