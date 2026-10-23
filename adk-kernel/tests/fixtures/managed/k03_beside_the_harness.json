@@ -1,0 +1,71 @@
+{
+  "name": "K-03: Beside the harness block",
+  "description": "A harness definition carrying both `adk.harness` and `adk.kernel`; the harness block and the caller's keys stay as they are.",
+  "agent_def": {
+    "name": "builder",
+    "model": "claude-sonnet-5-5",
+    "metadata": {
+      "adk.harness": "{\"mode\":\"ask\",\"shell\":{\"isolation\":\"none\"}}",
+      "team": "platform"
+    }
+  },
+  "kernel": {
+    "proactivity": {
+      "quietHours": {
+        "start": "23:00",
+        "end": "06:30"
+      }
+    },
+    "wakeSets": [
+      {
+        "name": "nightly",
+        "anyOf": [
+          {
+            "cron": {
+              "expr": "0 0 2 * * *",
+              "missed": "fireOnce"
+            }
+          }
+        ],
+        "input": "Run the nightly checks."
+      }
+    ]
+  },
+  "expect": {
+    "canonical": {
+      "proactivity": {
+        "maxProposedOpen": 10,
+        "dailyBudget": {},
+        "quietHours": {
+          "start": "23:00",
+          "end": "06:30"
+        },
+        "approval": "follow_mode",
+        "reviewPeriodMs": 7776000000
+      },
+      "wakeSets": [
+        {
+          "name": "nightly",
+          "anyOf": [
+            {
+              "cron": {
+                "expr": "0 0 2 * * *",
+                "missed": "fireOnce"
+              }
+            }
+          ],
+          "input": "Run the nightly checks.",
+          "overlap": "skip"
+        }
+      ]
+    },
+    "consolidation": false,
+    "triggers": [
+      "builder/nightly"
+    ],
+    "metadata_kept": {
+      "adk.harness": "{\"mode\":\"ask\",\"shell\":{\"isolation\":\"none\"}}",
+      "team": "platform"
+    }
+  }
+}

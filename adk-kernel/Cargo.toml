@@ -12,7 +12,7 @@ keywords = ["adk", "agent", "kernel", "durable", "supervisor"]
 categories = ["asynchronous", "development-tools"]
 
 # Feature set of spec 3.2 §7.1. Features of later phases are declared empty until their
-# phase lands: `proc-baselines` (phase 4), `channels`, `managed` (phase 5).
+# phase lands: `proc-baselines` (phase 4), `channels` (phase 5).
 [features]
 default = ["sqlite", "webhooks", "drivers", "service", "proc"]
 # SQLite backends for the kernel-owned stores, on the pool of `harness.db` with distinct
@@ -46,8 +46,9 @@ proc = ["dep:adk-telemetry", "dep:opentelemetry"]
 proc-baselines = ["proc"]
 # Channel wake sources (spec 3.2 §7.4, phase 5); empty until then.
 channels = []
-# The `adk-managed` bridge (spec 3.2 §7.13, phase 5); empty until then.
-managed = []
+# The managed form (spec 3.2 §7.13, §10 M1): `KernelDef` under the `adk.kernel` metadata
+# key of a `ManagedAgentDef`, and one kernel per tenant over its `ManagedStores`.
+managed = ["dep:adk-managed", "drivers"]
 # The `conformance` module: suites for kernel store backends (spec 3.2 §11).
 conformance = ["tokio/rt"]
 
@@ -60,6 +61,7 @@ adk-server = { workspace = true, features = ["background", "approvals"] }
 adk-telemetry = { workspace = true, optional = true }
 adk-tool = { workspace = true, optional = true }
 adk-sandbox = { workspace = true, optional = true }
+adk-managed = { workspace = true, optional = true }
 async-trait.workspace = true
 # The control plane's router, served on the Unix socket and merged into `ServerBuilder`.
 axum = "0.8"

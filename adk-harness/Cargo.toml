@@ -80,7 +80,8 @@ payments = ["dep:adk-payments", "dep:adk-auth"]
 # The voice surface (spec 3.1 §7.17): the harness as the agent of an `IntegratedRealtimeRunner`.
 voice = ["dep:adk-realtime", "adk-realtime/integration"]
 # The managed form (spec 3.1 §7.18): adk-managed runs on adk-runner and adk-session already.
-managed = ["runner", "dep:adk-managed"]
+# With `kernel`, also the kernel's managed form: one kernel per tenant (spec 3.2 §7.13).
+managed = ["runner", "dep:adk-managed", "adk-kernel?/managed"]
 # Governed web access: web_fetch, web_search, screening (spec 3.1 §7.20).
 web = ["dep:reqwest", "dep:adk-guardrail", "dep:regex", "dep:adk-tool"]
 # MCP interaction: elicitation, sampling and resource bridges (spec 3.1 §7.21).

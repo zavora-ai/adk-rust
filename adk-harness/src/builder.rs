@@ -522,6 +522,23 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// Puts the harness's `propose_followup` items on the agenda of the kernel `handle` is
+    /// bound to (spec 3.2 §7.5, §7.13): a kernel built without `Harness::kernel`, such as a
+    /// tenant's in the managed form (`adk_kernel::managed::TenantKernel::agenda_handle`).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let agenda = adk_kernel::AgendaHandle::new();
+    /// let resolver = HarnessResolver::new("/srv/workspaces")
+    ///     .configure({ let agenda = agenda.clone(); move |b, _| b.agenda_handle(agenda.clone()) });
+    /// ```
+    #[cfg(feature = "kernel")]
+    pub fn agenda_handle(mut self, handle: adk_kernel::AgendaHandle) -> Self {
+        self.kernel_agenda = handle;
+        self
+    }
+
     /// The approval inbox held calls are submitted to.
     ///
     /// With feature `kernel`, the harness keeps a wrapper that also reports each request

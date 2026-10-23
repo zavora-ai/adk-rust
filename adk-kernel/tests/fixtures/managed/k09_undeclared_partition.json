@@ -1,0 +1,7 @@
+{
+  "name": "K-09: A wake set in an undeclared partition",
+  "description": "A wake set's partition is one the block declares, or the default partition.",
+  "agent_def": { "name": "digest", "model": "gemini-3.5-flash-lite" },
+  "kernel": { "wakeSets": [{ "name": "door", "anyOf": [{ "webhook": { "hook": "door" } }], "input": "Who is at the door?", "partition": "home" }] },
+  "expect": { "error_contains": ["partition `home`", "does not declare"] }
+}

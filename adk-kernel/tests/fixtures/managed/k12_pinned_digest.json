@@ -1,0 +1,7 @@
+{
+  "name": "K-12: A driver that pins its own declarations",
+  "description": "Declaration digests are pinned when a person approves the mount, never by a definition.",
+  "agent_def": { "name": "assistant", "model": "claude-sonnet-5-5" },
+  "kernel": { "drivers": [{ "id": "email", "server": { "command": "mcp-email" }, "partitions": ["default"], "sandbox": "os", "declarationDigests": { "send_draft": "sha256:00" } }] },
+  "expect": { "error_contains": ["email", "declarationDigests"] }
+}

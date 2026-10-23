@@ -1,0 +1,118 @@
+{
+  "name": "K-01: Wake sets",
+  "description": "A cron, a webhook and a queue wake set in the kernel's own wake shape; defaults become explicit in the canonical form.",
+  "agent_def": {
+    "name": "digest",
+    "model": "gemini-3.5-flash-lite",
+    "system": "Keep it short."
+  },
+  "kernel": {
+    "wakeSets": [
+      {
+        "name": "morning",
+        "anyOf": [
+          {
+            "cron": {
+              "expr": "0 0 9 * * *",
+              "missed": "skip"
+            }
+          }
+        ],
+        "input": "Summarize the night."
+      },
+      {
+        "name": "orders",
+        "anyOf": [
+          {
+            "webhook": {
+              "hook": "orders"
+            }
+          },
+          {
+            "queue": {
+              "source": "orders"
+            }
+          }
+        ],
+        "input": "Triage the new orders.",
+        "overlap": "queue"
+      },
+      {
+        "name": "weekly",
+        "anyOf": [
+          {
+            "cron": {
+              "expr": "0 0 8 * * MON",
+              "missed": {
+                "catchUp": 2
+              }
+            }
+          }
+        ],
+        "input": "Plan the week.",
+        "queue": "maintenance",
+        "user": "ana"
+      }
+    ]
+  },
+  "expect": {
+    "canonical": {
+      "wakeSets": [
+        {
+          "name": "morning",
+          "anyOf": [
+            {
+              "cron": {
+                "expr": "0 0 9 * * *",
+                "missed": "skip"
+              }
+            }
+          ],
+          "input": "Summarize the night.",
+          "overlap": "skip"
+        },
+        {
+          "name": "orders",
+          "anyOf": [
+            {
+              "webhook": {
+                "hook": "orders"
+              }
+            },
+            {
+              "queue": {
+                "source": "orders"
+              }
+            }
+          ],
+          "input": "Triage the new orders.",
+          "overlap": "queue"
+        },
+        {
+          "name": "weekly",
+          "anyOf": [
+            {
+              "cron": {
+                "expr": "0 0 8 * * MON",
+                "missed": {
+                  "catchUp": 2
+                }
+              }
+            }
+          ],
+          "input": "Plan the week.",
+          "queue": "maintenance",
+          "user": "ana",
+          "overlap": "skip"
+        }
+      ]
+    },
+    "consolidation": false,
+    "triggers": [
+      "digest/morning",
+      "digest/orders",
+      "digest/orders",
+      "digest/weekly"
+    ]
+  }
+}

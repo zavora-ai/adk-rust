@@ -1,0 +1,7 @@
+{
+  "name": "K-06: A wake set on the interactive queue",
+  "description": "The interactive queue is reserved for a person's turn; a wake set runs on background or maintenance.",
+  "agent_def": { "name": "digest", "model": "gemini-3.5-flash-lite" },
+  "kernel": { "wakeSets": [{ "name": "now", "anyOf": [{ "webhook": { "hook": "ping" } }], "input": "Ping.", "queue": "interactive" }] },
+  "expect": { "error_contains": ["interactive", "`background` or `maintenance`"] }
+}

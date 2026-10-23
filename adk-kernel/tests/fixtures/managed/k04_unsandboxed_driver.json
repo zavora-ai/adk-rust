@@ -1,0 +1,7 @@
+{
+  "name": "K-04: Unsandboxed driver",
+  "description": "A definition comes from a tenant, so its driver runs sandboxed; `unsandboxed` is the operator's to configure.",
+  "agent_def": { "name": "assistant", "model": "claude-sonnet-5-5" },
+  "kernel": { "drivers": [{ "id": "shell", "server": { "command": "mcp-shell" }, "partitions": ["default"], "sandbox": "unsandboxed" }] },
+  "expect": { "error_contains": ["adk.kernel", "'assistant'", "unsandboxed", "`os` or `container`"] }
+}

@@ -1,0 +1,193 @@
+{
+  "name": "K-02: Partitions, a driver manifest, a proactivity policy",
+  "description": "Every part of the block: two partitions, a sandboxed driver manifest with a brokered secret, and a proactivity policy that turns the consolidation tick on.",
+  "agent_def": {
+    "name": "assistant",
+    "model": "claude-sonnet-5-5"
+  },
+  "kernel": {
+    "partitions": [
+      {
+        "id": "work",
+        "class": "work",
+        "defaultMode": "auto",
+        "drivers": [
+          "email"
+        ],
+        "crossPartition": "coordinator_with_approval",
+        "blockedCrossings": [
+          "home"
+        ]
+      },
+      {
+        "id": "home",
+        "class": "home",
+        "memoryScope": "family"
+      }
+    ],
+    "drivers": [
+      {
+        "id": "email",
+        "server": {
+          "command": "mcp-email",
+          "args": [
+            "--imap"
+          ],
+          "env": {
+            "EMAIL_TOKEN": "secret://email/token",
+            "EMAIL_HOST": "imap.example.com"
+          }
+        },
+        "partitions": [
+          "work"
+        ],
+        "sandbox": "os",
+        "lifecycle": "eager",
+        "tools": {
+          "list_inbox": "read",
+          "send_draft": "send_external"
+        }
+      }
+    ],
+    "proactivity": {
+      "maxProposedOpen": 5,
+      "dailyBudget": {
+        "maxCostMicroUsd": 2000000
+      },
+      "quietHours": {
+        "start": "22:00",
+        "end": "07:00"
+      },
+      "approval": "always_ask",
+      "consolidation": {
+        "minNewFacts": 10,
+        "budgetShare": 0.2
+      }
+    },
+    "wakeSets": [
+      {
+        "name": "inbox",
+        "anyOf": [
+          {
+            "cron": {
+              "expr": "0 */15 * * * *",
+              "missed": "skip"
+            }
+          }
+        ],
+        "input": "Check the inbox.",
+        "partition": "work"
+      }
+    ]
+  },
+  "expect": {
+    "canonical": {
+      "partitions": [
+        {
+          "id": "work",
+          "class": "work",
+          "defaultMode": "auto",
+          "drivers": [
+            "email"
+          ],
+          "crossPartition": "coordinator_with_approval",
+          "blockedCrossings": [
+            "home"
+          ]
+        },
+        {
+          "id": "home",
+          "class": "home",
+          "defaultMode": "ask",
+          "memoryScope": "family",
+          "crossPartition": "deny"
+        }
+      ],
+      "drivers": [
+        {
+          "id": "email",
+          "server": {
+            "command": "mcp-email",
+            "args": [
+              "--imap"
+            ],
+            "env": {
+              "EMAIL_HOST": "imap.example.com",
+              "EMAIL_TOKEN": "secret://email/token"
+            },
+            "disabled": false,
+            "autoApprove": [],
+            "restartPolicy": null,
+            "lifecycle": "initialize",
+            "taskConfig": {
+              "enableTasks": false,
+              "pollIntervalMs": 1000,
+              "timeoutMs": 300000,
+              "maxPollAttempts": null,
+              "maxInputRounds": 10
+            }
+          },
+          "partitions": [
+            "work"
+          ],
+          "sandbox": "os",
+          "tools": {
+            "list_inbox": "read",
+            "send_draft": "send_external"
+          },
+          "declarationDigests": {},
+          "lifecycle": "eager",
+          "access": {
+            "allowNetwork": true
+          },
+          "sampling": false
+        }
+      ],
+      "proactivity": {
+        "maxProposedOpen": 5,
+        "dailyBudget": {
+          "maxCostMicroUsd": 2000000
+        },
+        "quietHours": {
+          "start": "22:00",
+          "end": "07:00"
+        },
+        "approval": "always_ask",
+        "consolidation": {
+          "minNewSessions": 3,
+          "minNewFacts": 10,
+          "minIntervalMs": 21600000,
+          "debounceMs": 1800000,
+          "budgetShare": 0.2,
+          "maxTokensPerTick": 50000,
+          "dedupScore": 0.92,
+          "expireConfidence": 0.5,
+          "assumedTtlMs": 7776000000,
+          "maxClustersPerTick": 20,
+          "maxLossFraction": 0.25
+        },
+        "reviewPeriodMs": 7776000000
+      },
+      "wakeSets": [
+        {
+          "name": "inbox",
+          "anyOf": [
+            {
+              "cron": {
+                "expr": "0 */15 * * * *",
+                "missed": "skip"
+              }
+            }
+          ],
+          "input": "Check the inbox.",
+          "partition": "work",
+          "overlap": "skip"
+        }
+      ]
+    },
+    "consolidation": true,
+    "triggers": [
+      "assistant/inbox"
+    ]
+  }
+}

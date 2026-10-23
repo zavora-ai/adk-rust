@@ -289,7 +289,8 @@ second.
 | `conformance` | off | The `conformance` module |
 | `drivers` | on | `drivers`: manifests, the driver store, the supervisor over `adk-tool`'s MCP manager, the stdio launcher on `adk-sandbox`'s enforcers |
 | `service` | on | The `service` module; `windows-service` on Windows |
-| `proc-baselines`, `channels`, `managed` | off | Reserved for later phases of spec 3.2; empty in this release |
+| `managed` | off | `managed`: `KernelDef` under the `adk.kernel` metadata key of a managed definition, and `TenantKernel`, one kernel per tenant over its `ManagedStores` on `adk-managed`'s runtime (Experimental) |
+| `proc-baselines`, `channels` | off | Reserved for later phases of spec 3.2; empty in this release |
 
 ## Tests
 
@@ -306,6 +307,7 @@ second.
 | `tests/driver_*_property_tests.rs` | Any declaration change makes a pinned tool stale; a re-issued round never executes a completed call twice under the action ledger |
 | `src/control/tests.rs` | The auth matrix on every transport: socket peers of another uid refused; on Windows the pipe's owner-only descriptor, its owner admitted, and a client of another identity refused by the DACL and, behind an open DACL, by the token check |
 | `src/service/tests.rs` | The launchd plist, systemd unit and Windows service rendered for each platform on every platform; `plutil` accepts the plist; the log is created `0600`. Real installs run in `.github/workflows/kernel-service.yml` |
+| `tests/managed_def_fixtures.rs`, `tests/managed_tenants.rs`, `tests/managed_tenant_property_tests.rs` (feature `managed`) | The kernel block's golden fixtures and refusals; a definition round-trips through the managed state store; a cron wake for one tenant runs on its stores only; a held call runs once after the tenant's approval; no wake, process or approval crosses tenants |
 
 ## License
 

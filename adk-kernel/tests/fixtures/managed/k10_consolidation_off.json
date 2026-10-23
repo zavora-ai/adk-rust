@@ -1,0 +1,26 @@
+{
+  "name": "K-10: The consolidation tick stays off",
+  "description": "A proactivity policy without `consolidation` leaves the tick off in the managed form (spec 3.2 §13 Q1).",
+  "agent_def": {
+    "name": "assistant",
+    "model": "claude-sonnet-5-5"
+  },
+  "kernel": {
+    "proactivity": {
+      "approval": "never",
+      "maxProposedOpen": 3
+    }
+  },
+  "expect": {
+    "canonical": {
+      "proactivity": {
+        "maxProposedOpen": 3,
+        "dailyBudget": {},
+        "approval": "never",
+        "reviewPeriodMs": 7776000000
+      }
+    },
+    "consolidation": false,
+    "triggers": []
+  }
+}

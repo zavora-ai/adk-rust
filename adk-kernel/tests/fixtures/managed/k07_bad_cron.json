@@ -1,0 +1,7 @@
+{
+  "name": "K-07: A cron expression that does not parse",
+  "description": "Cron wakes take the six-field form, seconds first.",
+  "agent_def": { "name": "digest", "model": "gemini-3.5-flash-lite" },
+  "kernel": { "wakeSets": [{ "name": "morning", "anyOf": [{ "cron": { "expr": "every morning", "missed": "skip" } }], "input": "Summarize." }] },
+  "expect": { "error_contains": ["morning", "six-field cron expression"] }
+}

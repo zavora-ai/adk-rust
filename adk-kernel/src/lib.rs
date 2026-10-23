@@ -37,10 +37,11 @@
 //! | [`audit`] action names | §9.3 |
 //! | `service` (feature `service`): `ServiceDefinition`, `install`, `uninstall`, `run_as_service` (Windows) | §7.12, §10 W3 |
 //! | `conformance` (feature `conformance`) | §11 |
+//! | `managed` (feature `managed`): `KernelDef`, `TenantKernel`, `KernelResolver`, `ManagedKernels` | §7.13, §10 M1 |
 //!
 //! Agenda and proactivity (§7.5) and attention and resources (§7.9) are phase 2; drivers
-//! (§7.7) and partitions (§7.8) phase 3; `/proc` baselines (§7.10) phase 4; the managed form
-//! (§7.13) and channel wakes phase 5. Each adds to these types without changing them.
+//! (§7.7) and partitions (§7.8) phase 3; `/proc` baselines (§7.10) phase 4; channel wakes
+//! phase 5. Each adds to these types without changing them.
 //!
 //! # Features
 //!
@@ -53,7 +54,8 @@
 //! | `service` | on | The `service` module: `adk-rust up` as a launchd agent, a systemd user unit or a Windows service (`windows-service` on Windows) |
 //! | `proc` | on | The OTel GenAI histograms of the live aggregates; the ledger in phase 4 |
 //! | `proc-baselines` | off | Empty until phase 4 (implies `proc`) |
-//! | `channels`, `managed` | off | Empty until phase 5 |
+//! | `channels` | off | Empty until phase 5 |
+//! | `managed` | off | The managed form: `KernelDef` in a managed definition, one kernel per tenant (`adk-managed`) |
 //! | `conformance` | off | The `conformance` module |
 //!
 //! # Example
@@ -90,6 +92,8 @@ pub mod control;
 pub mod drivers;
 pub mod error;
 pub mod kernel;
+#[cfg(feature = "managed")]
+pub mod managed;
 pub mod partition;
 pub mod process;
 pub mod review;
