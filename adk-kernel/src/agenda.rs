@@ -903,6 +903,10 @@ pub fn item_session(item_id: &str) -> String {
     format!("agenda-{item_id}")
 }
 
+/// The approver group of the approvals inbox `adk-rust up` serves: the control plane's
+/// `operator` scope.
+const OPERATOR_GROUP: &str = "operator";
+
 /// The id of the inbox request of item `item_id`.
 fn request_id(item_id: &str) -> String {
     format!("agenda_{item_id}")
@@ -1090,8 +1094,13 @@ impl Agenda {
         let scope = ApprovalScope::new(sup.app_name.clone(), item.subject.id.clone(), session);
         let args = serde_json::to_value(item)?;
         let call = ToolConfirmationRequest::new(AGENDA_TOOL_NAME, args.clone());
-        let policy = ApprovalPolicy::new([ApproverSelector::human(item.subject.id.clone())])
-            .allow_self_approval();
+        // The item's user, or the operators the control plane's socket and loopback serve,
+        // decide it; either is a person.
+        let policy = ApprovalPolicy::new([
+            ApproverSelector::human(item.subject.id.clone()),
+            ApproverSelector::group(OPERATOR_GROUP),
+        ])
+        .allow_self_approval();
         let id = request_id(&item.id);
         let mut request = ApprovalRequest::new(id.clone(), scope, &call, policy)
             .with_summary(format!("Agenda follow-up: {}", item.title))
