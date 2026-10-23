@@ -415,6 +415,33 @@ async fn consolidate(harness: &Harness, user: &UserId, sessions: Vec<String>) ->
 }
 ```
 
+#### Confirmed observations
+
+The kernel's daily baseline pass ([`/proc`](../kernel/proc.md)) asks a person about a change
+in their routine as an agenda question. `Harness::observation_audience(user)` is the
+harness's `ObservationAudience`: the kernel puts the partition's observations to `user`, in
+the harness's mode, and a confirmation is remembered as a user-wide `preference` fact,
+`known`, source `user_confirmed`, whose text is the observation's statement. The same text
+already remembered as an assumption is promoted to `known` instead of stored twice; a
+rejected observation writes nothing. `adk-rust up` registers it for the OS user when
+long-term memory is on.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::UserId;
+use adk_harness::Harness;
+use adk_kernel::{Kernel, PartitionId};
+
+fn with_observations(harness: &Harness, user: &UserId) -> adk_core::Result<Kernel> {
+    let audience = harness.observation_audience(user)?;
+    Ok(harness
+        .kernel()
+        .observation_audience(PartitionId::default(), Arc::new(audience))
+        .build()?)
+}
+```
+
 ### Audit records
 
 Records carry fact ids and digests, never the text (I45).

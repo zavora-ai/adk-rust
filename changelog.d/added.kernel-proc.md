@@ -24,6 +24,14 @@
     (`LlmPhraser`, within `BaselinePolicy::daily_budget`) only after the deterministic
     detection, else by the kernel's template; `KernelEvent::Observation` and the
     `kernel.observation` audit record name its dimensions and windows, never a value.
+  - Observations are asked, not scheduled: in a partition with an `ObservationAudience`
+    (`KernelBuilder::observation_audience`), each is an `AgendaOrigin::Observation` agenda
+    item that needs a person in every mode, Auto included, and never becomes a process.
+    `agenda approve` confirms it — the item is `Done` with its `AgendaAnswer`, and the
+    audience remembers its statement (`Observation::statement`) as a `Known` fact — and
+    `agenda reject` closes it with nothing remembered; `agenda schedule` is refused.
+    `adk_harness::Harness::observation_audience` (`HarnessObservations`) remembers a
+    confirmation as a user-wide `Preference` fact with source `UserConfirmed`.
   - `adk-rust proc [ledger|baselines|observations]`, with `proc ledger --export FILE`;
-    `adk-rust up` keeps the ledger beside its other stores and words observations with the
-    harness's model.
+    `adk-rust up` keeps the ledger beside its other stores, words observations with the
+    harness's model, and puts them to its user when long-term memory is on.

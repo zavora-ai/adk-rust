@@ -16,6 +16,7 @@ quiet hours and within the day's budget. Proposing is free; running is governed.
 | `plan` | The steps the proposer produced, if any |
 | `budget` | The `RunBudget` of the item's process; its cost cap is reserved against the daily budget |
 | `expiresAt`, `when` | When an item not yet running expires; the wake the proposer asked for |
+| `answer` | For an `observation` item, the person's answer once given: `confirmed`, `by`, `at` and the `fact` it remembered |
 
 An item's process is a `Proposed` process on the `background` queue, in a session of its own
 (`agenda-<id>`), whose parent is the proposing run. Every state change is a
@@ -59,6 +60,19 @@ it through the agenda.
 > **Important:** an item of origin `consolidation` — proposed by the consolidation tick —
 > never starts without a person's approval, in every mode, Auto included (K-I23). Approving
 > or scheduling it as a service is refused.
+
+An item of origin `observation` is a question, answered and never scheduled (spec 3.2 §7.10).
+It needs a person in every mode, Auto included, and never becomes a process or a model turn:
+
+| Answer | How | Effect |
+|---|---|---|
+| Confirm | `adk-rust agenda approve ID`, or `approve` in the inbox | `proposed` → `done`; the partition's `ObservationAudience` remembers the item's rationale as a `known` fact with the person as its source |
+| Reject | `adk-rust agenda reject ID`, or `reject` in the inbox | `proposed` → `rejected`; nothing is remembered, so a related assumed fact stays assumed |
+| None | — | `expired` once `expiresAt` passes |
+
+Its inbox request allows `[approve, reject]`, and `adk-rust agenda schedule` on it is refused
+with the reason. A question costs no budget, so only `max_proposed_open` refuses one. See
+[Answering an observation](proc.md#answering-an-observation).
 
 ## Limits
 

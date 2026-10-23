@@ -12,7 +12,7 @@
 //! | Approvals | `StoreApprovalService::with_run_store`, so a decision wakes the parked run; `spawn_approval_ticker` for expiries |
 //! | Kill switch | [`KernelConfig::governance`]: `GovernanceControl::mirrored` with a 250 ms poll on multi-replica ([`KernelConfig::mirrored_governance`], K-I8) |
 //! | Control plane | [`ControlPlane`] over [`KernelConfig::control`] (§7.11) |
-//! | `/proc` (feature `proc`) | `KernelBuilder::ledger`: a sink on the bus writes every event's ledger row; the hosted runtime's `ProgressSource` gets the ledger at start; with `proc-baselines` the maintenance tick enqueues the daily `kernel.proc` pass (§7.10) |
+//! | `/proc` (feature `proc`) | `KernelBuilder::ledger`: a sink on the bus writes every event's ledger row; the hosted runtime's `ProgressSource` gets the ledger at start; with `proc-baselines` the maintenance tick enqueues the daily `kernel.proc` pass, and [`KernelBuilder::observation_audience`] puts a partition's observations to a person as agenda questions (§7.10) |
 //!
 //! Lifecycle: [`pause`](Kernel::pause) shuts each worker's claim loop down and lets running
 //! processes finish their attempt; [`drain`](Kernel::drain) suspends running processes at

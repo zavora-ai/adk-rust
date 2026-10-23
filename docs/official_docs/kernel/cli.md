@@ -207,13 +207,13 @@ approved ab264c4b-f8f5-413e-937a-b364be35b52f: now scheduled on 1 wake(s)
 | Subcommand | Does |
 |---|---|
 | `list [--partition P] [--state S] [--limit N]` | The items, oldest first; the default |
-| `approve ID` | Approves a proposed item as you; it runs once admitted |
-| `reject ID [--reason R]` | Rejects a proposed or approved item |
-| `schedule ID --at TIME` | Runs the item at a time — RFC 3339, `HH:MM` local, or `+30m`, `+2h`, `+1d` — approving a proposed item first |
+| `approve ID` | Approves a proposed item as you; it runs once admitted. For an `observation`, confirms it: nothing runs, and its statement is remembered as known ([`/proc`](proc.md#answering-an-observation)) |
+| `reject ID [--reason R]` | Rejects a proposed or approved item; for an `observation`, dismisses it with nothing remembered |
+| `schedule ID --at TIME` | Runs the item at a time — RFC 3339, `HH:MM` local, or `+30m`, `+2h`, `+1d` — approving a proposed item first; refused for an `observation`, which is answered, never scheduled |
 | `schedule ID --cron EXPR` | At the next time the cron expression (UTC) fires |
 
-An ID may be a unique prefix. An item the consolidation tick proposed is approved only by a
-person; `agenda approve` over the socket or loopback is one.
+An ID may be a unique prefix. An item the consolidation tick or the baseline pass proposed is
+approved only by a person; `agenda approve` over the socket or loopback is one.
 
 ## `adk-rust wake`
 

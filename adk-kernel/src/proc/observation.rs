@@ -151,21 +151,19 @@ impl Observation {
     /// # Example
     ///
     /// ```rust
-    /// use adk_kernel::proc::{Direction, Observation, ObservedDimension, Phrasing};
-    /// use chrono::NaiveDate;
+    /// use adk_kernel::proc::Observation;
     ///
-    /// let day = NaiveDate::from_ymd_opt(2026, 10, 22).unwrap();
-    /// let since = NaiveDate::from_ymd_opt(2026, 10, 13).unwrap();
-    /// let observation = Observation {
-    ///     id: Observation::id_for(&"default".into(), day),
-    ///     partition: "default".into(),
-    ///     as_of: day,
-    ///     dimensions: vec![ObservedDimension::new("activity.last_minute", Direction::Higher, since, 10)],
-    ///     windows: vec![7, 14],
-    ///     question: "Your routine has changed over the last two weeks. Would you like to review what changed?".into(),
-    ///     phrasing: Phrasing::Template,
-    ///     created_at: chrono::Utc::now(),
-    /// };
+    /// let observation: Observation = serde_json::from_value(serde_json::json!({
+    ///     "id": "obs-20261022-37a8eec1",
+    ///     "partition": "default",
+    ///     "asOf": "2026-10-22",
+    ///     "dimensions": [{ "dimension": "activity.last_minute", "direction": "higher", "since": "2026-10-13", "days": 10 }],
+    ///     "windows": [7, 14],
+    ///     "question": "Your routine has changed over the last two weeks. Would you like to review what changed?",
+    ///     "phrasing": "template",
+    ///     "createdAt": "2026-10-23T00:05:00Z",
+    /// }))
+    /// .unwrap();
     /// assert_eq!(
     ///     observation.statement(),
     ///     "Since 2026-10-13, compared with the 28 days before: the day's last activity has been later."

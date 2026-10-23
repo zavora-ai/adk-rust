@@ -8,7 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use adk_kernel::control::ControlClient;
-use adk_kernel::control::api::{AttachRequest, ProcessesQuery, SpawnRequest};
+use adk_kernel::control::api::{AgendaQuery, AttachRequest, ProcessesQuery, SpawnRequest};
 use adk_kernel::{Wake, WakeSet};
 use anyhow::{Context, Result, bail};
 use serde_json::json;
@@ -50,15 +50,17 @@ struct Up {
 
 impl Up {
     async fn start(bin: &Path, provider: &str, model: &str, mode: &str) -> Result<Self> {
-        Self::start_seeded(bin, provider, model, mode, |_| async { Ok(()) }).await
+        Self::start_seeded(bin, provider, model, mode, false, |_| async { Ok(()) }).await
     }
 
-    /// Starts `adk-rust up` after `seed` wrote what the kernel home holds before it.
+    /// Starts `adk-rust up` after `seed` wrote what the kernel home holds before it, with
+    /// long-term memory when `memory` is set.
     async fn start_seeded<F, Fut>(
         bin: &Path,
         provider: &str,
         model: &str,
         mode: &str,
+        memory: bool,
         seed: F,
     ) -> Result<Self>
     where
@@ -105,7 +107,8 @@ impl Up {
             .arg(&home)
             .args(["--bind", &format!("127.0.0.1:{port}"), "--mode", mode, "--dir"])
             .arg(&workspace)
-            .args(["--provider", provider, "--model", model, "--no-memory"])
+            .args(["--provider", provider, "--model", model])
+            .args((!memory).then_some("--no-memory"))
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log);
@@ -373,7 +376,7 @@ async fn k4(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
     .with_session_id("k4-live");
     let pid = client.spawn(&request).await?.meta.pid;
     let item = |client: ControlClient, pid: String| async move {
-        let items = client.agenda(&adk_kernel::control::api::AgendaQuery::default()).await?;
+        let items = client.agenda(&AgendaQuery::default()).await?;
         Ok::<_, anyhow::Error>(items.into_iter().find(|item| item.proposer() == Some(pid.as_str())))
     };
     let proposed = until(Duration::from_secs(120), || {
@@ -716,7 +719,7 @@ async fn k10(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
     use adk_kernel::proc::{LedgerEntry, Phrasing, is_neutral_question};
 
     let mut checks = Checks::default();
-    let up = Up::start_seeded(bin, provider, model, "ask", seed_routine).await?;
+    let up = Up::start_seeded(bin, provider, model, "ask", true, seed_routine).await?;
     let client = up.client().await?;
 
     // A live turn: its activity reaches the ledger, its content does not.
@@ -807,17 +810,103 @@ async fn k10(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
         }),
     );
 
+    // The observation is a question for the user, answered and never scheduled: confirmed
+    // through the binary, it is remembered as a known fact with the person as its source.
+    let asked = until(Duration::from_secs(30), || {
+        let client = client.clone();
+        async move {
+            let items = client.agenda(&AgendaQuery::default()).await?;
+            Ok(items.iter().any(|item| {
+                item.origin.is_question() && item.state == adk_kernel::AgendaState::Proposed
+            }))
+        }
+    })
+    .await?;
+    checks.check("the observation waits in the agenda as a question for the user", asked);
+    let items = client.agenda(&AgendaQuery::default()).await?;
+    let question = items.iter().find(|item| item.origin.is_question()).cloned();
+    let processes = client.processes(&ProcessesQuery::default()).await?;
+    checks.check(
+        "and no process runs for it",
+        question.as_ref().is_some_and(|item| {
+            processes.iter().all(|process| process.meta.agenda_item.as_deref() != Some(&item.id))
+        }),
+    );
+    let mut list = Command::new(bin);
+    list.args(["agenda", "--home"]).arg(&up.home).env("RUST_LOG", "warn").stdin(Stdio::null());
+    isolate(&mut list, up.root.path());
+    let listed = String::from_utf8_lossy(&list.output()?.stdout).to_string();
+    println!("    $ adk-rust agenda\n{}", indent(&listed));
+    checks.check(
+        "`adk-rust agenda` lists it as a question",
+        listed.contains("observation") && listed.contains("asked as questions"),
+    );
+    let mut remembered = false;
+    if let Some(item) = &question {
+        let mut schedule = Command::new(bin);
+        schedule
+            .args(["agenda", "--home"])
+            .arg(&up.home)
+            .args(["schedule", &item.id, "--at", "+1h"])
+            .env("RUST_LOG", "warn")
+            .stdin(Stdio::null());
+        isolate(&mut schedule, up.root.path());
+        let refused = schedule.output()?;
+        checks.check(
+            "`adk-rust agenda schedule` on it is refused with the reason",
+            !refused.status.success()
+                && String::from_utf8_lossy(&refused.stderr).contains("never scheduled"),
+        );
+        let mut approve = Command::new(bin);
+        approve
+            .args(["agenda", "--home"])
+            .arg(&up.home)
+            .args(["approve", &item.id[..12]])
+            .env("RUST_LOG", "warn")
+            .stdin(Stdio::null());
+        isolate(&mut approve, up.root.path());
+        let approved = approve.output()?;
+        let said = String::from_utf8_lossy(&approved.stdout).to_string();
+        println!("    $ adk-rust agenda approve {}\n{}", &item.id[..12], indent(&said));
+        let answered = client.agenda(&AgendaQuery::default()).await?;
+        let closed = answered.iter().find(|candidate| candidate.id == item.id);
+        let fact = closed.and_then(|item| item.answer.as_ref()).and_then(|a| a.fact.clone());
+        checks.check(
+            "`adk-rust agenda approve` confirms it and closes the item",
+            approved.status.success()
+                && said.contains("remembered as known fact")
+                && closed.is_some_and(|item| item.state == adk_kernel::AgendaState::Done),
+        );
+        if let Some(fact) = fact {
+            use adk_harness::FactStore as _;
+            let url = format!("sqlite://{}?mode=rw", up.home.join("harness.db").display());
+            let sessions = adk_session::SqliteSessionService::new(&url).await?;
+            let store = adk_harness::SqliteFactStore::new(sessions.pool().clone());
+            let facts =
+                store.list(adk_harness::FactFilter::user("adk-rust", &item.subject.id)).await?;
+            remembered = facts.iter().any(|known| {
+                known.id == fact
+                    && known.text == item.rationale
+                    && known.status == adk_harness::FactStatus::Known
+                    && known.provenance.source == adk_harness::FactSource::UserConfirmed
+            });
+        }
+    }
+    checks.check("its statement is a known fact whose source is the person", remembered);
+
     // The export, through the binary as a person runs it.
     let export = up.root.path().join("ledger.jsonl");
-    let status = Command::new(bin)
+    let mut command = Command::new(bin);
+    command
         .args(["proc", "ledger", "--home"])
         .arg(&up.home)
         .arg("--export")
         .arg(&export)
         .env("RUST_LOG", "warn")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
+        .stderr(Stdio::null());
+    isolate(&mut command, up.root.path());
+    let status = command.status()?;
     let exported = std::fs::read_to_string(&export).unwrap_or_default();
     let parsed: Vec<LedgerEntry> =
         exported.lines().filter_map(|line| serde_json::from_str(line).ok()).collect();
@@ -825,11 +914,10 @@ async fn k10(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
         "`adk-rust proc ledger --export` writes every row as JSONL",
         status.success() && parsed.len() == exported.lines().count() && parsed.len() > 400,
     );
-    let shown = Command::new(bin)
-        .args(["proc", "--home"])
-        .arg(&up.home)
-        .env("RUST_LOG", "warn")
-        .output()?;
+    let mut command = Command::new(bin);
+    command.args(["proc", "--home"]).arg(&up.home).env("RUST_LOG", "warn");
+    isolate(&mut command, up.root.path());
+    let shown = command.output()?;
     let shown = String::from_utf8_lossy(&shown.stdout);
     checks.check(
         "`adk-rust proc` offers the observation's question",

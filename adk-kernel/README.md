@@ -296,8 +296,11 @@ With `proc-baselines`, the maintenance tick runs the daily `kernel.proc` pass ov
 `adk-eval`'s ledger statistics — 28-day median and MAD baselines, a 14-day warm-up, the 7-
 and 14-day deviation test, two dimensions or one for ten days, a 7-day cooldown — and
 records each change as an `Observation` worded as a neutral question (`LlmPhraser`, or the
-kernel's template). `GET /api/kernel/proc/ledger|baselines|observations` serve them; see
-[Self-observation: `/proc`](../docs/official_docs/kernel/proc.md).
+kernel's template). `GET /api/kernel/proc/ledger|baselines|observations` serve them. In a
+partition with an `ObservationAudience` (`KernelBuilder::observation_audience`; the harness is
+one), each observation is also an agenda question, answered and never scheduled: confirmed,
+its statement becomes a `Known` fact with the person as its source; rejected, nothing is
+remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md).
 
 ## Features
 
@@ -330,7 +333,7 @@ kernel's template). `GET /api/kernel/proc/ledger|baselines|observations` serve t
 | `src/control/tests.rs` | The auth matrix on every transport: socket peers of another uid refused; on Windows the pipe's owner-only descriptor, its owner admitted, and a client of another identity refused by the DACL and, behind an open DACL, by the token check |
 | `src/service/tests.rs` | The launchd plist, systemd unit and Windows service rendered for each platform on every platform; `plutil` accepts the plist; the log is created `0600`. Real installs run in `.github/workflows/kernel-service.yml` |
 | `tests/managed_def_fixtures.rs`, `tests/managed_tenants.rs`, `tests/managed_tenant_property_tests.rs` (feature `managed`) | The kernel block's golden fixtures and refusals; a definition round-trips through the managed state store; a cron wake for one tenant runs on its stores only; a held call runs once after the tenant's approval; no wake, process or approval crosses tenants |
-| `tests/k10_baselines.rs` | K10 on a manual clock: six weeks of a routine whose last two end late yield one observation on the tenth day of the change, none in the warm-up or the cooldown, and again after it; none without `proc-baselines` |
+| `tests/k10_baselines.rs` | K10 on a manual clock: six weeks of a routine whose last two end late yield one observation on the tenth day of the change, none in the warm-up or the cooldown, and again after it; each an agenda question that stays open in Auto, starts no run, is remembered once when confirmed and not at all when rejected; none without `proc-baselines` |
 | `tests/proc_property_tests.rs` | K-I19: no ledger row carries a payload of the event or audit record that produced it |
 
 ## License

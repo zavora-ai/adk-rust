@@ -104,6 +104,41 @@ $ adk-rust proc
 Each observation is also a `KernelEvent::Observation` on the event bus and a
 `kernel.observation` audit record with its id, partition, dimensions and windows.
 
+## Answering an observation
+
+An observation of a partition with an audience is also put to a person as an agenda item of
+origin `observation`: titled with the question, its rationale the statement of what changed,
+built from the dimension names alone. `adk-rust up` makes the harness its partition's audience
+when long-term memory is on, so the question goes to the user it serves:
+
+```text
+$ adk-rust agenda
+ID                                    STATE       ORIGIN             AGE  TITLE
+obs-20261022-37a8eec1                 proposed    observation         2h  Your routine has changed over the last two weeks: …
+
+1 observation(s) asked as questions: `adk-rust agenda approve ID` confirms one and remembers it, `reject ID` dismisses it.
+
+$ adk-rust agenda approve obs-2026
+confirmed obs-20261022-37a8eec1: remembered as known fact 5b0e…
+```
+
+The item is answered, never scheduled (spec 3.2 §7.10):
+
+| Answer | Effect |
+|---|---|
+| Confirm (`agenda approve`, or `approve` in the inbox) | The item is `done` with the answer. Its statement — such as "Since 2026-10-15, compared with the 28 days before: the day's last activity has been later." — is remembered as a user-wide `preference` fact, `known`, source `user_confirmed` (spec 3.1 §7.15); the same text already remembered as an assumption is promoted to `known` instead |
+| Reject (`agenda reject`, or `reject` in the inbox) | The item is `rejected` with the answer; nothing is remembered, so any related fact stays as it was |
+| No answer | The item expires after the longest comparison window, 14 days |
+
+> **Important:** an observation needs a person in every mode, Auto included, and never becomes
+> a process or a model turn. Approving it as a service is refused, and `adk-rust agenda
+> schedule` on it is refused with the reason.
+
+A partition without an audience keeps its observations at `adk-rust proc` and
+`/api/kernel/proc/observations` and asks nobody. In code, `KernelBuilder::observation_audience`
+registers an `ObservationAudience` for a partition; `adk_harness::Harness::observation_audience`
+is the harness's.
+
 ## Exporting the ledger
 
 ```bash
