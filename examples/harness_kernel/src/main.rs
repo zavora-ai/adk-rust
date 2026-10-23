@@ -1,10 +1,12 @@
 //! Scenarios for the agent kernel (spec 3.2 §5, §11).
 //!
-//! Scripted, no keys: K1 and K5 on `ScriptedLlm` with a real kernel — durable workers, the
-//! scheduler, SQLite stores and the control plane on a socket and loopback HTTP.
-//! Live (`--live`): K3 and K5 through the `adk-rust up` binary on a real model.
+//! Scripted, no keys: K1, K5 and K6 on `ScriptedLlm` with a real kernel — durable workers,
+//! the scheduler, SQLite stores, drivers and the control plane on a socket and loopback HTTP.
+//! Live (`--live`): K3, K5, K6 and a parked driver question answered after a restart,
+//! through the `adk-rust up` binary on a real model.
 
 mod live;
+mod notes_driver;
 mod scripted;
 
 use std::path::PathBuf;
@@ -51,6 +53,10 @@ const SCRIPTED: &[(&str, &str)] = &[
         "k5_one_job_many_windows",
         "a turn belongs to the terminal that runs it; there is no control plane to attach to",
     ),
+    (
+        "k6_drivers_you_can_trust",
+        "an MCP server runs unsandboxed as configured, its `readOnlyHint` decides its class, and a changed tool keeps its rules",
+    ),
 ];
 
 /// The live scenarios.
@@ -58,6 +64,8 @@ const LIVE: &[&str] = &[
     "live_k5_approve_from_another_process",
     "live_k3_file_change_wakes",
     "live_k4_a_proposal_waits_for_approval",
+    "live_k6_supervised_driver",
+    "live_parked_question_after_restart",
 ];
 
 fn verdict(result: &Result<Checks>) -> String {
@@ -70,6 +78,10 @@ fn verdict(result: &Result<Checks>) -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Mounted as a driver, this binary is the notes MCP server; it prints nothing else.
+    if std::env::args().nth(1).as_deref() == Some("serve-notes-driver") {
+        return notes_driver::serve().await;
+    }
     match std::env::var("HARNESS_ENV_FILE") {
         Ok(path) => {
             dotenvy::from_path_override(path).ok();

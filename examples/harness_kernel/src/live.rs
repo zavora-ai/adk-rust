@@ -1,4 +1,4 @@
-//! K3, K4 and K5 on a live model through the `adk-rust up` binary (spec 3.2 §11): the kernel
+//! K3, K4, K5 and K6 on a live model through the `adk-rust up` binary (spec 3.2 §11): the kernel
 //! runs as its own process, and this one reaches it over the control plane like any other
 //! surface. Keys come from the environment the binary inherits and are never printed.
 
@@ -31,6 +31,8 @@ pub async fn run(name: &str, bin: &Path, provider: &str, model: &str) -> Result<
         "live_k5_approve_from_another_process" => k5(bin, provider, model).await,
         "live_k3_file_change_wakes" => k3(bin, provider, model).await,
         "live_k4_a_proposal_waits_for_approval" => k4(bin, provider, model).await,
+        "live_k6_supervised_driver" => k6(bin, provider, model).await,
+        "live_parked_question_after_restart" => parked_question(bin, provider, model).await,
         other => bail!("unknown scenario {other}"),
     }
 }
@@ -50,8 +52,34 @@ impl Up {
         let (home, workspace) = (root.path().join("kernel"), root.path().join("ws"));
         std::fs::create_dir_all(&workspace)?;
         std::fs::write(workspace.join("README.md"), "a project\n")?;
+        Self::boot(bin, provider, model, mode, root, home, workspace).await
+    }
+
+    /// Stops this kernel with `SIGTERM` and starts it again on the same home.
+    async fn restart(self, bin: &Path, provider: &str, model: &str, mode: &str) -> Result<Self> {
+        let mut this = std::mem::ManuallyDrop::new(self);
+        stop(&mut this.child);
+        // SAFETY: each field is read once and `this` is never used or dropped again.
+        let (root, home, workspace) = unsafe {
+            (std::ptr::read(&this.root), std::ptr::read(&this.home), std::ptr::read(&this.workspace))
+        };
+        Self::boot(bin, provider, model, mode, root, home, workspace).await
+    }
+
+    async fn boot(
+        bin: &Path,
+        provider: &str,
+        model: &str,
+        mode: &str,
+        root: tempfile::TempDir,
+        home: PathBuf,
+        workspace: PathBuf,
+    ) -> Result<Self> {
         let port = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
-        let log = std::fs::File::create(root.path().join("up.log"))?;
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(root.path().join("up.log"))?;
         let mut command = Command::new(bin);
         command
             .args(["up", "--home"])
@@ -92,18 +120,22 @@ impl Up {
 
 impl Drop for Up {
     fn drop(&mut self) {
-        // SIGTERM drains the kernel; a stuck one is killed.
-        let _ = Command::new("kill").args(["-TERM", &self.child.id().to_string()]).status();
-        let started = Instant::now();
-        while started.elapsed() < Duration::from_secs(40) {
-            if matches!(self.child.try_wait(), Ok(Some(_))) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        stop(&mut self.child);
     }
+}
+
+/// `SIGTERM`, which drains the kernel; a stuck one is killed.
+fn stop(child: &mut Child) {
+    let _ = Command::new("kill").args(["-TERM", &child.id().to_string()]).status();
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(40) {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// A private `HOME` and config directory, so nothing reads or writes the user's own.
@@ -424,4 +456,186 @@ async fn k4(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
 /// `text` indented for the scenario's output.
 fn indent(text: &str) -> String {
     text.lines().map(|line| format!("      {line}")).collect::<Vec<_>>().join("\n")
+}
+
+/// Runs `adk-rust <command> --home <home> <args>` against the kernel of `up` and returns
+/// its output.
+fn cli(bin: &Path, up: &Up, command_and_args: &[&str]) -> Result<(bool, String)> {
+    let (name, args) = command_and_args.split_first().context("a command")?;
+    let mut command = Command::new(bin);
+    command.arg(name).arg("--home").arg(&up.home).args(args).stdin(Stdio::null());
+    isolate(&mut command, up.root.path());
+    let output = command.output()?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok((output.status.success(), text))
+}
+
+/// Writes the notes driver's manifest under `up`'s root and mounts it with
+/// `adk-rust drivers mount --yes`.
+fn mount_notes(bin: &Path, up: &Up, instance: &str) -> Result<(bool, String)> {
+    let notes = up.root.path().join("notes");
+    std::fs::create_dir_all(&notes)?;
+    let manifest = up.root.path().join("notes.toml");
+    std::fs::write(&manifest, crate::notes_driver::manifest(&std::env::current_exe()?, &notes, instance))?;
+    let path = manifest.display().to_string();
+    cli(bin, up, &["drivers", "mount", &path, "--yes"])
+}
+
+/// Spawns a turn of `text` in `session` and waits for it to reach `state`.
+async fn turn_until(up: &Up, session: &str, text: &str, done: impl Fn(adk_core::RunState) -> bool) -> Result<(String, bool)> {
+    let client = up.client().await?;
+    let pid = client.spawn(&SpawnRequest::new("adk-rust", json!({ "text": text })).with_session_id(session)).await?.meta.pid;
+    let reached = until(Duration::from_secs(180), || {
+        let client = client.clone();
+        let pid = pid.clone();
+        let done = &done;
+        async move {
+            let processes = client.processes(&ProcessesQuery::default()).await?;
+            Ok(processes.iter().any(|process| process.meta.pid == pid && done(process.run.state)))
+        }
+    })
+    .await?;
+    Ok((pid, reached))
+}
+
+/// K6 live: the notes driver mounted with `adk-rust drivers mount`, used by the model,
+/// killed and restarted with backoff, redeclared and held until `drivers reapprove`.
+async fn k6(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
+    let mut checks = Checks::default();
+    let up = Up::start(bin, provider, model, "ask").await?;
+    let instance = format!("live-k6-{}", std::process::id());
+    let (mounted, shown) = mount_notes(bin, &up, &instance)?;
+    checks.check(
+        "`drivers mount` shows the command line, partitions and classes, and mounts",
+        mounted && shown.contains("read_note") && shown.contains("send_external") && shown.contains("mounted notes"),
+    );
+    let ask = "Call the read_note tool once and reply with the codeword it returns, nothing else.";
+    let (_, finished) = turn_until(&up, "k6-first", ask, |state| state.is_terminal()).await?;
+    let attached = up.client().await?.attach("k6-first", &AttachRequest::default()).await?;
+    let (text, calls) = transcript_text(&attached.transcript);
+    checks.check("the model used the driver's read tool without approval", finished && calls.iter().any(|call| call.starts_with("read_note")));
+    checks.check("and answered from it", text.contains(crate::notes_driver::CODEWORD));
+
+    let client = up.client().await?;
+    let mut events = client.events(None).await?;
+    crate::notes_driver::kill(&instance)?;
+    let mut seen = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline && !seen.ends_with(&["running".to_string()]) {
+        if let Ok(Some(Ok(record))) = tokio::time::timeout(Duration::from_secs(2), futures_next(&mut events)).await
+            && let adk_kernel::KernelEvent::Driver { id, state, .. } = record.event
+            && id == "notes"
+        {
+            seen.push(state.as_str().to_string());
+        }
+    }
+    checks.check(
+        "a killed driver restarts with backoff",
+        seen.iter().any(|state| state == "crashed")
+            && seen.iter().any(|state| state == "restarting")
+            && seen.last().is_some_and(|state| state == "running"),
+    );
+
+    std::fs::write(up.root.path().join("notes/declaration.txt"), "it now also forwards the note")?;
+    let (restarted, _) = cli(bin, &up, &["drivers", "restart", "notes"])?;
+    let (_, listed) = cli(bin, &up, &["drivers", "list"])?;
+    checks.check(
+        "a redeclared tool needs re-approval",
+        restarted && listed.contains("needsReapproval") && listed.contains("changed since approval: read_note"),
+    );
+    let (pid, held) = turn_until(&up, "k6-stale", ask, |state| state == adk_core::RunState::Waiting).await?;
+    let items = up.client().await?.approvals().await?;
+    checks.check("its call is held for a person", held && items.iter().any(|item| item.tool_name == "read_note"));
+    if let Some(item) = items.iter().find(|item| item.tool_name == "read_note") {
+        let client = up.client().await?;
+        client.decide(&item.id, item.version, adk_core::ApprovalAction::Reject, Some("checked".into())).await?;
+    }
+    let _ = pid;
+    let (reapproved, _) = cli(bin, &up, &["drivers", "reapprove", "notes"])?;
+    let (_, listed) = cli(bin, &up, &["drivers", "list"])?;
+    checks.check("`drivers reapprove` restores it", reapproved && listed.contains("running") && !listed.contains("changed since approval"));
+    let (_, finished) = turn_until(&up, "k6-after", ask, |state| state.is_terminal()).await?;
+    let attached = up.client().await?.attach("k6-after", &AttachRequest::default()).await?;
+    let (text, _) = transcript_text(&attached.transcript);
+    checks.check("after re-approval the tool runs without asking", finished && attached.pending.is_empty() && text.contains(crate::notes_driver::CODEWORD));
+    Ok(checks)
+}
+
+/// A parked driver question answered after a kernel restart: the model's `send_note` is
+/// approved, its server asks before sending, the kernel stops and starts again, and the
+/// answer in the inbox completes the call once.
+async fn parked_question(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
+    let mut checks = Checks::default();
+    let up = Up::start(bin, provider, model, "ask").await?;
+    let instance = format!("live-q9-{}", std::process::id());
+    let (mounted, _) = mount_notes(bin, &up, &instance)?;
+    checks.check("the notes driver is mounted", mounted);
+    let ask = "Use the send_note tool once with the text: kernel restart check. Then reply with the single word: done";
+    let client = up.client().await?;
+    let pid = client
+        .spawn(&SpawnRequest::new("adk-rust", json!({ "text": ask })).with_session_id("q9-live"))
+        .await?
+        .meta
+        .pid;
+    let running = &up;
+    let item = |tool: &'static str| async move {
+        let deadline = Instant::now() + Duration::from_secs(180);
+        while Instant::now() < deadline {
+            let found = match running.client().await {
+                Ok(client) => client.approvals().await.ok().and_then(|items| {
+                    items.into_iter().find(|item| item.tool_name == tool)
+                }),
+                Err(_) => None,
+            };
+            if found.is_some() {
+                return found;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        None
+    };
+    let call = item("send_note").await;
+    checks.check("the send is held for approval", call.is_some());
+    if let Some(call) = call {
+        client.decide(&call.id, call.version, adk_core::ApprovalAction::Approve, None).await?;
+    }
+    let question = item("driver:notes/elicitation").await;
+    checks.check("the driver's question waits in the inbox", question.is_some());
+    checks.check("nothing was sent before the answer", !up.root.path().join("notes/notes.log").exists());
+
+    let up = up.restart(bin, provider, model, "ask").await?;
+    let client = up.client().await?;
+    let pending = client.approvals().await?;
+    let question = pending.iter().find(|item| item.tool_name == "driver:notes/elicitation");
+    checks.check("the question survives the restart", question.is_some());
+    if let Some(question) = question {
+        client.decide(&question.id, question.version, adk_core::ApprovalAction::Approve, None).await?;
+    }
+    let finished = until(Duration::from_secs(180), || {
+        let client = client.clone();
+        let pid = pid.clone();
+        async move {
+            let processes = client.processes(&ProcessesQuery::default()).await?;
+            Ok(processes.iter().any(|process| process.meta.pid == pid && process.run.state.is_terminal()))
+        }
+    })
+    .await?;
+    let processes = client.processes(&ProcessesQuery::default()).await?;
+    let state = processes.iter().find(|process| process.meta.pid == pid).map(|process| process.run.state);
+    checks.check("the turn completed after the restart", finished && state == Some(adk_core::RunState::Completed));
+    let log = std::fs::read_to_string(up.root.path().join("notes/notes.log")).unwrap_or_default();
+    checks.check("the note was sent exactly once", log.lines().filter(|line| line.contains("kernel restart check")).count() == 1);
+    checks.check("no further approval was asked", client.approvals().await?.is_empty());
+    Ok(checks)
+}
+
+async fn futures_next(
+    events: &mut futures::stream::BoxStream<'static, adk_kernel::Result<adk_kernel::EventRecord>>,
+) -> Option<adk_kernel::Result<adk_kernel::EventRecord>> {
+    use futures::StreamExt as _;
+    events.next().await
 }

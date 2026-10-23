@@ -1,4 +1,4 @@
-//! K1, K4, K5 and K8 on `ScriptedLlm` with a real kernel (spec 3.2 §5, §11): the kernel's durable
+//! K1, K4, K5, K6 and K8 on `ScriptedLlm` with a real kernel (spec 3.2 §5, §11): the kernel's durable
 //! workers, its scheduler, SQLite stores in `harness.db`, and its control plane on a socket
 //! and loopback HTTP, composed as `adk-rust up` composes them, through `Harness::kernel`.
 
@@ -17,7 +17,8 @@ use adk_core::{
 use adk_harness::{Harness, HarnessAgent, HarnessMode, InstructionsConfig};
 use adk_kernel::control::api::{AttachRequest, ProcessesQuery, SpawnRequest};
 use adk_kernel::control::{ControlClient, ControlPlaneConfig};
-use adk_kernel::{Kernel, KernelConfig, ProcessFilter, QueueClass};
+use adk_kernel::drivers::{DriverManifest, DriverState, DriverSupervisor};
+use adk_kernel::{Kernel, KernelConfig, KernelEvent, PartitionId, ProcessFilter, QueueClass};
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_session::{
     SqliteApprovalStore, SqliteAuditLogStore, SqliteRunStore, SqliteScheduleStore,
@@ -38,6 +39,7 @@ pub async fn run(name: &str) -> Result<Checks> {
         "k4_it_proposes_its_own_work" => k4_it_proposes_its_own_work().await,
         "k5_one_job_many_windows" => k5_one_job_many_windows().await,
         "k8_a_message_preempts_background_work" => k8_a_message_preempts_background_work().await,
+        "k6_drivers_you_can_trust" => k6_drivers_you_can_trust().await,
         other => bail!("unknown scenario {other}"),
     }
 }
@@ -99,6 +101,8 @@ struct Boot {
     proactivity: Option<adk_kernel::ProactivityPolicy>,
     /// Every partition's quotas (spec 3.2 §7.9); `None` sets none.
     quotas: Option<adk_kernel::Quotas>,
+    /// The kernel's drivers, served to the default partition (K6).
+    drivers: Option<DriverSupervisor>,
 }
 
 /// One boot of the kernel over `stores`: the harness, held calls routed to the `operator`
@@ -110,7 +114,7 @@ fn boot(stores: &Stores, home: &Path, workspace: &Path, boot: Boot) -> Result<Ke
             .with_router(routing)
             .with_run_store(stores.runs.clone()),
     );
-    let agent = Arc::new(
+    let agent =
         HarnessAgent::builder(APP)
             .model(boot.model)
             .workspace(adk_devtools::Workspace::new(workspace).allow_bash(true))
@@ -122,9 +126,12 @@ fn boot(stores: &Stores, home: &Path, workspace: &Path, boot: Boot) -> Result<Ke
             .mode(boot.mode)
             .approval_store(stores.approvals.clone())
             .approval_service(service)
-            .audit_log(boot.audit)
-            .build()?,
-    );
+            .audit_log(boot.audit);
+    let agent = match &boot.drivers {
+        Some(drivers) => agent.kernel_drivers(drivers, &PartitionId::default(), &["notes".to_string()]),
+        None => agent,
+    };
+    let agent = Arc::new(agent.build()?);
     let runner = adk_runner::Runner::builder()
         .app_name(APP)
         .agent(agent.agent())
@@ -134,6 +141,9 @@ fn boot(stores: &Stores, home: &Path, workspace: &Path, boot: Boot) -> Result<Ke
     let harness = Harness::with_runner(agent, runner)?
         .with_run_store(stores.runs.clone())
         .with_goal_queue(QueueClass::BACKGROUND);
+    if let Some(drivers) = &boot.drivers {
+        drivers.set_rule_pins(harness.driver_rule_pins());
+    }
     let config = KernelConfig::default()
         .with_app_name(APP)
         .with_home(home)
@@ -142,13 +152,16 @@ fn boot(stores: &Stores, home: &Path, workspace: &Path, boot: Boot) -> Result<Ke
         .with_clock(boot.clock)
         .with_proactivity(boot.proactivity.unwrap_or_default())
         .with_quotas(boot.quotas.unwrap_or_default());
-    Ok(harness
+    let mut builder = harness
         .kernel()
         .config(config)
         .process_store(stores.processes.clone())
         .agenda_store(stores.agenda.clone())
-        .schedule_store(stores.schedules.clone())
-        .build()?)
+        .schedule_store(stores.schedules.clone());
+    if let Some(drivers) = boot.drivers {
+        builder = builder.drivers(drivers);
+    }
+    Ok(builder.build()?)
 }
 
 /// Waits until `check` holds, polling every 100 ms, for at most `limit`.
@@ -200,6 +213,7 @@ async fn k1_leave_it_running() -> Result<Checks> {
             clock: clock.clone(),
             proactivity: None,
             quotas: None,
+            drivers: None,
         };
         let kernel = boot(&stores, &home, &workspace, first)?;
         kernel.start().await?;
@@ -237,6 +251,7 @@ async fn k1_leave_it_running() -> Result<Checks> {
         clock,
         proactivity: None,
         quotas: None,
+        drivers: None,
     };
     let kernel = boot(&stores, &home, &workspace, second)?;
     kernel.start().await?;
@@ -332,6 +347,7 @@ async fn k5_one_job_many_windows() -> Result<Checks> {
         clock,
         proactivity: None,
         quotas: None,
+        drivers: None,
     };
     let kernel = boot(&stores, &home, &workspace, setup)?;
     kernel.start().await?;
@@ -464,6 +480,7 @@ async fn k4_it_proposes_its_own_work() -> Result<Checks> {
         clock,
         proactivity: None,
         quotas: None,
+        drivers: None,
     };
     let kernel = boot(&ask_stores, &home, &workspace, ask)?;
     kernel.start().await?;
@@ -543,6 +560,7 @@ async fn k4_it_proposes_its_own_work() -> Result<Checks> {
         clock,
         proactivity: Some(adk_kernel::ProactivityPolicy::default().with_quiet_hours(quiet)),
         quotas: None,
+        drivers: None,
     };
     let kernel = boot(&auto_stores, &home, &workspace, auto)?;
     kernel.start().await?;
@@ -691,6 +709,7 @@ async fn k8_a_message_preempts_background_work() -> Result<Checks> {
         clock,
         proactivity: None,
         quotas: Some(adk_kernel::Quotas::new().with_max_running(3)),
+        drivers: None,
     };
     let kernel = boot(&stores, &home, &workspace, setup)?;
     kernel.start().await?;
@@ -823,4 +842,168 @@ async fn k8_a_message_preempts_background_work() -> Result<Checks> {
     );
     kernel.stop().await?;
     Ok(checks)
+}
+
+/// Waits for the next `Driver` event of the notes driver in `state`.
+async fn driver_event(events: &mut adk_kernel::EventSubscriber, state: DriverState) -> bool {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while let Some(record) = events.recv().await {
+            if matches!(record.event, KernelEvent::Driver { ref id, state: seen, .. } if id == "notes" && seen == state)
+            {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// The answer the transcript of `session` holds for its `read_note` calls.
+async fn read_note_answers(stores: &Stores, session: &str) -> Result<Vec<String>> {
+    use adk_session::SessionService as _;
+    let session = stores
+        .sessions
+        .get(adk_session::GetRequest {
+            app_name: APP.into(),
+            user_id: "ana".into(),
+            session_id: session.into(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await?;
+    Ok(session
+        .events()
+        .all()
+        .iter()
+        .filter_map(|event| event.llm_response.content.as_ref())
+        .flat_map(|content| content.parts.iter())
+        .filter_map(|part| match part {
+            adk_core::Part::FunctionResponse { function_response, .. }
+                if function_response.name == "read_note" =>
+            {
+                Some(function_response.response.to_string())
+            }
+            _ => None,
+        })
+        .collect())
+}
+
+/// One turn of the scripted agent in session `session`, run as a process.
+async fn turn(kernel: &Kernel, session: &str) -> Result<String> {
+    let run = NewRun::new(QueueClass::INTERACTIVE, APP, "ana", APP, json!({ "text": "read the note" }))
+        .with_session_id(session);
+    Ok(kernel
+        .processes()
+        .spawn(run, adk_kernel::ProcessSpec::new(adk_kernel::ProcessKind::Interactive))
+        .await?
+        .meta
+        .pid)
+}
+
+async fn run_state(stores: &Stores, pid: &str, state: RunState) -> Result<bool> {
+    let pid = pid.to_string();
+    until(Duration::from_secs(30), || {
+        let runs = stores.runs.clone();
+        let pid = pid.clone();
+        async move { Ok(runs.get(&pid).await?.is_some_and(|run| run.state == state)) }
+    })
+    .await
+}
+
+async fn k6_drivers_you_can_trust() -> Result<Checks> {
+    let mut checks = Checks::default();
+    let dir = tempfile::tempdir()?;
+    let (home, workspace, notes) =
+        (dir.path().join("home"), dir.path().join("ws"), dir.path().join("notes"));
+    std::fs::create_dir_all(&workspace)?;
+    std::fs::create_dir_all(&notes)?;
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let stores = stores(&home, clock.clone()).await?;
+    let driver_store = adk_kernel::stores::SqliteDriverStore::new(stores.sessions.pool().clone());
+    driver_store.migrate().await?;
+    let drivers = DriverSupervisor::builder(Arc::new(driver_store))
+        .app_name(APP)
+        .home(&home)
+        .health_check_interval(Duration::from_millis(200))
+        .build();
+    let read = || ScriptedResponse::function_call("read_note", json!({}));
+    let recorder = InMemoryAuditRecorder::new();
+    let setup = Boot {
+        model: scripted(vec![
+            read(),
+            ScriptedResponse::text("first"),
+            read(),
+            ScriptedResponse::text("second"),
+            read(),
+            ScriptedResponse::text("third"),
+        ]),
+        mode: HarnessMode::Ask,
+        control: ControlPlaneConfig::default().without_socket(),
+        audit: Arc::new(recorder.clone()),
+        clock,
+        proactivity: None,
+        quotas: None,
+        drivers: Some(drivers.clone()),
+    };
+    let kernel = boot(&stores, &home, &workspace, setup)?;
+    kernel.start().await?;
+    let mut events = kernel.events();
+
+    // Mount: the manifest the person approves, then a read in ask mode needs no approval.
+    let instance = format!("k6-{}", uuid_like());
+    let manifest = crate::notes_driver::manifest(&std::env::current_exe()?, &notes, &instance);
+    drivers.mount(DriverManifest::from_toml(&manifest)?, "ana").await?;
+    let first = turn(&kernel, "k6-first").await?;
+    checks.check("a `read` driver tool runs without approval", run_state(&stores, &first, RunState::Completed).await?);
+    checks.check(
+        "the agent got the driver's answer",
+        read_note_answers(&stores, "k6-first").await?.iter().any(|answer| answer.contains(crate::notes_driver::CODEWORD)),
+    );
+    let pinned = drivers.record("notes").map(|record| record.manifest.declaration_digests.len()).unwrap_or(0);
+    checks.check("its tools' declarations are pinned", pinned == 2);
+
+    // Kill: the driver restarts with backoff.
+    crate::notes_driver::kill(&instance)?;
+    checks.check("the crash is reported", driver_event(&mut events, DriverState::Crashed).await);
+    checks.check("it restarts with backoff", driver_event(&mut events, DriverState::Restarting).await);
+    checks.check("and runs again", driver_event(&mut events, DriverState::Running).await);
+
+    // Redeclare: the changed tool is stale, and a call of it is held for a person.
+    std::fs::write(notes.join("declaration.txt"), "it now also forwards the note")?;
+    drivers.restart("notes").await?;
+    checks.check("the redeclared tool needs re-approval", driver_event(&mut events, DriverState::NeedsReapproval).await);
+    let second = turn(&kernel, "k6-second").await?;
+    checks.check("a call of the stale tool is held", run_state(&stores, &second, RunState::Waiting).await?);
+    let service = StoreApprovalService::new(stores.approvals.clone());
+    let held = service.inbox(adk_core::InboxQuery::default()).await?;
+    let item = held.items.iter().find(|item| item.tool_name == "read_note").cloned();
+    checks.check("the inbox shows it", item.is_some());
+
+    // Re-approve: the new declaration is pinned; the held call runs once approved, and the
+    // next call runs without asking.
+    drivers.reapprove("notes", "ana").await?;
+    checks.check("re-approval restores it", drivers.state("notes") == Some(DriverState::Running));
+    if let Some(item) = item {
+        let decision = adk_core::ApprovalDecision::approve(adk_core::SubjectRef::human("ana")).with_groups(["operator"]);
+        let routed = StoreApprovalService::new(stores.approvals.clone()).with_run_store(stores.runs.clone());
+        routed.decide(&item.id, item.version, decision).await?;
+    }
+    checks.check("the held call completes", run_state(&stores, &second, RunState::Completed).await?);
+    let third = turn(&kernel, "k6-third").await?;
+    checks.check("the next call runs without asking", run_state(&stores, &third, RunState::Completed).await?);
+    let actions: Vec<String> = recorder.records().into_iter().map(|record| record.action).collect();
+    checks.check(
+        "mount, start, crash, restart, stale and re-approval are audited",
+        ["mounted", "started", "crashed", "restarted", "stale", "reapproved"]
+            .iter()
+            .all(|step| actions.iter().any(|action| *action == format!("kernel.driver.{step}"))),
+    );
+    kernel.stop().await?;
+    Ok(checks)
+}
+
+/// A short unique id without a dependency.
+fn uuid_like() -> String {
+    format!("{:x}{:x}", std::process::id(), Utc::now().timestamp_nanos_opt().unwrap_or_default())
 }

@@ -434,9 +434,11 @@ dependencies = [
  "adk-agent",
  "adk-core",
  "adk-runner",
+ "adk-sandbox",
  "adk-server",
  "adk-session",
  "adk-telemetry",
+ "adk-tool",
  "async-trait",
  "axum",
  "chrono",
@@ -454,7 +456,9 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "toml",
  "tracing",
+ "url",
  "uuid",
 ]
 

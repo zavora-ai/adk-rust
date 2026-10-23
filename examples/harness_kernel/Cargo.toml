@@ -15,11 +15,15 @@ adk-harness = { path = "../../adk-harness", features = ["sqlite", "kernel"] }
 adk-kernel = { path = "../../adk-kernel" }
 # ScriptedLlm for the scripted scenarios; the live ones run the `adk-rust up` binary.
 adk-model = { path = "../../adk-model", default-features = false }
+adk-tool = { path = "../../adk-tool", features = ["mcp"] }
 adk-runner = { path = "../../adk-runner" }
 adk-session = { path = "../../adk-session", features = ["sqlite"] }
 anyhow = "1.0"
+# The notes driver the K6 and parked-question scenarios mount, served by this binary.
+rmcp = { version = "3.1", features = ["server", "client", "elicitation"] }
 chrono = "0.4"
 dotenvy = "0.15"
+futures = "0.3"
 serde_json = "1.0"
 tempfile = "3"
 tokio = { version = "1.40", features = ["full"] }
