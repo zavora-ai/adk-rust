@@ -320,9 +320,10 @@ contract the kernel relies on.
 
 ### Alpha backends: MongoDB, Firestore, Neo4j
 
-Every kernel store also runs on MongoDB, Firestore and Neo4j (spec 3.2 §13 Q8), each
-backend **Alpha** until its live conformance suites pass in CI, so its storage layout may
-still change without a migration. Each feature also turns on the same backend of
+The process, agenda, driver and ledger stores also run on MongoDB, Firestore and Neo4j
+(spec 3.2 §13 Q8); the partition store does not yet. Each backend is **Alpha** until its
+live conformance suites pass in CI, so its storage layout may still change without a
+migration. Each feature also turns on the same backend of
 `adk-session`'s run, schedule and governance stores, and every store takes the handle
 those stores use, so one client serves them all.
 

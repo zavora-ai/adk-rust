@@ -130,6 +130,6 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 - [Self-observation: `/proc`](proc.md): the content-free activity ledger, baselines and
   observations
 - [Kernel store backends](backends.md): every kernel store on in-memory, SQLite, PostgreSQL
-  and Redis, and on MongoDB, Firestore and Neo4j (Alpha)
+  and Redis, and all but the partition store on MongoDB, Firestore and Neo4j (Alpha)
 - [Partitions](partitions.md): one harness per partition, memory scoping, and crossings by the
   coordinator under approval
