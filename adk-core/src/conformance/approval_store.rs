@@ -14,6 +14,7 @@
 //! | [`requests_are_created_once`] | `create_request` keeps the first request under an ID and returns it unchanged |
 //! | [`concurrent_replace_has_one_winner`] | Of concurrent `replace_request` calls at one version, across two handles, exactly one succeeds |
 //! | [`requests_list_in_order_with_filters`] | `list_requests` filters by state, openness, and application, orders by creation time then ID, and pages by cursor |
+//! | [`requests_list_by_session`] | `list_requests` filtered by session returns that session's requests alone, in order and by page, however many requests of other sessions list first (spec 3.3 §10 C1) |
 //! | [`delegations_round_trip`] | Delegations are stored, replaced by ID, listed per delegate by ID, and deleted once |
 //! | [`approval_requests_survive_a_restart`] | Requests and delegations read back unchanged after a restart |
 //!
@@ -523,6 +524,94 @@ pub async fn requests_list_in_order_with_filters<H: ApprovalStoreHarness + ?Size
         list(ApprovalRequestQuery::default().with_app_name(app.clone()).with_limit(1)).await[0],
         pending_early,
         "listed requests read back exactly"
+    );
+}
+
+/// `list_requests` filtered by session returns that session's requests alone, ordered by
+/// creation time and then ID and paged by cursor, however many requests of other sessions
+/// list before them; with an application it is one application's session, without one the
+/// session ID in every application (spec 3.3 §10 C1).
+pub async fn requests_list_by_session<H: ApprovalStoreHarness + ?Sized>(harness: &H) {
+    let store = harness.open().await;
+    let app = unique_unicode("app");
+    let session = unique_unicode("session");
+    let prefix = unique("request");
+    let id = |n: u32| format!("{prefix}:{n:02}");
+    let in_session = |app: &str, n: u32, offset_secs: i64| {
+        let mut request = approval_request(app, &id(n), offset_secs);
+        request.scope.session_id = session.clone();
+        request
+    };
+    // More requests of other sessions than a page of two list before this session's first.
+    let mut others: Vec<ApprovalRequest> =
+        (0..5).map(|n| approval_request(&app, &id(n), i64::from(n))).collect();
+    let first = in_session(&app, 10, 10);
+    others.push(approval_request(&app, &id(11), 11));
+    // Two of the session's requests share a creation time, so the ID breaks the tie.
+    let mut tied_late = in_session(&app, 21, 20);
+    let tied_early = in_session(&app, 20, 20);
+    let elsewhere = in_session(&unique_unicode("app"), 15, 15);
+    for request in others.iter().chain([&first, &tied_late, &tied_early, &elsewhere]) {
+        store.create_request(request).await.expect("create");
+    }
+    let ids = |requests: Vec<ApprovalRequest>| -> Vec<String> {
+        requests.into_iter().map(|request| request.id).collect()
+    };
+    let list = |query: ApprovalRequestQuery| {
+        let store = store.clone();
+        async move { store.list_requests(&query).await.expect("list_requests reads the store") }
+    };
+    let one_session =
+        ApprovalRequestQuery::default().with_app_name(app.clone()).with_session_id(session.clone());
+
+    assert_eq!(
+        ids(list(one_session.clone()).await),
+        [id(10), id(20), id(21)],
+        "the session's requests alone, by creation time and then id"
+    );
+    assert_eq!(
+        list(one_session.clone().with_limit(1)).await,
+        [first],
+        "a page of one is the session's first request, read back exactly"
+    );
+    let page = list(one_session.clone().with_limit(2)).await;
+    assert_eq!(ids(page.clone()), [id(10), id(20)], "a page of two");
+    let cursor = page.last().map(ApprovalRequest::cursor);
+    assert_eq!(
+        ids(list(one_session.clone().with_after(cursor)).await),
+        [id(21)],
+        "the next page starts after the cursor, inside a tie on creation time"
+    );
+    assert_eq!(
+        ids(list(ApprovalRequestQuery::default().with_session_id(session.clone())).await),
+        [id(10), id(15), id(20), id(21)],
+        "without an application, the session ID in every application"
+    );
+
+    let mut decided = tied_late.clone();
+    decided.version = 2;
+    decided.state = ApprovalState::Approved;
+    assert!(store.replace_request(&decided, 1).await.expect("replace"), "replaced");
+    tied_late = decided;
+    assert_eq!(
+        ids(list(one_session.clone().with_states([ApprovalState::Pending])).await),
+        [id(10), id(20)],
+        "with a state"
+    );
+    assert_eq!(
+        list(one_session.with_states([ApprovalState::Approved])).await,
+        [tied_late],
+        "a replaced request stays in its session"
+    );
+    assert_eq!(
+        list(
+            ApprovalRequestQuery::default()
+                .with_app_name(app)
+                .with_session_id(unique_unicode("session"))
+        )
+        .await,
+        [],
+        "a session with no requests"
     );
 }
 

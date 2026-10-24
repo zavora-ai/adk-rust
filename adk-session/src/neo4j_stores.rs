@@ -827,12 +827,13 @@ fn subject_kind(subject: &SubjectRef) -> Result<String> {
     }
 }
 
-/// Binds a request's indexed properties and record to `$app`, `$state`, `$open`,
-/// `$created_us`, `$version`, and `$record`.
+/// Binds a request's indexed properties and record to `$app`, `$session`, `$state`,
+/// `$open`, `$created_us`, `$version`, and `$record`.
 fn with_request(statement: Query, request: &ApprovalRequest) -> Result<Query> {
     Ok(statement
         .param("id", request.id.clone())
         .param("app", request.scope.app_name.clone())
+        .param("session", request.scope.session_id.clone())
         .param("state", request.state.as_str())
         .param("open", request.is_open())
         .param("created_us", request.created_at.timestamp_micros())
@@ -840,8 +841,8 @@ fn with_request(statement: Query, request: &ApprovalRequest) -> Result<Query> {
         .param("record", encode_json(request, "request")?))
 }
 
-const SET_REQUEST: &str = "r.app = $app, r.state = $state, r.open = $open, \
-    r.created_us = $created_us, r.version = $version, r.record = $record";
+const SET_REQUEST: &str = "r.app = $app, r.session = $session, r.state = $state, \
+    r.open = $open, r.created_us = $created_us, r.version = $version, r.record = $record";
 
 /// Neo4j-backed [`ApprovalStore`], so calls held for approval and their decisions
 /// survive a restart and are shared by every process.
@@ -893,11 +894,13 @@ impl Neo4jApprovalStore {
         Self { graph }
     }
 
-    /// Creates the uniqueness constraints the store relies on.
+    /// Creates the uniqueness constraints and indexes the store relies on, and gives
+    /// requests stored without a session property the one their record names.
     ///
     /// # Errors
     ///
-    /// Returns `session.approval_store.storage` when a schema statement fails.
+    /// Returns `session.approval_store.storage` when a schema statement or an update
+    /// fails.
     pub async fn migrate(&self) -> Result<()> {
         run_schema(
             &self.graph,
@@ -919,6 +922,8 @@ impl Neo4jApprovalStore {
                  FOR (r:AdkApprovalRequest) ON (r.app, r.created_us)",
                 "CREATE INDEX adk_approval_request_open IF NOT EXISTS \
                  FOR (r:AdkApprovalRequest) ON (r.open, r.created_us)",
+                "CREATE INDEX adk_approval_request_session IF NOT EXISTS \
+                 FOR (r:AdkApprovalRequest) ON (r.session, r.created_us)",
                 "CREATE CONSTRAINT adk_approval_delegation_unique IF NOT EXISTS \
                  FOR (d:AdkApprovalDelegation) REQUIRE d.id IS UNIQUE",
                 "CREATE INDEX adk_approval_delegation_to IF NOT EXISTS \
@@ -926,7 +931,29 @@ impl Neo4jApprovalStore {
             ],
             approval_error,
         )
+        .await?;
+        // Requests stored before the session property existed name their session only in
+        // the record (spec 3.3 §10 C1).
+        let unindexed = graph_rows(
+            &self.graph,
+            query("MATCH (r:AdkApprovalRequest) WHERE r.session IS NULL RETURN r.record AS record"),
+        )
         .await
+        .map_err(|e| approval_error(format!("read failed: {e}")))?;
+        for request in decode_records::<ApprovalRequest>(&unindexed, "request")? {
+            self.graph
+                .run(
+                    query(
+                        "MATCH (r:AdkApprovalRequest {id: $id}) WHERE r.session IS NULL \
+                         SET r.session = $session",
+                    )
+                    .param("id", request.id)
+                    .param("session", request.scope.session_id),
+                )
+                .await
+                .map_err(|e| approval_error(format!("write failed: {e}")))?;
+        }
+        Ok(())
     }
 
     /// Write-locks the scope node inside `txn`. Returns `false` when the scope has never
@@ -1214,6 +1241,7 @@ impl ApprovalStore for Inline<Neo4jApprovalStore> {
             query(
                 "MATCH (r:AdkApprovalRequest) \
                  WHERE ($app IS NULL OR r.app = $app) \
+                   AND ($session IS NULL OR r.session = $session) \
                    AND (size($states) = 0 OR r.state IN $states) \
                    AND (NOT $open_only OR r.open = true) \
                    AND ($after_id IS NULL OR r.created_us > $after_us \
@@ -1221,6 +1249,7 @@ impl ApprovalStore for Inline<Neo4jApprovalStore> {
                  RETURN r.record AS record ORDER BY r.created_us, r.id LIMIT $limit",
             )
             .param("app", query_spec.app_name.clone())
+            .param("session", query_spec.session_id.clone())
             .param("states", states)
             .param("open_only", query_spec.open_only)
             .param("after_id", query_spec.after.as_ref().map(|cursor| cursor.id.clone()))

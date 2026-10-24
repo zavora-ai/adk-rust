@@ -8,7 +8,7 @@ PostgreSQL, Redis, MongoDB, Neo4j, or Firestore.
 
 | Capability | Behaviour |
 |------------|-----------|
-| **Inbox** | Lists the requests an approver may decide now — by name, by group, or through a live delegation — oldest first, paged by cursor |
+| **Inbox** | Lists the requests an approver may decide now — by name, by group, or through a live delegation — oldest first, paged by cursor; `InboxQuery::with_session_id` narrows it to the decisions one session waits on |
 | **Quorum** | A request resolves once `quorum` distinct approvers approve; a delegate's approval counts for the delegator |
 | **Self-approval** | Refused by default for the requester, the acting agent, and anyone acting through their delegation |
 | **Actions** | Approve, edit (approve with substituted arguments), reject, respond (answer the model instead of running the call) |
@@ -169,7 +169,7 @@ let ticker = spawn_approval_ticker(service, Duration::from_secs(30));
 
 | Route | Effect |
 |-------|--------|
-| `GET /api/approvals` | The caller's inbox (`state`, `group`, `app`, `cursor`, `limit`) |
+| `GET /api/approvals` | The caller's inbox (`state`, `group`, `app`, `session`, `cursor`, `limit`) |
 | `GET /api/approvals/{id}` | One request the caller may decide or asked for |
 | `POST /api/approvals/{id}/decide` | `{"expectedVersion", "action", "editedArgs", "reason", "via"}` |
 | `POST /api/approvals/{id}/cancel` | `{"reason"}`; the requester or an approver |

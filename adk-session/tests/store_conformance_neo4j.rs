@@ -241,3 +241,43 @@ async fn calls_dropped_mid_query_leave_the_pool_usable() {
         .expect("a fenced write after dropped calls");
     assert_eq!(finished.state, RunState::Completed);
 }
+
+/// A request stored before requests carried a session property lists by its session once
+/// `migrate` has run (spec 3.3 §10 C1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires a Neo4j server at NEO4J_URI"]
+async fn a_request_stored_without_a_session_lists_by_session_after_migrate() {
+    use adk_core::{
+        ApprovalPolicy, ApprovalRequest, ApprovalRequestQuery, ApprovalScope, ApproverSelector,
+        ToolConfirmationRequest,
+    };
+
+    let app = format!("legacy-{}", uuid::Uuid::new_v4());
+    let call = ToolConfirmationRequest::new("send_invoice", serde_json::json!({ "n": 1 }));
+    let request = ApprovalRequest::new(
+        format!("{app}/legacy"),
+        ApprovalScope::new(&app, "user", "s-legacy"),
+        &call,
+        ApprovalPolicy::new([ApproverSelector::group("owners")]),
+    );
+    graph()
+        .await
+        .run(
+            neo4rs::query(
+                "CREATE (r:AdkApprovalRequest {id: $id, app: $app, state: $state, open: true, \
+                 created_us: $created_us, version: 1, record: $record})",
+            )
+            .param("id", request.id.clone())
+            .param("app", app.clone())
+            .param("state", request.state.as_str())
+            .param("created_us", request.created_at.timestamp_micros())
+            .param("record", serde_json::to_string(&request).expect("encode")),
+        )
+        .await
+        .expect("create a request without a session property");
+
+    let store = Neo4jApprovalStore::from_graph(graph().await);
+    store.migrate().await.expect("migrate");
+    let query = ApprovalRequestQuery::default().with_app_name(app).with_session_id("s-legacy");
+    assert_eq!(store.list_requests(&query).await.expect("list"), [request]);
+}

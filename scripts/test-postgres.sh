@@ -52,7 +52,9 @@ suite "adk-session" -p adk-session --features sqlite,postgres \
     --test spend_ledger_postgres \
     --test session_contract_postgres \
     --test sqlx_migration_inputs_postgres \
-    --test upgrade_from_sqlx_0_8
+    --test upgrade_from_sqlx_0_8 \
+    --test approval_session_upgrade \
+    --test approval_session_property_tests
 
 suite "adk-memory" -p adk-memory --features sqlite-memory,database-memory \
     --test postgres_migrate_lock_tests \

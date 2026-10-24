@@ -957,6 +957,9 @@ pub struct ApprovalRequestQuery {
     pub open_only: bool,
     /// Only requests from this application.
     pub app_name: Option<String>,
+    /// Only requests from the session with this ID ([`ApprovalScope::session_id`]); with
+    /// [`app_name`](Self::app_name), one application's session (spec 3.3 §10 C1).
+    pub session_id: Option<String>,
     /// Only requests listing after this position.
     pub after: Option<ApprovalCursor>,
     /// At most this many requests.
@@ -969,6 +972,7 @@ impl Default for ApprovalRequestQuery {
             states: Vec::new(),
             open_only: false,
             app_name: None,
+            session_id: None,
             after: None,
             limit: DEFAULT_APPROVAL_PAGE,
         }
@@ -997,6 +1001,22 @@ impl ApprovalRequestQuery {
         self
     }
 
+    /// Only requests from the session with ID `session_id` (spec 3.3 §10 C1).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::ApprovalRequestQuery;
+    ///
+    /// let query = ApprovalRequestQuery::default().with_app_name("shop").with_session_id("s-1");
+    /// assert_eq!(query.session_id.as_deref(), Some("s-1"));
+    /// ```
+    #[must_use]
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
+        self
+    }
+
     /// Starts after `cursor`.
     #[must_use]
     pub fn with_after(mut self, cursor: Option<ApprovalCursor>) -> Self {
@@ -1016,6 +1036,7 @@ impl ApprovalRequestQuery {
         (self.states.is_empty() || self.states.contains(&request.state))
             && (!self.open_only || request.is_open())
             && self.app_name.as_ref().is_none_or(|app| *app == request.scope.app_name)
+            && self.session_id.as_ref().is_none_or(|session| *session == request.scope.session_id)
             && self.after.as_ref().is_none_or(|cursor| cursor.precedes(request))
     }
 }
@@ -1028,7 +1049,8 @@ impl ApprovalRequestQuery {
 ///
 /// With an approver or groups set, the inbox holds the requests they may decide now,
 /// directly or through a live delegation, excluding those self-approval rules refuse.
-/// With neither set it holds every request in the selected states.
+/// With neither set it holds every request in the selected states. An application or a
+/// session narrows either to the requests of that application or session.
 ///
 /// # Example
 ///
@@ -1050,6 +1072,9 @@ pub struct InboxQuery {
     pub states: Vec<ApprovalState>,
     /// Only requests from this application.
     pub app_name: Option<String>,
+    /// Only requests from the session with this ID ([`ApprovalScope::session_id`]); with
+    /// [`app_name`](Self::app_name), one application's session (spec 3.3 §10 C1).
+    pub session_id: Option<String>,
     /// The page token from the previous page.
     pub cursor: Option<String>,
     /// Page size.
@@ -1063,6 +1088,7 @@ impl Default for InboxQuery {
             groups: Vec::new(),
             states: Vec::new(),
             app_name: None,
+            session_id: None,
             cursor: None,
             limit: 50,
         }
@@ -1098,6 +1124,26 @@ impl InboxQuery {
     #[must_use]
     pub fn with_app_name(mut self, app_name: impl Into<String>) -> Self {
         self.app_name = Some(app_name.into());
+        self
+    }
+
+    /// Only requests from the session with ID `session_id`, such as the decisions one
+    /// thread is waiting on (spec 3.3 §10 C1).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::InboxQuery;
+    /// use adk_core::principal::SubjectRef;
+    ///
+    /// let query = InboxQuery::for_approver(SubjectRef::human("ana"), ["finance"])
+    ///     .with_app_name("shop")
+    ///     .with_session_id("s-1");
+    /// assert_eq!(query.session_id.as_deref(), Some("s-1"));
+    /// ```
+    #[must_use]
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
         self
     }
 
@@ -1833,6 +1879,7 @@ impl ApprovalService for StoreApprovalService {
                 .with_after(after.clone())
                 .with_limit(DEFAULT_APPROVAL_PAGE);
             store_query.app_name = query.app_name.clone();
+            store_query.session_id = query.session_id.clone();
             let batch = self.store.list_requests(&store_query).await?;
             let exhausted = batch.len() < DEFAULT_APPROVAL_PAGE;
             for request in batch {

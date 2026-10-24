@@ -10,7 +10,7 @@
 //!
 //! | Route | Effect |
 //! |-------|--------|
-//! | `GET /api/approvals` | The caller's inbox. Query: `state` (repeatable via comma list), `group`, `app`, `cursor`, `limit` |
+//! | `GET /api/approvals` | The caller's inbox. Query: `state` (repeatable via comma list), `group`, `app`, `session`, `cursor`, `limit` |
 //! | `GET /api/approvals/{id}` | One request the caller may decide, cancel, or asked for |
 //! | `POST /api/approvals/{id}/decide` | Body `{"expectedVersion": 3, "action": "approve" \| "edit" \| "reject" \| "respond", "editedArgs": {...}, "reason": "...", "via": {"kind": "human", "id": "ana"}}` |
 //! | `POST /api/approvals/{id}/cancel` | Body `{"reason": "..."}`; the requester or an approver |
@@ -220,6 +220,9 @@ pub struct InboxParams {
     /// Only one application.
     #[serde(default)]
     pub app: Option<String>,
+    /// Only one session, by ID; with `app`, one application's session (spec 3.3 §10 C1).
+    #[serde(default)]
+    pub session: Option<String>,
     /// Page token.
     #[serde(default)]
     pub cursor: Option<String>,
@@ -269,6 +272,9 @@ async fn inbox(
     .with_limit(params.limit.unwrap_or(50).clamp(1, 200));
     if let Some(app) = params.app {
         query = query.with_app_name(app);
+    }
+    if let Some(session) = params.session {
+        query = query.with_session_id(session);
     }
     match endpoints.service.inbox(query).await {
         Ok(page) => Json(serde_json::json!({
