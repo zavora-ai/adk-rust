@@ -454,15 +454,23 @@ impl PromptConfig {
                 self.max_skill_chars,
             );
         }
-        if let Some(index) = session_history.iter().rposition(|content| {
-            content.role == "user" && !adk_core::history::is_other_agent_context(content)
-        }) {
-            session_history[index] = current_user_content.clone();
-        } else {
-            session_history.push(current_user_content.clone());
+        // A run that resumes held calls carries an empty user turn: no parts, or only blank
+        // text. A turn without parts never reaches the projected history, so the last user
+        // turn there is the person's message, which an empty turn must not stand in for.
+        let empty_turn = current_user_content
+            .parts
+            .iter()
+            .all(|part| matches!(part, Part::Text { text } if text.trim().is_empty()));
+        if !empty_turn {
+            match session_history.iter().rposition(|content| {
+                content.role == "user" && !adk_core::history::is_other_agent_context(content)
+            }) {
+                Some(index) => session_history[index] = current_user_content.clone(),
+                None => session_history.push(current_user_content.clone()),
+            }
         }
-        // A run that resumes held calls carries an empty user turn. It adds nothing to the
-        // conversation, and providers such as Anthropic reject empty text blocks.
+        // An empty user turn adds nothing to the conversation, and providers such as
+        // Anthropic reject empty text blocks.
         session_history.retain(|content| {
             content.role != "user"
                 || content
@@ -474,10 +482,6 @@ impl PromptConfig {
         // answered after the held call, or a loop running this agent again after its own
         // answer — would be read as a prefill, which models without prefill support
         // (Anthropic's newer ones) reject. It gets a user turn to answer.
-        let empty_turn = current_user_content
-            .parts
-            .iter()
-            .all(|part| matches!(part, Part::Text { text } if text.trim().is_empty()));
         if session_history.last().is_some_and(|last| {
             last.role == "model"
                 && !last.parts.iter().any(|part| matches!(part, Part::FunctionCall { .. }))
