@@ -5,4 +5,6 @@
   30-second busy timeout and fail with `database is locked`. The mode is stored in the file;
   while an older process still holds it in rollback mode, a newer one keeps that mode and
   logs a warning. `harness.db-wal` and `harness.db-shm` sit beside the database while it is
-  open; on Unix they get its owner-only mode.
+  open and get its owner-only protection: on Unix its mode, and on Windows the directory
+  holding `harness.db` gets a protected DACL granting its owner alone, inherited by every
+  file created in it.

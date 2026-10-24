@@ -35,6 +35,12 @@ pub async fn open_in(dir: &Path) -> Result<Arc<SqliteSessionService>> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
+        // SQLite creates `harness.db-wal` and `-shm` itself, so on Windows they take the
+        // directory's DACL: owner-only, as `harness.db` is (spec 3.2 §10 W4).
+        #[cfg(windows)]
+        crate::owner_only::protect_dir(parent).with_context(|| {
+            format!("failed to make {} readable by its owner only", parent.display())
+        })?;
     }
     create_private(&path)?;
     let service = SqliteSessionService::new(&sqlite_url(&path)).await.with_context(|| {
@@ -358,12 +364,20 @@ mod tests {
             })
             .await
             .unwrap();
-        // The log holds the same rows as the database, so it gets the database's mode.
+        // The log and the shared memory hold the database's rows, so they get its protection.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let wal = dir.path().join("harness.db-wal");
             assert_eq!(std::fs::metadata(&wal).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        #[cfg(windows)]
+        for file in ["harness.db-wal", "harness.db-shm"] {
+            let path = dir.path().join(file);
+            assert!(
+                crate::owner_only::only_the_owner_has_access(&path).unwrap(),
+                "{file} is not owner-only"
+            );
         }
         drop(store);
         let reopened = open_in(dir.path()).await.unwrap();
