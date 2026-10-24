@@ -75,8 +75,14 @@ pub trait Source: Send + Sync {
         tokio::time::sleep(max).await;
     }
 
-    /// The decision requests `caller` may answer, open ones only when `open_only`.
-    async fn requests(&self, caller: &Caller, open_only: bool) -> Result<Vec<ApprovalRequest>>;
+    /// The decision requests `caller` may answer — of one session when `session` is set
+    /// (`InboxQuery::with_session_id`, spec 3.3 §10 C1) — open ones only when `open_only`.
+    async fn requests(
+        &self,
+        caller: &Caller,
+        session: Option<&str>,
+        open_only: bool,
+    ) -> Result<Vec<ApprovalRequest>>;
 
     /// One decision request.
     async fn request(&self, id: &str) -> Result<Option<ApprovalRequest>>;

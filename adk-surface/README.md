@@ -27,7 +27,7 @@ from anywhere, and every other window shows who made it.
 | Source | For |
 |---|---|
 | `LocalSource` | Surfaces in the same process as the agents: the session store, the approval service, and an in-process `Kernel`, `Harness` or `Runner` |
-| `ControlSource` | A kernel in another process or on another machine, through `adk_kernel::control::ControlClient` |
+| `ControlSource` | A kernel in another process or on another machine, through `adk_kernel::control::ControlClient`, with the approvals inbox read in full over the same HTTP or Unix-socket endpoint |
 
 ## Quick start
 

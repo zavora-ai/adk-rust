@@ -27,12 +27,19 @@ adk-surface = { version = "3.0.0", features = ["web"] }
 | Source | Reads | Acts |
 |---|---|---|
 | `LocalSource` | The session store, the approval service, an in-process kernel's process table and `/proc` ledger, a harness's mode | Decide, start a turn (a kernel process, a harness turn or a runner turn), freeze and unfreeze, set the mode, create the standing rule of "Always allow" |
-| `ControlSource` | A kernel's control plane through `ControlClient`: attach, the approvals inbox, processes, health, the ledger | Decide, spawn, freeze, unfreeze |
+| `ControlSource` | A kernel's control plane through `ControlClient` (attach, processes, health, the ledger) and the approvals inbox beside it, read in full | Decide (edits included), spawn, freeze, unfreeze |
 
-The control plane's inbox lists pending requests without their risk, acting agent or earlier
-decisions, and its decide route takes no edited arguments. Through `ControlSource` every
-decision therefore counts as high risk, "Edit" is not offered, and a decision answered
-elsewhere reads "Decided" without who or how.
+Both sources read decisions one session at a time where a surface shows one session
+(`InboxQuery::with_session_id`, `GET /api/approvals?session=`; spec 3.3 §10 C1), and
+`SurfaceEngine::session_decisions` returns that session's cards.
+
+`ControlSource` reads the inbox over the same endpoint as its client: HTTP, or HTTP over the
+kernel's Unix socket. Pass the HTTP control plane's token to `ControlSource::with_bearer_token`
+as well as to the client. The inbox serves requests without their fingerprints, so a thread
+links a held call to its card by the tool and its arguments. Over the named pipe on Windows
+the source keeps to `ControlClient`'s pending items, which carry no risk, agent or earlier
+decisions: every decision counts as high risk, "Edit" is not offered, and a decision
+answered elsewhere is no longer found.
 
 ## A decision on every surface
 
@@ -114,9 +121,24 @@ Every answer is written to the audit trail as `surface.decide` (kind `approval`)
 `approvalId`, `sessionId`, `tool`, `answer`, `outcome` (`decided`, `already_decided`,
 `changed`, `refused`, `cancelled`), `surface` and `origin`; the actor is the person.
 `surface.send`, `surface.stop_all`, `surface.resume_all` and `surface.set_mode` record the
-other commands the same way. `AuditAnswerLog` reads `surface.decide` records back from an
-`AuditLogStore`, so every process over the same signed audit log shows how a decision was
-answered.
+other commands the same way.
+
+How an answer was given — "in Telegram", "on your phone" — is not part of the approval
+service's decision, so the engine keeps it in an `AnswerLog`. The default,
+`InMemoryAnswerLog`, lasts as long as the process. `AuditAnswerLog` reads the
+`surface.decide` records back from the `AuditLogStore` the engine's audit trail writes to, so
+every surface over the same signed audit log, and a restarted kernel, shows how a decision was
+answered:
+
+```rust,ignore
+use std::sync::Arc;
+use adk_surface::{AuditAnswerLog, SurfaceEngine};
+
+let engine = SurfaceEngine::builder(source)
+    .audit(trail)                                     // writes to `store` (signed audit log)
+    .answers(Arc::new(AuditAnswerLog::new(store)))   // reads how each answer was given
+    .build();
+```
 
 ## The web API
 

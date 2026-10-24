@@ -33,13 +33,19 @@ async-trait.workspace = true
 axum = { version = "0.8", optional = true }
 chrono.workspace = true
 futures.workspace = true
+# The approvals inbox in full over the kernel's Unix socket (`ControlSource`).
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+# The approvals inbox in full over the kernel's HTTP control plane (`ControlSource`).
+reqwest.workspace = true
 # JSON Schema for every projection and command type, so surfaces and third parties share
 # one contract (spec 3.3 §6).
 schemars = { version = "1.0", features = ["chrono04"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "net"] }
 tracing.workspace = true
 uuid.workspace = true
 
@@ -53,7 +59,6 @@ adk-model = { path = "../adk-model", default-features = false, features = ["anth
 adk-server = { path = "../adk-server", features = ["approvals"] }
 adk-session = { path = "../adk-session" }
 dotenvy = "0.15"
-http-body-util = "0.1"
 proptest = "1.5"
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }

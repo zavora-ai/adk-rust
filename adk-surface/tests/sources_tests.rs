@@ -1,6 +1,6 @@
 //! The engine over its other sources (spec 3.3 §6): a kernel reached through its control plane
-//! (`ControlSource` over `ControlClient` on HTTP), and a harness with no kernel, whose decided
-//! call resumes with an empty turn.
+//! (`ControlSource` over HTTP and over the kernel's Unix socket, with the approvals inbox read in
+//! full), and a harness with no kernel, whose decided call resumes with an empty turn.
 
 #![cfg(feature = "web")]
 
@@ -54,22 +54,32 @@ fn os_user() -> String {
         .unwrap_or_else(|| "user".to_string())
 }
 
+/// A remote engine over a kernel serving `control`, reached through `client`.
+async fn remote(
+    control: ControlPlaneConfig,
+    client: impl FnOnce() -> ControlClient,
+    path: &str,
+) -> (Scenario, SurfaceEngine, Arc<InMemoryAnswerLog>) {
+    let s = scenario_with(scripted(path), control, true).await;
+    let answers = Arc::new(InMemoryAnswerLog::new());
+    let remote = SurfaceEngine::builder(Arc::new(ControlSource::new(client(), APP, APP)))
+        .answers(answers.clone())
+        .poll_interval(Duration::from_millis(20))
+        .build();
+    (s, remote, answers)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_terminal_decides_through_the_control_plane() {
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let control = ControlPlaneConfig::default()
         .without_socket()
         .with_http(format!("127.0.0.1:{port}").parse().unwrap());
-    let s = scenario_with(scripted("terminal.txt"), control, true).await;
-    let answers = Arc::new(InMemoryAnswerLog::new());
-    let client = ControlClient::http(format!("http://127.0.0.1:{port}"));
-    let remote = SurfaceEngine::builder(Arc::new(ControlSource::new(client, APP, APP)))
-        .answers(answers.clone())
-        .poll_interval(Duration::from_millis(20))
-        .build();
+    let (s, remote, answers) =
+        remote(control, || ControlClient::http(format!("http://127.0.0.1:{port}")), "terminal.txt")
+            .await;
     let me = os_user();
-    let terminal =
-        Caller::human(me.clone(), SurfaceKind::Terminal, Origin::Keyboard).with_paired_local();
+    let terminal = Caller::human(me.clone(), SurfaceKind::Terminal, Origin::Keyboard);
 
     let sent = remote
         .execute(&terminal, Command::Send { session_id: "t1".into(), text: "write it".into() })
@@ -77,32 +87,32 @@ async fn a_terminal_decides_through_the_control_plane() {
         .unwrap();
     assert_eq!(sent, CommandOutcome::Sent { session_id: "t1".into() });
     let card = eventually("the card over the control plane", WITHIN, || async {
-        remote.decisions(&terminal).await.unwrap().into_iter().next()
+        remote.session_decisions(&terminal, "t1").await.unwrap().into_iter().next()
     })
     .await;
-    // The control plane reports no risk: the card counts as high risk and offers no edit.
-    assert_eq!(card.risk, Risk::High);
+    // The inbox beside the kernel routes serves the whole request: its risk, its agent.
+    assert_eq!(card.risk, Risk::Medium);
+    assert_eq!(card.agent.name, "finance");
     let offered: Vec<Answer> = card.allowed.options.iter().map(|option| option.answer).collect();
-    assert_eq!(offered, [Answer::AllowOnce, Answer::Deny]);
+    assert_eq!(offered, [Answer::AllowOnce, Answer::Edit, Answer::Deny]);
     assert_eq!(card.heading, "Write file terminal.txt");
+    // The held call links to its card although the inbox serves no fingerprints.
     let thread = remote.thread(&terminal, "t1").await.unwrap();
-    assert!(
-        thread
-            .iter()
-            .flat_map(|entry| &entry.items)
-            .any(|item| matches!(item, ThreadItem::Activity { tool, .. } if tool == "write_file"))
-    );
-    // An unpaired terminal sends the person to the home for a high-risk call.
-    let unpaired = Caller::human(me.clone(), SurfaceKind::Terminal, Origin::Keyboard);
-    let error = remote.execute(&unpaired, decide(&card.id, card.version)).await.unwrap_err();
-    assert_eq!(error.code(), "surface.answer_not_allowed");
+    assert!(thread.iter().flat_map(|entry| &entry.items).any(|item| matches!(
+        item,
+        ThreadItem::Decision { decision_id: Some(id), .. } if *id == card.id
+    )));
+    assert!(remote.session_decisions(&terminal, "elsewhere").await.unwrap().is_empty());
 
     let outcome = remote.execute(&terminal, decide(&card.id, card.version)).await.unwrap();
     assert!(matches!(outcome, CommandOutcome::Answered { .. }), "{outcome:?}");
-    // A second answer through the control plane: decided, not retried.
-    let again = remote.execute(&terminal, decide(&card.id, card.version)).await;
-    // The control plane lists open decisions only, so a decided one is no longer found.
-    assert_eq!(again.unwrap_err().code(), "surface.not_found");
+    // A second answer through the control plane: told who decided and how, not retried.
+    let again = remote.execute(&terminal, decide(&card.id, card.version)).await.unwrap();
+    let CommandOutcome::AlreadyDecided { decided, .. } = again else {
+        panic!("a second answer is shown as decided: {again:?}");
+    };
+    assert!(decided.by_you);
+    assert!(decided.text.starts_with("You said yes in the terminal at "), "{}", decided.text);
     eventually("the process to complete", WITHIN, || async {
         let processes = s.kernel.processes().ps(Default::default()).await.unwrap();
         processes.into_iter().find(|process| process.run.state == RunState::Completed)
@@ -113,6 +123,47 @@ async fn a_terminal_decides_through_the_control_plane() {
     assert_eq!((stored.state, stored.decisions.len()), (ApprovalState::Approved, 1));
     let answer = answers.find(&card.id).await.unwrap().unwrap();
     assert_eq!(answer.via.surface, SurfaceKind::Terminal);
+    s.kernel.stop().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_local_terminal_edits_a_call_over_the_kernel_socket() {
+    // A short directory: Unix socket paths are limited to about a hundred bytes.
+    let home = tempfile::Builder::new().prefix("ks").tempdir_in("/tmp").unwrap();
+    let socket = home.path().join("k.sock");
+    let control = ControlPlaneConfig::default().with_socket(&socket);
+    let path = socket.clone();
+    let (s, remote, _) = remote(control, move || ControlClient::socket(path), "draft.txt").await;
+    let terminal =
+        Caller::human(os_user(), SurfaceKind::Terminal, Origin::Keyboard).with_paired_local();
+    remote
+        .execute(&terminal, Command::Send { session_id: "u1".into(), text: "write it".into() })
+        .await
+        .unwrap();
+    let card = eventually("the card over the socket", WITHIN, || async {
+        remote.session_decisions(&terminal, "u1").await.unwrap().into_iter().next()
+    })
+    .await;
+    assert_eq!(card.risk, Risk::Medium);
+    let edit = Command::Decide {
+        decision_id: card.id.clone(),
+        version: card.version,
+        answer: Answer::Edit,
+        edited_args: Some(json!({ "path": "final.txt", "content": "INV-2" })),
+        reason: None,
+        expanded: true,
+    };
+    let outcome = remote.execute(&terminal, edit).await.unwrap();
+    let CommandOutcome::Answered { card: answered } = outcome else {
+        panic!("the edit is recorded: {outcome:?}");
+    };
+    assert_eq!(answered.decided.unwrap().answer, adk_surface::DecidedAnswer::Edited);
+    eventually("the edited call to run", WITHIN, || async {
+        std::fs::read_to_string(s.path.join("final.txt")).ok()
+    })
+    .await;
+    assert!(!s.path.join("draft.txt").exists(), "the call ran with the edited arguments only");
     s.kernel.stop().await.unwrap();
 }
 
