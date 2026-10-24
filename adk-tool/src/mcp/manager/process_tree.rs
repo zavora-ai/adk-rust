@@ -13,9 +13,8 @@ use rmcp::transport::{TokioChildProcess, Transport};
 /// a stop, a restart, a crash's cleanup, a dropped connection, or the manager's own process
 /// exiting — also ends every process the server started.
 pub(super) struct JobTransport {
-    // Dropped first: the transport ends the server, then closing the job ends what is left.
     transport: TokioChildProcess,
-    _job: JobObject,
+    job: JobObject,
 }
 
 impl JobTransport {
@@ -27,7 +26,24 @@ impl JobTransport {
             .id()
             .ok_or_else(|| std::io::Error::other("the server exited before it was started"))?;
         let job = JobObject::contain_suspended(pid)?;
-        Ok(Self { transport, _job: job })
+        Ok(Self { transport, job })
+    }
+}
+
+impl Drop for JobTransport {
+    fn drop(&mut self) {
+        // The job ends the server and everything it started, and the drop returns once they
+        // have exited, so no write one had in flight lands afterwards.
+        match self.job.terminate_and_wait(JobObject::TERMINATION_WAIT) {
+            Ok(true) => {}
+            Ok(false) => tracing::warn!(
+                wait = ?JobObject::TERMINATION_WAIT,
+                "a process of the MCP server had not exited when its transport closed"
+            ),
+            Err(error) => {
+                tracing::warn!(error = %error, "could not wait for the MCP server's processes to exit")
+            }
+        }
     }
 }
 

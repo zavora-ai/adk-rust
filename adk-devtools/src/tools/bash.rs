@@ -186,7 +186,7 @@ impl Tool for BashTool {
                     #[cfg(not(any(unix, windows)))]
                     let shell_exited = false;
                     if shell_exited {
-                        group.kill();
+                        group.kill().await;
                     }
                 }
             };
@@ -216,7 +216,7 @@ impl Tool for BashTool {
             }
             Ok(Err(e)) => Err(DevToolError::from(e).into()),
             Err(_) => {
-                group.kill();
+                group.kill().await;
                 // Also signal the child directly, which is all that is available elsewhere.
                 child.start_kill();
                 ctx.emit_progress("stderr", &format!("\n[timeout after {}s]\n", timeout.as_secs()))
@@ -349,7 +349,8 @@ struct ProcessGroupGuard {
 }
 
 impl ProcessGroupGuard {
-    fn kill(&self) {
+    /// Signals the Unix process group; a Windows job is ended by `kill` or the drop.
+    fn signal(&self) {
         #[cfg(unix)]
         if let Some(pid) = self.pid {
             // SAFETY: `killpg` takes a process-group id and a signal, and cannot violate
@@ -358,9 +359,16 @@ impl ProcessGroupGuard {
                 libc::killpg(pid as libc::pid_t, libc::SIGKILL);
             }
         }
+    }
+
+    /// Kills the command's processes. On Windows it returns once the job's processes have
+    /// exited, for at most `JobObject::TERMINATION_WAIT`, since a process the job ended can
+    /// still complete a write it had in flight.
+    async fn kill(&self) {
+        self.signal();
         #[cfg(windows)]
         if let Some(job) = &self.job {
-            job.terminate();
+            note_termination(job.terminate_and_wait_async(JobObject::TERMINATION_WAIT).await);
         }
     }
 
@@ -386,7 +394,27 @@ impl ProcessGroupGuard {
 
 impl Drop for ProcessGroupGuard {
     fn drop(&mut self) {
-        self.kill();
+        self.signal();
+        // A dropped call, such as a cancelled run's, waits briefly for its processes too.
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            note_termination(job.terminate_and_wait(JobObject::TERMINATION_WAIT));
+        }
+    }
+}
+
+/// Logs a job whose processes had not all exited when the wait ended.
+#[cfg(windows)]
+fn note_termination(result: std::io::Result<bool>) {
+    match result {
+        Ok(true) => {}
+        Ok(false) => tracing::warn!(
+            wait = ?JobObject::TERMINATION_WAIT,
+            "a process of the bash command had not exited when the call ended"
+        ),
+        Err(error) => {
+            tracing::warn!(error = %error, "could not wait for the bash command's processes to exit")
+        }
     }
 }
 

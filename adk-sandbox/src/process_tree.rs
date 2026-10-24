@@ -18,6 +18,7 @@ use std::os::windows::io::{
     AsHandle, AsRawHandle as _, BorrowedHandle, FromRawHandle as _, OwnedHandle,
 };
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
@@ -25,13 +26,17 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, TerminateJobObject,
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, INFINITE, OpenProcess, OpenThread, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
     ResumeThread, THREAD_SUSPEND_RESUME, WaitForSingleObject,
 };
+
+/// How often a terminating job is asked whether its processes have exited.
+const TERMINATION_POLL: Duration = Duration::from_millis(5);
 
 /// The process creation flag that starts a process suspended, so
 /// [`JobObject::contain_suspended`] can place it in a job before it runs.
@@ -138,11 +143,114 @@ impl JobObject {
         Ok(())
     }
 
+    /// How long [`terminate_and_wait`](Self::terminate_and_wait) callers wait by default for
+    /// the job's processes to exit: termination is normally done in milliseconds.
+    pub const TERMINATION_WAIT: Duration = Duration::from_secs(2);
+
     /// Kills every process in the job. A job with no process left is unaffected.
+    ///
+    /// Termination is asynchronous: a process can still complete I/O it had in flight, such
+    /// as a write to a file, after this returns. [`terminate_and_wait`](Self::terminate_and_wait)
+    /// returns only once every process has exited.
     pub fn terminate(&self) {
         // SAFETY: the handle is open. A failure means the job has no process left.
         unsafe {
             TerminateJobObject(self.0.as_raw_handle(), 1);
+        }
+    }
+
+    /// How many processes in the job have not exited.
+    ///
+    /// # Errors
+    ///
+    /// Returns the OS error when the job cannot be queried.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_sandbox::process_tree::JobObject;
+    ///
+    /// let job = JobObject::new()?;
+    /// assert_eq!(job.active_processes()?, 0);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn active_processes(&self) -> io::Result<u32> {
+        // SAFETY: the structure is plain data for which all zeroes is valid.
+        let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `info` is writable and the size passed is its own; the handle is open.
+        let queried = unsafe {
+            QueryInformationJobObject(
+                self.0.as_raw_handle(),
+                JobObjectBasicAccountingInformation,
+                (&raw mut info).cast(),
+                size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if queried == 0 { Err(io::Error::last_os_error()) } else { Ok(info.ActiveProcesses) }
+    }
+
+    /// Kills every process in the job and waits, for at most `limit`, until each has exited,
+    /// so nothing a process had in flight lands after the call returns. Returns whether the
+    /// job is empty. The wait blocks the thread; [`terminate_and_wait_async`](Self::terminate_and_wait_async)
+    /// is its async form.
+    ///
+    /// # Errors
+    ///
+    /// Returns the OS error when the job cannot be queried.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_sandbox::process_tree::JobObject;
+    ///
+    /// let job = JobObject::new()?;
+    /// assert!(job.terminate_and_wait(JobObject::TERMINATION_WAIT)?);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn terminate_and_wait(&self, limit: Duration) -> io::Result<bool> {
+        self.terminate();
+        let deadline = Instant::now() + limit;
+        loop {
+            if self.active_processes()? == 0 {
+                return Ok(true);
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            std::thread::sleep(TERMINATION_POLL);
+        }
+    }
+
+    /// [`terminate_and_wait`](Self::terminate_and_wait) that sleeps on the Tokio timer
+    /// instead of blocking the thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns the OS error when the job cannot be queried.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_sandbox::process_tree::JobObject;
+    ///
+    /// # async fn run() -> std::io::Result<()> {
+    /// let job = JobObject::new()?;
+    /// assert!(job.terminate_and_wait_async(JobObject::TERMINATION_WAIT).await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn terminate_and_wait_async(&self, limit: Duration) -> io::Result<bool> {
+        self.terminate();
+        let deadline = Instant::now() + limit;
+        loop {
+            if self.active_processes()? == 0 {
+                return Ok(true);
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            tokio::time::sleep(TERMINATION_POLL).await;
         }
     }
 
