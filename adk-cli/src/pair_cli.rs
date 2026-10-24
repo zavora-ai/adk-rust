@@ -296,7 +296,7 @@ mod tests {
         assert!(!terminal_safe("phone\u{1b}[2J").contains('\u{1b}'));
     }
 
-    /// Review finding 23: a pairing of no days, or of more than a year, is refused.
+    /// A pairing of no days, or of more than a year, is refused.
     #[test]
     fn days_are_one_to_365() {
         use clap::Parser;
@@ -347,7 +347,7 @@ mod tests {
         })
     }
 
-    /// Review finding 25: `pair revoke` acts on one active device or account, matched by
+    /// `pair revoke` acts on one active device or account, matched by
     /// id prefix, name or account id, and refuses an ambiguous match.
     #[test]
     fn revoke_resolves_one_active_match() {
@@ -386,7 +386,7 @@ mod tests {
         assert!(error.to_string().contains("nothing paired"), "{error}");
     }
 
-    /// Review finding 25: `pair list` shows devices, chat accounts and waiting accounts,
+    /// `pair list` shows devices, chat accounts and waiting accounts,
     /// escaping names a device or a platform supplied.
     #[test]
     fn list_shows_everything_paired_and_waiting() {
@@ -404,5 +404,32 @@ mod tests {
         assert!(text.contains("Ana T (telegram)") && text.contains("removed"), "{text}");
         assert!(text.contains("Stranger on telegram asked to pair"), "{text}");
         assert!(text.contains("adk-rust pair revoke ch-cc33"), "{text}");
+    }
+
+    /// A kernel that cannot list its chat accounts is reported as failing, not as having
+    /// none: `pair list` and `pair revoke` both answer its error.
+    #[tokio::test]
+    async fn a_failed_chat_account_listing_is_reported() {
+        use axum::http::StatusCode;
+        use axum::routing::get;
+
+        let app = axum::Router::new()
+            .route(
+                "/api/kernel/devices",
+                get(|| async { axum::Json(serde_json::json!({ "devices": [] })) }),
+            )
+            .route(
+                "/api/kernel/channels",
+                get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "the binding store is down") }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = ControlClient::http(base);
+
+        let error = list(&client).await.expect_err("pair list reports the failure");
+        assert!(error.to_string().contains("500"), "{error}");
+        let error = revoke(&client, "Ana").await.expect_err("pair revoke reports the failure");
+        assert!(!error.to_string().contains("nothing paired"), "{error}");
     }
 }
