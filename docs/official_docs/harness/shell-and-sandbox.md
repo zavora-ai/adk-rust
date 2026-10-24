@@ -283,6 +283,12 @@ approval; the prompt is titled as a host command and shows the model's reason qu
 escaped and capped. The approved retry runs on the host and consumes the failed call, so a
 replay of it is refused without a prompt.
 
+With the retry off — `allow_unsandboxed_retry(false)`, and always under the personal preset
+([Personal preset](personal.md)) — `bash` declares no `unsandboxed`, `retry_of` or `reason`,
+its hint offers no retry, and a call that sends `unsandboxed: true` is refused with
+`harness.bash.retry_refused`. The declaration digest differs, so a standing rule granted with
+the retry on does not cover the shell with it off.
+
 ## Process lifetime and the kill switch
 
 | Guarantee | Host | Seatbelt | bubblewrap | Container |
