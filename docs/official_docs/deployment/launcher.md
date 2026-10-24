@@ -444,7 +444,7 @@ launcher for a `HarnessAgent` (spec 3.1). It is what the `adk-rust` binary runs:
 |------|------------|-------------------|
 | Console | REPL over any agent | Harness REPL: banner with workspace, mode and shell; approvals through the harness's prompter (`ConsolePrompter`, with `[a] always allow`); a denial ends the turn; `/mode`, `/sandbox`, `/todos`, `/rules`, `/approvals` and more |
 | One turn | — | `run_once(text)` returns the calls held for a decision |
-| Server | REST API | The same server with the harness mounted behind an extractor: loopback peers are the operator by default (`LoopbackOperatorExtractor`), other addresses need `with_auth_token` or another extractor; with feature `surface` (on in the `adk-rust` binary), the web home at `/ui/` over the harness's modes, standing rules and inbox, its turns run as the operator, and one kill switch (`with_governance`) for the server's runs, the background runs and the home |
+| Server | REST API | The same server with the harness mounted behind an extractor: loopback peers are the operator by default (`LoopbackOperatorExtractor`), other addresses need `with_auth_token` or another extractor; with feature `surface` (on in the `adk-rust` binary), the web home at `/ui/` over the harness's modes, standing rules and inbox, its turns run as the caller the server admitted, and one kill switch (`with_governance`) for the server's runs, the background runs and the home, which only the `operator` scope stops or resumes |
 
 ```rust
 use std::sync::Arc;

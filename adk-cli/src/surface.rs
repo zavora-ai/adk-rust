@@ -41,3 +41,58 @@ pub(crate) fn harness_engine(
     }
     Ok(engine.build())
 }
+
+/// Most a command body may hold; a command is a few hundred bytes.
+const COMMAND_LIMIT: usize = 1 << 20;
+
+/// The home's routes, with **Stop all** and **Resume all** for the operator only (spec 3.3
+/// §11 S-I10): on a served harness they freeze and unfreeze every run the server makes, as
+/// the kernel's own freeze route does, which needs the operator too. Any other caller the
+/// server admits gets `403` for them; every other command is unchanged.
+pub(crate) fn operator_stops(routes: axum::Router) -> axum::Router {
+    routes.layer(axum::middleware::from_fn(stops_need_the_operator))
+}
+
+async fn stops_need_the_operator(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    if request.method() != axum::http::Method::POST
+        || !request.uri().path().ends_with(adk_surface::web::paths::COMMANDS)
+    {
+        return next.run(request).await;
+    }
+    let (parts, body) = request.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, COMMAND_LIMIT).await else {
+        return axum::http::StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    };
+    let stops = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|value| {
+            value.pointer("/command/type").and_then(|kind| kind.as_str().map(str::to_string))
+        })
+        .is_some_and(|kind| kind == "stopAll" || kind == "resumeAll");
+    // No caller at all is the surface's own `401`.
+    let caller =
+        parts.extensions.get::<Option<adk_core::RequestContext>>().and_then(Option::as_ref);
+    if stops
+        && let Some(caller) = caller
+        && !caller.scopes.iter().any(|scope| scope == crate::harness::OPERATOR_SCOPE)
+    {
+        let error = adk_core::AdkError::new(
+            adk_core::ErrorComponent::Server,
+            adk_core::ErrorCategory::Forbidden,
+            "surface.operator_only",
+            format!(
+                "stopping and resuming every agent needs the `{}` scope: they freeze and \
+                 unfreeze every run this server makes",
+                crate::harness::OPERATOR_SCOPE
+            ),
+        );
+        return (axum::http::StatusCode::FORBIDDEN, axum::Json(error.to_problem_json()))
+            .into_response();
+    }
+    next.run(axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes))).await
+}

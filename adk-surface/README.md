@@ -10,7 +10,9 @@ from anywhere, and every other window shows who made it.
 [![Documentation](https://docs.rs/adk-surface/badge.svg)](https://docs.rs/adk-surface)
 [![License](https://img.shields.io/crates/l/adk-surface.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
 
-**Stability: Beta.** `default = []`; no library crate depends on `adk-surface`.
+**Stability: Beta.** `default = []`. `adk-cli` depends on it, with `web`, through its `surface`
+feature, which is on by default so the `adk-rust` binary serves the web home; build `adk-cli`
+with `default-features = false` to leave it out.
 
 ## What it is
 

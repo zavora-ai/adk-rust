@@ -89,6 +89,11 @@ export async function followFeed(
         onTrouble(false);
         onState(state);
         wait = NEW_SESSION_MS;
+      } else if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        // The server answered: the page asks the person to sign in, not that it can't reach.
+        failures = Math.min(failures + 1, 4);
+        onTrouble(false);
+        wait = Math.min(500 * 2 ** failures, 8_000);
       } else {
         failures += 1;
         if (failures > 1) onTrouble(true);

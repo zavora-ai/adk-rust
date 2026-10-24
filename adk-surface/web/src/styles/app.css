@@ -822,6 +822,19 @@ pre {
   background: var(--card);
 }
 
+.visiting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--decision);
+  color: var(--text);
+}
+
 .composer-wrap {
   display: grid;
   gap: 8px;

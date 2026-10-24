@@ -26,8 +26,11 @@
 - **`adk-rust serve` and `adk-rust up` serve the web home** (`adk-cli`, feature `surface`, on
   by default): at `http://127.0.0.1:8080/ui/`, over the harness's sessions, approval inbox,
   modes and standing rules; `up` adds the kernel and records every command and how each
-  answer was given on its signed audit log. A message typed in the home runs as the operator,
-  with their mode and standing rules, and its **Stop all** freezes the server's runs, the
-  background runs and the home's turns alike. `HarnessLauncher::with_auth_token` and
-  `HarnessLauncher::with_governance` set the token and the shared kill switch. The umbrella
+  answer was given on its signed audit log. A message typed in the home runs as the caller
+  the server admitted, with the session's mode and standing rules (`Harness::send_as` and
+  `Harness::resume_as` in `adk-harness`, `Source::resolved_by` in `adk-surface`). Its **Stop
+  all** freezes the server's runs, the background runs and the home's turns alike, on every
+  replica of `serve --store`, and it and **Resume all** need the `operator` scope.
+  `HarnessLauncher::with_auth_token` and `HarnessLauncher::with_governance` set the token and
+  the shared kill switch. The umbrella
   `surface` feature turns on `adk-cli`'s.

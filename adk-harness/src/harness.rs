@@ -7,8 +7,8 @@ use adk_core::audit_log::AuditActor;
 use adk_core::principal::{SubjectKind, SubjectRef};
 use adk_core::{
     AdkError, ApprovalScope, Content, ErrorCategory, ErrorComponent, Event, EventStream,
-    FunctionResponseData, Part, PendingApproval, Result, SessionId, ToolApproval, UserId,
-    held_tool_calls,
+    FunctionResponseData, Part, PendingApproval, RequestContext, Result, RunConfig, SessionId,
+    ToolApproval, UserId, held_tool_calls,
 };
 use adk_runner::Runner;
 use adk_session::{CreateRequest, GetRequest, SessionService};
@@ -317,11 +317,44 @@ impl Harness {
         session: &SessionId,
         text: impl Into<String>,
     ) -> Result<EventStream> {
-        self.settle_stranded_calls(user, session).await?;
-        self.recover(user, session).await?;
-        self.runner
-            .run(user.clone(), session.clone(), Content::new("user").with_text(text.into()))
-            .await
+        self.turn(user, session, Content::new("user").with_text(text.into()), None).await
+    }
+
+    /// [`send`](Self::send) as the caller `context` authenticates (spec 3.3 §6): the run
+    /// carries `context`, so the session's mode and standing rules apply as they do to a
+    /// request a server admitted. `context` names `user`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_core::{RequestContext, SessionId, UserId};
+    /// use adk_harness::Harness;
+    ///
+    /// # async fn example(harness: Harness, user: UserId, session: SessionId) -> adk_core::Result<()> {
+    /// // The caller the server admitted for `user`.
+    /// let context = RequestContext {
+    ///     user_id: user.to_string(),
+    ///     scopes: vec!["operator".into()],
+    ///     metadata: Default::default(),
+    /// };
+    /// let events = harness.send_as(&user, &session, "create note.txt", context).await?;
+    /// # let _ = events;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// As [`send`](Self::send); the run fails with `identity.subject_mismatch` when `context`
+    /// names another user.
+    pub async fn send_as(
+        &self,
+        user: &UserId,
+        session: &SessionId,
+        text: impl Into<String>,
+        context: RequestContext,
+    ) -> Result<EventStream> {
+        self.turn(user, session, Content::new("user").with_text(text.into()), Some(context)).await
     }
 
     /// Runs an empty turn, which resumes held calls that now have a decision.
@@ -338,9 +371,40 @@ impl Harness {
     /// Returns an error when the run cannot start, or the approval store's or the action
     /// ledger's error.
     pub async fn resume(&self, user: &UserId, session: &SessionId) -> Result<EventStream> {
+        self.turn(user, session, Content::new("user"), None).await
+    }
+
+    /// [`resume`](Self::resume) as the caller `context` authenticates (spec 3.3 §6), as
+    /// [`send_as`](Self::send_as) sends.
+    ///
+    /// # Errors
+    ///
+    /// As [`resume`](Self::resume); the run fails with `identity.subject_mismatch` when
+    /// `context` names another user.
+    pub async fn resume_as(
+        &self,
+        user: &UserId,
+        session: &SessionId,
+        context: RequestContext,
+    ) -> Result<EventStream> {
+        self.turn(user, session, Content::new("user"), Some(context)).await
+    }
+
+    /// A turn of `content`, settling stranded held calls first, run as `context` when given.
+    async fn turn(
+        &self,
+        user: &UserId,
+        session: &SessionId,
+        content: Content,
+        context: Option<RequestContext>,
+    ) -> Result<EventStream> {
         self.settle_stranded_calls(user, session).await?;
         self.recover(user, session).await?;
-        self.runner.run(user.clone(), session.clone(), Content::new("user")).await
+        let config = context.map(|context| RunConfig {
+            request_context: Some(context),
+            ..self.runner.run_config().clone()
+        });
+        self.runner.run_with_config(user.clone(), session.clone(), content, config).await
     }
 
     /// Answers from the action ledger, or holds again, the session's held calls that have

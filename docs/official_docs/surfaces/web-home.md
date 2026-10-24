@@ -29,9 +29,11 @@ holds the write, the home shows it as a decision, and **Allow once** runs it onc
 | ![A held write in the home](../images/surfaces/web-live-held-light.png) | ![The write ran once, dark](../images/surfaces/web-live-ran-dark.png) |
 
 The `adk-rust` binary turns the home on with its `surface` feature, which is on by default.
-The home serves the harness: a message typed in it runs as the operator the server admitted,
-with their mode and standing rules, and **Stop all** freezes the one kill switch the server's
-runs, the background runs and the home's turns share. `adk_cli::Launcher` serving a chat agent
+The home serves the harness: a message typed in it runs as the caller the server admitted,
+with the session's mode and standing rules. **Stop all** freezes the one kill switch the
+server's runs, the background runs and the home's turns share, on every replica of
+`adk-rust serve --store`; it and **Resume all** need the `operator` scope, and any other caller
+gets `403`. `adk_cli::Launcher` serving a chat agent
 serves its REST API only; to put the home on your own server, mount it as below.
 
 ## Mount it on your own server

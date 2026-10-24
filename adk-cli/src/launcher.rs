@@ -80,7 +80,7 @@ struct LauncherCli {
 enum LauncherCommand {
     /// Run interactive console (default if no command specified)
     Chat,
-    /// Start web server with UI
+    /// Start the web server: the REST API under /api
     Serve {
         /// Server port
         #[arg(long, default_value_t = 8080)]
@@ -136,7 +136,8 @@ impl Default for TelemetryConfig {
 ///
 /// # Serve mode
 ///
-/// Starts an Axum HTTP server with the ADK web UI on `127.0.0.1`. Listening on
+/// Starts an Axum HTTP server with the REST API under `/api`, on `127.0.0.1`; it serves no
+/// page (the web home is `adk-rust serve`'s and `adk-rust up`'s, spec 3.3 §10 S1). Listening on
 /// other interfaces is an explicit choice: [`with_bind_address`](Self::with_bind_address)
 /// or `serve --host`. The server then answers only loopback names and IP addresses until
 /// its public host names are listed in [`SecurityConfig::allowed_hosts`].
@@ -569,7 +570,7 @@ impl Launcher {
     /// Run the launcher, parsing CLI arguments.
     ///
     /// - No arguments or `chat`: Interactive console
-    /// - `serve [--port PORT] [--host ADDRESS]`: Web server with UI, on `127.0.0.1` unless
+    /// - `serve [--port PORT] [--host ADDRESS]`: Web server with the REST API, on `127.0.0.1` unless
     ///   `--host` or [`with_bind_address`](Self::with_bind_address) says otherwise
     pub async fn run(self) -> Result<()> {
         let cli = LauncherCli::parse();
@@ -871,7 +872,7 @@ impl Launcher {
         #[cfg(all(feature = "surface", feature = "harness"))]
         if let Some(surface) = surface {
             builder = builder
-                .add_api_routes(adk_surface::web::router(surface))
+                .add_api_routes(crate::surface::operator_stops(adk_surface::web::router(surface)))
                 .add_root_routes(adk_surface::web::home());
         }
         #[cfg(feature = "harness")]
@@ -2070,6 +2071,17 @@ mod tests {
             .unwrap();
         let response = app.oneshot(stop).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "no route freezes the server");
+    }
+
+    /// `serve`'s help promises the REST API, not a page a chat launcher no longer serves.
+    #[test]
+    fn the_serve_command_promises_no_page() {
+        use clap::CommandFactory;
+        let command = LauncherCli::command();
+        let serve = command.find_subcommand("serve").expect("serve is a command");
+        let about = serve.get_about().map(ToString::to_string).unwrap_or_default();
+        assert!(about.contains("REST API"), "{about}");
+        assert!(!about.contains("UI"), "{about}");
     }
 
     /// Serve mode names where the REST API answers; nothing is mounted at `/` to open.

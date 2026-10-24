@@ -665,3 +665,102 @@ async fn a_caller_lists_and_revokes_only_their_own_rules() {
     .await;
     assert_eq!(listed["rules"][0]["id"], id, "bo could not revoke ana's rule");
 }
+
+/// Stop all and Resume all freeze and unfreeze every run the server makes, so behind a
+/// custom extractor only the operator gives them (spec 3.3 §11 S-I10); another caller the
+/// server admits gets `403`, and the server's runs carry on.
+#[cfg(feature = "surface")]
+#[tokio::test]
+async fn only_the_operator_stops_or_resumes_every_agent() {
+    let served = served_with(
+        vec![
+            ScriptedResponse::function_call(
+                "write_file",
+                json!({ "path": "count.txt", "content": "run\n" }),
+            ),
+            ScriptedResponse::text("Ran it."),
+        ],
+        HarnessMode::Auto,
+        Some(Arc::new(HeaderIdentity)),
+        None,
+    )
+    .await;
+    let count = served.workspace.path().join("count.txt");
+    let command = |kind: &str| Some(home_command(json!({ "type": kind })));
+    for kind in ["stopAll", "resumeAll"] {
+        let viewer = as_caller(
+            request("POST", "/api/surface/commands", command(kind), None),
+            "ana",
+            "viewer",
+        );
+        let (status, body) = call(&served.app, viewer).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{kind}: {body}");
+        assert_eq!(body["error"]["code"], "surface.operator_only", "{body}");
+    }
+    let run = as_caller(
+        request("POST", "/api/run", Some(run_body(Some("count"))), None),
+        "ana",
+        "viewer",
+    );
+    let (status, events) = call(&served.app, run).await;
+    assert_eq!(status, StatusCode::OK, "{events}");
+    assert_eq!(std::fs::read_to_string(&count).unwrap(), "run\n", "the viewer stopped nothing");
+
+    let operator = as_caller(
+        request("POST", "/api/surface/commands", command("stopAll"), None),
+        "ana",
+        OPERATOR_SCOPE,
+    );
+    let (status, outcome) = call(&served.app, operator).await;
+    assert_eq!((status, outcome["type"].clone()), (StatusCode::OK, json!("stopped")), "{outcome}");
+}
+
+/// Behind a custom extractor too, a message typed in the home runs as the caller the server
+/// admitted (spec 3.3 §5.1, spec 3.1 §8.2): in Auto mode the edit runs without a decision.
+#[cfg(feature = "surface")]
+#[tokio::test]
+async fn the_home_s_turns_run_as_the_caller_behind_any_extractor() {
+    let served = served_with_gate(
+        vec![
+            ScriptedResponse::function_call(
+                "write_file",
+                json!({ "path": "count.txt", "content": "run\n" }),
+            ),
+            ScriptedResponse::text("Ran it."),
+        ],
+        HarnessMode::Auto,
+        Some(Arc::new(HeaderIdentity)),
+        None,
+        true,
+    )
+    .await;
+    let count = served.workspace.path().join("count.txt");
+    let send = home_command(json!({ "type": "send", "sessionId": "s1", "text": "count" }));
+    let (status, outcome) = call(
+        &served.app,
+        as_caller(
+            request("POST", "/api/surface/commands", Some(send), None),
+            "ana",
+            OPERATOR_SCOPE,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{outcome}");
+    for _ in 0..200 {
+        if count.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let (_, page) = call(
+        &served.app,
+        as_caller(
+            request("GET", "/api/surface/decisions?surface=web", None, None),
+            "ana",
+            OPERATOR_SCOPE,
+        ),
+    )
+    .await;
+    assert_eq!(page["decisions"], json!([]), "Auto asked nothing: {page}");
+    assert_eq!(std::fs::read_to_string(&count).unwrap(), "run\n");
+}

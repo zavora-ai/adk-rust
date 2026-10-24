@@ -105,6 +105,14 @@ pub trait Source: Send + Sync {
         Ok(())
     }
 
+    /// [`resolved`](Self::resolved), for the answer `caller` gave: a source that runs the
+    /// resumed turn runs it as `caller` when the session is theirs, so the session's mode and
+    /// standing rules apply to it (spec 3.3 §6). The default calls `resolved`.
+    async fn resolved_by(&self, caller: &Caller, request: &ApprovalRequest) -> Result<()> {
+        let _ = caller;
+        self.resolved(request).await
+    }
+
     /// What "Always allow" would create for `request`, when this source can create it.
     async fn always_allow_offer(&self, request: &ApprovalRequest) -> Option<AlwaysAllowOffer> {
         let _ = request;
