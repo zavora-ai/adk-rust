@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::audit;
-use crate::error::{KernelError, NOT_FOUND_CODE, Result};
+use crate::error::{KernelError, MEMORY_CROSSING_CODE, MEMORY_DELETE_CODE, NOT_FOUND_CODE, Result};
 use crate::sched::{QuietHours, Quotas};
 
 mod crossing;
@@ -528,7 +528,7 @@ impl PartitionMemory {
         AdkError::new(
             ErrorComponent::Memory,
             ErrorCategory::Forbidden,
-            "kernel.partition.memory_crossing",
+            MEMORY_CROSSING_CODE,
             format!(
                 "partition `{}` reads and writes only its own memory scope `{}`, not `{project}`; \
                  the coordinator reaches another partition through a crossing (spec 3.2 K-I15)",
@@ -557,7 +557,7 @@ impl Memory for PartitionMemory {
         Err(AdkError::new(
             ErrorComponent::Memory,
             ErrorCategory::Unsupported,
-            "kernel.partition.memory_delete",
+            MEMORY_DELETE_CODE,
             format!(
                 "partition `{}` cannot delete by query: the memory's delete reaches every \
                  project; delete the partition's project through its MemoryService",

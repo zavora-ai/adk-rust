@@ -697,7 +697,7 @@ fn refused(reason: String) -> AdkError {
     AdkError::new(
         ErrorComponent::Tool,
         ErrorCategory::Forbidden,
-        "kernel.partition.crossing_denied",
+        crate::error::CROSSING_DENIED_CODE,
         reason,
     )
 }
