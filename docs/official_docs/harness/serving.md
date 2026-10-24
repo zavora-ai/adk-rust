@@ -45,9 +45,11 @@ The [web home](../surfaces/web-home.md) at `http://127.0.0.1:8080/ui/` shows hel
 decision cards and answers them with the version it saw (spec 3.3 §5.1, §7). It is the
 operator's, as the mount's other routes are: on loopback it needs nothing more, and with
 `--auth-token` the page asks for the token once and sends it as `Authorization: Bearer` on
-every request. A message typed in the home runs as the operator, so the mode and standing
-rules apply to it as they do to `POST /api/run`, and its **Stop all** freezes the server's
-runs, the background runs and the home's turns alike (spec 3.3 §11 S-I10).
+every request. A message typed in the home runs as the caller the server admitted, so the
+mode and standing rules apply to it as they do to `POST /api/run`. Its **Stop all** freezes
+the server's runs, the background runs and the home's turns alike, on every replica sharing
+the `--store`, and only a caller with the `operator` scope may stop or resume (spec 3.3 §11
+S-I10).
 
 ## Running replicas
 

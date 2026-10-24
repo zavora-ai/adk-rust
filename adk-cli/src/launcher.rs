@@ -872,7 +872,7 @@ impl Launcher {
         #[cfg(all(feature = "surface", feature = "harness"))]
         if let Some(surface) = surface {
             builder = builder
-                .add_api_routes(adk_surface::web::router(surface))
+                .add_api_routes(crate::surface::operator_stops(adk_surface::web::router(surface)))
                 .add_root_routes(adk_surface::web::home());
         }
         #[cfg(feature = "harness")]

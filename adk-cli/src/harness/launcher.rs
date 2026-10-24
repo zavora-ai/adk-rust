@@ -581,7 +581,7 @@ impl HarnessLauncher {
             &app_name,
             sessions.clone(),
             self.run_store.clone(),
-            Served::default(),
+            None,
         )?;
         let harness = match &self.goal_queue {
             Some(queue) => harness.with_goal_queue(queue.clone()),
@@ -766,8 +766,8 @@ impl HarnessLauncher {
             })
         });
         // The web home over this harness (spec 3.3 §5.1, §10 S1), on the sessions the server
-        // serves, so both see one store. Its turns run as the operator when every caller is
-        // (loopback or the token), so their mode and standing rules apply (spec 3.1 §8.2).
+        // serves, so both see one store. Its turns run as the caller who sent them, so the
+        // session's mode and standing rules apply (spec 3.1 §8.2).
         #[cfg(feature = "surface")]
         let (surface, sessions, take_over) = {
             let app = self.resolved_app_name();
@@ -775,16 +775,12 @@ impl HarnessLauncher {
                 .session_service
                 .clone()
                 .unwrap_or_else(|| Arc::new(InMemorySessionService::new()));
-            let operator = self
-                .request_context_extractor
-                .is_none()
-                .then(|| super::serve::operator(&self.user_id));
             let harness = harness_for(
                 self.agent.clone(),
                 &app,
                 sessions.clone(),
                 self.run_store.clone(),
-                Served { governance: Some(governance.clone()), caller: operator },
+                Some(governance.clone()),
             )?;
             let engine = crate::surface::harness_engine(
                 &app,
@@ -999,21 +995,14 @@ pub(crate) fn memory_on(harness: &Harness) -> bool {
 }
 
 /// A `Harness` whose runner asks the agent's prompter and waits an hour for a person, and
-/// that runs goals as durable runs in `run_store` when one is given.
-/// What a served harness's runner shares with the server: its kill switch, and the caller its
-/// turns run as when every caller is the operator.
-#[derive(Default)]
-pub(crate) struct Served {
-    pub(crate) governance: Option<GovernanceControl>,
-    pub(crate) caller: Option<adk_core::RequestContext>,
-}
-
+/// that runs goals as durable runs in `run_store` when one is given; served, its runner
+/// shares the server's kill switch `governance`.
 pub(crate) fn harness_for(
     agent: Arc<HarnessAgent>,
     app_name: &str,
     sessions: Arc<dyn SessionService>,
     run_store: Option<Arc<dyn DurableRunStore>>,
-    served: Served,
+    governance: Option<GovernanceControl>,
 ) -> Result<Harness> {
     let runtime = agent.runtime();
     let config = RunConfig {
@@ -1031,11 +1020,8 @@ pub(crate) fn harness_for(
     if let Some(compaction) = runtime.compaction() {
         builder = builder.compaction_config(compaction.clone());
     }
-    if let Some(governance) = served.governance {
+    if let Some(governance) = governance {
         builder = builder.governance(governance);
-    }
-    if let Some(caller) = served.caller {
-        builder = builder.request_context(caller);
     }
     let harness = Harness::with_runner(agent, builder.build()?)?;
     // Goals get their own queue, so this worker and a server's background worker on the
@@ -1158,7 +1144,7 @@ impl Shared {
             &self.app_name,
             self.sessions.clone(),
             self.run_store.clone(),
-            Served::default(),
+            None,
         )?);
         *self.harness.write().unwrap_or_else(std::sync::PoisonError::into_inner) = harness.clone();
         Ok(Some(harness))
@@ -1217,7 +1203,7 @@ impl Shared {
             &self.app_name,
             self.sessions.clone(),
             self.run_store.clone(),
-            Served::default(),
+            None,
         )?);
         *self.harness.write().unwrap_or_else(std::sync::PoisonError::into_inner) = harness.clone();
         *self.effort.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(effort);

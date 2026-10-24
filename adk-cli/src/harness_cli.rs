@@ -1999,8 +1999,9 @@ pub async fn serve(
     )?;
 
     // One kill switch for the server's runs, the background runs and the web home's turns,
-    // so the home's Stop all stops them all (spec 3.3 §11 S-I10).
-    let governance = adk_core::GovernanceControl::new();
+    // so the home's Stop all stops them all (spec 3.3 §11 S-I10), on every replica.
+    let governance =
+        serve_governance(setup.shared.as_ref().map(|shared| shared.governance.clone())).await?;
     // A turn can run as a durable background run of the `adk-rust` target (spec 3.1 §7.12).
     let runner = adk_runner::Runner::builder()
         .app_name(APP_NAME)
@@ -2100,9 +2101,49 @@ fn workspace_mcp_servers(
     Ok(Some(file.mcp_servers))
 }
 
+/// How often a replica of `serve` reads the kill switch the replicas share.
+const SERVE_GOVERNANCE_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The kill switch of a served harness (spec 3.3 §11 S-I10): mirrored over the store every
+/// replica shares, so Stop all on one replica stops them all; else this process's own.
+async fn serve_governance(
+    shared: Option<Arc<dyn adk_core::GovernanceStateStore>>,
+) -> Result<adk_core::GovernanceControl> {
+    let Some(store) = shared else {
+        return Ok(adk_core::GovernanceControl::new());
+    };
+    let control = adk_core::GovernanceControl::mirrored(
+        store,
+        adk_core::governance::GovernanceMirrorConfig::default()
+            .with_poll_interval(SERVE_GOVERNANCE_POLL),
+    );
+    control.refresh().await?;
+    control.spawn_mirror();
+    Ok(control)
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// Replicas of `serve --store` share one kill switch (spec 3.3 §11 S-I10): Stop all on
+    /// one freezes the others' runs too.
+    #[tokio::test]
+    async fn serve_replicas_share_the_kill_switch() {
+        let store: Arc<dyn adk_core::GovernanceStateStore> =
+            Arc::new(adk_core::governance_state::InMemoryGovernanceStateStore::new());
+        let a = serve_governance(Some(store.clone())).await.unwrap();
+        let b = serve_governance(Some(store)).await.unwrap();
+        a.freeze_recorded(
+            "Stop all",
+            adk_core::audit_log::AuditActor::subject(adk_core::principal::SubjectRef::human("ana")),
+        )
+        .await
+        .unwrap();
+        b.refresh().await.unwrap();
+        assert!(b.is_frozen(), "the other replica is stopped too");
+        assert!(!serve_governance(None).await.unwrap().is_mirrored(), "one process, its own");
+    }
 
     #[test]
     fn an_output_file_never_follows_a_planted_link() {

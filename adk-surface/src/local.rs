@@ -9,7 +9,8 @@ use std::time::Duration;
 use adk_core::audit_log::AuditActor;
 use adk_core::{
     ApprovalDecision, ApprovalRequest, ApprovalService, ApprovalState, Content, ErrorCategory,
-    Event, GovernanceControl, InboxQuery, NewRun, RunCheckpointRef, RunState, SessionId, UserId,
+    Event, GovernanceControl, InboxQuery, NewRun, RequestContext, RunCheckpointRef, RunState,
+    SessionId, UserId,
 };
 use adk_harness::{Harness, HarnessMode, RuleOwner, StandingDecision, StandingRule};
 use adk_kernel::proc::LedgerQuery;
@@ -243,17 +244,36 @@ impl LocalSource {
     }
 
     /// Runs a turn of the session in the background through the harness or the runner;
-    /// `text` empty resumes the session's decided calls.
-    fn run_turn(&self, user: &str, session: &str, text: &str) -> Result<()> {
+    /// `text` empty resumes the session's decided calls. With `caller`, the turn carries the
+    /// caller's identity, so the harness applies the session's mode and standing rules as
+    /// it does to a request a server admitted (spec 3.3 §6).
+    fn run_turn(
+        &self,
+        user: &str,
+        session: &str,
+        text: &str,
+        caller: Option<&Caller>,
+    ) -> Result<()> {
         let (user_id, session_id) = Self::ids(user, session)?;
         let text = text.to_string();
+        let context =
+            caller.filter(|caller| caller.user_id() == user).map(|caller| RequestContext {
+                user_id: caller.user_id().to_string(),
+                scopes: caller.groups.clone(),
+                metadata: Default::default(),
+            });
         if let Some(harness) = &self.harness {
             let harness = Arc::clone(harness);
             tokio::spawn(async move {
-                let stream = if text.is_empty() {
-                    harness.resume(&user_id, &session_id).await
-                } else {
-                    harness.send(&user_id, &session_id, text).await
+                let stream = match (text.is_empty(), context) {
+                    (true, None) => harness.resume(&user_id, &session_id).await,
+                    (true, Some(context)) => {
+                        harness.resume_as(&user_id, &session_id, context).await
+                    }
+                    (false, None) => harness.send(&user_id, &session_id, text).await,
+                    (false, Some(context)) => {
+                        harness.send_as(&user_id, &session_id, text, context).await
+                    }
                 };
                 drain(stream, session_id.as_ref()).await;
             });
@@ -267,7 +287,12 @@ impl LocalSource {
                 } else {
                     Content::new("user").with_text(text)
                 };
-                let stream = runner.run(user_id, session_id.clone(), content).await;
+                let config = context.map(|context| adk_core::RunConfig {
+                    request_context: Some(context),
+                    ..runner.run_config().clone()
+                });
+                let stream =
+                    runner.run_with_config(user_id, session_id.clone(), content, config).await;
                 drain(stream, session_id.as_ref()).await;
             });
             return Ok(());
@@ -431,15 +456,11 @@ impl Source for LocalSource {
     }
 
     async fn resolved(&self, request: &ApprovalRequest) -> Result<()> {
-        // A durable run parked on the call is woken by the approval service; a call held in
-        // a plain run resumes with an empty turn, as `Harness::resume` does.
-        if request.run_id.is_some() && self.kernel.is_some() {
-            return Ok(());
-        }
-        if self.harness.is_none() && self.runner.is_none() {
-            return Ok(());
-        }
-        self.run_turn(&request.scope.user_id, &request.scope.session_id, "")
+        self.resume_decided(request, None)
+    }
+
+    async fn resolved_by(&self, caller: &Caller, request: &ApprovalRequest) -> Result<()> {
+        self.resume_decided(request, Some(caller))
     }
 
     async fn always_allow_offer(&self, request: &ApprovalRequest) -> Option<AlwaysAllowOffer> {
@@ -549,7 +570,7 @@ impl Source for LocalSource {
             kernel.processes().spawn(run, ProcessSpec::new(ProcessKind::Interactive)).await?;
             return Ok(());
         }
-        self.run_turn(user, session, text)
+        self.run_turn(user, session, text, Some(caller))
     }
 
     async fn stop_all(&self, caller: &Caller, reason: &str) -> Result<()> {
@@ -639,6 +660,19 @@ impl Source for LocalSource {
 }
 
 impl LocalSource {
+    /// Resumes the session of a decided `request` (spec 3.3 §7.3): a durable run parked on the
+    /// call is woken by the approval service; a call held in a plain run resumes with an
+    /// empty turn, as `Harness::resume` does, as the person who answered when it is theirs.
+    fn resume_decided(&self, request: &ApprovalRequest, caller: Option<&Caller>) -> Result<()> {
+        if request.run_id.is_some() && self.kernel.is_some() {
+            return Ok(());
+        }
+        if self.harness.is_none() && self.runner.is_none() {
+            return Ok(());
+        }
+        self.run_turn(&request.scope.user_id, &request.scope.session_id, "", caller)
+    }
+
     fn active_sessions(&self) -> Vec<String> {
         match (&self.harness, &self.runner) {
             (Some(harness), _) => harness.runner().active_session_ids(),

@@ -844,7 +844,7 @@ impl SurfaceEngine {
                 }
                 self.audit_decide(caller, &updated, answer, "decided", None).await?;
                 if updated.state != ApprovalState::Pending {
-                    if let Err(error) = self.inner.source.resolved(&updated).await {
+                    if let Err(error) = self.inner.source.resolved_by(caller, &updated).await {
                         tracing::warn!(error = %error, decision.id = %updated.id, "the decided call could not be resumed");
                     }
                     self.spawn_drain(caller.clone(), updated.scope.session_id.clone());

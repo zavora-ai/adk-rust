@@ -3,14 +3,14 @@
 
 use std::sync::Arc;
 
-use adk_core::{ApprovalStore, DurableRunStore};
+use adk_core::{ApprovalStore, DurableRunStore, GovernanceStateStore};
 use adk_graph::Checkpointer;
 use adk_harness::{ModeStore, StandingRuleStore, redact_store_url};
 use adk_session::SessionService;
 use anyhow::{Result, bail};
 
 /// The stores of a served harness in one backend: sessions, approvals, durable runs, modes,
-/// standing rules and plan checkpoints.
+/// standing rules, plan checkpoints and the kill switch every replica shares.
 pub struct SharedStores {
     /// The store URL with its password redacted, for the banner.
     pub label: String,
@@ -20,6 +20,8 @@ pub struct SharedStores {
     pub approvals: Arc<dyn ApprovalStore>,
     pub runs: Arc<dyn DurableRunStore>,
     pub checkpointer: Arc<dyn Checkpointer>,
+    /// Stop all on one replica stops every replica (spec 3.3 §11 S-I10).
+    pub governance: Arc<dyn GovernanceStateStore>,
 }
 
 /// Opens and migrates the standing-rule store at `url`, for `adk-rust rules --store`.
@@ -58,6 +60,8 @@ async fn postgres(url: &str, label: String) -> Result<SharedStores> {
     runs.migrate().await?;
     let checkpointer = adk_graph::PostgresCheckpointer::from_pool(pool);
     checkpointer.migrate().await?;
+    let governance = adk_session::PostgresGovernanceStateStore::new(url).await?;
+    governance.migrate().await?;
     Ok(SharedStores {
         label,
         sessions: Arc::new(sessions),
@@ -66,6 +70,7 @@ async fn postgres(url: &str, label: String) -> Result<SharedStores> {
         approvals: Arc::new(approvals),
         runs: Arc::new(runs),
         checkpointer: Arc::new(checkpointer),
+        governance: Arc::new(governance),
     })
 }
 
@@ -93,6 +98,8 @@ async fn redis(url: &str, label: String) -> Result<SharedStores> {
     let runs = adk_session::RedisRunStore::new(url).await?;
     runs.migrate().await?;
     let checkpointer = adk_harness::checkpointer_from_url(url).await?;
+    let governance = adk_session::RedisGovernanceStateStore::new(url).await?;
+    governance.migrate().await?;
     Ok(SharedStores {
         label,
         sessions: Arc::new(sessions),
@@ -101,6 +108,7 @@ async fn redis(url: &str, label: String) -> Result<SharedStores> {
         approvals: Arc::new(approvals),
         runs: Arc::new(runs),
         checkpointer,
+        governance: Arc::new(governance),
     })
 }
 
