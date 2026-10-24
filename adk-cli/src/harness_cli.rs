@@ -33,6 +33,7 @@ use serde_json::json;
 use crate::ultra::{self, UltraAgents};
 use crate::{BuiltModel, ResolvedModel};
 
+mod books;
 mod service;
 #[cfg(feature = "tui")]
 pub mod surface;
@@ -143,6 +144,9 @@ struct AgentExtras {
     /// The partition the harness runs, the table its policy reads, and whether it is the
     /// coordinator.
     partition: Option<(adk_kernel::Partition, adk_kernel::Partitions, bool)>,
+    /// The control store whose area mode, changed while the kernel runs, governs the
+    /// harness's sessions from their next step, and the harness's area (spec 3.3 §10 K3).
+    area_modes: Option<(Arc<dyn adk_kernel::control::ControlStore>, adk_kernel::PartitionId)>,
     /// The person at this console runs the harness and answers its inbox (the terminal
     /// surface in process, spec 3.3 §5.2): its runs are theirs, so standing rules and Auto
     /// apply without a server's authentication.
@@ -428,6 +432,24 @@ impl Setup {
                 .mode_store(shared.modes.clone())
                 .standing_rules(shared.rules.clone())
                 .approval_store(shared.approvals.clone());
+        }
+        // An area's mode the person changes while the kernel runs governs the harness's
+        // sessions from their next step (spec 3.3 §10 K3).
+        if let Some((control, area)) = &extras.area_modes {
+            let mut modes: Arc<dyn adk_harness::ModeStore> =
+                Arc::new(adk_harness::InMemoryModeStore::new());
+            #[cfg(feature = "persist")]
+            if let Some(db) = &self.db {
+                modes = db.modes.clone();
+            }
+            if let Some(shared) = &self.shared {
+                modes = shared.modes.clone();
+            }
+            builder = builder.mode_store(Arc::new(books::AreaModeStore::new(
+                modes,
+                control.clone(),
+                area.clone(),
+            )));
         }
         if let Some((checkpointer, _)) = &self.plans {
             builder = builder.plan_checkpointer(checkpointer.clone());
