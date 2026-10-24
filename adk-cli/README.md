@@ -78,6 +78,7 @@ See [The harness in your terminal](../docs/official_docs/harness/cli.md),
 | `telemetry-otlp` | no | OTLP export for `TelemetryConfig::Otlp` |
 | `optimize` | no | The `Launcher` CLI's `optimize` subcommand, which parses its arguments and logs that optimization is wired through `adk-eval`'s `PromptOptimizer`; it optimizes nothing itself |
 | `tui` | no | `adk-rust` with no subcommand as the terminal surface (spec 3.3 §5.2, `adk-surface`'s `tui`): full screen on a capable terminal, `--ui inline`, `--output json` with exit codes, `--theme`, and `--server` with `--pair` for a kernel on another machine; see [the terminal](../docs/official_docs/surfaces/terminal.md) |
+| `channels` | yes | `adk-rust up` starts the Telegram chat thread when `TELEGRAM_BOT_TOKEN` is set (spec 3.3 §5.3, `adk-surface`'s `channels`), with `harness` and `surface`; see [chat](../docs/official_docs/surfaces/chat.md) |
 | `scripted-model` | no | Hidden `--model-script` and `--approval-fixture` flags for end-to-end tests: a scripted model and a `record_note` tool that needs approval |
 
 `cargo install adk-cli` builds the default features; add `--features all-providers` for every provider.
@@ -231,6 +232,10 @@ access. The binary has no flag for more hosts or origins; a custom binary lists 
 | `--bind` | `[kernel] bind`, else `127.0.0.1:8080` | HTTP control plane and served harness; beyond loopback needs `--auth-token` |
 | `--auth-token` | `$ADK_SERVE_TOKEN` | Bearer token HTTP callers present |
 | `--store` | `harness.db` | `postgres://…` or `redis://…`: every store, the kernel's included, shared by replicas |
+
+With `TELEGRAM_BOT_TOKEN` set, `up` also starts the Telegram chat thread: an account that
+writes to the bot is paired with `adk-rust pair accept <code>`; see
+[chat](../docs/official_docs/surfaces/chat.md#with-adk-rust-up).
 
 The harness flags (`--mode`, `--dir`, `--sandbox`, …) apply as for `serve`. The other kernel
 commands reach the kernel on its socket, or over HTTP with `--server URL [--token T]`; see

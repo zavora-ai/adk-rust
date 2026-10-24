@@ -174,6 +174,7 @@ async fn world(model: Arc<ScriptedLlm>) -> World {
         .api_base(api.url())
         .poll_timeout(Duration::from_secs(1))
         .utc_offset(utc())
+        .approvals(Arc::clone(&service))
         .answer_log(answers)
         .audit(AuditTrail::new(Arc::new(audit.clone())))
         .build()
@@ -257,7 +258,14 @@ async fn a_held_write_is_allowed_once_from_telegram() {
     let card = eventually("the decision card", || async { w.api.last_card(&json!(ANA)) }).await;
     let text = card.body["text"].as_str().unwrap();
     assert!(text.starts_with("Waiting for you · since "), "{text}");
-    assert!(text.contains("Finance · Medium risk"), "{text}");
+    // Headed by the call in plain words, as the engine heads a chat card, not by the
+    // runtime's "Tool 'write_file' requires confirmation: …".
+    assert!(text.contains("\n<b>Write file</b>\nFinance · Medium risk\n"), "{text}");
+    assert!(!text.contains("requires confirmation"), "{text}");
+    let chat = Caller::human(OWNER, SurfaceKind::Chat, Origin::Chat { channel: "Telegram".into() })
+        .with_groups(["owner"]);
+    let engine_card = &w.engine.decisions(&chat).await.unwrap()[0];
+    assert_eq!(engine_card.heading, "Write file", "the engine's chat card says the same");
     // The gateway keeps the home's address without its trailing slash.
     let home = HOME.trim_end_matches('/');
     assert!(text.ends_with(&format!("<a href=\"{home}\">Open in home</a>")), "{text}");

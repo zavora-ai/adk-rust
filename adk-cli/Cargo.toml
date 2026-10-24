@@ -93,7 +93,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 
 [features]
-default = ["gemini", "openai", "anthropic", "ollama", "audit", "persist", "harness", "encrypted", "memory-local", "surface"]
+default = ["gemini", "openai", "anthropic", "ollama", "audit", "persist", "harness", "encrypted", "memory-local", "surface", "channels"]
 gemini = ["adk-model/gemini"]
 openai = ["adk-model/openai"]
 anthropic = ["adk-model/anthropic"]
@@ -174,6 +174,9 @@ voice-desktop = ["voice", "adk-audio/desktop-audio"]
 # CI; on the running kernel (`--home`, or `--server` with a token) or the harness in process,
 # every decision through the approvals inbox
 tui = ["harness", "surface", "adk-surface/tui", "dep:libc"]
+# Chat (spec 3.3 §5.3): `adk-rust up` starts the Telegram adapter when TELEGRAM_BOT_TOKEN is
+# set, and pairs its accounts beside the kernel's devices. No dependency beyond `surface`.
+channels = ["harness", "surface", "adk-surface/channels", "adk-kernel?/channels"]
 
 # Standard error to terminal.log while the full screen is up (spec 3.3 §5.2, S-I9)
 [target.'cfg(unix)'.dependencies]

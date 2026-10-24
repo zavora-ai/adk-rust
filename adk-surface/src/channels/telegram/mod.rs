@@ -11,7 +11,7 @@ use adk_core::audit_log::{
     AuditActor, AuditDecision, AuditRecordDraft, AuditRecordKind, AuditTrail,
 };
 use adk_core::principal::SubjectRef;
-use adk_core::{AdkError, ErrorCategory, ErrorComponent};
+use adk_core::{AdkError, ApprovalService, ErrorCategory, ErrorComponent};
 use adk_kernel::KernelError;
 use adk_kernel::channels::{
     ChannelAnswer, ChannelBinding, ChannelGateway, ChannelInbound, ChannelNotice, ChannelSink,
@@ -172,6 +172,7 @@ pub struct TelegramAdapterBuilder {
     api_base: String,
     poll_timeout: Duration,
     offset: FixedOffset,
+    approvals: Option<Arc<dyn ApprovalService>>,
     answers: Option<Arc<dyn AnswerLog>>,
     audit: Option<AuditTrail>,
 }
@@ -210,6 +211,16 @@ impl TelegramAdapterBuilder {
         self
     }
 
+    /// Reads each card's decision from `approvals`, the kernel's approval service, so the card
+    /// is headed by the call in plain words — "Write file", "Send email" — as the engine heads
+    /// a chat card, with a summary an approval route wrote under it (spec 3.3 §7.1, §8).
+    /// Without it, a card is headed by the kernel's masked summary.
+    #[must_use]
+    pub fn approvals(mut self, approvals: Arc<dyn ApprovalService>) -> Self {
+        self.approvals = Some(approvals);
+        self
+    }
+
     /// Records each answer given in Telegram in `log`, the engine's [`AnswerLog`], so every
     /// other surface shows "You said yes in Telegram at 07:31" (spec 3.3 §8.1). Give the log
     /// the engine was built with.
@@ -241,6 +252,7 @@ impl TelegramAdapterBuilder {
                 api,
                 poll_timeout: self.poll_timeout,
                 offset: self.offset,
+                approvals: self.approvals,
                 answers: self.answers,
                 audit: self.audit,
             }),
@@ -258,7 +270,7 @@ impl TelegramAdapterBuilder {
 ///
 /// | Direction | What |
 /// |---|---|
-/// | Out | A card: "Waiting for you · since 18:00", the kernel's masked summary, the agent and the risk, a button for each answer the card offers and no others, and "Open in home" — never the call's arguments (S-I5). Agent replies as plain text, so nothing in them is read as markup (S-I9) |
+/// | Out | A card: "Waiting for you · since 18:00", the call in plain words (with [`approvals`](TelegramAdapterBuilder::approvals)) or the kernel's masked summary, the agent and the risk, a button for each answer the card offers and no others, and "Open in home" — never the call's arguments (S-I5). Agent replies as plain text, so nothing in them is read as markup (S-I9) |
 /// | In | New text messages and pressed buttons from a person in a private chat; groups, channels, bots, edits and media are ignored. Typed text never answers a decision (S-I4), and `/start` loses a deep link's payload (S-I6) |
 /// | Commands | `/stop` is listed among the bot's commands; "stop all" and `/stop` stop everything, and resuming is refused (S-I10) |
 ///
@@ -292,6 +304,7 @@ struct Inner {
     api: BotApi,
     poll_timeout: Duration,
     offset: FixedOffset,
+    approvals: Option<Arc<dyn ApprovalService>>,
     answers: Option<Arc<dyn AnswerLog>>,
     audit: Option<AuditTrail>,
 }
@@ -313,6 +326,7 @@ impl TelegramAdapter {
             api_base: DEFAULT_API_BASE.to_string(),
             poll_timeout: DEFAULT_POLL_TIMEOUT,
             offset: *Local::now().offset(),
+            approvals: None,
             answers: None,
             audit: None,
         }
@@ -592,7 +606,15 @@ impl ChannelSink for TelegramAdapter {
     }
 
     async fn send_decision(&self, thread: &str, card: &DecisionCard) -> adk_kernel::Result<()> {
-        self.send(thread, wire::card(card, self.inner.offset), None).await
+        let request = match &self.inner.approvals {
+            Some(approvals) => approvals.get(&card.decision).await.unwrap_or_else(|error| {
+                tracing::warn!(error = %error, "a card's decision could not be read; headed by its summary");
+                None
+            }),
+            None => None,
+        };
+        let heading = wire::heading(card, request.as_ref());
+        self.send(thread, wire::card(card, &heading, self.inner.offset), None).await
     }
 
     async fn send_stopped(&self, thread: &str, notice: &StopNotice) -> adk_kernel::Result<()> {

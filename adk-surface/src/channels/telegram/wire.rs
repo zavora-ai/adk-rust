@@ -2,6 +2,7 @@
 //! updates read into the kernel's inbound values, and the kernel's cards and notices drawn
 //! as Telegram messages with buttons.
 
+use adk_core::ApprovalRequest;
 use adk_kernel::channels::{
     ChannelAnswer, ChannelInbound, ChannelNotice, DecisionCard, InboundBody, StopNotice,
 };
@@ -10,7 +11,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 
 use super::TELEGRAM_CHANNEL;
-use crate::project::humanize;
+use crate::project::{chat_heading, humanize};
 use crate::rules::Risk;
 use crate::words;
 
@@ -257,12 +258,48 @@ impl Outgoing {
     }
 }
 
+/// What a card is headed by (spec 3.3 §7.1, §8 "Name the outcome").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Heading {
+    /// The heading.
+    pub(crate) title: String,
+    /// The kernel's masked summary, under the heading.
+    pub(crate) detail: Option<String>,
+}
+
+/// The heading of `card`. With its decision, `request`, the heading is the engine's chat
+/// heading, the tool in plain words, and the kernel's masked summary follows when an approval
+/// route wrote one; without it, the summary is the heading.
+pub(crate) fn heading(card: &DecisionCard, request: Option<&ApprovalRequest>) -> Heading {
+    let summary = Some(card.summary.clone()).filter(|summary| !summary.trim().is_empty());
+    match request.filter(|request| request.id == card.decision) {
+        Some(request) => Heading {
+            title: chat_heading(request),
+            detail: summary.filter(|_| written_summary(request)),
+        },
+        None => Heading { title: card.summary.clone(), detail: None },
+    }
+}
+
+/// Whether `request`'s summary was written for people, rather than one of the texts adk-core
+/// gives a call no approval route summarized: the governed path's "Tool 'write_file' requires
+/// confirmation: …" and `ApprovalRequest::new`'s "Approve a call to 'write_file'".
+fn written_summary(request: &ApprovalRequest) -> bool {
+    let tool = &request.tool_name;
+    let reason = format!("Tool '{tool}' requires confirmation");
+    let summary = request.summary.trim();
+    !(summary.is_empty()
+        || summary == reason
+        || summary.starts_with(&format!("{reason}: "))
+        || summary == format!("Approve a call to '{tool}'"))
+}
+
 /// A decision card as the chat screen of spec 3.3 §5.3 draws it: "Waiting for you · since
-/// 18:00", the summary, "Finance · Medium risk", a button for each answer the card offers and
+/// 18:00", the heading, "Finance · Medium risk", a button for each answer the card offers and
 /// no others, and "Open in home". Nothing of the call's arguments is added to what the
 /// kernel's card carries (S-I5); the decision's id and version ride in the buttons' data,
 /// never in the text (§8).
-pub(crate) fn card(card: &DecisionCard, offset: FixedOffset) -> Outgoing {
+pub(crate) fn card(card: &DecisionCard, heading: &Heading, offset: FixedOffset) -> Outgoing {
     let buttons: Option<Vec<Value>> = card
         .answers
         .iter()
@@ -277,8 +314,11 @@ pub(crate) fn card(card: &DecisionCard, offset: FixedOffset) -> Outgoing {
         words::WAITING_FOR_YOU,
         words::since(&hh_mm(card.asked_at, offset))
     )];
-    if !card.summary.trim().is_empty() {
-        lines.push(format!("<b>{}</b>", html(&card.summary)));
+    if !heading.title.trim().is_empty() {
+        lines.push(format!("<b>{}</b>", html(&heading.title)));
+    }
+    if let Some(detail) = &heading.detail {
+        lines.push(html(detail));
     }
     lines.push(format!("{} · {}", html(&humanize(&card.agent)), Risk::from(card.risk).words()));
     if card.answers.is_empty() {
@@ -435,6 +475,11 @@ mod tests {
         FixedOffset::east_opt(0).unwrap()
     }
 
+    /// `card` drawn without its decision at hand: headed by the kernel's summary.
+    fn drawn(card: &DecisionCard) -> Outgoing {
+        super::card(card, &heading(card, None), utc())
+    }
+
     fn message(chat_type: &str, from_bot: bool, text: &str) -> Value {
         json!({
             "update_id": 7,
@@ -562,7 +607,7 @@ mod tests {
         let request =
             request("Send the October invoice to client@example.com", args, ApprovalRisk::Medium);
         let card = DecisionCard::from_request(&request, Some("https://home.example/ui/"));
-        let message = super::card(&card, utc());
+        let message = drawn(&card);
         let asked = hh_mm(request.created_at, utc());
         assert_eq!(
             message.text,
@@ -586,12 +631,54 @@ mod tests {
         }
     }
 
+    /// With its decision at hand, a card is headed by the tool in plain words, as the
+    /// engine's chat card is; a summary a route wrote follows it, the runtime's own does not.
+    #[test]
+    fn a_card_is_headed_by_the_call_in_plain_words() {
+        let written = request(
+            "Send the October invoice to client@example.com",
+            json!({ "to": "client@example.com" }),
+            ApprovalRisk::Medium,
+        );
+        let card = DecisionCard::from_request(&written, None);
+        assert_eq!(
+            heading(&card, Some(&written)),
+            Heading {
+                title: "Send email".into(),
+                detail: Some("Send the October invoice to […]".into())
+            }
+        );
+        let message = super::card(&card, &heading(&card, Some(&written)), utc());
+        assert!(
+            message.text.contains("\n<b>Send email</b>\nSend the October invoice to […]\n"),
+            "{}",
+            message.text
+        );
+        for runtime in [
+            "Tool 'send_email' requires confirmation",
+            "Tool 'send_email' requires confirmation: 'send_email' is an edit, which needs approval in ask mode",
+            "Approve a call to 'send_email'",
+        ] {
+            let held = request(runtime, json!({}), ApprovalRisk::Medium);
+            let card = DecisionCard::from_request(&held, None);
+            assert_eq!(
+                heading(&card, Some(&held)),
+                Heading { title: "Send email".into(), detail: None },
+                "{runtime}"
+            );
+        }
+        // Another decision's request is not this card's.
+        let mut other = written.clone();
+        other.id = "apr_other".into();
+        assert_eq!(heading(&card, Some(&other)).title, card.summary);
+    }
+
     #[test]
     fn a_card_chat_may_not_decide_links_to_the_home_without_buttons() {
         for risk in [ApprovalRisk::High, ApprovalRisk::Critical] {
             let request = request("Publish the release", json!({}), risk);
             let card = DecisionCard::from_request(&request, Some("http://127.0.0.1:8080/ui/"));
-            let message = super::card(&card, utc());
+            let message = drawn(&card);
             assert!(message.keyboard.is_none());
             assert!(message.text.contains("High risk"), "{}", message.text);
             assert!(message.text.contains(words::NEEDS_A_SCREEN));
@@ -602,18 +689,18 @@ mod tests {
         // A decision whose id does not fit a button is answered in the home.
         let mut request = request("Send it", json!({}), ApprovalRisk::Low);
         request.id = "d".repeat(70);
-        let message = super::card(&DecisionCard::from_request(&request, None), utc());
+        let message = drawn(&DecisionCard::from_request(&request, None));
         assert!(message.keyboard.is_none());
         assert!(message.text.contains("Decide this one in the home."), "{}", message.text);
         // Only http(s) homes are linked.
         let card = DecisionCard::from_request(&request, Some("javascript:alert(1)"));
-        assert!(!super::card(&card, utc()).text.contains("href"));
+        assert!(!drawn(&card).text.contains("href"));
     }
 
     #[test]
     fn text_from_agents_and_tools_is_escaped() {
         let request = request("Run <b>rm</b> & \"x\"\u{202E}", json!({}), ApprovalRisk::Low);
-        let message = super::card(&DecisionCard::from_request(&request, None), utc());
+        let message = drawn(&DecisionCard::from_request(&request, None));
         assert!(
             message.text.contains("<b>Run &lt;b&gt;rm&lt;/b&gt; &amp; &quot;x&quot;</b>"),
             "{}",

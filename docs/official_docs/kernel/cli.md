@@ -84,6 +84,9 @@ Press Ctrl+C to drain and stop
 | `--print` | — | With `--install`: prints the service definition instead of installing it |
 | `--uninstall` | — | Stops and removes the service of this kernel home; the home and its stores stay |
 
+With `TELEGRAM_BOT_TOKEN` set, `up` also starts the Telegram chat thread, its accounts
+paired with `adk-rust pair accept <code>` ([chat](../surfaces/chat.md#with-adk-rust-up)).
+
 On Windows the kernel serves a named pipe in place of the socket, so the control commands
 there reach it without `--server`.
 

@@ -227,7 +227,7 @@ impl Projector {
                 text: full.tool,
                 truncated: full.truncated,
             };
-            (humanize(&request.tool_name), call)
+            (chat_heading(request), call)
         } else {
             ((self.heading)(request), call_view(request))
         };
@@ -636,6 +636,12 @@ pub(crate) fn heading(request: &ApprovalRequest) -> String {
         return request.summary.clone();
     }
     describe_call(&request.tool_name, &request.args_redacted)
+}
+
+/// What a chat card says will happen: the tool in plain words, "Write file", "Send email" —
+/// never its arguments, since a chat card leaves the machine (spec 3.3 §7.1, S-I5).
+pub(crate) fn chat_heading(request: &ApprovalRequest) -> String {
+    humanize(&request.tool_name)
 }
 
 /// The argument a heading names, short enough for one line.

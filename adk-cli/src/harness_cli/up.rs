@@ -29,6 +29,9 @@ use super::{APP_NAME, AgentExtras, Setup, user_config};
 use crate::ResolvedModel;
 use crate::cli::UpArgs;
 
+#[cfg(feature = "channels")]
+mod telegram;
+
 /// Where `up` listens over HTTP when neither `--bind` nor `[kernel] bind` says.
 pub(super) const DEFAULT_BIND: &str = "127.0.0.1:8080";
 
@@ -119,15 +122,22 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     }
 
     let (approval_store, run_store) = run_and_approval_stores(&setup);
+    // The Telegram chat thread, only when `TELEGRAM_BOT_TOKEN` is set (spec 3.3 §5.3).
+    #[cfg(feature = "channels")]
+    let chat = telegram::Chat::from_env(&setup, store.as_deref()).await?;
     // The person running the kernel is the operator: their own run's calls are theirs to
     // approve, as `serve` routes them.
     let routing =
         ApprovalPolicy::new([ApproverSelector::group(OPERATOR_SCOPE)]).allow_self_approval();
-    let service: Arc<dyn ApprovalService> = Arc::new(
-        StoreApprovalService::new(approval_store)
-            .with_router(routing)
-            .with_run_store(run_store.clone()),
-    );
+    let service = StoreApprovalService::new(approval_store)
+        .with_router(routing)
+        .with_run_store(run_store.clone());
+    #[cfg(feature = "channels")]
+    let service = match &chat {
+        Some(chat) => service.with_notifier(chat.doorbell()),
+        None => service,
+    };
+    let service: Arc<dyn ApprovalService> = Arc::new(service);
     let stores = kernel_stores(&setup, store.as_deref()).await?;
     // One kill switch for the runner, the kernel and the server, mirrored from the store
     // replicas share (K-I8).
@@ -223,6 +233,12 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     }
     let tick = !ticking.is_empty();
     settings.consolidation = tick;
+    let pairing = adk_kernel::pairing::Pairing::new(stores.devices.clone());
+    #[cfg(feature = "channels")]
+    let pairing = match &chat {
+        Some(chat) => pairing.with_channel_bindings(chat.bindings()),
+        None => pairing,
+    };
     // The run store reads the system clock too, so leases, `not_before` and wake times agree.
     let config = settings.apply(
         KernelConfig::default()
@@ -232,10 +248,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             // The socket at the kernel home, or on Windows the named pipe named after it
             // (spec 3.2 §10 W2), pairing devices beside the kernel's other stores (spec 3.3
             // §10 K2).
-            .with_control(
-                ControlPlaneConfig::default()
-                    .with_pairing(adk_kernel::pairing::Pairing::new(stores.devices.clone())),
-            )
+            .with_control(ControlPlaneConfig::default().with_pairing(pairing))
             .with_clock(Arc::new(adk_core::SystemClock)),
     );
     // The subject key stays in the home; an ephemeral kernel's ledger and key end with it.
@@ -315,6 +328,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         .approval_service()
         .cloned()
         .context("the served harness has an approval service")?;
+    #[cfg(feature = "channels")]
+    if let Some(chat) = chat {
+        let trail = surface_records.as_ref().map(|(trail, _)| trail.clone());
+        chat.start(&kernel, decisions.clone(), trail, bind).await?;
+    }
 
     // `/api/runs` submissions land on the interactive queue, where the kernel's worker
     // claims them; the server runs no worker of its own.

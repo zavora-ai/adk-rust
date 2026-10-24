@@ -6,8 +6,9 @@ The `channels` feature of `adk-surface` ships the Telegram adapter. It moves mes
 between a Telegram bot and the kernel's [channel gateway](../kernel/pairing.md#chat-channels),
 which applies every rule: pairing, what a card carries, what chat may decide, stopping.
 
-> **Note:** chat is Beta and opt-in. `adk-rust up` does not start the adapter; a program
-> that hosts the kernel starts it, as in [Running the adapter](#running-the-adapter).
+> **Note:** chat is Beta. `adk-rust up` starts the adapter when `TELEGRAM_BOT_TOKEN` is set
+> ([With `adk-rust up`](#with-adk-rust-up)); a program that hosts its own kernel starts it as
+> in [Running the adapter](#running-the-adapter).
 
 ```toml
 [dependencies]
@@ -22,7 +23,8 @@ the agent and the risk, and nothing of the call's arguments (S-I5):
 | Part | Example | From |
 |---|---|---|
 | Status and wait | Waiting for you · since 18:00 | The decision's age, at the host's time zone |
-| Heading | **Send the October invoice to […]** | The kernel's summary: at most 160 characters, every argument value masked as `[…]` |
+| Heading | **Write file** | The call in plain words, as the engine heads every chat card: the tool, never its arguments. Without the approval service at hand, the kernel's summary: at most 160 characters, every argument value masked as `[…]` |
+| Summary | Send the October invoice to […] | The kernel's masked summary, when an approval route wrote one; never the runtime's own "Tool 'write_file' requires confirmation: …" |
 | Who and risk | Finance · Medium risk | The asking agent, and the risk in the words of spec 3.3 §8 |
 | Buttons | **Allow once** · **Deny** | The answers the card offers, and no others; none at high risk or for a call that moves money |
 | Link | Open in home | The gateway's `home_url`, for everything chat may not decide |
@@ -55,6 +57,35 @@ ignored, so a card never reaches a thread other people read. `/start` reaches th
 without a deep link's payload, so a link anyone can share cannot put words in the person's
 mouth. `/stop` is listed among the bot's commands as **Stop all**.
 
+## With `adk-rust up`
+
+1. Create a bot with [@BotFather](https://t.me/BotFather).
+2. Start the kernel with its token:
+
+   ```bash
+   TELEGRAM_BOT_TOKEN=123456789:AA… adk-rust up
+   ```
+
+   The banner says `chat  Telegram`. Without the variable nothing of the chat thread is built,
+   started or logged. `TELEGRAM_API_BASE` points the bot at another Bot API address, such as
+   a local Bot API server.
+3. Write to the bot from your Telegram account. It answers with a pairing code; accept it
+   where the kernel runs:
+
+   ```bash
+   adk-rust pair accept 3HWT-9PQA-7KMX
+   ```
+
+4. The account is listed by `adk-rust pair list` and in the home under **Where you can say
+   yes from**, where it can be removed. Its messages are turns on the harness, and every
+   decision rings its thread.
+
+Paired accounts are kept where the kernel's paired devices are: `harness.db`, the `--store`
+backend (PostgreSQL or Redis), or memory with `--ephemeral`. Cards link to the home at the
+kernel's bind address, and each answer given in Telegram is written to the kernel's signed
+audit log, so the home says "You said yes in Telegram at 07:31" after a restart too. The
+feature is `adk-cli`'s `channels`, on by default.
+
 ## Running the adapter
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and keep its token in
@@ -64,6 +95,7 @@ mouth. `/stop` is listed among the bot's commands as **Stop all**.
 ```rust,ignore
 use std::sync::Arc;
 
+use adk_core::ApprovalService;
 use adk_core::audit_log::AuditTrail;
 use adk_kernel::channels::{ChannelDoorbell, ChannelGateway, InMemoryChannelBindingStore};
 use adk_kernel::Kernel;
@@ -72,12 +104,14 @@ use adk_surface::{AnswerLog, SurfaceEngine};
 
 async fn chat(
     kernel: Kernel,
+    approvals: Arc<dyn ApprovalService>, // the kernel's approval service
     doorbell: Arc<ChannelDoorbell>,        // the notifier of the kernel's approval service
     bindings: Arc<InMemoryChannelBindingStore>, // the store the control plane's pairing uses
     answers: Arc<dyn AnswerLog>,           // the log the engine was built with
     trail: AuditTrail,                     // the engine's audit trail
 ) -> Result<(), Box<dyn std::error::Error>> {
     let telegram = TelegramAdapter::builder(std::env::var("TELEGRAM_BOT_TOKEN")?)
+        .approvals(approvals)
         .answer_log(answers)
         .audit(trail)
         .build()?;
@@ -104,6 +138,7 @@ in.
 | `api_base(url)` | The Bot API's address; `https://api.telegram.org` by default. Plain `http` is accepted on loopback only, since the token travels in the request path |
 | `poll_timeout(d)` | How long one long poll waits for an update; 25 s by default |
 | `utc_offset(offset)` | The time zone of "since 18:00" and "07:31"; the host's by default |
+| `approvals(service)` | Reads each card's decision, so the card is headed by the call in plain words |
 | `answer_log(log)` | Keeps each answer given in Telegram in the engine's `AnswerLog` |
 | `audit(trail)` | Writes a `surface.decide` record of each answer given in Telegram |
 

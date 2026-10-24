@@ -168,13 +168,15 @@ telegram.start(gateway).join().await?;
 # }
 ```
 
-A card carries "Waiting for you · since 18:00", the kernel's summary with every argument
-value masked, the agent and the risk, **Allow once** and **Deny** at low and medium risk only,
+A card carries "Waiting for you · since 18:00", the call in plain words ("Write file", as the
+engine heads every chat card; with `approvals`), the kernel's summary with every argument
+value masked when a route wrote one, the agent and the risk, **Allow once** and **Deny** at low and medium risk only,
 and "Open in home" — never the call's arguments (S-I5). Only a pressed button answers; typed
 text is a message (S-I4). Groups, bots, edits and media are ignored, and `/start` loses a deep
 link's payload (S-I6). `answer_log` and `audit` record each answer for the engine, so every
 other surface says "You said yes in Telegram". See
-[chat](../docs/official_docs/surfaces/chat.md).
+[chat](../docs/official_docs/surfaces/chat.md). `adk-rust up` starts it when
+`TELEGRAM_BOT_TOKEN` is set.
 
 ## License
 
