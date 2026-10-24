@@ -8,6 +8,7 @@
 | **Layers** | **Protocol:** AWP 2.0, implemented by `awp-types` and `adk-awp`. **Runtime:** the ADK-Rust harness. **Product:** `adk-website`, a multi-agent proactive website shipped as a workspace crate |
 | **Target** | `adk-rust` 3.5.0 for phases 0–2 ([§12](#12-phased-delivery)); 3.5.x for phases 3–4 |
 | **Grounding commit** | `origin/main` @ `c8141b55` for every `file:line` reference |
+| **Amended** | 2026-10-24: [§7.8.3](#783-constantly-updated-sites) constantly updated sites, with S19, G16, A-I26, A-I27, Q15 and Q16 |
 | **Evidence** | Public advisories, reports and standards from July to October 2026, listed under [References](#references) |
 | **Affected crates** | `awp-types`, `adk-awp` (AWP 2.0 wire); NEW `adk-site` (site pipeline); NEW `adk-website` (product); `adk-kernel` (charter, KPI tracker, signals, site process kinds); `adk-harness` (preset `website`, site toolsets, onboarding machinery); `adk-server` (feature `awp`: the agent edge); `adk-auth` (Web Bot Auth); `adk-tool` (MCP server); `adk-payments` (wallet and rails); `adk-eval` (experiment analysis); `adk-surface` (onboarding and site views); `adk-cli` (`adk-rust website`, `adk-rust awp`); `cargo-adk` (`website` template); `adk-rust` (feature `website`) |
 | **Stability** | `adk-website` and `adk-site` enter at **Experimental**; the AWP 2.0 types enter `awp-types` at **Beta**; AWP stays Beta until its normative text is published ([§13](#13-open-questions) Q1) |
@@ -46,6 +47,7 @@ The honest claim is bounded. Removing the server runtime from the page path remo
 - **G13.** `adk-website` serves every kind of site that runs on PHP today; the site kind decides what is switched on, and a non-commercial site carries no sales, advertising or profit machinery unless its owner adds it.
 - **G14.** Organisations govern their site with roles and approval chains, not a single owner: a public body can require two people to publish, and every decision records who made it.
 - **G15.** Publishing is one pipeline from any entry point — a message from the owner's phone, the web editor, files, imports — to a signed release that is live within a minute of approval, with the approvals each site kind needs.
+- **G16.** A site that changes every minute stays static, signed, verifiable and affordable: updates are sorted into release, live and stream lanes, batched, published without a model unless they need writing, and bounded against broken or compromised feeds.
 
 ## 3. Non-goals
 
@@ -131,6 +133,7 @@ Each scenario is a test in `examples/website` ([§11](#11-testing-and-live-verif
 | S16 | **A public body** | A municipal site migrated from WordPress with kind `government`: two official languages, a permit-application form, an approval chain of editor and publisher | The launch gate fails until every page passes WCAG 2.2 AA in both languages; no third-party script ships; the form becomes a service capability whose applicant identity comes from an OIDC provider fixture; a release proposed by the editor publishes only after the publisher approves (A-I23); no advertising, sales or wallet jobs exist beyond hosting | Site kinds ([§7.16.1](#7161-site-kinds)), approval chains |
 | S17 | **A personal site** | A writer's WordPress blog migrated with kind `personal` and a budget of hosting plus a small model allowance | Posts, archive and feeds keep their URLs; a newsletter sign-up with consent replaces the plugin; the team runs Concierge, Steward, Growth and Guardian only; the weekly review reports readers, subscribers and cost; the monthly running cost stays inside the budget | Site kinds |
 | S18 | **Publishing at speed** | A WhatsApp message from the paired owner with three photos adds a product for launch at 09:00; two price changes of 5% and 15%; a breaking story by a reporter approved by an editor and a publisher on their phones, then corrected; an email from an unpaired account asking to change a price | The product is live at 09:00 in one signed release covering its page, category pages, sitemap, product feed and machine view, uploading only changed files; the 5% change goes live and the 15% change is held; the story is live under 60 s after the publisher's approval on `DirectoryHost` and the reference CDN host; the correction note is visible and both releases are in the log; the unpaired email produced only a signal (A-I24, A-I25) | Publishing ([§7.8.2](#782-publishing)) |
+| S19 | **A site that never stops changing** | A 50,000-product shop fed by a supplier every minute for 24 simulated hours (2% stock and 0.5% price changes per minute); an election-night live blog of 600 entries over six hours; at hour three a corrupted feed batch changes 60% of prices; one bad product edit is reverted | Stock changes never trigger a release; price changes publish once per batch window with p95 approval-to-live under the window plus 60 s; the corrupted batch is held whole with a P2 alarm and no price from it publishes; live-blog entries appear within 10 s and a signed fold lands every five minutes and at the close; the revert restores one product and keeps every other change; the Guardian raises no false drift alarm; each subscriber gets one `catalog.changed` per batch; feed updates make no model calls; the weekly review reports cost per thousand updates | Constantly updated sites ([§7.8.3](#783-constantly-updated-sites)) |
 
 S3, S5 and S7 together — an infection left behind, a defacement reversed from a signed log, an injection that reaches no privileged tool — are what an autonomous website needs before anyone should run one. S1, S8 and S10 are what make an owner want one. S16 and S17 show the same product serving a public body and a single writer.
 
@@ -174,7 +177,7 @@ An `adk-website` runs as three deployables: **content** on any static host, the 
 | `adk-awp` | `awp-v1` | The 1.x routes, for one release line |
 | `adk-auth` | `web-bot-auth` | `HttpSignatureVerifier` (RFC 9421, Ed25519), key-directory fetch and cache, `WebBotAuthTrustAssigner`, `HttpSignatureSigner` |
 | `adk-tool` | `mcp-server` | A Streamable HTTP MCP server publishing a set of `adk_core::Tool`s; adk-rust has MCP clients only today |
-| NEW `adk-site` | default | The content model, `ContentSource` adapters, incremental `ReleaseBuilder`, `SiteSource`, inventory, sanitiser, `SiteGenerator` with the built-in renderer, `LaunchGate`, `ReleaseBuilder`, `SiteLog`, `SiteHost` with `DirectoryHost`, probes, freeze |
+| NEW `adk-site` | default | The content model, `ContentSource` adapters, incremental `ReleaseBuilder` with batching and delta releases, feed bounds, tiered checks, `SiteSource`, inventory, sanitiser, `SiteGenerator` with the built-in renderer, `LaunchGate`, `ReleaseBuilder`, `SiteLog`, `SiteHost` with `DirectoryHost`, probes, freeze |
 | `adk-site` | `gen-zola`, `gen-hugo`, `gen-astro`, `gen-build-awesome` | External generators as sandboxed processes with no network |
 | `adk-site` | `host-s3`, `host-gcs`, `host-azure`, `host-cloudflare`, `host-netlify`, `host-github-pages`, `host-rsync` | Host adapters under one conformance suite |
 | `adk-kernel` | `charter` | `CharterStore`, `KpiStore`, the KPI tracker, `SignalSink`, `AgendaOrigin::Signal`, site process kinds; in-memory, SQLite, PostgreSQL and Redis backends |
@@ -317,6 +320,7 @@ pub struct Kpi {
 pub struct ReleaseManifest {
     pub seq: u64,
     pub previous: Option<Digest>,               // digest of the previous manifest
+    pub base: Option<u64>,                      // a delta release lists only changes against this release (§7.8.3); None for a snapshot
     pub created_at: DateTime<Utc>,
     pub files: BTreeMap<String, FileEntry>,     // path → { sha256, size, content_type }
     pub redirects: Vec<Redirect>,
@@ -448,6 +452,87 @@ Only these entry points author content (A-I24). The public partition never does:
 **Translations.** Each item is drafted in every charter language. A kind's `TranslationPolicy` sets whether a language needs human approval: a spot check for most kinds, approval per language for public bodies, where publication waits for every official language.
 
 **Concurrency.** Releases are serialised per site. Conflicting edits to one item produce a merge card; a scheduled release rebases onto the latest release at its publication time and runs its checks again.
+
+#### 7.8.3 Constantly updated sites
+
+Some sites change all day: a shop syncing 50,000 products, a newsroom on election night, a club during a match, a public body during an emergency. They stay static and signed — nothing runs when a page is requested. What changes is that every update is sorted into a lane, batched, checked in tiers and published without a model unless it needs writing.
+
+**Three lanes.** A content kind declares the lane of each field: `volatile` fields (§7.8.2) are live; `stream` fields are streams; everything else is released.
+
+| Lane | Carries | Delivered | Rule |
+|---|---|---|---|
+| **Release** | Claims: articles, product pages, prices, notices, final results | Batched signed releases | Anything an agent may act on — pay, quote, cite — is released (A-I26) |
+| **Live** | State: stock, availability, live scores, queue times, counts | Read-only edge capabilities with a cache of seconds; with script off, the page shows the last released value and its time | Never carries a claim; an order checks live state again at order time |
+| **Stream** | Append-only coverage: live blogs, tickers, emergency updates | An edge feed the page polls, each entry signed by the edge; folded into a signed release every `fold_interval` (default five minutes) and when the stream closes | Every entry ends up in a signed release |
+
+**Batching.**
+
+```rust
+pub struct BatchPolicy {
+    pub window: Duration,        // default 30 s; 5 s to 5 min; per kind: news 10 s, shops 60 s
+    pub max_items: usize,        // default 10,000 changed items per release
+    pub max_bytes: u64,
+    pub flush_now: Vec<Trigger>, // corrections, takedowns, emergency notices, owner request
+}
+```
+
+Changes arriving within a window coalesce into one release; a `flush_now` change publishes immediately with whatever is pending. When one item changes several times in a window, the latest version is released and the earlier ones stay in the content history only.
+
+**Model-free updates.** `ContentSource` mappings are deterministic: each feed record maps to item fields through a declared mapping with types, units and bounds, and no model is called. Agents write new descriptions, translations and exceptions only. The weekly review reports cost per thousand updates and the share of updates that needed a model.
+
+**Bounds on automated feeds.** Machine-speed publishing magnifies a broken or compromised feed, as the 2026 plugin supply-chain attacks showed for code.
+
+```rust
+pub struct FeedBounds {
+    pub max_change_fraction: f32,              // default 0.2 of a collection's items in one batch
+    pub price_rule: PriceRule,                 // §7.8.2
+    pub field_bounds: BTreeMap<String, Bound>, // e.g. price > 0, stock ≤ 100,000, date within a year
+    pub max_rate: Rate,                        // records per minute
+}
+```
+
+A batch that breaks its bounds is held whole and raises a P2 alarm with a summary of what it would change; nothing from it publishes until the owner decides (A-I27).
+
+**Approvals on exceptions only.** Changes within the charter's rules publish in their batch; an out-of-rule change is held on its own and the rest of the batch proceeds. A new story passes its approval chain once; later entries and updates to an approved live story run at the live job's autonomy level.
+
+**Tiered checks.**
+
+| Tier | When | Checks |
+|---|---|---|
+| **Fast** | Every batch, on changed items and their dependents | Schema, links, claim sources, red lines, required languages, executable refusal (A-I1) |
+| **Scheduled** | Every N hours or N releases (default six hours or 500 releases) | Full accessibility crawl, visual comparison, full machine-view validation, `awp verify` against production |
+
+A fast-tier failure holds the failing item, not the batch; an A-I1 failure refuses the whole release.
+
+**Releases at scale.** A release can be a delta: its manifest names a `base` release and lists only added, changed and removed files. Every `snapshot_every` releases (default 100) or once a day the builder writes a full snapshot, so a verifier needs one snapshot and at most 99 deltas. Each batch appends one entry to the site log and publishes one checkpoint; the log's tiles are built for millions of entries.
+
+**Hosts at speed.** `SiteHost` declares its limits and gains delta publication:
+
+```rust
+pub struct HostLimits { pub max_publishes_per_hour: Option<u32>, pub delta_upload: bool, pub atomic: Atomicity }
+pub enum Atomicity { Deploy, PrefixPointer, None }
+
+#[async_trait]
+pub trait SiteHost: Send + Sync {
+    // … the §7.8 methods, plus:
+    fn limits(&self) -> HostLimits;
+    async fn publish_delta(&self, delta: &StagedDelta, target: HostTarget) -> Result<PublishReport>;
+}
+```
+
+`PrefixPointer` publishes each release under its own prefix and switches one pointer last, so readers never see a mixed release. Onboarding compares the charter's expected update rate with the host's limits and proposes object storage behind a CDN for high-frequency sites; a host with `Atomicity::None` cannot serve a site whose batch window is under one minute. The host conformance suite tests atomicity under concurrent reads.
+
+**Undo per item.** `adk-rust site revert <item> [--to <seq>]` publishes the item's earlier version as a new release and keeps every other change. Whole-site rollback stays for incidents; afterwards the Steward lists the changes made since the rollback point and proposes replaying them one by one.
+
+**Probes under constant change.** The Guardian reads the latest checkpoint and then the sampled pages, and accepts a page that matches the checkpoint it read or the one after; drift is a digest that matches no release in the window. Constant publishing raises no false alarms.
+
+**Events and engines.** Subscribers get one `catalog.changed` per batch with the changed item ids, paginated beyond 1,000. Sitemaps carry `lastmod` and update once per batch; search engines that accept pings get at most one per batch, within each engine's limits.
+
+**Translations at speed.** Each language follows the source within `TranslationPolicy::lag` (default ten minutes). A kind can require simultaneous publication; public bodies pre-approve translations of fixed emergency texts in every official language so that an emergency notice is never slowed.
+
+**Visitor submissions.** Comments, reviews and listings arrive through capabilities, are moderated by policy, and publish in batches; they never write to the content repository (A-I24).
+
+**When a page is an application.** A page that differs per visitor or per second — a personalised feed, search results, a dashboard, a marketplace taking listings at volume — is an application, not content. Its dynamic part is a read-only edge capability and the page around it stays static and signed; account-heavy applications remain Q12.
 
 ### 7.9 Agent edge, MCP server and stores
 
@@ -730,6 +815,7 @@ Spans `website.onboarding.{stage}`, `site.release`, `site.probe`, `awp.request` 
 | `adk-rust site migrate <url \| --wxr file \| --backup dir>`, `site freeze <url>` | Migration and freeze outside onboarding |
 | `adk-rust site build`, `site publish`, `site rollback <seq>`, `site log` | Releases |
 | `adk-rust site content new <kind>`, `site schedule <item> <time>`, `site correct <item>`, `site withdraw <item>` | Drafting, scheduling, corrections and withdrawals outside the web editor |
+| `adk-rust site revert <item> [--to <seq>]`, `site batches`, `site feeds` | Per-item revert; recent batches with held items; feeds with their bounds and rates |
 | `adk-rust awp verify <domain>`, `awp conformance <url>` | Verification and conformance |
 | `adk-rust awp keys rotate`, `awp keys delegate` | Root and delegated keys; root operations need the root key file or hardware token and never run inside an agent |
 | `adk-rust awp migrate-config business.toml` | 1.x configuration to site data and a draft charter |
@@ -759,6 +845,7 @@ Spans `website.onboarding.{stage}`, `site.release`, `site.probe`, `awp.request` 
 | Credential phishing in onboarding | No credentials in conversation (A-I19) |
 | One insider or one compromised account publishing alone | Approval chains with distinct principals (A-I23) |
 | Content or prices changed through the public inbox or a spoofed owner message | Authoring only through authorised entry points (A-I24); price rules and quote validity (A-I25) |
+| A broken or compromised feed publishing at machine speed | Feed bounds that hold the whole batch (A-I27); tiered checks; per-item revert |
 | A stranger claiming a fresh deployment | Setup code and pairing (A-I20) |
 | Autonomy creep | The site can only lower its own autonomy (A-I13) |
 | Cross-client leakage in agency mode | Site isolation (A-I22) |
@@ -791,10 +878,12 @@ Spans `website.onboarding.{stage}`, `site.release`, `site.probe`, `awp.request` 
 - **A-I23.** An action whose class has an approval chain completes only when every required role has approved it, each by a distinct principal; no agent holds a role, and the proposer of a release cannot also be its approver.
 - **A-I24.** Content is authored only through the owner's paired devices, people holding a role in the web editor, authorised committers to the content repository, feeds the owner configured, and the site's own agents; nothing from the public partition authors content.
 - **A-I25.** A price change outside the charter's price rule is held for the owner, and an open quote keeps its price until its validity ends.
+- **A-I26.** A value an agent may act on — a price, a published statement, a final result — is served only from a signed release; the live lane and streams never carry one, and an order checks live state again at order time.
+- **A-I27.** A feed batch that breaks its bounds — the share of a collection it changes, a field bound, its rate — is held whole and raises an alarm; no part of it publishes until the owner decides.
 
 ### 9.3 Audit records
 
-`website.onboarding.{started, stage, completed}`, `website.charter.{drafted, committed}`, `website.approval_chain.{satisfied, refused}`, `website.job.{promoted, demoted, paused}`, `website.review.sent`, `website.alarm.{raised, acknowledged}`, `site.content.{drafted, approved, scheduled, published, corrected, withdrawn}`, `site.migration.{finding, decided}`, `site.release.{built, signed, published, refused}`, `site.drift.detected`, `site.status.changed`, `site.rollback`, `site.freeze`, `site.archive`, `awp.request.{verified, refused}`, `awp.capability.{called, held, decided}`, `kernel.signal`, `awp.consent.{granted, revoked}`, `awp.payment.{created, settled, rejected}`, `wallet.{payment, held, anomaly, reconciled}`, `awp.keys.{delegated, rotated}`. Each carries the run id, the principal, the requester where there is one, the charter version and the release sequence.
+`website.onboarding.{started, stage, completed}`, `website.charter.{drafted, committed}`, `website.approval_chain.{satisfied, refused}`, `website.job.{promoted, demoted, paused}`, `website.review.sent`, `website.alarm.{raised, acknowledged}`, `site.content.{drafted, approved, scheduled, published, corrected, withdrawn, reverted}`, `site.batch.{published, held}`, `site.stream.folded`, `site.migration.{finding, decided}`, `site.release.{built, signed, published, refused}`, `site.drift.detected`, `site.status.changed`, `site.rollback`, `site.freeze`, `site.archive`, `awp.request.{verified, refused}`, `awp.capability.{called, held, decided}`, `kernel.signal`, `awp.consent.{granted, revoked}`, `awp.payment.{created, settled, rejected}`, `wallet.{payment, held, anomaly, reconciled}`, `awp.keys.{delegated, rotated}`. Each carries the run id, the principal, the requester where there is one, the charter version and the release sequence.
 
 ## 10. Changes outside the feature
 
@@ -822,6 +911,7 @@ Spans `website.onboarding.{stage}`, `site.release`, `site.probe`, `awp.request` 
 - **Conformance.** One suite per trait and backend: sources, generators (identical manifests for identical inputs on the built-in renderer), hosts, drivers, wallet providers, the charter, KPI and edge stores (in-memory, SQLite, PostgreSQL, Redis), and the AWP 2.0 conformance kit against the edge.
 - **Interoperability.** Web Bot Auth against the draft's test vectors and an external signer; A2A card signatures against A2A v1.0 vectors; the MCP server card against the merged schema; `awp verify` against a site built by a different generator.
 - **Property tests.** Release manifests round-trip; a checkpoint never verifies against a log it does not extend; the sanitiser never emits an element outside its allowlist; manifest filtering never shows a capability above the caller's tier; the autonomy ladder never raises a level without an owner decision.
+- **Soak.** S19 runs nightly for 24 simulated hours against `DirectoryHost` and an S3-compatible emulator behind a caching proxy, recording approval-to-live latency, held batches, false drift alarms, model calls per thousand updates and storage growth of the site log.
 - **Live.** Each scenario has a live run with a real model (the Anthropic live model for the harness, `gemini-3.7-flash` for examples), real Web Bot Auth signing, real email delivery to a maintainers' mailbox, a real static host the maintainers control, and payment rails in sandbox mode only. Documentation claims about routes and defaults are verified by a running program and reviewed by an agent that did not write them.
 
 ## 12. Phased delivery
@@ -831,14 +921,14 @@ Spans `website.onboarding.{stage}`, `site.release`, `site.probe`, `awp.request` 
 | 0 | Hygiene | — | X1–X9, X13 | — | — |
 | 1 | Leave the runtime | Contract, static profile, releases, keys, status, charter format, conformance kit, `awp verify` | `adk-site` (sources, sanitiser, built-in generator, launch gate, content model, incremental releases, scheduling, corrections, `DirectoryHost` and two hosts, freeze, probes); charter store; the web editor; `Preset::Website` | `adk-website` spin-up, onboarding with self-building, migration, deployment; Steward and Guardian; weekly review | S1, S2, S3, S4, S5, S13, S16 (two-person publication), S17 |
 | 2 | Open the front door | Identity and tiers, capabilities, held and exactly-once actions, events, consent | Edge, MCP server, Web Bot Auth, edge stores, partitions and signals, `up` webhook ingress | Concierge and Agent desk; multilingual conversation; leads and handoff | S6, S7, S8, S9 without payment, S18 |
-| 3 | Work full time | — | KPI tracker, autonomy ladder, measurement, experiments, email and analytics drivers, channel adapters | Growth, Inbox, the full weekly review, agency mode | S10, S11, S14, S15 |
+| 3 | Work full time | Delta releases | KPI tracker, autonomy ladder, batching, streams, feed bounds, host limits and delta publication, measurement, experiments, email and analytics drivers, channel adapters | Growth, Inbox, the full weekly review, agency mode | S10, S11, S14, S15, S19 |
 | 4 | Run the money | Commerce and receipts | Wallet and rails, social and advertising drivers, playbook learning | Revenue commerce, Finance | S9 in full, S12 |
 
 Phase 1 is useful on its own: an owner gets a self-built or migrated static site, a signed log, a verifier and a weekly review before any agent faces the public.
 
 **Site kinds by phase.** Phase 1 covers the content-led kinds — personal, business, nonprofit, community, education and the information pages of public bodies — with charter templates, roles and approval chains (S16's two-person publication, S17). Phase 2 adds the transactional capabilities that shops, bookings, donations and public-service forms with verified identity need. Phase 3 adds newsrooms' subscription and licensing jobs and health bookings with special-category data controls. Phase 4 completes e-commerce and paid events with the wallet and rails.
 
-**Publishing by phase.** Phase 1 ships the content model, chat and web-editor authoring, incremental signed releases, scheduling, corrections and withdrawals, and the media pipeline. Phase 2 adds the volatile-data lane and price rules, which need the edge. Phase 3 adds imports and feeds for catalogues, newsrooms and calendars, and live coverage.
+**Publishing by phase.** Phase 1 ships the content model, chat and web-editor authoring, incremental signed releases, scheduling, corrections and withdrawals, and the media pipeline. Phase 2 adds the volatile-data lane and price rules, which need the edge. Phase 3 adds imports and feeds for catalogues, newsrooms and calendars, live coverage, and constantly updated sites: batching, delta releases, streams, feed bounds, tiered checks and per-item revert (S19).
 
 ## 13. Open questions
 
@@ -858,6 +948,8 @@ Phase 1 is useful on its own: an owner gets a self-built or migrated static site
 | Q12 | Account-heavy sites: forums, learning platforms, member portals | A later spec for authenticated areas on the edge; until then the public pages migrate and the account area is a named owner decision |
 | Q13 | How rich the web editor is | Structured forms per content kind with Markdown-backed rich text and media; no page builder or theme editor (N4); developers change layouts through themes |
 | Q14 | The publication latency target per host | Under 60 seconds for single-item changes on hosts with atomic deploys; hosts without them report their measured latency in the conformance suite |
+| Q15 | Default batch window and snapshot cadence | 30 s windows (news 10 s, shops 60 s), a snapshot every 100 releases or daily; owner-adjustable per kind within 5 s to 5 min |
+| Q16 | Atomic publication on object storage | A release prefix with a pointer switched last where the CDN supports it; hosts without atomic publication are limited to batch windows of a minute or more |
 
 ## 14. Appendix: grounding against current APIs (`origin/main` @ `c8141b55`)
 
