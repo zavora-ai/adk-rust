@@ -23,6 +23,7 @@ with `default-features = false` to leave it out.
 | Commands | Decide at the version seen, send, queue, stop all, resume all, change the mode — each with the caller's subject and how the input was given, written to the audit log | `SurfaceEngine::execute`, `Command` |
 | Rules | What each surface may decide (§7.2) and the rules on every surface (§7.4), enforced by the engine | `rules` |
 | `web` | The web home: its HTTP API under `/api/surface`, its OpenAPI document and generated TypeScript types, and the page itself at `/ui/` — Threads, Today and Memory & rules, in light and dark (spec 3.3 §5.1) | `web::router`, `web::home` |
+| `channels` | Chat: the Telegram adapter over the kernel's channel contract — cards with Allow once and Deny, never the call's arguments, pairing, "stop all" (spec 3.3 §5.3) | `channels::TelegramAdapter` |
 
 ## Sources
 
@@ -136,10 +137,44 @@ See [The Web Home](../docs/official_docs/surfaces/web-home.md).
 |---|---|---|
 | `web` | The web home: its page and HTTP API | Beta |
 | `tui` | The terminal: full screen, inline and JSON lines (`adk_surface::tui`), decisions answered by key; the `adk-rust` binary's `tui` feature | Beta |
+| `channels` | Chat: the Telegram adapter (`adk_surface::channels`), over the kernel's channel contract, by long polling | Beta |
 
-Chat channels, the phone, the desktop tray, voice, agent-drawn UI and the workflow observer
-arrive as further features (spec 3.3 §6.1, §12). See
+The phone, the desktop tray, voice, agent-drawn UI and the workflow observer arrive as
+further features (spec 3.3 §6.1, §12). See
 [the terminal](../docs/official_docs/surfaces/terminal.md) for its keys, modes and exit codes.
+
+## Chat
+
+`TelegramAdapter` is a Telegram bot as the person's chat thread with their agents (spec 3.3
+§5.3). It is the kernel's `ChannelSink` for the channel `telegram` and reads the bot's
+updates by long polling, handing each to `ChannelGateway::receive`; the gateway pairs
+accounts, starts turns, answers decisions and stops everything.
+
+```rust,no_run
+use std::sync::Arc;
+use adk_kernel::channels::{ChannelDoorbell, ChannelGateway, InMemoryChannelBindingStore};
+use adk_surface::channels::TelegramAdapter;
+
+# async fn example(kernel: adk_kernel::Kernel, doorbell: Arc<ChannelDoorbell>) -> Result<(), Box<dyn std::error::Error>> {
+let telegram = TelegramAdapter::builder(std::env::var("TELEGRAM_BOT_TOKEN")?).build()?;
+let gateway = ChannelGateway::builder(Arc::new(kernel), Arc::new(InMemoryChannelBindingStore::new()))
+    .sink(Arc::new(telegram.clone()))
+    .home_url("http://127.0.0.1:8080/ui/")
+    .doorbell(doorbell)
+    .build();
+gateway.start().await?;
+telegram.start(gateway).join().await?;
+# Ok(())
+# }
+```
+
+A card carries "Waiting for you · since 18:00", the kernel's summary with every argument
+value masked, the agent and the risk, **Allow once** and **Deny** at low and medium risk only,
+and "Open in home" — never the call's arguments (S-I5). Only a pressed button answers; typed
+text is a message (S-I4). Groups, bots, edits and media are ignored, and `/start` loses a deep
+link's payload (S-I6). `answer_log` and `audit` record each answer for the engine, so every
+other surface says "You said yes in Telegram". See
+[chat](../docs/official_docs/surfaces/chat.md).
 
 ## License
 

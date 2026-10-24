@@ -25,6 +25,7 @@
 //! | Feature | Surface | Stability |
 //! |---|---|---|
 //! | `web` | The web home: its HTTP API under `/api/surface`, mounted with `ServerBuilder::add_api_routes`, with its OpenAPI document, and its page at `/ui/`, mounted with `ServerBuilder::add_root_routes` | Beta |
+//! | `channels` | Chat: the Telegram adapter over the kernel's channel contract, `channels::TelegramAdapter` (spec 3.3 §5.3) | Beta |
 //!
 //! ## Example
 //!
@@ -52,6 +53,8 @@
 #![warn(missing_docs)]
 
 pub mod answers;
+#[cfg(feature = "channels")]
+pub mod channels;
 mod control;
 mod engine;
 pub mod error;
