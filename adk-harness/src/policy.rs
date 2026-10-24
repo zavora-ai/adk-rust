@@ -880,6 +880,13 @@ impl PromptContexts {
         }
     }
 
+    /// The context recorded for the call `call_id`, left in place.
+    #[cfg(feature = "acp-server")]
+    pub(crate) fn by_call_id(&self, call_id: &str) -> Option<PromptContext> {
+        let by_call = self.by_call.lock().unwrap_or_else(|e| e.into_inner());
+        by_call.entries.get(call_id).map(|(_, context)| context.clone())
+    }
+
     /// Takes the context recorded for `request`, by call ID first.
     pub(crate) fn take(&self, request: &ToolConfirmationRequest) -> Option<PromptContext> {
         if let Some(call_id) = request.function_call_id.as_deref() {
