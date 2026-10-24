@@ -357,7 +357,7 @@ Agents receive an `InvocationContext`; see [Context Traits](core.md#context-trai
 | Field | Purpose |
 |-------|---------|
 | `streaming_mode` | `StreamingMode::SSE` (default), `None`, or `Bidi` (realtime) |
-| `tool_policy`, `governance`, `tool_confirmation_handler`, `tool_confirmation_decisions`, `tool_approvals`, `approval_store`, `approval_service`, `tool_confirmation_timeout` | The governed tool path; see [Tool Authorization](../security/tool-authorization.md) |
+| `tool_policy`, `governance`, `tool_confirmation_handler`, `tool_confirmation_decisions`, `tool_approvals`, `approval_store`, `approval_service`, `tool_confirmation_timeout`, `deny_on_confirmation_timeout` | The governed tool path; see [Tool Authorization](../security/tool-authorization.md) |
 | `budget`, `budget_tracker` | Run limits |
 | `spend_ledger`, `llm_spend_estimate` | Spend caps |
 | `action_ledger` | Non-idempotent call records |

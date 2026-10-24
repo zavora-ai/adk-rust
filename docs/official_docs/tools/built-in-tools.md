@@ -175,7 +175,7 @@ The delegate's run config is built from the caller's field by field:
 
 | Fields | Delegate gets |
 |--------|---------------|
-| `budget`, `budget_tracker`, `governance`, `tool_policy`, `tool_approvals`, `approval_store`, `approval_service`, `durable_run_id`, `action_ledger`, `spend_ledger`, `llm_spend_estimate`, `audit`, `invocation_hooks`, `tool_confirmation_handler`, `tool_confirmation_timeout`, `tool_concurrency`, `max_transfer_depth`, `auto_cache`, `record_payloads`, `trace_payload_max_bytes`, `history_max_events` | The caller's, shared for the whole invocation |
+| `budget`, `budget_tracker`, `governance`, `tool_policy`, `tool_approvals`, `approval_store`, `approval_service`, `durable_run_id`, `action_ledger`, `spend_ledger`, `llm_spend_estimate`, `audit`, `invocation_hooks`, `tool_confirmation_handler`, `tool_confirmation_timeout`, `deny_on_confirmation_timeout`, `tool_concurrency`, `max_transfer_depth`, `auto_cache`, `record_payloads`, `trace_payload_max_bytes`, `history_max_events` | The caller's, shared for the whole invocation |
 | `acting` | The caller's, with the delegate's principal and the caller appended to the delegation chain |
 | `transfer_targets`, `parent_agent` | The delegate's own topology (`Agent::configure_run`, `Agent::transfer_targets_for`), never the caller's handoff targets |
 | `cached_content` | None; a context cache is built for one agent's instructions and tools |

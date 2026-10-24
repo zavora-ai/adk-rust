@@ -28,8 +28,11 @@
 //! [`RunConfig::tool_confirmation_timeout`] and denies when it expires.
 //!
 //! A call held without a decision is answered with a [`confirmation_pending_response`]
-//! and stays held across runs. At the start of a later run the agent finds its held
-//! calls with [`held_tool_calls`] and, for each one with a decision
+//! and stays held across runs. So is a call the handler does not decide in time when the
+//! run has an [`ApprovalStore`] or an [`ApprovalService`](crate::ApprovalService): it waits
+//! for a decision instead of being denied (spec 3.3 §7.3), unless
+//! [`RunConfig::deny_on_confirmation_timeout`] is set. At the start of a later run the
+//! agent finds its held calls with [`held_tool_calls`] and, for each one with a decision
 //! ([`confirmation_decision_available`]), dispatches the original call again through
 //! the same path, so the decision authorizes or refuses it without the model issuing
 //! it a second time. The call's real response supersedes the pending one
@@ -65,7 +68,8 @@ use crate::{
 };
 
 /// How long a [`ToolConfirmationHandler`](crate::ToolConfirmationHandler) may take to
-/// decide before the call is denied.
+/// decide before the call waits in the run's approval store, or is denied when the run has
+/// none.
 pub const DEFAULT_TOOL_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(300);
 
 // ---------------------------------------------------------------------------
@@ -2108,6 +2112,18 @@ async fn resolve_confirmation(
         }
         None => decide.await,
     };
+    // Nothing is decided by silence where a decision can still arrive (spec 3.3 §7.3).
+    if decided.is_err()
+        && !config.deny_on_confirmation_timeout
+        && (config.approval_store.is_some() || config.approval_service.is_some())
+    {
+        tracing::info!(
+            tool.name = %request.tool_name,
+            timeout = ?config.tool_confirmation_timeout,
+            "confirmation handler did not decide in time; the call waits for a decision"
+        );
+        return Ok(None);
+    }
     match decided {
         Ok(Ok(approval)) => Ok(Some((approval, "handler"))),
         Ok(Err(error)) => Err(error),
@@ -3185,6 +3201,112 @@ mod tests {
                 confirmation: Some(ToolConfirmationDecision::Deny),
             }
         );
+    }
+
+    /// A timeout with an approval store holds the call there; a decision recorded later
+    /// authorizes the call once (spec 3.3 §7.3, §10 C2).
+    #[tokio::test]
+    async fn a_timeout_with_an_approval_store_leaves_the_call_waiting() {
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let config = RunConfig::builder()
+            .tool_confirmation_handler(Arc::new(NeverDecides))
+            .tool_confirmation_timeout(Duration::from_millis(20))
+            .approval_store(store.clone())
+            .build();
+        let call = || GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
+
+        let ToolAuthorization::Pending { request, reason } =
+            authorize_tool_call(&gate(&config), call()).await.unwrap()
+        else {
+            panic!("a timed-out call with a store waits for a decision");
+        };
+        assert_eq!(reason, "Tool 'tool' requires confirmation");
+        let scope = ApprovalScope::new("app", "user", "session");
+        let pending = store.pending(&scope).await.unwrap();
+        assert_eq!(pending.len(), 1, "the call waits in the store");
+        assert_eq!(pending[0].request, request);
+
+        store.decide(&scope, &request.fingerprint(), ToolApproval::approve()).await.unwrap();
+        assert_eq!(
+            authorize_tool_call(&gate(&config), call()).await.unwrap(),
+            ToolAuthorization::Execute {
+                args: json!({}),
+                confirmation: Some(ToolConfirmationDecision::Approve),
+            },
+            "the stored decision authorizes the call before the handler is asked"
+        );
+        assert!(
+            matches!(
+                authorize_tool_call(&gate(&config), call()).await.unwrap(),
+                ToolAuthorization::Pending { .. }
+            ),
+            "the decision was used once"
+        );
+    }
+
+    /// A timeout with an approval service submits the call to its inbox.
+    #[tokio::test]
+    async fn a_timeout_with_an_approval_service_waits_in_its_inbox() {
+        let service = Arc::new(
+            crate::StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+                .with_router(crate::ApprovalPolicy::new([crate::ApproverSelector::group("ops")])),
+        );
+        let config = RunConfig {
+            approval_store: None,
+            ..RunConfig::builder()
+                .tool_confirmation_handler(Arc::new(NeverDecides))
+                .tool_confirmation_timeout(Duration::from_millis(20))
+                .approval_service(service.clone())
+                .build()
+        };
+        let call = GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
+        assert!(matches!(
+            authorize_tool_call(&gate(&config), call).await.unwrap(),
+            ToolAuthorization::Pending { .. }
+        ));
+        let inbox = service.inbox(crate::InboxQuery::for_group("ops")).await.unwrap();
+        assert_eq!(inbox.items.len(), 1, "the call waits in the service's inbox");
+        assert_eq!(inbox.items[0].tool_name, "tool");
+    }
+
+    /// `deny_on_confirmation_timeout` restores the denial with a store, and records nothing.
+    #[tokio::test]
+    async fn the_opt_out_denies_a_timeout_even_with_an_approval_store() {
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let config = RunConfig::builder()
+            .tool_confirmation_handler(Arc::new(NeverDecides))
+            .tool_confirmation_timeout(Duration::from_millis(20))
+            .approval_store(store.clone())
+            .deny_on_confirmation_timeout(true)
+            .build();
+        let call = GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
+        assert_eq!(
+            authorize_tool_call(&gate(&config), call).await.unwrap(),
+            ToolAuthorization::Refuse {
+                reason: "Tool 'tool' execution denied by confirmation policy".into(),
+                confirmation: Some(ToolConfirmationDecision::Deny),
+            }
+        );
+        let scope = ApprovalScope::new("app", "user", "session");
+        assert!(store.pending(&scope).await.unwrap().is_empty(), "nothing waits");
+    }
+
+    /// A tool's own confirmation that times out with a store waits there too.
+    #[tokio::test]
+    async fn a_timeout_during_execution_waits_with_an_approval_store() {
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let config = RunConfig::builder()
+            .tool_confirmation_handler(Arc::new(NeverDecides))
+            .tool_confirmation_timeout(Duration::from_millis(20))
+            .approval_store(store.clone())
+            .build();
+        let gate = gate(&config);
+        let request = ToolConfirmationRequest::new("pay", json!({ "cents": 75_000 }))
+            .with_function_call_id("c1")
+            .with_acting_context(gate.acting_context().clone());
+        assert_eq!(confirm_tool_call(&gate, &request, "over $50").await.unwrap(), None);
+        let scope = ApprovalScope::new("app", "user", "session");
+        assert_eq!(store.pending(&scope).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

@@ -674,7 +674,9 @@ let runner = Runner::builder()
 ```
 
 2. **`ToolConfirmationPolicy`** — built-in HITL. A `ToolConfirmationHandler` decides each call
-   inside the run (bounded by `RunConfig::tool_confirmation_timeout`, denied when it expires);
+   inside the run (bounded by `RunConfig::tool_confirmation_timeout`; when it expires the call
+   waits in the run's approval store, or is denied without one or under
+   `RunConfig::deny_on_confirmation_timeout`);
    without one the agent holds the call, emits a `ToolConfirmationRequest` event, and ends the run.
 
 ```rust

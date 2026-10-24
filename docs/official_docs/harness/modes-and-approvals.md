@@ -80,7 +80,10 @@ checks edited arguments against the policy again.
 | `DenyAndRemember(suggestion)` | Refuses the call and stores a Deny rule |
 | `DenyAllRemaining` | Refuses this call and every other call of the turn |
 
-A call nobody decides within `confirmation_timeout` (300 seconds by default) is denied.
+A call nobody decides within `confirmation_timeout` (300 seconds by default) is not denied: it
+waits in the approval store, the run ends with it held, and a decision made later — through
+`Harness::decide`, the approval inbox or any other surface — runs or refuses it on the next
+`resume`.
 
 ```rust
 use adk_rust::async_trait;

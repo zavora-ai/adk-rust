@@ -76,7 +76,7 @@ agent and the tool's origin:
 | 1 | `RunConfig::tool_confirmation_decisions` (call ID, bound to the fingerprint) | Decides for the run |
 | 2 | `RunConfig::tool_approvals` (fingerprint, live) | Decides until it expires |
 | 3 | `RunConfig::approval_store` | Decides once; the payment consumes the approval |
-| 4 | `RunConfig::tool_confirmation_handler` | Decides within `tool_confirmation_timeout`, denying when it expires |
+| 4 | `RunConfig::tool_confirmation_handler` | Decides within `tool_confirmation_timeout`; when it expires the request waits in the approval store, or is denied without one |
 
 Without a decision, the request is recorded as pending in the approval store and submitted
 to the approval service, the call fails with `payments.policy.approval_required`, and its
