@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use adk_core::{AdkError, Effort, Result};
 use adk_harness::hooks::{HookSet, HookSource};
-use adk_harness::{EffortPolicy, HarnessMode, MemberSpec, Pack};
+use adk_harness::{EffortPolicy, HarnessMode, MemberSpec, Pack, Preset};
 use serde::Deserialize;
 
 /// The project file, relative to the workspace root.
@@ -135,6 +135,12 @@ pub struct HarnessArgs {
     /// config, else the store the sessions are in; spec 3.1 §7.11)
     #[arg(long, value_name = "URL", conflicts_with = "ephemeral")]
     pub checkpointer: Option<String>,
+
+    /// Preset: coding, or personal — a workspace of notes and files under the kernel home
+    /// instead of a repository, no host shell, and quiet time and a daily spending limit
+    /// asked for at its first run (spec 3.3 §10 H1)
+    #[arg(long, value_parser = parse_preset, value_name = "PRESET")]
+    pub preset: Option<Preset>,
 }
 
 /// A `--member` flag value (spec 3.1 §8.1, §7.10).
@@ -322,6 +328,10 @@ fn parse_pack(value: &str) -> std::result::Result<Pack, String> {
 }
 
 fn parse_member(value: &str) -> std::result::Result<MemberArg, String> {
+    value.parse()
+}
+
+fn parse_preset(value: &str) -> std::result::Result<Preset, String> {
     value.parse()
 }
 

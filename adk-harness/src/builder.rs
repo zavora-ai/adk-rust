@@ -136,6 +136,9 @@ pub struct HarnessAgentBuilder {
     confirmation_timeout: Duration,
     shell: ShellConfig,
     shell_enabled: bool,
+    /// The personal preset offers `bash` only in the OS sandbox or a container (spec 3.3
+    /// §10 H1).
+    isolated_shell_only: bool,
     /// `allow_unsandboxed_retry` was set explicitly, so a container shell keeps it.
     retry_explicit: bool,
     trust_mcp_read_only_hints: bool,
@@ -202,6 +205,7 @@ pub struct HarnessAgentBuilder {
     computer_use: Option<crate::packs::computer_use::ComputerUsePack>,
     computer_use_requested: bool,
     voice_requested: bool,
+    take_over: Option<crate::take_over::TakeOver>,
 }
 
 impl HarnessAgentBuilder {
@@ -236,6 +240,7 @@ impl HarnessAgentBuilder {
             confirmation_timeout: Duration::from_secs(300),
             shell: ShellConfig::default(),
             shell_enabled: true,
+            isolated_shell_only: false,
             retry_explicit: false,
             trust_mcp_read_only_hints: false,
             todos: true,
@@ -300,6 +305,7 @@ impl HarnessAgentBuilder {
             computer_use: None,
             computer_use_requested: false,
             voice_requested: false,
+            take_over: None,
         }
     }
 
@@ -674,6 +680,37 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// Applies `preset` (spec 3.1 §7.19, spec 3.3 §10 H1): its prompt, mode, members and
+    /// shell. Calls after it override what it sets.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::{HarnessAgent, InstructionsConfig, Preset};
+    /// use adk_model::{ScriptedLlm, ScriptedResponse};
+    /// use std::sync::Arc;
+    ///
+    /// let dir = tempfile::tempdir().unwrap();
+    /// let harness = HarnessAgent::builder("assistant")
+    ///     .preset(Preset::Personal)
+    ///     .model(Arc::new(ScriptedLlm::new("scripted", vec![ScriptedResponse::text("ok")])))
+    ///     .workspace(adk_devtools::Workspace::new(dir.path()).allow_bash(true))
+    ///     .project_instructions(InstructionsConfig { user_file: None, ..InstructionsConfig::default() })
+    ///     .build()?;
+    /// assert!(harness.info().members.is_empty());
+    /// assert!(!harness.info().tools.contains(&"bash".to_string()), "no host shell");
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn preset(self, preset: crate::Preset) -> Self {
+        preset.apply(self)
+    }
+
+    /// Offers `bash` only when it runs in the OS sandbox or a container (spec 3.3 §10 H1).
+    pub(crate) fn isolated_shell_only(mut self) -> Self {
+        self.isolated_shell_only = true;
+        self
+    }
+
     /// Trusts an MCP server's `readOnlyHint` for the External class (default `false`).
     pub fn trust_mcp_read_only_hints(mut self, yes: bool) -> Self {
         self.trust_mcp_read_only_hints = yes;
@@ -982,6 +1019,31 @@ impl HarnessAgentBuilder {
     pub fn pack_computer_use(mut self, pack: crate::packs::computer_use::ComputerUsePack) -> Self {
         self.computer_use = Some(pack);
         self.computer_use_requested = true;
+        self
+    }
+
+    /// Lets the harness's tool calls ask the person for a secret through `take_over`
+    /// (spec 3.3 §8.2, §10 H2): the request reaches surfaces through the approval inbox, the
+    /// typed value reaches the asking call only, and every occurrence of it in any call's
+    /// result or error is replaced by
+    /// [`TAKE_OVER_PLACEHOLDER`](crate::take_over::TAKE_OVER_PLACEHOLDER). Asking needs an
+    /// [`approval_service`](Self::approval_service); the wait is bounded by the
+    /// [`confirmation_timeout`](Self::confirmation_timeout).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let take_over = TakeOver::new();
+    /// let harness = HarnessAgent::builder("assistant")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .tool(Arc::new(SignIn { take_over: take_over.clone() }))
+    ///     .approval_service(inbox)
+    ///     .take_over(take_over)
+    ///     .build()?;
+    /// ```
+    pub fn take_over(mut self, take_over: crate::take_over::TakeOver) -> Self {
+        self.take_over = Some(take_over);
         self
     }
 
@@ -1407,7 +1469,11 @@ impl HarnessAgentBuilder {
         let container_shell = container_pool.is_some();
         #[cfg(not(feature = "docker"))]
         let container_shell = false;
-        if self.shell_enabled && workspace.bash_allowed() && !container_shell {
+        // The personal preset never offers a host shell (spec 3.3 §10 H1).
+        let isolated_shell = matches!(status, IsolationStatus::OsSandbox { .. });
+        let host_shell_refused = self.isolated_shell_only && !isolated_shell;
+        if self.shell_enabled && workspace.bash_allowed() && !container_shell && !host_shell_refused
+        {
             let bash = HarnessBashTool::new(
                 workspace.clone(),
                 status.clone(),
@@ -1551,6 +1617,12 @@ impl HarnessAgentBuilder {
         #[cfg(feature = "computer-use")]
         if let Some(computer_use) = &computer_use {
             tools.extend(computer_use.tools.iter().cloned());
+        }
+        // Take over (spec 3.3 §10 H2): every call runs in a scope a secret can reach, and
+        // leaves it scrubbed before RBAC, hooks or members see the result.
+        if let Some(take_over) = &self.take_over {
+            take_over.bind(self.approval_service.clone(), self.confirmation_timeout);
+            tools = tools.into_iter().map(crate::take_over::ScopedTool::wrap).collect();
         }
         let tool_names: Vec<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
         #[cfg(feature = "auth")]
@@ -1773,7 +1845,11 @@ impl HarnessAgentBuilder {
         let environment = Environment {
             root: workspace.root().display().to_string(),
             branch: instruction_state.instructions.git_branch().map(str::to_string),
-            isolation: status.to_string(),
+            isolation: if host_shell_refused && !container_shell {
+                "none".to_string()
+            } else {
+                status.to_string()
+            },
             default_mode: self.mode,
             packs: packs.clone(),
         };
@@ -1896,11 +1972,19 @@ impl HarnessAgentBuilder {
             }
         }
         for tool in self.tools {
+            let tool = match &self.take_over {
+                Some(_) => crate::take_over::ScopedTool::wrap(tool),
+                None => tool,
+            };
             #[cfg(feature = "auth")]
             let tool = self.identity.protect_extra(tool);
             builder = builder.tool(tool);
         }
         for extra in self.toolsets {
+            let extra = match &self.take_over {
+                Some(_) => crate::take_over::ScopedToolset::wrap(extra),
+                None => extra,
+            };
             builder = builder.toolset(extra);
         }
         #[cfg(feature = "web")]
@@ -2082,6 +2166,7 @@ impl HarnessAgentBuilder {
                 cache_capable: self.context_caching.then_some(self.cache_capable).flatten(),
                 #[cfg(feature = "payments")]
                 payments: payments.map(|payments| payments.reminder),
+                take_over: self.take_over,
             },
             info,
         })

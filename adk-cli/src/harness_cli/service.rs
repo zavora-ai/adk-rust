@@ -132,6 +132,13 @@ fn definition(up: &UpArgs, platform: ServicePlatform) -> Result<ServiceDefinitio
     let workspace = workspace(up)?;
     let settings = KernelSettings::resolve(user_config().as_deref(), &workspace)?;
     let home = kernel_home(up, &settings)?;
+    // The personal preset's workspace is a folder under the home (spec 3.3 §10 H1).
+    let workspace =
+        if up.harness.preset == Some(adk_harness::Preset::Personal) && up.harness.dir.is_none() {
+            adk_harness::personal::PersonalWorkspace::create(&home)?.root().to_path_buf()
+        } else {
+            workspace
+        };
     let bind = match up.bind.or(settings.bind) {
         Some(bind) => bind,
         None => DEFAULT_BIND.parse()?,
@@ -169,6 +176,11 @@ pub fn print_service(up: &UpArgs) -> Result<()> {
 pub async fn install_service(up: &UpArgs) -> Result<()> {
     let platform = platform()?;
     let definition = definition(up, platform)?;
+    // A service has no terminal, so the personal preset's first-run questions are asked here
+    // (spec 3.3 §13 Q7).
+    if up.harness.preset == Some(adk_harness::Preset::Personal) {
+        super::personal_settings(&definition.home)?;
+    }
     #[cfg(windows)]
     let password = Some(windows_password()?);
     #[cfg(not(windows))]

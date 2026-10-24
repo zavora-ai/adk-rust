@@ -134,6 +134,8 @@ toml.workspace = true
 tracing.workspace = true
 unicode-normalization = "0.1"
 uuid.workspace = true
+# Take over keeps the person's typed secret in memory for one call (spec 3.3 §10 H2).
+zeroize = "1.8.2"
 
 # The hook runner starts each hook in its own session and kills its process group, as the
 # devtools bash does.
@@ -160,8 +162,11 @@ windows-sys = { version = "0.61", features = ["Win32_Security_Authorization"] }
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"], optional = true }
 
 [dev-dependencies]
-# `anthropic` for the live confirmation-wait run (spec 3.3 §10 C2).
+# `anthropic` for the live confirmation-wait run (spec 3.3 §10 C2) and the live take-over
+# run (spec 3.3 §10 H2).
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic"] }
+# The live take-over run reads its key from the workspace `.env`.
+dotenvy = "0.15"
 # The scripted realtime provider of the voice surface tests (spec 3.1 §7.17).
 adk-realtime = { path = "../adk-realtime", features = ["integration", "scripted"] }
 # SQLite sessions, approvals and ledger, and the durable worker, for the durability tests;

@@ -1,7 +1,9 @@
 - **`adk-surface`: one engine under every agent surface** (spec 3.3, Beta): a new opt-in
   crate (`default = []`; umbrella feature `surface`, in no tier). `SurfaceEngine` reads a
   `LocalSource` (an in-process kernel, harness or runner with its session store and approval
-  service) or a `ControlSource` (a kernel's control plane through `ControlClient`) and gives
+  service) or a `ControlSource` (a kernel's control plane through `ControlClient`, with the
+  approvals inbox read in full over the same HTTP or Unix-socket endpoint, one session at a
+  time) and gives
   every surface the same feed (session events numbered by store position, a snapshot then a
   live tail, resumable after the last `seq` without a gap or a duplicate), the same projection
   (decision cards with every part of §7.1, thread items, agent rows, the status line and the

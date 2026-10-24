@@ -11,6 +11,13 @@
 //! | [`AgendaStore`](crate::AgendaStore) | [`AgendaStoreHarness`] | [`agenda_store_conformance_tests!`](crate::agenda_store_conformance_tests) | [`agenda_store`] |
 //! | [`DriverStore`](crate::drivers::DriverStore) (feature `drivers`) | `DriverStoreHarness` | `driver_store_conformance_tests!` | `driver_store` |
 //! | `proc::LedgerStore` (feature `proc`) | `LedgerStoreHarness` | `ledger_store_conformance_tests!` | `ledger_store` |
+//! | [`DeviceStore`](crate::pairing::DeviceStore) (spec 3.3 §10 K2) | [`DeviceStoreHarness`] | [`device_store_conformance_tests!`](crate::device_store_conformance_tests) | [`device_store`] |
+//! | `channels::ChannelBindingStore` (feature `channels`; spec 3.3 §10 K1) | `ChannelBindingStoreHarness` | `channel_binding_store_conformance_tests!` | `channel_binding_store` |
+//!
+//! Chat channel adapters pass `channel_contract` (feature `channels`; spec 3.3 §10 K1): a
+//! `ChannelAdapterHarness` makes a fresh adapter per case and `channel_contract_tests!`
+//! generates the tests, which run the adapter under the kernel's gateway and check what it
+//! put on the wire.
 //!
 //! In-memory and SQLite run on the PR tier; PostgreSQL and Redis run in the CI `postgres`
 //! job, `#[ignore]`d elsewhere. The partition suite arrives with its
@@ -46,6 +53,11 @@
 //! ```
 
 pub mod agenda_store;
+#[cfg(feature = "channels")]
+pub mod channel_binding_store;
+#[cfg(feature = "channels")]
+pub mod channel_contract;
+pub mod device_store;
 #[cfg(feature = "drivers")]
 pub mod driver_store;
 #[cfg(feature = "proc")]
@@ -53,6 +65,11 @@ pub mod ledger_store;
 pub mod process_store;
 
 pub use agenda_store::AgendaStoreHarness;
+#[cfg(feature = "channels")]
+pub use channel_binding_store::ChannelBindingStoreHarness;
+#[cfg(feature = "channels")]
+pub use channel_contract::{ChannelAdapter, ChannelAdapterHarness, ContractHost};
+pub use device_store::DeviceStoreHarness;
 #[cfg(feature = "drivers")]
 pub use driver_store::DriverStoreHarness;
 #[cfg(feature = "proc")]

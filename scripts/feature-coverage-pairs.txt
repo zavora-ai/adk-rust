@@ -112,6 +112,10 @@
 # The daily baseline pass and scenario K10, the kernel's only adk-eval edge (spec 3.2
 # §7.10, §13 Q4); adk-cli turns it on, so this also covers it without the CLI.
 2 adk-kernel proc-baselines
+# The chat channel contract (spec 3.3 §10 K1): the gateway, its scenarios and the adapter
+# contract suite; with no default features, the in-memory stores alone.
+2 adk-kernel channels
+2 adk-kernel channels,conformance no-default
 # The surface engine's web API (spec 3.3 §6): the router, the scenario on a kernel-hosted
 # harness, the control-plane source, and the generated-types drift test.
 2 adk-surface web doc
