@@ -148,7 +148,7 @@ the server's auth middleware authenticates every request.
 
 | Route (under `/api`) | Answer |
 |---|---|
-| `GET /surface/decisions?surface=` | The caller's open decisions as cards |
+| `GET /surface/decisions?surface=&session=` | The caller's open decisions as cards, of one session with `session` |
 | `GET /surface/decisions/{id}` | One decision, waiting or decided |
 | `GET /surface/sessions/{session}/thread` | The session's entries |
 | `GET /surface/sessions/{session}/feed` | Server-sent events: `entry` (with `id` = `seq`), `decisions`, `reset`; resumes after `Last-Event-ID` or `?after=` |

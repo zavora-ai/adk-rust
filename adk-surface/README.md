@@ -92,7 +92,7 @@ A chat card carries the agent, the risk and a short summary, never the call's ar
 
 | Route (under `/api`) | Answer |
 |---|---|
-| `GET /surface/decisions` | The caller's open decisions as cards |
+| `GET /surface/decisions` | The caller's open decisions as cards; `?session=` for one session's |
 | `GET /surface/decisions/{id}` | One decision, waiting or decided |
 | `GET /surface/sessions/{session}/thread` | The session's entries |
 | `GET /surface/sessions/{session}/feed` | Server-sent events, resumable with `Last-Event-ID` |

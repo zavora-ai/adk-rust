@@ -8,7 +8,7 @@
 //!
 //! | Route (under `/api`) | Answer |
 //! |---|---|
-//! | `GET /surface/decisions` | [`DecisionsResponse`]: the caller's open decisions as cards |
+//! | `GET /surface/decisions` | [`DecisionsResponse`]: the caller's open decisions as cards; `?session=` for one session's |
 //! | `GET /surface/decisions/{id}` | [`DecisionCard`]: waiting, or decided with who, where and when |
 //! | `GET /surface/sessions/{session}/thread` | [`ThreadResponse`]: the session's entries, numbered by store position |
 //! | `GET /surface/sessions/{session}/feed` | Server-sent events: `entry` (with `id` = `seq`), `decisions`, `reset`; resumes after `Last-Event-ID` or `?after=` |
@@ -173,7 +173,8 @@ pub struct SurfaceQuery {
     /// The surface; defaults to the web home.
     #[serde(default)]
     pub surface: Option<SurfaceKind>,
-    /// `GET /surface/status`: the session whose mode to show.
+    /// `GET /surface/status`: the session whose mode to show; `GET /surface/decisions`: only
+    /// that session's decisions.
     #[serde(default)]
     pub session: Option<String>,
     /// `GET /surface/briefing`: since when.
@@ -252,7 +253,11 @@ async fn decisions(
     Query(query): Query<SurfaceQuery>,
 ) -> Response {
     let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
-    match engine.decisions(&caller).await {
+    let decisions = match &query.session {
+        Some(session) => engine.session_decisions(&caller, session).await,
+        None => engine.decisions(&caller).await,
+    };
+    match decisions {
         Ok(decisions) => Json(DecisionsResponse { decisions }).into_response(),
         Err(error) => failed(error),
     }
