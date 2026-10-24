@@ -608,15 +608,11 @@ pub(crate) fn call_view(request: &ApprovalRequest) -> CallView {
     }
 }
 
-/// The arguments the inbox shows are the call's own: its fingerprint ends with the shown
-/// arguments in canonical form (`adk_core::tool_call_fingerprint`). A source that serves no
-/// fingerprints, such as the approvals API, cannot tell, and its entries keep what they allow.
+/// The arguments the inbox shows are the call's own (`ApprovalRequest::shows_call_args`). A
+/// source that serves no fingerprints, the approvals API, removes Edit itself where they are
+/// not (`inbox::request_of`).
 fn shows_own_arguments(request: &ApprovalRequest) -> bool {
-    if request.fingerprint.is_empty() {
-        return true;
-    }
-    let shown = adk_core::tool_call_fingerprint(&request.tool_name, &request.args_redacted);
-    request.fingerprint.strip_suffix(shown.as_str()).is_some_and(|rest| rest.ends_with('\u{1f}'))
+    request.fingerprint.is_empty() || request.shows_call_args()
 }
 
 /// `tool(key: value, …)`, each value as JSON.
