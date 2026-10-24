@@ -90,24 +90,37 @@ fn entries() -> impl Strategy<Value = Vec<(u8, u8, i64)>> {
     prop::collection::vec((0u8..2, 0u8..3, 0i64..8), 0..30)
 }
 
+/// The 100 cases share one file database, each writing under an application of its own, as
+/// the PostgreSQL property shares its server. The property is about paging, not durability,
+/// so commits skip the sync (`synchronous = OFF`): a database and its migration per case,
+/// with a synchronized commit per request, took 62–90 s on Windows.
 #[cfg(feature = "sqlite")]
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(100))]
+#[test]
+fn sqlite_pages_one_session_without_gaps_or_duplicates() {
+    use std::str::FromStr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    #[test]
-    fn sqlite_pages_one_session_without_gaps_or_duplicates(
-        entries in entries(),
-        page in 1usize..6,
-        target in (0u8..2, 0u8..3),
-    ) {
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        runtime.block_on(async {
-            let dir = tempfile::tempdir().unwrap();
-            let url = format!("sqlite://{}?mode=rwc", dir.path().join("approvals.db").display());
-            let store = adk_session::SqliteApprovalStore::new(&url).await.expect("open");
-            store.migrate().await.expect("migrate");
-            check(&store, "app", &entries, page, target).await
-        })?;
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}?mode=rwc", dir.path().join("approvals.db").display());
+    let options = sqlx::sqlite::SqliteConnectOptions::from_str(&url)
+        .expect("a valid URL")
+        .synchronous(sqlx::sqlite::SqliteSynchronous::Off);
+    let store = runtime.block_on(async {
+        let pool = sqlx::SqlitePool::connect_with(options).await.expect("open");
+        let store = adk_session::SqliteApprovalStore::from_pool(pool);
+        store.migrate().await.expect("migrate");
+        store
+    });
+    let case = AtomicUsize::new(0);
+    let mut runner = proptest::test_runner::TestRunner::new(ProptestConfig::with_cases(100));
+    let outcome =
+        runner.run(&(entries(), 1usize..6, (0u8..2, 0u8..3)), |(entries, page, target)| {
+            let app = format!("app-{}", case.fetch_add(1, Ordering::Relaxed));
+            runtime.block_on(check(&store, &app, &entries, page, target))
+        });
+    if let Err(failure) = outcome {
+        panic!("{failure}");
     }
 }
 
