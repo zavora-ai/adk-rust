@@ -13,6 +13,8 @@ mod legacy;
 mod manage;
 #[cfg(all(windows, any(feature = "audit", feature = "persist", feature = "harness")))]
 mod owner_only;
+#[cfg(feature = "harness")]
+mod pair_cli;
 #[cfg(feature = "vertex-agent-registry")]
 mod registry;
 #[cfg(feature = "scripted-model")]
@@ -259,6 +261,10 @@ async fn run() -> Result<()> {
         }
         #[cfg(feature = "harness")]
         Some(Commands::Drivers { command, kernel }) => kernel_cli::drivers(&kernel, command).await,
+        #[cfg(feature = "harness")]
+        Some(Commands::Pair { command, issue, kernel }) => {
+            pair_cli::run(&kernel, command, issue).await
+        }
         #[cfg(feature = "harness")]
         Some(Commands::Proc { view, partition, kind, agent, since, limit, export, kernel }) => {
             let query = kernel_cli::ProcQuery { partition, kind, agent, since, limit, export };

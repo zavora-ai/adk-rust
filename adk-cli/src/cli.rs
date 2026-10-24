@@ -549,6 +549,21 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
+    /// Phones, terminals and chat accounts that may reach your agents: pair one with a code,
+    /// list them, remove one (spec 3.3 §10 K1, K2)
+    ///
+    /// Example: `adk-rust pair --name "Ana's phone"`, then enter the code on the phone;
+    /// `adk-rust pair accept ABCD-2345` pairs the chat account that was sent that code.
+    #[cfg(feature = "harness")]
+    Pair {
+        #[command(subcommand)]
+        command: Option<crate::pair_cli::PairCommand>,
+        #[command(flatten)]
+        issue: crate::pair_cli::IssueArgs,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
     /// The kernel's self-observation: its content-free activity ledger, each partition's
     /// baselines, and the observations it offered as questions (spec 3.2 §7.10)
     ///
