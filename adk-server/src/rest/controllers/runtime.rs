@@ -1,3 +1,6 @@
+use super::ag_ui_decisions::{
+    AgUiDecisions, HeldCall, ResumeOutcome, apply_resume, decision_event,
+};
 use crate::ServerConfig;
 use crate::auth_bridge::{RequestContextError, RequestContextExtractor};
 use crate::rest::controllers::ui::{
@@ -21,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::sync::Arc;
 use tracing::{Instrument, info, warn};
 use uuid::Uuid;
 
@@ -34,11 +38,38 @@ const UI_TRANSPORT_HEADER: &str = "x-adk-ui-transport";
 #[derive(Clone)]
 pub struct RuntimeController {
     config: ServerConfig,
+    approval_service: Option<Arc<dyn adk_core::ApprovalService>>,
 }
 
 impl RuntimeController {
     pub fn new(config: ServerConfig) -> Self {
-        Self { config }
+        Self { config, approval_service: None }
+    }
+
+    /// Routes the calls that protocol-native AG-UI runs hold for approval to `service`,
+    /// and answers AG-UI resumes through it (spec 3.3 §10 S2).
+    ///
+    /// A held call ends the run with an AG-UI interrupt whose `id` is the call's inbox
+    /// entry, and a later run's `resume` entry becomes [`ApprovalService::decide`] on that
+    /// entry. A service without an [`approval_store`](adk_core::ApprovalService::approval_store)
+    /// cannot name the entry, so its interrupts carry the call ID, which no resume decides.
+    /// `ServerBuilder::with_approval_service` (feature `approvals`) sets it.
+    ///
+    /// [`ApprovalService::decide`]: adk_core::ApprovalService::decide
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::{ApprovalPolicy, ApproverSelector, InMemoryApprovalStore, StoreApprovalService};
+    ///
+    /// let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+    ///     .with_router(ApprovalPolicy::new([ApproverSelector::human("alice")]).allow_self_approval());
+    /// let controller = RuntimeController::new(config).with_approval_service(Arc::new(service));
+    /// ```
+    #[must_use]
+    pub fn with_approval_service(mut self, service: Arc<dyn adk_core::ApprovalService>) -> Self {
+        self.approval_service = Some(service);
+        self
     }
 }
 
@@ -141,6 +172,99 @@ pub struct AgUiRunInput {
     pub context: Vec<Value>,
     #[serde(default)]
     pub forwarded_props: Option<Value>,
+    /// Answers to the interrupts the previous run on the thread ended with (spec 3.3 §10
+    /// S2). A run that carries them starts no new user turn unless `newMessage` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<AgUiResume>,
+}
+
+/// The `resume` of an AG-UI run input (spec 3.3 §10 S2): the AG-UI 1.1 list of
+/// [`AgUiResumeEntry`], or the single entry of the earlier interrupt draft.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_server::rest::controllers::runtime::{AgUiResume, AgUiResumeStatus};
+/// use serde_json::json;
+///
+/// let resume: AgUiResume = serde_json::from_value(json!([
+///     { "interruptId": "apr_1", "status": "resolved", "payload": { "approved": true } }
+/// ]))
+/// .unwrap();
+/// assert_eq!(resume.entries()[0].status, AgUiResumeStatus::Resolved);
+/// ```
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum AgUiResume {
+    /// One entry per interrupt, as AG-UI 1.1 sends them.
+    Entries(Vec<AgUiResumeEntry>),
+    /// One entry, as the earlier draft sends it.
+    Entry(AgUiResumeEntry),
+}
+
+impl AgUiResume {
+    /// The entries, in order.
+    pub fn entries(&self) -> &[AgUiResumeEntry] {
+        match self {
+            Self::Entries(entries) => entries,
+            Self::Entry(entry) => std::slice::from_ref(entry),
+        }
+    }
+}
+
+/// One answer to an AG-UI interrupt (spec 3.3 §10 S2; AG-UI `ResumeEntry`).
+///
+/// A `resolved` answer's `payload` is `{"approved": true}` (allow once),
+/// `{"approved": true, "editedArgs": {...}}` (edit), or
+/// `{"approved": false, "reason": "..."}` (deny). `metadata.version`, when the client echoes
+/// the version its interrupt carried, is the inbox entry version the decision is made at.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_server::rest::controllers::runtime::{AgUiResumeEntry, AgUiResumeStatus};
+/// use serde_json::json;
+///
+/// let entry: AgUiResumeEntry = serde_json::from_value(json!({
+///     "interruptId": "apr_1",
+///     "payload": { "approved": false, "reason": "wrong client" }
+/// }))
+/// .unwrap();
+/// assert_eq!(entry.status, AgUiResumeStatus::Resolved);
+/// ```
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgUiResumeEntry {
+    /// The interrupt answered, as the interrupt's `id` named it.
+    pub interrupt_id: String,
+    /// Whether the person answered or abandoned the interrupt; `resolved` when absent.
+    #[serde(default)]
+    pub status: AgUiResumeStatus,
+    /// The answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Value>,
+    /// Envelope information, not part of the answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+}
+
+/// How an AG-UI client ended an interrupt (spec 3.3 §10 S2).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_server::rest::controllers::runtime::AgUiResumeStatus;
+///
+/// assert_eq!(serde_json::to_value(AgUiResumeStatus::Cancelled).unwrap(), "cancelled");
+/// ```
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AgUiResumeStatus {
+    /// The person answered; the payload is the answer.
+    #[default]
+    Resolved,
+    /// The person abandoned the interrupt; the decision keeps waiting in the inbox.
+    Cancelled,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -796,11 +920,28 @@ fn translate_ag_ui_event(
     let mut translated = Vec::new();
     let timestamp = timestamp_millis(event);
     let is_partial = event.llm_response.partial;
+    // Every action is named, so a new kind is a compile error here rather than dropped.
+    let adk_core::EventActions {
+        state_delta,
+        // AG-UI 1.0 has no event for these; they stay in the session.
+        artifact_delta: _,
+        skip_summarization: _,
+        transfer_to_agent: _,
+        escalate: _,
+        compaction: _,
+        route: _,
+        input_screened: _,
+        workflow_positions: _,
+        // A held call ends the run with an interrupt (spec 3.3 §10 S2), built when the
+        // run finishes; a decision is reported by the result of the call it decided.
+        tool_confirmation,
+        tool_confirmation_decision: _,
+    } = &event.actions;
 
-    if !event.actions.state_delta.is_empty() {
+    if !state_delta.is_empty() {
         translated.push(json!({
             "type": "STATE_DELTA",
-            "delta": state_delta_to_json_patch(&event.actions.state_delta),
+            "delta": state_delta_to_json_patch(state_delta),
             "timestamp": timestamp,
         }));
     }
@@ -816,6 +957,11 @@ fn translate_ag_ui_event(
         }));
     }
 
+    // The text of the event that holds a call is the agent's placeholder; the interrupt
+    // describes the decision instead, drawn from the inbox entry (spec 3.3 §7.1).
+    if tool_confirmation.is_some() {
+        return translated;
+    }
     let Some(content) = &event.llm_response.content else {
         return translated;
     };
@@ -824,7 +970,11 @@ fn translate_ag_ui_event(
     let mut thinking_seen = false;
     for (index, part) in content.parts.iter().enumerate() {
         match part {
-            adk_core::Part::Text { .. } if !text_seen => {
+            // Every text part of the event is one message, sent at the first.
+            adk_core::Part::Text { .. } => {
+                if text_seen {
+                    continue;
+                }
                 text_seen = true;
                 let text: String = content
                     .parts
@@ -871,7 +1021,10 @@ fn translate_ag_ui_event(
                     }));
                 }
             }
-            adk_core::Part::Thinking { .. } if !thinking_seen => {
+            adk_core::Part::Thinking { .. } => {
+                if thinking_seen {
+                    continue;
+                }
                 thinking_seen = true;
                 let thinking: String = content
                     .parts
@@ -964,6 +1117,11 @@ fn translate_ag_ui_event(
                 }
             }
             adk_core::Part::FunctionResponse { function_response, id, .. } => {
+                // A held call has no result yet: it arrives against the same tool call ID
+                // in the run that resumes it.
+                if adk_core::is_confirmation_pending(&function_response.response) {
+                    continue;
+                }
                 let tool_call_id =
                     id.clone().unwrap_or_else(|| format!("{}-tool-result-{}", event.id, index));
                 let response_content = serde_json::to_string(&function_response.response)
@@ -978,7 +1136,13 @@ fn translate_ag_ui_event(
                     "timestamp": timestamp,
                 }));
             }
-            _ => {}
+            // AG-UI 1.0 has no event for inline or file data, provider-executed tools, or
+            // embedded resources.
+            adk_core::Part::InlineData { .. }
+            | adk_core::Part::FileData { .. }
+            | adk_core::Part::ServerToolCall { .. }
+            | adk_core::Part::ServerToolResponse { .. }
+            | adk_core::Part::EmbeddedResource { .. } => {}
         }
     }
 
@@ -1133,10 +1297,17 @@ struct AgUiMessages {
 struct AgUiStream {
     deltas: adk_core::EventTextDeltas,
     messages: HashMap<(String, String), AgUiMessages>,
+    /// Calls the run held for approval, one per fingerprint, in the order held.
+    held: Vec<HeldCall>,
 }
 
 impl AgUiStream {
     fn translate(&mut self, event: &adk_core::Event, thread_id: &str, run_id: &str) -> Vec<Value> {
+        if let Some(request) = &event.actions.tool_confirmation {
+            let fingerprint = request.fingerprint();
+            self.held.retain(|held| held.request.fingerprint() != fingerprint);
+            self.held.push(HeldCall { request: request.clone(), agent: event.author.clone() });
+        }
         let key = (event.invocation_id.clone(), event.id.clone());
         let mut open = self.messages.remove(&key).unwrap_or_default();
         let mut delta = self.deltas.push(event);
@@ -1187,10 +1358,13 @@ fn build_runtime_sse_stream<S>(
     transport: UiTransportMode,
     session_id: String,
     ag_ui_input: Option<AgUiRunInput>,
+    decisions: AgUiDecisions,
 ) -> std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>
 where
     S: Stream<Item = adk_core::Result<adk_core::Event>> + Send + 'static + Unpin,
 {
+    let decision_updates: Vec<Value> =
+        decisions.updates.iter().cloned().map(decision_event).collect();
     let selected_thread_id =
         ag_ui_input.as_ref().and_then(|input| input.thread_id.clone()).unwrap_or(session_id);
     let selected_run_input = ag_ui_input.clone();
@@ -1248,6 +1422,9 @@ where
                             for activity_event in selected_activity_events.clone() {
                                 yield Ok(Event::default().data(activity_event.to_string()));
                             }
+                            for update in &decision_updates {
+                                yield Ok(Event::default().data(update.to_string()));
+                            }
                             started = true;
                         }
 
@@ -1268,6 +1445,9 @@ where
                                 "threadId": selected_thread_id,
                                 "runId": run_id,
                             }).to_string()));
+                            for update in &decision_updates {
+                                yield Ok(Event::default().data(update.to_string()));
+                            }
                         }
                         yield Ok(Event::default().data(json!({
                             "type": "RUN_ERROR",
@@ -1291,14 +1471,70 @@ where
                     "threadId": selected_thread_id,
                     "runId": run_id,
                 }).to_string()));
+                for update in &decision_updates {
+                    yield Ok(Event::default().data(update.to_string()));
+                }
             }
-            yield Ok(Event::default().data(json!({
+            let mut finished = json!({
                 "type": "RUN_FINISHED",
                 "threadId": selected_thread_id,
                 "runId": run_id,
-            }).to_string()));
+            });
+            // A run that stopped on held calls is not a success (spec 3.3 §10 S2).
+            if !ag_ui_stream.held.is_empty() {
+                finished["outcome"] = json!({
+                    "type": "interrupt",
+                    "interrupts": decisions.interrupts(&ag_ui_stream.held).await,
+                });
+            }
+            yield Ok(Event::default().data(finished.to_string()));
         }
     })
+}
+
+/// The stream of an AG-UI resume refused before its run started: `RUN_STARTED`, the
+/// decision updates, and a `RUN_ERROR` naming the refusal (spec 3.3 §10 S2, S-I2).
+fn refused_resume_stream(
+    thread_id: String,
+    run_id: String,
+    updates: Vec<Value>,
+    code: &'static str,
+    message: String,
+) -> std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> {
+    let mut events = vec![json!({ "type": "RUN_STARTED", "threadId": thread_id, "runId": run_id })];
+    events.extend(updates.into_iter().map(decision_event));
+    events.push(json!({
+        "type": "RUN_ERROR",
+        "threadId": thread_id,
+        "runId": run_id,
+        "message": message,
+        "code": code,
+    }));
+    Box::pin(futures::stream::iter(
+        events.into_iter().map(|event| Ok(Event::default().data(event.to_string()))),
+    ))
+}
+
+/// What a request's AG-UI stream needs for decisions: the approval service only for
+/// protocol-native AG-UI runs, whose held calls become interrupts (spec 3.3 §10 S2).
+fn ag_ui_decisions(
+    controller: &RuntimeController,
+    profile: UiProfile,
+    transport: UiTransportMode,
+    scope: adk_core::ApprovalScope,
+    authenticated: bool,
+) -> AgUiDecisions {
+    if profile != UiProfile::AgUi || transport != UiTransportMode::ProtocolNative {
+        return AgUiDecisions::default();
+    }
+    AgUiDecisions {
+        service: controller.approval_service.clone(),
+        scope: Some(scope),
+        // The caller the extractor authenticated is the session's owner: the session was
+        // looked up under its user ID.
+        show_arguments: authenticated,
+        updates: Vec::new(),
+    }
 }
 
 pub async fn run_sse(
@@ -1346,6 +1582,13 @@ pub(crate) async fn run_sse_for_request(
         // other users via the URL while keeping the path param as a fallback
         // for unauthenticated deployments (no extractor configured).
         let effective_user_id = request_context.as_ref().map_or(user_id, |rc| rc.user_id.clone());
+        let decisions = ag_ui_decisions(
+            &controller,
+            ui_profile,
+            transport,
+            adk_core::ApprovalScope::new(&app_name, &effective_user_id, &session_id),
+            request_context.is_some(),
+        );
 
         // Validate session exists
         controller
@@ -1393,6 +1636,10 @@ pub(crate) async fn run_sse_for_request(
         if let Some(request_context) = request_context {
             runner_builder = runner_builder.request_context(request_context);
         }
+        if let Some(service) = decisions.service.clone() {
+            runner_builder = runner_builder
+                .run_config(adk_core::RunConfig::builder().approval_service(service).build());
+        }
         let runner = runner_builder.build().map_err(adk_err_to_runtime)?;
 
         // Build content with attachments
@@ -1414,8 +1661,14 @@ pub(crate) async fn run_sse_for_request(
             .map_err(adk_err_to_runtime)?;
 
         // Convert to SSE stream
-        let sse_stream =
-            build_runtime_sse_stream(event_stream, ui_profile, transport, session_id.clone(), None);
+        let sse_stream = build_runtime_sse_stream(
+            event_stream,
+            ui_profile,
+            transport,
+            session_id.clone(),
+            None,
+            decisions,
+        );
 
         Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
     }
@@ -1474,34 +1727,88 @@ pub(crate) async fn run_sse_compat_for_request(
     // other users via the JSON payload while keeping the body param as a
     // fallback for unauthenticated deployments (no extractor configured).
     let effective_user_id = request_context.as_ref().map_or(user_id, |rc| rc.user_id.clone());
+    let mut decisions = ag_ui_decisions(
+        &controller,
+        ui_profile,
+        transport,
+        adk_core::ApprovalScope::new(&app_name, &effective_user_id, &session_id),
+        request_context.is_some(),
+    );
 
-    let resolved_new_message = req
-        .new_message
-        .clone()
-        .or_else(|| ag_ui_input.as_ref().and_then(new_message_from_ag_ui_input))
-        .ok_or_else(|| {
-            (
+    // Answers to the previous run's interrupts are decided before this run starts, so the
+    // run resumes the calls they allow (spec 3.3 §10 S2).
+    let resume = ag_ui_input.as_ref().and_then(|input| input.resume.as_ref());
+    let resuming = resume.is_some_and(|resume| !resume.entries().is_empty());
+    if let Some(resume) = resume.filter(|_| resuming) {
+        let Some(service) = decisions.service.clone() else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "an AG-UI resume needs the ag_ui profile with the protocol_native transport and \
+                 a server with an approval service (ServerBuilder::with_approval_service)"
+                    .to_string(),
+            ));
+        };
+        let Some(caller) = request_context.as_ref() else {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "an AG-UI resume decides approvals, which need an authenticated caller; \
+                 configure a RequestContextExtractor"
+                    .to_string(),
+            ));
+        };
+        let scope = adk_core::ApprovalScope::new(&app_name, &effective_user_id, &session_id);
+        // The session's owner decides: the extractor authenticated the user it runs for.
+        let approver = adk_core::principal::SubjectRef::human(effective_user_id.clone());
+        match apply_resume(service.as_ref(), &scope, &approver, &caller.scopes, resume.entries())
+            .await
+            .map_err(|reason| (StatusCode::BAD_REQUEST, reason))?
+        {
+            ResumeOutcome::Run(updates) => decisions.updates = updates,
+            ResumeOutcome::Refused { updates, code, message } => {
+                let input = ag_ui_input.as_ref();
+                let thread_id = input
+                    .and_then(|input| input.thread_id.clone())
+                    .unwrap_or_else(|| session_id.clone());
+                let run_id = input
+                    .and_then(|input| input.run_id.clone())
+                    .unwrap_or_else(|| format!("run-{}", Uuid::new_v4()));
+                let stream = refused_resume_stream(thread_id, run_id, updates, code, message);
+                return Ok(Sse::new(stream).keep_alive(KeepAlive::default()));
+            }
+        }
+    }
+
+    // A resume carries the client's whole history, whose last user message this session
+    // already answered, so it starts no new user turn unless one is sent as `newMessage`.
+    let content = match req.new_message.clone().or_else(|| {
+        if resuming { None } else { ag_ui_input.as_ref().and_then(new_message_from_ag_ui_input) }
+    }) {
+        Some(resolved_new_message) => {
+            // Log part info
+            let text_parts: Vec<_> =
+                resolved_new_message.parts.iter().filter(|p| p.text.is_some()).collect();
+            let data_parts: Vec<_> =
+                resolved_new_message.parts.iter().filter(|p| p.inline_data.is_some()).collect();
+            if !data_parts.is_empty() {
+                info!(
+                    text_parts = text_parts.len(),
+                    inline_data_parts = data_parts.len(),
+                    "processing request with inline data"
+                );
+            }
+            // Build content from message parts (includes both text and inline_data)
+            build_content_from_parts(&resolved_new_message.parts)?
+        }
+        // A blank turn resumes the held calls that now have a decision.
+        None if resuming => adk_core::Content::new("user").with_text(""),
+        None => {
+            return Err((
                 StatusCode::BAD_REQUEST,
                 "newMessage is required unless protocol-native ag_ui input supplies a user message"
                     .to_string(),
-            )
-        })?;
-
-    // Build content from message parts (includes both text and inline_data)
-    let content = build_content_from_parts(&resolved_new_message.parts)?;
-
-    // Log part info
-    let text_parts: Vec<_> =
-        resolved_new_message.parts.iter().filter(|p| p.text.is_some()).collect();
-    let data_parts: Vec<_> =
-        resolved_new_message.parts.iter().filter(|p| p.inline_data.is_some()).collect();
-    if !data_parts.is_empty() {
-        info!(
-            text_parts = text_parts.len(),
-            inline_data_parts = data_parts.len(),
-            "processing request with inline data"
-        );
-    }
+            ));
+        }
+    };
 
     let merged_state_delta = merge_runtime_state_delta(
         body_state_delta(req.state_delta.as_ref())?,
@@ -1545,12 +1852,16 @@ pub(crate) async fn run_sse_compat_for_request(
     let streaming_mode =
         if req.streaming { adk_core::StreamingMode::SSE } else { adk_core::StreamingMode::None };
 
+    let mut run_config = adk_core::RunConfig::builder().streaming_mode(streaming_mode);
+    if let Some(service) = decisions.service.clone() {
+        run_config = run_config.approval_service(service);
+    }
     let mut runner_builder = adk_runner::Runner::builder()
         .app_name(app_name)
         .agent(agent)
         .session_service(controller.config.session_service.clone())
         .governance(controller.config.governance.clone())
-        .run_config(adk_core::RunConfig::builder().streaming_mode(streaming_mode).build());
+        .run_config(run_config.build());
     if let Some(ref artifact_service) = controller.config.artifact_service {
         runner_builder = runner_builder.artifact_service(artifact_service.clone());
     }
@@ -1586,6 +1897,7 @@ pub(crate) async fn run_sse_compat_for_request(
         transport,
         session_id.clone(),
         ag_ui_input,
+        decisions,
     );
 
     Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))

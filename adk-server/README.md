@@ -509,7 +509,7 @@ Supported runtime profile values: `adk_ui` (default), `a2ui`, `ag_ui`, `mcp_apps
 
 Current support is intentionally tiered:
 - `a2ui` is a draft-aligned hybrid subset exposed through protocol-aware UI tool payloads.
-- `ag_ui` is a hybrid subset: the default stream remains the generic ADK wrapper, but clients can opt into `protocol_native` transport plus AG-UI run input fields on `/api/run_sse`.
+- `ag_ui` is a hybrid subset: the default stream remains the generic ADK wrapper, but clients can opt into `protocol_native` transport plus AG-UI run input fields on `/api/run_sse`. With `with_approval_service`, a protocol-native run ends on held calls with AG-UI `tool_call` interrupts naming their inbox entries, and the next run's `resume` decides them through the approval service, reporting each answer as a `CUSTOM` `adk.decision` event and a refused one as `RUN_ERROR` (spec 3.3 §10 S2; see [UI Tools](../docs/official_docs/tools/ui-tools.md#ag-ui-decisions)).
 - `mcp_apps` is a compatibility subset with `ui://` resource registration plus additive `initialize` / `message` / `update-model-context` bridge helpers, notification polling, list-changed host flows, and runtime request fields, not a full browser `postMessage` host bridge yet.
 
 Runtime transport values:
