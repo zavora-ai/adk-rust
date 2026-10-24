@@ -1,0 +1,63 @@
+[package]
+name = "adk-surface"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Agent surfaces for ADK-Rust: one engine that turns a kernel's sessions, decisions and activity into plain words for every surface, and the surfaces that show them"
+repository.workspace = true
+documentation = "https://docs.rs/adk-surface"
+readme = "README.md"
+keywords = ["adk", "agent", "approvals", "ui", "kernel"]
+categories = ["asynchronous", "web-programming"]
+
+# Spec 3.3 §6.1: one feature per surface, none on by default. The engine (feed,
+# projection, commands and the rules of §7.2 and §7.4) is always compiled.
+[features]
+default = []
+# The web home's HTTP API under `/api/surface` (spec 3.3 §5.1, §6): an Axum router mounted
+# with `ServerBuilder::add_api_routes`, the feed over server-sent events, and the OpenAPI
+# document the TypeScript types are generated from.
+web = ["dep:axum"]
+
+[dependencies]
+adk-core.workspace = true
+adk-session.workspace = true
+adk-runner.workspace = true
+# The control-plane client, the process table, freezing and the `/proc` ledger.
+adk-kernel.workspace = true
+# Modes, `Harness::set_mode` and standing rules for "Always allow".
+adk-harness.workspace = true
+async-trait.workspace = true
+axum = { version = "0.8", optional = true }
+chrono.workspace = true
+futures.workspace = true
+# JSON Schema for every projection and command type, so surfaces and third parties share
+# one contract (spec 3.3 §6).
+schemars = { version = "1.0", features = ["chrono04"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# Internal dev-deps are path-only (no version) so cargo strips them from the published
+# manifest.
+adk-devtools = { path = "../adk-devtools" }
+# The kernel-hosted harness of the scenario tests.
+adk-harness = { path = "../adk-harness", features = ["kernel"] }
+adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "openai", "gemini"] }
+adk-server = { path = "../adk-server", features = ["approvals"] }
+adk-session = { path = "../adk-session" }
+dotenvy = "0.15"
+http-body-util = "0.1"
+proptest = "1.5"
+tempfile = "3"
+tokio = { workspace = true, features = ["full"] }
+tower = { version = "0.4", features = ["util"] }
+
+[package.metadata.docs.rs]
+all-features = true

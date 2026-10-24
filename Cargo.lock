@@ -1111,6 +1111,7 @@ dependencies = [
  "adk-server",
  "adk-session",
  "adk-skill",
+ "adk-surface",
  "adk-telemetry",
  "adk-tool",
  "anyhow",
@@ -1270,6 +1271,36 @@ dependencies = [
  "tracing",
  "walkdir",
  "zip 9.0.4",
+]
+
+[[package]]
+name = "adk-surface"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "adk-devtools",
+ "adk-harness",
+ "adk-kernel",
+ "adk-model",
+ "adk-runner",
+ "adk-server",
+ "adk-session",
+ "async-trait",
+ "axum",
+ "chrono",
+ "dotenvy",
+ "futures",
+ "http-body-util",
+ "proptest",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tower 0.4.13",
+ "tracing",
+ "uuid 1.25.0",
 ]
 
 [[package]]
