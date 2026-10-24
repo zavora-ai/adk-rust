@@ -21,6 +21,15 @@
 //! same tool. A confirmation request that carries no call ID is rejected rather
 //! than approved under a weaker key.
 //!
+//! # Always allow
+//!
+//! With [`StandingPermissions`] configured, a call it may remember is also offered
+//! `allow_always` and `reject_always` (spec 3.3 §10 A1). Choosing one decides this call
+//! and asks [`StandingPermissions::remember`] to make the answer a standing rule, so the
+//! next identical call is not asked about. A call it may never remember — spending money,
+//! publishing, leaving plan mode, an unsandboxed retry — is offered allow once and deny
+//! only, and an "always" answer to a request that did not offer one is a denial.
+//!
 //! # SDK safety
 //!
 //! `session/request_permission` is a nested, agent-to-client request issued
@@ -31,12 +40,13 @@
 //! nested request does not block the connection's dispatch loop and the outer
 //! prompt response still completes.
 
-use adk_core::{ToolConfirmationDecision, ToolConfirmationRequest};
+use adk_core::{ApprovalScope, ToolConfirmationDecision, ToolConfirmationRequest};
 use agent_client_protocol::schema::v1::{
     PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
     SessionId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use agent_client_protocol::{Client, ConnectionTo};
+use async_trait::async_trait;
 
 use super::error::AcpServerError;
 use super::streamer::infer_tool_kind;
@@ -45,22 +55,143 @@ use super::streamer::infer_tool_kind;
 const ALLOW_OPTION_ID: &str = "acp-allow-once";
 /// Opaque option id for the one-time reject choice offered to the client.
 const REJECT_OPTION_ID: &str = "acp-reject-once";
+/// Opaque option id for the allow choice remembered as a standing rule.
+const ALLOW_ALWAYS_OPTION_ID: &str = "acp-allow-always";
+/// Opaque option id for the reject choice remembered as a standing rule.
+const REJECT_ALWAYS_OPTION_ID: &str = "acp-reject-always";
+
+/// Remembers an ACP client's "always" answer as a standing rule (spec 3.3 §10 A1).
+///
+/// The server asks [`offer`](Self::offer) before each permission request: an offer adds
+/// `allow_always` and `reject_always` to the request, and the client's choice of one is
+/// passed to [`remember`](Self::remember). `adk-harness`'s `HarnessAgent` implements it
+/// with its standing rules (spec 3.1 §7.5), bound to the tool's exact declaration and the
+/// session's person; `AcpServerConfigBuilder::standing_permissions` installs it.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_acp::server::{StandingOffer, StandingPermissions};
+/// use adk_core::{ApprovalScope, ToolConfirmationDecision, ToolConfirmationRequest};
+///
+/// /// Remembers nothing: every call is offered allow once and deny only.
+/// struct Never;
+///
+/// #[async_trait::async_trait]
+/// impl StandingPermissions for Never {
+///     async fn offer(
+///         &self,
+///         _scope: &ApprovalScope,
+///         _request: &ToolConfirmationRequest,
+///     ) -> Option<StandingOffer> {
+///         None
+///     }
+///
+///     async fn remember(
+///         &self,
+///         _scope: &ApprovalScope,
+///         _request: &ToolConfirmationRequest,
+///         _decision: ToolConfirmationDecision,
+///     ) -> adk_core::Result<()> {
+///         Ok(())
+///     }
+/// }
+/// ```
+#[async_trait]
+pub trait StandingPermissions: Send + Sync {
+    /// What an "always" answer to `request` would cover for the person in `scope`, or
+    /// `None` when the call may never be remembered, such as spending money, publishing,
+    /// leaving plan mode, or an unsandboxed retry.
+    async fn offer(
+        &self,
+        scope: &ApprovalScope,
+        request: &ToolConfirmationRequest,
+    ) -> Option<StandingOffer>;
+
+    /// Remembers `decision` as a standing rule covering what [`offer`](Self::offer)
+    /// described for `request`, owned by the person in `scope`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the rule cannot be created or stored; the call is then
+    /// decided once.
+    async fn remember(
+        &self,
+        scope: &ApprovalScope,
+        request: &ToolConfirmationRequest,
+        decision: ToolConfirmationDecision,
+    ) -> adk_core::Result<()>;
+}
+
+/// What an "always" answer would cover, offered by [`StandingPermissions::offer`]
+/// (spec 3.3 §10 A1).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_acp::server::StandingOffer;
+///
+/// let offer = StandingOffer::new("for this command (bash: cargo test …)");
+/// assert_eq!(offer.scope, "for this command (bash: cargo test …)");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct StandingOffer {
+    /// Completes "Always allow …" and "Always deny …" in plain words, such as
+    /// `for this command (bash: cargo test …)`.
+    pub scope: String,
+}
+
+impl StandingOffer {
+    /// An offer covering `scope`.
+    pub fn new(scope: impl Into<String>) -> Self {
+        Self { scope: scope.into() }
+    }
+}
+
+/// The client's answer to one permission request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PermissionAnswer {
+    /// The decision for this call.
+    pub(crate) decision: ToolConfirmationDecision,
+    /// Whether the client chose to remember it as a standing rule.
+    pub(crate) always: bool,
+}
 
 /// Bridges ADK tool confirmations to ACP `session/request_permission`.
 pub(crate) struct PermissionBridge;
 
 impl PermissionBridge {
-    /// The permission options offered to the client for every request.
+    /// The permission options offered for a request, in the words of spec 3.3 §8.2.
     ///
-    /// A one-time allow and a one-time reject are sufficient to express the ADK
-    /// [`ToolConfirmationDecision`] set (`Approve` / `Deny`); persistent
-    /// allow/reject are not offered because ADK applies a decision per resume,
-    /// not persistently.
-    fn options() -> Vec<PermissionOption> {
-        vec![
-            PermissionOption::new(ALLOW_OPTION_ID, "Allow", PermissionOptionKind::AllowOnce),
-            PermissionOption::new(REJECT_OPTION_ID, "Reject", PermissionOptionKind::RejectOnce),
-        ]
+    /// Allow once and deny are always offered. An `offer` adds the two remembered
+    /// answers, worded with what they cover.
+    fn options(offer: Option<&StandingOffer>) -> Vec<PermissionOption> {
+        let mut options = vec![PermissionOption::new(
+            ALLOW_OPTION_ID,
+            "Allow once",
+            PermissionOptionKind::AllowOnce,
+        )];
+        if let Some(offer) = offer {
+            options.push(PermissionOption::new(
+                ALLOW_ALWAYS_OPTION_ID,
+                format!("Always allow {}", offer.scope),
+                PermissionOptionKind::AllowAlways,
+            ));
+        }
+        options.push(PermissionOption::new(
+            REJECT_OPTION_ID,
+            "Deny",
+            PermissionOptionKind::RejectOnce,
+        ));
+        if let Some(offer) = offer {
+            options.push(PermissionOption::new(
+                REJECT_ALWAYS_OPTION_ID,
+                format!("Always deny {}", offer.scope),
+                PermissionOptionKind::RejectAlways,
+            ));
+        }
+        options
     }
 
     /// Build the ACP `session/request_permission` request describing a tool call
@@ -73,6 +204,7 @@ impl PermissionBridge {
     fn build_request(
         session_id: &SessionId,
         request: &ToolConfirmationRequest,
+        offer: Option<&StandingOffer>,
     ) -> RequestPermissionRequest {
         let call_id = request
             .function_call_id
@@ -86,34 +218,46 @@ impl PermissionBridge {
         RequestPermissionRequest::new(
             session_id.clone(),
             ToolCallUpdate::new(call_id, fields),
-            Self::options(),
+            Self::options(offer),
         )
     }
 
     /// Map an ACP permission outcome to an ADK decision.
     ///
-    /// A selected allow option (one-time or persistent) approves; a selected
-    /// reject option denies; a cancelled request denies (Requirement 7.4). An
-    /// unrecognized selected option id is treated as a denial so an
-    /// unauthorized call never executes.
-    fn decision_for(outcome: &RequestPermissionOutcome) -> ToolConfirmationDecision {
+    /// A selected allow option approves and a selected reject option denies; an
+    /// "always" option does so and asks to remember the answer, but only when the
+    /// request `offered_always`. A cancelled request denies (Requirement 7.4). An
+    /// unrecognized selected option id is treated as a denial so an unauthorized call
+    /// never executes.
+    fn answer_for(outcome: &RequestPermissionOutcome, offered_always: bool) -> PermissionAnswer {
+        let deny = PermissionAnswer { decision: ToolConfirmationDecision::Deny, always: false };
         match outcome {
             RequestPermissionOutcome::Selected(selected) => {
-                let id = selected.option_id.to_string();
-                if id == ALLOW_OPTION_ID {
-                    ToolConfirmationDecision::Approve
-                } else {
-                    ToolConfirmationDecision::Deny
+                match (selected.option_id.to_string().as_str(), offered_always) {
+                    (ALLOW_OPTION_ID, _) => PermissionAnswer {
+                        decision: ToolConfirmationDecision::Approve,
+                        always: false,
+                    },
+                    (ALLOW_ALWAYS_OPTION_ID, true) => PermissionAnswer {
+                        decision: ToolConfirmationDecision::Approve,
+                        always: true,
+                    },
+                    (REJECT_ALWAYS_OPTION_ID, true) => {
+                        PermissionAnswer { decision: ToolConfirmationDecision::Deny, always: true }
+                    }
+                    _ => deny,
                 }
             }
             // Cancellation and any future outcome variant map to deny so the
             // affected tool call is not executed.
-            _ => ToolConfirmationDecision::Deny,
+            _ => deny,
         }
     }
 
     /// Send a `session/request_permission` request to the client, await the
-    /// outcome, and return the mapped decision.
+    /// outcome, and return the mapped answer.
+    ///
+    /// `offer` adds the "always" options (spec 3.3 §10 A1).
     ///
     /// # Errors
     ///
@@ -123,14 +267,15 @@ impl PermissionBridge {
         connection: &ConnectionTo<Client>,
         session_id: &SessionId,
         request: &ToolConfirmationRequest,
-    ) -> Result<ToolConfirmationDecision, AcpServerError> {
-        let acp_request = Self::build_request(session_id, request);
+        offer: Option<&StandingOffer>,
+    ) -> Result<PermissionAnswer, AcpServerError> {
+        let acp_request = Self::build_request(session_id, request, offer);
         let response = connection
             .send_request(acp_request)
             .block_task()
             .await
             .map_err(|error| AcpServerError::Transport(error.to_string()))?;
-        Ok(Self::decision_for(&response.outcome))
+        Ok(Self::answer_for(&response.outcome, offer.is_some()))
     }
 }
 
@@ -152,10 +297,20 @@ mod tests {
         }
     }
 
+    fn selected(id: &str) -> RequestPermissionOutcome {
+        RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(PermissionOptionId::new(
+            id,
+        )))
+    }
+
+    fn once(decision: ToolConfirmationDecision) -> PermissionAnswer {
+        PermissionAnswer { decision, always: false }
+    }
+
     #[test]
     fn request_carries_function_call_id_kind_and_args() {
         let session = SessionId::new("session-1");
-        let request = PermissionBridge::build_request(&session, &confirmation());
+        let request = PermissionBridge::build_request(&session, &confirmation(), None);
         assert_eq!(request.tool_call.tool_call_id.to_string(), "call-42");
         assert_eq!(request.tool_call.fields.kind, Some(ToolKind::Delete));
         assert_eq!(request.tool_call.fields.status, Some(ToolCallStatus::Pending));
@@ -168,39 +323,94 @@ mod tests {
         let session = SessionId::new("session-1");
         let mut confirmation = confirmation();
         confirmation.function_call_id = None;
-        let request = PermissionBridge::build_request(&session, &confirmation);
+        let request = PermissionBridge::build_request(&session, &confirmation, None);
         assert_eq!(request.tool_call.tool_call_id.to_string(), "delete_file-call");
     }
 
     #[test]
+    fn options_use_the_surface_words_and_offer_always_only_with_an_offer() {
+        let options =
+            |offer: Option<&StandingOffer>| -> Vec<(String, String, PermissionOptionKind)> {
+                PermissionBridge::options(offer)
+                    .into_iter()
+                    .map(|option| (option.option_id.to_string(), option.name, option.kind))
+                    .collect()
+            };
+        assert_eq!(
+            options(None),
+            [
+                (ALLOW_OPTION_ID.into(), "Allow once".into(), PermissionOptionKind::AllowOnce),
+                (REJECT_OPTION_ID.into(), "Deny".into(), PermissionOptionKind::RejectOnce),
+            ]
+        );
+        let offer = StandingOffer::new("for this command (bash: cargo test …)");
+        assert_eq!(
+            options(Some(&offer)),
+            [
+                (ALLOW_OPTION_ID.into(), "Allow once".into(), PermissionOptionKind::AllowOnce),
+                (
+                    ALLOW_ALWAYS_OPTION_ID.into(),
+                    "Always allow for this command (bash: cargo test …)".into(),
+                    PermissionOptionKind::AllowAlways
+                ),
+                (REJECT_OPTION_ID.into(), "Deny".into(), PermissionOptionKind::RejectOnce),
+                (
+                    REJECT_ALWAYS_OPTION_ID.into(),
+                    "Always deny for this command (bash: cargo test …)".into(),
+                    PermissionOptionKind::RejectAlways
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn allow_selection_maps_to_approve() {
-        let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-            PermissionOptionId::new(ALLOW_OPTION_ID),
-        ));
-        assert_eq!(PermissionBridge::decision_for(&outcome), ToolConfirmationDecision::Approve);
+        assert_eq!(
+            PermissionBridge::answer_for(&selected(ALLOW_OPTION_ID), false),
+            once(ToolConfirmationDecision::Approve)
+        );
     }
 
     #[test]
     fn reject_selection_maps_to_deny() {
-        let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-            PermissionOptionId::new(REJECT_OPTION_ID),
-        ));
-        assert_eq!(PermissionBridge::decision_for(&outcome), ToolConfirmationDecision::Deny);
+        assert_eq!(
+            PermissionBridge::answer_for(&selected(REJECT_OPTION_ID), true),
+            once(ToolConfirmationDecision::Deny)
+        );
+    }
+
+    #[test]
+    fn always_selections_are_remembered_only_when_offered() {
+        assert_eq!(
+            PermissionBridge::answer_for(&selected(ALLOW_ALWAYS_OPTION_ID), true),
+            PermissionAnswer { decision: ToolConfirmationDecision::Approve, always: true }
+        );
+        assert_eq!(
+            PermissionBridge::answer_for(&selected(REJECT_ALWAYS_OPTION_ID), true),
+            PermissionAnswer { decision: ToolConfirmationDecision::Deny, always: true }
+        );
+        // A client answering "always" to a call that may never be remembered is denied.
+        for id in [ALLOW_ALWAYS_OPTION_ID, REJECT_ALWAYS_OPTION_ID] {
+            assert_eq!(
+                PermissionBridge::answer_for(&selected(id), false),
+                once(ToolConfirmationDecision::Deny)
+            );
+        }
     }
 
     #[test]
     fn cancellation_maps_to_deny() {
         assert_eq!(
-            PermissionBridge::decision_for(&RequestPermissionOutcome::Cancelled),
-            ToolConfirmationDecision::Deny
+            PermissionBridge::answer_for(&RequestPermissionOutcome::Cancelled, true),
+            once(ToolConfirmationDecision::Deny)
         );
     }
 
     #[test]
     fn unknown_selection_maps_to_deny() {
-        let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-            PermissionOptionId::new("made-up-id"),
-        ));
-        assert_eq!(PermissionBridge::decision_for(&outcome), ToolConfirmationDecision::Deny);
+        assert_eq!(
+            PermissionBridge::answer_for(&selected("made-up-id"), true),
+            once(ToolConfirmationDecision::Deny)
+        );
     }
 }

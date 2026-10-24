@@ -112,6 +112,10 @@ pub const UI_PROTOCOL_CAPABILITIES: &[UiProtocolCapabilitySpec] = &[
             "messages_snapshot",
             "stable_text_events",
             "stable_tool_events",
+            // Spec 3.3 §10 S2: held calls end the run as `tool_call` interrupts, and a
+            // `resume` decides their inbox entries (AG-UI 1.1 draft lifecycle).
+            "tool_call_interrupts",
+            "interrupt_resume",
         ],
         limitations: &[
             "Protocol-native AG-UI transport is opt-in and currently scoped to `adk-server`; the default runtime stream remains the generic ADK wrapper for compatibility.",

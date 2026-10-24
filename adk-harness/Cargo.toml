@@ -28,6 +28,9 @@ team = ["dep:adk-tool", "adk-agent/team-tools"]
 team-acp = ["team", "dep:adk-acp"]
 # Remote agents as members over A2A.
 team-a2a = ["team", "dep:adk-server"]
+# The harness served to editors over ACP: "always allow" and "always deny" become standing
+# rules (spec 3.3 §10 A1).
+acp-server = ["dep:adk-acp", "adk-acp/server"]
 # Goals started by cron, file-watch and webhook triggers (spec 3.1 §7.11).
 ambient = ["runner", "adk-agent/ambient"]
 # The Agent Kernel glue (spec 3.2 §10 HK1, HK3, §13 Q6): `Harness::kernel`, the partition

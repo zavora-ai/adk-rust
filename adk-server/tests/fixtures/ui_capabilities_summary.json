@@ -38,7 +38,9 @@
         "state_snapshot",
         "messages_snapshot",
         "stable_text_events",
-        "stable_tool_events"
+        "stable_tool_events",
+        "tool_call_interrupts",
+        "interrupt_resume"
       ],
       "limitations": [
         "Protocol-native AG-UI transport is opt-in and currently scoped to `adk-server`; the default runtime stream remains the generic ADK wrapper for compatibility.",

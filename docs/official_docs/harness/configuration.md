@@ -230,6 +230,7 @@ On `adk-harness`:
 | `mongodb`, `neo4j`, `firestore` | off | `mongodb://`, `neo4j://` and `firestore://` plan checkpoints |
 | `ambient` | off | Goals started by cron, file-watch and webhook triggers |
 | `team-acp`, `team-a2a` | off | ACP-compatible coding agents and remote A2A agents as members |
+| `acp-server` | off | The harness served to editors over ACP: "Always allow" and "Always deny" become standing rules ([ACP server](../acp/server.md#always-allow)) |
 | `docker` | off | The container shell, `ShellIsolation::Container` (see [Shell and sandbox](shell-and-sandbox.md#the-container-shell)) |
 | `skills-registry`, `memory-graph` | off | Registry skills, graph memory |
 

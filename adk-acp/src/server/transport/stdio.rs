@@ -2478,4 +2478,320 @@ mod tests {
         assert_eq!(response["error"]["code"], -32602, "got {response}");
         assert!(response["error"]["data"].is_string(), "got {response}");
     }
+
+    // ----- "Always allow" as a standing rule (spec 3.3 §10 A1) -----
+
+    /// Answers remembered as rules over a tool and its exact arguments; `publish` calls
+    /// are never remembered. Also the run's tool policy, as a harness's standing rules are.
+    #[derive(Debug, Default)]
+    struct RememberedAnswers {
+        rules: Mutex<Vec<(String, serde_json::Value, ToolConfirmationDecision)>>,
+        owners: Mutex<Vec<adk_core::ApprovalScope>>,
+    }
+
+    #[async_trait]
+    impl crate::server::StandingPermissions for RememberedAnswers {
+        async fn offer(
+            &self,
+            _scope: &adk_core::ApprovalScope,
+            request: &ToolConfirmationRequest,
+        ) -> Option<crate::server::StandingOffer> {
+            (request.tool_name != "publish").then(|| {
+                crate::server::StandingOffer::new(format!(
+                    "for this command ({})",
+                    request.args["command"].as_str().unwrap_or_default()
+                ))
+            })
+        }
+
+        async fn remember(
+            &self,
+            scope: &adk_core::ApprovalScope,
+            request: &ToolConfirmationRequest,
+            decision: ToolConfirmationDecision,
+        ) -> AdkResult<()> {
+            self.owners.lock().expect("owners lock").push(scope.clone());
+            self.rules.lock().expect("rules lock").push((
+                request.tool_name.clone(),
+                request.args.clone(),
+                decision,
+            ));
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl adk_core::ToolPolicy for RememberedAnswers {
+        async fn evaluate(
+            &self,
+            request: &adk_core::ToolPolicyRequest,
+        ) -> adk_core::PolicyDecision {
+            let rules = self.rules.lock().expect("rules lock");
+            match rules
+                .iter()
+                .find(|(tool, args, _)| *tool == request.tool_name && *args == request.args)
+            {
+                Some((_, _, ToolConfirmationDecision::Approve)) => adk_core::PolicyDecision::Allow,
+                Some((_, _, ToolConfirmationDecision::Deny)) => {
+                    adk_core::PolicyDecision::Deny { reason: "always denied".into() }
+                }
+                None => adk_core::PolicyDecision::RequireApproval { reason: "ask first".into() },
+            }
+        }
+    }
+
+    /// An agent run under the remembered answers as its tool policy.
+    struct GovernedAgent {
+        inner: Arc<dyn AdkAgent>,
+        rules: Arc<RememberedAnswers>,
+    }
+
+    #[async_trait]
+    impl AdkAgent for GovernedAgent {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+
+        fn description(&self) -> &str {
+            self.inner.description()
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn AdkAgent>] {
+            self.inner.sub_agents()
+        }
+
+        fn configure_run(&self, _agent_name: &str, config: &mut adk_core::RunConfig) {
+            config.tool_policy = Some(self.rules.clone());
+        }
+
+        async fn run(&self, ctx: Arc<dyn InvocationContext>) -> AdkResult<EventStream> {
+            self.inner.run(ctx).await
+        }
+    }
+
+    /// Replies with the scripted contents in order.
+    struct ScriptModel(Mutex<std::collections::VecDeque<Content>>);
+
+    #[async_trait]
+    impl adk_core::Llm for ScriptModel {
+        fn name(&self) -> &str {
+            "script"
+        }
+
+        async fn generate_content(
+            &self,
+            _request: adk_core::LlmRequest,
+            _stream: bool,
+        ) -> AdkResult<adk_core::LlmResponseStream> {
+            let content = self
+                .0
+                .lock()
+                .expect("script lock")
+                .pop_front()
+                .unwrap_or_else(|| Content::new("model").with_text("script exhausted"));
+            let response = adk_core::LlmResponse {
+                content: Some(content),
+                turn_complete: true,
+                ..Default::default()
+            };
+            Ok(Box::pin(futures::stream::iter([Ok(response)])))
+        }
+    }
+
+    /// Records each command it runs.
+    struct CommandTool {
+        name: &'static str,
+        ran: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl adk_core::Tool for CommandTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn description(&self) -> &str {
+            "Runs a command"
+        }
+
+        async fn execute(
+            &self,
+            _ctx: Arc<dyn adk_core::ToolContext>,
+            args: serde_json::Value,
+        ) -> AdkResult<serde_json::Value> {
+            let command = args["command"].as_str().unwrap_or_default().to_string();
+            self.ran.lock().expect("ran lock").push(format!("{}: {command}", self.name));
+            Ok(serde_json::json!({"ok": true}))
+        }
+    }
+
+    fn call(id: &str, tool: &str, command: &str) -> Content {
+        Content {
+            role: "model".to_string(),
+            parts: vec![adk_core::Part::FunctionCall {
+                name: tool.to_string(),
+                args: serde_json::json!({"command": command}),
+                id: Some(id.to_string()),
+                thought_signature: None,
+            }],
+        }
+    }
+
+    /// Sends each prompt in one session and answers every permission request with
+    /// "Always allow" when it is offered, otherwise "Allow once"; returns every request.
+    async fn drive_prompts(
+        config: AcpServerConfig,
+        prompts: &'static [&'static str],
+    ) -> Vec<RequestPermissionRequest> {
+        let capabilities = CapabilitiesBuilder::build(&config);
+        let handler =
+            Arc::new(AcpSessionHandler::new(&config, CancellationToken::new()).expect("handler"));
+        let asked = Arc::new(Mutex::new(Vec::<RequestPermissionRequest>::new()));
+        let asked_by_client = asked.clone();
+        let (server_channel, client_channel) = Channel::duplex();
+        let server =
+            serve_connection(handler, capabilities, "governed".into(), "".into(), server_channel);
+        let client = Client
+            .builder()
+            .on_receive_request(
+                move |request: RequestPermissionRequest,
+                      responder: Responder<RequestPermissionResponse>,
+                      _connection: ConnectionTo<Agent>| {
+                    let asked = asked_by_client.clone();
+                    async move {
+                        let choice =
+                            [PermissionOptionKind::AllowAlways, PermissionOptionKind::AllowOnce]
+                                .into_iter()
+                                .find_map(|kind| {
+                                    request.options.iter().find(|option| option.kind == kind)
+                                })
+                                .expect("an allow option")
+                                .option_id
+                                .clone();
+                        asked.lock().expect("asked lock").push(request);
+                        responder.respond(RequestPermissionResponse::new(
+                            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                                choice,
+                            )),
+                        ))
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .connect_with(client_channel, move |connection: ConnectionTo<Agent>| async move {
+                connection
+                    .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                    .block_task()
+                    .await?;
+                let cwd = std::env::current_dir().expect("absolute cwd");
+                let session =
+                    connection.send_request(NewSessionRequest::new(cwd)).block_task().await?;
+                for prompt in prompts {
+                    let response = connection
+                        .send_request(PromptRequest::new(
+                            session.session_id.clone(),
+                            vec![ContentBlock::Text(TextContent::new(*prompt))],
+                        ))
+                        .block_task()
+                        .await?;
+                    assert_eq!(response.stop_reason, StopReason::EndTurn);
+                }
+                Ok(())
+            });
+        let server_task = tokio::spawn(server);
+        tokio::time::timeout(std::time::Duration::from_secs(5), client)
+            .await
+            .expect("prompts completed before timeout")
+            .expect("official ACP client completed");
+        server_task.abort();
+        let _ = server_task.await;
+        asked.lock().expect("asked lock").clone()
+    }
+
+    /// An ACP client picks "Always allow" for the test command: the answer becomes a rule
+    /// for the session's person, the next identical call runs without asking, and a publish
+    /// call, which may never be remembered, is still asked about and offered no "always".
+    #[tokio::test]
+    async fn always_allow_creates_a_rule_and_the_next_identical_call_is_not_asked() {
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let model = ScriptModel(Mutex::new(
+            [
+                call("call-1", "run_command", "cargo test"),
+                Content::new("model").with_text("tests pass"),
+                call("call-2", "run_command", "cargo test"),
+                Content::new("model").with_text("tests pass again"),
+                call("call-3", "publish", "cargo publish"),
+                Content::new("model").with_text("published"),
+            ]
+            .into(),
+        ));
+        let inner = adk_agent::LlmAgentBuilder::new("governed")
+            .model(Arc::new(model))
+            .tool(Arc::new(CommandTool { name: "run_command", ran: ran.clone() }))
+            .tool(Arc::new(CommandTool { name: "publish", ran: ran.clone() }))
+            .build()
+            .expect("agent");
+        let rules = Arc::new(RememberedAnswers::default());
+        let config = AcpServerConfigBuilder::new()
+            .agent(Arc::new(GovernedAgent { inner: Arc::new(inner), rules: rules.clone() }))
+            .session_service(Arc::new(adk_session::InMemorySessionService::new()))
+            .agent_name("governed")
+            .user_id("alice")
+            .standing_permissions(rules.clone())
+            .build()
+            .expect("valid config");
+
+        let asked = drive_prompts(config, &["run the tests", "run them again", "publish it"]).await;
+
+        let asked_about: Vec<(String, Vec<PermissionOptionKind>)> = asked
+            .iter()
+            .map(|request| {
+                (
+                    request.tool_call.tool_call_id.to_string(),
+                    request.options.iter().map(|option| option.kind).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            asked_about,
+            [
+                (
+                    "call-1".to_string(),
+                    vec![
+                        PermissionOptionKind::AllowOnce,
+                        PermissionOptionKind::AllowAlways,
+                        PermissionOptionKind::RejectOnce,
+                        PermissionOptionKind::RejectAlways,
+                    ]
+                ),
+                // call-2 is not asked about: the rule allows it.
+                (
+                    "call-3".to_string(),
+                    vec![PermissionOptionKind::AllowOnce, PermissionOptionKind::RejectOnce]
+                ),
+            ]
+        );
+        assert_eq!(
+            asked[0].options[1].name, "Always allow for this command (cargo test)",
+            "the option says what it covers"
+        );
+        assert_eq!(
+            *ran.lock().expect("ran lock"),
+            ["run_command: cargo test", "run_command: cargo test", "publish: cargo publish"]
+        );
+        assert_eq!(
+            *rules.rules.lock().expect("rules lock"),
+            [(
+                "run_command".to_string(),
+                serde_json::json!({"command": "cargo test"}),
+                ToolConfirmationDecision::Approve
+            )],
+            "one rule, from the one 'always' answer"
+        );
+        let owners = rules.owners.lock().expect("owners lock");
+        assert_eq!(
+            (owners[0].app_name.as_str(), owners[0].user_id.as_str()),
+            ("governed", "alice")
+        );
+    }
 }

@@ -1,4 +1,5 @@
 pub mod a2a;
+mod ag_ui_decisions;
 pub mod apps;
 pub mod artifacts;
 pub mod debug;

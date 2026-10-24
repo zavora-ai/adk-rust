@@ -337,9 +337,16 @@ cargo check --manifest-path examples/acp_server/Cargo.toml
 - The ACP server bridges ADK tool confirmations to native ACP permission
   requests. When the agent pauses on a `ToolConfirmationRequest`, the server
   sends a `session/request_permission` titled `Run tool '{name}'` with the
-  options `acp-allow-once` and `acp-reject-once`, awaits the outcome, and resumes
-  the turn with the mapped decision: `acp-allow-once` approves; any other
-  selection, and a cancellation, deny. Each outcome is recorded under the call's
+  options **Allow once** (`acp-allow-once`) and **Deny** (`acp-reject-once`),
+  awaits the outcome, and resumes the turn with the mapped decision:
+  `acp-allow-once` approves; any other selection, and a cancellation, deny.
+  With `AcpServerConfigBuilder::standing_permissions`, a call that may be
+  remembered also offers `acp-allow-always` and `acp-reject-always`, which decide
+  the call and remember the answer as a standing rule (spec 3.3 §10 A1);
+  `adk-harness`'s `acp-server` feature implements it with the harness's standing
+  rules, and never offers "always" for a payment, leaving plan mode, a memory
+  write, a desktop action, a protected edit, or an unsandboxed retry. Each
+  outcome is recorded under the call's
   function-call id and bound to the call's fingerprint — the acting agent, the
   tool's origin, the tool name, and the arguments — so a reused call id on
   another agent's call, or on a tool another MCP server publishes, is not

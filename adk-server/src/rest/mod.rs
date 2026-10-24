@@ -487,6 +487,8 @@ pub struct ServerBuilder {
     cron_state: Option<crate::background::CronState>,
     #[cfg(feature = "webhook-ingress")]
     webhook_ingress: Option<crate::webhooks::WebhookIngress>,
+    #[cfg(feature = "approvals")]
+    approval_service: Option<Arc<dyn adk_core::ApprovalService>>,
 }
 
 impl ServerBuilder {
@@ -510,6 +512,8 @@ impl ServerBuilder {
             cron_state: None,
             #[cfg(feature = "webhook-ingress")]
             webhook_ingress: None,
+            #[cfg(feature = "approvals")]
+            approval_service: None,
         }
     }
 
@@ -750,6 +754,11 @@ impl ServerBuilder {
     /// Mount the approval inbox endpoints for `service` under `/api/approvals`, behind
     /// the auth middleware. See [`crate::approvals`] for the routes.
     ///
+    /// Protocol-native AG-UI runs route the calls they hold to `service` as well: each ends
+    /// the run with an AG-UI interrupt naming its inbox entry, and a later AG-UI `resume`
+    /// decides the entry (spec 3.3 §10 S2,
+    /// [`RuntimeController::with_approval_service`]).
+    ///
     /// The endpoints need an authenticated caller, so configure a
     /// `RequestContextExtractor`; without one every route answers `401`. Run
     /// [`spawn_approval_ticker`](crate::approvals::spawn_approval_ticker) as well so
@@ -761,7 +770,8 @@ impl ServerBuilder {
     /// let app = ServerBuilder::new(config).with_approval_service(service).build();
     /// ```
     #[cfg(feature = "approvals")]
-    pub fn with_approval_service(self, service: Arc<dyn adk_core::ApprovalService>) -> Self {
+    pub fn with_approval_service(mut self, service: Arc<dyn adk_core::ApprovalService>) -> Self {
+        self.approval_service = Some(service.clone());
         self.add_api_routes(crate::approvals::approvals_router(
             crate::approvals::ApprovalEndpoints::new(service),
         ))
@@ -798,6 +808,11 @@ impl ServerBuilder {
         let config = &self.config;
         let session_controller = SessionController::new(config.session_service.clone());
         let runtime_controller = RuntimeController::new(config.clone());
+        #[cfg(feature = "approvals")]
+        let runtime_controller = match &self.approval_service {
+            Some(service) => runtime_controller.with_approval_service(service.clone()),
+            None => runtime_controller,
+        };
         let apps_controller = AppsController::new(config.clone());
         let artifacts_controller = ArtifactsController::new(config.clone());
         let debug_controller = DebugController::new(config.clone());

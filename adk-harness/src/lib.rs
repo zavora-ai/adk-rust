@@ -59,6 +59,8 @@
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "acp-server")]
+mod acp;
 mod agent;
 mod audit;
 mod builder;

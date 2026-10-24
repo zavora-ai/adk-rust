@@ -24,6 +24,7 @@ use adk_session::SessionService;
 
 use super::error::AcpServerError;
 use super::modes::SessionControls;
+use super::permission::StandingPermissions;
 
 /// Transport selection for the ACP Server.
 #[derive(Clone, Debug, Default)]
@@ -61,6 +62,11 @@ pub struct AcpServerConfig {
     /// configuration options, preserving capability accuracy for agents that
     /// expose no interactive session controls.
     pub session_controls: Option<Arc<dyn SessionControls>>,
+    /// Optional store for "always" answers to permission requests (spec 3.3 §10 A1).
+    ///
+    /// When `None` (the default), every permission request offers allow once and deny
+    /// only.
+    pub standing_permissions: Option<Arc<dyn StandingPermissions>>,
 }
 
 /// Builder for [`AcpServerConfig`] with validation.
@@ -84,6 +90,7 @@ pub struct AcpServerConfigBuilder {
     shutdown_timeout: Duration,
     transport: TransportConfig,
     session_controls: Option<Arc<dyn SessionControls>>,
+    standing_permissions: Option<Arc<dyn StandingPermissions>>,
 }
 
 impl Default for AcpServerConfigBuilder {
@@ -105,6 +112,7 @@ impl AcpServerConfigBuilder {
             shutdown_timeout: Duration::from_secs(30),
             transport: TransportConfig::Stdio,
             session_controls: None,
+            standing_permissions: None,
         }
     }
 
@@ -164,6 +172,26 @@ impl AcpServerConfigBuilder {
         self
     }
 
+    /// Offer "always allow" and "always deny" on permission requests for the calls
+    /// `standing` may remember, and remember those answers through it as standing rules
+    /// (spec 3.3 §10 A1).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // A harness remembers answers as its own standing rules.
+    /// let harness = Arc::new(HarnessAgent::builder("harness").model(model).build()?);
+    /// let config = AcpServerConfigBuilder::new()
+    ///     .agent(harness.clone())
+    ///     .session_service(sessions)
+    ///     .standing_permissions(harness)
+    ///     .build()?;
+    /// ```
+    pub fn standing_permissions(mut self, standing: Arc<dyn StandingPermissions>) -> Self {
+        self.standing_permissions = Some(standing);
+        self
+    }
+
     /// Build the configuration, validating all required fields.
     ///
     /// # Errors
@@ -203,6 +231,7 @@ impl AcpServerConfigBuilder {
             shutdown_timeout: self.shutdown_timeout,
             transport: self.transport,
             session_controls: self.session_controls,
+            standing_permissions: self.standing_permissions,
         })
     }
 }

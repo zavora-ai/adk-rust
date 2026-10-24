@@ -30,7 +30,7 @@ use super::modes::{
     self, SessionControls, config_state_key, config_value_is_valid, mode_is_advertised,
     option_with_current_value,
 };
-use super::permission::PermissionBridge;
+use super::permission::{PermissionBridge, StandingPermissions};
 use super::streamer::ResponseStreamer;
 use agent_client_protocol::schema::v1::{
     AvailableCommandsUpdate, ConfigOptionUpdate, CurrentModeUpdate, SessionConfigId,
@@ -80,6 +80,8 @@ pub struct AcpSessionHandler {
     sessions: Arc<Mutex<HashMap<String, SessionState>>>,
     shutdown_token: CancellationToken,
     session_controls: Option<Arc<dyn SessionControls>>,
+    /// Where "always" answers to permission requests are remembered (spec 3.3 §10 A1).
+    standing_permissions: Option<Arc<dyn StandingPermissions>>,
     /// Prompts running now, which shutdown waits for.
     running_prompts: tokio::sync::watch::Sender<usize>,
 }
@@ -115,6 +117,7 @@ impl AcpSessionHandler {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             shutdown_token,
             session_controls: config.session_controls.clone(),
+            standing_permissions: config.standing_permissions.clone(),
             running_prompts: tokio::sync::watch::channel(0).0,
         })
     }
@@ -685,13 +688,27 @@ impl AcpSessionHandler {
             // `session/request_permission` to the client, await the outcome, and
             // record the decision (cancellation → deny) against the exact call for
             // the next resume run.
+            let scope = adk_core::ApprovalScope::new(
+                &self.app_name,
+                &self.user_id,
+                request.session_id.to_string(),
+            );
             for confirmation in &pending {
                 if cancellation_token.is_cancelled() {
                     return Ok(StopReason::Cancelled);
                 }
-                let decision =
-                    PermissionBridge::request(&connection, &request.session_id, confirmation)
-                        .await?;
+                // A call the store may remember is also offered "always" (spec 3.3 §10 A1).
+                let offer = match &self.standing_permissions {
+                    Some(standing) => standing.offer(&scope, confirmation).await,
+                    None => None,
+                };
+                let answer = PermissionBridge::request(
+                    &connection,
+                    &request.session_id,
+                    confirmation,
+                    offer.as_ref(),
+                )
+                .await?;
                 // A confirmation without a call ID cannot be bound to one call, so
                 // there is nothing safe to authorize.
                 let Some(call_id) = confirmation.function_call_id.clone() else {
@@ -701,8 +718,16 @@ impl AcpSessionHandler {
                             .into(),
                     ));
                 };
+                if answer.always
+                    && let Some(standing) = &self.standing_permissions
+                    && let Err(error) =
+                        standing.remember(&scope, confirmation, answer.decision).await
+                {
+                    // The person decided this call; only remembering the answer failed.
+                    warn!(%error, tool.name = %confirmation.tool_name, "could not remember the ACP client's answer; it applies to this call only");
+                }
                 fingerprints.insert(call_id.clone(), confirmation.fingerprint());
-                decisions.insert(call_id, decision);
+                decisions.insert(call_id, answer.decision);
             }
             is_resume = true;
         }
