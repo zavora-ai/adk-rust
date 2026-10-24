@@ -1046,7 +1046,8 @@ mod tests {
 
     /// A WOF-compressed file is backed by `IO_REPARSE_TAG_WOF`, an in-place tag like a
     /// cloud placeholder's. A real placeholder needs a cloud sync provider registered and
-    /// connected through the Cloud Filter API, which a unit test cannot stand up.
+    /// connected through the Cloud Filter API, which a unit test cannot stand up. WOF hides
+    /// the reparse point from the handle, so the read and write take the ordinary path.
     #[cfg(windows)]
     #[tokio::test]
     async fn an_in_place_reparse_point_is_read_and_written() {
@@ -1088,6 +1089,132 @@ mod tests {
         ws.write_contained(&target, b"rewritten").await.unwrap();
 
         assert_eq!(std::fs::read_to_string(&packed).unwrap(), "rewritten");
+    }
+
+    /// Sets a reparse point on the file `path` whose tag no filter on the volume serves: a
+    /// third-party tag, neither a link nor a junction, whose file keeps its own data.
+    /// Returns the tag.
+    #[cfg(windows)]
+    fn set_unserved_reparse_point(path: &Path) -> u32 {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+        use windows_sys::Win32::System::Ioctl::FSCTL_SET_REPARSE_POINT;
+
+        // Bit 31 clear: not a Microsoft tag, so its buffer carries a GUID. Bit 29 clear: not
+        // a name surrogate.
+        const TAG: u32 = 0x0000_7ADC;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .unwrap();
+        // REPARSE_GUID_DATA_BUFFER: the tag, the data's length, two reserved bytes, the
+        // owner's GUID, then the data.
+        let data = b"adk-devtools test placeholder";
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&TAG.to_le_bytes());
+        buffer.extend_from_slice(&(data.len() as u16).to_le_bytes());
+        buffer.extend_from_slice(&[0, 0]);
+        buffer.extend_from_slice(&[0x41; 16]);
+        buffer.extend_from_slice(data);
+        let mut returned = 0u32;
+        // SAFETY: the handle is open; the input buffer is readable for its length; there is
+        // no output buffer, and `returned` is writable.
+        let set = unsafe {
+            DeviceIoControl(
+                file.as_raw_handle(),
+                FSCTL_SET_REPARSE_POINT,
+                buffer.as_ptr().cast(),
+                buffer.len() as u32,
+                std::ptr::null_mut(),
+                0,
+                &raw mut returned,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(set, 0, "FSCTL_SET_REPARSE_POINT failed: {}", std::io::Error::last_os_error());
+        TAG
+    }
+
+    /// The reparse tag a handle opened on `path` itself reports, `None` for no reparse point.
+    #[cfg(windows)]
+    fn visible_reparse_tag(path: &Path) -> Option<u32> {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_OPEN_REPARSE_POINT,
+            FileAttributeTagInfo, GetFileInformationByHandleEx,
+        };
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .unwrap();
+        let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
+        // SAFETY: `tag` is writable and the size passed is its own; the handle is open.
+        let queried = unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                FileAttributeTagInfo,
+                (&raw mut tag).cast(),
+                size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+            )
+        };
+        assert_ne!(queried, 0, "{}", std::io::Error::last_os_error());
+        (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0).then_some(tag.ReparseTag)
+    }
+
+    /// An in-place reparse point the handle shows — neither a link nor a junction — passes
+    /// the open's checks, and the file tools read and write its content through a reopen of
+    /// the handle without `FILE_FLAG_OPEN_REPARSE_POINT`, which the tag's filter serves (spec
+    /// 3.2 §10 W6). WOF hides its tag from the handle, so the test above takes the ordinary
+    /// path; a third-party tag stays visible. No filter serves it, so the reopen fails: the
+    /// read is refused and the write leaves the content in place rather than truncate it.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn an_unserved_in_place_reparse_point_fails_closed_at_the_reopen() {
+        use std::io::Read as _;
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Foundation::ERROR_STOPPED_ON_SYMLINK;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+        let f = swap_fixture();
+        let path = f.root.join("placeholder.txt");
+        std::fs::write(&path, "placeholder content").unwrap();
+        let tag = set_unserved_reparse_point(&path);
+        assert_eq!(visible_reparse_tag(&path), Some(tag), "the handle shows the tag");
+        assert!(!crate::beneath::is_name_surrogate(tag));
+        let ws = Workspace::new(&f.root);
+        // `resolve_target` canonicalizes the path, which opens through the point and fails;
+        // the tools open the canonical target it returns for an ordinary file.
+        let target = ws.root().join("placeholder.txt");
+
+        let read = ws.read_contained(&target).await;
+        let write = ws.write_contained(&target, b"rewritten").await;
+
+        // An `Io` error other than the link refusal: the open passed its checks, and the
+        // reopen through the unserved tag failed.
+        let stopped = Some(ERROR_STOPPED_ON_SYMLINK as i32);
+        assert!(
+            matches!(&read, Err(DevToolError::Io(error)) if error.raw_os_error() != stopped),
+            "{read:?}"
+        );
+        assert!(
+            matches!(&write, Err(DevToolError::Io(error)) if error.raw_os_error() != stopped),
+            "{write:?}"
+        );
+        let mut content = String::new();
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&path)
+            .unwrap()
+            .read_to_string(&mut content)
+            .unwrap();
+        assert_eq!(content, "placeholder content", "the refused write truncated the file");
     }
 
     /// A tool context that names a session and an agent.

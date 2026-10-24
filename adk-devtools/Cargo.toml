@@ -37,6 +37,10 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"
 
+# The in-place reparse point test sets a reparse point (spec 3.2 §10 W6).
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_IO", "Win32_System_Ioctl"] }
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }
