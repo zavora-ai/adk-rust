@@ -3,8 +3,9 @@
 //! A pairing code is twelve characters of Crockford base32 (60 bits), shown as
 //! `ABCD-EFGH-2345`; the stores keep only its SHA-256. Sixty bits keep a waiting code out of
 //! reach of a reader of the store, who would have to try about 10^18 hashes in the code's
-//! lifetime, a year and more of a current GPU's time. A device token is `adkd_<id>_<secret>`, the secret 32
-//! random bytes in hex; the stores keep only the secret's SHA-256, compared in constant time.
+//! lifetime, a year and more of a current GPU's time. A device token is
+//! `adkd_<id>_<secret>`, the secret 32 random bytes in hex; the stores keep only the
+//! secret's SHA-256, compared in constant time.
 
 use sha2::{Digest as _, Sha256};
 
@@ -119,7 +120,7 @@ mod tests {
         assert_eq!(seen.len(), 200, "codes repeat");
     }
 
-    /// Review finding 7: a waiting code carries sixty bits, so enumerating its SHA-256 takes
+    /// A waiting code carries sixty bits, so enumerating its SHA-256 takes
     /// far longer than the code lives.
     #[test]
     fn a_code_carries_sixty_bits() {

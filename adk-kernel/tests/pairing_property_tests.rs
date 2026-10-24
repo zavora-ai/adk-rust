@@ -128,7 +128,7 @@ mod cards {
 
         /// No argument value survives into a card's summary: values of any length, with
         /// newlines, tabs and other control characters inside them, standing as words of
-        /// their own (review findings 2 and 12).
+        /// their own.
         #[test]
         fn a_card_summary_never_carries_an_argument_value(
             values in prop::collection::vec("[A-Za-z0-9@._-]{1,8}([\n\r\t\u{7} ][A-Za-z0-9@._-]{1,8}){0,2}", 1..5),

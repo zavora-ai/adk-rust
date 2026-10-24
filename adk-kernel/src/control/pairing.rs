@@ -582,7 +582,7 @@ mod channels {
     }
 
     /// Dismisses the waiting chat account `id`: its code stops working and its place in the
-    /// queue is freed (review finding 11).
+    /// queue is freed.
     pub(super) async fn dismiss(
         State(backend): Backend,
         caller: Caller,

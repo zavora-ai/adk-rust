@@ -149,7 +149,7 @@ async fn eventually(what: &str, mut probe: impl FnMut() -> bool) {
     panic!("timed out waiting for {what}");
 }
 
-/// Review finding 3: a call that moves money is carded with no answers, and an answer forged
+/// A call that moves money is carded with no answers, and an answer forged
 /// from an everyday card is refused; the decision still waits for the home.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn chat_never_decides_money() {
@@ -188,7 +188,7 @@ async fn chat_never_decides_money() {
     }
 }
 
-/// Review finding 3: on the kernel, a tool a mounted driver declares `financial` moves money.
+/// On the kernel, a tool a mounted driver declares `financial` moves money.
 #[cfg(feature = "drivers")]
 #[tokio::test]
 async fn a_financial_driver_tool_moves_money_on_the_kernel() {
@@ -228,7 +228,7 @@ async fn a_financial_driver_tool_moves_money_on_the_kernel() {
     assert!(!ChannelHost::moves_money(&kernel, &request("send_email")));
 }
 
-/// Review finding 8: a gateway stopped and started again still rings the doorbell, and a
+/// A gateway stopped and started again still rings the doorbell, and a
 /// second start sends each reply once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_restarted_gateway_rings_and_a_second_start_replies_once() {
@@ -257,7 +257,7 @@ async fn a_restarted_gateway_rings_and_a_second_start_replies_once() {
     assert_eq!(replies, 1, "a second start sends no second reply");
 }
 
-/// Review finding 9: a decision the doorbell queued before the gateway started, and
+/// A decision the doorbell queued before the gateway started, and
 /// `ring_waiting` found after, is carded once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_decision_queued_before_start_is_carded_once() {
@@ -274,7 +274,7 @@ async fn a_decision_queued_before_start_is_carded_once() {
     assert_eq!(cards_for(&chat, "t-ana", &request.id), 1, "{}", chat.wire("t-ana"));
 }
 
-/// Review finding 10: an answer that counts toward a quorum says the decision waits for
+/// An answer that counts toward a quorum says the decision waits for
 /// someone else; a stale card gets one fresh card, and pressing it again sends no other.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_quorum_answer_waits_for_the_others() {
@@ -315,7 +315,7 @@ async fn a_quorum_answer_waits_for_the_others() {
     assert_eq!(cards_for(&chat, "t-ana", &request.id), 2, "{}", chat.wire("t-ana"));
 }
 
-/// Review finding 13: a decision the policy does not let the person answer is carded on
+/// A decision the policy does not let the person answer is carded on
 /// neither path, and an answer to it is told it waits for someone else.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn only_who_may_answer_gets_a_card() {
@@ -395,7 +395,7 @@ impl ChannelBindingStore for SlowRequests {
     }
 }
 
-/// Review finding 15: unpaired accounts writing at once keep the waiting limit, and one
+/// Unpaired accounts writing at once keep the waiting limit, and one
 /// account writing twice at once gets one code.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_unpaired_messages_keep_the_limits() {

@@ -279,8 +279,8 @@ pub async fn concurrent_writers(harness: &dyn DeviceStoreHarness) {
 }
 
 /// Concurrent claim counts from two handles each get a distinct count, a reset starts the
-/// count again at one, and a durable count survives a restart (review finding 14: replicas
-/// share the count of wrong codes).
+/// count again at one, and a durable count survives a restart, so replicas share the
+/// count of wrong codes.
 pub async fn claim_attempts_are_counted_once_and_shared(harness: &dyn DeviceStoreHarness) {
     let stores = two(harness).await;
     stores[0].reset_claim_attempts().await.expect("reset");

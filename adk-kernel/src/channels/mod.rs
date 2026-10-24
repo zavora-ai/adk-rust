@@ -1153,7 +1153,7 @@ mod tests {
         assert_eq!(card_summary(&long, &json!({})).chars().count(), MAX_SUMMARY_CHARS);
     }
 
-    /// Review finding 2: a value with a newline, a carriage return or a tab is masked in a
+    /// A value with a newline, a carriage return or a tab is masked in a
     /// summary that quotes it, raw or with the control characters already turned to spaces.
     #[test]
     fn values_with_control_characters_are_masked() {
@@ -1168,7 +1168,7 @@ mod tests {
         assert_eq!(card_summary("Note: a\tb\r\nc!", &tabbed), "Note: […]!");
     }
 
-    /// Review finding 12: short values, strings and numbers alike, are masked where they
+    /// Short values, strings and numbers alike, are masked where they
     /// stand on their own, and not inside a longer word or number.
     #[test]
     fn short_values_are_masked_where_they_stand_alone() {

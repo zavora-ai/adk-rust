@@ -161,7 +161,7 @@ async fn a_revoked_device_is_refused_on_the_resident_app() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-/// Review finding 17: the claim route keeps the server's host and origin checks, so a page
+/// The claim route keeps the server's host and origin checks, so a page
 /// rebinding its name to the loopback address cannot spend the waiting codes.
 #[tokio::test]
 async fn the_claim_route_keeps_the_host_and_origin_checks() {
@@ -176,7 +176,7 @@ async fn the_claim_route_keeps_the_host_and_origin_checks() {
     assert_eq!(call(&app, cross).await.0, StatusCode::FORBIDDEN, "a foreign origin");
 }
 
-/// Review finding 18: a client still holding a removed device's token re-pairs on the
+/// A client still holding a removed device's token re-pairs on the
 /// resident app: the claim route skips the device guard.
 #[tokio::test]
 async fn a_client_holding_a_removed_token_re_pairs_on_the_resident_app() {
@@ -201,7 +201,7 @@ async fn a_client_holding_a_removed_token_re_pairs_on_the_resident_app() {
     assert_eq!(status, StatusCode::OK, "{claimed}");
 }
 
-/// Review finding 5: on the resident app a `decide` device answers an everyday decision,
+/// On the resident app a `decide` device answers an everyday decision,
 /// which the device guard checked and recorded before the extractor admitted it, and is
 /// refused a high-risk one.
 #[tokio::test]

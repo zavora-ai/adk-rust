@@ -325,7 +325,7 @@ async fn ends_within(
     }
 }
 
-/// Review finding 1: revoking a device ends the event stream it holds open.
+/// Revoking a device ends the event stream it holds open.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn revoking_a_device_ends_its_open_event_stream() {
     let plane = Plane::start().await;
@@ -336,7 +336,7 @@ async fn revoking_a_device_ends_its_open_event_stream() {
     assert!(ends_within(&mut events, Duration::from_secs(3)).await, "revocation ends the stream");
 }
 
-/// Review finding 1: a device's pairing ending ends the event stream it holds open.
+/// A device's pairing ending ends the event stream it holds open.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_pairing_that_ends_ends_its_open_event_stream() {
     let plane = Plane::start_with(|pairing| pairing.with_device_ttl(Duration::from_secs(1))).await;
@@ -345,7 +345,7 @@ async fn a_pairing_that_ends_ends_its_open_event_stream() {
     assert!(ends_within(&mut events, Duration::from_secs(4)).await, "expiry ends the stream");
 }
 
-/// Review finding 4: the issue record names the scopes the code grants and the stored name.
+/// The issue record names the scopes the code grants and the stored name.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_issue_record_names_what_the_code_grants() {
     let plane = Plane::start().await;
@@ -364,7 +364,7 @@ async fn the_issue_record_names_what_the_code_grants() {
     assert_eq!(record["name"], json!("Ana's[2J phone"));
 }
 
-/// Review findings 16 and 21: a claim whose record cannot be written leaves no device behind
+/// A claim whose record cannot be written leaves no device behind
 /// and the code still claimable.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_claim_whose_record_fails_leaves_the_code_and_no_device() {
@@ -379,7 +379,7 @@ async fn a_claim_whose_record_fails_leaves_the_code_and_no_device() {
     assert!(claimed.is_ok(), "the code still pairs once the record can be written");
 }
 
-/// Review finding 23: a pairing of zero days, or of more than a year, is refused.
+/// A pairing of zero days, or of more than a year, is refused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_pairing_length_outside_one_to_365_days_is_refused() {
     let plane = Plane::start().await;
@@ -392,7 +392,7 @@ async fn a_pairing_length_outside_one_to_365_days_is_refused() {
     plane.operator().issue_pairing_code(&request).await.expect("a year is allowed");
 }
 
-/// Review finding 20: a kernel that pairs nothing answers the pairing commands with what to
+/// A kernel that pairs nothing answers the pairing commands with what to
 /// set, not an empty `404`, and lists no chat accounts.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_kernel_without_pairing_says_what_it_lacks() {
@@ -409,7 +409,7 @@ async fn a_kernel_without_pairing_says_what_it_lacks() {
     assert_eq!(category(error), ErrorCategory::InvalidInput);
 }
 
-/// Review finding 18: a client still holding a revoked token re-pairs, on the kernel's
+/// A client still holding a revoked token re-pairs, on the kernel's
 /// listener and on an app behind `guard_devices`, where the claim route skips the guard.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_client_holding_a_revoked_token_re_pairs() {
@@ -448,7 +448,7 @@ async fn a_client_holding_a_revoked_token_re_pairs() {
     stale.claim_pairing(&issued.code, None).await.expect("re-pairs behind the guard");
 }
 
-/// Review findings 21 and 22: a chat account whose pairing cannot be recorded is not
+/// A chat account whose pairing cannot be recorded is not
 /// paired, and its code still works once the record can be written.
 #[cfg(feature = "channels")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -476,7 +476,7 @@ async fn a_chat_account_whose_pairing_fails_to_record_stays_unpaired() {
     assert_eq!(account.account, "stranger");
 }
 
-/// Review finding 11: the operator dismisses chat accounts waiting to be paired, so
+/// The operator dismisses chat accounts waiting to be paired, so
 /// strangers cannot hold every place in the queue.
 #[cfg(feature = "channels")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

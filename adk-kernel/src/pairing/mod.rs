@@ -1193,7 +1193,7 @@ mod tests {
         }
     }
 
-    /// Review finding 6: concurrent wrong claims are counted before they are checked, so no
+    /// Concurrent wrong claims are counted before they are checked, so no
     /// more than twenty reach the codes.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_wrong_claims_are_counted_before_they_are_checked() {
@@ -1215,7 +1215,7 @@ mod tests {
         assert!(lookups <= MAX_FAILED_CLAIMS as usize, "{lookups} guesses reached the codes");
     }
 
-    /// Review finding 14: replicas over one store share the count of wrong codes.
+    /// Replicas over one store share the count of wrong codes.
     #[tokio::test]
     async fn replicas_share_the_count_of_wrong_codes() {
         let store: Arc<dyn DeviceStore> = Arc::new(InMemoryDeviceStore::new());
@@ -1228,7 +1228,7 @@ mod tests {
         assert!(second.claim(&issued.code, None).await.is_err(), "the shared lockout fired");
     }
 
-    /// Review finding 14: a lockout whose clear fails keeps refusing claims.
+    /// A lockout whose clear fails keeps refusing claims.
     #[tokio::test]
     async fn a_lockout_whose_clear_fails_keeps_refusing() {
         let store = Arc::new(Faulty::default());
@@ -1241,7 +1241,7 @@ mod tests {
         assert!(pairing.claim(&issued.code, None).await.is_err(), "still locked out");
     }
 
-    /// Review finding 16: a claim whose device cannot be stored keeps its code.
+    /// A claim whose device cannot be stored keeps its code.
     #[tokio::test]
     async fn a_claim_whose_device_cannot_be_stored_keeps_its_code() {
         let store = Arc::new(Faulty::default());
@@ -1252,7 +1252,7 @@ mod tests {
         assert!(pairing.claim(&issued.code, None).await.is_ok(), "the retry pairs");
     }
 
-    /// Review findings 6 and 14: a lockout holds until the next code is issued, which pairs.
+    /// A lockout holds until the next code is issued, which pairs.
     #[tokio::test]
     async fn a_lockout_holds_until_the_next_code() {
         let pairing = pairing();
@@ -1267,7 +1267,7 @@ mod tests {
         assert!(pairing.claim(&second.code, None).await.is_ok(), "a new code pairs");
     }
 
-    /// Review finding 5: the extractor alone never admits a device's decision, which only
+    /// The extractor alone never admits a device's decision, which only
     /// the guard in front of the app checks for risk and records.
     #[tokio::test]
     async fn the_extractor_alone_refuses_a_device_decision() {
