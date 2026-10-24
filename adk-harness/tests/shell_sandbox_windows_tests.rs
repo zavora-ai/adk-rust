@@ -103,6 +103,8 @@ async fn the_sandbox_is_active_and_declares_the_open_network() {
     let status = launcher.status();
     assert_eq!(status, IsolationStatus::OsSandbox { enforcer: "restricted-token".into() });
     assert!(status.to_string().contains("network not restricted"), "{status}");
+    assert!(status.to_string().contains("reads not confined"), "{status}");
+    assert!(!status.confines_reads());
 
     let ws = adk_devtools::Workspace::new(".").allow_bash(true);
     let bash = HarnessBashTool::new(ws, status, true, Arc::new(InMemoryShellLedger::new()))
@@ -110,6 +112,7 @@ async fn the_sandbox_is_active_and_declares_the_open_network() {
     let annotations = bash.annotations().unwrap();
     assert_eq!(annotations["enforcer"], "restricted-token");
     assert_eq!(annotations["network"], true, "the restricted token leaves the network open");
+    assert_eq!(annotations["reads"], "unconfined", "the token reads what the user may read");
     assert!(bash.description().contains("network access"), "{}", bash.description());
 
     let dir = tempfile::tempdir().unwrap();
@@ -134,6 +137,7 @@ async fn the_sandbox_is_active_and_declares_the_open_network() {
     let refused = build(sandbox(), true).unwrap_err();
     assert_eq!(refused.code, AUTO_ALLOW_UNAVAILABLE_CODE);
     assert!(refused.message.contains("network"), "{}", refused.message);
+    assert!(refused.message.contains("does not confine reads"), "{}", refused.message);
 }
 
 #[tokio::test]
@@ -192,6 +196,7 @@ async fn sandboxed_bash_writes_the_workspace_but_not_outside_it() {
     assert_eq!(begin.len(), 1);
     assert_eq!(begin[0].ext["enforcer"], "restricted-token");
     assert_eq!(begin[0].ext["network"], true);
+    assert_eq!(begin[0].ext["reads"], "unconfined");
     assert_eq!(begin[0].ext["workspaceAccess"], "read_write");
 }
 

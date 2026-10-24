@@ -283,7 +283,7 @@ with rules and `allow_network = false` blocks all network access and logs a warn
 | Named objects and pipes | Created in the logon session's namespace, which grants the logon SID and admits Low integrity |
 | Descendants | Killed with the call's Job Object, also on a timeout |
 | Network | **Not enforced** — Windows has no per-process network control without AppContainer |
-| After the call | The grants and the Low labels stay on the policy's paths, so any Low-integrity process of the machine may write the read-write paths |
+| After the call | The grants and the Low labels stay on the policy's paths, so any Low-integrity process of the machine may write the read-write paths; `icacls <path> /setintegritylevel "(OI)(CI)M" /T` and `icacls <path> /remove:g *S-1-5-12 /T` take a path back |
 
 The user is a restricting SID because the MSYS2 runtime of Git for Windows' `sh` and `bash` creates its signal pipe and its per-user shared memory with an ACL naming only the user, `Administrators` and `SYSTEM`, then opens them again: without the user among the restricting SIDs, the shell exits at start with `couldn't create signal pipe, Win32 error 5`. That widens reads from the paths the policy grants (and those granting `Everyone` or `Users`) to every path the user may read; the Low integrity level keeps writes to the read-write paths, and narrows them where a path's ACL grants `Everyone` or `Users` write access, which a Medium label still closes.
 

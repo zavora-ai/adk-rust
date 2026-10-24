@@ -7,8 +7,12 @@
   "restricted-token" }` when `WindowsEnforcer::probe_confined` runs a command under the token,
   and `Degraded`, or refused under `fail_if_unavailable`, otherwise. The command writes only
   the workspace and the scratch directory, which are labelled Low, and reads what the user may
-  read. The token leaves the network open and its grants stay on the workspace, so on Windows
-  the `bash`
+  read. The `bash` declaration's new `reads` annotation (`confined` under Seatbelt, bubblewrap
+  and a container, `unconfined` on the host and here), `IsolationStatus::confines_reads` and
+  the `harness.bash.begin` record say so, and a standing rule granted under a confining sandbox
+  does not match this one. The session scratch directory is removed with the harness; the
+  workspace keeps its Low label. The token leaves the network open and its grants stay on the
+  workspace, so on Windows the `bash`
   declaration reports network access, Plan mode denies `bash`, every sandboxed command is
-  asked in Ask and Auto, `auto_allow_sandboxed` and hooks with `isolation = "inherit"` fail
+  asked in Ask and Auto, `auto_allow_sandboxed` (open network, unconfined reads) and hooks with `isolation = "inherit"` fail
   the build, and `read_toolchains` grants only toolchain directories in the user's profile.

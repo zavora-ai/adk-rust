@@ -283,6 +283,7 @@ async fn the_container_shell_declares_itself_and_binds_rules_to_its_configuratio
             "enforcer": "container",
             "profileDigest": ContainerConfig::default().profile_digest(),
             "network": false,
+            "reads": "confined",
         })
     );
     assert_eq!(open.annotations().unwrap()["network"], true);

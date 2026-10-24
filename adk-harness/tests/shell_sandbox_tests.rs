@@ -285,6 +285,7 @@ fn the_declaration_digest_differs_per_sandbox_configuration() {
             "enforcer": "passthrough",
             "profileDigest": SandboxLauncher::new(with_enforcer(Arc::new(Passthrough))).profile_digest(),
             "network": false,
+            "reads": "confined",
         })
     );
 }

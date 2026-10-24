@@ -126,14 +126,32 @@ What follows from that:
 | Behaviour | Windows | macOS, Linux |
 |---|---|---|
 | The `bash` declaration's `network` annotation and description | network access | `network` |
+| The `bash` declaration's `reads` annotation, `IsolationStatus::confines_reads` and the status line | `unconfined`, `false`, `OS sandbox (restricted-token, network not restricted, reads not confined)`; the declaration digest differs from a confining sandbox's, so a standing rule granted under Seatbelt or bubblewrap does not match it | `confined`, `true` |
 | Plan mode | `bash` is denied: a read-write grant from an earlier command stays in the workspace's ACL, so the sandbox cannot promise a read-only workspace | sandboxed commands run read-only without a prompt |
 | Ask and Auto mode | every sandboxed command is asked | as the mode table says |
-| `auto_allow_sandboxed` | `build()` fails: the sandbox does not restrict the network | needs every protected path |
+| `auto_allow_sandboxed` | `build()` fails: the sandbox does not restrict the network and does not confine reads to the workspace | needs every protected path |
 | Hooks with `isolation = "inherit"` | `build()` fails: a hook needs a command it can spawn and feed; give it `isolation = "host"` | run in the sandbox |
 
 The first command of a process grants the workspace, and with `read_toolchains` the
 toolchain directories in your profile; Windows applies a grant to everything beneath the
 path, which takes a while on a large tree. Later commands reuse the grants.
+
+**Labels and grants that stay.** The token writes only what is labelled Low integrity, so
+the sandbox labels each read-write path and grants it to `RESTRICTED`:
+
+| Path | Labelled Low | Afterwards |
+|---|---|---|
+| The workspace root, and what is created beneath it | from the first sandboxed command on; the label stays | any Low-integrity process of the machine may write the workspace |
+| Each `extra_write` path | the same | the same |
+| The session's scratch directory (`HOME`, `TMPDIR`, `TEMP`, `TMP`) | while the harness runs | removed with its label when the harness is dropped; a killed process leaves it in the temporary directory |
+| Read-only paths (toolchains, `extra_read`) | never; they keep `RESTRICTED`'s read entry | — |
+
+To take a workspace back, restore its Medium label and remove the grant:
+
+```powershell
+icacls "C:\path\to\workspace" /setintegritylevel "(OI)(CI)M" /T
+icacls "C:\path\to\workspace" /remove:g *S-1-5-12 /T
+```
 
 ## The container shell
 
@@ -282,7 +300,7 @@ Windows host no process the command starts can leave its Job Object.
 
 | Action | Fields (`ext`) |
 |---|---|
-| `harness.bash.begin` (write-ahead, `args_digest`, `payload_ref` = digest of the command) | `functionCallId`, `enforcer`, `profileDigest`, `network`, `workspaceAccess`, `envKeys`, `retryOf`, `goalCheck` |
+| `harness.bash.begin` (write-ahead, `args_digest`, `payload_ref` = digest of the command) | `functionCallId`, `enforcer`, `profileDigest`, `network`, `reads`, `workspaceAccess`, `envKeys`, `retryOf`, `goalCheck` |
 | `harness.bash.end` (`outcome`, `payload_ref` = digest of the result) | `functionCallId`, `enforcer`, `exitCode`, `durationMs`, `timedOut`, `killedByFreeze`, `truncated`, `denialSuspected`, `retryOf` |
 | `harness.bash.retry_unsandboxed` | `functionCallId`, `retryOf`, `failedEnforcer`, `failureDigest`, `decision`, `source` (`policy` when requested, `tool` when consumed) |
 | `harness.sandbox.unavailable` | `functionCallId`, `requested`, `error` |

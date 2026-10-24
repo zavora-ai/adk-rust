@@ -158,6 +158,29 @@ pub struct SandboxLauncher {
     /// stays in the path's ACL, and granting again re-applies it to everything beneath.
     #[cfg(windows)]
     granted: Arc<std::sync::Mutex<std::collections::BTreeSet<(PathBuf, bool)>>>,
+    /// The session scratch directories this launcher labelled Low, removed with its last clone.
+    #[cfg(windows)]
+    scratch: Arc<LabelledScratch>,
+}
+
+/// The scratch directories a Windows launcher labelled Low, removed when its last clone is
+/// dropped, so that of the paths it labels only the workspace keeps its label (spec 3.2 §10
+/// W5).
+#[cfg(windows)]
+#[derive(Default)]
+struct LabelledScratch(std::sync::Mutex<std::collections::BTreeSet<PathBuf>>);
+
+#[cfg(windows)]
+impl Drop for LabelledScratch {
+    fn drop(&mut self) {
+        for dir in self.0.get_mut().unwrap_or_else(|e| e.into_inner()).iter() {
+            if let Err(error) = std::fs::remove_dir_all(dir)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(path = %dir.display(), error = %error, "could not remove a sandbox scratch directory");
+            }
+        }
+    }
 }
 
 impl fmt::Debug for SandboxLauncher {
@@ -202,6 +225,8 @@ impl SandboxLauncher {
             contained,
             #[cfg(windows)]
             granted: Arc::default(),
+            #[cfg(windows)]
+            scratch: Arc::default(),
         }
     }
 
@@ -209,6 +234,12 @@ impl SandboxLauncher {
     /// whose restricted-token enforcer leaves the network open (spec 3.2 §10 W5).
     pub(crate) fn denies_network(&self) -> bool {
         !self.contained && !self.config.network
+    }
+
+    /// Whether the sandbox confines reads to the paths it grants; the Windows restricted-token
+    /// sandbox reads what the user may read (spec 3.2 §10 W5).
+    pub(crate) fn confines_reads(&self) -> bool {
+        !self.contained
     }
 
     /// Whether the launcher starts each shell itself (spec 3.2 §10 W5), so a caller that can
@@ -620,6 +651,7 @@ impl SandboxLauncher {
                 DevToolError::Other(format!("the sandboxed command could not start: {error}"))
             })?;
         self.granted.lock().unwrap_or_else(|e| e.into_inner()).extend(wanted);
+        self.scratch.0.lock().unwrap_or_else(|e| e.into_inner()).insert(scratch);
         Ok(child)
     }
 }

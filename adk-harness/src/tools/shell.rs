@@ -228,10 +228,13 @@ impl HarnessBashTool {
         };
         #[cfg(not(feature = "sandbox"))]
         let (profile_digest, network, protects) = (Value::Null, host, true);
+        // Reads join the declaration beside the network, so a rule granted under one profile
+        // never matches a weaker one (spec 3.1 §9.2 I9, spec 3.2 §10 W5).
         self.annotations = json!({
             "enforcer": self.status.enforcer(),
             "profileDigest": profile_digest,
             "network": network,
+            "reads": if self.status.confines_reads() { "confined" } else { "unconfined" },
         });
         self.description = if host {
             "Run a shell command in the workspace root and return stdout, stderr and the exit \
@@ -491,6 +494,7 @@ impl Tool for HarnessBashTool {
                         "enforcer": enforcer,
                         "profileDigest": if selected.sandboxed { self.annotations["profileDigest"].clone() } else { Value::Null },
                         "network": if selected.sandboxed { self.annotations["network"].clone() } else { Value::Bool(true) },
+                        "reads": if selected.sandboxed { self.annotations["reads"].clone() } else { json!("unconfined") },
                         "workspaceAccess": if !selected.sandboxed { Value::Null } else if selected.read_only { json!("read_only") } else { json!("read_write") },
                         "envKeys": selected.env_keys,
                         "retryOf": retry_of,
@@ -622,6 +626,33 @@ impl Tool for HarnessBashTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The declaration carries whether reads are confined, so a standing rule bound to a
+    /// confining sandbox's declaration never matches the Windows restricted-token one, which
+    /// reads what the user may read (spec 3.1 §9.2 I9, spec 3.2 §10 W5).
+    #[test]
+    fn the_declaration_says_whether_reads_are_confined() {
+        let bash = |status: IsolationStatus| {
+            let ws = Workspace::new(".").allow_bash(true);
+            HarnessBashTool::new(ws, status, false, Arc::new(crate::InMemoryShellLedger::new()))
+        };
+        let confining = bash(IsolationStatus::OsSandbox { enforcer: "seatbelt".into() });
+        let windows = bash(IsolationStatus::OsSandbox { enforcer: "restricted-token".into() });
+        let host = bash(IsolationStatus::Host);
+        assert_eq!(confining.annotations().unwrap()["reads"], "confined");
+        assert_eq!(windows.annotations().unwrap()["reads"], "unconfined");
+        assert_eq!(host.annotations().unwrap()["reads"], "unconfined");
+        let windows_only_reads = {
+            let mut annotations = windows.annotations().unwrap().clone();
+            annotations["enforcer"] = "seatbelt".into();
+            annotations
+        };
+        assert_ne!(&windows_only_reads, confining.annotations().unwrap(), "reads alone differ");
+        assert_ne!(
+            adk_core::ToolOrigin::of(&confining).declaration_digest,
+            adk_core::ToolOrigin::of(&windows).declaration_digest
+        );
+    }
 
     #[test]
     fn denials_are_recognized_and_ordinary_failures_are_not() {
