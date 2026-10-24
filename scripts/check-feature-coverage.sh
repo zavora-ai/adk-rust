@@ -10,6 +10,7 @@
 #
 # A pair's optional fourth column holds comma-separated flags: `no-default` builds with
 # `--no-default-features`, and `doc` also runs the crate's doctests, which nextest skips.
+# A `-` in the features column passes no `--features`, so `- no-default` builds none.
 #
 # Usage:
 #   scripts/check-feature-coverage.sh all      # every pair
@@ -38,14 +39,15 @@ while IFS=' ' read -r shard package features flags; do
     [[ "$SELECT" == "all" || "$SELECT" == "$shard" ]] || continue
     ran+=1
 
-    args=(--features "$features")
-    [[ ",$flags," == *,no-default,* ]] && args=(--no-default-features "${args[@]}")
-    label="$package ${args[*]}"
+    args=()
+    [[ "$features" != "-" ]] && args=(--features "$features")
+    [[ ",$flags," == *,no-default,* ]] && args=(--no-default-features ${args[@]+"${args[@]}"})
+    label="$package ${args[*]-}"
     printf '\n==> %s (shard %s)\n' "$label" "$shard"
     started=$SECONDS
-    if cargo clippy -p "$package" "${args[@]}" --all-targets -- -D warnings \
-        && cargo nextest run -p "$package" "${args[@]}" \
-        && { [[ ",$flags," != *,doc,* ]] || cargo test -p "$package" "${args[@]}" --doc; }; then
+    if cargo clippy -p "$package" ${args[@]+"${args[@]}"} --all-targets -- -D warnings \
+        && cargo nextest run -p "$package" ${args[@]+"${args[@]}"} \
+        && { [[ ",$flags," != *,doc,* ]] || cargo test -p "$package" ${args[@]+"${args[@]}"} --doc; }; then
         printf 'ok       %s (%ds)\n' "$label" "$((SECONDS - started))"
     else
         printf 'FAILED   %s (%ds)\n' "$label" "$((SECONDS - started))"
