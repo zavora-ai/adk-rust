@@ -40,8 +40,11 @@
 //! response supersedes the pending one ([`supersede_pending_responses`]).
 //!
 //! A decision from any source closes what the call left waiting: its pending entry in the
-//! store and its open request in the [`ApprovalService`](crate::ApprovalService), so neither
-//! can authorize a later call with the same fingerprint.
+//! store and its open request in the [`ApprovalService`](crate::ApprovalService), which is
+//! withdrawn ([`ApprovalService::withdraw`](crate::ApprovalService::withdraw)), so neither
+//! can authorize a later call with the same fingerprint. A request an approver resolved at
+//! the same moment is waited for until its outcome is in the store, and that outcome is
+//! absorbed rather than left to authorize a later call.
 //!
 //! A held call survives what happens to the session while it waits: compaction never
 //! covers it ([`held_call_compaction_limit`]), a workflow agent that it stopped resumes at
