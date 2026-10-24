@@ -326,16 +326,25 @@ impl Neo4jProcessStore {
     }
 }
 
-/// Reads a row back into the [`ProcessMeta`] that was put.
-fn decode(row: &Row) -> Result<ProcessMeta> {
+/// Reads a row back into the [`ProcessMeta`] that was put, or `None` for a node a concurrent
+/// `delete` removed after the statement matched it: Neo4j reads committed data, so its
+/// properties then read as null, as if the read had come after the delete.
+fn decode(row: &Row) -> Result<Option<ProcessMeta>> {
     let optional = |name: &str| column::<Option<String>>(row, name);
-    let kind: String = column(row, "kind")?;
-    let labels: String = column(row, "labels")?;
-    Ok(ProcessMeta {
-        pid: column(row, "pid")?,
+    let (Some(pid), Some(partition), Some(queue), Some(kind), Some(labels)) = (
+        optional("pid")?,
+        optional("partition")?,
+        optional("queue")?,
+        optional("kind")?,
+        optional("labels")?,
+    ) else {
+        return Ok(None);
+    };
+    Ok(Some(ProcessMeta {
+        pid,
         parent: optional("parent")?,
-        partition: PartitionId::new(column::<String>(row, "partition")?),
-        queue: QueueClass::from_name(&column::<String>(row, "queue")?),
+        partition: PartitionId::new(partition),
+        queue: QueueClass::from_name(&queue),
         kind: json("process kind", &kind)?,
         wake: optional("wake")?.map(|wake| json("wake set", &wake)).transpose()?,
         suspended_by: optional("suspended_by")?
@@ -344,7 +353,7 @@ fn decode(row: &Row) -> Result<ProcessMeta> {
         suspend_requested: column::<Option<bool>>(row, "suspend_requested")?.unwrap_or(false),
         agenda_item: optional("agenda_item")?,
         labels: json("label set", &labels)?,
-    })
+    }))
 }
 
 #[async_trait]
@@ -378,7 +387,10 @@ impl ProcessStore for Neo4jProcessStore {
             query(&format!("MATCH (p:AdkKernelProcess {{pid: $pid}}) {COLUMNS}")).param("pid", pid);
         let graph = self.graph.clone();
         detached(async move {
-            rows(&graph, statement, "read the process table").await?.first().map(decode).transpose()
+            Ok(match rows(&graph, statement, "read the process table").await?.first() {
+                Some(row) => decode(row)?,
+                None => None,
+            })
         })
         .await
     }
@@ -409,7 +421,8 @@ impl ProcessStore for Neo4jProcessStore {
         .param("limit", limit_value);
         let graph = self.graph.clone();
         detached(async move {
-            rows(&graph, statement, "list processes").await?.iter().map(decode).collect()
+            let rows = rows(&graph, statement, "list processes").await?;
+            rows.iter().filter_map(|row| decode(row).transpose()).collect()
         })
         .await
     }

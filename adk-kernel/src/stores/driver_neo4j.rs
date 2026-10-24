@@ -2,7 +2,7 @@
 
 use adk_core::ApprovalScope;
 use async_trait::async_trait;
-use neo4rs::{Graph, query};
+use neo4rs::{Graph, Row, query};
 
 use super::neo4j::{column, connect, count, detached, json, order_key, rows, run_schema};
 use crate::drivers::store::park_key;
@@ -96,6 +96,12 @@ impl Neo4jDriverStore {
     }
 }
 
+/// Column `name` of `row` as `what`, or `None` for a node a concurrent delete removed after
+/// the statement matched it, whose properties then read as null.
+fn decode<T: serde::de::DeserializeOwned>(row: &Row, name: &str, what: &str) -> Result<Option<T>> {
+    column::<Option<String>>(row, name)?.map(|text| json(what, &text)).transpose()
+}
+
 /// The key of the park of `call_id` in `scope`.
 fn park_node_key(scope: &ApprovalScope, call_id: &str) -> String {
     let (app, user, session, call) = park_key(scope, call_id);
@@ -128,8 +134,7 @@ impl DriverStore for Neo4jDriverStore {
             rows(&graph, statement, "read the driver table")
                 .await?
                 .first()
-                .map(|row| json("driver", &column::<String>(row, "record")?))
-                .transpose()
+                .map_or(Ok(None), |row| decode(row, "record", "driver"))
         })
         .await
     }
@@ -142,7 +147,7 @@ impl DriverStore for Neo4jDriverStore {
             rows(&graph, statement, "list the driver table")
                 .await?
                 .iter()
-                .map(|row| json("driver", &column::<String>(row, "record")?))
+                .filter_map(|row| decode(row, "record", "driver").transpose())
                 .collect()
         })
         .await
@@ -183,8 +188,7 @@ impl DriverStore for Neo4jDriverStore {
             rows(&graph, statement, "read the driver table")
                 .await?
                 .first()
-                .map(|row| json("parked driver call", &column::<String>(row, "park")?))
-                .transpose()
+                .map_or(Ok(None), |row| decode(row, "park", "parked driver call"))
         })
         .await
     }
@@ -200,7 +204,7 @@ impl DriverStore for Neo4jDriverStore {
             rows(&graph, statement, "list the driver table")
                 .await?
                 .iter()
-                .map(|row| json("parked driver call", &column::<String>(row, "park")?))
+                .filter_map(|row| decode(row, "park", "parked driver call").transpose())
                 .collect()
         })
         .await

@@ -380,8 +380,9 @@ impl ProcessStore for FirestoreProcessStore {
                     .and_then(|requested| q.field("suspend_requested").eq(requested)),
             ])
         });
-        if let Some(limit) = filter.limit {
-            select = select.limit(u32::try_from(limit).unwrap_or(u32::MAX));
+        // Firestore takes a limit up to `i32::MAX`; a larger one limits nothing.
+        if let Some(limit) = filter.limit.and_then(|limit| i32::try_from(limit).ok()) {
+            select = select.limit(limit.unsigned_abs());
         }
         let docs: Vec<ProcessDoc> =
             select.obj().query().await.map_err(|error| store_error("list processes", &error))?;

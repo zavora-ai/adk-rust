@@ -118,8 +118,10 @@ fn bind(statement: Query, item: &AgendaItem) -> Result<Query> {
         .param("item", serde_json::to_string(item)?))
 }
 
-fn decode(row: &Row) -> Result<AgendaItem> {
-    json("agenda item", &column::<String>(row, "item")?)
+/// Reads a row back into its item, or `None` for a node a concurrent `delete` removed after
+/// the statement matched it, whose properties then read as null.
+fn decode(row: &Row) -> Result<Option<AgendaItem>> {
+    column::<Option<String>>(row, "item")?.map(|item| json("agenda item", &item)).transpose()
 }
 
 /// Writes `write` over the item `id` when its state is `from`, in one transaction that
@@ -162,7 +164,10 @@ impl AgendaStore for Neo4jAgendaStore {
             query("MATCH (a:AdkKernelAgendaItem {id: $id}) RETURN a.item AS item").param("id", id);
         let graph = self.graph.clone();
         detached(async move {
-            rows(&graph, statement, "read the agenda").await?.first().map(decode).transpose()
+            Ok(match rows(&graph, statement, "read the agenda").await?.first() {
+                Some(row) => decode(row)?,
+                None => None,
+            })
         })
         .await
     }
@@ -188,7 +193,8 @@ impl AgendaStore for Neo4jAgendaStore {
         .param("limit", limit_value);
         let graph = self.graph.clone();
         detached(async move {
-            rows(&graph, statement, "list the agenda").await?.iter().map(decode).collect()
+            let rows = rows(&graph, statement, "list the agenda").await?;
+            rows.iter().filter_map(|row| decode(row).transpose()).collect()
         })
         .await
     }
