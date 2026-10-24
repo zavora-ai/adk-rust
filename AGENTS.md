@@ -179,9 +179,10 @@ expensive axes move to a later tier.
   everything else warn-only). A `scope` job skips the Rust jobs when a change
   touches only `docs/` or Markdown, and merge-queue builds skip `docs`, the
   standalone examples and the macOS/Windows builds the pull request already passed.
-- **Merge tier** (`ci-merge.yml`, on `push: main`) — cross-platform
+- **Merge tier** (`ci-merge.yml`, on `push: main` and on demand) — cross-platform
   `nextest --workspace` on macOS/Windows and doc-example compilation. Runs
-  post-merge; not branch-protection-required. `sandbox-linux.yml` (on `push: main`,
+  post-merge, or on a branch with `gh workflow run ci-merge.yml --ref <branch>`;
+  not branch-protection-required. `sandbox-linux.yml` (on `push: main`,
   on a pull request touching the sandbox or the harness shell, and on demand) proves
   bubblewrap enforcement on `ubuntu-24.04` with `ADK_SANDBOX_REQUIRE_ENFORCER=1`, under
   which the enforcement tests fail instead of skipping when the enforcer cannot start.

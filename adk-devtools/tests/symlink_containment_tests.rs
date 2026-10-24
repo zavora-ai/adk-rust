@@ -386,7 +386,10 @@ async fn read_file_never_follows_a_symlink_swapped_in_after_the_check() {
     stop.store(true, Ordering::Relaxed);
     swapper.join().unwrap();
 
-    assert_eq!(leaked, 0, "{leaked} of {attempts} reads followed a link swapped in after the check");
+    assert_eq!(
+        leaked, 0,
+        "{leaked} of {attempts} reads followed a link swapped in after the check"
+    );
     assert!(read > 0, "none of {attempts} reads saw the workspace file");
     assert!(refused > 0, "none of {attempts} reads met the swapped-in link");
 }

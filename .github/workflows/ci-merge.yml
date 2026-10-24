@@ -9,10 +9,15 @@ name: CI Merge
 #   • doc-example compilation is triggered on this same event.
 # All Rust runner preparation goes through the shared setup-rust composite
 # action so toolchain/components/linker/cache can never drift per-workflow.
+#
+# `workflow_dispatch` runs the same jobs on any branch before it merges:
+# `gh workflow run ci-merge.yml --ref <branch>`. Only `main` saves build caches, so a
+# dispatched run never evicts the caches the push runs restore.
 
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -57,6 +62,7 @@ jobs:
         # entries without invalidating the already-warm main caches.
         cache-key: cross-platform-test-${{ matrix.os }}
         cache-shared-key: cross-platform-test
+        cache-save: ${{ github.ref == 'refs/heads/main' }}
 
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'
@@ -135,6 +141,7 @@ jobs:
       uses: ./.github/actions/setup-rust
       with:
         cache-key: doc-examples
+        cache-save: ${{ github.ref == 'refs/heads/main' }}
         neutralize-wild: 'true'
 
     - name: Set up Python
