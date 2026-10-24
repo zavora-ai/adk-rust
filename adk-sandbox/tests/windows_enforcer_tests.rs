@@ -181,7 +181,9 @@ async fn a_contained_command_streams_its_output_and_reports_its_exit_code() {
 #[tokio::test]
 async fn a_contained_command_reads_its_standard_input() {
     let (_root, _base, workspace) = layout();
-    let mut child = spawn(&workspace, "findstr /r \".*\"");
+    // `sort` echoes its input and takes no quoted argument: `cmd /c` rereads the quoted
+    // script, so an inner `"` would reach the program escaped as `\"`.
+    let mut child = spawn(&workspace, "sort");
     let mut stdin = child.stdin.take().expect("piped");
     stdin.write_all(b"hello\r\n").expect("write stdin");
     drop(stdin);
