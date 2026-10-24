@@ -104,10 +104,14 @@ if [ -n "$AFFECTED" ]; then
 fi
 
 for crate in $DIRECT; do
-    while IFS=' ' read -r shard package features; do
+    while IFS=' ' read -r shard package features flags; do
         [[ -n "$shard" && "$shard" != \#* && "$package" == "$crate" ]] || continue
-        step "feature coverage $package --features $features" bash -c \
-            "cargo clippy -p '$package' --features '$features' --all-targets -- -D warnings && cargo nextest run -p '$package' --features '$features'"
+        # The flags column and the `-` placeholder, as scripts/check-feature-coverage.sh reads them.
+        args=()
+        [[ "$features" != "-" ]] && args=(--features "$features")
+        [[ ",$flags," == *,no-default,* ]] && args=(--no-default-features ${args[@]+"${args[@]}"})
+        step "feature coverage $package ${args[*]-}" bash -c \
+            "cargo clippy -p '$package' ${args[*]-} --all-targets -- -D warnings && cargo nextest run -p '$package' ${args[*]-}"
     done < scripts/feature-coverage-pairs.txt
 done
 

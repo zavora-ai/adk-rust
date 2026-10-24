@@ -843,9 +843,14 @@ mod tests {
 
     #[cfg(unix)]
     /// A 64-bit little-endian ELF file with `PT_INTERP` `interpreter` and `DT_RUNPATH`
-    /// `run_path`, mapped by one `PT_LOAD` segment at 0x1000.
+    /// `run_path`, mapped by one `PT_LOAD` segment at 0x1000. Each string gets the room
+    /// its length needs, since a temporary directory's path on macOS is longer than 64 bytes.
     fn elf(interpreter: &str, run_path: &str) -> Vec<u8> {
-        let mut bytes = vec![0_u8; 512];
+        // The headers, the dynamic section at 256, the interpreter at 320, then the string
+        // table, whose string 1 is the run path.
+        let (dynamic, interp) = (256, 320);
+        let strtab = interp + interpreter.len() + 1;
+        let mut bytes = vec![0_u8; strtab + run_path.len() + 2];
         let put = |bytes: &mut Vec<u8>, at: usize, value: u64, size: usize| {
             bytes[at..at + size].copy_from_slice(&value.to_le_bytes()[..size]);
         };
@@ -856,9 +861,9 @@ mod tests {
         put(&mut bytes, 0x38, 3, 2);
         // (type, offset, vaddr, size): PT_LOAD of the file, PT_INTERP, PT_DYNAMIC.
         let segments = [
-            (1, 0, 0x1000, 512),
-            (3, 256, 0x1100, interpreter.len() as u64 + 1),
-            (2, 384, 0x1180, 48),
+            (1, 0, 0x1000, bytes.len() as u64),
+            (3, interp as u64, 0x1000 + interp as u64, interpreter.len() as u64 + 1),
+            (2, dynamic as u64, 0x1000 + dynamic as u64, 48),
         ];
         for (index, (kind, offset, vaddr, size)) in segments.into_iter().enumerate() {
             let at = 64 + index * 56;
@@ -867,12 +872,14 @@ mod tests {
             put(&mut bytes, at + 16, vaddr, 8);
             put(&mut bytes, at + 32, size, 8);
         }
-        bytes[256..256 + interpreter.len()].copy_from_slice(interpreter.as_bytes());
-        bytes[321..321 + run_path.len()].copy_from_slice(run_path.as_bytes());
-        // DT_STRTAB at file offset 320, DT_RUNPATH at string 1, DT_NULL.
-        for (index, (tag, value)) in [(5, 0x1000 + 320), (29, 1), (0, 0)].into_iter().enumerate() {
-            put(&mut bytes, 384 + index * 16, tag, 8);
-            put(&mut bytes, 384 + index * 16 + 8, value, 8);
+        bytes[interp..interp + interpreter.len()].copy_from_slice(interpreter.as_bytes());
+        bytes[strtab + 1..strtab + 1 + run_path.len()].copy_from_slice(run_path.as_bytes());
+        // DT_STRTAB, DT_RUNPATH at string 1, DT_NULL.
+        for (index, (tag, value)) in
+            [(5, 0x1000 + strtab as u64), (29, 1), (0, 0)].into_iter().enumerate()
+        {
+            put(&mut bytes, dynamic + index * 16, tag, 8);
+            put(&mut bytes, dynamic + index * 16 + 8, value, 8);
         }
         bytes
     }
