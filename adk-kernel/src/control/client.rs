@@ -812,22 +812,7 @@ fn category_of(status: StatusCode) -> ErrorCategory {
 
 /// The kernel code `code` names, or the control-plane code for one this client does not know.
 fn known_code(code: &str) -> &'static str {
-    [
-        error::NOT_FOUND_CODE,
-        error::INVALID_STATE_CODE,
-        error::FROZEN_CODE,
-        error::LIFECYCLE_CODE,
-        error::CONFIG_CODE,
-        error::STORE_CODE,
-        error::CONTROL_PLANE_CODE,
-        error::UNAUTHORIZED_CODE,
-        error::SERVICE_CODE,
-        error::IO_CODE,
-        error::SERDE_CODE,
-    ]
-    .into_iter()
-    .find(|known| *known == code)
-    .unwrap_or(error::CONTROL_PLANE_CODE)
+    error::CODES.iter().copied().find(|known| *known == code).unwrap_or(error::CONTROL_PLANE_CODE)
 }
 
 /// Percent-encodes `text` for a path segment or a query value.
@@ -958,5 +943,41 @@ mod tests {
 
         let other = answer_error(StatusCode::BAD_GATEWAY, b"upstream down");
         assert!(other.to_string().contains("upstream down"), "{other}");
+    }
+
+    #[test]
+    fn every_kernel_code_reaches_the_client() {
+        let refusals = [
+            KernelError::AgendaNotFound { item: "agenda-1".into() },
+            KernelError::AgendaState {
+                item: "agenda-1".into(),
+                state: crate::agenda::AgendaStateKind::Rejected,
+                action: "approved",
+            },
+            KernelError::Quota { partition: "work".into(), reason: "max running 2".into() },
+        ];
+        for refusal in refusals {
+            let problem = AdkError::from(refusal);
+            let body = serde_json::to_vec(&problem.to_problem_json()).unwrap();
+            let status = StatusCode::from_u16(problem.http_status_code()).unwrap();
+            let error = AdkError::from(answer_error(status, &body));
+            assert_eq!((error.code, error.category), (problem.code, problem.category));
+        }
+        for code in error::CODES {
+            let problem =
+                AdkError::new(ErrorComponent::Server, ErrorCategory::Conflict, code, "refused");
+            let body = serde_json::to_vec(&problem.to_problem_json()).unwrap();
+            assert_eq!(AdkError::from(answer_error(StatusCode::CONFLICT, &body)).code, *code);
+        }
+        // A code from a crate the kernel composes, which this client does not list.
+        let foreign = AdkError::new(
+            ErrorComponent::Server,
+            ErrorCategory::Conflict,
+            "session.not_found",
+            "refused",
+        );
+        let body = serde_json::to_vec(&foreign.to_problem_json()).unwrap();
+        let error = AdkError::from(answer_error(StatusCode::CONFLICT, &body));
+        assert_eq!((error.code, error.message.as_str()), (error::CONTROL_PLANE_CODE, "refused"));
     }
 }

@@ -24,7 +24,11 @@ the `operator` scope.
 | `401` | No authenticated caller |
 | `403 kernel.unauthorized` | A change without the `operator` scope |
 | `404 kernel.not_found` | An unknown process, session or target |
+| `404 kernel.agenda_not_found` | An unknown agenda item |
 | `409 kernel.invalid_state` | The process is in a state the action does not apply to, such as resuming one a freeze parked |
+| `409 kernel.agenda_state` | The agenda item is in a state the action does not apply to |
+| `409 kernel.spawn_rejected` | Another run holds the spawn's concurrency key and the run does not queue behind it |
+| `429 kernel.quota` | A partition quota refuses the process |
 | `422` | A body field the route does not take, such as `userId` on a spawn |
 
 ### The named pipe on Windows
@@ -132,7 +136,9 @@ answer carries the failure in `auditError`.
 ## From code
 
 `adk_kernel::control::ControlClient` speaks the API over every transport;
-`ControlClient::connect_local` finds the socket, or the pipe on Windows:
+`ControlClient::connect_local` finds the socket, or the pipe on Windows. A refusal reaches
+the caller with the kernel's code from the table above; a code the client does not know reads
+as `kernel.control_plane`.
 
 ```rust
 use adk_kernel::control::ControlClient;
@@ -160,3 +166,18 @@ To serve the control plane from your own server, merge `adk_kernel::control::rou
 with `ServerBuilder::add_api_routes` and register the kernel with
 `ServerBuilder::with_freeze_delegate`; `ControlPlane::start` serves it on the socket (the pipe
 on Windows) and, with `ControlPlaneConfig::with_http`, on a bind of its own.
+
+`KernelConfig::default()` serves no control plane, so a kernel embedded in an application
+never takes the socket of the kernel `adk-rust up` runs at the same home. Pass
+`KernelConfig::with_control(ControlPlaneConfig::default())` to serve the socket at the
+kernel's home, as `adk-rust up` does:
+
+```rust
+use adk_kernel::KernelConfig;
+use adk_kernel::control::ControlPlaneConfig;
+
+let config = KernelConfig::default()
+    .with_home("/srv/kernel")
+    .with_control(ControlPlaneConfig::default());
+assert!(config.control.socket.is_some());
+```
