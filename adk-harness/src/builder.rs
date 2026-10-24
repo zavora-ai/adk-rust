@@ -554,7 +554,8 @@ impl HarnessAgentBuilder {
         self
     }
 
-    /// How long a person may take to decide one call (default 300 s); a timeout denies.
+    /// How long a person may take to decide one call (default 300 s); a call nobody decides
+    /// in time waits in the approval store for a later decision (spec 3.3 §7.3).
     pub fn confirmation_timeout(mut self, timeout: Duration) -> Self {
         self.confirmation_timeout = timeout;
         self

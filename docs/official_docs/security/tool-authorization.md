@@ -564,7 +564,10 @@ static map.
 A `ToolConfirmationHandler` is asked about each call with its final arguments while the run
 waits. Calls in one batch are decided concurrently, so a handler that prompts on a shared
 device serializes its own prompts. A `decide` that takes longer than
-`RunConfig::tool_confirmation_timeout` (default five minutes) denies the call:
+`RunConfig::tool_confirmation_timeout` (default five minutes) leaves the call waiting for a
+decision in the run's `approval_store` or `approval_service`, and the run ends with it held,
+as if no handler had been asked; nothing is decided by silence. A run with neither, or with
+`RunConfig::deny_on_confirmation_timeout` set, denies the call:
 
 ```rust
 use adk_core::RunConfig;

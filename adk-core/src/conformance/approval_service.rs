@@ -13,6 +13,7 @@
 //! | [`edit_substitutes_arguments`] | An edit resolves the request with the edited arguments on the recorded decision |
 //! | [`escalation_fires_once`] | An escalation step fires once however often `tick` runs, and only then admits its approvers |
 //! | [`inbox_lists_what_an_approver_may_decide`] | The inbox holds what the approver may decide, directly or by delegation, and pages by cursor |
+//! | [`inbox_lists_one_session`] | An inbox filtered by session holds that session's requests alone and pages by cursor (spec 3.3 §10 C1) |
 //! | [`cancel_and_reject_deny_the_call`] | Cancelling or rejecting records a denial carrying the reason |
 //! | [`requests_survive_a_restart`] | A partly approved request survives a restart and is resolved through a new handle |
 //!
@@ -182,6 +183,16 @@ impl Fixture {
     /// Holds a call in the store and submits its request under `policy`.
     async fn submit(&self, policy: ApprovalPolicy) -> ApprovalRequest {
         let (scope, call) = self.call(250);
+        self.submit_in(scope, call, policy).await
+    }
+
+    /// Holds `call` in `scope` and submits its request under `policy`.
+    async fn submit_in(
+        &self,
+        scope: ApprovalScope,
+        call: ToolConfirmationRequest,
+        policy: ApprovalPolicy,
+    ) -> ApprovalRequest {
         self.store.record_pending(&scope, &call).await.expect("record_pending");
         let request = ApprovalRequest::new(unique_unicode("request"), scope, &call, policy)
             .with_requester(SubjectRef::human("conformance:requester"));
@@ -559,6 +570,70 @@ pub async fn inbox_lists_what_an_approver_may_decide<H: ApprovalStoreHarness + ?
         ids(fx.service.inbox(resolved).await.expect("inbox")),
         [by_name.id],
         "a decided request leaves the pending inbox"
+    );
+}
+
+/// An inbox filtered by session holds the session's requests the approver may decide,
+/// oldest first, and pages by cursor; requests of the approver's other sessions stay out
+/// (spec 3.3 §10 C1).
+pub async fn inbox_lists_one_session<H: ApprovalStoreHarness + ?Sized>(harness: &H) {
+    let fx = Fixture::new(harness).await;
+    let ana = SubjectRef::human(unique("ana"));
+    let first = fx.submit(finance()).await;
+    fx.clock.advance(Duration::from_secs(1));
+    let other = fx.submit(finance()).await;
+    fx.clock.advance(Duration::from_secs(1));
+    let (_, call) = fx.call(500);
+    let second = fx.submit_in(first.scope.clone(), call, finance()).await;
+    fx.clock.advance(Duration::from_secs(1));
+    let (_, call) = fx.call(750);
+    let not_ana = fx
+        .submit_in(
+            first.scope.clone(),
+            call,
+            ApprovalPolicy::new([ApproverSelector::group("conformance:ops")]),
+        )
+        .await;
+    let ids = |page: crate::InboxPage| page.items.into_iter().map(|r| r.id).collect::<Vec<_>>();
+    let session = &first.scope.session_id;
+
+    let inbox = InboxQuery::for_approver(ana.clone(), ["conformance:finance"])
+        .with_session_id(session.clone());
+    assert_eq!(
+        ids(fx.service.inbox(inbox.clone()).await.expect("inbox")),
+        [first.id.clone(), second.id.clone()],
+        "the session's requests the approver may decide, oldest first"
+    );
+    let page = fx.service.inbox(inbox.clone().with_limit(1)).await.expect("inbox");
+    assert_eq!(ids(page.clone()), std::slice::from_ref(&first.id));
+    let next = fx.service.inbox(inbox.with_limit(1).with_cursor(page.next_cursor)).await;
+    assert_eq!(ids(next.expect("next page")), std::slice::from_ref(&second.id));
+    assert_eq!(
+        ids(fx
+            .service
+            .inbox(InboxQuery::for_group("conformance:ops").with_session_id(session.clone()))
+            .await
+            .expect("inbox")),
+        std::slice::from_ref(&not_ana.id),
+        "a group's queue for the session"
+    );
+    assert_eq!(
+        ids(fx
+            .service
+            .inbox(InboxQuery::default().with_session_id(other.scope.session_id.clone()))
+            .await
+            .expect("inbox")),
+        std::slice::from_ref(&other.id),
+        "every pending request of another session"
+    );
+    assert_eq!(
+        fx.service
+            .inbox(InboxQuery::default().with_session_id(unique("session")))
+            .await
+            .expect("inbox")
+            .items,
+        [],
+        "a session with no requests"
     );
 }
 

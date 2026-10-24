@@ -79,6 +79,10 @@ fn fixture() -> Fixture {
 }
 
 async fn submit(fx: &Fixture, quorum: u32) -> ApprovalRequest {
+    submit_in(fx, "s1", quorum).await
+}
+
+async fn submit_in(fx: &Fixture, session: &str, quorum: u32) -> ApprovalRequest {
     let call = ToolConfirmationRequest {
         tool_name: "transfer".into(),
         function_call_id: Some("call-1".into()),
@@ -86,7 +90,7 @@ async fn submit(fx: &Fixture, quorum: u32) -> ApprovalRequest {
         acting: None,
         origin: None,
     };
-    let scope = ApprovalScope::new("bank", "carol", "s1");
+    let scope = ApprovalScope::new("bank", "carol", session);
     fx.store.record_pending(&scope, &call).await.unwrap();
     let request = ApprovalRequest::new(
         uuid::Uuid::new_v4().to_string(),
@@ -169,6 +173,39 @@ async fn a_quorum_of_two_is_reached_through_the_endpoints() {
         fx.store.take_approval(&request.scope, &request.fingerprint).await.unwrap(),
         Some(ToolApproval::approve())
     );
+}
+
+/// `?session=` lists the decisions one session waits on (spec 3.3 §10 C1).
+#[tokio::test]
+async fn the_inbox_lists_one_session() {
+    let fx = fixture();
+    let first = submit_in(&fx, "s1", 1).await;
+    let second = submit_in(&fx, "s2", 1).await;
+    let ids = |inbox: &Value| -> Vec<String> {
+        inbox["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let (status, every) = call(&fx, "GET", "/api/approvals", Some("ana"), Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{every}");
+    assert_eq!(ids(&every).len(), 2, "both sessions without a filter");
+    let (status, one) =
+        call(&fx, "GET", "/api/approvals?session=s2", Some("ana"), Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{one}");
+    assert_eq!(ids(&one), [second.id]);
+    let (_, scoped) =
+        call(&fx, "GET", "/api/approvals?app=bank&session=s1", Some("ana"), Value::Null).await;
+    assert_eq!(ids(&scoped), [first.id]);
+    let (_, elsewhere) =
+        call(&fx, "GET", "/api/approvals?app=shop&session=s1", Some("ana"), Value::Null).await;
+    assert_eq!(elsewhere["items"], json!([]), "the session ID in another application");
+    let (_, outsider) =
+        call(&fx, "GET", "/api/approvals?session=s1", Some("eve"), Value::Null).await;
+    assert_eq!(outsider["items"], json!([]), "the filter never widens the caller's inbox");
 }
 
 #[tokio::test]
