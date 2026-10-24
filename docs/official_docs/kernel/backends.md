@@ -1,9 +1,10 @@
 # Kernel Store Backends
 
-The kernel keeps its own state in five stores beside the run, schedule and governance
+The kernel keeps its own state in six stores beside the run, schedule and governance
 stores of `adk-session`: the process side table, the agenda, the mounted drivers with their
-parked calls, the [`/proc`](proc.md) activity ledger, and the [partition](partitions.md)
-table with its crossing ledger (spec 3.2 §7.1, §7.8, §13 Q8). Every backend a store runs on
+parked calls, the [`/proc`](proc.md) activity ledger, the [partition](partitions.md)
+table with its crossing ledger, and the cron watermarks, where each cron wake source left off
+(spec 3.2 §7.1, §7.4, §7.8, §13 Q8). Every backend a store runs on
 passes the store's conformance suite.
 
 | Store | In-memory | SQLite (`sqlite`, default) | PostgreSQL (`postgres`) | Redis (`redis`) | MongoDB (`mongodb`, Alpha) | Firestore (`firestore`, Alpha) | Neo4j (`neo4j`, Alpha) |
@@ -13,6 +14,12 @@ passes the store's conformance suite.
 | `DriverStore` (`drivers`) | `InMemoryDriverStore` | `SqliteDriverStore` | `PostgresDriverStore` | `RedisDriverStore` | `MongoDriverStore` | `FirestoreDriverStore` | `Neo4jDriverStore` |
 | `LedgerStore` (`proc`) | `InMemoryLedgerStore` | `SqliteLedgerStore` | `PostgresLedgerStore` | `RedisLedgerStore` | `MongoLedgerStore` | `FirestoreLedgerStore` | `Neo4jLedgerStore` |
 | `PartitionStore` | `InMemoryPartitionStore` | `SqlitePartitionStore` | `PostgresPartitionStore` | `RedisPartitionStore` | `MongoPartitionStore` | `FirestorePartitionStore` | `Neo4jPartitionStore` |
+| `CronWatermarkStore` | `InMemoryCronWatermarkStore` | `SqliteCronWatermarkStore` | `PostgresCronWatermarkStore` | `RedisCronWatermarkStore` | — | — | — |
+
+The cron watermark store has no MongoDB, Firestore or Neo4j backend yet: a kernel built on
+those backends keeps its cron watermarks in memory, or on SQLite, PostgreSQL or Redis. A
+[tenant kernel](managed.md#cron-wakes-missed-while-a-tenant-was-down) keeps them in the
+tenant's own store (`TenantKernelBuilder::watermark_store`).
 
 There is no file backend: no durable store is file-backed, and the CLI keeps its state in
 `harness.db`. Vertex AI holds sessions only, so it has no kernel backend.

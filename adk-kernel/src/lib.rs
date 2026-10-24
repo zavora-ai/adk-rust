@@ -26,6 +26,7 @@
 //! | [`Process`], [`ProcessMeta`], [`ProcessView`], [`GoalProgress`], [`ProcessKind`], [`Suspension`], [`ProcessTable`], [`ProcessSpec`], [`ProgressSource`] | §7.3 |
 //! | [`ProcessStore`], [`ProcessFilter`], [`SpendScope`], [`InMemoryProcessStore`], `SqliteProcessStore`, `PostgresProcessStore`, `RedisProcessStore`; Alpha: `MongoProcessStore`, `FirestoreProcessStore`, `Neo4jProcessStore` | §7.3, §13 Q8 |
 //! | [`Wake`], [`WakeSet`], [`ExpiryAction`], [`WakeSource`], [`WakeEvent`], [`keys`], [`Trigger`], [`WakeRouter`], [`WakeOutcome`], [`KernelWakeExecutor`], the wake source adapters | §7.4 |
+//! | [`CronWatermarkStore`], [`SourceWatermark`], [`InMemoryCronWatermarkStore`], `SqliteCronWatermarkStore`, `PostgresCronWatermarkStore`, `RedisCronWatermarkStore` | §7.4, §7.13 |
 //! | [`KernelEvent`], [`EventRecord`], [`EventBus`], [`EventSubscriber`], [`EventSink`], [`AuditSink`], [`SpendDelta`] | §7.6 |
 //! | [`Agenda`], [`AgendaHandle`], [`ProposalOutcome`], [`AgendaItem`], [`AgendaState`], [`AgendaStateKind`], [`AgendaOrigin`], [`AgendaAnswer`], [`ObservationAudience`], [`PlanRef`], [`AgendaStore`], [`AgendaFilter`], [`InMemoryAgendaStore`], [`ProactivityPolicy`], [`ProactiveApproval`] | §7.5 |
 //! | [`ConsolidationTick`], [`Consolidator`], [`admit_tick`], [`TickInputs`], [`TickAdmission`], [`TickMaterial`], [`TickRun`], [`TickOutcome`], [`TickProposal`], [`TickSpend`], [`CONSOLIDATION_TARGET`], [`CONSOLIDATION_LABEL`] | §7.5, §13 Q1, Q12 |
@@ -114,6 +115,7 @@ pub mod service;
 pub mod stores;
 mod supervise;
 pub mod wake;
+pub mod watermark;
 #[cfg(windows)]
 mod win;
 
@@ -165,11 +167,15 @@ pub use stores::Neo4jProcessStore;
 #[cfg(feature = "postgres")]
 pub use stores::PostgresAgendaStore;
 #[cfg(feature = "postgres")]
+pub use stores::PostgresCronWatermarkStore;
+#[cfg(feature = "postgres")]
 pub use stores::PostgresPartitionStore;
 #[cfg(feature = "postgres")]
 pub use stores::PostgresProcessStore;
 #[cfg(feature = "redis")]
 pub use stores::RedisAgendaStore;
+#[cfg(feature = "redis")]
+pub use stores::RedisCronWatermarkStore;
 #[cfg(feature = "redis")]
 pub use stores::RedisPartitionStore;
 #[cfg(feature = "redis")]
@@ -177,12 +183,14 @@ pub use stores::RedisProcessStore;
 #[cfg(feature = "sqlite")]
 pub use stores::SqliteAgendaStore;
 #[cfg(feature = "sqlite")]
+pub use stores::SqliteCronWatermarkStore;
+#[cfg(feature = "sqlite")]
 pub use stores::SqlitePartitionStore;
 #[cfg(feature = "sqlite")]
 pub use stores::SqliteProcessStore;
 pub use stores::{
-    InMemoryAgendaStore, InMemoryPartitionStore, InMemoryProcessStore, ProcessFilter, ProcessStore,
-    SpendScope,
+    InMemoryAgendaStore, InMemoryCronWatermarkStore, InMemoryPartitionStore, InMemoryProcessStore,
+    ProcessFilter, ProcessStore, SpendScope,
 };
 #[cfg(feature = "webhooks")]
 pub use wake::webhook_wake_hook;
@@ -191,6 +199,7 @@ pub use wake::{
     KernelWakeExecutor, RunFinishedWakeSource, Trigger, Wake, WakeEvent, WakeOutcome, WakeRouter,
     WakeSet, WakeSource, kernel_wake_run, keys, queue_wake_ingress,
 };
+pub use watermark::{CronWatermarkStore, SourceWatermark};
 
 /// A short, stable tag of `path`: sixteen hex digits of the SHA-256 of its absolute form,
 /// lowercased on Windows, whose paths ignore case. It names a kernel home's pipe and service

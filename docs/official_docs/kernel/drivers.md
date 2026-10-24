@@ -264,7 +264,15 @@ drivers.mount(DriverManifest::from_file("email.toml")?, "alice").await?;
 A partition serves a driver only when its manifest lists the partition and the partition's
 own driver list names it. `toolset_for_manifests` serves every driver whose manifest lists
 the partition, for a kernel that keeps no partition records, as `adk-rust up` does for the
-default partition.
+default partition. `crossing_toolset` offers a coordinator other partitions' drivers as
+crossings, each call under a non-waivable approval
+([partitions](partitions.md#crossing-into-another-partitions-drivers)).
+
+## Drivers in the managed form
+
+A managed definition's driver manifests mount on the tenant's own supervisor, one person's
+approval in the tenant's inbox per driver, and reach that tenant's partitions only; see
+[the managed form](managed.md#a-definitions-drivers).
 
 | Route | Purpose | `operator` | Recorded |
 |---|---|---|---|

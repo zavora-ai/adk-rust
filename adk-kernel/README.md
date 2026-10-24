@@ -199,7 +199,10 @@ from the kernel's own per-process daily totals, fed by a `ProgressSource`.
 
 A `Trigger` spawns a new process for an event no sleeper takes, keyed
 `<event key>#<trigger name>`. Changes to watched files while the kernel was down are
-reconciled on start. A local event reaches `Running` in under 2 s: in-process sources
+reconciled on start. `CronWakeSource::watermarked` keeps where a cron source left off in a
+`CronWatermarkStore` (in-memory, SQLite, PostgreSQL, Redis;
+`cron_watermark_store_conformance_tests!`), so the ticks missed while no kernel watched fire
+once each, as the wake's `MissedFirePolicy` picks them. A local event reaches `Running` in under 2 s: in-process sources
 enqueue and claim at once, and the tick claims wake runs an external ingress or another
 replica enqueued.
 
@@ -216,9 +219,10 @@ A `Partition` is a policy class, a memory scope and a driver set, run by its own
 | `Partition::scope_memory` | Confines an `adk_core::Memory` to the partition's project |
 | `PartitionPolicy` | Denies a request reaching another partition unless the coordinator makes it, then requires a non-waivable approval; an approved read holds for the rest of its run, keyed by the crossing fingerprint (the call's fingerprint with the target partition and resource class) |
 | `CrossingTool` | Offers the coordinator another partition's driver or session tool as a crossing |
+| `DriverSupervisor::crossing_toolset` | Offers the coordinator other partitions' drivers as crossings `<partition>__<tool>`, read from the table at every listing and judged by the driver policy as the tool each wraps |
 | `KernelBuilder::partition_agent` | Hosts a partition's runner as a target bound to its partition: a process of another partition cannot run it or continue its sessions |
 | `KernelBuilder::partition_progress_source` | The partition's own progress source: the kernel reads its processes' goal progress, loop-guard verdicts and usage from it, by the process's partition, and hands it the process table and the ledger; a partition without one falls back to the main source |
-| Managed form | `KernelDef::partitions` and `coordinator` run one agent per partition on a tenant's kernel through `TenantKernelBuilder::partition_resolver`, over the tenant's own partition table (`partition_store`) |
+| Managed form | `KernelDef::partitions` and `coordinator` run one agent per partition on a tenant's kernel through `TenantKernelBuilder::partition_resolver`, over the tenant's own partition table (`partition_store`); with `TenantKernelBuilder::drivers`, each driver a partition mounts is proposed in the tenant's inbox and mounted on the tenant's own supervisor when a person approves it |
 | Audit | `kernel.partition.created`, `kernel.partition.changed`, and `kernel.partition.crossing` for every crossing, with a digest of its fingerprint |
 
 ## Lifecycle
@@ -431,6 +435,8 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `src/control/tests.rs` | The auth matrix on every transport: socket peers of another uid refused; on Windows the pipe's owner-only descriptor, its owner admitted, and a client of another identity refused by the DACL and, behind an open DACL, by the token check |
 | `src/service/tests.rs` | The launchd plist, systemd unit and Windows service rendered for each platform on every platform; `plutil` accepts the plist; the log is created `0600`. Real installs run in `.github/workflows/kernel-service.yml` |
 | `tests/managed_def_fixtures.rs`, `tests/managed_tenants.rs`, `tests/managed_tenant_property_tests.rs` (feature `managed`) | The kernel block's golden fixtures and refusals; a definition round-trips through the managed state store; a cron wake for one tenant runs on its stores only; a held call runs once after the tenant's approval; no wake, process or approval crosses tenants |
+| `tests/managed_drivers.rs`, `tests/managed_cron_watermarks.rs` (feature `managed`) | A definition's driver mounts on its tenant only when a person approves, and another tenant never sees it; missed cron ticks fire once each as each wake set's policy picks them, across a restart and two replicas |
+| `tests/cron_watermark_store_sqlite.rs`, `tests/cron_watermark_store_postgres.rs`, `tests/cron_watermark_store_redis.rs` | The cron watermark store's suite in memory and on SQLite; PostgreSQL and Redis in CI's `postgres` job |
 | `tests/k10_baselines.rs` | K10 on a manual clock: six weeks of a routine whose last two end late yield one observation on the tenth day of the change, none in the warm-up or the cooldown, and again after it; each an agenda question that stays open in Auto, starts no run, is remembered once when confirmed and not at all when rejected; none without `proc-baselines` |
 | `tests/proc_property_tests.rs` | K-I19: no ledger row carries a payload of the event or audit record that produced it |
 | `tests/pairing_scenarios.rs` | Spec 3.3 K2 on loopback HTTP: a `read` device reads but cannot decide, and once revoked is refused; a `stop` device freezes but cannot resume; a device token is never the loopback operator; a device decides medium risk but not high; a code pairs one device; every pairing action is recorded with what it grants; an open event stream ends on revocation and on expiry; a claim or a chat acceptance that cannot be recorded pairs nothing and keeps its code; a client holding a revoked token re-pairs; a waiting chat account is dismissed; a kernel without pairing says what it lacks |

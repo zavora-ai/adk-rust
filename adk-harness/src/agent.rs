@@ -145,6 +145,9 @@ pub struct HarnessRuntime {
     pub(crate) toolset: Arc<HarnessToolset>,
     pub(crate) instructions: Arc<InstructionState>,
     pub(crate) non_waivable_tools: BTreeSet<String>,
+    /// Prefixes of tool names no run-wide approval answers: the coordinator's crossing tools
+    /// listed at request time, `<to>__` for each partition it crosses into (spec 3.2 K-I15).
+    pub(crate) non_waivable_prefixes: Vec<String>,
     pub(crate) workspace: Workspace,
     pub(crate) audit: Option<adk_core::audit_log::AuditTrail>,
     #[cfg(feature = "auth")]
@@ -405,10 +408,14 @@ pub struct HarnessLayer<'a> {
 pub(crate) fn names_non_waivable(
     fingerprint: &str,
     non_waivable: &BTreeSet<String>,
+    prefixes: &[String],
     root: &std::path::Path,
 ) -> bool {
     let parts: Vec<&str> = fingerprint.splitn(5, '\u{1f}').collect();
     if parts.iter().any(|part| non_waivable.contains(*part)) {
+        return true;
+    }
+    if parts.get(3).is_some_and(|tool| prefixes.iter().any(|prefix| tool.starts_with(prefix))) {
         return true;
     }
     let [_, _, _, tool, args] = parts.as_slice() else {
@@ -517,7 +524,12 @@ impl HarnessLayer<'_> {
 
         let before = config.tool_approvals.len();
         config.tool_approvals.retain(|fingerprint, _| {
-            !names_non_waivable(fingerprint, &runtime.non_waivable_tools, runtime.workspace.root())
+            !names_non_waivable(
+                fingerprint,
+                &runtime.non_waivable_tools,
+                &runtime.non_waivable_prefixes,
+                runtime.workspace.root(),
+            )
         });
         if config.tool_approvals.len() != before {
             tracing::warn!(
@@ -1319,13 +1331,24 @@ mod tests {
         };
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
-        let strip = |fingerprint: &str| names_non_waivable(fingerprint, &nw(), &root);
+        let strip = |fingerprint: &str| names_non_waivable(fingerprint, &nw(), &[], &root);
         assert!(strip(&key("exit_plan_mode", "{}")));
         assert!(strip(&key("bash", r#"{"command":"ls","unsandboxed":true}"#)));
         assert!(!strip(&key("bash", r#"{"command":"ls"}"#)));
         assert!(strip(&key("write_file", r#"{"path":"AGENTS.md"}"#)));
         assert!(!strip(&key("write_file", r#"{"path":"src/a.rs"}"#)));
         assert!(strip("garbage"));
+    }
+
+    #[test]
+    fn a_crossing_tool_listed_at_request_time_is_non_waivable_by_its_prefix() {
+        let key =
+            |tool: &str| format!("agent\u{1f}driver:notes\u{1f}sha256:x\u{1f}{tool}\u{1f}{{}}");
+        let root = std::path::Path::new("/");
+        let prefixes = ["work__".to_string()];
+        assert!(names_non_waivable(&key("work__read_note"), &nw(), &prefixes, root));
+        assert!(!names_non_waivable(&key("read_note"), &nw(), &prefixes, root));
+        assert!(!names_non_waivable(&key("home__read_note"), &nw(), &prefixes, root));
     }
 
     #[cfg(unix)]
@@ -1340,8 +1363,8 @@ mod tests {
         std::fs::create_dir(root.join("docs")).unwrap();
         std::os::unix::fs::symlink("../AGENTS.md", root.join("docs/notes.md")).unwrap();
         std::os::unix::fs::symlink(".git", root.join("cfg")).unwrap();
-        assert!(names_non_waivable(&key(r#"{"path":"docs/notes.md"}"#), &nw(), &root));
-        assert!(names_non_waivable(&key(r#"{"path":"cfg/hooks/pre-commit"}"#), &nw(), &root));
-        assert!(!names_non_waivable(&key(r#"{"path":"docs/other.md"}"#), &nw(), &root));
+        assert!(names_non_waivable(&key(r#"{"path":"docs/notes.md"}"#), &nw(), &[], &root));
+        assert!(names_non_waivable(&key(r#"{"path":"cfg/hooks/pre-commit"}"#), &nw(), &[], &root));
+        assert!(!names_non_waivable(&key(r#"{"path":"docs/other.md"}"#), &nw(), &[], &root));
     }
 }

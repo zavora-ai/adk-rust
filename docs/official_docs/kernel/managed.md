@@ -150,6 +150,75 @@ decision store, state store, approval service or process store another tenant ho
 run store would let one tenant's workers claim the other's runs. Distinct store values over one
 database are not detected, so give each tenant its own database, schema or key namespace.
 
+## A definition's drivers
+
+A definition's partitions mount its drivers on the tenant's own `DriverSupervisor`
+(`TenantKernelBuilder::drivers`), only once a person approves each one (spec 3.2 §7.7, §7.8,
+K-I13):
+
+| Step | What happens |
+|---|---|
+| 1. Hosting | Each driver a declared partition mounts — the partition's `drivers` names it and the manifest's `partitions` lists the partition — is proposed in the tenant's approval inbox as a request with `tool_name` `kernel:driver.mount` (`DRIVER_MOUNT_TOOL_NAME`). The request shows what the person approves: the command line, the partitions, the effect classes, the sandbox and the `secret://` references |
+| 2. A person decides | An approver in the `operator` group, or the policy `TenantKernelBuilder::driver_approvers` sets, approves or rejects the request in the tenant's inbox |
+| 3. The mount | Every scheduler tick while the tenant's kernel runs, `TenantKernel::apply_driver_decisions` mounts each approved driver as the person who approved it (`kernel.driver.mounted`); an approval by anyone but a person mounts nothing |
+| 4. Pinning | The first listing of the driver's tools pins each tool's declaration digest; a later change makes the tool stale until `DriverSupervisor::reapprove` (K-I14) |
+| 5. Serving | Each partition's harness mounts the drivers its `drivers` names (`HarnessResolver` calls `partition_drivers`); the coordinator reaches the definition's other partitions' drivers only as [crossings](partitions.md#crossing-into-another-partitions-drivers) |
+
+A changed manifest — another command, partitions, class, sandbox or secret — is proposed again
+under a new request; the approved one keeps serving until the new one is approved. A driver no
+declared partition mounts is recorded and not proposed: drivers reach a definition's agents
+through its partitions, so a definition without partitions mounts none.
+
+Each tenant's drivers are invisible to every other tenant: a tenant's supervisor and driver store
+are its own (`ManagedKernels` refuses a tenant whose supervisor or driver store another tenant
+holds), its approvals are decided in its own inbox, and its drivers run as the tenant's app under
+`<kernel home>/tenants/<tenant>-<digest>` unless the supervisor's builder set a home.
+
+```rust
+use std::sync::Arc;
+
+use adk_core::{ApprovalPolicy, ApproverSelector};
+use adk_harness::packs::managed::HarnessResolver;
+use adk_kernel::drivers::DriverSupervisor;
+use adk_kernel::managed::TenantKernel;
+use adk_kernel::stores::InMemoryDriverStore;
+use adk_managed::ManagedStores;
+use adk_session::InMemorySessionService;
+
+fn tenant(stores: ManagedStores) -> adk_kernel::Result<TenantKernel> {
+    let harnesses = Arc::new(HarnessResolver::new("./workspaces/tenant-a"));
+    TenantKernel::builder("tenant-a", stores, Arc::new(InMemorySessionService::new()))
+        .resolver(harnesses.clone())
+        .partition_resolver(harnesses)
+        // The tenant's own supervisor over the tenant's own driver store.
+        .drivers(DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new())).build())
+        .driver_approvers(ApprovalPolicy::new([ApproverSelector::group("tenant-a-admins")]))
+        .build()
+}
+```
+
+## Cron wakes missed while a tenant was down
+
+Each cron expression of a tenant's wake sets has one cron source, which keeps its cursor in the
+tenant's own `CronWatermarkStore` (`TenantKernelBuilder::watermark_store`; in memory by default,
+which keeps nothing across a restart). When a replica of the tenant starts after an outage, the
+ticks no replica watched fire once each, as the wake set's `missed` policy picks them (spec 3.2
+§7.4):
+
+| `missed` | Missed ticks that fire |
+|---|---|
+| `skip` | The latest, only when it is no more than a minute late |
+| `fireOnce` | The latest, however late |
+| `catchUp(n)` | The latest `n`, oldest first |
+
+The cursor is written before each tick goes out, so a restart replays nothing a second time, and
+each tick keeps its key (`cron:<source>:<time>`), so replicas that start together fire each tick
+once (K-I3). A catch-up's processes follow the wake set's `overlap`: they queue behind each other
+(`queue`), or the later ones start nothing while one is unfinished (`skip`), so a long outage is
+never a burst. A source with no cursor yet starts at its first watch and replays nothing from
+before it existed. The store runs on in-memory, SQLite, PostgreSQL and Redis ([backends](backends.md));
+`ManagedKernels` refuses a tenant whose watermark store another tenant holds.
+
 ## What a tenant's definition cannot do
 
 A definition comes from a tenant, so its kernel block cannot widen what the operator allows.
@@ -190,7 +259,10 @@ record: only `unfreeze` wakes it (K-I21).
 | `adk-kernel/tests/managed_tenant_property_tests.rs` | Over random deliveries, approvals and approvals attempted through another tenant's service, across two or three tenants sharing a session service: no wake, process, approval or session crosses tenants (`proptest`, 100 cases) |
 | `adk-harness/tests/managed_kernel_tests.rs` | A harness definition on a tenant kernel: the held write runs once after the tenant's approval, and the harness's follow-up lands on the tenant's agenda |
 | `adk-harness/tests/voice_kernel_tests.rs` | A scripted spoken yes wakes a parked process; a freeze-parked process is refused and wakes only on unfreeze |
-| `examples/harness_kernel` `m1_one_kernel_per_tenant`, `v1_voice_answers_a_parked_process`, `live_managed_tenant_approval`, `live_voice_parked_process` | The managed form with two tenants scripted and one tenant live on `claude-sonnet-5-5` and `gemini-3.5-flash-lite`; a parked process decided by voice, scripted and live on Gemini Live |
+| `adk-kernel/tests/managed_drivers.rs` | A definition's driver is proposed in each tenant's own inbox, mounted only when a person approves, pinned at its first listing, run under the tenant's own home; another tenant's approval mounts nothing; a changed manifest is asked again; an approval by a service mounts nothing; tenants never share a supervisor or a driver store |
+| `adk-harness/tests/managed_partition_drivers.rs` | With real harnesses: tenant A's approved driver serves A's work partition, the coordinator reaches it only as a crossing its process parks on until approved, and tenant B, hosting the same definition, is offered nothing |
+| `adk-kernel/tests/managed_cron_watermarks.rs`, `cron_watermark_store_sqlite.rs` | Missed ticks fire once each as `skip`, `fireOnce` and `catchUp(2)` pick them; a restart replays nothing; two replicas starting together fire each tick once; each tenant keeps its own cursors; the store's conformance suite in memory and on SQLite (PostgreSQL and Redis in CI's `postgres` job) |
+| `examples/harness_kernel` `m1_one_kernel_per_tenant`, `m2_a_tenants_drivers`, `m3_missed_ticks_replay_once`, `v1_voice_answers_a_parked_process`, `live_managed_tenant_approval`, `live_managed_tenant_drivers`, `live_tenant_missed_ticks`, `live_voice_parked_process` | The managed form with two tenants scripted and one tenant live on `claude-sonnet-5-5` and `gemini-3.5-flash-lite`; a parked process decided by voice, scripted and live on Gemini Live |
 
 ## Related
 

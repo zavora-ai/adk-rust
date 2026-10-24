@@ -15,6 +15,7 @@
 //! | `channels::ChannelBindingStore` (feature `channels`; spec 3.3 §10 K1) | `ChannelBindingStoreHarness` | `channel_binding_store_conformance_tests!` | `channel_binding_store` |
 //! | [`PartitionStore`](crate::PartitionStore) | [`PartitionStoreHarness`] | [`partition_store_conformance_tests!`](crate::partition_store_conformance_tests) | [`partition_store`] |
 //! | [`ControlStore`](crate::control::ControlStore) (spec 3.3 §10 K3, K4) | [`ControlStoreHarness`] | [`control_store_conformance_tests!`](crate::control_store_conformance_tests) | [`control_store`] |
+//! | [`CronWatermarkStore`](crate::CronWatermarkStore) | [`CronWatermarkStoreHarness`] | [`cron_watermark_store_conformance_tests!`](crate::cron_watermark_store_conformance_tests) | [`cron_watermark_store`] |
 //!
 //! Chat channel adapters pass `channel_contract` (feature `channels`; spec 3.3 §10 K1): a
 //! `ChannelAdapterHarness` makes a fresh adapter per case and `channel_contract_tests!`
@@ -59,6 +60,7 @@ pub mod channel_binding_store;
 #[cfg(feature = "channels")]
 pub mod channel_contract;
 pub mod control_store;
+pub mod cron_watermark_store;
 pub mod device_store;
 #[cfg(feature = "drivers")]
 pub mod driver_store;
@@ -73,6 +75,7 @@ pub use channel_binding_store::ChannelBindingStoreHarness;
 #[cfg(feature = "channels")]
 pub use channel_contract::{ChannelAdapter, ChannelAdapterHarness, ContractHost};
 pub use control_store::ControlStoreHarness;
+pub use cron_watermark_store::CronWatermarkStoreHarness;
 pub use device_store::DeviceStoreHarness;
 #[cfg(feature = "drivers")]
 pub use driver_store::DriverStoreHarness;
@@ -175,6 +178,50 @@ macro_rules! ledger_store_conformance_tests {
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn ledger_store_pass_states_round_trip() {
             $crate::conformance::ledger_store::pass_states_round_trip(&$harness).await;
+        }
+    };
+}
+
+/// Generates one test per [`cron_watermark_store`] case for a [`CronWatermarkStoreHarness`]
+/// (spec 3.2 §7.4, §11).
+///
+/// Used as [`process_store_conformance_tests!`](crate::process_store_conformance_tests) is;
+/// see the [module documentation](crate::conformance).
+#[macro_export]
+macro_rules! cron_watermark_store_conformance_tests {
+    ($(#[$attr:meta])* harness = $harness:expr $(,)?) => {
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn cron_watermark_store_unknown_source() {
+            $crate::conformance::cron_watermark_store::unknown_source(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn cron_watermark_store_advance_then_read() {
+            $crate::conformance::cron_watermark_store::advance_then_read(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn cron_watermark_store_never_moves_back() {
+            $crate::conformance::cron_watermark_store::never_moves_back(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn cron_watermark_store_delete() {
+            $crate::conformance::cron_watermark_store::delete(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn cron_watermark_store_cursors_survive_a_restart() {
+            $crate::conformance::cron_watermark_store::cursors_survive_a_restart(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn cron_watermark_store_concurrent_advances_keep_the_latest() {
+            $crate::conformance::cron_watermark_store::concurrent_advances_keep_the_latest(
+                &$harness,
+            )
+            .await;
         }
     };
 }

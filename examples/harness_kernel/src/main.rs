@@ -66,6 +66,10 @@ const SCRIPTED: &[(&str, &str)] = &[
         "k7_partitions",
         "one harness serves everything: every agent reads every fact, and nothing is a crossing",
     ),
+    (
+        "k7_driver_crossings",
+        "one harness gets every driver: work's calendar is a plain tool of every agent, and nothing is a crossing",
+    ),
 ];
 
 /// The live scenarios.
@@ -76,9 +80,12 @@ const LIVE: &[&str] = &[
     "live_k6_supervised_driver",
     "live_parked_question_after_restart",
     "live_managed_tenant_approval",
+    "live_managed_tenant_drivers",
+    "live_tenant_missed_ticks",
     "live_voice_parked_process",
     "live_k10_proc",
     "live_k7_partitions",
+    "live_k7_driver_crossing",
 ];
 
 fn verdict(result: &Result<Checks>) -> String {
