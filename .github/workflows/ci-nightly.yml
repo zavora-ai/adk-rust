@@ -475,11 +475,13 @@ jobs:
             secret: ANTHROPIC_API_KEY
           - provider: gemini
             secret: GOOGLE_API_KEY
+    # Each job receives only its own provider's key. Literal `secrets.<NAME>` references keep
+    # every other secret off the runner, which an indexed `secrets[...]` lookup does not.
     env:
-      PROVIDER_KEY: ${{ secrets[matrix.secret] }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENAI_API_KEY: ${{ matrix.provider == 'openai' && secrets.OPENAI_API_KEY || '' }}
+      ANTHROPIC_API_KEY: ${{ matrix.provider == 'anthropic' && secrets.ANTHROPIC_API_KEY || '' }}
+      GOOGLE_API_KEY: ${{ matrix.provider == 'gemini' && secrets.GOOGLE_API_KEY || '' }}
+      PROVIDER_KEY: ${{ matrix.provider == 'openai' && secrets.OPENAI_API_KEY || matrix.provider == 'anthropic' && secrets.ANTHROPIC_API_KEY || matrix.provider == 'gemini' && secrets.GOOGLE_API_KEY || '' }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
