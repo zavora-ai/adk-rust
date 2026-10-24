@@ -77,7 +77,7 @@ async fn main() -> AnyhowResult<()> {
 cargo run
 ```
 
-With the default `minimal` tier, `Launcher` is `adk_runner::Launcher`, a console loop. With the `cli` feature it is `adk_cli::Launcher`, which also serves the web UI (`cargo run -- serve --port 8080`, on `127.0.0.1`).
+With the default `minimal` tier, `Launcher` is `adk_runner::Launcher`, a console loop. With the `cli` feature it is `adk_cli::Launcher`, which also serves the REST API (`cargo run -- serve --port 8080`, on `127.0.0.1`); the [web home](../docs/official_docs/surfaces/web-home.md) is served by `adk-rust serve` and `adk-rust up`.
 
 ### One Call — `adk_rust::run()`
 
