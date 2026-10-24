@@ -218,6 +218,7 @@ name = "adk-devtools"
 version = "3.0.0"
 dependencies = [
  "adk-core",
+ "adk-sandbox",
  "async-trait",
  "glob",
  "libc",
@@ -652,6 +653,7 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "adk-rust-macros",
+ "adk-sandbox",
  "adk-telemetry",
  "async-trait",
  "base64 0.22.1",

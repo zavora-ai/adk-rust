@@ -85,6 +85,15 @@ google-cloud-auth = { version = "1.8", optional = true, default-features = false
 # Optional: shared Google Cloud REST plumbing for the Example Store and Agent Registry clients
 adk-gcp = { workspace = true, optional = true }
 
+# The Job Object that holds each managed stdio server's process tree on Windows
+# (spec 3.2 §10 W1).
+[target.'cfg(windows)'.dependencies]
+adk-sandbox = { workspace = true, features = ["process-tree"] }
+
+# The Job Object tests wait for and end the processes a server started.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [dev-dependencies]
 # Internal dev-deps are path-only (no version) so cargo strips them from the
 # published manifest — they can never block or reorder a crates.io publish.

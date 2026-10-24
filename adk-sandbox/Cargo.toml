@@ -36,7 +36,8 @@ futures = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# Optional: Windows restricted-token enforcer API (spec 3.2 §10 W5)
+# Optional: the Job Objects of `process_tree` (spec 3.2 §10 W1) and the Windows
+# restricted-token enforcer API (spec 3.2 §10 W5)
 [target.'cfg(windows)'.dependencies]
 find-msvc-tools = "0.1.9"
 windows-sys = { version = "0.59", optional = true, features = [
@@ -44,6 +45,7 @@ windows-sys = { version = "0.59", optional = true, features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }
@@ -60,7 +62,10 @@ workspace-docker = ["workspace", "dep:bollard", "dep:futures"]
 # OS-level sandbox enforcers
 sandbox-macos = []       # Seatbelt via sandbox-exec (no extra deps)
 sandbox-linux = []       # Bubblewrap via bwrap binary (no extra deps)
-sandbox-windows = ["dep:windows-sys"]  # restricted-token enforcer via Win32 API (spec 3.2 §10 W5)
+sandbox-windows = ["process-tree"]  # restricted-token enforcer via Win32 API (spec 3.2 §10 W5)
+
+# Job Objects that hold a process tree on Windows (spec 3.2 §10 W1); nothing elsewhere.
+process-tree = ["dep:windows-sys"]
 
 # Convenience: enables all platform enforcers — only the target platform's code
 # compiles due to #[cfg(target_os = "...")] gates inside each module.

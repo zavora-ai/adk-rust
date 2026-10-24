@@ -134,6 +134,14 @@ When no enforcer runs on the host — a Linux host without bubblewrap, for examp
 driver runs unsandboxed and `drivers list` says why. `KernelConfig::fail_if_sandbox_unavailable` refuses
 to start it instead.
 
+On Windows every driver, sandboxed or not, runs in a Job Object of its own (spec 3.2 §10
+W1): it starts suspended and runs only once it is in the job, so every process it starts
+belongs to the job too. Stopping, restarting or unmounting the driver, a crash, and the
+kernel's own exit end the whole tree. The kernel records it on the driver as
+`processTree: "jobObject"` (`DriverRecord::process_tree`), in its `kernel.driver.started`
+record, and `drivers list` adds `in a job object` to the driver's isolation. On macOS and
+Linux `processTree` is absent and ending a driver ends its own process only.
+
 ## Secrets
 
 An `env` value `secret://<scope>/<name>` is resolved through the kernel's credential broker

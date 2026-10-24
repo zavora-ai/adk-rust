@@ -556,6 +556,20 @@ jobs:
         cargo test -p adk-sandbox --features sandbox-windows --lib sandbox::windows
         cargo test -p adk-sandbox --features sandbox-windows --test windows_enforcer_tests
 
+    # The Job Objects that hold a process tree (spec 3.2 §10 W1): adk-sandbox's own, each
+    # stdio server of McpServerManager's, and a kernel driver's, which unmounting ends with
+    # every process the driver started. adk-devtools' bash runs in the same jobs below.
+    - name: Run the Windows process-tree tests
+      timeout-minutes: 20
+      run: |
+        cargo test -p adk-sandbox --features process-tree --test process_tree_tests
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cargo test -p adk-tool --features mcp --test mcp_manager_status_tests
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cargo test -p adk-kernel --lib -- drivers::launch::tests::the_plan_records
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cargo test -p adk-kernel --test driver_scenarios a_drivers_process_tree
+
     # adk-code spawns rustc from a cleared environment and adk-devtools resolves
     # workspace paths; both carry Windows-only behaviour that the compile-only build
     # cannot exercise and that the merge tier otherwise reports only after landing.

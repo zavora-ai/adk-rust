@@ -1,6 +1,7 @@
 //! Drivers on a real stdio MCP server (spec 3.2 §7.7, §11): K6 — mount, crash and restart
-//! with backoff, a redeclared tool going stale and needing re-approval — and secrets that
-//! reach the server as files, never in its environment.
+//! with backoff, a redeclared tool going stale and needing re-approval — secrets that reach
+//! the server as files, never in its environment, and on Windows the Job Object that ends a
+//! driver's whole process tree with it (§10 W1).
 
 #![cfg(feature = "drivers")]
 
@@ -14,10 +15,12 @@ use adk_core::{
     ActingContext, CredentialBroker, InMemoryRunStore, PolicyDecision, ReadonlyContext,
     RevocationScope, ScopedToken, ToolOrigin, async_trait,
 };
-use adk_kernel::drivers::{DriverPolicy, DriverState, DriverSupervisor, driver_source};
+use adk_kernel::drivers::{
+    DriverPolicy, DriverProcessTree, DriverState, DriverSupervisor, driver_source,
+};
 use adk_kernel::stores::InMemoryDriverStore;
 use adk_kernel::{EventSubscriber, Kernel, KernelConfig, KernelEvent, PartitionId};
-use driver_support::{RunContext, Workdir};
+use driver_support::{RunContext, UNSANDBOXED, Workdir};
 use serde_json::{Value, json};
 
 #[tokio::test]
@@ -82,10 +85,13 @@ async fn k6_a_driver_restarts_after_a_crash_and_a_redeclared_tool_needs_reapprov
     let tools = toolset.tools(ctx.clone() as Arc<dyn ReadonlyContext>).await.unwrap();
     let mut names: Vec<&str> = tools.iter().map(|tool| tool.name()).collect();
     names.sort_unstable();
-    assert_eq!(names, ["crash", "env_report", "read_note", "send_note", "write_file"]);
+    assert_eq!(
+        names,
+        ["crash", "env_report", "read_note", "send_note", "spawn_descendant", "write_file"]
+    );
     driver_event(&mut events, "notes", DriverState::Running).await;
     let pinned = drivers.record("notes").unwrap().manifest.declaration_digests;
-    assert_eq!(pinned.len(), 5, "the first listing after approval pins every tool");
+    assert_eq!(pinned.len(), 6, "the first listing after approval pins every tool");
     for tool in &tools {
         assert_eq!(tool.origin(), driver_source("notes"));
     }
@@ -218,4 +224,90 @@ async fn a_secret_reaches_the_driver_as_a_file_and_never_in_its_environment() {
 
 fn report_tool(tools: &[Arc<dyn adk_core::Tool>]) -> Arc<dyn adk_core::Tool> {
     tools.iter().find(|tool| tool.name() == "env_report").unwrap().clone()
+}
+
+/// The text of a driver tool's answer.
+fn answer_text(answer: &Value) -> String {
+    answer["output"]
+        .as_str()
+        .or_else(|| answer.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| answer.to_string())
+}
+
+/// What holds a driver's process tree is recorded when it starts. On Windows it is the
+/// driver's Job Object, and unmounting the driver ends a process the driver started, which
+/// otherwise runs on after it (spec 3.2 §10 W1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_drivers_process_tree_is_recorded_and_ends_with_it() {
+    let work = Workdir::new();
+    let drivers =
+        DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new())).home(work.path()).build();
+    drivers.start().await.unwrap();
+    drivers.mount(work.manifest("notes", UNSANDBOXED), "alice").await.unwrap();
+    let ctx = RunContext::new(None, "s1", "call-1");
+    let tools = drivers
+        .toolset_for(&PartitionId::default(), &["notes".to_string()])
+        .tools(ctx.clone() as Arc<dyn ReadonlyContext>)
+        .await
+        .unwrap();
+
+    let expected = if cfg!(windows) { Some(DriverProcessTree::JobObject) } else { None };
+    assert_eq!(drivers.record("notes").unwrap().process_tree, expected);
+
+    #[cfg(windows)]
+    {
+        let spawn = tools.iter().find(|tool| tool.name() == "spawn_descendant").unwrap();
+        let answer = spawn.execute(ctx, json!({})).await.unwrap();
+        let pid: u32 = answer_text(&answer).parse().unwrap();
+        assert!(!process::ends_within(pid, Duration::from_millis(500)), "the descendant started");
+
+        assert!(drivers.unmount("notes", "alice").await.unwrap());
+
+        let ended = process::ends_within(pid, Duration::from_secs(10));
+        process::terminate(pid);
+        assert!(ended, "a process the driver started outlived the driver");
+    }
+    #[cfg(not(windows))]
+    let _ = (tools, ctx, answer_text);
+    drivers.shutdown().await;
+}
+
+/// Waiting for and ending a process by its ID.
+#[cfg(windows)]
+mod process {
+    use std::time::Duration;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
+    };
+
+    /// Whether the process `pid` has ended, or ends within `wait`.
+    pub fn ends_within(pid: u32, wait: Duration) -> bool {
+        // SAFETY: plain arguments; a null handle means no such process is left.
+        let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        if process.is_null() {
+            return true;
+        }
+        let millis = u32::try_from(wait.as_millis()).unwrap_or(u32::MAX);
+        // SAFETY: the handle is open with `PROCESS_SYNCHRONIZE` and closed once.
+        unsafe {
+            let waited = WaitForSingleObject(process, millis);
+            CloseHandle(process);
+            waited == WAIT_OBJECT_0
+        }
+    }
+
+    /// Ends the process `pid`, should a test leave it running.
+    pub fn terminate(pid: u32) {
+        // SAFETY: plain arguments; the handle is checked and closed once.
+        unsafe {
+            let process = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if !process.is_null() {
+                TerminateProcess(process, 1);
+                CloseHandle(process);
+            }
+        }
+    }
 }

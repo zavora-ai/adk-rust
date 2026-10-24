@@ -397,6 +397,7 @@ mod imp {
 
     use std::ffi::{OsStr, OsString, c_void};
     use std::os::windows::ffi::OsStrExt as _;
+    use std::os::windows::io::BorrowedHandle;
     use std::path::Path;
     use std::time::Duration;
 
@@ -419,20 +420,16 @@ mod imp {
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
     };
-    use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, TerminateJobObject,
-    };
     use windows_sys::Win32::System::Threading::{
         CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, GetCurrentProcess,
         GetExitCodeProcess, INFINITE, OpenProcessToken, PROCESS_INFORMATION, ResumeThread,
-        STARTUPINFOW, WaitForSingleObject,
+        STARTUPINFOW, TerminateProcess, WaitForSingleObject,
     };
 
     use super::token::{self, Sid, TokenGroup, TokenPlan};
     use super::{ConfinedOutcome, ENFORCER_NAME, strip_unc_prefix};
     use crate::error::SandboxError;
+    use crate::process_tree::JobObject;
     use crate::sandbox::{AccessMode, AllowedPath, SandboxPolicy};
 
     /// Owns a Win32 `HANDLE` and closes it on drop.
@@ -776,30 +773,12 @@ mod imp {
         Some(block)
     }
 
-    /// Creates a Job Object that kills its processes when its last handle closes.
-    fn create_job() -> Result<Handle, SandboxError> {
-        // SAFETY: both arguments may be null: no security attributes, no name.
-        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if handle.is_null() {
-            return Err(last_error("CreateJobObjectW"));
+    /// An enforcer error for the Job Object step `call` that failed with `error`.
+    fn job_error(call: &str, error: std::io::Error) -> SandboxError {
+        SandboxError::EnforcerFailed {
+            enforcer: ENFORCER_NAME.to_string(),
+            message: format!("{call} failed ({error})"),
         }
-        let job = Handle(handle);
-        // SAFETY: the limit structure is a plain C struct valid when zero-initialised.
-        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        // SAFETY: `limits` is readable for its own size and the handle is open.
-        let ok = unsafe {
-            SetInformationJobObject(
-                job.0,
-                JobObjectExtendedLimitInformation,
-                (&raw const limits).cast(),
-                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
-        };
-        if ok == 0 {
-            return Err(last_error("SetInformationJobObject"));
-        }
-        Ok(job)
     }
 
     pub(super) fn run_confined(
@@ -826,7 +805,7 @@ mod imp {
             grant_path(&entry.path, entry.mode, psid(&restricted))?;
         }
 
-        let job = create_job()?;
+        let job = JobObject::new().map_err(|error| job_error("CreateJobObjectW", error))?;
 
         let mut command = command_line(program, args);
         let cwd_wide: Vec<u16> =
@@ -873,17 +852,16 @@ mod imp {
 
         // Put the process in the job before it runs, so every descendant it starts is
         // captured and killed with it.
-        // SAFETY: both handles are open.
-        if unsafe { AssignProcessToJobObject(job.0, process.0) } == 0 {
-            let err = last_error("AssignProcessToJobObject");
+        // SAFETY: the process handle is open for the borrow, which ends with the call.
+        if let Err(error) = job.assign(unsafe { BorrowedHandle::borrow_raw(process.0) }) {
             // SAFETY: the process handle is open; terminate the stillborn process.
-            unsafe { TerminateJobObject(job.0, 1) };
-            return Err(err);
+            unsafe { TerminateProcess(process.0, 1) };
+            return Err(job_error("AssignProcessToJobObject", error));
         }
         // SAFETY: the thread handle is open; resuming a suspended primary thread is safe.
         if unsafe { ResumeThread(thread.0) } == u32::MAX {
             let err = last_error("ResumeThread");
-            unsafe { TerminateJobObject(job.0, 1) };
+            job.terminate();
             return Err(err);
         }
 
@@ -892,13 +870,13 @@ mod imp {
         // SAFETY: the process handle is open.
         let waited = unsafe { WaitForSingleObject(process.0, wait_ms) };
         if waited == WAIT_TIMEOUT {
-            // SAFETY: the job handle is open; kill the whole tree.
-            unsafe { TerminateJobObject(job.0, 1) };
+            // Kill the whole tree.
+            job.terminate();
             return Ok(ConfinedOutcome { exit_code: None, timed_out: true });
         }
         if waited == WAIT_FAILED {
             let err = last_error("WaitForSingleObject");
-            unsafe { TerminateJobObject(job.0, 1) };
+            job.terminate();
             return Err(err);
         }
         debug_assert_eq!(waited, WAIT_OBJECT_0);
@@ -908,8 +886,7 @@ mod imp {
         let got = unsafe { GetExitCodeProcess(process.0, &mut code) };
         // The process has exited, so terminating the job now only reaps any descendant that
         // outlived it.
-        // SAFETY: the job handle is open.
-        unsafe { TerminateJobObject(job.0, 1) };
+        job.terminate();
         if got == 0 {
             return Err(last_error("GetExitCodeProcess"));
         }
