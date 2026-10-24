@@ -342,7 +342,9 @@ cargo check --manifest-path examples/acp_server/Cargo.toml
   `acp-allow-once` approves; any other selection, and a cancellation, deny.
   With `AcpServerConfigBuilder::standing_permissions`, a call that may be
   remembered also offers `acp-allow-always` and `acp-reject-always`, which decide
-  the call and remember the answer as a standing rule (spec 3.3 §10 A1);
+  the call and remember the answer as a standing rule (spec 3.3 §10 A1), and a
+  call the implementation already decides — such as one a rule remembered for an
+  earlier call of the same turn covers — is not asked about.
   `adk-harness`'s `acp-server` feature implements it with the harness's standing
   rules, and never offers "always" for a payment, leaving plan mode, a memory
   write, a desktop action, a protected edit, or an unsandboxed retry. Each

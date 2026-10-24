@@ -2504,6 +2504,14 @@ mod tests {
             })
         }
 
+        async fn standing_decision(
+            &self,
+            _scope: &adk_core::ApprovalScope,
+            request: &ToolConfirmationRequest,
+        ) -> Option<ToolConfirmationDecision> {
+            self.rule_for(&request.tool_name, &request.args)
+        }
+
         async fn remember(
             &self,
             scope: &adk_core::ApprovalScope,
@@ -2526,17 +2534,41 @@ mod tests {
             &self,
             request: &adk_core::ToolPolicyRequest,
         ) -> adk_core::PolicyDecision {
-            let rules = self.rules.lock().expect("rules lock");
-            match rules
-                .iter()
-                .find(|(tool, args, _)| *tool == request.tool_name && *args == request.args)
-            {
-                Some((_, _, ToolConfirmationDecision::Approve)) => adk_core::PolicyDecision::Allow,
-                Some((_, _, ToolConfirmationDecision::Deny)) => {
+            match self.rule_for(&request.tool_name, &request.args) {
+                Some(ToolConfirmationDecision::Approve) => adk_core::PolicyDecision::Allow,
+                Some(ToolConfirmationDecision::Deny) => {
                     adk_core::PolicyDecision::Deny { reason: "always denied".into() }
                 }
                 None => adk_core::PolicyDecision::RequireApproval { reason: "ask first".into() },
             }
+        }
+    }
+
+    impl RememberedAnswers {
+        /// The decision of the rule covering `tool` with a command that starts with the same
+        /// two words, as a harness's command-prefix rule covers it.
+        fn rule_for(
+            &self,
+            tool: &str,
+            args: &serde_json::Value,
+        ) -> Option<ToolConfirmationDecision> {
+            let prefix = |args: &serde_json::Value| -> Vec<String> {
+                args["command"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .take(2)
+                    .map(str::to_string)
+                    .collect()
+            };
+            self.rules
+                .lock()
+                .expect("rules lock")
+                .iter()
+                .find(|(rule_tool, rule_args, _)| {
+                    rule_tool == tool && prefix(rule_args) == prefix(args)
+                })
+                .map(|(_, _, decision)| *decision)
         }
     }
 
@@ -2637,11 +2669,29 @@ mod tests {
         }
     }
 
+    /// The options a client prefers for its `n`th permission request, best first.
+    type Preference = fn(usize) -> &'static [PermissionOptionKind];
+
+    /// "Always allow" when it is offered, otherwise "Allow once".
+    fn always_then_once(_: usize) -> &'static [PermissionOptionKind] {
+        &[PermissionOptionKind::AllowAlways, PermissionOptionKind::AllowOnce]
+    }
+
     /// Sends each prompt in one session and answers every permission request with
     /// "Always allow" when it is offered, otherwise "Allow once"; returns every request.
     async fn drive_prompts(
         config: AcpServerConfig,
         prompts: &'static [&'static str],
+    ) -> Vec<RequestPermissionRequest> {
+        drive_prompts_with(config, prompts, always_then_once).await
+    }
+
+    /// Sends each prompt in one session and answers the `n`th permission request with the
+    /// first option `prefer(n)` names that is offered; returns every request.
+    async fn drive_prompts_with(
+        config: AcpServerConfig,
+        prompts: &'static [&'static str],
+        prefer: Preference,
     ) -> Vec<RequestPermissionRequest> {
         let capabilities = CapabilitiesBuilder::build(&config);
         let handler =
@@ -2659,15 +2709,15 @@ mod tests {
                       _connection: ConnectionTo<Agent>| {
                     let asked = asked_by_client.clone();
                     async move {
-                        let choice =
-                            [PermissionOptionKind::AllowAlways, PermissionOptionKind::AllowOnce]
-                                .into_iter()
-                                .find_map(|kind| {
-                                    request.options.iter().find(|option| option.kind == kind)
-                                })
-                                .expect("an allow option")
-                                .option_id
-                                .clone();
+                        let index = asked.lock().expect("asked lock").len();
+                        let choice = prefer(index)
+                            .iter()
+                            .find_map(|kind| {
+                                request.options.iter().find(|option| option.kind == *kind)
+                            })
+                            .expect("a preferred option")
+                            .option_id
+                            .clone();
                         asked.lock().expect("asked lock").push(request);
                         responder.respond(RequestPermissionResponse::new(
                             RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
@@ -2792,6 +2842,63 @@ mod tests {
         assert_eq!(
             (owners[0].app_name.as_str(), owners[0].user_id.as_str()),
             ("governed", "alice")
+        );
+    }
+
+    /// Review of #1029, finding 7: a rule remembered for an earlier call of a batch decides the
+    /// later calls it covers, so the person is never asked a question whose answer the rule
+    /// would override.
+    #[tokio::test]
+    async fn a_rule_remembered_mid_batch_decides_the_later_calls_it_covers() {
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let batch = Content {
+            role: "model".to_string(),
+            parts: ["call-1", "call-2"]
+                .iter()
+                .zip(["cargo test -p a", "cargo test -p b"])
+                .map(|(id, command)| adk_core::Part::FunctionCall {
+                    name: "run_command".to_string(),
+                    args: serde_json::json!({"command": command}),
+                    id: Some((*id).to_string()),
+                    thought_signature: None,
+                })
+                .collect(),
+        };
+        let model = ScriptModel(Mutex::new(
+            [batch, Content::new("model").with_text("both packages pass")].into(),
+        ));
+        let inner = adk_agent::LlmAgentBuilder::new("governed")
+            .model(Arc::new(model))
+            .tool(Arc::new(CommandTool { name: "run_command", ran: ran.clone() }))
+            .build()
+            .expect("agent");
+        let rules = Arc::new(RememberedAnswers::default());
+        let config = AcpServerConfigBuilder::new()
+            .agent(Arc::new(GovernedAgent { inner: Arc::new(inner), rules: rules.clone() }))
+            .session_service(Arc::new(adk_session::InMemorySessionService::new()))
+            .agent_name("governed")
+            .user_id("alice")
+            .standing_permissions(rules.clone())
+            .build()
+            .expect("valid config");
+
+        // "Always allow" for the first call; "Deny" for any call asked about after it.
+        fn first_always_then_deny(index: usize) -> &'static [PermissionOptionKind] {
+            if index == 0 {
+                &[PermissionOptionKind::AllowAlways]
+            } else {
+                &[PermissionOptionKind::RejectOnce]
+            }
+        }
+        let asked =
+            drive_prompts_with(config, &["test both packages"], first_always_then_deny).await;
+
+        let asked_about: Vec<String> =
+            asked.iter().map(|request| request.tool_call.tool_call_id.to_string()).collect();
+        assert_eq!(asked_about, ["call-1"], "the rule decides call-2; it is not asked about");
+        assert_eq!(
+            *ran.lock().expect("ran lock"),
+            ["run_command: cargo test -p a", "run_command: cargo test -p b"]
         );
     }
 }

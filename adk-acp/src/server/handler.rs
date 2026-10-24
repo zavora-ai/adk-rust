@@ -697,6 +697,17 @@ impl AcpSessionHandler {
                 if cancellation_token.is_cancelled() {
                     return Ok(StopReason::Cancelled);
                 }
+                // A call a rule covers — one remembered for an earlier call of this batch
+                // too — is decided by the rule, so no answer is asked for that the rule would
+                // override (spec 3.3 §10 A1).
+                if let Some(standing) = &self.standing_permissions
+                    && let Some(decision) = standing.standing_decision(&scope, confirmation).await
+                    && let Some(call_id) = confirmation.function_call_id.clone()
+                {
+                    fingerprints.insert(call_id.clone(), confirmation.fingerprint());
+                    decisions.insert(call_id, decision);
+                    continue;
+                }
                 // A call the store may remember is also offered "always" (spec 3.3 §10 A1).
                 let offer = match &self.standing_permissions {
                     Some(standing) => standing.offer(&scope, confirmation).await,
