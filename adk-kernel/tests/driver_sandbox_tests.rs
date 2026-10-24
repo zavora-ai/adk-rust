@@ -142,27 +142,19 @@ async fn a_script_driver_whose_interpreter_is_outside_the_system_directories_sta
     }
     use std::os::unix::fs::PermissionsExt as _;
     let work = Workdir::new();
+    // The interpreter is a copy of this test binary, which serves the driver: the script's
+    // path reaches it as one more test-name filter. A copy of `/bin/sh` cannot stand in,
+    // since macOS launch constraints kill a system binary started from another directory.
     let toolchain = tempfile::tempdir().unwrap();
-    let interpreter = toolchain.path().join("sh");
-    std::fs::copy("/bin/sh", &interpreter).unwrap();
+    let interpreter = toolchain.path().join("notes-interpreter");
+    std::fs::copy(std::env::current_exe().unwrap(), &interpreter).unwrap();
     std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o755)).unwrap();
     let scripts = tempfile::tempdir().unwrap();
     let script = scripts.path().join("notes-server");
-    let exe = std::env::current_exe().unwrap();
-    std::fs::write(
-        &script,
-        format!("#!{}\nexec '{}' \"$@\"\n", interpreter.display(), exe.display()),
-    )
-    .unwrap();
+    std::fs::write(&script, format!("#!{}\n", interpreter.display())).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    // The binary the script runs is a file the server reads, so the manifest lists it, and
-    // its loader: under a Nix toolchain that is the store.
-    let mut read = vec![exe.parent().unwrap()];
-    if Path::new("/nix/store").is_dir() {
-        read.push(Path::new("/nix/store"));
-    }
     let isolation =
-        assert_confined(&work, work.manifest_with("notes", &script, &read, "sandbox = \"os\""))
+        assert_confined(&work, work.manifest_with("notes", &script, &[], "sandbox = \"os\""))
             .await;
     let opened = program_paths(&isolation);
     assert!(
