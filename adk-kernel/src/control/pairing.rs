@@ -11,12 +11,18 @@
 //! | `POST /kernel/channels/pair` (feature `channels`) | operator | Accepts the code a chat account was sent ([`AcceptChannelRequest`] → [`ChannelAccountResponse`]) |
 //! | `GET /kernel/channels` (feature `channels`) | operator | Paired chat accounts and the ones waiting ([`ChannelAccountsResponse`]) |
 //! | `POST /kernel/channels/{id}/revoke` (feature `channels`) | operator | Removes a chat account ([`ChannelAccountResponse`]) |
+//! | `POST /kernel/channels/waiting/{id}/dismiss` (feature `channels`) | operator | Dismisses a chat account waiting to be paired: its code stops working ([`ChannelPairingResponse`]) |
 //!
-//! Each route that changes something writes a `kernel.control` record before it acts:
-//! `pairing.issue`, `pairing.claim` (the device's owner as the subject, since the caller
-//! has no credentials but the code), `devices.revoke`, `channels.pair` and
-//! `channels.revoke`. A device's own actions carry `device` in their record, and a decision
-//! a device answers is recorded as `approvals.decide` before it reaches the inbox.
+//! The operator routes are mounted on every kernel: one that pairs no devices, or has no
+//! chat channels, answers `400` naming what it lacks, and lists no chat accounts.
+//!
+//! Each route that changes something writes a `kernel.control` record before it takes
+//! effect: `pairing.issue`, `pairing.claim` (the device's owner as the subject, since the
+//! caller has no credentials but the code), `devices.revoke`, `channels.pair`,
+//! `channels.revoke` and `channels.dismiss`. A claim or an acceptance takes its code first
+//! and puts it back when the record cannot be written, so nothing is paired unrecorded and
+//! the code still works. A device's own actions carry `device` in their record, and a
+//! decision a device answers is recorded as `approvals.decide` before it reaches the inbox.
 
 use std::sync::Arc;
 
@@ -39,8 +45,8 @@ use super::{ControlTransport, paths};
 use crate::audit;
 use crate::error::{KernelError, Result};
 use crate::pairing::{
-    ClaimedDevice, DEVICE_ID_METADATA, DEVICE_NAME_METADATA, DeviceScope, DeviceView, IssueCode,
-    IssuedCode, Pairing, device_scope_for, device_token,
+    ClaimedDevice, DEVICE_ID_METADATA, DEVICE_NAME_METADATA, DeviceAdmission, DeviceScope,
+    DeviceView, IssueCode, IssuedCode, Pairing, device_scope_for, device_token,
 };
 
 /// `POST /kernel/pairing` body: `adk-rust pair [--name] [--scope] [--expires]` (spec 3.3 §10
@@ -146,6 +152,8 @@ pub struct ChannelAccountView {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ChannelPairingView {
+    /// The id the account gets once paired, which dismisses it while it waits.
+    pub id: String,
     /// The channel.
     pub channel: String,
     /// The account.
@@ -169,6 +177,14 @@ pub struct ChannelAccountsResponse {
     pub waiting: Vec<ChannelPairingView>,
 }
 
+/// The answer of `POST /kernel/channels/waiting/{id}/dismiss`: the request it dismissed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelPairingResponse {
+    /// The dismissed request.
+    pub waiting: ChannelPairingView,
+}
+
 /// The answer of a chat-account action: the account after it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -179,18 +195,18 @@ pub struct ChannelAccountResponse {
 
 type Backend = State<Arc<dyn ControlBackend>>;
 
-/// The operator routes of `backend`'s pairing, relative to `/api`.
+/// The operator routes of `backend`'s pairing, relative to `/api`; mounted on every kernel,
+/// so one that pairs nothing answers with what to set rather than an empty `404`.
 pub(super) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
-    let router = Router::new()
+    Router::new()
         .route(paths::PAIRING, post(issue))
         .route(paths::DEVICES, get(devices))
-        .route(paths::DEVICE_REVOKE, post(revoke));
-    #[cfg(feature = "channels")]
-    let router = router
+        .route(paths::DEVICE_REVOKE, post(revoke))
         .route(paths::CHANNELS, get(channels::list))
         .route(paths::CHANNEL_PAIR, post(channels::accept))
-        .route(paths::CHANNEL_REVOKE, post(channels::revoke));
-    router.with_state(backend)
+        .route(paths::CHANNEL_REVOKE, post(channels::revoke))
+        .route(paths::CHANNEL_DISMISS, post(channels::dismiss))
+        .with_state(backend)
 }
 
 /// The claim route under `/api`, which needs no caller: the code is the credential.
@@ -224,7 +240,14 @@ async fn issue(
     if let Some(days) = request.expires_in_days {
         code = code.with_device_ttl(std::time::Duration::from_secs(u64::from(days) * 86_400));
     }
-    let extra = [("scopes", json!(code.scopes)), ("name", json!(request.name))];
+    // The record names what the code grants: every scope when none was named, and the
+    // name as it is stored.
+    let code = code.normalized();
+    let extra = [
+        ("scopes", json!(code.scopes)),
+        ("name", json!(code.name)),
+        ("expiresInDays", json!(request.expires_in_days)),
+    ];
     record(backend.as_ref(), &caller, "pairing.issue", None, &extra).await?;
     Ok(Json(pairing.issue(code).await?))
 }
@@ -234,14 +257,16 @@ async fn claim(
     Json(request): Json<ClaimRequest>,
 ) -> Result<Json<ClaimedDevice>> {
     let pairing = pairing_of(backend.as_ref())?;
-    let claimed = pairing.claim(&request.code, request.name.as_deref()).await?;
-    let device = &claimed.device;
+    // The code is taken, then the claim recorded, then the device stored: a claim nobody
+    // recorded pairs nothing and leaves its code to be claimed again.
+    let pending = pairing.take_for_claim(&request.code, request.name.as_deref()).await?;
+    let device = pending.device();
     let extra = [
         ("device", json!(device.id)),
         ("name", json!(device.name)),
         ("scopes", json!(device.scopes)),
     ];
-    if let Err(error) = record_as(
+    let recorded = record_as(
         backend.as_ref(),
         SubjectRef::human(device.owner.clone()),
         ControlTransport::Http,
@@ -249,15 +274,12 @@ async fn claim(
         Some(&device.id),
         &extra,
     )
-    .await
-    {
-        // A device nobody recorded pairing does not stay paired.
-        if let Err(revoke) = pairing.revoke(&device.id).await {
-            tracing::error!(device.id = %device.id, error = %revoke, "could not remove an unrecorded device");
-        }
+    .await;
+    if let Err(error) = recorded {
+        pairing.abandon_claim(pending).await;
         return Err(error);
     }
-    Ok(Json(claimed))
+    Ok(Json(pairing.finish_claim(pending).await?))
 }
 
 async fn devices(State(backend): Backend, caller: Caller) -> Result<Json<DevicesResponse>> {
@@ -385,9 +407,16 @@ fn percent_decode(segment: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Whether `method` and `path` are the claim route, which needs no caller.
+fn is_claim(method: &Method, path: &str) -> bool {
+    *method == Method::POST
+        && path.strip_prefix(paths::API_PREFIX).unwrap_or(path) == paths::PAIRING_CLAIM
+}
+
 /// Checks every request that carries a device token against `backend`'s pairing before it
 /// reaches `router` (spec 3.3 §10 K2), so a device reaches only the routes its scopes open:
-/// `401` for an unknown, expired or revoked token, `403` for a route it may not call.
+/// `401` for an unknown, expired or revoked token, `403` for a route it may not call. The
+/// claim route passes untouched, since it needs no caller.
 pub(super) fn guard(backend: Arc<dyn ControlBackend>, router: Router) -> Router {
     router.layer(middleware::from_fn(move |request: Request<Body>, next: Next| {
         let backend = backend.clone();
@@ -400,36 +429,55 @@ pub(super) fn guard(backend: Arc<dyn ControlBackend>, router: Router) -> Router 
             };
             let method = request.method().clone();
             let path = request.uri().path().to_string();
+            // The claim needs no caller: a client still holding an old token re-pairs.
+            if is_claim(&method, &path) {
+                return next.run(request).await;
+            }
             match admit_device(backend.as_ref(), &pairing, &token, &method, &path).await {
-                Ok(_) => next.run(request).await,
+                Ok(context) => {
+                    // The extractor behind the guard admits only the decisions it checked.
+                    let mut request = request;
+                    if let Some(device) = context.metadata.get(DEVICE_ID_METADATA) {
+                        request.extensions_mut().insert(DeviceAdmission { device: device.clone() });
+                    }
+                    next.run(request).await
+                }
                 Err(response) => response,
             }
         }
     }))
 }
 
-/// The chat-account routes (spec 3.3 §10 K1; feature `channels`).
-#[cfg(feature = "channels")]
+/// The chat-account routes (spec 3.3 §10 K1), mounted on every kernel: one without chat
+/// channels lists none and answers the others with what it lacks.
 mod channels {
     use axum::Json;
     use axum::extract::{Path as UrlPath, State};
-    use serde_json::json;
 
     use super::{
         AcceptChannelRequest, Backend, Caller, ChannelAccountResponse, ChannelAccountsResponse,
-        pairing_of, record,
+        ChannelPairingResponse,
     };
-    use crate::channels::ChannelBindingStore;
     use crate::error::{KernelError, Result};
 
+    /// A chat account or waiting request `id` this kernel does not have.
+    fn no_account(id: &str) -> KernelError {
+        KernelError::Core(adk_core::AdkError::new(
+            adk_core::ErrorComponent::Server,
+            adk_core::ErrorCategory::NotFound,
+            crate::error::NOT_FOUND_CODE,
+            format!("no chat account {id}: list them with `adk-rust pair list`"),
+        ))
+    }
+
+    #[cfg(feature = "channels")]
     fn bindings(
         backend: &dyn super::ControlBackend,
-    ) -> Result<(crate::pairing::Pairing, std::sync::Arc<dyn ChannelBindingStore>)> {
-        let pairing = pairing_of(backend)?;
-        let store = pairing.channel_bindings().cloned().ok_or_else(|| KernelError::Config {
-            reason: "this kernel pairs no chat accounts: set Pairing::with_channel_bindings".into(),
-        })?;
-        Ok((pairing, store))
+    ) -> Option<(crate::pairing::Pairing, std::sync::Arc<dyn crate::channels::ChannelBindingStore>)>
+    {
+        let pairing = backend.pairing()?;
+        let store = pairing.channel_bindings().cloned()?;
+        Some((pairing, store))
     }
 
     pub(super) async fn list(
@@ -437,17 +485,24 @@ mod channels {
         caller: Caller,
     ) -> Result<Json<ChannelAccountsResponse>> {
         caller.require_operator("list the paired chat accounts")?;
-        let (pairing, store) = bindings(backend.as_ref())?;
-        let now = pairing.now();
-        let accounts = store.list_bindings().await?.iter().map(|binding| binding.view()).collect();
-        let waiting = store
-            .list_requests()
-            .await?
-            .iter()
-            .filter(|request| request.expires_at > now)
-            .map(|request| request.view())
-            .collect();
-        Ok(Json(ChannelAccountsResponse { accounts, waiting }))
+        let empty = ChannelAccountsResponse { accounts: Vec::new(), waiting: Vec::new() };
+        #[cfg(feature = "channels")]
+        if let Some((pairing, store)) = bindings(backend.as_ref()) {
+            let now = pairing.now();
+            let accounts =
+                store.list_bindings().await?.iter().map(|binding| binding.view()).collect();
+            let waiting = store
+                .list_requests()
+                .await?
+                .iter()
+                .filter(|request| request.expires_at > now)
+                .map(|request| request.view())
+                .collect();
+            return Ok(Json(ChannelAccountsResponse { accounts, waiting }));
+        }
+        let _ = backend;
+        // A kernel without chat channels has none to list.
+        Ok(Json(empty))
     }
 
     pub(super) async fn accept(
@@ -456,25 +511,55 @@ mod channels {
         Json(request): Json<AcceptChannelRequest>,
     ) -> Result<Json<ChannelAccountResponse>> {
         caller.require_operator("pair a chat account")?;
-        let (pairing, store) = bindings(backend.as_ref())?;
-        let binding = crate::channels::accept_pairing(
-            store.as_ref(),
-            &request.code,
-            &caller.context.user_id,
-            &caller.context.scopes,
-            pairing.now(),
-        )
-        .await?;
-        let extra = [("channel", json!(binding.channel)), ("account", json!(binding.account))];
-        if let Err(error) =
-            record(backend.as_ref(), &caller, "channels.pair", Some(&binding.id), &extra).await
+        #[cfg(feature = "channels")]
         {
-            // An account nobody recorded pairing does not stay paired.
-            let _ =
-                crate::channels::revoke_binding(store.as_ref(), &binding.id, pairing.now()).await;
-            return Err(error);
+            let (pairing, store) =
+                bindings(backend.as_ref()).ok_or_else(|| KernelError::Config {
+                    reason: "this kernel pairs no chat accounts: no chat channel is connected to \
+                         it (Pairing::with_channel_bindings)"
+                        .into(),
+                })?;
+            let now = pairing.now();
+            // The code is taken, then the pairing recorded, then the account stored: an
+            // account nobody recorded pairing is not paired, and its code still works.
+            let waiting = crate::channels::take_pairing(store.as_ref(), &request.code, now).await?;
+            let binding = crate::channels::binding_for(
+                &waiting,
+                &caller.context.user_id,
+                &caller.context.scopes,
+                now,
+            );
+            let extra = [
+                ("channel", serde_json::json!(binding.channel)),
+                ("account", serde_json::json!(binding.account)),
+            ];
+            let recorded = super::record(
+                backend.as_ref(),
+                &caller,
+                "channels.pair",
+                Some(&binding.id),
+                &extra,
+            )
+            .await;
+            if let Err(error) = recorded {
+                crate::channels::restore_pairing(store.as_ref(), waiting).await;
+                return Err(error);
+            }
+            if let Err(error) = store.put_binding(binding.clone()).await {
+                crate::channels::restore_pairing(store.as_ref(), waiting).await;
+                return Err(error);
+            }
+            Ok(Json(ChannelAccountResponse { account: binding.view() }))
         }
-        Ok(Json(ChannelAccountResponse { account: binding.view() }))
+        #[cfg(not(feature = "channels"))]
+        {
+            let _ = (backend, request);
+            Err(KernelError::Config {
+                reason: "this kernel has no chat channels: it was built without adk-kernel's \
+                         `channels` feature, so no chat account can be paired with it"
+                    .into(),
+            })
+        }
     }
 
     pub(super) async fn revoke(
@@ -483,10 +568,37 @@ mod channels {
         UrlPath(id): UrlPath<String>,
     ) -> Result<Json<ChannelAccountResponse>> {
         caller.require_operator("remove a chat account")?;
-        let (pairing, store) = bindings(backend.as_ref())?;
-        record(backend.as_ref(), &caller, "channels.revoke", Some(&id), &[]).await?;
-        let binding = crate::channels::revoke_binding(store.as_ref(), &id, pairing.now()).await?;
-        Ok(Json(ChannelAccountResponse { account: binding.view() }))
+        #[cfg(feature = "channels")]
+        if let Some((pairing, store)) = bindings(backend.as_ref())
+            && store.get_binding(&id).await?.is_some()
+        {
+            super::record(backend.as_ref(), &caller, "channels.revoke", Some(&id), &[]).await?;
+            let binding =
+                crate::channels::revoke_binding(store.as_ref(), &id, pairing.now()).await?;
+            return Ok(Json(ChannelAccountResponse { account: binding.view() }));
+        }
+        let _ = backend;
+        Err(no_account(&id))
+    }
+
+    /// Dismisses the waiting chat account `id`: its code stops working and its place in the
+    /// queue is freed (review finding 11).
+    pub(super) async fn dismiss(
+        State(backend): Backend,
+        caller: Caller,
+        UrlPath(id): UrlPath<String>,
+    ) -> Result<Json<ChannelPairingResponse>> {
+        caller.require_operator("dismiss a chat account waiting to be paired")?;
+        #[cfg(feature = "channels")]
+        if let Some((_, store)) = bindings(backend.as_ref())
+            && let Some(waiting) = crate::channels::waiting_request(store.as_ref(), &id).await?
+        {
+            super::record(backend.as_ref(), &caller, "channels.dismiss", Some(&id), &[]).await?;
+            store.take_request(&waiting.code_hash).await?;
+            return Ok(Json(ChannelPairingResponse { waiting: waiting.view() }));
+        }
+        let _ = backend;
+        Err(no_account(&id))
     }
 }
 

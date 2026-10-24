@@ -19,7 +19,7 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use futures::StreamExt;
+use futures::{FutureExt as _, StreamExt};
 use serde_json::json;
 
 use super::api::{
@@ -263,10 +263,7 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         .route(paths::PROC_OBSERVATIONS, get(proc_observations));
     // Device pairing (spec 3.3 §10 K2); its tokens are admitted where the transport
     // authenticates, and by `guard_devices` in front of a server's app.
-    match backend.pairing() {
-        Some(_) => router.with_state(backend.clone()).merge(super::pairing::routes(backend)),
-        None => router.with_state(backend),
-    }
+    router.with_state(backend.clone()).merge(super::pairing::routes(backend))
 }
 
 type Backend = State<Arc<dyn ControlBackend>>;
@@ -280,6 +277,11 @@ pub(crate) struct Caller {
 impl Caller {
     pub(super) fn subject(&self) -> SubjectRef {
         SubjectRef::human(self.context.user_id.clone())
+    }
+
+    /// The paired device the request came from, when a device token admitted it.
+    fn device(&self) -> Option<&str> {
+        self.context.metadata.get(crate::pairing::DEVICE_ID_METADATA).map(String::as_str)
     }
 
     fn actor(&self) -> AuditActor {
@@ -490,7 +492,7 @@ async fn resume(
 
 async fn events(
     State(backend): Backend,
-    _caller: Caller,
+    caller: Caller,
     headers: HeaderMap,
     Query(query): Query<EventsQuery>,
 ) -> Result<Response> {
@@ -501,7 +503,13 @@ async fn events(
         .and_then(|value| value.trim().parse::<u64>().ok())
         .or(query.after);
     let subscriber = backend.events(after).await?;
-    let stream = subscriber.into_stream().map(|record| {
+    // A paired device's stream ends when the device is revoked or its pairing ends (spec 3.3
+    // S-I7): its access ends at once, not at its next request.
+    let device_ends = match (backend.pairing(), caller.device()) {
+        (Some(pairing), Some(device)) => pairing.device_ends(device.to_string()).boxed(),
+        _ => futures::future::pending().boxed(),
+    };
+    let stream = subscriber.into_stream().take_until(device_ends).map(|record| {
         let event = SseEvent::default().id(record.cursor.to_string()).event(record.event.name());
         Ok::<_, std::convert::Infallible>(event.json_data(&record).unwrap_or_else(|error| {
             tracing::warn!(error = %error, "kernel event could not be encoded");

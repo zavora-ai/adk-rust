@@ -3,8 +3,9 @@
 //!
 //! One row per device in `adk_kernel_devices` and one per waiting code in
 //! `adk_kernel_pairing_codes`, each holding its record as JSON text beside the columns the
-//! store orders and prunes by. A code is taken with one `DELETE … RETURNING`, so two claims
-//! of one code take it once.
+//! store orders and prunes by, and the shared count of claims in the one row of
+//! `adk_kernel_pairing_attempts`, counted with one `INSERT … ON CONFLICT … RETURNING`. A
+//! code is taken with one `DELETE … RETURNING`, so two claims of one code take it once.
 
 use crate::error::KernelError;
 
@@ -30,6 +31,14 @@ pub(crate) const GET_DEVICE: &str = "SELECT record FROM adk_kernel_devices WHERE
 
 pub(crate) const LIST_DEVICES: &str =
     "SELECT record FROM adk_kernel_devices ORDER BY created_us, id";
+
+pub(crate) const COUNT_ATTEMPT: &str = "\
+INSERT INTO adk_kernel_pairing_attempts (id, attempts) VALUES (1, 1) \
+ON CONFLICT (id) DO UPDATE SET attempts = adk_kernel_pairing_attempts.attempts + 1 \
+RETURNING attempts";
+
+pub(crate) const RESET_ATTEMPTS: &str =
+    "UPDATE adk_kernel_pairing_attempts SET attempts = 0 WHERE id = 1";
 
 /// Maps a database error.
 pub(crate) fn db_error(backend: &'static str, action: &str, error: &sqlx::Error) -> KernelError {
@@ -138,6 +147,22 @@ macro_rules! sql_device_store {
                 rows.iter()
                     .map(|(text,)| $crate::pairing::sql::decode($backend, "device", text))
                     .collect()
+            }
+
+            async fn count_claim_attempt(&self) -> $crate::error::Result<u64> {
+                let (attempts,): (i64,) = sqlx::query_as($crate::pairing::sql::COUNT_ATTEMPT)
+                    .fetch_one(&self.pool)
+                    .await
+                    .map_err(|e| $crate::pairing::sql::db_error($backend, "count in", &e))?;
+                Ok(u64::try_from(attempts).unwrap_or_default())
+            }
+
+            async fn reset_claim_attempts(&self) -> $crate::error::Result<()> {
+                sqlx::query($crate::pairing::sql::RESET_ATTEMPTS)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| $crate::pairing::sql::db_error($backend, "reset", &e))?;
+                Ok(())
             }
         }
     };

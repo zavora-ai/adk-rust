@@ -1,6 +1,7 @@
 //! The in-memory [`DeviceStore`] (spec 3.3 §10 K2).
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -31,6 +32,7 @@ use crate::error::Result;
 pub struct InMemoryDeviceStore {
     codes: RwLock<BTreeMap<String, PairingCode>>,
     devices: RwLock<BTreeMap<String, DeviceRecord>>,
+    attempts: AtomicU64,
 }
 
 impl InMemoryDeviceStore {
@@ -78,5 +80,14 @@ impl DeviceStore for InMemoryDeviceStore {
         let mut devices: Vec<DeviceRecord> = self.devices.read().await.values().cloned().collect();
         devices.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
         Ok(devices)
+    }
+
+    async fn count_claim_attempt(&self) -> Result<u64> {
+        Ok(self.attempts.fetch_add(1, Ordering::SeqCst) + 1)
+    }
+
+    async fn reset_claim_attempts(&self) -> Result<()> {
+        self.attempts.store(0, Ordering::SeqCst);
+        Ok(())
     }
 }

@@ -4,10 +4,11 @@ use super::sql::{REGISTRY_TABLE, sql_device_store};
 use crate::error::{KernelError, Result};
 
 /// Migrations of [`SqliteDeviceStore`], recorded in `_adk_kernel_device_migrations`.
-const MIGRATIONS: &[(i64, &str, &str)] = &[(
-    1,
-    "create kernel device and pairing-code tables",
-    "\
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (
+        1,
+        "create kernel device and pairing-code tables",
+        "\
 CREATE TABLE IF NOT EXISTS adk_kernel_devices (\
     id TEXT PRIMARY KEY, \
     created_us INTEGER NOT NULL, \
@@ -19,14 +20,24 @@ CREATE TABLE IF NOT EXISTS adk_kernel_pairing_codes (\
     record TEXT NOT NULL\
 );\
 CREATE INDEX IF NOT EXISTS adk_kernel_pairing_codes_expiry ON adk_kernel_pairing_codes (expires_us);",
-)];
+    ),
+    (
+        2,
+        "create the shared count of pairing claims",
+        "\
+CREATE TABLE IF NOT EXISTS adk_kernel_pairing_attempts (\
+    id INTEGER PRIMARY KEY, \
+    attempts INTEGER NOT NULL\
+);",
+    ),
+];
 
 /// A [`DeviceStore`](super::DeviceStore) in SQLite (spec 3.3 §10 K2, feature `sqlite`).
 ///
 /// In the CLI it lives in `harness.db` on the same pool as the harness and process stores:
-/// its tables are `adk_kernel_devices` and `adk_kernel_pairing_codes`, and
-/// [`migrate`](Self::migrate) records its steps in `_adk_kernel_device_migrations`. Call
-/// `migrate` once before use.
+/// its tables are `adk_kernel_devices`, `adk_kernel_pairing_codes` and
+/// `adk_kernel_pairing_attempts`, and [`migrate`](Self::migrate) records its steps in
+/// `_adk_kernel_device_migrations`. Call `migrate` once before use.
 ///
 /// # Example
 ///

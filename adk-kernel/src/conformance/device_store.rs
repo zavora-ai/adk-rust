@@ -13,10 +13,12 @@
 //! | [`records_survive_a_restart`] | Devices and codes read back through a new handle (durable backends only) |
 //! | [`concurrent_takes_take_once`] | Eight concurrent takes of one code from two handles take it once |
 //! | [`concurrent_writers`] | Concurrent puts from two handles over distinct devices and codes lose none |
+//! | [`claim_attempts_are_counted_once_and_shared`] | Concurrent claim counts from two handles each get a distinct count, a reset starts again at one, and the count survives a restart |
 //!
 //! Every case writes under fresh ids and hashes, so a harness may point every case at one
-//! shared database, except [`clear_removes_every_code`], which removes every code: give it a
-//! database of its own, as the harnesses of this crate give every case.
+//! shared database, except [`clear_removes_every_code`], which removes every code, and
+//! [`claim_attempts_are_counted_once_and_shared`], which uses the one count of claims: give
+//! each a database of its own, as the harnesses of this crate give every case.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -276,6 +278,31 @@ pub async fn concurrent_writers(harness: &dyn DeviceStoreHarness) {
     }
 }
 
+/// Concurrent claim counts from two handles each get a distinct count, a reset starts the
+/// count again at one, and a durable count survives a restart (review finding 14: replicas
+/// share the count of wrong codes).
+pub async fn claim_attempts_are_counted_once_and_shared(harness: &dyn DeviceStoreHarness) {
+    let stores = two(harness).await;
+    stores[0].reset_claim_attempts().await.expect("reset");
+    let mut counts = Vec::new();
+    for index in 0..16 {
+        let store = stores[index % 2].clone();
+        counts.push(tokio::spawn(async move { store.count_claim_attempt().await.expect("count") }));
+    }
+    let mut seen = Vec::new();
+    for count in counts {
+        seen.push(count.await.expect("count completes"));
+    }
+    seen.sort_unstable();
+    assert_eq!(seen, (1..=16).collect::<Vec<u64>>(), "every count is distinct");
+    stores[1].reset_claim_attempts().await.expect("reset");
+    assert_eq!(stores[0].count_claim_attempt().await.expect("count"), 1);
+    if harness.is_durable() {
+        let reopened = harness.open().await;
+        assert_eq!(reopened.count_claim_attempt().await.expect("count"), 2);
+    }
+}
+
 /// Generates one test per [`device_store`](self) case for a `DeviceStoreHarness` (spec 3.3 §10 K2).
 ///
 /// Used as [`process_store_conformance_tests!`](crate::process_store_conformance_tests) is;
@@ -337,6 +364,11 @@ macro_rules! device_store_conformance_tests {
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn device_store_concurrent_writers() {
             $crate::conformance::device_store::concurrent_writers(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn device_store_claim_attempts_are_counted_once_and_shared() {
+            $crate::conformance::device_store::claim_attempts_are_counted_once_and_shared(&$harness).await;
         }
     };
 }

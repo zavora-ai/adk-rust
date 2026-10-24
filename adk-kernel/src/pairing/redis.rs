@@ -73,6 +73,7 @@ return out
 /// | `{<ns>}:devices` | Sorted set | Every device id, scored by its pairing time in microseconds |
 /// | `{<ns>}:pairing-code:<hash>` | String | One waiting code's record as JSON |
 /// | `{<ns>}:pairing-codes` | Sorted set | Every waiting code's hash, scored by its expiry in microseconds |
+/// | `{<ns>}:pairing-attempts` | String | The count of claims since the last code was issued or claimed |
 /// | `{<ns>}:devices-layout` | String | The layout version [`migrate`](Self::migrate) recorded |
 ///
 /// Device ids are hex and code hashes are SHA-256 hex, so no identifier can spill into
@@ -299,5 +300,23 @@ impl DeviceStore for RedisDeviceStore {
         )
         .await?;
         rows.iter().map(|text| decode("device", text)).collect()
+    }
+
+    async fn count_claim_attempt(&self) -> Result<u64> {
+        let count: i64 = self
+            .client
+            .incr(self.key("pairing-attempts"))
+            .await
+            .map_err(|error| store_error("count a pairing claim", &error))?;
+        Ok(u64::try_from(count).unwrap_or_default())
+    }
+
+    async fn reset_claim_attempts(&self) -> Result<()> {
+        let _: () = self
+            .client
+            .set(self.key("pairing-attempts"), 0, None, None, false)
+            .await
+            .map_err(|error| store_error("reset the count of pairing claims", &error))?;
+        Ok(())
     }
 }

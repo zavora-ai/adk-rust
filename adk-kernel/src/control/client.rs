@@ -629,7 +629,8 @@ impl ControlClient {
     }
 
     /// `POST /kernel/pairing/claim`: pairs this client's device with `code` and returns its
-    /// token, once (spec 3.3 §10 K2). The call needs no token; send the one it returns with
+    /// token, once (spec 3.3 §10 K2). The call needs no token and sends none, so a client
+    /// whose old token was revoked or expired re-pairs; send the one it returns with
     /// [`with_bearer_token`](Self::with_bearer_token) from then on.
     ///
     /// # Errors
@@ -643,7 +644,8 @@ impl ControlClient {
     ) -> Result<crate::pairing::ClaimedDevice> {
         let body =
             super::api::ClaimRequest { code: code.to_string(), name: name.map(str::to_string) };
-        self.call(Method::POST, paths::PAIRING_CLAIM.to_string(), Some(&body)).await
+        let anonymous = Self { transport: self.transport.clone(), token: None };
+        anonymous.call(Method::POST, paths::PAIRING_CLAIM.to_string(), Some(&body)).await
     }
 
     /// `GET /kernel/devices`: every paired device (spec 3.3 §10 K2, `adk-rust pair list`).
@@ -677,7 +679,7 @@ impl ControlClient {
     /// # Errors
     ///
     /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
-    /// error the kernel answered: `404` when it has no chat channels.
+    /// error the kernel answered; a kernel without chat channels answers none.
     pub async fn channel_accounts(&self) -> Result<super::api::ChannelAccountsResponse> {
         self.call(Method::GET, paths::CHANNELS.to_string(), None::<&()>).await
     }
@@ -688,7 +690,8 @@ impl ControlClient {
     /// # Errors
     ///
     /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
-    /// error the kernel answered: `401` for a wrong or expired code.
+    /// error the kernel answered: `401` for a wrong or expired code, `400` when the kernel
+    /// has no chat channels.
     pub async fn accept_channel(&self, code: &str) -> Result<super::api::ChannelAccountView> {
         let body = super::api::AcceptChannelRequest { code: code.to_string() };
         let answer: super::api::ChannelAccountResponse =
@@ -707,6 +710,23 @@ impl ControlClient {
         let answer: super::api::ChannelAccountResponse =
             self.call(Method::POST, path, Some(&())).await?;
         Ok(answer.account)
+    }
+
+    /// `POST /kernel/channels/waiting/{id}/dismiss`: dismisses a chat account waiting to be
+    /// paired; its code stops working (spec 3.3 §10 K1).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `404` for an account that is not waiting.
+    pub async fn dismiss_channel_request(
+        &self,
+        id: &str,
+    ) -> Result<super::api::ChannelPairingView> {
+        let path = paths::CHANNEL_DISMISS.replace("{id}", &encode(id));
+        let answer: super::api::ChannelPairingResponse =
+            self.call(Method::POST, path, Some(&())).await?;
+        Ok(answer.waiting)
     }
 
     async fn agenda_action(

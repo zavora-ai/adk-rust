@@ -95,7 +95,7 @@ proptest! {
     fn a_code_claims_however_it_is_typed_and_only_itself(
         lower in any::<bool>(),
         separator in prop::sample::select(vec!["-", " ", "", "."]),
-        position in 0usize..8,
+        position in 0usize..12,
         replacement in prop::sample::select("0123456789ABCDEFGHJKMNPQRSTVWXYZ".chars().collect::<Vec<_>>()),
     ) {
         runtime().block_on(async {
@@ -126,11 +126,13 @@ mod cards {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(128))]
 
-        /// No argument value of three or more characters survives into a card's summary.
+        /// No argument value survives into a card's summary: values of any length, with
+        /// newlines, tabs and other control characters inside them, standing as words of
+        /// their own (review findings 2 and 12).
         #[test]
         fn a_card_summary_never_carries_an_argument_value(
-            values in prop::collection::vec("[A-Za-z0-9@._-]{3,24}", 1..5),
-            amount in 10u64..1_000_000,
+            values in prop::collection::vec("[A-Za-z0-9@._-]{1,8}([\n\r\t\u{7} ][A-Za-z0-9@._-]{1,8}){0,2}", 1..5),
+            amount in 0u64..1_000_000,
             words in prop::collection::vec("[a-z]{2,8}", 0..6),
         ) {
             let mut summary = words.join(" ");
@@ -149,10 +151,23 @@ mod cards {
             )
             .with_summary(summary);
             let card = DecisionCard::from_request(&request, None);
+            // The card's words: a value survives only as a word or run of words of its own.
+            let shown: Vec<&str> = card.summary.split(' ').collect();
             for value in &values {
-                prop_assert!(!card.summary.contains(value.as_str()), "{value} in {}", card.summary);
+                let words: Vec<&str> = value
+                    .split(|c: char| c.is_whitespace() || c.is_control())
+                    .filter(|word| !word.is_empty())
+                    .collect();
+                let found = shown.windows(words.len()).any(|window| {
+                    window.iter().zip(&words).all(|(shown, word)| shown.eq_ignore_ascii_case(word))
+                });
+                prop_assert!(!found, "{value:?} in {}", card.summary);
             }
-            prop_assert!(!card.summary.contains(&amount.to_string()), "{amount} in {}", card.summary);
+            prop_assert!(
+                !shown.contains(&amount.to_string().as_str()),
+                "{amount} in {}",
+                card.summary
+            );
         }
     }
 }

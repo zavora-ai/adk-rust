@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use adk_core::audit_log::{AuditActor, AuditTrail};
-use adk_core::{ApprovalService, NewRun, RunRecord};
+use adk_core::{ApprovalRequest, ApprovalService, NewRun, RunRecord};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::{BoxStream, StreamExt};
@@ -48,6 +48,20 @@ impl ChannelHost for Kernel {
 
     fn approvals(&self) -> Option<Arc<dyn ApprovalService>> {
         self.approval_service().cloned()
+    }
+
+    /// Whether a mounted driver declares the called tool `financial` (spec 3.2 K-I9); a
+    /// name two drivers share counts when either declares it so.
+    fn moves_money(&self, request: &ApprovalRequest) -> bool {
+        #[cfg(feature = "drivers")]
+        if let Some(drivers) = Kernel::drivers(self) {
+            return drivers.mounted().iter().filter_map(|id| drivers.record(id)).any(|record| {
+                record.manifest.class_of(&request.tool_name)
+                    == crate::drivers::EffectClass::Financial
+            });
+        }
+        let _ = request;
+        false
     }
 
     fn audit_trail(&self) -> Option<AuditTrail> {

@@ -11,10 +11,12 @@
 //! | Rule | What the gateway does |
 //! |---|---|
 //! | Only paired accounts reach an agent (S-I6) | An unpaired account's message, or answer, gets a pairing code ([`ChannelNotice::PairingCode`]) and starts nothing; the person accepts the code where the kernel runs (`adk-rust pair accept`, `POST /api/kernel/channels/pair`) |
+//! | One code per account, at most so many waiting | The gateway serializes unpaired accounts' messages, so concurrent messages from one account get one code and the waiting limit holds; the operator dismisses a waiting account (`adk-rust pair revoke`, `POST /api/kernel/channels/waiting/{id}/dismiss`) |
 //! | A paired account's message is a turn | It starts a turn as the paired person, a `Human` subject, in the thread's session, keyed by the platform's message id so a redelivery starts nothing; the turn's reply goes back to the same thread |
 //! | Cards carry no arguments (S-I5) | A [`DecisionCard`] holds the agent, a short summary with every argument value masked, and the risk; never the call's arguments |
-//! | Chat says yes once or no (§7.2, §7.4) | Answers are [`ChannelAnswer::AllowOnce`] and [`ChannelAnswer::Deny`] at low and medium risk only, through `ApprovalService::decide` with the version the card showed (S-I2); high risk links to the home |
-//! | A second answer is shown, never retried (S-I2) | A version conflict answers [`ChannelNotice::AlreadyDecided`] |
+//! | Chat says yes once or no, never money (§7.2, §7.4) | Answers are [`ChannelAnswer::AllowOnce`] and [`ChannelAnswer::Deny`] at low and medium risk only, through `ApprovalService::decide` with the version the card showed (S-I2); a call that moves money ([`ChannelHost::moves_money`], [`ChannelGatewayBuilder::money_tools`]) and high risk link to the home |
+//! | Only who may answer gets buttons | A card goes to the decision's person when the policy lets that person answer it, and its answers only when chat may decide it |
+//! | A second answer is shown, never retried (S-I2) | A version conflict answers [`ChannelNotice::AlreadyDecided`], or a fresh card when the decision still waits; an answer that counts toward a quorum, or one from someone the policy does not ask, answers [`ChannelNotice::WaitingForOthers`] |
 //! | Stop all from anywhere; resume only at home (S-I10) | "stop all" freezes the kernel and answers [`StopNotice`]; "resume" is refused with [`ChannelNotice::ResumeRefused`] |
 //! | Nothing notifies during quiet time | A card for a decision asked during quiet time is delivered when quiet time ends, if it still waits |
 //!
@@ -250,7 +252,9 @@ pub struct DecisionCard {
     /// The agent asking.
     pub agent: String,
     /// What will happen, in at most 160 characters, with every argument value masked as
-    /// `[…]`.
+    /// `[…]`: one of three or more characters wherever it appears, ignoring case, and a
+    /// shorter one wherever it stands as a word or a number of its own, newlines and other
+    /// control characters read as spaces (S-I5).
     pub summary: String,
     /// The risk.
     pub risk: ApprovalRisk,
@@ -331,18 +335,44 @@ fn agent_name(request: &ApprovalRequest) -> String {
     }
 }
 
-/// `summary` without control characters, every argument value of `args` masked as `[…]`,
-/// in at most [`MAX_SUMMARY_CHARS`] characters (S-I5).
+/// `summary` with every argument value of `args` masked as `[…]`, in at most
+/// [`MAX_SUMMARY_CHARS`] characters (S-I5).
+///
+/// The summary and the values are read alike: control characters and runs of whitespace
+/// become one space, so a value with a newline or a tab is found in a summary that quotes
+/// it. A value of three or more characters is masked wherever it appears, ignoring case; a
+/// shorter one, and `true` or `false`, wherever it stands as a word or a number of its own,
+/// so `50` is masked in "Transfer 50 EUR" and "EUR50" but `5` is not taken out of "500".
+/// Whole numbers of four or more digits are also found with thousands separators, as
+/// `1,250`. Where masked values overlap or touch, one `[…]` covers them.
 pub(crate) fn card_summary(summary: &str, args: &Value) -> String {
     let mut values = Vec::new();
     collect_values(args, &mut values);
-    // Longest first, so a value that contains another is masked whole.
-    values.sort_by_key(|value| std::cmp::Reverse(value.chars().count()));
-    let mut text: String = summary.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let text: Vec<char> = plain(summary).chars().collect();
+    let folded: Vec<char> = text.iter().map(|c| fold(*c)).collect();
+    let mut masked = vec![false; text.len()];
     for value in values {
-        text = text.replace(&value, "[…]");
+        let needle: Vec<char> = plain(&value.text).chars().map(fold).collect();
+        if needle.is_empty() || needle.len() > text.len() {
+            continue;
+        }
+        let whole = value.whole_word || needle.len() < 3;
+        for start in 0..=text.len() - needle.len() {
+            let end = start + needle.len();
+            if folded[start..end] == needle[..] && (!whole || stands_alone(&text, start, end)) {
+                masked[start..end].fill(true);
+            }
+        }
     }
-    let text = text.trim();
+    let mut out = String::with_capacity(text.len());
+    for (index, c) in text.iter().enumerate() {
+        match (masked[index], index.checked_sub(1).is_some_and(|before| masked[before])) {
+            (true, true) => {}
+            (true, false) => out.push_str("[…]"),
+            (false, _) => out.push(*c),
+        }
+    }
+    let text = out.trim();
     if text.chars().count() <= MAX_SUMMARY_CHARS {
         return text.to_string();
     }
@@ -351,15 +381,84 @@ pub(crate) fn card_summary(summary: &str, args: &Value) -> String {
     cut
 }
 
-/// Every string of three or more characters and every number of `value`, as text.
-fn collect_values(value: &Value, out: &mut Vec<String>) {
+/// `text` with control characters and runs of whitespace as one space, trimmed.
+fn plain(text: &str) -> String {
+    text.split(|c: char| c.is_whitespace() || c.is_control())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `c` in lower case, one character for one, so positions line up.
+fn fold(c: char) -> char {
+    c.to_lowercase().next().unwrap_or(c)
+}
+
+/// What a character is, for telling where a short value stands on its own.
+#[derive(PartialEq, Eq)]
+enum CharClass {
+    Digit,
+    Letter,
+    Other,
+}
+
+fn class(c: char) -> CharClass {
+    if c.is_numeric() {
+        CharClass::Digit
+    } else if c.is_alphabetic() {
+        CharClass::Letter
+    } else {
+        CharClass::Other
+    }
+}
+
+/// Whether `text[start..end]` is not part of a longer word or number: the characters on
+/// either side are of another kind than its own first and last.
+fn stands_alone(text: &[char], start: usize, end: usize) -> bool {
+    let edge = |inside: char, outside: Option<&char>| {
+        class(inside) == CharClass::Other || outside.is_none_or(|c| class(*c) != class(inside))
+    };
+    edge(text[start], start.checked_sub(1).and_then(|before| text.get(before)))
+        && edge(text[end - 1], text.get(end))
+}
+
+/// An argument value as the masking reads it.
+struct ArgValue {
+    text: String,
+    /// Masked only where it stands on its own, whatever its length.
+    whole_word: bool,
+}
+
+/// Every string, number and boolean of `value`, as text; whole numbers of four or more
+/// digits also with thousands separators.
+fn collect_values(value: &Value, out: &mut Vec<ArgValue>) {
     match value {
-        Value::String(text) if text.chars().count() >= 3 => out.push(text.clone()),
-        Value::Number(number) if number.to_string().len() >= 2 => out.push(number.to_string()),
+        Value::String(text) => out.push(ArgValue { text: text.clone(), whole_word: false }),
+        Value::Number(number) => {
+            let text = number.to_string();
+            if let Some(whole) = number.as_i64().filter(|whole| whole.unsigned_abs() >= 1_000) {
+                out.push(ArgValue { text: grouped(whole), whole_word: false });
+            }
+            out.push(ArgValue { text, whole_word: false });
+        }
+        Value::Bool(flag) => out.push(ArgValue { text: flag.to_string(), whole_word: true }),
         Value::Array(items) => items.iter().for_each(|item| collect_values(item, out)),
         Value::Object(fields) => fields.values().for_each(|item| collect_values(item, out)),
-        _ => {}
+        Value::Null => {}
     }
+}
+
+/// `number` with a comma between each group of three digits, as `-1,250,000`.
+fn grouped(number: i64) -> String {
+    let digits = number.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    if number < 0 { format!("-{out}") } else { out }
 }
 
 /// Everything was stopped from a chat thread (spec 3.3 S-I10).
@@ -400,7 +499,7 @@ impl StopNotice {
 pub enum ChannelNotice {
     /// The account is not paired: its code, to be accepted where the kernel runs.
     PairingCode {
-        /// The code, as `ABCD-2345`.
+        /// The code, as `ABCD-EFGH-2345`.
         code: String,
         /// When it stops working.
         expires_at: DateTime<Utc>,
@@ -441,6 +540,12 @@ pub enum ChannelNotice {
     },
     /// The decision is no longer waiting, or is not this person's.
     DecisionGone,
+    /// The decision waits for someone else: another approver after this person's answer
+    /// counted, or an approver other than this person.
+    WaitingForOthers {
+        /// Whether this person's answer was counted.
+        answered: bool,
+    },
     /// A chat thread cannot resume (S-I10).
     ResumeRefused {
         /// The web home, when the gateway knows it.
@@ -495,6 +600,12 @@ impl ChannelNotice {
                 format!("Decide this one in the home{}", home(link))
             }
             Self::DecisionGone => "That decision is no longer waiting for you.".to_string(),
+            Self::WaitingForOthers { answered: true } => {
+                "Your answer counts. The decision also waits for someone else.".to_string()
+            }
+            Self::WaitingForOthers { answered: false } => {
+                "This decision waits for someone else to answer it.".to_string()
+            }
             Self::ResumeRefused { home: link } => match link {
                 Some(link) => format!("Resuming happens only in the home: {link}"),
                 None => "Resuming happens only in the home.".to_string(),
@@ -733,6 +844,7 @@ impl ChannelPairingRequest {
     /// The request as the control plane lists it.
     pub fn view(&self) -> ChannelPairingView {
         ChannelPairingView {
+            id: ChannelBinding::id_for(&self.channel, &self.account),
             channel: self.channel.clone(),
             account: self.account.clone(),
             display_name: self.display_name.clone(),
@@ -791,7 +903,27 @@ pub async fn accept_pairing(
     groups: &[String],
     now: DateTime<Utc>,
 ) -> Result<ChannelBinding> {
-    let request = store
+    let request = take_pairing(store, code, now).await?;
+    let binding = binding_for(&request, user_id, groups, now);
+    if let Err(error) = store.put_binding(binding.clone()).await {
+        restore_pairing(store, request).await;
+        return Err(error);
+    }
+    Ok(binding)
+}
+
+/// Takes the waiting request that was sent `code`.
+///
+/// # Errors
+///
+/// Returns [`KernelError::Unauthorized`] for a wrong, used or expired code, and the store's
+/// error.
+pub(crate) async fn take_pairing(
+    store: &dyn ChannelBindingStore,
+    code: &str,
+    now: DateTime<Utc>,
+) -> Result<ChannelPairingRequest> {
+    store
         .take_request(&secret::code_hash(code))
         .await?
         .filter(|request| now < request.expires_at)
@@ -799,13 +931,53 @@ pub async fn accept_pairing(
             reason: "the chat pairing code is wrong, used or expired: write to the agent from the \
                      chat account again for a new one"
                 .into(),
-        })?;
-    let mut binding =
-        ChannelBinding::new(request.channel, request.account, request.thread, user_id, now)
-            .with_groups(groups.iter().cloned());
-    binding.display_name = request.display_name;
-    store.put_binding(binding.clone()).await?;
-    Ok(binding)
+        })
+}
+
+/// The binding a taken request becomes once `user_id` accepts it.
+pub(crate) fn binding_for(
+    request: &ChannelPairingRequest,
+    user_id: &str,
+    groups: &[String],
+    now: DateTime<Utc>,
+) -> ChannelBinding {
+    let mut binding = ChannelBinding::new(
+        request.channel.clone(),
+        request.account.clone(),
+        request.thread.clone(),
+        user_id,
+        now,
+    )
+    .with_groups(groups.iter().cloned());
+    binding.display_name = request.display_name.clone();
+    binding
+}
+
+/// Puts a taken request back, so its code works again; a failure is logged, since the
+/// caller is already answering with the error that made it put it back.
+pub(crate) async fn restore_pairing(
+    store: &dyn ChannelBindingStore,
+    request: ChannelPairingRequest,
+) {
+    if let Err(error) = store.put_request(request).await {
+        tracing::error!(error = %error, "a chat pairing code could not be put back");
+    }
+}
+
+/// The unexpired-or-not request of the account whose binding id would be `id`.
+///
+/// # Errors
+///
+/// Returns the store's error.
+pub(crate) async fn waiting_request(
+    store: &dyn ChannelBindingStore,
+    id: &str,
+) -> Result<Option<ChannelPairingRequest>> {
+    Ok(store
+        .list_requests()
+        .await?
+        .into_iter()
+        .find(|request| ChannelBinding::id_for(&request.channel, &request.account) == id))
 }
 
 /// Removes the chat account `id` (spec 3.3 §10 K1); removing a removed one changes nothing.
@@ -853,6 +1025,15 @@ pub trait ChannelHost: Send + Sync + 'static {
 
     /// The approval service decisions go through; `None` when the host has none.
     fn approvals(&self) -> Option<Arc<dyn ApprovalService>>;
+
+    /// Whether `request`'s call moves money, which chat never decides (spec 3.3 §7.4 rule
+    /// 4). The kernel answers for the tools its mounted drivers declare `financial`; the
+    /// gateway adds the tools [`ChannelGatewayBuilder::money_tools`] names. `false` by
+    /// default.
+    fn moves_money(&self, request: &ApprovalRequest) -> bool {
+        let _ = request;
+        false
+    }
 
     /// The audit trail the `kernel.channel` records go to.
     fn audit_trail(&self) -> Option<AuditTrail>;
@@ -967,8 +1148,42 @@ mod tests {
             "Send […] USD to […], cc […]"
         );
         assert_eq!(card_summary("Line one\nline two", &json!({})), "Line one line two");
+        assert_eq!(card_summary("Pay 1,250 now", &json!({"amount": 1250})), "Pay […] now");
         let long = "x".repeat(400);
         assert_eq!(card_summary(&long, &json!({})).chars().count(), MAX_SUMMARY_CHARS);
+    }
+
+    /// Review finding 2: a value with a newline, a carriage return or a tab is masked in a
+    /// summary that quotes it, raw or with the control characters already turned to spaces.
+    #[test]
+    fn values_with_control_characters_are_masked() {
+        let message = "Sign in to Acme\nAccount 4417-2201";
+        let args = json!({"message": message, "url": "https://acme.example/login"});
+        let summary = format!("MCP server acme asks you to open a URL: {message}");
+        let card = card_summary(&summary, &args);
+        assert_eq!(card, "MCP server acme asks you to open a URL: […]");
+        let spaced = "Sign in to Acme Account 4417-2201";
+        assert!(!card_summary(spaced, &args).contains("4417"), "{}", card_summary(spaced, &args));
+        let tabbed = json!({"note": "a\tb\r\nc"});
+        assert_eq!(card_summary("Note: a\tb\r\nc!", &tabbed), "Note: […]!");
+    }
+
+    /// Review finding 12: short values, strings and numbers alike, are masked where they
+    /// stand on their own, and not inside a longer word or number.
+    #[test]
+    fn short_values_are_masked_where_they_stand_alone() {
+        let args = json!({"amount": "50", "currency": "EUR", "fee": 5, "confirm": true});
+        assert_eq!(
+            card_summary("Transfer 50 EUR to savings, fee 5, confirm true", &args),
+            "Transfer […] […] to savings, fee […], confirm […]"
+        );
+        assert_eq!(
+            card_summary("EUR50 and 500 and a5", &json!({"n": "50"})),
+            "EUR[…] and 500 and a5"
+        );
+        assert_eq!(card_summary("Transfer 50 EUR", &json!({"amount": 50})), "Transfer […] EUR");
+        assert_eq!(card_summary("a cat", &json!({"x": "a"})), "[…] cat");
+        assert_eq!(card_summary("Pay acme CORP", &json!({"to": "Acme Corp"})), "Pay […]");
     }
 
     #[test]
