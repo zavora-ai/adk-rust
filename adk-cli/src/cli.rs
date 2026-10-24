@@ -133,7 +133,7 @@ pub struct Cli {
     pub voice: VoiceArgs,
 
     /// The terminal surface (`--ui`, `--output`, `--theme`), which runs without a subcommand.
-    #[cfg(feature = "surface")]
+    #[cfg(feature = "tui")]
     #[command(flatten)]
     pub surface: SurfaceArgs,
 }
@@ -141,7 +141,7 @@ pub struct Cli {
 /// The terminal surface (spec 3.3 §5.2): full screen by default on a capable terminal, the
 /// scrollback with `--ui inline`, JSON lines with `--output json`. It attaches to the running
 /// kernel, or runs the harness in this process.
-#[cfg(feature = "surface")]
+#[cfg(feature = "tui")]
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct SurfaceArgs {
     /// `full` (the default on a terminal of at least 60 by 16) or `inline`, which keeps the
@@ -167,7 +167,7 @@ pub struct SurfaceArgs {
     pub kernel: KernelTarget,
 }
 
-#[cfg(feature = "surface")]
+#[cfg(feature = "tui")]
 impl SurfaceArgs {
     /// Whether any of the terminal's flags was given: before a subcommand they would reach no
     /// kernel, or the local one in place of the named one.
@@ -183,7 +183,7 @@ impl SurfaceArgs {
     }
 }
 
-#[cfg(feature = "surface")]
+#[cfg(feature = "tui")]
 fn parse_from_str<T: std::str::FromStr<Err = String>>(value: &str) -> Result<T, String> {
     value.parse()
 }

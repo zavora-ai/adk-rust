@@ -1,4 +1,4 @@
-- **The terminal surface** (`adk-surface` feature `tui`, `adk-cli` feature `surface`; spec
+- **The terminal surface** (`adk-surface` feature `tui`, `adk-cli` feature `tui`; spec
   3.3 §5.2, Beta): `adk-rust` with no subcommand opens a full-screen terminal on a capable
   terminal — status line, roster, coming up, "While you were away", the thread, and each
   decision as a box answered by key (`y` allow once, `a` always allow, `e` edit, `n` deny, `?`

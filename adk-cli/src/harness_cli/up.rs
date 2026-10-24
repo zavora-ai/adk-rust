@@ -180,7 +180,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                     memory_with_inbox: true,
                     drivers: Some(drivers.clone()),
                     partition: None,
-                    #[cfg(feature = "surface")]
+                    #[cfg(feature = "tui")]
                     local_console: false,
                 },
             )?);
@@ -195,7 +195,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                 memory_with_inbox: true,
                 drivers: Some(drivers.clone()),
                 partition: Some((partition, table.clone(), coordinator)),
-                #[cfg(feature = "surface")]
+                #[cfg(feature = "tui")]
                 local_console: false,
             };
             partition_harnesses(&setup, &settings, table, &service, &governance, &run_store, extras)

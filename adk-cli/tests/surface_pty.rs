@@ -5,7 +5,7 @@
 //! inbox, keys answer it, typing while it is open is queued, Esc never decides, model text
 //! cannot reach the terminal as control characters, and the terminal is restored on a signal.
 
-#![cfg(all(unix, feature = "scripted-model", feature = "surface"))]
+#![cfg(all(unix, feature = "scripted-model", feature = "tui"))]
 
 mod common;
 

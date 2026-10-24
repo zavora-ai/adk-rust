@@ -28,7 +28,7 @@ fn banner_search(home: &Path, ws: &Path, flags: &[&str]) -> Terminal {
 }
 
 #[test]
-#[cfg_attr(feature = "surface", ignore = "`surface` replaces the REPL with the terminal surface")]
+#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn the_banner_and_web_name_where_search_runs() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
@@ -69,7 +69,7 @@ fn the_banner_and_web_name_where_search_runs() {
 }
 
 #[test]
-#[cfg_attr(feature = "surface", ignore = "`surface` replaces the REPL with the terminal surface")]
+#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn an_openai_session_searches_with_openai_by_default() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();

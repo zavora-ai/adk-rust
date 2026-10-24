@@ -6,8 +6,8 @@ box answered by key. It is a client of the [engine](index.md) like every other s
 shows what the engine projects, in the engine's words, and changes nothing except through
 commands.
 
-> **Note:** the terminal is Beta. It is the `tui` feature of `adk-surface` and the `surface`
-> feature of `adk-cli`; neither is on by default.
+> **Note:** the terminal is Beta. It is the `tui` feature of `adk-surface` and of `adk-cli`;
+> neither is on by default. (`adk-cli`'s default `surface` feature is the web home.)
 
 ## Modes
 
@@ -18,7 +18,7 @@ commands.
 | JSON | `--output json` | One engine event per line, then an `end` line, and an exit code — for CI |
 
 ```bash
-cargo install adk-cli --features surface
+cargo install adk-cli --features tui
 adk-rust                                          # full screen
 adk-rust --ui inline                              # the scrollback
 adk-rust --output json --message "Summarise the open issues"
@@ -43,7 +43,7 @@ workspace's instruction files and hooks load; without it an untrusted workspace 
 the session's workspace — `--continue` opens the latest session of the workspace, a new
 session records the workspace, and a session that works in another workspace is refused.
 
-With the `surface` feature, `adk-rust` without a subcommand is the terminal in place of the
+With the `tui` feature, `adk-rust` without a subcommand is the terminal in place of the
 REPL; `--voice` keeps the REPL. The REPL's other slash commands (`/hooks`, `/memory`,
 `/rules`, `/sandbox`, `/todos`, `/plan`, `/cost`, `/team`, `/skills`, `/web`, `/mcp`,
 `/effort`, `/approvals`) and tab completion are not in the terminal; `adk-rust memory`,

@@ -1,4 +1,4 @@
-//! The terminal surface in the `adk-rust` binary (spec 3.3 §5.2, feature `surface`): full
+//! The terminal surface in the `adk-rust` binary (spec 3.3 §5.2, feature `tui`): full
 //! screen by default on a capable terminal, `--ui inline` in the scrollback, `--output json`
 //! for CI. It attaches to the running kernel (its socket, or `--server` with a device token)
 //! and otherwise runs the harness in this process; either way it is a client of the

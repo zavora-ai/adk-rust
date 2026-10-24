@@ -34,7 +34,7 @@ use crate::ultra::{self, UltraAgents};
 use crate::{BuiltModel, ResolvedModel};
 
 mod service;
-#[cfg(feature = "surface")]
+#[cfg(feature = "tui")]
 pub mod surface;
 mod up;
 #[cfg(windows)]
@@ -123,7 +123,7 @@ struct AgentExtras {
     /// The person at this console runs the harness and answers its inbox (the terminal
     /// surface in process, spec 3.3 §5.2): its runs are theirs, so standing rules and Auto
     /// apply without a server's authentication.
-    #[cfg(feature = "surface")]
+    #[cfg(feature = "tui")]
     local_console: bool,
 }
 
@@ -378,9 +378,9 @@ impl Setup {
         }
         if let Some(service) = approval_service {
             builder = builder.approval_service(service);
-            #[cfg(feature = "surface")]
+            #[cfg(feature = "tui")]
             let local_console = extras.local_console;
-            #[cfg(not(feature = "surface"))]
+            #[cfg(not(feature = "tui"))]
             let local_console = false;
             if !local_console {
                 builder = builder.require_authenticated_identity();

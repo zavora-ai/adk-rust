@@ -61,7 +61,7 @@ async fn run() -> Result<()> {
     let parsed = Cli::parse();
     #[cfg(feature = "voice")]
     let voice = parsed.voice.clone();
-    #[cfg(feature = "surface")]
+    #[cfg(feature = "tui")]
     let surface = parsed.surface.clone();
     #[cfg(feature = "harness")]
     let Cli { command, options, harness, .. } = parsed;
@@ -69,7 +69,7 @@ async fn run() -> Result<()> {
     let Cli { command, options } = parsed;
     // A subcommand takes its own --server, --home and --token: before it, the terminal's
     // would reach no kernel, or the local one in place of the named one (spec 3.3 §5.2).
-    #[cfg(feature = "surface")]
+    #[cfg(feature = "tui")]
     if command.is_some() && surface.given() {
         anyhow::bail!(
             "--server, --home, --token, --pair, --ui, --output, --theme and --message before a \
@@ -87,7 +87,7 @@ async fn run() -> Result<()> {
             let in_process = false;
             // The terminal surface: full screen, inline or JSON, on the kernel or in process
             // (spec 3.3 §5.2).
-            #[cfg(feature = "surface")]
+            #[cfg(feature = "tui")]
             if !in_process {
                 let reach = harness_cli::surface::reach(&surface, &harness).await?;
                 let model = match reach {
