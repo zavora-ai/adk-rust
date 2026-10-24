@@ -44,7 +44,7 @@ non-loopback refusal, the `--store` backend — and adds the kernel:
 | Kernel home | `<config dir>/adk-rust`: `kernel.sock`, `harness.db`, `kernel-id`, `kernel-audit.key`, `ledger.key` |
 | HTTP | `127.0.0.1:8080` (`--bind`); anything but loopback needs `--auth-token` |
 | Mode | `plan`, as `serve`; `--mode ask` lets the agent edit and run commands after approval |
-| Stores | `harness.db`, shared with the REPL and `serve`; `--store postgres://…` or `redis://…` for replicas |
+| Stores | `harness.db`, shared with the REPL and `serve`; `--store postgres://…` or `redis://…` for replicas ([backends](backends.md)) |
 | Shutdown | Ctrl-C, `SIGTERM` or a Windows service stop: the HTTP server stops accepting, the kernel drains for 30 s and stops |
 | Service | `adk-rust up --install` runs it as a launchd agent, a systemd user unit or a Windows service, as you ([service installation](service.md)) |
 
@@ -108,6 +108,7 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 |---|---|---|
 | `sqlite` | on | `SqliteProcessStore` on the `harness.db` pool |
 | `postgres`, `redis` | off | The kernel's stores in the backend replicas share |
+| `mongodb`, `firestore`, `neo4j` | off | **Alpha**: the kernel's stores on MongoDB, Firestore or Neo4j, with the same backend of `adk-session`'s stores ([backends](backends.md)) |
 | `webhooks` | on | Webhook wake sources over `WebhookIngress` |
 | `proc` | on | The content-free activity ledger and its stores; the live aggregates' OTel GenAI histograms |
 | `proc-baselines` | off | The daily baselines and observations ([`/proc`](proc.md)) |
@@ -125,3 +126,5 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 - [The managed form](managed.md): one kernel per tenant on the managed runtime
 - [Self-observation: `/proc`](proc.md): the content-free activity ledger, baselines and
   observations
+- [Kernel store backends](backends.md): every kernel store on in-memory, SQLite, PostgreSQL
+  and Redis, and on MongoDB, Firestore and Neo4j (Alpha)

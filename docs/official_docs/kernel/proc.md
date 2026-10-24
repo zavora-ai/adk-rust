@@ -50,7 +50,9 @@ a wake source — reaches the row only as an HMAC under a key kept in the kernel
 | The harness, from its audit records | `turn` (from `harness.spend`: model calls, tool calls, tokens, cost), `loop_guard`, `approval`, `rejection`, `denial`, `held`, and `audit` for the rest |
 
 The ledger lives beside the kernel's other stores: in `harness.db`, or in the `--store`
-PostgreSQL or Redis backend replicas share. It never leaves the host unless you export it.
+PostgreSQL or Redis backend replicas share; a kernel built in code can also keep it in
+MongoDB, Firestore or Neo4j (Alpha, [backends](backends.md)). It never leaves the host
+unless you export it.
 
 ## Baselines and the daily pass
 
