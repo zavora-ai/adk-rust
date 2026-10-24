@@ -454,15 +454,23 @@ impl PromptConfig {
                 self.max_skill_chars,
             );
         }
-        if let Some(index) = session_history.iter().rposition(|content| {
-            content.role == "user" && !adk_core::history::is_other_agent_context(content)
-        }) {
-            session_history[index] = current_user_content.clone();
-        } else {
-            session_history.push(current_user_content.clone());
+        // A run that resumes held calls carries an empty user turn: no parts, or only blank
+        // text. A turn without parts never reaches the projected history, so the last user
+        // turn there is the person's message, which an empty turn must not stand in for.
+        let empty_turn = current_user_content
+            .parts
+            .iter()
+            .all(|part| matches!(part, Part::Text { text } if text.trim().is_empty()));
+        if !empty_turn {
+            match session_history.iter().rposition(|content| {
+                content.role == "user" && !adk_core::history::is_other_agent_context(content)
+            }) {
+                Some(index) => session_history[index] = current_user_content.clone(),
+                None => session_history.push(current_user_content.clone()),
+            }
         }
-        // A run that resumes held calls carries an empty user turn. It adds nothing to the
-        // conversation, and providers such as Anthropic reject empty text blocks.
+        // An empty user turn adds nothing to the conversation, and providers such as
+        // Anthropic reject empty text blocks.
         session_history.retain(|content| {
             content.role != "user"
                 || content
@@ -470,14 +478,45 @@ impl PromptConfig {
                     .iter()
                     .any(|part| !matches!(part, Part::Text { text } if text.trim().is_empty()))
         });
+        // An agent limited to its current turn sees the latest user input and what followed.
+        // A run that resumes held calls begins that turn at the message that led to the
+        // earliest one, so each resumed result answers a call the model can see; an empty
+        // turn without held calls begins it at the person's last message. Any other run sends
+        // the current user turn alone.
+        let turn_start = match self.include_contents {
+            adk_core::IncludeContents::Default => None,
+            adk_core::IncludeContents::None => {
+                let held: Vec<String> = ctx
+                    .session()
+                    .held_tool_calls(agent_name, ctx.branch())
+                    .into_iter()
+                    .filter_map(|call| call.id)
+                    .collect();
+                let earliest_held = session_history.iter().position(|content| {
+                    content.parts.iter().any(|part| {
+                        matches!(part, Part::FunctionCall { id: Some(id), .. } if held.contains(id))
+                    })
+                });
+                let is_message = |content: &Content| {
+                    content.role == "user"
+                        && content.carries_user_input()
+                        && !adk_core::history::is_other_agent_context(content)
+                };
+                match earliest_held {
+                    Some(call) => {
+                        Some(session_history[..call].iter().rposition(is_message).unwrap_or(0))
+                    }
+                    None if empty_turn => {
+                        Some(session_history.iter().rposition(is_message).unwrap_or(0))
+                    }
+                    None => None,
+                }
+            }
+        };
         // A history that ends on the model's answer — a resuming run whose model already
         // answered after the held call, or a loop running this agent again after its own
         // answer — would be read as a prefill, which models without prefill support
         // (Anthropic's newer ones) reject. It gets a user turn to answer.
-        let empty_turn = current_user_content
-            .parts
-            .iter()
-            .all(|part| matches!(part, Part::Text { text } if text.trim().is_empty()));
         if session_history.last().is_some_and(|last| {
             last.role == "model"
                 && !last.parts.iter().any(|part| matches!(part, Part::FunctionCall { .. }))
@@ -486,12 +525,16 @@ impl PromptConfig {
             session_history.push(Content::new("user").with_text(note));
         }
 
-        Ok(match self.include_contents {
-            adk_core::IncludeContents::None => {
+        Ok(match (self.include_contents, turn_start) {
+            (adk_core::IncludeContents::None, Some(start)) => {
+                preamble.extend(session_history.drain(start..));
+                preamble
+            }
+            (adk_core::IncludeContents::None, None) => {
                 preamble.push(current_user_content);
                 preamble
             }
-            adk_core::IncludeContents::Default => {
+            (adk_core::IncludeContents::Default, _) => {
                 preamble.extend(session_history);
                 preamble
             }

@@ -69,6 +69,29 @@ struct Setup {
     /// Where plans and goal graphs are checkpointed, and its name for the banner (spec 3.1
     /// §7.11, §13 Q5); `None` keeps them in memory.
     plans: Option<(Arc<dyn adk_graph::Checkpointer>, String)>,
+    /// `--preset personal`: the first-run answers (spec 3.3 §10 H1, §13 Q7).
+    personal: Option<adk_harness::personal::PersonalSettings>,
+}
+
+/// Where `bash` runs, or `none` when the harness offers no shell, as the personal preset's
+/// does on the host (spec 3.3 §10 H1).
+fn shell_label(info: &adk_harness::HarnessInfo) -> String {
+    if info.tools.iter().any(|tool| tool == "bash") {
+        info.isolation.to_string()
+    } else {
+        "none".to_string()
+    }
+}
+
+/// `--preset personal` (spec 3.3 §10 H1, §13 Q7): the answers kept in `home`, asked for on
+/// this terminal at the first run.
+fn personal_settings(home: &Path) -> Result<adk_harness::personal::PersonalSettings> {
+    let (settings, _) = adk_harness::personal::PersonalSettings::load_or_ask(
+        home,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout(),
+    )?;
+    Ok(settings)
 }
 
 /// The client of one session (spec 3.1 §7.23): the harness, its members and the
@@ -79,7 +102,8 @@ struct Models {
 }
 
 /// What an `ultracode` implementer adds to a harness agent (spec 3.1 §7.10): its turn's
-/// `RunBudget` and the run's audit log.
+/// `RunBudget` and the run's audit log; and what `up` adds for a partition's harness (spec
+/// 3.2 §7.8).
 #[derive(Default)]
 struct AgentExtras {
     budget: Option<RunBudget>,
@@ -87,9 +111,13 @@ struct AgentExtras {
     /// Long-term memory with an approval service: `adk-rust up`, the user's own kernel,
     /// keeps it, where `serve` turns it off (spec 3.2 §8.1).
     memory_with_inbox: bool,
-    /// The kernel's drivers whose manifests list the default partition, classed by their
-    /// manifests and under the kernel's driver policy (spec 3.2 §7.7).
+    /// The kernel's drivers, classed by their manifests and under the kernel's driver
+    /// policy (spec 3.2 §7.7): those whose manifests list the default partition, or for a
+    /// partition's harness, those its own driver list names (§7.8).
     drivers: Option<adk_kernel::drivers::DriverSupervisor>,
+    /// The partition the harness runs, the table its policy reads, and whether it is the
+    /// coordinator.
+    partition: Option<(adk_kernel::Partition, adk_kernel::Partitions, bool)>,
 }
 
 /// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
@@ -126,11 +154,26 @@ impl Setup {
     async fn open(
         model: ResolvedModel,
         instruction: Option<String>,
-        args: HarnessArgs,
+        mut args: HarnessArgs,
         default_mode: HarnessMode,
         store: Option<&str>,
         home: Option<&Path>,
     ) -> Result<Self> {
+        // The personal preset works in a folder under the home, not the current directory,
+        // and asks its first-run questions before anything starts (spec 3.3 §10 H1, §13 Q7).
+        let personal = if args.preset == Some(adk_harness::Preset::Personal) {
+            let home = match home {
+                Some(home) => home.to_path_buf(),
+                None => up::default_home()?,
+            };
+            let workspace = adk_harness::personal::PersonalWorkspace::create(&home)?;
+            if args.dir.is_none() {
+                args.dir = Some(workspace.root().to_path_buf());
+            }
+            Some(personal_settings(&home)?)
+        } else {
+            None
+        };
         let resolved = args.resolve(default_mode, user_config().as_deref())?;
         // The payments pack takes a merchant backend only a program can supply
         // (spec 3.1 §7.16): no flag or config file carries one.
@@ -192,6 +235,7 @@ impl Setup {
         Ok(Self {
             shared,
             plans,
+            personal,
             embedder,
             model_id: model.id.clone(),
             models,
@@ -254,7 +298,13 @@ impl Setup {
         extras: AgentExtras,
     ) -> Result<HarnessAgent> {
         let workspace = Workspace::new(&self.resolved.workspace).allow_bash(true);
-        let mut builder = HarnessAgent::builder(name)
+        let mut builder = HarnessAgent::builder(name);
+        // A preset first, so the flags and config files override what it sets (spec 3.3 §10
+        // H1).
+        if let Some(preset) = self.args.preset {
+            builder = builder.preset(preset);
+        }
+        let mut builder = builder
             .model(self.models.harness.llm.clone())
             .effort(effort)
             .workspace(workspace)
@@ -377,11 +427,25 @@ impl Setup {
         if let Some(recorder) = extras.audit {
             builder = builder.audit_log(recorder);
         }
-        if let Some(drivers) = extras.drivers {
-            builder = builder
-                .toolset(drivers.toolset_for_manifests(&adk_kernel::PartitionId::default()))
-                .tool_classes(Arc::new(adk_harness::DriverClasses::new(drivers.clone())))
-                .add_operator_policy(drivers.policy());
+        match (extras.partition, extras.drivers) {
+            // A partition's harness: its mode, identity, memory scope, crossing policy and
+            // the drivers its own list names (spec 3.2 §7.7, §7.8).
+            (Some((partition, table, coordinator)), drivers) => {
+                builder = builder.partition(partition, table);
+                if coordinator {
+                    builder = builder.partition_coordinator();
+                }
+                if let Some(drivers) = drivers {
+                    builder = builder.partition_drivers(&drivers);
+                }
+            }
+            (None, Some(drivers)) => {
+                builder = builder
+                    .toolset(drivers.toolset_for_manifests(&adk_kernel::PartitionId::default()))
+                    .tool_classes(Arc::new(adk_harness::DriverClasses::new(drivers.clone())))
+                    .add_operator_policy(drivers.policy());
+            }
+            (None, None) => {}
         }
         // Servers the workspace declares in `.mcp.json` start once the workspace is trusted
         // (spec 3.1 §7.21, I3).
@@ -464,6 +528,15 @@ impl Setup {
             launcher = launcher.with_status_line("Store", store);
         }
         launcher = launcher.with_status_line("Plans", self.plans_note());
+        // Both limits are shown on every start (spec 3.3 §13 Q7).
+        if let Some(personal) = &self.personal {
+            launcher = launcher
+                .with_status_line("Quiet time", personal.quiet_time_label())
+                .with_status_line(
+                    "Spending",
+                    format!("daily spending limit {}", personal.daily_spending_limit_label()),
+                );
+        }
         for note in &self.resolved.notes {
             launcher = launcher.with_banner_note(note.clone());
         }
@@ -751,7 +824,7 @@ pub async fn code(
         setup.model_id,
         setup.resolved.workspace.display(),
         setup.resolved.mode,
-        info.isolation,
+        shell_label(&info),
         setup.plans_note()
     );
     let outcome = launcher.run_once(&task).await?;
@@ -839,7 +912,7 @@ pub async fn voice(
         setup.model_id,
         setup.resolved.workspace.display(),
         setup.resolved.mode,
-        info.isolation,
+        shell_label(&info),
         realtime.id
     );
     let surface = adk_harness::VoiceSurface::open(

@@ -1041,7 +1041,12 @@ mod tick {
             let _one_at_a_time = self.distilling.lock().await;
             let mut record = ConsolidationRecord::new(&tick_id, app, user, &partition, now);
             let project = self.scope(app, user);
-            record.scopes = vec![project.clone(), project.user_wide()];
+            // A partition's harness reads no user-wide fact, so its tick merges none (K-I15).
+            record.scopes = if self.confined {
+                vec![project.clone()]
+            } else {
+                vec![project.clone(), project.user_wide()]
+            };
             // Write-ahead; a store that cannot keep the record refuses here, before any change.
             self.store.put_consolidation(&record).await?;
 

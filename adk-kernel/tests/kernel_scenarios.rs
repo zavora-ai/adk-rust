@@ -500,9 +500,13 @@ impl Tool for Step {
     }
 }
 
+/// K-I8's bound on a freeze stopping every process on a replica that observed it.
+const FREEZE_STOP: Duration = Duration::from_secs(1);
+
 /// K9: two kernel replicas over one SQLite file run six processes, three each. A freeze on
-/// one replica parks all six `Waiting` within a second on both; nothing runs while frozen;
-/// the unfreeze resumes them to completion, and the action ledger shows every step once.
+/// one replica stops all six within a second on both (K-I8): no model or tool call starts
+/// after that. Each is then recorded parked `Waiting`; nothing runs while frozen; the
+/// unfreeze resumes them to completion, and the action ledger shows every step once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn k9_one_switch_stops_everything_on_both_replicas() {
     const PROCESSES: usize = 6;
@@ -524,7 +528,13 @@ async fn k9_one_switch_stops_everything_on_both_replicas() {
     let mut kernels = Vec::new();
     for (name, stores) in ["replica-a", "replica-b"].into_iter().zip(&replicas) {
         let control = KernelConfig::mirrored_governance(Arc::clone(&stores.governance) as _);
-        let mut builder = kernel(name, stores, &control, Arc::new(SystemClock), 3);
+        // K9 measures the kill switch, not lease recovery, so the workers keep their default
+        // lease. On the one-second lease the chaos test needs, six runs heartbeat 18 times a
+        // second: half of the commits a Windows runner's disk makes, at about 30 ms each.
+        let worker =
+            DurableWorkerConfig::default().with_worker_id(name).with_max_concurrent_runs(3);
+        let mut builder = kernel(name, stores, &control, Arc::new(SystemClock), 3)
+            .config(config(name, &control, Arc::new(SystemClock), 3).with_worker(worker));
         for (i, model) in models.iter().enumerate() {
             let agent = LlmAgentBuilder::new("agent")
                 .model(Arc::clone(model) as Arc<dyn Llm>)
@@ -538,6 +548,7 @@ async fn k9_one_switch_stops_everything_on_both_replicas() {
         kernel.start().await.unwrap();
     }
 
+    let spawned = tokio::time::Instant::now();
     let mut pids = Vec::new();
     for i in 0..PROCESSES {
         let target = format!("process-{i}");
@@ -567,9 +578,22 @@ async fn k9_one_switch_stops_everything_on_both_replicas() {
         owners,
         BTreeMap::from([("replica-a:background".into(), 3), ("replica-b:background".into(), 3)])
     );
+    // The pace the six kept, start-up included: the time the rest of the work takes after
+    // the unfreeze, on this host's disk.
+    let (ran, steps_ran) = (spawned.elapsed(), executions.lock().unwrap().values().sum::<usize>());
 
     let frozen = tokio::time::Instant::now();
     kernels[0].freeze("incident 9", operator()).await.unwrap();
+    // K-I8 bounds the stop, which the process's own checks make at its next boundary; the
+    // park that records it is store writes, as fast as the disk commits them.
+    tokio::time::sleep_until(frozen + FREEZE_STOP).await;
+    let calls = || {
+        (
+            executions.lock().unwrap().clone(),
+            models.iter().map(|m| m.requests().len()).sum::<usize>(),
+        )
+    };
+    let stopped = calls();
     eventually("six freeze-parked processes", Duration::from_secs(5), || async {
         for pid in &pids {
             let run = runs.get(pid).await.ok().flatten()?;
@@ -580,7 +604,6 @@ async fn k9_one_switch_stops_everything_on_both_replicas() {
         Some(())
     })
     .await;
-    assert!(frozen.elapsed() < Duration::from_secs(1), "parked in {:?}", frozen.elapsed());
     for (replica, events) in events.iter_mut().enumerate() {
         let mut parked = 0;
         while let Ok(Some(record)) =
@@ -595,21 +618,24 @@ async fn k9_one_switch_stops_everything_on_both_replicas() {
         }
         assert_eq!(parked, 3, "replica {replica} parked its own three");
     }
-    let still = (
-        executions.lock().unwrap().clone(),
-        models.iter().map(|m| m.requests().len()).sum::<usize>(),
-    );
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let after = (
-        executions.lock().unwrap().clone(),
-        models.iter().map(|m| m.requests().len()).sum::<usize>(),
+    assert_eq!(
+        calls(),
+        stopped,
+        "no tool or model call starts more than a second after the freeze"
     );
-    assert_eq!(still, after, "no tool or model call while frozen");
 
     kernels[0].unfreeze(operator()).await.unwrap();
-    for pid in &pids {
-        in_state(runs, pid, RunState::Completed).await;
-    }
+    let remaining = PROCESSES * STEPS as usize - stopped.0.values().sum::<usize>();
+    let finish =
+        ran.mul_f64(3.0 * remaining as f64 / steps_ran as f64).max(Duration::from_secs(10));
+    eventually("six completed processes", finish, || async {
+        for pid in &pids {
+            (runs.get(pid).await.ok().flatten()?.state == RunState::Completed).then_some(())?;
+        }
+        Some(())
+    })
+    .await;
     let executions = executions.lock().unwrap().clone();
     let twice: Vec<_> = executions.iter().filter(|(_, count)| **count != 1).collect();
     assert_eq!(twice, Vec::<(&(usize, u64), &usize)>::new(), "no step executed twice");

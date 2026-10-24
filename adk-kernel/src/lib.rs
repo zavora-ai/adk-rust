@@ -33,12 +33,15 @@
 //! | [`QueueClass`], [`QuietHours`], [`Quotas`] | §7.9 |
 //! | [`drivers`]: `DriverManifest`, [`EffectClass`](drivers::EffectClass), `DriverStore`, `DriverSupervisor`, `DriverPolicy` (feature `drivers`) | §7.7 |
 //! | `proc` (feature `proc`): `Ledger`, `LedgerEntry`, `LedgerStore` on every backend, `LedgerSink`, `LedgerAuditTap`; `proc::baselines` (feature `proc-baselines`): `BaselinePass`, `BaselinePolicy`, `ObservationPhraser`, `Observation` | §7.10 |
-//! | [`PartitionId`], [`PartitionMode`] | §7.8 (the phase-1 part) |
+//! | [`PartitionId`], [`PartitionMode`], [`Partition`], [`CrossPartition`], [`PartitionStore`], [`InMemoryPartitionStore`], `SqlitePartitionStore`, `PostgresPartitionStore`, `RedisPartitionStore`, [`Partitions`] | §7.8 |
+//! | [`Crossing`], [`CrossingResource`], [`CrossingAccess`], [`CrossingRun`], [`CrossingRecord`], [`CrossingOutcome`], [`CrossingFilter`], [`CrossingRoute`], [`PartitionPolicy`], [`CrossingTool`] | §7.8, §13 Q3, K-I15 |
 //! | [`control`]: [`ControlPlaneConfig`](control::ControlPlaneConfig), [`router`](control::router), [`ControlPlane`](control::ControlPlane), [`ControlClient`](control::ControlClient), [`api`](control::api) | §7.11 |
 //! | [`audit`] action names | §9.3 |
 //! | `service` (feature `service`): `ServiceDefinition`, `install`, `uninstall`, `run_as_service` (Windows) | §7.12, §10 W3 |
 //! | `conformance` (feature `conformance`) | §11 |
 //! | `managed` (feature `managed`): `KernelDef`, `TenantKernel`, `KernelResolver`, `ManagedKernels` | §7.13, §10 M1 |
+//! | [`pairing`]: `Pairing`, `DeviceScope`, `DeviceStore` on every backend, `DeviceTokenExtractor` | spec 3.3 §10 K2 |
+//! | `channels` (feature `channels`): `ChannelSink`, `ChannelGateway`, `ChannelBindingStore` on every backend, `InMemoryChannel` | spec 3.3 §10 K1 |
 //!
 //! Agenda and proactivity (§7.5) and attention and resources (§7.9) are phase 2; drivers
 //! (§7.7) and partitions (§7.8) phase 3; channel wakes phase 5. Each adds to these types
@@ -56,7 +59,7 @@
 //! | `service` | on | The `service` module: `adk-rust up` as a launchd agent, a systemd user unit or a Windows service (`windows-service` on Windows) |
 //! | `proc` | on | The content-free activity ledger (`proc`), its stores and `GET /api/kernel/proc/*`; the OTel GenAI histograms of the live aggregates |
 //! | `proc-baselines` | off | The daily baseline pass and observations over `adk-eval`'s ledger statistics (implies `proc`; the only `adk-eval` edge) |
-//! | `channels` | off | Empty until phase 5 |
+//! | `channels` | off | The chat channel contract (spec 3.3 §10 K1): the `channels` module, its binding store on every backend, and the adapter contract suite with `conformance` |
 //! | `managed` | off | The managed form: `KernelDef` in a managed definition, one kernel per tenant (`adk-managed`) |
 //! | `conformance` | off | The `conformance` module |
 //!
@@ -87,6 +90,8 @@
 pub mod agenda;
 pub mod audit;
 pub mod bus;
+#[cfg(feature = "channels")]
+pub mod channels;
 #[cfg(feature = "conformance")]
 pub mod conformance;
 pub mod consolidation;
@@ -96,6 +101,7 @@ pub mod error;
 pub mod kernel;
 #[cfg(feature = "managed")]
 pub mod managed;
+pub mod pairing;
 pub mod partition;
 #[cfg(feature = "proc")]
 pub mod proc;
@@ -126,7 +132,12 @@ pub use consolidation::{
 };
 pub use error::{KernelError, Result};
 pub use kernel::{Kernel, KernelBuilder, KernelConfig, KernelHealth, KernelState, WorkerHealth};
-pub use partition::{PartitionId, PartitionMode};
+pub use partition::{
+    CROSSING_PARTITION_ARG, CrossPartition, Crossing, CrossingAccess, CrossingFilter,
+    CrossingOutcome, CrossingRecord, CrossingResource, CrossingRoute, CrossingRun, CrossingTool,
+    Partition, PartitionId, PartitionMode, PartitionPolicy, PartitionStore, Partitions,
+    RecurringCrossing,
+};
 pub use process::{
     GoalProgress, Process, ProcessHandle, ProcessKind, ProcessMeta, ProcessSpec, ProcessTable,
     ProcessView, ProgressSource, RunUsage, Suspension,
@@ -148,17 +159,24 @@ pub use stores::Neo4jProcessStore;
 #[cfg(feature = "postgres")]
 pub use stores::PostgresAgendaStore;
 #[cfg(feature = "postgres")]
+pub use stores::PostgresPartitionStore;
+#[cfg(feature = "postgres")]
 pub use stores::PostgresProcessStore;
 #[cfg(feature = "redis")]
 pub use stores::RedisAgendaStore;
+#[cfg(feature = "redis")]
+pub use stores::RedisPartitionStore;
 #[cfg(feature = "redis")]
 pub use stores::RedisProcessStore;
 #[cfg(feature = "sqlite")]
 pub use stores::SqliteAgendaStore;
 #[cfg(feature = "sqlite")]
+pub use stores::SqlitePartitionStore;
+#[cfg(feature = "sqlite")]
 pub use stores::SqliteProcessStore;
 pub use stores::{
-    InMemoryAgendaStore, InMemoryProcessStore, ProcessFilter, ProcessStore, SpendScope,
+    InMemoryAgendaStore, InMemoryPartitionStore, InMemoryProcessStore, ProcessFilter, ProcessStore,
+    SpendScope,
 };
 #[cfg(feature = "webhooks")]
 pub use wake::webhook_wake_hook;

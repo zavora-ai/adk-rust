@@ -433,7 +433,10 @@ export type SurfaceKind = "web" | "terminal" | "phone" | "tray" | "chat" | "voic
 export interface SurfaceQuery {
   /** `GET .../feed`: resume after this `seq` when no `Last-Event-ID` is sent. */
   after?: number | null;
-  /** `GET /surface/status`: the session whose mode to show. */
+  /**
+   * `GET /surface/status`: the session whose mode to show; `GET /surface/decisions`: only
+   * that session's decisions.
+   */
   session?: string | null;
   /** `GET /surface/briefing`: since when. */
   since?: string | null;

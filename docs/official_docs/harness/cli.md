@@ -58,6 +58,7 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--web` / `--no-web` | Declares the web tools (on by default) or none at all (spec 3.1 §7.20) |
 | `--allow-domain HOST` | A host `web_fetch` reads without approval: exact, or `*.example.com`; repeatable |
 | `--search provider\|off\|searxng\|deepseek` | Where web search runs (spec 3.1 §7.20): `provider` (the default) is the built-in search of the provider the model's client serves; `searxng` and `deepseek` replace it with the governed `web_search` over a SearXNG instance (`[web] searxng_url`, else `SEARXNG_URL`) or DeepSeek's Search API (`DEEPSEEK_API_KEY`); `off` declares none. The banner's `Search` line and `/web` name the path |
+| `--preset coding\|personal` | Applies a preset (spec 3.3 §10 H1): `personal` works in `<home>/workspace` instead of the current directory, offers no host shell, and asks for quiet time and a daily spending limit at its first run; `coding` is the coding agent's prompt and no members. See [The personal preset and take over](personal.md) |
 | `--checkpointer URL` | Where plans and goal graphs are checkpointed: `sqlite://`, `postgres://`, `redis://`, `mongodb://`, `neo4j://` or `firestore://` (spec 3.1 §7.11); without it `[plan] checkpointer` in the user config, else the store the sessions are in. Not with `--ephemeral` |
 
 > **Note:** `--pack computer-use` and `--pack payments` refuse at start: a desktop runtime and a merchant service are connections only the library API takes (spec 3.1 §7.16, §7.24).

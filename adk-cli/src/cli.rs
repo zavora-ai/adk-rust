@@ -549,6 +549,21 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
+    /// Phones, terminals and chat accounts that may reach your agents: pair one with a code,
+    /// list them, remove one (spec 3.3 §10 K1, K2)
+    ///
+    /// Example: `adk-rust pair --name "Ana's phone"`, then enter the code on the phone;
+    /// `adk-rust pair accept ABCD-2345` pairs the chat account that was sent that code.
+    #[cfg(feature = "harness")]
+    Pair {
+        #[command(subcommand)]
+        command: Option<crate::pair_cli::PairCommand>,
+        #[command(flatten)]
+        issue: crate::pair_cli::IssueArgs,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
     /// The kernel's self-observation: its content-free activity ledger, each partition's
     /// baselines, and the observations it offered as questions (spec 3.2 §7.10)
     ///
@@ -579,6 +594,16 @@ pub enum Commands {
         /// format `cargo adk eval --ledger` reads
         #[arg(long, value_name = "FILE")]
         export: Option<std::path::PathBuf>,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+
+    /// The running kernel's partitions: list them, add one, or set one's mode
+    #[cfg(feature = "harness")]
+    Partitions {
+        #[command(subcommand)]
+        command: Option<PartitionsCommands>,
+        /// The kernel to list, when no subcommand is given
         #[command(flatten)]
         kernel: KernelTarget,
     },
@@ -835,6 +860,58 @@ pub enum ProcView {
     Baselines,
     /// The observations offered as questions
     Observations,
+}
+
+/// `adk-rust partitions` (spec 3.2 §7.8, §8.1).
+#[cfg(feature = "harness")]
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum PartitionsCommands {
+    /// Every partition: its class, mode, memory scope, drivers, crossings and blocks
+    List {
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+    /// Add a partition, or replace one; its harness starts at the next `adk-rust up`
+    Add {
+        /// The partition id, such as work
+        id: String,
+        /// The class of its agents' principals (default: the id)
+        #[arg(long)]
+        class: Option<String>,
+        /// The tenant of its agents' principals
+        #[arg(long)]
+        tenant: Option<String>,
+        /// Its mode: read_only, plan, ask or auto (default: ask)
+        #[arg(long, value_parser = parse_partition_mode)]
+        mode: Option<adk_kernel::PartitionMode>,
+        /// The project of its long-term facts (default: the id)
+        #[arg(long, value_name = "SCOPE")]
+        memory_scope: Option<String>,
+        /// A driver mounted for it; repeat for several
+        #[arg(long = "driver", value_name = "ID")]
+        drivers: Vec<String>,
+        /// Let the coordinator cross into and out of it, each crossing under approval
+        #[arg(long)]
+        coordinator_crossings: bool,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+    /// Set a partition's mode; its harness takes it at the next `adk-rust up`
+    SetMode {
+        /// The partition id
+        partition: String,
+        /// read_only, plan, ask or auto
+        #[arg(value_parser = parse_partition_mode)]
+        mode: adk_kernel::PartitionMode,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+}
+
+/// Parses a partition mode: `read_only`, `plan`, `ask` or `auto`.
+#[cfg(feature = "harness")]
+fn parse_partition_mode(value: &str) -> Result<adk_kernel::PartitionMode, String> {
+    value.parse().map_err(|error: adk_kernel::KernelError| error.to_string())
 }
 
 /// Parses a run state as the run store names it: `waiting`, `running`, ….
@@ -1550,6 +1627,61 @@ mod tests {
             ChatArgs { ephemeral: true, ..ChatArgs::default() }
         );
         assert!(parse(&["adk-rust"]).command.is_none());
+    }
+
+    /// Spec 3.2 §8.1: `adk-rust partitions [list|add|set-mode P MODE]`.
+    #[cfg(feature = "harness")]
+    #[test]
+    fn partitions_parse_with_and_without_a_subcommand() {
+        let target =
+            |home: &str| KernelTarget { home: Some(home.into()), ..KernelTarget::default() };
+        match parse(&["adk-rust", "partitions", "--home", "/k"]).command {
+            Some(Commands::Partitions { command: None, kernel }) => {
+                assert_eq!(kernel, target("/k"))
+            }
+            _ => panic!("not the partitions command"),
+        }
+        match parse(&["adk-rust", "partitions", "set-mode", "work", "read-only", "--home", "/k"])
+            .command
+        {
+            Some(Commands::Partitions { command: Some(command), .. }) => assert_eq!(
+                command,
+                PartitionsCommands::SetMode {
+                    partition: "work".into(),
+                    mode: adk_kernel::PartitionMode::ReadOnly,
+                    kernel: target("/k"),
+                }
+            ),
+            _ => panic!("not the partitions command"),
+        }
+        match parse(&[
+            "adk-rust",
+            "partitions",
+            "add",
+            "team",
+            "--driver",
+            "a",
+            "--driver",
+            "b",
+            "--coordinator-crossings",
+        ])
+        .command
+        {
+            Some(Commands::Partitions {
+                command: Some(PartitionsCommands::Add { id, drivers, coordinator_crossings, .. }),
+                ..
+            }) => {
+                assert_eq!(
+                    (id.as_str(), drivers, coordinator_crossings),
+                    ("team", vec!["a".to_string(), "b".to_string()], true)
+                );
+            }
+            _ => panic!("not the partitions command"),
+        }
+        assert!(
+            Cli::try_parse_from(["adk-rust", "partitions", "set-mode", "work", "sometimes"])
+                .is_err()
+        );
     }
 
     #[test]

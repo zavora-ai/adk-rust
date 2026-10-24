@@ -24,8 +24,9 @@ use serde_json::json;
 
 use super::api::{
     AgendaItemResponse, AgendaQuery, AgendaResponse, AttachRequest, AttachResponse, EventsQuery,
-    FreezeRequest, FreezeResponse, KillRequest, NiceRequest, ProcessResponse, ProcessesQuery,
-    ProcessesResponse, RejectRequest, ScheduleRequest, SpawnRequest,
+    FreezeRequest, FreezeResponse, KillRequest, NiceRequest, PartitionModeRequest,
+    PartitionResponse, PartitionsResponse, ProcessResponse, ProcessesQuery, ProcessesResponse,
+    RejectRequest, ScheduleRequest, SpawnRequest,
 };
 use super::{ControlTransport, paths};
 use crate::agenda::Agenda;
@@ -33,6 +34,7 @@ use crate::audit;
 use crate::bus::EventSubscriber;
 use crate::error::{KernelError, Result, UNAUTHORIZED_CODE};
 use crate::kernel::{Kernel, KernelHealth};
+use crate::partition::{Partition, PartitionId, PartitionMode};
 use crate::process::{Process, ProcessKind, ProcessSpec};
 use crate::sched::QueueClass;
 use crate::stores::ProcessFilter;
@@ -81,6 +83,31 @@ pub(crate) trait ControlBackend: Send + Sync + 'static {
     #[cfg(feature = "proc")]
     fn ledger(&self) -> Option<crate::proc::Ledger> {
         None
+    }
+
+    /// Device pairing (spec 3.3 §10 K2); `None` on a backend that pairs no devices.
+    fn pairing(&self) -> Option<crate::pairing::Pairing> {
+        None
+    }
+
+    /// The partition table, ordered by id (spec 3.2 §7.8).
+    async fn partitions(&self) -> Result<Vec<Partition>> {
+        Ok(Vec::new())
+    }
+    /// Creates or replaces `partition` (spec 3.2 §7.8).
+    async fn put_partition(&self, partition: Partition, by: AuditActor) -> Result<Partition> {
+        let _ = (partition, by);
+        Err(KernelError::Config { reason: "this kernel keeps no partition table".into() })
+    }
+    /// Sets the mode of partition `id` (spec 3.2 §7.8).
+    async fn set_partition_mode(
+        &self,
+        id: PartitionId,
+        mode: PartitionMode,
+        by: AuditActor,
+    ) -> Result<Partition> {
+        let _ = (id, mode, by);
+        Err(KernelError::Config { reason: "this kernel keeps no partition table".into() })
     }
 }
 
@@ -179,6 +206,28 @@ impl ControlBackend for Kernel {
     fn ledger(&self) -> Option<crate::proc::Ledger> {
         Kernel::ledger(self).cloned()
     }
+
+    fn pairing(&self) -> Option<crate::pairing::Pairing> {
+        self.config().control.pairing.clone()
+    }
+
+    async fn partitions(&self) -> Result<Vec<Partition>> {
+        Kernel::partitions(self).list().await
+    }
+
+    async fn put_partition(&self, partition: Partition, by: AuditActor) -> Result<Partition> {
+        Kernel::partitions(self).put(partition.clone(), by).await?;
+        Ok(partition)
+    }
+
+    async fn set_partition_mode(
+        &self,
+        id: PartitionId,
+        mode: PartitionMode,
+        by: AuditActor,
+    ) -> Result<Partition> {
+        Kernel::partitions(self).set_mode(id, mode, by).await
+    }
 }
 
 /// The routes over `backend`, relative to `/api`.
@@ -197,7 +246,9 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         .route(paths::AGENDA, get(agenda))
         .route(paths::AGENDA_APPROVE, post(agenda_approve))
         .route(paths::AGENDA_REJECT, post(agenda_reject))
-        .route(paths::AGENDA_SCHEDULE, post(agenda_schedule));
+        .route(paths::AGENDA_SCHEDULE, post(agenda_schedule))
+        .route(paths::PARTITIONS, get(partitions).post(put_partition))
+        .route(paths::PARTITION_MODE, post(set_partition_mode));
     #[cfg(feature = "drivers")]
     let router = router
         .route(paths::DRIVERS, get(drivers::list))
@@ -210,19 +261,24 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         .route(paths::PROC_LEDGER, get(proc_ledger))
         .route(paths::PROC_BASELINES, get(proc_baselines))
         .route(paths::PROC_OBSERVATIONS, get(proc_observations));
-    router.with_state(backend)
+    // Device pairing (spec 3.3 §10 K2); its tokens are admitted where the transport
+    // authenticates, and by `guard_devices` in front of a server's app.
+    match backend.pairing() {
+        Some(_) => router.with_state(backend.clone()).merge(super::pairing::routes(backend)),
+        None => router.with_state(backend),
+    }
 }
 
 type Backend = State<Arc<dyn ControlBackend>>;
 
 /// The authenticated caller of a route (K-I16).
 pub(crate) struct Caller {
-    context: RequestContext,
+    pub(super) context: RequestContext,
     transport: ControlTransport,
 }
 
 impl Caller {
-    fn subject(&self) -> SubjectRef {
+    pub(super) fn subject(&self) -> SubjectRef {
         SubjectRef::human(self.context.user_id.clone())
     }
 
@@ -231,7 +287,7 @@ impl Caller {
     }
 
     /// Refuses a caller without the `operator` scope the routes that change the kernel need.
-    fn require_operator(&self, action: &str) -> Result<()> {
+    pub(super) fn require_operator(&self, action: &str) -> Result<()> {
         if self.context.scopes.iter().any(|scope| scope == OPERATOR_SCOPE) {
             return Ok(());
         }
@@ -272,7 +328,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 /// # Errors
 ///
 /// The trail's error under `AuditFailureMode::Block`; the caller refuses the action.
-async fn record(
+pub(super) async fn record(
     backend: &dyn ControlBackend,
     caller: &Caller,
     action: &str,
@@ -298,6 +354,11 @@ async fn record(
     .ext("transport", json!(caller.transport))
     .ext("action", json!(action))
     .ext("target", json!(target));
+    // A paired device's action names the device (spec 3.3 §11).
+    let draft = match caller.context.metadata.get(crate::pairing::DEVICE_ID_METADATA) {
+        Some(device) => draft.ext("device", json!(device)),
+        None => draft,
+    };
     let draft = extra.iter().fold(draft, |draft, (key, value)| draft.ext(*key, value.clone()));
     trail.record(draft).await.map_err(KernelError::from)
 }
@@ -809,4 +870,32 @@ async fn proc_observations(
     let observations =
         ledger_of(backend.as_ref())?.store().observations(&params.to_query()).await?;
     Ok(Json(super::api::ObservationsResponse { observations }))
+}
+
+async fn partitions(State(backend): Backend, _caller: Caller) -> Result<Json<PartitionsResponse>> {
+    Ok(Json(PartitionsResponse { partitions: backend.partitions().await? }))
+}
+
+async fn put_partition(
+    State(backend): Backend,
+    caller: Caller,
+    Json(partition): Json<Partition>,
+) -> Result<Json<PartitionResponse>> {
+    caller.require_operator("change partitions")?;
+    record(backend.as_ref(), &caller, "partition.put", Some(partition.id.as_str()), &[]).await?;
+    let partition = backend.put_partition(partition, caller.actor()).await?;
+    Ok(Json(PartitionResponse { partition }))
+}
+
+async fn set_partition_mode(
+    State(backend): Backend,
+    caller: Caller,
+    UrlPath(id): UrlPath<String>,
+    Json(request): Json<PartitionModeRequest>,
+) -> Result<Json<PartitionResponse>> {
+    caller.require_operator("change partitions")?;
+    record(backend.as_ref(), &caller, "partition.mode", Some(&id), &[]).await?;
+    let partition =
+        backend.set_partition_mode(PartitionId::new(id), request.mode, caller.actor()).await?;
+    Ok(Json(PartitionResponse { partition }))
 }

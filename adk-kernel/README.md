@@ -61,11 +61,11 @@ adk-rust memory undo <tick-id>
 | Kill switch | `freeze` parks running processes on every replica sharing the store; `unfreeze` resumes exactly the ones it parked |
 | Control plane | How terminals and apps reach the kernel: an owner-only local socket, plus an HTTP API on loopback, or beyond it with authentication |
 | Self-observation (`/proc`) | A content-free ledger of what your agents did — kinds, durations and hashed subjects, never what they read or wrote. Once a day the kernel compares your routine with its last four weeks and, when it changes for long enough, asks you about it in plain words (`adk-rust proc`) |
+| Partitions | Separate compartments, such as work and home, each run by an agent of its own with its own memory, drivers and mode. Nothing crosses between them except through the coordinator, and only with your approval |
 | Stores | Processes, schedules, the agenda and the ledger live in SQLite (`harness.db`) or a shared PostgreSQL or Redis backend, so a crash or restart resumes work instead of losing it |
 
 Every tool call a kernel process makes still goes through the harness's modes, standing rules
-and approvals. Partitions (separate work and home compartments), channel wake sources and
-the managed form are the remaining parts of spec 3.2.
+and approvals. Channel wake sources are the remaining part of spec 3.2.
 
 ## How it is built
 
@@ -203,6 +203,23 @@ reconciled on start. A local event reaches `Running` in under 2 s: in-process so
 enqueue and claim at once, and the tick claims wake runs an external ingress or another
 replica enqueued.
 
+## Partitions
+
+A `Partition` is a policy class, a memory scope and a driver set, run by its own harness
+(spec 3.2 §7.8). `Partitions` keeps the table and the crossing ledger in a `PartitionStore`
+(in-memory, SQLite, PostgreSQL, Redis; `partition_store_conformance_tests!`).
+
+| Part | What it does |
+|---|---|
+| `Partition::identity_source` | Every agent of the partition's runner acts with the partition's class and tenant, so `PolicyRule::for_class` rules apply |
+| `Partition::scope_memory` | Confines an `adk_core::Memory` to the partition's project |
+| `PartitionPolicy` | Denies a request reaching another partition unless the coordinator makes it, then requires a non-waivable approval; an approved read holds for the rest of its run, keyed by the crossing fingerprint (the call's fingerprint with the target partition and resource class) |
+| `CrossingTool` | Offers the coordinator another partition's driver or session tool as a crossing |
+| `KernelBuilder::partition_agent` | Hosts a partition's runner as a target bound to its partition: a process of another partition cannot run it or continue its sessions |
+| `KernelBuilder::partition_progress_source` | The partition's own progress source: the kernel reads its processes' goal progress, loop-guard verdicts and usage from it, by the process's partition, and hands it the process table and the ledger; a partition without one falls back to the main source |
+| Managed form | `KernelDef::partitions` and `coordinator` run one agent per partition on a tenant's kernel through `TenantKernelBuilder::partition_resolver`, over the tenant's own partition table (`partition_store`) |
+| Audit | `kernel.partition.created`, `kernel.partition.changed`, and `kernel.partition.crossing` for every crossing, with a digest of its fingerprint |
+
 ## Lifecycle
 
 | Call | Effect | Audit record |
@@ -261,6 +278,25 @@ shows any platform's definition without installing; `service::install` and
 `service::uninstall` act on the current platform, and `service::run_as_service` is the
 Windows service's entry point.
 
+## Pairing devices and chat channels
+
+`ControlPlaneConfig::with_pairing(Pairing::new(store))` lets a phone, a tray or a remote
+terminal reach the control plane with a device token instead of the operator's credentials
+(spec 3.3 §10 K2): `adk-rust pair` issues a ten-minute code, the device claims it at
+`POST /api/kernel/pairing/claim` and receives `adkd_<id>_<secret>` once, and the token opens
+only the routes its scopes name — `read`, `decide` (low and medium risk), `stop` — until it
+expires or `adk-rust pair revoke` removes it. Codes and tokens are stored hashed; pairing
+never widens the bind (S-I7).
+
+With the `channels` feature, `channels::ChannelGateway` is the kernel's side of every chat
+thread (spec 3.3 §10 K1): an unpaired account gets a pairing code and starts nothing, a
+paired account's message is a turn whose reply returns to its thread, the `ChannelDoorbell`
+sends decision cards that carry the agent, a masked summary and the risk but never the
+arguments, chat answers **Allow once** or **Deny** at low and medium risk through
+`ApprovalService::decide`, and "stop all" freezes while "resume" is refused. A platform
+adapter implements `ChannelSink` and passes `channel_contract_tests!`; `InMemoryChannel` is
+the test channel. See [Pairing devices and chat channels](../docs/official_docs/kernel/pairing.md).
+
 ## Replicas
 
 Kernels share one run store, process store and governance store. Give each replica
@@ -273,16 +309,21 @@ second.
 | `ProcessStore` | `InMemoryProcessStore`; `SqliteProcessStore` (feature `sqlite`, on the pool of `harness.db`); `PostgresProcessStore` (`postgres`); `RedisProcessStore` (`redis`) |
 | `AgendaStore` | `InMemoryAgendaStore`; `SqliteAgendaStore` (`sqlite`); `PostgresAgendaStore` (`postgres`); `RedisAgendaStore` (`redis`) |
 | `DriverStore` | `InMemoryDriverStore`; `SqliteDriverStore`; `PostgresDriverStore`; `RedisDriverStore` (feature `drivers` with the backend's) |
+| `pairing::DeviceStore` | `InMemoryDeviceStore`; `SqliteDeviceStore`; `PostgresDeviceStore`; `RedisDeviceStore` |
+| `channels::ChannelBindingStore` (feature `channels`) | `InMemoryChannelBindingStore`; `SqliteChannelBindingStore`; `PostgresChannelBindingStore`; `RedisChannelBindingStore` |
 | Runs, sessions, schedules, approvals, governance state, action ledger | `adk-session`'s stores on the same backend |
 
-`process_store_conformance_tests!`, `agenda_store_conformance_tests!` and `driver_store_conformance_tests!` (feature
-`conformance`) check a backend against the contract the kernel relies on.
+`process_store_conformance_tests!`, `agenda_store_conformance_tests!`,
+`driver_store_conformance_tests!`, `device_store_conformance_tests!` and
+`channel_binding_store_conformance_tests!` (feature `conformance`) check a backend against the
+contract the kernel relies on.
 
 ### Alpha backends: MongoDB, Firestore, Neo4j
 
-Every kernel store also runs on MongoDB, Firestore and Neo4j (spec 3.2 §13 Q8), each
-backend **Alpha** until its live conformance suites pass in CI, so its storage layout may
-still change without a migration. Each feature also turns on the same backend of
+The process, agenda, driver and ledger stores also run on MongoDB, Firestore and Neo4j
+(spec 3.2 §13 Q8); the partition store does not yet. Each backend is **Alpha** until its
+live conformance suites pass in CI, so its storage layout may still change without a
+migration. Each feature also turns on the same backend of
 `adk-session`'s run, schedule and governance stores, and every store takes the handle
 those stores use, so one client serves them all.
 
@@ -353,13 +394,13 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `drivers` | on | `drivers`: manifests, the driver store, the supervisor over `adk-tool`'s MCP manager, the stdio launcher on `adk-sandbox`'s enforcers |
 | `service` | on | The `service` module; `windows-service` on Windows |
 | `managed` | off | `managed`: `KernelDef` under the `adk.kernel` metadata key of a managed definition, and `TenantKernel`, one kernel per tenant over its `ManagedStores` on `adk-managed`'s runtime (Experimental) |
-| `channels` | off | Reserved for a later phase of spec 3.2; empty in this release |
+| `channels` | off | The chat channel contract (spec 3.3 §10 K1): `channels`, the binding store on every backend, and with `conformance` the adapter contract suite |
 
 ## Tests
 
 | Suite | Covers |
 |---|---|
-| `tests/kernel_scenarios.rs` | K2: ten sleepers on ten kinds of wake set make no model call and hold no lease over a clock-controlled hour. K3: a file save, a signed webhook and a queue message each wake one run in under 2 s, and redeliveries wake nothing. K9: two replicas over one SQLite file, six running processes parked within 1 s of a freeze on both, resumed by the unfreeze with every tool call once. Chaos: a kernel process killed with `SIGKILL` mid-step, restarted, resumes from its checkpoint |
+| `tests/kernel_scenarios.rs` | K2: ten sleepers on ten kinds of wake set make no model call and hold no lease over a clock-controlled hour. K3: a file save, a signed webhook and a queue message each wake one run in under 2 s, and redeliveries wake nothing. K9: two replicas over one SQLite file, six running processes stopped within 1 s of a freeze on both (no model or tool call after it) and parked, resumed by the unfreeze with every tool call once. Chaos: a kernel process killed with `SIGKILL` mid-step, restarted, resumes from its checkpoint |
 | `tests/supervisor_tests.rs`, `tests/supervisor_property_tests.rs` | The process actions, lifecycle and spend attribution; sleepers never call the model and freezes stop everything within a second, with process-store writes delayed up to 120 ms |
 | `tests/wake_*.rs` | Matching, keys, expiry, reconciliation and each wake source |
 | `tests/proactivity_scenarios.rs` | K4: in Ask a follow-up waits in the inbox and nothing runs until it is approved, edited or rejected; in Auto it runs after quiet hours within the daily budget, a proposal past `max_proposed_open` is rejected with a reason on the bus, and an over-budget process sleeps until the budget replenishes. K8: three background runs at a quota of three, a typed message runs at once, the youngest background run parks and is requeued, no tool runs twice and the quota is never exceeded. A consolidation item waits for a person in Auto |
@@ -374,6 +415,9 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `tests/managed_def_fixtures.rs`, `tests/managed_tenants.rs`, `tests/managed_tenant_property_tests.rs` (feature `managed`) | The kernel block's golden fixtures and refusals; a definition round-trips through the managed state store; a cron wake for one tenant runs on its stores only; a held call runs once after the tenant's approval; no wake, process or approval crosses tenants |
 | `tests/k10_baselines.rs` | K10 on a manual clock: six weeks of a routine whose last two end late yield one observation on the tenth day of the change, none in the warm-up or the cooldown, and again after it; each an agenda question that stays open in Auto, starts no run, is remembered once when confirmed and not at all when rejected; none without `proc-baselines` |
 | `tests/proc_property_tests.rs` | K-I19: no ledger row carries a payload of the event or audit record that produced it |
+| `tests/pairing_scenarios.rs` | Spec 3.3 K2 on loopback HTTP: a `read` device reads but cannot decide, and once revoked is refused; a `stop` device freezes but cannot resume; a device token is never the loopback operator; a device decides medium risk but not high; a code pairs one device; every pairing action is recorded |
+| `tests/channel_scenarios.rs`, `tests/channel_contract.rs` (feature `channels`) | Spec 3.3 K1 with a scripted agent: a stranger gets a code and starts nothing, once paired its message is answered in its thread; a held call's card reaches the chat without its arguments, "Allow once" runs it once, and a later answer from a paired phone or the chat is already decided. The adapter contract on `InMemoryChannel` |
+| `tests/device_store_*.rs`, `tests/channel_store_*.rs` | The device and channel binding suites on every backend |
 
 ## License
 

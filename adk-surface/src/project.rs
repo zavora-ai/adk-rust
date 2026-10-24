@@ -390,8 +390,12 @@ impl Projector {
             }
         }
         if let Some(held) = &event.actions.tool_confirmation {
+            let decision_id = links
+                .get(&held.fingerprint())
+                .or_else(|| links.get(&call_key(&held.tool_name, &held.args)))
+                .cloned();
             items.push(ThreadItem::Decision {
-                decision_id: links.get(&held.fingerprint()).cloned(),
+                decision_id,
                 tool: held.tool_name.clone(),
                 text: words::WAITING_FOR_YOU.to_string(),
             });
@@ -514,6 +518,11 @@ pub(crate) fn agent_name(request: &ApprovalRequest) -> String {
         })
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| request.scope.app_name.clone())
+}
+
+/// A held call's key where the source shows no fingerprint: the tool and its arguments.
+pub(crate) fn call_key(tool: &str, args: &Value) -> String {
+    format!("{tool}\u{0}{args}")
 }
 
 /// The exact call, cut short past [`CALL_TEXT_LIMIT`] characters.

@@ -199,7 +199,7 @@ impl SandboxLauncher {
     ///
     /// On Windows the enforcer is the restricted-token one (`WindowsEnforcer`) when the config
     /// names none or names it: it starts each shell itself through
-    /// [`CommandLauncher::spawn_contained`] (spec 3.2 §10 W5).
+    /// `CommandLauncher::spawn_contained`, a Windows-only method (spec 3.2 §10 W5).
     pub fn new(config: OsSandboxConfig) -> Self {
         let contained = cfg!(windows)
             && config.enforcer.as_ref().is_none_or(|enforcer| {

@@ -24,11 +24,23 @@ pub async fn open() -> Result<Arc<SqliteSessionService>> {
 }
 
 /// [`open`], with `harness.db` in `dir` (`adk-rust up --home`; spec 3.2 §7.2).
+///
+/// The database runs in write-ahead-log mode, so readers never block the writer and a
+/// commit appends to `harness.db-wal` rather than rewriting a rollback journal. Several
+/// processes share the file (`adk-rust up`, `chat`, `serve`), and on Windows a
+/// rollback-journal commit costs about four times a WAL one: under the kernel's write load
+/// writers waited past the 30-second busy timeout.
 pub async fn open_in(dir: &Path) -> Result<Arc<SqliteSessionService>> {
     let path = dir.join("harness.db");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
+        // SQLite creates `harness.db-wal` and `-shm` itself, so on Windows they take the
+        // directory's DACL: owner-only, as `harness.db` is (spec 3.2 §10 W4).
+        #[cfg(windows)]
+        crate::owner_only::protect_dir(parent).with_context(|| {
+            format!("failed to make {} readable by its owner only", parent.display())
+        })?;
     }
     create_private(&path)?;
     let service = SqliteSessionService::new(&sqlite_url(&path)).await.with_context(|| {
@@ -37,6 +49,16 @@ pub async fn open_in(dir: &Path) -> Result<Arc<SqliteSessionService>> {
             path.display()
         )
     })?;
+    // Persistent in the file. The switch needs the file to itself, so while an older
+    // process still has it open in rollback mode, this one keeps that mode.
+    match sqlx::query_scalar::<_, String>("PRAGMA journal_mode = WAL")
+        .fetch_one(service.pool())
+        .await
+    {
+        Ok(mode) if mode.eq_ignore_ascii_case("wal") => {}
+        Ok(mode) => tracing::warn!(journal.mode = %mode, "harness.db stays out of WAL mode"),
+        Err(error) => tracing::warn!(error = %error, "harness.db keeps its journal mode for now"),
+    }
     service.migrate().await?;
     Ok(Arc::new(service))
 }
@@ -324,5 +346,41 @@ mod tests {
         reopened.migrate().await.unwrap();
         assert_eq!(latest(&reopened, "ana").await.unwrap().as_deref(), Some("second"));
         assert_eq!(latest(&reopened, "bo").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn harness_db_runs_in_wal_mode_and_stays_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_in(dir.path()).await.unwrap();
+        let mode: String =
+            sqlx::query_scalar("PRAGMA journal_mode").fetch_one(store.pool()).await.unwrap();
+        assert_eq!(mode, "wal");
+        store
+            .create(CreateRequest {
+                app_name: APP_NAME.into(),
+                user_id: "ana".into(),
+                session_id: Some("first".into()),
+                state: Default::default(),
+            })
+            .await
+            .unwrap();
+        // The log and the shared memory hold the database's rows, so they get its protection.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let wal = dir.path().join("harness.db-wal");
+            assert_eq!(std::fs::metadata(&wal).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        #[cfg(windows)]
+        for file in ["harness.db-wal", "harness.db-shm"] {
+            let path = dir.path().join(file);
+            assert!(
+                crate::owner_only::only_the_owner_has_access(&path).unwrap(),
+                "{file} is not owner-only"
+            );
+        }
+        drop(store);
+        let reopened = open_in(dir.path()).await.unwrap();
+        assert_eq!(latest(reopened.as_ref(), "ana").await.unwrap().as_deref(), Some("first"));
     }
 }

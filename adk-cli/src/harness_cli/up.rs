@@ -36,11 +36,15 @@ pub(super) const DEFAULT_BIND: &str = "127.0.0.1:8080";
 struct KernelStores {
     processes: Arc<dyn ProcessStore>,
     agenda: Arc<dyn adk_kernel::AgendaStore>,
+    /// The partition table and the crossing ledger (spec 3.2 §7.8).
+    partitions: Arc<dyn adk_kernel::PartitionStore>,
     schedules: Arc<dyn ScheduleStore>,
     /// Mounted drivers and their parked calls (spec 3.2 §7.7).
     drivers: Arc<dyn adk_kernel::drivers::DriverStore>,
     /// The activity ledger, its observations and pass state (spec 3.2 §7.10).
     ledger: Arc<dyn LedgerStore>,
+    /// Paired devices and their waiting codes, hashed (spec 3.3 §10 K2).
+    devices: Arc<dyn adk_kernel::pairing::DeviceStore>,
     /// Whether nothing outlives the kernel (`--ephemeral`).
     ephemeral: bool,
     /// The kill switch's shared state; `None` keeps it in this process.
@@ -51,7 +55,7 @@ struct KernelStores {
 
 /// `adk-rust up` (spec 3.2 §8.1): runs until Ctrl-C or `SIGTERM`, then drains and stops.
 pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -> Result<()> {
-    let UpArgs { home, bind, auth_token, store, harness, .. } = up;
+    let UpArgs { home, bind, auth_token, store, mut harness, .. } = up;
     // The baseline pass's observations are worded by the harness's model (spec 3.2 §7.10).
     let phraser = Arc::new(LlmPhraser::new(model.llm.clone()));
     // Only `max_concurrent_runs` of a workspace's [kernel] table applies, so the directory
@@ -65,6 +69,13 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         Some(home) => home,
         None => default_home()?,
     };
+    // The personal preset's workspace is a folder under the home (spec 3.3 §10 H1); its
+    // `.adk/harness.toml` may restrict the kernel as a project's does.
+    if harness.preset == Some(adk_harness::Preset::Personal) && harness.dir.is_none() {
+        let personal = adk_harness::personal::PersonalWorkspace::create(&home)?;
+        settings = KernelSettings::resolve(user_config().as_deref(), personal.root())?;
+        harness.dir = Some(personal.root().to_path_buf());
+    }
     let bind = match bind.or(settings.bind) {
         Some(bind) => bind,
         None => DEFAULT_BIND.parse()?,
@@ -84,6 +95,16 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     setup.memory_notice();
     for note in &settings.notes {
         println!("note: {note}");
+    }
+    // The first-run answers become the kernel's quiet hours and every partition's daily
+    // spend cap, unless the user config's `[kernel]` table sets them (spec 3.3 §13 Q7).
+    if let Some(personal) = &setup.personal {
+        if settings.quiet_hours.is_none() {
+            settings.quiet_hours = personal.quiet_time.map(Into::into);
+        }
+        if settings.quotas.daily_spend_cap.is_none() {
+            settings.quotas.daily_spend_cap = personal.daily_spending_limit_micro_usd();
+        }
     }
     if !bind.ip().is_loopback()
         && setup.resolved.mode == HarnessMode::Auto
@@ -128,44 +149,64 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                 as Arc<dyn adk_tool::sampling::SamplingHandler>)
         })
         .build();
-    let agent = Arc::new(setup.agent_with(
-        setup.resolved.effort,
-        APP_NAME,
-        setup.resolved.mode,
-        setup.resolved.sandbox,
-        None,
-        Some(service),
-        AgentExtras {
-            budget: None,
-            audit,
-            memory_with_inbox: true,
-            drivers: Some(drivers.clone()),
-        },
-    )?);
-    let runner = adk_runner::Runner::builder()
-        .app_name(APP_NAME)
-        .agent(agent.agent())
-        .session_service(setup.sessions())
-        .approval_store(agent.runtime().approval_store().clone())
-        .governance(governance.clone())
-        .build()?;
-    // The harness glue registers the runner as `adk-rust` and `harness.goal`, with the
-    // harness's sessions, approval service, kill switch, audit trail and goal progress
-    // (spec 3.2 §10 HK1); goals land on the background queue.
-    let harness = adk_harness::Harness::with_runner(agent.clone(), runner)?
-        .with_run_store(run_store.clone())
-        .with_goal_queue(QueueClass::BACKGROUND);
+    // One harness per partition when `[[kernel.partitions]]` names any (spec 3.2 §7.8).
+    let table = match settings.partitions.is_empty() {
+        true => None,
+        false => Some(
+            open_partitions(&setup, &settings, stores.partitions.clone(), audit.as_ref()).await?,
+        ),
+    };
+    let hosted = match &table {
+        None => {
+            let agent = Arc::new(setup.agent_with(
+                setup.resolved.effort,
+                APP_NAME,
+                setup.resolved.mode,
+                setup.resolved.sandbox,
+                None,
+                Some(service),
+                AgentExtras {
+                    budget: None,
+                    audit: audit.clone(),
+                    memory_with_inbox: true,
+                    drivers: Some(drivers.clone()),
+                    partition: None,
+                },
+            )?);
+            vec![host(&setup, agent, None, &governance, &run_store)?]
+        }
+        Some(table) => {
+            // Each partition's harness: its mode, identity, memory scope, crossing policy and
+            // the drivers its own list names (spec 3.2 §7.7, §7.8).
+            let extras = |partition: adk_kernel::Partition, coordinator: bool| AgentExtras {
+                budget: None,
+                audit: audit.clone(),
+                memory_with_inbox: true,
+                drivers: Some(drivers.clone()),
+                partition: Some((partition, table.clone(), coordinator)),
+            };
+            partition_harnesses(&setup, &settings, table, &service, &governance, &run_store, extras)
+                .await?
+        }
+    };
+    let primary = &hosted[0];
     // Re-approving a driver carries the re-approving person's standing rules forward.
-    drivers.set_rule_pins(harness.driver_rule_pins());
+    drivers.set_rule_pins(primary.harness.driver_rule_pins());
     let mut worker = DurableWorkerConfig::default();
     if let Some(max) = settings.max_concurrent_runs {
         worker = worker.with_max_concurrent_runs(max);
     }
-    // The consolidation tick: on in Ask and Auto with long-term memory (spec 3.2 §13 Q1).
-    let tick = settings.enable_consolidation(
-        setup.resolved.mode,
-        setup.resolved.consolidation && setup.memory_on(),
-    );
+    // The consolidation tick: on in Ask and Auto with long-term memory (spec 3.2 §13 Q1),
+    // for each partition in its own mode.
+    let allowed = setup.resolved.consolidation && setup.memory_on();
+    let mut ticking = Vec::new();
+    for hosted in &hosted {
+        if settings.enable_consolidation(hosted.agent.info().default_mode, allowed) {
+            ticking.push(hosted);
+        }
+    }
+    let tick = !ticking.is_empty();
+    settings.consolidation = tick;
     // The run store reads the system clock too, so leases, `not_before` and wake times agree.
     let config = settings.apply(
         KernelConfig::default()
@@ -173,8 +214,12 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             .with_home(&home)
             .with_worker(worker)
             // The socket at the kernel home, or on Windows the named pipe named after it
-            // (spec 3.2 §10 W2).
-            .with_control(ControlPlaneConfig::default())
+            // (spec 3.2 §10 W2), pairing devices beside the kernel's other stores (spec 3.3
+            // §10 K2).
+            .with_control(
+                ControlPlaneConfig::default()
+                    .with_pairing(adk_kernel::pairing::Pairing::new(stores.devices.clone())),
+            )
             .with_clock(Arc::new(adk_core::SystemClock)),
     );
     // The subject key stays in the home; an ephemeral kernel's ledger and key end with it.
@@ -195,8 +240,26 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         }
         LedgerKey::load_or_create(&path)?
     };
-    let mut kernel = harness
-        .kernel()
+    // The harness glue registers the runner as `adk-rust` and `harness.goal`, with the
+    // harness's sessions, approval service, kill switch, audit trail and goal progress
+    // (spec 3.2 §10 HK1); goals land on the background queue. A partition's harness runs as
+    // `adk-rust@<partition>` and `harness.goal@<partition>`, bound to its partition; the
+    // coordinator's also runs the CLI's own targets, so `attach`, `goal` and `/api/runs`
+    // reach it.
+    let (primary_goal, primary_runner) = primary.harness.goal_target();
+    let mut builder = primary.harness.kernel();
+    if let Some(partition) = &primary.partition {
+        builder = builder
+            .partition_agent(partition.clone(), APP_NAME, primary_runner.clone())
+            .partition_agent(partition.clone(), adk_harness::GOAL_TARGET, primary_runner.clone());
+    }
+    for other in &hosted[1..] {
+        builder = other.harness.host_partition(builder);
+    }
+    if let Some(table) = &table {
+        builder = builder.partitions(table.clone());
+    }
+    let mut kernel = builder
         .config(config)
         .process_store(stores.processes)
         .agenda_store(stores.agenda)
@@ -204,29 +267,34 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         .drivers(drivers)
         .ledger(Ledger::new(stores.ledger, key))
         .observation_phraser(phraser);
-    if tick {
-        // The tick distils this workspace's sessions, and the kernel's own, which name none.
-        let recorded = setup.resolved.workspace.display().to_string();
-        let user = adk_core::UserId::new(setup.user.clone())?;
-        let consolidator = harness.consolidator(&user)?.with_session_filter(Arc::new(
-            move |state: &dyn adk_session::State| match state.get("harness:workspace") {
-                Some(value) => value.as_str() == Some(recorded.as_str()),
-                None => true,
-            },
-        ));
-        kernel = kernel.consolidator(adk_kernel::PartitionId::default(), Arc::new(consolidator));
+    // Each tick distils this workspace's sessions of its own partition, and the kernel's own,
+    // which name no workspace; an unpartitioned kernel's tick skips every partition's
+    // (spec 3.2 §7.5, K-I15).
+    let recorded = setup.resolved.workspace.display().to_string();
+    let user = adk_core::UserId::new(setup.user.clone())?;
+    for hosted in ticking {
+        let filter = tick_sessions(recorded.clone(), hosted.partition.clone());
+        let consolidator = hosted.harness.consolidator(&user)?.with_session_filter(filter);
+        kernel = kernel
+            .consolidator(hosted.partition.clone().unwrap_or_default(), Arc::new(consolidator));
     }
     if setup.memory_on() {
-        // The pass's observations are put to the user; a confirmed one is remembered.
+        // The pass's observations are put to the user; a confirmed one is remembered — each
+        // partition's by its own harness, in its memory scope (spec 3.2 §7.8, §7.10).
         let user = adk_core::UserId::new(setup.user.clone())?;
-        let audience = harness.observation_audience(&user)?;
-        kernel =
-            kernel.observation_audience(adk_kernel::PartitionId::default(), Arc::new(audience));
+        for hosted in &hosted {
+            let audience = hosted.harness.observation_audience(&user)?;
+            kernel = kernel.observation_audience(
+                hosted.partition.clone().unwrap_or_default(),
+                Arc::new(audience),
+            );
+        }
     }
     let kernel = kernel.build()?;
     // The inbox decides through the harness's approval service, which wakes the kernel's
     // approval sleepers; the service the builder was given would not.
-    let decisions = agent
+    let decisions = primary
+        .agent
         .runtime()
         .approval_service()
         .cloned()
@@ -234,15 +302,32 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
 
     // `/api/runs` submissions land on the interactive queue, where the kernel's worker
     // claims them; the server runs no worker of its own.
-    let (target, runner) = harness.goal_target();
-    let background = BackgroundState::new()
+    let mut background = BackgroundState::new()
         .with_run_store(run_store)
         .with_app_name(APP_NAME)
-        .with_agent(APP_NAME, runner.clone())
-        .with_agent(target, runner)
+        .with_agent(APP_NAME, primary_runner.clone())
+        .with_agent(adk_harness::GOAL_TARGET, primary_runner.clone())
+        .with_agent(primary_goal, primary_runner)
         .with_worker_config(DurableWorkerConfig::default().with_queue(QueueClass::INTERACTIVE))
         .with_embedded_worker(false)
         .with_governance(governance);
+    for hosted in &hosted {
+        if let Some(partition) = &hosted.partition {
+            let (goal, runner) = hosted.harness.goal_target();
+            background = background
+                .with_agent(adk_harness::partition_target(APP_NAME, partition), runner.clone())
+                .with_agent(goal, runner);
+        }
+    }
+    let partitions_note = hosted
+        .iter()
+        .filter_map(|hosted| hosted.partition.as_ref())
+        .map(|id| match settings.coordinator.as_ref() == Some(id) {
+            true => format!("{id} (coordinator)"),
+            false => id.to_string(),
+        })
+        .collect::<Vec<_>>();
+    let agent = primary.agent.clone();
     let mut launcher = HarnessLauncher::shared(agent)
         .app_name(APP_NAME)
         .with_session_service(setup.sessions())
@@ -258,10 +343,29 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         )));
     }
     println!(
-        "  store {}: sessions, approvals, runs, processes, agenda, schedules, drivers, the activity ledger",
+        "  store {}: sessions, approvals, runs, processes, agenda, schedules, drivers, partitions, the activity ledger, paired devices",
         stores.label
     );
+    if !partitions_note.is_empty() {
+        println!("  partitions {}", partitions_note.join(", "));
+    }
     println!("  plans {}", setup.plans_note());
+    // Both limits are shown on every start (spec 3.3 §13 Q7).
+    if setup.personal.is_some() {
+        println!(
+            "  work  {} (personal preset: not a code repository, no host shell)",
+            setup.resolved.workspace.display()
+        );
+        let quiet = settings.quiet_hours.map_or_else(
+            || "off".to_string(),
+            |quiet| format!("{}–{}", quiet.start.format("%H:%M"), quiet.end.format("%H:%M")),
+        );
+        let limit = settings.quotas.daily_spend_cap.map_or_else(
+            || "none".to_string(),
+            |micro| format!("${:.2} a day", micro as f64 / 1_000_000.0),
+        );
+        println!("  quiet time {quiet} · daily spending limit {limit}");
+    }
     println!(
         "  tick  {}",
         if tick {
@@ -271,6 +375,118 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         }
     );
     launcher.run_serve_directly(bind.port()).await.map_err(Into::into)
+}
+
+/// The sessions a tick of `partition` distils: those of the workspace `recorded`, or naming
+/// none, that `partition`'s harness ran — with no partition, those no partition's harness
+/// ran (spec 3.2 §7.5, K-I15).
+fn tick_sessions(
+    recorded: String,
+    partition: Option<adk_kernel::PartitionId>,
+) -> adk_harness::SessionStateFilter {
+    Arc::new(move |state: &dyn adk_session::State| {
+        let workspace = match state.get("harness:workspace") {
+            Some(value) => value.as_str() == Some(recorded.as_str()),
+            None => true,
+        };
+        let ran = state.get(adk_harness::PARTITION_STATE_KEY);
+        workspace
+            && ran.as_ref().and_then(serde_json::Value::as_str)
+                == partition.as_ref().map(adk_kernel::PartitionId::as_str)
+    })
+}
+
+/// One harness `up` hosts: its agent, the harness over its runner, and its partition.
+struct Hosted {
+    agent: Arc<adk_harness::HarnessAgent>,
+    harness: adk_harness::Harness,
+    partition: Option<adk_kernel::PartitionId>,
+}
+
+/// The harness over `agent`'s runner, with the run store and the background goal queue;
+/// a partition's runner acts with the partition's class and tenant (spec 3.2 §7.8).
+fn host(
+    setup: &Setup,
+    agent: Arc<adk_harness::HarnessAgent>,
+    partition: Option<&adk_kernel::Partition>,
+    governance: &GovernanceControl,
+    run_store: &Arc<dyn adk_core::DurableRunStore>,
+) -> Result<Hosted> {
+    let mut runner = adk_runner::Runner::builder()
+        .app_name(APP_NAME)
+        .agent(agent.agent())
+        .session_service(setup.sessions())
+        .approval_store(agent.runtime().approval_store().clone())
+        .governance(governance.clone());
+    if let Some(partition) = partition {
+        runner = runner.identity_source(
+            partition.identity_source(APP_NAME, adk_core::Agent::name(agent.as_ref())),
+        );
+    }
+    let harness = adk_harness::Harness::with_runner(agent.clone(), runner.build()?)?
+        .with_run_store(run_store.clone())
+        .with_goal_queue(QueueClass::BACKGROUND);
+    Ok(Hosted { agent, harness, partition: partition.map(|partition| partition.id.clone()) })
+}
+
+/// The partition table in the kernel's store, with every `[[kernel.partitions]]` entry it
+/// lacks added; an entry the table already holds keeps the table's record, which
+/// `adk-rust partitions` changes (spec 3.2 §7.8, §8.1).
+async fn open_partitions(
+    setup: &Setup,
+    settings: &KernelSettings,
+    store: Arc<dyn adk_kernel::PartitionStore>,
+    audit: Option<&Arc<dyn AuditRecorder>>,
+) -> Result<adk_kernel::Partitions> {
+    let mut table = adk_kernel::Partitions::new(store);
+    if let Some(recorder) = audit {
+        table = table.with_audit(AuditTrail::new(recorder.clone()));
+    }
+    let by =
+        adk_core::audit_log::AuditActor::subject(adk_core::SubjectRef::human(setup.user.clone()));
+    for partition in &settings.partitions {
+        match table.get(&partition.id).await? {
+            None => table.put(partition.clone(), by.clone()).await?,
+            Some(stored) if stored != *partition => println!(
+                "note: partition `{}` differs from its [[kernel.partitions]] entry; the \
+                 partition table's record applies (change it with `adk-rust partitions`)",
+                partition.id
+            ),
+            Some(_) => {}
+        }
+    }
+    Ok(table)
+}
+
+/// One harness per partition in the table, the coordinator's first: it serves the REPL,
+/// the web surface and the CLI's own targets (spec 3.2 §7.8).
+async fn partition_harnesses(
+    setup: &Setup,
+    settings: &KernelSettings,
+    table: &adk_kernel::Partitions,
+    service: &Arc<dyn ApprovalService>,
+    governance: &GovernanceControl,
+    run_store: &Arc<dyn adk_core::DurableRunStore>,
+    extras: impl Fn(adk_kernel::Partition, bool) -> AgentExtras,
+) -> Result<Vec<Hosted>> {
+    let mut partitions = table.list().await?;
+    let coordinator = settings.coordinator.as_ref();
+    partitions.sort_by_key(|partition| Some(&partition.id) != coordinator);
+    let mut hosted = Vec::with_capacity(partitions.len());
+    for partition in partitions {
+        let is_coordinator = coordinator == Some(&partition.id);
+        let agent = Arc::new(setup.agent_with(
+            setup.resolved.effort,
+            APP_NAME,
+            partition.default_mode.into(),
+            setup.resolved.sandbox,
+            None,
+            Some(service.clone()),
+            extras(partition.clone(), is_coordinator),
+        )?);
+        hosted.push(host(setup, agent, Some(&partition), governance, run_store)?);
+    }
+    Ok(hosted)
 }
 
 /// The kernel home when neither `--home` nor `[kernel] home` names one: the directory
@@ -311,6 +527,8 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
         processes.migrate().await?;
         let agenda = adk_kernel::SqliteAgendaStore::new(db.pool.clone());
         agenda.migrate().await?;
+        let partitions = adk_kernel::SqlitePartitionStore::new(db.pool.clone());
+        partitions.migrate().await?;
         let schedules = adk_session::SqliteScheduleStore::from_pool(db.pool.clone());
         schedules.migrate().await?;
         let governance = adk_session::SqliteGovernanceStateStore::from_pool(db.pool.clone());
@@ -319,12 +537,16 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
         drivers.migrate().await?;
         let ledger = adk_kernel::proc::SqliteLedgerStore::new(db.pool.clone());
         ledger.migrate().await?;
+        let devices = adk_kernel::pairing::SqliteDeviceStore::new(db.pool.clone());
+        devices.migrate().await?;
         return Ok(KernelStores {
             processes: Arc::new(processes),
             agenda: Arc::new(agenda),
+            partitions: Arc::new(partitions),
             schedules: Arc::new(schedules),
             drivers: Arc::new(drivers),
             ledger: Arc::new(ledger),
+            devices: Arc::new(devices),
             ephemeral: false,
             governance: Some(Arc::new(governance)),
             label: "harness.db".into(),
@@ -334,9 +556,11 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
     Ok(KernelStores {
         processes: Arc::new(adk_kernel::InMemoryProcessStore::new()),
         agenda: Arc::new(adk_kernel::InMemoryAgendaStore::new()),
+        partitions: Arc::new(adk_kernel::InMemoryPartitionStore::new()),
         schedules: Arc::new(adk_core::InMemoryScheduleStore::new()),
         drivers: Arc::new(adk_kernel::stores::InMemoryDriverStore::new()),
         ledger: Arc::new(adk_kernel::proc::InMemoryLedgerStore::new()),
+        devices: Arc::new(adk_kernel::pairing::InMemoryDeviceStore::new()),
         ephemeral: true,
         governance: None,
         label: "memory (--ephemeral): nothing outlives the kernel".into(),
@@ -353,6 +577,8 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             processes.migrate().await?;
             let agenda = adk_kernel::PostgresAgendaStore::new(processes.pool().clone());
             agenda.migrate().await?;
+            let partitions = adk_kernel::PostgresPartitionStore::new(processes.pool().clone());
+            partitions.migrate().await?;
             let schedules = adk_session::PostgresScheduleStore::new(url).await?;
             schedules.migrate().await?;
             let governance = adk_session::PostgresGovernanceStateStore::new(url).await?;
@@ -361,12 +587,16 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             drivers.migrate().await?;
             let ledger = adk_kernel::proc::PostgresLedgerStore::new(processes.pool().clone());
             ledger.migrate().await?;
+            let devices = adk_kernel::pairing::PostgresDeviceStore::new(processes.pool().clone());
+            devices.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
                 agenda: Arc::new(agenda),
+                partitions: Arc::new(partitions),
                 schedules: Arc::new(schedules),
                 drivers: Arc::new(drivers),
                 ledger: Arc::new(ledger),
+                devices: Arc::new(devices),
                 ephemeral: false,
                 governance: Some(Arc::new(governance)),
                 label,
@@ -378,6 +608,9 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             processes.migrate().await?;
             let agenda = adk_kernel::RedisAgendaStore::from_client(processes.client().clone());
             agenda.migrate().await?;
+            let partitions =
+                adk_kernel::RedisPartitionStore::from_client(processes.client().clone());
+            partitions.migrate().await?;
             let schedules = adk_session::RedisScheduleStore::new(url).await?;
             schedules.migrate().await?;
             let governance = adk_session::RedisGovernanceStateStore::new(url).await?;
@@ -387,12 +620,17 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             let ledger =
                 adk_kernel::proc::RedisLedgerStore::from_client(processes.client().clone());
             ledger.migrate().await?;
+            let devices =
+                adk_kernel::pairing::RedisDeviceStore::from_client(processes.client().clone());
+            devices.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
                 agenda: Arc::new(agenda),
+                partitions: Arc::new(partitions),
                 schedules: Arc::new(schedules),
                 drivers: Arc::new(drivers),
                 ledger: Arc::new(ledger),
+                devices: Arc::new(devices),
                 ephemeral: false,
                 governance: Some(Arc::new(governance)),
                 label,
@@ -552,5 +790,53 @@ mod tests {
             #[cfg(windows)]
             assert!(crate::owner_only::is_owner_only(&path).unwrap(), "{}", path.display());
         }
+    }
+}
+
+#[cfg(test)]
+mod tick_tests {
+    use std::collections::HashMap;
+
+    use serde_json::{Value, json};
+
+    use super::tick_sessions;
+
+    struct State(HashMap<String, Value>);
+
+    impl adk_session::State for State {
+        fn get(&self, key: &str) -> Option<Value> {
+            self.0.get(key).cloned()
+        }
+
+        fn set(&mut self, key: String, value: Value) {
+            self.0.insert(key, value);
+        }
+
+        fn all(&self) -> HashMap<String, Value> {
+            self.0.clone()
+        }
+    }
+
+    #[test]
+    fn a_tick_distils_only_its_own_partitions_sessions() {
+        let state = |entries: &[(&str, Value)]| {
+            State(entries.iter().map(|(key, value)| (key.to_string(), value.clone())).collect())
+        };
+        let workspace = ("harness:workspace", json!("/ws"));
+        let home = ("harness:partition", json!("home"));
+        let work = ("harness:partition", json!("work"));
+        let home_tick = tick_sessions("/ws".into(), Some("home".into()));
+        let plain_tick = tick_sessions("/ws".into(), None);
+        assert!(home_tick(&state(&[workspace.clone(), home.clone()])));
+        assert!(
+            home_tick(&state(std::slice::from_ref(&home))),
+            "a kernel session names no workspace"
+        );
+        assert!(!home_tick(&state(&[workspace.clone(), work.clone()])), "work's session");
+        assert!(!home_tick(&state(std::slice::from_ref(&workspace))), "no partition's session");
+        assert!(!home_tick(&state(&[("harness:workspace", json!("/other")), home])));
+        assert!(plain_tick(&state(std::slice::from_ref(&workspace))));
+        assert!(plain_tick(&state(&[])));
+        assert!(!plain_tick(&state(&[workspace, work])), "a partition's session");
     }
 }

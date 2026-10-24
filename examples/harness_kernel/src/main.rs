@@ -1,9 +1,10 @@
 //! Scenarios for the agent kernel (spec 3.2 §5, §11).
 //!
-//! Scripted, no keys: K1, K5 and K6 on `ScriptedLlm` with a real kernel — durable workers,
-//! the scheduler, SQLite stores, drivers and the control plane on a socket and loopback HTTP.
-//! Live (`--live`): K3, K5, K6, a parked driver question answered after a restart, and K10,
-//! through the `adk-rust up` binary on a real model.
+//! Scripted, no keys: K1, K4, K5, K6, K7 and K8 on `ScriptedLlm` with a real kernel — durable
+//! workers, the scheduler, SQLite stores, drivers and the control plane on a socket and
+//! loopback HTTP.
+//! Live (`--live`): K3, K4, K5, K6, K7, a parked driver question answered after a restart, and
+//! K10, through the `adk-rust up` binary on a real model.
 //! The managed form (spec 3.2 §7.13) and voice decisions on parked processes (§7.11) run in
 //! process, scripted and live.
 
@@ -61,6 +62,10 @@ const SCRIPTED: &[(&str, &str)] = &[
         "k6_drivers_you_can_trust",
         "an MCP server runs unsandboxed as configured, its `readOnlyHint` decides its class, and a changed tool keeps its rules",
     ),
+    (
+        "k7_partitions",
+        "one harness serves everything: every agent reads every fact, and nothing is a crossing",
+    ),
 ];
 
 /// The live scenarios.
@@ -73,6 +78,7 @@ const LIVE: &[&str] = &[
     "live_managed_tenant_approval",
     "live_voice_parked_process",
     "live_k10_proc",
+    "live_k7_partitions",
 ];
 
 fn verdict(result: &Result<Checks>) -> String {

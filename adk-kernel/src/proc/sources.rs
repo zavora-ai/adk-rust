@@ -17,7 +17,7 @@ use crate::bus::{EventSink, KernelEvent};
 use crate::error::Result;
 use crate::partition::PartitionId;
 use crate::stores::ProcessStore;
-use crate::wake::WakeOutcome;
+use crate::wake::{RunFinishedWakeSource, WakeOutcome};
 
 /// The longest label the mappings copy from an identifier.
 const LABEL: usize = 128;
@@ -309,6 +309,11 @@ impl AuditRecorder for LedgerAuditTap {
     }
 }
 
+/// The run a run-finished wake's key names: `run:<pid>:<state>` (`keys::run_finished`).
+fn finished_run(key: &str) -> Option<&str> {
+    key.strip_prefix("run:")?.rsplit_once(':').map(|(pid, _)| pid)
+}
+
 /// Most processes the kernel's sink remembers the partition, agent and start of.
 const REMEMBERED: usize = 4096;
 
@@ -384,6 +389,14 @@ impl EventSink for LedgerEventSink {
             if !matches!(event, KernelEvent::Wake { .. }) {
                 activity.agent = agent;
             }
+        } else if let KernelEvent::Wake { source, key, pid: None, .. } = event
+            && source == RunFinishedWakeSource::NAME
+            && let Some(finished) = finished_run(key)
+            && let Ok(Some(meta)) = self.processes.get(finished).await
+        {
+            // A finished run nothing waited on is its own partition's activity (spec 3.2
+            // §7.8, §7.10).
+            activity.partition = meta.partition;
         }
         if let KernelEvent::Process { pid, from, to, .. } = event {
             let now = self.ledger.clock().now();

@@ -169,6 +169,51 @@ impl ControlClient {
         self.call(Method::GET, paths::HEALTH.to_string(), None::<&()>).await
     }
 
+    /// `GET /kernel/partitions`: the partition table (spec 3.2 §7.8).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    pub async fn partitions(&self) -> Result<Vec<crate::partition::Partition>> {
+        let answer: super::api::PartitionsResponse =
+            self.call(Method::GET, paths::PARTITIONS.to_string(), None::<&()>).await?;
+        Ok(answer.partitions)
+    }
+
+    /// `POST /kernel/partitions`: creates or replaces `partition` (spec 3.2 §7.8).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    pub async fn put_partition(
+        &self,
+        partition: &crate::partition::Partition,
+    ) -> Result<crate::partition::Partition> {
+        let answer: super::api::PartitionResponse =
+            self.call(Method::POST, paths::PARTITIONS.to_string(), Some(partition)).await?;
+        Ok(answer.partition)
+    }
+
+    /// `POST /kernel/partitions/{id}/mode`: sets partition `id`'s mode (spec 3.2 §8.1).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    pub async fn set_partition_mode(
+        &self,
+        id: &str,
+        mode: crate::partition::PartitionMode,
+    ) -> Result<crate::partition::Partition> {
+        let path = paths::PARTITION_MODE.replace("{id}", &encode(id));
+        let body = super::api::PartitionModeRequest { mode };
+        let answer: super::api::PartitionResponse =
+            self.call(Method::POST, path, Some(&body)).await?;
+        Ok(answer.partition)
+    }
+
     /// `GET /kernel/processes`.
     ///
     /// # Errors
@@ -550,6 +595,102 @@ impl ControlClient {
     /// error the kernel answered.
     pub async fn schedule_item(&self, id: &str, wake: WakeSet) -> Result<AgendaItem> {
         self.agenda_action(paths::AGENDA_SCHEDULE, id, &ScheduleRequest { wake }).await
+    }
+
+    /// `POST /kernel/pairing`: issues a pairing code for a device acting for the caller
+    /// (spec 3.3 §10 K2, `adk-rust pair`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `403` without the `operator` scope, `400` when the kernel
+    /// pairs no devices.
+    pub async fn issue_pairing_code(
+        &self,
+        request: &super::api::IssueRequest,
+    ) -> Result<crate::pairing::IssuedCode> {
+        self.call(Method::POST, paths::PAIRING.to_string(), Some(request)).await
+    }
+
+    /// `POST /kernel/pairing/claim`: pairs this client's device with `code` and returns its
+    /// token, once (spec 3.3 §10 K2). The call needs no token; send the one it returns with
+    /// [`with_bearer_token`](Self::with_bearer_token) from then on.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `401` for a wrong, used or expired code.
+    pub async fn claim_pairing(
+        &self,
+        code: &str,
+        name: Option<&str>,
+    ) -> Result<crate::pairing::ClaimedDevice> {
+        let body =
+            super::api::ClaimRequest { code: code.to_string(), name: name.map(str::to_string) };
+        self.call(Method::POST, paths::PAIRING_CLAIM.to_string(), Some(&body)).await
+    }
+
+    /// `GET /kernel/devices`: every paired device (spec 3.3 §10 K2, `adk-rust pair list`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    pub async fn devices(&self) -> Result<Vec<crate::pairing::DeviceView>> {
+        let answer: super::api::DevicesResponse =
+            self.call(Method::GET, paths::DEVICES.to_string(), None::<&()>).await?;
+        Ok(answer.devices)
+    }
+
+    /// `POST /kernel/devices/{id}/revoke`: removes a device; its token stops working at once
+    /// (spec 3.3 §10 K2, `adk-rust pair revoke`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `404` for an unknown device.
+    pub async fn revoke_device(&self, id: &str) -> Result<crate::pairing::DeviceView> {
+        let path = paths::DEVICE_REVOKE.replace("{id}", &encode(id));
+        let answer: super::api::DeviceResponse = self.call(Method::POST, path, Some(&())).await?;
+        Ok(answer.device)
+    }
+
+    /// `GET /kernel/channels`: the paired chat accounts and the ones waiting for their code
+    /// to be accepted (spec 3.3 §10 K1).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `404` when it has no chat channels.
+    pub async fn channel_accounts(&self) -> Result<super::api::ChannelAccountsResponse> {
+        self.call(Method::GET, paths::CHANNELS.to_string(), None::<&()>).await
+    }
+
+    /// `POST /kernel/channels/pair`: accepts the code a chat account was sent, so its
+    /// messages reach the caller's agents (spec 3.3 §10 K1).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `401` for a wrong or expired code.
+    pub async fn accept_channel(&self, code: &str) -> Result<super::api::ChannelAccountView> {
+        let body = super::api::AcceptChannelRequest { code: code.to_string() };
+        let answer: super::api::ChannelAccountResponse =
+            self.call(Method::POST, paths::CHANNEL_PAIR.to_string(), Some(&body)).await?;
+        Ok(answer.account)
+    }
+
+    /// `POST /kernel/channels/{id}/revoke`: removes a chat account (spec 3.3 §10 K1).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `404` for an unknown account.
+    pub async fn revoke_channel_account(&self, id: &str) -> Result<super::api::ChannelAccountView> {
+        let path = paths::CHANNEL_REVOKE.replace("{id}", &encode(id));
+        let answer: super::api::ChannelAccountResponse =
+            self.call(Method::POST, path, Some(&())).await?;
+        Ok(answer.account)
     }
 
     async fn agenda_action(

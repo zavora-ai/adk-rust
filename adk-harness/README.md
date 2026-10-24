@@ -63,6 +63,8 @@ adk-rust memory accept <id>
 | Durability | Sessions, waiting approvals and completed actions survive a crash; a completed edit or command never runs twice |
 | Oversight | Every decision is written to an audit log, spend is metered per agent and person, and a looping session is stopped and made read-only |
 | Packs | Web search and fetch, MCP servers, voice, payments and browser control, each behind the same checkpoint |
+| Personal preset | `--preset personal` or `Preset::Personal`: a workspace of notes and files under the home instead of a repository, no host shell, long-term memory on, and quiet time and a daily spending limit asked at the first run |
+| Take over | A tool asks for a password or a one-time code; you type it on your phone or the web home, and it reaches that one call — the model sees a placeholder, and no store, log or audit record keeps it |
 
 With the `kernel` feature, the same harness runs as long-lived processes under `adk-rust up`;
 see [`adk-kernel`](https://github.com/zavora-ai/adk-rust/blob/main/adk-kernel/README.md).
@@ -182,6 +184,7 @@ control plane, then builds and starts the kernel.
 | Process view | A `ProgressSource`: a goal's iteration of max, duration and last check, the loop guard's verdict, and the session's model calls, tool calls and cost for spend attribution |
 | Goals | The goal thread keeps the last `2 × GOAL_STALL_WINDOW` checkpoints. Under a kernel, a goal whose check repeats its last `GOAL_STALL_WINDOW` (3) results, or whose iteration made no tool call (`Graph` engine), records `harness.goal.stalled` and parks `Waiting` before its next model call instead of spending its iteration cap |
 | Drivers | `HarnessAgentBuilder::kernel_drivers(drivers, partition, ids)` attaches a partition's kernel drivers: their tools classed by the approved manifest (`driver_tool_kind`: `read` a trusted read-only `External`, every other class a trusted `External` with effects, whatever the server's `readOnlyHint`), under the kernel's `DriverPolicy` composed with the harness's. `Harness::driver_rule_pins` moves a person's standing rules onto the declarations they re-approve (spec 3.2 §7.7) |
+| Partitions | `HarnessAgentBuilder::partition(partition, partitions)` builds one partition's harness: its mode, its class and tenant on every agent's principal, its `memory_scope` as the project of every long-term fact and of its working notes, its drivers (`partition_drivers`: only those its own list names and whose manifests serve it), and its `PartitionPolicy`; `partition_coordinator` marks the one harness that may cross into another partition, under a non-waivable approval (spec 3.2 §7.8, K-I15). `host_partition` adds a partition's harness to a kernel as `<app>@<partition>` and `harness.goal@<partition>`, with its progress source for the partition's processes, so its ledger rows carry its partition; its `observation_audience` answers its own partition's observations only and remembers them in its memory scope. `HarnessResolver` builds one harness per partition of a managed definition (`PartitionAgentResolver`) |
 
 ```rust,ignore
 use std::sync::Arc;

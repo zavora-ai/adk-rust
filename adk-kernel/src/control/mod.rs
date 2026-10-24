@@ -22,15 +22,19 @@
 //! | `POST /kernel/freeze`, `POST /kernel/unfreeze` | [`Kernel::freeze`] and [`Kernel::unfreeze`] |
 //! | `GET /kernel/agenda` | the agenda ([`api::AgendaQuery`]) |
 //! | `POST /kernel/agenda/{id}/{approve,reject,schedule}` | [`Agenda`](crate::Agenda) actions as the caller ([`api::RejectRequest`], [`api::ScheduleRequest`]) |
+//! | `GET /kernel/drivers`, `POST /kernel/drivers/{id}/{mount,unmount,restart,reapprove}` (feature `drivers`) | the mounted drivers; a mount shown, then approved with `confirm` (`api::MountDriverRequest`, spec 3.2 §7.7) |
 //! | `GET /kernel/proc/ledger` (feature `proc`) | the content-free ledger, paged by `seq`, as JSON or as the JSONL `cargo adk eval --ledger` reads |
 //! | `GET /kernel/proc/baselines`, `GET /kernel/proc/observations` (feature `proc`) | each partition's last baseline pass, and the observations it offered |
+//! | `POST /kernel/pairing`, `POST /kernel/pairing/claim`, `GET /kernel/devices`, `POST /kernel/devices/{id}/revoke` | device pairing (spec 3.3 §10 K2), when [`ControlPlaneConfig::with_pairing`] sets it; see [`pairing`](crate::pairing) |
+//! | `POST /kernel/channels/pair`, `GET /kernel/channels`, `POST /kernel/channels/{id}/revoke` (feature `channels`) | chat accounts' pairings (spec 3.3 §10 K1) |
+//! | `GET /kernel/partitions` | the partition table ([`api::PartitionsResponse`], spec 3.2 §7.8) |
+//! | `POST /kernel/partitions`, `POST /kernel/partitions/{id}/mode` | create or replace a partition; set its mode ([`api::PartitionModeRequest`]) |
 //!
 //! The approvals inbox, `/api/runs`, `/api/cron`, `/api/admin/freeze` and `/hooks/{name}`
 //! are the existing server routes, unchanged; `POST /api/admin/freeze` delegates to
 //! [`Kernel::freeze`] through the kernel's `FreezeDelegate` (§10 S4). The socket serves the
 //! approvals inbox beside the kernel routes when the kernel has an approval service, so a
-//! held call is decided over the socket as over HTTP. Driver and partition routes
-//! arrive with their phases.
+//! held call is decided over the socket as over HTTP.
 //!
 //! # Authentication and audit
 //!
@@ -47,18 +51,24 @@
 //! | [`ControlPlaneConfig::http`] beyond loopback without one | Refused at start (K-I18) |
 //!
 //! The routes that change the kernel — `spawn`, `kill`, `nice`, `suspend`, `resume`,
-//! `freeze`, `unfreeze`, and the agenda's `approve`, `reject` and `schedule` — and the
-//! `/proc` routes, which describe the user's activity, need the `operator` scope (`403`
-//! otherwise), which the socket, the pipe and a loopback bind grant. `attach` reads only the
-//! caller's own sessions. A ledger read is recorded as `kernel.control` with action
-//! `proc.ledger`: the ledger leaves the host only through it.
+//! `freeze`, `unfreeze`, the agenda's `approve`, `reject` and `schedule`, the driver actions
+//! and the partition writes — and the `/proc` routes, which describe the user's activity,
+//! need the `operator` scope (`403` otherwise), which the socket, the pipe and a loopback
+//! bind grant. `attach` reads only the caller's own sessions. A ledger read is recorded as
+//! `kernel.control` with action `proc.ledger`: the ledger leaves the host only through it.
+//!
+//! A paired device's token (spec 3.3 §10 K2, S-I7) admits it as the person who paired it,
+//! only to the routes its scopes open (`read`, `decide`, `stop`; never `unfreeze`), whatever
+//! the transport admits otherwise: on loopback a request carrying a device token is the
+//! device, not the operator. Pairing never widens the bind.
 //!
 //! Every action that changes the kernel or reads a session writes a `kernel.control` record
 //! with `subject`, `transport`, `action` and `target` to the kernel's audit trail before it
 //! acts (K-I16; `spawn` records the new `pid` once it exists and cancels the process when
 //! the record fails), and is refused when the record cannot be written under
 //! `AuditFailureMode::Block`, except `freeze`, which takes effect regardless. Reads of the
-//! process table, the health and the event stream are authenticated and not recorded.
+//! process table, the partition table, the health and the event stream are authenticated
+//! and not recorded.
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -78,6 +88,7 @@ use crate::kernel::Kernel;
 
 pub mod api;
 mod client;
+mod pairing;
 #[cfg(windows)]
 mod pipe;
 mod routes;
@@ -138,6 +149,24 @@ pub mod paths {
     pub const PROC_BASELINES: &str = "/kernel/proc/baselines";
     /// `GET`: the observations (spec 3.2 §7.10).
     pub const PROC_OBSERVATIONS: &str = "/kernel/proc/observations";
+    /// `POST`: issue a device pairing code (spec 3.3 §10 K2).
+    pub const PAIRING: &str = "/kernel/pairing";
+    /// `POST`: claim a pairing code; the one route that needs no caller (spec 3.3 §10 K2).
+    pub const PAIRING_CLAIM: &str = "/kernel/pairing/claim";
+    /// `GET`: the paired devices (spec 3.3 §10 K2).
+    pub const DEVICES: &str = "/kernel/devices";
+    /// `POST`: remove a paired device (spec 3.3 §10 K2).
+    pub const DEVICE_REVOKE: &str = "/kernel/devices/{id}/revoke";
+    /// `GET`: the paired chat accounts (spec 3.3 §10 K1).
+    pub const CHANNELS: &str = "/kernel/channels";
+    /// `POST`: accept the code a chat account was sent (spec 3.3 §10 K1).
+    pub const CHANNEL_PAIR: &str = "/kernel/channels/pair";
+    /// `POST`: remove a paired chat account (spec 3.3 §10 K1).
+    pub const CHANNEL_REVOKE: &str = "/kernel/channels/{id}/revoke";
+    /// `GET`: the partition table; `POST`: create or replace a partition (spec 3.2 §7.8).
+    pub const PARTITIONS: &str = "/kernel/partitions";
+    /// `POST`: set a partition's mode (spec 3.2 §7.8, §8.1 `partitions set-mode`).
+    pub const PARTITION_MODE: &str = "/kernel/partitions/{id}/mode";
 }
 
 /// Where the control plane listens and how it authenticates HTTP callers (spec 3.2 §7.11).
@@ -171,6 +200,8 @@ pub struct ControlPlaneConfig {
     pub http: Option<SocketAddr>,
     /// Authenticates HTTP callers; required on a non-loopback bind (K-I18).
     pub extractor: Option<Arc<dyn RequestContextExtractor>>,
+    /// Pairs devices and admits their tokens (spec 3.3 §10 K2); `None` pairs none.
+    pub pairing: Option<crate::pairing::Pairing>,
 }
 
 impl ControlPlaneConfig {
@@ -202,6 +233,15 @@ impl ControlPlaneConfig {
     #[must_use]
     pub fn with_extractor(mut self, extractor: Arc<dyn RequestContextExtractor>) -> Self {
         self.extractor = Some(extractor);
+        self
+    }
+
+    /// Pairs devices with `pairing` and admits their tokens, each to the routes its scopes
+    /// open (spec 3.3 §10 K2). It changes no bind: a non-loopback bind still needs an
+    /// extractor (S-I7, K-I18).
+    #[must_use]
+    pub fn with_pairing(mut self, pairing: crate::pairing::Pairing) -> Self {
+        self.pairing = Some(pairing);
         self
     }
 
@@ -254,7 +294,12 @@ impl ControlPlaneConfig {
 
 impl Default for ControlPlaneConfig {
     fn default() -> Self {
-        Self { socket: Some(PathBuf::from(Self::DEFAULT_SOCKET)), http: None, extractor: None }
+        Self {
+            socket: Some(PathBuf::from(Self::DEFAULT_SOCKET)),
+            http: None,
+            extractor: None,
+            pairing: None,
+        }
     }
 }
 
@@ -264,6 +309,7 @@ impl fmt::Debug for ControlPlaneConfig {
             .field("socket", &self.socket)
             .field("http", &self.http)
             .field("extractor", &self.extractor.is_some())
+            .field("pairing", &self.pairing)
             .finish()
     }
 }
@@ -304,6 +350,47 @@ pub enum ControlTransport {
 /// ```
 pub fn router(kernel: Kernel) -> Router {
     routes::routes(Arc::new(kernel))
+}
+
+/// The claim route of `kernel`'s device pairing (spec 3.3 §10 K2) at
+/// `/api/kernel/pairing/claim`, which needs no caller since the code is the credential:
+/// merge it with `ServerBuilder::add_root_routes`, outside the auth middleware. Empty when
+/// the kernel pairs no devices.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # fn example(kernel: adk_kernel::Kernel, builder: adk_server::ServerBuilder) {
+/// let builder = builder
+///     .add_api_routes(adk_kernel::control::router(kernel.clone()))
+///     .add_root_routes(adk_kernel::control::claim_router(kernel));
+/// # let _ = builder;
+/// # }
+/// ```
+pub fn claim_router(kernel: Kernel) -> Router {
+    let backend: Arc<dyn routes::ControlBackend> = Arc::new(kernel);
+    match backend.pairing() {
+        Some(_) => pairing::claim_routes(backend),
+        None => Router::new(),
+    }
+}
+
+/// `app` with every request that carries a device token checked against `kernel`'s pairing
+/// first (spec 3.3 §10 K2, S-I7): `401` for an unknown, expired or revoked token, `403` for
+/// a route its scopes do not open, a decision it answers limited to low and medium risk and
+/// recorded. Layer it on the whole app that serves the kernel's routes, so no route outside
+/// them admits a device either; requests without a device token pass untouched.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # fn example(kernel: adk_kernel::Kernel, app: axum::Router) {
+/// let app = adk_kernel::control::guard_devices(&kernel, app);
+/// # let _ = app;
+/// # }
+/// ```
+pub fn guard_devices(kernel: &Kernel, app: Router) -> Router {
+    pairing::guard(Arc::new(kernel.clone()), app)
 }
 
 impl IntoResponse for KernelError {

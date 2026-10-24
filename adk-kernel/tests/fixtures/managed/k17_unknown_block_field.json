@@ -1,0 +1,7 @@
+{
+  "name": "K-17: An unknown key beside the partitions",
+  "description": "The block refuses a key it does not know, such as a misspelt `coordinators`.",
+  "agent_def": { "name": "assistant", "model": "claude-sonnet-5-5" },
+  "kernel": { "partitions": [{ "id": "home", "class": "home" }], "coordinators": ["home"] },
+  "expect": { "error_contains": ["adk.kernel", "unknown field `coordinators`"] }
+}

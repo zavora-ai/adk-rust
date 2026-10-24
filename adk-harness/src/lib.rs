@@ -30,6 +30,8 @@
 //! | `hooks::HookSpec`, `hooks::HookSet`, `hooks::HookRunner` (feature `hooks`) | §7.22 |
 //! | `packs::managed::{HarnessDef, HarnessResolver}` (feature `managed`) | §7.18 |
 //! | [`coding::CodingAgent`] | §7.19 |
+//! | [`Preset`], [`personal::PersonalAgent`], [`personal::PersonalWorkspace`], [`personal::PersonalSettings`] | spec 3.3 §10 H1 |
+//! | [`take_over::TakeOver`], [`take_over::TakeOverRequest`], [`take_over::TakeOverAnswer`] | spec 3.3 §8.2, §10 H2 |
 //! | [`WebConfig`], [`SearchProvider`], [`ProviderWebTools`], [`WebSearchPath`], `web_fetch`, `web_search`, `SearxngSearch`, `DeepSeekSearch` (feature `web`) | §7.20 |
 //! | [`McpInteractionConfig`], `HarnessElicitationHandler`, `HarnessSamplingHandler`, `mcp_*_resource` (feature `mcp`) | §7.21 |
 //! | [`EffortPolicy`], [`Effort`] | §7.23 |
@@ -88,6 +90,8 @@ mod mode;
 #[cfg(feature = "observe")]
 mod observe;
 pub mod packs;
+#[cfg(feature = "kernel")]
+mod partition;
 #[cfg(feature = "graph")]
 mod plan_graph;
 mod policy;
@@ -97,6 +101,7 @@ mod run_context;
 mod shell;
 #[cfg(feature = "skills")]
 mod skills;
+pub mod take_over;
 #[cfg(feature = "team")]
 mod team;
 mod tools;
@@ -109,6 +114,10 @@ pub mod coding;
 pub mod conformance;
 #[cfg(feature = "hooks")]
 pub mod hooks;
+#[path = "presets/personal.rs"]
+pub mod personal;
+#[path = "presets/preset.rs"]
+mod preset;
 
 pub use agent::{HARNESS_UNGOVERNED_CODE, HarnessAgent, HarnessInfo, HarnessLayer, HarnessRuntime};
 #[cfg(feature = "postgres")]
@@ -215,6 +224,11 @@ pub use packs::voice::{
     VOICE_AUDIT_RESUMED, VOICE_FROZEN_CODE, VOICE_NOT_PARKED_CODE, VoiceConfig, VoiceEvent,
     VoiceSurface, parse_spoken_decision,
 };
+#[cfg(feature = "kernel")]
+pub use partition::{
+    CrossingAnswer, CrossingPrompt, PARTITION_MEMORY_REMEMBER, PARTITION_MEMORY_SEARCH,
+    PARTITION_SESSION_CODE, PARTITION_STATE_KEY, partition_target,
+};
 #[cfg(feature = "graph")]
 pub use plan_graph::{
     ActivePlan, PLAN_GATE_TOOL, PlanGraphShape, PlanGraphs, PlanRunStatus, compile_plan,
@@ -227,6 +241,7 @@ pub use policy::{
     has_harness_layer,
 };
 pub use posture::{Effort, EffortPolicy};
+pub use preset::Preset;
 pub use prompt::HARNESS_SYSTEM_PROMPT;
 #[cfg(feature = "sqlite")]
 pub use shell::SqliteShellLedger;

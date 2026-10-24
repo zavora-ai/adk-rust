@@ -11,8 +11,7 @@ documentation = "https://docs.rs/adk-kernel"
 keywords = ["adk", "agent", "kernel", "durable", "supervisor"]
 categories = ["asynchronous", "development-tools"]
 
-# Feature set of spec 3.2 §7.1. Features of later phases are declared empty until their
-# phase lands: `channels` (phase 5).
+# Feature set of spec 3.2 §7.1, with `channels` from spec 3.3 §10 K1.
 [features]
 default = ["sqlite", "webhooks", "drivers", "service", "proc"]
 # SQLite backends for the kernel-owned stores, on the pool of `harness.db` with distinct
@@ -47,12 +46,13 @@ drivers = [
 service = ["dep:windows-service"]
 # The content-free activity ledger with its subject HMACs, and the live `ps`/`top`
 # aggregates' OTel GenAI histograms (spec 3.2 §7.10, §13 Q4).
-proc = ["dep:adk-telemetry", "dep:opentelemetry", "dep:hmac", "dep:hex", "dep:getrandom"]
+proc = ["dep:adk-telemetry", "dep:opentelemetry", "dep:hmac", "dep:hex"]
 # The daily 28-day baselines and observations over `adk-eval`'s ledger statistics (spec 3.2
 # §7.10, §13 Q4). The only edge to `adk-eval`, which pulls `adk-runner`, `adk-session` and
 # `adk-model` into a build.
 proc-baselines = ["proc", "dep:adk-eval"]
-# Channel wake sources (spec 3.2 §7.4, phase 5); empty until then.
+# The chat channel contract (spec 3.3 §10 K1): `ChannelSink`, the channel binding store, the
+# gateway that turns a paired account's message into a turn, and the adapter contract suite.
 channels = []
 # The managed form (spec 3.2 §7.13, §10 M1): `KernelDef` under the `adk.kernel` metadata
 # key of a `ManagedAgentDef`, and one kernel per tenant over its `ManagedStores`.
@@ -81,8 +81,9 @@ dirs = "7"
 firestore = { version = "0.48", optional = true }
 fred = { version = "10", optional = true, features = ["i-scripts"] }
 futures.workspace = true
-# The ledger key's random bytes (feature `proc`).
-getrandom = { version = "0.3", optional = true }
+# The ledger key's random bytes (feature `proc`), and pairing codes and device tokens
+# (spec 3.3 §10 K2).
+getrandom = "0.3"
 hex = { workspace = true, optional = true }
 # The ledger's subject HMACs (feature `proc`).
 hmac = { version = "0.12", optional = true }
@@ -97,7 +98,8 @@ opentelemetry = { workspace = true, optional = true }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# The named pipe's and the service's names, derived from the kernel home.
+# The named pipe's and the service's names, derived from the kernel home, and digests of
+# crossing fingerprints, so the crossing ledger holds no argument text.
 sha2.workspace = true
 sqlx = { workspace = true, optional = true, features = ["runtime-tokio", "chrono", "json"] }
 thiserror.workspace = true
@@ -121,6 +123,8 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 # Internal dev-deps are path-only (no version) so cargo strips them from the published
 # manifest. The self dependency lets the crate's own tests run the conformance suites.
 adk-kernel = { path = ".", features = ["conformance"] }
+# A project-scoped memory for the partition memory tests.
+adk-memory = { path = "../adk-memory" }
 # ScriptedLlm for the scenario tests on a real DurableWorker.
 adk-model = { path = "../adk-model", default-features = false }
 adk-session = { path = "../adk-session", features = ["sqlite"] }

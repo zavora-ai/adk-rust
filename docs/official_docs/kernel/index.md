@@ -113,18 +113,23 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 | `proc` | on | The content-free activity ledger and its stores; the live aggregates' OTel GenAI histograms |
 | `proc-baselines` | off | The daily baselines and observations ([`/proc`](proc.md)) |
 | `service` | on | `adk_kernel::service`: launchd, systemd and Windows service installation |
-| `conformance` | off | `process_store_conformance_tests!` for a new store backend |
+| `conformance` | off | `process_store_conformance_tests!` and `partition_store_conformance_tests!` for a new store backend |
 | `managed` | off | The managed form: `KernelDef` in a managed definition and one kernel per tenant ([managed form](managed.md)) |
+| `channels` | off | The chat channel contract: `ChannelSink`, the channel gateway, the binding store on every backend, the adapter contract suite ([pairing](pairing.md)) |
 
 ## Read next
 
 - [Kernel commands](cli.md): `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`,
   `freeze`, `unfreeze`, `events`, and `goal` on a running kernel
 - [The control plane](control-plane.md): transports, authentication, routes and audit records
+- [Pairing devices and chat channels](pairing.md): `adk-rust pair`, scoped device tokens, and
+  the chat channel contract
 - [Running the kernel as a service](service.md): `up --install`, `--uninstall` and `--print`
   on macOS, Linux and Windows
 - [The managed form](managed.md): one kernel per tenant on the managed runtime
 - [Self-observation: `/proc`](proc.md): the content-free activity ledger, baselines and
   observations
 - [Kernel store backends](backends.md): every kernel store on in-memory, SQLite, PostgreSQL
-  and Redis, and on MongoDB, Firestore and Neo4j (Alpha)
+  and Redis, and all but the partition store on MongoDB, Firestore and Neo4j (Alpha)
+- [Partitions](partitions.md): one harness per partition, memory scoping, and crossings by the
+  coordinator under approval

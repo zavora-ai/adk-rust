@@ -141,6 +141,9 @@ pub struct HarnessRuntime {
     /// §7.10).
     #[cfg(feature = "kernel")]
     pub(crate) kernel_ledger: adk_kernel::proc::LateLedgerSink,
+    /// The partition the harness was built for and its policy (spec 3.2 §7.8).
+    #[cfg(feature = "kernel")]
+    pub(crate) partition: Option<crate::partition::PartitionWiring>,
     /// Provider-executed search and URL tools, when the operator enabled any (spec 3.1 §7.20).
     #[cfg(feature = "web")]
     pub(crate) provider_web: Option<Arc<crate::web::provider::ProviderWebToolset>>,
@@ -157,6 +160,8 @@ pub struct HarnessRuntime {
     /// The payments pack's per-request reminder (spec 3.1 §7.16).
     #[cfg(feature = "payments")]
     pub(crate) payments: Option<Arc<crate::packs::payments::PaymentsReminder>>,
+    /// Take over, when the harness was built with it (spec 3.3 §10 H2).
+    pub(crate) take_over: Option<crate::take_over::TakeOver>,
 }
 
 /// The harness's audit trail, in Block mode: `recorder`, or with feature `auth` an
@@ -217,6 +222,12 @@ impl HarnessRuntime {
     /// The approval inbox, if configured.
     pub fn approval_service(&self) -> Option<&Arc<dyn ApprovalService>> {
         self.approval_service.as_ref()
+    }
+
+    /// Take over (spec 3.3 §8.2, §10 H2), when the harness was built with it: surfaces answer
+    /// a take-over entry through it.
+    pub fn take_over(&self) -> Option<&crate::take_over::TakeOver> {
+        self.take_over.as_ref()
     }
 
     /// Where non-idempotent calls are recorded when a run carries no ledger of its own
@@ -581,6 +592,25 @@ impl HarnessAgent {
         &self.info
     }
 
+    /// The partition the harness was built for (spec 3.2 §7.8,
+    /// [`HarnessAgentBuilder::partition`](crate::HarnessAgentBuilder::partition)).
+    #[cfg(feature = "kernel")]
+    pub fn partition(&self) -> Option<&adk_kernel::Partition> {
+        self.runtime.partition.as_ref().map(|wiring| &wiring.partition)
+    }
+
+    /// The partition's policy, when the harness was built for one: what decides its
+    /// crossings (spec 3.2 §7.8, K-I15).
+    #[cfg(feature = "kernel")]
+    pub fn partition_policy(&self) -> Option<&adk_kernel::PartitionPolicy> {
+        self.runtime.partition.as_ref().map(|wiring| &wiring.policy)
+    }
+
+    #[cfg(feature = "kernel")]
+    pub(crate) fn partition_wiring(&self) -> Option<&crate::partition::PartitionWiring> {
+        self.runtime.partition.as_ref()
+    }
+
     /// A run config carrying the harness layer and the confirmation handler, for callers
     /// wiring their own `Runner`. Its policy records no `harness.*` audit records; with the
     /// harness at the root of the runner, `configure_run` binds the run's audit trail.
@@ -729,6 +759,12 @@ impl Agent for HarnessAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        // A partition's harness runs only its own partition's sessions (spec 3.2 K-I15).
+        #[cfg(feature = "kernel")]
+        let mark = match self.partition_wiring() {
+            Some(wiring) => wiring.session_mark(ctx.as_ref(), self.name())?,
+            None => None,
+        };
         // A run that starts in Ask or Auto with a provider-executed web tool declared
         // records that an ungoverned fetch path was live (spec 3.1 §7.20, I49).
         #[cfg(feature = "web")]
@@ -749,7 +785,16 @@ impl Agent for HarnessAgent {
             Some(provider_web) => provider_web.record_searches(ctx.clone(), events),
             None => events,
         };
-        Ok(self.with_mode_mirror(&ctx, events).await)
+        let events = self.with_mode_mirror(&ctx, events).await;
+        #[cfg(feature = "kernel")]
+        let events = match mark {
+            Some(mark) => {
+                use futures::StreamExt as _;
+                Box::pin(futures::stream::iter([Ok(mark)]).chain(events)) as EventStream
+            }
+            None => events,
+        };
+        Ok(events)
     }
 }
 

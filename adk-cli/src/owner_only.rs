@@ -3,7 +3,8 @@
 //!
 //! The descriptor is given to `CreateFileW` itself, so the file never exists with the
 //! permissions it would inherit from its directory. As with a Unix mode, it applies only to
-//! a file the call creates; an existing file keeps its own.
+//! a file the call creates; an existing file keeps its own. [`protect_dir`] covers the files
+//! another component creates in a directory, such as SQLite's `-wal` and `-shm`.
 
 use std::fs::File;
 use std::io;
@@ -13,10 +14,10 @@ use std::path::Path;
 
 use windows_sys::Win32::Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAce, GetLengthSid, GetTokenInformation,
-    InitializeAcl, InitializeSecurityDescriptor, PSID, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
-    SECURITY_DESCRIPTOR, SetSecurityDescriptorControl, SetSecurityDescriptorDacl, TOKEN_QUERY,
-    TOKEN_USER, TokenUser,
+    ACCESS_ALLOWED_ACE, ACE_FLAGS, ACL, ACL_REVISION, AddAccessAllowedAceEx, GetLengthSid,
+    GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor, PSID, SE_DACL_PROTECTED,
+    SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SetSecurityDescriptorControl,
+    SetSecurityDescriptorDacl, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE,
@@ -47,26 +48,76 @@ pub(crate) fn open_append(path: &Path) -> io::Result<File> {
     file.seek(SeekFrom::End(0))?;
     Ok(file)
 }
-/// Opens `path` for writing with `disposition`, giving a file the call creates an
-/// owner-only DACL.
-fn create(path: &Path, disposition: u32) -> io::Result<File> {
+/// Gives directory `dir` a protected DACL with one entry, full access for the current user,
+/// inherited by every file and directory later created in it (spec 3.2 §10 W4). An entry
+/// inherited from above is dropped, and a child with a protected DACL of its own keeps it.
+///
+/// # Errors
+///
+/// Returns the OS error when the user may not change the directory's DACL.
+#[cfg(feature = "persist")]
+pub(crate) fn protect_dir(dir: &Path) -> io::Result<()> {
+    use windows_sys::Win32::Security::Authorization::{SE_FILE_OBJECT, SetNamedSecurityInfoW};
+    use windows_sys::Win32::Security::{
+        CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE,
+        PROTECTED_DACL_SECURITY_INFORMATION,
+    };
+
     let user = current_user()?;
-    let sid = user_sid(&user);
+    let mut acl = owner_acl(&user, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)?;
+    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: `wide` is NUL-terminated and `acl` is a valid list; both outlive the call.
+    let status = unsafe {
+        SetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl.as_mut_ptr().cast(),
+            std::ptr::null(),
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    Ok(())
+}
+
+/// An access-control list with one entry, full access for the `TOKEN_USER` in `user`,
+/// carrying the inheritance `flags`. The `u32` storage keeps the list aligned as
+/// `InitializeAcl` requires.
+fn owner_acl(user: &[u64], flags: ACE_FLAGS) -> io::Result<Vec<u32>> {
+    let sid = user_sid(user);
     // SAFETY: `sid` points at a valid SID inside `user`.
     let sid_len = unsafe { GetLengthSid(sid) } as usize;
     // The entry's `SidStart` field is the first four bytes of the SID it holds.
     let acl_len = size_of::<ACL>() + size_of::<ACCESS_ALLOWED_ACE>() - size_of::<u32>() + sid_len;
-    // `u32` storage keeps the list aligned as `InitializeAcl` requires.
-    let mut acl = vec![0u32; acl_len.div_ceil(size_of::<u32>())];
-    let acl = acl.as_mut_ptr().cast::<ACL>();
-    let mut descriptor = SECURITY_DESCRIPTOR::default();
-    let descriptor_ptr = (&raw mut descriptor).cast();
-    // SAFETY: `acl` holds `acl_len` writable bytes, `sid` is valid, and `descriptor` is
-    // writable; all three outlive `CreateFileW`, which reads them.
+    let mut storage = vec![0u32; acl_len.div_ceil(size_of::<u32>())];
+    let acl = storage.as_mut_ptr().cast::<ACL>();
+    // SAFETY: `acl` holds `acl_len` writable bytes and `sid` is valid.
     let built = unsafe {
         InitializeAcl(acl, acl_len as u32, ACL_REVISION) != 0
-            && AddAccessAllowedAce(acl, ACL_REVISION, FILE_ALL_ACCESS, sid) != 0
-            && InitializeSecurityDescriptor(descriptor_ptr, SECURITY_DESCRIPTOR_REVISION) != 0
+            && AddAccessAllowedAceEx(acl, ACL_REVISION, flags, FILE_ALL_ACCESS, sid) != 0
+    };
+    if !built {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(storage)
+}
+
+/// Opens `path` for writing with `disposition`, giving a file the call creates an
+/// owner-only DACL.
+fn create(path: &Path, disposition: u32) -> io::Result<File> {
+    let user = current_user()?;
+    let mut storage = owner_acl(&user, 0)?;
+    let acl = storage.as_mut_ptr().cast::<ACL>();
+    let mut descriptor = SECURITY_DESCRIPTOR::default();
+    let descriptor_ptr = (&raw mut descriptor).cast();
+    // SAFETY: `acl` is a valid list and `descriptor` is writable; both outlive
+    // `CreateFileW`, which reads them.
+    let built = unsafe {
+        InitializeSecurityDescriptor(descriptor_ptr, SECURITY_DESCRIPTOR_REVISION) != 0
             && SetSecurityDescriptorDacl(descriptor_ptr, 1, acl, 0) != 0
             // Protected: no entry is inherited from the directory.
             && SetSecurityDescriptorControl(descriptor_ptr, SE_DACL_PROTECTED, SE_DACL_PROTECTED)
@@ -147,6 +198,20 @@ fn user_sid(user: &[u64]) -> PSID {
 /// grants the current user full access.
 #[cfg(all(test, any(feature = "audit", feature = "persist")))]
 pub(crate) fn is_owner_only(path: &Path) -> io::Result<bool> {
+    owner_only_dacl(path, true)
+}
+
+/// Whether `path`'s DACL has one entry, full access for the current user, set on the file or
+/// inherited from a directory [`protect_dir`] protected.
+#[cfg(all(test, feature = "persist"))]
+pub(crate) fn only_the_owner_has_access(path: &Path) -> io::Result<bool> {
+    owner_only_dacl(path, false)
+}
+
+/// Whether `path`'s DACL has one entry, full access for the current user, and, when
+/// `protected`, is protected from inheritance.
+#[cfg(all(test, any(feature = "audit", feature = "persist")))]
+fn owner_only_dacl(path: &Path, protected: bool) -> io::Result<bool> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
     use windows_sys::Win32::Security::{
@@ -187,7 +252,7 @@ pub(crate) fn is_owner_only(path: &Path) -> io::Result<bool> {
                 size_of::<ACL_SIZE_INFORMATION>() as u32,
                 AclSizeInformation,
             ) != 0
-            && control & SE_DACL_PROTECTED != 0
+            && (!protected || control & SE_DACL_PROTECTED != 0)
             && size.AceCount == 1
             && GetAce(dacl, 0, &raw mut ace) != 0
             && {

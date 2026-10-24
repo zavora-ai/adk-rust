@@ -15,11 +15,12 @@
 //! | [`WAKE`] | `source`, `key`, `matchedPid` or `newPid`, `deduplicated` |
 //! | [`CONTROL`] | `subject`, `transport`, `action`, `target` |
 //! | [`AGENDA_PROPOSED`], [`AGENDA_APPROVED`], [`AGENDA_REJECTED`], [`AGENDA_SCHEDULED`], [`AGENDA_EXPIRED`] | `item`, `partition`, `origin`, `by`, `budget`, `reason` |
-//! | [`REVIEW`] | `partition`, `reviewPeriodMs`, `rules`, `sleepers`, `frozen` (ids and ages), `ask` |
+//! | [`REVIEW`] | `partition`, `reviewPeriodMs`, `rules`, `sleepers`, `frozen` (ids and ages), `ask`, `crossings` (`from`, `to`, `resource`, `name`, `count`), `remedies` |
 //! | [`DRIVER_MOUNTED`], [`DRIVER_UNMOUNTED`], [`DRIVER_STARTED`], [`DRIVER_CRASHED`], [`DRIVER_RESTARTED`], [`DRIVER_STALE`], [`DRIVER_REAPPROVED`] | `driverId`, `commandDigest`, `partitions`, `effectClasses`, `digests`, `attempt` |
 //! | [`OBSERVATION`] | `id`, `partition`, `dimensions`, `windows` — no value that identifies content |
-//!
-//! The partition actions of §9.3 arrive with their phase.
+//! | [`CHANNEL`] | `surface`, `origin`, `channel`, `account`, `action`, `target` (spec 3.3 §11) |
+//! | [`PARTITION_CREATED`], [`PARTITION_CHANGED`] | `partition`, `fields`, `from`, `to` |
+//! | [`PARTITION_CROSSING`] | `partition`, `to`, `resource`, `name`, `access`, `outcome`, `run`, `tool`, `fingerprintDigest`, `reason`, `by` |
 //!
 //! # Example
 //!
@@ -67,8 +68,8 @@ pub const AGENDA_REJECTED: &str = "kernel.agenda.rejected";
 pub const AGENDA_SCHEDULED: &str = "kernel.agenda.scheduled";
 /// An agenda item expired before it ran.
 pub const AGENDA_EXPIRED: &str = "kernel.agenda.expired";
-/// The daily review of standing rules, sleepers and freezes older than the review period
-/// (spec 3.2 §7.4, §9.1).
+/// The daily review of standing rules, sleepers and freezes older than the review period,
+/// and of recurring crossings (spec 3.2 §7.4, §7.8, §9.1).
 pub const REVIEW: &str = "kernel.review";
 /// A driver's manifest was approved and mounted (spec 3.2 §7.7).
 pub const DRIVER_MOUNTED: &str = "kernel.driver.mounted";
@@ -86,3 +87,13 @@ pub const DRIVER_STALE: &str = "kernel.driver.stale";
 pub const DRIVER_REAPPROVED: &str = "kernel.driver.reapproved";
 /// A baseline pass recorded an observation (spec 3.2 §7.10, feature `proc-baselines`).
 pub const OBSERVATION: &str = "kernel.observation";
+/// Something a chat thread did or was sent (spec 3.3 §10 K1, §11): a pairing request, a
+/// message, a decision card, an answer, a stop or a refused resume, with `surface: chat`,
+/// `origin`, `channel`, `account`, `action` and `target` (feature `channels`).
+pub const CHANNEL: &str = "kernel.channel";
+/// A partition was created (spec 3.2 §7.8).
+pub const PARTITION_CREATED: &str = "kernel.partition.created";
+/// A partition's record changed: its mode, memory scope, drivers, crossings or blocks.
+pub const PARTITION_CHANGED: &str = "kernel.partition.changed";
+/// A request reached, or tried to reach, another partition (K-I15).
+pub const PARTITION_CROSSING: &str = "kernel.partition.crossing";

@@ -115,6 +115,9 @@ pub(crate) struct Supervision {
     pub(crate) audit: Option<AuditTrail>,
     pub(crate) sessions: Option<Arc<dyn SessionService>>,
     pub(crate) progress: Option<Arc<dyn ProgressSource>>,
+    /// Each partition's own progress source (spec 3.2 §7.8,
+    /// [`KernelBuilder::partition_progress_source`](crate::KernelBuilder::partition_progress_source)).
+    pub(crate) partition_progress: BTreeMap<PartitionId, Arc<dyn ProgressSource>>,
     /// One worker per queue class, set once the hooks that reference this state exist.
     pub(crate) workers: OnceLock<Vec<(QueueClass, DurableWorker)>>,
     /// The claim loops while the kernel runs.
@@ -151,6 +154,11 @@ pub(crate) struct Supervision {
     /// The daily baseline pass the maintenance tick enqueues (spec 3.2 §7.10).
     #[cfg(feature = "proc-baselines")]
     pub(crate) proc: Option<Arc<crate::proc::baselines::ProcRuntime>>,
+    /// The partition each partition agent's target runs (spec 3.2 §7.8,
+    /// [`KernelBuilder::partition_agent`](crate::KernelBuilder::partition_agent)).
+    pub(crate) partition_targets: BTreeMap<String, PartitionId>,
+    /// The partition table, whose run grants a finished run releases (spec 3.2 §13 Q3).
+    pub(crate) partitions: crate::partition::Partitions,
 }
 
 impl std::fmt::Debug for Supervision {
@@ -164,6 +172,23 @@ impl std::fmt::Debug for Supervision {
 }
 
 impl Supervision {
+    /// The progress source of a process of `partition`: the partition's own, else the
+    /// main one (spec 3.2 §7.8).
+    pub(crate) fn progress_for(&self, partition: &PartitionId) -> Option<&Arc<dyn ProgressSource>> {
+        self.partition_progress.get(partition).or(self.progress.as_ref())
+    }
+
+    /// Every distinct progress source, the main one first.
+    pub(crate) fn progress_sources(&self) -> Vec<Arc<dyn ProgressSource>> {
+        let mut sources: Vec<Arc<dyn ProgressSource>> = Vec::new();
+        for source in self.progress.iter().chain(self.partition_progress.values()) {
+            if !sources.iter().any(|seen| Arc::ptr_eq(seen, source)) {
+                sources.push(Arc::clone(source));
+            }
+        }
+        sources
+    }
+
     /// The side table a run gets when nothing recorded one: the kind read from its target
     /// and idempotency key, in the default partition.
     pub(crate) fn infer_meta(run: &RunRecord) -> ProcessMeta {
@@ -187,6 +212,80 @@ impl Supervision {
             ProcessKind::Interactive
         };
         ProcessMeta::new(run.run_id.clone(), QueueClass::from_name(&run.queue), kind)
+    }
+
+    /// [`infer_meta`](Self::infer_meta) in the partition `run`'s target is bound to (spec
+    /// 3.2 §7.8).
+    pub(crate) fn inferred_meta(&self, run: &RunRecord) -> ProcessMeta {
+        let mut meta = Self::infer_meta(run);
+        if let Some(partition) = self.partition_targets.get(&run.target) {
+            meta.partition = partition.clone();
+        }
+        meta
+    }
+
+    /// The partition a process of `target` runs in when `asked` is requested: the target's
+    /// partition when it is bound to one and `asked` is it or the default, `asked` for a
+    /// target bound to none (spec 3.2 §7.8, K-I15).
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::Config`](crate::KernelError::Config) when `target` runs another
+    /// partition's agent.
+    pub(crate) fn partition_for(
+        &self,
+        target: &str,
+        asked: PartitionId,
+    ) -> crate::error::Result<PartitionId> {
+        match self.partition_targets.get(target) {
+            None => Ok(asked),
+            Some(bound) if *bound == asked || asked.as_str() == PartitionId::DEFAULT => {
+                Ok(bound.clone())
+            }
+            Some(bound) => Err(crate::error::KernelError::Config {
+                reason: format!(
+                    "target `{target}` runs the agent of partition `{bound}`, so a process of \
+                     partition `{asked}` cannot run it; spawn it with that partition's target \
+                     (spec 3.2 K-I15)"
+                ),
+            }),
+        }
+    }
+
+    /// Refuses a run of a partition agent's target that continues a session another
+    /// partition's agent ran, so no agent reads another partition's transcript (spec 3.2
+    /// K-I15).
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::Config`](crate::KernelError::Config) naming the other partition, or
+    /// the run store's error.
+    pub(crate) async fn check_session_partition(
+        &self,
+        run: &adk_core::NewRun,
+        partition: &PartitionId,
+    ) -> crate::error::Result<()> {
+        let Some(session) = &run.session_id else { return Ok(()) };
+        if self.partition_targets.is_empty() {
+            return Ok(());
+        }
+        let filter = adk_core::RunFilter::default()
+            .app_name(&run.app_name)
+            .user_id(&run.user_id)
+            .session_id(session);
+        for earlier in self.runs.list(filter).await? {
+            if let Some(other) = self.partition_targets.get(&earlier.target)
+                && other != partition
+            {
+                return Err(crate::error::KernelError::Config {
+                    reason: format!(
+                        "session `{session}` belongs to partition `{other}`; a process of \
+                         partition `{partition}` cannot continue it (spec 3.2 K-I15)"
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// The stored side table of `run`, or `None`.
@@ -414,11 +513,11 @@ impl Supervision {
     /// Attributes the spend the hosted agent counted since the last attribution to `pid`,
     /// on today's row (spec 3.2 §7.10).
     pub(crate) async fn attribute(&self, pid: &str) {
-        let Some(progress) = &self.progress else { return };
         let Some(local) = self.local.lock().unwrap_or_else(|e| e.into_inner()).get(pid).cloned()
         else {
             return;
         };
+        let Some(progress) = self.progress_for(&local.partition) else { return };
         let usage = match progress.usage(&local.run).await {
             Ok(Some(usage)) => usage,
             Ok(None) => return,
@@ -569,15 +668,57 @@ impl Supervision {
         self.proactivity.daily_budget.max_cost_micro_usd
     }
 
-    /// Every quiet-hours window that applies: the kernel's and the proactivity policy's.
-    fn quiet_windows(&self) -> Vec<QuietHours> {
-        self.quiet_hours.iter().chain(self.proactivity.quiet_hours.iter()).copied().collect()
+    /// Every quiet-hours window that applies in `partition`: the kernel's, the proactivity
+    /// policy's and the partition's own (spec 3.2 §7.8, §7.9).
+    pub(crate) async fn quiet_windows(&self, partition: &PartitionId) -> Vec<QuietHours> {
+        let mut windows: Vec<QuietHours> =
+            self.quiet_hours.iter().chain(self.proactivity.quiet_hours.iter()).copied().collect();
+        if let Some(record) = self.partition_record(partition).await {
+            windows.extend(record.quiet_hours);
+        }
+        windows
     }
 
-    /// The earliest instant at or after `now` outside every quiet-hours window: when a
-    /// proactive process may start (spec 3.2 §7.9).
-    pub(crate) fn quiet_release(&self, now: DateTime<Utc>) -> DateTime<Utc> {
-        let quiet = self.quiet_windows();
+    /// The quotas of `partition`: the kernel's, each lowered by the partition's own (spec
+    /// 3.2 §7.8, §7.9).
+    pub(crate) async fn quotas_of(&self, partition: &PartitionId) -> Quotas {
+        match self.partition_record(partition).await {
+            Some(record) => self.quotas.stricter(&record.quotas),
+            None => self.quotas.clone(),
+        }
+    }
+
+    /// Whether the kernel or a partition caps the processes running at once.
+    pub(crate) async fn caps_running(&self) -> bool {
+        self.quotas.max_running.is_some()
+            || self.partitions.list().await.is_ok_and(|partitions| {
+                partitions.iter().any(|partition| partition.quotas.max_running.is_some())
+            })
+    }
+
+    /// The stored record of `partition`; `None` without one or when the store fails, so
+    /// the kernel's own limits apply.
+    async fn partition_record(
+        &self,
+        partition: &PartitionId,
+    ) -> Option<crate::partition::Partition> {
+        match self.partitions.get(partition).await {
+            Ok(record) => record,
+            Err(error) => {
+                tracing::warn!(partition = %partition, error = %error, "could not read the partition's record; the kernel's limits apply");
+                None
+            }
+        }
+    }
+
+    /// The earliest instant at or after `now` outside every quiet-hours window of
+    /// `partition`: when a proactive process may start there (spec 3.2 §7.9).
+    pub(crate) async fn quiet_release(
+        &self,
+        partition: &PartitionId,
+        now: DateTime<Utc>,
+    ) -> DateTime<Utc> {
+        let quiet = self.quiet_windows(partition).await;
         let probe = AdmissionInput {
             class: ProcessClass::Proactive,
             approval_woken: false,
@@ -647,11 +788,12 @@ impl Supervision {
             return Admission::Admit;
         }
         let class = class_of(run, meta);
-        let quiet = self.quiet_windows();
+        let quiet = self.quiet_windows(&meta.partition).await;
+        let quotas = self.quotas_of(&meta.partition).await;
         let _gate = self.admission.lock().await;
         let (running, background) = self.admitted(&meta.partition, &run.run_id).await;
         let budgeted = class != ProcessClass::Interactive
-            && (self.quotas.daily_spend_cap.is_some()
+            && (quotas.daily_spend_cap.is_some()
                 || (class == ProcessClass::Proactive && self.daily_budget_cost().is_some()));
         let (partition_spent, proactive_spent, need) = if budgeted {
             (
@@ -674,7 +816,7 @@ impl Supervision {
             ),
             now: self.clock.now(),
             quiet_hours: &quiet,
-            quotas: &self.quotas,
+            quotas: &quotas,
             running,
             preemptible: !background.is_empty(),
             partition_spent,
@@ -810,10 +952,10 @@ impl Supervision {
         }
         let mut woken = 0;
         for (partition, mut waiters) in waiting {
+            let quotas = self.quotas_of(&partition).await;
             let _gate = self.admission.lock().await;
             let (running, _) = self.admitted(&partition, "").await;
-            let free =
-                self.quotas.max_running.map_or(usize::MAX, |max| max.saturating_sub(running));
+            let free = quotas.max_running.map_or(usize::MAX, |max| max.saturating_sub(running));
             waiters.sort_by(|(a, x), (b, y)| {
                 let human = |meta: &ProcessMeta, run: &RunRecord| {
                     class_of(run, meta) != ProcessClass::Interactive
@@ -865,14 +1007,14 @@ impl Supervision {
             // Without a cap there is nothing to replenish: such a sleeper waits on its other
             // wakes.
             let budget = if proactive { self.daily_budget_cost() } else { None };
-            if self.quotas.daily_spend_cap.is_none() && budget.is_none() {
+            let cap = self.quotas_of(&partition).await.daily_spend_cap;
+            if cap.is_none() && budget.is_none() {
                 continue;
             }
             let fits = |cap: Option<u64>, spent: u64| {
                 cap.is_none_or(|cap| spent.saturating_add(need.max(1)) <= cap)
             };
-            let mut room =
-                fits(self.quotas.daily_spend_cap, self.partition_spent(&partition).await);
+            let mut room = fits(cap, self.partition_spent(&partition).await);
             if budget.is_some() {
                 room &= fits(budget, self.proactive_spent(&partition).await);
             }
@@ -1020,6 +1162,7 @@ impl Supervision {
             rules: Vec::new(),
             sleepers: Vec::new(),
             frozen: Vec::new(),
+            crossings: Vec::new(),
         };
         let mut reports: BTreeMap<PartitionId, crate::review::ReviewReport> =
             std::iter::once(PartitionId::default())
@@ -1040,7 +1183,30 @@ impl Supervision {
                 entry.sleepers.push(aged);
             }
         }
-        // Standing rules carry no partition until partitions land (phase 3).
+        // Crossings that recur are reported in the partition they come from (spec 3.2 §7.8).
+        let since = chrono::Duration::from_std(crate::review::ReviewReport::CROSSING_WINDOW)
+            .ok()
+            .and_then(|window| now.checked_sub_signed(window))
+            .unwrap_or(now);
+        match self
+            .partitions
+            .recurring_crossings(since, crate::review::ReviewReport::CROSSING_THRESHOLD)
+            .await
+        {
+            Ok(recurring) => {
+                for crossing in recurring {
+                    reports
+                        .entry(crossing.from.clone())
+                        .or_insert_with(|| empty(&crossing.from))
+                        .crossings
+                        .push(crossing);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "could not read the crossing ledger for the review")
+            }
+        }
+        // Standing rules carry no partition: the default partition's report lists them.
         if let Some(source) = &self.rule_source {
             let users: std::collections::BTreeSet<String> =
                 match self.runs.list(RunFilter::default().app_name(self.app_name.clone())).await {
@@ -1075,12 +1241,14 @@ impl Supervision {
                 review.rules = report.rules.len(),
                 review.sleepers = report.sleepers.len(),
                 review.frozen = report.frozen.len(),
-                "review found work older than the review period"
+                review.crossings = report.crossings.len(),
+                "review found work older than the review period or recurring crossings"
             );
             let mut fields = serde_json::to_value(&report).unwrap_or_default();
             if let Value::Object(map) = &mut fields {
                 map.remove("at");
                 map.insert("ask".into(), json!(report.renewal_ask()));
+                map.insert("remedies".into(), json!(report.crossing_remedies()));
             }
             self.record(audit::REVIEW, self.actor_for(None), fields).await;
             self.publish(KernelEvent::Review(report));
@@ -1312,7 +1480,7 @@ impl WorkerHooks for KernelHooks {
         }
         let persisted = stored.is_some();
         let asleep = asleep_at_claim(run, stored.as_ref());
-        let mut meta = stored.unwrap_or_else(|| Supervision::infer_meta(run));
+        let mut meta = stored.unwrap_or_else(|| sup.inferred_meta(run));
         let from = if meta.wake.is_some() || meta.suspended_by.is_some() || run.attempt > 1 {
             RunState::Waiting
         } else {
@@ -1344,7 +1512,7 @@ impl WorkerHooks for KernelHooks {
         if admitted {
             sup.item_started(&meta).await;
         }
-        let baseline = match &sup.progress {
+        let baseline = match sup.progress_for(&meta.partition) {
             Some(progress) => progress.usage(run).await.ok().flatten(),
             None => None,
         };
@@ -1384,7 +1552,7 @@ impl WorkerHooks for KernelHooks {
             });
             return;
         }
-        let mut meta = stored.unwrap_or_else(|| Supervision::infer_meta(run));
+        let mut meta = stored.unwrap_or_else(|| sup.inferred_meta(run));
         let draining = sup.draining.load(Ordering::SeqCst);
         let label = match reason {
             ParkReason::Suspended => {
@@ -1424,7 +1592,7 @@ impl WorkerHooks for KernelHooks {
         }
         // A slot may have freed in the partition, and a preempted process whose preemptor
         // already finished goes back to its queue (spec 3.2 §7.9).
-        if sup.quotas.max_running.is_some() {
+        if sup.caps_running().await {
             sup.admit_waiters().await;
         }
         if matches!(meta.suspended_by, Some(Suspension::Preempted { .. })) {
@@ -1442,6 +1610,13 @@ impl WorkerHooks for KernelHooks {
             self.run_finished.on_finish(run).await;
         }
         sup.release(&run.run_id).await;
+        // A finished run's approved crossing reads end with it (spec 3.2 §13 Q3).
+        if run.state.is_terminal() {
+            let finished = crate::partition::CrossingRun::Durable(run.run_id.clone());
+            if let Err(error) = sup.partitions.release_run(&finished).await {
+                tracing::warn!(run.id = %run.run_id, error = %error, "could not release the run's crossing grants");
+            }
+        }
         if run.state.is_terminal()
             && let Some(mut meta) = sup.stored_meta(run).await
             && (meta.suspend_requested || meta.suspended_by.is_some() || meta.wake.is_some())
@@ -1464,7 +1639,7 @@ impl WorkerHooks for KernelHooks {
             // The processes this one preempted go back to their queue, and a slot freed
             // (spec 3.2 §7.9); the item this one ran is done (§7.5).
             sup.requeue_preempted(Some(&run.run_id)).await;
-            if sup.quotas.max_running.is_some() {
+            if sup.caps_running().await {
                 sup.admit_waiters().await;
             }
             if let Some(meta) = sup.stored_meta(run).await {
