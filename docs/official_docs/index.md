@@ -97,6 +97,7 @@ The interface to an always-on agent (`adk-surface`, spec 3.3): every surface is 
 
 - [The Engine](surfaces/index.md) - Feed, projection and commands every surface shares: decision cards in plain words, what each surface may decide, one write path with the version seen, the `web` feature's HTTP API and its generated types
 - [The Web Home](surfaces/web-home.md) - Threads, Today and Memory & rules at `/ui/`, in light and dark: decisions with the version seen, what stays read-only until the kernel serves it, mounting it on your own server, the developer panel, and moving from `adk-server`'s bundled runtime UI
+- [The Terminal](surfaces/terminal.md) - Full screen, inline and JSON lines from the keyboard: decisions answered by key, Esc never decides, typing queued, device pairing for a kernel on another machine, exit codes for CI
 
 ## Realtime & Multimodal
 

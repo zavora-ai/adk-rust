@@ -133,9 +133,11 @@ See [The Web Home](../docs/official_docs/surfaces/web-home.md).
 | Feature | Surface | Stability |
 |---|---|---|
 | `web` | The web home: its page and HTTP API | Beta |
+| `tui` | The terminal: full screen, inline and JSON lines (`adk_surface::tui`), decisions answered by key; the `adk-rust` binary's `surface` feature | Beta |
 
-The terminal, chat channels, the phone, the desktop tray, voice, agent-drawn UI and the
-workflow observer arrive as further features (spec 3.3 §6.1, §12).
+Chat channels, the phone, the desktop tray, voice, agent-drawn UI and the workflow observer
+arrive as further features (spec 3.3 §6.1, §12). See
+[the terminal](../docs/official_docs/surfaces/terminal.md) for its keys, modes and exit codes.
 
 ## License
 
