@@ -1168,6 +1168,28 @@ pub mod kernel {
     pub use adk_kernel::*;
 }
 
+/// Agent surfaces: the engine every surface runs on, and the web home's HTTP API (spec 3.3).
+///
+/// Everything `adk-surface` exports: the [`SurfaceEngine`](surface::SurfaceEngine) with its
+/// sources, decision cards in the words of spec 3.3 §8, the rules of what each surface may
+/// decide, and [`web::router`](surface::web::router) for `ServerBuilder::add_api_routes`.
+///
+/// Available with feature: `surface` (opt-in, in no tier)
+///
+/// # Example
+///
+/// ```rust
+/// use adk_rust::surface::{Caller, Origin, SurfaceKind, rules};
+///
+/// let chat = Caller::human("ana", SurfaceKind::Chat, Origin::Chat { channel: "Telegram".into() });
+/// assert!(!rules::may_resume(&chat));
+/// ```
+#[cfg(feature = "surface")]
+#[cfg_attr(docsrs, doc(cfg(feature = "surface")))]
+pub mod surface {
+    pub use adk_surface::*;
+}
+
 // ============================================================================
 // Enterprise Client SDK (feature-gated, experimental)
 // ============================================================================

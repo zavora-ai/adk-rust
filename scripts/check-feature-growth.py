@@ -145,6 +145,7 @@ AXES: dict[str, str] = {
     "all-onnx": "media",
     "mcp": "mcp",
     "harness": "harness",
+    "surface": "surface",
 }
 
 TIERS = {
