@@ -131,6 +131,45 @@ pub struct Cli {
     #[cfg(feature = "voice")]
     #[command(flatten)]
     pub voice: VoiceArgs,
+
+    /// The terminal surface (`--ui`, `--output`, `--theme`), which runs without a subcommand.
+    #[cfg(feature = "surface")]
+    #[command(flatten)]
+    pub surface: SurfaceArgs,
+}
+
+/// The terminal surface (spec 3.3 §5.2): full screen by default on a capable terminal, the
+/// scrollback with `--ui inline`, JSON lines with `--output json`. It attaches to the running
+/// kernel, or runs the harness in this process.
+#[cfg(feature = "surface")]
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct SurfaceArgs {
+    /// `full` (the default on a terminal of at least 60 by 16) or `inline`, which keeps the
+    /// output in the scrollback
+    #[arg(long, value_name = "UI", value_parser = parse_from_str::<adk_surface::tui::UiMode>)]
+    pub ui: Option<adk_surface::tui::UiMode>,
+    /// `text`, or `json`: one engine event per line and an exit code — 0 done, 1 error, 3
+    /// waiting for a decision, 4 the daily spending limit reached
+    #[arg(long, value_name = "FORMAT", default_value = "text", value_parser = parse_from_str::<adk_surface::tui::OutputFormat>)]
+    pub output: adk_surface::tui::OutputFormat,
+    /// `auto` (from the terminal's background), `light` or `dark`
+    #[arg(long, value_name = "THEME", default_value = "auto", value_parser = parse_from_str::<adk_surface::tui::ThemeChoice>)]
+    pub theme: adk_surface::tui::ThemeChoice,
+    /// With `--output json`: the message to send (default: standard input when piped)
+    #[arg(long, value_name = "TEXT")]
+    pub message: Option<String>,
+    /// With `--server`: pair this terminal by the code `adk-rust pair` showed on the kernel's
+    /// machine, keep its device token for the next start, and attach
+    #[arg(long, value_name = "CODE", requires = "server")]
+    pub pair: Option<String>,
+    /// The kernel to attach to: its home's socket, or `--server` with a token
+    #[command(flatten)]
+    pub kernel: KernelTarget,
+}
+
+#[cfg(feature = "surface")]
+fn parse_from_str<T: std::str::FromStr<Err = String>>(value: &str) -> Result<T, String> {
+    value.parse()
 }
 
 /// `adk-rust --voice`: the harness over a realtime session (spec 3.1 §8.1, §7.17, H5).

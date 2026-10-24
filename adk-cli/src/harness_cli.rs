@@ -34,6 +34,8 @@ use crate::ultra::{self, UltraAgents};
 use crate::{BuiltModel, ResolvedModel};
 
 mod service;
+#[cfg(feature = "surface")]
+pub mod surface;
 mod up;
 #[cfg(windows)]
 pub use service::run_windows_service;
@@ -118,6 +120,11 @@ struct AgentExtras {
     /// The partition the harness runs, the table its policy reads, and whether it is the
     /// coordinator.
     partition: Option<(adk_kernel::Partition, adk_kernel::Partitions, bool)>,
+    /// The person at this console runs the harness and answers its inbox (the terminal
+    /// surface in process, spec 3.3 §5.2): its runs are theirs, so standing rules and Auto
+    /// apply without a server's authentication.
+    #[cfg(feature = "surface")]
+    local_console: bool,
 }
 
 /// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
@@ -370,7 +377,14 @@ impl Setup {
             builder = builder.prompter(prompter);
         }
         if let Some(service) = approval_service {
-            builder = builder.approval_service(service).require_authenticated_identity();
+            builder = builder.approval_service(service);
+            #[cfg(feature = "surface")]
+            let local_console = extras.local_console;
+            #[cfg(not(feature = "surface"))]
+            let local_console = false;
+            if !local_console {
+                builder = builder.require_authenticated_identity();
+            }
         }
         for pack in &self.resolved.packs {
             builder = builder.pack(*pack);

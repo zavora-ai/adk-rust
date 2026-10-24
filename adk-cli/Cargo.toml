@@ -54,6 +54,8 @@ adk-surface = { workspace = true, optional = true, features = ["web"] }
 # the WAV codec for `--voice-input`/`--voice-output`
 adk-realtime = { workspace = true, optional = true }
 adk-audio = { workspace = true, optional = true }
+# `adk-rust` as the terminal surface: full screen, inline or JSON (spec 3.3 §5.2)
+adk-surface = { workspace = true, optional = true, features = ["tui"] }
 # `adk-rust approvals --server` talks to a served harness's approval inbox
 reqwest = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
@@ -169,6 +171,11 @@ voice = ["harness", "adk-harness?/voice", "dep:adk-realtime", "adk-realtime/inte
 surface = ["dep:adk-surface"]
 # The microphone and the speaker for `--voice` (cpal: audio hardware, ALSA headers on Linux)
 voice-desktop = ["voice", "adk-audio/desktop-audio"]
+# `adk-rust` with no subcommand as the terminal surface of spec 3.3 §5.2: full screen on a
+# capable terminal, `--ui inline` in the scrollback, `--output json` for CI; on the running
+# kernel (`--home`, or `--server` with a token) or the harness in process, every decision
+# through the approvals inbox
+surface = ["harness", "dep:adk-surface"]
 
 [dev-dependencies]
 # The scripted realtime provider the `--voice` end-to-end test writes its script with.
@@ -186,6 +193,8 @@ sha2 = "0.10"
 [target.'cfg(unix)'.dev-dependencies]
 # openpty for the console end-to-end tests, which drive the binary in a pseudo-terminal
 libc = "0.2"
+# Reads the terminal surface's screen as a terminal would (spec 3.3 §5.2)
+vt100 = "0.16"
 
 # Reads a file's DACL back in the owner-only session store test.
 [target.'cfg(windows)'.dev-dependencies]

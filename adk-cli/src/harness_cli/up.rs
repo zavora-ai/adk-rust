@@ -180,6 +180,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                     memory_with_inbox: true,
                     drivers: Some(drivers.clone()),
                     partition: None,
+                    #[cfg(feature = "surface")]
+                    local_console: false,
                 },
             )?);
             vec![host(&setup, agent, None, &governance, &run_store)?]
@@ -193,6 +195,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                 memory_with_inbox: true,
                 drivers: Some(drivers.clone()),
                 partition: Some((partition, table.clone(), coordinator)),
+                #[cfg(feature = "surface")]
+                local_console: false,
             };
             partition_harnesses(&setup, &settings, table, &service, &governance, &run_store, extras)
                 .await?
@@ -511,7 +515,7 @@ pub(super) fn default_home() -> Result<PathBuf> {
 }
 
 /// The approval and run stores `serve` uses: the `--store` backend, `harness.db`, or memory.
-fn run_and_approval_stores(
+pub(super) fn run_and_approval_stores(
     setup: &Setup,
 ) -> (Arc<dyn adk_core::ApprovalStore>, Arc<dyn adk_core::DurableRunStore>) {
     if let Some(shared) = &setup.shared {

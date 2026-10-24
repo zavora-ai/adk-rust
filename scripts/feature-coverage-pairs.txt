@@ -125,6 +125,13 @@
 # The managed form (spec 3.2 §7.13, §10 M1): `KernelDef`, `TenantKernel` and partitions on a
 # tenant's kernel, which no workspace member enables.
 2 adk-kernel managed
+# The terminal surface (spec 3.3 §5.2): full screen, inline and JSON lines; with `web`, the
+# scripted scenario on a kernel-hosted harness drawn by `TerminalSurface::screen`.
+2 adk-surface tui doc
+2 adk-surface web,tui
+# `adk-rust` as the terminal surface in a pseudo-terminal: full screen, inline, JSON, a
+# kernel on its socket and a paired one over HTTP (spec 3.3 §5.2, §10 K2).
+2 adk-cli surface,scripted-model
 
 # Shard 3 — adk-graph, adk-managed, adk-code.
 # No workspace member enables these four; four clippy failures and two uncompilable doc

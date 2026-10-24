@@ -55,6 +55,7 @@ fn dir_arg(dir: &Path) -> String {
 }
 
 #[test]
+#[cfg_attr(feature = "surface", ignore = "`surface` replaces the REPL with the terminal surface")]
 fn hooks_are_listed_with_their_source_and_an_on_stop_notice_reaches_the_user() {
     let home = tempfile::tempdir().unwrap();
     write_user_config(home.path(), USER_HOOKS);
@@ -84,6 +85,7 @@ fn hooks_are_listed_with_their_source_and_an_on_stop_notice_reaches_the_user() {
 }
 
 #[test]
+#[cfg_attr(feature = "surface", ignore = "`surface` replaces the REPL with the terminal surface")]
 fn no_hooks_runs_none_and_hooks_says_so() {
     let home = tempfile::tempdir().unwrap();
     write_user_config(home.path(), USER_HOOKS);
@@ -130,6 +132,7 @@ fn no_hooks_runs_none_and_hooks_says_so() {
 }
 
 #[test]
+#[cfg_attr(feature = "surface", ignore = "`surface` replaces the REPL with the terminal surface")]
 fn an_untrusted_workspace_hook_is_listed_as_not_running() {
     let home = tempfile::tempdir().unwrap();
     let ws = workspace_with_hooks();
@@ -177,6 +180,7 @@ fn a_hooks_table_in_the_project_file_is_not_an_unknown_key() {
 }
 
 #[test]
+#[cfg_attr(feature = "surface", ignore = "`surface` replaces the REPL with the terminal surface")]
 fn tab_completes_a_slash_command() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
