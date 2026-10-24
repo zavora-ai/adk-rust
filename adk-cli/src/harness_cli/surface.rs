@@ -350,6 +350,9 @@ async fn in_process(
         Arc::new(ApproveAll { allow_unsandboxed: setup.resolved.allow_unsandboxed })
             as Arc<dyn ApprovalPrompter>
     });
+    // With `--yes` the prompter answers held calls, as in the REPL: the harness asks the
+    // approval service first when it has one, so it gets none and the inbox stays empty.
+    let held_to_inbox = prompter.is_none().then(|| service.clone());
     // Long-term memory stays on, as in the REPL and in `up` (spec 3.1 §7.15.2, 3.2 §8.1).
     let agent = Arc::new(setup.agent_with(
         setup.resolved.effort,
@@ -357,20 +360,22 @@ async fn in_process(
         setup.resolved.mode,
         setup.resolved.sandbox,
         prompter,
-        Some(service),
+        held_to_inbox,
         AgentExtras { local_console: true, memory_with_inbox: true, ..AgentExtras::default() },
     )?);
+    // Each run carries the prompter's confirmation handler, as the REPL's do.
+    let config = adk_core::RunConfig {
+        tool_confirmation_handler: agent.runtime().confirmation_handler().cloned(),
+        ..adk_core::RunConfig::default()
+    };
     let runner = adk_runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent.agent())
         .session_service(setup.sessions())
+        .run_config(config)
         .approval_store(agent.runtime().approval_store().clone())
         .build()?;
-    let decisions = agent
-        .runtime()
-        .approval_service()
-        .cloned()
-        .context("the harness has an approval service")?;
+    let decisions = agent.runtime().approval_service().cloned().unwrap_or(service);
     let harness = Arc::new(Harness::with_runner(agent, runner)?.with_run_store(run_store));
     let session = open_session(&setup).await?;
     let mut notices = Vec::new();

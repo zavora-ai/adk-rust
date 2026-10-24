@@ -53,6 +53,17 @@ pub fn run_input(args: &[&str], home: &Path, cwd: &Path, input: &str) -> Output 
     child.wait_with_output().expect("adk-rust runs")
 }
 
+/// A binary still running when its handle is dropped — a kernel, a paired terminal, a test
+/// that failed half way — is killed and reaped, so no test leaves a process behind.
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
 /// Standard output and error of `output`, joined.
 pub fn text(output: &Output) -> String {
     format!(
