@@ -1974,8 +1974,11 @@ impl AuditedCall<'_, '_> {
 
     /// Asks the run's policy about the call with `args`, passing its origin and ID.
     async fn evaluate_policy(&self, args: &Value) -> PolicyDecision {
-        let call =
-            PolicyCall { origin: self.origin, function_call_id: Some(self.function_call_id) };
+        let call = PolicyCall {
+            origin: self.origin,
+            function_call_id: Some(self.function_call_id),
+            durable_run_id: self.gate.run_config.durable_run_id.as_deref(),
+        };
         evaluate_policy(self.gate, self.tool_name, args, self.effect, call).await
     }
 
@@ -2862,7 +2865,11 @@ impl BuiltinToolGovernor {
         effect: ToolEffect,
         origin: ToolOrigin,
     ) -> Result<Option<(BuiltinToolWithholding, String)>> {
-        let call = PolicyCall { origin: Some(&origin), function_call_id: None };
+        let call = PolicyCall {
+            origin: Some(&origin),
+            function_call_id: None,
+            durable_run_id: gate.run_config.durable_run_id.as_deref(),
+        };
         let approval_reason = match evaluate_policy(gate, name, &args, effect, call).await {
             PolicyDecision::Allow => return Ok(None),
             PolicyDecision::Deny { reason } => {
@@ -4274,6 +4281,43 @@ mod tests {
         let builtin: Vec<_> =
             seen[3..].iter().map(|(origin, id, _)| (origin.is_some(), id)).collect();
         assert_eq!(builtin, [(true, &None), (true, &None)], "{seen:?}");
+    }
+
+    /// Spec 3.2 §7.8: a policy scopes a crossing approval to one durable run, which spans
+    /// the invocations that resume it.
+    #[tokio::test]
+    async fn the_policy_sees_the_durable_run_the_call_belongs_to() {
+        #[derive(Debug, Default)]
+        struct RunPolicy(std::sync::Mutex<Vec<Option<String>>>);
+        #[async_trait]
+        impl crate::ToolPolicy for RunPolicy {
+            async fn evaluate(&self, _request: &ToolPolicyRequest) -> PolicyDecision {
+                PolicyDecision::require_approval("evaluate_call was not used")
+            }
+
+            async fn evaluate_call(
+                &self,
+                _request: &ToolPolicyRequest,
+                call: &PolicyCall<'_>,
+            ) -> PolicyDecision {
+                self.0.lock().unwrap().push(call.durable_run_id.map(str::to_string));
+                PolicyDecision::Allow
+            }
+        }
+
+        let policy = Arc::new(RunPolicy::default());
+        let mut config = RunConfig::builder().tool_policy(policy.clone()).build();
+        let (call, _) = origin_call("mcp:good", "c1", json!({ "q": 1 }));
+        authorize_tool_call(&gate(&config), call).await.unwrap();
+        config.durable_run_id = Some("run-7".into());
+        let (call, _) = origin_call("mcp:good", "c2", json!({ "q": 1 }));
+        authorize_tool_call(&gate(&config), call).await.unwrap();
+        let (mut declarations, tools) = native_tools();
+        BuiltinToolGovernor::new().govern(&gate(&config), &mut declarations, &tools).await.unwrap();
+
+        let seen = policy.0.lock().unwrap().clone();
+        assert_eq!(seen[..2], [None, Some("run-7".to_string())]);
+        assert!(seen[2..].iter().all(|run| run.as_deref() == Some("run-7")), "{seen:?}");
     }
 
     #[tokio::test]

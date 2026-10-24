@@ -52,6 +52,14 @@ pub const SPAWN_REJECTED_CODE: &str = "kernel.spawn_rejected";
 /// assert_eq!(adk_kernel::error::LEDGER_INVALID_CODE, "kernel.ledger.invalid_row");
 /// ```
 pub const LEDGER_INVALID_CODE: &str = "kernel.ledger.invalid_row";
+/// Error code of a crossing between partitions that no rule permits (spec 3.2 K-I15).
+pub const CROSSING_DENIED_CODE: &str = "kernel.partition.crossing_denied";
+/// Error code of a partition's memory call that names another partition's scope
+/// (spec 3.2 K-I15).
+pub const MEMORY_CROSSING_CODE: &str = "kernel.partition.memory_crossing";
+/// Error code of a delete by query on a partition's memory, which would reach every
+/// partition's scope.
+pub const MEMORY_DELETE_CODE: &str = "kernel.partition.memory_delete";
 
 /// Every code the kernel answers a control-plane call with: the codes a
 /// [`ControlClient`](crate::control::ControlClient) keeps, and reports any other code as
@@ -73,6 +81,9 @@ pub(crate) const CODES: &[&str] = &[
     SERDE_CODE,
     SPAWN_REJECTED_CODE,
     LEDGER_INVALID_CODE,
+    CROSSING_DENIED_CODE,
+    MEMORY_CROSSING_CODE,
+    MEMORY_DELETE_CODE,
 ];
 
 /// What went wrong in the kernel (spec 3.2 §7.1).

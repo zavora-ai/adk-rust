@@ -27,13 +27,21 @@ use super::args::PROJECT_CONFIG_FILE;
 /// | `[kernel.consolidation] enabled` | `false` turns the tick off | `false` turns it off |
 /// | `[kernel.consolidation] min_new_sessions`, `min_new_facts`, `min_interval_minutes`, `debounce_minutes` | The tick's admission gates | Ignored, with a note |
 /// | `[kernel.consolidation] max_tokens_per_tick` | The tick's token cap | Applies only when lower |
+/// | `[[kernel.partitions]]`, `coordinator` | The partitions `up` runs, one harness each, and the one whose harness may cross into the others (spec 3.2 §7.8) | Ignored |
 ///
 /// The consolidation tick is on in the CLI's Ask and Auto partitions with long-term memory
 /// and off otherwise ([`enable_consolidation`](Self::enable_consolidation), spec 3.2 §13 Q1);
 /// `--no-consolidation` turns it off.
 ///
-/// The partitions and drivers directory of the table arrive with their phases; until then
-/// they are reported as unknown keys. Flags win over both files (spec 3.2 §7.5, §7.9).
+/// A `[[kernel.partitions]]` entry has `id`, and optionally `class` (default the id),
+/// `tenant`, `mode` (`read_only`, `plan`, `ask`, `auto`; default `ask`), `memory_scope`
+/// (default the id), `drivers`, `quiet_hours` (`HH:MM-HH:MM`, local), `quotas` (an inline
+/// table of `max_running`, `max_queued`, `daily_spend_cap_usd`) and `cross_partition`
+/// (`deny`, the default, or `coordinator_with_approval`). A partition's quiet hours and
+/// quotas apply beside the kernel's: every window holds, and each quota is the lower one.
+///
+/// The drivers directory of the table arrives with its phase; until then it is reported
+/// as an unknown key. Flags win over both files (spec 3.2 §7.5, §7.8, §7.9).
 ///
 /// # Example
 ///
@@ -81,8 +89,73 @@ pub struct KernelSettings {
     pub consolidation_disabled: bool,
     /// `[kernel.consolidation]` overrides of the tick's defaults.
     pub tick: TickSettings,
+    /// The partitions `up` runs, one harness each, from `[[kernel.partitions]]` in the user
+    /// config (spec 3.2 §7.8); empty runs one harness, partitioned by nothing.
+    pub partitions: Vec<adk_kernel::Partition>,
+    /// The partition whose harness is the coordinator, from `kernel.coordinator`.
+    pub coordinator: Option<adk_kernel::PartitionId>,
     /// Settings a file made that were ignored, and why.
     pub notes: Vec<String>,
+}
+
+/// One `[[kernel.partitions]]` entry as written.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PartitionTable {
+    id: String,
+    class: Option<String>,
+    tenant: Option<String>,
+    mode: Option<String>,
+    memory_scope: Option<String>,
+    #[serde(default)]
+    drivers: Vec<String>,
+    quiet_hours: Option<String>,
+    quotas: Option<QuotasTable>,
+    cross_partition: Option<String>,
+}
+
+impl PartitionTable {
+    fn partition(self, origin: &str) -> Result<adk_kernel::Partition> {
+        let invalid = |error: adk_kernel::KernelError| {
+            AdkError::config(format!("{origin}: partition `{}`: {error}", self.id))
+        };
+        let class = self.class.clone().unwrap_or_else(|| self.id.clone());
+        let mut partition = adk_kernel::Partition::new(self.id.as_str(), class);
+        if let Some(tenant) = &self.tenant {
+            partition = partition.with_tenant(tenant.clone());
+        }
+        if let Some(mode) = &self.mode {
+            partition = partition.with_mode(mode.parse().map_err(invalid)?);
+        }
+        if let Some(scope) = &self.memory_scope {
+            partition = partition.with_memory_scope(scope.clone());
+        }
+        for driver in &self.drivers {
+            partition = partition.with_driver(driver.clone());
+        }
+        if let Some(window) = &self.quiet_hours {
+            partition = partition.with_quiet_hours(window.parse().map_err(invalid)?);
+        }
+        if let Some(quotas) = &self.quotas {
+            let mut limits = adk_kernel::Quotas::new();
+            if let Some(max) = positive(origin, quotas.max_running)? {
+                limits = limits.with_max_running(max);
+            }
+            if let Some(max) = positive(origin, quotas.max_queued)? {
+                limits = limits.with_max_queued(max);
+            }
+            let cap = "partitions.quotas.daily_spend_cap_usd";
+            if let Some(cap) = micro_usd(origin, cap, quotas.daily_spend_cap_usd)? {
+                limits = limits.with_daily_spend_cap(cap);
+            }
+            partition = partition.with_quotas(limits);
+        }
+        if let Some(cross) = &self.cross_partition {
+            partition = partition.with_cross_partition(cross.parse().map_err(invalid)?);
+        }
+        partition.validate().map_err(invalid)?;
+        Ok(partition)
+    }
 }
 
 /// The `[kernel]` table as written.
@@ -96,6 +169,8 @@ struct KernelTable {
     proactivity: Option<ProactivityTable>,
     quotas: Option<QuotasTable>,
     consolidation: Option<ConsolidationTable>,
+    partitions: Option<Vec<PartitionTable>>,
+    coordinator: Option<String>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
 }
@@ -323,17 +398,43 @@ impl KernelSettings {
                 debounce: minutes(tick.debounce_minutes),
                 max_tokens_per_tick: tick.max_tokens_per_tick,
             };
+            for table in user.partitions.unwrap_or_default() {
+                let partition = table.partition(&origin)?;
+                if settings.partitions.iter().any(|p| p.id == partition.id) {
+                    return Err(AdkError::config(format!(
+                        "{origin}: partition `{}` is listed twice under [[kernel.partitions]]",
+                        partition.id
+                    )));
+                }
+                settings.partitions.push(partition);
+            }
+            if let Some(coordinator) = user.coordinator {
+                let coordinator = adk_kernel::PartitionId::new(coordinator);
+                if !settings.partitions.iter().any(|partition| partition.id == coordinator) {
+                    return Err(AdkError::config(format!(
+                        "{origin}: `kernel.coordinator` names `{coordinator}`, which no \
+                         [[kernel.partitions]] entry defines"
+                    )));
+                }
+                settings.coordinator = Some(coordinator);
+            }
             for key in user.unknown.keys() {
                 settings.notes.push(format!("{origin}: unknown key `kernel.{key}` ignored"));
             }
         }
         if let Some(project) = KernelTable::load(&workspace.join(PROJECT_CONFIG_FILE))? {
             let origin = PROJECT_CONFIG_FILE;
-            for (key, set) in [("home", project.home.is_some()), ("bind", project.bind.is_some())] {
+            for (key, set) in [
+                ("home", project.home.is_some()),
+                ("bind", project.bind.is_some()),
+                ("partitions", project.partitions.is_some()),
+                ("coordinator", project.coordinator.is_some()),
+            ] {
                 if set {
                     settings.notes.push(format!(
-                        "{origin}: `kernel.{key}` ignored — where the kernel keeps its state and \
-                         listens is yours to choose; set it in your user config"
+                        "{origin}: `kernel.{key}` ignored — where the kernel keeps its state, \
+                         listens and draws its partitions is yours to choose; set it in your \
+                         user config"
                     ));
                 }
             }
@@ -606,6 +707,63 @@ mod tests {
             settings.notes
         );
         assert!(settings.proactivity().consolidation.is_none());
+    }
+
+    #[test]
+    fn partitions_come_from_the_user_config_only() {
+        let (dir, user) = files(
+            "[kernel]\ncoordinator = \"home\"\n\
+             [[kernel.partitions]]\nid = \"home\"\ncross_partition = \"coordinator_with_approval\"\n\
+             quiet_hours = \"22:00-07:00\"\n\
+             [[kernel.partitions]]\nid = \"work\"\nclass = \"work-agents\"\nmode = \"auto\"\n\
+             memory_scope = \"job\"\ndrivers = [\"calendar\"]\ncross_partition = \"coordinator_with_approval\"\n\
+             quotas = { max_running = 2, daily_spend_cap_usd = 1.5 }\n",
+            "[kernel]\ncoordinator = \"work\"\n[[kernel.partitions]]\nid = \"evil\"\n",
+        );
+        let settings = KernelSettings::resolve(Some(&user), dir.path()).unwrap();
+        let expected = vec![
+            adk_kernel::Partition::new("home", "home")
+                .with_quiet_hours("22:00-07:00".parse().unwrap())
+                .with_cross_partition(adk_kernel::CrossPartition::CoordinatorWithApproval),
+            adk_kernel::Partition::new("work", "work-agents")
+                .with_mode(adk_kernel::PartitionMode::Auto)
+                .with_memory_scope("job")
+                .with_driver("calendar")
+                .with_quotas(
+                    adk_kernel::Quotas::new().with_max_running(2).with_daily_spend_cap(1_500_000),
+                )
+                .with_cross_partition(adk_kernel::CrossPartition::CoordinatorWithApproval),
+        ];
+        assert_eq!(settings.partitions, expected);
+        assert_eq!(settings.coordinator, Some("home".into()));
+        assert!(
+            settings.notes.iter().any(|note| note.contains("kernel.partitions")),
+            "{:?}",
+            settings.notes
+        );
+        assert!(
+            settings.notes.iter().any(|note| note.contains("kernel.coordinator")),
+            "{:?}",
+            settings.notes
+        );
+    }
+
+    #[test]
+    fn a_bad_partition_table_is_refused() {
+        for user in [
+            "[kernel]\ncoordinator = \"home\"\n",
+            "[[kernel.partitions]]\nid = \"home\"\n[[kernel.partitions]]\nid = \"home\"\n",
+            "[[kernel.partitions]]\nid = \"home\"\nmode = \"sometimes\"\n",
+            "[[kernel.partitions]]\nid = \"home\"\ncross_partition = \"maybe\"\n",
+            "[[kernel.partitions]]\nid = \"\"\n",
+            "[[kernel.partitions]]\nid = \"home\"\ncolour = \"blue\"\n",
+            "[[kernel.partitions]]\nid = \"home\"\nquiet_hours = \"late\"\n",
+            "[[kernel.partitions]]\nid = \"home\"\nquotas = { max_running = 0 }\n",
+            "[[kernel.partitions]]\nid = \"home\"\nquotas = { max_parallel = 2 }\n",
+        ] {
+            let (dir, user_path) = files(user, "");
+            assert!(KernelSettings::resolve(Some(&user_path), dir.path()).is_err(), "{user}");
+        }
     }
 
     #[test]

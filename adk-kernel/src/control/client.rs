@@ -169,6 +169,51 @@ impl ControlClient {
         self.call(Method::GET, paths::HEALTH.to_string(), None::<&()>).await
     }
 
+    /// `GET /kernel/partitions`: the partition table (spec 3.2 §7.8).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    pub async fn partitions(&self) -> Result<Vec<crate::partition::Partition>> {
+        let answer: super::api::PartitionsResponse =
+            self.call(Method::GET, paths::PARTITIONS.to_string(), None::<&()>).await?;
+        Ok(answer.partitions)
+    }
+
+    /// `POST /kernel/partitions`: creates or replaces `partition` (spec 3.2 §7.8).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    pub async fn put_partition(
+        &self,
+        partition: &crate::partition::Partition,
+    ) -> Result<crate::partition::Partition> {
+        let answer: super::api::PartitionResponse =
+            self.call(Method::POST, paths::PARTITIONS.to_string(), Some(partition)).await?;
+        Ok(answer.partition)
+    }
+
+    /// `POST /kernel/partitions/{id}/mode`: sets partition `id`'s mode (spec 3.2 §8.1).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    pub async fn set_partition_mode(
+        &self,
+        id: &str,
+        mode: crate::partition::PartitionMode,
+    ) -> Result<crate::partition::Partition> {
+        let path = paths::PARTITION_MODE.replace("{id}", &encode(id));
+        let body = super::api::PartitionModeRequest { mode };
+        let answer: super::api::PartitionResponse =
+            self.call(Method::POST, path, Some(&body)).await?;
+        Ok(answer.partition)
+    }
+
     /// `GET /kernel/processes`.
     ///
     /// # Errors

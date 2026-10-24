@@ -349,6 +349,21 @@ impl Quotas {
         self.daily_spend_cap = Some(micro_usd);
         self
     }
+
+    /// Each limit the lower of `self`'s and `other`'s; a limit only one sets applies.
+    pub(crate) fn stricter(&self, other: &Self) -> Self {
+        fn lower<T: Ord + Copy>(a: Option<T>, b: Option<T>) -> Option<T> {
+            match (a, b) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+        }
+        Self {
+            max_running: lower(self.max_running, other.max_running),
+            max_queued: lower(self.max_queued, other.max_queued),
+            daily_spend_cap: lower(self.daily_spend_cap, other.daily_spend_cap),
+        }
+    }
 }
 
 /// How admission treats a claimed process (spec 3.2 §7.9).

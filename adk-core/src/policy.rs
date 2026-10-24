@@ -233,6 +233,13 @@ pub struct PolicyCall<'a> {
     pub origin: Option<&'a ToolOrigin>,
     /// The model's ID for the call, as the function response that answers it carries.
     pub function_call_id: Option<&'a str>,
+    /// The [`DurableRunStore`](crate::DurableRunStore) run the call belongs to
+    /// ([`RunConfig::durable_run_id`](crate::RunConfig::durable_run_id)), so a policy can scope
+    /// a decision to one run across the invocations that resume it. `None` outside a durable
+    /// run, where the invocation is the run.
+    ///
+    /// Spec 3.2 §7.8 (a partition crossing approved for the rest of one run).
+    pub durable_run_id: Option<&'a str>,
 }
 
 impl<'a> PolicyCall<'a> {
@@ -252,6 +259,23 @@ impl<'a> PolicyCall<'a> {
     #[must_use]
     pub fn with_function_call_id(mut self, function_call_id: &'a str) -> Self {
         self.function_call_id = Some(function_call_id);
+        self
+    }
+
+    /// Sets the durable run the call belongs to (spec 3.2 §7.8).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::PolicyCall;
+    ///
+    /// let call = PolicyCall::new().with_durable_run_id("run-1");
+    /// assert_eq!(call.durable_run_id, Some("run-1"));
+    /// assert_eq!(PolicyCall::new().durable_run_id, None);
+    /// ```
+    #[must_use]
+    pub fn with_durable_run_id(mut self, durable_run_id: &'a str) -> Self {
+        self.durable_run_id = Some(durable_run_id);
         self
     }
 }

@@ -1,7 +1,7 @@
 //! The harness's own tools (spec 3.1 §7.4, §7.6, §7.9).
 
 #[cfg(feature = "memory")]
-mod facts;
+pub(crate) mod facts;
 #[cfg(feature = "mcp")]
 mod mcp;
 #[cfg(feature = "memory")]

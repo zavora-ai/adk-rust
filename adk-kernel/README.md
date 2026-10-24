@@ -61,11 +61,11 @@ adk-rust memory undo <tick-id>
 | Kill switch | `freeze` parks running processes on every replica sharing the store; `unfreeze` resumes exactly the ones it parked |
 | Control plane | How terminals and apps reach the kernel: an owner-only local socket, plus an HTTP API on loopback, or beyond it with authentication |
 | Self-observation (`/proc`) | A content-free ledger of what your agents did — kinds, durations and hashed subjects, never what they read or wrote. Once a day the kernel compares your routine with its last four weeks and, when it changes for long enough, asks you about it in plain words (`adk-rust proc`) |
+| Partitions | Separate compartments, such as work and home, each run by an agent of its own with its own memory, drivers and mode. Nothing crosses between them except through the coordinator, and only with your approval |
 | Stores | Processes, schedules, the agenda and the ledger live in SQLite (`harness.db`) or a shared PostgreSQL or Redis backend, so a crash or restart resumes work instead of losing it |
 
 Every tool call a kernel process makes still goes through the harness's modes, standing rules
-and approvals. Partitions (separate work and home compartments), channel wake sources and
-the managed form are the remaining parts of spec 3.2.
+and approvals. Channel wake sources are the remaining part of spec 3.2.
 
 ## How it is built
 
@@ -203,6 +203,23 @@ reconciled on start. A local event reaches `Running` in under 2 s: in-process so
 enqueue and claim at once, and the tick claims wake runs an external ingress or another
 replica enqueued.
 
+## Partitions
+
+A `Partition` is a policy class, a memory scope and a driver set, run by its own harness
+(spec 3.2 §7.8). `Partitions` keeps the table and the crossing ledger in a `PartitionStore`
+(in-memory, SQLite, PostgreSQL, Redis; `partition_store_conformance_tests!`).
+
+| Part | What it does |
+|---|---|
+| `Partition::identity_source` | Every agent of the partition's runner acts with the partition's class and tenant, so `PolicyRule::for_class` rules apply |
+| `Partition::scope_memory` | Confines an `adk_core::Memory` to the partition's project |
+| `PartitionPolicy` | Denies a request reaching another partition unless the coordinator makes it, then requires a non-waivable approval; an approved read holds for the rest of its run, keyed by the crossing fingerprint (the call's fingerprint with the target partition and resource class) |
+| `CrossingTool` | Offers the coordinator another partition's driver or session tool as a crossing |
+| `KernelBuilder::partition_agent` | Hosts a partition's runner as a target bound to its partition: a process of another partition cannot run it or continue its sessions |
+| `KernelBuilder::partition_progress_source` | The partition's own progress source: the kernel reads its processes' goal progress, loop-guard verdicts and usage from it, by the process's partition, and hands it the process table and the ledger; a partition without one falls back to the main source |
+| Managed form | `KernelDef::partitions` and `coordinator` run one agent per partition on a tenant's kernel through `TenantKernelBuilder::partition_resolver`, over the tenant's own partition table (`partition_store`) |
+| Audit | `kernel.partition.created`, `kernel.partition.changed`, and `kernel.partition.crossing` for every crossing, with a digest of its fingerprint |
+
 ## Lifecycle
 
 | Call | Effect | Audit record |
@@ -303,9 +320,10 @@ contract the kernel relies on.
 
 ### Alpha backends: MongoDB, Firestore, Neo4j
 
-Every kernel store also runs on MongoDB, Firestore and Neo4j (spec 3.2 §13 Q8), each
-backend **Alpha** until its live conformance suites pass in CI, so its storage layout may
-still change without a migration. Each feature also turns on the same backend of
+The process, agenda, driver and ledger stores also run on MongoDB, Firestore and Neo4j
+(spec 3.2 §13 Q8); the partition store does not yet. Each backend is **Alpha** until its
+live conformance suites pass in CI, so its storage layout may still change without a
+migration. Each feature also turns on the same backend of
 `adk-session`'s run, schedule and governance stores, and every store takes the handle
 those stores use, so one client serves them all.
 
