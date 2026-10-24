@@ -74,6 +74,11 @@ fn events(p: &str) -> Vec<KernelEvent> {
             delta: SpendDelta::new(42),
         },
         KernelEvent::Observation { id: p.into(), partition: PartitionId::default() },
+        KernelEvent::Driver {
+            id: p.into(),
+            state: adk_kernel::drivers::DriverState::Crashed,
+            reason: Some(format!("exited printing {p}")),
+        },
         KernelEvent::Governance { frozen: true, reason: Some(format!("incident: {p}")) },
     ]);
     events

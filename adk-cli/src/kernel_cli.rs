@@ -1028,6 +1028,11 @@ fn event_line(record: &EventRecord) -> String {
         KernelEvent::Observation { id, partition } => {
             format!("{partition} observation {id}: `adk-rust proc` shows its question")
         }
+        KernelEvent::Driver { id, state, reason } => format!(
+            "{id} {}{}",
+            state.as_str(),
+            reason.as_deref().map(|reason| format!(" ({reason})")).unwrap_or_default()
+        ),
         other => other.name().to_string(),
     };
     format!(

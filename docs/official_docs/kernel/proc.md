@@ -45,7 +45,7 @@ a wake source — reaches the row only as an HMAC under a key kept in the kernel
 
 | Writer | Rows |
 |---|---|
-| The kernel, from its event bus | `process` (with the time the process ran), `wake`, `held`, `decided`, `rule_hit`, `spend`, `governance`, `observation` |
+| The kernel, from its event bus | `process` (with the time the process ran), `wake`, `held`, `decided`, `rule_hit`, `spend`, `governance`, `observation`; `proposal` for agenda changes; `audit` for the daily review and for a driver's state change (effect `driver.<state>`, its id hashed) |
 | The harness, from each run | `intent` when a run starts; `tool_call` when a call's response arrives, with the tool's effect class and the time it took |
 | The harness, from its audit records | `turn` (from `harness.spend`: model calls, tool calls, tokens, cost), `loop_guard`, `approval`, `rejection`, `denial`, `held`, and `audit` for the rest |
 

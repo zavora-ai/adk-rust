@@ -47,6 +47,7 @@ fn state_label(state: RunState) -> String {
 /// | `Spend` | `spend` | | | `micro_usd` |
 /// | `Agenda` | `proposal` | the state the item entered | the item id | |
 /// | `Review` | `audit` | `review` | | `rules`, `sleepers`, `frozen` |
+/// | `Driver` | `audit` | `driver.` and the state entered, such as `driver.crashed` | the driver id | |
 /// | `Observation` | `observation` | | the observation id | |
 /// | `Governance` | `governance` | `frozen` or `unfrozen` | | |
 ///
@@ -113,6 +114,9 @@ pub fn activity_for_event(event: &KernelEvent) -> Option<Activity> {
             .with_count("rules", report.rules.len() as u64)
             .with_count("sleepers", report.sleepers.len() as u64)
             .with_count("frozen", report.frozen.len() as u64),
+        KernelEvent::Driver { id, state, .. } => kernel(LedgerKind::Audit)
+            .with_effect(format!("driver.{}", state.as_str()))
+            .with_subject(id.clone()),
         KernelEvent::Observation { id, partition } => kernel(LedgerKind::Observation)
             .with_partition(partition.clone())
             .with_subject(id.clone()),
@@ -135,6 +139,7 @@ fn event_pid(event: &KernelEvent) -> Option<&str> {
         KernelEvent::Spend { .. }
         | KernelEvent::Agenda { .. }
         | KernelEvent::Review(_)
+        | KernelEvent::Driver { .. }
         | KernelEvent::Observation { .. }
         | KernelEvent::Governance { .. }
         | KernelEvent::Health(_) => None,
@@ -497,6 +502,17 @@ mod tests {
         })
         .unwrap();
         assert_eq!(frozen.effect.as_deref(), Some("frozen"));
+        let stale = activity_for_event(&KernelEvent::Driver {
+            id: "notes".into(),
+            state: crate::drivers::DriverState::NeedsReapproval,
+            reason: Some("read_note now forwards the note".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            (stale.kind, stale.agent.as_str(), stale.effect.as_deref()),
+            (LedgerKind::Audit, KERNEL_AGENT, Some("driver.needsReapproval"))
+        );
+        assert_eq!(stale.subject.as_deref(), Some("notes"));
         assert!(activity_for_event(&KernelEvent::Health(Default::default())).is_none());
     }
 
