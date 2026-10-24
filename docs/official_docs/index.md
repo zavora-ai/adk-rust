@@ -88,6 +88,12 @@ The always-on form of the harness (`adk-kernel`, spec 3.2): durable processes th
 - [Self-observation: `/proc`](kernel/proc.md) - The content-free activity ledger, daily baselines and observations offered as questions, `adk-rust proc`, exporting for `cargo adk eval --ledger`
 - [Kernel Store Backends](kernel/backends.md) - The process, agenda, driver and ledger stores on in-memory, SQLite, PostgreSQL and Redis, and on MongoDB, Firestore and Neo4j (Alpha)
 
+## Agent Surfaces
+
+The interface to an always-on agent (`adk-surface`, spec 3.3): every surface is a window onto the same kernel, and a decision is made once, from anywhere.
+
+- [The Engine](surfaces/index.md) - Feed, projection and commands every surface shares: decision cards in plain words, what each surface may decide, one write path with the version seen, the `web` feature's HTTP API and its generated types
+
 ## Realtime & Multimodal
 
 A dedicated, newcomer-friendly guide to building voice + multimodal agents — architecture, concepts, and runnable examples.
