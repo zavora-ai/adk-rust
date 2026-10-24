@@ -29,14 +29,19 @@
 //!
 //! A call held without a decision is answered with a [`confirmation_pending_response`]
 //! and stays held across runs. So is a call the handler does not decide in time when the
-//! run has an [`ApprovalStore`] or an [`ApprovalService`](crate::ApprovalService): it waits
-//! for a decision instead of being denied (spec 3.3 §7.3), unless
+//! run has an [`ApprovalStore`] to read a later decision from: it waits for a decision
+//! instead of being denied (spec 3.3 §7.3), unless
 //! [`RunConfig::deny_on_confirmation_timeout`] is set. At the start of a later run the
 //! agent finds its held calls with [`held_tool_calls`] and, for each one with a decision
 //! ([`confirmation_decision_available`]), dispatches the original call again through
 //! the same path, so the decision authorizes or refuses it without the model issuing
-//! it a second time. The call's real response supersedes the pending one
-//! ([`supersede_pending_responses`]).
+//! it a second time. A call waiting in the store resumes only on a decision recorded for
+//! it; the handler is not asked again, so the run goes on to the model. The call's real
+//! response supersedes the pending one ([`supersede_pending_responses`]).
+//!
+//! A decision from any source closes what the call left waiting: its pending entry in the
+//! store and its open request in the [`ApprovalService`](crate::ApprovalService), so neither
+//! can authorize a later call with the same fingerprint.
 //!
 //! A held call survives what happens to the session while it waits: compaction never
 //! covers it ([`held_call_compaction_limit`]), a workflow agent that it stopped resumes at
@@ -69,7 +74,7 @@ use crate::{
 
 /// How long a [`ToolConfirmationHandler`](crate::ToolConfirmationHandler) may take to
 /// decide before the call waits in the run's approval store, or is denied when the run has
-/// none.
+/// none (spec 3.3 §7.3).
 pub const DEFAULT_TOOL_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(300);
 
 // ---------------------------------------------------------------------------
@@ -1690,6 +1695,7 @@ pub async fn authorize_tool_call(
         record_held_call(gate, &request, &reason).await?;
         return Ok(ToolAuthorization::Pending { request, reason });
     };
+    close_waiting_call(gate, &request, source).await?;
     match approval.decision {
         ToolConfirmationDecision::Approve => {
             let edited = approval.edited_args.filter(|edited| *edited != args);
@@ -1764,6 +1770,58 @@ async fn record_held_call(
     Ok(())
 }
 
+/// Closes what a decided call left waiting: its open requests in the run's
+/// [`ApprovalService`](crate::ApprovalService), which are cancelled, and its pending entry
+/// in the run's [`ApprovalStore`], so neither can authorize a later call with the same
+/// fingerprint (spec 3.3 §7.3, §11 S-I1). A decision taken from the store already cleared
+/// the entry.
+async fn close_waiting_call(
+    gate: &ToolGate<'_>,
+    request: &ToolConfirmationRequest,
+    source: &str,
+) -> Result<()> {
+    let config = gate.run_config;
+    let fingerprint = request.fingerprint();
+    let note = format!("the call was decided another way ({source})");
+    let mut wrote = false;
+    if let Some(service) = &config.approval_service {
+        let mut query = crate::InboxQuery::default().with_session(&gate.scope);
+        loop {
+            let page = service.inbox(query.clone()).await?;
+            for open in page.items.iter().filter(|open| open.fingerprint == fingerprint) {
+                match service.cancel(&open.id, Some(note.clone())).await {
+                    Ok(_) => wrote = true,
+                    // Resolved meanwhile: its decision is taken below.
+                    Err(error) if error.category == crate::ErrorCategory::Conflict => wrote = true,
+                    Err(error) => return Err(error),
+                }
+            }
+            match page.next_cursor {
+                Some(cursor) => query = query.with_cursor(Some(cursor)),
+                None => break,
+            }
+        }
+    }
+    if let Some(store) = &config.approval_store {
+        if source != "approval_store"
+            && store
+                .pending(&gate.scope)
+                .await?
+                .iter()
+                .any(|entry| entry.fingerprint == fingerprint)
+        {
+            store
+                .decide(&gate.scope, &fingerprint, ToolApproval::deny().with_message(note))
+                .await?;
+            wrote = true;
+        }
+        if wrote {
+            store.take_approval(&gate.scope, &fingerprint).await?;
+        }
+    }
+    Ok(())
+}
+
 /// Decides a confirmation that a tool asks for while it executes, through the decision
 /// sources of the governed path.
 ///
@@ -1834,6 +1892,7 @@ pub async fn confirm_tool_call(
         record_held_call(gate, request, reason).await?;
         return Ok(None);
     };
+    close_waiting_call(gate, request, source).await?;
     tracing::info!(
         tool.name = %request.tool_name,
         agent.id = %gate.acting.agent.id,
@@ -2115,11 +2174,15 @@ async fn resolve_confirmation(
         }
         None => decide.await,
     };
-    // Nothing is decided by silence where a decision can still arrive (spec 3.3 §7.3).
+    // Nothing is decided by silence where a later decision can be read back (spec 3.3 §7.3).
     if decided.is_err()
         && !config.deny_on_confirmation_timeout
-        && (config.approval_store.is_some() || config.approval_service.is_some())
+        && let Some(store) = &config.approval_store
     {
+        // A decision may have reached the store while the handler was asked.
+        if let Some(approval) = store.take_approval(&gate.scope, &fingerprint).await? {
+            return Ok(Some((approval, "approval_store")));
+        }
         tracing::info!(
             tool.name = %request.tool_name,
             timeout = ?config.tool_confirmation_timeout,
@@ -2575,7 +2638,10 @@ pub fn supersede_pending_responses(
 /// fingerprint approval, a decision in the run's [`ApprovalStore`] (asked through
 /// [`ApprovalStore::has_decision`], which consumes nothing), or a configured
 /// [`ToolConfirmationHandler`](crate::ToolConfirmationHandler), which decides when
-/// asked. An agent resumes a [`HeldToolCall`] only when this is `true`.
+/// asked. A call waiting in the store's pending entries is not put to the handler again:
+/// it waits for a decision recorded for it, so a run that brings a new message goes on to
+/// the model instead of asking about the waiting call (spec 3.3 §7.3, §7.4). An agent
+/// resumes a [`HeldToolCall`] only when this is `true`.
 ///
 /// # Errors
 ///
@@ -2624,12 +2690,17 @@ pub async fn confirmation_decision_available(
     {
         return Ok(true);
     }
-    if let Some(store) = &config.approval_store
-        && store.has_decision(&gate.scope, &fingerprint).await?
-    {
+    let Some(store) = &config.approval_store else {
+        return Ok(config.tool_confirmation_handler.is_some());
+    };
+    if store.has_decision(&gate.scope, &fingerprint).await? {
         return Ok(true);
     }
-    Ok(config.tool_confirmation_handler.is_some())
+    if config.tool_confirmation_handler.is_none() {
+        return Ok(false);
+    }
+    // A call waiting in the store resumes on its decision, never by asking the handler again.
+    Ok(!store.pending(&gate.scope).await?.iter().any(|entry| entry.fingerprint == fingerprint))
 }
 
 // ---------------------------------------------------------------------------
@@ -3251,13 +3322,46 @@ mod tests {
         );
     }
 
-    /// A timeout with an approval service submits the call to its inbox.
-    #[tokio::test]
-    async fn a_timeout_with_an_approval_service_waits_in_its_inbox() {
+    /// The service the timeout waits in for the tests below: an in-memory store under a
+    /// service whose requests the `ops` group decides.
+    fn ops_inbox() -> (Arc<InMemoryApprovalStore>, Arc<crate::StoreApprovalService>) {
+        let store = Arc::new(InMemoryApprovalStore::new());
         let service = Arc::new(
-            crate::StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+            crate::StoreApprovalService::new(store.clone())
                 .with_router(crate::ApprovalPolicy::new([crate::ApproverSelector::group("ops")])),
         );
+        (store, service)
+    }
+
+    fn ops_approval() -> crate::ApprovalDecision {
+        crate::ApprovalDecision::approve(SubjectRef::human("ana")).with_groups(["ops"])
+    }
+
+    /// A timeout with an approval service, whose store the builder installs, submits the
+    /// call to its inbox and waits there.
+    #[tokio::test]
+    async fn a_timeout_with_an_approval_service_waits_in_its_inbox() {
+        let (_, service) = ops_inbox();
+        let config = RunConfig::builder()
+            .tool_confirmation_handler(Arc::new(NeverDecides))
+            .tool_confirmation_timeout(Duration::from_millis(20))
+            .approval_service(service.clone())
+            .build();
+        let call = GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
+        assert!(matches!(
+            authorize_tool_call(&gate(&config), call).await.unwrap(),
+            ToolAuthorization::Pending { .. }
+        ));
+        let inbox = service.inbox(crate::InboxQuery::for_group("ops")).await.unwrap();
+        assert_eq!(inbox.items.len(), 1, "the call waits in the service's inbox");
+        assert_eq!(inbox.items[0].tool_name, "tool");
+    }
+
+    /// Review finding 5: with an approval service and no store to read its decisions from,
+    /// a timeout denies, as no decision could ever reach the call.
+    #[tokio::test]
+    async fn a_timeout_with_only_an_approval_service_is_denied() {
+        let (_, service) = ops_inbox();
         let config = RunConfig {
             approval_store: None,
             ..RunConfig::builder()
@@ -3267,13 +3371,159 @@ mod tests {
                 .build()
         };
         let call = GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
-        assert!(matches!(
+        assert_eq!(
             authorize_tool_call(&gate(&config), call).await.unwrap(),
+            ToolAuthorization::Refuse {
+                reason: "Tool 'tool' execution denied by confirmation policy".into(),
+                confirmation: Some(ToolConfirmationDecision::Deny),
+            }
+        );
+        let inbox = service.inbox(crate::InboxQuery::for_group("ops")).await.unwrap();
+        assert!(inbox.items.is_empty(), "nothing waits where no decision can be read back");
+    }
+
+    /// Review finding 1: a call waiting in the store is not put to the handler again; it
+    /// resumes on a decision recorded for it. A held call with no pending entry still goes
+    /// to the handler.
+    #[tokio::test]
+    async fn a_call_waiting_in_the_store_resumes_only_on_its_decision() {
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let config = RunConfig::builder()
+            .tool_confirmation_handler(Arc::new(NeverDecides))
+            .approval_store(store.clone())
+            .build();
+        let gate = gate(&config);
+        let waiting = ToolConfirmationRequest::new("pay", json!({ "cents": 500 }))
+            .with_function_call_id("c1")
+            .with_acting_context(gate.acting_context().clone());
+        let stranded = ToolConfirmationRequest::new("pay", json!({ "cents": 700 }))
+            .with_function_call_id("c2")
+            .with_acting_context(gate.acting_context().clone());
+        store.record_pending(gate.scope(), &waiting).await.unwrap();
+
+        assert!(
+            !confirmation_decision_available(&gate, &waiting).await.unwrap(),
+            "the handler is not asked about a call waiting in the store"
+        );
+        assert!(
+            confirmation_decision_available(&gate, &stranded).await.unwrap(),
+            "a held call with no pending entry is still asked about"
+        );
+        store.decide(gate.scope(), &waiting.fingerprint(), ToolApproval::approve()).await.unwrap();
+        assert!(confirmation_decision_available(&gate, &waiting).await.unwrap());
+    }
+
+    /// Answers every call with `Approve` at once.
+    #[derive(Debug)]
+    struct Approves;
+
+    #[async_trait]
+    impl ToolConfirmationHandler for Approves {
+        async fn decide(
+            &self,
+            _request: &ToolConfirmationRequest,
+        ) -> Result<ToolConfirmationDecision> {
+            Ok(ToolConfirmationDecision::Approve)
+        }
+    }
+
+    /// Review finding 2: a call decided by the handler, by a call-ID decision or by a
+    /// fingerprint approval leaves no pending entry and no open inbox request that could
+    /// authorize a second identical call.
+    #[tokio::test]
+    async fn a_decision_from_any_source_closes_the_waiting_entries() {
+        let call =
+            || GovernedCall::new("tool", "c1", json!({ "n": 1 })).requiring_confirmation(true);
+        let fingerprint = key("tool", &json!({ "n": 1 }));
+        let scope = ApprovalScope::new("app", "user", "session");
+        let mut sources =
+            Vec::<Box<dyn Fn(crate::RunConfigBuilder) -> crate::RunConfigBuilder>>::new();
+        sources.push(Box::new(|builder| builder.tool_confirmation_handler(Arc::new(Approves))));
+        sources.push(Box::new(|builder| {
+            builder.tool_confirmation_decisions(HashMap::from([(
+                "c1".to_string(),
+                ToolConfirmationDecision::Approve,
+            )]))
+        }));
+        let approval = fingerprint.clone();
+        sources.push(Box::new(move |builder| {
+            builder.tool_approval(approval.clone(), ToolApproval::approve())
+        }));
+        for (index, source) in sources.iter().enumerate() {
+            let (store, service) = ops_inbox();
+            let held = RunConfig::builder().approval_service(service.clone()).build();
+            assert!(matches!(
+                authorize_tool_call(&gate(&held), call()).await.unwrap(),
+                ToolAuthorization::Pending { .. }
+            ));
+            let open = service.inbox(crate::InboxQuery::for_group("ops")).await.unwrap().items;
+            assert_eq!(open.len(), 1, "source {index}: the call waits as one request");
+
+            let decided = source(RunConfig::builder().approval_service(service.clone())).build();
+            assert!(matches!(
+                authorize_tool_call(&gate(&decided), call()).await.unwrap(),
+                ToolAuthorization::Execute { .. }
+            ));
+            assert!(store.pending(&scope).await.unwrap().is_empty(), "source {index}: no entry");
+            assert!(!store.has_decision(&scope, &fingerprint).await.unwrap(), "source {index}");
+            let request = service.get(&open[0].id).await.unwrap().unwrap();
+            assert_eq!(request.state, crate::ApprovalState::Cancelled, "source {index}");
+            assert!(
+                service.decide(&request.id, request.version, ops_approval()).await.is_err(),
+                "source {index}: the stale request cannot be approved"
+            );
+            assert!(
+                matches!(
+                    authorize_tool_call(&gate(&held), call()).await.unwrap(),
+                    ToolAuthorization::Pending { .. }
+                ),
+                "source {index}: the next identical call needs its own decision"
+            );
+        }
+    }
+
+    /// Records an inbox decision for the call while it is being asked, then never answers.
+    #[derive(Debug)]
+    struct DecidedInTheInbox(Arc<crate::StoreApprovalService>);
+
+    #[async_trait]
+    impl ToolConfirmationHandler for DecidedInTheInbox {
+        async fn decide(
+            &self,
+            _request: &ToolConfirmationRequest,
+        ) -> Result<ToolConfirmationDecision> {
+            let open = self.0.inbox(crate::InboxQuery::for_group("ops")).await?.items;
+            self.0.decide(&open[0].id, open[0].version, ops_approval()).await?;
+            std::future::pending().await
+        }
+    }
+
+    /// Review finding 3: a decision the inbox records while the handler is asked is used
+    /// when the handler times out, instead of a second pending entry and request.
+    #[tokio::test]
+    async fn a_decision_made_in_the_inbox_during_the_wait_is_used() {
+        let (store, service) = ops_inbox();
+        let call = || GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
+        let held = RunConfig::builder().approval_service(service.clone()).build();
+        assert!(matches!(
+            authorize_tool_call(&gate(&held), call()).await.unwrap(),
             ToolAuthorization::Pending { .. }
         ));
-        let inbox = service.inbox(crate::InboxQuery::for_group("ops")).await.unwrap();
-        assert_eq!(inbox.items.len(), 1, "the call waits in the service's inbox");
-        assert_eq!(inbox.items[0].tool_name, "tool");
+        let asked = RunConfig::builder()
+            .tool_confirmation_handler(Arc::new(DecidedInTheInbox(service.clone())))
+            .tool_confirmation_timeout(Duration::from_millis(20))
+            .approval_service(service.clone())
+            .build();
+        assert!(matches!(
+            authorize_tool_call(&gate(&asked), call()).await.unwrap(),
+            ToolAuthorization::Execute { .. }
+        ));
+        let scope = ApprovalScope::new("app", "user", "session");
+        assert!(store.pending(&scope).await.unwrap().is_empty(), "nothing is held again");
+        let all = crate::InboxQuery::for_group("ops").with_states(crate::ApprovalState::ALL);
+        let requests = service.inbox(all).await.unwrap().items;
+        assert_eq!(requests.len(), 1, "no second request");
+        assert_eq!(requests[0].state, crate::ApprovalState::Approved);
     }
 
     /// `deny_on_confirmation_timeout` restores the denial with a store, and records nothing.

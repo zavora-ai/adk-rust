@@ -671,7 +671,9 @@ impl Harness {
     }
 
     /// Records a person's decision for the pending call with `fingerprint`; the next
-    /// [`resume`](Self::resume) runs or refuses it (spec 3.1 §7.3).
+    /// [`resume`](Self::resume) runs or refuses it (spec 3.1 §7.3). The call's open request
+    /// in the approval service, if any, is cancelled, so it cannot decide the call again
+    /// (spec 3.3 §7.3).
     ///
     /// A remembered rule must pin the call's exact declaration, and no rule is remembered
     /// for a non-waivable call.
@@ -741,6 +743,12 @@ impl Harness {
                 audit.record("harness.rule.created", fields).await?;
             }
             runtime.standing_rules().grant(rule).await?;
+        }
+        // An inbox request left open for the call would decide it a second time
+        // (spec 3.3 §7.3).
+        if runtime.approval_service().is_some() {
+            let fingerprints = [fingerprint.to_string()];
+            self.clear_inbox(user, session, &fingerprints, "decided in the harness").await?;
         }
         runtime.approval_store().decide(&scope, fingerprint, approval).await?;
         self.wake_parked(user, session, fingerprint).await

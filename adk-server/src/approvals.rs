@@ -10,7 +10,7 @@
 //!
 //! | Route | Effect |
 //! |-------|--------|
-//! | `GET /api/approvals` | The caller's inbox. Query: `state` (repeatable via comma list), `group`, `app`, `session`, `cursor`, `limit` |
+//! | `GET /api/approvals` | The caller's inbox. Query: `state` (repeatable via comma list), `group`, `app`, `user`, `session` (with `app`; one session of `user`, the caller by default), `cursor`, `limit` |
 //! | `GET /api/approvals/{id}` | One request the caller may decide, cancel, or asked for |
 //! | `POST /api/approvals/{id}/decide` | Body `{"expectedVersion": 3, "action": "approve" \| "edit" \| "reject" \| "respond", "editedArgs": {...}, "reason": "...", "via": {"kind": "human", "id": "ana"}}` |
 //! | `POST /api/approvals/{id}/cancel` | Body `{"reason": "..."}`; the requester or an approver |
@@ -224,7 +224,12 @@ pub struct InboxParams {
     /// Only one application.
     #[serde(default)]
     pub app: Option<String>,
-    /// Only one session, by ID; with `app`, one application's session (spec 3.3 §10 C1).
+    /// Only requests of this user.
+    #[serde(default)]
+    pub user: Option<String>,
+    /// Only one session: the session with this ID of `user` (the caller when `user` is
+    /// unset) in `app`, which it needs (spec 3.3 §10 C1). It narrows the caller's inbox and
+    /// never widens it.
     #[serde(default)]
     pub session: Option<String>,
     /// Page token.
@@ -240,10 +245,19 @@ async fn inbox(
     Extension(caller): Extension<Option<RequestContext>>,
     Query(params): Query<InboxParams>,
 ) -> Response {
+    let caller_user = caller.as_ref().map(|context| context.user_id.clone());
     let (subject, groups) = match endpoints.caller(caller) {
         Ok(caller) => caller,
         Err(response) => return response,
     };
+    if params.session.is_some() && params.app.is_none() {
+        return problem(&AdkError::new(
+            ErrorComponent::Server,
+            ErrorCategory::InvalidInput,
+            "approval.session_needs_app",
+            "a session is named by its application, user and ID: pass `app` with `session`",
+        ));
+    }
     let mut states = Vec::new();
     for name in params.state.iter().flat_map(|states| states.split(',')) {
         match serde_json::from_value::<ApprovalState>(Value::String(name.trim().to_string())) {
@@ -276,6 +290,13 @@ async fn inbox(
     .with_limit(params.limit.unwrap_or(50).clamp(1, 200));
     if let Some(app) = params.app {
         query = query.with_app_name(app);
+    }
+    let user = match (&params.session, params.user) {
+        (Some(_), None) => caller_user,
+        (_, user) => user,
+    };
+    if let Some(user) = user {
+        query = query.with_user_id(user);
     }
     if let Some(session) = params.session {
         query = query.with_session_id(session);

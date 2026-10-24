@@ -79,10 +79,10 @@ fn fixture() -> Fixture {
 }
 
 async fn submit(fx: &Fixture, quorum: u32) -> ApprovalRequest {
-    submit_in(fx, "s1", quorum).await
+    submit_in(fx, "carol", "s1", quorum).await
 }
 
-async fn submit_in(fx: &Fixture, session: &str, quorum: u32) -> ApprovalRequest {
+async fn submit_in(fx: &Fixture, user: &str, session: &str, quorum: u32) -> ApprovalRequest {
     let call = ToolConfirmationRequest {
         tool_name: "transfer".into(),
         function_call_id: Some("call-1".into()),
@@ -90,7 +90,7 @@ async fn submit_in(fx: &Fixture, session: &str, quorum: u32) -> ApprovalRequest 
         acting: None,
         origin: None,
     };
-    let scope = ApprovalScope::new("bank", "carol", session);
+    let scope = ApprovalScope::new("bank", user, session);
     fx.store.record_pending(&scope, &call).await.unwrap();
     let request = ApprovalRequest::new(
         uuid::Uuid::new_v4().to_string(),
@@ -99,7 +99,7 @@ async fn submit_in(fx: &Fixture, session: &str, quorum: u32) -> ApprovalRequest 
         ApprovalPolicy::new([ApproverSelector::group("finance")]).with_quorum(quorum),
     )
     .with_redacted_args(json!({ "amount": 900, "iban": "DE00 ****" }))
-    .with_requester(SubjectRef::human("carol"));
+    .with_requester(SubjectRef::human(user));
     fx.service.submit(request).await.unwrap()
 }
 
@@ -175,36 +175,43 @@ async fn a_quorum_of_two_is_reached_through_the_endpoints() {
     );
 }
 
-/// `?session=` lists the decisions one session waits on (spec 3.3 §10 C1).
+/// `?session=` lists the decisions one session waits on: the session of `user` (the
+/// caller by default) in `app`, which it needs (spec 3.3 §10 C1).
 #[tokio::test]
 async fn the_inbox_lists_one_session() {
     let fx = fixture();
-    let first = submit_in(&fx, "s1", 1).await;
-    let second = submit_in(&fx, "s2", 1).await;
+    let carol_s1 = submit_in(&fx, "carol", "s1", 1).await;
+    let carol_s2 = submit_in(&fx, "carol", "s2", 1).await;
+    let dave_s1 = submit_in(&fx, "dave", "s1", 1).await;
     let ids = |inbox: &Value| -> Vec<String> {
         inbox["items"]
             .as_array()
-            .unwrap()
+            .unwrap_or_else(|| panic!("no items in {inbox}"))
             .iter()
             .map(|item| item["id"].as_str().unwrap().to_string())
             .collect()
     };
+    let get =
+        |uri: &'static str, user: &'static str| call(&fx, "GET", uri, Some(user), Value::Null);
 
-    let (status, every) = call(&fx, "GET", "/api/approvals", Some("ana"), Value::Null).await;
+    let (status, every) = get("/api/approvals", "ana").await;
     assert_eq!(status, StatusCode::OK, "{every}");
-    assert_eq!(ids(&every).len(), 2, "both sessions without a filter");
-    let (status, one) =
-        call(&fx, "GET", "/api/approvals?session=s2", Some("ana"), Value::Null).await;
+    assert_eq!(ids(&every).len(), 3, "every session without a filter");
+    let (status, one) = get("/api/approvals?app=bank&user=carol&session=s1", "ana").await;
     assert_eq!(status, StatusCode::OK, "{one}");
-    assert_eq!(ids(&one), [second.id]);
-    let (_, scoped) =
-        call(&fx, "GET", "/api/approvals?app=bank&session=s1", Some("ana"), Value::Null).await;
-    assert_eq!(ids(&scoped), [first.id]);
-    let (_, elsewhere) =
-        call(&fx, "GET", "/api/approvals?app=shop&session=s1", Some("ana"), Value::Null).await;
+    assert_eq!(ids(&one), [carol_s1.id], "carol's s1, not dave's s1");
+    let (_, two) = get("/api/approvals?app=bank&user=carol&session=s2", "ana").await;
+    assert_eq!(ids(&two), [carol_s2.id]);
+    let (_, dave) = get("/api/approvals?app=bank&user=dave&session=s1", "ana").await;
+    assert_eq!(ids(&dave), [dave_s1.id]);
+    let (_, own) = get("/api/approvals?app=bank&session=s1", "ana").await;
+    assert_eq!(own["items"], json!([]), "without `user`, the caller's own session");
+    let (status, problem) = get("/api/approvals?session=s1", "ana").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert_eq!(problem["error"]["code"], "approval.session_needs_app");
+    let (_, elsewhere) = get("/api/approvals?app=shop&user=carol&session=s1", "ana").await;
     assert_eq!(elsewhere["items"], json!([]), "the session ID in another application");
-    let (_, outsider) =
-        call(&fx, "GET", "/api/approvals?session=s1", Some("eve"), Value::Null).await;
+    let (_, outsider) = get("/api/approvals?app=bank&user=carol&session=s1", "eve").await;
     assert_eq!(outsider["items"], json!([]), "the filter never widens the caller's inbox");
 }
 

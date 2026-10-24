@@ -14,7 +14,7 @@
 //! | [`requests_are_created_once`] | `create_request` keeps the first request under an ID and returns it unchanged |
 //! | [`concurrent_replace_has_one_winner`] | Of concurrent `replace_request` calls at one version, across two handles, exactly one succeeds |
 //! | [`requests_list_in_order_with_filters`] | `list_requests` filters by state, openness, and application, orders by creation time then ID, and pages by cursor |
-//! | [`requests_list_by_session`] | `list_requests` filtered by session returns that session's requests alone, in order and by page, however many requests of other sessions list first (spec 3.3 §10 C1) |
+//! | [`requests_list_by_session`] | `list_requests` filtered by session (application, user and session ID) returns that session's requests alone, in order and by page, however many requests of other sessions list first (spec 3.3 §10 C1) |
 //! | [`delegations_round_trip`] | Delegations are stored, replaced by ID, listed per delegate by ID, and deleted once |
 //! | [`approval_requests_survive_a_restart`] | Requests and delegations read back unchanged after a restart |
 //!
@@ -529,29 +529,44 @@ pub async fn requests_list_in_order_with_filters<H: ApprovalStoreHarness + ?Size
 
 /// `list_requests` filtered by session returns that session's requests alone, ordered by
 /// creation time and then ID and paged by cursor, however many requests of other sessions
-/// list before them; with an application it is one application's session, without one the
-/// session ID in every application (spec 3.3 §10 C1).
+/// list before them. A session is an application's, user's and session ID together
+/// (`with_session`); a session ID alone matches it for every user and application
+/// (spec 3.3 §10 C1).
 pub async fn requests_list_by_session<H: ApprovalStoreHarness + ?Sized>(harness: &H) {
     let store = harness.open().await;
-    let app = unique_unicode("app");
-    let session = unique_unicode("session");
+    let scope = ApprovalScope::new(
+        unique_unicode("app"),
+        unique_unicode("user"),
+        unique_unicode("session"),
+    );
     let prefix = unique("request");
     let id = |n: u32| format!("{prefix}:{n:02}");
-    let in_session = |app: &str, n: u32, offset_secs: i64| {
-        let mut request = approval_request(app, &id(n), offset_secs);
-        request.scope.session_id = session.clone();
+    let in_scope = |scope: &ApprovalScope, n: u32, offset_secs: i64| {
+        let mut request = approval_request(&scope.app_name, &id(n), offset_secs);
+        request.scope = scope.clone();
         request
     };
     // More requests of other sessions than a page of two list before this session's first.
     let mut others: Vec<ApprovalRequest> =
-        (0..5).map(|n| approval_request(&app, &id(n), i64::from(n))).collect();
-    let first = in_session(&app, 10, 10);
-    others.push(approval_request(&app, &id(11), 11));
+        (0..5).map(|n| approval_request(&scope.app_name, &id(n), i64::from(n))).collect();
+    let first = in_scope(&scope, 10, 10);
+    others.push(approval_request(&scope.app_name, &id(11), 11));
+    // Another user's session, and another application's, with the same session ID.
+    let other_user = ApprovalScope::new(
+        scope.app_name.clone(),
+        unique_unicode("user"),
+        scope.session_id.clone(),
+    );
+    let other_app =
+        ApprovalScope::new(unique_unicode("app"), scope.user_id.clone(), scope.session_id.clone());
+    let same_id_other_user = in_scope(&other_user, 12, 12);
+    let elsewhere = in_scope(&other_app, 15, 15);
     // Two of the session's requests share a creation time, so the ID breaks the tie.
-    let mut tied_late = in_session(&app, 21, 20);
-    let tied_early = in_session(&app, 20, 20);
-    let elsewhere = in_session(&unique_unicode("app"), 15, 15);
-    for request in others.iter().chain([&first, &tied_late, &tied_early, &elsewhere]) {
+    let mut tied_late = in_scope(&scope, 21, 20);
+    let tied_early = in_scope(&scope, 20, 20);
+    for request in
+        others.iter().chain([&first, &tied_late, &tied_early, &elsewhere, &same_id_other_user])
+    {
         store.create_request(request).await.expect("create");
     }
     let ids = |requests: Vec<ApprovalRequest>| -> Vec<String> {
@@ -561,8 +576,7 @@ pub async fn requests_list_by_session<H: ApprovalStoreHarness + ?Sized>(harness:
         let store = store.clone();
         async move { store.list_requests(&query).await.expect("list_requests reads the store") }
     };
-    let one_session =
-        ApprovalRequestQuery::default().with_app_name(app.clone()).with_session_id(session.clone());
+    let one_session = ApprovalRequestQuery::default().with_session(&scope);
 
     assert_eq!(
         ids(list(one_session.clone()).await),
@@ -583,9 +597,29 @@ pub async fn requests_list_by_session<H: ApprovalStoreHarness + ?Sized>(harness:
         "the next page starts after the cursor, inside a tie on creation time"
     );
     assert_eq!(
-        ids(list(ApprovalRequestQuery::default().with_session_id(session.clone())).await),
+        ids(list(
+            ApprovalRequestQuery::default()
+                .with_app_name(scope.app_name.clone())
+                .with_session_id(scope.session_id.clone())
+        )
+        .await),
+        [id(10), id(12), id(20), id(21)],
+        "without a user, the session ID of every user in the application"
+    );
+    assert_eq!(
+        ids(list(
+            ApprovalRequestQuery::default()
+                .with_user_id(scope.user_id.clone())
+                .with_session_id(scope.session_id.clone())
+        )
+        .await),
         [id(10), id(15), id(20), id(21)],
-        "without an application, the session ID in every application"
+        "without an application, the user's session ID in every application"
+    );
+    assert_eq!(
+        ids(list(ApprovalRequestQuery::default().with_session(&other_user)).await),
+        [id(12)],
+        "another user's session with the same ID"
     );
 
     let mut decided = tied_late.clone();
@@ -603,13 +637,10 @@ pub async fn requests_list_by_session<H: ApprovalStoreHarness + ?Sized>(harness:
         [tied_late],
         "a replaced request stays in its session"
     );
+    let mut empty = scope.clone();
+    empty.session_id = unique_unicode("session");
     assert_eq!(
-        list(
-            ApprovalRequestQuery::default()
-                .with_app_name(app)
-                .with_session_id(unique_unicode("session"))
-        )
-        .await,
+        list(ApprovalRequestQuery::default().with_session(&empty)).await,
         [],
         "a session with no requests"
     );

@@ -242,8 +242,8 @@ async fn calls_dropped_mid_query_leave_the_pool_usable() {
     assert_eq!(finished.state, RunState::Completed);
 }
 
-/// A request stored before requests carried a session property lists by its session once
-/// `migrate` has run (spec 3.3 §10 C1).
+/// A request stored before requests carried user and session properties lists by its
+/// session once `migrate` has run (spec 3.3 §10 C1).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a Neo4j server at NEO4J_URI"]
 async fn a_request_stored_without_a_session_lists_by_session_after_migrate() {
@@ -278,6 +278,6 @@ async fn a_request_stored_without_a_session_lists_by_session_after_migrate() {
 
     let store = Neo4jApprovalStore::from_graph(graph().await);
     store.migrate().await.expect("migrate");
-    let query = ApprovalRequestQuery::default().with_app_name(app).with_session_id("s-legacy");
+    let query = ApprovalRequestQuery::default().with_session(&request.scope);
     assert_eq!(store.list_requests(&query).await.expect("list"), [request]);
 }
