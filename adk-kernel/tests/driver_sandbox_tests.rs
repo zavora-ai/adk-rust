@@ -154,8 +154,7 @@ async fn a_script_driver_whose_interpreter_is_outside_the_system_directories_sta
     std::fs::write(&script, format!("#!{}\n", interpreter.display())).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     let isolation =
-        assert_confined(&work, work.manifest_with("notes", &script, &[], "sandbox = \"os\""))
-            .await;
+        assert_confined(&work, work.manifest_with("notes", &script, &[], "sandbox = \"os\"")).await;
     let opened = program_paths(&isolation);
     assert!(
         opened.contains(&canonical(toolchain.path())),
