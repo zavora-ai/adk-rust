@@ -92,7 +92,7 @@ migration.
 
 | Crate | Features | Backends | Leaves Alpha when |
 |-------|----------|----------|-------------------|
-| `adk-kernel` | `mongodb`, `firestore`, `neo4j` | `ProcessStore`, `AgendaStore`, `DriverStore` and `LedgerStore` on MongoDB, Firestore and Neo4j (`Mongo*`, `Firestore*`, `Neo4j*`) | Each store's conformance suite passes on the backend in the nightly `durable-stores` job (spec 3.2 §13 Q8) |
+| `adk-kernel` | `mongodb`, `firestore`, `neo4j` | `ProcessStore`, `AgendaStore`, `DriverStore`, `LedgerStore` and `PartitionStore` on MongoDB, Firestore and Neo4j (`Mongo*`, `Firestore*`, `Neo4j*`) | Each store's conformance suite passes on the backend in the nightly `durable-stores` job (spec 3.2 §13 Q8) |
 
 ### Excluded from Workspace
 
