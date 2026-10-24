@@ -1,7 +1,9 @@
 //! Property tests for listing approval requests by session in the SQL stores, which filter
-//! and page in the database (spec 3.3 §10 C1): paging `list_requests` by session returns
-//! exactly that session's requests, ordered by creation time and then ID, with no gap and no
-//! duplicate, whatever the page size and however the sessions' requests interleave.
+//! and page in the database (spec 3.3 §10 C1): paging `list_requests` by session —
+//! application, user and session ID — returns exactly that session's requests, ordered by
+//! creation time and then ID, with no gap and no duplicate, whatever the page size and
+//! however the sessions' requests interleave, other users' sessions with the same ID
+//! included.
 //!
 //! The SQLite property runs by default; the PostgreSQL one uses the server at
 //! `DATABASE_URL`:
@@ -26,16 +28,17 @@ fn base_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 24, 18, 0, 0).single().expect("a valid instant")
 }
 
-/// One request of `app` per `(session, offset)` entry, with IDs that order like the entries.
-fn requests(app: &str, entries: &[(u8, i64)]) -> Vec<ApprovalRequest> {
+/// One request of `app` per `(user, session, offset)` entry, with IDs that order like the
+/// entries.
+fn requests(app: &str, entries: &[(u8, u8, i64)]) -> Vec<ApprovalRequest> {
     entries
         .iter()
         .enumerate()
-        .map(|(index, (session, offset))| {
+        .map(|(index, (user, session, offset))| {
             let call = ToolConfirmationRequest::new("send_invoice", json!({ "n": index }));
             let mut request = ApprovalRequest::new(
                 format!("{app}/r{index:02}"),
-                ApprovalScope::new(app, "user", format!("s{session}")),
+                ApprovalScope::new(app, format!("u{user}"), format!("s{session}")),
                 &call,
                 ApprovalPolicy::new([ApproverSelector::group("owners")]),
             );
@@ -45,21 +48,21 @@ fn requests(app: &str, entries: &[(u8, i64)]) -> Vec<ApprovalRequest> {
         .collect()
 }
 
-/// Creates the requests, pages through `target`'s session, and compares.
+/// Creates the requests, pages through the `(user, session)` target's session, and compares.
 async fn check(
     store: &dyn ApprovalStore,
     app: &str,
-    entries: &[(u8, i64)],
+    entries: &[(u8, u8, i64)],
     page: usize,
-    target: u8,
+    (user, session): (u8, u8),
 ) -> Result<(), TestCaseError> {
     let created = requests(app, entries);
     for request in &created {
         store.create_request(request).await.expect("create");
     }
-    let session = format!("s{target}");
+    let scope = ApprovalScope::new(app, format!("u{user}"), format!("s{session}"));
     let mut want: Vec<&ApprovalRequest> =
-        created.iter().filter(|request| request.scope.session_id == session).collect();
+        created.iter().filter(|request| request.scope == scope).collect();
     want.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
     let want: Vec<String> = want.into_iter().map(|request| request.id.clone()).collect();
 
@@ -67,8 +70,7 @@ async fn check(
     let mut after = None;
     loop {
         let query = ApprovalRequestQuery::default()
-            .with_app_name(app)
-            .with_session_id(session.clone())
+            .with_session(&scope)
             .with_after(after.clone())
             .with_limit(page);
         let batch = store.list_requests(&query).await.expect("list_requests");
@@ -84,8 +86,8 @@ async fn check(
     Ok(())
 }
 
-fn entries() -> impl Strategy<Value = Vec<(u8, i64)>> {
-    prop::collection::vec((0u8..3, 0i64..8), 0..30)
+fn entries() -> impl Strategy<Value = Vec<(u8, u8, i64)>> {
+    prop::collection::vec((0u8..2, 0u8..3, 0i64..8), 0..30)
 }
 
 #[cfg(feature = "sqlite")]
@@ -96,7 +98,7 @@ proptest! {
     fn sqlite_pages_one_session_without_gaps_or_duplicates(
         entries in entries(),
         page in 1usize..6,
-        target in 0u8..3,
+        target in (0u8..2, 0u8..3),
     ) {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         runtime.block_on(async {
@@ -118,7 +120,7 @@ proptest! {
     fn postgres_pages_one_session_without_gaps_or_duplicates(
         entries in entries(),
         page in 1usize..6,
-        target in 0u8..3,
+        target in (0u8..2, 0u8..3),
     ) {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         runtime.block_on(async {

@@ -13,7 +13,8 @@
 //! | [`edit_substitutes_arguments`] | An edit resolves the request with the edited arguments on the recorded decision |
 //! | [`escalation_fires_once`] | An escalation step fires once however often `tick` runs, and only then admits its approvers |
 //! | [`inbox_lists_what_an_approver_may_decide`] | The inbox holds what the approver may decide, directly or by delegation, and pages by cursor |
-//! | [`inbox_lists_one_session`] | An inbox filtered by session holds that session's requests alone and pages by cursor (spec 3.3 §10 C1) |
+//! | [`inbox_lists_one_session`] | An inbox filtered by session (application, user and session ID) holds that session's requests alone and pages by cursor (spec 3.3 §10 C1) |
+//! | [`a_call_held_again_keeps_its_open_request`] | A call held again while its request is pending gets that request back, never a second one (spec 3.3 §7.3) |
 //! | [`cancel_and_reject_deny_the_call`] | Cancelling or rejecting records a denial carrying the reason |
 //! | [`requests_survive_a_restart`] | A partly approved request survives a restart and is resolved through a new handle |
 //!
@@ -574,8 +575,8 @@ pub async fn inbox_lists_what_an_approver_may_decide<H: ApprovalStoreHarness + ?
 }
 
 /// An inbox filtered by session holds the session's requests the approver may decide,
-/// oldest first, and pages by cursor; requests of the approver's other sessions stay out
-/// (spec 3.3 §10 C1).
+/// oldest first, and pages by cursor; requests of the approver's other sessions — another
+/// user's session with the same ID included — stay out (spec 3.3 §10 C1).
 pub async fn inbox_lists_one_session<H: ApprovalStoreHarness + ?Sized>(harness: &H) {
     let fx = Fixture::new(harness).await;
     let ana = SubjectRef::human(unique("ana"));
@@ -594,11 +595,14 @@ pub async fn inbox_lists_one_session<H: ApprovalStoreHarness + ?Sized>(harness: 
             ApprovalPolicy::new([ApproverSelector::group("conformance:ops")]),
         )
         .await;
+    fx.clock.advance(Duration::from_secs(1));
+    let (mut same_id, call) = fx.call(900);
+    same_id.session_id = first.scope.session_id.clone();
+    let other_user = fx.submit_in(same_id, call, finance()).await;
     let ids = |page: crate::InboxPage| page.items.into_iter().map(|r| r.id).collect::<Vec<_>>();
-    let session = &first.scope.session_id;
 
-    let inbox = InboxQuery::for_approver(ana.clone(), ["conformance:finance"])
-        .with_session_id(session.clone());
+    let inbox =
+        InboxQuery::for_approver(ana.clone(), ["conformance:finance"]).with_session(&first.scope);
     assert_eq!(
         ids(fx.service.inbox(inbox.clone()).await.expect("inbox")),
         [first.id.clone(), second.id.clone()],
@@ -611,7 +615,7 @@ pub async fn inbox_lists_one_session<H: ApprovalStoreHarness + ?Sized>(harness: 
     assert_eq!(
         ids(fx
             .service
-            .inbox(InboxQuery::for_group("conformance:ops").with_session_id(session.clone()))
+            .inbox(InboxQuery::for_group("conformance:ops").with_session(&first.scope))
             .await
             .expect("inbox")),
         std::slice::from_ref(&not_ana.id),
@@ -620,21 +624,77 @@ pub async fn inbox_lists_one_session<H: ApprovalStoreHarness + ?Sized>(harness: 
     assert_eq!(
         ids(fx
             .service
-            .inbox(InboxQuery::default().with_session_id(other.scope.session_id.clone()))
+            .inbox(
+                InboxQuery::for_approver(ana.clone(), ["conformance:finance"])
+                    .with_session_id(first.scope.session_id.clone())
+            )
+            .await
+            .expect("inbox")),
+        [first.id.clone(), second.id.clone(), other_user.id.clone()],
+        "a session ID alone matches it for every user"
+    );
+    assert_eq!(
+        ids(fx
+            .service
+            .inbox(InboxQuery::default().with_session(&other_user.scope))
+            .await
+            .expect("inbox")),
+        std::slice::from_ref(&other_user.id),
+        "another user's session with the same ID"
+    );
+    assert_eq!(
+        ids(fx
+            .service
+            .inbox(InboxQuery::default().with_session(&other.scope))
             .await
             .expect("inbox")),
         std::slice::from_ref(&other.id),
         "every pending request of another session"
     );
+    let mut empty = first.scope.clone();
+    empty.session_id = unique("session");
     assert_eq!(
-        fx.service
-            .inbox(InboxQuery::default().with_session_id(unique("session")))
-            .await
-            .expect("inbox")
-            .items,
+        fx.service.inbox(InboxQuery::default().with_session(&empty)).await.expect("inbox").items,
         [],
         "a session with no requests"
     );
+}
+
+/// A call held again while its request is pending keeps that request, even when its
+/// pending entry was recorded anew; `submit_call` creates no second request and sends no
+/// second notification (spec 3.3 §7.3).
+pub async fn a_call_held_again_keeps_its_open_request<H: ApprovalStoreHarness + ?Sized>(
+    harness: &H,
+) {
+    let fx = Fixture::new(harness).await;
+    let (scope, call) = fx.call(250);
+    let held = || crate::approval::ApprovalCall {
+        scope: scope.clone(),
+        request: call.clone(),
+        reason: "requires confirmation".into(),
+        agent_name: "conformance".into(),
+        invocation_id: "inv-1".into(),
+        run_id: None,
+        acting: None,
+    };
+    let service = StoreApprovalService::new(fx.store.clone())
+        .with_clock(Arc::new(fx.clock.clone()))
+        .with_notifier(fx.recorder.clone())
+        .with_router(finance());
+    fx.store.record_pending(&scope, &call).await.expect("record_pending");
+    let first = service.submit_call(held()).await.expect("submit_call").expect("routed");
+
+    // The entry is cleared and recorded again, as a decision taken and the call re-held do.
+    fx.store.decide(&scope, &call.fingerprint(), ToolApproval::deny()).await.expect("decide");
+    fx.store.take_approval(&scope, &call.fingerprint()).await.expect("take");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    fx.store.record_pending(&scope, &call).await.expect("record_pending");
+    let again = service.submit_call(held()).await.expect("submit_call").expect("routed");
+
+    assert_eq!(again.id, first.id, "the open request is kept");
+    let all = ApprovalRequestQuery::default().with_session(&scope);
+    assert_eq!(fx.store.list_requests(&all).await.expect("list").len(), 1, "one request");
+    assert_eq!(fx.recorder.kinds(), [ApprovalEventKind::Submitted], "notified once");
 }
 
 /// Cancelling or rejecting a request records a denial for the call that carries the

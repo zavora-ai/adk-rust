@@ -23,6 +23,10 @@ default = []
 # document the TypeScript types are generated from; and the page itself, built from
 # `web/` and embedded, mounted with `ServerBuilder::add_root_routes` (§10 S1).
 web = ["dep:axum", "dep:rust-embed", "dep:mime_guess"]
+# The terminal (spec 3.3 §5.2): full-screen by default, `inline` in the scrollback, and JSON
+# lines for CI, all on the engine. Light and dark from the §9 tokens, detected from the
+# terminal's background unless set.
+tui = ["dep:ratatui", "dep:crossterm", "dep:syntect", "dep:pulldown-cmark", "dep:terminal-colorsaurus", "dep:unicode-width", "tokio/signal", "tokio/io-std", "tokio/io-util"]
 
 [dependencies]
 adk-core.workspace = true
@@ -35,6 +39,7 @@ adk-harness.workspace = true
 async-trait.workspace = true
 axum = { version = "0.8", optional = true }
 chrono.workspace = true
+crossterm = { version = "0.29", optional = true, features = ["event-stream"] }
 futures.workspace = true
 # The approvals inbox in full over the kernel's Unix socket (`ControlSource`).
 http-body-util = "0.1"
@@ -43,6 +48,9 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 mime_guess = { version = "2.0.5", optional = true }
 # The approvals inbox in full over the kernel's HTTP control plane (`ControlSource`).
 reqwest.workspace = true
+# Agent messages as Markdown, code blocks highlighted (spec 3.3 §6.1 `tui`).
+pulldown-cmark = { version = "0.13", optional = true, default-features = false }
+ratatui = { version = "0.30", optional = true, default-features = false, features = ["crossterm"] }
 # The web home's built assets, embedded in the binary (spec 3.3 §6.1 `web`).
 rust-embed = { version = "8.9.0", optional = true }
 # JSON Schema for every projection and command type, so surfaces and third parties share
@@ -50,9 +58,13 @@ rust-embed = { version = "8.9.0", optional = true }
 schemars = { version = "1.0", features = ["chrono04"] }
 serde.workspace = true
 serde_json.workspace = true
+syntect = { version = "5.3", optional = true, default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing"] }
+# The terminal's background, for the light or dark theme (`--theme auto`).
+terminal-colorsaurus = { version = "1.0", optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "net"] }
 tracing.workspace = true
+unicode-width = { version = "0.2", optional = true }
 uuid.workspace = true
 
 [dev-dependencies]
@@ -70,6 +82,8 @@ tempfile = "3"
 # `test-util`: the inbox's timeout tests run on paused time.
 tokio = { workspace = true, features = ["full", "test-util"] }
 tower = { version = "0.4", features = ["util"] }
+# Parses what the terminal surface writes, as a terminal would (spec 3.3 WP-E).
+vt100 = "0.16"
 
 # The web home over a scripted kernel, which the end-to-end test in `web/e2e` opens.
 [[example]]

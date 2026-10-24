@@ -492,3 +492,30 @@ async fn the_local_source_reads_one_sessions_requests() {
     assert_eq!(ids(source.requests(&web(), Some("s1"), false).await.unwrap()), ["apr-1"]);
     assert_eq!(source.requests(&web(), None, true).await.unwrap().len(), 2);
 }
+
+/// A session is an application's, user's and session ID (spec 3.3 §10 C1): another user's
+/// session with the same ID is not the caller's, even for an approver who may answer it.
+#[tokio::test]
+async fn the_local_source_reads_the_callers_session_only() {
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let service: Arc<dyn ApprovalService> =
+        Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new())));
+    for (id, user) in [("apr-ana", "ana"), ("apr-bo", "bo")] {
+        let request = ApprovalRequest::new(
+            id,
+            ApprovalScope::new(APP, user, "s1"),
+            &invoice(),
+            ApprovalPolicy::new([ApproverSelector::group("owner")]).allow_self_approval(),
+        );
+        service.submit(request).await.unwrap();
+    }
+    let source = LocalSource::builder(APP)
+        .sessions(sessions)
+        .approvals(Arc::clone(&service))
+        .build()
+        .unwrap();
+    use adk_surface::Source;
+    let requests = source.requests(&web(), Some("s1"), false).await.unwrap();
+    let ids: Vec<String> = requests.into_iter().map(|request| request.id).collect();
+    assert_eq!(ids, ["apr-ana"]);
+}

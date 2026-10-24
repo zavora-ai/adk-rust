@@ -334,12 +334,16 @@ fn home_command(command: Value) -> Value {
 
 /// The home's Stop all freezes what the server runs, not only the home's own turns (spec 3.3
 /// §11 S-I10): a run started over `POST /api/run` afterwards does not run, until Resume all.
+/// Auto mode runs the edit without approval, so only the stop can keep it from running.
 #[cfg(feature = "surface")]
 #[tokio::test]
 async fn the_home_s_stop_all_stops_the_server_s_runs() {
     let served = served(
         vec![
-            ScriptedResponse::function_call("bash", json!({ "command": "echo run >> count.txt" })),
+            ScriptedResponse::function_call(
+                "write_file",
+                json!({ "path": "count.txt", "content": "run\n" }),
+            ),
             ScriptedResponse::text("Ran it."),
         ],
         HarnessMode::Auto,
@@ -371,14 +375,17 @@ async fn the_home_s_stop_all_stops_the_server_s_runs() {
 }
 
 /// A message typed in the home runs as the operator the server admitted (spec 3.3 §5.1,
-/// spec 3.1 §8.2): in Auto mode its call runs without a decision, as the same message over
-/// `POST /api/run` does.
+/// spec 3.1 §8.2): in Auto mode its edit runs without a decision, as the same message over
+/// `POST /api/run` does; an unauthenticated turn would be held as in Ask.
 #[cfg(feature = "surface")]
 #[tokio::test]
 async fn the_home_s_turns_run_as_the_operator() {
     let served = served_gated(
         vec![
-            ScriptedResponse::function_call("bash", json!({ "command": "echo run >> count.txt" })),
+            ScriptedResponse::function_call(
+                "write_file",
+                json!({ "path": "count.txt", "content": "run\n" }),
+            ),
             ScriptedResponse::text("Ran it."),
         ],
         HarnessMode::Auto,

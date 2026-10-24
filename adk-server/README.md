@@ -423,7 +423,7 @@ Share the run store with `BackgroundState::with_run_store` and the embedded `Dur
 
 | Route | Effect |
 |-------|--------|
-| `GET /api/approvals` | The caller's inbox (`state`, `group`, `app`, `session`, `cursor`, `limit`) |
+| `GET /api/approvals` | The caller's inbox (`state`, `group`, `app`, `user`, `session`, `cursor`, `limit`); `session` needs `app` and names a session of `user`, the caller by default |
 | `GET /api/approvals/{id}` | One request |
 | `POST /api/approvals/{id}/decide` | `approve`, `edit`, `reject`, or `respond` with `expectedVersion` |
 | `POST /api/approvals/{id}/cancel` | Cancel a request |

@@ -12,10 +12,7 @@ passes the store's conformance suite.
 | `AgendaStore` | `InMemoryAgendaStore` | `SqliteAgendaStore` | `PostgresAgendaStore` | `RedisAgendaStore` | `MongoAgendaStore` | `FirestoreAgendaStore` | `Neo4jAgendaStore` |
 | `DriverStore` (`drivers`) | `InMemoryDriverStore` | `SqliteDriverStore` | `PostgresDriverStore` | `RedisDriverStore` | `MongoDriverStore` | `FirestoreDriverStore` | `Neo4jDriverStore` |
 | `LedgerStore` (`proc`) | `InMemoryLedgerStore` | `SqliteLedgerStore` | `PostgresLedgerStore` | `RedisLedgerStore` | `MongoLedgerStore` | `FirestoreLedgerStore` | `Neo4jLedgerStore` |
-| `PartitionStore` | `InMemoryPartitionStore` | `SqlitePartitionStore` | `PostgresPartitionStore` | `RedisPartitionStore` | — | — | — |
-
-The partition store has no MongoDB, Firestore or Neo4j backend yet: a kernel built on those
-backends keeps its partition table in memory, or on SQLite, PostgreSQL or Redis.
+| `PartitionStore` | `InMemoryPartitionStore` | `SqlitePartitionStore` | `PostgresPartitionStore` | `RedisPartitionStore` | `MongoPartitionStore` | `FirestorePartitionStore` | `Neo4jPartitionStore` |
 
 There is no file backend: no durable store is file-backed, and the CLI keeps its state in
 `harness.db`. Vertex AI holds sessions only, so it has no kernel backend.
@@ -33,10 +30,10 @@ standing rules, which have no MongoDB, Firestore or Neo4j backend.
 
 ## Alpha backends
 
-MongoDB, Firestore and Neo4j are **Alpha**: each implements the whole contract of the
-process, agenda, driver and ledger stores and carries their conformance suites, but stays Alpha until those suites pass
-against a live server in CI, so its storage layout may still change in a minor release
-without a migration ([STABILITY.md](../../../STABILITY.md)). CI's nightly `durable-stores`
+MongoDB, Firestore and Neo4j are **Alpha**: each implements the whole contract of every
+kernel store — process, agenda, driver, ledger and partition — and carries their
+conformance suites, but stays Alpha until those suites pass against a live server in CI, so
+its storage layout may still change in a minor release without a migration ([STABILITY.md](../../../STABILITY.md)). CI's nightly `durable-stores`
 job runs them against a MongoDB replica set and a standalone server, Neo4j 5 and the
 Firestore emulator.
 
@@ -106,6 +103,8 @@ bytes above only keep the example short.
 | Concurrent spend additions all count | One `$inc` upsert | Firestore's server-side increment | `SET s.micro_usd = s.micro_usd + $amount` under Cypher's write lock |
 | An agenda item moves from a state once | An update filtered on `_id` and `state` | A read and a write in one serializable transaction | A write lock on the node before the state is read |
 | Ledger rows take increasing numbers | A `$inc` counter, then the insert | A counter read and raised in the row's transaction | The counter raised and the row created in one statement |
+| A crossing is recorded once and never changed | `insertOne` on its id | Firestore's create, which fails when the document exists | `CREATE` under a uniqueness constraint on the id |
+| Granting twice keeps one grant | An upsert on `{run, fingerprint}` | One document named by the digest of run and fingerprint | `MERGE` on a key of run and fingerprint |
 | Transactions needed | None: a standalone `mongod` serves every store | Transactions for compare-and-set, deletes and appends | Explicit transactions for agenda transitions |
 
 | Limit | Backend |
@@ -114,12 +113,13 @@ bytes above only keep the example short.
 | Queries use equality filters or one range filter, which the automatic single-field indexes serve, so no composite index is needed; `list` reads every row its equality filters match and orders in memory, and the ledger walks rows by number or by time and filters in memory, as Redis does | Firestore |
 | The ledger's counter and its row are two writes, so a reader paging with `after` while appends land can pass a row whose number was taken before the last row it read, as with a PostgreSQL sequence | MongoDB |
 | Every call runs on a task of its own, because a neo4rs connection dropped mid-exchange is left out of step | Neo4j |
+| A node a concurrent `delete` removes while a list reads it is left out of the list: Neo4j reads committed data, so its properties read as null, as if the list had come after the delete | Neo4j |
 
 ## Checking a backend
 
 The conformance suites — `process_store_conformance_tests!`, `agenda_store_conformance_tests!`,
-`driver_store_conformance_tests!` and `ledger_store_conformance_tests!` (feature
-`conformance`) — check a backend against the contract the kernel relies on. The Alpha suites
+`driver_store_conformance_tests!`, `ledger_store_conformance_tests!` and
+`partition_store_conformance_tests!` (feature `conformance`) — check a backend against the contract the kernel relies on. The Alpha suites
 are `#[ignore]`d and need a server:
 
 ```bash

@@ -18,11 +18,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use std::sync::Mutex;
+
 use adk_core::{
-    ApprovalDecision, ApprovalPolicy, ApprovalService, ApprovalStore, ApproverSelector, Content,
-    Event, InMemoryApprovalStore, InboxQuery, Llm, RunConfig, SessionId, StoreApprovalService,
-    SubjectRef, Tool, ToolConfirmationDecision, ToolConfirmationHandler, ToolConfirmationRequest,
-    ToolContext, UserId,
+    ApprovalDecision, ApprovalPolicy, ApprovalRequest, ApprovalScope, ApprovalService,
+    ApprovalState, ApprovalStore, ApproverSelector, Content, Event, InMemoryApprovalStore,
+    InboxQuery, Llm, RunConfig, SessionId, StoreApprovalService, SubjectRef, Tool,
+    ToolConfirmationDecision, ToolConfirmationHandler, ToolConfirmationRequest, ToolContext,
+    UserId,
 };
 use adk_harness::{ApprovalPrompt, ApprovalPrompter, PromptAnswer};
 use adk_model::{ScriptedLlm, ScriptedResponse};
@@ -76,12 +79,12 @@ async fn a_timed_out_call_waits_and_runs_once_after_a_decision(store: Arc<dyn Ap
     );
     assert_eq!(confirmation_requests(&events).len(), 1, "the run ends with the call waiting");
     assert!(!f.path("ran.txt").exists(), "nothing runs before the decision");
-    let waiting = |session: &SessionId| {
+    let waiting = |user: &UserId, session: &SessionId| {
         let service = service.clone();
-        let query = InboxQuery::default().with_session_id(session.to_string());
-        async move { service.inbox(query).await.unwrap().items }
+        let scope = ApprovalScope::new(common::APP, user.to_string(), session.to_string());
+        async move { service.inbox(InboxQuery::default().with_session(&scope)).await.unwrap().items }
     };
-    let items = waiting(&f.session).await;
+    let items = waiting(&f.user, &f.session).await;
     assert_eq!(items.len(), 1, "the call is in the session's inbox");
     assert_eq!(items[0].tool_name, "bash");
     assert_eq!(f.harness.pending_approvals(&f.user, &f.session).await.unwrap().len(), 1);
@@ -90,7 +93,7 @@ async fn a_timed_out_call_waits_and_runs_once_after_a_decision(store: Arc<dyn Ap
     let events = f.resume().await;
     assert_eq!(outcome(&response_of(&events, "bash")), Outcome::Executed);
     assert_eq!(std::fs::read_to_string(f.path("ran.txt")).unwrap(), "ran\n", "it ran once");
-    assert!(waiting(&f.session).await.is_empty(), "nothing waits any more");
+    assert!(waiting(&f.user, &f.session).await.is_empty(), "nothing waits any more");
     assert!(f.harness.pending_approvals(&f.user, &f.session).await.unwrap().is_empty());
 }
 
@@ -107,6 +110,298 @@ async fn a_timed_out_call_waits_in_sqlite() {
     let store = adk_session::SqliteApprovalStore::new(&url).await.unwrap();
     store.migrate().await.unwrap();
     a_timed_out_call_waits_and_runs_once_after_a_decision(Arc::new(store)).await;
+}
+
+/// Answers prompts from a script; `None` never answers. Counts every prompt.
+#[derive(Debug, Default)]
+struct Prompts {
+    script: Mutex<Vec<Option<PromptAnswer>>>,
+    asked: AtomicUsize,
+}
+
+impl Prompts {
+    fn new(script: Vec<Option<PromptAnswer>>) -> Arc<Self> {
+        Arc::new(Self { script: Mutex::new(script), asked: AtomicUsize::new(0) })
+    }
+
+    fn asked(&self) -> usize {
+        self.asked.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl ApprovalPrompter for Prompts {
+    async fn prompt(&self, _prompt: ApprovalPrompt) -> adk_core::Result<PromptAnswer> {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        let next = {
+            let mut script = self.script.lock().unwrap();
+            if script.is_empty() { None } else { script.remove(0) }
+        };
+        match next {
+            Some(answer) => Ok(answer),
+            None => std::future::pending().await,
+        }
+    }
+}
+
+/// Every request of `service` for `scope`, in any state.
+async fn requests(service: &StoreApprovalService, scope: &ApprovalScope) -> Vec<ApprovalRequest> {
+    let query = InboxQuery::default().with_session(scope).with_states(ApprovalState::ALL);
+    service.inbox(query).await.unwrap().items
+}
+
+/// Review finding 1: while a call waits in the inbox, a new message reaches the model; the
+/// person is not asked about the waiting call again (spec 3.3 §7.3, §7.4).
+#[tokio::test]
+async fn a_new_message_reaches_the_model_while_a_call_waits() {
+    let prompts = Prompts::new(vec![]);
+    let f = fixture(vec![append_line(), ScriptedResponse::text("hello again")], |b| {
+        b.prompter(prompts.clone()).confirmation_timeout(TIMEOUT)
+    })
+    .await;
+    let events = f.send("append a line").await;
+    assert_eq!(outcome(&response_of(&events, "bash")), Outcome::Held);
+
+    let events = f.send("never mind, just say hello").await;
+    assert!(
+        events.iter().any(|event| event.llm_response.content.as_ref().is_some_and(|content| {
+            content.parts.iter().any(|part| part.text() == Some("hello again"))
+        })),
+        "the model answers the new message"
+    );
+    assert!(confirmation_requests(&events).is_empty(), "the waiting call is not held again");
+    assert_eq!(prompts.asked(), 1, "the person is asked about the waiting call once");
+    assert_eq!(f.harness.pending_approvals(&f.user, &f.session).await.unwrap().len(), 1);
+    assert!(!f.path("ran.txt").exists());
+}
+
+/// Review finding 2: deciding a waiting call in the harness cancels its inbox request, so
+/// approving the request later cannot decide the call a second time.
+#[tokio::test]
+async fn deciding_in_the_harness_cancels_the_inbox_request() {
+    let service = inbox(Arc::new(InMemoryApprovalStore::new()));
+    let f = fixture(vec![append_line(), ScriptedResponse::text("done")], |b| {
+        b.prompter(Arc::new(Away)).confirmation_timeout(TIMEOUT).approval_service(service.clone())
+    })
+    .await;
+    f.send("append a line").await;
+    let scope = ApprovalScope::new(common::APP, f.user.to_string(), f.session.to_string());
+    let pending = f.harness.pending_approvals(&f.user, &f.session).await.unwrap();
+    f.harness
+        .decide(&f.user, &f.session, &pending[0].fingerprint, adk_harness::HarnessDecision::Approve)
+        .await
+        .unwrap();
+
+    let request = requests(&service, &scope).await.remove(0);
+    assert_eq!(request.state, ApprovalState::Cancelled, "the inbox request is closed");
+    assert!(service.decide(&request.id, request.version, owner()).await.is_err());
+    f.resume().await;
+    assert_eq!(std::fs::read_to_string(f.path("ran.txt")).unwrap(), "ran\n", "it ran once");
+}
+
+/// An in-memory approval store that records every decision written to it.
+#[derive(Debug, Default)]
+struct RecordingStore {
+    inner: InMemoryApprovalStore,
+    written: Mutex<Vec<ToolConfirmationDecision>>,
+}
+
+#[async_trait::async_trait]
+impl ApprovalStore for RecordingStore {
+    async fn record_pending(
+        &self,
+        scope: &ApprovalScope,
+        request: &ToolConfirmationRequest,
+    ) -> adk_core::Result<()> {
+        self.inner.record_pending(scope, request).await
+    }
+    async fn pending(
+        &self,
+        scope: &ApprovalScope,
+    ) -> adk_core::Result<Vec<adk_core::PendingApproval>> {
+        self.inner.pending(scope).await
+    }
+    async fn decide(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+        approval: adk_core::ToolApproval,
+    ) -> adk_core::Result<()> {
+        self.written.lock().unwrap().push(approval.decision);
+        self.inner.decide(scope, fingerprint, approval).await
+    }
+    async fn take_decision(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<Option<ToolConfirmationDecision>> {
+        self.inner.take_decision(scope, fingerprint).await
+    }
+    async fn has_decision(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<bool> {
+        self.inner.has_decision(scope, fingerprint).await
+    }
+    async fn record_pending_keyed(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+        request: &ToolConfirmationRequest,
+    ) -> adk_core::Result<()> {
+        self.inner.record_pending_keyed(scope, fingerprint, request).await
+    }
+    async fn take_approval(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<Option<adk_core::ToolApproval>> {
+        self.inner.take_approval(scope, fingerprint).await
+    }
+    async fn create_request(&self, request: &ApprovalRequest) -> adk_core::Result<ApprovalRequest> {
+        self.inner.create_request(request).await
+    }
+    async fn get_request(&self, id: &str) -> adk_core::Result<Option<ApprovalRequest>> {
+        self.inner.get_request(id).await
+    }
+    async fn replace_request(
+        &self,
+        request: &ApprovalRequest,
+        expected_version: u64,
+    ) -> adk_core::Result<bool> {
+        self.inner.replace_request(request, expected_version).await
+    }
+    async fn list_requests(
+        &self,
+        query: &adk_core::ApprovalRequestQuery,
+    ) -> adk_core::Result<Vec<ApprovalRequest>> {
+        self.inner.list_requests(query).await
+    }
+    async fn put_delegation(
+        &self,
+        delegation: &adk_core::ApprovalDelegation,
+    ) -> adk_core::Result<()> {
+        self.inner.put_delegation(delegation).await
+    }
+    async fn delegations_to(
+        &self,
+        to: &SubjectRef,
+    ) -> adk_core::Result<Vec<adk_core::ApprovalDelegation>> {
+        self.inner.delegations_to(to).await
+    }
+    async fn delete_delegation(&self, id: &str) -> adk_core::Result<bool> {
+        self.inner.delete_delegation(id).await
+    }
+}
+
+/// Review finding 4 of #1044: deciding in the harness withdraws the inbox request
+/// without writing a denial, so the only decision written for the call is the person's
+/// and no run can take another first.
+#[tokio::test]
+async fn deciding_in_the_harness_writes_only_the_persons_decision() {
+    let store = Arc::new(RecordingStore::default());
+    let service = inbox(store.clone());
+    let f = fixture(vec![append_line(), ScriptedResponse::text("done")], |b| {
+        b.prompter(Arc::new(Away)).confirmation_timeout(TIMEOUT).approval_service(service.clone())
+    })
+    .await;
+    f.send("append a line").await;
+    let pending = f.harness.pending_approvals(&f.user, &f.session).await.unwrap();
+    f.harness
+        .decide(&f.user, &f.session, &pending[0].fingerprint, adk_harness::HarnessDecision::Approve)
+        .await
+        .unwrap();
+
+    assert_eq!(*store.written.lock().unwrap(), [ToolConfirmationDecision::Approve]);
+    let scope = ApprovalScope::new(common::APP, f.user.to_string(), f.session.to_string());
+    let request = requests(&service, &scope).await.remove(0);
+    assert_eq!(request.state, ApprovalState::Cancelled, "the inbox request is closed");
+    f.resume().await;
+    assert_eq!(std::fs::read_to_string(f.path("ran.txt")).unwrap(), "ran\n", "it ran once");
+}
+
+/// An approver who decided the inbox request first keeps the decision: the harness
+/// refuses the person's, rather than write one after it (spec 3.3 §7.3).
+#[tokio::test]
+async fn deciding_in_the_harness_after_the_inbox_is_refused() {
+    let service = inbox(Arc::new(InMemoryApprovalStore::new()));
+    let f = fixture(vec![append_line(), ScriptedResponse::text("done")], |b| {
+        b.prompter(Arc::new(Away)).confirmation_timeout(TIMEOUT).approval_service(service.clone())
+    })
+    .await;
+    f.send("append a line").await;
+    let pending = f.harness.pending_approvals(&f.user, &f.session).await.unwrap();
+    let scope = ApprovalScope::new(common::APP, f.user.to_string(), f.session.to_string());
+    let request = requests(&service, &scope).await.remove(0);
+    // Resolved by the approver, its outcome not yet written.
+    let mut resolved = request.clone();
+    resolved.state = ApprovalState::Rejected;
+    resolved.version += 1;
+    assert!(
+        service
+            .approval_store()
+            .unwrap()
+            .replace_request(&resolved, request.version)
+            .await
+            .unwrap()
+    );
+
+    let error = f
+        .harness
+        .decide(&f.user, &f.session, &pending[0].fingerprint, adk_harness::HarnessDecision::Approve)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "harness.decision.invalid");
+    assert!(
+        !service
+            .approval_store()
+            .unwrap()
+            .has_decision(&scope, &pending[0].fingerprint)
+            .await
+            .unwrap()
+    );
+}
+
+/// Review finding 2: when the person approves the call again live, the request left
+/// waiting for it is cancelled and its entry cleared, so the next identical call is asked
+/// about, not run on the stale request.
+#[tokio::test]
+async fn a_live_approval_closes_the_request_left_waiting() {
+    let service = inbox(Arc::new(InMemoryApprovalStore::new()));
+    let prompts = Prompts::new(vec![
+        None,
+        Some(PromptAnswer::ApproveOnce),
+        Some(PromptAnswer::Deny { message: Some("not again".into()) }),
+    ]);
+    let script = vec![
+        append_line(),
+        append_line(),
+        ScriptedResponse::text("done"),
+        append_line(),
+        ScriptedResponse::text("refused"),
+    ];
+    let f = fixture(script, |b| {
+        b.prompter(prompts.clone()).confirmation_timeout(TIMEOUT).approval_service(service.clone())
+    })
+    .await;
+    let scope = ApprovalScope::new(common::APP, f.user.to_string(), f.session.to_string());
+
+    f.send("append a line").await;
+    let waiting = requests(&service, &scope).await;
+    assert_eq!(waiting.len(), 1);
+
+    let events = f.send("do it now, I am here").await;
+    assert_eq!(outcome(&response_of(&events, "bash")), Outcome::Executed);
+    let closed = service.get(&waiting[0].id).await.unwrap().unwrap();
+    assert_eq!(closed.state, ApprovalState::Cancelled, "the stale request is closed");
+    assert!(f.harness.pending_approvals(&f.user, &f.session).await.unwrap().is_empty());
+    assert!(service.decide(&closed.id, closed.version, owner()).await.is_err());
+
+    let events = f.send("and once more").await;
+    assert_eq!(outcome(&response_of(&events, "bash")), Outcome::Denied, "asked and refused");
+    assert_eq!(prompts.asked(), 3);
+    assert_eq!(std::fs::read_to_string(f.path("ran.txt")).unwrap(), "ran\n", "it ran once");
 }
 
 /// `deny_on_confirmation_timeout` denies the same call, with the harness's store in place.
@@ -265,7 +560,8 @@ fn env_key(name: &str) -> Option<String> {
 }
 
 /// The scenario on `claude-sonnet-5-5`: the model's call waits in the inbox through the
-/// timeout and runs once after an owner allows it.
+/// timeout; a new message is answered by the model without asking about the waiting call
+/// again; the call runs once after an owner allows it.
 #[tokio::test]
 #[ignore = "calls the Anthropic API with ANTHROPIC_API_KEY"]
 async fn live_a_timed_out_call_waits_and_runs_once() {
@@ -281,13 +577,14 @@ async fn live_a_timed_out_call_waits_and_runs_once() {
         .unwrap(),
     );
     let service = inbox(Arc::new(InMemoryApprovalStore::new()));
+    let prompts = Prompts::new(vec![]);
     let dir = tempfile::tempdir().unwrap();
     let agent = Arc::new(
         adk_harness::HarnessAgent::builder("harness")
             .model(model)
             .workspace(adk_devtools::Workspace::new(dir.path()).allow_bash(true))
             .project_instructions(common::no_user_file())
-            .prompter(Arc::new(Away))
+            .prompter(prompts.clone())
             .confirmation_timeout(TIMEOUT)
             .approval_service(service.clone())
             .build()
@@ -315,13 +612,18 @@ async fn live_a_timed_out_call_waits_and_runs_once() {
     assert_eq!(held.len(), 1, "the call waits: {:#?}", common::responses(&events));
     let written = dir.path().join("live.txt");
     assert!(!written.exists(), "nothing runs before the decision");
-    let items = service
-        .inbox(InboxQuery::default().with_session_id(session.to_string()))
-        .await
-        .unwrap()
-        .items;
+    let scope = ApprovalScope::new(common::APP, user.to_string(), session.to_string());
+    let items = service.inbox(InboxQuery::default().with_session(&scope)).await.unwrap().items;
     assert_eq!(items.len(), 1, "the call is in the session's inbox");
     println!("waiting: {} {}", items[0].tool_name, items[0].args_redacted);
+
+    let aside = "Do not call any tool. Reply with exactly one word: hello.";
+    let events = collect(harness.send(&user, &session, aside).await.unwrap()).await;
+    let reply = final_text(&events);
+    assert!(!reply.is_empty(), "the model answers the new message");
+    assert_eq!(prompts.asked(), 1, "the waiting call is not asked about again");
+    assert!(!written.exists(), "the waiting call has not run");
+    println!("while waiting, the model replied: {reply:?}");
 
     service.decide(&items[0].id, items[0].version, owner()).await.unwrap();
     let events = collect(harness.resume(&user, &session).await.unwrap()).await;

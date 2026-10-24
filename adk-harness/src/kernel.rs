@@ -613,6 +613,12 @@ impl ApprovalService for NotifyingApprovals {
         Ok(request)
     }
 
+    async fn withdraw(&self, id: &str, reason: Option<String>) -> Result<ApprovalRequest> {
+        let request = self.inner.withdraw(id, reason).await?;
+        self.late.notify(&request, None).await;
+        Ok(request)
+    }
+
     async fn tick(&self, now: DateTime<Utc>) -> Result<ApprovalTick> {
         let tick = self.inner.tick(now).await?;
         for id in &tick.expired {

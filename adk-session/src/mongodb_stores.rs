@@ -629,6 +629,7 @@ fn subject_kind(subject: &SubjectRef) -> Result<String> {
 fn request_fields(request: &ApprovalRequest) -> Result<Document> {
     Ok(doc! {
         "app": &request.scope.app_name,
+        "user": &request.scope.user_id,
         "session": &request.scope.session_id,
         "state": request.state.as_str(),
         "open": request.is_open(),
@@ -710,7 +711,7 @@ impl MongoApprovalStore {
 
     /// Creates the indexes that list a scope's pending calls, approval requests by
     /// application, session, state, and openness, and delegations by delegate, and gives
-    /// requests stored without a session field the one their record names.
+    /// requests stored without a user or session field the ones their record names.
     ///
     /// # Errors
     ///
@@ -734,14 +735,21 @@ impl MongoApprovalStore {
                     "adk_approval_requests_session",
                     doc! { "session": 1, "created_us": 1, "_id": 1 },
                 ),
+                index(
+                    "adk_approval_requests_session_user",
+                    doc! { "session": 1, "user": 1, "created_us": 1, "_id": 1 },
+                ),
             ])
             .await
             .map_err(|e| approval_error(format!("approval store index creation failed: {e}")))?;
-        // Requests stored before the session field existed name their session only in the
+        // Requests stored before the user and session fields existed name them only in the
         // record (spec 3.3 §10 C1).
         let mut unindexed = self
             .requests()
-            .find(doc! { "session": { "$exists": false } })
+            .find(doc! { "$or": [
+                { "session": { "$exists": false } },
+                { "user": { "$exists": false } },
+            ] })
             .await
             .map_err(|e| approval_error(format!("approval store read failed: {e}")))?;
         while unindexed
@@ -755,8 +763,11 @@ impl MongoApprovalStore {
             let request: ApprovalRequest = decode_record(&document, "request")?;
             self.requests()
                 .update_one(
-                    doc! { "_id": &request.id, "session": { "$exists": false } },
-                    doc! { "$set": { "session": &request.scope.session_id } },
+                    doc! { "_id": &request.id },
+                    doc! { "$set": {
+                        "user": &request.scope.user_id,
+                        "session": &request.scope.session_id,
+                    } },
                 )
                 .await
                 .map_err(|e| approval_error(format!("approval store write failed: {e}")))?;
@@ -985,6 +996,9 @@ impl ApprovalStore for MongoApprovalStore {
         }
         if let Some(session) = &query.session_id {
             filter.insert("session", session);
+        }
+        if let Some(user) = &query.user_id {
+            filter.insert("user", user);
         }
         if !query.states.is_empty() {
             let states: Vec<&str> = query.states.iter().map(|state| state.as_str()).collect();

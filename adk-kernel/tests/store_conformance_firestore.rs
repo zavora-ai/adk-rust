@@ -1,6 +1,6 @@
-//! The kernel's Firestore stores (spec 3.2 §7.1, §11, §13 Q8): the process, agenda, driver
-//! and ledger conformance suites against the Firestore emulator, the identifier limit, and
-//! the stores sharing one client with adk-session's run and schedule stores.
+//! The kernel's Firestore stores (spec 3.2 §7.1, §11, §13 Q8): the process, agenda, driver,
+//! ledger and partition conformance suites against the Firestore emulator, the identifier
+//! limit, and the stores sharing one client with adk-session's run and schedule stores.
 //!
 //! The tests are `#[ignore]`d because they need the emulator; CI's nightly `durable-stores`
 //! job runs them. Every case writes under fresh identifiers, so the cases share one
@@ -76,6 +76,15 @@ impl adk_kernel::conformance::LedgerStoreHarness for Emulator {
     }
 }
 
+#[async_trait::async_trait]
+impl adk_kernel::conformance::PartitionStoreHarness for Emulator {
+    async fn open(&self) -> Arc<dyn adk_kernel::PartitionStore> {
+        let store = adk_kernel::FirestorePartitionStore::from_db(emulator_db().await);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+}
+
 mod process {
     use super::*;
 
@@ -109,6 +118,15 @@ mod ledger {
     use super::*;
 
     adk_kernel::ledger_store_conformance_tests! {
+        #[ignore = "needs FIRESTORE_EMULATOR_HOST; CI's nightly durable-stores job runs it"]
+        harness = Emulator
+    }
+}
+
+mod partition {
+    use super::*;
+
+    adk_kernel::partition_store_conformance_tests! {
         #[ignore = "needs FIRESTORE_EMULATOR_HOST; CI's nightly durable-stores job runs it"]
         harness = Emulator
     }
