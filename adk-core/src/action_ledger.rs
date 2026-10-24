@@ -12,6 +12,10 @@
 //! | Completed | The recorded outcome is returned; the tool does not run |
 //! | Begun, not completed | An [`outcome_unknown_response`] is returned; the tool does not run |
 //! | Ledger read or `begin` fails | An error is returned; the tool does not run |
+//!
+//! The governance kill switch is checked again between `begin` and execution. A call it
+//! refuses there is completed as [`ActionOutcome::Failed`] with its [`not_run_text`], so the
+//! record never reads as begun without an outcome and a replay is answered with that text.
 
 use crate::{AdkError, ErrorCategory, ErrorComponent, Result, ToolEffect};
 use async_trait::async_trait;
@@ -42,6 +46,38 @@ pub const OUTCOME_UNKNOWN_STATUS: &str = "outcome_unknown";
 /// ```
 pub fn outcome_unknown_response(detail: impl Into<String>) -> Value {
     serde_json::json!({ "status": OUTCOME_UNKNOWN_STATUS, "detail": detail.into() })
+}
+
+/// The prefix of the text a call the governance kill switch refused is answered with.
+pub const NOT_RUN_PREFIX: &str = "not run: ";
+
+/// The text a call the governance kill switch refused with `refusal` is answered with:
+/// `not run: <refusal message>`. A call refused after [`ActionLedger::begin`] is completed
+/// as [`ActionOutcome::Failed`] with this text, so a replay answers it the same way.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{AdkError, is_not_run, not_run_text};
+///
+/// let text = not_run_text(&AdkError::agent("execution is frozen"));
+/// assert_eq!(text, "not run: execution is frozen");
+/// assert!(is_not_run(&text));
+/// ```
+pub fn not_run_text(refusal: &AdkError) -> String {
+    format!("{NOT_RUN_PREFIX}{}", refusal.message)
+}
+
+/// Returns `true` when `text` is a [`not_run_text`]: the call was refused and never ran.
+///
+/// # Example
+///
+/// ```rust
+/// assert!(adk_core::is_not_run("not run: execution is frozen"));
+/// assert!(!adk_core::is_not_run("card declined"));
+/// ```
+pub fn is_not_run(text: &str) -> bool {
+    text.starts_with(NOT_RUN_PREFIX)
 }
 
 /// Returns `true` when `response` is an [`outcome_unknown_response`].
@@ -100,10 +136,12 @@ pub enum ActionOutcome {
         /// [`json_digest`] of the value the tool returned.
         result_digest: String,
     },
-    /// The tool returned an error.
+    /// The tool returned an error, or the governance kill switch refused the call between
+    /// [`ActionLedger::begin`] and execution, in which case `error` is its [`not_run_text`]
+    /// and the tool never ran ([`is_not_run`]).
     #[serde(rename_all = "camelCase")]
     Failed {
-        /// The error message the tool returned.
+        /// The error message the tool returned, or the [`not_run_text`] of a refused call.
         error: String,
     },
 }

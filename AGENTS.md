@@ -762,7 +762,11 @@ Evaluation order in `LlmAgent` (`adk-agent/src/llm_agent.rs`) and `CodeActAgent`
    decision, fingerprint approval, `ApprovalStore`, handler, or hold).
 6. Action ledger begin (`NonIdempotent` tools, `RunConfig::action_ledger`) — a recorded call is
    answered from its record without executing (`CodeActAgent` raises the answer into the
-   script). Shared helper: `adk-agent/src/tool_ledger.rs`.
+   script). Shared helper: `adk-agent/src/tool_ledger.rs`. Then the kill switch again: a call
+   frozen during the ledger write never starts; it is answered `not run`
+   (`adk_core::not_run_text`) and its begun record is completed `Failed` with that text, so a
+   replay answers `already_failed` and recovery audits it `NotRun`. No retry starts after a
+   freeze either.
 7. `execute()` under the tool's timeout — `adk-auth` wrappers (`ProtectedTool`, `ScopeGuard`)
    check RBAC and scopes here, so a denial is a tool error (`tool.permission_denied`, category
    `Forbidden`, naming the missing scope or permission to the model). Only `ReadOnly` and `Idempotent`

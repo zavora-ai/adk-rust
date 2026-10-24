@@ -149,7 +149,9 @@ pub(crate) async fn record_outcome_unknown(
 impl LedgeredCall {
     /// Records the outcome of a call that ran to an end: `result` when the tool
     /// returned a value, otherwise `error`, the text the model was given for the
-    /// failure, since a replay of the call is answered with it.
+    /// failure, since a replay of the call is answered with it. A call the kill switch
+    /// refused between `begin` and execution is completed here too, as `Failed` with its
+    /// [`not_run_text`](adk_core::not_run_text): it never ran.
     ///
     /// A call that ended mid-flight (timeout, panic) must not be completed, so
     /// its begun record answers a replay with an unknown outcome.

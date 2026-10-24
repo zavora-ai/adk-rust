@@ -1003,6 +1003,17 @@ async fn run_authorized_tool(
         Err(error) => return Ok(ToolRun::Abort(error)),
     };
 
+    // The kill switch again, after the ledger write, which can take long enough for a freeze
+    // to arrive: a call it refuses now never starts (spec 3.1 I20). The step ends as at
+    // authorization, and the begun record is completed with the not-run text, so a replay
+    // is answered the same way.
+    if let Err(refusal) = invocation_ctx.run_config().check_governance() {
+        if let Some(ledgered) = ledgered {
+            ledgered.complete(&name, None, &adk_core::not_run_text(&refusal)).await;
+        }
+        return Ok(ToolRun::Abort(refusal));
+    }
+
     // Only a call that cannot repeat a side effect is retried, and only after a
     // retryable error.
     let budget = policy.budget_for(&name).filter(|_| effect.is_retry_safe());
@@ -1023,13 +1034,18 @@ async fn run_authorized_tool(
     // attempt, or the last failed one). Surfaced via `ToolOutcome::attempt`.
     let mut final_attempt: u32 = 0;
     for attempt in 0..max_attempts {
-        final_attempt = attempt;
         if attempt > 0 {
             if let Some(budget) = budget {
                 tokio::time::sleep(budget.backoff_delay(attempt)).await;
             }
+            // A retry is a new start, and none begins once a freeze is observed; the last
+            // attempt's failure stands.
+            if invocation_ctx.run_config().check_governance().is_err() {
+                break;
+            }
             tool_ctx.set_actions(initial_actions.clone());
         }
+        final_attempt = attempt;
         let execution = tool.execute(tool_ctx.clone(), args.clone());
         let bounded = async {
             match timeout {
@@ -5064,6 +5080,78 @@ mod tests {
             })
         );
         assert!(ledger.begun.lock().unwrap().is_empty());
+    }
+
+    /// A freeze that arrives while the ledger records the call: the call never starts, and
+    /// its begun record is completed with the not-run text.
+    #[tokio::test]
+    async fn a_freeze_during_the_ledger_write_keeps_the_call_from_starting() {
+        #[derive(Debug)]
+        struct FreezingLedger {
+            inner: adk_core::InMemoryActionLedger,
+            control: adk_core::GovernanceControl,
+            begun: StdMutex<Vec<String>>,
+        }
+
+        #[async_trait]
+        impl adk_core::ActionLedger for FreezingLedger {
+            async fn begin(&self, record: &adk_core::ActionRecord) -> adk_core::Result<()> {
+                self.inner.begin(record).await?;
+                self.begun.lock().unwrap().push(record.key.clone());
+                self.control.freeze("incident 7");
+                Ok(())
+            }
+            async fn complete(
+                &self,
+                key: &str,
+                outcome: adk_core::ActionOutcome,
+            ) -> adk_core::Result<()> {
+                self.inner.complete(key, outcome).await
+            }
+            async fn get(&self, key: &str) -> adk_core::Result<Option<adk_core::ActionRecord>> {
+                self.inner.get(key).await
+            }
+        }
+
+        use adk_core::ActionLedger as _;
+        let control = adk_core::GovernanceControl::new();
+        let ledger = Arc::new(FreezingLedger {
+            inner: adk_core::InMemoryActionLedger::new(),
+            control: control.clone(),
+            begun: StdMutex::new(Vec::new()),
+        });
+        let (charge, executions) = charge_tool(adk_core::ToolEffect::NonIdempotent, None);
+        let runtime = Arc::new(ScriptedRuntime::with_suspension(vec![charge_program(&[0])]));
+        let incoming = user("pay");
+        let mut input = base_inputs(FakeLlm::new("noop"), runtime, incoming.clone());
+        input.invocation_ctx = Arc::new(
+            MockInvocationContext::new(incoming).with_invocation_id("inv-1").with_run_config(
+                adk_core::RunConfig::builder()
+                    .action_ledger(ledger.clone())
+                    .governance(control)
+                    .build(),
+            ),
+        );
+        input.tools = vec![charge];
+
+        let mut stream = Box::pin(run_codeact(input));
+        let mut ended = None;
+        while let Some(item) = stream.next().await {
+            if let Err(error) = item {
+                ended = Some(error);
+                break;
+            }
+        }
+
+        assert!(executions.lock().unwrap().is_empty(), "the tool never started");
+        let error = ended.expect("the run stops at the freeze");
+        assert_eq!(error.code, adk_core::GOVERNANCE_FROZEN_CODE);
+        let key = ledger.begun.lock().unwrap().first().cloned().expect("the call was begun");
+        let record = ledger.get(&key).await.unwrap().expect("a record");
+        assert_eq!(
+            record.outcome,
+            Some(adk_core::ActionOutcome::Failed { error: adk_core::not_run_text(&error) })
+        );
     }
 
     #[tokio::test]
