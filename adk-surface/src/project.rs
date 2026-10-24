@@ -517,49 +517,60 @@ pub(crate) fn agent_name(request: &ApprovalRequest) -> String {
 ///
 /// A request with a fingerprint decides the calls held with that fingerprint. A request
 /// served without one, as a kernel's approvals inbox serves them, decides a call of the same
-/// tool by the same acting agent: the one showing the call's arguments, else the earliest
-/// one, since a route may show approvers redacted arguments. No request decides two calls,
-/// and a call held again keeps its request until a decided request has a newer one.
+/// tool by the same acting agent. Calls link in two passes over the session: first each call
+/// to the request showing its exact arguments, then each call still unlinked to the earliest
+/// request still free, since a route may show approvers redacted arguments. No request
+/// decides two calls, so a call whose own request is missing (unrouted, or not the caller's
+/// to decide) links to none rather than to another call's. A call held again keeps its
+/// request unless that request was resolved before the call was held again.
 pub(crate) fn links(events: &[Event], requests: &[ApprovalRequest]) -> HashMap<u64, String> {
     let mut order: Vec<&ApprovalRequest> = requests.iter().collect();
     order.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
     let mut taken = vec![false; order.len()];
-    let mut held_by: HashMap<String, usize> = HashMap::new();
-    let mut links = HashMap::new();
-    for (index, event) in events.iter().enumerate() {
-        let Some(held) = &event.actions.tool_confirmation else { continue };
-        let fingerprint = held.fingerprint();
-        let agent = held.acting.as_deref().map(|acting| &acting.agent.id);
-        let decides = |request: &ApprovalRequest| match request.fingerprint.is_empty() {
-            false => request.fingerprint == fingerprint,
-            true => {
-                request.tool_name == held.tool_name
-                    && match (agent, &request.acting) {
-                        (Some(agent), Some(acting)) => *agent == acting.agent.id,
-                        _ => true,
-                    }
+    let mut linked: HashMap<u64, usize> = HashMap::new();
+    for exact in [true, false] {
+        let mut held_by: HashMap<String, usize> = HashMap::new();
+        for (index, event) in events.iter().enumerate() {
+            let Some(held) = &event.actions.tool_confirmation else { continue };
+            let seq = index as u64 + 1;
+            let fingerprint = held.fingerprint();
+            if let Some(&position) = linked.get(&seq) {
+                held_by.insert(fingerprint, position);
+                continue;
             }
-        };
-        let free = |same_args: bool| {
-            (0..order.len()).find(|&position| {
-                let request = order[position];
-                !taken[position]
-                    && decides(request)
-                    && (!same_args || request.args_redacted == held.args)
-            })
-        };
-        let kept = held_by.get(&fingerprint).copied();
-        let next = match kept {
-            Some(position) if order[position].state == ApprovalState::Pending => Some(position),
-            _ => free(true).or_else(|| free(false)).or(kept),
-        };
-        if let Some(position) = next {
-            taken[position] = true;
-            held_by.insert(fingerprint, position);
-            links.insert(index as u64 + 1, order[position].id.clone());
+            let agent = held.acting.as_deref().map(|acting| &acting.agent.id);
+            let decides = |request: &ApprovalRequest| match request.fingerprint.is_empty() {
+                false => exact && request.fingerprint == fingerprint,
+                true => {
+                    request.tool_name == held.tool_name
+                        && match (agent, &request.acting) {
+                            (Some(agent), Some(acting)) => *agent == acting.agent.id,
+                            _ => true,
+                        }
+                        && (!exact || request.args_redacted == held.args)
+                }
+            };
+            let kept = held_by.get(&fingerprint).copied();
+            let next = match kept {
+                // Held again while its request was still open, as the event's time shows,
+                // not the request's state now.
+                Some(position)
+                    if order[position].resolved_at.is_none_or(|at| at > event.timestamp) =>
+                {
+                    Some(position)
+                }
+                _ => (0..order.len())
+                    .find(|&position| !taken[position] && decides(order[position]))
+                    .or(kept),
+            };
+            if let Some(position) = next {
+                taken[position] = true;
+                held_by.insert(fingerprint, position);
+                linked.insert(seq, position);
+            }
         }
     }
-    links
+    linked.into_iter().map(|(seq, position)| (seq, order[position].id.clone())).collect()
 }
 
 /// The exact call, cut short past [`CALL_TEXT_LIMIT`] characters.

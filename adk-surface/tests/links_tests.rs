@@ -1,7 +1,8 @@
 //! A thread links each held call to its own card when the source serves no fingerprints, as
 //! a kernel's approvals inbox does (spec 3.3 §7.1, §11 S-I1): two agents holding the same call
-//! get two links, a call whose arguments the route redacted for approvers still links, and a
-//! call held again after its decision links to its new request.
+//! get two links, a call whose arguments the route redacted for approvers still links, a call
+//! held again after its decision links to its new request, a call held again before its
+//! decision keeps its request, and a call with no request of its own takes no other call's.
 
 use std::sync::Arc;
 
@@ -13,6 +14,7 @@ use adk_core::{
 use adk_surface::{Caller, Origin, Source, SurfaceEngine, SurfaceKind, ThreadItem};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, TimeZone, Utc};
+use proptest::prelude::*;
 use serde_json::{Value, json};
 
 /// A session with held calls, and an inbox that serves requests without fingerprints.
@@ -172,6 +174,7 @@ async fn redacted_calls_of_one_agent_link_in_the_order_they_were_held() {
     let masked = |amount: u64| Some(json!({ "iban": "****", "amount": amount }));
     let mut rejected = request("apr-first", "billing", &first, 500, masked(5));
     rejected.state = ApprovalState::Rejected;
+    rejected.resolved_at = Some(t0() + Duration::seconds(20));
     let source = Inbox {
         events: vec![
             // Both calls of one model turn are held before either event is written.
@@ -191,4 +194,166 @@ async fn redacted_calls_of_one_agent_link_in_the_order_they_were_held() {
     let thread = engine.thread(&me, "s1").await.unwrap();
     let id = |id: &str| Some(id.to_string());
     assert_eq!(links(&thread), [id("apr-first"), id("apr-second"), id("apr-again")]);
+}
+
+#[tokio::test]
+async fn a_call_without_a_request_of_its_own_takes_no_other_calls_card() {
+    let large = call("billing", "transfer", json!({ "amount": 5000 }));
+    let small = call("billing", "transfer", json!({ "amount": 50 }));
+    let source = Inbox {
+        events: vec![
+            // The route leaves the large transfer held in the store only: it has no request.
+            held("billing", &large, 1),
+            held("billing", &small, 2),
+        ],
+        requests: vec![request("apr-small", "billing", &small, 1_500, None)],
+    };
+    let engine = SurfaceEngine::builder(Arc::new(source)).build();
+    let me = Caller::human("ana", SurfaceKind::Web, Origin::Pointer);
+    let thread = engine.thread(&me, "s1").await.unwrap();
+    assert_eq!(links(&thread), [None, Some("apr-small".to_string())]);
+}
+
+#[tokio::test]
+async fn a_call_held_again_before_its_decision_keeps_its_request() {
+    let first = call("billing", "write_file", json!({ "path": "out.txt", "content": "x" }));
+    let next = call("billing", "write_file", json!({ "path": "b.txt", "content": "y" }));
+    let masked = |redacted: bool| redacted.then(|| json!({ "path": "****" }));
+    // Arguments shown link in the exact pass; redacted ones in the order pass.
+    for redacted in [false, true] {
+        let mut approved = request("apr-billing", "billing", &first, 500, masked(redacted));
+        approved.state = ApprovalState::Approved;
+        approved.resolved_at = Some(t0() + Duration::seconds(20));
+        let source = Inbox {
+            events: vec![
+                held("billing", &first, 1),
+                // Held again in a later run, before the approval at 20 s.
+                held("billing", &first, 10),
+                // The approved call ran; the agent then holds its next call.
+                held("billing", &next, 40),
+            ],
+            requests: vec![
+                approved,
+                request("apr-billing-2", "billing", &next, 39_500, masked(redacted)),
+            ],
+        };
+        let engine = SurfaceEngine::builder(Arc::new(source)).build();
+        let me = Caller::human("ana", SurfaceKind::Web, Origin::Pointer);
+        let thread = engine.thread(&me, "s1").await.unwrap();
+        let id = |id: &str| Some(id.to_string());
+        assert_eq!(
+            links(&thread),
+            [id("apr-billing"), id("apr-billing"), id("apr-billing-2")],
+            "redacted: {redacted}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_call_held_again_before_its_rejection_keeps_its_request_with_fingerprints() {
+    let write = call("billing", "write_file", json!({ "path": "out.txt", "content": "x" }));
+    let with_fingerprint = |mut request: ApprovalRequest| {
+        request.fingerprint = write.fingerprint();
+        request
+    };
+    let mut rejected = with_fingerprint(request("apr-first", "billing", &write, 500, None));
+    rejected.state = ApprovalState::Rejected;
+    rejected.resolved_at = Some(t0() + Duration::seconds(20));
+    let source = Inbox {
+        events: vec![
+            held("billing", &write, 1),
+            // Held again in a later run, before the rejection at 20 s.
+            held("billing", &write, 10),
+            // The model makes the rejected call again: a new hold and a new request.
+            held("billing", &write, 30),
+        ],
+        requests: vec![
+            rejected,
+            with_fingerprint(request("apr-again", "billing", &write, 29_000, None)),
+        ],
+    };
+    let engine = SurfaceEngine::builder(Arc::new(source)).build();
+    let me = Caller::human("ana", SurfaceKind::Web, Origin::Pointer);
+    let thread = engine.thread(&me, "s1").await.unwrap();
+    let id = |id: &str| Some(id.to_string());
+    assert_eq!(links(&thread), [id("apr-first"), id("apr-first"), id("apr-again")]);
+}
+
+/// How a held call's request reaches the caller's inbox.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Shown {
+    /// Unrouted, or the caller is not an approver: no request.
+    Missing,
+    /// The request shows the call's arguments.
+    Exact,
+    /// The route shows approvers redacted arguments.
+    Redacted,
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// Whatever the order of holds, a call whose request shows its arguments links to that
+    /// request, and no request links two calls.
+    #[test]
+    fn no_call_takes_a_request_that_shows_another_calls_arguments(
+        (calls, holds) in prop::collection::vec(
+            prop_oneof![Just(Shown::Missing), Just(Shown::Exact), Just(Shown::Redacted)],
+            1..8,
+        )
+        .prop_flat_map(|calls| {
+            let count = calls.len();
+            let holds = (0..count)
+                .chain(0..count)
+                .collect::<Vec<_>>();
+            (Just(calls), Just(holds).prop_shuffle(), prop::collection::vec(any::<bool>(), count))
+                .prop_map(|(calls, holds, again)| {
+                    // Each call is held once, and some again before anyone answers.
+                    let mut seen = vec![false; calls.len()];
+                    let holds = holds
+                        .into_iter()
+                        .filter(|&call| !std::mem::replace(&mut seen[call], true) || again[call])
+                        .collect::<Vec<_>>();
+                    (calls, holds)
+                })
+        })
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        runtime.block_on(async {
+            let made = (0..calls.len())
+                .map(|index| call("billing", "transfer", json!({ "amount": index })))
+                .collect::<Vec<_>>();
+            let events = holds
+                .iter()
+                .enumerate()
+                .map(|(at, &index)| held("billing", &made[index], at as i64 + 1))
+                .collect::<Vec<_>>();
+            let requests = calls
+                .iter()
+                .enumerate()
+                .filter(|(_, shown)| **shown != Shown::Missing)
+                .map(|(index, shown)| {
+                    let first = holds.iter().position(|&call| call == index).unwrap() as i64;
+                    let redacted = (*shown == Shown::Redacted).then(|| json!({ "amount": "****" }));
+                    request(&format!("apr-{index}"), "billing", &made[index], first * 1_000 + 500, redacted)
+                })
+                .collect::<Vec<_>>();
+            let engine = SurfaceEngine::builder(Arc::new(Inbox { events, requests })).build();
+            let me = Caller::human("ana", SurfaceKind::Web, Origin::Pointer);
+            let thread = engine.thread(&me, "s1").await.unwrap();
+            let linked = links(&thread);
+            let mut owner = std::collections::HashMap::new();
+            for (hold, &index) in holds.iter().enumerate() {
+                if calls[index] == Shown::Exact {
+                    prop_assert_eq!(linked[hold].clone(), Some(format!("apr-{index}")));
+                }
+                if let Some(id) = &linked[hold] {
+                    let first = *owner.entry(id.clone()).or_insert(index);
+                    // The request and the calls it links.
+                    prop_assert_eq!((id.as_str(), first), (id.as_str(), index));
+                }
+            }
+            Ok(())
+        })?;
+    }
 }
