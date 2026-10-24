@@ -40,10 +40,18 @@ PostgreSQL, Redis, MongoDB, Neo4j, or Firestore.
    the decision. An edited call passes the `ToolPolicy` and the agent's tool screen again before
    it executes; a policy denial of the edit refuses the call. A run without a decision for the
    call does not ask its confirmation handler about it again: the call keeps waiting and the
-   run goes on to the model (spec 3.3 §7.3).
+   run goes on to the model (spec 3.3 §7.3). `LlmAgent`, `CodeActAgent` and the realtime
+   runners follow this rule; `CodeActAgent` answers the new message in a turn that cannot
+   suspend and keeps the waiting call's checkpoint.
 6. A call decided any other way — by the confirmation handler, a call-ID decision, a
-   fingerprint approval, or `Harness::decide` — has its open request cancelled and its pending
-   entry cleared, so the request cannot authorize a later call with the same fingerprint.
+   fingerprint approval, or `Harness::decide` — has its open request withdrawn
+   (`ApprovalService::withdraw`: closed as cancelled, with no outcome written and no run
+   woken) and its pending entry cleared, so the request cannot authorize a later call with the
+   same fingerprint. A request an approver resolved at the same moment is waited for until its
+   outcome is in the store, and that outcome is absorbed; a request that does not settle
+   within ten seconds fails the call with `approval.outcome_unsettled`. `Harness::decide`
+   withdraws the request before it records the person's decision, and refuses the decision
+   when an approver resolved the request first.
 
 ```rust
 use std::sync::Arc;
