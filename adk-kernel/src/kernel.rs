@@ -1587,6 +1587,7 @@ impl KernelBuilder {
         for sink in self.sinks {
             bus.add_sink(sink);
         }
+        let trigger_names = self.triggers.iter().map(|trigger| trigger.name.clone()).collect();
         let router = self
             .triggers
             .into_iter()
@@ -1619,6 +1620,7 @@ impl KernelBuilder {
             rule_source: self.rule_source,
             reviewed: std::sync::Mutex::new(None),
             crons: std::sync::Mutex::new(BTreeMap::new()),
+            triggers: trigger_names,
         });
         let run_finished = Arc::new(RunFinishedWakeSource::new());
         let hooks =

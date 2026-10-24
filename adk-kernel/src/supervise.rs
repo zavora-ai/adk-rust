@@ -1,7 +1,7 @@
 //! The supervision state a kernel shares between its process table, its worker hooks and
 //! its loops (spec 3.2 §7.2, §7.3, §7.6, §9.3).
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -47,6 +47,20 @@ pub(crate) fn spawned_by_kernel(run: &RunRecord) -> bool {
     run.idempotency_key
         .as_deref()
         .is_some_and(|key| key.starts_with(ASLEEP_KEY_PREFIX) || key.starts_with(SPAWN_KEY_PREFIX))
+}
+
+/// Whether the kernel writes `run`'s row itself after enqueueing it, so no hook may write an
+/// inferred one: a run `spawn` enqueued, or one a trigger in `triggers` fired, keyed
+/// `<event key>#<trigger name>` ([`keys::trigger`](crate::keys::trigger)). A claim can
+/// overtake that write, and an inferred row written then would replace the recorded one.
+pub(crate) fn writes_own_row(run: &RunRecord, triggers: &BTreeSet<String>) -> bool {
+    spawned_by_kernel(run)
+        || (run.target != KERNEL_WAKE_TARGET
+            && run
+                .idempotency_key
+                .as_deref()
+                .and_then(|key| key.rsplit_once('#'))
+                .is_some_and(|(_, trigger)| triggers.contains(trigger)))
 }
 
 /// Whether a claim of `run` must park it before its first model call (K-I2): its process
@@ -131,6 +145,9 @@ pub(crate) struct Supervision {
     /// The cron expressions of sleepers the kernel fires itself, each with the occurrence
     /// it last fired, or when it was first needed (spec 3.2 §7.4).
     pub(crate) crons: Mutex<BTreeMap<String, DateTime<Utc>>>,
+    /// The names of the router's [`Trigger`](crate::Trigger)s, whose runs the router
+    /// records itself.
+    pub(crate) triggers: BTreeSet<String>,
 }
 
 impl std::fmt::Debug for Supervision {
@@ -1278,9 +1295,10 @@ impl WorkerHooks for KernelHooks {
     async fn on_claim(&self, run: &RunRecord) {
         let sup = &self.sup;
         let mut stored = sup.stored_meta(run).await;
-        if stored.is_none() && spawned_by_kernel(run) && !asleep_at_claim(run, None) {
-            // `spawn` writes the row right after the enqueue this claim may have overtaken;
-            // admission needs the row's kind and partition, so wait for it briefly.
+        if stored.is_none() && writes_own_row(run, &sup.triggers) && !asleep_at_claim(run, None) {
+            // `spawn` or the trigger's router writes the row right after the enqueue this
+            // claim may have overtaken; admission needs the row's kind and partition, so wait
+            // for it briefly.
             for _ in 0..SPAWN_ROW_POLLS {
                 tokio::time::sleep(SPAWN_ROW_POLL).await;
                 stored = sup.stored_meta(run).await;
@@ -1297,9 +1315,9 @@ impl WorkerHooks for KernelHooks {
         } else {
             RunState::Queued
         };
-        // A run `spawn` enqueued gets its row from `spawn`, which may still be writing it; an
-        // inferred row written here could replace it.
-        let mut changed = !persisted && !spawned_by_kernel(run);
+        // A run `spawn` enqueued or a trigger fired gets its row from the kernel, which may
+        // still be writing it; an inferred row written here could replace it.
+        let mut changed = !persisted && !writes_own_row(run, &sup.triggers);
         let mut admitted = false;
         if asleep || meta.suspend_requested || sup.draining.load(Ordering::SeqCst) {
             // A sleeper, a suspension asked while it queued, or a drain: the attempt parks
@@ -1351,8 +1369,8 @@ impl WorkerHooks for KernelHooks {
         let sup = &self.sup;
         sup.release(&run.run_id).await;
         let stored = sup.stored_meta(run).await;
-        if stored.is_none() && spawned_by_kernel(run) {
-            // `spawn` has not written the row yet; the row it writes is the sleeper's, and
+        if stored.is_none() && writes_own_row(run, &sup.triggers) {
+            // The kernel has not written the row yet; the row it writes is the run's, and
             // the 250 ms mirror clears its pending request now that the run parked.
             let label = if reason == ParkReason::Suspended { "asleep" } else { "parked" };
             sup.publish(KernelEvent::Process {
@@ -1479,6 +1497,20 @@ mod tests {
         let mut run = NewRun::new(queue, "adk-rust", "alice", target, json!({}));
         run.idempotency_key = key.map(str::to_string);
         RunRecord::queued("run-1", run, Utc::now())
+    }
+
+    #[test]
+    fn the_kernel_writes_the_rows_of_runs_it_spawned_or_a_trigger_fired() {
+        let triggers = BTreeSet::from(["triage".to_string()]);
+        let writes = |target, key| writes_own_row(&run("background", target, key), &triggers);
+        assert!(writes("adk-rust", Some("kernel:spawn:7f3a")));
+        assert!(writes("adk-rust", Some("kernel:asleep:7f3a")));
+        assert!(writes("adk-rust", Some("hook:github:msg_1#triage")));
+        // Another trigger's name, a wake run, a submitted key or none: a hook writes the row.
+        assert!(!writes("adk-rust", Some("hook:github:msg_1#nightly")));
+        assert!(!writes(KERNEL_WAKE_TARGET, Some("file:/w/a#triage")));
+        assert!(!writes("adk-rust", Some("hook:github:msg_1")));
+        assert!(!writes("adk-rust", None));
     }
 
     #[test]
