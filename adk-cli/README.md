@@ -66,6 +66,7 @@ See [The harness in your terminal](../docs/official_docs/harness/cli.md),
 | `gemini`, `openai`, `anthropic` | yes | The Gemini, OpenAI and Anthropic providers |
 | `audit` | yes | `adk-rust audit verify` and `audit keygen` (through `adk-auth`'s `signed-audit`) |
 | `persist` | yes | Sessions, held calls, durable runs, modes and standing rules in SQLite at `adk-rust/harness.db` (through `adk-session`'s and `adk-harness`'s `sqlite`) |
+| `surface` | yes | The web home of `adk-surface` at `/ui/` on `serve` and `up`, over the harness (spec 3.3 §5.1, §10 S1), with `harness` |
 | `harness` | yes | The harness: `adk-rust` REPL, `code`, `goal`, `ultracode` and `serve` on `adk-harness`, `sessions`, `rules`, `approvals`, and the `adk_cli::harness` module; the agent kernel's `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`, `freeze`, `unfreeze`, `events`, `proc` and `partitions` on `adk-kernel`, with its daily baselines (`proc-baselines`) |
 | `deepseek`, `groq`, `ollama` | no | The other providers |
 | `all-providers` | no | Every provider |
@@ -114,7 +115,7 @@ saved or `--provider` choice that this build does not compile in fails with the
 ```text
 adk-rust              The harness REPL in the current directory (default)
 adk-rust chat         Interactive REPL with the plain chat agent
-adk-rust serve        Serve the harness (plan mode, approval inbox); `--agent chat` serves chat
+adk-rust serve        Serve the harness (plan mode, approval inbox, the web home at /ui/); `--agent chat` serves chat
 adk-rust code         One harness turn on a task; exit 3 when calls are held
 adk-rust goal         Harness turns until a success-condition command exits 0
 adk-rust ultracode    Implement, then route the review to parallel reviewers or a review board

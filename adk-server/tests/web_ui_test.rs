@@ -143,56 +143,29 @@ impl Agent for RealtimeMockAgent {
     }
 }
 
+/// The web home moved to `adk-surface`'s `web` feature (spec 3.3 §10 S1): the server
+/// keeps its APIs and serves no page of its own at `/` or `/ui/`.
 #[tokio::test]
-async fn test_web_ui_redirect() {
+async fn the_server_serves_no_bundled_ui() {
     let agent = Arc::new(MockAgent);
     let agent_loader = Arc::new(SingleAgentLoader::new(agent));
     let session_service = Arc::new(InMemorySessionService::new());
-    let config = ServerConfig::new(agent_loader, session_service);
-    let app = create_app(config);
+    let app = create_app(ServerConfig::new(agent_loader, session_service));
 
-    let response =
-        app.oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
-
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert_eq!(response.headers().get("location").unwrap(), "/ui/");
-}
-
-#[tokio::test]
-async fn test_web_ui_assets() {
-    let agent = Arc::new(MockAgent);
-    let agent_loader = Arc::new(SingleAgentLoader::new(agent));
-    let session_service = Arc::new(InMemorySessionService::new());
-    let config = ServerConfig::new(agent_loader, session_service);
-    let app = create_app(config);
-
-    // Test index.html
+    for uri in ["/", "/ui/", "/ui/index.html", "/ui/assets/config/runtime-config.json"] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+    // The APIs a host's page reads stay.
     let response = app
-        .clone()
-        .oneshot(Request::builder().uri("/ui/index.html").body(Body::empty()).unwrap())
+        .oneshot(Request::builder().uri("/api/ui/agents/mock-agent").body(Body::empty()).unwrap())
         .await
         .unwrap();
-
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers().get("content-type").unwrap(), "text/html");
-    assert_eq!(response.headers().get("cache-control").unwrap(), "no-cache");
-    assert!(response.headers().get("content-security-policy").is_some());
-
-    // Test runtime-config.json
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/ui/assets/config/runtime-config.json")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let body_str = String::from_utf8(body.to_vec()).unwrap();
-    assert!(body_str.contains("backendUrl"));
 }
 
 #[tokio::test]
@@ -302,24 +275,6 @@ async fn test_agent_details_classifies_flow_topology_as_workflow() {
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(value["kind"], "workflow");
     assert_eq!(value["topology"]["relationships"][0]["kind"], "flow");
-}
-
-#[tokio::test]
-async fn test_web_ui_index_route() {
-    let agent = Arc::new(MockAgent);
-    let agent_loader = Arc::new(SingleAgentLoader::new(agent));
-    let session_service = Arc::new(InMemorySessionService::new());
-    let config = ServerConfig::new(agent_loader, session_service);
-    let app = create_app(config);
-
-    // Test /ui/ serves index.html
-    let response =
-        app.oneshot(Request::builder().uri("/ui/").body(Body::empty()).unwrap()).await.unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(
-        response.headers().get("content-type").unwrap().to_str().unwrap().contains("text/html")
-    );
 }
 
 #[tokio::test]

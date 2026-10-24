@@ -1077,6 +1077,12 @@ impl SurfaceEngine {
             .unwrap_or_default()
     }
 
+    /// Sends the session's queued input once its decisions are answered, after an answer
+    /// recorded outside [`execute`](Self::execute), such as a take over (spec 3.3 §7.4 rule 2).
+    pub fn deliver_queued(&self, caller: &Caller, session: &str) {
+        self.spawn_drain(caller.clone(), session.to_string());
+    }
+
     async fn stop_all(&self, caller: &Caller, reason: Option<String>) -> Result<CommandOutcome> {
         let reason = reason.unwrap_or_else(|| words::STOP_ALL.to_string());
         // Stopping never waits on the audit log (spec 3.2 K-I8): record after, warn on failure.

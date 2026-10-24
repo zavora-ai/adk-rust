@@ -1,0 +1,200 @@
+// Decisions on the web home (spec 3.3 §7.1, §7.2, §7.4, §11 S-I2, S-I4): one write path with
+// the version seen, "already decided" from the conflict, Enter and Esc never decide, typing
+// while a decision is open is queued.
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import { DecisionCard } from "../src/components/DecisionCard";
+import type { Command, CommandOutcome, DecisionCard as Card, Origin } from "../src/generated/api";
+import { ApiError } from "../src/client";
+import { FixtureClient, invoiceCard, releaseCard } from "../src/fixture/fixture";
+
+/** A take-over entry as the engine draws it: the tool that asks, the kind, the resource. */
+function takeOverCard(): Card {
+  return {
+    ...invoiceCard(),
+    id: "apr_code",
+    version: 3,
+    heading: "Type the code your bank sent",
+    call: {
+      tool: "harness:take-over",
+      args: { takeOver: true, tool: "bank_sign_in", secret: "oneTimeCode", resource: "https://bank.example.com/login" },
+      text: "harness:take-over(…)",
+      truncated: false,
+    },
+    allowed: { options: [{ answer: "deny", label: "Deny", needsPresence: false, needsExpanded: false }], openInHome: false },
+  };
+}
+
+function sendThrough(client: FixtureClient) {
+  return vi.fn((command: Command, origin: Origin): Promise<CommandOutcome> => client.command(command, origin));
+}
+
+describe("a decision card", () => {
+  it("draws the anatomy of §7.1 on its own background, without the entry's id or version", () => {
+    const card = invoiceCard();
+    const { container } = render(<DecisionCard card={card} send={vi.fn()} />);
+    const article = screen.getByRole("article", { name: card.heading });
+    expect(article.className).toContain("decision");
+    expect(within(article).getByText(/since 18:00/)).toBeTruthy();
+    expect(within(article).getAllByText("Waiting for you").length).toBeGreaterThan(0);
+    expect(within(article).getByText("send_email")).toBeTruthy();
+    expect(within(article).getByText("Waited through quiet time")).toBeTruthy();
+    for (const label of ["Allow once", "Always allow for this person", "Edit", "Deny"]) {
+      expect(within(article).getByRole("button", { name: label })).toBeTruthy();
+    }
+    expect(within(article).getByText("Medium risk")).toBeTruthy();
+    expect(within(article).getByText("Can't be unsent")).toBeTruthy();
+    expect(container.textContent).not.toContain(card.id);
+  });
+
+  it("answers through decide with the version it showed", async () => {
+    const client = new FixtureClient();
+    const send = sendThrough(client);
+    render(<DecisionCard card={invoiceCard()} send={send} />);
+    await userEvent.click(screen.getByRole("button", { name: "Allow once" }));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toEqual({
+      type: "decide",
+      decisionId: "apr_invoice",
+      version: 1,
+      answer: "allowOnce",
+      expanded: true,
+    });
+    expect(send.mock.calls[0][1]).toEqual({ kind: "pointer" });
+    // The answer is the last step of how it got here (§8.1 "Decided").
+    const step = await screen.findByText("You said yes in the home app at 07:40");
+    expect(step.getAttribute("aria-current")).toBe("step");
+    expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+  });
+
+  it("shows an answer given elsewhere first, and never retries it", async () => {
+    const client = new FixtureClient();
+    client.elsewhere.add("apr_invoice");
+    const send = sendThrough(client);
+    render(<DecisionCard card={invoiceCard()} send={send} />);
+    await userEvent.click(screen.getByRole("button", { name: "Deny" }));
+    expect((await screen.findByText("You said yes in Telegram at 07:31")).getAttribute("aria-current")).toBe("step");
+    expect(screen.getByText("Decided")).toBeTruthy();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("never decides on Enter or Esc", async () => {
+    const send = vi.fn();
+    render(<DecisionCard card={invoiceCard()} send={send} />);
+    const allow = screen.getByRole("button", { name: "Allow once" });
+    allow.focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard("{Escape}");
+    screen.getByRole("button", { name: "Deny" }).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("answers to the space bar as the keyboard", async () => {
+    const client = new FixtureClient();
+    const send = sendThrough(client);
+    render(<DecisionCard card={invoiceCard()} send={send} />);
+    screen.getByRole("button", { name: "Allow once" }).focus();
+    await userEvent.keyboard(" ");
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send.mock.calls[0][1]).toEqual({ kind: "keyboard" });
+  });
+
+  it("holds the answers of a truncated call until it is shown in full", async () => {
+    const card: Card = {
+      ...invoiceCard(),
+      call: { ...invoiceCard().call, truncated: true },
+      allowed: {
+        ...invoiceCard().allowed,
+        options: invoiceCard().allowed.options.map((option) =>
+          option.answer === "deny" ? option : { ...option, needsExpanded: true },
+        ),
+      },
+    };
+    const send = vi.fn();
+    render(<DecisionCard card={card} send={send} />);
+    expect((screen.getByRole("button", { name: "Allow once" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Deny" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("edits the arguments, checks them, and Esc closes the editor without deciding", async () => {
+    const client = new FixtureClient();
+    const send = sendThrough(client);
+    render(<DecisionCard card={invoiceCard()} send={send} />);
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const area = screen.getByRole("textbox");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(send).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const edit = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(area).not.toBe(edit);
+    await userEvent.clear(edit);
+    await userEvent.click(edit);
+    await userEvent.paste('{"to": "[accountant email]"}');
+    await userEvent.click(screen.getByRole("button", { name: /allow/i }));
+    expect(send.mock.calls[0][0]).toMatchObject({ type: "decide", answer: "edit", editedArgs: { to: "[accountant email]" } });
+  });
+
+  it("answers with the version the person saw when a newer one arrives, and shows the change", async () => {
+    const client = new FixtureClient();
+    const send = sendThrough(client);
+    const seen = invoiceCard();
+    const { rerender } = render(<DecisionCard card={seen} send={send} />);
+    // Another approver changed the call: the feed sends version 2, which looks the same.
+    rerender(<DecisionCard card={{ ...seen, version: 2 }} send={send} />);
+    client.hold({ ...seen, version: 2 });
+    await userEvent.click(screen.getByRole("button", { name: "Allow once" }));
+    expect(send.mock.calls[0][0]).toMatchObject({ type: "decide", version: 1 });
+    expect(await screen.findByText("This decision changed since you saw it. Check it again.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeTruthy();
+  });
+
+  it("shows what a take over asks for, and sends what the person typed to the call that asked", async () => {
+    const card = takeOverCard();
+    const provide = vi.fn(
+      async (shown: Card, _value: string, _origin: Origin): Promise<CommandOutcome> => ({
+        type: "answered",
+        card: { ...shown, version: shown.version + 1, status: "decided", statusText: "Decided", allowed: { options: [], openInHome: false } },
+      }),
+    );
+    const send = vi.fn();
+    render(<DecisionCard card={card} send={send} takeOver={{ provide }} />);
+    const article = screen.getByRole("article", { name: "Type the code your bank sent" });
+    expect(within(article).getByText("bank_sign_in")).toBeTruthy();
+    expect(within(article).getByText("https://bank.example.com/login")).toBeTruthy();
+    expect(within(article).queryByText("harness:take-over")).toBeNull();
+    expect(within(article).queryByRole("button", { name: "Allow once" })).toBeNull();
+    await userEvent.click(within(article).getByRole("button", { name: "Take over" }));
+    const field = within(article).getByPlaceholderText("Type it here");
+    await userEvent.type(field, "731905{Enter}");
+    expect(provide).not.toHaveBeenCalled();
+    await userEvent.click(within(article).getByRole("button", { name: "Done" }));
+    expect(provide).toHaveBeenCalledTimes(1);
+    expect(provide.mock.calls[0][0]).toMatchObject({ id: "apr_code", version: 3 });
+    expect(provide.mock.calls[0][1]).toBe("731905");
+    await within(article).findByText("Decided");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("says why a take over did not go through, and keeps the card open", async () => {
+    const provide = vi.fn(async (): Promise<CommandOutcome> => {
+      throw new ApiError(404, "no tool call in this process waits for take over apr_code");
+    });
+    render(<DecisionCard card={takeOverCard()} send={vi.fn()} takeOver={{ provide }} />);
+    await userEvent.click(screen.getByRole("button", { name: "Take over" }));
+    await userEvent.type(screen.getByPlaceholderText("Type it here"), "731905");
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("no tool call in this process waits");
+    expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
+  });
+
+  it("shows why a high-risk answer needs the person to confirm it is them", async () => {
+    const client = new FixtureClient();
+    render(<DecisionCard card={releaseCard()} send={sendThrough(client)} />);
+    await userEvent.click(screen.getByRole("button", { name: "Confirm it's you and approve" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("confirm it's you first");
+  });
+});

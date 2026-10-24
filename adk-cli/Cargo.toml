@@ -48,6 +48,8 @@ adk-kernel = { workspace = true, optional = true }
 adk-browser = { workspace = true, optional = true }
 # `--provider mistralrs`: local inference in process (spec 3.1 §8.1); a heavy build
 adk-mistralrs = { workspace = true, optional = true }
+# The web home on `adk-rust serve` and `adk-rust up` (spec 3.3 §5.1, §10 S1)
+adk-surface = { workspace = true, optional = true, features = ["web"] }
 # `adk-rust --voice`: the harness voice surface (spec 3.1 §7.17); the realtime providers and
 # the WAV codec for `--voice-input`/`--voice-output`
 adk-realtime = { workspace = true, optional = true }
@@ -91,7 +93,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 
 [features]
-default = ["gemini", "openai", "anthropic", "ollama", "audit", "persist", "harness", "encrypted", "memory-local"]
+default = ["gemini", "openai", "anthropic", "ollama", "audit", "persist", "harness", "encrypted", "memory-local", "surface"]
 gemini = ["adk-model/gemini"]
 openai = ["adk-model/openai"]
 anthropic = ["adk-model/anthropic"]
@@ -162,6 +164,9 @@ scripted-model = ["adk-realtime?/scripted"]
 # `adk-rust --voice`: the harness voice surface over Gemini Live or the OpenAI Realtime API
 # (spec 3.1 §7.17, H5); `--voice-input <wav>` and `--voice-output <wav>` need no audio hardware
 voice = ["harness", "adk-harness?/voice", "dep:adk-realtime", "adk-realtime/integration", "adk-realtime/gemini", "adk-realtime/openai", "dep:adk-audio"]
+# The web home (spec 3.3 §5.1, §10 S1): `serve` and `up` mount it at `/ui/` with its API under
+# `/api/surface`, over the harness (with `harness`)
+surface = ["dep:adk-surface"]
 # The microphone and the speaker for `--voice` (cpal: audio hardware, ALSA headers on Linux)
 voice-desktop = ["voice", "adk-audio/desktop-audio"]
 

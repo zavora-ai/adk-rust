@@ -93,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
 - Agent card at `GET /.well-known/agent-card.json` and `GET /.well-known/agent.json`, with
   `http://localhost:8080/a2a` as its endpoint
 - JSON-RPC endpoints at `POST /a2a` and `POST /a2a/stream`
-- The server's REST API and web UI, with the [host and origin defaults](../deployment/server.md#host-origin-and-bind-defaults)
+- The server's REST API, with the [host and origin defaults](../deployment/server.md#host-origin-and-bind-defaults)
 
 It returns the router; bind it to `127.0.0.1:8080` so the card's URL matches the listener.
 

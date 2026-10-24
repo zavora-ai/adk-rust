@@ -1,8 +1,9 @@
 # Server API
 
 The ADK-Rust server (`adk-server`) exposes an agent over HTTP: a REST API for running agents,
-managing sessions, and reading artifacts, Server-Sent Events (SSE) streaming, an embedded web UI,
-and optional A2A routes.
+managing sessions, and reading artifacts, Server-Sent Events (SSE) streaming, and optional A2A
+routes. It serves no page of its own: the web home of `adk-surface` mounts on it (spec 3.3 §10
+S1).
 
 ## Overview
 
@@ -10,7 +11,8 @@ The server is built on Axum and provides:
 
 - **REST API**: HTTP endpoints for agent execution and session management
 - **Server-Sent Events (SSE)**: Real-time streaming of agent responses
-- **Web UI**: Interactive browser-based interface, embedded in the crate
+- **Custom routes**: `ServerBuilder::add_api_routes` and `add_root_routes` mount routers such
+  as the [web home](../surfaces/web-home.md) behind the same middleware
 - **Host and origin checks**: loopback names and IP addresses only, and no cross-origin
   browser access, until [configured](#host-origin-and-bind-defaults)
 - **Kill switch**: optional admin endpoints that freeze every run the server starts
@@ -356,7 +358,7 @@ GET /api/list-apps  (adk-go compatibility)
 ```
 
 `GET /api/ui/agents/{name}` returns the agent's description, kind, capabilities, configured
-services, children, and topology for the web UI.
+services, children, and topology, which the web home's developer panel draws.
 
 ## Authentication
 
@@ -382,54 +384,21 @@ the caller's identity from each request. With one configured:
 - Session and artifact routes whose path names another user's `user_id` answer `403`.
   `POST /api/sessions` creates the session for the authenticated user.
 
-`GET /api/health` and the web UI's static routes (`/`, `/ui/`, `/ui/assets/*`) are not
-authenticated; `/api/apps` and `/api/ui/*` are. See
+`GET /api/health` and routes mounted with `ServerBuilder::add_root_routes` (such as the web
+home's page at `/ui/`) are not authenticated; `/api/apps` and `/api/ui/*` are. See
 [Access control](../security/access-control.md) for extractors built on `adk-auth`.
 
-## Web UI
+## The web home
 
-The server includes a built-in web UI at `/ui/`:
+`adk-server` serves no page of its own. The web home — Threads, Today and Memory & rules, with
+a developer panel that draws an agent's topology, telemetry and state — is `adk-surface`'s
+`web` feature, mounted on `ServerBuilder` with `add_api_routes(adk_surface::web::router(engine))`
+and `add_root_routes(adk_surface::web::home())` behind a `RequestContextExtractor`. `adk-rust
+serve` mounts it at `http://127.0.0.1:8080/ui/`. See [The Web Home](../surfaces/web-home.md).
 
-```
-http://localhost:8080/ui/
-```
-
-![Prompting an agent, following an animated team handoff, and inspecting telemetry in the embedded runtime UI](../images/adk-runtime-five-minute.gif)
-
-The [five-minute quickstart](../quickstart.md) scaffolds an OpenAI-backed server
-and opens this interface. The recording uses a team to make
-the active topology edge visible; leaf agents, tools, graphs, workflows,
-realtime agents, and remote agents use the same interface.
-
-### Features
-
-- **Interactive Runs**: Send messages and attachments and inspect safely rendered Markdown, streaming text, tool calls, failures, and handoffs
-- **Session Management**: Create, view, and switch between sessions
-- **Team Topology**: Distinguish delegation-and-return edges from control handoffs, with animation for the active member and incoming edge
-- **Runtime Inspector**: Inspect ordered events, telemetry spans, shared and session state, configured runtime services, A2A discovery, and UI/MCP Apps protocol support
-- **Realtime Playback**: Recognize realtime agents, merge transcript deltas, and play completed PCM output as WAV audio
-- **Artifact Viewer**: View and download session artifacts
-- **Themes**: Keyboard-accessible system, light, and dark layouts with no external assets
-
-### UI Routes
-
-- `/` - Redirects to `/ui/`
-- `/ui/` - Main chat interface
-- `/ui/assets/*` - Static assets (CSS, JS, images)
-- `/ui/assets/config/runtime-config.json` - Runtime configuration (`{"backendUrl": "/api"}` unless `ServerConfig::with_backend_url` sets it)
-- `/api/ui/agents/{name}` - Agent capabilities, hierarchy, and portable topology metadata
-
-The interface is maintained in `adk-server/webui` and its production build is
-embedded in the server crate, so generated projects and deployments use the
-same runtime UI without a separate frontend service.
-
-The runnable [runtime UI showcase](../../../examples/runtime_ui_showcase/README.md)
-includes separate OpenAI-backed walkthroughs and screenshots for a tool-calling
-agent, a deterministic graph workflow, and a portable handoff team. The
-[advanced agent gallery](../../../examples/advanced_agents/README.md) adds an
-ambient schedule, OpenAI Realtime voice playback, A2A discovery, MCP
-`2026-07-28` discovery with SEP-2663 tasks, and configured telemetry, artifact,
-and memory services in one server.
+> **Note:** until 3.0 the server bundled a runtime UI at `/`, `/ui/` and
+> `/ui/assets/config/runtime-config.json`. Those paths now answer `404`; see
+> [Moving from the bundled runtime UI](../surfaces/web-home.md#moving-from-the-bundled-runtime-ui).
 
 ## Client Examples
 
@@ -726,7 +695,7 @@ against live models.
 ## Telemetry
 
 `Launcher` serve mode initializes telemetry: it logs to stdout and keeps runtime spans in an
-in-memory exporter that the web UI's telemetry view reads. `Launcher::with_telemetry` selects an
+in-memory exporter that the web home's developer panel reads. `Launcher::with_telemetry` selects an
 OTLP exporter (`cli-telemetry-otlp` feature) or none. A server built with `create_app` or
 `ServerBuilder` initializes nothing: install a `tracing` subscriber, or call an
 [`adk-telemetry`](../observability/telemetry.md) initializer, and pass its exporter to

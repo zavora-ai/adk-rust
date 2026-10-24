@@ -10,7 +10,8 @@ use schemars::generate::{Contract, SchemaGenerator, SchemaSettings};
 use serde_json::{Map, Value, json};
 
 use super::{
-    AgentsResponse, CommandRequest, DecisionsResponse, SurfaceQuery, ThreadResponse, paths,
+    AgentsResponse, CommandRequest, DecisionsResponse, QueuedResponse, SurfaceQuery,
+    TakeOverRequest, ThreadResponse, paths,
 };
 use crate::engine::{CommandOutcome, FeedFrame};
 use crate::model::{Briefing, DecisionCard, FeedEntry, StatusLine};
@@ -85,10 +86,12 @@ pub fn openapi() -> Value {
     let outcome = schema_ref::<CommandOutcome>(&mut out);
     let frame = schema_ref::<FeedFrame>(&mut out);
     let entry = schema_ref::<FeedEntry>(&mut out);
+    let queued = schema_ref::<QueuedResponse>(&mut out);
     let mut schemas = out.take_definitions(true);
 
     let mut input = generator(Contract::Deserialize);
     let request = schema_ref::<CommandRequest>(&mut input);
+    let take_over = schema_ref::<TakeOverRequest>(&mut input);
     let surface_query = input.subschema_for::<SurfaceQuery>().to_value();
     for (name, schema) in input.take_definitions(true) {
         schemas.entry(name).or_insert(schema);
@@ -147,6 +150,14 @@ pub fn openapi() -> Value {
         } }),
     );
     routes.insert(
+        with(paths::QUEUED),
+        read(
+            "What the caller typed while a decision of the session was open, sent once it is answered (spec 3.3 §7.4 rule 2)",
+            json!([path_param("session")]),
+            answer("The queued input, oldest first", queued),
+        ),
+    );
+    routes.insert(
         with(paths::AGENTS),
         read("The caller's agents (spec 3.3 §8.1)", json!([]), answer("The roster", agents)),
     );
@@ -181,7 +192,21 @@ pub fn openapi() -> Value {
             "requestBody": { "required": true, "content": { "application/json": { "schema": request } } },
             "responses": errors({
                 let mut ok = Map::new();
-                ok.insert("200".into(), answer("What the command did", outcome));
+                ok.insert("200".into(), answer("What the command did", outcome.clone()));
+                ok.insert("422".into(), problem());
+                ok
+            }),
+        } }),
+    );
+    routes.insert(
+        with(paths::TAKE_OVER),
+        json!({ "post": {
+            "summary": "Take over, then Done (spec 3.3 §8.2, §10 H2): the secret the person typed goes to the one call that asked; mounted beside a harness that takes over",
+            "parameters": [path_param("id")],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": take_over } } },
+            "responses": errors({
+                let mut ok = Map::new();
+                ok.insert("200".into(), answer("answered, alreadyDecided or changed", outcome));
                 ok.insert("422".into(), problem());
                 ok
             }),

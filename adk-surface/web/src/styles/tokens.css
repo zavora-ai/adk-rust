@@ -1,0 +1,153 @@
+/*
+ * The visual tokens of spec 3.3 §9. Every dark screen is the light screen rendered with the
+ * dark set. Text colours meet WCAG AA (4.5:1) on the surfaces they sit on; the bright brand
+ * orange appears only on large type and dots. Status uses a word and a colour, never colour
+ * alone.
+ */
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --card: #ffffff;
+  --raised: #f6f7f9;
+  --border: #e6e8ec;
+  --text: #0f172a;
+  --text-2: #475569;
+  --label: #64748b;
+  --brand: #f74c00;
+  --accent: #c03a00;
+  --button: #c03a00;
+  --on-button: #ffffff;
+  --decision: #fff8f3;
+  --decision-border: #f7d3bd;
+  --decision-button: #ffffff;
+  --stop: #0a1628;
+  --on-stop: #ffffff;
+  --code-bg: #ffffff;
+  --code-tool: #1d4ed8;
+  --code-string: #b93a07;
+  --focus: #c03a00;
+  --glow: rgba(247, 76, 0, 0.12);
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 6px 20px rgba(15, 23, 42, 0.05);
+  --shadow-decision: 0 1px 2px rgba(15, 23, 42, 0.04), 0 10px 28px rgba(192, 58, 0, 0.07);
+  --tab-active: #ffffff;
+  --tab-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.06);
+
+  --working: #15803d;
+  --waiting: #c03a00;
+  --done: #1d4ed8;
+  --failed: #b91c1c;
+  --asleep: #5f6c80;
+
+  --pill-waiting-bg: #fdeadf;
+  --pill-waiting: #b3360a;
+  --pill-done-bg: #dbeafe;
+  --pill-done: #1d4ed8;
+  --pill-failed-bg: #fee2e2;
+  --pill-failed: #b91c1c;
+  --pill-decided-bg: #dcfce7;
+  --pill-decided: #15803d;
+  --pill-neutral-bg: #f1f5f9;
+  --pill-neutral-border: #e2e8f0;
+  --pill-neutral: #334155;
+  --pill-question-bg: #ffedd5;
+  --pill-question: #b3360a;
+
+  --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --radius: 10px;
+  --radius-lg: 16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0a1628;
+    --card: #15233b;
+    --raised: #1c2b45;
+    --border: #2a3d5c;
+    --text: #f1f5f9;
+    --text-2: #d5dee8;
+    --label: #a7b4c6;
+    --accent: #ff9c78;
+    --button: #f74c00;
+    --on-button: #0a1628;
+    --decision: #2a2432;
+    --decision-border: #5a4554;
+    --decision-button: transparent;
+    --stop: #f1f5f9;
+    --on-stop: #0a1628;
+    --code-bg: #0d1729;
+    --code-tool: #93c5fd;
+    --code-string: #ff9c78;
+    --focus: #ff9c78;
+    --glow: rgba(247, 76, 0, 0.16);
+    --shadow: none;
+    --shadow-decision: none;
+    --tab-active: #0a1628;
+    --tab-shadow: none;
+    --working: #4ade80;
+    --waiting: #ff9c78;
+    --done: #93c5fd;
+    --failed: #fca5a5;
+    --asleep: #a7b4c6;
+    --pill-waiting-bg: #3b2a2c;
+    --pill-waiting: #ff9c78;
+    --pill-done-bg: #1c3557;
+    --pill-done: #93c5fd;
+    --pill-failed-bg: #3d1f2a;
+    --pill-failed: #fca5a5;
+    --pill-decided-bg: #133626;
+    --pill-decided: #4ade80;
+    --pill-neutral-bg: #1c2b45;
+    --pill-neutral-border: #2a3d5c;
+    --pill-neutral: #d5dee8;
+    --pill-question-bg: #3b2a26;
+    --pill-question: #ff9c78;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0a1628;
+  --card: #15233b;
+  --raised: #1c2b45;
+  --border: #2a3d5c;
+  --text: #f1f5f9;
+  --text-2: #d5dee8;
+  --label: #a7b4c6;
+  --accent: #ff9c78;
+  --button: #f74c00;
+  --on-button: #0a1628;
+  --decision: #2a2432;
+  --decision-border: #5a4554;
+  --decision-button: transparent;
+  --stop: #f1f5f9;
+  --on-stop: #0a1628;
+  --code-bg: #0d1729;
+  --code-tool: #93c5fd;
+  --code-string: #ff9c78;
+  --focus: #ff9c78;
+  --glow: rgba(247, 76, 0, 0.16);
+  --shadow: none;
+  --shadow-decision: none;
+  --tab-active: #0a1628;
+  --tab-shadow: none;
+  --working: #4ade80;
+  --waiting: #ff9c78;
+  --done: #93c5fd;
+  --failed: #fca5a5;
+  --asleep: #a7b4c6;
+  --pill-waiting-bg: #3b2a2c;
+  --pill-waiting: #ff9c78;
+  --pill-done-bg: #1c3557;
+  --pill-done: #93c5fd;
+  --pill-failed-bg: #3d1f2a;
+  --pill-failed: #fca5a5;
+  --pill-decided-bg: #133626;
+  --pill-decided: #4ade80;
+  --pill-neutral-bg: #1c2b45;
+  --pill-neutral-border: #2a3d5c;
+  --pill-neutral: #d5dee8;
+  --pill-question-bg: #3b2a26;
+  --pill-question: #ff9c78;
+}

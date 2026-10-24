@@ -24,7 +24,7 @@
 //!
 //! | Feature | Surface | Stability |
 //! |---|---|---|
-//! | `web` | The web home's HTTP API under `/api/surface`, mounted with `ServerBuilder::add_api_routes`, with its OpenAPI document | Beta |
+//! | `web` | The web home: its HTTP API under `/api/surface`, mounted with `ServerBuilder::add_api_routes`, with its OpenAPI document, and its page at `/ui/`, mounted with `ServerBuilder::add_root_routes` | Beta |
 //!
 //! ## Example
 //!

@@ -2,9 +2,9 @@ name: adk-rust
 
 # Test code asserts that secrets do *not* appear in output and uses fixed keys and
 # nonces as fixtures; scanning it produces only false positives. Examples log request
-# ids on purpose. The webui bundle is generated from adk-server/webui.
+# ids on purpose. The web home's bundle is generated from adk-surface/web.
 paths-ignore:
   - '**/tests/**'
   - 'examples/**'
-  - 'adk-server/assets/**'
+  - 'adk-surface/assets/**'
   - 'target/**'

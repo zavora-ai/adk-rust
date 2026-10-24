@@ -1,4 +1,4 @@
-//! Runs the advanced agent gallery through the embedded ADK Runtime UI.
+//! Runs the advanced agent gallery over the ADK REST, SSE and A2A APIs.
 
 use std::sync::Arc;
 
@@ -142,7 +142,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| format!("http://{address}"));
     let app = ServerBuilder::new(config).with_a2a(public_url).build();
     let listener = tokio::net::TcpListener::bind(&address).await?;
-    println!("Advanced ADK Runtime: http://{address}/ui/");
+    println!("Advanced ADK Runtime: http://{address}/api/");
     println!("Agents: a2a_gateway, ambient_monitor, voice_assistant, mcp_warehouse");
     println!(
         "Ambient monitor schedule: {ambient_schedule}; session: ambient-monitor."

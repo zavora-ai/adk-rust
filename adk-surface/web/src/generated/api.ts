@@ -370,6 +370,17 @@ export type Origin = {
 /** A pill on a briefing line (spec 3.3 §5.1 Today). */
 export type Pill = "done" | "failed" | "waitingForYou" | "youDecided" | "suggestion" | "question";
 
+/** `GET /surface/sessions/{session}/queued` answer (spec 3.3 §7.4 rule 2, S-I4). */
+export interface QueuedResponse {
+  /**
+   * What the caller typed while a decision of the session was open, oldest first; each is
+   * sent once the session's decisions are answered.
+   */
+  queued: string[];
+  /** The session. */
+  sessionId: string;
+}
+
 /** Quiet time (spec 3.3 §8.1). */
 export interface QuietView {
   /** Quiet time holds now. */
@@ -442,6 +453,19 @@ export interface SurfaceQuery {
   since?: string | null;
   /** The surface; defaults to the web home. */
   surface?: SurfaceKind | null;
+}
+
+/**
+ * `POST /surface/decisions/{id}/take-over` body: the secret typed on a surface, for the card
+ * at the version that surface showed (S-I2). Its `Debug` output redacts the secret.
+ */
+export interface TakeOverRequest {
+  /** What the person typed. */
+  secret: string;
+  /** The surface: the web home (default) or the phone, the two that take over (§8.2). */
+  surface?: SurfaceKind;
+  /** The card's `version`. */
+  version: number;
 }
 
 /**

@@ -1,4 +1,7 @@
-//! The web home's HTTP API (spec 3.3 §5.1, §6; feature `web`).
+//! The web home (spec 3.3 §5.1, §6; feature `web`): its HTTP API and its page.
+//!
+//! [`home`] serves the page — the React app built from `adk-surface/web`, embedded — at
+//! `/ui/` as root routes (§10 S1); mount it with `ServerBuilder::add_root_routes`.
 //!
 //! [`router`] serves the engine under `/surface`, relative to the `/api` prefix: mount it
 //! with `ServerBuilder::add_api_routes`, beside the kernel's control-plane routes, so the
@@ -12,11 +15,13 @@
 //! | `GET /surface/decisions/{id}` | [`DecisionCard`]: waiting, or decided with who, where and when |
 //! | `GET /surface/sessions/{session}/thread` | [`ThreadResponse`]: the session's entries, numbered by store position |
 //! | `GET /surface/sessions/{session}/feed` | Server-sent events: `entry` (with `id` = `seq`), `decisions`, `reset`; resumes after `Last-Event-ID` or `?after=` |
+//! | `GET /surface/sessions/{session}/queued` | [`QueuedResponse`]: what the caller typed while a decision of the session was open, sent once it is answered |
 //! | `GET /surface/agents` | [`AgentsResponse`] |
 //! | `GET /surface/status` | [`StatusLine`]; `?session=` for that session's mode |
 //! | `GET /surface/briefing` | [`Briefing`] since `?since=` (default: the last 24 hours) |
 //! | `POST /surface/commands` | [`CommandRequest`] → [`CommandOutcome`] |
 //! | `GET /surface/openapi.json` | The OpenAPI 3.1 document of these routes |
+//! | `POST /surface/decisions/{id}/take-over` | [`TakeOverRequest`] → [`CommandOutcome`]; mounted by [`take_over_router`] beside a harness that takes over |
 //!
 //! Reads take `?surface=` (`web`, `terminal`, `phone`, `tray`, `chat`, `voice`) so a card
 //! lists the answers that surface may give (§7.2). A declared surface or origin can only
@@ -26,7 +31,10 @@
 //! read from the `RequestContext` metadata the server's extractor builds. Errors are problem
 //! documents with the engine's `surface.*` code.
 
+mod home;
 mod openapi;
+mod take_over;
+mod vocabulary;
 
 use std::time::Duration;
 
@@ -42,7 +50,10 @@ use futures::StreamExt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+pub use home::{HOME_PATH, home};
 pub use openapi::{openapi, typescript};
+pub use take_over::{TakeOverRequest, take_over_router};
+pub use vocabulary::words_typescript;
 
 use crate::engine::{Command, CommandOutcome, FeedFrame, SurfaceEngine};
 use crate::error::SurfaceError;
@@ -61,6 +72,10 @@ pub mod paths {
     pub const THREAD: &str = "/surface/sessions/{session}/thread";
     /// `GET`: a session's feed, as server-sent events.
     pub const FEED: &str = "/surface/sessions/{session}/feed";
+    /// `GET`: the input queued behind a session's open decisions.
+    pub const QUEUED: &str = "/surface/sessions/{session}/queued";
+    /// `POST`: the secret a person typed for a take-over decision.
+    pub const TAKE_OVER: &str = "/surface/decisions/{id}/take-over";
     /// `GET`: the roster.
     pub const AGENTS: &str = "/surface/agents";
     /// `GET`: the status line.
@@ -101,6 +116,7 @@ pub fn router(engine: SurfaceEngine) -> Router {
         .route(paths::DECISION, get(decision))
         .route(paths::THREAD, get(thread))
         .route(paths::FEED, get(feed))
+        .route(paths::QUEUED, get(queued))
         .route(paths::AGENTS, get(agents))
         .route(paths::STATUS, get(status))
         .route(paths::BRIEFING, get(briefing))
@@ -125,6 +141,17 @@ pub struct ThreadResponse {
     pub session_id: String,
     /// Every event of the session store, numbered by position from 1.
     pub entries: Vec<FeedEntry>,
+}
+
+/// `GET /surface/sessions/{session}/queued` answer (spec 3.3 §7.4 rule 2, S-I4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QueuedResponse {
+    /// The session.
+    pub session_id: String,
+    /// What the caller typed while a decision of the session was open, oldest first; each is
+    /// sent once the session's decisions are answered.
+    pub queued: Vec<String>,
 }
 
 /// `GET /surface/agents` answer.
@@ -326,6 +353,18 @@ async fn feed(
         )
     });
     Sse::new(frames).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))).into_response()
+}
+
+async fn queued(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path(session): Path<String>,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    // The queue is kept per caller, so a caller only ever reads their own.
+    let queued = engine.queued(&caller, &session);
+    Json(QueuedResponse { session_id: session, queued }).into_response()
 }
 
 async fn agents(

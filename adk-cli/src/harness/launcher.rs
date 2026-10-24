@@ -9,8 +9,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
 
 use adk_core::{
-    AdkError, Agent, ApprovalService, DurableRunStore, Effort, Event, Result, RunConfig, SessionId,
-    ToolConfirmationRequest, UserId, held_tool_calls,
+    AdkError, Agent, ApprovalService, DurableRunStore, Effort, Event, GovernanceControl, Result,
+    RunConfig, SessionId, ToolConfirmationRequest, UserId, held_tool_calls,
 };
 use adk_harness::{Harness, HarnessAgent, HarnessMode, TrustDecision};
 use adk_runner::Runner;
@@ -128,6 +128,8 @@ pub struct HarnessLauncher {
     status_lines: Vec<(String, String)>,
     banner_notes: Vec<String>,
     request_context_extractor: Option<Arc<dyn RequestContextExtractor>>,
+    auth_token: Option<String>,
+    governance: Option<GovernanceControl>,
     approval_service: Option<Arc<dyn ApprovalService>>,
     background_runs: Option<BackgroundState>,
     security_config: Option<SecurityConfig>,
@@ -137,6 +139,8 @@ pub struct HarnessLauncher {
     kernel: Option<adk_kernel::Kernel>,
     hooks_disabled: bool,
     opened: Option<Arc<Shared>>,
+    #[cfg(feature = "surface")]
+    surface_records: Option<crate::surface::SurfaceRecords>,
 }
 
 impl std::fmt::Debug for HarnessLauncher {
@@ -188,6 +192,8 @@ impl HarnessLauncher {
             status_lines: Vec::new(),
             banner_notes: Vec::new(),
             request_context_extractor: None,
+            auth_token: None,
+            governance: None,
             approval_service: None,
             background_runs: None,
             security_config: None,
@@ -197,6 +203,8 @@ impl HarnessLauncher {
             kernel: None,
             hooks_disabled: false,
             opened: None,
+            #[cfg(feature = "surface")]
+            surface_records: None,
         }
     }
 
@@ -311,6 +319,48 @@ impl HarnessLauncher {
         self
     }
 
+    /// Admits served requests carrying `Authorization: Bearer <token>` as the operator: the
+    /// launcher's [user](Self::with_user_id) with the [`OPERATOR_SCOPE`](super::OPERATOR_SCOPE)
+    /// (spec 3.1 §8.2). Every caller is then the operator, so the web home's turns run as them,
+    /// with their mode and standing rules (spec 3.3 §5.1).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_cli::harness::HarnessLauncher;
+    ///
+    /// # fn example(agent: adk_harness::HarnessAgent) -> adk_core::Result<()> {
+    /// let app = HarnessLauncher::new(agent).with_user_id("ana").with_auth_token("s3cret").build_app()?;
+    /// # let _ = app;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
+        self.auth_token = Some(token.into());
+        self
+    }
+
+    /// Shares `control` as the kill switch of everything served: the server's runs, the
+    /// background runs built over it, and the web home's turns, so the home's **Stop all**
+    /// stops them all (spec 3.3 §11 S-I10). A kernel's own control takes its place.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_cli::harness::HarnessLauncher;
+    /// use adk_core::GovernanceControl;
+    ///
+    /// # fn example(agent: adk_harness::HarnessAgent) {
+    /// let control = GovernanceControl::new();
+    /// let launcher = HarnessLauncher::new(agent).with_governance(control.clone());
+    /// # let _ = launcher;
+    /// # }
+    /// ```
+    pub fn with_governance(mut self, control: GovernanceControl) -> Self {
+        self.governance = Some(control);
+        self
+    }
+
     /// Serves the approval inbox for `service` under `/api/approvals` (spec 3.1 §8.2).
     /// Build the harness with the same service so held calls reach it.
     pub fn with_approval_service(mut self, service: Arc<dyn ApprovalService>) -> Self {
@@ -377,6 +427,19 @@ impl HarnessLauncher {
     /// ```
     pub fn with_kernel(mut self, kernel: adk_kernel::Kernel) -> Self {
         self.kernel = Some(kernel);
+        self
+    }
+
+    /// Records the web home's commands on `trail` and keeps how each answer was given in
+    /// `answers` (spec 3.3 §11), such as an `adk_surface::AuditAnswerLog` over the signed audit
+    /// log, so "You said yes in Telegram" survives a restart.
+    #[cfg(feature = "surface")]
+    pub fn with_surface_records(
+        mut self,
+        trail: adk_core::audit_log::AuditTrail,
+        answers: Arc<dyn adk_surface::AnswerLog>,
+    ) -> Self {
+        self.surface_records = Some(crate::surface::SurfaceRecords { trail, answers });
         self
     }
 
@@ -513,8 +576,13 @@ impl HarnessLauncher {
             &workspace,
         )
         .await?;
-        let harness =
-            harness_for(self.agent.clone(), &app_name, sessions.clone(), self.run_store.clone())?;
+        let harness = harness_for(
+            self.agent.clone(),
+            &app_name,
+            sessions.clone(),
+            self.run_store.clone(),
+            Served::default(),
+        )?;
         let harness = match &self.goal_queue {
             Some(queue) => harness.with_goal_queue(queue.clone()),
             None => harness,
@@ -683,6 +751,51 @@ impl HarnessLauncher {
             ) as Arc<dyn RequestContextExtractor>,
             None => extractor,
         };
+        // One kill switch for everything served: the kernel's, else this launcher's, so the
+        // home's Stop all reaches the server's runs and the background runs (spec 3.3 S-I10).
+        let governance = match &kernel {
+            Some(kernel) => kernel.config().governance.clone(),
+            None => self.governance.clone().unwrap_or_default(),
+        };
+        let extractor = self.request_context_extractor.clone().or_else(|| {
+            self.auth_token.as_ref().map(|token| {
+                Arc::new(super::serve::BearerTokenExtractor::new(
+                    token.clone(),
+                    self.user_id.clone(),
+                )) as Arc<dyn RequestContextExtractor>
+            })
+        });
+        // The web home over this harness (spec 3.3 §5.1, §10 S1), on the sessions the server
+        // serves, so both see one store. Its turns run as the operator when every caller is
+        // (loopback or the token), so their mode and standing rules apply (spec 3.1 §8.2).
+        #[cfg(feature = "surface")]
+        let (surface, sessions, take_over) = {
+            let app = self.resolved_app_name();
+            let sessions = self
+                .session_service
+                .clone()
+                .unwrap_or_else(|| Arc::new(InMemorySessionService::new()));
+            let operator = self
+                .request_context_extractor
+                .is_none()
+                .then(|| super::serve::operator(&self.user_id));
+            let harness = harness_for(
+                self.agent.clone(),
+                &app,
+                sessions.clone(),
+                self.run_store.clone(),
+                Served { governance: Some(governance.clone()), caller: operator },
+            )?;
+            let engine = crate::surface::harness_engine(
+                &app,
+                Arc::new(harness),
+                sessions.clone(),
+                self.approval_service.clone(),
+                kernel.clone(),
+                self.surface_records.clone(),
+            )?;
+            (engine, sessions, self.agent.take_over().cloned())
+        };
         let rules = super::rules::rules_router(super::rules::RuleEndpoints {
             agent: self.agent.clone(),
             app_name: self.resolved_app_name(),
@@ -694,11 +807,27 @@ impl HarnessLauncher {
             .with_api_routes(rules);
         // The kernel's control plane beside the inbox, behind the same extractor, and its
         // kill switch on the server (spec 3.2 §7.11, §10 S4).
-        if let Some(kernel) = kernel.clone() {
-            launcher = launcher
-                .with_api_routes(adk_kernel::control::router(kernel.clone()))
-                .with_kernel_governance(kernel.config().governance.clone(), Arc::new(kernel));
+        match kernel.clone() {
+            Some(kernel) => {
+                launcher = launcher
+                    .with_api_routes(adk_kernel::control::router(kernel.clone()))
+                    .with_kernel_governance(kernel.config().governance.clone(), Arc::new(kernel));
+            }
+            None => launcher = launcher.with_governance(governance),
         }
+        #[cfg(feature = "surface")]
+        {
+            // Take over, then Done: a secret typed on the home reaches the call that asked
+            // (spec 3.3 §8.2, §10 H2).
+            if let Some(take_over) = take_over {
+                launcher = launcher.with_api_routes(adk_surface::web::take_over_router(
+                    surface.clone(),
+                    take_over,
+                ));
+            }
+            launcher = launcher.with_session_service(sessions).with_surface(surface);
+        }
+        #[cfg(not(feature = "surface"))]
         if let Some(sessions) = self.session_service {
             launcher = launcher.with_session_service(sessions);
         }
@@ -713,7 +842,7 @@ impl HarnessLauncher {
         if let Some(state) = self.background_runs {
             launcher = launcher.with_background_runs(state);
         }
-        let loopback = match self.request_context_extractor {
+        let loopback = match extractor {
             Some(extractor) => {
                 launcher = launcher.with_request_context_extractor(devices(extractor));
                 None
@@ -765,6 +894,8 @@ impl HarnessLauncher {
         }
         println!("ADK-Rust harness serving on http://{addr}");
         println!("  mode {} · shell {}", info.default_mode, terminal_safe(&shell_label(&info)));
+        #[cfg(feature = "surface")]
+        println!("  web home  http://{addr}/ui/");
         println!("  approvals: GET /api/approvals, POST /api/approvals/{{id}}/decide");
         println!("  standing rules: GET /api/rules, POST /api/rules, DELETE /api/rules/{{id}}");
         println!("Press Ctrl+C to stop\n");
@@ -813,6 +944,8 @@ async fn serve_resident(
     println!(
         "  control: adk-rust ps | top | attach | kill | suspend | resume | freeze | events | proc"
     );
+    #[cfg(feature = "surface")]
+    println!("  web home  http://{addr}/ui/");
     println!("  approvals: GET /api/approvals, POST /api/approvals/{{id}}/decide");
     println!("Press Ctrl+C to drain and stop\n");
     let server = tokio::spawn(async move {
@@ -869,11 +1002,20 @@ pub(crate) fn memory_on(harness: &Harness) -> bool {
 
 /// A `Harness` whose runner asks the agent's prompter and waits an hour for a person, and
 /// that runs goals as durable runs in `run_store` when one is given.
+/// What a served harness's runner shares with the server: its kill switch, and the caller its
+/// turns run as when every caller is the operator.
+#[derive(Default)]
+pub(crate) struct Served {
+    pub(crate) governance: Option<GovernanceControl>,
+    pub(crate) caller: Option<adk_core::RequestContext>,
+}
+
 pub(crate) fn harness_for(
     agent: Arc<HarnessAgent>,
     app_name: &str,
     sessions: Arc<dyn SessionService>,
     run_store: Option<Arc<dyn DurableRunStore>>,
+    served: Served,
 ) -> Result<Harness> {
     let runtime = agent.runtime();
     let config = RunConfig {
@@ -890,6 +1032,12 @@ pub(crate) fn harness_for(
         .approval_store(runtime.approval_store().clone());
     if let Some(compaction) = runtime.compaction() {
         builder = builder.compaction_config(compaction.clone());
+    }
+    if let Some(governance) = served.governance {
+        builder = builder.governance(governance);
+    }
+    if let Some(caller) = served.caller {
+        builder = builder.request_context(caller);
     }
     let harness = Harness::with_runner(agent, builder.build()?)?;
     // Goals get their own queue, so this worker and a server's background worker on the
@@ -1012,6 +1160,7 @@ impl Shared {
             &self.app_name,
             self.sessions.clone(),
             self.run_store.clone(),
+            Served::default(),
         )?);
         *self.harness.write().unwrap_or_else(std::sync::PoisonError::into_inner) = harness.clone();
         Ok(Some(harness))
@@ -1070,6 +1219,7 @@ impl Shared {
             &self.app_name,
             self.sessions.clone(),
             self.run_store.clone(),
+            Served::default(),
         )?);
         *self.harness.write().unwrap_or_else(std::sync::PoisonError::into_inner) = harness.clone();
         *self.effort.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(effort);
