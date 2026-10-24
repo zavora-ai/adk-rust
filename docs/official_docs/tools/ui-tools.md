@@ -91,13 +91,20 @@ inbox, and the run ends with one interrupt per held call instead of a success:
 
 | Field | Value |
 |-------|-------|
-| `id` | The inbox entry's ID; without an approval service, the call ID |
+| `id` | The inbox entry's ID; for a call with no inbox entry, the call ID |
 | `toolCallId` | The held call, whose `TOOL_CALL_START`, `TOOL_CALL_ARGS` and `TOOL_CALL_END` the run already sent |
-| `metadata.summary`, `risk`, `agent` | Drawn from the inbox entry, never from agent output |
+| `metadata.summary`, `risk`, `version` | Drawn from the inbox entry, never from agent output |
+| `metadata.agent` | The acting agent's ID the inbox entry records |
+| `metadata.answerable` | Whether a `resume` can decide it here: `true` for an inbox entry |
 | `metadata.arguments` | The arguments as shown to approvers, only when the caller authenticated through the server's `RequestContextExtractor`, so it is the session's owner |
-| `expiresAt` | The inbox entry's expiry, when it has one |
+| `responseSchema`, `expiresAt` | The answers the inbox entry allows and its expiry; absent for a call with no inbox entry |
 
-The held call's placeholder result and the hold's placeholder text are not sent.
+A call with no inbox entry — no approval service, or a service that leaves the call held
+in its store only, such as `StoreApprovalService` without a router — still ends the run
+with an interrupt, but with `metadata.answerable: false` and no `responseSchema`: it is
+decided where it is held. A server with an approval service accepts it answered
+`cancelled`; one without accepts no `resume` at all. The held call's placeholder result
+and the hold's placeholder text are not sent.
 
 ### Resume
 
@@ -127,28 +134,43 @@ The next run on the thread answers the interrupts in `resume`:
 | `{"approved": true, "editedArgs": {...}}` | Edit: the call runs with the full replacement arguments after the policy checks them again |
 | `{"approved": false, "reason": "..."}` | Deny, with the reason reported to the model |
 
-Each `resolved` entry becomes `ApprovalService::decide` on its inbox entry, before the
-run starts, by the authenticated caller as `human(<user id>)` at the version the client
-echoes in `metadata.version`, or else the version read then. The run is a blank turn
-that resumes the calls the decisions allow; their results arrive as `TOOL_CALL_RESULT`
-against the original `toolCallId`. A `cancelled` entry decides nothing: the call keeps
-waiting in the inbox. An entry naming no inbox entry of the run's session is reported as
-`unknown` and skipped.
+A resume is all or nothing. Every entry is checked against its inbox entry first, as
+`ApprovalService::decide` would check it, by the authenticated caller as
+`human(<user id>)` at the version the client echoes in `metadata.version`, or else the
+version read then. The answers are recorded only once the rest of the request is valid,
+the session and the agent are loaded, and the server is not frozen, just before the run
+starts. The run is a blank turn that resumes the calls the decisions allow; their results
+arrive as `TOOL_CALL_RESULT` against the original `toolCallId`.
+
+| Entry | Effect |
+|-------|--------|
+| `resolved`, the inbox entry pending | Decided when the run starts |
+| `resolved`, the inbox entry already decided and its call not yet run — decided on another surface, or by this resume sent before | Nothing is recorded; the run starts and the call follows the recorded decision. A different answer is reported with `code` and `message` |
+| `resolved`, the inbox entry already decided and its call already run, expired, withdrawn, or changed since it was shown | The whole resume is refused and nothing is decided |
+| `cancelled` | Nothing is decided: the call keeps waiting in the inbox |
+| Naming no inbox entry of the run's session | Reported as `unknown` and skipped |
 
 Each answered entry is reported after `RUN_STARTED` as a `CUSTOM` event named
 `adk.decision`, with `interruptId`, `state` (`approved`, `rejected`, `responded`,
-`pending`, `expired`, `cancelled`, or `unknown`), `tool`, and, once decided, `decidedBy`
-and `decidedAt`. An answer the service refuses — already decided, expired, withdrawn, or
-changed since it was shown — is reported, never retried: the stream is `RUN_STARTED`, the
-entry's `adk.decision`, and `RUN_ERROR` with the service's code, such as
-`approval.already_resolved` with the message "Already decided by alice", and the run does
-not start.
+`pending`, `expired`, `cancelled`, or `unknown`), `tool`, `version` — the version to
+answer at — and, once decided, `decidedBy` and `decidedAt`; an answer not recorded also
+carries `code` and `message`. A refused resume is reported, never retried: the stream is
+`RUN_STARTED`, the `adk.decision` updates, and `RUN_ERROR` with the refusal's code, such
+as `approval.already_resolved` with the message "Already decided by alice" or
+`approval.version_conflict` after an escalation changed the entry, and the run does not
+start. Answering again at the reported `version` decides the entry.
 
 | Request | Answer |
 |---------|--------|
 | `resume` without an approval service, or outside the `ag_ui` profile's `protocol_native` transport | `400` |
 | `resume` without an authenticated caller | `401` |
-| A `resolved` entry whose `payload` is not one of the answers above | `400`, and nothing is decided |
+| A `resolved` entry whose `payload` is not one of the answers above, or one interrupt answered twice | `400`, and nothing is decided |
+| Any other invalid request, such as a `stateDelta` that is not an object | Its error, and nothing is decided |
+| A frozen server | `403` (`governance.frozen`), and nothing is decided |
+
+`GET /api/ui/capabilities` lists `interrupt_resume` for `ag_ui` only on a server with an
+approval service and a `RequestContextExtractor`; `tool_call_interrupts` is listed on
+every server.
 
 The inbox's approval policy decides who may answer. For a personal agent whose person
 approves their own agent's calls, route held calls with

@@ -39,12 +39,12 @@
         "messages_snapshot",
         "stable_text_events",
         "stable_tool_events",
-        "tool_call_interrupts",
-        "interrupt_resume"
+        "tool_call_interrupts"
       ],
       "limitations": [
         "Protocol-native AG-UI transport is opt-in and currently scoped to `adk-server`; the default runtime stream remains the generic ADK wrapper for compatibility.",
-        "The framework translates generic ADK runtime events into the stable AG-UI subset at the server boundary, but it does not yet emit the full activity, reasoning, or agent-native AG-UI event families end-to-end from `adk-agent`."
+        "The framework translates generic ADK runtime events into the stable AG-UI subset at the server boundary, but it does not yet emit the full activity, reasoning, or agent-native AG-UI event families end-to-end from `adk-agent`.",
+        "Held calls end a run as `tool_call` interrupts only on the protocol-native transport. Interrupts are answered with `resume` (feature `interrupt_resume`) only on a server with an approval service and a request-context extractor; elsewhere an interrupt has no `responseSchema` and is decided where the call is held."
       ]
     },
     {

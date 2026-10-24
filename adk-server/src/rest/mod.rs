@@ -813,6 +813,9 @@ impl ServerBuilder {
             Some(service) => runtime_controller.with_approval_service(service.clone()),
             None => runtime_controller,
         };
+        // An AG-UI resume decides inbox entries for an authenticated caller.
+        let resume_wired =
+            runtime_controller.answers_ag_ui_resume() && config.request_context_extractor.is_some();
         let apps_controller = AppsController::new(config.clone());
         let artifacts_controller = ArtifactsController::new(config.clone());
         let debug_controller = DebugController::new(config.clone());
@@ -846,7 +849,10 @@ impl ServerBuilder {
             .route("/list-apps", get(controllers::apps::list_apps_compat))
             .route("/ui/agents/{name}", get(controllers::apps::get_agent_details))
             .with_state(apps_controller)
-            .route("/ui/capabilities", get(controllers::ui::ui_capabilities))
+            .route(
+                "/ui/capabilities",
+                get(controllers::ui::served_ui_capabilities).with_state(resume_wired),
+            )
             .route("/ui/initialize", post(controllers::ui::ui_initialize))
             .route("/ui/message", post(controllers::ui::ui_message))
             .route("/ui/update-model-context", post(controllers::ui::ui_update_model_context))
