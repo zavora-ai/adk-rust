@@ -61,11 +61,11 @@ adk-rust memory undo <tick-id>
 | Kill switch | `freeze` parks running processes on every replica sharing the store; `unfreeze` resumes exactly the ones it parked |
 | Control plane | How terminals and apps reach the kernel: an owner-only local socket, plus an HTTP API on loopback, or beyond it with authentication |
 | Self-observation (`/proc`) | A content-free ledger of what your agents did — kinds, durations and hashed subjects, never what they read or wrote. Once a day the kernel compares your routine with its last four weeks and, when it changes for long enough, asks you about it in plain words (`adk-rust proc`) |
+| Partitions | Separate compartments, such as work and home, each run by an agent of its own with its own memory, drivers and mode. Nothing crosses between them except through the coordinator, and only with your approval |
 | Stores | Processes, schedules, the agenda and the ledger live in SQLite (`harness.db`) or a shared PostgreSQL or Redis backend, so a crash or restart resumes work instead of losing it |
 
 Every tool call a kernel process makes still goes through the harness's modes, standing rules
-and approvals. Partitions (separate work and home compartments), channel wake sources and
-the managed form are the remaining parts of spec 3.2.
+and approvals. Channel wake sources are the remaining part of spec 3.2.
 
 ## How it is built
 
