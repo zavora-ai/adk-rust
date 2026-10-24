@@ -140,7 +140,7 @@ impl FactsRuntime {
                 continue;
             };
             if fact.status.is_live()
-                && scope.admits(&fact.scope)
+                && self.admits(scope, &fact.scope)
                 && kind.is_none_or(|kind| fact.kind == kind)
             {
                 facts.push((fact, score));

@@ -19,7 +19,7 @@ adk-rust serve --store postgres://harness@db/harness --port 8081   # one replica
 | Approval inbox | `/api/approvals`, expiry ticker every 30 s |
 | Standing rules | `/api/rules`, for callers with the `operator` scope |
 | Background runs | `/api/runs`, target `adk-rust` |
-| Storage | `<config dir>/adk-rust/harness.db`, shared with the REPL; `--store <url>` for [replicas](#running-replicas) |
+| Storage | `<config dir>/adk-rust/harness.db`, shared with the REPL, in SQLite's write-ahead-log mode (`harness.db-wal` and `harness.db-shm` sit beside it while it is open); `--store <url>` for [replicas](#running-replicas) |
 | Plans and goal graphs | Checkpointed in the same store; `--checkpointer <url>` names another |
 | Request timeout | 15 minutes, since a turn runs model calls and commands (`with_security_config` sets another) |
 

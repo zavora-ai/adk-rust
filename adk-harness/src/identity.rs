@@ -650,6 +650,13 @@ impl IdentityGate {
         seen.insert(ctx.invocation_id().to_string(), ctx.is_authenticated());
     }
 
+    /// Whether rules and Auto apply only to authenticated runs
+    /// (`HarnessAgentBuilder::require_authenticated_identity`).
+    #[cfg(feature = "acp-server")]
+    pub(crate) fn requires_authentication(&self) -> bool {
+        self.require_authenticated
+    }
+
     /// Whether standing rules and Auto are inert for `invocation_id`: the harness requires
     /// authenticated identity and the invocation was not authenticated, or was never seen.
     pub(crate) fn inert(&self, invocation_id: &str) -> bool {

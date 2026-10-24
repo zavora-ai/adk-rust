@@ -112,14 +112,14 @@ pub const UI_PROTOCOL_CAPABILITIES: &[UiProtocolCapabilitySpec] = &[
             "messages_snapshot",
             "stable_text_events",
             "stable_tool_events",
-            // Spec 3.3 §10 S2: held calls end the run as `tool_call` interrupts, and a
-            // `resume` decides their inbox entries (AG-UI 1.1 draft lifecycle).
+            // Spec 3.3 §10 S2: held calls end the run as `tool_call` interrupts (AG-UI 1.1
+            // draft lifecycle). `interrupt_resume` is added by a server that can decide them.
             "tool_call_interrupts",
-            "interrupt_resume",
         ],
         limitations: &[
             "Protocol-native AG-UI transport is opt-in and currently scoped to `adk-server`; the default runtime stream remains the generic ADK wrapper for compatibility.",
             "The framework translates generic ADK runtime events into the stable AG-UI subset at the server boundary, but it does not yet emit the full activity, reasoning, or agent-native AG-UI event families end-to-end from `adk-agent`.",
+            "Held calls end a run as `tool_call` interrupts only on the protocol-native transport. Interrupts are answered with `resume` (feature `interrupt_resume`) only on a server with an approval service and a request-context extractor; elsewhere an interrupt has no `responseSchema` and is decided where the call is held.",
         ],
         deprecation: None,
     },
@@ -150,6 +150,10 @@ pub const UI_PROTOCOL_CAPABILITIES: &[UiProtocolCapabilitySpec] = &[
         deprecation: None,
     },
 ];
+
+/// The `ag_ui` feature a server lists when it answers interrupts with `resume`
+/// (spec 3.3 §10 S2): it has an approval service and authenticates callers.
+pub(crate) const AG_UI_RESUME_FEATURE: &str = "interrupt_resume";
 
 /// Normalize runtime UI profile aliases to canonical values.
 pub fn normalize_runtime_ui_protocol(raw: &str) -> Option<&'static str> {

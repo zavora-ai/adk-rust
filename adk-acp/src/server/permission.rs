@@ -26,9 +26,11 @@
 //! With [`StandingPermissions`] configured, a call it may remember is also offered
 //! `allow_always` and `reject_always` (spec 3.3 §10 A1). Choosing one decides this call
 //! and asks [`StandingPermissions::remember`] to make the answer a standing rule, so the
-//! next identical call is not asked about. A call it may never remember — spending money,
-//! publishing, leaving plan mode, an unsandboxed retry — is offered allow once and deny
-//! only, and an "always" answer to a request that did not offer one is a denial.
+//! next identical call is not asked about. A call it may never remember — which calls those
+//! are is the implementation's to decide — is offered allow once and deny only, and an
+//! "always" answer to a request that did not offer one is a denial. A call a remembered
+//! rule already covers, one remembered for an earlier call of the same batch included, is
+//! decided by the rule and not asked about.
 //!
 //! # SDK safety
 //!
@@ -100,13 +102,29 @@ const REJECT_ALWAYS_OPTION_ID: &str = "acp-reject-always";
 #[async_trait]
 pub trait StandingPermissions: Send + Sync {
     /// What an "always" answer to `request` would cover for the person in `scope`, or
-    /// `None` when the call may never be remembered, such as spending money, publishing,
-    /// leaving plan mode, or an unsandboxed retry.
+    /// `None` when the call may never be remembered, or when a remembered rule would not
+    /// apply to the server's runs. `adk-harness` never remembers a payment, leaving plan
+    /// mode, a memory write, a desktop action, a protected edit, or an unsandboxed retry.
     async fn offer(
         &self,
         scope: &ApprovalScope,
         request: &ToolConfirmationRequest,
     ) -> Option<StandingOffer>;
+
+    /// The decision the server's policy gives `request` for the person in `scope` without
+    /// asking — a standing rule covers it, one remembered for an earlier call of the same
+    /// batch included — or `None` when the person decides.
+    ///
+    /// The server asks before each permission request, so a call the policy now decides is
+    /// not asked about: the person is never shown a question whose answer the policy would
+    /// override. The default leaves every call to the person.
+    async fn standing_decision(
+        &self,
+        _scope: &ApprovalScope,
+        _request: &ToolConfirmationRequest,
+    ) -> Option<ToolConfirmationDecision> {
+        None
+    }
 
     /// Remembers `decision` as a standing rule covering what [`offer`](Self::offer)
     /// described for `request`, owned by the person in `scope`.
@@ -131,7 +149,8 @@ pub trait StandingPermissions: Send + Sync {
 /// ```rust
 /// use adk_acp::server::StandingOffer;
 ///
-/// let offer = StandingOffer::new("for this command (bash: cargo test …)");
+/// let offer = StandingOffer::new("for this command (bash: cargo test …)")
+///     .with_allow_warning("runs project scripts, so it allows whatever they do");
 /// assert_eq!(offer.scope, "for this command (bash: cargo test …)");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,12 +159,21 @@ pub struct StandingOffer {
     /// Completes "Always allow …" and "Always deny …" in plain words, such as
     /// `for this command (bash: cargo test …)`.
     pub scope: String,
+    /// What "Always allow" also permits, appended to its label only, such as a command
+    /// rule that runs project scripts allowing whatever they do (spec 3.1 §7.5).
+    pub allow_warning: Option<String>,
 }
 
 impl StandingOffer {
     /// An offer covering `scope`.
     pub fn new(scope: impl Into<String>) -> Self {
-        Self { scope: scope.into() }
+        Self { scope: scope.into(), allow_warning: None }
+    }
+
+    /// Adds `warning` to the "Always allow" label (spec 3.1 §7.5).
+    pub fn with_allow_warning(mut self, warning: impl Into<String>) -> Self {
+        self.allow_warning = Some(warning.into());
+        self
     }
 }
 
@@ -175,7 +203,10 @@ impl PermissionBridge {
         if let Some(offer) = offer {
             options.push(PermissionOption::new(
                 ALLOW_ALWAYS_OPTION_ID,
-                format!("Always allow {}", offer.scope),
+                match &offer.allow_warning {
+                    Some(warning) => format!("Always allow {} — {warning}", offer.scope),
+                    None => format!("Always allow {}", offer.scope),
+                },
                 PermissionOptionKind::AllowAlways,
             ));
         }
@@ -359,6 +390,21 @@ mod tests {
                     "Always deny for this command (bash: cargo test …)".into(),
                     PermissionOptionKind::RejectAlways
                 ),
+            ]
+        );
+        // A warning qualifies what "Always allow" permits, never "Always deny".
+        let warned =
+            offer.with_allow_warning("runs project scripts, so it allows whatever they do");
+        let labels: Vec<String> =
+            options(Some(&warned)).into_iter().map(|(_, label, _)| label).collect();
+        assert_eq!(
+            labels,
+            [
+                "Allow once",
+                "Always allow for this command (bash: cargo test …) — runs project scripts, so it \
+                 allows whatever they do",
+                "Deny",
+                "Always deny for this command (bash: cargo test …)",
             ]
         );
     }

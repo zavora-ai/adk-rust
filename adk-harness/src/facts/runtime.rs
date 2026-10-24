@@ -74,8 +74,12 @@ pub(crate) struct FactsRuntime {
     /// vector with (spec 3.2 §7.5).
     #[cfg_attr(not(feature = "runner"), allow(dead_code))] // read by consolidation
     pub(crate) embedder: Option<Arc<dyn adk_memory::EmbeddingProvider>>,
-    /// The project of this harness's workspace.
+    /// The project of this harness's workspace, or its partition's memory scope.
     pub(crate) project: String,
+    /// Whether the harness is a partition's (spec 3.2 §7.8, K-I15): every fact it writes is
+    /// in [`project`](Self::project), preferences included, and it reads no other — no
+    /// user-wide fact, which another partition could have written.
+    pub(crate) confined: bool,
     /// The harness's own agent; members neither recall nor write (spec 3.1 §9.2 I42).
     pub(crate) root_agent: String,
     /// Long-term memory is inert for runs without authenticated identity (I42).
@@ -141,6 +145,7 @@ impl FactsRuntime {
             index,
             embedder: None,
             project,
+            confined: false,
             root_agent,
             require_authenticated,
             audit,
@@ -170,9 +175,29 @@ impl FactsRuntime {
         self
     }
 
+    /// Confines the harness's facts to its project (spec 3.2 §7.8, K-I15): a partition's.
+    #[must_use]
+    pub(crate) fn confined(mut self, confined: bool) -> Self {
+        self.confined = confined;
+        self
+    }
+
     /// The project scope of `user` of `app`.
     pub(crate) fn scope(&self, app: &str, user: &str) -> FactScope {
         FactScope::new(app, user, Some(self.project.clone()))
+    }
+
+    /// Whether a fact in `fact` may be read from `scope`: the same app and user, and this
+    /// project or user-wide (spec 3.1 §9.2 I42); for a partition's harness, exactly
+    /// `scope` (spec 3.2 K-I15).
+    pub(crate) fn admits(&self, scope: &FactScope, fact: &FactScope) -> bool {
+        if self.confined { scope == fact } else { scope.admits(fact) }
+    }
+
+    /// The project of a new fact of `kind`: user-wide for a preference, this project for
+    /// every other kind and for every kind in a partition (spec 3.2 §7.8).
+    pub(crate) fn project_of(&self, kind: super::types::FactKind) -> Option<String> {
+        (self.confined || kind != super::types::FactKind::Preference).then(|| self.project.clone())
     }
 
     /// Whether long-term memory serves `ctx`: the harness's own agent, with authenticated

@@ -1,6 +1,6 @@
 //! The in-memory and SQLite agenda stores pass the agenda store conformance suite (spec 3.2
 //! §7.5, §11, §13 Q8). The SQLite suite runs on a file opened as `adk-rust` opens
-//! `harness.db`, and again in WAL mode; every `open` is a new pool over the same file, as
+//! `harness.db`, and again on a bare WAL pool; every `open` is a new pool over the same file, as
 //! a restarted kernel or a second process would create.
 
 use std::sync::Arc;
@@ -70,6 +70,10 @@ mod sqlite {
                 Journal::HarnessDb => {
                     let sessions =
                         SqliteSessionService::new(&self.url()).await.expect("SQLite opens");
+                    sqlx::query("PRAGMA journal_mode = WAL")
+                        .execute(sessions.pool())
+                        .await
+                        .expect("WAL");
                     sessions.migrate().await.expect("session schema migrates");
                     sessions.pool().clone()
                 }

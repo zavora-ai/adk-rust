@@ -145,7 +145,7 @@ impl FactsRuntime {
     ///
     /// `Known` only from a verified quote; a model's or a tool's word is `Assumed` at
     /// most. A secret or an over-long text is rejected; personal data is redacted. A
-    /// `Preference` is user-wide; every other kind is the project's.
+    /// `Preference` is user-wide, except in a partition; every other kind is the project's.
     ///
     /// # Errors
     ///
@@ -154,6 +154,21 @@ impl FactsRuntime {
         &self,
         candidate: &FactCandidate,
         ctx: &AdmitContext<'_>,
+    ) -> Result<Admitted> {
+        self.admit_into(candidate, ctx, None).await
+    }
+
+    /// [`admit`](Self::admit) into the project `target` when it is set: the coordinator's
+    /// write into another partition's memory scope, through a crossing (spec 3.2 §7.8).
+    ///
+    /// # Errors
+    ///
+    /// Returns the store's or, in Block mode, the audit trail's error.
+    pub(crate) async fn admit_into(
+        &self,
+        candidate: &FactCandidate,
+        ctx: &AdmitContext<'_>,
+        target: Option<&str>,
     ) -> Result<Admitted> {
         let raw = candidate.text.trim();
         if raw.is_empty() {
@@ -201,11 +216,11 @@ impl FactsRuntime {
             (Some(_), Some(quote)) => Some(redact_pii(&collapse_whitespace(quote)).0),
             _ => None,
         };
-        let scope = FactScope::new(
-            ctx.app,
-            ctx.user,
-            (kind != FactKind::Preference).then(|| self.project.clone()),
-        );
+        let project = match target {
+            Some(project) => Some(project.to_string()),
+            None => self.project_of(kind),
+        };
+        let scope = FactScope::new(ctx.app, ctx.user, project);
         let invocation =
             verified.map_or(ctx.invocation_id, |message| message.invocation_id.as_str());
         let mut provenance = Provenance::new(source, ctx.session_id, invocation);
@@ -245,7 +260,13 @@ impl FactsRuntime {
             let Some(old) = self.store.get(id.trim()).await? else {
                 return Ok(rejected(&fact.text, format!("supersedes unknown fact '{id}'")));
             };
-            if old.scope.app != ctx.app || old.scope.user != ctx.user || !old.status.is_live() {
+            // A partition supersedes only its own facts (spec 3.2 K-I15).
+            let foreign = (self.confined || target.is_some()) && old.scope != scope;
+            if old.scope.app != ctx.app
+                || old.scope.user != ctx.user
+                || !old.status.is_live()
+                || foreign
+            {
                 return Ok(rejected(&fact.text, format!("supersedes unknown fact '{id}'")));
             }
             if old.status == FactStatus::Known && fact.status != FactStatus::Known {
@@ -364,7 +385,8 @@ impl FactsRuntime {
 
 #[cfg(feature = "runner")]
 impl FactsRuntime {
-    /// The fact `id` when it is `user`'s, in this project or user-wide.
+    /// The fact `id` when it is `user`'s, in this project or user-wide (in a partition, in
+    /// its project only).
     ///
     /// # Errors
     ///
@@ -373,7 +395,7 @@ impl FactsRuntime {
         self.store
             .get(id.trim())
             .await?
-            .filter(|fact| self.scope(app, user).admits(&fact.scope))
+            .filter(|fact| self.admits(&self.scope(app, user), &fact.scope))
             .ok_or_else(|| super::store::not_found(id))
     }
 

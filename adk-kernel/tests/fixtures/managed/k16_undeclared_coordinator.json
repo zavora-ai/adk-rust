@@ -1,0 +1,7 @@
+{
+  "name": "K-16: A coordinator the block does not declare",
+  "description": "The coordinator is one of the block's partitions.",
+  "agent_def": { "name": "assistant", "model": "claude-sonnet-5-5" },
+  "kernel": { "partitions": [{ "id": "work", "class": "work" }], "coordinator": "home" },
+  "expect": { "error_contains": ["adk.kernel", "coordinator `home` is not a partition the block declares"] }
+}

@@ -1,5 +1,5 @@
 use super::ag_ui_decisions::{
-    AgUiDecisions, HeldCall, ResumeOutcome, apply_resume, decision_event,
+    AgUiDecisions, HeldCall, ResumeOutcome, commit_resume, decision_event, plan_resume,
 };
 use crate::ServerConfig;
 use crate::auth_bridge::{RequestContextError, RequestContextExtractor};
@@ -51,8 +51,9 @@ impl RuntimeController {
     ///
     /// A held call ends the run with an AG-UI interrupt whose `id` is the call's inbox
     /// entry, and a later run's `resume` entry becomes [`ApprovalService::decide`] on that
-    /// entry. A service without an [`approval_store`](adk_core::ApprovalService::approval_store)
-    /// cannot name the entry, so its interrupts carry the call ID, which no resume decides.
+    /// entry. A call the service routes to no inbox entry — no router, or a service without an
+    /// [`approval_store`](adk_core::ApprovalService::approval_store) — ends the run with an
+    /// interrupt carrying the call ID, `metadata.answerable: false` and no `responseSchema`.
     /// `ServerBuilder::with_approval_service` (feature `approvals`) sets it.
     ///
     /// [`ApprovalService::decide`]: adk_core::ApprovalService::decide
@@ -70,6 +71,11 @@ impl RuntimeController {
     pub fn with_approval_service(mut self, service: Arc<dyn adk_core::ApprovalService>) -> Self {
         self.approval_service = Some(service);
         self
+    }
+
+    /// Whether AG-UI resumes can be decided: the controller has an approval service.
+    pub(crate) fn answers_ag_ui_resume(&self) -> bool {
+        self.approval_service.is_some()
     }
 }
 
@@ -1735,10 +1741,12 @@ pub(crate) async fn run_sse_compat_for_request(
         request_context.is_some(),
     );
 
-    // Answers to the previous run's interrupts are decided before this run starts, so the
-    // run resumes the calls they allow (spec 3.3 §10 S2).
+    // Answers to the previous run's interrupts are checked now and recorded only once the run
+    // is about to start, so a request that fails decides nothing and the run resumes the calls
+    // they allow (spec 3.3 §10 S2).
     let resume = ag_ui_input.as_ref().and_then(|input| input.resume.as_ref());
     let resuming = resume.is_some_and(|resume| !resume.entries().is_empty());
+    let mut resume_plan = None;
     if let Some(resume) = resume.filter(|_| resuming) {
         let Some(service) = decisions.service.clone() else {
             return Err((
@@ -1759,11 +1767,11 @@ pub(crate) async fn run_sse_compat_for_request(
         let scope = adk_core::ApprovalScope::new(&app_name, &effective_user_id, &session_id);
         // The session's owner decides: the extractor authenticated the user it runs for.
         let approver = adk_core::principal::SubjectRef::human(effective_user_id.clone());
-        match apply_resume(service.as_ref(), &scope, &approver, &caller.scopes, resume.entries())
+        match plan_resume(service.as_ref(), &scope, &approver, &caller.scopes, resume.entries())
             .await
             .map_err(|reason| (StatusCode::BAD_REQUEST, reason))?
         {
-            ResumeOutcome::Run(updates) => decisions.updates = updates,
+            ResumeOutcome::Run(plan) => resume_plan = Some((service, plan)),
             ResumeOutcome::Refused { updates, code, message } => {
                 let input = ag_ui_input.as_ref();
                 let thread_id = input
@@ -1881,14 +1889,23 @@ pub(crate) async fn run_sse_compat_for_request(
         runner_builder = runner_builder.request_context(request_context);
     }
     let runner = runner_builder.build().map_err(adk_err_to_runtime)?;
+    // A frozen server records no answer: the run would not start.
+    if resume_plan.is_some() {
+        controller.config.governance.check().map_err(adk_err_to_runtime)?;
+    }
 
     // Run agent with full content (text + inline data)
     let typed_user_id =
         UserId::new(effective_user_id).map_err(|err| adk_err_to_runtime(err.into()))?;
     let typed_session_id =
         SessionId::new(session_id.clone()).map_err(|err| adk_err_to_runtime(err.into()))?;
+    // `run` refuses a request context of another user before returning; the agent runs only
+    // once the stream is read, after the answers are recorded below.
     let event_stream =
         runner.run(typed_user_id, typed_session_id, content).await.map_err(adk_err_to_runtime)?;
+    if let Some((service, plan)) = resume_plan {
+        decisions.updates = commit_resume(service.as_ref(), plan).await;
+    }
 
     // Convert to SSE stream
     let sse_stream = build_runtime_sse_stream(

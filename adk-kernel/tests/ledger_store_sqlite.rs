@@ -1,5 +1,5 @@
 //! The SQLite ledger store (spec 3.2 §7.1, §7.10, §11, §13 Q8): the conformance suite on a
-//! file opened as `adk-rust` opens `harness.db`, and again in WAL mode, plus its migrations
+//! file opened as `adk-rust` opens `harness.db`, and again on a bare WAL pool, plus its migrations
 //! beside the session and process stores on one pool.
 //!
 //! Every `open` is a new connection pool over the same file, as a restarted kernel or a
@@ -24,9 +24,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool};
 #[derive(Clone, Copy)]
 enum Journal {
     /// As `adk-rust` opens `harness.db`: `SqliteSessionService::new`, with its 30-second
-    /// busy timeout and the default rollback journal.
+    /// busy timeout, switched to write-ahead logging.
     HarnessDb,
-    /// Write-ahead logging, with the same busy timeout.
+    /// A bare pool in write-ahead-logging mode, with the same busy timeout.
     Wal,
 }
 
@@ -52,6 +52,10 @@ impl FileDatabase {
         match self.journal {
             Journal::HarnessDb => {
                 let sessions = SqliteSessionService::new(&self.url()).await.expect("SQLite opens");
+                sqlx::query("PRAGMA journal_mode = WAL")
+                    .execute(sessions.pool())
+                    .await
+                    .expect("WAL");
                 sessions.migrate().await.expect("session schema migrates");
                 sessions.pool().clone()
             }

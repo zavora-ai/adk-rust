@@ -25,7 +25,12 @@
 //! `InMemoryLedgerStore`, `SqliteLedgerStore`, `PostgresLedgerStore` and `RedisLedgerStore`
 //! (spec 3.2 §7.10, suite `ledger_store_conformance_tests!`).
 //!
-//! Phase 4 adds every store on MongoDB, Firestore and Neo4j (§13 Q8), each **Alpha** until
+//! The [`PartitionStore`](crate::PartitionStore) — the partition table and the crossing
+//! ledger (§7.8) — runs on in-memory, SQLite, PostgreSQL and Redis
+//! ([`InMemoryPartitionStore`], `SqlitePartitionStore`, `PostgresPartitionStore`,
+//! `RedisPartitionStore`, suite `partition_store_conformance_tests!`).
+//!
+//! Phase 4 adds these stores on MongoDB, Firestore and Neo4j (§13 Q8), each **Alpha** until
 //! its live conformance suite passes in CI:
 //!
 //! | Store | MongoDB (`mongodb`) | Firestore (`firestore`) | Neo4j (`neo4j`) |
@@ -35,8 +40,9 @@
 //! | `drivers::DriverStore` (with `drivers`) | `MongoDriverStore` | `FirestoreDriverStore` | `Neo4jDriverStore` |
 //! | `proc::LedgerStore` (with `proc`) | `MongoLedgerStore` | `FirestoreLedgerStore` | `Neo4jLedgerStore` |
 //!
-//! There is no file backend and no Vertex AI backend (§13 Q8): no durable store on `main`
-//! is file-backed, and Vertex AI holds sessions only.
+//! The partition store has no MongoDB, Firestore or Neo4j backend yet. There is no file
+//! backend and no Vertex AI backend (§13 Q8): no durable store on `main` is file-backed, and
+//! Vertex AI holds sessions only.
 
 use async_trait::async_trait;
 use chrono::NaiveDate;
@@ -97,6 +103,11 @@ mod memory;
 mod mongodb;
 #[cfg(feature = "neo4j")]
 mod neo4j;
+mod partition_memory;
+#[cfg(feature = "redis")]
+mod partition_redis;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+pub(crate) mod partition_sql;
 #[cfg(feature = "postgres")]
 mod postgres;
 #[cfg(feature = "redis")]
@@ -154,6 +165,13 @@ pub use memory::InMemoryProcessStore;
 pub use mongodb::MongoProcessStore;
 #[cfg(feature = "neo4j")]
 pub use neo4j::Neo4jProcessStore;
+pub use partition_memory::InMemoryPartitionStore;
+#[cfg(feature = "redis")]
+pub use partition_redis::RedisPartitionStore;
+#[cfg(feature = "postgres")]
+pub use partition_sql::PostgresPartitionStore;
+#[cfg(feature = "sqlite")]
+pub use partition_sql::SqlitePartitionStore;
 #[cfg(feature = "postgres")]
 pub use postgres::PostgresProcessStore;
 #[cfg(feature = "redis")]

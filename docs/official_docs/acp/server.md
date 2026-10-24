@@ -249,26 +249,41 @@ remember also gets two remembered options, worded with what they cover:
 | Option id | Kind | Label | Effect |
 |-----------|------|-------|--------|
 | `acp-allow-once` | `allow_once` | Allow once | Runs this call |
-| `acp-allow-always` | `allow_always` | Always allow for this command (bash: cargo test …) | Runs this call and remembers an allow rule |
+| `acp-allow-always` | `allow_always` | Always allow for this command (bash: cargo test …, every session) — runs project scripts, so it allows whatever they do | Runs this call and remembers an allow rule |
 | `acp-reject-once` | `reject_once` | Deny | Refuses this call |
-| `acp-reject-always` | `reject_always` | Always deny for this command (bash: cargo test …) | Refuses this call and remembers a deny rule |
+| `acp-reject-always` | `reject_always` | Always deny for this command (bash: cargo test …, every session) | Refuses this call and remembers a deny rule |
 
 A call the implementation may never remember is offered **Allow once** and
 **Deny** only, and an "always" answer to a request that did not offer one is a
 denial. When the rule cannot be stored, the answer applies to this call only
 and the failure is logged.
 
+Before each permission request the server also asks
+`StandingPermissions::standing_decision` (default: none) whether its policy
+already decides the call. A model turn can hold several calls; when the person
+answers "Always allow" for the first, a later call of the same turn that the new
+rule covers is decided by the rule and not asked about, so the person is never
+shown a question whose answer the rule would override. `HarnessAgent` answers it
+by re-checking the call as its terminal prompt does: a rule answers only the
+harness's own approval, so a call another policy layer also holds, or one the
+harness holds without a waiver, is still asked about.
+
 `adk-harness` implements `StandingPermissions` for `HarnessAgent` under its
 `acp-server` feature: the answer becomes the narrowest standing rule the
 harness suggests for the call (a command's two-token prefix, a file's folder, a
 site, or the tool from its exact publisher), bound to the tool's declaration
 and the session's person, and recorded as `harness.rule.created` with surface
-`acp`. Calls no standing rule may cover — a payment, leaving plan mode, a memory
-write, a desktop action, a protected edit, an unsandboxed retry, a chained shell
-command — are never offered "always". The next identical call is allowed by the
-harness's policy without a
-permission request; a call the rule does not cover, such as `cargo publish`
-after "Always allow" on `cargo test`, is still asked about.
+`acp`. The option says where the rule applies ("every session" for a rule over
+the person's sessions) and, as at the terminal prompt, "Always allow" warns that a
+rule over commands that run project scripts (`cargo test`, `npm test`, `make`)
+allows whatever those scripts do (`StandingOffer::allow_warning`). Calls no standing rule may cover — a payment, leaving plan mode, a
+memory write, a desktop action, a protected edit, an unsandboxed retry, a chained
+shell command — are never offered "always", and neither is any call of a harness
+built with `require_authenticated_identity`, whose standing rules apply only to
+authenticated runs and so never to ACP runs. The next identical call is allowed
+by the harness's policy without a permission request; a call the rule does not
+cover, such as `cargo publish` after "Always allow" on `cargo test`, is still
+asked about.
 
 ```toml
 [dependencies]

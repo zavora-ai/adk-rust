@@ -86,6 +86,10 @@ impl AgUiDecisions {
 
 /// One AG-UI `Interrupt` for a held call: the inbox entry's ID when the call has one, else
 /// the call ID; the arguments only for the session's owner.
+///
+/// A call with no inbox entry — no approval service, or one that leaves the call held in its
+/// store only — cannot be decided here, so its interrupt carries no `responseSchema` and
+/// `metadata.answerable: false` (spec 3.3 S-I1).
 fn interrupt(call: &HeldCall, entry: Option<&ApprovalRequest>, show_arguments: bool) -> Value {
     let request = &call.request;
     let call_id =
@@ -94,12 +98,16 @@ fn interrupt(call: &HeldCall, entry: Option<&ApprovalRequest>, show_arguments: b
         || format!("Approve a call to '{}'", request.tool_name),
         |entry| entry.summary.clone(),
     );
-    let allows =
-        |action: ApprovalAction| entry.is_none_or(|entry| entry.allowed_actions.contains(&action));
+    // The agent the governed path resolved, as the inbox records it; the hold event's own
+    // author only when there is no entry.
+    let agent = entry
+        .and_then(|entry| entry.acting.as_ref())
+        .map_or_else(|| call.agent.clone(), |acting| acting.agent.id.to_string());
     let mut metadata = json!({
         "summary": summary,
-        "agent": call.agent,
+        "agent": agent,
         "tool": request.tool_name,
+        "answerable": entry.is_some(),
     });
     if let Some(entry) = entry {
         metadata["risk"] = json!(entry.risk);
@@ -114,11 +122,15 @@ fn interrupt(call: &HeldCall, entry: Option<&ApprovalRequest>, show_arguments: b
         "reason": TOOL_CALL_REASON,
         "message": summary,
         "toolCallId": call_id,
-        "responseSchema": response_schema(allows(ApprovalAction::Edit), allows(ApprovalAction::Reject)),
         "metadata": metadata,
     });
-    if let Some(at) = entry.and_then(|entry| entry.expires_at) {
-        interrupt["expiresAt"] = json!(at.to_rfc3339());
+    if let Some(entry) = entry {
+        let allows = |action: ApprovalAction| entry.allowed_actions.contains(&action);
+        interrupt["responseSchema"] =
+            response_schema(allows(ApprovalAction::Edit), allows(ApprovalAction::Reject));
+        if let Some(at) = entry.expires_at {
+            interrupt["expiresAt"] = json!(at.to_rfc3339());
+        }
     }
     interrupt
 }
@@ -135,8 +147,8 @@ fn response_schema(edit: bool, reject: bool) -> Value {
     json!({ "type": "object", "properties": properties, "required": ["approved"] })
 }
 
-/// An `adk.decision` value: where the inbox entry `interrupt_id` stands, or `unknown` when
-/// the session has no such entry.
+/// An `adk.decision` value: where the inbox entry `interrupt_id` stands, with the version to
+/// answer it at, or `unknown` when the session has no such entry.
 pub(crate) fn decision_update(interrupt_id: &str, entry: Option<&ApprovalRequest>) -> Value {
     let Some(entry) = entry else {
         return json!({ "interruptId": interrupt_id, "state": "unknown" });
@@ -145,6 +157,7 @@ pub(crate) fn decision_update(interrupt_id: &str, entry: Option<&ApprovalRequest
         "interruptId": interrupt_id,
         "state": entry.state.as_str(),
         "tool": entry.tool_name,
+        "version": entry.version,
     });
     if let Some(decision) = entry.decisions.last() {
         value["decidedBy"] = json!(decision.authority().id);
@@ -153,6 +166,14 @@ pub(crate) fn decision_update(interrupt_id: &str, entry: Option<&ApprovalRequest
     if let Some(at) = entry.resolved_at {
         value["resolvedAt"] = json!(at.to_rfc3339());
     }
+    value
+}
+
+/// A decision update that also says why this answer was not recorded.
+fn refused_update(interrupt_id: &str, entry: &ApprovalRequest, code: &str, message: &str) -> Value {
+    let mut value = decision_update(interrupt_id, Some(entry));
+    value["code"] = json!(code);
+    value["message"] = json!(message);
     value
 }
 
@@ -166,20 +187,41 @@ pub(crate) fn decision_event(value: Value) -> Value {
     })
 }
 
-/// What answering the resume entries left to do.
+/// What reading the resume entries found, before anything is decided.
 #[derive(Debug)]
 pub(crate) enum ResumeOutcome {
-    /// Run the turn; send these decision updates first.
-    Run(Vec<Value>),
-    /// Do not run: an answer was refused. Send these updates, then a `RUN_ERROR`.
+    /// Every answer may be recorded: start the run, recording them first with
+    /// [`commit_resume`].
+    Run(ResumePlan),
+    /// Do not run and decide nothing: an answer would be refused. Send these updates, then a
+    /// `RUN_ERROR`.
     Refused {
         /// Decision updates, the refused entry's last.
         updates: Vec<Value>,
-        /// The service's error code, such as `approval.already_resolved`.
+        /// The refusal's code, such as `approval.version_conflict`.
         code: &'static str,
         /// What happened, in plain words.
         message: String,
     },
+}
+
+/// The answers of a resume that may all be recorded, in the order the client sent them.
+#[derive(Debug, Default)]
+pub(crate) struct ResumePlan {
+    steps: Vec<Step>,
+}
+
+#[derive(Debug)]
+enum Step {
+    /// Record `decision` on the entry at `version`.
+    Decide {
+        interrupt_id: String,
+        request: Box<ApprovalRequest>,
+        version: u64,
+        decision: Box<ApprovalDecision>,
+    },
+    /// Nothing to record; report this update.
+    Report(Value),
 }
 
 /// The decision `entry` answers with, from its payload.
@@ -241,20 +283,90 @@ fn refusal_message(entry: Option<&ApprovalRequest>, fallback: &str) -> String {
     }
 }
 
-/// Answers `entries` as `approver`, a member of `groups`, through `service`, before the
-/// run starts.
+/// The message of a version conflict on a pending entry.
+const CHANGED: &str = "This decision changed since it was shown; look at it again";
+
+/// Whether `decision` is the answer `entry` already resolved with.
+fn same_answer(entry: &ApprovalRequest, decision: &ApprovalDecision) -> bool {
+    match decision.kind {
+        ApprovalAction::Approve | ApprovalAction::Edit => entry.state == ApprovalState::Approved,
+        ApprovalAction::Reject => entry.state == ApprovalState::Rejected,
+        ApprovalAction::Respond => entry.state == ApprovalState::Responded,
+    }
+}
+
+/// Why `service` would refuse `decision` on the pending `request` at `version` now, mirroring
+/// [`ApprovalService::decide`]'s checks so a resume is refused before anything is recorded.
+async fn refusal(
+    service: &dyn ApprovalService,
+    request: &ApprovalRequest,
+    version: u64,
+    decision: &ApprovalDecision,
+) -> Option<(&'static str, String)> {
+    let approver = &decision.approver;
+    if request.version != version {
+        return Some(("approval.version_conflict", CHANGED.to_string()));
+    }
+    if request.expires_at.is_some_and(|at| at <= chrono::Utc::now()) {
+        return Some(("approval.expired", "This decision expired".to_string()));
+    }
+    if !request.allowed_actions.contains(&decision.kind) {
+        return Some((
+            "approval.action_not_allowed",
+            format!("This decision does not allow {:?}", decision.kind).to_lowercase(),
+        ));
+    }
+    if request.policy.forbid_self_approval && request.is_self(approver) {
+        return Some((
+            "approval.self_approval",
+            format!("'{}' may not approve their own call", approver.id),
+        ));
+    }
+    if !request.is_eligible(approver, &decision.approver_groups) {
+        let now = chrono::Utc::now();
+        let delegated = match service.delegations_to(approver).await {
+            Ok(delegations) => {
+                delegations.iter().any(|delegation| delegation.applies_to(request, now))
+            }
+            Err(error) => {
+                warn!(error = %error, "could not read the approver's delegations");
+                false
+            }
+        };
+        if !delegated {
+            return Some((
+                "approval.not_an_approver",
+                format!("'{}' may not decide this call", approver.id),
+            ));
+        }
+    }
+    if decision.kind == ApprovalAction::Approve && request.quorum_progress().0.contains(approver) {
+        return Some((
+            "approval.already_decided",
+            format!("'{}' already approved this call; another approver must decide", approver.id),
+        ));
+    }
+    None
+}
+
+/// Reads `entries`, answered as `approver`, a member of `groups`, and decides whether every
+/// answer may be recorded — without recording any (spec 3.3 §10 S2, S-I2).
 ///
-/// Every payload is checked first, so an invalid one decides nothing. A `resolved` entry
-/// becomes one [`ApprovalService::decide`] at the version the client saw (its
-/// `metadata.version`) or, without one, the version read here; the first refusal stops
-/// the resume and is reported, never retried. A `cancelled` entry decides nothing: the
-/// call keeps waiting in the inbox (spec 3.3 §7.3). An entry naming no inbox entry of
-/// `scope` is reported as `unknown` and skipped, as AG-UI asks of an unknown interrupt.
+/// A resume is all or nothing. Every payload is checked, an interrupt answered twice is
+/// refused, and every `resolved` entry is checked against its inbox entry as
+/// [`ApprovalService::decide`] would check it, at the version the client saw (its
+/// `metadata.version`) or, without one, the version read here. The first refusal refuses
+/// the whole resume, and nothing is decided. An entry already decided whose call has not run
+/// yet — decided on another surface, or by this resume sent before — is reported and lets the
+/// run start, so the run dispatches the call; an entry whose call already ran is a refusal. A
+/// `cancelled` entry decides nothing: the call keeps waiting in the inbox (spec 3.3 §7.3). An
+/// entry naming no inbox entry of `scope` is reported as `unknown` and skipped, as AG-UI asks
+/// of an unknown interrupt.
 ///
 /// # Errors
 ///
-/// Returns the reason when a payload is not an answer.
-pub(crate) async fn apply_resume(
+/// Returns the reason when a payload is not an answer or an interrupt is answered twice.
+pub(crate) async fn plan_resume(
     service: &dyn ApprovalService,
     scope: &ApprovalScope,
     approver: &SubjectRef,
@@ -262,12 +374,21 @@ pub(crate) async fn apply_resume(
     entries: &[AgUiResumeEntry],
 ) -> Result<ResumeOutcome, String> {
     let mut decisions = Vec::with_capacity(entries.len());
+    let mut answered = std::collections::HashSet::new();
     for entry in entries {
+        if !answered.insert(entry.interrupt_id.as_str()) {
+            return Err(format!(
+                "resume answers interrupt '{}' more than once; send one answer per interrupt",
+                entry.interrupt_id
+            ));
+        }
         decisions.push(match entry.status {
             AgUiResumeStatus::Resolved => Some(decision_for(entry, approver, groups)?),
             AgUiResumeStatus::Cancelled => None,
         });
     }
+    let store = service.approval_store();
+    let mut plan = ResumePlan::default();
     let mut updates = Vec::new();
     for (entry, decision) in entries.iter().zip(decisions) {
         let Some(decision) = decision else {
@@ -278,7 +399,9 @@ pub(crate) async fn apply_resume(
             Ok(Some(request)) if request.scope == *scope => request,
             Ok(_) => {
                 warn!(approval.id = %entry.interrupt_id, "AG-UI resume names no decision of this session; skipped");
-                updates.push(decision_update(&entry.interrupt_id, None));
+                let update = decision_update(&entry.interrupt_id, None);
+                updates.push(update.clone());
+                plan.steps.push(Step::Report(update));
                 continue;
             }
             Err(error) => {
@@ -289,32 +412,89 @@ pub(crate) async fn apply_resume(
                 });
             }
         };
-        let seen = entry
+        if request.state.is_terminal() {
+            // Decided already: a call still waiting to run is dispatched by the run; one that
+            // ran cannot be answered again.
+            let waiting = match &store {
+                Some(store) => store
+                    .has_decision(&request.scope, &request.fingerprint)
+                    .await
+                    .unwrap_or_else(|error| {
+                        warn!(error = %error, "could not read whether the decision waits to run");
+                        false
+                    }),
+                None => false,
+            };
+            let message = refusal_message(Some(&request), CHANGED);
+            if !waiting {
+                updates.push(decision_update(&entry.interrupt_id, Some(&request)));
+                return Ok(ResumeOutcome::Refused {
+                    updates,
+                    code: "approval.already_resolved",
+                    message,
+                });
+            }
+            let update = if same_answer(&request, &decision) {
+                decision_update(&entry.interrupt_id, Some(&request))
+            } else {
+                refused_update(&entry.interrupt_id, &request, "approval.already_resolved", &message)
+            };
+            updates.push(update.clone());
+            plan.steps.push(Step::Report(update));
+            continue;
+        }
+        let version = entry
             .metadata
             .as_ref()
             .and_then(|metadata| metadata.get("version"))
             .and_then(Value::as_u64)
             .unwrap_or(request.version);
-        match service.decide(&request.id, seen, decision).await {
-            Ok(decided) => updates.push(decision_update(&entry.interrupt_id, Some(&decided))),
-            Err(error) => {
-                let now = service.get(&request.id).await.ok().flatten();
-                let current = now.as_ref().unwrap_or(&request);
-                updates.push(decision_update(&entry.interrupt_id, Some(current)));
-                let message = if error.category == ErrorCategory::Conflict {
-                    refusal_message(
-                        Some(current),
-                        "This decision changed since it was shown; look at it again",
-                    )
-                } else {
-                    refusal_text(&error)
-                };
-                info!(approval.id = %request.id, error.code = error.code, "AG-UI resume refused");
-                return Ok(ResumeOutcome::Refused { updates, code: error.code, message });
+        if let Some((code, message)) = refusal(service, &request, version, &decision).await {
+            info!(approval.id = %request.id, error.code = code, "AG-UI resume refused before deciding");
+            updates.push(decision_update(&entry.interrupt_id, Some(&request)));
+            return Ok(ResumeOutcome::Refused { updates, code, message });
+        }
+        updates.push(decision_update(&entry.interrupt_id, Some(&request)));
+        plan.steps.push(Step::Decide {
+            interrupt_id: entry.interrupt_id.clone(),
+            request: Box::new(request),
+            version,
+            decision: Box::new(decision),
+        });
+    }
+    Ok(ResumeOutcome::Run(plan))
+}
+
+/// Records a planned resume through [`ApprovalService::decide`] and returns the decision
+/// updates to send, one per answered entry, in order.
+///
+/// Call it once the run is about to start. An answer refused here — another approver decided
+/// between the plan and now — is reported in its update with the refusal's `code` and
+/// `message`; the others stand and the run starts, so the calls they decided run.
+pub(crate) async fn commit_resume(service: &dyn ApprovalService, plan: ResumePlan) -> Vec<Value> {
+    let mut updates = Vec::with_capacity(plan.steps.len());
+    for step in plan.steps {
+        match step {
+            Step::Report(update) => updates.push(update),
+            Step::Decide { interrupt_id, request, version, decision } => {
+                match service.decide(&request.id, version, *decision).await {
+                    Ok(decided) => updates.push(decision_update(&interrupt_id, Some(&decided))),
+                    Err(error) => {
+                        warn!(approval.id = %request.id, error.code = error.code, "AG-UI answer refused while recording it");
+                        let now = service.get(&request.id).await.ok().flatten();
+                        let current = now.as_ref().unwrap_or(request.as_ref());
+                        let message = if error.category == ErrorCategory::Conflict {
+                            refusal_message(Some(current), CHANGED)
+                        } else {
+                            refusal_text(&error)
+                        };
+                        updates.push(refused_update(&interrupt_id, current, error.code, &message));
+                    }
+                }
             }
         }
     }
-    Ok(ResumeOutcome::Run(updates))
+    updates
 }
 
 /// An error's message when it describes the call, a generic one otherwise.
@@ -388,6 +568,28 @@ mod tests {
         SubjectRef::human("alice")
     }
 
+    /// A resume as the handler runs it: planned, then recorded when the run may start.
+    #[derive(Debug)]
+    enum Applied {
+        Run(Vec<Value>),
+        Refused { updates: Vec<Value>, code: &'static str, message: String },
+    }
+
+    async fn apply_resume(
+        service: &StoreApprovalService,
+        scope: &ApprovalScope,
+        approver: &SubjectRef,
+        groups: &[String],
+        entries: &[AgUiResumeEntry],
+    ) -> Result<Applied, String> {
+        Ok(match plan_resume(service, scope, approver, groups, entries).await? {
+            ResumeOutcome::Run(plan) => Applied::Run(commit_resume(service, plan).await),
+            ResumeOutcome::Refused { updates, code, message } => {
+                Applied::Refused { updates, code, message }
+            }
+        })
+    }
+
     #[tokio::test]
     async fn an_interrupt_is_drawn_from_the_inbox_entry_and_shows_arguments_only_to_the_owner() {
         let service = Arc::new(service());
@@ -412,6 +614,7 @@ mod tests {
                     "summary": "Send the October invoice",
                     "agent": "finance",
                     "tool": "send_invoice",
+                    "answerable": true,
                     "risk": "medium",
                     "version": 1,
                 },
@@ -451,6 +654,9 @@ mod tests {
         assert_eq!(interrupts[0]["toolCallId"], "call-1");
         assert_eq!(interrupts[0]["message"], "Approve a call to 'send_invoice'");
         assert!(interrupts[0]["metadata"].get("arguments").is_none());
+        // Nothing can decide it here, so no answer is offered.
+        assert!(interrupts[0].get("responseSchema").is_none());
+        assert_eq!(interrupts[0]["metadata"]["answerable"], false);
     }
 
     #[test]
@@ -500,7 +706,7 @@ mod tests {
             ..answer(&entry.id, json!({ "approved": true }))
         };
         let outcome = apply_resume(&service, &scope(), &alice(), &[], &[stale]).await.unwrap();
-        let ResumeOutcome::Refused { updates, code, message } = outcome else {
+        let Applied::Refused { updates, code, message } = outcome else {
             panic!("a stale version must be refused");
         };
         assert_eq!(code, "approval.version_conflict");
@@ -523,9 +729,37 @@ mod tests {
         )
         .await
         .unwrap();
-        let ResumeOutcome::Run(updates) = outcome else { panic!("an unknown entry is skipped") };
+        let Applied::Run(updates) = outcome else { panic!("an unknown entry is skipped") };
         assert_eq!(updates, vec![json!({ "interruptId": entry.id, "state": "unknown" })]);
         assert_eq!(service.get(&entry.id).await.unwrap().unwrap().state, ApprovalState::Pending);
+    }
+
+    #[tokio::test]
+    async fn an_answer_overtaken_while_recording_is_reported_and_the_rest_stand() {
+        let service = service();
+        let entry = hold(&service).await;
+        let ResumeOutcome::Run(plan) = plan_resume(
+            &service,
+            &scope(),
+            &alice(),
+            &[],
+            &[answer(&entry.id, json!({ "approved": true }))],
+        )
+        .await
+        .unwrap() else {
+            panic!("the answer may be recorded");
+        };
+        // Another surface decides between the plan and the run.
+        service
+            .decide(&entry.id, entry.version, ApprovalDecision::reject(alice(), "not now"))
+            .await
+            .unwrap();
+        let updates = commit_resume(&service, plan).await;
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0]["state"], "rejected");
+        assert_eq!(updates[0]["code"], "approval.version_conflict");
+        assert_eq!(updates[0]["message"], "Already decided by alice");
+        assert_eq!(service.get(&entry.id).await.unwrap().unwrap().decisions.len(), 1);
     }
 
     /// One answer an AG-UI client may send.
@@ -543,10 +777,12 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(128))]
 
         /// However many answers arrive for one interrupt, and in whatever form, exactly the
-        /// first decides it; every later one is refused and reported, and the store holds
-        /// one decision, which authorizes one execution (spec 3.3 S-I2).
+        /// first decides it. Later answers while the call waits to run decide nothing and let
+        /// the run start, reporting a different answer as refused; once the call ran, an
+        /// answer is refused. The store holds one decision, which authorizes one execution
+        /// (spec 3.3 S-I2).
         #[test]
-        fn the_first_answer_decides_and_the_rest_are_refused(
+        fn the_first_answer_decides_and_later_ones_never_decide_again(
             answers in proptest::collection::vec(any_answer(), 1..6),
             echo_version in any::<bool>(),
         ) {
@@ -557,22 +793,32 @@ mod tests {
                     ApprovalPolicy::new([ApproverSelector::human("alice")]).allow_self_approval(),
                 );
                 let entry = hold(&service).await;
-                for (index, payload) in answers.iter().enumerate() {
+                let state_for = |payload: &Value| match payload["approved"].as_bool() {
+                    Some(true) => ApprovalState::Approved,
+                    _ => ApprovalState::Rejected,
+                };
+                let resume = |payload: &Value| {
                     let mut resume = answer(&entry.id, payload.clone());
                     if echo_version {
                         resume.metadata = Some(json!({ "version": entry.version }));
                     }
-                    let outcome =
-                        apply_resume(&service, &scope(), &alice(), &[], &[resume]).await.unwrap();
-                    match (index, outcome) {
-                        (0, ResumeOutcome::Run(updates)) => prop_assert_eq!(updates.len(), 1),
-                        (0, refused) => prop_assert!(false, "the first answer was refused: {refused:?}"),
-                        (_, ResumeOutcome::Refused { code, .. }) => prop_assert!(
-                            code == "approval.already_resolved" || code == "approval.version_conflict",
-                            "unexpected refusal {code}"
-                        ),
-                        (_, ResumeOutcome::Run(_)) => prop_assert!(false, "a later answer decided again"),
-                    }
+                    resume
+                };
+                for (index, payload) in answers.iter().enumerate() {
+                    let outcome = apply_resume(&service, &scope(), &alice(), &[], &[resume(payload)])
+                        .await
+                        .unwrap();
+                    let Applied::Run(updates) = outcome else {
+                        prop_assert!(false, "answer {index} was refused while the call waits");
+                        unreachable!();
+                    };
+                    prop_assert_eq!(updates.len(), 1);
+                    prop_assert_eq!(&updates[0]["state"], state_for(&answers[0]).as_str());
+                    let differs = index > 0 && state_for(payload) != state_for(&answers[0]);
+                    prop_assert_eq!(
+                        updates[0].get("code").and_then(Value::as_str),
+                        differs.then_some("approval.already_resolved")
+                    );
                 }
                 let decided = service.get(&entry.id).await.unwrap().unwrap();
                 prop_assert_eq!(decided.decisions.len(), 1);
@@ -583,10 +829,19 @@ mod tests {
                     _ => ApprovalAction::Reject,
                 };
                 prop_assert_eq!(decided.decisions[0].kind, expected);
+                // The call runs: its decision is taken once.
                 let fingerprint = call().fingerprint();
-                let taken: Option<ToolApproval> = store.take_approval(&scope(), &fingerprint).await.unwrap();
+                let taken: Option<ToolApproval> =
+                    store.take_approval(&scope(), &fingerprint).await.unwrap();
                 prop_assert!(taken.is_some(), "the decision reached the store");
                 prop_assert!(store.take_approval(&scope(), &fingerprint).await.unwrap().is_none());
+                let after = apply_resume(&service, &scope(), &alice(), &[], &[resume(&answers[0])])
+                    .await
+                    .unwrap();
+                prop_assert!(
+                    matches!(after, Applied::Refused { code: "approval.already_resolved", .. }),
+                    "an answer after the call ran is refused: {after:?}"
+                );
                 Ok(())
             })?;
         }

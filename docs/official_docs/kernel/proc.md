@@ -27,7 +27,7 @@ to which hashed subject:
 | Column | Holds |
 |---|---|
 | `ts` | When, to the millisecond, in the offset of the user's local time |
-| `partition` | The partition the activity belongs to |
+| `partition` | The partition the activity belongs to: the process's for the kernel's rows, the harness's partition for a [partition's harness](partitions.md#self-observation-per-partition), else `default` |
 | `agent` | The acting agent's id, or `kernel` for the kernel's own work |
 | `kind` | `intent`, `tool_call`, `approval`, `rejection`, `denial`, `held`, `decided`, `rule_hit`, `turn`, `loop_guard`, `process`, `wake`, `spend`, `governance`, `observation`, `audit` |
 | `effect` | A label such as the tool's effect class (`read_only`) or the state a process entered |
@@ -128,7 +128,7 @@ The item is answered, never scheduled (spec 3.2 §7.10):
 
 | Answer | Effect |
 |---|---|
-| Confirm (`agenda approve`, or `approve` in the inbox) | The item is `done` with the answer. Its statement — such as "Since 2026-10-15, compared with the 28 days before: the day's last activity has been later." — is remembered as a user-wide `preference` fact, `known`, source `user_confirmed` (spec 3.1 §7.15); the same text already remembered as an assumption is promoted to `known` instead |
+| Confirm (`agenda approve`, or `approve` in the inbox) | The item is `done` with the answer. Its statement — such as "Since 2026-10-15, compared with the 28 days before: the day's last activity has been later." — is remembered as a user-wide `preference` fact, or in the partition's memory scope for a partition's harness, `known`, source `user_confirmed` (spec 3.1 §7.15); the same text already remembered as an assumption is promoted to `known` instead |
 | Reject (`agenda reject`, or `reject` in the inbox) | The item is `rejected` with the answer; nothing is remembered, so any related fact stays as it was |
 | No answer | The item expires after the longest comparison window, 14 days |
 
@@ -139,7 +139,8 @@ The item is answered, never scheduled (spec 3.2 §7.10):
 A partition without an audience keeps its observations at `adk-rust proc` and
 `/api/kernel/proc/observations` and asks nobody. In code, `KernelBuilder::observation_audience`
 registers an `ObservationAudience` for a partition; `adk_harness::Harness::observation_audience`
-is the harness's.
+is the harness's. Under partitions each partition's harness is its own partition's audience only
+([partitions](partitions.md#self-observation-per-partition)).
 
 ## Exporting the ledger
 

@@ -104,20 +104,20 @@ toolchain directories, since `HOME` moved.
 ## The Windows sandbox
 
 The restricted-token enforcer runs `sh -c <script>` — the `sh` the sandbox's `PATH` finds,
-from Git for Windows, as the host shell does — under a token whose groups are deny-only and
-whose restricting SIDs admit only what the policy grants (see the
-[sandbox reference](../sandbox/index.md)). The command starts in a Job Object, so the `bash`
+from Git for Windows, as the host shell does — under a Low-integrity token whose groups are
+deny-only (see the [sandbox reference](../sandbox/index.md)). The workspace and the scratch
+directory are labelled Low, so the command writes there and nowhere else. The command starts in a Job Object, so the `bash`
 tool keeps its timeout ceiling, output cap, streaming, empty standard input, the kill of
 every process the command starts, and the freeze's kill (spec 3.2 §10 W1). It inherits its
 three standard handles and no other handle of the agent.
 
 | | Under the restricted token |
 |---|---|
-| Workspace root, scratch directory, `extra_write` | read-write: `RESTRICTED` is granted on each, once per process; the grant stays in the path's ACL |
-| Protected paths | **writable**: a path inside the workspace inherits its read-write grant |
+| Workspace root, scratch directory, `extra_write` | read-write: `RESTRICTED` is granted on each and each is labelled Low, once per process; the grant and the label stay on the path |
+| Protected paths | **writable**: a path inside the workspace inherits its read-write grant and its Low label |
 | Toolchains (`read_toolchains`) | read-only when they lie in your profile (`~/.cargo`, `~/.rustup`, …); program and system directories grant `Users` read access already and are not rewritten |
-| Your profile and other paths that grant neither `Everyone` nor `Users` | none |
-| Paths that grant `Everyone` or `Users` write access | writable |
+| Your profile and anything else you may read | **readable**: MSYS2, the runtime of Git for Windows' `sh`, opens its own signal pipe and shared memory through an ACL that names only you, so you are one of the token's restricting SIDs |
+| Anything else you may write, including paths that grant `Everyone` or `Users` write access | none: an unlabelled path is Medium integrity, which the Low token cannot write; paths already labelled Low, such as `%USERPROFILE%\AppData\LocalLow`, stay writable |
 | Network | **not restricted**, whatever `network` says |
 | Environment | as on the other platforms, with `TEMP` and `TMP` also set to the scratch directory |
 
@@ -126,14 +126,32 @@ What follows from that:
 | Behaviour | Windows | macOS, Linux |
 |---|---|---|
 | The `bash` declaration's `network` annotation and description | network access | `network` |
+| The `bash` declaration's `reads` annotation, `IsolationStatus::confines_reads` and the status line | `unconfined`, `false`, `OS sandbox (restricted-token, network not restricted, reads not confined)`; the declaration digest differs from a confining sandbox's, so a standing rule granted under Seatbelt or bubblewrap does not match it | `confined`, `true` |
 | Plan mode | `bash` is denied: a read-write grant from an earlier command stays in the workspace's ACL, so the sandbox cannot promise a read-only workspace | sandboxed commands run read-only without a prompt |
 | Ask and Auto mode | every sandboxed command is asked | as the mode table says |
-| `auto_allow_sandboxed` | `build()` fails: the sandbox does not restrict the network | needs every protected path |
+| `auto_allow_sandboxed` | `build()` fails: the sandbox does not restrict the network and does not confine reads to the workspace | needs every protected path |
 | Hooks with `isolation = "inherit"` | `build()` fails: a hook needs a command it can spawn and feed; give it `isolation = "host"` | run in the sandbox |
 
 The first command of a process grants the workspace, and with `read_toolchains` the
 toolchain directories in your profile; Windows applies a grant to everything beneath the
 path, which takes a while on a large tree. Later commands reuse the grants.
+
+**Labels and grants that stay.** The token writes only what is labelled Low integrity, so
+the sandbox labels each read-write path and grants it to `RESTRICTED`:
+
+| Path | Labelled Low | Afterwards |
+|---|---|---|
+| The workspace root, and what is created beneath it | from the first sandboxed command on; the label stays | any Low-integrity process of the machine may write the workspace |
+| Each `extra_write` path | the same | the same |
+| The session's scratch directory (`HOME`, `TMPDIR`, `TEMP`, `TMP`) | while the harness runs | removed with its label when the harness is dropped; a killed process leaves it in the temporary directory |
+| Read-only paths (toolchains, `extra_read`) | never; they keep `RESTRICTED`'s read entry | — |
+
+To take a workspace back, restore its Medium label and remove the grant:
+
+```powershell
+icacls "C:\path\to\workspace" /setintegritylevel "(OI)(CI)M" /T
+icacls "C:\path\to\workspace" /remove:g *S-1-5-12 /T
+```
 
 ## The container shell
 
@@ -282,7 +300,7 @@ Windows host no process the command starts can leave its Job Object.
 
 | Action | Fields (`ext`) |
 |---|---|
-| `harness.bash.begin` (write-ahead, `args_digest`, `payload_ref` = digest of the command) | `functionCallId`, `enforcer`, `profileDigest`, `network`, `workspaceAccess`, `envKeys`, `retryOf`, `goalCheck` |
+| `harness.bash.begin` (write-ahead, `args_digest`, `payload_ref` = digest of the command) | `functionCallId`, `enforcer`, `profileDigest`, `network`, `reads`, `workspaceAccess`, `envKeys`, `retryOf`, `goalCheck` |
 | `harness.bash.end` (`outcome`, `payload_ref` = digest of the result) | `functionCallId`, `enforcer`, `exitCode`, `durationMs`, `timedOut`, `killedByFreeze`, `truncated`, `denialSuspected`, `retryOf` |
 | `harness.bash.retry_unsandboxed` | `functionCallId`, `retryOf`, `failedEnforcer`, `failureDigest`, `decision`, `source` (`policy` when requested, `tool` when consumed) |
 | `harness.sandbox.unavailable` | `functionCallId`, `requested`, `error` |

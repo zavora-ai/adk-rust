@@ -16,7 +16,7 @@
 //! | [`driver_tool_kind`]: `EffectClass` → [`ToolKind::External`], the manifest's class over any `readOnlyHint` | §7.7, §10 HK1 |
 //! | [`DriverClasses`], [`HarnessAgentBuilder::kernel_drivers`]: a partition's drivers with their classes and the kernel's driver policy | §7.7, §7.8 |
 //! | [`HarnessRulePins`]: standing rules carried to re-approved driver declarations | §7.7, K-I14 |
-//! | The harness's activity in the kernel's content-free ledger: each run's `intent`, each tool call with its effect class and duration, and its audit records — `harness.spend`, the loop guard, approvals, denials and the rest — through `LedgerAuditTap` | §7.10 |
+//! | The harness's activity in the kernel's content-free ledger: each run's `intent`, each tool call with its effect class and duration, and its audit records — `harness.spend`, the loop guard, approvals, denials and the rest — through `LedgerAuditTap`; a partition's harness writes its rows in its partition | §7.10, §7.8 |
 
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -27,11 +27,11 @@ use adk_core::{
     ApprovalStore, ApprovalTick, ErrorCategory, ErrorComponent, InboxPage, InboxQuery, Result,
     RunCheckpointRef, RunRecord, SubjectRef, Tool, ToolContext, ToolEffect,
 };
-use adk_kernel::proc::{LateLedgerSink, LedgerAuditTap, LedgerSink};
+use adk_kernel::proc::{Activity, LateLedgerSink, LedgerAuditTap, LedgerSink};
 use adk_kernel::{
     AgendaHandle, AgendaItem, AgendaOrigin, ApprovalWakeSource, GoalProgress, KernelBuilder,
-    KernelConfig, PartitionMode, PlanRef, ProcessHandle, ProgressSource, ProposalOutcome, RuleAge,
-    RunUsage, StandingRuleSource, Wake,
+    KernelConfig, PartitionId, PartitionMode, PlanRef, ProcessHandle, ProgressSource,
+    ProposalOutcome, RuleAge, RunUsage, StandingRuleSource, Wake,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -226,6 +226,11 @@ impl Harness {
     /// `background` queue when the harness was given
     /// `with_goal_queue(adk_kernel::QueueClass::BACKGROUND)`.
     ///
+    /// A partition's harness registers its runner as its partition's targets,
+    /// `<app>@<partition>` and `harness.goal@<partition>`, bound to the partition, with the
+    /// partition table its policy reads ([`host_partition`](Self::host_partition)); add the
+    /// other partitions' harnesses with `host_partition` (spec 3.2 §7.8).
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -239,20 +244,17 @@ impl Harness {
     pub fn kernel(&self) -> KernelBuilder {
         let runtime = self.agent().runtime();
         let (target, runner) = self.goal_target();
-        let progress = Arc::new(HarnessProgress {
-            goals: runtime.goal_store().clone(),
-            book: runtime.goals.until.book().clone(),
-            #[cfg(feature = "observe")]
-            trails: runtime.run_trails.clone(),
-            processes: RwLock::new(None),
-            ledger: runtime.kernel_ledger.clone(),
-        });
-        runtime.goals.until.book().set_parker(progress.clone());
+        let progress = self.kernel_progress();
         let source = runtime.kernel_approvals.bind();
-        let mut builder = adk_kernel::Kernel::builder()
-            .config(KernelConfig::default().with_app_name(self.app_name()))
-            .agent(self.app_name(), runner.clone())
-            .agent(target, runner.clone())
+        let builder = adk_kernel::Kernel::builder()
+            .config(KernelConfig::default().with_app_name(self.app_name()));
+        // A partition's harness runs as its partition's targets and answers for its
+        // partition's processes (spec 3.2 §7.8).
+        let builder = match self.agent().partition() {
+            Some(_) => self.host_partition_with(builder, progress.clone()),
+            None => builder.agent(self.app_name(), runner.clone()).agent(target, runner.clone()),
+        };
+        let mut builder = builder
             .session_service(self.sessions().clone())
             .governance(runner.governance().clone())
             .progress_source(progress)
@@ -290,8 +292,27 @@ fn session_of(run: &RunRecord) -> String {
     }
 }
 
+impl Harness {
+    /// What this harness tells a kernel about the processes it runs, the parker of its
+    /// stalled goals.
+    pub(crate) fn kernel_progress(&self) -> Arc<HarnessProgress> {
+        let runtime = self.agent().runtime();
+        let progress = Arc::new(HarnessProgress {
+            goals: runtime.goal_store().clone(),
+            book: runtime.goals.until.book().clone(),
+            #[cfg(feature = "observe")]
+            trails: runtime.run_trails.clone(),
+            processes: RwLock::new(None),
+            ledger: runtime.kernel_ledger.clone(),
+            partition: self.agent().partition().map(|partition| partition.id.clone()),
+        });
+        runtime.goals.until.book().set_parker(progress.clone());
+        progress
+    }
+}
+
 /// What the harness tells the kernel about the processes it runs (spec 3.2 §7.3, §10 HK3).
-struct HarnessProgress {
+pub(crate) struct HarnessProgress {
     goals: Arc<dyn GoalStore>,
     book: Arc<GoalBook>,
     #[cfg(feature = "observe")]
@@ -299,6 +320,23 @@ struct HarnessProgress {
     processes: RwLock<Option<ProcessHandle>>,
     /// Where the harness writes its activity; bound to the kernel's ledger at start.
     ledger: LateLedgerSink,
+    /// The partition of a partition's harness, whose ledger rows carry it (spec 3.2 §7.8).
+    partition: Option<PartitionId>,
+}
+
+/// The kernel's ledger as a partition's harness writes to it: every row in the partition
+/// (spec 3.2 §7.8, §7.10). The harness serves only its partition's sessions, so the
+/// partition is the session's.
+struct PartitionRows {
+    ledger: Arc<dyn LedgerSink>,
+    partition: PartitionId,
+}
+
+#[async_trait]
+impl LedgerSink for PartitionRows {
+    async fn record(&self, activity: Activity) -> adk_kernel::Result<()> {
+        self.ledger.record(activity.with_partition(self.partition.clone())).await
+    }
 }
 
 #[async_trait]
@@ -339,6 +377,11 @@ impl ProgressSource for HarnessProgress {
     }
 
     fn attach_ledger(&self, ledger: Arc<dyn LedgerSink>) {
+        let ledger = match &self.partition {
+            Some(partition) => Arc::new(PartitionRows { ledger, partition: partition.clone() })
+                as Arc<dyn LedgerSink>,
+            None => ledger,
+        };
         if !self.ledger.bind(ledger) {
             tracing::debug!("the harness already writes to a kernel's ledger; keeping it");
         }
@@ -642,10 +685,12 @@ fn invalid(message: impl Into<String>) -> AdkError {
 ///
 /// The follow-up runs in a session of its own whose mode is recorded as this session's at
 /// the time of the proposal, so its process never runs above the proposing run's mode
-/// (K-I7). Without a kernel hosting the harness the tool answers that none runs.
+/// (K-I7). A partition's harness proposes into its partition (spec 3.2 §7.8). Without a
+/// kernel hosting the harness the tool answers that none runs.
 pub(crate) struct ProposeFollowupTool {
     agenda: AgendaHandle,
     modes: (Arc<dyn ModeStore>, HarnessMode),
+    partition: Option<adk_kernel::PartitionId>,
 }
 
 impl ProposeFollowupTool {
@@ -653,8 +698,9 @@ impl ProposeFollowupTool {
         agenda: AgendaHandle,
         mode_store: Arc<dyn ModeStore>,
         default_mode: HarnessMode,
+        partition: Option<adk_kernel::PartitionId>,
     ) -> Self {
-        Self { agenda, modes: (mode_store, default_mode) }
+        Self { agenda, modes: (mode_store, default_mode), partition }
     }
 
     async fn mode(&self, ctx: &dyn ToolContext) -> HarnessMode {
@@ -772,6 +818,9 @@ impl Tool for ProposeFollowupTool {
             AgendaOrigin::Agent { pid, confidence: 1.0 },
             Utc::now(),
         );
+        if let Some(partition) = &self.partition {
+            item = item.with_partition(partition.clone());
+        }
         if let Some(when) = when {
             item = item.with_when(when);
         }

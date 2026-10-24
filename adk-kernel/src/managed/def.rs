@@ -11,7 +11,7 @@ use crate::agenda::ProactivityPolicy;
 use crate::consolidation::ConsolidationTick;
 use crate::drivers::{DriverManifest, DriverSandbox};
 use crate::error::{KernelError, Result};
-use crate::partition::{PartitionId, PartitionMode};
+use crate::partition::{CrossPartition, Partition, PartitionId, PartitionMode};
 use crate::sched::QueueClass;
 use crate::wake::Wake;
 
@@ -36,8 +36,8 @@ pub const DEFAULT_WAKE_USER: &str = "kernel";
 /// (spec 3.2 §7.8).
 pub const CROSS_PARTITION_VALUES: [&str; 2] = ["deny", "coordinator_with_approval"];
 
-/// The kernel part of a hosted definition: partitions, drivers, the proactivity policy and
-/// wake sets (spec 3.2 §7.13, §10 M1).
+/// The kernel part of a hosted definition: partitions and their coordinator, drivers, the
+/// proactivity policy and wake sets (spec 3.2 §7.8, §7.13, §10 M1).
 ///
 /// A `KernelDef` travels as JSON under [`KERNEL_DEF_METADATA_KEY`] in a
 /// [`ManagedAgentDef`]'s metadata, beside the harness block, so the managed runtime stores
@@ -51,7 +51,7 @@ pub const CROSS_PARTITION_VALUES: [&str; 2] = ["deny", "coordinator_with_approva
 /// | `wakeSets` | standing triggers: each wake starts a governed run of the definition's agent |
 /// | `proactivity` | the tenant kernel's [`ProactivityPolicy`]: open proposals, the daily proactive budget, quiet hours, how proposals are approved; the consolidation tick runs only when the block sets `consolidation` (§13 Q1) |
 /// | `drivers` | real [`DriverManifest`]s, validated and recorded; each needs a person's approval to mount |
-/// | `partitions` | recorded and validated as the partition record's plain data; the definition's agent runs in the default partition |
+/// | `partitions`, `coordinator` | as `[[kernel.partitions]]` and `kernel.coordinator` in `harness.toml`: each partition in the tenant's partition table, its tenant the hosting tenant, with an agent of its own built by the tenant's [`PartitionAgentResolver`](super::PartitionAgentResolver) — one harness per partition — as the target `<definition>@<partition>`; the coordinator's agent, else the first partition's by id, also serves the definition's own target. Without a partition resolver the partitions are recorded and the definition's agent runs in the default partition |
 ///
 /// A definition comes from a tenant, so the block cannot widen what the operator allows: a
 /// driver is never `unsandboxed` and pins no declaration digest of its own, a credential
@@ -84,6 +84,11 @@ pub struct KernelDef {
     /// The partitions the definition's agents run in (spec 3.2 §7.8).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub partitions: Vec<PartitionDef>,
+    /// The partition whose agent is the coordinator, the one that may cross into another
+    /// partition under a non-waivable approval (spec 3.2 §7.8, K-I15); one of
+    /// [`partitions`](Self::partitions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator: Option<PartitionId>,
     /// The drivers the definition asks to mount (spec 3.2 §7.7).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drivers: Vec<DriverManifest>,
@@ -107,6 +112,21 @@ impl KernelDef {
     pub fn with_partition(mut self, partition: PartitionDef) -> Self {
         self.partitions.push(partition);
         self
+    }
+
+    /// Makes `partition`'s agent the coordinator (spec 3.2 §7.8).
+    #[must_use]
+    pub fn with_coordinator(mut self, partition: impl Into<PartitionId>) -> Self {
+        self.coordinator = Some(partition.into());
+        self
+    }
+
+    /// The partition whose agent serves the definition's own target: the coordinator's,
+    /// else the first partition's by id; `None` without partitions (spec 3.2 §7.8).
+    pub fn primary_partition(&self) -> Option<PartitionId> {
+        self.coordinator
+            .clone()
+            .or_else(|| self.partitions.iter().map(|partition| partition.id.clone()).min())
     }
 
     /// Adds a driver manifest.
@@ -191,6 +211,7 @@ impl KernelDef {
     /// | Part | Refused when |
     /// |---|---|
     /// | partitions | an id or class is blank or repeated, an id has a character other than letters, digits, `-` and `_`, a mounted driver is not one of the block's, `crossPartition` is unknown, a blocked crossing names the partition itself |
+    /// | coordinator | it names a partition the block does not declare |
     /// | drivers | a manifest fails `DriverManifest::validate`, an id is repeated, a partition is not declared, the sandbox is `unsandboxed`, a declaration digest is pinned |
     /// | proactivity | a share, score or fraction of the consolidation tick is outside its range, or its schedule is blank |
     /// | wake sets | a name is blank, repeated or not an identifier, `anyOf` or `input` is empty, a wake is not a cron, webhook or queue wake, a cron expression does not parse, a hook or source is blank, the partition is not declared, the queue is `interactive`, the user is blank |
@@ -207,6 +228,14 @@ impl KernelDef {
             if !declared.insert(partition.id.clone()) {
                 return Err(invalid(format!("partition `{}` is declared twice", partition.id)));
             }
+        }
+        if let Some(coordinator) = &self.coordinator
+            && !declared.contains(coordinator)
+        {
+            return Err(invalid(format!(
+                "coordinator `{coordinator}` is not a partition the block declares; name one \
+                 of `partitions`"
+            )));
         }
         let mut partitions = declared;
         partitions.insert(PartitionId::default());
@@ -372,6 +401,38 @@ impl PartitionDef {
     /// The memory scope: the one set, or the id.
     pub fn memory_scope(&self) -> &str {
         self.memory_scope.as_deref().unwrap_or(self.id.as_str())
+    }
+
+    /// The partition record of this partition on `tenant`'s kernel (spec 3.2 §7.8): the
+    /// tenant is the hosting tenant, never the definition's.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_kernel::managed::PartitionDef;
+    ///
+    /// let work = PartitionDef::new("work", "work-agents").with_driver("calendar").to_partition("tenant-a")?;
+    /// assert_eq!(work.tenant.as_deref(), Some("tenant-a"));
+    /// assert_eq!((work.memory_scope.as_str(), work.drivers.as_slice()), ("work", ["calendar".to_string()].as_slice()));
+    /// # Ok::<(), adk_kernel::KernelError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Config`] when `crossPartition` is unknown.
+    pub fn to_partition(&self, tenant: &str) -> Result<Partition> {
+        let mut partition = Partition::new(self.id.clone(), self.class.clone())
+            .with_tenant(tenant)
+            .with_mode(self.default_mode)
+            .with_memory_scope(self.memory_scope())
+            .with_cross_partition(self.cross_partition.parse::<CrossPartition>()?);
+        for driver in &self.drivers {
+            partition = partition.with_driver(driver.clone());
+        }
+        for blocked in &self.blocked_crossings {
+            partition = partition.with_blocked_crossing(blocked.clone());
+        }
+        Ok(partition)
     }
 
     fn validate(&self, drivers: &BTreeSet<&str>) -> Result<()> {

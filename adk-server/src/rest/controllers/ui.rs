@@ -945,6 +945,21 @@ pub async fn ui_capabilities() -> Json<UiCapabilities> {
     })
 }
 
+/// GET /api/ui/capabilities as a server serves it: [`ui_capabilities`], plus
+/// `interrupt_resume` for `ag_ui` when `resume` is wired (spec 3.3 §10 S2).
+pub(crate) async fn served_ui_capabilities(
+    axum::extract::State(resume): axum::extract::State<bool>,
+) -> Json<UiCapabilities> {
+    let Json(mut capabilities) = ui_capabilities().await;
+    if resume
+        && let Some(ag_ui) =
+            capabilities.protocols.iter_mut().find(|protocol| protocol.protocol == "ag_ui")
+    {
+        ag_ui.features.push(crate::ui_protocol::AG_UI_RESUME_FEATURE);
+    }
+    Json(capabilities)
+}
+
 /// POST /api/ui/initialize
 pub(crate) async fn ui_initialize(
     Extension(request_context): Extension<Option<adk_core::RequestContext>>,
