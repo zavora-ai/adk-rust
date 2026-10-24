@@ -75,8 +75,9 @@ pub trait Source: Send + Sync {
         tokio::time::sleep(max).await;
     }
 
-    /// The decision requests `caller` may answer — of one session when `session` is set
-    /// (`InboxQuery::with_session_id`, spec 3.3 §10 C1) — open ones only when `open_only`.
+    /// The decision requests `caller` may answer — of the caller's session `session` when
+    /// it is set (`InboxQuery::with_session`, spec 3.3 §10 C1) — open ones only when
+    /// `open_only`.
     async fn requests(
         &self,
         caller: &Caller,

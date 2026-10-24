@@ -7,7 +7,7 @@
 //! |-------|-----|-------|
 //! | `adk_approval_pending` | app, user, session, fingerprint | The first request and when it was held |
 //! | `adk_approval_decisions` | app, user, session, fingerprint | The [`ToolApproval`](adk_core::ToolApproval) as JSON, with any edited arguments and message |
-//! | `adk_approval_requests` | id | An [`ApprovalRequest`](adk_core::ApprovalRequest) as JSON, with its application, session, state, openness, creation time, and version as indexed columns |
+//! | `adk_approval_requests` | id | An [`ApprovalRequest`](adk_core::ApprovalRequest) as JSON, with its application, user, session, state, openness, creation time, and version as indexed columns |
 //! | `adk_approval_delegations` | id | An [`ApprovalDelegation`](adk_core::ApprovalDelegation) as JSON, with its delegate as indexed columns |
 //!
 //! | Backend | Feature | How a decision is consumed once | How a request changes once per version |
@@ -81,6 +81,17 @@ ALTER TABLE adk_approval_requests ADD COLUMN session_id TEXT;\
 CREATE INDEX IF NOT EXISTS adk_approval_requests_session \
     ON adk_approval_requests (session_id, created_at_us, id);",
     ),
+    (
+        4,
+        "index approval requests by user and session",
+        // A session is an application's, user's and session ID together; `migrate` fills
+        // the column of requests stored before it from their records.
+        "\
+ALTER TABLE adk_approval_requests ADD COLUMN user_id TEXT;\
+DROP INDEX IF EXISTS adk_approval_requests_session;\
+CREATE INDEX IF NOT EXISTS adk_approval_requests_user_session \
+    ON adk_approval_requests (session_id, user_id, created_at_us, id);",
+    ),
 ];
 
 const REGISTRY_TABLE: &str = "_adk_approval_migrations";
@@ -118,23 +129,23 @@ WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND fingerprint = $4";
 
 const CREATE_REQUEST: &str = "\
 INSERT INTO adk_approval_requests \
-    (id, app_name, session_id, state, open_flag, created_at_us, version, record) \
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+    (id, app_name, user_id, session_id, state, open_flag, created_at_us, version, record) \
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
 ON CONFLICT (id) DO NOTHING";
 
 const READ_REQUEST: &str = "SELECT record FROM adk_approval_requests WHERE id = $1";
 
 const REPLACE_REQUEST: &str = "\
 UPDATE adk_approval_requests \
-SET app_name = $1, session_id = $2, state = $3, open_flag = $4, created_at_us = $5, \
-    version = $6, record = $7 \
-WHERE id = $8 AND version = $9";
+SET app_name = $1, user_id = $2, session_id = $3, state = $4, open_flag = $5, \
+    created_at_us = $6, version = $7, record = $8 \
+WHERE id = $9 AND version = $10";
 
 const UNINDEXED_REQUESTS: &str =
-    "SELECT id, record FROM adk_approval_requests WHERE session_id IS NULL";
+    "SELECT id, record FROM adk_approval_requests WHERE session_id IS NULL OR user_id IS NULL";
 
 const INDEX_REQUEST_SESSION: &str =
-    "UPDATE adk_approval_requests SET session_id = $1 WHERE id = $2 AND session_id IS NULL";
+    "UPDATE adk_approval_requests SET user_id = $1, session_id = $2 WHERE id = $3";
 
 const PUT_DELEGATION: &str = "\
 INSERT INTO adk_approval_delegations (id, to_kind, to_id, record) VALUES ($1, $2, $3, $4) \
@@ -193,6 +204,10 @@ fn list_statement(query: &ApprovalRequestQuery) -> (String, Vec<SqlParam>) {
     if let Some(session) = &query.session_id {
         let p = next(&mut params, SqlParam::Text(session.clone()));
         sql.push_str(&format!(" AND session_id = {p}"));
+    }
+    if let Some(user) = &query.user_id {
+        let p = next(&mut params, SqlParam::Text(user.clone()));
+        sql.push_str(&format!(" AND user_id = {p}"));
     }
     if !query.states.is_empty() {
         let placeholders: Vec<String> = query
@@ -298,20 +313,25 @@ macro_rules! sql_approval_store {
             pub async fn migrate(&self) -> Result<()> {
                 let migrate = $migrate;
                 migrate(&self.pool).await?;
-                // Requests stored before migration 3 name their session only in the record.
+                // Requests stored before migrations 3 and 4 name their user and session only
+                // in the record.
                 let unindexed: Vec<(String, String)> = sqlx::query_as(UNINDEXED_REQUESTS)
                     .fetch_all(&self.pool)
                     .await
                     .map_err(|e| store_error(format!("approval store read failed: {e}")))?;
                 for (id, record) in unindexed {
                     let record: serde_json::Value = from_json(&record, "record")?;
-                    let Some(session_id) = record.pointer("/scope/sessionId").and_then(|v| v.as_str())
+                    let scope = |field: &str| {
+                        record.pointer(&format!("/scope/{field}")).and_then(|v| v.as_str())
+                    };
+                    let (Some(user_id), Some(session_id)) = (scope("userId"), scope("sessionId"))
                     else {
                         return Err(store_error(format!(
                             "approval store column 'record' of request '{id}' names no session"
                         )));
                     };
                     sqlx::query(INDEX_REQUEST_SESSION)
+                        .bind(user_id)
                         .bind(session_id)
                         .bind(&id)
                         .execute(&self.pool)
@@ -453,6 +473,7 @@ macro_rules! sql_approval_store {
                 sqlx::query(CREATE_REQUEST)
                     .bind(&request.id)
                     .bind(&request.scope.app_name)
+                    .bind(&request.scope.user_id)
                     .bind(&request.scope.session_id)
                     .bind(columns.state)
                     .bind(columns.open_flag)
@@ -484,6 +505,7 @@ macro_rules! sql_approval_store {
                 let columns = request_columns(request)?;
                 let updated = sqlx::query(REPLACE_REQUEST)
                     .bind(&request.scope.app_name)
+                    .bind(&request.scope.user_id)
                     .bind(&request.scope.session_id)
                     .bind(columns.state)
                     .bind(columns.open_flag)

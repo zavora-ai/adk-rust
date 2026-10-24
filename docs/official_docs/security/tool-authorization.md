@@ -565,9 +565,13 @@ A `ToolConfirmationHandler` is asked about each call with its final arguments wh
 waits. Calls in one batch are decided concurrently, so a handler that prompts on a shared
 device serializes its own prompts. A `decide` that takes longer than
 `RunConfig::tool_confirmation_timeout` (default five minutes) leaves the call waiting for a
-decision in the run's `approval_store` or `approval_service`, and the run ends with it held,
-as if no handler had been asked; nothing is decided by silence. A run with neither, or with
-`RunConfig::deny_on_confirmation_timeout` set, denies the call:
+decision in the run's `approval_store` (and submits it to the run's `approval_service`, if
+any), and the run ends with it held; nothing is decided by silence. Only a decision recorded
+for the call resumes it: later runs do not ask the handler about it again, so a new message
+goes on to the model. A decision from any source cancels the call's pending entry and open
+inbox request. A run without a store — including one with only an `approval_service`, whose
+decisions the run cannot read — or with `RunConfig::deny_on_confirmation_timeout` set, denies
+the call:
 
 ```rust
 use adk_core::RunConfig;

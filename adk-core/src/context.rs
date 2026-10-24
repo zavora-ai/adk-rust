@@ -1354,9 +1354,11 @@ impl ToolConfirmationRequest {
 /// batch are dropped.
 ///
 /// The timeout denies only in a run without an [`approval_store`](RunConfig::approval_store)
-/// or [`approval_service`](RunConfig::approval_service). With either, a call the handler does
-/// not decide in time is held there, and the run ends with it waiting for a decision
-/// (spec 3.3 §7.3); [`RunConfig::deny_on_confirmation_timeout`] restores the denial.
+/// to read a later decision from. With one, a call the handler does not decide in time is
+/// held there (and submitted to the run's
+/// [`approval_service`](RunConfig::approval_service), if any), the run ends with it waiting,
+/// and only a decision recorded for it resumes it; the handler is not asked about it again
+/// (spec 3.3 §7.3). [`RunConfig::deny_on_confirmation_timeout`] restores the denial.
 #[async_trait]
 pub trait ToolConfirmationHandler: std::fmt::Debug + Send + Sync {
     /// Approve or deny one pending tool call.
@@ -1602,9 +1604,9 @@ pub struct RunConfig {
     pub request_context: Option<crate::RequestContext>,
     /// How long the [`tool_confirmation_handler`](Self::tool_confirmation_handler) may take
     /// to decide one call. A call it does not decide in time waits in the
-    /// [`approval_store`](Self::approval_store) or [`approval_service`](Self::approval_service)
-    /// when the run has one, and is denied otherwise or under
-    /// [`deny_on_confirmation_timeout`](Self::deny_on_confirmation_timeout). Defaults to
+    /// [`approval_store`](Self::approval_store) when the run has one, and is denied
+    /// otherwise or under [`deny_on_confirmation_timeout`](Self::deny_on_confirmation_timeout).
+    /// Defaults to
     /// [`DEFAULT_TOOL_CONFIRMATION_TIMEOUT`](crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT).
     pub tool_confirmation_timeout: std::time::Duration,
     /// Ledger that model calls and payment tools reserve budget against.
@@ -1647,12 +1649,14 @@ pub struct RunConfig {
     pub acting: crate::ActingConfig,
     /// Deny a call whose [`tool_confirmation_handler`](Self::tool_confirmation_handler) does
     /// not decide within [`tool_confirmation_timeout`](Self::tool_confirmation_timeout), even
-    /// when the run has an [`approval_store`](Self::approval_store) or
-    /// [`approval_service`](Self::approval_service).
+    /// when the run has an [`approval_store`](Self::approval_store).
     ///
-    /// `false` (the default) holds such a call there instead: it is recorded as pending, the
-    /// run ends with it waiting, and a later decision resumes it, so nothing is decided by
-    /// silence (spec 3.3 §7.3, §10 C2). A run with neither denies the call either way.
+    /// `false` (the default) holds such a call in the store instead: it is recorded as
+    /// pending and submitted to the [`approval_service`](Self::approval_service), if any, the
+    /// run ends with it waiting, and a decision recorded for it later resumes it, so nothing
+    /// is decided by silence (spec 3.3 §7.3, §10 C2). A run without a store — including one
+    /// with only an approval service, whose decisions it cannot read — denies the call
+    /// either way.
     pub deny_on_confirmation_timeout: bool,
 }
 

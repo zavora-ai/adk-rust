@@ -1,6 +1,6 @@
-//! The kernel's MongoDB stores (spec 3.2 §7.1, §11, §13 Q8): the process, agenda, driver and
-//! ledger conformance suites against a live server, and the stores sharing one database with
-//! adk-session's run, schedule and governance stores.
+//! The kernel's MongoDB stores (spec 3.2 §7.1, §11, §13 Q8): the process, agenda, driver,
+//! ledger and partition conformance suites against a live server, and the stores sharing one
+//! database with adk-session's run, schedule and governance stores.
 //!
 //! The tests are `#[ignore]`d because they need a server; CI's nightly `durable-stores` job
 //! runs them on a single-node replica set and on a standalone server. Each case opens a
@@ -77,6 +77,16 @@ impl adk_kernel::conformance::LedgerStoreHarness for Database {
     }
 }
 
+#[async_trait::async_trait]
+impl adk_kernel::conformance::PartitionStoreHarness for Database {
+    async fn open(&self) -> Arc<dyn adk_kernel::PartitionStore> {
+        let store =
+            adk_kernel::MongoPartitionStore::connect(&url(), &self.0).await.expect("connect");
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+}
+
 mod process {
     use super::*;
 
@@ -110,6 +120,15 @@ mod ledger {
     use super::*;
 
     adk_kernel::ledger_store_conformance_tests! {
+        #[ignore = "needs MONGODB_URL; CI's nightly durable-stores job runs it"]
+        harness = Database::new()
+    }
+}
+
+mod partition {
+    use super::*;
+
+    adk_kernel::partition_store_conformance_tests! {
         #[ignore = "needs MONGODB_URL; CI's nightly durable-stores job runs it"]
         harness = Database::new()
     }

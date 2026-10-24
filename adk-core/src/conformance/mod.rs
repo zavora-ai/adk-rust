@@ -351,6 +351,14 @@ macro_rules! approval_service_conformance_tests {
         }
         $(#[$attr])*
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_a_call_held_again_keeps_its_open_request() {
+            $crate::conformance::approval_service::a_call_held_again_keeps_its_open_request(
+                &$harness,
+            )
+            .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn approval_service_cancel_and_reject_deny_the_call() {
             $crate::conformance::approval_service::cancel_and_reject_deny_the_call(&$harness)
                 .await;

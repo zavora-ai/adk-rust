@@ -8,7 +8,7 @@ PostgreSQL, Redis, MongoDB, Neo4j, or Firestore.
 
 | Capability | Behaviour |
 |------------|-----------|
-| **Inbox** | Lists the requests an approver may decide now — by name, by group, or through a live delegation — oldest first, paged by cursor; `InboxQuery::with_session_id` narrows it to the decisions one session waits on |
+| **Inbox** | Lists the requests an approver may decide now — by name, by group, or through a live delegation — oldest first, paged by cursor; `InboxQuery::with_session` narrows it to the decisions one session — application, user and session ID — waits on |
 | **Quorum** | A request resolves once `quorum` distinct approvers approve; a delegate's approval counts for the delegator |
 | **Self-approval** | Refused by default for the requester, the acting agent, and anyone acting through their delegation |
 | **Actions** | Approve, edit (approve with substituted arguments), reject, respond (answer the model instead of running the call) |
@@ -27,7 +27,8 @@ PostgreSQL, Redis, MongoDB, Neo4j, or Firestore.
 2. With `RunConfig::approval_service` set, it also offers the call to the service's
    `ApprovalRouter`, which returns the `ApprovalPolicy` (or `None` to leave the call in the
    store only). The request ID is derived from the session, the call's fingerprint, and the
-   time it was first held, so a call held again before its decision maps to the same request.
+   time it was first held, and a call held again while its request is pending gets that
+   request back, so one held call never has two open requests.
 3. Approvers decide through `ApprovalService::decide` or the server endpoints.
 4. The decision that resolves the request is written to the store: an approval (with any
    edited arguments) or a denial carrying the reason. The request's `run_id` is woken with
@@ -37,7 +38,12 @@ PostgreSQL, Redis, MongoDB, Neo4j, or Firestore.
    the run its approval wakes.
 5. The next run resumes the held call under its original call ID, and the governed path takes
    the decision. An edited call passes the `ToolPolicy` and the agent's tool screen again before
-   it executes; a policy denial of the edit refuses the call.
+   it executes; a policy denial of the edit refuses the call. A run without a decision for the
+   call does not ask its confirmation handler about it again: the call keeps waiting and the
+   run goes on to the model (spec 3.3 §7.3).
+6. A call decided any other way — by the confirmation handler, a call-ID decision, a
+   fingerprint approval, or `Harness::decide` — has its open request cancelled and its pending
+   entry cleared, so the request cannot authorize a later call with the same fingerprint.
 
 ```rust
 use std::sync::Arc;
@@ -169,7 +175,7 @@ let ticker = spawn_approval_ticker(service, Duration::from_secs(30));
 
 | Route | Effect |
 |-------|--------|
-| `GET /api/approvals` | The caller's inbox (`state`, `group`, `app`, `session`, `cursor`, `limit`) |
+| `GET /api/approvals` | The caller's inbox (`state`, `group`, `app`, `user`, `session`, `cursor`, `limit`); `session` needs `app` and names a session of `user`, the caller by default, and never widens the inbox |
 | `GET /api/approvals/{id}` | One request the caller may decide or asked for |
 | `POST /api/approvals/{id}/decide` | `{"expectedVersion", "action", "editedArgs", "reason", "via"}` |
 | `POST /api/approvals/{id}/cancel` | `{"reason"}`; the requester or an approver |

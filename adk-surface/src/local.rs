@@ -401,8 +401,9 @@ impl Source for LocalSource {
             .with_states(states)
             .with_app_name(self.app.clone())
             .with_limit(INBOX_PAGE);
+        // A session is the caller's: another user's session with the same ID stays out.
         if let Some(session) = session {
-            query = query.with_session_id(session);
+            query = query.with_user_id(caller.user_id()).with_session_id(session);
         }
         let mut requests = Vec::new();
         loop {
