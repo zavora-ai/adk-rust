@@ -48,6 +48,7 @@ impl FileDatabase {
     async fn pool(&self) -> SqlitePool {
         let url = format!("sqlite://{}?mode=rwc", self.path.display());
         let sessions = SqliteSessionService::new(&url).await.expect("SQLite opens");
+        sqlx::query("PRAGMA journal_mode = WAL").execute(sessions.pool()).await.expect("WAL");
         sessions.migrate().await.expect("session schema migrates");
         sessions.pool().clone()
     }
