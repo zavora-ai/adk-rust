@@ -1,6 +1,8 @@
 //! The personal preset (spec 3.3 §10 H1): a workspace that is not a code repository, no host
 //! shell, long-term memory on, and the coding preset through the same builder call.
 
+#![cfg(all(feature = "runner", feature = "memory", feature = "sandbox"))]
+
 mod common;
 
 use std::sync::Arc;

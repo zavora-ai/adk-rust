@@ -205,6 +205,7 @@ pub struct HarnessAgentBuilder {
     computer_use: Option<crate::packs::computer_use::ComputerUsePack>,
     computer_use_requested: bool,
     voice_requested: bool,
+    take_over: Option<crate::take_over::TakeOver>,
 }
 
 impl HarnessAgentBuilder {
@@ -304,6 +305,7 @@ impl HarnessAgentBuilder {
             computer_use: None,
             computer_use_requested: false,
             voice_requested: false,
+            take_over: None,
         }
     }
 
@@ -1020,6 +1022,31 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// Lets the harness's tool calls ask the person for a secret through `take_over`
+    /// (spec 3.3 §8.2, §10 H2): the request reaches surfaces through the approval inbox, the
+    /// typed value reaches the asking call only, and every occurrence of it in any call's
+    /// result or error is replaced by
+    /// [`TAKE_OVER_PLACEHOLDER`](crate::take_over::TAKE_OVER_PLACEHOLDER). Asking needs an
+    /// [`approval_service`](Self::approval_service); the wait is bounded by the
+    /// [`confirmation_timeout`](Self::confirmation_timeout).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let take_over = TakeOver::new();
+    /// let harness = HarnessAgent::builder("assistant")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .tool(Arc::new(SignIn { take_over: take_over.clone() }))
+    ///     .approval_service(inbox)
+    ///     .take_over(take_over)
+    ///     .build()?;
+    /// ```
+    pub fn take_over(mut self, take_over: crate::take_over::TakeOver) -> Self {
+        self.take_over = Some(take_over);
+        self
+    }
+
     /// Adds a tool, governed as `External`.
     pub fn tool(mut self, tool: Arc<dyn Tool>) -> Self {
         self.tools.push(tool);
@@ -1591,6 +1618,12 @@ impl HarnessAgentBuilder {
         if let Some(computer_use) = &computer_use {
             tools.extend(computer_use.tools.iter().cloned());
         }
+        // Take over (spec 3.3 §10 H2): every call runs in a scope a secret can reach, and
+        // leaves it scrubbed before RBAC, hooks or members see the result.
+        if let Some(take_over) = &self.take_over {
+            take_over.bind(self.approval_service.clone(), self.confirmation_timeout);
+            tools = tools.into_iter().map(crate::take_over::ScopedTool::wrap).collect();
+        }
         let tool_names: Vec<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
         #[cfg(feature = "auth")]
         let (tools, identity_gate) = {
@@ -1939,11 +1972,19 @@ impl HarnessAgentBuilder {
             }
         }
         for tool in self.tools {
+            let tool = match &self.take_over {
+                Some(_) => crate::take_over::ScopedTool::wrap(tool),
+                None => tool,
+            };
             #[cfg(feature = "auth")]
             let tool = self.identity.protect_extra(tool);
             builder = builder.tool(tool);
         }
         for extra in self.toolsets {
+            let extra = match &self.take_over {
+                Some(_) => crate::take_over::ScopedToolset::wrap(extra),
+                None => extra,
+            };
             builder = builder.toolset(extra);
         }
         #[cfg(feature = "web")]
@@ -2125,6 +2166,7 @@ impl HarnessAgentBuilder {
                 cache_capable: self.context_caching.then_some(self.cache_capable).flatten(),
                 #[cfg(feature = "payments")]
                 payments: payments.map(|payments| payments.reminder),
+                take_over: self.take_over,
             },
             info,
         })

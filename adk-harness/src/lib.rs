@@ -31,6 +31,7 @@
 //! | `packs::managed::{HarnessDef, HarnessResolver}` (feature `managed`) | §7.18 |
 //! | [`coding::CodingAgent`] | §7.19 |
 //! | [`Preset`], [`personal::PersonalAgent`], [`personal::PersonalWorkspace`], [`personal::PersonalSettings`] | spec 3.3 §10 H1 |
+//! | [`take_over::TakeOver`], [`take_over::TakeOverRequest`], [`take_over::TakeOverAnswer`] | spec 3.3 §8.2, §10 H2 |
 //! | [`WebConfig`], [`SearchProvider`], [`ProviderWebTools`], [`WebSearchPath`], `web_fetch`, `web_search`, `SearxngSearch`, `DeepSeekSearch` (feature `web`) | §7.20 |
 //! | [`McpInteractionConfig`], `HarnessElicitationHandler`, `HarnessSamplingHandler`, `mcp_*_resource` (feature `mcp`) | §7.21 |
 //! | [`EffortPolicy`], [`Effort`] | §7.23 |
@@ -98,6 +99,7 @@ mod run_context;
 mod shell;
 #[cfg(feature = "skills")]
 mod skills;
+pub mod take_over;
 #[cfg(feature = "team")]
 mod team;
 mod tools;
