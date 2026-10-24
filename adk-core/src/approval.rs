@@ -693,9 +693,7 @@ impl ApprovalRequest {
     /// ```
     pub fn shows_call_args(&self) -> bool {
         let shown = crate::tool_call_fingerprint(&self.tool_name, &self.args_redacted);
-        self.fingerprint
-            .strip_suffix(shown.as_str())
-            .is_some_and(|rest| rest.ends_with('\u{1f}'))
+        self.fingerprint.strip_suffix(shown.as_str()).is_some_and(|rest| rest.ends_with('\u{1f}'))
     }
 
     /// Whether the request still needs work: pending, or resolved but not yet applied.

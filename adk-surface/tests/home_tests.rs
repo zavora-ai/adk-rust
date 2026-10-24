@@ -51,7 +51,7 @@ fn asset_paths(text: &str) -> Vec<String> {
         .map(|(start, _)| {
             let rest = &text[start..];
             let end =
-                rest.find(|c: char| matches!(c, '"' | '\'' | ')' | ' ')).unwrap_or(rest.len());
+                rest.find(['"', '\'', ')', ' ']).unwrap_or(rest.len());
             rest[..end].to_string()
         })
         .collect()

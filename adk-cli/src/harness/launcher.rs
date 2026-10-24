@@ -794,7 +794,7 @@ impl HarnessLauncher {
                 kernel.clone(),
                 self.surface_records.clone(),
             )?;
-            (engine, sessions, self.agent.take_over().cloned())
+            (engine, sessions, self.agent.runtime().take_over().cloned())
         };
         let rules = super::rules::rules_router(super::rules::RuleEndpoints {
             agent: self.agent.clone(),
