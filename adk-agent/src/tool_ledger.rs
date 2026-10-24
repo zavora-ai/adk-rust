@@ -7,8 +7,12 @@
 use std::sync::Arc;
 
 use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind, AuditRecordOutcome};
-use adk_core::{ActionLedger, ActionOutcome, ActionRecord, InvocationContext, ToolEffect};
+use adk_core::{
+    ActionLedger, ActionOutcome, ActionRecord, InvocationContext, ToolEffect, ToolResultStatus,
+};
 use serde_json::Value;
+
+use crate::tool_response::ToolResponse;
 
 /// The action-ledger key of a held tool call that a later run resumes.
 ///
@@ -70,28 +74,37 @@ pub(crate) async fn begin_ledgered_call(
     key: String,
     name: &str,
     args: &Value,
-) -> adk_core::Result<Result<Option<LedgeredCall>, Value>> {
+) -> adk_core::Result<Result<Option<LedgeredCall>, ToolResponse>> {
     let ledger = match &ctx.run_config().action_ledger {
         Some(ledger) if effect == ToolEffect::NonIdempotent => ledger.clone(),
         _ => return Ok(Ok(None)),
     };
     let answer = match ledger.get(&key).await {
         Ok(Some(record)) => match record.outcome {
-            Some(ActionOutcome::Succeeded { result_digest }) => serde_json::json!({
-                "status": "already_succeeded",
-                "result_digest": result_digest,
-                "detail": format!("this call to '{name}' already completed; it was not executed again"),
-            }),
-            Some(ActionOutcome::Failed { error }) => serde_json::json!({
-                "status": "already_failed",
-                "error": error,
-                "detail": format!("this call to '{name}' already failed; it was not executed again"),
-            }),
+            Some(ActionOutcome::Succeeded { result_digest }) => {
+                ToolResponse::new(serde_json::json!({
+                    "status": "already_succeeded",
+                    "result_digest": result_digest,
+                    "detail": format!("this call to '{name}' already completed; it was not executed again"),
+                }))
+            }
+            Some(ActionOutcome::Failed { error }) => ToolResponse::unsuccessful(
+                serde_json::json!({
+                    "status": "already_failed",
+                    "error": error,
+                    "detail": format!("this call to '{name}' already failed; it was not executed again"),
+                }),
+                true,
+                false,
+            ),
             _ => {
                 record_outcome_unknown(ctx, name, args, "began_without_outcome").await?;
-                adk_core::outcome_unknown_response(format!(
-                    "an earlier attempt of this call to '{name}' began but recorded no outcome, so it may have taken effect; it was not executed again"
-                ))
+                ToolResponse::with_status(
+                    adk_core::outcome_unknown_response(format!(
+                        "an earlier attempt of this call to '{name}' began but recorded no outcome, so it may have taken effect; it was not executed again"
+                    )),
+                    ToolResultStatus::OutcomeUnknown,
+                )
             }
         },
         // A store error can name its connection, so the model is given its code only.
@@ -99,22 +112,27 @@ pub(crate) async fn begin_ledgered_call(
             Ok(()) => return Ok(Ok(Some(LedgeredCall { ledger, key }))),
             Err(error) => {
                 tracing::error!(tool.name = %name, error = %error, "action ledger could not record the call");
-                serde_json::json!({
-                    "error": format!("tool '{name}' was not executed: the action ledger could not record the call: {}", error.redacted())
-                })
+                ToolResponse::not_run(
+                    format!(
+                        "tool '{name}' was not executed: the action ledger could not record the call: {}",
+                        error.redacted()
+                    ),
+                ).caused_by(&error)
             }
         },
         Err(error) => {
             tracing::error!(tool.name = %name, error = %error, "action ledger could not be read");
-            serde_json::json!({
-                "error": format!("tool '{name}' was not executed: the action ledger could not be read: {}", error.redacted())
-            })
+            ToolResponse::not_run(format!(
+                "tool '{name}' was not executed: the action ledger could not be read: {}",
+                error.redacted()
+            ))
+            .caused_by(&error)
         }
     };
     tracing::warn!(
         tool.name = %name,
         tool.idempotency_key = %key,
-        response = %answer,
+        response = %answer.value,
         "non-idempotent call answered by the action ledger without executing"
     );
     Ok(Err(answer))

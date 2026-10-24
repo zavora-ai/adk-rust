@@ -372,6 +372,7 @@ pub(crate) async fn screen_tool_result(
     guardrails: &ToolGuardrailSet,
     tool_name: &str,
     args: &serde_json::Value,
+    executed: bool,
     mut content: Content,
 ) -> (Content, Vec<String>) {
     use adk_core::ToolResultScreen as _;
@@ -388,6 +389,12 @@ pub(crate) async fn screen_tool_result(
                 function_response.response = adk_core::result_blocked_response(tool_name, &reason);
                 function_response.inline_data.clear();
                 function_response.file_data.clear();
+                if part.tool_result_status() != Some(adk_core::ToolResultStatus::OutcomeUnknown) {
+                    part.set_tool_result_status(
+                        adk_core::ToolResultStatus::derive(executed, true),
+                        None,
+                    );
+                }
                 withheld.push(reason);
             }
         }
@@ -400,6 +407,7 @@ pub(crate) async fn screen_tool_result(
     _guardrails: &ToolGuardrailSet,
     _tool_name: &str,
     _args: &serde_json::Value,
+    _executed: bool,
     content: Content,
 ) -> (Content, Vec<String>) {
     (content, Vec::new())

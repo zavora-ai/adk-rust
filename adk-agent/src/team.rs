@@ -3660,7 +3660,9 @@ mod tests {
                     }),
                 ),
                 id: Some("delegate-1".to_string()),
-                annotations: None,
+                annotations: Some(serde_json::json!({
+                    (adk_core::TOOL_RESULT_STATUS_KEY): adk_core::ToolResultStatus::NotRun,
+                })),
             }],
         })
         .unwrap();

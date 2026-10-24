@@ -281,9 +281,21 @@ async fn test_tool_confirmation_interrupts_when_decision_missing() {
 
     let mut stream = agent.run(Arc::new(MockContext::new(RunConfig::default()))).await.unwrap();
     let mut saw_confirmation_interrupt = false;
+    let mut saw_pending_response = false;
 
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
+        if let Some(content) = event.content() {
+            for part in &content.parts {
+                if matches!(part, Part::FunctionResponse { .. }) {
+                    assert_eq!(
+                        part.tool_result_status(),
+                        Some(adk_core::ToolResultStatus::Pending)
+                    );
+                    saw_pending_response = true;
+                }
+            }
+        }
         if event.llm_response.interrupted {
             let request = event.actions.tool_confirmation.as_ref().unwrap();
             assert_eq!(request.tool_name, "test_tool");
@@ -293,6 +305,7 @@ async fn test_tool_confirmation_interrupts_when_decision_missing() {
     }
 
     assert!(saw_confirmation_interrupt, "expected confirmation interrupt event");
+    assert!(saw_pending_response, "expected a pending function response");
     assert_eq!(tool_calls.load(Ordering::SeqCst), 0, "tool should not execute before approval");
 }
 
@@ -603,7 +616,7 @@ fn runtime_denial_content() -> Value {
                 json!({ "error": "Tool 'test_tool' execution denied by confirmation policy" }),
             ),
             id: Some("call-runtime".to_string()),
-            annotations: None,
+            annotations: Some(json!({adk_core::TOOL_RESULT_STATUS_KEY: "not_run"})),
         }],
     })
     .unwrap()

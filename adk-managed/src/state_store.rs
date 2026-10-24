@@ -182,6 +182,9 @@ pub struct PendingAction {
     /// action of the turn is answered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolution: Option<serde_json::Value>,
+    /// Framework execution status for a resolved custom tool; absent for successful or old results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution_status: Option<adk_core::ToolResultStatus>,
 }
 
 /// Storage for managed session state.

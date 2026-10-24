@@ -980,11 +980,7 @@ impl Agent for RealtimeAgent {
                         tool_event.actions = outcome.actions.clone();
                         tool_event.llm_response.content = Some(Content {
                             role: "function".to_string(),
-                            parts: vec![Part::FunctionResponse {
-                                function_response: adk_core::FunctionResponseData::new(held.name.clone(), outcome.result.clone()),
-                                id: Some(function_call_id.clone()),
-                                annotations: None,
-                            }],
+                            parts: vec![outcome.part(&held.name, &function_call_id)],
                         });
                         yield Ok(tool_event);
                         let rendered = outcome.result.to_string();
@@ -1333,7 +1329,7 @@ impl Agent for RealtimeAgent {
                                 // Execute tool through the governed path.
                                 let tool = resolved_tools.iter().find(|t| t.name() == name);
 
-                                let (result, actions) = if let Some(tool) = tool {
+                                let (result, actions, status, error) = if let Some(tool) = tool {
                                     match dispatch_tool(
                                         &ctx,
                                         tool,
@@ -1357,7 +1353,7 @@ impl Agent for RealtimeAgent {
                                                 held_event.actions.tool_confirmation = Some(request);
                                                 yield Ok(held_event);
                                             }
-                                            (outcome.result, outcome.actions)
+                                            (outcome.result, outcome.actions, outcome.status, outcome.error)
                                         }
                                         Err(error) => {
                                             // The kill switch or the approval service ended the run.
@@ -1370,6 +1366,8 @@ impl Agent for RealtimeAgent {
                                     (
                                         serde_json::json!({ "error": format!("Tool {} not found", name) }),
                                         EventActions::default(),
+                                        Some(adk_core::ToolResultStatus::NotRun),
+                                        None,
                                     )
                                 };
 
@@ -1379,11 +1377,7 @@ impl Agent for RealtimeAgent {
                                 tool_event.actions = actions.clone();
                                 tool_event.llm_response.content = Some(Content {
                                     role: "function".to_string(),
-                                    parts: vec![Part::FunctionResponse {
-                                        function_response: adk_core::FunctionResponseData::new(name.clone(), result.clone()),
-                                        id: Some(call_id.clone()),
-                                        annotations: None,
-                                    }],
+                                    parts: vec![ToolDispatch { result: result.clone(), actions: actions.clone(), held: None, status, error }.part(&name, &call_id)],
                                 });
                                 yield Ok(tool_event);
 
@@ -1677,6 +1671,22 @@ struct ToolDispatch {
     actions: EventActions,
     /// The request for a call held for a confirmation decision.
     held: Option<adk_core::ToolConfirmationRequest>,
+    status: Option<adk_core::ToolResultStatus>,
+    error: Option<(&'static str, adk_core::ErrorCategory)>,
+}
+
+impl ToolDispatch {
+    fn part(&self, name: &str, id: &str) -> Part {
+        let mut part = Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(name, self.result.clone()),
+            id: Some(id.to_string()),
+            annotations: None,
+        };
+        if let Some(status) = self.status {
+            part.set_tool_result_status(status, self.error);
+        }
+        part
+    }
 }
 
 /// Runs one realtime tool call: its arguments are parsed strictly, the run's invocation
@@ -1712,6 +1722,8 @@ async fn dispatch_tool(
                 result: serde_json::json!({ "error": format!("Tool '{name}' was not run: {reason}") }),
                 actions: EventActions::default(),
                 held: None,
+                status: Some(adk_core::ToolResultStatus::NotRun),
+                error: None,
             });
         }
     };
@@ -1755,10 +1767,17 @@ async fn dispatch_tool(
     };
 
     let mut short_circuit: Option<serde_json::Value> = None;
+    let mut status = None;
+    let mut error = None;
     let mut run_after_tool_callbacks = true;
     for hook in hooks {
         match hook.before_tool(cb_ctx.clone()).await {
             Ok(Some(content)) => {
+                status = (!content
+                    .parts
+                    .iter()
+                    .any(|part| matches!(part, Part::FunctionResponse { .. })))
+                .then_some(adk_core::ToolResultStatus::NotRun);
                 short_circuit = Some(content_to_tool_result(&content));
                 break;
             }
@@ -1766,6 +1785,8 @@ async fn dispatch_tool(
             Err(e) => {
                 log_failure(&e, "before_tool");
                 short_circuit = Some(not_run(&e));
+                status = Some(adk_core::ToolResultStatus::NotRun);
+                error = Some((e.code, e.category));
                 run_after_tool_callbacks = false;
                 break;
             }
@@ -1775,6 +1796,11 @@ async fn dispatch_tool(
         for callback in before_tool_callbacks {
             match callback(cb_ctx.clone()).await {
                 Ok(Some(content)) => {
+                    status = (!content
+                        .parts
+                        .iter()
+                        .any(|part| matches!(part, Part::FunctionResponse { .. })))
+                    .then_some(adk_core::ToolResultStatus::NotRun);
                     short_circuit = Some(content_to_tool_result(&content));
                     break;
                 }
@@ -1782,6 +1808,8 @@ async fn dispatch_tool(
                 Err(e) => {
                     log_failure(&e, "before_tool");
                     short_circuit = Some(not_run(&e));
+                    status = Some(adk_core::ToolResultStatus::NotRun);
+                    error = Some((e.code, e.category));
                     run_after_tool_callbacks = false;
                     break;
                 }
@@ -1811,19 +1839,27 @@ async fn dispatch_tool(
                         Ok(Ok(value)) => value,
                         Ok(Err(e)) => {
                             log_failure(&e, "execute");
+                            status = Some(adk_core::ToolResultStatus::Failed);
+                            error = Some((e.code, e.category));
                             adk_core::tool_error_response(&name, &e, policy.expose_error_messages)
                         }
-                        Err(_) => serde_json::json!({
+                        Err(_) => {
+                            status = Some(adk_core::ToolResultStatus::Failed);
+                            error = Some(("tool.timeout", adk_core::ErrorCategory::Timeout));
+                            serde_json::json!({
                             "error": format!("Tool '{name}' timed out after {timeout:?}")
-                        }),
+                            })
+                        }
                     }
                 }
                 adk_core::ToolAuthorization::Refuse { reason, confirmation: decision } => {
+                    status = Some(adk_core::ToolResultStatus::NotRun);
                     confirmation = decision;
                     run_after_tool_callbacks = false;
                     serde_json::json!({ "error": reason })
                 }
                 adk_core::ToolAuthorization::Pending { request, reason } => {
+                    status = Some(adk_core::ToolResultStatus::Pending);
                     held = Some(request);
                     run_after_tool_callbacks = false;
                     serde_json::json!({ "error": reason })
@@ -1845,6 +1881,8 @@ async fn dispatch_tool(
             // hold resumes as the agent-tool call (`held_tool_calls`).
             request.function_call_id = Some(call_id.to_string());
             held = Some(request);
+            status = Some(adk_core::ToolResultStatus::Pending);
+            error = None;
             run_after_tool_callbacks = false;
             if !adk_core::is_confirmation_pending(&result) {
                 result = adk_core::confirmation_pending_response(format!(
@@ -1861,6 +1899,8 @@ async fn dispatch_tool(
             match hook.after_tool(cb_ctx.clone()).await {
                 Ok(Some(modified)) => {
                     result = content_to_tool_result(&modified);
+                    status = None;
+                    error = None;
                     replaced = true;
                     break;
                 }
@@ -1876,6 +1916,8 @@ async fn dispatch_tool(
                 match callback(cb_ctx.clone()).await {
                     Ok(Some(modified)) => {
                         result = content_to_tool_result(&modified);
+                        status = None;
+                        error = None;
                         break;
                     }
                     Ok(None) => continue,
@@ -1888,15 +1930,21 @@ async fn dispatch_tool(
         }
         // An after-tool stage is where results are redacted, so the result it did not finish
         // with is withheld; the model is told the tool ran so it does not repeat the effect.
-        if let Some(error) = failed {
-            log_failure(&error, "after_tool");
+        if let Some(after_error) = failed {
+            log_failure(&after_error, "after_tool");
+            status = Some(adk_core::ToolResultStatus::derive(executed, true));
+            error = Some((after_error.code, after_error.category));
             result = if executed {
-                adk_core::result_withheld_response(&name, &error, policy.expose_error_messages)
+                adk_core::result_withheld_response(
+                    &name,
+                    &after_error,
+                    policy.expose_error_messages,
+                )
             } else {
                 serde_json::json!({
                     "error": format!(
                         "tool '{name}' was not run, and its after-tool pipeline failed with {}",
-                        failure(&error)
+                        failure(&after_error)
                     )
                 })
             };
@@ -1906,14 +1954,24 @@ async fn dispatch_tool(
     if held.is_none()
         && let (Some(screen), Some(args)) = (policy.screen.as_ref(), screened_args.as_ref())
     {
-        result = adk_core::screen_tool_result(screen.as_ref(), &name, args, result).await;
+        result = match screen.screen_result(&name, args, &result).await {
+            Ok(screened) => screened,
+            Err(reason) => {
+                tracing::warn!(tool.name = %name, "tool result withheld by its screen");
+                if status != Some(adk_core::ToolResultStatus::OutcomeUnknown) {
+                    status = Some(adk_core::ToolResultStatus::derive(executed, true));
+                    error = None;
+                }
+                adk_core::result_blocked_response(&name, &reason)
+            }
+        };
     }
 
     let mut actions = tool_ctx.actions();
     if actions.tool_confirmation_decision.is_none() {
         actions.tool_confirmation_decision = confirmation;
     }
-    Ok(ToolDispatch { result, actions, held })
+    Ok(ToolDispatch { result, actions, held, status, error })
 }
 
 /// Turns a callback's substitute `Content` into the result sent back to the provider.
@@ -2139,6 +2197,53 @@ mod tool_safety_tests {
         Arc::new(CountingTool { executions: Arc::clone(executions) })
     }
 
+    #[tokio::test]
+    async fn answers_record_execution_and_cause() {
+        use adk_core::{ErrorCategory, ErrorComponent, ToolResultStatus};
+        for (stage, expected) in [
+            ("before", ToolResultStatus::NotRun),
+            ("execute", ToolResultStatus::Failed),
+            ("after", ToolResultStatus::Withheld),
+        ] {
+            let executions = Arc::new(AtomicUsize::new(0));
+            let tool: Arc<dyn Tool> =
+                if stage == "execute" { Arc::new(LeakyTool) } else { counting(&executions) };
+            let error = || {
+                AdkError::new(
+                    ErrorComponent::Tool,
+                    ErrorCategory::Cancelled,
+                    "tool.cancelled",
+                    "stopped",
+                )
+            };
+            let before: Vec<BeforeToolCallback> = if stage == "before" {
+                vec![Box::new(move |_| Box::pin(async move { Err(error()) }))]
+            } else {
+                vec![]
+            };
+            let after: Vec<AfterToolCallback> = if stage == "after" {
+                vec![Box::new(move |_| Box::pin(async move { Err(error()) }))]
+            } else {
+                vec![]
+            };
+            let outcome =
+                dispatch_with(RunConfig::default(), &tool, "{}", before, after).await.unwrap();
+            let part = outcome.part(tool.name(), "call-1");
+            assert_eq!(part.tool_result_status(), Some(expected), "{stage}");
+            let (code, category) = if stage == "execute" {
+                ("tool.orders.unavailable", ErrorCategory::Unavailable)
+            } else {
+                ("tool.cancelled", ErrorCategory::Cancelled)
+            };
+            assert_eq!(part.tool_result_error_code(), Some(code));
+            assert_eq!(part.tool_result_error_category(), Some(category));
+            assert_eq!(executions.load(Ordering::SeqCst), usize::from(stage == "after"));
+            let Part::FunctionResponse { function_response, .. } = part else { unreachable!() };
+            assert_eq!(function_response.response, outcome.result);
+            assert!(!serde_json::to_string(&function_response).unwrap().contains("hunter2"));
+        }
+    }
+
     /// A tool whose delegate held a call: it surfaces the delegate's request through the
     /// context's actions, as `AgentTool` does when its agent holds a call.
     struct DelegatingTool;
@@ -2250,6 +2355,10 @@ mod tool_safety_tests {
         .unwrap();
 
         assert_eq!(executions.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            outcome.part("counting", "call-1").tool_result_status(),
+            Some(adk_core::ToolResultStatus::NotRun)
+        );
         let error = outcome.result["error"].as_str().unwrap_or_default();
         assert!(error.contains("not valid JSON"), "{error}");
     }
@@ -2264,6 +2373,10 @@ mod tool_safety_tests {
             dispatch_with(deny_all, &counting(&executions), "{}", vec![], vec![]).await.unwrap();
         assert_eq!(executions.load(Ordering::SeqCst), 0);
         assert!(outcome.result["error"].as_str().unwrap_or_default().contains("denied by policy"));
+        assert_eq!(
+            outcome.part("counting", "call-1").tool_result_status(),
+            Some(adk_core::ToolResultStatus::NotRun)
+        );
 
         let approval = RunConfig::builder()
             .tool_policy(Arc::new(
@@ -2274,6 +2387,10 @@ mod tool_safety_tests {
             .build();
         let held =
             dispatch_with(approval, &counting(&executions), "{}", vec![], vec![]).await.unwrap();
+        assert_eq!(
+            held.part("counting", "call-1").tool_result_status(),
+            Some(adk_core::ToolResultStatus::Pending)
+        );
         assert_eq!(executions.load(Ordering::SeqCst), 0);
         assert_eq!(held.held.map(|request| request.tool_name), Some("counting".to_string()));
     }
@@ -2514,6 +2631,47 @@ mod tool_safety_tests {
         .unwrap()
         .result;
         assert_eq!(result, serde_json::json!({ "screened": "counting", "had": { "ran": true } }));
+    }
+
+    #[tokio::test]
+    async fn screens_preserve_execution_facts() {
+        for stage in ["synthetic", "execute", "success"] {
+            let executions = Arc::new(AtomicUsize::new(0));
+            let tool: Arc<dyn Tool> =
+                if stage == "execute" { Arc::new(LeakyTool) } else { counting(&executions) };
+            let before: Vec<BeforeToolCallback> = if stage == "synthetic" {
+                vec![Box::new(|_| {
+                    Box::pin(async { Ok(Some(Content::new("function").with_text("cached"))) })
+                })]
+            } else {
+                vec![]
+            };
+            let policy = ToolResultPolicy {
+                timeout: std::time::Duration::from_millis(50),
+                screen: Some(Arc::new(FixedScreen { fail: true })),
+                expose_error_messages: false,
+            };
+            let outcome =
+                dispatch_with_policy(RunConfig::default(), &tool, "{}", before, vec![], &policy)
+                    .await
+                    .unwrap();
+            let part = outcome.part(tool.name(), "call-1");
+            assert_eq!(
+                part.tool_result_status(),
+                Some(adk_core::ToolResultStatus::derive(stage != "synthetic", true)),
+                "{stage}"
+            );
+            assert_eq!(part.tool_result_error_code(), None);
+            assert_eq!(part.tool_result_error_category(), None);
+            assert_eq!(
+                outcome.result,
+                adk_core::result_blocked_response(
+                    tool.name(),
+                    "the screening service is unavailable"
+                )
+            );
+            assert_eq!(executions.load(Ordering::SeqCst), usize::from(stage == "success"));
+        }
     }
 
     #[tokio::test]

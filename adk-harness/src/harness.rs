@@ -390,14 +390,11 @@ impl Harness {
                             "held call ran without its result being saved; answering it from the action ledger"
                         );
                         answered.push(call_id.to_string());
-                        answers.push(Part::FunctionResponse {
-                            function_response: FunctionResponseData::new(
-                                call.name.clone(),
-                                crate::ledger::recorded_answer(&call.name, &record),
-                            ),
-                            id: call.id.clone(),
-                            annotations: None,
-                        });
+                        answers.push(crate::ledger::recorded_answer(
+                            &call.name,
+                            call.id.as_ref(),
+                            &record,
+                        ));
                     }
                     None if runtime.confirmation_handler().is_none() => {
                         tracing::warn!(
@@ -507,7 +504,8 @@ impl Harness {
                             }
                             None => true,
                         })
-                        .map(|call| Part::FunctionResponse {
+                        .map(|call| {
+                            let mut part = Part::FunctionResponse {
                             function_response: FunctionResponseData::new(
                                 call.name.clone(),
                                 json!({
@@ -517,6 +515,9 @@ impl Harness {
                             ),
                             id: call.id.clone(),
                             annotations: None,
+                            };
+                            part.set_tool_result_status(adk_core::ToolResultStatus::NotRun, None);
+                            part
                         })
                         .collect(),
                 });

@@ -10,7 +10,7 @@ use adk_core::{
     ActionLedger, ActionOutcome, ActionRecord, AdkError, Agent, CallbackContext, Content,
     ErrorCategory, ErrorComponent, Event, InMemoryActionLedger, InvocationContext, Llm, LlmRequest,
     LlmResponse, LlmResponseStream, Part, Result, RetryBudget, RunConfig, Session, State, Tool,
-    ToolContext, ToolEffect,
+    ToolContext, ToolEffect, ToolResultStatus,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -183,6 +183,17 @@ fn responses(events: &[Event]) -> Vec<Value> {
         .collect()
 }
 
+fn statuses(events: &[Event]) -> Vec<Option<ToolResultStatus>> {
+    events
+        .iter()
+        .filter(|event| !event.llm_response.partial)
+        .filter_map(|event| event.llm_response.content.as_ref())
+        .flat_map(|content| &content.parts)
+        .filter(|part| matches!(part, Part::FunctionResponse { .. }))
+        .map(Part::tool_result_status)
+        .collect()
+}
+
 fn unavailable() -> AdkError {
     AdkError::new(
         ErrorComponent::Tool,
@@ -274,6 +285,7 @@ async fn a_timed_out_payment_never_repeats() {
     for response in &responses {
         assert!(adk_core::is_outcome_unknown(response), "{response}");
     }
+    assert_eq!(statuses(&events), vec![Some(ToolResultStatus::OutcomeUnknown); 2]);
     let record = ledger.get("shop/alice/session-1/inv-1/pay-1").await.unwrap().unwrap();
     assert_eq!(record.outcome, None, "a timed-out call keeps its begun record");
 }
@@ -432,33 +444,57 @@ async fn a_crash_after_begin_is_answered_as_unknown_on_resume_and_never_re_execu
 }
 
 #[tokio::test]
-async fn a_completed_record_answers_a_replay_without_executing() {
-    let ledger = Arc::new(InMemoryActionLedger::new());
-    let key = "shop/alice/session-1/inv-1/pay-1";
-    ledger
-        .begin(&ActionRecord::new(key, "pay", &json!({"amount": 50}), ToolEffect::NonIdempotent))
-        .await
-        .unwrap();
-    ledger
-        .complete(key, ActionOutcome::Succeeded { result_digest: "fnv1a128:abc".into() })
-        .await
-        .unwrap();
-    let pay = CountingTool::new("pay", ToolEffect::NonIdempotent);
-    let calls = pay.calls.clone();
-    let agent = LlmAgentBuilder::new("shopper")
-        .model(ScriptedModel::replaying(vec![call("pay", Some("pay-1"))]))
-        .tool(Arc::new(pay))
-        .build()
-        .unwrap();
+async fn completed_records_preserve_replay_results() {
+    for (outcome, response, status) in [
+        (
+            ActionOutcome::Succeeded { result_digest: "fnv1a128:abc".into() },
+            json!({
+                "status": "already_succeeded",
+                "result_digest": "fnv1a128:abc",
+                "detail": "this call to 'pay' already completed; it was not executed again",
+            }),
+            None,
+        ),
+        (
+            ActionOutcome::Failed { error: "card declined".into() },
+            json!({
+                "status": "already_failed",
+                "error": "card declined",
+                "detail": "this call to 'pay' already failed; it was not executed again",
+            }),
+            Some(ToolResultStatus::Failed),
+        ),
+    ] {
+        let ledger = Arc::new(InMemoryActionLedger::new());
+        let key = "shop/alice/session-1/inv-1/pay-1";
+        ledger
+            .begin(&ActionRecord::new(
+                key,
+                "pay",
+                &json!({"amount": 50}),
+                ToolEffect::NonIdempotent,
+            ))
+            .await
+            .unwrap();
+        ledger.complete(key, outcome.clone()).await.unwrap();
+        let pay = CountingTool::new("pay", ToolEffect::NonIdempotent);
+        let calls = pay.calls.clone();
+        let agent = LlmAgentBuilder::new("shopper")
+            .model(ScriptedModel::replaying(vec![call("pay", Some("pay-1"))]))
+            .tool(Arc::new(pay))
+            .build()
+            .unwrap();
+        let events = run(
+            &agent,
+            Invocation::with_config(RunConfig::builder().action_ledger(ledger.clone()).build()),
+        )
+        .await;
 
-    let events =
-        run(&agent, Invocation::with_config(RunConfig::builder().action_ledger(ledger).build()))
-            .await;
-
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    let response = &responses(&events)[0];
-    assert_eq!(response["status"], "already_succeeded");
-    assert_eq!(response["result_digest"], "fnv1a128:abc");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(responses(&events), vec![response]);
+        assert_eq!(statuses(&events), vec![status]);
+        assert_eq!(ledger.get(key).await.unwrap().unwrap().outcome, Some(outcome));
+    }
 }
 
 #[tokio::test]
@@ -490,43 +526,64 @@ async fn a_ledgered_call_records_its_outcome() {
 
 /// A ledger whose store is down.
 #[derive(Debug)]
-struct BrokenLedger;
+struct BrokenLedger {
+    read_failure: bool,
+    reads: AtomicUsize,
+    begins: AtomicUsize,
+    completes: AtomicUsize,
+}
 
 #[async_trait]
 impl ActionLedger for BrokenLedger {
     async fn begin(&self, _record: &ActionRecord) -> Result<()> {
+        self.begins.fetch_add(1, Ordering::SeqCst);
         Err(AdkError::tool("ledger store unavailable"))
     }
     async fn complete(&self, _key: &str, _outcome: ActionOutcome) -> Result<()> {
+        self.completes.fetch_add(1, Ordering::SeqCst);
         Err(AdkError::tool("ledger store unavailable"))
     }
     async fn get(&self, _key: &str) -> Result<Option<ActionRecord>> {
-        Ok(None)
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        if self.read_failure { Err(AdkError::tool("ledger store unavailable")) } else { Ok(None) }
     }
 }
 
 #[tokio::test]
-async fn a_ledger_write_failure_fails_the_call_closed() {
-    let pay = CountingTool::new("pay", ToolEffect::NonIdempotent);
-    let calls = pay.calls.clone();
-    let agent = LlmAgentBuilder::new("shopper")
-        .model(ScriptedModel::replaying(vec![call("pay", Some("pay-1"))]))
-        .tool(Arc::new(pay))
-        .build()
-        .unwrap();
+async fn ledger_failures_prevent_execution() {
+    for read_failure in [false, true] {
+        let ledger = Arc::new(BrokenLedger {
+            read_failure,
+            reads: AtomicUsize::new(0),
+            begins: AtomicUsize::new(0),
+            completes: AtomicUsize::new(0),
+        });
+        let pay = CountingTool::new("pay", ToolEffect::NonIdempotent);
+        let calls = pay.calls.clone();
+        let agent = LlmAgentBuilder::new("shopper")
+            .model(ScriptedModel::replaying(vec![call("pay", Some("pay-1"))]))
+            .tool(Arc::new(pay))
+            .build()
+            .unwrap();
+        let events = run(
+            &agent,
+            Invocation::with_config(RunConfig::builder().action_ledger(ledger.clone()).build()),
+        )
+        .await;
 
-    let events = run(
-        &agent,
-        Invocation::with_config(RunConfig::builder().action_ledger(Arc::new(BrokenLedger)).build()),
-    )
-    .await;
-
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert!(
-        responses(&events)[0]["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("was not executed"))
-    );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(ledger.reads.load(Ordering::SeqCst), 1);
+        assert_eq!(ledger.begins.load(Ordering::SeqCst), usize::from(!read_failure));
+        assert_eq!(ledger.completes.load(Ordering::SeqCst), 0);
+        let operation = if read_failure { "be read" } else { "record the call" };
+        assert_eq!(
+            responses(&events),
+            vec![json!({
+                "error": format!("tool 'pay' was not executed: the action ledger could not {operation}: tool.internal (tool.legacy)")
+            })]
+        );
+        assert_eq!(statuses(&events), vec![Some(ToolResultStatus::NotRun)]);
+    }
 }
 
 #[tokio::test]

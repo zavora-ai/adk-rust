@@ -52,8 +52,7 @@ use std::sync::Arc;
 use adk_core::{
     AdkError, Agent, AgentCapabilities, AgentInteractionMode, AgentTopology, AgentTransferDecision,
     AgentTransferRequest, ApprovalCall, ApprovalScope, Content, ErrorCategory, ErrorComponent,
-    Event, EventStream, FunctionResponseData, InvocationContext, Llm, Part, Result, RunConfig,
-    async_trait,
+    Event, EventStream, InvocationContext, Llm, Result, RunConfig, async_trait,
 };
 use adk_devtools::Workspace;
 use adk_managed::types::{ManagedAgentDef, ModelRef, RuntimeError, ToolConfig};
@@ -740,14 +739,7 @@ impl ManagedHarness {
                     function_call.id = %call_id,
                     "held call ran without its result being saved; answering it from the action ledger"
                 );
-                answers.push(Part::FunctionResponse {
-                    function_response: FunctionResponseData::new(
-                        call.name.clone(),
-                        crate::ledger::recorded_answer(&call.name, &record),
-                    ),
-                    id: call.id.clone(),
-                    annotations: None,
-                });
+                answers.push(crate::ledger::recorded_answer(&call.name, call.id.as_ref(), &record));
                 continue;
             }
             tracing::warn!(

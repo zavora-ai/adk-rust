@@ -205,6 +205,76 @@ impl EmbeddedResource {
     }
 }
 
+/// Annotation key carrying an execution status reported by the tool dispatcher.
+pub const TOOL_RESULT_STATUS_KEY: &str = "adk.tool_result.status";
+
+/// Annotation key carrying the framework error code for a tool result.
+pub const TOOL_RESULT_ERROR_CODE_KEY: &str = "adk.tool_result.error_code";
+
+/// Annotation key carrying the framework error category for a tool result.
+pub const TOOL_RESULT_ERROR_CATEGORY_KEY: &str = "adk.tool_result.error_category";
+
+/// A non-success tool-result status reported outside the tool's response payload.
+///
+/// These are execution facts, not interpretations of application-owned JSON. A
+/// successful tool or callback may return fields named `isError` or `error` without
+/// setting this annotation. An absent status does not imply a framework failure.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::ToolResultStatus;
+///
+/// assert_ne!(ToolResultStatus::Failed, ToolResultStatus::OutcomeUnknown);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ToolResultStatus {
+    /// The tool ran and failed with a known outcome.
+    Failed,
+    /// The framework did not enter the tool's execute method.
+    NotRun,
+    /// The tool ran, but the framework withheld its result.
+    Withheld,
+    /// The call may have taken effect, so repeating it is unsafe.
+    OutcomeUnknown,
+    /// The call is held for an approval decision and has not failed.
+    Pending,
+}
+
+impl ToolResultStatus {
+    /// Derives a known failure from execution facts, independently of error category.
+    ///
+    /// ```rust
+    /// use adk_core::ToolResultStatus;
+    /// assert_eq!(ToolResultStatus::derive(false, true), ToolResultStatus::NotRun);
+    /// assert_eq!(ToolResultStatus::derive(true, true), ToolResultStatus::Withheld);
+    /// ```
+    pub const fn derive(executed: bool, withheld: bool) -> Self {
+        match (executed, withheld) {
+            (false, _) => Self::NotRun,
+            (true, false) => Self::Failed,
+            (true, true) => Self::Withheld,
+        }
+    }
+
+    /// Whether a provider should mark this answer as a tool execution error.
+    ///
+    /// `Withheld` and `OutcomeUnknown` must not encourage a repeat of a call that ran
+    /// or may have taken effect. This flag does not authorize retries.
+    ///
+    /// ```rust
+    /// use adk_core::ToolResultStatus;
+    /// assert!(ToolResultStatus::NotRun.is_error());
+    /// assert!(!ToolResultStatus::Withheld.is_error());
+    /// assert!(!ToolResultStatus::OutcomeUnknown.is_error());
+    /// ```
+    pub const fn is_error(self) -> bool {
+        matches!(self, Self::Failed | Self::NotRun)
+    }
+}
+
 /// Data for a function (tool) response, including optional multimodal parts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionResponseData {
@@ -725,6 +795,89 @@ impl Part {
             | Part::FunctionResponse { annotations, .. } => annotations.as_ref(),
             _ => None,
         }
+    }
+
+    /// Returns an explicit execution status attached to a function response.
+    ///
+    /// The response payload is never inspected. Other part types and unrecognized
+    /// annotations return `None`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{FunctionResponseData, Part, TOOL_RESULT_STATUS_KEY, ToolResultStatus};
+    /// use serde_json::json;
+    ///
+    /// let part = Part::FunctionResponse {
+    ///     function_response: FunctionResponseData::new("lookup", json!({"error": "unavailable"})),
+    ///     id: Some("call-1".to_string()),
+    ///     annotations: Some(json!({TOOL_RESULT_STATUS_KEY: "failed"})),
+    /// };
+    /// assert_eq!(part.tool_result_status(), Some(ToolResultStatus::Failed));
+    /// ```
+    pub fn tool_result_status(&self) -> Option<ToolResultStatus> {
+        ToolResultStatus::deserialize(self.tool_result_annotation(TOOL_RESULT_STATUS_KEY)?).ok()
+    }
+
+    /// Returns the framework error code, without inspecting application-owned JSON.
+    ///
+    /// See [`set_tool_result_status`](Self::set_tool_result_status) for an example
+    /// that writes and reads both the code and category. The code is also in the
+    /// model-visible error text produced by [`AdkError::redacted`].
+    pub fn tool_result_error_code(&self) -> Option<&str> {
+        self.tool_result_annotation(TOOL_RESULT_ERROR_CODE_KEY)?.as_str()
+    }
+
+    /// Returns the framework error category, independently of execution status.
+    ///
+    /// See [`set_tool_result_status`](Self::set_tool_result_status) for a typed example.
+    pub fn tool_result_error_category(&self) -> Option<ErrorCategory> {
+        ErrorCategory::deserialize(self.tool_result_annotation(TOOL_RESULT_ERROR_CATEGORY_KEY)?)
+            .ok()
+    }
+
+    /// Sets framework result metadata without changing the response payload.
+    ///
+    /// Existing unrelated annotations are retained. Passing no error clears an old
+    /// code and category. Other part types are left unchanged.
+    ///
+    /// ```rust
+    /// use adk_core::{ErrorCategory, FunctionResponseData, Part, ToolResultStatus};
+    /// use serde_json::json;
+    /// let mut part = Part::FunctionResponse {
+    ///     function_response: FunctionResponseData::new("lookup", json!({"error": "domain row"})),
+    ///     id: None,
+    ///     annotations: None,
+    /// };
+    /// part.set_tool_result_status(ToolResultStatus::NotRun,
+    ///     Some(("governance.frozen", ErrorCategory::Unavailable)));
+    /// assert_eq!(part.tool_result_error_code(), Some("governance.frozen"));
+    /// assert_eq!(part.tool_result_error_category(), Some(ErrorCategory::Unavailable));
+    /// ```
+    pub fn set_tool_result_status(
+        &mut self,
+        status: ToolResultStatus,
+        error: Option<(&str, ErrorCategory)>,
+    ) {
+        let Self::FunctionResponse { annotations, .. } = self else { return };
+        let mut fields =
+            annotations.take().and_then(|value| value.as_object().cloned()).unwrap_or_default();
+        fields.insert(TOOL_RESULT_STATUS_KEY.to_string(), serde_json::json!(status));
+        if let Some((code, category)) = error {
+            fields.insert(TOOL_RESULT_ERROR_CODE_KEY.to_string(), serde_json::json!(code));
+            fields.insert(TOOL_RESULT_ERROR_CATEGORY_KEY.to_string(), serde_json::json!(category));
+        } else {
+            fields.remove(TOOL_RESULT_ERROR_CODE_KEY);
+            fields.remove(TOOL_RESULT_ERROR_CATEGORY_KEY);
+        }
+        *annotations = Some(serde_json::Value::Object(fields));
+    }
+
+    fn tool_result_annotation(&self, key: &str) -> Option<&serde_json::Value> {
+        let Self::FunctionResponse { annotations: Some(annotations), .. } = self else {
+            return None;
+        };
+        annotations.get(key)
     }
 
     /// Returns true if this part contains media (image, audio, video)
@@ -1317,5 +1470,105 @@ mod tests {
         let frd = FunctionResponseData::from_tool_result("tool", value);
         assert_eq!(frd.inline_data.len(), 1);
         assert_eq!(frd.response, serde_json::json!({"status": "ok"}));
+    }
+
+    mod tool_status {
+        use super::*;
+        use serde_json::json;
+
+        #[test]
+        fn preserves_payload_during_roundtrip() {
+            let response = json!({"isError": true, "error": "domain row"});
+            for (encoded, status) in [
+                ("failed", ToolResultStatus::Failed),
+                ("not_run", ToolResultStatus::NotRun),
+                ("withheld", ToolResultStatus::Withheld),
+                ("outcome_unknown", ToolResultStatus::OutcomeUnknown),
+                ("pending", ToolResultStatus::Pending),
+            ] {
+                let part = Part::FunctionResponse {
+                    function_response: FunctionResponseData::new("lookup", response.clone()),
+                    id: Some("call-1".to_string()),
+                    annotations: Some(json!({TOOL_RESULT_STATUS_KEY: encoded})),
+                };
+                let decoded: Part =
+                    serde_json::from_value(serde_json::to_value(&part).unwrap()).unwrap();
+                assert_eq!(decoded, part);
+                assert_eq!(decoded.tool_result_status(), Some(status));
+                let Part::FunctionResponse { function_response, .. } = decoded else {
+                    unreachable!()
+                };
+                assert_eq!(function_response.response, response);
+            }
+        }
+
+        #[test]
+        fn derives_execution_facts() {
+            for (executed, withheld, expected) in [
+                (false, false, ToolResultStatus::NotRun),
+                (false, true, ToolResultStatus::NotRun),
+                (true, false, ToolResultStatus::Failed),
+                (true, true, ToolResultStatus::Withheld),
+            ] {
+                assert_eq!(ToolResultStatus::derive(executed, withheld), expected);
+            }
+            for status in [ToolResultStatus::Failed, ToolResultStatus::NotRun] {
+                assert!(status.is_error());
+            }
+            for status in [
+                ToolResultStatus::Withheld,
+                ToolResultStatus::OutcomeUnknown,
+                ToolResultStatus::Pending,
+            ] {
+                assert!(!status.is_error());
+            }
+        }
+
+        #[test]
+        fn replaces_cause_without_changing_payload() {
+            let response = json!({"error": "domain row"});
+            let mut part = Part::FunctionResponse {
+                function_response: FunctionResponseData::new("lookup", response.clone()),
+                id: None,
+                annotations: Some(json!({"trace": "kept"})),
+            };
+            part.set_tool_result_status(
+                ToolResultStatus::NotRun,
+                Some(("governance.frozen", ErrorCategory::Unavailable)),
+            );
+            assert_eq!(part.tool_result_status(), Some(ToolResultStatus::NotRun));
+            assert_eq!(part.tool_result_error_code(), Some("governance.frozen"));
+            assert_eq!(part.tool_result_error_category(), Some(ErrorCategory::Unavailable));
+            part.set_tool_result_status(ToolResultStatus::Withheld, None);
+            assert_eq!(part.tool_result_error_code(), None);
+            assert_eq!(part.tool_result_error_category(), None);
+            assert_eq!(part.annotations().unwrap().get("trace"), Some(&json!("kept")));
+            let Part::FunctionResponse { function_response, .. } = part else { unreachable!() };
+            assert_eq!(function_response.response, response);
+        }
+
+        #[test]
+        fn ignores_business_fields_and_other_parts() {
+            let response =
+                json!({"isError": true, "error": "domain row", TOOL_RESULT_STATUS_KEY: "failed"});
+            for annotations in [
+                None,
+                Some(json!({"isError": true})),
+                Some(json!({TOOL_RESULT_STATUS_KEY: "unknown"})),
+            ] {
+                let part = Part::FunctionResponse {
+                    function_response: FunctionResponseData::new("lookup", response.clone()),
+                    id: None,
+                    annotations,
+                };
+                assert_eq!(part.tool_result_status(), None);
+            }
+            let part = Part::FileData {
+                mime_type: "text/plain".to_string(),
+                file_uri: "https://example.test/document".to_string(),
+                annotations: Some(json!({TOOL_RESULT_STATUS_KEY: "failed"})),
+            };
+            assert_eq!(part.tool_result_status(), None);
+        }
     }
 }

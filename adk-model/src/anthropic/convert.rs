@@ -12,7 +12,7 @@ use adk_anthropic::{
 };
 use adk_core::{
     BuiltinToolUse, Content, FinishReason, LlmResponse, Part, SchemaAdapter, SchemaCache,
-    UsageMetadata,
+    ToolResultStatus, UsageMetadata,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -122,7 +122,10 @@ pub fn content_to_message(
                 Some(ContentBlock::ToolResult(ToolResultBlock {
                     tool_use_id: id.clone().unwrap_or_else(|| "unknown".to_string()),
                     content: Some(tool_result_content(function_response)),
-                    is_error: None,
+                    is_error: part
+                        .tool_result_status()
+                        .is_some_and(ToolResultStatus::is_error)
+                        .then_some(true),
                     cache_control: None,
                 }))
             }
@@ -633,6 +636,53 @@ pub fn build_message_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flags_failed_and_unrun_results() {
+        for (status, is_error) in [
+            (None, None),
+            (Some(ToolResultStatus::Failed), Some(true)),
+            (Some(ToolResultStatus::NotRun), Some(true)),
+            (Some(ToolResultStatus::Withheld), None),
+            (Some(ToolResultStatus::OutcomeUnknown), None),
+            (Some(ToolResultStatus::Pending), None),
+        ] {
+            let payload = serde_json::json!({
+                "error": "business field",
+                "isError": true,
+                "status": "outcome_unknown",
+                "value": {"retained": [1, 2, 3]},
+            });
+            let mut part = Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData::new("charge", payload.clone()),
+                id: Some("toolu_1".to_string()),
+                annotations: None,
+            };
+            if let Some(status) = status {
+                part.set_tool_result_status(
+                    status,
+                    Some(("tool.charge.failure", adk_core::ErrorCategory::Unavailable)),
+                );
+            }
+            let content = Content { role: "function".to_string(), parts: vec![part] };
+            let original = content.clone();
+            let message =
+                serde_json::to_value(content_to_message(&content, false).unwrap()).unwrap();
+            let mut expected = serde_json::json!({
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "content": serde_json::to_string(&payload).unwrap(),
+            });
+            if let Some(is_error) = is_error {
+                expected["is_error"] = is_error.into();
+            }
+            assert_eq!(message, serde_json::json!({"role": "user", "content": [expected]}));
+            assert_eq!(
+                serde_json::to_value(&content).unwrap(),
+                serde_json::to_value(&original).unwrap()
+            );
+        }
+    }
 
     #[test]
     fn code_execution_results_become_server_tool_responses() {

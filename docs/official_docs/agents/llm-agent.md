@@ -813,15 +813,16 @@ not use it as made (`ErrorCategory::is_rejection`: `InvalidInput`, `Forbidden`, 
 `Unsupported`, `Conflict`, `ResourceExhausted`) — keeps its message, cut at
 `TOOL_ERROR_MESSAGE_LIMIT` (500) characters, since that message is what the model acts on:
 
-| Outcome | Function response |
-|---------|-------------------|
-| Tool returns `Err(AdkError)` with an upstream or internal category | `{"error": "tool 'lookup_order' failed: tool.unavailable (tool.orders_db.unavailable)"}` |
-| Tool returns `Err(AdkError)` with a rejection category | `{"error": "tool 'bash' failed: tool.forbidden (harness.shell.protected): .git/hooks is a protected path"}` — the message, cut at 500 characters |
-| Error with code `adk_core::TOOL_INVALID_ARGUMENTS_CODE` (the `#[tool]` macro's argument errors) | `{"error": "tool.invalid_input: invalid arguments for 'lookup_order': missing field `id`"}` — the message tells the model what to fix |
-| Timeout | `{"error": "Tool 'slow_report' timed out after 50ms"}`; a `NonIdempotent` call gets `{"status": "outcome_unknown", ...}` |
-| Before-tool callback or plugin returns `Err` | `{"error": "tool 'lookup_order' was not run: a before-tool callback failed with agent.internal (agent.legacy)"}` |
-| After-tool hook, callback, or plugin returns `Err` | `{"status": "result_withheld", "error": "tool 'charge_card' ran, but its after-tool pipeline failed with ..., so its result is withheld; do not call it again for this request."}` |
-| The provider could not decode the model's arguments into a JSON object | `{"error": "tool 'get_weather' was not run: arguments are not valid JSON: ... Call it again with arguments that are one JSON object matching its parameters."}` — the tool does not run and the turn continues |
+| Outcome | Status | Function response |
+|---------|--------|-------------------|
+| Tool returns `Err(AdkError)` with an upstream or internal category | `Failed` | `{"error": "tool 'lookup_order' failed: tool.unavailable (tool.orders_db.unavailable)"}` |
+| Tool returns `Err(AdkError)` with a rejection category | `Failed` | `{"error": "tool 'bash' failed: tool.forbidden (harness.shell.protected): .git/hooks is a protected path"}` — the message, cut at 500 characters |
+| Error with code `adk_core::TOOL_INVALID_ARGUMENTS_CODE` (the `#[tool]` macro's argument errors) | `Failed` | `{"error": "tool.invalid_input: invalid arguments for 'lookup_order': missing field `id`"}` — the message tells the model what to fix |
+| Timeout of a `ReadOnly` or `Idempotent` call | `Failed` | `{"error": "Tool 'slow_report' timed out after 50ms"}` |
+| Timeout of a `NonIdempotent` call | `OutcomeUnknown` | `{"status": "outcome_unknown", ...}` — repeating the call is unsafe |
+| Before-tool callback or plugin returns `Err` | `NotRun` | `{"error": "tool 'lookup_order' was not run: a before-tool callback failed with agent.internal (agent.legacy)"}` |
+| After-tool hook, callback, or plugin returns `Err` after execution | `Withheld` | `{"status": "result_withheld", "error": "tool 'charge_card' ran, but its after-tool pipeline failed with ..., so its result is withheld; do not call it again for this request."}` |
+| The provider could not decode the model's arguments into a JSON object | `NotRun` | `{"error": "tool 'get_weather' was not run: arguments are not valid JSON: ... Call it again with arguments that are one JSON object matching its parameters."}` — the tool does not run and the turn continues |
 
 - **Full messages**: `expose_tool_error_messages(true)` sends `component.category: message`
   instead. Enable it only when every tool's error messages are safe to send to the provider.
@@ -829,9 +830,29 @@ not use it as made (`ErrorCategory::is_rejection`: `InvalidInput`, `Forbidden`, 
   `ToolOutcome::error` carries the structured `AdkError`. Tracing records the message when
   `RunConfig::record_payloads` is set.
 - **After-tool failures**: the first failing stage ends the after-tool pipeline, since a later stage
-  may be handed the unscreened result. The tool's side effect stands and its action-ledger record
-  says it completed; the model is told not to repeat the call, because a new call has a new
-  idempotency key.
+  may be handed the unscreened result. A completed action-ledger outcome remains recorded; an
+  interrupted non-idempotent call keeps its begun record and `ToolResultStatus::OutcomeUnknown`
+  annotation through error fallbacks, callbacks, plugins and result screening, since a later
+  error or withheld result does not establish whether the side effect completed. The model is told
+  not to repeat the call, because a new call has a new idempotency key.
+- **Status**: framework answers carry `ToolResultStatus`, plus the error's `code` and `category`
+  when an `AdkError` caused the answer. Refusals, the kill switch, an exhausted run budget,
+  a transfer, an unknown tool, an open circuit breaker, a concurrency limit and an action-ledger
+  failure are `NotRun`; a held call is `Pending`. Execution facts stay distinct from error
+  categories: cancellation before execution is `NotRun`, while a result withheld after execution
+  is `Withheld`. A hook that replaces the result starts with fresh annotations; only
+  `OutcomeUnknown`, with its code and category, carries over. Successful tool results remain
+  unmarked, including business payloads containing `error` or `isError`.
+- **Reading status**: `Part::tool_result_status`, `Part::tool_result_error_code` and
+  `Part::tool_result_error_category` read the annotations; `Part::set_tool_result_status` writes
+  them without changing `function_response.response`. `CodeActCheckpoint::resolution_status`
+  records a resolved call's non-success status, including unknown outcomes carried through
+  replacement values; ordinary returned values and older checkpoints have no status.
+  Annotations are not sent to providers; the Anthropic,
+  Gemini Interactions and Bedrock converters set their tool-error flag for `Failed` and `NotRun`.
+  Bedrock sends that flag only to Anthropic and Amazon Nova models. Events stored before this
+  change carry no status; `adk_core::is_outcome_unknown` and `adk_core::is_confirmation_pending`
+  read their structured payloads.
 - **Errors the model should read**: a tool returns `Ok(json!({"error": "..."}))` for a failure
   whose text is meant for the model, or an `on_tool_error` callback supplies that text.
   `McpToolset` does this for an MCP result with `isError: true`, whose text the server wrote

@@ -5,7 +5,10 @@
 
 use super::config::{BedrockCacheConfig, BedrockCacheTtl};
 use crate::part_conversion::ConversionReport;
-use adk_core::{Content, FinishReason, GenerateContentConfig, LlmResponse, Part, UsageMetadata};
+use adk_core::{
+    Content, FinishReason, GenerateContentConfig, LlmResponse, Part, ToolResultStatus,
+    UsageMetadata,
+};
 use aws_sdk_bedrockruntime::types::{
     self as bedrock, CachePointBlock, CachePointType, CacheTtl, ContentBlock, ContentBlockDelta,
     ContentBlockStart, ConversationRole, ConverseOutput, DocumentBlock, DocumentFormat,
@@ -15,7 +18,7 @@ use aws_sdk_bedrockruntime::types::{
 };
 use aws_smithy_types::Document;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::super::attachment;
 
@@ -32,6 +35,32 @@ pub(crate) struct BedrockConverseInput {
     pub inference_config: Option<InferenceConfiguration>,
     /// Tool configuration if tools are declared.
     pub tool_config: Option<ToolConfiguration>,
+}
+
+/// Flags failed or unrun results only for models that accept Bedrock's tool-result status.
+pub(crate) fn flag_tool_errors(model_id: &str, contents: &[Content], messages: &mut [Message]) {
+    if !(model_id.contains("anthropic.") || model_id.contains("amazon.nova")) {
+        return;
+    }
+    let failed: HashSet<&str> = contents
+        .iter()
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::FunctionResponse { id: Some(id), .. }
+                if part.tool_result_status().is_some_and(ToolResultStatus::is_error) =>
+            {
+                Some(id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    for block in messages.iter_mut().flat_map(|message| &mut message.content) {
+        if let ContentBlock::ToolResult(result) = block
+            && failed.contains(result.tool_use_id.as_str())
+        {
+            result.status = Some(bedrock::ToolResultStatus::Error);
+        }
+    }
 }
 
 /// Convert an `LlmRequest` into Bedrock Converse API inputs.
@@ -810,6 +839,82 @@ pub(crate) fn document_to_json_value(doc: &Document) -> Value {
 mod tests {
     use super::*;
     use adk_core::FunctionResponseData;
+
+    #[test]
+    fn flags_errors_for_supported_models() {
+        let statuses = [
+            None,
+            Some(ToolResultStatus::Failed),
+            Some(ToolResultStatus::NotRun),
+            Some(ToolResultStatus::Withheld),
+            Some(ToolResultStatus::OutcomeUnknown),
+            Some(ToolResultStatus::Pending),
+        ];
+        let contents = vec![Content {
+            role: "function".to_string(),
+            parts: statuses
+                .into_iter()
+                .enumerate()
+                .map(|(index, status)| {
+                    let mut part = Part::FunctionResponse {
+                        function_response: FunctionResponseData::new(
+                            "charge",
+                            serde_json::json!({
+                                "error": "business field",
+                                "isError": true,
+                                "status": "outcome_unknown",
+                                "value": {"retained": [1, 2, 3]},
+                            }),
+                        ),
+                        id: Some(format!("call-{index}")),
+                        annotations: None,
+                    };
+                    if let Some(status) = status {
+                        part.set_tool_result_status(
+                            status,
+                            Some(("tool.charge.failure", adk_core::ErrorCategory::Unavailable)),
+                        );
+                    }
+                    part
+                })
+                .collect(),
+        }];
+        let original = contents.clone();
+        for (model, supported) in [
+            ("us.anthropic.test-model-v1:0", true),
+            ("amazon.nova-pro-v1:0", true),
+            ("meta.llama4-maverick-17b-instruct-v1:0", false),
+        ] {
+            let mut input = adk_request_to_bedrock(&contents, &HashMap::new(), None, None).unwrap();
+            let original_messages = input.messages.clone();
+            flag_tool_errors(model, &contents, &mut input.messages);
+            let actual: Vec<_> = input.messages[0]
+                .content
+                .iter()
+                .map(|block| block.as_tool_result().unwrap().status.clone())
+                .collect();
+            let error = Some(bedrock::ToolResultStatus::Error);
+            assert_eq!(
+                actual,
+                if supported {
+                    vec![None, error.clone(), error, None, None, None]
+                } else {
+                    vec![None; 6]
+                },
+                "model {model}"
+            );
+            for block in input.messages.iter_mut().flat_map(|message| &mut message.content) {
+                if let ContentBlock::ToolResult(result) = block {
+                    result.status = None;
+                }
+            }
+            assert_eq!(input.messages, original_messages);
+            assert_eq!(
+                serde_json::to_value(&contents).unwrap(),
+                serde_json::to_value(&original).unwrap()
+            );
+        }
+    }
 
     #[test]
     fn test_json_value_to_document_roundtrip() {

@@ -127,6 +127,7 @@ fn ask_before_bash(store: Arc<dyn ApprovalStore>) -> RunConfig {
 
 async fn held_bash_runner(
     concurrent: bool,
+    screen: Option<Arc<dyn adk_core::ToolResultScreen>>,
 ) -> (
     IntegratedRealtimeRunner,
     ScriptedRealtimeModel,
@@ -145,15 +146,18 @@ async fn held_bash_runner(
     let sessions = sessions().await;
     let executions = Arc::new(AtomicUsize::new(0));
     let store = Arc::new(InMemoryApprovalStore::new());
-    let runner = IntegratedRealtimeRunner::builder()
+    let builder = IntegratedRealtimeRunner::builder()
         .model(Arc::new(model.clone()))
         .identity(APP, USER, SESSION)
         .session_service(sessions.clone())
         .adk_tool(Arc::new(Shell { executions: executions.clone() }))
         .tool_governance(ask_before_bash(store.clone()))
-        .concurrent_tool_dispatch(concurrent)
-        .build()
-        .unwrap();
+        .concurrent_tool_dispatch(concurrent);
+    let builder = match screen {
+        Some(screen) => builder.tool_result_screen(screen),
+        None => builder,
+    };
+    let runner = builder.build().unwrap();
     runner.connect().await.unwrap();
     (runner, model, sessions, executions, store)
 }
@@ -172,7 +176,7 @@ fn holds(events: &[ServerEvent]) -> Vec<(String, ToolConfirmationRequest)> {
 
 #[tokio::test]
 async fn a_held_call_is_surfaced_recorded_and_resumed_once_decided() {
-    let (runner, model, sessions, executions, store) = held_bash_runner(false).await;
+    let (runner, model, sessions, executions, store) = held_bash_runner(false, None).await;
 
     runner.send_text("what's failing in the build?").await.unwrap();
     let events = drain(&runner).await;
@@ -234,9 +238,53 @@ async fn a_held_call_is_surfaced_recorded_and_resumed_once_decided() {
     let _ = runner.close().await;
 }
 
+struct WithholdScreen;
+
+#[async_trait]
+impl adk_core::ToolResultScreen for WithholdScreen {
+    async fn screen_result(
+        &self,
+        _name: &str,
+        _args: &Value,
+        _result: &Value,
+    ) -> std::result::Result<Value, String> {
+        Err("results are under review".into())
+    }
+}
+
+#[tokio::test]
+async fn resumed_screening_preserves_execution() {
+    let (runner, model, sessions, executions, store) =
+        held_bash_runner(false, Some(Arc::new(WithholdScreen))).await;
+    runner.send_text("run the tests").await.unwrap();
+    let events = drain(&runner).await;
+    let (_, request) = holds(&events).remove(0);
+    store.decide(&scope(), &request.fingerprint(), ToolApproval::approve()).await.unwrap();
+    let resumed = runner.resume_held_calls().await.unwrap();
+    assert_eq!(resumed.len(), 1);
+    let expected = adk_core::result_blocked_response("bash", "results are under review");
+    assert_eq!(resumed[0].result, expected);
+    assert_eq!(executions.load(Ordering::SeqCst), 1);
+    let recorded = events_of(&sessions).await;
+    let answer = recorded
+        .iter()
+        .filter_map(|event| event.content())
+        .flat_map(|content| &content.parts)
+        .rfind(|part| matches!(part, adk_core::Part::FunctionResponse { .. }))
+        .unwrap();
+    assert_eq!(answer.tool_result_status(), Some(adk_core::ToolResultStatus::Withheld));
+    assert_eq!(answer.tool_result_error_code(), None);
+    let adk_core::Part::FunctionResponse { function_response, .. } = answer else { unreachable!() };
+    assert_eq!(function_response.response, expected);
+    assert_eq!(model.log().tool_outputs().last().unwrap().output, expected);
+    assert!(runner.resume_held_calls().await.unwrap().is_empty());
+    assert_eq!(executions.load(Ordering::SeqCst), 1);
+    let _ = runner.close().await;
+}
+
 #[tokio::test]
 async fn a_denied_call_is_answered_as_not_run() {
-    let (runner, model, _sessions, executions, store) = held_bash_runner(false).await;
+    let (runner, model, _sessions, executions, store) = held_bash_runner(false, None).await;
     runner.send_text("run the tests").await.unwrap();
     let events = drain(&runner).await;
     let (_, request) = holds(&events).remove(0);
@@ -258,7 +306,7 @@ async fn a_denied_call_is_answered_as_not_run() {
 
 #[tokio::test]
 async fn concurrent_dispatch_surfaces_the_hold_while_events_keep_flowing() {
-    let (runner, _model, _sessions, executions, _store) = held_bash_runner(true).await;
+    let (runner, _model, _sessions, executions, _store) = held_bash_runner(true, None).await;
     runner.send_text("run the tests").await.unwrap();
     let events = drain(&runner).await;
     let held = holds(&events);

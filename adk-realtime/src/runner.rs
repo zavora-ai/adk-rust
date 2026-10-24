@@ -1327,16 +1327,22 @@ impl RealtimeRunner {
         self.expose_tool_error_messages
     }
 
-    /// Runs the configured result screen, if any, on `result`.
+    /// Runs the configured result screen and reports whether it withheld the result.
     pub(crate) async fn screen_tool_result(
         &self,
         name: &str,
         args: &serde_json::Value,
         result: serde_json::Value,
-    ) -> serde_json::Value {
+    ) -> (serde_json::Value, bool) {
         match &self.tool_result_screen {
-            Some(screen) => adk_core::screen_tool_result(screen.as_ref(), name, args, result).await,
-            None => result,
+            Some(screen) => match screen.screen_result(name, args, &result).await {
+                Ok(screened) => (screened, false),
+                Err(reason) => {
+                    tracing::warn!(tool.name = %name, "tool result withheld by its screen");
+                    (adk_core::result_blocked_response(name, &reason), true)
+                }
+            },
+            None => (result, false),
         }
     }
 
@@ -1408,7 +1414,7 @@ impl RealtimeRunner {
                     }
                 };
                 match screened_args {
-                    Some(args) => self.screen_tool_result(name, &args, result).await,
+                    Some(args) => self.screen_tool_result(name, &args, result).await.0,
                     None => result,
                 }
             }

@@ -583,6 +583,10 @@ async fn test_transfer_event_answers_every_call_in_the_turn() {
     assert_eq!(event.actions.transfer_to_agent.as_deref(), Some("child"));
     let content = event.llm_response.content.expect("transfer event content");
     assert_eq!(content.role, "function");
+    assert_eq!(
+        content.parts.iter().map(Part::tool_result_status).collect::<Vec<_>>(),
+        vec![Some(adk_core::ToolResultStatus::NotRun), None]
+    );
     let responses: Vec<_> = content
         .parts
         .iter()
@@ -669,6 +673,14 @@ async fn test_invalid_then_valid_transfer_answers_each_call_once() {
             (Some("call_b".to_string()), serde_json::json!({"transferred_to": "child"})),
         ]
     );
+    let statuses: Vec<_> = events
+        .iter()
+        .filter_map(|event| event.content())
+        .flat_map(|content| &content.parts)
+        .filter(|part| matches!(part, Part::FunctionResponse { .. }))
+        .map(Part::tool_result_status)
+        .collect();
+    assert_eq!(statuses, vec![Some(adk_core::ToolResultStatus::NotRun), None]);
 }
 
 /// Replies with each scripted turn in order, then with text, recording every request.

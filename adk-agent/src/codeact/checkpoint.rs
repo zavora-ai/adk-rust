@@ -9,7 +9,7 @@
 //! [`LlmAgent`](crate::LlmAgent), with the snapshot standing in for the part of
 //! the continuation that can't be reconstructed from message history.
 
-use adk_core::Content;
+use adk_core::{Content, ToolResultStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -89,6 +89,10 @@ pub struct CodeActCheckpoint {
     /// before the field existed; resuming one starts a new scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// Execution status of a resolved call, including an unknown outcome carried through
+    /// a replacement value. `None` denotes an ordinary returned value or an older checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution_status: Option<ToolResultStatus>,
 }
 
 #[cfg(test)]
@@ -108,6 +112,7 @@ mod tests {
             },
             tool_roster: vec!["slow".into()],
             run_id: Some("run-1".into()),
+            resolution_status: None,
         };
         let value = serde_json::to_value(&cp).unwrap();
         let back: CodeActCheckpoint = serde_json::from_value(value.clone()).unwrap();

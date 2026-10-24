@@ -29,7 +29,7 @@ use std::collections::HashMap;
 
 use adk_core::{
     AdkError, Content, ErrorCategory, ErrorComponent, FinishReason, GenerateContentConfig,
-    LlmRequest, LlmResponse, Part, UsageMetadata,
+    LlmRequest, LlmResponse, Part, ToolResultStatus, UsageMetadata,
 };
 use adk_gemini::ThinkingLevel;
 use adk_gemini::interactions::{
@@ -488,7 +488,10 @@ fn append_steps(content: &Content, steps: &mut Vec<Step>) {
                         call_id: id.clone().unwrap_or_default(),
                         name: Some(function_response.name.clone()),
                         result: function_response.response.clone(),
-                        is_error: None,
+                        is_error: part
+                            .tool_result_status()
+                            .is_some_and(ToolResultStatus::is_error)
+                            .then_some(true),
                         signature: None,
                     });
                 }
@@ -996,6 +999,57 @@ mod tests {
 
     fn model_target() -> InteractionTarget {
         InteractionTarget::Model("gemini-3.7-flash".to_string())
+    }
+
+    #[test]
+    fn flags_failed_and_unrun_results() {
+        for (status, is_error) in [
+            (None, None),
+            (Some(ToolResultStatus::Failed), Some(true)),
+            (Some(ToolResultStatus::NotRun), Some(true)),
+            (Some(ToolResultStatus::Withheld), None),
+            (Some(ToolResultStatus::OutcomeUnknown), None),
+            (Some(ToolResultStatus::Pending), None),
+        ] {
+            let payload = serde_json::json!({
+                "error": "business field",
+                "isError": true,
+                "status": "outcome_unknown",
+                "value": {"retained": [1, 2, 3]},
+            });
+            let mut part = Part::FunctionResponse {
+                function_response: FunctionResponseData::new("charge", payload.clone()),
+                id: Some("call-1".to_string()),
+                annotations: None,
+            };
+            if let Some(status) = status {
+                part.set_tool_result_status(
+                    status,
+                    Some(("tool.charge.failure", ErrorCategory::Unavailable)),
+                );
+            }
+            let request =
+                request_with(vec![Content { role: "function".to_string(), parts: vec![part] }]);
+            let original = request.contents.clone();
+            let built = build_request(&request, &model_target(), None, false, true).unwrap();
+            let Input::Steps(steps) = built.input else {
+                panic!("function result steps expected");
+            };
+            assert_eq!(
+                steps,
+                vec![Step::FunctionResult {
+                    call_id: "call-1".to_string(),
+                    name: Some("charge".to_string()),
+                    result: payload,
+                    is_error,
+                    signature: None,
+                }]
+            );
+            assert_eq!(
+                serde_json::to_value(&request.contents).unwrap(),
+                serde_json::to_value(&original).unwrap()
+            );
+        }
     }
 
     #[test]

@@ -7,7 +7,7 @@
 use super::config::BedrockConfig;
 use super::convert::{
     adk_request_to_bedrock, bedrock_response_to_adk, bedrock_stream_content_start_to_adk,
-    bedrock_stream_delta_to_adk, bedrock_stream_stop_to_adk,
+    bedrock_stream_delta_to_adk, bedrock_stream_stop_to_adk, flag_tool_errors,
 };
 use crate::retry::RetryConfig;
 use adk_core::{AdkError, Llm, LlmRequest, LlmResponse, LlmResponseStream};
@@ -230,7 +230,7 @@ impl Llm for BedrockClient {
             );
         }
         let usage_span = adk_telemetry::llm_generate_span("bedrock", &self.model_id, stream);
-        let bedrock_input = adk_request_to_bedrock(
+        let mut bedrock_input = adk_request_to_bedrock(
             &request.contents,
             &request.tools,
             request.config.as_ref(),
@@ -242,6 +242,7 @@ impl Llm for BedrockClient {
                 self.region, self.model_id
             ))
         })?;
+        flag_tool_errors(&self.model_id, &request.contents, &mut bedrock_input.messages);
 
         if stream && request.tools.is_empty() {
             let result = self.generate_streaming(bedrock_input).await?;

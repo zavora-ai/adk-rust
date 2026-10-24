@@ -163,6 +163,7 @@ fn a_full_state(events: u64) -> ManagedSessionState {
         input: serde_json::json!({ "target": "prod" }),
         expires_at: None,
         resolution: None,
+        resolution_status: None,
     }];
     state.durable_run_id = Some("run-1".into());
     state

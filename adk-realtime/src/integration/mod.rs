@@ -230,6 +230,23 @@ struct GovernedOutcome {
     result: Value,
     /// The request for a call held for a confirmation decision.
     held: Option<adk_core::ToolConfirmationRequest>,
+    status: Option<adk_core::ToolResultStatus>,
+    error: Option<(&'static str, adk_core::ErrorCategory)>,
+    executed: bool,
+}
+
+impl GovernedOutcome {
+    fn part(&self, name: &str, id: &str) -> adk_core::Part {
+        let mut part = adk_core::Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(name, self.result.clone()),
+            id: Some(id.to_string()),
+            annotations: None,
+        };
+        if let Some(status) = self.status {
+            part.set_tool_result_status(status, self.error);
+        }
+        part
+    }
 }
 
 /// Renders the most recent `limit` turns as bounded `role: text` lines.
@@ -750,11 +767,17 @@ impl IntegratedRealtimeRunner {
                 // The decision was not live after all: the call stays held.
                 continue;
             }
-            let result =
+            let mut outcome = outcome;
+            let (result, withheld) =
                 inner.runner.screen_tool_result(&held.name, &held.args, outcome.result).await;
-            inner.persist_answer(&call_id, &held.name, &held.args, &result).await;
-            inner.deliver_resumed_result(&call_id, &held.name, &result).await?;
-            resumed.push(ResumedToolCall { call_id, name: held.name, result });
+            outcome.result = result;
+            if withheld && outcome.status != Some(adk_core::ToolResultStatus::OutcomeUnknown) {
+                outcome.status = Some(adk_core::ToolResultStatus::derive(outcome.executed, true));
+                outcome.error = None;
+            }
+            inner.persist_answer(&call_id, &held.name, &held.args, &outcome).await;
+            inner.deliver_resumed_result(&call_id, &held.name, &outcome.result).await?;
+            resumed.push(ResumedToolCall { call_id, name: held.name, result: outcome.result });
         }
         Ok(resumed)
     }
@@ -1003,6 +1026,20 @@ impl Inner {
                 let refusal = serde_json::json!({
                     "error": format!("Tool '{name}' was not run: {reason}")
                 });
+                let answer = GovernedOutcome {
+                    result: refusal.clone(),
+                    held: None,
+                    status: Some(adk_core::ToolResultStatus::NotRun),
+                    error: None,
+                    executed: false,
+                };
+                let mut event = adk_core::Event::new(call_id);
+                event.author = "tool".to_string();
+                event.set_content(adk_core::Content {
+                    role: "tool".to_string(),
+                    parts: vec![answer.part(name, call_id)],
+                });
+                self.persist_event(event, "tool event session persist failed (non-fatal)").await;
                 return self.runner.send_tool_result(call_id, refusal).await;
             }
         };
@@ -1023,6 +1060,9 @@ impl Inner {
     ) -> Result<Value> {
         let ctx = self.create_tool_context(&call.call_id);
         let mut held = None;
+        let mut status = None;
+        let mut error = None;
+        let mut executed = false;
 
         let result = if let Some(ref pm) = self.plugin_manager {
             // Run before_tool_call pipeline
@@ -1041,6 +1081,9 @@ impl Inner {
                 Ok(adk_plugin::BeforeToolCallResult::Continue(args)) => {
                     // The governed path sees the plugin-rewritten arguments.
                     let outcome = self.governed_execute(tool, &ctx, &call.call_id, args).await?;
+                    executed = outcome.executed;
+                    status = outcome.status;
+                    error = outcome.error;
                     held = outcome.held;
                     if held.is_some() {
                         // A held call has no result to screen; the after-tool pipeline runs
@@ -1057,8 +1100,14 @@ impl Inner {
                             )
                             .await
                         {
-                            Ok(adk_plugin::AfterToolCallResult::Continue(v)) => v,
+                            Ok(adk_plugin::AfterToolCallResult::Continue(v)) => {
+                                status = None;
+                                error = None;
+                                v
+                            }
                             Err(e) => {
+                                status = Some(adk_core::ToolResultStatus::derive(executed, true));
+                                error = Some((e.code, e.category));
                                 // Fail closed. An after-tool plugin is where result redaction
                                 // and screening live, so the unscreened result is withheld.
                                 // The tool has already run, and the model is told so it does
@@ -1087,6 +1136,8 @@ impl Inner {
                     }
                 }
                 Err(e) => {
+                    status = Some(adk_core::ToolResultStatus::NotRun);
+                    error = Some((e.code, e.category));
                     // Fail closed. A before-tool plugin is where authorization, redaction, and
                     // policy live, so executing the tool when that pipeline fails turns a
                     // broken guard into no guard. The model receives the error instead.
@@ -1121,6 +1172,9 @@ impl Inner {
         } else {
             let outcome =
                 self.governed_execute(tool, &ctx, &call.call_id, call.arguments.clone()).await?;
+            status = outcome.status;
+            error = outcome.error;
+            executed = outcome.executed;
             held = outcome.held;
             outcome.result
         };
@@ -1129,7 +1183,13 @@ impl Inner {
         let result = if held.is_some() {
             result
         } else {
-            self.runner.screen_tool_result(&call.name, &call.arguments, result).await
+            let (result, withheld) =
+                self.runner.screen_tool_result(&call.name, &call.arguments, result).await;
+            if withheld && status != Some(adk_core::ToolResultStatus::OutcomeUnknown) {
+                status = Some(adk_core::ToolResultStatus::derive(executed, true));
+                error = None;
+            }
+            result
         };
 
         // Record completed tool call in aggregator
@@ -1148,11 +1208,10 @@ impl Inner {
             id: Some(call.call_id.clone()),
             thought_signature: None,
         });
-        content.parts.push(adk_core::Part::FunctionResponse {
-            function_response: adk_core::FunctionResponseData::new(&call.name, result.clone()),
-            id: Some(call.call_id.clone()),
-            annotations: None,
-        });
+        content.parts.push(
+            GovernedOutcome { result: result.clone(), held: None, status, error, executed }
+                .part(&call.name, &call.call_id),
+        );
 
         let mut adk_event = adk_core::Event::new(&call.call_id);
         adk_event.author = "tool".to_string();
@@ -1190,11 +1249,15 @@ impl Inner {
         let call_id = call.function_call_id.clone();
         Ok(match self.runner.authorize_tool_call(call).await? {
             adk_core::ToolAuthorization::Execute { args, .. } => {
+                let mut status = None;
+                let mut error = None;
                 let timeout = self.runner.tool_timeout();
                 let execution = tool.execute(ctx.clone() as Arc<dyn adk_core::ToolContext>, args);
                 let result = match tokio::time::timeout(timeout, execution).await {
                     Ok(Ok(value)) => value,
                     Ok(Err(e)) => {
+                        status = Some(adk_core::ToolResultStatus::Failed);
+                        error = Some((e.code, e.category));
                         if self.runner.records_payloads() {
                             tracing::warn!(
                                 tool = tool.name(),
@@ -1215,9 +1278,13 @@ impl Inner {
                             self.runner.exposes_tool_error_messages(),
                         )
                     }
-                    Err(_) => serde_json::json!({
+                    Err(_) => {
+                        status = Some(adk_core::ToolResultStatus::Failed);
+                        error = Some(("tool.timeout", adk_core::ErrorCategory::Timeout));
+                        serde_json::json!({
                         "error": format!("Tool '{}' timed out after {timeout:?}", tool.name())
-                    }),
+                        })
+                    }
                 };
                 // An agent tool whose delegate held a call of its own holds this call with
                 // it: the request is the delegate's, and this call resumes once that request
@@ -1239,17 +1306,30 @@ impl Inner {
                                 tool.name()
                             ))
                         };
-                        GovernedOutcome { result, held: Some(request) }
+                        GovernedOutcome {
+                            result,
+                            held: Some(request),
+                            status: Some(adk_core::ToolResultStatus::Pending),
+                            error: None,
+                            executed: true,
+                        }
                     }
-                    None => GovernedOutcome { result, held: None },
+                    None => GovernedOutcome { result, held: None, status, error, executed: true },
                 }
             }
-            adk_core::ToolAuthorization::Refuse { reason, .. } => {
-                GovernedOutcome { result: serde_json::json!({ "error": reason }), held: None }
-            }
+            adk_core::ToolAuthorization::Refuse { reason, .. } => GovernedOutcome {
+                result: serde_json::json!({ "error": reason }),
+                held: None,
+                status: Some(adk_core::ToolResultStatus::NotRun),
+                error: None,
+                executed: false,
+            },
             adk_core::ToolAuthorization::Pending { request, reason } => GovernedOutcome {
                 result: adk_core::confirmation_pending_response(reason),
                 held: Some(request),
+                status: Some(adk_core::ToolResultStatus::Pending),
+                error: None,
+                executed: false,
             },
         })
     }
@@ -1290,7 +1370,14 @@ impl Inner {
     }
 
     /// Saves a resumed call's answer authored by the runner's agent, which clears its hold.
-    async fn persist_answer(&self, call_id: &str, name: &str, args: &Value, result: &Value) {
+    async fn persist_answer(
+        &self,
+        call_id: &str,
+        name: &str,
+        args: &Value,
+        outcome: &GovernedOutcome,
+    ) {
+        let result = &outcome.result;
         let mut content = adk_core::Content::new("model");
         content.parts.push(adk_core::Part::FunctionCall {
             name: name.to_string(),
@@ -1298,11 +1385,7 @@ impl Inner {
             id: Some(call_id.to_string()),
             thought_signature: None,
         });
-        content.parts.push(adk_core::Part::FunctionResponse {
-            function_response: adk_core::FunctionResponseData::new(name, result.clone()),
-            id: Some(call_id.to_string()),
-            annotations: None,
-        });
+        content.parts.push(outcome.part(name, call_id));
         let mut event = adk_core::Event::new(call_id);
         event.author = self.runner.agent_name().to_string();
         event.set_content(content);
@@ -1757,6 +1840,223 @@ mod session_persistence_tests {
             _plugin_ctx: &adk_plugin::PluginContext,
         ) -> adk_core::Result<adk_plugin::BeforeToolCallResult> {
             Ok(adk_plugin::BeforeToolCallResult::ShortCircuit(self.short_circuit_value.clone()))
+        }
+    }
+
+    struct StatusTool {
+        stage: &'static str,
+        runs: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    fn status_error() -> adk_core::AdkError {
+        adk_core::AdkError::new(
+            adk_core::ErrorComponent::Tool,
+            adk_core::ErrorCategory::Cancelled,
+            "fixture.cancelled",
+            "private result",
+        )
+    }
+
+    #[async_trait]
+    impl adk_core::Tool for StatusTool {
+        fn name(&self) -> &str {
+            "status_tool"
+        }
+        fn description(&self) -> &str {
+            "records execution"
+        }
+        async fn execute(
+            &self,
+            _ctx: Arc<dyn adk_core::ToolContext>,
+            _args: Value,
+        ) -> adk_core::Result<Value> {
+            self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.stage == "execute" {
+                Err(status_error())
+            } else {
+                Ok(serde_json::json!({"error": "business row"}))
+            }
+        }
+    }
+
+    struct StatusPlugin(&'static str);
+
+    #[async_trait]
+    impl adk_plugin::EnhancedPlugin for StatusPlugin {
+        fn name(&self) -> &str {
+            "status_plugin"
+        }
+        async fn before_tool_call(
+            &self,
+            _tool: Arc<dyn adk_core::Tool>,
+            args: Value,
+            _ctx: Arc<dyn adk_core::CallbackContext>,
+            _plugin_ctx: &adk_plugin::PluginContext,
+        ) -> adk_core::Result<adk_plugin::BeforeToolCallResult> {
+            if self.0 == "before" {
+                Err(status_error())
+            } else if self.0 == "synthetic" {
+                Ok(adk_plugin::BeforeToolCallResult::ShortCircuit(
+                    serde_json::json!({"cached": true}),
+                ))
+            } else {
+                Ok(adk_plugin::BeforeToolCallResult::Continue(args))
+            }
+        }
+        async fn after_tool_call(
+            &self,
+            _tool: Arc<dyn adk_core::Tool>,
+            _args: &Value,
+            result: Value,
+            _ctx: Arc<dyn adk_core::CallbackContext>,
+            _plugin_ctx: &adk_plugin::PluginContext,
+        ) -> adk_core::Result<adk_plugin::AfterToolCallResult> {
+            if self.0 == "after" {
+                Err(status_error())
+            } else {
+                Ok(adk_plugin::AfterToolCallResult::Continue(result))
+            }
+        }
+    }
+
+    struct WithholdScreen;
+
+    #[async_trait]
+    impl adk_core::ToolResultScreen for WithholdScreen {
+        async fn screen_result(
+            &self,
+            _name: &str,
+            _args: &Value,
+            _result: &Value,
+        ) -> std::result::Result<Value, String> {
+            Err("results are under review".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn screened_answers_record_execution() {
+        for stage in ["synthetic", "execute", "success"] {
+            let service = Arc::new(InMemorySessionService::new());
+            create_test_session(&service, "screened").await;
+            let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let tool: Arc<dyn adk_core::Tool> = Arc::new(StatusTool { stage, runs: runs.clone() });
+            let mut builder = IntegratedRealtimeRunner::builder()
+                .model(mock_model())
+                .identity("test-app", "test-user", "screened")
+                .session_service(service.clone())
+                .adk_tool(tool.clone())
+                .tool_result_screen(Arc::new(WithholdScreen));
+            if stage == "synthetic" {
+                builder =
+                    builder.plugin_manager(Arc::new(adk_plugin::EnhancedPluginManager::new(vec![
+                        Arc::new(StatusPlugin(stage)),
+                    ])));
+            }
+            let runner = builder.build().unwrap();
+            let result = runner
+                .execute_tool_with_plugins(
+                    &tool,
+                    &crate::events::ToolCall {
+                        call_id: "call-1".into(),
+                        name: "status_tool".into(),
+                        arguments: serde_json::json!({}),
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                runs.load(std::sync::atomic::Ordering::SeqCst),
+                usize::from(stage != "synthetic")
+            );
+            let events = get_session_events(&service, "screened").await;
+            let answers: Vec<_> = events
+                .iter()
+                .filter_map(|event| event.content())
+                .flat_map(|content| &content.parts)
+                .filter(|part| matches!(part, adk_core::Part::FunctionResponse { .. }))
+                .collect();
+            assert_eq!(answers.len(), 1);
+            assert_eq!(
+                answers[0].tool_result_status(),
+                Some(adk_core::ToolResultStatus::derive(stage != "synthetic", true)),
+                "{stage}"
+            );
+            assert_eq!(answers[0].tool_result_error_code(), None);
+            assert_eq!(answers[0].tool_result_error_category(), None);
+            assert_eq!(
+                result,
+                adk_core::result_blocked_response("status_tool", "results are under review")
+            );
+            let adk_core::Part::FunctionResponse { function_response, .. } = answers[0] else {
+                unreachable!()
+            };
+            assert_eq!(function_response.response, result);
+        }
+    }
+
+    #[tokio::test]
+    async fn persisted_answers_record_execution() {
+        use adk_core::ToolResultStatus;
+        for (stage, status) in [
+            ("before", Some(ToolResultStatus::NotRun)),
+            ("execute", Some(ToolResultStatus::Failed)),
+            ("after", Some(ToolResultStatus::Withheld)),
+            ("success", None),
+        ] {
+            let service = Arc::new(InMemorySessionService::new());
+            create_test_session(&service, "statuses").await;
+            let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let tool: Arc<dyn adk_core::Tool> = Arc::new(StatusTool { stage, runs: runs.clone() });
+            let mut builder = IntegratedRealtimeRunner::builder()
+                .model(mock_model())
+                .identity("test-app", "test-user", "statuses")
+                .session_service(service.clone())
+                .adk_tool(tool.clone());
+            // An explicit successful replacement clears a known failure; the execute case
+            // leaves that hook absent so the original failed answer is persisted.
+            if stage != "execute" {
+                builder =
+                    builder.plugin_manager(Arc::new(adk_plugin::EnhancedPluginManager::new(vec![
+                        Arc::new(StatusPlugin(stage)),
+                    ])));
+            }
+            let runner = builder.build().unwrap();
+            let result = runner
+                .execute_tool_with_plugins(
+                    &tool,
+                    &crate::events::ToolCall {
+                        call_id: "call-1".into(),
+                        name: "status_tool".into(),
+                        arguments: serde_json::json!({}),
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                runs.load(std::sync::atomic::Ordering::SeqCst),
+                usize::from(stage != "before")
+            );
+            let events = get_session_events(&service, "statuses").await;
+            let answers: Vec<_> = events
+                .iter()
+                .filter_map(|event| event.content())
+                .flat_map(|content| &content.parts)
+                .filter(|part| matches!(part, adk_core::Part::FunctionResponse { .. }))
+                .collect();
+            assert_eq!(answers.len(), 1);
+            assert_eq!(answers[0].tool_result_status(), status, "{stage}");
+            assert_eq!(answers[0].tool_result_error_code(), status.map(|_| "fixture.cancelled"));
+            assert_eq!(
+                answers[0].tool_result_error_category(),
+                status.map(|_| adk_core::ErrorCategory::Cancelled)
+            );
+            let adk_core::Part::FunctionResponse { function_response, .. } = answers[0] else {
+                unreachable!()
+            };
+            assert_eq!(function_response.response, result);
+            if stage == "success" {
+                assert_eq!(result, serde_json::json!({"error": "business row"}));
+            }
         }
     }
 

@@ -12,9 +12,9 @@ use std::sync::Arc;
 
 use adk_core::ActionLedger;
 #[cfg(feature = "runner")]
-use adk_core::{ActionOutcome, ActionRecord};
+use adk_core::{ActionOutcome, ActionRecord, FunctionResponseData, Part, ToolResultStatus};
 #[cfg(feature = "runner")]
-use serde_json::{Value, json};
+use serde_json::json;
 
 /// The ledger key every resumption of the held call `call_id` with `fingerprint` shares:
 /// the key `LlmAgent` records a resumed call under.
@@ -32,23 +32,41 @@ pub(crate) fn held_call_key(
 /// The function response for a held call that ran but whose result was never saved,
 /// from its ledger record; the shapes the agent answers a re-issued call with.
 #[cfg(feature = "runner")]
-pub(crate) fn recorded_answer(name: &str, record: &ActionRecord) -> Value {
-    match &record.outcome {
-        Some(ActionOutcome::Succeeded { result_digest }) => json!({
-            "status": "already_succeeded",
-            "result_digest": result_digest,
-            "detail": format!("this call to '{name}' already completed; it was not executed again"),
-        }),
-        Some(ActionOutcome::Failed { error }) => json!({
-            "status": "already_failed",
-            "error": error,
-            "detail": format!("this call to '{name}' already failed; it was not executed again"),
-        }),
-        _ => adk_core::outcome_unknown_response(format!(
-            "an earlier attempt of this call to '{name}' began but recorded no outcome, so it \
+pub(crate) fn recorded_answer(name: &str, id: Option<&String>, record: &ActionRecord) -> Part {
+    let (response, status) = match &record.outcome {
+        Some(ActionOutcome::Succeeded { result_digest }) => (
+            json!({
+                "status": "already_succeeded",
+                "result_digest": result_digest,
+                "detail": format!("this call to '{name}' already completed; it was not executed again"),
+            }),
+            None,
+        ),
+        Some(ActionOutcome::Failed { error }) => (
+            json!({
+                "status": "already_failed",
+                "error": error,
+                "detail": format!("this call to '{name}' already failed; it was not executed again"),
+            }),
+            Some(ToolResultStatus::Failed),
+        ),
+        _ => (
+            adk_core::outcome_unknown_response(format!(
+                "an earlier attempt of this call to '{name}' began but recorded no outcome, so it \
              may have taken effect; it was not executed again"
-        )),
+            )),
+            Some(ToolResultStatus::OutcomeUnknown),
+        ),
+    };
+    let mut part = Part::FunctionResponse {
+        function_response: FunctionResponseData::new(name, response),
+        id: id.cloned(),
+        annotations: None,
+    };
+    if let Some(status) = status {
+        part.set_tool_result_status(status, None);
     }
+    part
 }
 
 /// The harness's action ledger and the one each run records in (spec 3.1 §7.12).
@@ -84,6 +102,33 @@ mod tests {
         ToolEffect,
     };
     use serde_json::json;
+
+    #[test]
+    fn recorded_outcomes_preserve_status_and_payload() {
+        for (outcome, status, field) in [
+            (None, Some(ToolResultStatus::OutcomeUnknown), "outcome_unknown"),
+            (
+                Some(ActionOutcome::Succeeded { result_digest: "digest".into() }),
+                None,
+                "already_succeeded",
+            ),
+            (
+                Some(ActionOutcome::Failed { error: "failed".into() }),
+                Some(ToolResultStatus::Failed),
+                "already_failed",
+            ),
+        ] {
+            let mut record =
+                ActionRecord::new("key", "write", &json!({}), ToolEffect::NonIdempotent);
+            record.outcome = outcome;
+            let id = "call-1".to_string();
+            let part = recorded_answer("write", Some(&id), &record);
+            assert_eq!(part.tool_result_status(), status);
+            let Part::FunctionResponse { function_response, id, .. } = part else { unreachable!() };
+            assert_eq!(id.as_deref(), Some("call-1"));
+            assert_eq!(function_response.response["status"], field);
+        }
+    }
 
     fn held(call_id: &str) -> HeldToolCall {
         let args = json!({ "command": "echo once" });

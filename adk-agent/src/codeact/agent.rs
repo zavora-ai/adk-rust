@@ -34,8 +34,8 @@ use adk_core::{
     IncludeContents, InstructionProvider, InvocationContext, Llm, LlmRequest, LlmResponse,
     MemoryEntry, OnToolErrorCallback, Part, ReadonlyContext, RetryBudget, SharedState, Tool,
     ToolAuthorization, ToolCallbackContext, ToolConfirmationDecision, ToolConfirmationPolicy,
-    ToolConfirmationRequest, ToolContext, ToolEffect, ToolGate, ToolOutcome, Toolset,
-    authorize_tool_call,
+    ToolConfirmationRequest, ToolContext, ToolEffect, ToolGate, ToolOutcome, ToolResultStatus,
+    Toolset, authorize_tool_call,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -53,6 +53,7 @@ use crate::codeact::runtime::{CodeRuntime, ResumeWith, RunStep, RuntimeError, bi
 use crate::guardrails::{GuardrailSet, Phase, enforce_guardrails};
 use crate::invocation_hooks::HookCallbacks;
 use crate::skill_shim::{SelectionPolicy, SkillIndex, select_skill_prompt_block};
+use crate::tool_response::ToolResponse;
 #[cfg(feature = "enhanced-plugins")]
 use adk_plugin::{
     AfterModelCallResult, AfterToolCallResult, BeforeModelCallResult, BeforeToolCallResult,
@@ -322,6 +323,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                 let mut resume_control = ToolControl::default();
                 // A call still waiting for a decision, re-held with its final arguments.
                 let mut held: Option<ToolConfirmationRequest> = None;
+                let mut resolution_status = cp.resolution_status;
                 let resolution: Option<ResolutionRecord> = match &cp.disposition {
                     // Recovery re-runs an unfinished call, and a confirmed call runs now.
                     // Both pass through the governed path, which finds the decision.
@@ -335,8 +337,9 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                         )
                         .await
                         {
-                            Resumed::Ready(with, control) => {
+                            Resumed::Ready(with, status, control) => {
                                 resume_control = control;
+                                resolution_status = status;
                                 Some(resume_to_record(with))
                             }
                             Resumed::Held(request) => {
@@ -388,7 +391,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                         // SAVE-AFTER: persist the resolution unless this checkpoint
                         // was already `Resolved` (in which case it is on disk).
                         if !matches!(cp.disposition, Disposition::Resolved(_)) {
-                            let after = mk_checkpoint(
+                            let mut after = mk_checkpoint(
                                 cp.iteration,
                                 cp.transcript.clone(),
                                 cp.snapshot.clone(),
@@ -397,6 +400,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                 &roster,
                                 &run_id,
                             );
+                            after.resolution_status = resolution_status;
                             let mut after_ev =
                                 checkpoint_event(&invocation_id, &agent_name, &after);
                             flush_actions(&mut after_ev, &mut pending_actions);
@@ -568,7 +572,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                             }
                             match exec {
                                 Ok(handle) => {
-                                    let cp = mk_checkpoint(
+                                    let mut cp = mk_checkpoint(
                                         iteration,
                                         transcript_with_stdout(
                                             &transcript,
@@ -577,17 +581,18 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                         ),
                                         snapshot,
                                         pcall,
-                                        Disposition::AwaitingCompletion { pending_handle: Some(handle) },
+                                        Disposition::AwaitingCompletion { pending_handle: Some(handle.value) },
                                         &roster,
                                         &run_id,
                                     );
+                                    cp.resolution_status = handle.status;
                                     let mut event = suspend_event(&invocation_id, &agent_name, &cp);
                                     flush_actions(&mut event, &mut pending_actions);
                                     yield Ok(event);
                                     return;
                                 }
                                 Err(msg) => {
-                                    match call.resume(ResumeWith::Raise(msg)) {
+                                    match call.resume(ResumeWith::Raise(msg.message)) {
                                         Ok(s) => step = s,
                                         Err(e) => {
                                             yield Err(runtime_err(e));
@@ -660,9 +665,9 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                 }
                             };
                             let control = capture_actions(&mut pending_actions, tool_ctx.actions());
-                            let resolution = match exec {
-                                Ok(v) => ResolutionRecord::Value(v),
-                                Err(msg) => ResolutionRecord::Raise(msg),
+                            let (resolution, resolution_status) = match exec {
+                                Ok(answer) => (ResolutionRecord::Value(answer.value), answer.status),
+                                Err(raised) => (ResolutionRecord::Raise(raised.message), raised.status),
                             };
 
                             // A tool that escalated / requested skip-summarization /
@@ -677,7 +682,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                             }
 
                             // SAVE-AFTER
-                            let after = mk_checkpoint(
+                            let mut after = mk_checkpoint(
                                 iteration,
                                 transcript_with_stdout(
                                     &transcript,
@@ -690,6 +695,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                 &roster,
                                 &run_id,
                             );
+                            after.resolution_status = resolution_status;
                             let mut after_ev = checkpoint_event(&invocation_id, &agent_name, &after);
                             flush_actions(&mut after_ev, &mut pending_actions);
                             yield Ok(after_ev);
@@ -701,9 +707,9 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                 ));
                             let exec = match run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await {
                                 ToolRun::Finished(exec) => exec,
-                                ToolRun::Held(_) => Err(format!(
+                                ToolRun::Held(_) => Err(Raised::not_run(format!(
                                     "tool '{name}' requires confirmation but this runtime cannot pause"
-                                )),
+                                ))),
                                 ToolRun::Abort(error) => {
                                     yield Err(error);
                                     return;
@@ -718,8 +724,8 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                 return;
                             }
                             match exec {
-                                Ok(v) => ResumeWith::Value(v),
-                                Err(msg) => ResumeWith::Raise(msg),
+                                Ok(answer) => ResumeWith::Value(answer.value),
+                                Err(msg) => ResumeWith::Raise(msg.message),
                             }
                         };
 
@@ -837,7 +843,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
 /// How a resumed or recovered call ended.
 enum Resumed {
     /// The value or error to feed back, with any terminal signal the tool raised.
-    Ready(ResumeWith, ToolControl),
+    Ready(ResumeWith, Option<ToolResultStatus>, ToolControl),
     /// The call still needs a confirmation decision.
     Held(ToolConfirmationRequest),
     /// The run must end.
@@ -862,17 +868,23 @@ async fn execute_for_resume(
 ) -> Resumed {
     match tools.get(&call.tool) {
         Some(tool) => {
-            let result = match run_tool(tool, &tool_ctx, call.args.clone(), policy, circuit).await {
-                ToolRun::Finished(Ok(v)) => ResumeWith::Value(v),
-                ToolRun::Finished(Err(msg)) => ResumeWith::Raise(msg),
-                ToolRun::Held(request) => return Resumed::Held(request),
-                ToolRun::Abort(error) => return Resumed::Abort(error),
-            };
+            let (result, status) =
+                match run_tool(tool, &tool_ctx, call.args.clone(), policy, circuit).await {
+                    ToolRun::Finished(Ok(answer)) => {
+                        (ResumeWith::Value(answer.value), answer.status)
+                    }
+                    ToolRun::Finished(Err(raised)) => {
+                        (ResumeWith::Raise(raised.message), raised.status)
+                    }
+                    ToolRun::Held(request) => return Resumed::Held(request),
+                    ToolRun::Abort(error) => return Resumed::Abort(error),
+                };
             let control = capture_actions(pending, tool_ctx.actions());
-            Resumed::Ready(result, control)
+            Resumed::Ready(result, status, control)
         }
         None => Resumed::Ready(
             ResumeWith::Raise(unknown_tool_message(&call.tool)),
+            Some(ToolResultStatus::NotRun),
             ToolControl::default(),
         ),
     }
@@ -881,11 +893,23 @@ async fn execute_for_resume(
 /// How one tool call ended.
 enum ToolRun {
     /// A value to feed back into the script, or a message to raise in it.
-    Finished(Result<Value, String>),
+    Finished(Result<ToolResponse, Raised>),
     /// The call needs a confirmation decision that does not exist yet.
     Held(ToolConfirmationRequest),
     /// The run must end: the kill switch is set, or the approval service failed.
     Abort(AdkError),
+}
+
+/// A message raised into the script, with the status of the tool call that produced it.
+struct Raised {
+    message: String,
+    status: Option<ToolResultStatus>,
+}
+
+impl Raised {
+    fn not_run(message: impl Into<String>) -> Self {
+        Self { message: message.into(), status: Some(ToolResultStatus::derive(false, false)) }
+    }
 }
 
 /// Execute a tool with the full robustness policy and report a single outcome.
@@ -908,10 +932,10 @@ async fn run_tool(
     if let Some(cb) = circuit.as_ref()
         && cb.is_open(&name)
     {
-        return ToolRun::Finished(Err(format!(
+        return ToolRun::Finished(Err(Raised::not_run(format!(
             "tool '{name}' is temporarily disabled after {} consecutive failures",
             cb.threshold
-        )));
+        ))));
     }
 
     match run_authorized_tool(tool, tool_ctx, args, policy, circuit).await {
@@ -928,7 +952,7 @@ async fn run_authorized_tool(
     args: Value,
     policy: &ToolPolicy<'_>,
     circuit: &mut Option<CircuitBreaker>,
-) -> Result<ToolRun, String> {
+) -> Result<ToolRun, Raised> {
     let name = tool.name().to_string();
 
     // before-tool plugins: rewrite args or short-circuit with a synthetic result.
@@ -940,9 +964,9 @@ async fn run_authorized_tool(
         {
             Ok(BeforeToolCallResult::Continue(modified)) => modified,
             Ok(BeforeToolCallResult::ShortCircuit(result)) => {
-                return Ok(ToolRun::Finished(Ok(result)));
+                return Ok(ToolRun::Finished(Ok(ToolResponse::new(result))));
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(Raised::not_run(e.to_string())),
         },
         None => args,
     };
@@ -958,10 +982,12 @@ async fn run_authorized_tool(
         for callback in policy.hooks.before_tool.iter().chain(policy.before_tool) {
             match callback(cb_ctx.clone()).await {
                 Ok(Some(content)) => {
-                    return Ok(ToolRun::Finished(Ok(content_to_tool_value(&content))));
+                    return Ok(ToolRun::Finished(Ok(ToolResponse::new(content_to_tool_value(
+                        &content,
+                    )))));
                 }
                 Ok(None) => continue,
-                Err(e) => return Err(e.to_string()),
+                Err(e) => return Err(Raised::not_run(e.to_string())),
             }
         }
     }
@@ -977,10 +1003,10 @@ async fn run_authorized_tool(
         match authorize_tool_call(&ToolGate::for_context(invocation_ctx.as_ref()), call).await {
             Ok(ToolAuthorization::Execute { args, .. }) => args,
             Ok(ToolAuthorization::Refuse { reason, confirmation }) => {
-                return Err(match confirmation {
+                return Err(Raised::not_run(match confirmation {
                     Some(ToolConfirmationDecision::Deny) => denied_message(&name),
                     _ => reason,
-                });
+                }));
             }
             Ok(ToolAuthorization::Pending { request, .. }) => return Ok(ToolRun::Held(request)),
             Err(error) => return Ok(ToolRun::Abort(error)),
@@ -999,7 +1025,12 @@ async fn run_authorized_tool(
     .await
     {
         Ok(Ok(ledgered)) => ledgered,
-        Ok(Err(answer)) => return Ok(ToolRun::Finished(Err(render_value(&answer)))),
+        Ok(Err(answer)) => {
+            return Ok(ToolRun::Finished(Err(Raised {
+                message: render_value(&answer.value),
+                status: answer.status,
+            })));
+        }
         Err(error) => return Ok(ToolRun::Abort(error)),
     };
 
@@ -1107,6 +1138,14 @@ async fn run_authorized_tool(
         serde_json::json!({ "error": last_error })
     };
     let failure_message = if outcome_unknown { render_value(&failure) } else { last_error.clone() };
+    let ran = |withheld: bool| {
+        Some(if outcome_unknown {
+            ToolResultStatus::OutcomeUnknown
+        } else {
+            ToolResultStatus::derive(true, withheld)
+        })
+    };
+    let withheld = |error: AdkError| Raised { message: error.to_string(), status: ran(true) };
 
     let tool_succeeded = value.is_some();
     if let Some(cb) = circuit.as_mut() {
@@ -1150,7 +1189,7 @@ async fn run_authorized_tool(
                     }
                 }
             }
-            fallback.ok_or(failure_message)
+            fallback.ok_or(Raised { message: failure_message, status: ran(false) })
         }
     };
 
@@ -1176,7 +1215,7 @@ async fn run_authorized_tool(
                     break;
                 }
                 Ok(None) => continue,
-                Err(e) => return Err(e.to_string()),
+                Err(e) => return Err(withheld(e)),
             }
         }
         let callback_value = match &result {
@@ -1191,12 +1230,19 @@ async fn run_authorized_tool(
                     break;
                 }
                 Ok(None) => continue,
-                Err(e) => return Err(e.to_string()),
+                Err(e) => return Err(withheld(e)),
             }
         }
     }
 
     let result = result?;
+    let answer = |value| {
+        if outcome_unknown {
+            ToolResponse::with_status(value, ToolResultStatus::OutcomeUnknown)
+        } else {
+            ToolResponse::new(value)
+        }
+    };
 
     // after-tool plugins may transform the successful result last.
     #[cfg(feature = "enhanced-plugins")]
@@ -1210,11 +1256,13 @@ async fn run_authorized_tool(
             )
             .await
         {
-            Ok(AfterToolCallResult::Continue(modified)) => Ok(ToolRun::Finished(Ok(modified))),
-            Err(e) => Err(e.to_string()),
+            Ok(AfterToolCallResult::Continue(modified)) => {
+                Ok(ToolRun::Finished(Ok(answer(modified))))
+            }
+            Err(e) => Err(withheld(e)),
         };
     }
-    Ok(ToolRun::Finished(Ok(result)))
+    Ok(ToolRun::Finished(Ok(answer(result))))
 }
 
 /// Run-control signals a tool may raise via its [`EventActions`].
@@ -1301,6 +1349,7 @@ fn mk_checkpoint(
         disposition,
         tool_roster: roster.to_vec(),
         run_id: Some(run_id.to_string()),
+        resolution_status: None,
     }
 }
 
@@ -3333,6 +3382,7 @@ mod tests {
             disposition: Disposition::Resolved(ResolutionRecord::Value(json!("stored"))),
             tool_roster: vec!["echo".to_string()],
             run_id: None,
+            resolution_status: None,
         };
         let events = drive(
             FakeLlm::new("noop"),
@@ -3346,6 +3396,41 @@ mod tests {
         )
         .await;
         assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("recovered"));
+    }
+
+    /// A raised answer records on its SAVE-AFTER checkpoint whether the call ran.
+    #[tokio::test]
+    async fn resolved_checkpoints_record_execution() {
+        let script = || {
+            Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+                Planned::call("boom", json!({}), 1),
+                Planned::Complete(json!({"type": "final_result", "value": "after"})),
+            ]]))
+        };
+        let deny_all = || {
+            adk_core::RunConfig::builder()
+                .tool_policy(Arc::new(adk_core::DeclarativePolicy::builder().build()))
+                .build()
+        };
+        for (config, expected) in [
+            (deny_all(), ToolResultStatus::NotRun),
+            (adk_core::RunConfig::default(), ToolResultStatus::Failed),
+        ] {
+            let mut input = base_inputs(FakeLlm::new("noop"), script(), user("go"));
+            input.tools = vec![failing_tool()];
+            input.invocation_ctx =
+                Arc::new(MockInvocationContext::new(user("go")).with_run_config(config));
+
+            let events = collect(input).await;
+
+            let statuses: Vec<_> = events
+                .iter()
+                .filter_map(pending_in)
+                .filter(|cp| matches!(cp.disposition, Disposition::Resolved(_)))
+                .map(|cp| cp.resolution_status)
+                .collect();
+            assert_eq!(statuses, vec![Some(expected)]);
+        }
     }
 
     #[tokio::test]
@@ -4724,6 +4809,7 @@ mod tests {
             disposition: Disposition::PendingResult,
             tool_roster: vec!["echo".to_string()],
             run_id: None,
+            resolution_status: None,
         };
         let events = drive(
             FakeLlm::new("noop"),
@@ -4784,6 +4870,7 @@ mod tests {
             disposition: Disposition::PendingResult,
             tool_roster: vec!["panic_button".to_string()],
             run_id: None,
+            resolution_status: None,
         };
         let events = drive(
             FakeLlm::new("noop"),
@@ -5050,6 +5137,7 @@ mod tests {
             disposition: Disposition::PendingResult,
             tool_roster: vec!["charge".to_string()],
             run_id: Some("run-1".to_string()),
+            resolution_status: None,
         });
         collect(input).await;
 
@@ -5064,6 +5152,138 @@ mod tests {
             })
         );
         assert!(ledger.begun.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn replacements_preserve_unknown_checkpoints() {
+        use adk_core::ActionLedger as _;
+        for stage in ["fallback", "legacy", "full"] {
+            for recovery in [false, true] {
+                for unknown in [false, true] {
+                    let ledger = Arc::new(RecordingLedger::default());
+                    let (charge, executions) = charge_tool(
+                        adk_core::ToolEffect::NonIdempotent,
+                        unknown.then_some(Duration::from_secs(3600)),
+                    );
+                    let runtime = Arc::new(ScriptedRuntime::with_suspension(if recovery {
+                        vec![]
+                    } else {
+                        vec![charge_program(&[0])]
+                    }));
+                    let mut input = ledgered_inputs(
+                        runtime.clone(),
+                        vec![charge.clone()],
+                        ledger.clone(),
+                        "inv-1",
+                        HashMap::new(),
+                    );
+                    input.tool_timeout = Duration::from_millis(20);
+                    if recovery {
+                        input.pending = Some(CodeActCheckpoint {
+                            iteration: 1,
+                            transcript: vec![],
+                            snapshot: serde_json::to_vec(&vec![Planned::Complete(
+                                json!({"type": "final_result", "value": "paid"}),
+                            )])
+                            .unwrap(),
+                            call: PendingToolCall {
+                                call_id: 0,
+                                tool: "charge".into(),
+                                args: json!({"amount": 5}),
+                            },
+                            disposition: Disposition::PendingResult,
+                            tool_roster: vec!["charge".into()],
+                            run_id: Some("run-1".into()),
+                            resolution_status: None,
+                        });
+                    }
+                    let replacement = json!({"cached": true, "status": "settled"});
+                    let value = replacement.clone();
+                    let callbacks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                    let called = callbacks.clone();
+                    match stage {
+                        "fallback" => {
+                            input.on_tool_error = Arc::new(vec![Box::new(move |_, _, _, _| {
+                                called.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                let value = value.clone();
+                                Box::pin(async move { Ok(Some(value)) })
+                            })])
+                        }
+                        "legacy" => {
+                            input.after_tool_callbacks = Arc::new(vec![Box::new(move |_| {
+                                called.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                let value = value.clone();
+                                Box::pin(async move {
+                                    Ok(Some(Content {
+                                        role: "function".into(),
+                                        parts: vec![Part::FunctionResponse {
+                                            function_response: adk_core::FunctionResponseData::new(
+                                                "charge", value,
+                                            ),
+                                            id: None,
+                                            annotations: None,
+                                        }],
+                                    }))
+                                })
+                            })])
+                        }
+                        "full" => {
+                            input.after_tool_callbacks_full =
+                                Arc::new(vec![Box::new(move |_, _, _, _| {
+                                    called.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                    let value = value.clone();
+                                    Box::pin(async move { Ok(Some(value)) })
+                                })])
+                        }
+                        _ => unreachable!(),
+                    }
+                    let events = collect(input).await;
+                    let expected = if stage == "fallback" && !unknown {
+                        json!({"charged": 5})
+                    } else {
+                        replacement
+                    };
+                    assert_eq!(
+                        runtime.last_value(),
+                        Some(expected.clone()),
+                        "{stage}, recovery={recovery}, unknown={unknown}"
+                    );
+                    let resolved: Vec<_> = checkpoints(&events)
+                        .into_iter()
+                        .filter(|cp| matches!(cp.disposition, Disposition::Resolved(_)))
+                        .collect();
+                    assert_eq!(resolved.len(), 1);
+                    assert_eq!(
+                        resolved[0].resolution_status,
+                        unknown.then_some(ToolResultStatus::OutcomeUnknown)
+                    );
+                    assert_eq!(
+                        resolved[0].disposition,
+                        Disposition::Resolved(ResolutionRecord::Value(expected.clone()))
+                    );
+                    assert_eq!(executions.lock().unwrap().len(), 1);
+                    let key = ledger.begun.lock().unwrap()[0].clone();
+                    assert_eq!(ledger.get(&key).await.unwrap().unwrap().is_completed(), !unknown);
+                    let called = callbacks.load(std::sync::atomic::Ordering::SeqCst);
+                    assert_eq!(called, usize::from(stage != "fallback" || unknown));
+
+                    // Replaying a saved resolution returns its exact value and never re-enters the tool.
+                    let replay = Arc::new(ScriptedRuntime::with_suspension(vec![]));
+                    let mut input = ledgered_inputs(
+                        replay.clone(),
+                        vec![charge],
+                        ledger.clone(),
+                        "inv-2",
+                        HashMap::new(),
+                    );
+                    input.pending = Some(resolved.into_iter().next().unwrap());
+                    collect(input).await;
+                    assert_eq!(replay.last_value(), Some(expected));
+                    assert_eq!(executions.lock().unwrap().len(), 1);
+                    assert_eq!(callbacks.load(std::sync::atomic::Ordering::SeqCst), called);
+                }
+            }
+        }
     }
 
     #[tokio::test]

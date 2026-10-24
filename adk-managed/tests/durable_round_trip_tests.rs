@@ -637,6 +637,19 @@ async fn an_unanswered_call_expires() {
     assert_eq!(kinds, ["status.running", "agent.message", "status.idle"]);
     let responses = llm.last_responses();
     assert_eq!(responses[0].1["status"], "expired", "{responses:?}");
+    {
+        let requests = llm.requests.lock().unwrap();
+        let parts: Vec<_> = requests
+            .last()
+            .unwrap()
+            .contents
+            .iter()
+            .flat_map(|content| &content.parts)
+            .filter(|part| matches!(part, Part::FunctionResponse { .. }))
+            .collect();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].tool_result_status(), Some(adk_core::ToolResultStatus::OutcomeUnknown));
+    }
 
     let late = runtime.send_event(&session, deploy_result()).await;
     assert!(late.is_err(), "a result after expiry is refused");

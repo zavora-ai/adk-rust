@@ -679,6 +679,8 @@ impl SessionLoop {
                             );
                         }
                         Ok(None) if expired => {
+                            action.resolution_status =
+                                Some(adk_core::ToolResultStatus::OutcomeUnknown);
                             action.resolution = Some(json!({
                                 "error": format!(
                                     "the client did not return a result for custom tool '{}' \
@@ -784,13 +786,19 @@ impl SessionLoop {
                 action.function_call_id.as_ref().is_none_or(|id| !answered.contains(id))
             })
             .filter_map(|action| {
-                action.resolution.clone().map(|response| Part::FunctionResponse {
-                    function_response: FunctionResponseData::new(
-                        action.tool_name.clone(),
-                        response,
-                    ),
-                    id: action.function_call_id.clone(),
-                    annotations: None,
+                action.resolution.clone().map(|response| {
+                    let mut part = Part::FunctionResponse {
+                        function_response: FunctionResponseData::new(
+                            action.tool_name.clone(),
+                            response,
+                        ),
+                        id: action.function_call_id.clone(),
+                        annotations: None,
+                    };
+                    if let Some(status) = action.resolution_status {
+                        part.set_tool_result_status(status, None);
+                    }
+                    part
                 })
             })
             .collect();
@@ -1123,6 +1131,7 @@ impl SessionLoop {
                 input: request.args.clone(),
                 expires_at,
                 resolution: None,
+                resolution_status: None,
             });
             return;
         }
@@ -1192,6 +1201,7 @@ impl SessionLoop {
                         input,
                         expires_at: self.expiry(),
                         resolution: None,
+                        resolution_status: None,
                     });
                 }
                 _ => {}
