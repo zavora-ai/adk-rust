@@ -99,11 +99,11 @@ async fn migrations_share_harness_db_and_pairings_survive_a_restart() {
     store.migrate().await.expect("migrate");
     store.migrate().await.expect("migrate again");
     assert_eq!(count(&pool, "_adk_kernel_channel_migrations").await, 1);
-    assert_eq!(count(&pool, "_adk_kernel_device_migrations").await, 1);
+    assert_eq!(count(&pool, "_adk_kernel_device_migrations").await, 2);
 
     let now = chrono::Utc::now();
     let request = ChannelPairingRequest::new(
-        adk_kernel_code_hash("ABCD-2345"),
+        adk_kernel_code_hash("ABCD-EFGH-2345"),
         "telegram",
         "4217",
         "4217",
@@ -111,7 +111,7 @@ async fn migrations_share_harness_db_and_pairings_survive_a_restart() {
         now + chrono::Duration::hours(1),
     );
     store.put_request(request).await.expect("put");
-    let binding = accept_pairing(&store, "abcd 2345", "ana", &["operator".into()], now)
+    let binding = accept_pairing(&store, "abcd efgh 2345", "ana", &["operator".into()], now)
         .await
         .expect("the code pairs the account");
 

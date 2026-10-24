@@ -366,6 +366,20 @@ impl KernelSettings {
     /// Returns a configuration error when a file cannot be read, its `[kernel]` table does
     /// not parse, or `max_concurrent_runs` is 0.
     pub fn resolve(user_config: Option<&Path>, workspace: &Path) -> Result<Self> {
+        Self::resolve_in(user_config, Some(workspace))
+    }
+
+    /// Resolves the user config's `[kernel]` table alone, for a command whose workspace is
+    /// not the current directory, such as `--preset personal` (spec 3.3 §10 H1).
+    ///
+    /// # Errors
+    ///
+    /// As [`resolve`](Self::resolve), for the user config only.
+    pub fn resolve_user(user_config: Option<&Path>) -> Result<Self> {
+        Self::resolve_in(user_config, None)
+    }
+
+    fn resolve_in(user_config: Option<&Path>, workspace: Option<&Path>) -> Result<Self> {
         let mut settings = Self::default();
         if let Some(path) = user_config
             && let Some(user) = KernelTable::load(path)?
@@ -422,7 +436,9 @@ impl KernelSettings {
                 settings.notes.push(format!("{origin}: unknown key `kernel.{key}` ignored"));
             }
         }
-        if let Some(project) = KernelTable::load(&workspace.join(PROJECT_CONFIG_FILE))? {
+        if let Some(workspace) = workspace
+            && let Some(project) = KernelTable::load(&workspace.join(PROJECT_CONFIG_FILE))?
+        {
             let origin = PROJECT_CONFIG_FILE;
             for (key, set) in [
                 ("home", project.home.is_some()),

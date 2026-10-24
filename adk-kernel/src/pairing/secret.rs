@@ -1,8 +1,11 @@
 //! Pairing codes, device tokens and their hashes (spec 3.3 §10 K2, S-I7).
 //!
-//! A pairing code is eight characters of Crockford base32 (40 bits), shown as `ABCD-2345`;
-//! the stores keep only its SHA-256. A device token is `adkd_<id>_<secret>`, the secret 32
-//! random bytes in hex; the stores keep only the secret's SHA-256, compared in constant time.
+//! A pairing code is twelve characters of Crockford base32 (60 bits), shown as
+//! `ABCD-EFGH-2345`; the stores keep only its SHA-256. Sixty bits keep a waiting code out of
+//! reach of a reader of the store, who would have to try about 10^18 hashes in the code's
+//! lifetime, a year and more of a current GPU's time. A device token is
+//! `adkd_<id>_<secret>`, the secret 32 random bytes in hex; the stores keep only the
+//! secret's SHA-256, compared in constant time.
 
 use sha2::{Digest as _, Sha256};
 
@@ -39,16 +42,19 @@ pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |diff, (x, y)| diff | (x ^ y)) == 0
 }
 
-/// A new pairing code, shown as `XXXX-XXXX`.
+/// How many characters a pairing code has, five bits each.
+const CODE_CHARS: usize = 12;
+
+/// A new pairing code, shown as `XXXX-XXXX-XXXX`.
 pub(crate) fn new_code() -> Result<String> {
-    let bytes = random_bytes(5)?;
+    let bytes = random_bytes(8)?;
     let bits = bytes.iter().fold(0u64, |bits, byte| (bits << 8) | u64::from(*byte));
-    let mut code = String::with_capacity(9);
-    for index in 0..8 {
-        if index == 4 {
+    let mut code = String::with_capacity(CODE_CHARS + 2);
+    for index in 0..CODE_CHARS {
+        if index > 0 && index.is_multiple_of(4) {
             code.push('-');
         }
-        let shift = 35 - index * 5;
+        let shift = 5 * (CODE_CHARS - 1 - index);
         code.push(char::from(ALPHABET[((bits >> shift) & 0x1f) as usize]));
     }
     Ok(code)
@@ -102,13 +108,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn codes_are_eight_crockford_characters() {
+    fn codes_are_twelve_crockford_characters() {
+        let mut seen = std::collections::BTreeSet::new();
         for _ in 0..200 {
             let code = new_code().unwrap();
-            assert_eq!(code.len(), 9, "{code}");
-            assert_eq!(&code[4..5], "-");
+            assert_eq!(code.len(), 14, "{code}");
+            assert_eq!((&code[4..5], &code[9..10]), ("-", "-"), "{code}");
             assert!(code.chars().filter(|c| *c != '-').all(|c| ALPHABET.contains(&(c as u8))));
+            seen.insert(code);
         }
+        assert_eq!(seen.len(), 200, "codes repeat");
+    }
+
+    /// A waiting code carries sixty bits, so enumerating its SHA-256 takes
+    /// far longer than the code lives.
+    #[test]
+    fn a_code_carries_sixty_bits() {
+        let bits = CODE_CHARS * 5;
+        assert!(bits >= 60, "{bits} bits");
+        // Every character position varies: the top character is not stuck at a few values.
+        let firsts: std::collections::BTreeSet<char> =
+            (0..400).map(|_| new_code().unwrap().chars().next().unwrap()).collect();
+        assert!(firsts.len() > 16, "{firsts:?}");
     }
 
     #[test]

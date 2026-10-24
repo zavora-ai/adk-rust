@@ -67,6 +67,34 @@ pub struct HarnessInfo {
     pub web_search: crate::web::WebSearchPath,
 }
 
+impl HarnessInfo {
+    /// Where `bash` runs, or `None` when the harness offers no shell — as the personal
+    /// preset's does outside the OS sandbox or a container (spec 3.3 §10 H1). Surfaces show
+    /// this rather than [`isolation`](Self::isolation), which names the isolation the
+    /// harness was configured with whether or not it offers `bash`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::{HarnessAgent, InstructionsConfig, Preset};
+    /// use adk_model::{ScriptedLlm, ScriptedResponse};
+    /// use std::sync::Arc;
+    ///
+    /// let dir = tempfile::tempdir().unwrap();
+    /// let harness = HarnessAgent::builder("assistant")
+    ///     .preset(Preset::Personal)
+    ///     .model(Arc::new(ScriptedLlm::new("scripted", vec![ScriptedResponse::text("ok")])))
+    ///     .workspace(adk_devtools::Workspace::new(dir.path()).allow_bash(true))
+    ///     .project_instructions(InstructionsConfig { user_file: None, ..InstructionsConfig::default() })
+    ///     .build()?;
+    /// assert_eq!(harness.info().shell(), None, "no host shell");
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn shell(&self) -> Option<&IsolationStatus> {
+        self.tools.iter().any(|tool| tool == "bash").then_some(&self.isolation)
+    }
+}
+
 /// Project instructions with the trust they load under.
 #[derive(Debug)]
 pub(crate) struct InstructionState {

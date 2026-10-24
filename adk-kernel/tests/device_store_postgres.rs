@@ -94,5 +94,5 @@ async fn replicas_starting_together_migrate_once() {
         .fetch_one(&pool)
         .await
         .expect("count");
-    assert_eq!(applied, 1);
+    assert_eq!(applied, 2);
 }

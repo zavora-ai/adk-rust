@@ -71,7 +71,7 @@ struct Selected<'a> {
 /// process-group kill (D3). The harness tool adds:
 ///
 /// - its own declaration `{ command, timeout_secs? }`, plus `unsandboxed`, `reason` and
-///   `retry_of` when a sandbox is active;
+///   `retry_of` when a sandbox is active and the unsandboxed retry is on;
 /// - `annotations()` of `{enforcer, profileDigest, network}`, so the declaration digest —
 ///   and every standing rule or held call bound to it — differs per isolation (I9);
 /// - a refusal to run unless the harness policy is in the run's config (I17);
@@ -355,7 +355,8 @@ impl Tool for HarnessBashTool {
             "command": { "type": "string", "description": "The shell command to run." },
             "timeout_secs": { "type": "integer", "description": "Optional timeout in seconds; cannot exceed the workspace limit." }
         });
-        if self.sandbox_active() {
+        // Declared only when the retry is on, as the container shell does.
+        if self.sandbox_active() && self.allow_unsandboxed_retry {
             properties["unsandboxed"] = json!({ "type": "boolean", "description": "Retry a failed sandboxed command on the host. Needs retry_of and reason, and the user's approval." });
             properties["reason"] = json!({ "type": "string", "description": "Why the command needs to run outside the sandbox." });
             properties["retry_of"] = json!({ "type": "string", "description": "Function call id of the failed sandboxed call." });
@@ -399,6 +400,13 @@ impl Tool for HarnessBashTool {
                 return Err(refuse(
                     "harness.bash.retry_refused",
                     "the shell already runs on the host; there is no sandboxed call to retry",
+                ));
+            }
+            if !self.allow_unsandboxed_retry {
+                return Err(refuse(
+                    "harness.bash.retry_refused",
+                    "unsandboxed retries are off for this harness; commands run only in the \
+                     sandbox",
                 ));
             }
             let failed_id = args.get("retry_of").and_then(Value::as_str).ok_or_else(|| {
@@ -652,6 +660,26 @@ mod tests {
             adk_core::ToolOrigin::of(&confining).declaration_digest,
             adk_core::ToolOrigin::of(&windows).declaration_digest
         );
+    }
+
+    /// Review of #1045, finding 5: with the retry off, `bash` declares no retry arguments,
+    /// whatever the host's enforcer.
+    #[test]
+    fn without_the_retry_bash_declares_no_retry_arguments() {
+        let declared = |retry: bool| {
+            let ws = Workspace::new(".").allow_bash(true);
+            let status = IsolationStatus::OsSandbox { enforcer: "seatbelt".into() };
+            HarnessBashTool::new(ws, status, false, Arc::new(crate::InMemoryShellLedger::new()))
+                .allow_unsandboxed_retry(retry)
+                .parameters_schema()
+                .unwrap()["properties"]
+                .clone()
+        };
+        assert!(declared(true).get("unsandboxed").is_some());
+        let off = declared(false);
+        for name in ["unsandboxed", "retry_of", "reason"] {
+            assert!(off.get(name).is_none(), "{name}: {off}");
+        }
     }
 
     #[test]

@@ -8,10 +8,11 @@ use crate::error::{KernelError, Result};
 ///
 /// The key columns take the `C` collation, so lists order by the bytes of the UTF-8 text on
 /// every server, as the other backends do.
-const MIGRATIONS: &[(i64, &str, &str)] = &[(
-    1,
-    "create kernel device and pairing-code tables",
-    "\
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (
+        1,
+        "create kernel device and pairing-code tables",
+        "\
 CREATE TABLE IF NOT EXISTS adk_kernel_devices (\
     id TEXT COLLATE \"C\" PRIMARY KEY, \
     created_us BIGINT NOT NULL, \
@@ -23,13 +24,24 @@ CREATE TABLE IF NOT EXISTS adk_kernel_pairing_codes (\
     record TEXT NOT NULL\
 );\
 CREATE INDEX IF NOT EXISTS adk_kernel_pairing_codes_expiry ON adk_kernel_pairing_codes (expires_us);",
-)];
+    ),
+    (
+        2,
+        "create the shared count of pairing claims",
+        "\
+CREATE TABLE IF NOT EXISTS adk_kernel_pairing_attempts (\
+    id INTEGER PRIMARY KEY, \
+    attempts BIGINT NOT NULL\
+);",
+    ),
+];
 
 /// A [`DeviceStore`](super::DeviceStore) in PostgreSQL, shared by every replica (spec 3.3
 /// §10 K2, feature `postgres`).
 ///
-/// It opens from the URL of `adk-rust serve --store`. Its tables are `adk_kernel_devices`
-/// and `adk_kernel_pairing_codes`; [`migrate`](Self::migrate) records its steps in
+/// It opens from the URL of `adk-rust serve --store`. Its tables are `adk_kernel_devices`,
+/// `adk_kernel_pairing_codes` and `adk_kernel_pairing_attempts`, the count of claims every
+/// replica shares; [`migrate`](Self::migrate) records its steps in
 /// `_adk_kernel_device_migrations` under an advisory lock, so replicas starting together
 /// migrate one at a time.
 ///

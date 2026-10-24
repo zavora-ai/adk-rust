@@ -9,7 +9,9 @@
 # compile once.
 #
 # A pair's optional fourth column holds comma-separated flags: `no-default` builds with
-# `--no-default-features`, and `doc` also runs the crate's doctests, which nextest skips.
+# `--no-default-features`, `doc` also runs the crate's doctests, which nextest skips, and
+# `lib` lints the library alone and runs no tests, for a crate whose dev-dependency on
+# itself turns its default features back on in every test target.
 # A `-` in the features column passes no `--features`, so `- no-default` builds none.
 #
 # Usage:
@@ -42,11 +44,13 @@ while IFS=' ' read -r shard package features flags; do
     args=()
     [[ "$features" != "-" ]] && args=(--features "$features")
     [[ ",$flags," == *,no-default,* ]] && args=(--no-default-features ${args[@]+"${args[@]}"})
-    label="$package ${args[*]-}"
+    targets=(--all-targets)
+    [[ ",$flags," == *,lib,* ]] && targets=(--lib)
+    label="$package ${args[*]-} ${targets[*]}"
     printf '\n==> %s (shard %s)\n' "$label" "$shard"
     started=$SECONDS
-    if cargo clippy -p "$package" ${args[@]+"${args[@]}"} --all-targets -- -D warnings \
-        && cargo nextest run -p "$package" ${args[@]+"${args[@]}"} \
+    if cargo clippy -p "$package" ${args[@]+"${args[@]}"} "${targets[@]}" -- -D warnings \
+        && { [[ ",$flags," == *,lib,* ]] || cargo nextest run -p "$package" ${args[@]+"${args[@]}"}; } \
         && { [[ ",$flags," != *,doc,* ]] || cargo test -p "$package" ${args[@]+"${args[@]}"} --doc; }; then
         printf 'ok       %s (%ds)\n' "$label" "$((SECONDS - started))"
     else

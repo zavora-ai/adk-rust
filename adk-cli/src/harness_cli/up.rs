@@ -58,20 +58,27 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     let UpArgs { home, bind, auth_token, store, mut harness, .. } = up;
     // The baseline pass's observations are worded by the harness's model (spec 3.2 §7.10).
     let phraser = Arc::new(LlmPhraser::new(model.llm.clone()));
+    // The personal preset's workspace is a folder under the home, so the current directory's
+    // `.adk/harness.toml` plays no part (spec 3.3 §10 H1).
+    let personal_home =
+        harness.preset == Some(adk_harness::Preset::Personal) && harness.dir.is_none();
     // Only `max_concurrent_runs` of a workspace's [kernel] table applies, so the directory
     // the workspace resolves from is enough here.
-    let workspace = match &harness.dir {
-        Some(dir) => dir.clone(),
-        None => std::env::current_dir().context("no current directory")?,
+    let mut settings = if personal_home {
+        KernelSettings::resolve_user(user_config().as_deref())?
+    } else {
+        let workspace = match &harness.dir {
+            Some(dir) => dir.clone(),
+            None => std::env::current_dir().context("no current directory")?,
+        };
+        KernelSettings::resolve(user_config().as_deref(), &workspace)?
     };
-    let mut settings = KernelSettings::resolve(user_config().as_deref(), &workspace)?;
     let home = match home.or_else(|| settings.home.clone()) {
         Some(home) => home,
         None => default_home()?,
     };
-    // The personal preset's workspace is a folder under the home (spec 3.3 §10 H1); its
-    // `.adk/harness.toml` may restrict the kernel as a project's does.
-    if harness.preset == Some(adk_harness::Preset::Personal) && harness.dir.is_none() {
+    // Its own `.adk/harness.toml` may restrict the kernel as a project's does.
+    if personal_home {
         let personal = adk_harness::personal::PersonalWorkspace::create(&home)?;
         settings = KernelSettings::resolve(user_config().as_deref(), personal.root())?;
         harness.dir = Some(personal.root().to_path_buf());
@@ -97,14 +104,10 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         println!("note: {note}");
     }
     // The first-run answers become the kernel's quiet hours and every partition's daily
-    // spend cap, unless the user config's `[kernel]` table sets them (spec 3.3 §13 Q7).
+    // spend cap (spec 3.3 §13 Q7).
     if let Some(personal) = &setup.personal {
-        if settings.quiet_hours.is_none() {
-            settings.quiet_hours = personal.quiet_time.map(Into::into);
-        }
-        if settings.quotas.daily_spend_cap.is_none() {
-            settings.quotas.daily_spend_cap = personal.daily_spending_limit_micro_usd();
-        }
+        let user = KernelSettings::resolve_user(user_config().as_deref())?;
+        apply_personal(&mut settings, &user, &personal.settings);
     }
     if !bind.ip().is_loopback()
         && setup.resolved.mode == HarnessMode::Auto
@@ -370,15 +373,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             "  work  {} (personal preset: not a code repository, no host shell)",
             setup.resolved.workspace.display()
         );
-        let quiet = settings.quiet_hours.map_or_else(
-            || "off".to_string(),
-            |quiet| format!("{}–{}", quiet.start.format("%H:%M"), quiet.end.format("%H:%M")),
+        println!(
+            "  quiet time {} · daily spending limit {}",
+            quiet_time_label(settings.quiet_hours),
+            spending_limit_label(settings.quotas.daily_spend_cap)
         );
-        let limit = settings.quotas.daily_spend_cap.map_or_else(
-            || "none".to_string(),
-            |micro| format!("${:.2} a day", micro as f64 / 1_000_000.0),
-        );
-        println!("  quiet time {quiet} · daily spending limit {limit}");
     }
     println!(
         "  tick  {}",
@@ -501,6 +500,42 @@ async fn partition_harnesses(
         hosted.push(host(setup, agent, Some(&partition), governance, run_store)?);
     }
     Ok(hosted)
+}
+
+/// Lays the personal preset's first-run answers over `settings` (spec 3.3 §13 Q7): the user
+/// config's `[kernel]` table, `user`, wins over them, and a workspace's
+/// `.adk/harness.toml` may only lower the daily spending limit, never raise it.
+pub(super) fn apply_personal(
+    settings: &mut KernelSettings,
+    user: &KernelSettings,
+    personal: &adk_harness::personal::PersonalSettings,
+) {
+    if user.quiet_hours.is_none() {
+        settings.quiet_hours = personal.quiet_time.map(Into::into);
+    }
+    if user.quotas.daily_spend_cap.is_none() {
+        settings.quotas.daily_spend_cap =
+            match (personal.daily_spending_limit_micro_usd(), settings.quotas.daily_spend_cap) {
+                (Some(answer), Some(workspace)) => Some(answer.min(workspace)),
+                (answer, workspace) => answer.or(workspace),
+            };
+    }
+}
+
+/// Quiet time as the banners show it.
+pub(super) fn quiet_time_label(quiet: Option<adk_kernel::QuietHours>) -> String {
+    quiet.map_or_else(
+        || "off".to_string(),
+        |quiet| format!("{}–{}", quiet.start.format("%H:%M"), quiet.end.format("%H:%M")),
+    )
+}
+
+/// The daily spending limit as the banners show it.
+pub(super) fn spending_limit_label(micro_usd: Option<u64>) -> String {
+    micro_usd.map_or_else(
+        || "none".to_string(),
+        |micro| format!("${:.2} a day", micro as f64 / 1_000_000.0),
+    )
 }
 
 /// The kernel home when neither `--home` nor `[kernel] home` names one: the directory
