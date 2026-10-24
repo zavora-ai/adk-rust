@@ -62,6 +62,9 @@
 # The kernel host (spec 3.2 §10 HK1, HK3): `Harness::kernel`, the approval wake and the goal
 # stall; no workspace member enables it until adk-cli's `harness` does.
 1 adk-harness kernel
+# A harness definition on a tenant kernel and one harness per partition (spec 3.2 §7.8,
+# §7.13): `managed` with `kernel`, which no workspace member enables.
+1 adk-harness kernel,managed
 # The browser and computer-use packs (spec 3.1 §7.24): adk-browser and adk-computer-use enter
 # the harness only through them; `web-fixture` admits the loopback fixture page.
 1 adk-harness browser,computer-use,web-fixture doc
@@ -119,6 +122,9 @@
 # The surface engine's web API (spec 3.3 §6): the router, the scenario on a kernel-hosted
 # harness, the control-plane source, and the generated-types drift test.
 2 adk-surface web doc
+# The managed form (spec 3.2 §7.13, §10 M1): `KernelDef`, `TenantKernel` and partitions on a
+# tenant's kernel, which no workspace member enables.
+2 adk-kernel managed
 
 # Shard 3 — adk-graph, adk-managed, adk-code.
 # No workspace member enables these four; four clippy failures and two uncompilable doc

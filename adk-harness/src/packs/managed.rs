@@ -568,6 +568,11 @@ impl HarnessResolver {
     /// refuses, or a feature the build lacks; and the builder's error, such as
     /// `harness.sandbox_unavailable`.
     pub fn build(&self, def: &HarnessDef, model: Arc<dyn Llm>) -> Result<HarnessAgent> {
+        self.builder(def, model)?.build()
+    }
+
+    /// The builder of the harness `def` declares, configured, before `build`.
+    fn builder(&self, def: &HarnessDef, model: Arc<dyn Llm>) -> Result<HarnessAgentBuilder> {
         let agent = &def.agent;
         if agent.permission_policy.is_some() {
             return Err(invalid(
@@ -629,7 +634,7 @@ impl HarnessResolver {
         if let Some(configure) = &self.configure {
             builder = configure(builder, def);
         }
-        builder.build()
+        Ok(builder)
     }
 
     fn shell(
@@ -687,6 +692,39 @@ impl AgentResolver for HarnessResolver {
                 Ok(Some(Arc::new(ManagedHarness::new(harness))))
             }
         }
+    }
+}
+
+/// One harness per partition of a definition on a tenant kernel (spec 3.2 §7.8, §7.13): the
+/// definition's harness built with `HarnessAgentBuilder::partition` over the tenant's
+/// partition table — the partition's mode, its class and tenant on every principal, its
+/// memory scope — after the operator's [`configure`](HarnessResolver::configure), and the
+/// coordinator's with `partition_coordinator`. A definition without a harness block
+/// resolves to `None`.
+#[cfg(feature = "kernel")]
+#[async_trait]
+impl adk_kernel::managed::PartitionAgentResolver for HarnessResolver {
+    async fn resolve_partition(
+        &self,
+        def: &ManagedAgentDef,
+        host: &adk_kernel::managed::PartitionHost,
+        models: &dyn ModelResolver,
+    ) -> std::result::Result<Option<Arc<dyn Agent>>, RuntimeError> {
+        let Some(harness_def) = HarnessDef::from_agent_def(def).map_err(runtime_error)? else {
+            return Ok(None);
+        };
+        let model = models.resolve(&def.model).await.map_err(|error| {
+            RuntimeError::provider_error(format!("{:?}", def.model), error.to_string())
+        })?;
+        let mut builder = self
+            .builder(&harness_def, model)
+            .map_err(runtime_error)?
+            .partition(host.partition.clone(), host.partitions.clone());
+        if host.coordinator {
+            builder = builder.partition_coordinator();
+        }
+        let harness = builder.build().map_err(runtime_error)?;
+        Ok(Some(Arc::new(ManagedHarness::new(harness))))
     }
 }
 

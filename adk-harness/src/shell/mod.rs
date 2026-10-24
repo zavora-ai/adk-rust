@@ -170,6 +170,27 @@ impl IsolationStatus {
         }
     }
 
+    /// Whether the isolation confines the command's reads to the paths it grants: Seatbelt,
+    /// bubblewrap and a container do; the host, a degraded sandbox and the Windows
+    /// restricted-token sandbox, which reads what the user may read (spec 3.2 §10 W5), do not.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::IsolationStatus;
+    ///
+    /// assert!(IsolationStatus::OsSandbox { enforcer: "seatbelt".into() }.confines_reads());
+    /// assert!(!IsolationStatus::OsSandbox { enforcer: "restricted-token".into() }.confines_reads());
+    /// assert!(!IsolationStatus::Host.confines_reads());
+    /// ```
+    pub fn confines_reads(&self) -> bool {
+        match self {
+            Self::Host | Self::Degraded { .. } => false,
+            Self::OsSandbox { enforcer } => enforcer != RESTRICTED_TOKEN,
+            Self::Container { .. } => true,
+        }
+    }
+
     /// The policy's isolation class for this status.
     pub fn isolation(&self) -> Isolation {
         match self {
@@ -180,7 +201,8 @@ impl IsolationStatus {
     }
 }
 
-/// The Windows restricted-token enforcer, which leaves the network open (spec 3.2 §10 W5).
+/// The Windows restricted-token enforcer, which leaves the network open and does not confine
+/// reads (spec 3.2 §10 W5).
 const RESTRICTED_TOKEN: &str = "restricted-token";
 
 impl fmt::Display for IsolationStatus {
@@ -188,7 +210,7 @@ impl fmt::Display for IsolationStatus {
         match self {
             Self::Host => f.write_str("host (full user permissions, network)"),
             Self::OsSandbox { enforcer } if enforcer == RESTRICTED_TOKEN => {
-                write!(f, "OS sandbox ({enforcer}, network not restricted)")
+                write!(f, "OS sandbox ({enforcer}, network not restricted, reads not confined)")
             }
             Self::OsSandbox { enforcer } => write!(f, "OS sandbox ({enforcer}, no network)"),
             Self::Container { image } => write!(f, "container ({image})"),
@@ -345,10 +367,19 @@ fn auto_allow_refusal(launcher: &SandboxLauncher, root: &std::path::Path) -> Opt
     if launcher.config().network {
         return Some("the sandbox allows the network".to_string());
     }
+    // An unapproved command must not reach the network or read outside the workspace.
+    let mut open = Vec::new();
     if !launcher.denies_network() {
+        open.push("does not restrict the network");
+    }
+    if !launcher.confines_reads() {
+        open.push("does not confine reads to the workspace");
+    }
+    if !open.is_empty() {
         return Some(format!(
-            "the {} sandbox does not restrict the network",
-            adk_devtools::CommandLauncher::isolation(launcher)
+            "the {} sandbox {}",
+            adk_devtools::CommandLauncher::isolation(launcher),
+            open.join(" and ")
         ));
     }
     if let Err(reason) = launcher.nested_read_only_conformance() {

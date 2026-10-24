@@ -93,19 +93,74 @@ fn the_shell_cannot_write_outside_the_workspace() {
     assert!(!outside.join("outside.txt").exists(), "a file was written outside the workspace");
 }
 
+/// The user is a restricting SID (MSYS2's objects name it), so the token reads what the user
+/// may read; a path only `Administrators` and `SYSTEM` may read stays closed, since the token
+/// holds `Administrators` deny-only.
 #[test]
-fn the_shell_cannot_read_a_path_the_policy_does_not_grant() {
+fn the_shell_cannot_read_a_path_only_administrators_may_read() {
     let (_root, base, workspace) = layout();
-    let outside = private_dir(&base, "ungranted");
+    let outside = base.join("administrators");
+    std::fs::create_dir_all(&outside).expect("create the directory");
     std::fs::write(outside.join("note.txt"), "ungranted-content").expect("write the note");
+    let status = std::process::Command::new("icacls")
+        .arg(&outside)
+        .args([
+            "/inheritance:r",
+            "/grant:r",
+            "*S-1-5-32-544:(OI)(CI)F",
+            "*S-1-5-18:(OI)(CI)F",
+            "/T",
+        ])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("icacls runs");
+    assert!(status.success(), "icacls set the directory's ACL");
     std::fs::write(workspace.join("granted.txt"), "granted-content").expect("write granted");
 
-    run(&workspace, r"type granted.txt > control.txt & type ..\ungranted\note.txt > read.txt 2>&1");
+    run(
+        &workspace,
+        r"type granted.txt > control.txt & type ..\administrators\note.txt > read.txt 2>&1",
+    );
 
     let control = std::fs::read_to_string(workspace.join("control.txt")).expect("control.txt");
     assert_eq!(control.trim(), "granted-content", "the same command reads a granted file");
     let seen = std::fs::read_to_string(workspace.join("read.txt")).expect("read.txt");
     assert!(!seen.contains("ungranted-content"), "the ungranted file was read: {seen}");
+}
+
+/// Git for Windows' `bash` (the MSYS2 runtime) starts under the token and writes the workspace
+/// but not a directory beside it (spec 3.2 §10 W5).
+#[tokio::test]
+async fn git_bash_starts_under_the_token_and_writes_only_the_workspace() {
+    let bash = Path::new(r"C:\Program Files\Git\usr\bin\bash.exe");
+    if !bash.is_file() {
+        assert!(std::env::var_os("CI").is_none(), "Git for Windows is on every CI runner");
+        eprintln!("skipped: Git for Windows is not installed");
+        return;
+    }
+    let (_root, base, workspace) = layout();
+    let outside = private_dir(&base, "outside");
+    let policy = SandboxPolicyBuilder::new().allow_read_write(&workspace).build();
+    let escaped = outside.join("escaped.txt").display().to_string().replace('\\', "/");
+    let script = format!("echo inside > inside.txt; echo out > '{escaped}'; echo ran");
+    let mut child = WindowsEnforcer::new()
+        .spawn_contained(
+            &policy,
+            bash.as_os_str(),
+            &[OsString::from("-c"), OsString::from(script)],
+            &workspace,
+        )
+        .expect("bash starts");
+    drop(child.stdin.take());
+    let (mut stdout, mut stderr) = (String::new(), String::new());
+    child.stdout.take().expect("piped").read_to_string(&mut stdout).expect("stdout");
+    child.stderr.take().expect("piped").read_to_string(&mut stderr).expect("stderr");
+    let code = child.process.wait().await.expect("waited");
+
+    assert_eq!(stdout.trim(), "ran", "exit {code}, stderr {stderr}");
+    let inside = std::fs::read_to_string(workspace.join("inside.txt")).expect("inside.txt");
+    assert_eq!(inside.trim(), "inside");
+    assert!(!outside.join("escaped.txt").exists(), "a write landed outside the workspace");
 }
 
 /// A sandboxed shell starts child processes, which inherit the restricted token: the token's

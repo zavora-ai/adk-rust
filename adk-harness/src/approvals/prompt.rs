@@ -43,6 +43,28 @@ use crate::shell::IsolationStatus;
 pub trait ApprovalPrompter: fmt::Debug + Send + Sync {
     /// Shows `prompt` and returns the person's answer.
     async fn prompt(&self, prompt: ApprovalPrompt) -> Result<PromptAnswer>;
+
+    /// Shows a partition crossing (spec 3.2 §7.8) and returns the person's answer: "allow
+    /// this read of *X* for this run" (once, for a change), "deny", or "deny and block
+    /// crossings to *X* from this partition".
+    ///
+    /// The default shows the call through [`prompt`](Self::prompt) with a title naming the
+    /// crossing and maps the answer with
+    /// [`CrossingAnswer::from_prompt_answer`](crate::CrossingAnswer::from_prompt_answer).
+    ///
+    /// # Errors
+    ///
+    /// Returns the prompter's error.
+    #[cfg(feature = "kernel")]
+    async fn prompt_crossing(
+        &self,
+        prompt: crate::partition::CrossingPrompt,
+    ) -> Result<crate::partition::CrossingAnswer> {
+        let mut call = prompt.call;
+        call.rendered.title =
+            format!("Partition crossing into {}: {}", prompt.crossing.label(), call.rendered.title);
+        Ok(crate::partition::CrossingAnswer::from_prompt_answer(self.prompt(call).await?))
+    }
 }
 
 /// What a prompt shows (spec 3.1 §7.5, §9.2 I21).
@@ -351,6 +373,9 @@ pub struct PromptingConfirmationHandler {
     policy: HarnessPolicy,
     serial: Mutex<Turns>,
     per_turn_cap: usize,
+    /// The partition whose crossings are put to the person with their three answers.
+    #[cfg(feature = "kernel")]
+    partition: Option<crate::partition::PartitionWiring>,
 }
 
 impl fmt::Debug for PromptingConfirmationHandler {
@@ -380,7 +405,16 @@ impl PromptingConfirmationHandler {
             policy,
             serial: Mutex::new(Turns::default()),
             per_turn_cap: DEFAULT_PROMPTS_PER_TURN,
+            #[cfg(feature = "kernel")]
+            partition: None,
         }
+    }
+
+    /// Puts `wiring`'s crossings to the person with their three answers (spec 3.2 §7.8).
+    #[cfg(feature = "kernel")]
+    pub(crate) fn with_partition(mut self, wiring: crate::partition::PartitionWiring) -> Self {
+        self.partition = Some(wiring);
+        self
     }
 
     /// Shows `prompt` under this handler's serial mutex and per-turn cap, for a request
@@ -530,6 +564,56 @@ impl PromptingConfirmationHandler {
                 tokio::time::sleep(crate::tools::GOVERNANCE_POLL_INTERVAL).await;
             }
         };
+        // A crossing: allow (for the run, when it reads), deny, or deny and block the
+        // partition; never a remembered rule (spec 3.2 §7.8, K-I15).
+        #[cfg(feature = "kernel")]
+        if let Some((wiring, crossing)) = self
+            .partition
+            .as_ref()
+            .and_then(|wiring| wiring.crossing_of(request).map(|crossing| (wiring, crossing)))
+        {
+            let crossing_prompt = crate::partition::CrossingPrompt::new(prompt, crossing.clone());
+            let answer = tokio::select! {
+                answer = self.prompter.prompt_crossing(crossing_prompt) => answer?,
+                error = frozen => {
+                    tracing::warn!(tool.name = %request.tool_name, "execution was frozen while a person was deciding; the crossing does not run");
+                    return Err(error);
+                }
+            };
+            return Ok(match answer {
+                crate::partition::CrossingAnswer::Allow if !rendered.can_approve() => {
+                    refuse("the call was approved without showing its full arguments")
+                }
+                crate::partition::CrossingAnswer::Allow => ToolApproval::approve(),
+                crate::partition::CrossingAnswer::Deny { message } => {
+                    turn.deny_all = true;
+                    match message {
+                        Some(message) => refuse(message),
+                        None => ToolApproval::deny(),
+                    }
+                }
+                crate::partition::CrossingAnswer::DenyAndBlock => {
+                    turn.deny_all = true;
+                    let by = match &context.acting {
+                        Some(acting) => adk_core::audit_log::AuditActor::new(
+                            acting,
+                            context.invocation_id.clone(),
+                        ),
+                        None => adk_core::audit_log::AuditActor::default(),
+                    };
+                    wiring
+                        .policy
+                        .partitions()
+                        .block(crossing.from.clone(), crossing.to.clone(), by)
+                        .await
+                        .map_err(adk_core::AdkError::from)?;
+                    refuse(format!(
+                        "denied, and crossings to `{}` from partition `{}` are blocked",
+                        crossing.to, crossing.from
+                    ))
+                }
+            });
+        }
         let answer = tokio::select! {
             answer = self.prompter.prompt(prompt) => answer?,
             error = frozen => {

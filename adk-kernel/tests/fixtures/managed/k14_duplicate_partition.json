@@ -1,0 +1,7 @@
+{
+  "name": "K-14: A partition declared twice",
+  "description": "A partition id is declared once; a second `work` is refused.",
+  "agent_def": { "name": "assistant", "model": "claude-sonnet-5-5" },
+  "kernel": { "partitions": [{ "id": "work", "class": "work" }, { "id": "work", "class": "office" }] },
+  "expect": { "error_contains": ["adk.kernel", "partition `work` is declared twice"] }
+}

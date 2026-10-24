@@ -9,10 +9,11 @@
 //! | `rules` | Standing rules with no `expires_at`, granted longer ago than the period, each with a renewal ask |
 //! | `sleepers` | `Waiting` processes asleep or suspended for longer than the period |
 //! | `frozen` | Processes a freeze parked longer ago than the period |
+//! | `crossings` | Crossings out of the partition that recur, at least [`ReviewReport::CROSSING_THRESHOLD`] times in [`ReviewReport::CROSSING_WINDOW`] by source, target, resource and name (spec 3.2 §7.8), each with partition membership as the remedy |
 //!
 //! A report is published as a [`KernelEvent::Review`](crate::KernelEvent::Review) and written as
-//! one `kernel.review` audit record — ids and ages, no content. The review never revokes,
-//! suspends or kills anything. Recurring partition crossings join it in phase 3.
+//! one `kernel.review` audit record — ids, ages, resource names and counts, no content. The
+//! review never revokes, suspends or kills anything, and never waives a crossing.
 //!
 //! `adk-kernel` reads no harness type (§6 D-1), so it reads standing rules through a
 //! [`StandingRuleSource`] the harness implements over its rule store.
@@ -24,7 +25,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::partition::PartitionId;
+use crate::partition::{PartitionId, RecurringCrossing};
 
 /// When a standing rule was granted and whether it expires, as the review reads it (spec
 /// 3.2 §9.1).
@@ -131,9 +132,12 @@ pub struct AgedProcess {
 /// let report: ReviewReport = serde_json::from_value(serde_json::json!({
 ///     "partition": "default", "reviewPeriodMs": 7_776_000_000u64, "at": "2026-10-23T09:00:00Z",
 ///     "rules": [{ "id": "rule-1", "user": "alice", "ageMs": 9_000_000_000u64 }],
-///     "sleepers": [], "frozen": []
+///     "sleepers": [], "frozen": [],
+///     "crossings": [{ "from": "default", "to": "work", "resource": "driver",
+///                     "name": "calendar", "count": 9 }]
 /// })).unwrap();
 /// assert!(report.renewal_ask().unwrap().contains("rule-1"));
+/// assert!(report.crossing_remedies()[0].contains("move calendar into default"));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -155,12 +159,29 @@ pub struct ReviewReport {
     /// Processes a freeze parked longer ago than the period.
     #[serde(default)]
     pub frozen: Vec<AgedProcess>,
+    /// Crossings out of the partition that recur (spec 3.2 §7.8), most frequent first.
+    #[serde(default)]
+    pub crossings: Vec<RecurringCrossing>,
 }
 
 impl ReviewReport {
-    /// Whether nothing is older than the period.
+    /// How far back the review counts crossings.
+    pub const CROSSING_WINDOW: Duration = Duration::from_secs(7 * 86_400);
+
+    /// How many crossings of one resource in the window the review reports.
+    pub const CROSSING_THRESHOLD: usize = 5;
+
+    /// Whether nothing is older than the period and no crossing recurs.
     pub fn is_empty(&self) -> bool {
-        self.rules.is_empty() && self.sleepers.is_empty() && self.frozen.is_empty()
+        self.rules.is_empty()
+            && self.sleepers.is_empty()
+            && self.frozen.is_empty()
+            && self.crossings.is_empty()
+    }
+
+    /// One line per recurring crossing, with partition membership as the remedy.
+    pub fn crossing_remedies(&self) -> Vec<String> {
+        self.crossings.iter().map(RecurringCrossing::remedy).collect()
     }
 
     /// The renewal ask for the stale rules, `None` without any.

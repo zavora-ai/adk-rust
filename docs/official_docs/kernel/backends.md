@@ -1,10 +1,10 @@
 # Kernel Store Backends
 
-The kernel keeps its own state in four stores beside the run, schedule and governance
+The kernel keeps its own state in five stores beside the run, schedule and governance
 stores of `adk-session`: the process side table, the agenda, the mounted drivers with their
-parked calls, and the [`/proc`](proc.md) activity ledger (spec 3.2 §7.1, §13 Q8). Every
-store runs on every backend that holds the run, schedule and governance stores, and every
-backend passes the store's conformance suite.
+parked calls, the [`/proc`](proc.md) activity ledger, and the [partition](partitions.md)
+table with its crossing ledger (spec 3.2 §7.1, §7.8, §13 Q8). Every backend a store runs on
+passes the store's conformance suite.
 
 | Store | In-memory | SQLite (`sqlite`, default) | PostgreSQL (`postgres`) | Redis (`redis`) | MongoDB (`mongodb`, Alpha) | Firestore (`firestore`, Alpha) | Neo4j (`neo4j`, Alpha) |
 |---|---|---|---|---|---|---|---|
@@ -12,6 +12,10 @@ backend passes the store's conformance suite.
 | `AgendaStore` | `InMemoryAgendaStore` | `SqliteAgendaStore` | `PostgresAgendaStore` | `RedisAgendaStore` | `MongoAgendaStore` | `FirestoreAgendaStore` | `Neo4jAgendaStore` |
 | `DriverStore` (`drivers`) | `InMemoryDriverStore` | `SqliteDriverStore` | `PostgresDriverStore` | `RedisDriverStore` | `MongoDriverStore` | `FirestoreDriverStore` | `Neo4jDriverStore` |
 | `LedgerStore` (`proc`) | `InMemoryLedgerStore` | `SqliteLedgerStore` | `PostgresLedgerStore` | `RedisLedgerStore` | `MongoLedgerStore` | `FirestoreLedgerStore` | `Neo4jLedgerStore` |
+| `PartitionStore` | `InMemoryPartitionStore` | `SqlitePartitionStore` | `PostgresPartitionStore` | `RedisPartitionStore` | — | — | — |
+
+The partition store has no MongoDB, Firestore or Neo4j backend yet: a kernel built on those
+backends keeps its partition table in memory, or on SQLite, PostgreSQL or Redis.
 
 There is no file backend: no durable store is file-backed, and the CLI keeps its state in
 `harness.db`. Vertex AI holds sessions only, so it has no kernel backend.
@@ -29,16 +33,16 @@ standing rules, which have no MongoDB, Firestore or Neo4j backend.
 
 ## Alpha backends
 
-MongoDB, Firestore and Neo4j are **Alpha**: each implements the whole contract of every
-kernel store and carries its conformance suites, but stays Alpha until those suites pass
+MongoDB, Firestore and Neo4j are **Alpha**: each implements the whole contract of the
+process, agenda, driver and ledger stores and carries their conformance suites, but stays Alpha until those suites pass
 against a live server in CI, so its storage layout may still change in a minor release
 without a migration ([STABILITY.md](../../../STABILITY.md)). CI's nightly `durable-stores`
 job runs them against a MongoDB replica set and a standalone server, Neo4j 5 and the
 Firestore emulator.
 
 Each feature also turns on the same backend of `adk-session`'s run, schedule and governance
-stores, and every kernel store takes the client handle those stores take, so one client
-serves them all.
+stores, and each of those kernel stores takes the client handle those stores take, so one
+client serves them all.
 
 ```toml
 [dependencies]

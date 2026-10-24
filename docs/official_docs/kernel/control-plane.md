@@ -68,14 +68,16 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 | `GET /kernel/drivers` | The mounted [drivers](drivers.md) with their state | — | — |
 | `POST /kernel/drivers/{id}/mount` | `{"manifest": "<toml>"}` answers what the mount approves; with `"confirm": true` mounts it as the caller | Yes | `drivers.mount` |
 | `POST /kernel/drivers/{id}/{unmount,restart,reapprove}` | Unmount, restart, re-approve as the caller | Yes | `drivers.unmount`, `drivers.restart`, `drivers.reapprove` |
-| `/approvals…` | The approvals inbox, unchanged; the socket and the pipe serve it too | Per inbox rules | Inbox records |
 | `POST /kernel/pairing` | Issue a device pairing code ([pairing](pairing.md)) | Yes | `pairing.issue` |
 | `POST /kernel/pairing/claim` | Claim a code; needs no caller, the code is the credential | — | `pairing.claim` |
 | `GET /kernel/devices`, `POST /kernel/devices/{id}/revoke` | The paired devices; remove one | Yes | `devices.revoke` |
 | `POST /kernel/channels/pair`, `GET /kernel/channels`, `POST /kernel/channels/{id}/revoke` (feature `channels`) | Accept the code a chat account was sent; the paired and waiting accounts; remove one | Yes | `channels.pair`, `channels.revoke` |
 | `GET /kernel/proc/ledger?partition=&kind=&agent=&from=&to=&after=&limit=&format=` | A page of the activity ledger, or JSONL with `format=jsonl` ([`/proc`](proc.md)) | Yes | `proc.ledger` |
 | `GET /kernel/proc/baselines`, `GET /kernel/proc/observations?partition=&since=&limit=` | Each partition's last baseline pass; the observations | Yes | — |
-| `/approvals…` | The approvals inbox, unchanged; the socket serves it too | Per inbox rules | Inbox records |
+| `GET /kernel/partitions` | The [partition](partitions.md) table | — | — |
+| `POST /kernel/partitions` | Create or replace a partition; body: the partition record | Yes | `partition.put` |
+| `POST /kernel/partitions/{id}/mode` | Set a partition's mode; body `{"mode": "auto"}` | Yes | `partition.mode` |
+| `/approvals…` | The approvals inbox, unchanged; the socket and the pipe serve it too | Per inbox rules | Inbox records |
 
 On HTTP the server's own routes stay beside them: `/api/runs` (submissions land on the
 `interactive` queue), `/api/admin/freeze` (delegates to `Kernel::freeze` and reports

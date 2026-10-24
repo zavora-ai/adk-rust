@@ -132,6 +132,8 @@ pub struct HarnessAgentBuilder {
     kernel_agenda: adk_kernel::AgendaHandle,
     #[cfg(feature = "kernel")]
     kernel_ledger: adk_kernel::proc::LateLedgerSink,
+    #[cfg(feature = "kernel")]
+    partition: crate::partition::PartitionOptions,
     action_ledger: Option<Arc<dyn ActionLedger>>,
     confirmation_timeout: Duration,
     shell: ShellConfig,
@@ -236,6 +238,8 @@ impl HarnessAgentBuilder {
             kernel_agenda: adk_kernel::AgendaHandle::default(),
             #[cfg(feature = "kernel")]
             kernel_ledger: adk_kernel::proc::LateLedgerSink::new(),
+            #[cfg(feature = "kernel")]
+            partition: crate::partition::PartitionOptions::default(),
             action_ledger: None,
             confirmation_timeout: Duration::from_secs(300),
             shell: ShellConfig::default(),
@@ -478,6 +482,109 @@ impl HarnessAgentBuilder {
         self.operator_policy = Some(match self.operator_policy.take() {
             Some(existing) => Arc::new(adk_core::StrictestPolicy::new(vec![existing, policy])),
             None => policy,
+        });
+        self
+    }
+
+    /// Builds the harness of `partition` in `partitions`, the partition table its kernel
+    /// shares (spec 3.2 §7.8): the partition's mode as the harness mode, its class and
+    /// tenant on every agent's principal, its `memory_scope` as the project of every
+    /// long-term fact — preferences included — and of a working-notes root of its own, and
+    /// its `PartitionPolicy` composed with the operator policy, so a request reaching
+    /// another partition is denied unless the coordinator makes it, and then needs a
+    /// non-waivable approval (K-I15). The harness gets `partition_memory_search` and
+    /// `partition_memory_remember`, the crossings into other partitions' facts.
+    ///
+    /// Set the mode with this call, not before: it replaces the builder's mode.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let partitions = adk_kernel::Partitions::new(store);
+    /// let work = HarnessAgent::builder("harness")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .long_term_memory(LongTermMemoryConfig::default())
+    ///     .fact_store(shared_facts.clone())
+    ///     .partition(adk_kernel::Partition::new("work", "work"), partitions.clone())
+    ///     .build()?;
+    /// ```
+    #[cfg(feature = "kernel")]
+    pub fn partition(
+        mut self,
+        partition: adk_kernel::Partition,
+        partitions: adk_kernel::Partitions,
+    ) -> Self {
+        self.mode = partition.default_mode.into();
+        #[cfg(feature = "memory")]
+        {
+            self.long_term.project = Some(partition.memory_scope.clone());
+        }
+        self.partition.partition = Some((partition, partitions));
+        match self.partition.drivers.take() {
+            Some(drivers) => self.partition_drivers(&drivers),
+            None => self,
+        }
+    }
+
+    /// Makes this partition's harness the coordinator, the one agent that may reach
+    /// another partition, each crossing under a non-waivable approval (spec 3.2 §7.8, K-I15).
+    #[cfg(feature = "kernel")]
+    pub fn partition_coordinator(mut self) -> Self {
+        self.partition.coordinator = true;
+        self
+    }
+
+    /// Mounts `drivers` for this partition (spec 3.2 §7.7, §7.8), as
+    /// [`kernel_drivers`](Self::kernel_drivers) with the partition's id and its own `drivers`
+    /// list: the harness sees a driver only when its manifest lists the partition and the
+    /// partition lists its id, so a driver of another partition is invisible to it (K-I15).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let work = HarnessAgent::builder("harness")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .partition(adk_kernel::Partition::new("work", "work").with_driver("calendar"), partitions)
+    ///     .partition_drivers(&drivers)
+    ///     .build()?;
+    /// ```
+    ///
+    /// Call it before or after [`partition`](Self::partition); `build` fails when no
+    /// partition is set.
+    #[cfg(feature = "kernel")]
+    pub fn partition_drivers(mut self, drivers: &adk_kernel::drivers::DriverSupervisor) -> Self {
+        let Some((partition, _)) = &self.partition.partition else {
+            // Mounted once `partition` names the partition.
+            self.partition.drivers = Some(drivers.clone());
+            return self;
+        };
+        let (id, ids) = (partition.id.clone(), partition.drivers.clone());
+        self.kernel_drivers(drivers, &id, &ids)
+    }
+
+    /// Offers the coordinator `tool`, which reaches partition `to`'s `resource` named
+    /// `name` — a driver tool of that partition, or a tool reading its sessions — as the
+    /// crossing tool `<to>__<tool>` (spec 3.2 §7.8). `access` is
+    /// [`Read`](adk_kernel::CrossingAccess::Read) only for a tool that only reads, by its
+    /// effect class, never by its own hints; a read approved once holds for the rest of the
+    /// run, anything else is approved one call at a time.
+    #[cfg(feature = "kernel")]
+    pub fn partition_crossing_tool(
+        mut self,
+        tool: Arc<dyn Tool>,
+        to: impl Into<adk_kernel::PartitionId>,
+        resource: adk_kernel::CrossingResource,
+        access: adk_kernel::CrossingAccess,
+        name: impl Into<String>,
+    ) -> Self {
+        self.partition.crossings.push(crate::partition::CrossingSpec {
+            tool,
+            to: to.into(),
+            resource,
+            access,
+            name: name.into(),
         });
         self
     }
@@ -1373,6 +1480,9 @@ impl HarnessAgentBuilder {
             registry
                 .register(crate::packs::computer_use::COMPUTER_USE_EXECUTE, ToolKind::ComputerUse);
         }
+        // The partition's policy and crossing tools (spec 3.2 §7.8).
+        #[cfg(feature = "kernel")]
+        let partition = self.partition.wire(&self.name, &mut registry)?;
         // 4 (resolved here: member names register as harness classes, spec 3.1 §7.4).
         #[cfg(feature = "team")]
         let team_plan = {
@@ -1528,9 +1638,16 @@ impl HarnessAgentBuilder {
             self.kernel_agenda.clone(),
             mode_store.clone(),
             self.mode,
+            partition.as_ref().map(|wired| wired.wiring.partition.id.clone()),
         )));
         #[cfg(feature = "memory")]
         let memory_resolver = self.memory.clone().map(|config| {
+            // A partition keeps working notes of its own (spec 3.2 K-I15).
+            #[cfg(feature = "kernel")]
+            let config = match &partition {
+                Some(wired) => wired.wiring.scope_notes(config, workspace.root()),
+                None => config,
+            };
             let resolver =
                 crate::tools::MemoryResolver::new(config, workspace.root().to_path_buf());
             tools.push(Arc::new(crate::tools::MemoryReadTool::new(resolver.clone())));
@@ -1565,6 +1682,15 @@ impl HarnessAgentBuilder {
         if let Some(facts) = &facts {
             tools.push(Arc::new(crate::tools::MemorySearchTool::new(facts.clone())));
             tools.push(Arc::new(crate::tools::MemoryRememberTool::new(facts.clone())));
+        }
+        // Crossings into other partitions' facts, drivers and sessions (spec 3.2 §7.8).
+        #[cfg(all(feature = "kernel", feature = "memory"))]
+        if let (Some(wired), Some(facts)) = (&partition, &facts) {
+            tools.extend(wired.wiring.memory_tools(facts));
+        }
+        #[cfg(feature = "kernel")]
+        if let Some(wired) = &partition {
+            tools.extend(wired.crossings.iter().cloned());
         }
         // Governed web tools (spec 3.1 §7.20): `web_search` only with a provider.
         #[cfg(feature = "web")]
@@ -1795,11 +1921,17 @@ impl HarnessAgentBuilder {
             root_agent: self.name.clone(),
         });
         let prompting = match (&self.confirmation_handler, self.prompter) {
-            (None, Some(prompter)) => Some(Arc::new(PromptingConfirmationHandler::new(
-                prompter,
-                rules.clone(),
-                policy.clone(),
-            ))),
+            (None, Some(prompter)) => {
+                let handler =
+                    PromptingConfirmationHandler::new(prompter, rules.clone(), policy.clone());
+                // A crossing is put to the person with its three answers (spec 3.2 §7.8).
+                #[cfg(feature = "kernel")]
+                let handler = match &partition {
+                    Some(wired) => handler.with_partition(wired.wiring.clone()),
+                    None => handler,
+                };
+                Some(Arc::new(handler))
+            }
             _ => None,
         };
         let handler: Option<Arc<dyn ToolConfirmationHandler>> = match self.confirmation_handler {
@@ -2013,7 +2145,25 @@ impl HarnessAgentBuilder {
             builder = builder
                 .tool_confirmation_policy(ToolConfirmationPolicy::PerTool(non_waivable.clone()));
         }
+        // An invocation's approved crossing reads end with it (spec 3.2 §13 Q3); a durable
+        // run's end with the run, released by the kernel's worker.
+        #[cfg(feature = "kernel")]
+        if let Some(wired) = &partition {
+            builder = builder.after_callback(crate::partition::release_on_end(
+                wired.wiring.policy.clone(),
+                self.name.clone(),
+            ));
+        }
         let agent = builder.build()?;
+        // No run-wide approval answers a crossing (spec 3.2 K-I15).
+        #[cfg(feature = "kernel")]
+        let non_waivable: BTreeSet<String> = match &partition {
+            Some(wired) => non_waivable
+                .into_iter()
+                .chain(wired.wiring.non_waivable(&wired.crossings))
+                .collect(),
+            None => non_waivable,
+        };
         let coordinator: Arc<dyn adk_core::Agent> = Arc::new(agent);
         // 4. Members lowered to one TeamSpec with the coordinator (spec 3.1 §7.10).
         #[cfg(feature = "team")]
@@ -2113,6 +2263,13 @@ impl HarnessAgentBuilder {
             root,
             runtime: HarnessRuntime {
                 policy,
+                // The partition's policy makes the operator layer stricter (spec 3.2 K-I6).
+                #[cfg(feature = "kernel")]
+                operator_policy: match &partition {
+                    Some(wired) => Some(wired.wiring.operator_policy(self.operator_policy)),
+                    None => self.operator_policy,
+                },
+                #[cfg(not(feature = "kernel"))]
                 operator_policy: self.operator_policy,
                 mode_store,
                 standing_rules: rules,
@@ -2156,6 +2313,8 @@ impl HarnessAgentBuilder {
                 kernel_agenda: self.kernel_agenda,
                 #[cfg(feature = "kernel")]
                 kernel_ledger: self.kernel_ledger,
+                #[cfg(feature = "kernel")]
+                partition: partition.map(|wired| wired.wiring),
                 #[cfg(feature = "web")]
                 provider_web,
                 #[cfg(feature = "mcp")]
@@ -2289,6 +2448,9 @@ struct LongTermOptions {
     store: Option<Arc<dyn crate::facts::FactStore>>,
     index: Option<Arc<dyn crate::facts::FactIndex>>,
     embedder: Option<Arc<dyn adk_memory::EmbeddingProvider>>,
+    /// A partition's memory scope: the project of every fact, read and written, in place
+    /// of the workspace's (spec 3.2 §7.8).
+    project: Option<String>,
 }
 
 #[cfg(feature = "memory")]
@@ -2337,12 +2499,14 @@ impl LongTermOptions {
         );
         // Consolidation embeds with the default index's embedder (spec 3.2 §7.5).
         let embedder = if self.index.is_none() { self.embedder.clone() } else { None };
+        let project =
+            self.project.clone().unwrap_or_else(|| crate::memory::project_slug(workspace_root));
         Ok(Some(Arc::new(
             crate::facts::runtime::FactsRuntime::new(
                 config,
                 store,
                 index,
-                crate::memory::project_slug(workspace_root),
+                project,
                 agent.to_string(),
                 require_authenticated,
                 audit,
@@ -2351,7 +2515,8 @@ impl LongTermOptions {
                 mode_store,
                 default_mode,
             )
-            .with_embedder(embedder),
+            .with_embedder(embedder)
+            .confined(self.project.is_some()),
         )))
     }
 }
