@@ -11,10 +11,13 @@ use crate::shell::ShellIsolation;
 /// | Preset | Workspace | Prompt | Mode | Members | Shell |
 /// |---|---|---|---|---|---|
 /// | `Coding` | A code repository | [`CODING_SYSTEM_PROMPT`](crate::coding::CODING_SYSTEM_PROMPT) | Ask | None | Host |
-/// | `Personal` | A folder under the harness home ([`PersonalWorkspace`](crate::personal::PersonalWorkspace)) | [`PERSONAL_SYSTEM_PROMPT`](crate::personal::PERSONAL_SYSTEM_PROMPT) | Ask | None | Only in the OS sandbox or a container |
+/// | `Personal` | The caller's; [`PersonalAgent`](crate::personal::PersonalAgent) and `adk-rust --preset personal` use a folder under the harness home ([`PersonalWorkspace`](crate::personal::PersonalWorkspace)) | [`PERSONAL_SYSTEM_PROMPT`](crate::personal::PERSONAL_SYSTEM_PROMPT) | Ask | None | Only in the OS sandbox or a container, with no unsandboxed retry |
 ///
-/// Builder calls after `preset` override what it sets, so `adk-rust --mode plan --preset
-/// personal` starts in plan mode.
+/// A preset replaces what an earlier one set. Builder calls after `preset` override what it
+/// sets, so `adk-rust --mode plan --preset personal` starts in plan mode; the personal
+/// preset's shell is the exception, and no later call gives it a host shell. Long-term
+/// memory is not part of a preset: [`PersonalAgent`](crate::personal::PersonalAgent) turns
+/// it on, and so does the CLI wherever it keeps memory.
 ///
 /// # Example
 ///
@@ -46,6 +49,7 @@ impl Preset {
 
     /// Lowers the preset onto `builder` (spec 3.1 §7.19, spec 3.3 §10 H1).
     pub(crate) fn apply(self, builder: HarnessAgentBuilder) -> HarnessAgentBuilder {
+        let builder = builder.clear_preset();
         match self {
             Self::Coding => builder
                 .base_prompt(crate::coding::CODING_SYSTEM_PROMPT)
@@ -57,7 +61,7 @@ impl Preset {
                 .description(crate::personal::PERSONAL_DESCRIPTION)
                 .mode(HarnessMode::Ask)
                 .without_default_members()
-                .isolated_shell_only(),
+                .isolated_shell_only(true),
         }
     }
 }

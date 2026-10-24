@@ -10,9 +10,10 @@
 //! | Answer | The call's result and error reach the model with every occurrence of the secret replaced by [`TAKE_OVER_PLACEHOLDER`] | The scrubbed result, as any other |
 //!
 //! The value never enters the approval inbox, a session event, the action ledger, an audit
-//! record or a log line. A take over is a live exchange: the call waits in flight for the
-//! harness's confirmation timeout and is declined when it passes, because a one-time code
-//! does not outlive a night of quiet time.
+//! record or a log line, and never reaches the harness's shell, whose commands the model
+//! writes. A take over is a live exchange: the call waits in flight for the harness's
+//! confirmation timeout, or until shortly before its own tool timeout, and is declined when
+//! that passes, because a one-time code does not outlive a night of quiet time.
 //!
 //! # Example
 //!
@@ -53,10 +54,11 @@ use std::time::{Duration, Instant};
 use adk_core::principal::SubjectRef;
 use adk_core::{
     ActingContext, AdkError, ApprovalAction, ApprovalDecision, ApprovalPolicy, ApprovalRequest,
-    ApprovalRisk, ApprovalScope, ApprovalService, ApprovalState, ApproverSelector,
-    CredentialBroker, CredentialSecret, ErrorCategory, ErrorComponent, LlmRequest, ReadonlyContext,
-    Result, RevocationScope, ScopedToken, Tool, ToolConfirmationRequest, ToolContext, ToolEffect,
-    Toolset, Url,
+    ApprovalRisk, ApprovalScope, ApprovalService, ApprovalState, ApproverSelector, Artifacts,
+    CallbackContext, Content, CredentialBroker, CredentialSecret, ErrorCategory, ErrorComponent,
+    Event, EventActions, LlmRequest, Memory, MemoryEntry, ReadonlyContext, Result, RevocationScope,
+    RunConfig, ScopedToken, Session, SharedState, State, Tool, ToolConfirmationRequest,
+    ToolContext, ToolEffect, ToolOutcome, Toolset, Url,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -67,8 +69,9 @@ use zeroize::Zeroizing;
 
 use crate::audit::HarnessAudit;
 
-/// The tool name of every take-over inbox entry (spec 3.3 §10 H2). No tool can carry it: a
-/// provider's function names allow no `:`.
+/// The tool name of every take-over inbox entry (spec 3.3 §10 H2). It is reserved: the
+/// harness's policy denies a call to any tool that carries it, so such a call never reaches
+/// the inbox, and [`TakeOverRequest::from_request`] also checks the entry's shape.
 pub const TAKE_OVER_TOOL: &str = "harness:take-over";
 
 /// What the model sees wherever the secret would appear in a call's result or error
@@ -182,7 +185,8 @@ impl TakeOverAsk {
         Self { heading: heading.into(), resource, kind: SecretKind::Other, timeout: None }
     }
 
-    /// Asks for a one-time code for `resource`.
+    /// Asks for a one-time code for `resource`. The code reaches the tool without the spaces
+    /// or dashes the person may type it with ("731 905" as `731905`).
     pub fn one_time_code(heading: impl Into<String>, resource: Url) -> Self {
         Self::new(heading, resource).with_kind(SecretKind::OneTimeCode)
     }
@@ -320,11 +324,22 @@ pub struct TakeOverRequest {
 
 impl TakeOverRequest {
     /// The take over `request` is, or `None` for any other inbox entry.
+    ///
+    /// A take over carries [`TAKE_OVER_TOOL`], the `takeOver` marker, the person as its
+    /// requester and only Approve and Reject; a held call is never read as one, whatever
+    /// its name and arguments.
     pub fn from_request(request: &ApprovalRequest) -> Option<Self> {
-        if request.tool_name != TAKE_OVER_TOOL {
+        let only_take_over_actions = request.allowed_actions.len() == 2
+            && request.allowed_actions.contains(&ApprovalAction::Approve)
+            && request.allowed_actions.contains(&ApprovalAction::Reject);
+        let args = &request.args_redacted;
+        if request.tool_name != TAKE_OVER_TOOL
+            || args.get("takeOver") != Some(&Value::Bool(true))
+            || !only_take_over_actions
+            || request.requester.as_ref() != Some(&SubjectRef::human(&request.scope.user_id))
+        {
             return None;
         }
-        let args = &request.args_redacted;
         let text = |key: &str| args.get(key).and_then(Value::as_str).map(str::to_string);
         Some(Self {
             request_id: request.id.clone(),
@@ -394,6 +409,10 @@ impl std::fmt::Debug for TakeOver {
 struct CallScope {
     ctx: Arc<dyn ToolContext>,
     tool: String,
+    /// The harness's shell, which never receives a typed secret: the command is the model's.
+    shell: bool,
+    /// When the call's own timeout drops it; a take over ends, recorded, before then.
+    deadline: Option<Instant>,
     secrets: Arc<Mutex<Vec<Zeroizing<String>>>>,
 }
 
@@ -401,12 +420,18 @@ tokio::task_local! {
     static CALL: CallScope;
 }
 
-/// Removes the waiter, and cancels a still-pending entry, when the waiting call ends or is
-/// dropped.
+/// How long before the call's own timeout a take over gives up, so it ends declined and
+/// recorded rather than dropped mid-wait.
+const CALL_DEADLINE_MARGIN: Duration = Duration::from_secs(2);
+
+/// Removes the waiter when the waiting call ends or is dropped; a call dropped mid-wait
+/// cancels its still-pending entry and records that the take over ended.
 struct WaitGuard {
     inner: Arc<Inner>,
     id: String,
     service: Arc<dyn ApprovalService>,
+    /// The audit trail and the record's fields, for a call dropped mid-wait.
+    ended: Option<(HarnessAudit, Value)>,
     settled: bool,
 }
 
@@ -418,9 +443,15 @@ impl Drop for WaitGuard {
         if !self.settled
             && let Ok(handle) = tokio::runtime::Handle::try_current()
         {
-            let (service, id) = (self.service.clone(), self.id.clone());
+            let (service, id, ended) = (self.service.clone(), self.id.clone(), self.ended.take());
             handle.spawn(async move {
                 let _ = service.cancel(&id, Some("the tool call ended".to_string())).await;
+                if let Some((audit, mut fields)) = ended {
+                    fields["reason"] = json!("the tool call ended");
+                    if let Err(error) = audit.record(TAKE_OVER_ENDED, fields).await {
+                        tracing::warn!(error = %error, approval.id = %id, "take over end not recorded");
+                    }
+                }
             });
         }
     }
@@ -455,19 +486,26 @@ impl TakeOver {
     }
 
     /// Asks the person for a secret on behalf of the tool call `ctx` (spec 3.3 §10 H2), and
-    /// waits until they type it, decline, or the harness's confirmation timeout passes.
+    /// waits until they type it, decline, or the wait ends: at the harness's confirmation
+    /// timeout, or shortly before the call's own tool timeout when that comes first, so an
+    /// unanswered take over always ends declined and recorded. Raise the tool timeout
+    /// ([`HarnessAgentBuilder::tool_timeout`](crate::HarnessAgentBuilder::tool_timeout) or
+    /// the tool's `timeout_override`) to give the person longer.
     ///
     /// The returned token's secret is for this call only: present it with
     /// [`ScopedToken::authorize_for`] to the resource asked about. Every occurrence of it in
-    /// the call's result or error is replaced by [`TAKE_OVER_PLACEHOLDER`] before the model,
-    /// the session or the action ledger see them.
+    /// the call's result or error — as typed or as a tool normalizes it (trimmed, without
+    /// spaces or dashes, in either case, or a code's value without its leading zeros);
+    /// percent- or form-encoded, JSON-escaped, or as a number — is replaced by
+    /// [`TAKE_OVER_PLACEHOLDER`] before the model, the session or the action ledger see them,
+    /// and progress or events the call streams once the secret has arrived are withheld.
     ///
     /// # Errors
     ///
     /// | Code | When |
     /// |---|---|
-    /// | `harness.take_over.unavailable` | Called outside a call the harness runs, without `HarnessAgentBuilder::take_over`, or without an approval inbox |
-    /// | `harness.take_over.declined` | The person declined, the entry was cancelled or expired, the timeout passed, or the call was cancelled |
+    /// | `harness.take_over.unavailable` | Called outside a call the harness runs, from the harness's shell, without `HarnessAgentBuilder::take_over`, or without an approval inbox |
+    /// | `harness.take_over.declined` | The person declined, the entry was cancelled or expired, the wait ended, or the call was cancelled |
     /// | `governance.frozen` | Stop all froze the harness while the call waited |
     pub async fn ask(&self, ctx: &dyn ToolContext, ask: TakeOverAsk) -> Result<ScopedToken> {
         let scope = CALL.try_with(Clone::clone).map_err(|_| {
@@ -485,6 +523,14 @@ impl TakeOver {
     }
 
     async fn ask_in(&self, scope: &CallScope, ask: TakeOverAsk) -> Result<ScopedToken> {
+        // The shell runs a command the model wrote, which could print or transform the
+        // secret past any scrub (spec 3.3 §10 H2).
+        if scope.shell {
+            return Err(unavailable(
+                "take over never hands a secret to the shell: the model writes its commands; \
+                 give the shell a credential broker that issues short-lived tokens instead",
+            ));
+        }
         let binding = self
             .inner
             .binding
@@ -501,7 +547,13 @@ impl TakeOver {
             )
         })?;
         let ctx = scope.ctx.as_ref();
-        let timeout = ask.timeout.map_or(binding.timeout, |timeout| timeout.min(binding.timeout));
+        let mut timeout =
+            ask.timeout.map_or(binding.timeout, |timeout| timeout.min(binding.timeout));
+        if let Some(deadline) = scope.deadline {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let margin = CALL_DEADLINE_MARGIN.min(left / 4);
+            timeout = timeout.min(left.saturating_sub(margin));
+        }
         let acting = ctx.acting_context();
         let resource = ask.resource_label();
         let shown = json!({
@@ -544,6 +596,7 @@ impl TakeOver {
             inner: self.inner.clone(),
             id: id.clone(),
             service: service.clone(),
+            ended: None,
             settled: false,
         };
         if let Err(submit) = service.submit(request).await {
@@ -569,6 +622,7 @@ impl TakeOver {
         {
             return Err(record);
         }
+        guard.ended = audit.clone().map(|audit| (audit, fields(json!({}))));
         tracing::info!(
             approval.id = %id,
             tool.name = %scope.tool,
@@ -592,9 +646,14 @@ impl TakeOver {
                 if let Ok(mut secrets) = scope.secrets.lock() {
                     secrets.push(delivered.secret.clone());
                 }
+                // A code shown as "731 905" reaches the tool as the code; a password as typed.
+                let value = match ask.kind {
+                    SecretKind::OneTimeCode => compact(&delivered.secret),
+                    SecretKind::Password | SecretKind::Other => delivered.secret.clone(),
+                };
                 let token = ScopedToken::new(
                     acting.agent.id.clone(),
-                    delivered.secret.as_str(),
+                    value.as_str(),
                     ask.resource.clone(),
                     Vec::new(),
                 )
@@ -618,8 +677,10 @@ impl TakeOver {
                 (
                     "timed out".to_string(),
                     Err(declined(format!(
-                        "the person did not type the secret within {} s",
-                        timeout.as_secs()
+                        "the person did not type the secret within {:?}",
+                        Duration::from_millis(
+                            u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)
+                        )
                     ))),
                 )
             }
@@ -663,6 +724,7 @@ impl TakeOver {
                         Err(_) => Ended::Gone,
                     };
                 }
+                () = tokio::time::sleep_until(deadline.into()) => return Ended::TimedOut,
                 _ = poll.tick() => {
                     if let Some(config) = ctx.run_config()
                         && let Err(frozen) = config.check_governance()
@@ -823,7 +885,9 @@ impl TakeOver {
 }
 
 /// The person is the issuer: a token is what they type (spec 3.3 §10 H2). Only a call the
-/// harness runs may ask, for the agent running it.
+/// harness runs may ask, for the agent running it, and never the harness's shell: as the
+/// broker of [`HarnessAgentBuilder::credentials`](crate::HarnessAgentBuilder::credentials)
+/// it refuses, and `bash` runs without a token.
 #[async_trait]
 impl CredentialBroker for TakeOver {
     async fn token_for(
@@ -856,37 +920,166 @@ impl CredentialBroker for TakeOver {
 
 /// `text` with every form of every secret replaced by the placeholder, or `None` when none
 /// occurs.
+///
+/// A form spells each character of the secret as typed (in either ASCII case),
+/// percent-encoded in either case, as `+` for a space (form encoding) or JSON-escaped, so the
+/// secret is found however a URL, a form body or a serialized string carries it. The forms
+/// are those of [`forms`]: the secret as typed and as a tool may normalize it.
 fn scrub_text(text: &str, secrets: &[Zeroizing<String>]) -> Option<String> {
     let mut out: Option<String> = None;
-    for secret in secrets {
-        let encoded = Zeroizing::new(percent_encode(secret));
-        for form in [secret.as_str(), encoded.as_str()] {
-            let current = out.as_deref().unwrap_or(text);
-            if current.contains(form) {
-                out = Some(current.replace(form, TAKE_OVER_PLACEHOLDER));
+    for form in forms(secrets) {
+        let current = out.as_deref().unwrap_or(text);
+        let mut scrubbed = String::new();
+        let (mut copied, mut at, mut found) = (0, 0, false);
+        while at < current.len() {
+            if current[at..].starts_with(TAKE_OVER_PLACEHOLDER) {
+                at += TAKE_OVER_PLACEHOLDER.len();
+                continue;
+            }
+            match spelled_at(current, at, &form.text).filter(|end| {
+                // A code's value is found only as a whole number: `7123` in "code 7123",
+                // never in "17123".
+                let alone = |ch: Option<char>| !ch.is_some_and(char::is_alphanumeric);
+                !form.whole
+                    || (alone(current[..at].chars().next_back())
+                        && alone(current[*end..].chars().next()))
+            }) {
+                Some(end) => {
+                    scrubbed.push_str(&current[copied..at]);
+                    scrubbed.push_str(TAKE_OVER_PLACEHOLDER);
+                    (copied, at, found) = (end, end, true);
+                }
+                None => at += current[at..].chars().next().map_or(1, char::len_utf8),
             }
         }
-    }
-    out
-}
-
-/// RFC 3986 percent-encoding of everything but the unreserved characters.
-fn percent_encode(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
+        if found {
+            scrubbed.push_str(&current[copied..]);
+            out = Some(scrubbed);
         }
     }
     out
 }
 
-/// `value` with the secrets replaced in every string and key.
+/// A form of a secret the scrub looks for.
+struct Form {
+    text: Zeroizing<String>,
+    /// Found only where no letter or digit adjoins it.
+    whole: bool,
+}
+
+/// `secret` without whitespace or dashes: a one-time code as the tool receives it.
+fn compact(secret: &str) -> Zeroizing<String> {
+    Zeroizing::new(secret.chars().filter(|ch| !ch.is_whitespace() && *ch != '-').collect())
+}
+
+/// Every form of `secrets`, longest first: each as typed, trimmed, and without whitespace or
+/// dashes, as a tool normalizes "731 905"; and for a code of digits, its value, which drops
+/// leading zeros ("007123" read and printed as "7123"), as a whole number.
+fn forms(secrets: &[Zeroizing<String>]) -> Vec<Form> {
+    let mut forms: Vec<Form> = Vec::new();
+    let mut add = |text: &str, whole: bool| {
+        if !text.is_empty() && !forms.iter().any(|form| form.text.as_str() == text) {
+            forms.push(Form { text: Zeroizing::new(text.to_string()), whole });
+        }
+    };
+    for secret in secrets {
+        add(secret, false);
+        add(secret.trim(), false);
+        let compact = compact(secret);
+        add(&compact, false);
+        if compact.bytes().all(|byte| byte.is_ascii_digit()) {
+            let value = match compact.trim_start_matches('0') {
+                "" => "0",
+                value => value,
+            };
+            add(value, true);
+        }
+    }
+    forms.sort_by_key(|form| std::cmp::Reverse(form.text.len()));
+    forms
+}
+
+/// Where `secret` ends when `text` spells it, in any of its forms, from byte `start`.
+///
+/// A character can be spelled more than one way (`\\` is a backslash as typed, or the
+/// start of its JSON escape), so every spelling is tried; each (secret, text) position is
+/// tried once.
+fn spelled_at(text: &str, start: usize, secret: &str) -> Option<usize> {
+    // Most positions fail on the first character, before anything is allocated.
+    spellings(&text[start..], secret.chars().next()?).next()?;
+    let mut tried = std::collections::HashSet::new();
+    let mut stack = vec![(0, start)];
+    while let Some((done, at)) = stack.pop() {
+        let Some(ch) = secret[done..].chars().next() else {
+            return Some(at);
+        };
+        if !tried.insert((done, at)) {
+            continue;
+        }
+        let Some(rest) = text.get(at..) else {
+            continue;
+        };
+        let next: Vec<usize> = spellings(rest, ch).collect();
+        // Reversed, so the plainest spelling is tried first.
+        stack.extend(next.into_iter().rev().map(|len| (done + ch.len_utf8(), at + len)));
+    }
+    None
+}
+
+/// The lengths of every spelling of `ch` at the start of `rest`: as typed in either ASCII
+/// case, `+` for a space, percent-encoded in either case, or JSON-escaped.
+fn spellings(rest: &str, ch: char) -> impl Iterator<Item = usize> {
+    let mut utf8 = [0u8; 4];
+    let typed = ch.encode_utf8(&mut utf8);
+    let raw = rest.as_bytes();
+    // `prefix` then hex digits, read as a number; no sign, unlike `from_str_radix`.
+    let escape = |at: usize, prefix: &str, digits: usize| -> Option<u32> {
+        let start = at + prefix.len();
+        let hex = raw.get(start..start + digits)?;
+        (raw.get(at..start) == Some(prefix.as_bytes()))
+            .then(|| hex.iter().try_fold(0, |n, d| Some(n * 16 + char::from(*d).to_digit(16)?)))
+            .flatten()
+    };
+    let as_typed =
+        rest.chars().next().filter(|first| first.eq_ignore_ascii_case(&ch)).map(char::len_utf8);
+    let plus = (ch == ' ' && rest.starts_with('+')).then_some(1);
+    let percent = typed
+        .bytes()
+        .enumerate()
+        .all(|(i, byte)| escape(i * 3, "%", 2) == Some(u32::from(byte)))
+        .then_some(typed.len() * 3);
+    let short = match ch {
+        '"' => Some("\\\""),
+        '\\' => Some("\\\\"),
+        '/' => Some("\\/"),
+        _ => None,
+    }
+    .filter(|short| rest.starts_with(short))
+    .map(str::len);
+    let mut units = [0u16; 2];
+    let units = ch.encode_utf16(&mut units);
+    let unicode = units
+        .iter()
+        .enumerate()
+        .all(|(i, unit)| escape(i * 6, "\\u", 4) == Some(u32::from(*unit)))
+        .then_some(units.len() * 6);
+    [as_typed, plus, percent, short, unicode].into_iter().flatten()
+}
+
+/// Whether a number spells a secret in any of its forms: "731905" holds "731 905", and 7123
+/// is the code "007123" read as a number.
+fn number_holds_secret(number: &serde_json::Number, secrets: &[Zeroizing<String>]) -> bool {
+    scrub_text(&number.to_string(), secrets).is_some()
+}
+
+/// `value` with the secrets replaced in every string, key and number; a number that holds
+/// one becomes the placeholder.
 fn scrub_value(value: Value, secrets: &[Zeroizing<String>]) -> Value {
     match value {
         Value::String(text) => Value::String(scrub_text(&text, secrets).unwrap_or(text)),
+        Value::Number(number) if number_holds_secret(&number, secrets) => {
+            Value::String(TAKE_OVER_PLACEHOLDER.to_string())
+        }
         Value::Array(items) => {
             Value::Array(items.into_iter().map(|item| scrub_value(item, secrets)).collect())
         }
@@ -898,7 +1091,7 @@ fn scrub_value(value: Value, secrets: &[Zeroizing<String>]) -> Value {
                 })
                 .collect(),
         ),
-        other => other,
+        other @ (Value::Null | Value::Bool(_) | Value::Number(_)) => other,
     }
 }
 
@@ -933,11 +1126,154 @@ fn scrub_error(mut error: AdkError, secrets: &[Zeroizing<String>]) -> AdkError {
 /// A tool whose calls may take over, with the secret scrubbed from what each returns.
 pub(crate) struct ScopedTool {
     inner: Arc<dyn Tool>,
+    /// The harness's tool timeout, which the agent applies unless the tool overrides it.
+    tool_timeout: Duration,
+    shell: bool,
 }
 
 impl ScopedTool {
-    pub(crate) fn wrap(tool: Arc<dyn Tool>) -> Arc<dyn Tool> {
-        Arc::new(Self { inner: tool })
+    pub(crate) fn wrap(tool: Arc<dyn Tool>, tool_timeout: Duration) -> Arc<dyn Tool> {
+        Arc::new(Self { inner: tool, tool_timeout, shell: false })
+    }
+
+    /// The harness's shell: its calls can never take over.
+    pub(crate) fn wrap_shell(tool: Arc<dyn Tool>, tool_timeout: Duration) -> Arc<dyn Tool> {
+        Arc::new(Self { inner: tool, tool_timeout, shell: true })
+    }
+}
+
+/// The context a scoped call runs with: progress and events it streams once a secret has
+/// reached it are withheld, since a scrub of a transformed copy cannot be guaranteed.
+struct ScopedContext {
+    inner: Arc<dyn ToolContext>,
+    secrets: Arc<Mutex<Vec<Zeroizing<String>>>>,
+    tool: String,
+}
+
+impl ScopedContext {
+    fn holds_secret(&self) -> bool {
+        let holds = self.secrets.lock().map_or(true, |secrets| !secrets.is_empty());
+        if holds {
+            tracing::debug!(tool.name = %self.tool, "streamed output withheld: a typed secret is in the call");
+        }
+        holds
+    }
+}
+
+impl ReadonlyContext for ScopedContext {
+    fn invocation_id(&self) -> &str {
+        self.inner.invocation_id()
+    }
+    fn agent_name(&self) -> &str {
+        self.inner.agent_name()
+    }
+    fn user_id(&self) -> &str {
+        self.inner.user_id()
+    }
+    fn app_name(&self) -> &str {
+        self.inner.app_name()
+    }
+    fn session_id(&self) -> &str {
+        self.inner.session_id()
+    }
+    fn branch(&self) -> &str {
+        self.inner.branch()
+    }
+    fn user_content(&self) -> &Content {
+        self.inner.user_content()
+    }
+    fn acting_context(&self) -> ActingContext {
+        self.inner.acting_context()
+    }
+    fn is_authenticated(&self) -> bool {
+        self.inner.is_authenticated()
+    }
+    fn state(&self) -> Option<&dyn State> {
+        ReadonlyContext::state(self.inner.as_ref())
+    }
+}
+
+#[async_trait]
+impl CallbackContext for ScopedContext {
+    fn artifacts(&self) -> Option<Arc<dyn Artifacts>> {
+        self.inner.artifacts()
+    }
+    fn tool_outcome(&self) -> Option<ToolOutcome> {
+        self.inner.tool_outcome()
+    }
+    fn tool_name(&self) -> Option<&str> {
+        self.inner.tool_name()
+    }
+    fn tool_input(&self) -> Option<&Value> {
+        self.inner.tool_input()
+    }
+    fn shared_state(&self) -> Option<Arc<SharedState>> {
+        self.inner.shared_state()
+    }
+}
+
+#[async_trait]
+impl ToolContext for ScopedContext {
+    fn function_call_id(&self) -> &str {
+        self.inner.function_call_id()
+    }
+    fn idempotency_key(&self) -> String {
+        self.inner.idempotency_key()
+    }
+    fn actions(&self) -> EventActions {
+        self.inner.actions()
+    }
+    fn set_actions(&self, actions: EventActions) {
+        self.inner.set_actions(actions);
+    }
+    async fn search_memory(&self, query: &str) -> Result<Vec<MemoryEntry>> {
+        self.inner.search_memory(query).await
+    }
+    fn memory(&self) -> Option<Arc<dyn Memory>> {
+        self.inner.memory()
+    }
+    fn session(&self) -> Option<&dyn Session> {
+        self.inner.session()
+    }
+    fn run_config(&self) -> Option<&RunConfig> {
+        self.inner.run_config()
+    }
+    fn is_cancelled(&self) -> bool {
+        self.inner.is_cancelled()
+    }
+    fn request_metadata(&self) -> HashMap<String, Value> {
+        self.inner.request_metadata()
+    }
+    fn delegation_depth(&self) -> u32 {
+        self.inner.delegation_depth()
+    }
+    fn max_delegation_depth(&self) -> Option<u32> {
+        self.inner.max_delegation_depth()
+    }
+    fn orchestration_root_invocation_id(&self) -> &str {
+        self.inner.orchestration_root_invocation_id()
+    }
+    fn orchestration_edge_id(&self) -> Option<&str> {
+        self.inner.orchestration_edge_id()
+    }
+    async fn emit_event(&self, event: Event) {
+        if !self.holds_secret() {
+            self.inner.emit_event(event).await;
+        }
+    }
+    async fn emit_progress(&self, stream: &str, chunk: &str) {
+        if !self.holds_secret() {
+            self.inner.emit_progress(stream, chunk).await;
+        }
+    }
+    fn user_scopes(&self) -> Vec<String> {
+        self.inner.user_scopes()
+    }
+    async fn get_secret(&self, name: &str) -> Result<Option<String>> {
+        self.inner.get_secret(name).await
+    }
+    async fn get_secret_for_purpose(&self, name: &str, purpose: &str) -> Result<Option<String>> {
+        self.inner.get_secret_for_purpose(name, purpose).await
     }
 }
 
@@ -994,12 +1330,21 @@ impl Tool for ScopedTool {
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let secrets = Arc::new(Mutex::new(Vec::new()));
+        // The agent's timeout for this call started just before it reached this wrapper.
+        let limit = self.inner.timeout_override().unwrap_or(Some(self.tool_timeout));
         let scope = CallScope {
             ctx: ctx.clone(),
             tool: self.inner.name().to_string(),
+            shell: self.shell,
+            deadline: limit.map(|limit| Instant::now() + limit),
             secrets: secrets.clone(),
         };
-        let result = CALL.scope(scope, self.inner.execute(ctx, args)).await;
+        let scoped: Arc<dyn ToolContext> = Arc::new(ScopedContext {
+            inner: ctx,
+            secrets: secrets.clone(),
+            tool: scope.tool.clone(),
+        });
+        let result = CALL.scope(scope, self.inner.execute(scoped, args)).await;
         let secrets = std::mem::take(&mut *secrets.lock().unwrap_or_else(|e| e.into_inner()));
         if secrets.is_empty() {
             return result;
@@ -1014,11 +1359,12 @@ impl Tool for ScopedTool {
 /// A toolset whose tools are [`ScopedTool`]s.
 pub(crate) struct ScopedToolset {
     inner: Arc<dyn Toolset>,
+    tool_timeout: Duration,
 }
 
 impl ScopedToolset {
-    pub(crate) fn wrap(toolset: Arc<dyn Toolset>) -> Arc<dyn Toolset> {
-        Arc::new(Self { inner: toolset })
+    pub(crate) fn wrap(toolset: Arc<dyn Toolset>, tool_timeout: Duration) -> Arc<dyn Toolset> {
+        Arc::new(Self { inner: toolset, tool_timeout })
     }
 }
 
@@ -1029,7 +1375,14 @@ impl Toolset for ScopedToolset {
     }
 
     async fn tools(&self, ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
-        Ok(self.inner.tools(ctx).await?.into_iter().map(ScopedTool::wrap).collect())
+        let tool_timeout = self.tool_timeout;
+        Ok(self
+            .inner
+            .tools(ctx)
+            .await?
+            .into_iter()
+            .map(|tool| ScopedTool::wrap(tool, tool_timeout))
+            .collect())
     }
 
     async fn process_llm_request(
@@ -1081,6 +1434,96 @@ mod tests {
         assert!(!format!("{scrubbed:?}").contains("731905"), "{scrubbed:?}");
     }
 
+    /// Review finding 1: a number whose text is the secret, contains it, or equals its value
+    /// is scrubbed; other numbers stay.
+    #[test]
+    fn a_number_equal_to_the_secret_is_scrubbed() {
+        let value = json!({ "otp": 731905, "lead": 7123, "zeros": 0, "count": 7, "big": 1731905 });
+        let scrubbed = scrub_value(value, &secrets(&["731905", "007123", "0000"]));
+        assert_eq!(scrubbed["otp"], TAKE_OVER_PLACEHOLDER);
+        assert_eq!(scrubbed["lead"], TAKE_OVER_PLACEHOLDER, "leading zeros dropped by a parse");
+        assert_eq!(scrubbed["zeros"], TAKE_OVER_PLACEHOLDER, "a code of zeros reads as 0");
+        assert_eq!(scrubbed["big"], TAKE_OVER_PLACEHOLDER, "the digits appear in it");
+        assert_eq!(scrubbed["count"], 7);
+        let mut failed =
+            AdkError::new(ErrorComponent::Tool, ErrorCategory::InvalidInput, "x", "refused");
+        failed.details.metadata.insert("otp".into(), json!(731905));
+        assert!(!format!("{:?}", scrub_error(failed, &secrets(&["731905"]))).contains("731905"));
+    }
+
+    /// Review finding 7: the form-urlencoded, lowercase-hex and JSON-escaped forms are
+    /// scrubbed too.
+    #[test]
+    fn encoded_forms_of_the_secret_are_scrubbed() {
+        let typed = secrets(&["correct horse~battery*", "pa\"ss\\word@1"]);
+        for text in [
+            "password=correct+horse%7Ebattery*",
+            "password=correct%20horse~battery%2A",
+            "password=correct%20horse%7ebattery%2a",
+            r#"{"password":"pa\"ss\\word@1"}"#,
+            "p=pa%22ss%5cword%401",
+        ] {
+            let scrubbed = scrub_text(text, &typed);
+            assert!(
+                scrubbed.as_deref().is_some_and(|s| s.contains(TAKE_OVER_PLACEHOLDER)),
+                "{text}: {scrubbed:?}"
+            );
+        }
+    }
+
+    /// Review of #1045, findings 1, 2 and 7: the secret as a tool normalizes it — without
+    /// separators, trimmed, upper-cased, or a code read as a number — is scrubbed in text and
+    /// numbers; a code's value only as a whole number.
+    #[test]
+    fn a_normalized_secret_is_scrubbed() {
+        for (typed, text) in [
+            ("731 905", "code 731905 accepted"),
+            ("731-905", "code 731905 accepted"),
+            ("hunter22 ", "password hunter22, accepted"),
+            ("ab12-cd34", "token AB12CD34"),
+            ("007123", "the bank refused code 7123"),
+            ("007123", "otp=7123&next=1"),
+        ] {
+            let scrubbed = scrub_text(text, &secrets(&[typed]));
+            assert!(
+                scrubbed.as_deref().is_some_and(|s| s.contains(TAKE_OVER_PLACEHOLDER)),
+                "{typed:?} in {text}: {scrubbed:?}"
+            );
+        }
+        assert_eq!(scrub_text("order 17123 and 71234", &secrets(&["007123"])), None);
+        let value = json!({ "otp": 731905, "lead": 7123, "text": "7123", "other": 17123 });
+        let scrubbed = scrub_value(value, &secrets(&["731 905", "007123"]));
+        assert_eq!(
+            scrubbed,
+            json!({
+                "otp": TAKE_OVER_PLACEHOLDER,
+                "lead": TAKE_OVER_PLACEHOLDER,
+                "text": TAKE_OVER_PLACEHOLDER,
+                "other": 17123,
+            })
+        );
+    }
+
+    /// Review finding 6: an inbox entry the harness did not raise is never read as a take
+    /// over, whatever its tool name and arguments.
+    #[test]
+    fn a_held_call_named_like_take_over_is_not_one() {
+        let forged = json!({
+            "takeOver": true,
+            "tool": "bank_sign_in",
+            "secret": "password",
+            "resource": "https://bank.example.com/login",
+        });
+        let call = ToolConfirmationRequest::new(TAKE_OVER_TOOL, forged);
+        let request = ApprovalRequest::new(
+            "apr_1",
+            ApprovalScope::new("a", "u", "s"),
+            &call,
+            ApprovalPolicy::new([ApproverSelector::human("u")]),
+        );
+        assert!(TakeOverRequest::from_request(&request).is_none(), "every action allowed");
+    }
+
     #[test]
     fn a_take_over_entry_reads_back() {
         let call = ToolConfirmationRequest::new(TAKE_OVER_TOOL, json!({}));
@@ -1091,6 +1534,8 @@ mod tests {
             ApprovalPolicy::new([ApproverSelector::human("u")]),
         )
         .with_summary("Type the code your bank sent")
+        .with_allowed_actions([ApprovalAction::Approve, ApprovalAction::Reject])
+        .with_requester(SubjectRef::human("u"))
         .with_redacted_args(json!({
             "takeOver": true,
             "tool": "bank_sign_in",
