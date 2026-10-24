@@ -46,6 +46,8 @@ struct Up {
     home: PathBuf,
     workspace: PathBuf,
     port: u16,
+    /// Whether long-term memory is on.
+    memory: bool,
 }
 
 impl Up {
@@ -73,7 +75,7 @@ impl Up {
         seed(home.clone()).await?;
         std::fs::create_dir_all(&workspace)?;
         std::fs::write(workspace.join("README.md"), "a project\n")?;
-        Self::boot(bin, provider, model, mode, root, home, workspace).await
+        Self::boot(bin, provider, model, mode, memory, root).await
     }
 
     /// Stops this kernel with `SIGTERM` and starts it again on the same home.
@@ -84,7 +86,10 @@ impl Up {
         let (root, home, workspace) = unsafe {
             (std::ptr::read(&this.root), std::ptr::read(&this.home), std::ptr::read(&this.workspace))
         };
-        Self::boot(bin, provider, model, mode, root, home, workspace).await
+        // `boot` derives both paths from the root again.
+        drop((home, workspace));
+        let memory = this.memory;
+        Self::boot(bin, provider, model, mode, memory, root).await
     }
 
     async fn boot(
@@ -92,10 +97,10 @@ impl Up {
         provider: &str,
         model: &str,
         mode: &str,
+        memory: bool,
         root: tempfile::TempDir,
-        home: PathBuf,
-        workspace: PathBuf,
     ) -> Result<Self> {
+        let (home, workspace) = (root.path().join("kernel"), root.path().join("ws"));
         let port = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
         let log = std::fs::OpenOptions::new()
             .create(true)
@@ -115,7 +120,7 @@ impl Up {
         isolate(&mut command, root.path());
         let child =
             command.spawn().with_context(|| format!("failed to start {}", bin.display()))?;
-        let mut up = Self { child, root, home, workspace, port };
+        let mut up = Self { child, root, home, workspace, port, memory };
         let started = Instant::now();
         loop {
             if let Some(status) = up.child.try_wait()? {

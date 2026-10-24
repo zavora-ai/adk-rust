@@ -57,7 +57,7 @@ adk-rust memory undo <tick-id>
 | Processes | Each agent job is a process you list (`ps`), watch (`top`), suspend, resume, re-prioritise (`nice`) or `kill` |
 | Wake sources | What wakes a sleeping process: a file change, a cron schedule, a webhook, an approval being decided, another process finishing |
 | Scheduler | Three queues — your typed turns first, then background work, then maintenance. Quotas, a daily budget and quiet hours bound background work, and a typed turn takes a busy slot from it |
-| Agenda | Where an agent's proposed follow-ups wait for your decision. Proposals from the consolidation tick need a person in every mode, including `auto` |
+| Agenda | Where an agent's proposed follow-ups wait for your decision. Proposals from the consolidation tick, and the questions `/proc` asks about your routine, need a person in every mode, including `auto` |
 | Kill switch | `freeze` parks running processes on every replica sharing the store; `unfreeze` resumes exactly the ones it parked |
 | Control plane | How terminals and apps reach the kernel: an owner-only local socket, plus an HTTP API on loopback, or beyond it with authentication |
 | Self-observation (`/proc`) | A content-free ledger of what your agents did — kinds, durations and hashed subjects, never what they read or wrote. Once a day the kernel compares your routine with its last four weeks and, when it changes for long enough, asks you about it in plain words (`adk-rust proc`) |
