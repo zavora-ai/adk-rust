@@ -148,6 +148,9 @@ struct AgentExtras {
     /// apply without a server's authentication.
     #[cfg(feature = "tui")]
     local_console: bool,
+    /// For the coordinator: the partitions whose drivers it reaches as crossings (spec 3.2
+    /// §7.8, K-I15).
+    driver_crossings: Vec<adk_kernel::PartitionId>,
 }
 
 /// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
@@ -513,7 +516,8 @@ impl Setup {
         }
         match (extras.partition, extras.drivers) {
             // A partition's harness: its mode, identity, memory scope, crossing policy and
-            // the drivers its own list names (spec 3.2 §7.7, §7.8).
+            // the drivers its own list names (spec 3.2 §7.7, §7.8); the coordinator's also
+            // reaches the other partitions' drivers, each call a crossing (K-I15).
             (Some((partition, table, coordinator)), drivers) => {
                 builder = builder.partition(partition, table);
                 if coordinator {
@@ -521,6 +525,10 @@ impl Setup {
                 }
                 if let Some(drivers) = drivers {
                     builder = builder.partition_drivers(&drivers);
+                    if coordinator && !extras.driver_crossings.is_empty() {
+                        builder =
+                            builder.partition_driver_crossings(&drivers, extras.driver_crossings);
+                    }
                 }
             }
             (None, Some(drivers)) => {

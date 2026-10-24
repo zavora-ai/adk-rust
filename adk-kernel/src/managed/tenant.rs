@@ -4,11 +4,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
-use adk_agent::ambient::CronTrigger;
 use adk_core::audit_log::{AuditActor, AuditTrail};
+use adk_core::schedule::MissedFirePolicy;
 use adk_core::{
-    ActionLedger, Agent, GovernanceControl, NewRun, OnConflict, RunConfig, ScheduleStore,
-    SpendLedger,
+    ActionLedger, Agent, ApprovalAction, ApprovalPolicy, ApprovalRequest, ApprovalRisk,
+    ApprovalScope, ApprovalState, ApproverSelector, GovernanceControl, NewRun, OnConflict,
+    RunConfig, ScheduleStore, SpendLedger, SubjectKind, SubjectRef, ToolConfirmationRequest,
 };
 use adk_managed::state_store::SessionRecord;
 use adk_managed::types::{ManagedAgentDef, RuntimeError};
@@ -17,18 +18,22 @@ use adk_runner::Runner;
 use adk_session::SessionService;
 use async_trait::async_trait;
 use serde_json::json;
+use sha2::Digest as _;
 
 use super::def::{KernelDef, WakeOverlap, WakeSetDef};
 use crate::agenda::{AgendaHandle, AgendaStore, ProactivityPolicy};
 use crate::consolidation::Consolidator;
 use crate::control::ControlPlaneConfig;
+use crate::drivers::{DriverManifest, DriverProposal, DriverRecord, DriverSupervisor};
 use crate::error::{KernelError, Result};
 use crate::kernel::{Kernel, KernelConfig, KernelState};
 use crate::partition::{Partition, PartitionId, PartitionStore, Partitions};
 use crate::stores::{
-    InMemoryAgendaStore, InMemoryPartitionStore, InMemoryProcessStore, ProcessStore,
+    InMemoryAgendaStore, InMemoryCronWatermarkStore, InMemoryPartitionStore, InMemoryProcessStore,
+    ProcessStore,
 };
 use crate::wake::{CronWakeSource, Trigger, Wake};
+use crate::watermark::{CronWatermarkStore, SourceWatermark};
 
 /// One kernel over one tenant's [`ManagedStores`]: the managed form of the kernel (spec 3.2
 /// §7.13, §10 M1).
@@ -44,10 +49,11 @@ use crate::wake::{CronWakeSource, Trigger, Wake};
 /// | Run store | [`ManagedStores::runs`]: the kernel's queues (`interactive`, `background`, `maintenance`) beside the sessions' per-session queues |
 /// | Approvals | [`ManagedStores::approval_service`], whose run store wakes the parked process, and [`ManagedStores::decisions`] as each run's approval store |
 /// | Targets | one per hosted definition, named like it: the agent the tenant's resolver builds |
-/// | Triggers | the definitions' wake sets ([`KernelDef::wake_sets`]); a cron source per expression |
+/// | Triggers | the definitions' wake sets ([`KernelDef::wake_sets`]); a cron source per expression, its watermark in the tenant's [`CronWatermarkStore`], so ticks missed while no replica of the tenant ran fire once each as the wake sets' `missed` policies pick them (spec 3.2 §7.4) |
 /// | Proactivity | the hosted definitions' [`KernelDef::proactivity`], one policy per tenant; else the operator's with the consolidation tick off (§13 Q1); the tick runs where the builder registered a consolidator |
 /// | Agenda | the tenant's agenda store, and [`agenda_handle`](Self::agenda_handle) rebound to each kernel built |
 /// | Partitions | the tenant's partition table ([`partitions`](Self::partitions)) holding the definitions' [`KernelDef::partitions`], each with the tenant as its tenant; with a [`PartitionAgentResolver`], one agent per partition — one harness per partition — as `<definition>@<partition>`, bound to its partition and acting with its class and tenant (spec 3.2 §7.8) |
+/// | Drivers | the tenant's own [`DriverSupervisor`] ([`TenantKernelBuilder::drivers`]), its drivers under a home of the tenant's own: each driver a definition's partition mounts is proposed in the tenant's approval inbox, mounted when a person approves it ([`apply_driver_decisions`](Self::apply_driver_decisions)), its tools' declarations pinned at the first listing, and served to that partition's harness only (spec 3.2 §7.7, §7.8, K-I13) |
 /// | App name | the tenant: the `ManagedOwner::app_name` its sessions are created under |
 /// | Kill switch | its own `GovernanceControl`, unless the builder is given one |
 /// | Control plane | none of its own; mount `control::router(kernel)` on the host's server to serve one |
@@ -111,6 +117,11 @@ struct TenantInner {
     consolidators: BTreeMap<PartitionId, Arc<dyn Consolidator>>,
     partitions: Partitions,
     partition_resolver: Option<Arc<dyn PartitionAgentResolver>>,
+    watermarks: Arc<dyn CronWatermarkStore>,
+    drivers: Option<DriverSupervisor>,
+    driver_approvers: ApprovalPolicy,
+    /// Applies inbox decisions on driver mounts while the tenant's kernel runs.
+    driver_decisions: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     hosting: tokio::sync::Mutex<Hosting>,
 }
 
@@ -168,6 +179,9 @@ impl TenantKernel {
             consolidators: BTreeMap::new(),
             partition_store: None,
             partition_resolver: None,
+            watermark_store: None,
+            drivers: None,
+            driver_approvers: None,
         }
     }
 
@@ -195,6 +209,75 @@ impl TenantKernel {
     /// its tenant, and the crossing ledger (spec 3.2 §7.8).
     pub fn partitions(&self) -> &Partitions {
         &self.inner.partitions
+    }
+
+    /// The tenant's cron watermarks: where each cron expression of its wake sets left off
+    /// (spec 3.2 §7.4).
+    pub fn watermark_store(&self) -> &Arc<dyn CronWatermarkStore> {
+        &self.inner.watermarks
+    }
+
+    /// The tenant's driver supervisor, when the builder was given one (spec 3.2 §7.7).
+    pub fn drivers(&self) -> Option<&DriverSupervisor> {
+        self.inner.drivers.as_ref()
+    }
+
+    /// Mounts every driver a hosted definition's partition mounts whose proposal a person
+    /// approved in the tenant's approval inbox, and returns the ids mounted (spec 3.2 §7.7,
+    /// K-I13). While the tenant's kernel runs it does this every scheduler tick; a host may
+    /// call it to apply a decision at once.
+    ///
+    /// The person whose approval completed the request is recorded as the mount's approver
+    /// (`kernel.driver.mounted`). A decision by anyone but a person is ignored, and a
+    /// rejected proposal mounts nothing. A driver already mounted as proposed is left as it
+    /// is, its pins included.
+    ///
+    /// # Errors
+    ///
+    /// Returns the approval service's or the driver store's error.
+    pub async fn apply_driver_decisions(&self) -> Result<Vec<String>> {
+        let (Some(drivers), Some(service)) =
+            (&self.inner.drivers, &self.inner.stores.approval_service)
+        else {
+            return Ok(Vec::new());
+        };
+        let manifests = {
+            let hosting = self.inner.hosting.lock().await;
+            served_drivers(&hosting.hosted)
+        };
+        let mut mounted = Vec::new();
+        for (definition, manifest) in manifests {
+            if mounted_as_proposed(drivers, &manifest) {
+                continue;
+            }
+            let Some(request) = service.get(&driver_request_id(&manifest)).await? else {
+                continue;
+            };
+            if request.state != ApprovalState::Approved {
+                continue;
+            }
+            let Some(decision) = request.decisions.last() else { continue };
+            if decision.approver.kind != SubjectKind::Human {
+                tracing::warn!(
+                    tenant = %self.inner.tenant,
+                    driver.id = %manifest.id,
+                    approver = %decision.approver.id,
+                    "a driver mount approved by someone other than a person was ignored"
+                );
+                continue;
+            }
+            let id = manifest.id.clone();
+            drivers.mount(manifest, &decision.approver.id).await?;
+            tracing::info!(
+                tenant = %self.inner.tenant,
+                definition = %definition,
+                driver.id = %id,
+                by = %decision.approver.id,
+                "driver mounted on a person's approval"
+            );
+            mounted.push(id);
+        }
+        Ok(mounted)
     }
 
     /// The handle of the tenant kernel's agenda, rebound to every kernel the tenant builds:
@@ -320,7 +403,9 @@ impl TenantKernel {
             if let Some((other, _)) = other {
                 return Err(KernelError::Config {
                     reason: format!(
-                        "definition '{}' sets a proactivity policy other than definition                          '{other}''s, and tenant `{}` has one kernel with one policy: set the                          same policy in both, or leave it out of one",
+                        "definition '{}' sets a proactivity policy other than definition \
+                         '{other}''s, and tenant `{}` has one kernel with one policy: set the \
+                         same policy in both, or leave it out of one",
                         def.name, self.inner.tenant
                     ),
                 });
@@ -351,15 +436,7 @@ impl TenantKernel {
                  agent runs in the default partition (TenantKernelBuilder::partition_resolver)"
             );
         }
-        if !kernel.drivers.is_empty() {
-            tracing::warn!(
-                tenant = %self.inner.tenant,
-                definition = %def.name,
-                drivers = kernel.drivers.len(),
-                "the definition's driver manifests are recorded; no driver is mounted without a \
-                 person's approval"
-            );
-        }
+        self.propose_drivers(&def.name, &kernel).await?;
         // The tenant's partition table holds the definition's partitions, the tenant theirs.
         let mut partitions = BTreeMap::new();
         for declared in &kernel.partitions {
@@ -401,6 +478,8 @@ impl TenantKernel {
         let kernel = self.build(&hosting.hosted)?;
         kernel.start().await?;
         hosting.kernel = Some(kernel);
+        drop(hosting);
+        self.watch_driver_decisions();
         Ok(())
     }
 
@@ -411,10 +490,124 @@ impl TenantKernel {
     ///
     /// Returns the kernel's stop error; it is stopped regardless.
     pub async fn stop(&self) -> Result<()> {
+        if let Some(task) =
+            self.inner.driver_decisions.lock().unwrap_or_else(|e| e.into_inner()).take()
+        {
+            task.abort();
+        }
         let kernel = self.inner.hosting.lock().await.kernel.take();
         match kernel {
             Some(kernel) => kernel.stop().await,
             None => Ok(()),
+        }
+    }
+
+    /// Proposes each driver of `kernel` that a declared partition mounts, unless it is
+    /// mounted as proposed: an approval request in the tenant's inbox showing what a person
+    /// approves — the command line, the partitions, the effect classes, the sandbox and the
+    /// secrets it names (spec 3.2 §7.7, K-I13). Nothing runs before a person approves it.
+    async fn propose_drivers(&self, definition: &str, kernel: &KernelDef) -> Result<()> {
+        if kernel.drivers.is_empty() {
+            return Ok(());
+        }
+        let served = served_by_partitions(kernel);
+        for manifest in &kernel.drivers {
+            if !served.contains(&manifest.id) {
+                tracing::warn!(
+                    tenant = %self.inner.tenant,
+                    definition = %definition,
+                    driver.id = %manifest.id,
+                    "the driver is recorded and not proposed: no partition of the definition \
+                     mounts it (list it in a partition's `drivers`, and the partition in its \
+                     manifest's `partitions`)"
+                );
+            }
+        }
+        let Some(drivers) = &self.inner.drivers else {
+            tracing::warn!(
+                tenant = %self.inner.tenant,
+                definition = %definition,
+                drivers = served.len(),
+                "the definition's driver manifests are recorded; the tenant has no driver \
+                 supervisor to mount them on (TenantKernelBuilder::drivers)"
+            );
+            return Ok(());
+        };
+        let Some(service) = &self.inner.stores.approval_service else {
+            tracing::warn!(
+                tenant = %self.inner.tenant,
+                definition = %definition,
+                "the definition's drivers are recorded; the tenant has no approval service to \
+                 ask a person to mount them"
+            );
+            return Ok(());
+        };
+        for manifest in kernel.drivers.iter().filter(|manifest| served.contains(&manifest.id)) {
+            if mounted_as_proposed(drivers, manifest) {
+                continue;
+            }
+            let proposal = DriverProposal::of(manifest);
+            let args = serde_json::to_value(&proposal)?;
+            let scope = ApprovalScope::new(
+                self.inner.tenant.clone(),
+                super::DEFAULT_WAKE_USER,
+                format!("kernel-driver-{}", manifest.id),
+            );
+            let call = ToolConfirmationRequest::new(DRIVER_MOUNT_TOOL_NAME, args.clone());
+            let request = ApprovalRequest::new(
+                driver_request_id(manifest),
+                scope,
+                &call,
+                self.inner.driver_approvers.clone(),
+            )
+            .with_redacted_args(args)
+            .with_requester(SubjectRef::service(format!("definition:{definition}")))
+            .with_summary(format!(
+                "Mount driver `{}` for definition `{definition}`: {} (partitions {}; sandbox {})",
+                manifest.id,
+                proposal.command_line,
+                proposal
+                    .partitions
+                    .iter()
+                    .map(|partition| partition.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                proposal.sandbox.as_str(),
+            ))
+            .with_risk(ApprovalRisk::High)
+            .with_allowed_actions([ApprovalAction::Approve, ApprovalAction::Reject]);
+            service.submit(request).await?;
+            tracing::info!(
+                tenant = %self.inner.tenant,
+                definition = %definition,
+                driver.id = %manifest.id,
+                "driver mount proposed in the tenant's approval inbox"
+            );
+        }
+        Ok(())
+    }
+
+    /// Applies driver decisions every scheduler tick while the tenant's kernel runs.
+    fn watch_driver_decisions(&self) {
+        if self.inner.drivers.is_none() || self.inner.stores.approval_service.is_none() {
+            return;
+        }
+        let tenant = self.clone();
+        let tick = self.inner.config.scheduler_tick.max(std::time::Duration::from_millis(10));
+        let task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tick);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                if let Err(error) = tenant.apply_driver_decisions().await {
+                    tracing::debug!(tenant = %tenant.inner.tenant, error = %error, "could not apply driver decisions this tick");
+                }
+            }
+        });
+        if let Some(previous) =
+            self.inner.driver_decisions.lock().unwrap_or_else(|e| e.into_inner()).replace(task)
+        {
+            previous.abort();
         }
     }
 
@@ -469,7 +662,10 @@ impl TenantKernel {
         if let Some(trail) = &inner.audit {
             builder = builder.audit(trail.clone());
         }
-        let mut crons = BTreeSet::new();
+        if let Some(drivers) = &inner.drivers {
+            builder = builder.drivers(drivers.clone());
+        }
+        let mut crons: BTreeMap<String, MissedFirePolicy> = BTreeMap::new();
         for (target, hosted) in hosted {
             match hosted.kernel.primary_partition().filter(|_| !hosted.partitions.is_empty()) {
                 // One agent per partition, each bound to its partition; the primary's also
@@ -504,15 +700,20 @@ impl TenantKernel {
                     builder = builder.trigger(trigger);
                 }
                 for wake in &set.any_of {
-                    if let Wake::Cron { expr, .. } = wake {
-                        crons.insert(expr.clone());
+                    if let Wake::Cron { expr, missed } = wake {
+                        let widest = crons.get(expr).map_or(*missed, |held| widest(*held, *missed));
+                        crons.insert(expr.clone(), widest);
                     }
                 }
             }
         }
-        // One source per expression: every trigger on it matches each tick once.
-        for expr in crons {
-            let source = CronWakeSource::new(cron_source_name(&expr), CronTrigger::new(&expr)?);
+        // One source per expression: every trigger on it matches each tick once. Its
+        // watermark is the tenant's, so the ticks missed while no replica ran fire once each,
+        // as the widest policy on the expression plans them and each wake's own policy picks.
+        for (expr, missed) in crons {
+            let name = cron_source_name(&expr);
+            let watermark = SourceWatermark::new(Arc::clone(&inner.watermarks), name.clone());
+            let source = CronWakeSource::watermarked(name, &expr, missed, Arc::new(watermark))?;
             builder = builder.wake_source(Arc::new(source));
         }
         builder.build()
@@ -614,6 +815,101 @@ fn cron_source_name(expr: &str) -> String {
     expr.split_whitespace().collect::<Vec<_>>().join("_")
 }
 
+/// The policy that plans every missed tick either `a` or `b` picks: `catchUp` of the larger
+/// count, else `fireOnce`, else `skip` (spec 3.2 §7.4). `catchUp(1)` fires what `fireOnce`
+/// does, the latest however late.
+fn widest(a: MissedFirePolicy, b: MissedFirePolicy) -> MissedFirePolicy {
+    let fires = |policy: MissedFirePolicy| match policy {
+        MissedFirePolicy::Skip => 0,
+        MissedFirePolicy::CatchUp(count) => count,
+        // `fireOnce`, and a policy this release does not know: the latest, however late.
+        _ => 1,
+    };
+    match fires(a).max(fires(b)) {
+        0 => MissedFirePolicy::Skip,
+        1 => MissedFirePolicy::FireOnce,
+        count => MissedFirePolicy::CatchUp(count),
+    }
+}
+
+/// The approval-inbox tool name of a driver mount a hosted definition asks for (spec 3.2
+/// §7.7): the proposal waits in the tenant's inbox as an `ApprovalRequest` with this
+/// `tool_name`, the `DriverProposal` as `args_redacted` and `allowed_actions = [Approve,
+/// Reject]`.
+pub const DRIVER_MOUNT_TOOL_NAME: &str = "kernel:driver.mount";
+
+/// The approver group of a driver mount unless [`TenantKernelBuilder::driver_approvers`]
+/// names others: the control plane's operators.
+const DRIVER_APPROVER_GROUP: &str = "operator";
+
+/// The ids of `kernel`'s drivers that a declared partition mounts: listed in the partition's
+/// `drivers`, with the partition in the manifest's `partitions`.
+fn served_by_partitions(kernel: &KernelDef) -> Vec<String> {
+    kernel
+        .drivers
+        .iter()
+        .filter(|manifest| {
+            kernel.partitions.iter().any(|partition| {
+                partition.drivers.contains(&manifest.id)
+                    && manifest.partitions.contains(&partition.id)
+            })
+        })
+        .map(|manifest| manifest.id.clone())
+        .collect()
+}
+
+/// Every driver the hosted definitions' partitions mount, with its definition.
+fn served_drivers(hosted: &BTreeMap<String, Hosted>) -> Vec<(String, DriverManifest)> {
+    hosted
+        .iter()
+        .flat_map(|(definition, hosted)| {
+            let served = served_by_partitions(&hosted.kernel);
+            hosted
+                .kernel
+                .drivers
+                .iter()
+                .filter(move |manifest| served.contains(&manifest.id))
+                .map(|manifest| (definition.clone(), manifest.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Whether `manifest` is mounted with what its proposal shows: the same command, partitions,
+/// effect classes, sandbox, secrets and lifecycle.
+fn mounted_as_proposed(drivers: &DriverSupervisor, manifest: &DriverManifest) -> bool {
+    drivers.record(&manifest.id).is_some_and(|record: DriverRecord| {
+        DriverProposal::of(&record.manifest) == DriverProposal::of(manifest)
+    })
+}
+
+/// The inbox request id of mounting `manifest`: `kernel-driver-<id>-<digest>`, the digest of
+/// what the proposal shows, so a changed manifest is asked again.
+fn driver_request_id(manifest: &DriverManifest) -> String {
+    let proposal =
+        serde_json::to_vec(&DriverProposal::of(manifest)).expect("a proposal always serializes");
+    let digest = sha2::Sha256::digest(&proposal);
+    let hex: String = digest[..8].iter().map(|byte| format!("{byte:02x}")).collect();
+    let id: String = manifest
+        .id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    format!("kernel-driver-{id}-{hex}")
+}
+
+/// The directory name of `tenant` under the kernel home: its letters, digits, `-` and `_`,
+/// and a digest of the whole name, so two tenants never share one.
+fn tenant_dir(tenant: &str) -> String {
+    let readable: String = tenant
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let digest = sha2::Sha256::digest(tenant.as_bytes());
+    let hex: String = digest[..4].iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("{readable}-{hex}")
+}
+
 /// Builds `TenantKernel` (spec 3.2 §7.13, §10 M1).
 pub struct TenantKernelBuilder {
     tenant: String,
@@ -632,6 +928,9 @@ pub struct TenantKernelBuilder {
     consolidators: BTreeMap<PartitionId, Arc<dyn Consolidator>>,
     partition_store: Option<Arc<dyn PartitionStore>>,
     partition_resolver: Option<Arc<dyn PartitionAgentResolver>>,
+    watermark_store: Option<Arc<dyn CronWatermarkStore>>,
+    drivers: Option<DriverSupervisor>,
+    driver_approvers: Option<ApprovalPolicy>,
 }
 
 impl fmt::Debug for TenantKernelBuilder {
@@ -751,6 +1050,37 @@ impl TenantKernelBuilder {
         self
     }
 
+    /// Sets where the tenant's cron sources keep their watermarks, the tenant's own (spec 3.2
+    /// §7.4, §7.13): on a durable store, a tick missed while no replica of the tenant ran
+    /// fires once each as the wake set's `missed` policy picks it, when the next replica
+    /// starts. Defaults to in memory, which keeps nothing across a restart.
+    #[must_use]
+    pub fn watermark_store(mut self, store: Arc<dyn CronWatermarkStore>) -> Self {
+        self.watermark_store = Some(store);
+        self
+    }
+
+    /// Mounts the drivers the tenant's definitions ask for on `drivers`, the tenant's own
+    /// supervisor over the tenant's own driver store (spec 3.2 §7.7, §7.13). Each driver a
+    /// definition's partition mounts is proposed in the tenant's approval inbox and mounted
+    /// when a person approves it; its tools reach that partition's harness only. Its drivers
+    /// run as the tenant's app under `<kernel home>/tenants/<tenant>` unless the
+    /// supervisor's builder set an app name or a home. Without one, a definition's driver
+    /// manifests are recorded and none is mounted.
+    #[must_use]
+    pub fn drivers(mut self, drivers: DriverSupervisor) -> Self {
+        self.drivers = Some(drivers);
+        self
+    }
+
+    /// Who approves a driver mount: by default anyone in the `operator` group, as the
+    /// control plane's operators are. Only a person's approval mounts a driver.
+    #[must_use]
+    pub fn driver_approvers(mut self, approvers: ApprovalPolicy) -> Self {
+        self.driver_approvers = Some(approvers);
+        self
+    }
+
     /// Builds the tenant's kernel. Nothing runs until [`TenantKernel::start`].
     ///
     /// # Errors
@@ -769,6 +1099,12 @@ impl TenantKernelBuilder {
         config.control = ControlPlaneConfig::default().without_socket();
         if let Some(governance) = self.governance {
             config.governance = governance;
+        }
+        if let Some(drivers) = &self.drivers {
+            drivers.host_defaults(
+                &self.tenant,
+                &config.home.join("tenants").join(tenant_dir(&self.tenant)),
+            );
         }
         let mut partitions = Partitions::new(
             self.partition_store.unwrap_or_else(|| Arc::new(InMemoryPartitionStore::new())),
@@ -793,6 +1129,14 @@ impl TenantKernelBuilder {
                 consolidators: self.consolidators,
                 partitions,
                 partition_resolver: self.partition_resolver,
+                watermarks: self
+                    .watermark_store
+                    .unwrap_or_else(|| Arc::new(InMemoryCronWatermarkStore::new())),
+                drivers: self.drivers,
+                driver_approvers: self.driver_approvers.unwrap_or_else(|| {
+                    ApprovalPolicy::new([ApproverSelector::group(DRIVER_APPROVER_GROUP)])
+                }),
+                driver_decisions: std::sync::Mutex::new(None),
                 hosting: tokio::sync::Mutex::new(Hosting::default()),
             }),
         })
@@ -862,6 +1206,7 @@ impl AgentResolver for KernelResolver {
                 partition: declared.to_partition(self.tenant.tenant()).map_err(runtime_error)?,
                 partitions: self.tenant.partitions().clone(),
                 coordinator: block.coordinator.as_ref() == Some(&declared.id),
+                drivers: self.tenant.drivers().cloned(),
             };
             let Some(agent) = resolver.resolve_partition(def, &host, models).await? else {
                 return Err(RuntimeError::invalid_request(format!(
@@ -934,6 +1279,11 @@ pub struct PartitionHost {
     pub partitions: Partitions,
     /// Whether the partition's agent is the coordinator ([`KernelDef::coordinator`]).
     pub coordinator: bool,
+    /// The tenant's driver supervisor, when it has one: the partition's harness mounts the
+    /// drivers its `drivers` names from it (`HarnessAgentBuilder::partition_drivers`), and
+    /// the coordinator's offers the other partitions' drivers as crossings (spec 3.2 §7.7,
+    /// §7.8).
+    pub drivers: Option<DriverSupervisor>,
 }
 
 fn runtime_error(error: KernelError) -> RuntimeError {
@@ -946,8 +1296,8 @@ fn runtime_error(error: KernelError) -> RuntimeError {
 /// The tenants a host runs, one kernel each (spec 3.2 §7.13).
 ///
 /// A tenant's stores are its own: [`insert`](Self::insert) refuses a tenant whose run
-/// store, decision store, state store, approval service, process store or partition store
-/// another tenant already holds, since a shared run store lets one tenant's workers claim the other's
+/// store, decision store, state store, approval service, process store, partition store, cron
+/// watermark store, driver supervisor or driver store another tenant already holds, since a shared run store lets one tenant's workers claim the other's
 /// runs. Stores that are distinct values over one database are not detected; give each
 /// tenant its own database, schema or key namespace.
 ///
@@ -1083,6 +1433,17 @@ fn shared_store(a: &TenantKernel, b: &TenantKernel) -> Option<&'static str> {
     }
     if same(a.partitions().store(), b.partitions().store()) {
         return Some("partition store");
+    }
+    if same(a.watermark_store(), b.watermark_store()) {
+        return Some("cron watermark store");
+    }
+    if let (Some(p), Some(q)) = (a.drivers(), b.drivers()) {
+        if p.same(q) {
+            return Some("driver supervisor");
+        }
+        if same(p.store(), q.store()) {
+            return Some("driver store");
+        }
     }
     None
 }

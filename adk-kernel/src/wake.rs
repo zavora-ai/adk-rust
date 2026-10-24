@@ -53,10 +53,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use adk_agent::ambient::{CronTrigger, EventSource, FileWatchTrigger};
+use adk_agent::ambient::{CronTrigger, EventSource, FileWatchTrigger, TickWatermark};
 use adk_core::approval::{ApprovalEventKind, ApprovalNotification, ApprovalNotifier};
 use adk_core::queue_source::{QueueIngress, QueueSource};
-use adk_core::schedule::MissedFirePolicy;
+use adk_core::schedule::{DEFAULT_MISFIRE_GRACE, MissedFirePolicy, ScheduleSpec, plan_fires};
 use adk_core::{Clock, DurableRunStore, Enqueued, NewRun, RunRecord, RunState, SystemClock};
 use adk_server::background::{WorkerHooks, WorkflowExecutor, WorkflowState};
 use async_trait::async_trait;
@@ -437,6 +437,24 @@ pub fn kernel_wake_run(event: &WakeEvent, app_name: &str) -> Result<NewRun> {
     Ok(run)
 }
 
+/// Whether a cron wake with `missed` fires for the tick `payload` describes (spec 3.2 §7.4):
+/// every live tick; of the missed ones, the ticks `missed` picks by their rank from the
+/// latest, which a [`CronWakeSource::watermarked`] source sets. A missed tick without a rank,
+/// from a trigger's own policy, fires every wake but a `skip` one.
+fn picks_tick(missed: MissedFirePolicy, payload: &Value) -> bool {
+    if payload.get("catch_up").and_then(Value::as_bool) != Some(true) {
+        return true;
+    }
+    let rank = payload.get("catch_up_rank").and_then(Value::as_u64);
+    let on_time = payload.get("on_time").and_then(Value::as_bool) == Some(true);
+    match missed {
+        MissedFirePolicy::Skip => rank == Some(0) && on_time,
+        MissedFirePolicy::CatchUp(count) => rank.is_none_or(|rank| rank < u64::from(count)),
+        // `fireOnce`, and a policy this release does not know: the latest, however late.
+        _ => rank.is_none_or(|rank| rank == 0),
+    }
+}
+
 /// Whether `wake` fires for `event` (spec 3.2 §7.4 step 2).
 ///
 /// Each kernel source keys its events with its own prefix ([`keys`]); the payload carries
@@ -447,10 +465,9 @@ fn wake_matches(wake: &Wake, event: &WakeEvent) -> bool {
     let text = |field: &str| event.payload.get(field).and_then(Value::as_str);
     match wake {
         Wake::Cron { expr, missed } => {
-            let catch_up = event.payload.get("catch_up").and_then(Value::as_bool) == Some(true);
             event.key.starts_with("cron:")
                 && text("expression") == Some(expr.as_str())
-                && !(catch_up && *missed == MissedFirePolicy::Skip)
+                && picks_tick(*missed, &event.payload)
         }
         Wake::FileChange { root, glob, .. } => {
             event.key.starts_with("file:")
@@ -1139,6 +1156,24 @@ impl WorkflowExecutor for KernelWakeExecutor {
 /// A cron wake source over `adk_agent::ambient::CronTrigger` (spec 3.2 §7.4); keys
 /// [`keys::cron`].
 ///
+/// Built with [`new`](Self::new), it follows the trigger's `MissedTickPolicy` and watermark.
+/// Built with [`watermarked`](Self::watermarked), it keeps where it left off in a
+/// `TickWatermark`, such as a [`SourceWatermark`](crate::SourceWatermark) in the tenant's
+/// own [`CronWatermarkStore`](crate::CronWatermarkStore), and plans the ticks it missed
+/// while no kernel watched with the schedule's [`MissedFirePolicy`] (spec 3.2 §7.4, §7.13):
+///
+/// | Policy | Missed ticks it fires |
+/// |---|---|
+/// | `skip` | The latest, only when it is no more than a minute late |
+/// | `fireOnce` | The latest, however late |
+/// | `catchUp(n)` | The latest `n`, oldest first |
+///
+/// Each one is an event like a live tick's, with `catch_up` set and `catch_up_rank` its
+/// place from the latest (0), so a cron [`Wake`] fires for the ticks its own policy picks
+/// even when wake sets with other policies share the source. The cursor is written before
+/// each tick goes out, so a tick is fired at most once, across restarts and replicas: an
+/// event repeated by a second replica has the same key and starts nothing (K-I3).
+///
 /// # Example
 ///
 /// ```rust
@@ -1152,18 +1187,223 @@ impl WorkflowExecutor for KernelWakeExecutor {
 pub struct CronWakeSource {
     name: String,
     trigger: CronTrigger,
+    catch_up: Option<CatchUp>,
+}
+
+/// What a watermarked source plans its missed ticks with.
+struct CatchUp {
+    spec: ScheduleSpec,
+    missed: MissedFirePolicy,
+    watermark: Arc<dyn TickWatermark>,
 }
 
 impl fmt::Debug for CronWakeSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CronWakeSource").field("name", &self.name).finish_non_exhaustive()
+        f.debug_struct("CronWakeSource")
+            .field("name", &self.name)
+            .field("missed", &self.catch_up.as_ref().map(|catch_up| catch_up.missed))
+            .finish_non_exhaustive()
     }
 }
 
 impl CronWakeSource {
     /// A source named `name` over `trigger`, with its missed-tick policy and watermark.
     pub fn new(name: impl Into<String>, trigger: CronTrigger) -> Self {
-        Self { name: name.into(), trigger }
+        Self { name: name.into(), trigger, catch_up: None }
+    }
+
+    /// A source named `name` on the six-field cron expression `expr` (seconds first, UTC)
+    /// that keeps where it left off in `watermark`, and fires the ticks it missed while no
+    /// kernel watched as `missed` picks them, once each (spec 3.2 §7.4, §7.13).
+    ///
+    /// A watermark that holds nothing starts at the first subscription: a new source
+    /// replays nothing from before it existed.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::schedule::MissedFirePolicy;
+    /// use adk_kernel::stores::InMemoryCronWatermarkStore;
+    /// use adk_kernel::{CronWakeSource, SourceWatermark, WakeSource};
+    ///
+    /// let watermark = SourceWatermark::new(Arc::new(InMemoryCronWatermarkStore::new()), "nightly");
+    /// let source = CronWakeSource::watermarked("nightly", "0 0 2 * * *", MissedFirePolicy::FireOnce, Arc::new(watermark))?;
+    /// assert_eq!(source.name(), "nightly");
+    /// # Ok::<(), adk_kernel::KernelError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the trigger's error for an expression that does not parse, and
+    /// [`KernelError::Config`] for `catchUp(0)`.
+    pub fn watermarked(
+        name: impl Into<String>,
+        expr: &str,
+        missed: MissedFirePolicy,
+        watermark: Arc<dyn TickWatermark>,
+    ) -> Result<Self> {
+        if missed == MissedFirePolicy::CatchUp(0) {
+            return Err(KernelError::Config {
+                reason: format!("cron `{expr}`: `catchUp` must fire at least one missed tick"),
+            });
+        }
+        let trigger = CronTrigger::new(expr)?;
+        let spec = ScheduleSpec::Cron { expr: expr.to_string(), timezone: "UTC".to_string() };
+        Ok(Self { name: name.into(), trigger, catch_up: Some(CatchUp { spec, missed, watermark }) })
+    }
+}
+
+/// The payload of a tick at `scheduled_for`: the trigger's fields, and for a missed tick
+/// its rank from the latest and whether it was still on time.
+fn tick_payload(
+    expression: &str,
+    scheduled_for: DateTime<Utc>,
+    missed: Option<(usize, bool)>,
+) -> Value {
+    let mut payload = json!({
+        "expression": expression,
+        "tick": Utc::now().to_rfc3339(),
+        "scheduled_for": scheduled_for.to_rfc3339(),
+        "catch_up": missed.is_some(),
+    });
+    if let (Some((rank, on_time)), Value::Object(fields)) = (missed, &mut payload) {
+        fields.insert("catch_up_rank".into(), json!(rank));
+        fields.insert("on_time".into(), json!(on_time));
+    }
+    payload
+}
+
+/// Where a watermarked source's tick stream stands.
+struct Ticking {
+    name: String,
+    expression: String,
+    spec: ScheduleSpec,
+    missed: MissedFirePolicy,
+    watermark: Arc<dyn TickWatermark>,
+    /// Through when the ticks are accounted for; `None` before the first subscription
+    /// recorded one.
+    cursor: Option<DateTime<Utc>>,
+    /// Missed ticks planned and not yet out, oldest first, with their payloads.
+    pending: VecDeque<(DateTime<Utc>, Value)>,
+}
+
+impl Ticking {
+    /// Records `cursor`, or reports why the source stops.
+    async fn record(&self, cursor: DateTime<Utc>) -> bool {
+        match self.watermark.write(cursor).await {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::error!(wake.source = %self.name, error = %error, "could not record the cron watermark; the source stops before its next tick");
+                false
+            }
+        }
+    }
+
+    /// The next event: a planned missed tick, else the next live tick, each recorded before
+    /// it goes out; `None` when the source stops.
+    async fn next(&mut self) -> Option<WakeEvent> {
+        loop {
+            if let Some((at, payload)) = self.pending.pop_front() {
+                if !self.record(at).await {
+                    return None;
+                }
+                return Some(WakeEvent::new(
+                    self.name.clone(),
+                    keys::cron(&self.name, at),
+                    payload,
+                ));
+            }
+            let cursor = match self.cursor {
+                Some(cursor) => cursor,
+                None => {
+                    // A new source replays nothing from before it existed.
+                    let now = Utc::now();
+                    if !self.record(now).await {
+                        return None;
+                    }
+                    self.cursor = Some(now);
+                    now
+                }
+            };
+            let now = Utc::now();
+            let due = match self.spec.next_after(cursor) {
+                Ok(Some(due)) => due,
+                Ok(None) => return None,
+                Err(error) => {
+                    tracing::error!(wake.source = %self.name, error = %error, "cron schedule failed; the source stops");
+                    return None;
+                }
+            };
+            if due <= now {
+                // Behind: the ticks in [due, now] fire as the policy picks them.
+                let plan = match plan_fires(
+                    &self.spec,
+                    self.missed,
+                    due,
+                    now,
+                    DEFAULT_MISFIRE_GRACE,
+                ) {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        tracing::error!(wake.source = %self.name, error = %error, "could not plan the missed cron ticks; the source stops");
+                        return None;
+                    }
+                };
+                let count = plan.fire_times.len();
+                if count == 0 {
+                    // Nothing the policy fires: the gap is accounted for as skipped.
+                    if !self.record(now).await {
+                        return None;
+                    }
+                } else {
+                    tracing::info!(wake.source = %self.name, replayed = count, "replaying missed cron ticks");
+                }
+                for (index, at) in plan.fire_times.into_iter().enumerate() {
+                    let on_time = (now - at).to_std().unwrap_or_default() <= DEFAULT_MISFIRE_GRACE;
+                    let payload =
+                        tick_payload(&self.expression, at, Some((count - 1 - index, on_time)));
+                    self.pending.push_back((at, payload));
+                }
+                self.cursor = Some(now);
+                continue;
+            }
+            tokio::time::sleep((due - Utc::now()).to_std().unwrap_or_default()).await;
+            if !self.record(due).await {
+                return None;
+            }
+            self.cursor = Some(due);
+            let payload = tick_payload(&self.expression, due, None);
+            return Some(WakeEvent::new(self.name.clone(), keys::cron(&self.name, due), payload));
+        }
+    }
+}
+
+impl CatchUp {
+    /// The ticks a watermarked source emits from `restored`: the missed ones its policy
+    /// picks each time it finds itself behind, then each live tick.
+    fn ticks(
+        &self,
+        name: String,
+        restored: Option<DateTime<Utc>>,
+    ) -> BoxStream<'static, WakeEvent> {
+        let expression = match &self.spec {
+            ScheduleSpec::Cron { expr, .. } => expr.clone(),
+            other => format!("{other:?}"),
+        };
+        let ticking = Ticking {
+            name,
+            expression,
+            spec: self.spec.clone(),
+            missed: self.missed,
+            watermark: Arc::clone(&self.watermark),
+            cursor: restored,
+            pending: VecDeque::new(),
+        };
+        stream::unfold(ticking, |mut ticking| async move {
+            ticking.next().await.map(|event| (event, ticking))
+        })
+        .boxed()
     }
 }
 
@@ -1176,9 +1416,14 @@ impl WakeSource for CronWakeSource {
     /// Subscribes to the cron trigger: each tick, catch-up ticks included, becomes an event
     /// keyed [`keys::cron`] by its `scheduled_for`, with the tick's payload (`expression`,
     /// `scheduled_for`, `catch_up`). Missed ticks follow the trigger's `MissedTickPolicy`
-    /// and watermark.
+    /// and watermark, or for a [`watermarked`](Self::watermarked) source its
+    /// `MissedFirePolicy` and watermark.
     async fn subscribe(&self) -> Result<BoxStream<'static, WakeEvent>> {
         let name = self.name.clone();
+        if let Some(catch_up) = &self.catch_up {
+            let restored = catch_up.watermark.read().await?;
+            return Ok(catch_up.ticks(name, restored));
+        }
         let ticks = self.trigger.subscribe().await?;
         Ok(ticks
             .filter_map(move |tick| {
@@ -1706,6 +1951,100 @@ mod tests {
         assert!(!wake_matches(&wake(MissedFirePolicy::FireOnce), &cron_tick("0 0 3 * * *", false)));
         let not_cron = event("nightly", "queue:nightly:1", json!({"expression": "0 0 2 * * *"}));
         assert!(!wake_matches(&wake(MissedFirePolicy::FireOnce), &not_cron));
+    }
+
+    /// A watermarked source's missed tick, `rank` places from the latest.
+    fn ranked_tick(rank: u64, on_time: bool) -> WakeEvent {
+        event(
+            "nightly",
+            "cron:nightly:2026-10-22T02:00:00Z",
+            json!({
+                "expression": "0 0 2 * * *",
+                "scheduled_for": "2026-10-22T02:00:00+00:00",
+                "catch_up": true,
+                "catch_up_rank": rank,
+                "on_time": on_time,
+            }),
+        )
+    }
+
+    #[test]
+    fn a_cron_wake_fires_for_the_missed_ticks_its_own_policy_picks() {
+        let wake = |missed| Wake::Cron { expr: "0 0 2 * * *".into(), missed };
+        let fires =
+            |missed, rank, on_time| wake_matches(&wake(missed), &ranked_tick(rank, on_time));
+        // Skip: the latest, only on time.
+        assert!(fires(MissedFirePolicy::Skip, 0, true));
+        assert!(!fires(MissedFirePolicy::Skip, 0, false));
+        assert!(!fires(MissedFirePolicy::Skip, 1, true));
+        // FireOnce: the latest, however late.
+        assert!(fires(MissedFirePolicy::FireOnce, 0, false));
+        assert!(!fires(MissedFirePolicy::FireOnce, 1, false));
+        // CatchUp(n): the latest n.
+        assert!(fires(MissedFirePolicy::CatchUp(2), 0, false));
+        assert!(fires(MissedFirePolicy::CatchUp(2), 1, false));
+        assert!(!fires(MissedFirePolicy::CatchUp(2), 2, false));
+    }
+
+    #[tokio::test]
+    async fn a_watermarked_source_replays_what_its_policy_picks_then_records_the_gap() {
+        use crate::stores::InMemoryCronWatermarkStore;
+        use crate::watermark::{CronWatermarkStore, SourceWatermark};
+        use chrono::{Datelike, TimeZone};
+
+        let store = Arc::new(InMemoryCronWatermarkStore::new());
+        // Daily at 02:00 UTC, last accounted for five days and an hour ago.
+        let seeded = Utc::now() - chrono::Duration::days(5) - chrono::Duration::hours(1);
+        store.advance("daily", seeded).await.unwrap();
+        let watermark = Arc::new(SourceWatermark::new(store.clone(), "daily"));
+        let source = CronWakeSource::watermarked(
+            "daily",
+            "0 0 2 * * *",
+            MissedFirePolicy::CatchUp(2),
+            watermark,
+        )
+        .unwrap();
+        let mut events = source.subscribe().await.unwrap();
+        let first = events.next().await.unwrap();
+        let second = events.next().await.unwrap();
+        let ticks: Vec<DateTime<Utc>> = [&first, &second]
+            .iter()
+            .map(|event| {
+                DateTime::parse_from_rfc3339(event.payload["scheduled_for"].as_str().unwrap())
+                    .unwrap()
+                    .with_timezone(&Utc)
+            })
+            .collect();
+        let latest = {
+            let now = Utc::now();
+            let today = Utc.with_ymd_and_hms(now.year(), now.month(), now.day(), 2, 0, 0).unwrap();
+            if today <= now { today } else { today - chrono::Duration::days(1) }
+        };
+        assert_eq!(ticks, vec![latest - chrono::Duration::days(1), latest], "the latest two");
+        assert_eq!(
+            (first.payload["catch_up_rank"].as_u64(), second.payload["catch_up_rank"].as_u64()),
+            (Some(1), Some(0))
+        );
+        assert_eq!(first.key, keys::cron("daily", ticks[0]));
+        assert_eq!(store.read("daily").await.unwrap(), Some(latest), "recorded before it went out");
+        // The next tick is a day away: the stream waits rather than replaying again.
+        let more = tokio::time::timeout(Duration::from_millis(200), events.next()).await;
+        assert!(more.is_err(), "nothing more is due");
+        assert_eq!(store.read("daily").await.unwrap(), Some(latest), "no tick is due after it");
+    }
+
+    #[test]
+    fn a_watermarked_source_refuses_catch_up_zero() {
+        let store = Arc::new(crate::stores::InMemoryCronWatermarkStore::new());
+        let watermark = Arc::new(crate::watermark::SourceWatermark::new(store, "daily"));
+        let error = CronWakeSource::watermarked(
+            "daily",
+            "0 0 2 * * *",
+            MissedFirePolicy::CatchUp(0),
+            watermark,
+        )
+        .unwrap_err();
+        assert!(matches!(error, KernelError::Config { .. }), "{error}");
     }
 
     #[test]

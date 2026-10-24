@@ -28,7 +28,7 @@ use super::{DriverState, EffectClass, driver_of, driver_source};
 use crate::audit;
 use crate::bus::{EventBus, KernelEvent};
 use crate::error::{KernelError, Result};
-use crate::partition::PartitionId;
+use crate::partition::{PartitionId, PartitionPolicy};
 
 /// Builds the sampling handler of a driver whose manifest lets it sample.
 pub(crate) type SamplingFactory =
@@ -341,6 +341,7 @@ impl DriverSupervisorBuilder {
                 attempts: std::sync::Mutex::new(BTreeMap::new()),
                 loaded: tokio::sync::OnceCell::new(),
                 legacy: Arc::new(LegacyWaiters::default()),
+                crossings: RwLock::new(BTreeMap::new()),
             }),
         }
     }
@@ -384,6 +385,9 @@ pub(crate) struct Inner {
     attempts: std::sync::Mutex<BTreeMap<String, u32>>,
     loaded: tokio::sync::OnceCell<()>,
     pub(crate) legacy: Arc<LegacyWaiters>,
+    /// The driver tool each crossing tool wraps, by driver and crossing name, so a crossing
+    /// is classed and governed as the tool it reaches (spec 3.2 §7.8).
+    crossings: RwLock<BTreeMap<(String, String), String>>,
 }
 
 /// The kernel's supervisor of drivers: MCP servers run as child processes under the
@@ -477,6 +481,29 @@ impl DriverSupervisor {
         if fail_if_sandbox_unavailable {
             self.inner.fail_if_sandbox_unavailable.store(true, Ordering::SeqCst);
         }
+    }
+
+    /// Sets the app and the home the drivers run under where the builder set neither, before
+    /// a kernel attaches its own: a tenant kernel gives each tenant's drivers a home of the
+    /// tenant's own (spec 3.2 §7.13).
+    #[cfg(feature = "managed")]
+    pub(crate) fn host_defaults(&self, app_name: &str, home: &Path) {
+        self.inner
+            .app_name
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(|| app_name.to_string());
+        self.inner
+            .home
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(|| home.to_path_buf());
+    }
+
+    /// Whether `other` is this supervisor, rather than a clone of another.
+    #[cfg(feature = "managed")]
+    pub(crate) fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 
     /// Loads the mounted drivers and starts the eager ones. A driver that fails to start is
@@ -717,6 +744,41 @@ impl DriverSupervisor {
         Arc::new(DriverToolset::new(self.clone(), partition.clone(), None))
     }
 
+    /// The drivers of `partitions` offered to the coordinator whose partition `policy`
+    /// governs, as crossings (spec 3.2 §7.8, K-I15): each tool a target partition's own
+    /// toolset serves — its manifest lists the partition and the partition lists the
+    /// driver — named `<to>__<tool>` and registered with `policy`, so every call is the
+    /// coordinator's crossing under a non-waivable approval. A read of a tool the manifest
+    /// classes `read` approved once holds for the rest of the run; any other class is
+    /// approved one call at a time. The partitions are read from the table at every
+    /// listing: one that takes no crossing, or that the coordinator's partition blocks,
+    /// offers nothing.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_kernel::drivers::DriverSupervisor;
+    /// use adk_kernel::stores::InMemoryDriverStore;
+    /// use adk_kernel::Partitions;
+    ///
+    /// let drivers = DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new())).build();
+    /// let policy = Partitions::in_memory().policy("home").with_coordinator("harness");
+    /// let crossings = drivers.crossing_toolset(&policy, ["work".into()]);
+    /// assert_eq!(crossings.name(), "kernel_driver_crossings");
+    /// ```
+    pub fn crossing_toolset(
+        &self,
+        policy: &PartitionPolicy,
+        partitions: impl IntoIterator<Item = PartitionId>,
+    ) -> Arc<dyn Toolset> {
+        Arc::new(super::tool::DriverCrossings::new(
+            self.clone(),
+            policy.clone(),
+            partitions.into_iter().collect(),
+        ))
+    }
+
     /// Carries the re-approving person's standing rules forward at re-approval, set after
     /// the supervisor is built — for a harness built with the supervisor's tools.
     pub fn set_rule_pins(&self, pins: Arc<dyn StandingRulePins>) {
@@ -738,8 +800,28 @@ impl DriverSupervisor {
     /// ([`driver_source`]); `None` for any other source.
     pub fn class_of(&self, source: &str, tool: &str) -> Option<EffectClass> {
         let id = driver_of(source)?;
+        let tool = self.wrapped_tool(id, tool).unwrap_or_else(|| tool.to_string());
         let view = self.inner.view.read().unwrap_or_else(|e| e.into_inner());
-        view.get(id).map(|record| record.manifest.class_of(tool))
+        view.get(id).map(|record| record.manifest.class_of(&tool))
+    }
+
+    /// Records that the crossing tool `crossing` wraps tool `tool` of driver `id`.
+    pub(crate) fn register_crossing(&self, id: &str, crossing: &str, tool: &str) {
+        self.inner
+            .crossings
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert((id.to_string(), crossing.to_string()), tool.to_string());
+    }
+
+    /// The tool of driver `id` the crossing tool `crossing` wraps, if it is one.
+    pub(crate) fn wrapped_tool(&self, id: &str, crossing: &str) -> Option<String> {
+        self.inner
+            .crossings
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(id.to_string(), crossing.to_string()))
+            .cloned()
     }
 
     /// The mounted record of driver `id`, as last read or written.

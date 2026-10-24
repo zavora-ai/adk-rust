@@ -145,7 +145,8 @@ quotas = { max_running = 2, daily_spend_cap_usd = 1.5 }
 With long-term memory and consolidation on, each partition in Ask or Auto gets a consolidation
 tick of its own, which distils only the sessions its partition's harness ran. Each partition's
 harness gets the mounted drivers its `drivers` list names, and is the audience of its own
-partition's `/proc` observations.
+partition's `/proc` observations. The coordinator's harness also reaches every other partition's
+drivers, each call a [crossing](#crossing-into-another-partitions-drivers).
 
 ## Hosting partitions on a kernel
 
@@ -230,6 +231,49 @@ No standing rule and no expiring rule answers a crossing: the harness offers no 
 prompt, a standing rule only answers the harness's own approval and never another layer's, and a
 run-wide `tool_approvals` entry naming a crossing tool is removed when the run starts. Auto mode
 asks too.
+
+### Crossing into another partition's drivers
+
+The coordinator reaches another partition's drivers only as crossing tools:
+`HarnessAgentBuilder::partition_driver_crossings(&drivers, partitions)` offers, for each partition
+named, the tools that partition's own harness is served — its manifest lists the partition and
+the partition's `drivers` names it — each as `<partition>__<tool>`, such as `work__read_note`
+(`DriverSupervisor::crossing_toolset`). `adk-rust up` gives the coordinator every other
+partition's drivers this way, and a managed definition's coordinator its other partitions'.
+
+| Rule | How |
+|---|---|
+| Read from the table at every listing | A partition that takes no crossing (`crossPartition: deny`), the coordinator's own when it takes none, and one the coordinator's partition blocks offer nothing; a driver mounted later appears at the next listing |
+| Classed as the tool it reaches | The crossing is classed by the driver's manifest and governed by the driver policy as the wrapped tool, so a stale tool and the classes `publish_public` and `financial` are asked every call (K-I9, K-I14) |
+| A read once per run | Only a tool the manifest classes `read`, with the approved declaration, is offered as a read, approved once per crossing fingerprint and run; every other class is approved one call at a time |
+| Never waived | A run-wide `tool_approvals` entry for any tool named `<partition>__…` of a partition the coordinator crosses into is removed when the run starts; no standing rule answers one |
+| Only the coordinator | `build` fails when the harness is not its partition's coordinator |
+
+```rust
+use std::sync::Arc;
+
+use adk_harness::HarnessAgent;
+use adk_kernel::drivers::DriverSupervisor;
+use adk_kernel::{Partition, Partitions};
+
+fn coordinator(
+    model: Arc<dyn adk_core::Llm>,
+    workspace: adk_devtools::Workspace,
+    home: Partition,
+    table: Partitions,
+    drivers: &DriverSupervisor,
+) -> adk_core::Result<HarnessAgent> {
+    HarnessAgent::builder("harness")
+        .model(model)
+        .workspace(workspace)
+        .partition(home, table)
+        .partition_coordinator()
+        // Home's own drivers as tools, work's as crossings.
+        .partition_drivers(drivers)
+        .partition_driver_crossings(drivers, ["work"])
+        .build()
+}
+```
 
 ### The prompt
 
@@ -343,6 +387,7 @@ as `[[kernel.partitions]]` and `kernel.coordinator` do in `harness.toml`:
 | Agents | `TenantKernelBuilder::partition_resolver` builds one agent per partition — `adk-harness`'s `HarnessResolver` builds one harness per partition with `partition` and, for the coordinator, `partition_coordinator` — as `<definition>@<partition>`, bound to its partition and acting with its class and the tenant |
 | The definition's own target | The coordinator's agent, else the first partition's by id; the runtime's sessions run it |
 | Wake sets | A wake set in a partition starts that partition's agent |
+| Drivers | With `TenantKernelBuilder::drivers`, the tenant's own supervisor: a driver a partition mounts is proposed in the tenant's inbox and mounted when a person approves it; each partition's harness mounts the drivers its `drivers` names, and the coordinator's reaches the other partitions' drivers as crossings ([managed form](managed.md#a-definitions-drivers)) |
 | Refused | A coordinator the block does not declare, a partition declared twice, a partition key the record does not have (`tenant` included), a partition another hosted definition of the tenant declares |
 
 Without a partition resolver the partitions are recorded and the definition's agent runs in the

@@ -699,8 +699,11 @@ impl AgentResolver for HarnessResolver {
 /// definition's harness built with `HarnessAgentBuilder::partition` over the tenant's
 /// partition table — the partition's mode, its class and tenant on every principal, its
 /// memory scope — after the operator's [`configure`](HarnessResolver::configure), and the
-/// coordinator's with `partition_coordinator`. A definition without a harness block
-/// resolves to `None`.
+/// coordinator's with `partition_coordinator`. With the tenant's driver supervisor, each
+/// partition's harness mounts the drivers its `drivers` names (`partition_drivers`), and the
+/// coordinator's offers the definition's other partitions' drivers as crossings
+/// (`partition_driver_crossings`, spec 3.2 §7.7, K-I15). A definition without a harness
+/// block resolves to `None`.
 #[cfg(feature = "kernel")]
 #[async_trait]
 impl adk_kernel::managed::PartitionAgentResolver for HarnessResolver {
@@ -722,6 +725,28 @@ impl adk_kernel::managed::PartitionAgentResolver for HarnessResolver {
             .partition(host.partition.clone(), host.partitions.clone());
         if host.coordinator {
             builder = builder.partition_coordinator();
+        }
+        if let Some(drivers) = &host.drivers {
+            // The tenant's drivers this partition mounts (spec 3.2 §7.7, §7.8).
+            builder = builder.partition_drivers(drivers);
+            if host.coordinator {
+                // The definition's other partitions' drivers, as the coordinator's crossings.
+                let siblings: Vec<adk_kernel::PartitionId> =
+                    adk_kernel::managed::KernelDef::from_agent_def(def)
+                        .map_err(|error| RuntimeError::invalid_request(error.to_string()))?
+                        .map(|kernel| {
+                            kernel
+                                .partitions
+                                .into_iter()
+                                .map(|partition| partition.id)
+                                .filter(|id| *id != host.partition.id)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                if !siblings.is_empty() {
+                    builder = builder.partition_driver_crossings(drivers, siblings);
+                }
+            }
         }
         let harness = builder.build().map_err(runtime_error)?;
         Ok(Some(Arc::new(ManagedHarness::new(harness))))

@@ -42,6 +42,7 @@ pub async fn run(name: &str) -> Result<Checks> {
         "k8_a_message_preempts_background_work" => k8_a_message_preempts_background_work().await,
         "k6_drivers_you_can_trust" => k6_drivers_you_can_trust().await,
         "k7_partitions" => k7_partitions().await,
+        "k7_driver_crossings" => k7_driver_crossings().await,
         other => bail!("unknown scenario {other}"),
     }
 }
@@ -1027,6 +1028,7 @@ fn partition_harness(
     partition: adk_kernel::Partition,
     coordinator: bool,
     replies: Vec<ScriptedResponse>,
+    extra: impl FnOnce(adk_harness::HarnessAgentBuilder) -> adk_harness::HarnessAgentBuilder,
 ) -> Result<Harness> {
     let Shared { stores, workspace, table, facts, service } = shared;
     let mut builder = HarnessAgent::builder(APP)
@@ -1048,7 +1050,7 @@ fn partition_harness(
     if coordinator {
         builder = builder.partition_coordinator();
     }
-    let agent = Arc::new(builder.build()?);
+    let agent = Arc::new(extra(builder).build()?);
     let runner = adk_runner::Runner::builder()
         .app_name(APP)
         .agent(agent.agent())
@@ -1128,12 +1130,14 @@ async fn k7_partitions() -> Result<Checks> {
             search("work", "standup"),
             ScriptedResponse::text("asked again"),
         ],
+        |builder| builder,
     )?;
     let work = partition_harness(
         &shared,
         work_partition,
         false,
         vec![search("home", "dentist"), ScriptedResponse::text("not mine to see")],
+        |builder| builder,
     )?;
     let kernel = work
         .host_partition(coordinator.kernel())
@@ -1228,6 +1232,150 @@ async fn k7_partitions() -> Result<Checks> {
         }),
     );
     kernel.processes().kill(&next.meta.pid, "the scenario is over").await?;
+    kernel.stop().await?;
+    Ok(checks)
+}
+
+/// K7 with drivers (spec 3.2 §7.7, §7.8, K-I15): the notes driver serves work only. Work's
+/// harness calls it as a plain tool; the coordinator in home reaches it only as the crossing
+/// `work__read_note`, which parks its process until a person approves, and whose identical
+/// read later in the run is not asked again.
+async fn k7_driver_crossings() -> Result<Checks> {
+    use adk_core::audit_log::AuditTrail;
+    use adk_kernel::{
+        CrossPartition, CrossingFilter, CrossingOutcome, CrossingResource, Partition, ProcessKind,
+        ProcessSpec,
+    };
+
+    let mut checks = Checks::default();
+    let dir = tempfile::tempdir()?;
+    let (home, workspace, notes) =
+        (dir.path().join("home"), dir.path().join("ws"), dir.path().join("notes"));
+    std::fs::create_dir_all(&workspace)?;
+    std::fs::create_dir_all(&notes)?;
+    let stores = stores(&home, Arc::new(SystemClock)).await?;
+    let pool = stores.sessions.pool().clone();
+    let partition_store = adk_kernel::SqlitePartitionStore::new(pool.clone());
+    partition_store.migrate().await?;
+    let driver_store = adk_kernel::stores::SqliteDriverStore::new(pool.clone());
+    driver_store.migrate().await?;
+    let facts = adk_harness::SqliteFactStore::new(pool);
+    facts.migrate().await?;
+    let recorder = InMemoryAuditRecorder::new();
+    let table = adk_kernel::Partitions::new(Arc::new(partition_store))
+        .with_audit(AuditTrail::new(Arc::new(recorder.clone())));
+    for partition in [
+        Partition::new("home", "home-agents"),
+        Partition::new("work", "work-agents").with_driver("notes"),
+    ] {
+        let partition = partition.with_cross_partition(CrossPartition::CoordinatorWithApproval);
+        table.put(partition, adk_core::audit_log::AuditActor::default()).await?;
+    }
+    let drivers = DriverSupervisor::builder(Arc::new(driver_store))
+        .app_name(APP)
+        .home(&home)
+        .health_check_interval(Duration::from_millis(200))
+        .build();
+    let manifest = crate::notes_driver::manifest(
+        &std::env::current_exe()?,
+        &notes,
+        &format!("k7d-{}", uuid_like()),
+    )
+    .replace("sandbox = \"os\"\n", "sandbox = \"os\"\npartitions = [\"work\"]\n");
+    drivers.mount(DriverManifest::from_toml(&manifest)?, "ana").await?;
+    let routing = ApprovalPolicy::new([ApproverSelector::group("operator")]).allow_self_approval();
+    let service: Arc<dyn ApprovalService> = Arc::new(
+        StoreApprovalService::new(stores.approvals.clone())
+            .with_router(routing)
+            .with_run_store(stores.runs.clone()),
+    );
+    let shared =
+        Shared { stores: &stores, workspace: &workspace, table: &table, facts: Arc::new(facts), service };
+    let read = |tool: &str| ScriptedResponse::function_call(tool, json!({}));
+    let home_partition = table.get(&PartitionId::new("home")).await?.context("home")?;
+    let work_partition = table.get(&PartitionId::new("work")).await?.context("work")?;
+    let coordinator = partition_harness(
+        &shared,
+        home_partition,
+        true,
+        vec![
+            read("work__read_note"),
+            read("work__read_note"),
+            ScriptedResponse::text(crate::notes_driver::CODEWORD),
+        ],
+        |builder| builder.partition_drivers(&drivers).partition_driver_crossings(&drivers, ["work"]),
+    )?;
+    let work = partition_harness(
+        &shared,
+        work_partition,
+        false,
+        vec![read("read_note"), ScriptedResponse::text(crate::notes_driver::CODEWORD)],
+        |builder| builder.partition_drivers(&drivers),
+    )?;
+    let kernel = work
+        .host_partition(coordinator.kernel())
+        .config(
+            KernelConfig::default()
+                .with_app_name(APP)
+                .with_home(&home)
+                .with_scheduler_tick(Duration::from_millis(250))
+                .with_control(ControlPlaneConfig::default().without_socket()),
+        )
+        .process_store(stores.processes.clone())
+        .drivers(drivers.clone())
+        .build()?;
+    kernel.start().await?;
+    let spawn = |target: &str, session: &str| {
+        let run =
+            NewRun::new(QueueClass::INTERACTIVE, APP, "alice", target, json!({ "text": "notes?" }))
+                .with_session_id(session)
+                .with_authenticated_user();
+        kernel.processes().spawn(run, ProcessSpec::new(ProcessKind::Interactive))
+    };
+    let reaches = |pid: String, wanted: RunState| {
+        let runs = stores.runs.clone();
+        async move {
+            until(Duration::from_secs(20), || {
+                let (runs, pid) = (runs.clone(), pid.clone());
+                async move { Ok(runs.get(&pid).await?.map(|run| run.state) == Some(wanted)) }
+            })
+            .await
+        }
+    };
+
+    let direct = spawn("adk-rust@work", "w1").await?;
+    checks.check(
+        "work's harness calls its own driver as a plain tool",
+        reaches(direct.meta.pid.clone(), RunState::Completed).await?
+            && table.crossings(&CrossingFilter::default()).await?.is_empty(),
+    );
+
+    let parked = spawn("adk-rust@home", "h1").await?;
+    let pid = parked.meta.pid.clone();
+    checks.check(
+        "the coordinator's call is a crossing its process parks on",
+        reaches(pid.clone(), RunState::Waiting).await?,
+    );
+    let alice = adk_core::UserId::new("alice")?;
+    let h1 = adk_core::SessionId::new("h1")?;
+    let pending = coordinator.pending_approvals(&alice, &h1).await?;
+    checks.check(
+        "one crossing waits in the inbox",
+        pending.len() == 1 && pending[0].request.tool_name == "work__read_note",
+    );
+    if let Some(item) = pending.first() {
+        coordinator
+            .decide(&alice, &h1, &item.fingerprint, adk_harness::HarnessDecision::Approve)
+            .await?;
+    }
+    checks.check("the approved process completes", reaches(pid.clone(), RunState::Completed).await?);
+    let ledger = table.crossings(&CrossingFilter::default().run(&pid)).await?;
+    checks.check(
+        "the driver crossing was held, approved, and its identical read let through",
+        ledger.iter().map(|record| record.outcome).collect::<Vec<_>>()
+            == [CrossingOutcome::Held, CrossingOutcome::Approved, CrossingOutcome::RunGrant]
+            && ledger.iter().all(|record| record.resource == CrossingResource::Driver),
+    );
     kernel.stop().await?;
     Ok(checks)
 }

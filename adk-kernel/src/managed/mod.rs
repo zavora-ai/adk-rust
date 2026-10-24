@@ -10,6 +10,7 @@
 //! | [`KernelResolver`] | The `AgentResolver` the tenant's runtime is built with: it hosts each definition carrying a kernel block on the tenant's kernel |
 //! | [`PartitionAgentResolver`], [`PartitionHost`] | One agent per partition a definition declares — one harness per partition — over the tenant's partition table (spec 3.2 §7.8) |
 //! | [`ManagedKernels`] | A host's tenants, one kernel each, refusing a tenant whose stores another holds |
+//! | [`DRIVER_MOUNT_TOOL_NAME`] | The inbox tool name of a driver mount a definition asks for: a person approves it before the tenant's supervisor mounts it (spec 3.2 §7.7) |
 //!
 //! A definition comes from a tenant, so its kernel block cannot widen what the operator
 //! allows: its agent is built by the operator's resolver, a driver is never unsandboxed and
@@ -39,6 +40,6 @@ pub use def::{
     WakeOverlap, WakeSetDef,
 };
 pub use tenant::{
-    KernelResolver, ManagedKernels, PartitionAgentResolver, PartitionHost, TenantKernel,
-    TenantKernelBuilder,
+    DRIVER_MOUNT_TOOL_NAME, KernelResolver, ManagedKernels, PartitionAgentResolver, PartitionHost,
+    TenantKernel, TenantKernelBuilder,
 };

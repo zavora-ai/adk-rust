@@ -185,6 +185,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                     partition: None,
                     #[cfg(feature = "tui")]
                     local_console: false,
+                    driver_crossings: Vec::new(),
                 },
             )?);
             vec![host(&setup, agent, None, &governance, &run_store)?]
@@ -200,6 +201,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                 partition: Some((partition, table.clone(), coordinator)),
                 #[cfg(feature = "tui")]
                 local_console: false,
+                driver_crossings: Vec::new(),
             };
             partition_harnesses(&setup, &settings, table, &service, &governance, &run_store, extras)
                 .await?
@@ -486,8 +488,16 @@ async fn partition_harnesses(
     let coordinator = settings.coordinator.as_ref();
     partitions.sort_by_key(|partition| Some(&partition.id) != coordinator);
     let mut hosted = Vec::with_capacity(partitions.len());
+    let ids: Vec<adk_kernel::PartitionId> =
+        partitions.iter().map(|partition| partition.id.clone()).collect();
     for partition in partitions {
         let is_coordinator = coordinator == Some(&partition.id);
+        let mut extra = extras(partition.clone(), is_coordinator);
+        // The coordinator reaches the other partitions' drivers as crossings (spec 3.2 §7.8).
+        if is_coordinator {
+            extra.driver_crossings =
+                ids.iter().filter(|id| **id != partition.id).cloned().collect();
+        }
         let agent = Arc::new(setup.agent_with(
             setup.resolved.effort,
             APP_NAME,
@@ -495,7 +505,7 @@ async fn partition_harnesses(
             setup.resolved.sandbox,
             None,
             Some(service.clone()),
-            extras(partition.clone(), is_coordinator),
+            extra,
         )?);
         hosted.push(host(setup, agent, Some(&partition), governance, run_store)?);
     }

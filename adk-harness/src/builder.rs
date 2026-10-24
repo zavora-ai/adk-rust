@@ -589,6 +589,42 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// Offers the coordinator the drivers of `partitions` as crossings (spec 3.2 §7.7, §7.8,
+    /// K-I15): each tool a target partition's own driver list serves, named `<to>__<tool>`,
+    /// read from the partition table at every listing. Every call is the coordinator's
+    /// crossing under a non-waivable approval: a read of a tool the driver's manifest
+    /// classes `read`, once approved, holds for the rest of the run, and any other class is
+    /// approved one call at a time; no standing rule and no run-wide approval answers one.
+    /// The tools are classed by their manifests under the kernel's driver policy, as
+    /// [`partition_drivers`](Self::partition_drivers) classes the partition's own.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let home = HarnessAgent::builder("harness")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .partition(home_partition, partitions)
+    ///     .partition_coordinator()
+    ///     .partition_drivers(&drivers)
+    ///     .partition_driver_crossings(&drivers, ["work"])
+    ///     .build()?;
+    /// ```
+    ///
+    /// `build` fails unless the harness is a partition's coordinator.
+    #[cfg(feature = "kernel")]
+    pub fn partition_driver_crossings(
+        mut self,
+        drivers: &adk_kernel::drivers::DriverSupervisor,
+        partitions: impl IntoIterator<Item = impl Into<adk_kernel::PartitionId>>,
+    ) -> Self {
+        let targets: Vec<adk_kernel::PartitionId> =
+            partitions.into_iter().map(Into::into).collect();
+        self.partition.driver_crossings = Some((drivers.clone(), targets));
+        self.tool_classes(Arc::new(crate::kernel::DriverClasses::new(drivers.clone())))
+            .add_operator_policy(drivers.policy())
+    }
+
     /// Classes the tools of publishers `classes` knows by their approved declarations,
     /// such as the kernel's drivers (spec 3.2 §7.7).
     pub fn tool_classes(mut self, classes: Arc<dyn crate::policy::OriginClasses>) -> Self {
@@ -1497,6 +1533,12 @@ impl HarnessAgentBuilder {
         // The partition's policy and crossing tools (spec 3.2 §7.8).
         #[cfg(feature = "kernel")]
         let partition = self.partition.wire(&self.name, &mut registry)?;
+        // Crossing tools listed at request time: no run-wide approval names one (K-I15).
+        #[cfg(feature = "kernel")]
+        let non_waivable_prefixes: Vec<String> =
+            partition.as_ref().map(|wired| wired.prefixes.clone()).unwrap_or_default();
+        #[cfg(not(feature = "kernel"))]
+        let non_waivable_prefixes: Vec<String> = Vec::new();
         // 4 (resolved here: member names register as harness classes, spec 3.1 §7.4).
         #[cfg(feature = "team")]
         let team_plan = {
@@ -2144,6 +2186,17 @@ impl HarnessAgentBuilder {
             };
             builder = builder.toolset(extra);
         }
+        // The coordinator's crossings into other partitions' drivers (spec 3.2 §7.8).
+        #[cfg(feature = "kernel")]
+        if let Some(wired) = &partition {
+            for crossings in &wired.toolsets {
+                let crossings = match &self.take_over {
+                    Some(_) => crate::take_over::ScopedToolset::wrap(crossings.clone()),
+                    None => crossings.clone(),
+                };
+                builder = builder.toolset(crossings);
+            }
+        }
         #[cfg(feature = "web")]
         if let Some(provider_web) = &provider_web {
             builder = builder.toolset(provider_web.clone());
@@ -2319,6 +2372,7 @@ impl HarnessAgentBuilder {
                 toolset,
                 instructions: instruction_state,
                 non_waivable_tools: non_waivable,
+                non_waivable_prefixes,
                 workspace,
                 audit: harness_audit,
                 #[cfg(feature = "auth")]

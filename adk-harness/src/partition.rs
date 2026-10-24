@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use adk_core::{AdkError, Result, Tool, ToolConfirmationRequest, ToolPolicy};
+use adk_core::{AdkError, Result, Tool, ToolConfirmationRequest, ToolPolicy, Toolset};
 use adk_kernel::{
     Crossing, CrossingAccess, CrossingResource, CrossingRoute, CrossingTool, KernelBuilder,
     Partition, PartitionId, PartitionPolicy, Partitions,
@@ -72,6 +72,15 @@ pub fn partition_target(base: &str, partition: &PartitionId) -> String {
     format!("{base}@{partition}")
 }
 
+/// The start of every crossing tool name into `to`: `<to>__`, with the characters a tool
+/// name may not hold as `_`, as `CrossingTool` names its tools.
+fn crossing_prefix(to: &PartitionId) -> String {
+    format!("{to}__")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') { c } else { '_' })
+        .collect()
+}
+
 /// A tool of another partition the coordinator may call as a crossing.
 pub(crate) struct CrossingSpec {
     pub(crate) tool: Arc<dyn Tool>,
@@ -90,12 +99,19 @@ pub(crate) struct PartitionOptions {
     pub(crate) crossings: Vec<CrossingSpec>,
     /// The kernel's drivers, mounted for the partition at build.
     pub(crate) drivers: Option<adk_kernel::drivers::DriverSupervisor>,
+    /// The drivers of other partitions offered to the coordinator as crossings.
+    pub(crate) driver_crossings: Option<(adk_kernel::drivers::DriverSupervisor, Vec<PartitionId>)>,
 }
 
 /// A partition's wiring and the coordinator's crossing tools, as the builder takes them.
 pub(crate) struct WiredPartition {
     pub(crate) wiring: PartitionWiring,
     pub(crate) crossings: Vec<Arc<dyn Tool>>,
+    /// Crossing tools listed at request time: other partitions' drivers.
+    pub(crate) toolsets: Vec<Arc<dyn Toolset>>,
+    /// `<to>__` for each partition those toolsets cross into, so no run-wide approval
+    /// answers one of their tools (K-I15).
+    pub(crate) prefixes: Vec<String>,
 }
 
 /// A partition's harness as built (spec 3.2 §7.8): its record and its policy.
@@ -120,15 +136,26 @@ impl PartitionOptions {
         registry: &mut ToolClassRegistry,
     ) -> Result<Option<WiredPartition>> {
         let Some((partition, partitions)) = self.partition else {
-            if self.coordinator || !self.crossings.is_empty() || self.drivers.is_some() {
+            if self.coordinator
+                || !self.crossings.is_empty()
+                || self.drivers.is_some()
+                || self.driver_crossings.is_some()
+            {
                 return Err(AdkError::config(
-                    "partition_coordinator, partition_crossing_tool and partition_drivers \
-                     configure a partition's harness; set the partition with \
-                     HarnessAgentBuilder::partition (spec 3.2 §7.8)",
+                    "partition_coordinator, partition_crossing_tool, partition_drivers and \
+                     partition_driver_crossings configure a partition's harness; set the \
+                     partition with HarnessAgentBuilder::partition (spec 3.2 §7.8)",
                 ));
             }
             return Ok(None);
         };
+        if self.driver_crossings.is_some() && !self.coordinator {
+            return Err(AdkError::config(
+                "partition_driver_crossings offers other partitions' drivers to the \
+                 coordinator, the one agent that may cross (spec 3.2 §7.8, K-I15); call \
+                 partition_coordinator on this partition's harness, or leave the crossings out",
+            ));
+        }
         let mut policy = partitions.policy(partition.id.clone());
         if self.coordinator {
             policy = policy.with_coordinator(agent);
@@ -157,7 +184,21 @@ impl PartitionOptions {
                 )) as Arc<dyn Tool>
             })
             .collect();
-        Ok(Some(WiredPartition { wiring: PartitionWiring { partition, policy }, crossings }))
+        let (toolsets, prefixes) = match self.driver_crossings {
+            Some((drivers, targets)) => {
+                let targets: Vec<PartitionId> =
+                    targets.into_iter().filter(|to| *to != partition.id).collect();
+                let prefixes = targets.iter().map(crossing_prefix).collect();
+                (vec![drivers.crossing_toolset(&policy, targets)], prefixes)
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+        Ok(Some(WiredPartition {
+            wiring: PartitionWiring { partition, policy },
+            crossings,
+            toolsets,
+            prefixes,
+        }))
     }
 }
 

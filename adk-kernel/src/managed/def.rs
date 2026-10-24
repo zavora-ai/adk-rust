@@ -50,7 +50,7 @@ pub const CROSS_PARTITION_VALUES: [&str; 2] = ["deny", "coordinator_with_approva
 /// |---|---|
 /// | `wakeSets` | standing triggers: each wake starts a governed run of the definition's agent |
 /// | `proactivity` | the tenant kernel's [`ProactivityPolicy`]: open proposals, the daily proactive budget, quiet hours, how proposals are approved; the consolidation tick runs only when the block sets `consolidation` (§13 Q1) |
-/// | `drivers` | real [`DriverManifest`]s, validated and recorded; each needs a person's approval to mount |
+/// | `drivers` | real [`DriverManifest`]s, validated; with the tenant's driver supervisor (`TenantKernelBuilder::drivers`), each one a declared partition mounts is proposed in the tenant's approval inbox and mounted when a person approves it, then served to that partition's harness (spec 3.2 §7.7) |
 /// | `partitions`, `coordinator` | as `[[kernel.partitions]]` and `kernel.coordinator` in `harness.toml`: each partition in the tenant's partition table, its tenant the hosting tenant, with an agent of its own built by the tenant's [`PartitionAgentResolver`](super::PartitionAgentResolver) — one harness per partition — as the target `<definition>@<partition>`; the coordinator's agent, else the first partition's by id, also serves the definition's own target. Without a partition resolver the partitions are recorded and the definition's agent runs in the default partition |
 ///
 /// A definition comes from a tenant, so the block cannot widen what the operator allows: a

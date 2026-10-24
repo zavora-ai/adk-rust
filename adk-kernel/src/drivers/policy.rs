@@ -55,11 +55,25 @@ impl DriverPolicy {
             ));
         };
         let pins = &record.manifest.declaration_digests;
-        let pinned = pins.get(tool);
-        if record.stale.contains_key(tool)
-            || pinned.is_some_and(|pinned| pinned != digest)
-            || (pinned.is_none() && !pins.is_empty())
-        {
+        // A coordinator's crossing renames the tool it reaches and so its declaration; it is
+        // judged as that tool, whose declaration the listing that offered it compared with
+        // its pin (spec 3.2 §7.8).
+        let (tool, stale) = match self.drivers.wrapped_tool(id, tool) {
+            Some(wrapped) => {
+                let stale = record.stale.contains_key(&wrapped)
+                    || (!pins.is_empty() && !pins.contains_key(&wrapped));
+                (wrapped, stale)
+            }
+            None => {
+                let pinned = pins.get(tool);
+                let stale = record.stale.contains_key(tool)
+                    || pinned.is_some_and(|pinned| pinned != digest)
+                    || (pinned.is_none() && !pins.is_empty());
+                (tool.to_string(), stale)
+            }
+        };
+        let tool = tool.as_str();
+        if stale {
             return PolicyDecision::require_approval(format!(
                 "`{tool}` of driver `{id}` declares something other than what was approved, so \
                  its standing rules do not apply and every call needs approval until the driver \
@@ -99,5 +113,68 @@ impl ToolPolicy for DriverPolicy {
 
     fn policy_ref(&self) -> Option<String> {
         Some(DRIVER_POLICY_REF.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::drivers::{DriverManifest, DriverRecord, DriverStore};
+    use crate::stores::InMemoryDriverStore;
+
+    /// A supervisor whose store holds `calendar`, with `list_events` pinned, `stale` marked
+    /// stale and `pay` classed financial.
+    async fn supervisor(stale: bool) -> DriverSupervisor {
+        let manifest = DriverManifest::from_toml(
+            "id = \"calendar\"\ncommand = \"mcp-calendar\"\npartitions = [\"work\"]\n\
+             [tools]\nlist_events = \"read\"\npay = \"financial\"\n",
+        )
+        .unwrap();
+        let mut record = DriverRecord::new(manifest, "alice", chrono::Utc::now());
+        for tool in ["list_events", "pay"] {
+            record.manifest.declaration_digests.insert(tool.into(), format!("sha256:{tool}"));
+        }
+        if stale {
+            record.stale.insert("list_events".into(), "sha256:changed".into());
+        }
+        let store = Arc::new(InMemoryDriverStore::new());
+        store.put(record).await.unwrap();
+        let drivers = DriverSupervisor::builder(store).build();
+        drivers.load().await.unwrap();
+        drivers.register_crossing("calendar", "work__list_events", "list_events");
+        drivers.register_crossing("calendar", "work__pay", "pay");
+        drivers
+    }
+
+    /// A coordinator's crossing is judged as the driver tool it wraps: allowed while that
+    /// tool's declaration is the approved one, asked once it is stale (K-I14), and asked
+    /// every call for a class never auto-allowed (K-I9).
+    #[tokio::test]
+    async fn a_crossing_is_judged_as_the_driver_tool_it_wraps() {
+        let fresh = DriverPolicy::new(supervisor(false).await);
+        assert_eq!(
+            fresh.decide("calendar", "work__list_events", "sha256:renamed"),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            fresh.drivers.class_of("driver:calendar", "work__list_events"),
+            Some(crate::drivers::EffectClass::Read)
+        );
+        assert!(matches!(
+            fresh.decide("calendar", "work__pay", "sha256:renamed"),
+            PolicyDecision::RequireApproval { .. }
+        ));
+        let stale = DriverPolicy::new(supervisor(true).await);
+        assert!(matches!(
+            stale.decide("calendar", "work__list_events", "sha256:renamed"),
+            PolicyDecision::RequireApproval { .. }
+        ));
+        // A name no crossing registered is judged as itself: not there at approval.
+        assert!(matches!(
+            fresh.decide("calendar", "home__list_events", "sha256:x"),
+            PolicyDecision::RequireApproval { .. }
+        ));
     }
 }

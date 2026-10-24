@@ -41,6 +41,12 @@
 //! | `proc::LedgerStore` (with `proc`) | `MongoLedgerStore` | `FirestoreLedgerStore` | `Neo4jLedgerStore` |
 //! | [`PartitionStore`](crate::PartitionStore) | `MongoPartitionStore` | `FirestorePartitionStore` | `Neo4jPartitionStore` |
 //!
+//! The [`CronWatermarkStore`](crate::CronWatermarkStore) — where each cron wake source left
+//! off (§7.4) — runs on in-memory, SQLite, PostgreSQL and Redis
+//! ([`InMemoryCronWatermarkStore`], `SqliteCronWatermarkStore`, `PostgresCronWatermarkStore`,
+//! `RedisCronWatermarkStore`, suite `cron_watermark_store_conformance_tests!`); it has no
+//! MongoDB, Firestore or Neo4j backend yet.
+//!
 //! There is no file backend and no Vertex AI backend (§13 Q8): no durable store on `main` is file-backed, and
 //! Vertex AI holds sessions only.
 
@@ -122,6 +128,11 @@ mod redis;
 mod sql;
 #[cfg(feature = "sqlite")]
 mod sqlite;
+mod watermark_memory;
+#[cfg(feature = "redis")]
+mod watermark_redis;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+pub(crate) mod watermark_sql;
 
 #[cfg(feature = "firestore")]
 pub use agenda_firestore::FirestoreAgendaStore;
@@ -190,6 +201,13 @@ pub use postgres::PostgresProcessStore;
 pub use redis::RedisProcessStore;
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteProcessStore;
+pub use watermark_memory::InMemoryCronWatermarkStore;
+#[cfg(feature = "redis")]
+pub use watermark_redis::RedisCronWatermarkStore;
+#[cfg(feature = "postgres")]
+pub use watermark_sql::PostgresCronWatermarkStore;
+#[cfg(feature = "sqlite")]
+pub use watermark_sql::SqliteCronWatermarkStore;
 
 /// The kernel's side table of process metadata, keyed by run id (spec 3.2 §7.3, §6 D-2).
 ///

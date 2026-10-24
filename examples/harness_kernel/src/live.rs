@@ -36,6 +36,7 @@ pub async fn run(name: &str, bin: &Path, provider: &str, model: &str) -> Result<
         "live_parked_question_after_restart" => parked_question(bin, provider, model).await,
         "live_k10_proc" => k10(bin, provider, model).await,
         "live_k7_partitions" => k7(bin, provider, model).await,
+        "live_k7_driver_crossing" => k7_driver_crossing(bin, provider, model).await,
         other => bail!("unknown scenario {other}"),
     }
 }
@@ -1119,6 +1120,106 @@ async fn k7(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
     checks.check(
         "`adk-rust partitions set-mode work plan` changes the table",
         set.status.success() && work_mode == Some(adk_kernel::PartitionMode::Plan),
+    );
+    Ok(checks)
+}
+
+/// Home, the coordinator, and work, which mounts the notes driver.
+const PARTITIONS_WITH_NOTES: &str = "[kernel]
+coordinator = \"home\"
+
+[[kernel.partitions]]
+id = \"home\"
+class = \"home-agents\"
+cross_partition = \"coordinator_with_approval\"
+
+[[kernel.partitions]]
+id = \"work\"
+class = \"work-agents\"
+cross_partition = \"coordinator_with_approval\"
+drivers = [\"notes\"]
+";
+
+/// K7 with drivers through `adk-rust up` (spec 3.2 §7.7, §7.8, K-I15): the notes driver
+/// serves work. Work's agent calls it directly; the coordinator in home reaches it only as
+/// the crossing `work__read_note`, which parks its process until it is approved in the inbox.
+async fn k7_driver_crossing(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
+    use adk_kernel::{CrossingFilter, CrossingOutcome, CrossingResource, PartitionStore as _};
+
+    let mut checks = Checks::default();
+    let up = Up::start_with(bin, provider, model, "ask", PARTITIONS_WITH_NOTES).await?;
+    let notes = up.root.path().join("notes");
+    std::fs::create_dir_all(&notes)?;
+    let instance = format!("live-k7d-{}", std::process::id());
+    let manifest = crate::notes_driver::manifest(&std::env::current_exe()?, &notes, &instance)
+        .replace("sandbox = \"os\"\n", "sandbox = \"os\"\npartitions = [\"work\"]\n");
+    let path = up.root.path().join("notes.toml");
+    std::fs::write(&path, manifest)?;
+    let (mounted, _) = cli(bin, &up, &["drivers", "mount", &path.display().to_string(), "--yes"])?;
+    checks.check("the notes driver is mounted for work", mounted);
+
+    let client = up.client().await?;
+    let ask = |tool: &str| {
+        format!("Call the {tool} tool once and reply with the codeword it returns, nothing else.")
+    };
+    let (_, direct) = turn(&client, "adk-rust@work", "w-notes", &ask("read_note")).await?;
+    let attached = client.attach("w-notes", &AttachRequest::default()).await?;
+    let (text, calls) = transcript_text(&attached.transcript);
+    checks.check(
+        "work's agent calls its driver directly, without approval",
+        direct == adk_core::RunState::Completed && calls.iter().any(|call| call.starts_with("read_note")),
+    );
+    checks.check("and answers from it", text.contains(crate::notes_driver::CODEWORD));
+
+    let (pid, parked) = turn(&client, "adk-rust@home", "h-notes", &ask("work__read_note")).await?;
+    checks.check(
+        "the coordinator's call is a crossing its process parks on",
+        parked == adk_core::RunState::Waiting,
+    );
+    let items = client.approvals().await?;
+    let held: Vec<_> = items.iter().filter(|item| item.scope.session_id == "h-notes").collect();
+    checks.check(
+        "one crossing waits in the inbox",
+        held.len() == 1 && held[0].tool_name == "work__read_note",
+    );
+    if let Some(item) = held.first() {
+        client.decide(&item.id, item.version, adk_core::ApprovalAction::Approve, None).await?;
+    }
+    let finished = until(Duration::from_secs(180), || {
+        let (client, pid) = (client.clone(), pid.clone());
+        async move {
+            let processes = client.processes(&ProcessesQuery::default()).await?;
+            Ok(processes
+                .iter()
+                .any(|process| process.meta.pid == pid && process.run.state.is_terminal()))
+        }
+    })
+    .await?;
+    checks.check("the approved process completes", finished);
+    let attached = client.attach("h-notes", &AttachRequest::default()).await?;
+    let (text, calls) = transcript_text(&attached.transcript);
+    checks.check(
+        "the coordinator answered from work's driver, through the crossing",
+        text.contains(crate::notes_driver::CODEWORD)
+            && calls.iter().any(|call| call.starts_with("work__read_note"))
+            && !calls.iter().any(|call| call.starts_with("read_note")),
+    );
+
+    let url = format!("sqlite://{}?mode=rwc", up.home.join("harness.db").display());
+    let sessions = adk_session::SqliteSessionService::new(&url).await?;
+    let ledger = adk_kernel::SqlitePartitionStore::new(sessions.pool().clone())
+        .crossings(&CrossingFilter::default().from("home"))
+        .await?;
+    let outcomes: Vec<CrossingOutcome> = ledger
+        .iter()
+        .filter(|record| record.resource == CrossingResource::Driver)
+        .map(|record| record.outcome)
+        .collect();
+    println!("    crossings from home: {outcomes:?}");
+    checks.check(
+        "the ledger shows the driver crossing held, then approved",
+        outcomes.first() == Some(&CrossingOutcome::Held)
+            && outcomes.get(1) == Some(&CrossingOutcome::Approved),
     );
     Ok(checks)
 }

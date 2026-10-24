@@ -23,8 +23,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::store::DriverPark;
 use super::supervisor::{DriverSupervisor, declaration_digest};
-use super::{EffectClass, driver_source};
-use crate::partition::PartitionId;
+use super::{EffectClass, driver_of, driver_source};
+use crate::partition::{
+    CrossPartition, CrossingAccess, CrossingResource, CrossingTool, PartitionId, PartitionPolicy,
+};
 
 /// The tools of the drivers a partition mounts (spec 3.2 §7.7, §7.8).
 pub(crate) struct DriverToolset {
@@ -103,6 +105,90 @@ impl Toolset for DriverToolset {
                     source: driver_source(id),
                     drivers: self.drivers.clone(),
                 }));
+            }
+        }
+        Ok(tools)
+    }
+}
+
+/// The drivers of other partitions offered to a coordinator as crossing tools (spec 3.2
+/// §7.7, §7.8, K-I15).
+pub(crate) struct DriverCrossings {
+    drivers: DriverSupervisor,
+    policy: PartitionPolicy,
+    targets: Vec<PartitionId>,
+}
+
+impl DriverCrossings {
+    pub(crate) fn new(
+        drivers: DriverSupervisor,
+        policy: PartitionPolicy,
+        targets: Vec<PartitionId>,
+    ) -> Self {
+        Self { drivers, policy, targets }
+    }
+}
+
+#[async_trait]
+impl Toolset for DriverCrossings {
+    fn name(&self) -> &str {
+        "kernel_driver_crossings"
+    }
+
+    /// The tools each target partition's own toolset serves, read from the partition table
+    /// at every listing, each wrapped as the crossing `<to>__<tool>`: a partition that takes
+    /// no crossing, the coordinator's own when it takes none, and one the coordinator's
+    /// partition blocks offer nothing. A read is offered as a read only when the manifest
+    /// classes the tool `read`.
+    async fn tools(&self, ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
+        let table = self.policy.partitions();
+        let home = table.get(self.policy.home()).await.map_err(AdkError::from)?;
+        if home.as_ref().is_some_and(|home| home.cross_partition == CrossPartition::Deny) {
+            return Ok(Vec::new());
+        }
+        let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
+        for to in &self.targets {
+            if to == self.policy.home()
+                || home.as_ref().is_some_and(|home| home.blocked_crossings.contains(to))
+            {
+                continue;
+            }
+            let Some(partition) = table.get(to).await.map_err(AdkError::from)? else {
+                continue;
+            };
+            if partition.cross_partition == CrossPartition::Deny {
+                continue;
+            }
+            let listed =
+                DriverToolset::new(self.drivers.clone(), to.clone(), Some(partition.drivers))
+                    .tools(ctx.clone())
+                    .await?;
+            for tool in listed {
+                let Some(driver) = driver_of(tool.origin()).map(str::to_string) else {
+                    continue;
+                };
+                // A read is reused for the rest of a run only when the manifest classes the
+                // tool `read` and its declaration is the approved one; anything else is
+                // asked each call (K-I9, K-I14).
+                let stale = self
+                    .drivers
+                    .record(&driver)
+                    .is_none_or(|record| record.stale.contains_key(tool.name()));
+                let access = match self.drivers.class_of(tool.origin(), tool.name()) {
+                    Some(EffectClass::Read) if !stale => CrossingAccess::Read,
+                    _ => CrossingAccess::Write,
+                };
+                let name = tool.name().to_string();
+                let crossing = CrossingTool::new(
+                    tool,
+                    &self.policy,
+                    to.clone(),
+                    CrossingResource::Driver,
+                    access,
+                    driver.clone(),
+                );
+                self.drivers.register_crossing(&driver, crossing.name(), &name);
+                tools.push(Arc::new(crossing));
             }
         }
         Ok(tools)
