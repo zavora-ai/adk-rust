@@ -451,7 +451,12 @@ async fn dropping_the_manager_ends_the_processes_its_servers_started() {
 
     drop(manager);
 
-    let ended = ends_within(descendant, Duration::from_secs(10));
+    // The drop cancels each server's connection task, which drops the transport and its job
+    // when the runtime next runs it; the wait blocks a pool thread, not that runtime.
+    let ended =
+        tokio::task::spawn_blocking(move || ends_within(descendant, Duration::from_secs(10)))
+            .await
+            .unwrap();
     terminate(descendant);
     assert!(ended, "a process a server started outlived the dropped manager");
 }

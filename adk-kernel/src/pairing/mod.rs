@@ -5,16 +5,24 @@
 //! a device token instead of the operator's own credentials:
 //!
 //! 1. The person at the kernel issues a code (`adk-rust pair`, `POST /api/kernel/pairing`):
-//!    eight characters shown as `ABCD-2345`, valid for ten minutes, naming the scopes the
-//!    device gets. The store keeps the code's SHA-256 only.
+//!    twelve characters shown as `ABCD-EFGH-2345` (60 bits), valid for ten minutes, naming
+//!    the scopes the device gets. The store keeps the code's SHA-256 only.
 //! 2. The device claims it (`POST /api/kernel/pairing/claim`, the one route that needs no
 //!    caller, since the code is the credential) and receives its token once:
-//!    `adkd_<id>_<secret>`. The store keeps the secret's SHA-256 only. A claim takes the code,
-//!    so each code pairs one device; twenty wrong codes in a row cancel every waiting code.
-//! 3. The device sends the token as `Authorization: Bearer`. Each request is admitted only to
-//!    the routes its scopes open ([`device_scope_for`]), as the person who issued the code,
-//!    with that person's approval groups, until the token expires or is revoked
-//!    (`adk-rust pair revoke`, `POST /api/kernel/devices/{id}/revoke`).
+//!    `adkd_<id>_<secret>`. The store keeps the secret's SHA-256 only. A claim takes the
+//!    code, so each code pairs one device. Every claim is counted in the store before its
+//!    code is looked up, so replicas share the count: after twenty claims without a success,
+//!    every waiting code is cancelled and claims are refused until the next code is issued.
+//! 3. The device sends the token as `Authorization: Bearer` over HTTP. Each request is
+//!    admitted only to the routes its scopes open ([`device_scope_for`]), as the person who
+//!    issued the code, with that person's approval groups, until the token expires or is
+//!    revoked (`adk-rust pair revoke`, `POST /api/kernel/devices/{id}/revoke`). An event
+//!    stream a device holds open ends when the device is revoked or its pairing ends: at once
+//!    for a revocation on the same kernel, within five seconds for one on another replica.
+//!    A decision a device answers is checked for its risk and recorded by the device guard
+//!    in front of the routes: the kernel's own HTTP listener runs it, and a server's app
+//!    runs it through [`guard_devices`](crate::control::guard_devices); without the guard,
+//!    [`DeviceTokenExtractor`] refuses the decision.
 //!
 //! | Scope | Routes (under `/api`) |
 //! |---|---|
@@ -56,8 +64,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use adk_core::{AdkError, Clock, ErrorCategory, ErrorComponent, RequestContext, SystemClock};
@@ -96,8 +104,10 @@ pub const DEVICE_NAME_METADATA: &str = "adk.device.name";
 /// The request-context metadata key with the device's scopes, comma-separated.
 pub const DEVICE_SCOPES_METADATA: &str = "adk.device.scopes";
 
-/// Wrong codes in a row after which every waiting code is cancelled.
-const MAX_FAILED_CLAIMS: u32 = 20;
+/// Claims without a success after which the next one cancels every waiting code.
+const MAX_FAILED_CLAIMS: u64 = 20;
+/// How often an open event stream re-reads its device, for a revocation on another replica.
+const DEFAULT_RECHECK: Duration = Duration::from_secs(5);
 /// The longest a device name may be.
 const MAX_NAME_CHARS: usize = 64;
 /// The longest a device's pairing may last.
@@ -389,6 +399,14 @@ pub trait DeviceStore: Send + Sync {
 
     /// Every device, oldest pairing first, then by id.
     async fn list_devices(&self) -> Result<Vec<DeviceRecord>>;
+
+    /// Counts one claim attempt and returns how many were counted since the last reset.
+    /// Every replica over the store shares the count, and concurrent attempts each get a
+    /// distinct count.
+    async fn count_claim_attempt(&self) -> Result<u64>;
+
+    /// Starts the count of claim attempts again.
+    async fn reset_claim_attempts(&self) -> Result<()>;
 }
 
 /// What `adk-rust pair` asks for (spec 3.3 §10 K2): a code for a device acting for `owner`.
@@ -455,6 +473,54 @@ impl IssueCode {
         self.device_ttl = Some(ttl);
         self
     }
+
+    /// The request as it is issued and recorded: every scope when none is named, sorted and
+    /// without repeats, and the name without control characters, at most 64 characters.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_kernel::pairing::{DeviceScope, IssueCode};
+    ///
+    /// let code = IssueCode::new("ana", ["operator"]).with_name("Ana's\u{7} phone").normalized();
+    /// assert_eq!(code.scopes, DeviceScope::ALL);
+    /// assert_eq!(code.name.as_deref(), Some("Ana's phone"));
+    /// ```
+    #[must_use]
+    pub fn normalized(mut self) -> Self {
+        self.scopes = if self.scopes.is_empty() {
+            DeviceScope::ALL.to_vec()
+        } else {
+            self.scopes.iter().copied().collect::<BTreeSet<_>>().into_iter().collect()
+        };
+        self.name = self
+            .name
+            .map(|name| secret::clean_name(&name, MAX_NAME_CHARS))
+            .filter(|name| !name.is_empty());
+        self
+    }
+}
+
+/// A claimed code whose device is not stored yet: the control plane records the claim
+/// first, then stores the device or puts the code back.
+pub(crate) struct PendingClaim {
+    code: PairingCode,
+    device: DeviceRecord,
+    token: String,
+}
+
+impl PendingClaim {
+    /// The device the claim pairs.
+    pub(crate) fn device(&self) -> &DeviceRecord {
+        &self.device
+    }
+}
+
+/// The marker the device guard leaves on a request it admitted, so the extractor behind it
+/// knows the request's risk was checked and recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeviceAdmission {
+    pub(crate) device: String,
 }
 
 /// A code just issued (spec 3.3 §10 K2): the only time the code itself is seen.
@@ -462,16 +528,19 @@ impl IssueCode {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct IssuedCode {
-    /// The code, as `ABCD-2345`.
+    /// The code, as `ABCD-EFGH-2345`.
     pub code: String,
     /// When it stops working.
     pub expires_at: DateTime<Utc>,
     /// The scopes the device will get.
     pub scopes: Vec<DeviceScope>,
     /// Where a phone opens the code, when the kernel knows its home's address:
-    /// `<home>/pair#code=ABCD-2345`, the code in the fragment so no server log keeps it.
+    /// `<home>/pair#code=ABCD-EFGH-2345`, the code in the fragment so no server log keeps it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// How long the device that claims the code stays paired, in seconds.
+    #[serde(default)]
+    pub device_ttl_secs: u64,
 }
 
 /// A device just paired (spec 3.3 §10 K2): the only time its token is seen.
@@ -509,7 +578,8 @@ struct Inner {
     device_ttl: Duration,
     home_url: Option<String>,
     clock: Arc<dyn Clock>,
-    failed_claims: AtomicU32,
+    recheck: Duration,
+    revoked: tokio::sync::broadcast::Sender<String>,
 }
 
 impl fmt::Debug for Pairing {
@@ -539,7 +609,8 @@ impl Pairing {
                 device_ttl: Self::DEFAULT_DEVICE_TTL,
                 home_url: None,
                 clock: Arc::new(SystemClock),
-                failed_claims: AtomicU32::new(0),
+                recheck: DEFAULT_RECHECK,
+                revoked: tokio::sync::broadcast::channel(64).0,
             }),
         }
     }
@@ -553,7 +624,8 @@ impl Pairing {
             device_ttl: shared.device_ttl,
             home_url: shared.home_url.clone(),
             clock: shared.clock.clone(),
-            failed_claims: AtomicU32::new(shared.failed_claims.load(Ordering::SeqCst)),
+            recheck: shared.recheck,
+            revoked: shared.revoked.clone(),
         });
         let mut inner = inner;
         change(&mut inner);
@@ -584,6 +656,13 @@ impl Pairing {
     #[must_use]
     pub fn with_clock(self, clock: Arc<dyn Clock>) -> Self {
         self.rebuild(|inner| inner.clock = clock)
+    }
+
+    /// How often an open event stream re-reads its device, for a revocation made on another
+    /// replica; a revocation made here ends it at once. Defaults to five seconds.
+    #[must_use]
+    pub fn with_revocation_check(self, interval: Duration) -> Self {
+        self.rebuild(|inner| inner.recheck = interval.max(Duration::from_millis(10)))
     }
 
     /// Keeps chat accounts' pairings in `store` (spec 3.3 §10 K1), so the control plane
@@ -622,64 +701,102 @@ impl Pairing {
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::Config`] when the owner is empty or the random number
-    /// generator fails, or the store's error.
+    /// Returns [`KernelError::Config`] when the owner is empty, the device's pairing would
+    /// last no time or more than 365 days, or the random number generator fails, and the
+    /// store's error.
     pub async fn issue(&self, request: IssueCode) -> Result<IssuedCode> {
         if request.owner.trim().is_empty() {
             return Err(KernelError::Config {
                 reason: "a pairing code needs the person the device acts for".into(),
             });
         }
+        let request = request.normalized();
+        let device_ttl = request.device_ttl.unwrap_or(self.inner.device_ttl);
+        if device_ttl.is_zero() || device_ttl > MAX_DEVICE_TTL {
+            return Err(KernelError::Config {
+                reason: format!(
+                    "a device stays paired for at most 365 days and longer than none, not {} \
+                     days: pass `adk-rust pair --days` between 1 and 365",
+                    device_ttl.as_secs() / 86_400
+                ),
+            });
+        }
         let now = self.now();
         self.inner.store.prune_codes(now).await?;
-        let scopes: Vec<DeviceScope> = if request.scopes.is_empty() {
-            DeviceScope::ALL.to_vec()
-        } else {
-            request.scopes.iter().copied().collect::<BTreeSet<_>>().into_iter().collect()
-        };
         let code = secret::new_code()?;
         let expires_at = now + chrono::Duration::from_std(self.inner.code_ttl).unwrap_or_default();
-        let device_ttl = request.device_ttl.unwrap_or(self.inner.device_ttl).min(MAX_DEVICE_TTL);
         let mut stored =
             PairingCode::new(secret::code_hash(&code), request.owner, device_ttl, now, expires_at);
         stored.groups = request.groups;
-        stored.scopes = scopes.clone();
-        stored.name = request
-            .name
-            .map(|name| secret::clean_name(&name, MAX_NAME_CHARS))
-            .filter(|name| !name.is_empty());
+        stored.scopes = request.scopes.clone();
+        stored.name = request.name;
         self.inner.store.put_code(stored).await?;
+        // A new code starts the count of claims again, after a lockout too.
+        self.inner.store.reset_claim_attempts().await?;
         let url = self.inner.home_url.as_ref().map(|home| format!("{home}/pair#code={code}"));
-        Ok(IssuedCode { code, expires_at, scopes, url })
+        Ok(IssuedCode {
+            code,
+            expires_at,
+            scopes: request.scopes,
+            url,
+            device_ttl_secs: device_ttl.as_secs(),
+        })
     }
 
     /// Claims `code` for a device called `name` (the name the code was issued with wins) and
     /// returns its token, once.
     ///
+    /// Every claim is counted in the store before its code is looked up, on every replica
+    /// over the store: after twenty claims without a success every waiting code is
+    /// cancelled, and claims are refused until the next code is issued. A claim whose device
+    /// cannot be stored puts its code back.
+    ///
     /// # Errors
     ///
-    /// Returns [`KernelError::Unauthorized`] for a wrong, used or expired code; after twenty
-    /// wrong codes in a row every waiting code is cancelled. Returns the store's error.
+    /// Returns [`KernelError::Unauthorized`] for a wrong, used or expired code, or once the
+    /// claims are locked out. Returns the store's error.
     pub async fn claim(&self, code: &str, name: Option<&str>) -> Result<ClaimedDevice> {
-        let now = self.now();
-        let taken = self.inner.store.take_code(&secret::code_hash(code)).await?;
-        let Some(code) = taken.filter(|code| now < code.expires_at) else {
-            let failed = self.inner.failed_claims.fetch_add(1, Ordering::SeqCst) + 1;
-            if failed >= MAX_FAILED_CLAIMS {
-                self.inner.failed_claims.store(0, Ordering::SeqCst);
-                let cleared = self.inner.store.clear_codes().await?;
+        let pending = self.take_for_claim(code, name).await?;
+        self.finish_claim(pending).await
+    }
+
+    /// Takes `code` for a claim and makes its device and token, storing neither.
+    pub(crate) async fn take_for_claim(
+        &self,
+        code: &str,
+        name: Option<&str>,
+    ) -> Result<PendingClaim> {
+        let wrong = || KernelError::Unauthorized {
+            reason: "the pairing code is wrong, used or expired: run `adk-rust pair` for a new \
+                     one"
+            .into(),
+        };
+        let store = &self.inner.store;
+        let attempts = store.count_claim_attempt().await?;
+        if attempts > MAX_FAILED_CLAIMS {
+            // The count stays over the limit until the next code is issued, so every claim
+            // in flight and every later one is refused, and a failed clear refuses too.
+            let cleared = store.clear_codes().await?;
+            if cleared > 0 {
                 tracing::warn!(
                     pairing.cleared = cleared,
-                    "too many wrong pairing codes; every waiting code was cancelled"
+                    "too many claims without a success; every waiting code was cancelled"
                 );
             }
             return Err(KernelError::Unauthorized {
-                reason: "the pairing code is wrong, used or expired: run `adk-rust pair` for a \
-                         new one"
+                reason: "too many pairing codes were wrong, so every waiting code was \
+                         cancelled: run `adk-rust pair` for a new one"
                     .into(),
             });
+        }
+        let now = self.now();
+        let taken = store.take_code(&secret::code_hash(code)).await?;
+        let Some(code) = taken.filter(|code| now < code.expires_at) else {
+            return Err(wrong());
         };
-        self.inner.failed_claims.store(0, Ordering::SeqCst);
+        if let Err(error) = store.reset_claim_attempts().await {
+            tracing::warn!(error = %error, "the count of pairing claims could not be reset");
+        }
         let id = secret::new_device_id()?;
         let (token, token_hash) = secret::new_token(&id)?;
         let name = code
@@ -692,15 +809,61 @@ impl Pairing {
         let device = DeviceRecord::new(
             id,
             name,
-            code.owner,
+            code.owner.clone(),
             token_hash,
             now,
             now + chrono::Duration::from_std(ttl).unwrap_or_default(),
         )
-        .with_scopes(code.scopes)
-        .with_groups(code.groups);
-        self.inner.store.put_device(device.clone()).await?;
-        Ok(ClaimedDevice { device: device.view(now), token })
+        .with_scopes(code.scopes.clone())
+        .with_groups(code.groups.clone());
+        Ok(PendingClaim { code, device, token })
+    }
+
+    /// Stores a taken claim's device and returns its token; puts the code back when the
+    /// device cannot be stored.
+    pub(crate) async fn finish_claim(&self, pending: PendingClaim) -> Result<ClaimedDevice> {
+        if let Err(error) = self.inner.store.put_device(pending.device.clone()).await {
+            self.abandon_claim(pending).await;
+            return Err(error);
+        }
+        Ok(ClaimedDevice { device: pending.device.view(self.now()), token: pending.token })
+    }
+
+    /// Puts a taken claim's code back, so it can be claimed again.
+    pub(crate) async fn abandon_claim(&self, pending: PendingClaim) {
+        if let Err(error) = self.inner.store.put_code(pending.code).await {
+            tracing::error!(error = %error, "a pairing code could not be put back");
+        }
+    }
+
+    /// Resolves when device `id` stops working: when it is revoked here, when a re-read finds
+    /// it revoked elsewhere or gone, or when its pairing ends.
+    pub(crate) fn device_ends(&self, id: String) -> impl Future<Output = ()> + Send + 'static {
+        let pairing = self.clone();
+        let mut revoked = self.inner.revoked.subscribe();
+        async move {
+            loop {
+                let wait = match pairing.inner.store.get_device(&id).await {
+                    Ok(Some(device)) if device.is_active(pairing.now()) => {
+                        let left = (device.expires_at - pairing.now()).to_std().unwrap_or_default();
+                        left.min(pairing.inner.recheck)
+                    }
+                    Ok(_) => return,
+                    Err(error) => {
+                        tracing::warn!(device.id = %id, error = %error, "a device could not be re-read");
+                        pairing.inner.recheck
+                    }
+                };
+                tokio::select! {
+                    () = tokio::time::sleep(wait) => {}
+                    message = revoked.recv() => match message {
+                        Ok(gone) if gone == id => return,
+                        Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                    },
+                }
+            }
+        }
     }
 
     /// The device `token` belongs to, when the token works.
@@ -749,6 +912,10 @@ impl Pairing {
     /// device's owner with the owner's approval groups, and the device named in
     /// [`DEVICE_ID_METADATA`] and [`DEVICE_NAME_METADATA`].
     ///
+    /// It checks the device's scopes only: a decision's risk, which a device may answer at
+    /// low and medium only (spec 3.3 §7.2), is checked by the device guard of the control
+    /// plane ([`guard_devices`](crate::control::guard_devices)), which also records it.
+    ///
     /// # Errors
     ///
     /// [`authenticate`](Self::authenticate)'s errors, and a `Forbidden` error coded
@@ -785,8 +952,9 @@ impl Pairing {
         self.inner.store.list_devices().await
     }
 
-    /// Removes device `id`: its token stops working at once. Revoking a revoked device
-    /// changes nothing.
+    /// Removes device `id`: its token stops working at once, and an event stream it holds
+    /// open ends, at once on this kernel and at its next re-read on another replica (five
+    /// seconds by default). Revoking a revoked device changes nothing.
     ///
     /// # Errors
     ///
@@ -805,6 +973,8 @@ impl Pairing {
             device.revoked_at = Some(self.now());
             self.inner.store.put_device(device.clone()).await?;
         }
+        // Event streams the device holds open here end now; elsewhere, at their next re-read.
+        let _ = self.inner.revoked.send(device.id.clone());
         Ok(device)
     }
 }
@@ -875,9 +1045,11 @@ pub(crate) fn device_token(headers: &axum::http::HeaderMap) -> Option<&str> {
 /// Mount it as the `RequestContextExtractor` of a `ServerBuilder` that serves the kernel's
 /// routes, wrapping the extractor it had, so a device token is never mistaken for another
 /// credential and never widened: a request that carries one is the device, on loopback too.
-/// A refused device request answers `401` through `ServerBuilder`, whose extractor errors
-/// carry no `403`; [`guard_devices`](crate::control::guard_devices) in front of the app
-/// answers `403` first.
+/// Layer [`guard_devices`](crate::control::guard_devices) on the built app as well: it
+/// checks a device's decision for its risk (low and medium only, spec 3.3 §7.2) and records
+/// it, and the extractor refuses every device decision the guard did not admit. A refused
+/// device request answers `401` through `ServerBuilder`, whose extractor errors carry no
+/// `403`; the guard answers `403` first.
 ///
 /// # Example
 ///
@@ -933,6 +1105,19 @@ impl RequestContextExtractor for DeviceTokenExtractor {
         let path =
             parts.uri.path_and_query().map_or_else(|| parts.uri.path(), |path| path.as_str());
         match self.pairing.authorize(token, &parts.method, path).await {
+            // A device's decision is admitted only behind the guard, which checks its risk
+            // and records it (spec 3.3 §7.2, §11).
+            Ok(context)
+                if device_scope_for(&parts.method, path) == Some(DeviceScope::Decide)
+                    && parts.extensions.get::<DeviceAdmission>().map(|admitted| &admitted.device)
+                        != context.metadata.get(DEVICE_ID_METADATA) =>
+            {
+                Err(RequestContextError::InvalidToken(
+                    "a device's decision is admitted only behind adk_kernel::control::guard_devices, \
+                     which checks its risk and records it; layer it on the app"
+                        .into(),
+                ))
+            }
             Ok(context) => Ok(context),
             Err(error @ (KernelError::Store { .. } | KernelError::Io(_))) => {
                 Err(RequestContextError::ExtractionFailed(error.to_string()))
@@ -944,10 +1129,167 @@ impl RequestContextExtractor for DeviceTokenExtractor {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
     use super::*;
 
     fn pairing() -> Pairing {
         Pairing::new(Arc::new(InMemoryDeviceStore::new()))
+    }
+
+    /// An in-memory store that counts code lookups, can make them slow, and can fail a
+    /// device write or a clear.
+    #[derive(Default)]
+    struct Faulty {
+        inner: InMemoryDeviceStore,
+        lookups: AtomicUsize,
+        slow: AtomicBool,
+        fail_put_device: AtomicBool,
+        fail_clear: AtomicBool,
+    }
+
+    fn down() -> KernelError {
+        KernelError::Store { backend: "test", reason: "down".into() }
+    }
+
+    #[async_trait]
+    impl DeviceStore for Faulty {
+        async fn put_code(&self, code: PairingCode) -> Result<()> {
+            self.inner.put_code(code).await
+        }
+        async fn take_code(&self, code_hash: &str) -> Result<Option<PairingCode>> {
+            self.lookups.fetch_add(1, Ordering::SeqCst);
+            if self.slow.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            self.inner.take_code(code_hash).await
+        }
+        async fn prune_codes(&self, before: DateTime<Utc>) -> Result<usize> {
+            self.inner.prune_codes(before).await
+        }
+        async fn clear_codes(&self) -> Result<usize> {
+            if self.fail_clear.load(Ordering::SeqCst) {
+                return Err(down());
+            }
+            self.inner.clear_codes().await
+        }
+        async fn put_device(&self, device: DeviceRecord) -> Result<()> {
+            if self.fail_put_device.swap(false, Ordering::SeqCst) {
+                return Err(down());
+            }
+            self.inner.put_device(device).await
+        }
+        async fn get_device(&self, id: &str) -> Result<Option<DeviceRecord>> {
+            self.inner.get_device(id).await
+        }
+        async fn list_devices(&self) -> Result<Vec<DeviceRecord>> {
+            self.inner.list_devices().await
+        }
+        async fn count_claim_attempt(&self) -> Result<u64> {
+            self.inner.count_claim_attempt().await
+        }
+        async fn reset_claim_attempts(&self) -> Result<()> {
+            self.inner.reset_claim_attempts().await
+        }
+    }
+
+    /// Concurrent wrong claims are counted before they are checked, so no
+    /// more than twenty reach the codes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_wrong_claims_are_counted_before_they_are_checked() {
+        let store = Arc::new(Faulty::default());
+        store.slow.store(true, Ordering::SeqCst);
+        let pairing = Pairing::new(store.clone());
+        pairing.issue(IssueCode::new("ana", ["operator"])).await.unwrap();
+        let mut claims = Vec::new();
+        for guess in 0..100 {
+            let pairing = pairing.clone();
+            claims.push(tokio::spawn(async move {
+                pairing.claim(&format!("0000-0000-{guess:04}"), None).await.is_err()
+            }));
+        }
+        for claim in claims {
+            assert!(claim.await.unwrap());
+        }
+        let lookups = store.lookups.load(Ordering::SeqCst);
+        assert!(lookups <= MAX_FAILED_CLAIMS as usize, "{lookups} guesses reached the codes");
+    }
+
+    /// Replicas over one store share the count of wrong codes.
+    #[tokio::test]
+    async fn replicas_share_the_count_of_wrong_codes() {
+        let store: Arc<dyn DeviceStore> = Arc::new(InMemoryDeviceStore::new());
+        let (first, second) = (Pairing::new(store.clone()), Pairing::new(store));
+        let issued = first.issue(IssueCode::new("ana", ["operator"])).await.unwrap();
+        for _ in 0..MAX_FAILED_CLAIMS / 2 {
+            assert!(first.claim("0000-0000", None).await.is_err());
+            assert!(second.claim("0000-0000", None).await.is_err());
+        }
+        assert!(second.claim(&issued.code, None).await.is_err(), "the shared lockout fired");
+    }
+
+    /// A lockout whose clear fails keeps refusing claims.
+    #[tokio::test]
+    async fn a_lockout_whose_clear_fails_keeps_refusing() {
+        let store = Arc::new(Faulty::default());
+        store.fail_clear.store(true, Ordering::SeqCst);
+        let pairing = Pairing::new(store.clone());
+        let issued = pairing.issue(IssueCode::new("ana", ["operator"])).await.unwrap();
+        for _ in 0..=MAX_FAILED_CLAIMS {
+            assert!(pairing.claim("0000-0000", None).await.is_err());
+        }
+        assert!(pairing.claim(&issued.code, None).await.is_err(), "still locked out");
+    }
+
+    /// A claim whose device cannot be stored keeps its code.
+    #[tokio::test]
+    async fn a_claim_whose_device_cannot_be_stored_keeps_its_code() {
+        let store = Arc::new(Faulty::default());
+        let pairing = Pairing::new(store.clone());
+        let issued = pairing.issue(IssueCode::new("ana", ["operator"])).await.unwrap();
+        store.fail_put_device.store(true, Ordering::SeqCst);
+        assert!(matches!(pairing.claim(&issued.code, None).await, Err(KernelError::Store { .. })));
+        assert!(pairing.claim(&issued.code, None).await.is_ok(), "the retry pairs");
+    }
+
+    /// A lockout holds until the next code is issued, which pairs.
+    #[tokio::test]
+    async fn a_lockout_holds_until_the_next_code() {
+        let pairing = pairing();
+        let first = pairing.issue(IssueCode::new("ana", ["operator"])).await.unwrap();
+        for _ in 0..MAX_FAILED_CLAIMS {
+            assert!(pairing.claim("0000-0000-0000", None).await.is_err());
+        }
+        let error = pairing.claim(&first.code, None).await.unwrap_err();
+        assert!(error.to_string().contains("too many"), "{error}");
+        let second = pairing.issue(IssueCode::new("ana", ["operator"])).await.unwrap();
+        assert!(pairing.claim(&first.code, None).await.is_err(), "the first code was cancelled");
+        assert!(pairing.claim(&second.code, None).await.is_ok(), "a new code pairs");
+    }
+
+    /// The extractor alone never admits a device's decision, which only
+    /// the guard in front of the app checks for risk and records.
+    #[tokio::test]
+    async fn the_extractor_alone_refuses_a_device_decision() {
+        let pairing = pairing();
+        let issued = pairing.issue(IssueCode::new("ana", ["operator"])).await.unwrap();
+        let token = pairing.claim(&issued.code, None).await.unwrap().token;
+        let extractor = DeviceTokenExtractor::new(pairing);
+        let request = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri("/api/approvals/a1/decide")
+            .header("authorization", format!("Bearer {token}"))
+            .body(())
+            .unwrap();
+        let (parts, ()) = request.into_parts();
+        assert!(extractor.extract(&parts).await.is_err(), "decide needs the guard");
+        let request = axum::http::Request::builder()
+            .uri("/api/approvals")
+            .header("authorization", format!("Bearer {token}"))
+            .body(())
+            .unwrap();
+        let (parts, ()) = request.into_parts();
+        assert!(extractor.extract(&parts).await.is_ok(), "read needs no guard");
     }
 
     #[tokio::test]
@@ -984,20 +1326,25 @@ mod tests {
 
     #[tokio::test]
     async fn revoked_and_expired_tokens_are_refused() {
-        let pairing = pairing().with_device_ttl(Duration::from_secs(60));
+        let clock = adk_core::ManualClock::new(Utc::now());
+        let pairing =
+            pairing().with_device_ttl(Duration::from_secs(60)).with_clock(Arc::new(clock.clone()));
         let issued = pairing.issue(IssueCode::new("ana", ["operator"])).await.unwrap();
         let claimed = pairing.claim(&issued.code, None).await.unwrap();
         pairing.revoke(&claimed.device.id).await.unwrap();
         let error = pairing.authenticate(&claimed.token).await.unwrap_err();
         assert!(error.to_string().contains("was removed"), "{error}");
 
-        let issued = pairing
-            .issue(IssueCode::new("ana", ["operator"]).with_device_ttl(Duration::ZERO))
-            .await
-            .unwrap();
+        let issued = pairing.issue(IssueCode::new("ana", ["operator"])).await.unwrap();
         let claimed = pairing.claim(&issued.code, None).await.unwrap();
+        clock.advance(Duration::from_secs(61));
         let error = pairing.authenticate(&claimed.token).await.unwrap_err();
         assert!(error.to_string().contains("pairing ended"), "{error}");
+        let refused = pairing
+            .issue(IssueCode::new("ana", ["operator"]).with_device_ttl(Duration::ZERO))
+            .await
+            .unwrap_err();
+        assert!(matches!(refused, KernelError::Config { .. }), "a zero-length pairing is refused");
     }
 
     #[tokio::test]

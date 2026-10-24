@@ -13,8 +13,8 @@ use adk_cli::harness::ultracode::{
     UltracodeLimits, Verdict, WorkspaceSnapshot, route,
 };
 use adk_cli::harness::{
-    ConsolePrompter, HarnessArgs, HarnessLauncher, OPERATOR_SCOPE, ResolvedHarnessArgs, SearchArg,
-    TurnOutcome,
+    ConsolePrompter, HarnessArgs, HarnessLauncher, KernelSettings, OPERATOR_SCOPE,
+    ResolvedHarnessArgs, SearchArg, TurnOutcome,
 };
 use adk_core::audit_log::AuditRecorder;
 use adk_core::{
@@ -72,17 +72,40 @@ struct Setup {
     /// §7.11, §13 Q5); `None` keeps them in memory.
     plans: Option<(Arc<dyn adk_graph::Checkpointer>, String)>,
     /// `--preset personal`: the first-run answers (spec 3.3 §10 H1, §13 Q7).
-    personal: Option<adk_harness::personal::PersonalSettings>,
+    personal: Option<PersonalSetup>,
 }
 
-/// Where `bash` runs, or `none` when the harness offers no shell, as the personal preset's
-/// does on the host (spec 3.3 §10 H1).
-fn shell_label(info: &adk_harness::HarnessInfo) -> String {
-    if info.tools.iter().any(|tool| tool == "bash") {
-        info.isolation.to_string()
-    } else {
-        "none".to_string()
+/// `--preset personal`: the first-run answers and the limits in force (spec 3.3 §10 H1,
+/// §13 Q7).
+struct PersonalSetup {
+    settings: adk_harness::personal::PersonalSettings,
+    /// Quiet time as `adk-rust up` keeps it: the user config's `[kernel]` table wins.
+    quiet: Option<adk_kernel::QuietHours>,
+    /// The daily spending limit as `adk-rust up` keeps it: the user config's `[kernel]`
+    /// table wins, and the workspace's `.adk/harness.toml` may only lower it.
+    daily_spend_cap: Option<u64>,
+}
+
+impl PersonalSetup {
+    /// Both limits, shown on every start (spec 3.3 §13 Q7). Only `adk-rust up` runs work on
+    /// its own, so only it keeps them.
+    fn status_lines(&self) -> [(&'static str, String); 2] {
+        [
+            ("Quiet time", format!("{} (kept by adk-rust up)", up::quiet_time_label(self.quiet))),
+            (
+                "Spending",
+                format!(
+                    "daily spending limit {} (kept by adk-rust up)",
+                    up::spending_limit_label(self.daily_spend_cap)
+                ),
+            ),
+        ]
     }
+}
+
+/// Where `bash` runs, or `none` when the harness offers no shell (spec 3.3 §10 H1).
+fn shell_label(info: &adk_harness::HarnessInfo) -> String {
+    info.shell().map_or_else(|| "none".to_string(), ToString::to_string)
 }
 
 /// `--preset personal` (spec 3.3 §10 H1, §13 Q7): the answers kept in `home`, asked for on
@@ -166,12 +189,33 @@ impl Setup {
         store: Option<&str>,
         home: Option<&Path>,
     ) -> Result<Self> {
+        // The personal preset reads `[kernel]` for its home and the limits it shows; only
+        // `adk-rust up` runs a kernel, so anything else notes an error there and goes on
+        // (spec 3.3 §10 H1).
+        let personal_preset = args.preset == Some(adk_harness::Preset::Personal);
+        let mut kernel_notes = Vec::new();
+        let user_kernel = if personal_preset {
+            KernelSettings::resolve_user(user_config().as_deref())
+                .map_err(|error| {
+                    kernel_notes.push(format!(
+                        "{error}; the limits shown are the first-run answers, and `adk-rust up` \
+                         will not start until it is fixed"
+                    ));
+                })
+                .ok()
+        } else {
+            None
+        };
         // The personal preset works in a folder under the home, not the current directory,
         // and asks its first-run questions before anything starts (spec 3.3 §10 H1, §13 Q7).
-        let personal = if args.preset == Some(adk_harness::Preset::Personal) {
+        let personal = if personal_preset {
+            // The home `adk-rust up` uses, so both read one `personal.toml`.
             let home = match home {
                 Some(home) => home.to_path_buf(),
-                None => up::default_home()?,
+                None => match user_kernel.as_ref().and_then(|user| user.home.clone()) {
+                    Some(home) => home,
+                    None => up::default_home()?,
+                },
             };
             let workspace = adk_harness::personal::PersonalWorkspace::create(&home)?;
             if args.dir.is_none() {
@@ -181,7 +225,33 @@ impl Setup {
         } else {
             None
         };
-        let resolved = args.resolve(default_mode, user_config().as_deref())?;
+        let mut resolved = args.resolve(default_mode, user_config().as_deref())?;
+        let personal = match personal {
+            Some(settings) => {
+                let mut in_force = match &user_kernel {
+                    Some(user) => {
+                        KernelSettings::resolve(user_config().as_deref(), &resolved.workspace)
+                            .unwrap_or_else(|error| {
+                                kernel_notes.push(format!(
+                                    "{error}; the workspace's limits are not shown, and \
+                                     `adk-rust up` will not start until it is fixed"
+                                ));
+                                user.clone()
+                            })
+                    }
+                    None => KernelSettings::default(),
+                };
+                let user = user_kernel.unwrap_or_default();
+                up::apply_personal(&mut in_force, &user, &settings);
+                Some(PersonalSetup {
+                    settings,
+                    quiet: in_force.quiet_hours,
+                    daily_spend_cap: in_force.quotas.daily_spend_cap,
+                })
+            }
+            None => None,
+        };
+        resolved.notes.extend(kernel_notes);
         // The payments pack takes a merchant backend only a program can supply
         // (spec 3.1 §7.16): no flag or config file carries one.
         if resolved.packs.contains(&adk_harness::Pack::Payments) {
@@ -542,14 +612,10 @@ impl Setup {
             launcher = launcher.with_status_line("Store", store);
         }
         launcher = launcher.with_status_line("Plans", self.plans_note());
-        // Both limits are shown on every start (spec 3.3 §13 Q7).
         if let Some(personal) = &self.personal {
-            launcher = launcher
-                .with_status_line("Quiet time", personal.quiet_time_label())
-                .with_status_line(
-                    "Spending",
-                    format!("daily spending limit {}", personal.daily_spending_limit_label()),
-                );
+            for (label, line) in personal.status_lines() {
+                launcher = launcher.with_status_line(label, line);
+            }
         }
         for note in &self.resolved.notes {
             launcher = launcher.with_banner_note(note.clone());
@@ -1971,6 +2037,11 @@ pub async fn serve(
         );
     }
     println!("  plans {}", setup.plans_note());
+    if let Some(personal) = &setup.personal {
+        for (label, line) in personal.status_lines() {
+            println!("  {label}: {line}");
+        }
+    }
     launcher.run_serve_directly(port).await.map_err(Into::into)
 }
 

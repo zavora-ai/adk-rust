@@ -57,10 +57,12 @@
 //! bind grant. `attach` reads only the caller's own sessions. A ledger read is recorded as
 //! `kernel.control` with action `proc.ledger`: the ledger leaves the host only through it.
 //!
-//! A paired device's token (spec 3.3 §10 K2, S-I7) admits it as the person who paired it,
-//! only to the routes its scopes open (`read`, `decide`, `stop`; never `unfreeze`), whatever
-//! the transport admits otherwise: on loopback a request carrying a device token is the
-//! device, not the operator. Pairing never widens the bind.
+//! A paired device's token (spec 3.3 §10 K2, S-I7) admits it over HTTP as the person who
+//! paired it, only to the routes its scopes open (`read`, `decide`, `stop`; never
+//! `unfreeze`), whatever HTTP admits otherwise: on a loopback HTTP bind a request carrying a
+//! device token is the device, not the operator. The socket and the named pipe admit only
+//! the kernel's own OS user, as the operator, and read no `Authorization` header, so a
+//! device token there changes nothing. Pairing never widens the bind.
 //!
 //! Every action that changes the kernel or reads a session writes a `kernel.control` record
 //! with `subject`, `transport`, `action` and `target` to the kernel's audit trail before it
@@ -163,6 +165,8 @@ pub mod paths {
     pub const CHANNEL_PAIR: &str = "/kernel/channels/pair";
     /// `POST`: remove a paired chat account (spec 3.3 §10 K1).
     pub const CHANNEL_REVOKE: &str = "/kernel/channels/{id}/revoke";
+    /// `POST`: dismiss a chat account waiting to be paired (spec 3.3 §10 K1).
+    pub const CHANNEL_DISMISS: &str = "/kernel/channels/waiting/{id}/dismiss";
     /// `GET`: the partition table; `POST`: create or replace a partition (spec 3.2 §7.8).
     pub const PARTITIONS: &str = "/kernel/partitions";
     /// `POST`: set a partition's mode (spec 3.2 §7.8, §8.1 `partitions set-mode`).
@@ -354,17 +358,30 @@ pub fn router(kernel: Kernel) -> Router {
 
 /// The claim route of `kernel`'s device pairing (spec 3.3 §10 K2) at
 /// `/api/kernel/pairing/claim`, which needs no caller since the code is the credential:
-/// merge it with `ServerBuilder::add_root_routes`, outside the auth middleware. Empty when
-/// the kernel pairs no devices.
+/// merge it with `ServerBuilder::add_root_routes`, outside the auth middleware and inside
+/// the host and origin checks. Empty when the kernel pairs no devices.
+///
+/// A server that serves the kernel's routes to devices needs all three pieces: the routes
+/// behind a [`DeviceTokenExtractor`](crate::pairing::DeviceTokenExtractor), this claim
+/// route, and [`guard_devices`] around the built app, which checks a device's decision for
+/// its risk and records it; the extractor refuses a device's decision the guard did not
+/// admit.
 ///
 /// # Example
 ///
 /// ```rust,no_run
-/// # fn example(kernel: adk_kernel::Kernel, builder: adk_server::ServerBuilder) {
-/// let builder = builder
+/// use std::sync::Arc;
+/// use adk_kernel::pairing::DeviceTokenExtractor;
+///
+/// # fn example(kernel: adk_kernel::Kernel, config: adk_server::ServerConfig, bearer: Arc<dyn adk_server::auth_bridge::RequestContextExtractor>) {
+/// let pairing = kernel.config().control.pairing.clone().expect("the kernel pairs devices");
+/// let extractor = DeviceTokenExtractor::new(pairing).with_fallback(bearer);
+/// let app = adk_server::ServerBuilder::new(config.with_request_context(Arc::new(extractor)))
 ///     .add_api_routes(adk_kernel::control::router(kernel.clone()))
-///     .add_root_routes(adk_kernel::control::claim_router(kernel));
-/// # let _ = builder;
+///     .add_root_routes(adk_kernel::control::claim_router(kernel.clone()))
+///     .build();
+/// let app = adk_kernel::control::guard_devices(&kernel, app);
+/// # let _ = app;
 /// # }
 /// ```
 pub fn claim_router(kernel: Kernel) -> Router {

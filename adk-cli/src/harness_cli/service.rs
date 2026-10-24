@@ -129,16 +129,21 @@ fn service_args(
 
 /// What `--install` registers for this command line.
 fn definition(up: &UpArgs, platform: ServicePlatform) -> Result<ServiceDefinition> {
-    let workspace = workspace(up)?;
-    let settings = KernelSettings::resolve(user_config().as_deref(), &workspace)?;
+    // The personal preset's workspace is a folder under the home, so the current directory's
+    // `.adk/harness.toml` plays no part (spec 3.3 §10 H1).
+    let personal_home =
+        up.harness.preset == Some(adk_harness::Preset::Personal) && up.harness.dir.is_none();
+    let settings = if personal_home {
+        KernelSettings::resolve_user(user_config().as_deref())?
+    } else {
+        KernelSettings::resolve(user_config().as_deref(), &workspace(up)?)?
+    };
     let home = kernel_home(up, &settings)?;
-    // The personal preset's workspace is a folder under the home (spec 3.3 §10 H1).
-    let workspace =
-        if up.harness.preset == Some(adk_harness::Preset::Personal) && up.harness.dir.is_none() {
-            adk_harness::personal::PersonalWorkspace::create(&home)?.root().to_path_buf()
-        } else {
-            workspace
-        };
+    let workspace = if personal_home {
+        adk_harness::personal::PersonalWorkspace::create(&home)?.root().to_path_buf()
+    } else {
+        workspace(up)?
+    };
     let bind = match up.bind.or(settings.bind) {
         Some(bind) => bind,
         None => DEFAULT_BIND.parse()?,

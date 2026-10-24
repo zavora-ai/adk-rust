@@ -134,6 +134,7 @@ adk-rust freeze / unfreeze             The kill switch, on every replica
 adk-rust events       The kernel's event bus (`--follow`)
 adk-rust proc         The kernel's activity ledger, baselines and observations
 adk-rust partitions   The kernel's partitions (list/add/set-mode)
+adk-rust pair         Pair a phone or terminal with a code (list/revoke; `accept` a chat account's code)
 adk-rust skills       Skill tooling (list/validate/match)
 adk-rust graph        Graph checkpoint inspection (steps/replay/fork/resume)
 adk-rust audit        Signed audit log tools (verify/keygen; export with `audit-sql`)

@@ -37,6 +37,10 @@ const DEFAULT_TARGET: &str = "adk-rust";
 const DEFAULT_CODE_TTL: Duration = Duration::from_secs(60 * 60);
 /// How many accounts of one channel may wait to be paired at once by default.
 const DEFAULT_MAX_WAITING: usize = 5;
+/// The approval service's code for an answer at a version the decision has left.
+const VERSION_CONFLICT_CODE: &str = "approval.version_conflict";
+/// The approval service's code for an approver whose answer already counts toward a quorum.
+const ALREADY_DECIDED_CODE: &str = "approval.already_decided";
 
 /// The decision doorbell (spec 3.3 §5.3, §10 K1): an `ApprovalNotifier` registered on
 /// `StoreApprovalService::with_notifier` that hands each submitted decision to the
@@ -44,7 +48,8 @@ const DEFAULT_MAX_WAITING: usize = 5;
 /// decision's person.
 ///
 /// The approval service is built before the kernel and the gateway, so the doorbell holds
-/// the decisions it is told about until the gateway starts.
+/// the decisions it is told about until the gateway starts, and again while a stopped
+/// gateway is started anew.
 ///
 /// # Example
 ///
@@ -60,7 +65,8 @@ const DEFAULT_MAX_WAITING: usize = 5;
 /// ```
 pub struct ChannelDoorbell {
     sender: mpsc::UnboundedSender<ApprovalRequest>,
-    receiver: Mutex<Option<mpsc::UnboundedReceiver<ApprovalRequest>>>,
+    /// Held by the running gateway's bell task; a stopped task lets the next one take it.
+    receiver: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<ApprovalRequest>>>,
 }
 
 impl fmt::Debug for ChannelDoorbell {
@@ -73,11 +79,7 @@ impl ChannelDoorbell {
     /// A doorbell with no gateway yet.
     pub fn new() -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
-        Self { sender, receiver: Mutex::new(Some(receiver)) }
-    }
-
-    fn take_receiver(&self) -> Option<mpsc::UnboundedReceiver<ApprovalRequest>> {
-        self.receiver.lock().unwrap_or_else(PoisonError::into_inner).take()
+        Self { sender, receiver: Arc::new(tokio::sync::Mutex::new(receiver)) }
     }
 }
 
@@ -92,8 +94,10 @@ impl ApprovalNotifier for ChannelDoorbell {
     /// Passes each submitted decision on; every other change rings nothing.
     async fn notify(&self, notification: &ApprovalNotification) -> adk_core::Result<()> {
         if notification.kind == ApprovalEventKind::Submitted {
-            // A gateway that is gone hears nothing; the decision waits in the inbox.
-            let _ = self.sender.send(notification.request.clone());
+            // The doorbell holds its receiver, so a send fails only while it is dropped.
+            if self.sender.send(notification.request.clone()).is_err() {
+                tracing::warn!(approval.id = %notification.request.id, "the decision doorbell is gone; the decision waits in the inbox");
+            }
         }
         Ok(())
     }
@@ -109,6 +113,7 @@ pub struct ChannelGatewayBuilder {
     code_ttl: Duration,
     max_waiting: usize,
     doorbell: Option<Arc<ChannelDoorbell>>,
+    money_tools: Vec<String>,
 }
 
 impl fmt::Debug for ChannelGatewayBuilder {
@@ -163,6 +168,26 @@ impl ChannelGatewayBuilder {
         self
     }
 
+    /// Adds tools whose calls move money, which chat never decides (spec 3.3 §7.4 rule 4):
+    /// their cards link to the home and carry no answers. A name ending in `*` names every
+    /// tool it starts. The list starts with `payments_*`, the tools `adk-payments`
+    /// publishes, beside the tools the host's drivers declare `financial`
+    /// ([`ChannelHost::moves_money`]).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # fn example(builder: adk_kernel::channels::ChannelGatewayBuilder) {
+    /// let builder = builder.money_tools(["transfer", "bank_*"]);
+    /// # let _ = builder;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn money_tools(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.money_tools.extend(names.into_iter().map(Into::into));
+        self
+    }
+
     /// The gateway.
     pub fn build(self) -> ChannelGateway {
         ChannelGateway {
@@ -175,7 +200,11 @@ impl ChannelGatewayBuilder {
                 code_ttl: self.code_ttl,
                 max_waiting: self.max_waiting,
                 doorbell: self.doorbell,
-                tasks: Mutex::new(Vec::new()),
+                money_tools: self.money_tools,
+                lifecycle: Mutex::new(Lifecycle::default()),
+                held: Mutex::new(Vec::new()),
+                carded: Mutex::new(Carded::default()),
+                unpaired: tokio::sync::Mutex::new(()),
             }),
         }
     }
@@ -218,12 +247,66 @@ struct Inner {
     code_ttl: Duration,
     max_waiting: usize,
     doorbell: Option<Arc<ChannelDoorbell>>,
-    tasks: Mutex<Vec<JoinHandle<()>>>,
+    money_tools: Vec<String>,
+    /// The tasks [`ChannelGateway::start`] runs, and whether it runs.
+    lifecycle: Mutex<Lifecycle>,
+    /// The cards held through quiet time.
+    held: Mutex<Vec<JoinHandle<()>>>,
+    /// The decisions carded, or held to be carded, at their version.
+    carded: Mutex<Carded>,
+    /// Taken while an unpaired account is given a code, so the waiting limit and one code
+    /// per account hold for messages that arrive together.
+    unpaired: tokio::sync::Mutex<()>,
+}
+
+/// Whether the gateway runs, and its tasks.
+#[derive(Default)]
+struct Lifecycle {
+    running: bool,
+    /// Counts starts and stops, so a start that a stop overtook spawns nothing.
+    generation: u64,
+    tasks: Vec<JoinHandle<()>>,
+}
+
+/// The decisions the gateway carded at a version, newest last, at most [`Carded::LIMIT`].
+#[derive(Default)]
+struct Carded {
+    seen: std::collections::HashSet<(String, u64)>,
+    order: std::collections::VecDeque<(String, u64)>,
+}
+
+impl Carded {
+    const LIMIT: usize = 4096;
+
+    /// Notes decision `id` at `version`; `false` when it was noted before.
+    fn note(&mut self, id: &str, version: u64) -> bool {
+        let key = (id.to_string(), version);
+        if !self.seen.insert(key.clone()) {
+            return false;
+        }
+        self.order.push_back(key);
+        if self.order.len() > Self::LIMIT
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.seen.remove(&oldest);
+        }
+        true
+    }
+
+    /// Forgets decision `id` at `version`, so it can be carded again.
+    fn forget(&mut self, id: &str, version: u64) {
+        let key = (id.to_string(), version);
+        if self.seen.remove(&key) {
+            self.order.retain(|noted| *noted != key);
+        }
+    }
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        for task in self.tasks.get_mut().unwrap_or_else(PoisonError::into_inner).drain(..) {
+        let lifecycle = self.lifecycle.get_mut().unwrap_or_else(PoisonError::into_inner);
+        let held = self.held.get_mut().unwrap_or_else(PoisonError::into_inner);
+        for task in lifecycle.tasks.drain(..).chain(held.drain(..)) {
             task.abort();
         }
     }
@@ -276,6 +359,7 @@ impl ChannelGateway {
             code_ttl: DEFAULT_CODE_TTL,
             max_waiting: DEFAULT_MAX_WAITING,
             doorbell: None,
+            money_tools: vec!["payments_*".to_string()],
         }
     }
 
@@ -286,53 +370,89 @@ impl ChannelGateway {
 
     /// Follows the host's finished turns, sending each reply to the thread its turn came
     /// from, and rings the doorbell's decisions. Stopped by [`stop`](Self::stop) or when the
-    /// last handle to the gateway is dropped.
+    /// last handle to the gateway is dropped; starting a running gateway changes nothing,
+    /// and a stopped one starts again with the decisions the doorbell held meanwhile.
     ///
     /// # Errors
     ///
     /// Returns the host's error when it cannot follow its turns.
     pub async fn start(&self) -> Result<()> {
-        let mut turns = self.inner.host.finished_turns().await?;
+        let generation = {
+            let mut lifecycle = self.lifecycle();
+            if lifecycle.running {
+                return Ok(());
+            }
+            lifecycle.running = true;
+            lifecycle.generation += 1;
+            lifecycle.generation
+        };
+        let mut turns = match self.inner.host.finished_turns().await {
+            Ok(turns) => turns,
+            Err(error) => {
+                let mut lifecycle = self.lifecycle();
+                if lifecycle.generation == generation {
+                    lifecycle.running = false;
+                }
+                return Err(error);
+            }
+        };
+        let mut lifecycle = self.lifecycle();
+        if !lifecycle.running || lifecycle.generation != generation {
+            // A stop came first.
+            return Ok(());
+        }
         let weak = Arc::downgrade(&self.inner);
-        let replies = tokio::spawn(async move {
+        lifecycle.tasks.push(tokio::spawn(async move {
             while let Some(run) = turns.next().await {
                 let Some(gateway) = upgrade(&weak) else { break };
                 if let Err(error) = gateway.reply(&run).await {
                     tracing::warn!(run.id = %run.run_id, error = %error, "a chat reply could not be sent");
                 }
             }
-        });
-        self.track(replies);
-        if let Some(mut receiver) =
-            self.inner.doorbell.as_ref().and_then(|bell| bell.take_receiver())
-        {
+        }));
+        if let Some(doorbell) = &self.inner.doorbell {
+            let receiver = doorbell.receiver.clone();
             let weak = Arc::downgrade(&self.inner);
-            let bell = tokio::spawn(async move {
+            lifecycle.tasks.push(tokio::spawn(async move {
+                // The previous bell task, once aborted, lets go of the receiver.
+                let mut receiver = receiver.lock().await;
                 while let Some(request) = receiver.recv().await {
                     let Some(gateway) = upgrade(&weak) else { break };
                     if let Err(error) = gateway.ring(&request).await {
                         tracing::warn!(approval.id = %request.id, error = %error, "a decision card could not be sent");
                     }
                 }
-            });
-            self.track(bell);
+            }));
         }
         Ok(())
     }
 
-    /// Stops following turns and ringing decisions.
+    /// Stops following turns and ringing decisions, and drops the cards held through quiet
+    /// time; [`ring_waiting`](Self::ring_waiting) after the next start sends them.
     pub fn stop(&self) {
-        let tasks =
-            std::mem::take(&mut *self.inner.tasks.lock().unwrap_or_else(PoisonError::into_inner));
-        for task in tasks {
+        let tasks = {
+            let mut lifecycle = self.lifecycle();
+            lifecycle.running = false;
+            lifecycle.generation += 1;
+            std::mem::take(&mut lifecycle.tasks)
+        };
+        let held =
+            std::mem::take(&mut *self.inner.held.lock().unwrap_or_else(PoisonError::into_inner));
+        for task in tasks.into_iter().chain(held) {
             task.abort();
         }
+        // Held cards were dropped: they may be carded again.
+        *self.inner.carded.lock().unwrap_or_else(PoisonError::into_inner) = Carded::default();
     }
 
-    fn track(&self, task: JoinHandle<()>) {
-        let mut tasks = self.inner.tasks.lock().unwrap_or_else(PoisonError::into_inner);
-        tasks.retain(|task| !task.is_finished());
-        tasks.push(task);
+    fn lifecycle(&self) -> std::sync::MutexGuard<'_, Lifecycle> {
+        self.inner.lifecycle.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn hold(&self, task: JoinHandle<()>) {
+        let mut held = self.inner.held.lock().unwrap_or_else(PoisonError::into_inner);
+        held.retain(|task| !task.is_finished());
+        held.push(task);
     }
 
     /// Handles one inbound message (spec 3.3 §10 K1): an unpaired account gets a pairing code
@@ -368,9 +488,12 @@ impl ChannelGateway {
         }
     }
 
-    /// Sends the card of `request` to every paired thread of its person, or, during quiet
-    /// time, when quiet time ends if the decision still waits (spec 3.3 §5.3, §7.3). Returns
-    /// how many threads it reached now.
+    /// Sends the card of `request` to every paired thread of its person, when the policy
+    /// lets that person answer it, or, during quiet time, when quiet time ends if the
+    /// decision still waits (spec 3.3 §5.3, §7.3). The card carries answers only when chat
+    /// may decide it: low or medium risk, and no money (§7.2, §7.4). A decision is carded
+    /// once at each version, whether the doorbell or [`ring_waiting`](Self::ring_waiting)
+    /// rings it first. Returns how many threads it reached now.
     ///
     /// # Errors
     ///
@@ -379,30 +502,75 @@ impl ChannelGateway {
         if request.state != ApprovalState::Pending {
             return Ok(0);
         }
-        let bindings = self.bindings_of(&request.scope.user_id).await?;
+        let bindings = self.answering_bindings(request).await?;
         if bindings.is_empty() {
+            return Ok(0);
+        }
+        if !self.carded().note(&request.id, request.version) {
             return Ok(0);
         }
         let now = self.inner.host.now();
         if let Some(until) = self.inner.host.quiet_until(now) {
             let weak = Arc::downgrade(&self.inner);
-            let id = request.id.clone();
+            let (id, version) = (request.id.clone(), request.version);
             tracing::debug!(approval.id = %id, quiet.until = %until, "decision card held for quiet time");
             let held = tokio::spawn(async move {
-                if let Err(error) = ring_after_quiet(weak, &id).await {
+                if let Err(error) = ring_after_quiet(weak, &id, version).await {
                     tracing::warn!(approval.id = %id, error = %error, "a held decision card could not be sent");
                 }
             });
-            self.track(held);
+            self.hold(held);
             return Ok(0);
         }
-        Ok(self.deliver_card(request, &bindings).await)
+        let reached = self.deliver_card(request, &bindings).await;
+        if reached == 0 {
+            self.carded().forget(&request.id, request.version);
+        }
+        Ok(reached)
+    }
+
+    fn carded(&self) -> std::sync::MutexGuard<'_, Carded> {
+        self.inner.carded.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The active bindings of `request`'s person whose channel has a sink, when the policy
+    /// lets that person answer it, as the inbox lists it for them.
+    async fn answering_bindings(&self, request: &ApprovalRequest) -> Result<Vec<ChannelBinding>> {
+        let mut bindings = self.bindings_of(&request.scope.user_id).await?;
+        bindings.retain(|binding| may_answer(request, binding));
+        Ok(bindings)
+    }
+
+    /// Whether chat may answer `request` at all: low or medium risk, and no money (spec 3.3
+    /// §7.2, §7.4 rule 4).
+    fn chat_may_answer(&self, request: &ApprovalRequest) -> bool {
+        chat_may_decide(request.risk) && !self.moves_money(request)
+    }
+
+    /// Whether `request`'s call moves money: the host says so, or the tool is one the
+    /// gateway was told moves money.
+    fn moves_money(&self, request: &ApprovalRequest) -> bool {
+        self.inner.host.moves_money(request)
+            || self.inner.money_tools.iter().any(|name| match name.strip_suffix('*') {
+                Some(prefix) => request.tool_name.starts_with(prefix),
+                None => request.tool_name == *name,
+            })
+    }
+
+    /// The card of `request`, with its answers only when chat may answer it.
+    fn card(&self, request: &ApprovalRequest) -> DecisionCard {
+        let mut card = DecisionCard::from_request(request, self.inner.home.as_deref());
+        if !self.chat_may_answer(request) {
+            card.answers.clear();
+        }
+        card
     }
 
     /// Rings every decision still waiting for a paired person, as [`ring`](Self::ring) does
     /// one (spec 3.3 §7.3): call it after a restart, so a decision whose card a restart held
-    /// through quiet time, or never sent, still reaches the thread. A card sent before the
-    /// restart is sent again. Returns how many threads it reached now.
+    /// through quiet time, or never sent, still reaches the thread. A card this gateway sent
+    /// since it started is not sent again, while one sent before a process restart, or
+    /// before [`stop`](Self::stop), is. Returns how many threads it reached now.
     ///
     /// # Errors
     ///
@@ -455,7 +623,7 @@ impl ChannelGateway {
     }
 
     async fn deliver_card(&self, request: &ApprovalRequest, bindings: &[ChannelBinding]) -> usize {
-        let card = DecisionCard::from_request(request, self.inner.home.as_deref());
+        let card = self.card(request);
         let mut reached = 0;
         for binding in bindings {
             let Some(sink) = self.inner.sinks.get(&binding.channel) else { continue };
@@ -523,6 +691,9 @@ impl ChannelGateway {
         sink: &dyn ChannelSink,
         inbound: &ChannelInbound,
     ) -> Result<InboundOutcome> {
+        // One at a time: the waiting count and the account's earlier code are read and the
+        // new code stored with no other unpaired message in between.
+        let _serial = self.inner.unpaired.lock().await;
         let store = &self.inner.bindings;
         let now = self.inner.host.now();
         store.prune_requests(now).await?;
@@ -693,9 +864,11 @@ impl ChannelGateway {
             ChannelAnswer::AllowOnce => ApprovalAction::Approve,
             ChannelAnswer::Deny => ApprovalAction::Reject,
         };
-        if !chat_may_decide(request.risk) || !request.allowed_actions.contains(&action) {
-            // §7.2: chat says yes once or no, at low and medium risk only.
-            let extra = [("reason", json!("not_in_chat")), ("risk", json!(request.risk))];
+        if !self.chat_may_answer(&request) || !request.allowed_actions.contains(&action) {
+            // §7.2, §7.4 rule 4: chat says yes once or no, at low and medium risk only, and
+            // never to money.
+            let reason = if self.moves_money(&request) { "money" } else { "not_in_chat" };
+            let extra = [("reason", json!(reason)), ("risk", json!(request.risk))];
             self.record(binding, Some(&binding.user_id), "decide.refused", Some(decision), &extra)
                 .await?;
             self.notify(
@@ -723,17 +896,24 @@ impl ChannelGateway {
             choice.reason = None;
         }
         match approvals.decide(decision, version, choice).await {
+            // A quorum's first answer counts, and the decision still waits.
+            Ok(decided) if decided.state == ApprovalState::Pending => {
+                let notice = ChannelNotice::WaitingForOthers { answered: true };
+                self.notify(sink, thread, &notice).await;
+                Ok(InboundOutcome::Decided { decision: decision.to_string() })
+            }
             Ok(decided) => {
                 let summary = card_summary(&decided.summary, &decided.args_redacted);
                 self.notify(sink, thread, &ChannelNotice::Decided { answer, summary }).await;
                 Ok(InboundOutcome::Decided { decision: decision.to_string() })
             }
-            // S-I2: a stale answer is shown, never retried.
-            Err(error) if error.category == ErrorCategory::Conflict => {
+            // S-I2: a stale answer is shown, never retried; only a changed decision that
+            // still waits gets a fresh card.
+            Err(error) if error.code == VERSION_CONFLICT_CODE => {
                 match approvals.get(decision).await? {
                     Some(current) if current.state == ApprovalState::Pending => {
                         self.notify(sink, thread, &ChannelNotice::DecisionChanged).await;
-                        let card = DecisionCard::from_request(&current, self.inner.home.as_deref());
+                        let card = self.card(&current);
                         if let Err(error) = sink.send_decision(thread, &card).await {
                             tracing::warn!(error = %error, "a fresh decision card could not be sent");
                         }
@@ -750,8 +930,30 @@ impl ChannelGateway {
                     }
                 }
             }
+            // This person's answer already counts toward the quorum.
+            Err(error) if error.code == ALREADY_DECIDED_CODE => {
+                let notice = ChannelNotice::WaitingForOthers { answered: true };
+                self.notify(sink, thread, &notice).await;
+                Ok(InboundOutcome::AlreadyDecided { decision: decision.to_string() })
+            }
+            // Resolved or expired meanwhile.
+            Err(error) if error.category == ErrorCategory::Conflict => {
+                match approvals.get(decision).await? {
+                    Some(current) if current.state.is_terminal() => {
+                        self.notify(sink, thread, &already_decided(&current, &binding.user_id))
+                            .await;
+                        Ok(InboundOutcome::AlreadyDecided { decision: decision.to_string() })
+                    }
+                    _ => {
+                        self.notify(sink, thread, &gone).await;
+                        Ok(refused(decision))
+                    }
+                }
+            }
+            // The policy does not ask this person, or forbids them answering their own call.
             Err(error) if error.category == ErrorCategory::Forbidden => {
-                self.notify(sink, thread, &gone).await;
+                let notice = ChannelNotice::WaitingForOthers { answered: false };
+                self.notify(sink, thread, &notice).await;
                 Ok(refused(decision))
             }
             Err(error) => Err(error.into()),
@@ -811,8 +1013,9 @@ fn upgrade(weak: &Weak<Inner>) -> Option<ChannelGateway> {
     weak.upgrade().map(|inner| ChannelGateway { inner })
 }
 
-/// Waits for quiet time to end, then sends decision `id`'s card if it still waits.
-async fn ring_after_quiet(weak: Weak<Inner>, id: &str) -> Result<usize> {
+/// Waits for quiet time to end, then sends decision `id`'s card if it still waits; `version`
+/// is the one the card was noted at.
+async fn ring_after_quiet(weak: Weak<Inner>, id: &str, version: u64) -> Result<usize> {
     loop {
         let Some(gateway) = upgrade(&weak) else { return Ok(0) };
         let now = gateway.inner.host.now();
@@ -826,8 +1029,20 @@ async fn ring_after_quiet(weak: Weak<Inner>, id: &str) -> Result<usize> {
     if request.state != ApprovalState::Pending {
         return Ok(0);
     }
-    let bindings = gateway.bindings_of(&request.scope.user_id).await?;
-    Ok(gateway.deliver_card(&request, &bindings).await)
+    let bindings = gateway.answering_bindings(&request).await?;
+    let reached = gateway.deliver_card(&request, &bindings).await;
+    if reached == 0 {
+        gateway.carded().forget(id, version);
+    }
+    Ok(reached)
+}
+
+/// Whether the person `binding` acts for may answer `request`: an approver the policy
+/// names, and not its requester when the policy forbids self-approval.
+fn may_answer(request: &ApprovalRequest, binding: &ChannelBinding) -> bool {
+    let person = SubjectRef::human(binding.user_id.clone());
+    request.is_eligible(&person, &binding.groups)
+        && !(request.policy.forbid_self_approval && request.is_self(&person))
 }
 
 /// The notice of a decision that was answered before.

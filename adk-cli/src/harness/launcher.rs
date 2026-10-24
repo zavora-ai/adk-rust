@@ -861,13 +861,16 @@ impl HarnessLauncher {
                 )));
             }
         };
+        // The claim route needs no caller but keeps the server's host and origin checks.
+        if let (Some(kernel), Some(_)) = (&kernel, &pairing) {
+            launcher = launcher.with_root_routes(adk_kernel::control::claim_router(kernel.clone()));
+        }
         let router = launcher.build_app()?;
-        // The claim route needs no caller, and every route checks a device token first.
+        // Every route checks a device token first.
         let router = match kernel {
-            Some(kernel) if pairing.is_some() => adk_kernel::control::guard_devices(
-                &kernel,
-                router.merge(adk_kernel::control::claim_router(kernel.clone())),
-            ),
+            Some(kernel) if pairing.is_some() => {
+                adk_kernel::control::guard_devices(&kernel, router)
+            }
             _ => router,
         };
         Ok(match loopback {
@@ -906,14 +909,9 @@ impl HarnessLauncher {
     }
 }
 
-/// Where `bash` runs, or `none` when the harness offers no shell, as the personal preset's
-/// does on the host (spec 3.3 §10 H1).
-fn shell_label(info: &adk_harness::HarnessInfo) -> String {
-    if info.tools.iter().any(|tool| tool == "bash") {
-        info.isolation.to_string()
-    } else {
-        "none".to_string()
-    }
+/// Where `bash` runs, or `none` when the harness offers no shell (spec 3.3 §10 H1).
+pub(crate) fn shell_label(info: &adk_harness::HarnessInfo) -> String {
+    info.shell().map_or_else(|| "none".to_string(), ToString::to_string)
 }
 
 /// Serves `app` on `listener` with `kernel` resident: the kernel starts before the first

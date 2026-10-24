@@ -1100,6 +1100,14 @@ impl HarnessPolicy {
         origin: Option<&ToolOrigin>,
         kind: &ToolKind,
     ) -> Option<String> {
+        // A held call to such a tool would sit in the inbox looking like a take over
+        // (spec 3.3 §10 H2).
+        if request.tool_name == crate::take_over::TAKE_OVER_TOOL {
+            return Some(format!(
+                "'{}' is reserved for take over; no tool may carry that name",
+                request.tool_name
+            ));
+        }
         if origin.is_some_and(|origin| origin.source == BUILTIN_TOOL_ORIGIN)
             && is_provider_shell_builtin(&request.tool_name)
         {
@@ -1567,5 +1575,44 @@ impl ToolPolicy for HarnessPolicy {
 
     fn policy_ref(&self) -> Option<String> {
         Some(HARNESS_POLICY_REF.to_string())
+    }
+}
+
+#[cfg(all(test, feature = "sandbox"))]
+mod tests {
+    use std::sync::Arc;
+
+    use adk_core::ToolPolicyRequest;
+    use adk_model::{ScriptedLlm, ScriptedResponse};
+    use serde_json::json;
+
+    use crate::{HarnessAgent, InstructionsConfig, Preset, ShellIsolation};
+
+    /// Review of #1045, finding 5 (#1032 findings 3 and 5): on any host, enforcer or not, the
+    /// personal preset's policy refuses an unsandboxed retry as turned off, even when the
+    /// builder asks for the retry after the preset.
+    #[tokio::test]
+    async fn the_personal_preset_turns_the_unsandboxed_retry_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = HarnessAgent::builder("assistant")
+            .preset(Preset::Personal)
+            .shell(ShellIsolation::OsSandbox(Default::default()))
+            .allow_unsandboxed_retry(true)
+            .model(Arc::new(ScriptedLlm::new("scripted", vec![ScriptedResponse::text("ok")])))
+            .workspace(adk_devtools::Workspace::new(dir.path()).allow_bash(true))
+            .project_instructions(InstructionsConfig {
+                user_file: None,
+                ..InstructionsConfig::default()
+            })
+            .build()
+            .unwrap();
+        let retry = ToolPolicyRequest::new(
+            "bash",
+            json!({ "command": "ls", "unsandboxed": true, "retry_of": "1", "reason": "denied" }),
+        );
+        assert_eq!(
+            agent.runtime().policy.retry_refusal(&retry).await.as_deref(),
+            Some("unsandboxed retries are turned off for this harness")
+        );
     }
 }

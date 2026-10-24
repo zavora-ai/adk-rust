@@ -127,12 +127,13 @@ impl PersonalWorkspace {
         home.join(PERSONAL_WORKSPACE_DIR)
     }
 
-    /// Creates the workspace of `home` when it does not exist and returns it.
+    /// Creates the workspace of `home` when it does not exist and returns it, owner-only:
+    /// on Unix an existing directory that others can read is tightened to mode `0700`.
     ///
     /// # Errors
     ///
-    /// Returns `harness.personal.setup` when the directory cannot be created, or when the
-    /// path exists and is not a directory.
+    /// Returns `harness.personal.setup` when the directory cannot be created or made
+    /// owner-only, or when the path exists and is not a directory.
     pub fn create(home: &Path) -> Result<Self> {
         let root = Self::path_in(home);
         if root.exists() && !root.is_dir() {
@@ -142,16 +143,29 @@ impl PersonalWorkspace {
                 root.display()
             )));
         }
-        if !root.exists() {
-            std::fs::create_dir_all(&root).map_err(|error| {
-                setup_error(format!("failed to create {}: {error}", root.display()))
-            })?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).map_err(
-                    |error| setup_error(format!("failed to protect {}: {error}", root.display())),
-                )?;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(&root).map_err(|error| {
+            setup_error(format!("failed to create {}: {error}", root.display()))
+        })?;
+        // Checked on every start: a directory made earlier, by hand or by a start that failed
+        // to protect it, is tightened rather than accepted.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let protect = |error: std::io::Error| {
+                setup_error(format!(
+                    "failed to make {} owner-only: {error}; fix its permissions (chmod 700) or \
+                     choose another home",
+                    root.display()
+                ))
+            };
+            let mode = std::fs::metadata(&root).map_err(protect)?.permissions().mode();
+            if mode & 0o077 != 0 {
+                std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+                    .map_err(protect)?;
             }
         }
         Ok(Self { root })
@@ -753,6 +767,20 @@ mod tests {
         let other = tempfile::tempdir().unwrap();
         std::fs::write(other.path().join(PERSONAL_WORKSPACE_DIR), "x").unwrap();
         assert!(PersonalWorkspace::create(other.path()).is_err());
+    }
+
+    /// Review finding 9: a workspace that already exists, readable by others, is tightened.
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_workspace_is_made_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().unwrap();
+        let root = PersonalWorkspace::path_in(home.path());
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        PersonalWorkspace::create(home.path()).unwrap();
+        let mode = std::fs::metadata(&root).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
     }
 
     #[test]

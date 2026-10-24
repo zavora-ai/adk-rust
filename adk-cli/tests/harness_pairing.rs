@@ -27,6 +27,12 @@ const REMOTE: &str = "100.64.0.7:40000";
 
 /// The resident app of a harness on a kernel that pairs devices, admitting loopback peers.
 fn app() -> (Router, tempfile::TempDir) {
+    let (app, _, workspace) = app_with_approvals();
+    (app, workspace)
+}
+
+/// [`app`], with the approval service its inbox serves.
+fn app_with_approvals() -> (Router, Arc<StoreApprovalService>, tempfile::TempDir) {
     let workspace = tempfile::tempdir().unwrap();
     let agent = HarnessAgent::builder("harness")
         .model(Arc::new(ScriptedLlm::new("scripted", vec![ScriptedResponse::text("hi")])))
@@ -34,6 +40,9 @@ fn app() -> (Router, tempfile::TempDir) {
         .mode(HarnessMode::Plan)
         .build()
         .unwrap();
+    // The inbox and the kernel share the service, as `adk-rust up` shares the harness's, so
+    // the device guard reads a decision's risk.
+    let approvals = Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new())));
     let kernel = Kernel::builder()
         .config(
             KernelConfig::default().with_app_name("harness").with_control(
@@ -43,16 +52,16 @@ fn app() -> (Router, tempfile::TempDir) {
             ),
         )
         .run_store(Arc::new(InMemoryRunStore::new()))
+        .approval_service(approvals.clone())
         .build()
         .unwrap();
-    let approvals = Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new())));
     let app = HarnessLauncher::new(agent)
         .with_user_id("ana")
-        .with_approval_service(approvals)
+        .with_approval_service(approvals.clone())
         .with_kernel(kernel)
         .build_app()
         .unwrap();
-    (app, workspace)
+    (app, approvals, workspace)
 }
 
 fn request(
@@ -150,4 +159,82 @@ async fn a_revoked_device_is_refused_on_the_resident_app() {
     let (status, _) =
         call(&app, request("GET", "/api/kernel/health", None, REMOTE, Some(&token))).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// The claim route keeps the server's host and origin checks, so a page
+/// rebinding its name to the loopback address cannot spend the waiting codes.
+#[tokio::test]
+async fn the_claim_route_keeps_the_host_and_origin_checks() {
+    let (app, _workspace) = app();
+    let body = json!({ "code": "0000-0000-0000" });
+    let mut rebound =
+        request("POST", "/api/kernel/pairing/claim", Some(body.clone()), LOOPBACK, None);
+    rebound.headers_mut().insert("host", "evil.example:8080".parse().unwrap());
+    assert_eq!(call(&app, rebound).await.0, StatusCode::FORBIDDEN, "a foreign host");
+    let mut cross = request("POST", "/api/kernel/pairing/claim", Some(body), LOOPBACK, None);
+    cross.headers_mut().insert("origin", "https://evil.example".parse().unwrap());
+    assert_eq!(call(&app, cross).await.0, StatusCode::FORBIDDEN, "a foreign origin");
+}
+
+/// A client still holding a removed device's token re-pairs on the
+/// resident app: the claim route skips the device guard.
+#[tokio::test]
+async fn a_client_holding_a_removed_token_re_pairs_on_the_resident_app() {
+    let (app, _workspace) = app();
+    let old = pair(&app, json!(["read"])).await;
+    let (_, devices) =
+        call(&app, request("GET", "/api/kernel/devices", None, LOOPBACK, None)).await;
+    let id = devices["devices"][0]["id"].as_str().unwrap().to_string();
+    let revoke = request("POST", &format!("/api/kernel/devices/{id}/revoke"), None, LOOPBACK, None);
+    assert_eq!(call(&app, revoke).await.0, StatusCode::OK);
+
+    let issue = request("POST", "/api/kernel/pairing", Some(json!({})), LOOPBACK, None);
+    let (_, issued) = call(&app, issue).await;
+    let claim = request(
+        "POST",
+        "/api/kernel/pairing/claim",
+        Some(json!({ "code": issued["code"] })),
+        REMOTE,
+        Some(&old),
+    );
+    let (status, claimed) = call(&app, claim).await;
+    assert_eq!(status, StatusCode::OK, "{claimed}");
+}
+
+/// On the resident app a `decide` device answers an everyday decision,
+/// which the device guard checked and recorded before the extractor admitted it, and is
+/// refused a high-risk one.
+#[tokio::test]
+async fn a_decide_device_answers_an_everyday_decision_on_the_resident_app() {
+    use adk_core::{
+        ApprovalPolicy, ApprovalRequest, ApprovalRisk, ApprovalScope, ApprovalService,
+        ApproverSelector, ToolConfirmationRequest,
+    };
+
+    let (app, approvals, _workspace) = app_with_approvals();
+    let token = pair(&app, json!(["decide"])).await;
+    let ask = |id: &str, risk: ApprovalRisk| {
+        ApprovalRequest::new(
+            id,
+            ApprovalScope::new("harness", "ana", "s1"),
+            &ToolConfirmationRequest::new("send_email", json!({})),
+            ApprovalPolicy::new([ApproverSelector::group("operator")]).allow_self_approval(),
+        )
+        .with_risk(risk)
+    };
+    let everyday = approvals.submit(ask("everyday", ApprovalRisk::Medium)).await.unwrap();
+    let high = approvals.submit(ask("high", ApprovalRisk::High)).await.unwrap();
+    let decide = |id: &str, version: u64| {
+        request(
+            "POST",
+            &format!("/api/approvals/{id}/decide"),
+            Some(json!({ "expectedVersion": version, "action": "approve" })),
+            REMOTE,
+            Some(&token),
+        )
+    };
+    let (status, body) = call(&app, decide("everyday", everyday.version)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = call(&app, decide("high", high.version)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }

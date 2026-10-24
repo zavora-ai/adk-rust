@@ -222,9 +222,11 @@ async fn mode(shared: &Shared, args: &str) -> Result<String> {
 fn sandbox(shared: &Shared, args: &str) -> Result<String> {
     let status = |harness: &adk_harness::Harness| {
         let info = harness.agent().info();
+        // The personal preset offers no shell outside the sandbox (spec 3.3 §10 H1).
+        let shell = super::launcher::shell_label(info);
         match &info.degraded_reason {
-            Some(reason) => format!("shell: {} — {reason}", info.isolation),
-            None => format!("shell: {}", info.isolation),
+            Some(reason) => format!("shell: {shell} — {reason}"),
+            None => format!("shell: {shell}"),
         }
     };
     match args.trim() {
