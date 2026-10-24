@@ -61,6 +61,15 @@ describe("following a session's feed", () => {
     expect(pauses.slice(0, 3)).toEqual([1_000, 2_000, 4_000]);
   });
 
+  it("does not say it cannot reach the agents when the server asks the person to sign in", async () => {
+    const abort = new AbortController();
+    const signIn = () => new ApiError(401, "the surface API needs an authenticated caller");
+    const client = feeding([signIn(), signIn(), signIn(), [entry(1)]], abort);
+    const trouble: boolean[] = [];
+    await followFeed(client, "s1", abort.signal, () => {}, (value) => trouble.push(value), async () => {});
+    expect(trouble).not.toContain(true);
+  });
+
   it("wakes a pause early, so a message just sent shows now", async () => {
     const { pause, wake } = wakeable();
     const started = Date.now();

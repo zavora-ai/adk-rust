@@ -44,6 +44,8 @@ export function Threads({
   onSelect,
   followed,
   onFollow,
+  visiting,
+  onBack,
   focusDecision,
   onOpenDecision,
 }: {
@@ -63,6 +65,10 @@ export function Threads({
   /** The session each agent's thread follows, by agent name ("" before any agent). */
   followed: Record<string, string>;
   onFollow: (agent: string, session: string) => void;
+  /** A session of an agent shown in place of its conversation, from a decision opened. */
+  visiting?: { agent: string; session: string };
+  /** Back to the agent's own conversation. */
+  onBack: () => void;
   /** The decision to bring into view. */
   focusDecision?: string;
   onOpenDecision: (card: DecisionCard) => void;
@@ -86,10 +92,14 @@ export function Threads({
 
   const key = current?.agent.name ?? "";
   const pinned = followed[key];
-  const session = pinned ?? current?.sessionId ?? fresh;
+  // The person's conversation with the agent, and the session shown: another one only while
+  // a decision of it is being looked at.
+  const own = pinned ?? current?.sessionId ?? fresh;
+  const away = visiting && visiting.agent === key && visiting.session !== own ? visiting.session : undefined;
+  const session = away ?? own;
   useEffect(() => {
-    if (!pinned) onFollow(key, session);
-  }, [pinned, key, session, onFollow]);
+    if (!pinned) onFollow(key, own);
+  }, [pinned, key, own, onFollow]);
 
   const [thread, setThread] = useState<ThreadState>(() => emptyThread(session));
   useEffect(() => {
@@ -117,8 +127,8 @@ export function Threads({
   async function message(text: string, origin: Origin) {
     setProblem("");
     try {
-      await client.command({ type: "send", sessionId: session, text }, origin);
-      if (!pinned) onFollow(key, session);
+      await client.command({ type: "send", sessionId: own, text }, origin);
+      if (!pinned) onFollow(key, own);
       setSent((count) => count + 1);
       // A new session's first message shows now, not at the next look.
       feed.current.wake();
@@ -178,12 +188,23 @@ export function Threads({
             </p>
           )}
         </div>
-        <Composer
-          placeholder={name ? labels.message(name) : labels.messageYourAgents}
-          queued={shownQueued}
-          disabled={status?.stopped}
-          onSend={message}
-        />
+        {away ? (
+          <div className="composer-wrap">
+            <div className="visiting" role="status">
+              <span>{labels.anotherConversation(name ?? labels.yourAgents)}</span>
+              <button type="button" className="button button-secondary" onClick={onBack}>
+                {labels.backToYourConversation}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <Composer
+            placeholder={name ? labels.message(name) : labels.messageYourAgents}
+            queued={shownQueued}
+            disabled={status?.stopped}
+            onSend={message}
+          />
+        )}
       </main>
       <aside className="side">
         <DecisionList decisions={decisions} onOpen={onOpenDecision} />

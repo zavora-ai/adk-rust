@@ -31,6 +31,57 @@ describe("a thread", () => {
     expect(client.taken.commands.at(-1)?.command).toMatchObject({ type: "decide", decisionId: "apr_payroll" });
   });
 
+  it("goes back to the person's own conversation after a decision of another session, and sends there", async () => {
+    const client = new FixtureClient();
+    client.hold(payrollCard());
+    render(<App client={client} initialSection="threads" />);
+    const thread = screen.getByRole("main");
+    await within(thread).findByRole("article", { name: "Send the October invoice to [CLIENT]" });
+
+    const list = screen.getByRole("region", { name: /^Decisions/ });
+    await userEvent.click(await within(list).findByRole("button", { name: /Run the October payroll/ }));
+    const card = await within(thread).findByRole("article", { name: "Run the October payroll" });
+    // Another session's thread offers no message box: what is typed goes to the person's own.
+    expect(within(thread).queryByRole("textbox")).toBeNull();
+    await userEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+    await within(card).findByText("You said yes in the home app at 07:40");
+
+    await userEvent.click(within(thread).getByRole("button", { name: "Back to your conversation" }));
+    await within(thread).findByText(/The October invoice for \[CLIENT\] is ready/);
+    await userEvent.type(within(thread).getByRole("textbox", { name: "Message Finance" }), "thanks{Enter}");
+    await waitFor(() => expect(client.taken.commands.at(-1)?.command).toEqual({ type: "send", sessionId: "s-finance", text: "thanks" }));
+
+    // Leaving Threads and coming back keeps the conversation too.
+    await userEvent.click(screen.getByRole("link", { name: "Today" }));
+    await screen.findByRole("heading", { name: /While you were away/ });
+    await userEvent.click(screen.getByRole("link", { name: /Threads/ }));
+    await within(screen.getByRole("main")).findByText(/The October invoice for \[CLIENT\] is ready/);
+  });
+
+  it("opens the person's own waiting decision from Today before another session's", async () => {
+    class OtherFirst extends FixtureClient {
+      override async decisions() {
+        const open = await super.decisions();
+        return [...open.filter((card) => card.id === "apr_payroll"), ...open.filter((card) => card.id !== "apr_payroll")];
+      }
+      override async briefing() {
+        const briefing = await super.briefing();
+        const line = { ...briefing.lines[0], seq: 99, agent: "Finance", pill: "waitingForYou" as const, pillText: "Waiting for you", text: "Finance waits for you." };
+        return { ...briefing, lines: [...briefing.lines, line] };
+      }
+    }
+    const client = new OtherFirst();
+    client.hold(payrollCard());
+    render(<App client={client} initialSection="threads" />);
+    const thread = screen.getByRole("main");
+    await within(thread).findByRole("article", { name: "Send the October invoice to [CLIENT]" });
+    await userEvent.click(screen.getByRole("link", { name: "Today" }));
+    await screen.findByRole("heading", { name: /While you were away/ });
+    await userEvent.click(await screen.findByRole("button", { name: "Open" }));
+    await within(screen.getByRole("main")).findByRole("article", { name: "Send the October invoice to [CLIENT]" });
+    expect(within(screen.getByRole("main")).queryByRole("button", { name: "Back to your conversation" })).toBeNull();
+  });
+
   it("stays on its conversation when the roster row stops naming it", async () => {
     const client = new FixtureClient();
     render(<App client={client} initialSection="threads" />);

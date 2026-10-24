@@ -213,6 +213,10 @@ class Locked extends FixtureClient {
     if (this.token !== "t0ken") throw new ApiError(401, "the surface API needs an authenticated caller");
     return super.agents();
   }
+  override async rules() {
+    if (this.token !== "t0ken") throw new ApiError(401, "401 Unauthorized");
+    return super.rules();
+  }
 }
 
 describe("a server started with a token", () => {
@@ -224,5 +228,17 @@ describe("a server started with a token", () => {
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(await screen.findByText("$1.84 of $5.00 today")).toBeTruthy();
     await waitFor(() => expect(screen.queryByText("This page needs you signed in to the server it came from.")).toBeNull());
+  });
+});
+
+describe("a server started with a token, on Memory & rules", () => {
+  it("reads the rules again once signed in, without the earlier problem", async () => {
+    const client = new Locked();
+    render(<App client={client} initialSection="memory" />);
+    expect(await screen.findByText("401 Unauthorized")).toBeTruthy();
+    await userEvent.type(screen.getByLabelText("The token the server was started with"), "t0ken");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect((await screen.findAllByRole("button", { name: "Stop allowing" })).length).toBeGreaterThan(0);
+    expect(screen.queryByText("401 Unauthorized")).toBeNull();
   });
 });

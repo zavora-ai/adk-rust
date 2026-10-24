@@ -42,7 +42,10 @@ export function App({
   const [problem, setProblem] = useState("");
   const [selected, setSelected] = useState<string>();
   const [focusDecision, setFocusDecision] = useState<string>();
-  // Each sign-in starts the thread's feed again, with the token.
+  // A decision of another session is shown in place of the person's conversation until they go
+  // back; the conversation each thread follows (`followed`) never moves to it.
+  const [visiting, setVisiting] = useState<{ agent: string; session: string }>();
+  // Each sign-in reads every section again, with the token.
   const [signIns, setSignIns] = useState(0);
   const [followed, setFollowed] = useState<Record<string, string>>(() => readStored(FOLLOWED_KEY, {}));
   useEffect(() => writeStored(FOLLOWED_KEY, followed), [followed]);
@@ -99,16 +102,20 @@ export function App({
   const select = useCallback((agent: string) => {
     setSelected(agent);
     setFocusDecision(undefined);
+    setVisiting(undefined);
   }, []);
-  // A decision opens in its own session's thread, whichever session the agent's row names.
+  // A decision opens in its own session's thread, whichever session the agent's row names;
+  // one of another session than the person's conversation is visited, not followed.
   const openDecision = useCallback(
     (card: DecisionCard) => {
       setSelected(card.agent.name);
-      follow(card.agent.name, card.sessionId);
+      setVisiting(
+        followed[card.agent.name] === card.sessionId ? undefined : { agent: card.agent.name, session: card.sessionId },
+      );
       setFocusDecision(card.id);
       navigate("threads");
     },
-    [follow, navigate],
+    [followed, navigate],
   );
 
   async function act(command: Command, origin: Origin) {
@@ -164,10 +171,9 @@ export function App({
           }}
         />
       )}
-      <div id="content" className="content">
+      <div id="content" className="content" key={signIns}>
         {section === "threads" && (
           <Threads
-            key={signIns}
             client={client}
             agents={rows}
             decisions={decisions.value ?? []}
@@ -182,6 +188,11 @@ export function App({
             onSelect={select}
             followed={followed}
             onFollow={follow}
+            visiting={visiting}
+            onBack={() => {
+              setVisiting(undefined);
+              setFocusDecision(undefined);
+            }}
             focusDecision={focusDecision}
             onOpenDecision={openDecision}
           />
@@ -197,7 +208,9 @@ export function App({
             seams={seams}
             onChanged={refresh}
             onOpenAgent={(agent) => {
-              const waiting = decisions.value?.find((card) => card.agent.name === agent);
+              // The person's own conversation first, then any other of the agent's.
+              const cards = decisions.value?.filter((card) => card.agent.name === agent) ?? [];
+              const waiting = cards.find((card) => card.sessionId === followed[agent]) ?? cards[0];
               if (waiting) {
                 openDecision(waiting);
                 return;

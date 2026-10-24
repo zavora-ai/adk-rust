@@ -25,6 +25,8 @@ export const labels = {
   send: "Send",
   message: (name: string) => `Message ${name}`,
   messageYourAgents: "Message your agents",
+  anotherConversation: (name: string) => `A decision from another conversation of ${name}.`,
+  backToYourConversation: "Back to your conversation",
   queued: words.SENT_AFTER_THIS_CARD_IS_ANSWERED,
   stopAll: words.STOP_ALL,
   resumeAll: words.RESUME_ALL,
