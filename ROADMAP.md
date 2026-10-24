@@ -68,6 +68,7 @@ Autonomous agents that do vertically integrated tasks well, demonstrating:
 | Agent Kernel (always-on harness: process model, wake sources, proactivity, drivers, partitions) | 🚧 | Designed — see [`docs/design/spec-3.2-agent-kernel.md`](docs/design/spec-3.2-agent-kernel.md); builds on the HarnessAgent |
 | Harness UI (one decision contract rendered by the console, web client, ACP, AG-UI and notifiers) | 🚧 | Designed — see [`docs/design/spec-3.3-harness-ui.md`](docs/design/spec-3.3-harness-ui.md); builds on specs 3.1 and 3.2 |
 | Self-improving harness (opt-in maintenance loop: defect mining, sealed gate, signed bot PRs, supervised patch upgrades) | 🚧 | Designed — see [`docs/design/spec-3.4-self-improving-harness.md`](docs/design/spec-3.4-self-improving-harness.md); Experimental, off by default |
+| AWP 2.0 and `adk-website` (signed static sites with an agent front door, run by a multi-agent team for every kind of site) | 🚧 | Designed — see [`docs/design/spec-3.5-agentic-web.md`](docs/design/spec-3.5-agentic-web.md) and [`docs/design/awp-2.0-overview.md`](docs/design/awp-2.0-overview.md); Experimental |
 
 ### What's Shipped in Q2 2026
 

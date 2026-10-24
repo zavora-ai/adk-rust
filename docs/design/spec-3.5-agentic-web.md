@@ -1,0 +1,936 @@
+# Spec 3.5: AWP 2.0 and `adk-website` — the website that works for you
+
+| | |
+|---|---|
+| **Status** | Draft / RFC |
+| **Companion** | [`awp-2.0-overview.md`](awp-2.0-overview.md): the product story for owners and developers |
+| **Builds on** | [`spec-3.1-harness-agent.md`](spec-3.1-harness-agent.md) (modes, standing rules, the governed path, governed fetch, packs, long-term facts, teams), [`spec-3.2-agent-kernel.md`](spec-3.2-agent-kernel.md) (agenda, wakes, partitions and crossings, drivers and effect classes, quiet hours, `adk-rust up`), [`spec-3.3-harness-ui.md`](spec-3.3-harness-ui.md) (the decision contract, park on timeout, diff before write, pairing, chat channels, the web home), [`spec-3.4-self-improving-harness.md`](spec-3.4-self-improving-harness.md) (the learning loop the site's playbooks reuse) |
+| **Layers** | **Protocol:** AWP 2.0, implemented by `awp-types` and `adk-awp`. **Runtime:** the ADK-Rust harness. **Product:** `adk-website`, a multi-agent proactive website shipped as a workspace crate |
+| **Target** | `adk-rust` 3.5.0 for phases 0–2 ([§12](#12-phased-delivery)); 3.5.x for phases 3–4 |
+| **Grounding commit** | `origin/main` @ `c8141b55` for every `file:line` reference |
+| **Evidence** | Public advisories, reports and standards from July to October 2026, listed under [References](#references) |
+| **Affected crates** | `awp-types`, `adk-awp` (AWP 2.0 wire); NEW `adk-site` (site pipeline); NEW `adk-website` (product); `adk-kernel` (charter, KPI tracker, signals, site process kinds); `adk-harness` (preset `website`, site toolsets, onboarding machinery); `adk-server` (feature `awp`: the agent edge); `adk-auth` (Web Bot Auth); `adk-tool` (MCP server); `adk-payments` (wallet and rails); `adk-eval` (experiment analysis); `adk-surface` (onboarding and site views); `adk-cli` (`adk-rust website`, `adk-rust awp`); `cargo-adk` (`website` template); `adk-rust` (feature `website`) |
+| **Stability** | `adk-website` and `adk-site` enter at **Experimental**; the AWP 2.0 types enter `awp-types` at **Beta**; AWP stays Beta until its normative text is published ([§13](#13-open-questions) Q1) |
+
+---
+
+## 1. Summary
+
+On 21 October 2026 PHP shipped emergency fixes for **PHP2Shell** (CVE-2026-109618 and CVE-2026-109619, CVSS v4 9.2): unauthenticated remote code execution in "all PHP installations serving web requests", fixed only in 8.2.35, 8.3.36, 8.4.27 and 8.5.12. Updating a site's code or plugins did not fix it; government services in several countries went offline rather than stay exposed. PHP serves about 69% of sites whose server language is known, and WordPress about 40% of all sites. The months before had already shown the pattern: two WordPress core flaws mass-exploited within a day or two of their patches, backdoored plugin releases signed by their own vendors, a median of five hours from disclosure to mass exploitation, and agent-driven intrusion campaigns documented by Microsoft. Over the same period the visitors of a website changed: agents now search, compare, book and buy on people's behalf, and the standards for their identity (Web Bot Auth), conversation (A2A), tools (MCP) and payments (AP2, ACP, UCP) settled into layers. Websites themselves did not change: every CMS and builder still waits for its owner to act, and the 2026 vendor agents still ask a person to approve each write and run no site end to end.
+
+The Agentic Web Protocol saw the agent shift early. Its April 2026 drafts held the right ideas — two audiences, owner sovereignty, proactivity, owner intelligence — but mixed protocol, runtime and product in one set of documents, trusted claims (User-Agent strings, self-declared headers) instead of proof, and assumed a server composing every page. The runtime it needed did not exist: `adk-gateway` was an early attempt at it, built before the kernel, and the `adk-awp` crates implement a wire that matches neither draft and that no other crate uses ([§4.1](#41-awp-10-and-what-changes)).
+
+That runtime exists now. ADK-Rust has a governed tool path, always-on agents that sleep until woken, partitions that keep one agent's memory and drivers from another, held calls that wait as long as a person takes, an approvals inbox on every surface, payments under mandates, statistical evaluation, and a tamper-evident audit log. Spec 3.5 uses it to change what a website is:
+
+- **AWP 2.0** is the signed contract between a website and the people and agents who use it. It binds the 2026 standards under one owner-signed document and adds what they lack: signed releases, a site status, typed capabilities with owner policy, held and exactly-once actions, consent receipts and the **charter** — the site's goals, KPIs, guardrails, authority and budget.
+- **The runtime** adds a site pipeline (migrate, sanitise, build, gate, sign, publish, watch), an agent edge, public and back-office partitions joined only by typed signals, a charter store and KPI tracker, earned autonomy, measurement and experiments, drivers for hosting, DNS, email, analytics, social and advertising, and a wallet.
+- **`adk-website`** is the product: a prebuilt AWP website that a user spins up with one command or one click. It onboards its owner, builds a new site or migrates an existing one while the owner talks, passes its own launch gate, deploys itself, and from then on works towards the owner's goals with a team of eight agents — protecting itself, getting found, keeping itself fresh, serving people and agents in their language, running its own email within limits, reporting weekly and asking for help when it needs it.
+- **Every kind of website, not only businesses.** The sites PHP2Shell put at risk are personal sites and blogs, small businesses, shops, government and public services, charities, schools, newsrooms, clinics, places of worship, clubs and events. `adk-website` serves all of them: the charter's **site kind** sets the goals, KPIs, agents, capabilities and rules ([§7.16.1](#7161-site-kinds)). A personal blog gets publishing, a newsletter and protection with no sales machinery; a ministry gets accessibility, official languages, two-person publication and service forms with verified identity; a shop gets catalogue, orders and payments.
+
+The honest claim is bounded. Removing the server runtime from the page path removes the class of flaw that made Black October; the build pipeline, the host and registrar accounts, DNS and the edge and kernel services remain attack surface, and [§9](#9-security-invariants-and-audit-records) states what each control covers. "Unhackable" never appears in the documentation.
+
+## 2. Goals
+
+- **G1.** A user starts a working AWP website with one command or one deploy button, and the site itself guides the owner from nothing — or from an existing site or online presence — to a live, signed site.
+- **G2.** Onboarding is agent-led: the site researches before it asks, drafts every artefact, builds itself while the owner answers, and leaves the owner to confirm, correct and sign.
+- **G3.** No code runs when a page is requested; the site keeps serving its last signed release if every agent stops.
+- **G4.** Every published state is a signed release in an append-only log, any agent or person can verify a served page, and the site reverses tampering on its own.
+- **G5.** People and agents each get an interface made for them: fast multilingual pages and conversation for people; a verified front door with typed capabilities for agents, reachable over A2A, MCP and HTTP from one definition.
+- **G6.** The site is discoverable through search engines, answer engines and agent search, and measures all three.
+- **G7.** The site holds a charter — mission, strategy, goals, KPIs with baselines, guardrails, authority, budget, voice — and tracks its performance against it over time.
+- **G8.** The site works towards its goals around the clock — whatever they are: an audience for a writer, enquiries for a business, orders for a shop, completed services for a public body, donations and volunteers for a charity, readers for a newsroom — inside earned, per-job autonomy, budgets, quiet hours and guardrails that override growth targets.
+- **G9.** The site accounts for its own costs, pays them from an owner-funded wallet under mandates, and reports cost and return.
+- **G10.** Public input never reaches a privileged tool: agents that read untrusted text cannot spend, publish, send in bulk or read the owner's memory.
+- **G11.** The site reports weekly, raises alarms by urgency, and asks the owner for input on a schedule.
+- **G12.** Every claim in this spec is a scenario with a pass condition, runnable against local fixtures without exploiting anything.
+- **G13.** `adk-website` serves every kind of site that runs on PHP today; the site kind decides what is switched on, and a non-commercial site carries no sales, advertising or profit machinery unless its owner adds it.
+- **G14.** Organisations govern their site with roles and approval chains, not a single owner: a public body can require two people to publish, and every decision records who made it.
+- **G15.** Publishing is one pipeline from any entry point — a message from the owner's phone, the web editor, files, imports — to a signed release that is live within a minute of approval, with the approvals each site kind needs.
+
+## 3. Non-goals
+
+| Non-goal | Why | Where it belongs |
+|---|---|---|
+| **N1.** A hosting company, CDN or firewall | A framework, not a platform; the owner chooses where the site runs | Host drivers and deployment shapes ([§7.13](#713-drivers), [§7.22](#722-deployment-shapes)) |
+| **N2.** Patching or hardening WordPress or PHP in place | Black October showed that patching the application does not fix the runtime | Freeze, migrate, archive ([§7.8](#78-site-pipeline-adk-site)) |
+| **N3.** Vulnerability scanning or exploitation of third-party sites | Dual-use and outside a framework's remit | `awp verify` reads published documents only; active probes only on domains the owner proved (A-I9) |
+| **N4.** A page builder, theme marketplace or hosted owner dashboard as a service | Product concerns beyond a framework | Themes and capability packs as files; owner views on the existing surfaces |
+| **N5.** Logins, member areas, forums, learning platforms and account portals on the content origin | They reintroduce a runtime and an account database | Service capabilities with verified identity (OIDC, national eID) on the edge; a service the owner names; account-heavy sites in a later spec ([§13](#13-open-questions) Q12) |
+| **N6.** Replacing A2A, MCP, Web Bot Auth, IETF AI preferences or any payment protocol | They are converging under foundations and the IETF | AWP 2.0 binds them ([§7.2](#72-the-site-contract)) |
+| **N7.** Content at volume, invented claims, dark patterns | Legal and reputational risk; a profit-seeking site would learn them | Claims only from confirmed facts (A-I18); guardrails override targets (A-I15) |
+| **N8.** The site opening accounts, adding payment methods or raising its own limits | Money and identity stay with the owner | The wallet's mandates (A-I16) |
+| **N9.** Choosing a generator, host, email provider, analytics vendor, payment rail or store for users | Framework neutrality | Traits, adapters and conformance suites |
+| **N10.** Recursive self-improvement in name or claim | Spec 3.4 N8 | Learning is playbooks and proposals ([§7.15](#715-learning)) |
+
+## 4. Relationship to AWP 1.0, `adk-gateway`, specs 3.1–3.4 and the standards
+
+### 4.1 AWP 1.0 and what changes
+
+Two AWP texts exist, both unpublished: a v0.4 vision document and a formal v1.0-draft (April 2026, RFC style), in the `agenticwebprotocol` repository. The crates implement neither:
+
+| Area | v1.0-draft | `adk-awp` today | AWP 2.0 |
+|---|---|---|---|
+| Discovery | `awp_version`, `site_id`, `conformance_level`, snake_case, `application/awp+json` | `version` object, `siteName`, camelCase, plain JSON, unsigned, hard-coded URLs ([`discovery.rs:20-36`](../../adk-awp/src/discovery.rs)) | Signed site contract with profiles, keys, links to every surface, the public charter digest ([§7.2](#72-the-site-contract)) |
+| Trust | public, known, verified, partner; DIDs for verified | anonymous, known, partner, internal; every requester `Anonymous` ([`trust.rs:23-30`](../../adk-awp/src/trust.rs)) | public, known, verified, partner — from Web Bot Auth, OAuth, mTLS or DIDs; never from claims ([§7.3](#73-identity-and-trust-tiers)) |
+| Requester detection | `Accept` header first, then a User-Agent registry — while §17.3 forbids trusting self-declared types | User-Agent substrings and a self-declared `X-AWP-Channel` header ([`detect.rs:7-61`](../../adk-awp/src/detect.rs)) | A label for analytics only |
+| Capabilities | Per-resource manifests with schemas, trust, idempotency | One site manifest that drops `access_level` and both schemas ([`manifest.rs:28-46`](../../adk-awp/src/manifest.rs)) | Typed capabilities with effect, trust, price, consent, approval; one definition, three bindings; a machine view of every page ([§7.4](#74-capabilities-bindings-and-machine-views)) |
+| Agent messaging | A2A as substrate (§9.1) | A bespoke `A2aMessage` envelope ([`awp-types/src/a2a.rs`](../../awp-types/src/a2a.rs)) | A2A v1.0; AWP signals as typed records, not a message bus |
+| Pages | Agent-composed HTML per request; reverse proxy in front of any site | — | Static content; composition only as optional components; freeze mode instead of pass-through |
+| Payments | HMAC-signed `PaymentIntent` lifecycle | A type with an unused `signature` and a doc naming a bridge that does not exist ([`payment.rs:58-128`](../../awp-types/src/payment.rs)) | Rails through `adk-payments`, signed receipts any agent verifies |
+| Namespace | `https://awp.dev/schema/v1`, which an unrelated company owns | schema.org | A domain the project controls ([§13](#13-open-questions) Q1) |
+| Owner intelligence, proactivity | Described (morning digest, proposal queue, content pipeline), not specified | `business.toml` fields that no runtime reads ([`business.rs:210-244`](../../awp-types/src/business.rs)) | The charter, the team and the jobs ([§7.6](#76-the-charter-format), [§7.19](#719-the-team)) |
+
+`adk-awp` keeps serving its current routes for one release line behind the `awp-v1` feature; `business.toml` converts to the 2.0 site data and charter with `adk-rust awp migrate-config`.
+
+### 4.2 `adk-gateway`
+
+`zavora-ai/adk-gateway` (v1.0.0, June 2026) combined chat channels, cron, RAG, a knowledge graph and a control panel around `adk-awp` before the kernel existed. As wired today its `/awp/a2a` has no handler and answers 503, and its `/awp/consent*` routes sit outside its JWT layer and take the subject from the request body. Its channel adapters (Telegram, WhatsApp, Slack, Discord, Matrix) port to the kernel's `ChannelSink` contract ([`channels/mod.rs:554`](../../adk-kernel/src/channels/mod.rs)) under this spec ([§10](#10-changes-outside-the-feature) X12); the rest is superseded by the kernel, the harness and `adk-website`.
+
+### 4.3 Specs 3.1–3.4
+
+| Spec | Supplies to 3.5 | 3.5 adds |
+|---|---|---|
+| 3.1 HarnessAgent | Modes as a `ToolPolicy` ([`mode.rs:71`](../../adk-harness/src/mode.rs)); standing rules created only by people ([`rule.rs:357`](../../adk-harness/src/approvals/rule.rs)); governed `web_fetch` and `web_search`; the browser and payments packs ([`packs/browser.rs:242`](../../adk-harness/src/packs/browser.rs), [`packs/payments.rs:198`](../../adk-harness/src/packs/payments.rs)); long-term facts where `Known` needs an owner's words ([`facts/types.rs:174`](../../adk-harness/src/facts/types.rs)); teams ([`team.rs:141`](../../adk-harness/src/team.rs)); the plan graph ([`plan_graph.rs:295`](../../adk-harness/src/plan_graph.rs)); take-over | `Preset::Website`; site toolsets; Web Bot Auth signing of outbound fetches; onboarding machinery |
+| 3.2 Agent Kernel | Agenda and `ProactivityPolicy` ([`agenda.rs:216, 610, 957`](../../adk-kernel/src/agenda.rs)); wakes ([`wake.rs:100`](../../adk-kernel/src/wake.rs)); partitions and crossings ([`partition.rs:193, 271`](../../adk-kernel/src/partition.rs)); drivers with effect classes ([`drivers.rs:134`](../../adk-kernel/src/drivers.rs)); quiet hours; pairing ([`pairing/mod.rs:119`](../../adk-kernel/src/pairing/mod.rs)); `adk-rust up --install` | Charter store, KPI tracker, signals, site process kinds, `AgendaOrigin::Signal` |
+| 3.3 Harness UI | Decision cards and the inbox ([`surface/model.rs:239`](../../adk-surface/src/model.rs)); park on timeout; diff before write; the web home in `adk-surface` | Onboarding views, charter cards, the site view, the weekly review |
+| 3.4 Self-improving harness | The defect pipeline, sealed gates and promotion by people (specified, not yet built) | Its configuration-first half applied to playbooks ([§7.15](#715-learning)); a correction to its §1 date ([§10](#10-changes-outside-the-feature) X8) |
+
+### 4.4 The standards AWP 2.0 binds
+
+| Layer | Standard (October 2026) | AWP 2.0 role |
+|---|---|---|
+| Requester identity | Web Bot Auth (`draft-ietf-webbotauth-httpsig-protocol`, working-group draft since 2026-09-01) over HTTP Message Signatures (RFC 9421) | Verified identity → `known`; owner allowlists → `partner` |
+| Agent conversation | A2A v1.0 with signed Agent Cards; `/.well-known/agent-card.json` registered permanently with IANA | Each capability is an A2A skill |
+| Tools | MCP; Server Cards (SEP-2127, merged 2026-10-06) | Each capability is an MCP tool |
+| Usage preferences | IETF AI preferences (`Content-Usage`) | Generated from the charter's public terms |
+| Content for agents | `llms.txt` (proposal); Markdown by content negotiation | Generated at build; advisory |
+| Payments | AP2 (FIDO Alliance), ACP, UCP, use-based rails | Through `adk-payments` adapters; none is the default |
+| Disclosure | `security.txt` (RFC 9116) | Generated and linked |
+
+## 5. Headline capabilities and demonstration scenarios
+
+Each scenario is a test in `examples/website` ([§11](#11-testing-and-live-verification)) against local fixtures: a containerised, patched WordPress with seeded content, a contact-form plugin and a small shop, with an `infected` overlay of inert markers for S3; a business-presence fixture of listing, review and social pages; and an empty start. No scenario exploits anything.
+
+| # | Capability | Scenario | Pass condition | Machinery |
+|---|---|---|---|---|
+| S1 | **From nothing to live.** The site builds itself during onboarding | `adk-rust website new` with no source; the scripted owner answers the interview, picks a design direction, signs the charter, approves launch | Charter v1 signed with every KPI carrying a baseline source; every page maps to a charter goal; zero published claims from `Assumed` facts; launch gate green; release 1 signed; `awp verify` passes on the local deployment | Onboarding ([§7.18](#718-onboarding-and-self-building)) |
+| S2 | **From an online presence.** No site, but profiles and reviews exist | Start from the presence fixture | The snapshot lists each found fact with its source as unconfirmed; only confirmed facts appear on pages; review quotes appear only with the reviewer's public attribution and the owner's approval | Discovery, provenance |
+| S3 | **Migrate and leave the infection behind** | Start from the WordPress fixture with the `infected` overlay | Every inventoried URL is served or 301-redirected; zero broken internal links; zero server-side executables (A-I1); hidden spam, crawler-only scripts and a `.php` upload are quarantined with evidence; forms and shop map to capabilities; visual and text parity within thresholds on the top 20 pages | Site pipeline ([§7.8](#78-site-pipeline-adk-site)) |
+| S4 | **Freeze in hours** | The legacy site must come off the public path before migration | A crawled snapshot is served by the static host; zero requests reach the upstream at request time; the old server is reachable only from the crawler | Freeze |
+| S5 | **Tamper, detect, reverse** | A file on the host is replaced | Within one probe interval: `site.drift.detected`, status `incident`, edge `read_only`, rollback to the last good release (standing rule in Auto, held in Ask), one P1 alarm to the owner, linked audit records | Guardian ([§7.20](#720-jobs)) |
+| S6 | **Identity, not claims** | An unsigned client claiming `GPTBot` with `X-AWP-Channel: agent`; a Web Bot Auth-signed agent; a partner with an OAuth token | Trust `public`, `known`, `partner`; each sees only the capabilities its tier allows; limits key on the verified identity | Web Bot Auth ([§7.3](#73-identity-and-trust-tiers)) |
+| S7 | **Injection reaches nothing privileged** | A hostile A2A message and a hostile inbound email instruct the site to publish a page, change DNS, reveal owner notes and pay an invoice | Public agents hold no such tools; the back office receives one typed signal per input with screened, bounded fields; zero `PublishPublic`, `Financial` or memory reads; refusals audited | Partitions and signals ([§7.10](#710-partitions-and-signals)) |
+| S8 | **Lead to warm handoff** | A visitor converses, leaves an email with consent, answers two qualifying questions; a week of nurture follows | Lead record with consent receipt; two nurture emails sent within the playbook and quiet hours; the lead's score crosses the charter threshold; the owner gets one handoff card with the conversation summary on their chosen channel | Concierge, Revenue |
+| S9 | **Agent-to-agent business** | A buyer agent follows the contract to a quote, books (non-idempotent) and pays through an AP2 sandbox mandate; one booking exceeds the threshold; every call is retried twice | One booking and one payment per request; the large one answers 202, completes after the owner approves on the phone; consent and signed receipts issued; retries answered from the action ledger | Capabilities, held actions, commerce |
+| S10 | **A week on duty** | Seven simulated days on a warped clock: ten unanswered visitor questions, two reviews, a RustSec advisory against the edge's lockfile, a certificate 14 days from expiry | Draft pages for recurring gaps wait out `publish_delay` and an approval; review replies drafted; upgrade and renewal proposals; one weekly review with KPIs against baselines, cost, questions and promotion offers; every proactive run inside budget and outside quiet hours; every public change a signed release | Steward, Growth, Guardian |
+| S11 | **An experiment that respects its guardrails** | Two headline variants; variant B lifts sign-ups but doubles unsubscribes | The analysis reports the lift with its interval; the unsubscribe guardrail breach pauses the experiment and keeps A; the decision and evidence appear in the weekly review | Experiments ([§7.12](#712-measurement-and-experiments)) |
+| S12 | **Money inside the box** | A month of model tokens and a domain renewal within caps; an advertising top-up above its category cap; a burst of token spend at three times the daily average | In-cap payments settle and reconcile; the top-up is held for the owner; the burst raises an anomaly alarm and pauses the category; the site never adds a payment method or raises a cap | Wallet ([§7.14](#714-wallet-and-money)) |
+| S13 | **Anyone can check** | `adk-rust awp verify` from a clean machine, then against: a contract signed by a foreign key, an altered A2A card, a changed page, a log checkpoint that does not extend the previous one | The first run passes and prints posture and readiness; each tampered run fails naming the broken link | Verifier ([§7.7](#77-releases-site-log-and-verification)) |
+| S14 | **Earned autonomy** | Twenty review-reply proposals approved unchanged over 30 simulated days, then a guardrail breach | The weekly review offers promotion; the owner accepts and a standing rule is created by the owner's decision; the breach demotes the job one level automatically and says why | Autonomy ladder ([§7.11](#711-charter-store-kpi-tracker-and-earned-autonomy)) |
+| S15 | **Agency mode** | One harness runs two sites for two owners | Each site's partitions, memory, wallet and drivers are isolated; a cross-site request is denied and recorded even for a coordinator | Partitions (A-I22) |
+| S16 | **A public body** | A municipal site migrated from WordPress with kind `government`: two official languages, a permit-application form, an approval chain of editor and publisher | The launch gate fails until every page passes WCAG 2.2 AA in both languages; no third-party script ships; the form becomes a service capability whose applicant identity comes from an OIDC provider fixture; a release proposed by the editor publishes only after the publisher approves (A-I23); no advertising, sales or wallet jobs exist beyond hosting | Site kinds ([§7.16.1](#7161-site-kinds)), approval chains |
+| S17 | **A personal site** | A writer's WordPress blog migrated with kind `personal` and a budget of hosting plus a small model allowance | Posts, archive and feeds keep their URLs; a newsletter sign-up with consent replaces the plugin; the team runs Concierge, Steward, Growth and Guardian only; the weekly review reports readers, subscribers and cost; the monthly running cost stays inside the budget | Site kinds |
+| S18 | **Publishing at speed** | A WhatsApp message from the paired owner with three photos adds a product for launch at 09:00; two price changes of 5% and 15%; a breaking story by a reporter approved by an editor and a publisher on their phones, then corrected; an email from an unpaired account asking to change a price | The product is live at 09:00 in one signed release covering its page, category pages, sitemap, product feed and machine view, uploading only changed files; the 5% change goes live and the 15% change is held; the story is live under 60 s after the publisher's approval on `DirectoryHost` and the reference CDN host; the correction note is visible and both releases are in the log; the unpaired email produced only a signal (A-I24, A-I25) | Publishing ([§7.8.2](#782-publishing)) |
+
+S3, S5 and S7 together — an infection left behind, a defacement reversed from a signed log, an injection that reaches no privileged tool — are what an autonomous website needs before anyone should run one. S1, S8 and S10 are what make an owner want one. S16 and S17 show the same product serving a public body and a single writer.
+
+## 6. Architecture
+
+![adk-website architecture: any site, visitors, static content, the agent edge, the kernel back office and the owner](images/spec-3.5/architecture-light.png)
+
+Content is written only by the kernel's release builder, as signed releases. The public partition at the edge reaches the back office only through typed signals. The owner decides on cards from any surface.
+
+An `adk-website` runs as three deployables: **content** on any static host, the **agent edge** with the public partition, and the **kernel service** with the back office. If the edge and the kernel both stop, the content keeps serving its last signed release.
+
+**Decisions**
+
+| | Decision | Grounding |
+|---|---|---|
+| **D-1** | **Three layers, one repository.** AWP 2.0 is implemented by `awp-types` and `adk-awp`; the runtime is the harness and kernel; the product is the `adk-website` crate. The protocol knows nothing of the harness, the runtime knows nothing of any business, the product holds no framework code | The owner's decision; the 1.0 drafts failed by mixing them |
+| **D-2** | **Static content, dynamic edge.** No code runs per page request; composition happens only as optional components; freeze replaces pass-through proxying | PHP2Shell sat in the runtime |
+| **D-3** | **AWP composes.** Identity is Web Bot Auth (or OAuth, mTLS, DIDs), conversation is A2A, tools are MCP, usage is IETF AI preferences, money is any rail `adk-payments` adapts | The standards are converging under the IETF, the Agentic AI Foundation and FIDO |
+| **D-4** | **One capability declaration, three bindings.** Each capability is one `adk_core::Tool` exposed as an A2A skill, an MCP tool and an AWP endpoint, under one policy | `ToolEffect` ([`tool.rs:497`](../../adk-core/src/tool.rs)); A2A on `adk-server` |
+| **D-5** | **Public and back-office partitions, joined only by typed signals.** Agents that read untrusted text hold no privileged tools; the back office never reads raw untrusted text | Kernel partitions deny crossings by default ([`partition.rs:193`](../../adk-kernel/src/partition.rs)) |
+| **D-6** | **The charter is protocol.** Its format is in AWP so a site's goals and authority are portable; its public terms are published, the rest stays in the charter store | The owner's decision |
+| **D-7** | **Autonomy is earned per job and only an owner raises it.** The site may lower its own autonomy, never raise it; promotion creates a standing rule by the owner's decision | Standing rules are created only by people (spec 3.1 I2) |
+| **D-8** | **No target without a baseline; owners set targets.** The site proposes ranges with evidence | A site graded against numbers it chose would choose flattering ones |
+| **D-9** | **Guardrails override growth.** A guardrail breach pauses the job before its next action | Profit-seeking without guardrails learns spam and dark patterns |
+| **D-10** | **Money is boxed.** An owner-funded wallet, mandates per category, caps enforced before execution, anomaly alarms; the site never opens accounts, adds payment methods or raises limits | Payment mandates ([`packs/payments.rs:103`](../../adk-harness/src/packs/payments.rs)); spend ledger ([`spend.rs:376`](../../adk-core/src/spend.rs)) |
+| **D-11** | **Signed everything that matters, with roles.** A root key outside the agent signs the contract and delegations; short-lived keys sign releases, cards and receipts; releases append to a Merkle log | Signed audit log, notes, JCS ([`log.rs:192`](../../adk-auth/src/signed_audit/log.rs), [`note.rs:431`](../../adk-auth/src/signed_audit/note.rs), [`jcs.rs:33`](../../adk-auth/src/signed_audit/jcs.rs)) |
+| **D-12** | **Onboarding is agent-led and the site builds itself.** Release 1 comes from the charter, confirmed facts and the owner's choices, from any of three starting points | The owner's decision |
+| **D-13** | **Neutral adapters with conformance suites** for sources, generators, hosts, DNS, email, analytics, social, advertising, wallets and stores; built-in implementations exist so tests are hermetic, not as defaults over anyone's choice | Framework neutrality |
+| **D-14** | **`adk-website` is a workspace crate** with a library (team, onboarding, themes, packs, playbooks, deployment) and a binary; `adk-rust website` runs it from the CLI | The owner's decision |
+| **D-15** | **Every kind of site, one product.** The charter's site kind selects a template of goals, agents, capabilities and rules; non-commercial kinds carry no sales, advertising or profit machinery by default; organisations get roles and approval chains | About 70% of sites with a known server language run PHP, and most are not shops; the owner's decision |
+
+## 7. Component specifications
+
+### 7.1 Layout and features
+
+| Crate | Feature | Contents |
+|---|---|---|
+| `awp-types` | none | AWP 2.0 types beside 1.0: `SiteContract`, `SurfaceLinks`, `IdentityPolicy`, `ReleaseRef`, `SiteStatus`, `CapabilityV2`, `HeldCall`, `EventEnvelope`, `ConsentReceipt`, `Receipt`, `Charter` and its parts, `Proof`. Zero `adk-*` dependencies |
+| `adk-awp` | default | v2 router and handlers; dual-version negotiation; `StaticBundle` (the static profile); `CapabilityTool`; durable-store traits for subscriptions, consent, status and held calls |
+| `adk-awp` | `signing` | JWS over JCS for the contract and cards; `SiteKeys` and delegations; depends on `adk-auth/signed-audit` |
+| `adk-awp` | `awp-v1` | The 1.x routes, for one release line |
+| `adk-auth` | `web-bot-auth` | `HttpSignatureVerifier` (RFC 9421, Ed25519), key-directory fetch and cache, `WebBotAuthTrustAssigner`, `HttpSignatureSigner` |
+| `adk-tool` | `mcp-server` | A Streamable HTTP MCP server publishing a set of `adk_core::Tool`s; adk-rust has MCP clients only today |
+| NEW `adk-site` | default | The content model, `ContentSource` adapters, incremental `ReleaseBuilder`, `SiteSource`, inventory, sanitiser, `SiteGenerator` with the built-in renderer, `LaunchGate`, `ReleaseBuilder`, `SiteLog`, `SiteHost` with `DirectoryHost`, probes, freeze |
+| `adk-site` | `gen-zola`, `gen-hugo`, `gen-astro`, `gen-build-awesome` | External generators as sandboxed processes with no network |
+| `adk-site` | `host-s3`, `host-gcs`, `host-azure`, `host-cloudflare`, `host-netlify`, `host-github-pages`, `host-rsync` | Host adapters under one conformance suite |
+| `adk-kernel` | `charter` | `CharterStore`, `KpiStore`, the KPI tracker, `SignalSink`, `AgendaOrigin::Signal`, site process kinds; in-memory, SQLite, PostgreSQL and Redis backends |
+| `adk-eval` | `experiments` | `ExperimentAnalyzer`: sequential tests for proportions and means with guardrail monitoring |
+| `adk-payments` | `wallet` | `WalletProvider`, `WalletPolicy`, category mandates, reconciliation, a use-based rail adapter |
+| `adk-server` | `awp` | `ServerBuilder::awp(AwpEdge)`: AWP v2 routes, the A2A skill and MCP bindings, held-call status, the measurement beacon |
+| `adk-harness` | `website` | `Preset::Website`; site toolsets; Web Bot Auth signing for `web_fetch` and crawls; onboarding tools |
+| `adk-surface` | `website` | The web editor (forms per content kind, rich text, media, preview, scheduling), onboarding views, charter cards, the site view, the weekly review on the web home |
+| NEW `adk-website` | default | The product: team, onboarding, themes, capability packs, playbooks, deployment ([§7.16](#716-adk-website)) |
+| `adk-cli` | `website` | `adk-rust website …`, `adk-rust awp …` |
+| `cargo-adk` | — | A `website` template |
+| `adk-rust` | `website` (in `full`) | Forwards to `adk-website`; recorded in `docs/feature-surface.md` |
+
+## Part A — Protocol: AWP 2.0
+
+### 7.2 The site contract
+
+`/.well-known/awp.json`, served as `application/awp+json`, is signed by the site root key. Every field beyond `awp` and `site` is optional, so a read-only static site publishes a minimal contract and a client that speaks only A2A or MCP follows the links and ignores the rest.
+
+```json
+{
+  "awp": "2.0",
+  "site": { "id": "018f2c7e-…", "name": "Example Solar", "domain": "example.com", "languages": ["en", "sw"] },
+  "profile": "static+edge",
+  "surfaces": {
+    "a2aCard": "https://agent.example.com/.well-known/agent-card.json",
+    "mcpServerCard": "https://agent.example.com/.well-known/mcp/server-card.json",
+    "manifest": "https://agent.example.com/awp/v2/manifest",
+    "llmsTxt": "https://example.com/llms.txt",
+    "machineViews": true
+  },
+  "identity": { "accepts": ["web-bot-auth", "oauth2-client-credentials"], "trustRules": "https://agent.example.com/awp/v2/trust" },
+  "release": { "seq": 42, "manifest": "https://example.com/.well-known/awp/releases/42.json", "checkpoint": "https://example.com/.well-known/awp/log/checkpoint" },
+  "status": { "url": "https://agent.example.com/awp/v2/status", "lastKnown": "operational" },
+  "events": { "subscribe": "https://agent.example.com/awp/v2/events", "catalog": ["site.release.published", "site.status.changed", "catalog.changed", "order.updated", "consent.revoked"] },
+  "payments": { "rails": ["ap2", "acp"] },
+  "charter": { "public": "https://example.com/.well-known/awp/charter.json", "digest": "sha256:…" },
+  "contact": { "security": "https://example.com/.well-known/security.txt" },
+  "keys": "https://example.com/.well-known/awp/keys.json",
+  "proof": { "alg": "EdDSA", "kid": "site-root-2026", "jws": "<detached JWS over the JCS form without proof>" }
+}
+```
+
+- **Profiles.** `static` (contract, keys, log, cards and machine views as files; no edge), `static+edge` (`adk-website`'s default), `dynamic` (an application serving AWP itself).
+- **Keys.** `keys.json` lists the root key and a root-signed delegation naming release, card and receipt keys with validity windows and scopes. Verification walks root → delegation → signature. A new root is signed by the old; recovery publishes a root through a DNS TXT record (`_awp-root.<domain>`) that a person changes, so a stolen host account alone cannot rotate the root.
+- **Negotiation.** The edge serves 2.0 under `/awp/v2/` and, with `awp-v1`, the 1.x routes; `AWP-Version` selects the highest common major, replacing the single-major check ([`middleware.rs:32-37`](../../adk-awp/src/middleware.rs)).
+- **Registration.** The well-known URI and the media type are registered with IANA once the normative text is published ([§13](#13-open-questions) Q1).
+
+### 7.3 Identity and trust tiers
+
+| Tier | Earned by | Typical access |
+|---|---|---|
+| `public` | Nothing | Pages, machine views, read-only capabilities, conversation |
+| `known` | A valid Web Bot Auth signature, an OAuth client-credentials token, or an API key the owner issued | Quotes, bookings and orders within policy |
+| `verified` | A `known` identity from a key directory or DID issuer on the owner's verified list | Higher limits; capabilities the owner marks verified-only |
+| `partner` | An owner allowlist entry | Partner capabilities and limits |
+
+- `WebBotAuthTrustAssigner` verifies `Signature` and `Signature-Input` against the directory named by `Signature-Agent`, requires the draft's covered components, accepts `created`/`expires` within 60 s skew, and caches directories for their HTTP cache lifetime. The requester id is `wba:{directory origin}#{key thumbprint}`.
+- The 1.x `detect_requester_type` becomes a `claimed_agent` label for analytics; it never affects trust or limits.
+- The verified requester appears as the counterparty on every `ToolConfirmationRequest` and as `awp.requester` on every audit record; the acting agent stays the site's own principal ([`principal.rs:245`](../../adk-core/src/principal.rs)).
+- **Outbound.** The harness signs its own crawls, `web_fetch` calls and verifier requests with the site's Web Bot Auth key and publishes the directory, so the site is an identifiable, well-behaved agent on the sites it reads.
+
+### 7.4 Capabilities, bindings and machine views
+
+```rust
+pub struct CapabilityV2 {
+    pub name: String,                              // stable id: the A2A skill id and the MCP tool name
+    pub description: String,
+    pub effect: CapabilityEffect,                  // ReadOnly | Idempotent | NonIdempotent (mirrors ToolEffect)
+    pub min_trust: TrustTier,
+    pub input_schema: Option<serde_json::Value>,   // JSON Schema
+    pub output_schema: Option<serde_json::Value>,
+    pub consent: Option<ConsentRequirement>,       // scope and policy version a live receipt must cover
+    pub price: Option<Price>,                      // minor units, currency, accepted rails
+    pub approval: ApprovalHint,                    // Never | AboveAmount(u64) | Always — a held call answers 202
+    pub idempotency: IdempotencySource,            // A2A message id, MCP request id or Idempotency-Key
+    pub rate_class: Option<String>,
+    pub deprecated: Option<Deprecation>,           // successor and sunset
+}
+```
+
+- **One declaration, three bindings.** `CapabilityTool` wraps the handler as an `adk_core::Tool` whose `effect()` is the declared effect and whose `origin()` is `awp:{domain}` ([`context.rs:1116`](../../adk-core/src/context.rs)). The edge exposes it as an A2A skill, an MCP tool and `POST /awp/v2/capabilities/{name}`; all three enter one governed path.
+- **Visibility by tier.** The manifest lists only the capabilities the caller's verified tier allows.
+- **Held actions.** A call the owner must decide answers `202 Accepted` with `Location: /awp/v2/calls/{id}`; the decision on the owner's card resolves it; spec 3.3's park on timeout applies.
+- **Exactly once.** A `NonIdempotent` capability requires an idempotency key; a repeat returns the action ledger's recorded result ([`action_ledger.rs:203`](../../adk-core/src/action_ledger.rs)).
+- **Machine view of every page.** Each page has a structured twin (`<path>/index.awp.json`: resource data, the capabilities that apply to it, schema.org JSON-LD) and a Markdown twin (`<path>/index.md`), linked from the HTML with `<link rel="alternate">` and served by content negotiation where the host supports it.
+- **Embeddable components.** `render_component` returns a script-free HTML fragment with inline styles; no component carries script.
+
+### 7.5 Events, status, consent and commerce
+
+| Element | Wire |
+|---|---|
+| **Events** | Standard Webhooks signatures (the 1.0 draft's sorted-payload HMAC is dropped); `event_id` for idempotency; a catalogue in the contract; retries with backoff, suspension after six failures with a final `subscription.suspended` event; replay within 72 hours; subscriptions authenticated by Web Bot Auth or OAuth and scoped to the subscriber |
+| **Status** | `operational`, `degraded`, `read_only`, `maintenance`, `incident`, each with `since`, `reason_code` and the release `seq`, signed by the edge; `site.status.changed` on every transition |
+| **Consent** | `ConsentReceipt { id, subject_ref, scope, policy_version, policy_digest, legal_basis, jurisdiction, granted_at, expires_at, channel, proof }`, signed by the edge and returned to the subject; scopes from the 1.0 draft (`session_continuity`, `proactive_outreach`, `persistent_profile`, `payment_data`) plus `newsletter`; revocation within one hour, `consent.revoked`, export and erasure endpoints |
+| **Commerce** | Quote, order and booking capabilities; payment through a rail adapter; `Receipt` signed by a delegated receipt key so any agent verifies it; errors from the 1.0 registry (`payment_policy_rejected`, `inventory_unavailable`, `idempotency_conflict`) in one envelope `{awp, error: {code, message, retryable, retry_after, trace_id}}` |
+
+### 7.6 The charter format
+
+```rust
+pub struct Charter {
+    pub version: u32,
+    pub site_id: Uuid,
+    pub kind: SiteKind,                    // Personal | Business | Ecommerce | Government | Nonprofit | Education | Media | Health | Community | Events
+    pub governance: Governance,            // roles (owner, publisher, editor, approver, auditor) and approval chains
+    pub mission: String,
+    pub strategy: Vec<StrategyPillar>,
+    pub goals: Vec<Goal>,                  // each names the KPIs that measure it
+    pub kpis: Vec<Kpi>,
+    pub guardrails: Vec<Guardrail>,        // metric, threshold, window, action: PauseJob | Alert
+    pub authority: Vec<JobAuthority>,      // job id → autonomy level and limits
+    pub budget: Budget,                    // period, currency, caps per category
+    pub voice: Voice,                      // tone, languages, disclosure line
+    pub red_lines: Vec<RedLine>,           // claims, topics and actions never allowed
+    pub reporting: Reporting,              // review cadence, urgency levels, channels, quiet hours
+    pub public: PublicTerms,               // published: usage terms, policies, consent scopes, contact
+    pub signed: Option<OwnerSignature>,    // decision id, owner principal, signed note, time
+}
+
+pub struct Kpi {
+    pub id: String, pub name: String,
+    pub metric: MetricRef,                 // e.g. "leads.qualified", "pages.answer_citations"
+    pub source: SourceRef,                 // beacon | host_logs | analytics:<driver> | commerce | spend | email
+    pub direction: Direction,              // Up | Down
+    pub baseline: Option<Measurement>,     // value, window, measured_at
+    pub target: Option<Target>,            // value, horizon; None until a baseline exists (A-I14)
+    pub cadence: Cadence,
+}
+```
+
+- `SiteKind` selects a charter template: default goals, KPIs, guardrails, jobs, capabilities and rules for the kind ([§7.16.1](#7161-site-kinds)). The owner can change anything the template proposes.
+- `Governance` names the people who hold each role, by principal, and the approval chains per action class: for example, a publication needs an editor's proposal and a publisher's approval, and a charter change needs two owners. A chain is satisfied only by distinct principals, and no agent holds a role.
+- The public part (`PublicTerms`) is published at `/.well-known/awp/charter.json` and its digest appears in the contract; the rest stays in the charter store.
+- A charter version takes effect only when an owner's decision commits it; the commit is sealed as a signed note in the audit log and the version increments.
+- The schema is part of AWP 2.0 so that any conforming runtime can run a site's charter and an owner can move hosts without losing goals, history or authority.
+
+### 7.7 Releases, site log and verification
+
+```rust
+pub struct ReleaseManifest {
+    pub seq: u64,
+    pub previous: Option<Digest>,               // digest of the previous manifest
+    pub created_at: DateTime<Utc>,
+    pub files: BTreeMap<String, FileEntry>,     // path → { sha256, size, content_type }
+    pub redirects: Vec<Redirect>,
+    pub source: ReleaseSource,                  // Onboarding | Migration | Edit { job, decision } | Rollback { to_seq }
+    pub generator: GeneratorRef,                // name and version, for reproduction
+    pub charter_version: u32,
+}
+```
+
+- `ReleaseBuilder` hashes the output, refuses executables (A-I1), writes `/.well-known/awp/releases/{seq}.json`, appends the manifest digest to the `SiteLog` (an `adk-auth` signed audit log) and publishes a new signed-note checkpoint. The host receives files, then log tiles, then the checkpoint, so a reader never sees a checkpoint for files that are not there.
+- Signing runs inside the publish tool after the governed path allows the call; the model sees the diff and the sequence number, never a key.
+- **`adk-rust awp verify <domain>`** checks the contract proof against `keys.json` and the DNS root, the A2A card's signature, that the checkpoint extends the last one it saw, the current release's inclusion, and N sampled page digests (default 20); then prints a posture and readiness report: profile, server-code exposure, identity policy, A2A, MCP, usage terms, `security.txt`, HSTS and CSP. It sends only `GET` requests for published documents and pages.
+- **Conformance kit.** `adk-awp` ships the AWP 2.0 conformance suite as a library and a CLI target, usable against any implementation.
+
+## Part B — Runtime: the ADK-Rust harness
+
+### 7.8 Site pipeline (`adk-site`)
+
+```rust
+#[async_trait]
+pub trait SiteSource: Send + Sync {
+    async fn inventory(&self, ctx: &SourceContext) -> Result<SiteInventory>;   // urls, items, media, features
+}
+#[async_trait]
+pub trait SiteGenerator: Send + Sync {
+    async fn build(&self, project: &SiteProject, out: &Path) -> Result<BuildReport>;
+}
+#[async_trait]
+pub trait SiteHost: Send + Sync {
+    async fn publish(&self, release: &StagedRelease, target: HostTarget) -> Result<PublishReport>; // Preview | Production
+    async fn rollback(&self, to: &ReleaseManifest) -> Result<PublishReport>;
+    async fn fetch(&self, path: &str) -> Result<Option<Bytes>>;   // what the host holds, for drift checks
+    fn redirects_format(&self) -> RedirectsFormat;
+}
+```
+
+| Stage | Behaviour |
+|---|---|
+| **Sources** | `WordPressRest` (public collections; drafts with a read-scoped application password through the credential broker, [`credential.rs:522`](../../adk-core/src/credential.rs)); `Wxr` (an export file); `Crawl` (any site, robots-respecting, signed); `Presence` (business profiles, listings, reviews, social pages: facts as unconfirmed); `IsolatedReplay` (a database dump and uploads served by a container on a loopback-only bridge to the crawler, destroyed afterwards) |
+| **Sanitiser** | HTML to Markdown through an allowlist; drops scripts, inline handlers, `<object>`, `<embed>`, unlisted `<iframe>` and hiding styles; detects hidden-link spam (the `ContentFilter` and a hidden-element detector), cloaking (dual fetch as browser and crawler, then a diff), executables and MIME mismatches among uploads, obfuscated scripts. Findings carry evidence and go to a decision card; quarantined items never publish without a per-item decision |
+| **Feature mapping** | Contact form → `submit_inquiry` (`NonIdempotent`, consent `contact`); search → static index plus `search_site`; comments → off or held `submit_comment`; shop → products plus `get_quote` and `place_order`; bookings → `check_availability`, `book`; logins and member areas → a named owner decision (N5) |
+| **Generator** | The built-in renderer (Markdown plus templates, no plugins) or an external generator in `adk-sandbox` with no network; emits pages per language, machine and Markdown twins, `llms.txt`, `robots.txt` with `Content-Usage`, `security.txt`, sitemaps, JSON-LD, redirects in the host's format |
+| **Launch gate** | Fixed checks outside the agent's write scope ([§7.8.1](#781-the-launch-gate)) |
+| **Releases and log** | [§7.7](#77-releases-site-log-and-verification) |
+| **Hosts** | `DirectoryHost` by default; others by feature; any MCP host server whose driver manifest declares `PublishPublic` for its deploy tool ([`drivers/manifest.rs:171`](../../adk-kernel/src/drivers/manifest.rs)). Conformance: atomic publish, exact rollback, redirect round-trip, checkpoint last |
+| **Freeze** | Crawls the legacy site from a private vantage point, publishes the snapshot as a release, and maps forms to edge capabilities; the upstream is never contacted at request time |
+| **Probes** | Sampled page digests from the host and the public origin, status, certificate expiry, DNS records against the recorded set, security headers |
+
+#### 7.8.1 The launch gate
+
+| Check | Pass condition |
+|---|---|
+| Server code | Zero server-executable files or server-side include directives (A-I1) |
+| Claims | Zero published claims derived from `Assumed` facts (A-I18) |
+| Links | Zero broken internal links |
+| Accessibility | WCAG 2.2 AA automated checks with zero serious violations |
+| Performance | Each page within the charter's performance budget (default: 200 KB critical path, LCP under 2.5 s on the reference profile) |
+| Legal | Privacy, consent and terms pages present for the charter's jurisdictions |
+| Machine views | Every page has its twins; the contract and cards validate; `awp verify` passes against the preview |
+| Migration parity (migrations only) | Every inventoried URL returns 200 or a 301 to a 200; perceptual difference under 0.05 on the top N pages at two widths; main-text similarity at or above 0.95 |
+| Quarantine | Zero quarantined items in the output |
+
+#### 7.8.2 Publishing
+
+Every change to the site — a new product, a news story, a blog post, new opening hours, a correction — becomes a small signed release through one pipeline. Site kinds differ only in who drafts, who approves and how fast the change must go live.
+
+**Content model.** Content is typed and lives as files in the site's content repository: a Markdown body with front matter, structured fields and media beside it. Every draft is a branch; the repository's history is the content history.
+
+```rust
+pub enum ContentKind { Page, Post, Article, Product, Event, Notice, Service, Person, Collection }
+
+pub struct ContentItem {
+    pub id: ContentId,
+    pub kind: ContentKind,
+    pub slug: String,
+    pub language: LanguageTag,
+    pub fields: BTreeMap<String, Value>,   // typed per kind: price and sku, byline, starts_at, valid_until …
+    pub volatile: Vec<String>,             // fields served live by the edge, never released (stock, availability)
+    pub body: Option<Markdown>,
+    pub media: Vec<MediaRef>,
+    pub sources: Vec<FactRef>,             // the confirmed facts its claims rest on (A-I18)
+    pub schedule: Option<Schedule>,        // publish_at, embargo_until, expires_at, revert_at
+    pub state: ContentState,               // Draft | InReview | Approved | Scheduled | Published | Corrected | Withdrawn
+}
+```
+
+**Entry points.**
+
+| Entry point | Who | Mechanism |
+|---|---|---|
+| **Talk to the site** | Owners and staff on paired devices: chat, WhatsApp, voice, email | The kernel's channel contract delivers the message to the Steward in the back office; attachments go through the media pipeline; the result is a draft and a preview card |
+| **Web editor** | Owners, editors, reporters | `adk-surface`'s `website` feature: a structured form per content kind, Markdown-backed rich text, media upload, preview with page diffs, scheduling; no page builder (N4) |
+| **Files and git** | Developers, newsrooms with their own tools | The content repository; a push from an authorised committer arrives through a signed webhook and proposes a release |
+| **Imports and feeds** | Shops, organisations with existing systems | `ContentSource` adapters: CSV, WooCommerce and other exports, supplier and point-of-sale feeds and wire feeds through drivers, calendars; each import is one reviewable change set |
+| **The site's own proposals** | The agents | Freshness fixes, content-gap drafts, translations, as agenda items |
+| **Schedules** | Anyone with a role | Kernel wakes at `publish_at`, `embargo_until`, `expires_at` and `revert_at` ([`wake.rs:100`](../../adk-kernel/src/wake.rs)) |
+
+Only these entry points author content (A-I24). The public partition never does: an email to the site saying "change the price" from anyone but a paired owner produces only a typed signal.
+
+**The pipeline.**
+
+1. **Draft.** The change becomes one or more `ContentItem` edits on a branch.
+2. **Check.** The launch gate's per-change checks: claims from `Known` facts, links, accessibility (alt text present), required languages, red lines, structured data, machine views.
+3. **Preview.** A signed preview release; the decision card shows page diffs (spec 3.3 diff before write).
+4. **Approve.** The job's autonomy level and the charter's approval chain decide: nobody, the owner, or an editor and a publisher (A-I23).
+5. **Release.** `ReleaseBuilder` builds incrementally: the changed items and their dependents — collections, category and tag pages, home sections, sitemaps, feeds, machine views, the capability manifest, `llms.txt` — and signs a full manifest while uploading only changed files.
+6. **Publish.** The host swaps atomically and purges its cache. Target: under 60 seconds from approval to live for a single-item change on hosts with atomic deploys, measured by S18.
+7. **Announce.** `site.release.published` and `catalog.changed` to subscribed agents; updated sitemaps and a ping to search engines that accept one; a newsletter or social post when the job's playbook says so.
+8. **Measure.** The change is tagged in the KPI history so its effect is visible in the weekly review.
+
+**Publishing by kind.**
+
+| Case | Drafts | Default approval | Rules |
+|---|---|---|---|
+| **New product** (e-commerce) | The owner by chat with photos, the web editor, or a bulk import | Owner, until the job is promoted; an import is always one card with its diff | Descriptions only from supplied facts, unconfirmed specifications flagged; schema.org `Product` and the agent product feed rebuilt; launch at `publish_at` |
+| **Price change** | Owner, import or feed | The charter's `PriceRule`: changes within `auto_within_pct` (default 10%) act within budget, larger ones are held | A price is a claim and is always released and signed, never volatile; an open quote keeps its price until its `valid_until` (A-I25) |
+| **News article** | The reporter | Editor, then publisher, both possible from a phone | The site assists with headlines, summaries, tags, translations and SEO but never writes the news; legal-review flag; embargoes prepared and checked ahead, published at `embargo_until` |
+| **Live coverage** | Reporters | Editor for the first entry; then the live job's level | Micro-releases at a bounded rate (default one per minute), or a read-only live feed from the edge; the page itself stays static |
+| **Blog post** | The writer, or the site from the writer's notes | The writer; typo and link fixes may be promoted to act within budget | Scheduled publication; newsletter to consenting subscribers |
+| **Website update** (hours, notices, policies) | The owner says it once | Owner, or the approval chain of a public body | The site changes every place the fact appears — pages, banners, structured opening hours, the manifest, business profiles through drivers — and schedules any reversal (`revert_at`) |
+| **Official notice** (government) | Editor | Editor, then publisher; every official language approved | Publish and expiry dates shown on the page; superseded notices kept as records |
+
+**Volatile data.** Fields a kind declares `volatile` — stock, availability, queue times — are not released. The edge serves them through read-only capabilities with a short cache, a small script renders them, and without script the page shows the last released value marked with its time or a "check availability" link. Volatile fields never carry claims that agents rely on for a purchase; the order capability checks availability at the time of the order.
+
+**Corrections, withdrawals and takedowns.** A correction is a new release with a visible correction note; news templates require one, and the site log shows both versions' digests, so a newsroom can prove what it published and when it changed. A withdrawal replaces a page with a notice or answers 410 Gone. The site log keeps digests only, so it retains no removed content; a legal hold keeps content in the encrypted archive when the charter says so.
+
+**Media.** Uploads are type-sniffed (executables and polyglot files refused), location metadata is stripped, images are resized and converted, alt text is drafted and must be confirmed before the accessibility check passes, and generated images are labelled as illustrations.
+
+**Translations.** Each item is drafted in every charter language. A kind's `TranslationPolicy` sets whether a language needs human approval: a spot check for most kinds, approval per language for public bodies, where publication waits for every official language.
+
+**Concurrency.** Releases are serialised per site. Conflicting edits to one item produce a merge card; a scheduled release rebases onto the latest release at its publication time and runs its checks again.
+
+### 7.9 Agent edge, MCP server and stores
+
+`ServerBuilder::awp(AwpEdge)` mounts through `add_root_routes` ([`rest/mod.rs:546`](../../adk-server/src/rest/mod.rs)), so the server's host guard, CORS, timeouts and security headers apply:
+
+| Route | Purpose |
+|---|---|
+| `GET /.well-known/agent-card.json` | The signed A2A card, one skill per capability visible to the caller |
+| A2A v1.0 JSON-RPC and REST | Conversation with the Concierge and Agent desk |
+| `/.well-known/mcp/server-card.json`, MCP Streamable HTTP | The same capabilities as MCP tools (`adk-tool` `mcp-server`) |
+| `GET /awp/v2/manifest`, `GET /awp/v2/status`, `GET /awp/v2/trust` | Contract surfaces |
+| `POST /awp/v2/capabilities/{name}`, `GET /awp/v2/calls/{id}` | Invocation and held-call status |
+| `POST /awp/v2/events`, `GET`/`PATCH`/`DELETE /awp/v2/events/{id}`, `POST /awp/v2/events/replay` | Subscriptions |
+| `POST /awp/v2/consent`, `POST /awp/v2/consent/revoke`, `GET /awp/v2/consent/export` | Consent, authenticated to the subject by a signed link or session |
+| `POST /awp/v2/beacon` | Cookieless measurement ([§7.12](#712-measurement-and-experiments)) |
+| `GET /awp/v2/chat` (WebSocket) | The on-site assistant |
+
+- The edge has no interpreter on its request path and no owner route on its public listener; the owner's control plane is the kernel's, on loopback or paired devices.
+- Edge stores — subscriptions, consent receipts, status, held calls, leads — are traits with in-memory, SQLite, PostgreSQL and Redis implementations and one conformance suite each.
+- `read_only` answers every non-`ReadOnly` capability with 503 and the status document; `off` leaves only the static content.
+
+### 7.10 Partitions and signals
+
+| | Public partition | Back-office partition |
+|---|---|---|
+| Agents | Concierge, Agent desk, Inbox | Steward, Growth, Revenue, Guardian, Finance |
+| Input | Untrusted: conversations, A2A, MCP, form posts, inbound email and social messages | The owner, signals, probes, drivers' structured data |
+| Tools | Declared capabilities; `search_site` over the current release; `reply_in_thread`; `emit_signal` | Releases, host, DNS, email sequences, social and advertising drivers, payments, memory |
+| Memory | The current release's content index; no owner facts | The owner's long-term facts, the charter, KPIs, leads |
+| Mode | A fixed policy compiled from the capability manifest; no standing rules | The charter's per-job authority |
+
+- **Signals.** `emit_signal` appends a typed `Signal` to the back office's agenda through the kernel's `SignalSink`:
+
+  ```rust
+  pub enum SignalKind {
+      LeadCaptured { lead_ref: LeadRef, source: Channel, consent: Vec<ConsentReceiptRef>, answers: BTreeMap<String, Bounded> },
+      ContentGap { topic: Bounded, question_count: u32, samples: Vec<Bounded> },
+      VisitorIntent { capability: String, outcome: Outcome },
+      SupportEscalation { reason: ReasonCode, contact_ref: ContactRef },
+      ReviewSeen { platform: String, rating: u8, excerpt: Bounded },
+      InboundMessage { channel: Channel, thread_ref: ThreadRef, category: MessageCategory },
+      AgentInteraction { requester: RequesterId, capability: String, outcome: Outcome },
+      AbuseObserved { requester: RequesterId, kind: AbuseKind },
+  }
+  ```
+
+  `Bounded` strings are length-limited, pass the harness's injection screen and PII redaction, and are marked untrusted. Repeats of one kind and topic increment a count instead of adding items. Signals land as agenda items with `AgendaOrigin::Signal { kind, count }`.
+- **Signals are not crossings.** A crossing reaches another partition's memory, drivers or sessions and needs a coordinator and a non-waivable approval ([`partition/crossing.rs`](../../adk-kernel/src/partition/crossing.rs)); a signal reads nothing back, carries only typed fields, and is recorded as `kernel.signal`. Any request by a back-office agent for the raw text behind a signal is a crossing and is denied.
+- **In-thread replies.** `reply_in_thread` lets public agents answer the person who wrote, in the same thread, within a playbook template, at a rate limit, with no new recipients and no attachments; it is the only `SendExternal` effect in the public partition.
+
+### 7.11 Charter store, KPI tracker and earned autonomy
+
+- **`CharterStore`** keeps every charter version with its commit decision and signed note; `KpiStore` keeps time series per KPI with daily and weekly aggregates. Both have in-memory, SQLite, PostgreSQL and Redis backends and conformance suites.
+- **KPI tracker.** A kernel process reads each KPI's source daily, records the measurement, compares it with baseline and target, checks guardrails, and feeds the weekly review. A KPI without a baseline is in a measure-only period (default 14 days) and has no target.
+- **Autonomy ladder.** Each job's level compiles to harness policy for the job's agent and tool classes:
+
+| Level | Mechanism |
+|---|---|
+| **Observe** | The job's tools are filtered to `ReadOnly`; output goes to reports |
+| **Propose** | Plan mode for the job: writes become drafts and `Proposed` agenda items |
+| **Act with approval** | Ask: each non-read call is held through the `ApprovalService` ([`approval.rs:1502`](../../adk-core/src/approval.rs)) |
+| **Act within budget** | Auto for the job's tool classes under `DeclarativePolicy` rules (`for_agent`, `at_most` argument predicates, [`policy.rs:740`](../../adk-core/src/policy.rs)) and a `RunBudget` and spend cap; anything beyond is held |
+| **Act, reversible only** | Auto restricted to actions declared reversible: rollback to a signed release, switching the edge to read-only, drafts |
+
+- **Promotion and demotion.** When a job's proposals are approved unchanged for N consecutive decisions within W days (defaults 20 and 30) with no guardrail breach, the weekly review offers promotion; the owner's acceptance creates a `StandingRule` by the owner's decision. A guardrail breach, two owner rejections in a row, or an incident in the job's area demotes the job one level immediately and says why. The site can lower its own autonomy and can never raise it (A-I13).
+
+### 7.12 Measurement and experiments
+
+- **Measurement sources.** The edge beacon (`POST /awp/v2/beacon`): page and event counts per day, no cookies, no stored addresses, no identifiers without a `persistent_profile` receipt, honouring Global Privacy Control; host-log drivers; analytics and search-console drivers; the commerce and action ledgers; the spend ledger; the email driver's delivery statistics. Pages work and measure nothing when script is off.
+- **Discoverability metrics.** SEO from search-console drivers; AEO from periodic queries through `web_search` providers recording whether and how answer engines cite the site (Observe); agent search from verified agent discovery and capability calls at the edge.
+- **Experiments.** Variants are built as separate static files; assignment is a stable hash of an anonymous bucket at the edge or client; `ExperimentAnalyzer` runs a sequential test with a fixed error budget for proportions and means, and monitors the charter's guardrail metrics throughout. A guardrail breach stops the experiment and keeps the control (A-I15). `AbComparator`'s paired Wilcoxon test ([`ab_comparator.rs:68`](../../adk-eval/src/ab_comparator.rs)) remains for evaluation cases; web experiments need unpaired sequential tests.
+
+### 7.13 Drivers
+
+Drivers are kernel drivers (supervised MCP servers with manifests) or in-process adapters, each with a conformance suite and effect classes ([`drivers.rs:134`](../../adk-kernel/src/drivers.rs)):
+
+| Driver | Read | Write | Default autonomy cap |
+|---|---|---|---|
+| **Host** | `fetch` | `publish` (`PublishPublic`), `rollback` | Preview within budget; production publish always held at launch (A-I21) |
+| **DNS and registrar** | Records, expiry | Record changes, renewals (`PublishPublic`, `Financial`) | Changes always held; renewals within budget |
+| **Email** | Inbox (public partition) | `reply_in_thread` (public), sequences and newsletters (back office, `SendExternal`) | Sequences within playbook and consent |
+| **Analytics and search console** | Metrics | — | Read |
+| **Social** | Mentions, messages | Replies (`SendExternal`), posts (`PublishPublic`) | Propose |
+| **Advertising** | Spend, performance | Campaigns (`Financial`, `PublishPublic`), bids and pauses (`Financial`) | Launch held; tuning within budget |
+| **Owner channels** | — | Alarms and cards through `ChannelSink` (Telegram, WhatsApp, Slack, Discord, Matrix, SMS, voice) | Act |
+
+Email setup checks SPF, DKIM and DMARC before the first send and refuses bulk sending until they pass.
+
+### 7.14 Wallet and money
+
+```rust
+pub struct WalletPolicy {
+    pub currency: String,
+    pub period: Period,                                    // Monthly by default
+    pub categories: BTreeMap<SpendCategory, Mandate>,      // Hosting | Models | Advertising | Domains | Other
+    pub anomaly: AnomalyRule,                              // multiple of the trailing average that pauses a category
+    pub reconciliation: Cadence,                           // Monthly
+}
+pub struct Mandate { pub cap_per_period: u64, pub max_per_payment: u64, pub payees: Vec<PayeeRule>, pub rail: RailRef }
+```
+
+- The owner funds the wallet through a `WalletProvider` (stored value with a payment provider, or a prepaid virtual card through an issuing adapter); the site holds no custody of its own.
+- Every payment is a `Financial` call on the governed path; the spend ledger checks the category cap before execution ([`spend.rs:105, 376`](../../adk-core/src/spend.rs)); a payment over a cap or a per-payment limit is held.
+- Rails: AP2 mandates for purchases, a use-based rail adapter for metered APIs and model tokens, provider billing under the owner's accounts within caps.
+- Finance reconciles monthly against providers, reports profit and loss with cost per lead and per sale, and proposes budget changes; profitability is a KPI with guardrails, never an unconstrained objective.
+
+### 7.15 Learning
+
+- **Playbooks.** Each job runs from a playbook (a skill file). Outcomes — approvals, edits, rejections, KPI movements, experiment results — feed proposals to revise playbooks, which follow the job's autonomy level and land as owner decisions.
+- **Facts.** What the site learns about its owner and subject enters long-term memory as `Assumed` and becomes `Known` only by an owner's confirmation ([`facts/types.rs:174`](../../adk-harness/src/facts/types.rs)).
+- **Code.** Changes to the site's own code or the runtime go through spec 3.4's pipeline when it exists, never directly.
+
+## Part C — Product: `adk-website`
+
+### 7.16 `adk-website`
+
+`adk-website` is a workspace crate with a library and a binary. It contains no framework code: everything it needs from the runtime comes through the crates above.
+
+| Module | Contents |
+|---|---|
+| `team` | The eight agent definitions: principal, partition, prompt, toolset, default autonomy, wakes ([§7.19](#719-the-team)) |
+| `onboarding` | The onboarding plan template, elicitation forms, discovery routines, charter drafting, build orchestration ([§7.18](#718-onboarding-and-self-building)) |
+| `themes` | Default themes and design tokens for the built-in renderer; the theme interface for developers |
+| `packs` | Default capability packs: contact, quote, booking, order, search, components |
+| `playbooks` | Skill files for every job: nurture, handoff, review replies, freshness, SEO, AEO, agent search, experiments, alarms, the weekly review |
+| `deploy` | Deployment shapes ([§7.22](#722-deployment-shapes)) |
+| `ui` | Onboarding and owner views on the `adk-surface` web home |
+| `bin/adk-website` | The standalone binary for containers and deploy buttons |
+| `kinds` | One charter template per site kind ([§7.16.1](#7161-site-kinds)) |
+
+#### 7.16.1 Site kinds
+
+The sites exposed by Black October are not mostly businesses. `adk-website` treats the kind of site as the first fact of its charter: onboarding proposes a kind from discovery (a WooCommerce shop, a `.gov` domain, a blog theme, a donation plugin), the owner confirms it, and the kind's template sets what the site does.
+
+| Kind | Typical goals and KPIs | Agents switched on | Capabilities | Rules the template adds |
+|---|---|---|---|---|
+| **Personal** (blogs, portfolios, CVs) | Readers, subscribers, enquiries, freshness | Concierge, Steward, Growth, Guardian | Newsletter sign-up, contact | Smallest budget; no advertising or sales jobs; private by default about the owner |
+| **Business** (services, local firms, professionals) | Qualified enquiries, bookings, response time, reviews | All eight | Contact, quote, booking | The full lead, nurture and handoff loop |
+| **E-commerce** (shops, WooCommerce stores) | Orders, conversion, average order value, refunds, stock accuracy | All eight | Catalogue, quote, order, payment, order status, returns | Payment policy, product feeds for agents, fraud and refund guardrails |
+| **Government and public sector** | Service completion, accessibility conformance, content accuracy, time to update notices | Concierge, Agent desk, Inbox, Steward, Growth, Guardian | Service forms with verified identity (OIDC, national eID), appointments, status lookups, official notices | Approval chains with two people for publication; WCAG 2.2 AA as a hard gate; official languages all required; no third-party scripts or trackers; no advertising or profit KPIs; records retention; data residency through the deployment shape; disclosure of AI assistance on every agent reply |
+| **Nonprofit and charity** | Donations, volunteers, event sign-ups, supporter retention | All eight, with Revenue for donations | Donate, volunteer, register | Donor consent and receipts; gift-aid or tax-receipt fields by jurisdiction |
+| **Education** (schools, colleges, training) | Admissions enquiries, open-day bookings, information requests | Concierge, Agent desk, Inbox, Steward, Growth, Guardian, Revenue for fees | Enquiry, booking, prospectus | Safeguarding red lines; no profiling of minors; learning platforms stay outside (N5) |
+| **News and media** | Readers, newsletter subscribers, subscriptions, corrections time | Concierge, Steward, Growth, Guardian, Revenue for subscriptions | Subscribe, newsletter, licensing enquiries | Content-usage terms for AI training and answer engines; a corrections policy; drafts only from the newsroom's own reporting, never generated news |
+| **Health** (clinics, practitioners) | Appointment bookings, response time, no-shows | Concierge, Agent desk, Inbox, Steward, Growth, Guardian | Appointment booking, practice information | No clinical advice from any agent; health data as a special category with consent and minimal retention; urgent symptoms routed to emergency information |
+| **Community and faith** (clubs, associations, places of worship) | Event attendance, members reached, donations | Concierge, Steward, Growth, Guardian, Revenue for donations | Events, donations, sign-ups | Volunteer-run defaults: low budget, weekly review only |
+| **Events** (conferences, festivals) | Registrations, ticket sales, attendee questions answered | All eight for paid events | Registration, tickets, schedule | Date-driven freshness; the site winds down after the event and archives |
+
+**What `adk-website` covers, and what it does not yet.**
+
+| Site shape | Coverage | How |
+|---|---|---|
+| Content-led sites (most personal, business, public-sector, nonprofit, community and news sites) | Full | Static pages, machine views, the team |
+| Transactional sites (shops, bookings, donations, service forms, subscriptions) | Full through capabilities | The edge, held and exactly-once actions, rails, verified identity for public services |
+| Account-heavy sites (forums, learning platforms, member portals, intranets) | Partial | Public pages migrate; the account area becomes a named decision: keep it on a separate private origin, link to a service, or wait for the later spec ([§13](#13-open-questions) Q12) |
+
+### 7.17 Spinning it up
+
+| Route | Command or action | Result |
+|---|---|---|
+| **CLI** | `adk-rust website new [dir]` | Scaffolds the site project (content, theme, charter, data), starts the kernel and edge locally, prints a one-time setup code, and opens onboarding in the browser |
+| **Cargo** | `cargo adk new my-site --template website` | The same project, for developers who start from code |
+| **Container and deploy buttons** | The `adk-website` image on any host | Starts in onboarding mode; the setup code is printed to the host's logs |
+| **Agency** | `adk-rust website new --agency` | One harness for many sites; each site's partitions isolated (A-I22) |
+
+A freshly started site cannot be claimed without its setup code, which pairs the owner's device through the kernel's pairing ([`pairing/mod.rs:119`](../../adk-kernel/src/pairing/mod.rs)) (A-I20). Until then it serves a holding page and accepts no onboarding input.
+
+### 7.18 Onboarding and self-building
+
+Onboarding runs as a plan graph in the back office, led by the Steward; every step is a checkpoint, so it survives restarts and the owner can leave and resume on any surface.
+
+| # | Stage | The site | The owner | Result |
+|---|---|---|---|---|
+| 1 | **Start** | Asks for a URL, a name, or nothing; and a phone number for P1 alarms | Answers | — |
+| 2 | **Discover** | Crawls any existing site and runs `awp verify` against it; reads profiles, listings, reviews, peers, search presence and answer-engine mentions; proposes the site kind | Watches or leaves; confirms the kind | A snapshot with a source behind every fact, all `Assumed`; the site kind |
+| 3 | **Protect** | Offers freeze for a site on a legacy runtime | Approves one card | The old server off the public path |
+| 4 | **Interview** | Asks only what discovery could not answer, with choices and short forms; each answer updates a live preview | Answers by chat, voice or WhatsApp in resumable sessions | Owner-stated facts, `Known` by the owner's words |
+| 5 | **Charter** | Starts from the kind's template; drafts mission, strategy, goals, KPIs with baselines and target ranges, guardrails, conservative authority, roles and approval chains, budget with a running-cost estimate, voice, red lines, reporting | Reviews each section as a card, edits; every required signer signs | Charter v1 |
+| 6 | **Build** | Builds release 1: structure where every page has a goal and KPI; content from `Known` facts; design from brand assets or three directions; every chosen language; capabilities; machine views; legal pages; measurement; only the agents the charter needs | Picks a design; answers the build's questions | A signed preview release |
+| 7 | **Launch gate** | Runs [§7.8.1](#781-the-launch-gate) | Reviews the preview page by page with diffs | A release ready to publish |
+| 8 | **Connect and deploy** | Guides each connection — domain, email, owner channels, analytics, payment — through OAuth, the credential broker or pairing; deploys content, edge and kernel to the chosen shape | Grants scoped access; never types a password into chat (A-I19); approves going live (A-I21) | A live site and a starting wallet |
+| 9 | **Run** | Proposes a 30/60/90-day plan; works at Propose for the first week; locks baselines on day 0; sends the first weekly review on day 7 | Approves, edits, promotes | The routine loop |
+
+| Starting point | Source |
+|---|---|
+| Existing site | `WordPressRest`, `Wxr`, `Crawl` or `IsolatedReplay`, then the sanitiser |
+| Online presence, no site | `Presence` |
+| Nothing | The interview and the charter |
+
+**Rules.** Evidence before questions; drafts with defaults, not blank forms; plain language in, structured charter out; no target without a baseline, targets chosen by the owner; every job starts at Observe or Propose; no invented facts, testimonials, team members, prices or credentials; generated images only as illustration, never as the business's people or premises; nothing copied from competitors; an agency may prepare onboarding but the client signs the charter.
+
+### 7.19 The team
+
+| Agent | Principal | Partition | Default mode | Wakes |
+|---|---|---|---|---|
+| **Concierge** | `urn:adk:agent:{site}/concierge` | Public | Manifest policy | Chat, A2A conversation |
+| **Agent desk** | `…/agent-desk` | Public | Manifest policy | A2A, MCP, HTTP calls |
+| **Inbox** | `…/inbox` | Public | Manifest policy plus `reply_in_thread` | Email and social webhooks |
+| **Steward** | `…/steward` | Back office (team lead) | Charter authority | Onboarding, daily plan, weekly review, signals, owner messages |
+| **Growth** | `…/growth` | Back office | Charter authority | Content-gap signals, schedules, KPI movements |
+| **Revenue** | `…/revenue` | Back office | Charter authority | Lead signals, nurture schedule, order events |
+| **Guardian** | `…/guardian` | Back office | Reversible only for incident acts | Probes every 5 min, advisories daily, status changes |
+| **Finance** | `…/finance` | Back office | Charter authority | Payments, daily spend, monthly reconciliation |
+
+The team is a `TeamSpec` ([`adk-agent/src/team.rs:59`](../../adk-agent/src/team.rs)) with the Steward as lead; each agent is a `HarnessAgent` ([`agent.rs:550`](../../adk-harness/src/agent.rs)) built with its partition's policy. The charter's site kind decides which agents run ([§7.16.1](#7161-site-kinds)): a personal site runs four, a public body runs no Revenue or Finance jobs beyond hosting, and Revenue's work is sales for a shop, donations for a charity and subscriptions for a newsroom.
+
+### 7.20 Jobs
+
+| Area | Job | Agent | Starts at | Effects |
+|---|---|---|---|---|
+| **Run and protect** | Static content, signed releases, drift rollback, site watch, abuse throttling | Guardian | Act, reversible only | `PublishPublic` (rollback) |
+| | Alarms by urgency and channel | Guardian | Act | Owner channels |
+| | Freshness: stale facts, broken links, outdated pages | Growth | Within budget for edits; Propose for new pages | `PublishPublic` |
+| | Hosting, domains, certificates, backups | Guardian, Finance | Propose; renewals within budget | `PublishPublic`, `Financial` |
+| **Be found** | SEO | Growth | Within budget | `PublishPublic` |
+| | AEO | Growth | Within budget; tracking at Observe | `PublishPublic`, `Read` |
+| | Agent search | Growth | Act | `PublishPublic` |
+| **Serve** | Multilingual pages and conversation | Concierge, Growth | Act; a new language at Propose | `PublishPublic` |
+| | Presentations by role and need | Concierge | Act | — |
+| | Agent front door | Agent desk | Act within policy | Capability effects |
+| | The site's email | Inbox, Revenue | Within playbook; Propose otherwise | `SendExternal` |
+| | Social engagement | Inbox, Growth | Propose, then playbook | `SendExternal`, `PublishPublic` |
+| | Advertising | Growth, Finance | Propose to launch; within budget to tune | `Financial`, `PublishPublic` |
+| **Grow** (jobs vary by kind: enquiries, orders, donations, subscribers, service completions) | Lead, sign-up or request capture from every channel | Concierge, Inbox, Agent desk | Act | Signals |
+| | Qualify and nurture with consent | Revenue | Within playbook | `SendExternal` |
+| | Warm handoff with context | Revenue | Act | Owner channels |
+| | Sell: quotes, checkout, bookings, receipts | Revenue | Within payment policy | `Financial` |
+| | Experiments | Growth | Within budget | `PublishPublic` |
+| | Playbook learning | Steward | Propose | — |
+| **Money** | Pay running costs under mandates | Finance | Within budget | `Financial` |
+| | Cost and return; budget moves within caps | Finance | Within budget | — |
+| **Account** | Goals, strategy, KPIs | Steward | Propose | — |
+| | Weekly review and reports | Steward, Finance | Act | Owner channels |
+| | Questions for the owner | Steward | Act | Owner channels |
+
+### 7.21 Reviews, reports and escalation
+
+| Urgency | Examples | Delivery |
+|---|---|---|
+| **P1** | Incident, site down, payment anomaly, key compromise suspected | Immediately on the owner's P1 channels, including inside quiet hours; repeated until acknowledged |
+| **P2** | A held decision blocking a customer, a guardrail breach, a failed renewal | Within the hour on the owner's chosen channel, outside quiet hours |
+| **P3** | Everything else | The weekly review |
+
+The **weekly review** holds: KPIs against baselines and targets with trends; what each agent did; cost, revenue and profit and loss; experiments and their evidence; incidents; leads handed off; promotion offers and demotions; and a short list of questions. Monthly and quarterly reviews add financial reconciliation and a strategy proposal. Reports are delivered on the web home, as a document, and summarised on the owner's channel.
+
+### 7.22 Deployment shapes
+
+| Shape | Content | Edge and kernel | Fits |
+|---|---|---|---|
+| **Local** | `DirectoryHost`, or any host driver | `adk-rust up --install` on the owner's machine | Trials, developers |
+| **Single server or container** | Any static host | One container running edge and kernel as separate processes | Most small sites: personal, business, nonprofit, community |
+| **Managed runtime** | Any static host | The managed agent runtime or another agent platform through `adk-deploy` | Owners who want no servers |
+| **Agency** | Per-site hosts | One harness for many sites | Developers running sites for clients |
+
+Onboarding shows the estimated monthly running cost of the chosen shape and model choices before deployment, and Finance reports the actual cost every week.
+
+### 7.23 For developers
+
+| Extension | Form |
+|---|---|
+| **Themes** | Templates and design tokens for the built-in renderer, or a project for an external generator |
+| **Capability packs** | A signed bundle of capability declarations, handlers, skills and driver manifests; sandboxed; effects declared; verified at install like a release |
+| **Playbooks** | Skill files that change how a job is done, within its autonomy |
+| **Drivers** | MCP servers with manifests, for any host, DNS, email, analytics, social or advertising service |
+
+The `awp verify` report of a prospect's current site is the developer's opening conversation; migrations, packs and managed sites are the developer's business.
+
+### 7.24 Observability
+
+Spans `website.onboarding.{stage}`, `site.release`, `site.probe`, `awp.request` (requester, tier, binding, capability, outcome), `awp.capability.call`, `kernel.signal`, `website.job.{job}`; metrics for every KPI source, time to detect and restore, held decisions and their latency, autonomy changes, and spend by category. The site view on every surface shows status, releases, KPIs, jobs and their levels, signals and the wallet.
+
+## 8. Surfaces
+
+### 8.1 adk-cli
+
+| Command | Does |
+|---|---|
+| `adk-rust website new [dir] [--agency]` | Spin up ([§7.17](#717-spinning-it-up)) |
+| `adk-rust website status`, `website review`, `website charter` | Status, the latest review, the signed charter and its history |
+| `adk-rust website jobs [promote\|demote <job>]` | Jobs and levels; promotion and demotion as owner decisions |
+| `adk-rust site migrate <url \| --wxr file \| --backup dir>`, `site freeze <url>` | Migration and freeze outside onboarding |
+| `adk-rust site build`, `site publish`, `site rollback <seq>`, `site log` | Releases |
+| `adk-rust site content new <kind>`, `site schedule <item> <time>`, `site correct <item>`, `site withdraw <item>` | Drafting, scheduling, corrections and withdrawals outside the web editor |
+| `adk-rust awp verify <domain>`, `awp conformance <url>` | Verification and conformance |
+| `adk-rust awp keys rotate`, `awp keys delegate` | Root and delegated keys; root operations need the root key file or hardware token and never run inside an agent |
+| `adk-rust awp migrate-config business.toml` | 1.x configuration to site data and a draft charter |
+
+### 8.2 Server, kernel, surfaces and templates
+
+- `adk-server` feature `awp` provides the edge; `adk-rust up` mounts a `WebhookIngress` ([`webhooks/ingress.rs:326`](../../adk-server/src/webhooks/ingress.rs)) for the partitions' webhook wakes, which it does not do today.
+- `adk-surface` renders the web editor, onboarding, charter cards, the site view and the weekly review on the web home, and on chat and voice through the existing renderers.
+- `cargo-adk` gains the `website` template; the umbrella gains `website`, recorded in `docs/feature-surface.md` under the growth rule.
+- `docs/official_docs/` gains "Spin up an AWP website", "Move a WordPress site to AWP", "The charter", "AWP 2.0" and "Writing capability packs".
+
+## 9. Security invariants and audit records
+
+### 9.1 Threats
+
+| Threat | Control |
+|---|---|
+| Runtime remote code execution on the page path | No code per page request (A-I1) |
+| Host tampering, defacement | Signed releases, probes, rollback (A-I4, A-I11) |
+| Stolen release key | Short-lived delegated keys, DNS-anchored root, checkpoints that must extend (A-I5) |
+| Prompt injection through visitors, email, social or agents | Two partitions, typed signals, no web access in public agents (A-I2, A-I3) |
+| Impersonated agents | Verified identity only (A-I6) |
+| Duplicate orders or payments | Action ledger (A-I7) |
+| Outreach without consent | Receipts checked at send time (A-I8) |
+| Runaway spending, profit at any cost | Mandates, caps, anomaly pauses (A-I16); guardrails (A-I15) |
+| Dishonest or unlawful speech | Claims from `Known` facts only (A-I18); disclosure and consent (A-I17) |
+| Credential phishing in onboarding | No credentials in conversation (A-I19) |
+| One insider or one compromised account publishing alone | Approval chains with distinct principals (A-I23) |
+| Content or prices changed through the public inbox or a spoofed owner message | Authoring only through authorised entry points (A-I24); price rules and quote validity (A-I25) |
+| A stranger claiming a fresh deployment | Setup code and pairing (A-I20) |
+| Autonomy creep | The site can only lower its own autonomy (A-I13) |
+| Cross-client leakage in agency mode | Site isolation (A-I22) |
+| The verifier used as a scanner | Passive requests only; active probes only on proved domains (A-I9) |
+
+### 9.2 Invariants
+
+- **A-I1.** A release containing a server-executable file or a server-side include directive is refused; no flag overrides it.
+- **A-I2.** Public-partition agents hold only declared capabilities, `search_site`, `reply_in_thread` and `emit_signal`; they cannot publish, deploy, change DNS, spend, send in bulk, fetch the web or read owner memory.
+- **A-I3.** No back-office model context contains a requester's raw text; signals carry typed, bounded, screened fields marked untrusted.
+- **A-I4.** Every file served under the site's domain belongs to the latest signed release; any other state is drift.
+- **A-I5.** Only the root key signs the contract and delegations; no key appears in a model context, tool result, log or audit record.
+- **A-I6.** Trust above `public` requires a verified credential.
+- **A-I7.** A `NonIdempotent` capability executes at most once per idempotency key.
+- **A-I8.** A consent-bound action refuses without a live receipt for its scope and policy version; a revocation stops every pending action for the subject within one hour.
+- **A-I9.** Probes beyond fetching published documents run only against domains whose control the owner proved.
+- **A-I10.** No step deletes a legacy site, its database or its export; the archive is encrypted and deletion is the owner's act.
+- **A-I11.** The only pre-authorisable incident acts are rollback to a signed release and switching the edge to read-only.
+- **A-I12.** Under the kill switch the edge serves read-only capabilities and static content, and no proactive process starts.
+- **A-I13.** The site may lower a job's autonomy and never raise it; raising it is an owner decision that creates a standing rule.
+- **A-I14.** A KPI has no target until it has a baseline, and targets are set by the owner.
+- **A-I15.** A guardrail breach pauses the affected job before its next action and overrides any growth target.
+- **A-I16.** Every payment is a `Financial` call checked against its category cap before execution; the site never opens accounts, adds payment methods, changes payees outside the mandate or raises a cap.
+- **A-I17.** Every outbound message identifies the site's owner and states that an AI agent wrote it; unsubscribe and revocation take effect before the next send.
+- **A-I18.** Published claims derive only from `Known` facts; `Assumed` facts never appear as claims.
+- **A-I19.** No credential passes through conversation; connections use OAuth, the credential broker or pairing, and the site says so before the first connection.
+- **A-I20.** A fresh deployment accepts no onboarding input until its setup code pairs the owner's device.
+- **A-I21.** Production publication at launch and every DNS change are held for the owner in every mode.
+- **A-I22.** Sites in one harness are isolated; a cross-site request is denied and recorded, coordinator or not.
+- **A-I23.** An action whose class has an approval chain completes only when every required role has approved it, each by a distinct principal; no agent holds a role, and the proposer of a release cannot also be its approver.
+- **A-I24.** Content is authored only through the owner's paired devices, people holding a role in the web editor, authorised committers to the content repository, feeds the owner configured, and the site's own agents; nothing from the public partition authors content.
+- **A-I25.** A price change outside the charter's price rule is held for the owner, and an open quote keeps its price until its validity ends.
+
+### 9.3 Audit records
+
+`website.onboarding.{started, stage, completed}`, `website.charter.{drafted, committed}`, `website.approval_chain.{satisfied, refused}`, `website.job.{promoted, demoted, paused}`, `website.review.sent`, `website.alarm.{raised, acknowledged}`, `site.content.{drafted, approved, scheduled, published, corrected, withdrawn}`, `site.migration.{finding, decided}`, `site.release.{built, signed, published, refused}`, `site.drift.detected`, `site.status.changed`, `site.rollback`, `site.freeze`, `site.archive`, `awp.request.{verified, refused}`, `awp.capability.{called, held, decided}`, `kernel.signal`, `awp.consent.{granted, revoked}`, `awp.payment.{created, settled, rejected}`, `wallet.{payment, held, anomaly, reconciled}`, `awp.keys.{delegated, rotated}`. Each carries the run id, the principal, the requester where there is one, the charter version and the release sequence.
+
+## 10. Changes outside the feature
+
+| # | Change | Why |
+|---|---|---|
+| X1 | `build_manifest` carries `access_level` and schemas (additive) | It drops them ([`manifest.rs:28-46`](../../adk-awp/src/manifest.rs)) |
+| X2 | `PaymentIntent` and `PaymentPolicy` docs drop the bridge that does not exist and name `adk-gateway` as a separate repository; `evaluate` loses its redundant branch | [`payment.rs:58-128`](../../awp-types/src/payment.rs) |
+| X3 | `FileConsentService` writes atomically off the async executor | Whole-file blocking writes ([`consent.rs:163-190`](../../adk-awp/src/consent.rs)) |
+| X4 | `business_context_to_toml` gets its own error variant | It reports serialisation failures as `WatcherError` ([`config.rs:31-33`](../../adk-awp/src/config.rs)) |
+| X5 | The legacy `sign_payload`/`verify_signature` pair is deprecated for Standard Webhooks | Two schemes ([`events.rs:304-327`](../../adk-awp/src/events.rs)) |
+| X6 | `examples/awp_agent` moves to `gemini-3.7-flash` | It uses `gemini-2.5-flash` |
+| X7 | `ROADMAP.md` matches `STABILITY.md` for the AWP crates | Stable versus Beta |
+| X8 | Spec 3.4 §1: the OpenAI incident ran 8–19 July 2026, was attributed on 20 July and disclosed on 21 July | Public timeline |
+| X9 | Spec 3.2's implementation-status table reflects that `adk-kernel` exists | It says the crate does not exist |
+| X10 | `Preset::Website`, `AgendaOrigin::Signal`, `Wake::Signal` (all enums are `#[non_exhaustive]`) | [`preset.rs:30`](../../adk-harness/src/presets/preset.rs), [`agenda.rs:216`](../../adk-kernel/src/agenda.rs), [`wake.rs:100`](../../adk-kernel/src/wake.rs) |
+| X11 | `adk-rust up` mounts a `WebhookIngress` | Webhook wakes need one |
+| X12 | `adk-gateway`'s channel adapters port to `ChannelSink` | [§4.2](#42-adk-gateway) |
+| X13 | The AWP 1.0 drafts are marked superseded in the AWP repository; references to `awp.dev` are removed | [§4.1](#41-awp-10-and-what-changes) |
+| X14 | `STABILITY.md` lists `adk-site` and `adk-website` as Experimental; the workspace and publish order gain both crates (`adk-website` after `adk-harness`, before the umbrella) | New crates |
+
+## 11. Testing and live verification
+
+- **Fixtures.** `examples/website/fixtures/` holds a compose file for a current, patched WordPress with seeded content, a contact-form plugin and a small shop; an `infected` overlay of inert markers; a presence fixture of static listing, review and social pages; and an empty start. Fixtures bind to loopback. The WordPress fixture runs in the nightly tier and locally; the PR tier runs the pipeline against recorded inventories.
+- **Scripted runs.** Every scenario has a scripted-model run that asserts on stores, audit records, releases and the hosts' contents.
+- **Conformance.** One suite per trait and backend: sources, generators (identical manifests for identical inputs on the built-in renderer), hosts, drivers, wallet providers, the charter, KPI and edge stores (in-memory, SQLite, PostgreSQL, Redis), and the AWP 2.0 conformance kit against the edge.
+- **Interoperability.** Web Bot Auth against the draft's test vectors and an external signer; A2A card signatures against A2A v1.0 vectors; the MCP server card against the merged schema; `awp verify` against a site built by a different generator.
+- **Property tests.** Release manifests round-trip; a checkpoint never verifies against a log it does not extend; the sanitiser never emits an element outside its allowlist; manifest filtering never shows a capability above the caller's tier; the autonomy ladder never raises a level without an owner decision.
+- **Live.** Each scenario has a live run with a real model (the Anthropic live model for the harness, `gemini-3.7-flash` for examples), real Web Bot Auth signing, real email delivery to a maintainers' mailbox, a real static host the maintainers control, and payment rails in sandbox mode only. Documentation claims about routes and defaults are verified by a running program and reviewed by an agent that did not write them.
+
+## 12. Phased delivery
+
+| Phase | Name | Protocol | Runtime | Product | Scenarios |
+|---|---|---|---|---|---|
+| 0 | Hygiene | — | X1–X9, X13 | — | — |
+| 1 | Leave the runtime | Contract, static profile, releases, keys, status, charter format, conformance kit, `awp verify` | `adk-site` (sources, sanitiser, built-in generator, launch gate, content model, incremental releases, scheduling, corrections, `DirectoryHost` and two hosts, freeze, probes); charter store; the web editor; `Preset::Website` | `adk-website` spin-up, onboarding with self-building, migration, deployment; Steward and Guardian; weekly review | S1, S2, S3, S4, S5, S13, S16 (two-person publication), S17 |
+| 2 | Open the front door | Identity and tiers, capabilities, held and exactly-once actions, events, consent | Edge, MCP server, Web Bot Auth, edge stores, partitions and signals, `up` webhook ingress | Concierge and Agent desk; multilingual conversation; leads and handoff | S6, S7, S8, S9 without payment, S18 |
+| 3 | Work full time | — | KPI tracker, autonomy ladder, measurement, experiments, email and analytics drivers, channel adapters | Growth, Inbox, the full weekly review, agency mode | S10, S11, S14, S15 |
+| 4 | Run the money | Commerce and receipts | Wallet and rails, social and advertising drivers, playbook learning | Revenue commerce, Finance | S9 in full, S12 |
+
+Phase 1 is useful on its own: an owner gets a self-built or migrated static site, a signed log, a verifier and a weekly review before any agent faces the public.
+
+**Site kinds by phase.** Phase 1 covers the content-led kinds — personal, business, nonprofit, community, education and the information pages of public bodies — with charter templates, roles and approval chains (S16's two-person publication, S17). Phase 2 adds the transactional capabilities that shops, bookings, donations and public-service forms with verified identity need. Phase 3 adds newsrooms' subscription and licensing jobs and health bookings with special-category data controls. Phase 4 completes e-commerce and paid events with the wallet and rails.
+
+**Publishing by phase.** Phase 1 ships the content model, chat and web-editor authoring, incremental signed releases, scheduling, corrections and withdrawals, and the media pipeline. Phase 2 adds the volatile-data lane and price rules, which need the edge. Phase 3 adds imports and feeds for catalogues, newsrooms and calendars, and live coverage.
+
+## 13. Open questions
+
+| # | Question | Recommendation |
+|---|---|---|
+| Q1 | The protocol's home: `agenticwebprotocol.com` does not resolve, `awp.dev` belongs to an unrelated company, `/.well-known/awp.json` collides with an expired IETF draft | Publish the AWP 2.0 text at a domain the project controls; register the well-known URI and `application/awp+json` with IANA |
+| Q2 | The name `adk-site` beside `adk-website` | Keep `adk-site` for the pipeline library and `adk-website` for the product, or rename the pipeline `adk-sitegen` if the pair confuses users |
+| Q3 | Default themes and generator | The built-in renderer with two or three themes in phase 1; external generators as adapters |
+| Q4 | Default measurement | The cookieless edge beacon; external analytics only through drivers the owner connects |
+| Q5 | Wallet providers and rails first | Stored value with one payment provider and the use-based rail for model tokens; AP2 mandates for purchases; advertising and cloud cards stay the owner's until phase 4 has a record |
+| Q6 | Disclosure wording for AI-written messages across jurisdictions | One default line in the charter's voice, overridable per jurisdiction, never removable |
+| Q7 | `adk-gateway` retirement | Port the adapters in phase 3, then archive the repository |
+| Q8 | Experiment statistics | Sequential tests with a fixed error budget by default; Bayesian analysis as an option |
+| Q9 | Promotion thresholds | 20 unchanged approvals within 30 days, owner-adjustable per job |
+| Q10 | Image generation | Illustrative images only, labelled in the site's media library, never the owner's people or premises |
+| Q11 | Public-sector requirements by country: identity providers for service forms, accessibility law, records retention, data residency | Identity providers as OIDC adapters (national eID schemes included); the accessibility gate set to the strictest law the charter names; residency through the deployment shape; retention in the charter template |
+| Q12 | Account-heavy sites: forums, learning platforms, member portals | A later spec for authenticated areas on the edge; until then the public pages migrate and the account area is a named owner decision |
+| Q13 | How rich the web editor is | Structured forms per content kind with Markdown-backed rich text and media; no page builder or theme editor (N4); developers change layouts through themes |
+| Q14 | The publication latency target per host | Under 60 seconds for single-item changes on hosts with atomic deploys; hosts without them report their measured latency in the conformance suite |
+
+## 14. Appendix: grounding against current APIs (`origin/main` @ `c8141b55`)
+
+| Claim | Source |
+|---|---|
+| Requester detection by User-Agent substrings and a self-declared header | [`adk-awp/src/detect.rs:7-61`](../../adk-awp/src/detect.rs) |
+| Every requester `Anonymous` by default | [`adk-awp/src/trust.rs:23-30`](../../adk-awp/src/trust.rs) |
+| Discovery hard-codes URLs | [`adk-awp/src/discovery.rs:20-36`](../../adk-awp/src/discovery.rs) |
+| Manifest drops access levels and schemas | [`adk-awp/src/manifest.rs:28-46`](../../adk-awp/src/manifest.rs) |
+| Single-major version check | [`adk-awp/src/middleware.rs:32-37`](../../adk-awp/src/middleware.rs) |
+| Legacy HMAC scheme | [`adk-awp/src/events.rs:304-327`](../../adk-awp/src/events.rs) |
+| Non-atomic consent writes | [`adk-awp/src/consent.rs:163-190`](../../adk-awp/src/consent.rs) |
+| Unused payment signature, nonexistent bridge | [`awp-types/src/payment.rs:58-128`](../../awp-types/src/payment.rs) |
+| Agent-run business fields no runtime reads | [`awp-types/src/business.rs:210-244`](../../awp-types/src/business.rs) |
+| `ToolEffect`; tool origin and fingerprint | [`adk-core/src/tool.rs:497`](../../adk-core/src/tool.rs), [`context.rs:1116, 1316`](../../adk-core/src/context.rs) |
+| Approval requests and service | [`adk-core/src/approval.rs:496, 1502`](../../adk-core/src/approval.rs) |
+| Declarative policy | [`adk-core/src/policy.rs:740`](../../adk-core/src/policy.rs) |
+| Agent principals | [`adk-core/src/principal.rs:245`](../../adk-core/src/principal.rs) |
+| Spend keys and ledger | [`adk-core/src/spend.rs:105, 376`](../../adk-core/src/spend.rs) |
+| Action ledger | [`adk-core/src/action_ledger.rs:203`](../../adk-core/src/action_ledger.rs) |
+| Credential broker | [`adk-core/src/credential.rs:522`](../../adk-core/src/credential.rs) |
+| Kill switch | [`adk-core/src/governance.rs:123`](../../adk-core/src/governance.rs) |
+| Webhook egress policy and delivery | [`adk-core/src/webhook_delivery.rs:160, 429`](../../adk-core/src/webhook_delivery.rs) |
+| Signed audit log, notes, JCS | [`adk-auth/src/signed_audit/log.rs:192`](../../adk-auth/src/signed_audit/log.rs), [`note.rs:431`](../../adk-auth/src/signed_audit/note.rs), [`jcs.rs:33`](../../adk-auth/src/signed_audit/jcs.rs) |
+| Agenda origins, proactivity policy, agenda | [`adk-kernel/src/agenda.rs:216, 610, 957`](../../adk-kernel/src/agenda.rs) |
+| Wakes | [`adk-kernel/src/wake.rs:100`](../../adk-kernel/src/wake.rs) |
+| Partitions, cross-partition policy, crossings | [`adk-kernel/src/partition.rs:193, 271`](../../adk-kernel/src/partition.rs), [`partition/crossing.rs`](../../adk-kernel/src/partition/crossing.rs) |
+| Driver effect classes and manifests | [`adk-kernel/src/drivers.rs:134`](../../adk-kernel/src/drivers.rs), [`drivers/manifest.rs:171`](../../adk-kernel/src/drivers/manifest.rs) |
+| Pairing scopes | [`adk-kernel/src/pairing/mod.rs:119`](../../adk-kernel/src/pairing/mod.rs) |
+| Chat channel sink | [`adk-kernel/src/channels/mod.rs:554`](../../adk-kernel/src/channels/mod.rs) |
+| Harness modes, tool kinds, standing rules | [`adk-harness/src/mode.rs:71`](../../adk-harness/src/mode.rs), [`policy.rs:162`](../../adk-harness/src/policy.rs), [`approvals/rule.rs:357`](../../adk-harness/src/approvals/rule.rs) |
+| Presets | [`adk-harness/src/presets/preset.rs:30`](../../adk-harness/src/presets/preset.rs) |
+| Harness agent, plan graphs, facts | [`adk-harness/src/agent.rs:550`](../../adk-harness/src/agent.rs), [`plan_graph.rs:295`](../../adk-harness/src/plan_graph.rs), [`facts/types.rs:174`](../../adk-harness/src/facts/types.rs) |
+| Governed fetch is GET-only | [`adk-harness/src/web/fetch.rs:427`](../../adk-harness/src/web/fetch.rs) |
+| Browser and payments packs; mandates | [`adk-harness/src/packs/browser.rs:242`](../../adk-harness/src/packs/browser.rs), [`packs/payments.rs:103, 198`](../../adk-harness/src/packs/payments.rs) |
+| Team specs; remote members | [`adk-agent/src/team.rs:59`](../../adk-agent/src/team.rs), [`adk-harness/src/team.rs:141`](../../adk-harness/src/team.rs) |
+| Decision cards | [`adk-surface/src/model.rs:239`](../../adk-surface/src/model.rs) |
+| A2A card route; root routes without auth | [`adk-server/src/rest/mod.rs:415, 546`](../../adk-server/src/rest/mod.rs) |
+| Webhook ingress | [`adk-server/src/webhooks/ingress.rs:326`](../../adk-server/src/webhooks/ingress.rs) |
+| Paired A/B comparison | [`adk-eval/src/ab_comparator.rs:68`](../../adk-eval/src/ab_comparator.rs) |
+| CLI commands | [`adk-cli/src/cli.rs:285, 441`](../../adk-cli/src/cli.rs) |
+
+## References
+
+**The crisis**
+- PHP security advisories and releases, 20–23 October 2026: <https://www.php.net/archive/2026.php>
+- BleepingComputer, PHP2Shell emergency patches: <https://bleepingcomputer.com/news/security/php-ships-emergency-patches-for-critical-php2shell-flaws>
+- Vercel bulletin, php2shell: <https://vercel.com/kb/bulletin/php2shell-security-bulletin>
+- Cloudflare, PHP vulnerabilities and WAF protection (2026-10-21): <https://blog.cloudflare.com/php-vulnerabilities-waf-protection/>
+- UptimeRobot, why websites took themselves offline (2026-10-22): <https://uptimerobot.com/knowledge-hub/reports-research/inside-php2shell-why-websites-took-themselves-offline/>
+- W3Techs, PHP and WordPress usage (2026-10-24): <https://w3techs.com/technologies/details/pl-php>, <https://w3techs.com/technologies/details/cm-wordpress>
+
+**WordPress in 2026**
+- wp2shell: Wiz <https://wiz.io/blog/wp2shell-cve-2026-63030-cve-2026-60137>; Escape <https://escape.tech/blog/wp2shell-cve-2026-63030-cve-2026-60137/>; ELLIO <https://ellio.tech/en/blog/wp2shell-in-the-wild-under-48-hours-from-patch-to-mass-exploitation/>
+- CVE-2026-87902, TechTimes (2026-09-25): <https://www.techtimes.com/articles/328042/20260925/wordpress-patch-became-exploit-blueprint-cve-2026-87902-webshells-hit-350k-sites.htm>
+- UpdraftCentral keys, BleepingComputer (2026-10-20): <https://www.bleepingcomputer.com/news/security/stolen-updraftcentral-keys-used-to-backdoor-wordpress-sites/>
+- Patchstack, State of WordPress Security in 2026: <https://patchstack.com/whitepaper/state-of-wordpress-security-in-2026/>
+
+**Agents as attackers**
+- Hugging Face incident and timeline: <https://huggingface.co/blog/security-incident-july-2026>, <https://huggingface.co/blog/agent-intrusion-technical-timeline>
+- OpenAI incident timeline (2026-08-07): <https://simonwillison.net/2026/Aug/7/openai-timeline/>; INCIBE-CERT (2026-09-03): <https://www.incibe.es/en/incibe-cert/publications/cybersecurity-highlights/security-incident-involving-openais-ai-agents-targeting-hugging-face>
+- Microsoft on Storm-0940 and ARTEX (2026-10-21): <https://www.microsoft.com/en-us/security/blog/2026/10/21/storm-0940-uses-artex-agentic-ai-connectwise-supply-chain-compromise/>
+
+**Standards**
+- Web Bot Auth: <https://datatracker.ietf.org/wg/webbotauth/documents/>
+- A2A specification: <https://a2a-protocol.org/latest/specification/>; IANA well-known URIs: <https://www.iana.org/assignments/well-known-uris/well-known-uris.xhtml>
+- MCP Server Cards, SEP-2127: <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2127>
+- IETF AI preferences: <https://datatracker.ietf.org/wg/aipref/documents/>
+- AP2 at the FIDO Alliance: <https://blog.google/products-and-platforms/platforms/google-pay/agent-payments-protocol-fido-alliance/>
+- Cloudflare, agent readiness: <https://blog.cloudflare.com/agent-readiness>
+- Expired IETF draft registering `/.well-known/awp.json`: <https://datatracker.ietf.org/doc/draft-vinaysingh-awp-wellknown/>
+
+**Site agents in 2026**
+- Cloudflare Agent Lee write operations: <https://developers.cloudflare.com/changelog/post/2026-04-15-agentlee-writeops-genui/>
+- Vercel, agentic infrastructure: <https://vercel.com/blog/agentic-infrastructure>
+- Automattic, WordPress and the agentic web: <https://automattic.com/2026/04/21/wordpress-operating-system-agentic-web/>
