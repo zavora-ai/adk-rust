@@ -14,6 +14,20 @@ pub use super::pairing::{
     ChannelAccountsResponse, ChannelPairingResponse, ChannelPairingView, ClaimRequest,
     DeviceResponse, DevicesResponse, IssueRequest,
 };
+// The routes the surfaces need (spec 3.3 §10 K3–K5).
+#[cfg(feature = "proc")]
+pub use super::away::{
+    AwayCounts, AwayKind, AwayLine, AwayLineResponse, AwayQuery, AwayResponse, DEFAULT_VIEWER,
+    MAX_PAGE_ROWS, QuietTimeReport, SeenRequest, SeenResponse,
+};
+pub use super::memory::{
+    FactResponse, FixRequest, ForgetResponse, MemoryQuery, MemoryResponse, UndoRequest,
+};
+pub use super::record::{RecordQuery, RecordResponse};
+pub use super::settings::{
+    AreaResponse, AreaView, QuietTimeRequest, SettingsResponse, SpendingLimitRequest,
+};
+
 use crate::agenda::{AgendaFilter, AgendaItem, AgendaStateKind};
 use crate::partition::PartitionId;
 use crate::process::{Process, ProcessKind};

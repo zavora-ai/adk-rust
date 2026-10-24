@@ -159,6 +159,9 @@ pub(crate) struct Supervision {
     pub(crate) partition_targets: BTreeMap<String, PartitionId>,
     /// The partition table, whose run grants a finished run releases (spec 3.2 §13 Q3).
     pub(crate) partitions: crate::partition::Partitions,
+    /// The settings a person changed while the kernel runs, which admission reads in place
+    /// of the start ones (spec 3.3 §10 K3).
+    pub(crate) control: Arc<dyn crate::control::ControlStore>,
 }
 
 impl std::fmt::Debug for Supervision {
@@ -669,22 +672,45 @@ impl Supervision {
     }
 
     /// Every quiet-hours window that applies in `partition`: the kernel's, the proactivity
-    /// policy's and the partition's own (spec 3.2 §7.8, §7.9).
+    /// policy's and the partition's own (spec 3.2 §7.8, §7.9), the person's changed window
+    /// in place of the kernel's and the partition's (spec 3.3 §10 K3).
     pub(crate) async fn quiet_windows(&self, partition: &PartitionId) -> Vec<QuietHours> {
-        let mut windows: Vec<QuietHours> =
-            self.quiet_hours.iter().chain(self.proactivity.quiet_hours.iter()).copied().collect();
-        if let Some(record) = self.partition_record(partition).await {
-            windows.extend(record.quiet_hours);
-        }
-        windows
+        let record = self.partition_record(partition).await;
+        let changed = self.changed_settings(partition).await;
+        crate::control::settings::quiet_windows(
+            self.quiet_hours,
+            self.proactivity.quiet_hours,
+            record.as_ref(),
+            changed.as_ref(),
+        )
     }
 
     /// The quotas of `partition`: the kernel's, each lowered by the partition's own (spec
-    /// 3.2 §7.8, §7.9).
+    /// 3.2 §7.8, §7.9), and the person's changed daily limit in place of both caps (spec
+    /// 3.3 §10 K3).
     pub(crate) async fn quotas_of(&self, partition: &PartitionId) -> Quotas {
-        match self.partition_record(partition).await {
+        let mut quotas = match self.partition_record(partition).await {
             Some(record) => self.quotas.stricter(&record.quotas),
             None => self.quotas.clone(),
+        };
+        let changed = self.changed_settings(partition).await;
+        quotas.daily_spend_cap =
+            crate::control::settings::spend_cap(quotas.daily_spend_cap, changed.as_ref());
+        quotas
+    }
+
+    /// The settings the person changed for `partition` while the kernel runs; `None` when
+    /// the store fails, so the start settings apply (spec 3.3 §10 K3).
+    async fn changed_settings(
+        &self,
+        partition: &PartitionId,
+    ) -> Option<crate::control::AreaSettings> {
+        match self.control.area_settings(partition).await {
+            Ok(settings) => settings,
+            Err(error) => {
+                tracing::warn!(partition = %partition, error = %error, "could not read the changed settings; the start settings apply");
+                None
+            }
         }
     }
 

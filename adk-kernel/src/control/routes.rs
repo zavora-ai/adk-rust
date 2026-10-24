@@ -90,6 +90,12 @@ pub(crate) trait ControlBackend: Send + Sync + 'static {
         None
     }
 
+    /// The kernel behind the routes the surfaces need (spec 3.3 §10 K3–K5); `None` on a
+    /// test double.
+    fn kernel(&self) -> Option<&Kernel> {
+        None
+    }
+
     /// The partition table, ordered by id (spec 3.2 §7.8).
     async fn partitions(&self) -> Result<Vec<Partition>> {
         Ok(Vec::new())
@@ -211,6 +217,10 @@ impl ControlBackend for Kernel {
         self.config().control.pairing.clone()
     }
 
+    fn kernel(&self) -> Option<&Kernel> {
+        Some(self)
+    }
+
     async fn partitions(&self) -> Result<Vec<Partition>> {
         Kernel::partitions(self).list().await
     }
@@ -248,7 +258,14 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         .route(paths::AGENDA_REJECT, post(agenda_reject))
         .route(paths::AGENDA_SCHEDULE, post(agenda_schedule))
         .route(paths::PARTITIONS, get(partitions).post(put_partition))
-        .route(paths::PARTITION_MODE, post(set_partition_mode));
+        .route(paths::PARTITION_MODE, post(set_partition_mode))
+        // What the home's Today and "Agent Memory and Rules" read and change (spec 3.3 §10
+        // K3–K5).
+        .merge(super::settings::routes())
+        .merge(super::memory::routes())
+        .merge(super::record::routes());
+    #[cfg(feature = "proc")]
+    let router = router.merge(super::away::routes());
     #[cfg(feature = "drivers")]
     let router = router
         .route(paths::DRIVERS, get(drivers::list))
