@@ -81,9 +81,11 @@ pub const VOICE_NOT_PARKED_CODE: &str = "harness.voice.not_parked";
 /// How often the surface asks the approval store whether the inbox decided a held call.
 const INBOX_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-/// What a spoken answer to a held call means.
+/// What a spoken answer to a held call means. A spoken standing rule ("approve and
+/// remember", spec 3.1 §7.5) would be one more, so a `match` on it needs a wildcard arm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SpokenDecision {
     /// Run the held call once.
     Approve,
@@ -91,9 +93,11 @@ pub enum SpokenDecision {
     Deny,
 }
 
-/// Who decided a held call.
+/// Who decided a held call. Other surfaces, such as the console, the kernel or an ACP
+/// client, would be more, so a `match` on it needs a wildcard arm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum DecisionSource {
     /// A spoken answer in the voice session.
     Voice,

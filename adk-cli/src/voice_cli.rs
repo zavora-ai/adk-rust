@@ -159,15 +159,17 @@ pub(crate) async fn run(
                 println!("say yes or no (or decide with `adk-rust approvals`)");
             }
             VoiceEvent::Decided { decision, by, .. } => {
-                let decision = match decision {
-                    adk_harness::SpokenDecision::Approve => "approve",
-                    adk_harness::SpokenDecision::Deny => "deny",
+                // The wire names (`approve`, `voice`, ...), which cover a later variant too.
+                let name = |value: serde_json::Result<serde_json::Value>| {
+                    value.ok().and_then(|value| value.as_str().map(str::to_string))
                 };
-                let by = match by {
-                    adk_harness::DecisionSource::Voice => "voice",
-                    adk_harness::DecisionSource::Inbox => "inbox",
-                };
-                println!("decided ({by}): {decision}");
+                let decision = name(serde_json::to_value(decision));
+                let by = name(serde_json::to_value(by));
+                println!(
+                    "decided ({}): {}",
+                    by.as_deref().unwrap_or("unknown"),
+                    decision.as_deref().unwrap_or("unknown")
+                );
             }
             VoiceEvent::Resumed(call) => {
                 resumed = true;
@@ -229,7 +231,12 @@ pub(crate) async fn run(
                 }
                 _ => {}
             },
-            _ => {}
+            other => {
+                println!(
+                    "voice event: {}",
+                    adk_harness::escape_control(&first_line(&format!("{other:?}")))
+                );
+            }
         }
     }
     if !spoken.trim().is_empty() {
