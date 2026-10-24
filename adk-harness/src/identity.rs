@@ -382,6 +382,21 @@ impl CommandLauncher for CredentialLauncher {
     fn isolation(&self) -> &str {
         self.inner.isolation()
     }
+
+    /// The Windows restricted-token sandbox starts the process itself, so the helper's
+    /// environment travels with the call (spec 3.2 §10 W5).
+    #[cfg(windows)]
+    fn spawn_contained(
+        &self,
+        ws: &Workspace,
+        script: &str,
+        env: &[(String, String)],
+        ctx: &dyn ToolContext,
+    ) -> Option<std::result::Result<adk_devtools::ContainedChild, DevToolError>> {
+        let mut all = env.to_vec();
+        all.extend(self.calls.get(ctx.function_call_id()));
+        self.inner.spawn_contained(ws, script, &all, ctx)
+    }
 }
 
 /// Shell single-quoting.

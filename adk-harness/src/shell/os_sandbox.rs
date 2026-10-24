@@ -3,7 +3,9 @@
 //! `bash` under the OS sandbox runs `sh -c <script>` through
 //! `adk_sandbox::sandbox::sandboxed_command` (spec 3.1 §10 S1) as the launcher of the
 //! devtools `BashTool` (D1), which keeps its timeout ceiling, output cap, streaming,
-//! `setsid`, empty standard input and process-group kill (D3).
+//! `setsid`, empty standard input and process-group kill (D3). On Windows the
+//! restricted-token enforcer starts the shell itself, through `WindowsEnforcer::spawn_contained`
+//! and the launcher's `spawn_contained`, in a Job Object (spec 3.2 §10 W1, W5).
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -149,6 +151,13 @@ pub struct SandboxLauncher {
     enforcer: Result<Arc<dyn SandboxEnforcer>, String>,
     access: SandboxAccess,
     label: String,
+    /// The Windows restricted-token enforcer, which starts each shell itself (spec 3.2 §10
+    /// W5); never elsewhere.
+    contained: bool,
+    /// The paths already granted to the restricted token, with whether read-write. A grant
+    /// stays in the path's ACL, and granting again re-applies it to everything beneath.
+    #[cfg(windows)]
+    granted: Arc<std::sync::Mutex<std::collections::BTreeSet<(PathBuf, bool)>>>,
 }
 
 impl fmt::Debug for SandboxLauncher {
@@ -164,8 +173,18 @@ impl fmt::Debug for SandboxLauncher {
 impl SandboxLauncher {
     /// A read-write launcher for `config`, resolving its enforcer
     /// (`adk_sandbox::sandbox::get_enforcer()` when the config names none).
+    ///
+    /// On Windows the enforcer is the restricted-token one (`WindowsEnforcer`) when the config
+    /// names none or names it: it starts each shell itself through
+    /// [`CommandLauncher::spawn_contained`] (spec 3.2 §10 W5).
     pub fn new(config: OsSandboxConfig) -> Self {
+        let contained = cfg!(windows)
+            && config.enforcer.as_ref().is_none_or(|enforcer| {
+                enforcer.name() == adk_sandbox::sandbox::windows::ENFORCER_NAME
+            });
         let enforcer = match &config.enforcer {
+            _ if contained => Ok(Arc::new(adk_sandbox::sandbox::windows::WindowsEnforcer::new())
+                as Arc<dyn SandboxEnforcer>),
             Some(enforcer) => Ok(enforcer.clone()),
             None => adk_sandbox::sandbox::get_enforcer()
                 .map(Arc::from)
@@ -175,7 +194,35 @@ impl SandboxLauncher {
             Ok(enforcer) => enforcer.name().to_string(),
             Err(_) => "os_sandbox".to_string(),
         };
-        Self { config, enforcer, access: SandboxAccess::ReadWrite, label }
+        Self {
+            config,
+            enforcer,
+            access: SandboxAccess::ReadWrite,
+            label,
+            contained,
+            #[cfg(windows)]
+            granted: Arc::default(),
+        }
+    }
+
+    /// Whether the sandbox denies the network: not under `network`, and never on Windows,
+    /// whose restricted-token enforcer leaves the network open (spec 3.2 §10 W5).
+    pub(crate) fn denies_network(&self) -> bool {
+        !self.contained && !self.config.network
+    }
+
+    /// Whether the launcher starts each shell itself (spec 3.2 §10 W5), so a caller that can
+    /// only spawn a command cannot use it.
+    #[cfg(all(windows, feature = "hooks"))]
+    pub(crate) fn starts_processes_itself(&self) -> bool {
+        self.contained
+    }
+
+    /// Whether a read-only launcher keeps the workspace read-only, as Plan mode's unprompted
+    /// commands need (spec 3.1 §7.4). The restricted-token enforcer's grants stay in the
+    /// workspace's ACL, so a read-write grant from an earlier command outlives it.
+    pub(crate) fn keeps_read_only(&self) -> bool {
+        !self.contained
     }
 
     /// This launcher with a read-only workspace (Plan and ReadOnly modes).
@@ -198,6 +245,17 @@ impl SandboxLauncher {
     /// [`IsolationStatus::Degraded`] with the reason otherwise (spec 3.1 §7.9
     /// "Availability").
     pub fn status(&self) -> IsolationStatus {
+        // The generic probe of the restricted-token enforcer always fails; its own probes the
+        // path it runs commands through (spec 3.2 §10 W5).
+        if self.contained {
+            return match adk_sandbox::sandbox::windows::WindowsEnforcer::new().probe_confined() {
+                Ok(()) => IsolationStatus::OsSandbox { enforcer: self.label.clone() },
+                Err(error) => IsolationStatus::Degraded {
+                    requested: "os_sandbox".to_string(),
+                    reason: error.to_string(),
+                },
+            };
+        }
         let reason = match &self.enforcer {
             Ok(enforcer) => match enforcer.probe() {
                 Ok(()) => {
@@ -274,6 +332,11 @@ impl SandboxLauncher {
         env.retain(|key, _| passes_into_sandbox(key));
         let scratch = scratch.display().to_string();
         env.insert("HOME".to_string(), scratch.clone());
+        // Windows programs find their temporary directory in `TEMP` and `TMP`.
+        #[cfg(windows)]
+        for key in ["TEMP", "TMP"] {
+            env.insert(key.to_string(), scratch.clone());
+        }
         env.insert("TMPDIR".to_string(), scratch);
         if self.config.read_toolchains {
             let toolchains = Toolchains::detect(env.get("PATH").map(String::as_str), ws.root());
@@ -379,6 +442,11 @@ impl SandboxLauncher {
     /// Returns why the enforcer fails the check: unavailable, a write that went through,
     /// or ordinary work that did not.
     pub(crate) fn nested_read_only_conformance(&self) -> Result<(), String> {
+        if self.contained {
+            return Err("the restricted-token enforcer does not keep a read-only path inside a \
+                        read-write one read-only: the path inherits the workspace's grant"
+                .to_string());
+        }
         let enforcer = self.enforcer.clone()?;
         let scratch =
             tempfile_dir().map_err(|error| format!("no conformance directory: {error}"))?;
@@ -460,6 +528,13 @@ impl CommandLauncher for SandboxLauncher {
         script: &str,
         ctx: &dyn ToolContext,
     ) -> Result<tokio::process::Command, DevToolError> {
+        if self.contained {
+            return Err(DevToolError::Other(
+                "the restricted-token sandbox starts its commands itself (spec 3.2 §10 W5), and \
+                 this caller can only spawn a command; run it through the bash tool"
+                    .to_string(),
+            ));
+        }
         let enforcer = self.enforcer.clone().map_err(DevToolError::Other)?;
         let scratch = self.scratch_dir(ctx.app_name(), ctx.user_id(), ctx.session_id())?;
         let policy = self.policy(ws, &scratch);
@@ -478,6 +553,84 @@ impl CommandLauncher for SandboxLauncher {
     fn isolation(&self) -> &str {
         &self.label
     }
+
+    #[cfg(windows)]
+    fn spawn_contained(
+        &self,
+        ws: &Workspace,
+        script: &str,
+        env: &[(String, String)],
+        ctx: &dyn ToolContext,
+    ) -> Option<Result<adk_devtools::ContainedChild, DevToolError>> {
+        if !self.contained {
+            return None;
+        }
+        Some(self.start_contained(ws, script, env, ctx))
+    }
+}
+
+#[cfg(windows)]
+impl SandboxLauncher {
+    /// Starts `sh -c <script>` under the restricted token in the workspace root, in a Job
+    /// Object (spec 3.2 §10 W1, W5).
+    ///
+    /// `sh` is the one the sandbox's `PATH` finds, as on the host; `env` is added to the
+    /// sandbox's environment last. Each path is granted once
+    /// per process: a grant stays in the path's ACL, and granting it again would re-apply it
+    /// to everything beneath the path.
+    fn start_contained(
+        &self,
+        ws: &Workspace,
+        script: &str,
+        env: &[(String, String)],
+        ctx: &dyn ToolContext,
+    ) -> Result<adk_devtools::ContainedChild, DevToolError> {
+        let scratch = self.scratch_dir(ctx.app_name(), ctx.user_id(), ctx.session_id())?;
+        let mut policy = self.policy(ws, &scratch);
+        // A wrapping launcher's variables, such as the credential helper's, come last, as
+        // they would on a command (spec 3.1 §7.14).
+        policy.env.extend(env.iter().cloned());
+        let shell =
+            find_program("sh", policy.env.get("PATH").map(String::as_str)).ok_or_else(|| {
+                DevToolError::Other(
+                "`sh` is not on the sandbox's PATH; the sandboxed shell runs `sh -c` as the host \
+                 shell does, so put Git for Windows' `bin` directory on PATH"
+                    .to_string(),
+            )
+            })?;
+        let wanted: Vec<(PathBuf, bool)> = policy
+            .allowed_paths
+            .iter()
+            .map(|path| (path.path.clone(), path.mode == AccessMode::ReadWrite))
+            .collect();
+        {
+            let granted = self.granted.lock().unwrap_or_else(|e| e.into_inner());
+            policy.allowed_paths.retain(|path| {
+                !granted.contains(&(path.path.clone(), path.mode == AccessMode::ReadWrite))
+            });
+        }
+        let child = adk_sandbox::sandbox::windows::WindowsEnforcer::new()
+            .spawn_contained(
+                &policy,
+                shell.as_os_str(),
+                &[OsString::from("-c"), OsString::from(script)],
+                ws.root(),
+            )
+            .map_err(|error| {
+                DevToolError::Other(format!("the sandboxed command could not start: {error}"))
+            })?;
+        self.granted.lock().unwrap_or_else(|e| e.into_inner()).extend(wanted);
+        Ok(child)
+    }
+}
+
+/// The first `<name>.exe` in the directories of `path`.
+#[cfg(windows)]
+fn find_program(name: &str, path: Option<&str>) -> Option<PathBuf> {
+    std::env::split_paths(path?)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(format!("{name}.exe")))
+        .find(|candidate| candidate.is_file())
 }
 
 /// The toolchain directories a sandboxed command may read (spec 3.1 §7.9 `read_toolchains`).
@@ -551,6 +704,11 @@ impl Toolchains {
                 found.read.push(candidate);
             }
         }
+        // Windows grants `Users` read access to the system and program directories, which the
+        // restricted token's restricting SIDs include; a grant there would rewrite their ACLs
+        // and needs an administrator. Only toolchains in the user's profile are granted.
+        #[cfg(windows)]
+        found.read.retain(|dir| home.as_deref().is_some_and(|home| dir.starts_with(home)));
         // A link inside a directory that is itself granted already exists there.
         let read = found.read.clone();
         let links: Vec<PathBuf> = found.links.iter().map(|(_, link)| link.clone()).collect();

@@ -14,10 +14,12 @@
 //! `CreateProcessAsUserW`, whose result is a raw process handle. The generic enforcer path
 //! builds a [`tokio::process::Command`] that the caller spawns with `Command::spawn`, and a
 //! `tokio::process::Child` cannot be constructed from a foreign handle. The enforcer therefore
-//! owns its own spawn through [`WindowsEnforcer::run_confined`]; [`SandboxEnforcer::probe`] and
-//! [`SandboxEnforcer::configure_command`] report that the generic path cannot carry the token
-//! and name the working one, so a caller never runs a command believing it is confined when it
-//! is not.
+//! owns its own spawn through [`WindowsEnforcer::run_confined`], which waits for the command,
+//! and `WindowsEnforcer::spawn_contained`, which returns the running process with its standard
+//! streams on pipes; [`WindowsEnforcer::probe_confined`] probes that path.
+//! [`SandboxEnforcer::probe`] and [`SandboxEnforcer::configure_command`] report that the
+//! generic path cannot carry the token and name the working one, so a caller never runs a
+//! command believing it is confined when it is not.
 //!
 //! # What is enforced, and what is not
 //!
@@ -28,6 +30,7 @@
 //! | Read of a path the policy does not grant and that grants neither `Everyone` nor `Users` (a user's profile) | Denied by the restricted-SID check |
 //! | System binaries and DLLs (`System32` grants `Users`) | Readable, so the shell can start programs (`Everyone` and `Users` are restricting SIDs) |
 //! | Descendant processes | Killed with the call's Job Object |
+//! | Inherited handles | `spawn_contained`'s three standard handles only; `run_confined` inherits none |
 //! | Network | **Not enforced** — Windows offers no per-process network filter without AppContainer |
 //! | Integrity level | Left at the token's default; Low/Untrusted integrity needs the granted paths labelled and is a later rung |
 
@@ -115,6 +118,125 @@ impl WindowsEnforcer {
                           sandbox-windows feature"
                     .to_string(),
             })
+        }
+    }
+}
+
+impl WindowsEnforcer {
+    /// Starts `program` with `args` in `cwd` under the restricted token and ACL grants of
+    /// [`run_confined`](Self::run_confined), and returns at once with the running process
+    /// (spec 3.2 §10 W5).
+    ///
+    /// The process is held, with every process it starts, by the returned child's Job Object
+    /// from before it runs (spec 3.2 §10 W1); dropping the child ends them all. Its standard
+    /// input, output and error are pipes, and it inherits those three handles and no other.
+    /// The environment is `policy.env` as for `run_confined`. `program` should be a full
+    /// path: a bare name is searched for as `CreateProcessAsUserW` does, from the directory
+    /// of this process and its working directory before the system directories and `PATH`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SandboxError::PolicyViolation`] when an allowed path cannot be resolved, and
+    /// [`SandboxError::EnforcerFailed`] when a Win32 step fails (with the failing call and the
+    /// OS error).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::ffi::OsString;
+    /// use std::io::Read as _;
+    /// use std::path::Path;
+    ///
+    /// use adk_sandbox::sandbox::SandboxPolicyBuilder;
+    /// use adk_sandbox::sandbox::windows::WindowsEnforcer;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let workspace = Path::new("C:\\work\\project");
+    /// let policy = SandboxPolicyBuilder::new().allow_read_write(workspace).build();
+    /// let mut child = WindowsEnforcer::new().spawn_contained(
+    ///     &policy,
+    ///     "C:\\Windows\\System32\\cmd.exe".as_ref(),
+    ///     &[OsString::from("/c"), OsString::from("echo ok")],
+    ///     workspace,
+    /// )?;
+    /// drop(child.stdin.take());
+    /// let mut output = String::new();
+    /// child.stdout.take().expect("piped").read_to_string(&mut output)?;
+    /// assert_eq!(child.process.wait().await?, 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(all(target_os = "windows", feature = "sandbox-windows"))]
+    pub fn spawn_contained(
+        &self,
+        policy: &SandboxPolicy,
+        program: &OsStr,
+        args: &[OsString],
+        cwd: &std::path::Path,
+    ) -> Result<crate::process_tree::ContainedChild, SandboxError> {
+        imp::spawn_contained(policy, &grant_targets(policy), program, args, cwd)
+    }
+
+    /// Whether [`run_confined`](Self::run_confined) and `spawn_contained` confine a command
+    /// on this host: runs `cmd.exe /d /c exit 0` from the system directory under the
+    /// restricted token, with no path granted (spec 3.2 §10 W5).
+    ///
+    /// This is the probe of the working path. [`SandboxEnforcer::probe`] reports the generic
+    /// `configure_command` path, which cannot carry a restricted token and never succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SandboxError::EnforcerUnavailable`] off Windows, without the
+    /// `sandbox-windows` feature, and when the probe command cannot run or does not exit 0.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_sandbox::sandbox::windows::WindowsEnforcer;
+    ///
+    /// match WindowsEnforcer::new().probe_confined() {
+    ///     Ok(()) => println!("commands run under the restricted token"),
+    ///     Err(error) => println!("the restricted-token sandbox is unavailable: {error}"),
+    /// }
+    /// ```
+    pub fn probe_confined(&self) -> Result<(), SandboxError> {
+        let unavailable = |message: String| SandboxError::EnforcerUnavailable {
+            enforcer: ENFORCER_NAME.to_string(),
+            message,
+        };
+        #[cfg(all(target_os = "windows", feature = "sandbox-windows"))]
+        {
+            let system = std::env::var_os("SystemRoot")
+                .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
+                .join("System32");
+            let outcome = self
+                .run_confined(
+                    &super::SandboxPolicyBuilder::new().build(),
+                    system.join("cmd.exe").as_os_str(),
+                    &[OsString::from("/d"), OsString::from("/c"), OsString::from("exit 0")],
+                    &system,
+                    Some(std::time::Duration::from_secs(15)),
+                )
+                .map_err(|error| {
+                    unavailable(format!(
+                        "a probe command could not start under the restricted token: {error}"
+                    ))
+                })?;
+            match outcome {
+                ConfinedOutcome { exit_code: Some(0), .. } => Ok(()),
+                other => Err(unavailable(format!(
+                    "a probe command under the restricted token ended with {other:?} instead of \
+                     exit code 0"
+                ))),
+            }
+        }
+        #[cfg(not(all(target_os = "windows", feature = "sandbox-windows")))]
+        {
+            Err(unavailable(
+                "the restricted-token enforcer runs only on Windows with the sandbox-windows \
+                 feature"
+                    .to_string(),
+            ))
         }
     }
 }
@@ -397,13 +519,13 @@ mod imp {
 
     use std::ffi::{OsStr, OsString, c_void};
     use std::os::windows::ffi::OsStrExt as _;
-    use std::os::windows::io::BorrowedHandle;
+    use std::os::windows::io::{BorrowedHandle, FromRawHandle as _, OwnedHandle};
     use std::path::Path;
     use std::time::Duration;
 
     use windows_sys::Win32::Foundation::{
-        CloseHandle, GENERIC_ALL, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
-        WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+        CloseHandle, GENERIC_ALL, GetLastError, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+        LocalFree, SetHandleInformation, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::Security::Authorization::{
         EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, NO_MULTIPLE_TRUSTEE,
@@ -420,16 +542,20 @@ mod imp {
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
     };
+    use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::{
-        CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, GetCurrentProcess,
-        GetExitCodeProcess, INFINITE, OpenProcessToken, PROCESS_INFORMATION, ResumeThread,
-        STARTUPINFOW, TerminateProcess, WaitForSingleObject,
+        CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
+        DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
+        GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList,
+        LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcessToken, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
+        TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
     };
 
     use super::token::{self, Sid, TokenGroup, TokenPlan};
     use super::{ConfinedOutcome, ENFORCER_NAME, strip_unc_prefix};
     use crate::error::SandboxError;
-    use crate::process_tree::JobObject;
+    use crate::process_tree::{ContainedChild, ContainedProcess, JobObject};
     use crate::sandbox::{AccessMode, AllowedPath, SandboxPolicy};
 
     /// Owns a Win32 `HANDLE` and closes it on drop.
@@ -781,14 +907,31 @@ mod imp {
         }
     }
 
-    pub(super) fn run_confined(
+    /// The child's ends of its standard streams, inheritable only while the child is created.
+    struct ChildStdio {
+        input: Handle,
+        output: Handle,
+        error: Handle,
+    }
+
+    /// A process the restricted token runs, in its job and resumed.
+    struct Launched {
+        job: JobObject,
+        process: Handle,
+        pid: u32,
+    }
+
+    /// Builds the restricted token, grants the policy's paths, and starts `program` with
+    /// `args` in `cwd` under the token, suspended; places it in a new Job Object and only
+    /// then resumes it. With `stdio`, the child inherits those three handles and no other.
+    fn launch(
         policy: &SandboxPolicy,
         grants: &[AllowedPath],
         program: &OsStr,
         args: &[OsString],
         cwd: &Path,
-        timeout: Option<Duration>,
-    ) -> Result<ConfinedOutcome, SandboxError> {
+        stdio: Option<&ChildStdio>,
+    ) -> Result<Launched, SandboxError> {
         let process_token = open_process_token()?;
         let user = token_user(process_token.0)?;
         let groups = token_groups(process_token.0)?;
@@ -811,10 +954,10 @@ mod imp {
         let cwd_wide: Vec<u16> =
             strip_unc_prefix(cwd).as_os_str().encode_wide().chain(Some(0)).collect();
         let env = environment_block(policy);
-        // SAFETY: `STARTUPINFOW` and `PROCESS_INFORMATION` are plain C structs that an all-zero
-        // bit pattern initialises validly.
-        let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
-        startup.cb = size_of::<STARTUPINFOW>() as u32;
+        // SAFETY: `STARTUPINFOEXW` and `PROCESS_INFORMATION` are plain C structs that an
+        // all-zero bit pattern initialises validly.
+        let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+        startup.StartupInfo.cb = size_of::<STARTUPINFOW>() as u32;
         let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
 
         let mut flags = CREATE_SUSPENDED;
@@ -826,9 +969,39 @@ mod imp {
             None => std::ptr::null(),
         };
 
+        // The child inherits exactly its three standard handles: a handle list keeps every
+        // other inheritable handle of this process, which the restricted token's access
+        // check never saw, out of the sandbox.
+        let inherited: Vec<HANDLE> =
+            stdio.map(|io| vec![io.input.0, io.output.0, io.error.0]).unwrap_or_default();
+        let attributes = match stdio {
+            Some(io) => {
+                for handle in &inherited {
+                    // SAFETY: the handle is open; only its inherit flag changes.
+                    if unsafe {
+                        SetHandleInformation(*handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)
+                    } == 0
+                    {
+                        return Err(last_error("SetHandleInformation"));
+                    }
+                }
+                let mut attributes = AttributeList::handles(&inherited)?;
+                startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+                startup.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+                startup.StartupInfo.hStdInput = io.input.0;
+                startup.StartupInfo.hStdOutput = io.output.0;
+                startup.StartupInfo.hStdError = io.error.0;
+                startup.lpAttributeList = attributes.as_ptr();
+                flags |= EXTENDED_STARTUPINFO_PRESENT;
+                Some(attributes)
+            }
+            None => None,
+        };
+
         // SAFETY: the token is a restricted child of the caller's token, the command line is
         // NUL-terminated and mutable as the API requires, the directory and environment are
-        // NUL-terminated, and the startup and info structures are valid for the call.
+        // NUL-terminated, the startup structure is valid for the call with `cb` naming its
+        // size, and the attribute list and the handles it names outlive the call.
         let ok = unsafe {
             CreateProcessAsUserW(
                 token.0,
@@ -836,14 +1009,15 @@ mod imp {
                 command.as_mut_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
-                0,
+                i32::from(stdio.is_some()),
                 flags,
                 env_ptr,
                 cwd_wide.as_ptr(),
-                &startup,
+                (&raw const startup).cast::<STARTUPINFOW>(),
                 &mut info,
             )
         };
+        drop(attributes);
         if ok == 0 {
             return Err(last_error("CreateProcessAsUserW"));
         }
@@ -864,6 +1038,72 @@ mod imp {
             job.terminate();
             return Err(err);
         }
+        Ok(Launched { job, process, pid: info.dwProcessId })
+    }
+
+    /// A `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` attribute list, freed on drop.
+    struct AttributeList {
+        // `u64` storage keeps the list pointer-aligned.
+        buffer: Vec<u64>,
+    }
+
+    impl AttributeList {
+        /// A list whose one attribute names `handles`, which must outlive the list's use.
+        fn handles(handles: &[HANDLE]) -> Result<Self, SandboxError> {
+            let mut size = 0usize;
+            // SAFETY: a null list asks only for the size, written to `size`; the call fails
+            // with ERROR_INSUFFICIENT_BUFFER by design.
+            unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size) };
+            if size == 0 {
+                return Err(last_error("InitializeProcThreadAttributeList(size)"));
+            }
+            let mut list = Self { buffer: vec![0u64; size.div_ceil(8)] };
+            // SAFETY: the buffer holds at least `size` writable bytes.
+            if unsafe { InitializeProcThreadAttributeList(list.as_ptr(), 1, 0, &mut size) } == 0 {
+                // An uninitialised list must not be deleted.
+                std::mem::forget(list);
+                return Err(last_error("InitializeProcThreadAttributeList"));
+            }
+            // SAFETY: the list is initialised; `handles` is readable for its stated size and
+            // outlives the list's use, as the caller guarantees.
+            let updated = unsafe {
+                UpdateProcThreadAttribute(
+                    list.as_ptr(),
+                    0,
+                    PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                    handles.as_ptr().cast(),
+                    size_of_val(handles),
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                )
+            };
+            if updated == 0 {
+                return Err(last_error("UpdateProcThreadAttribute"));
+            }
+            Ok(list)
+        }
+
+        fn as_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
+            self.buffer.as_mut_ptr().cast()
+        }
+    }
+
+    impl Drop for AttributeList {
+        fn drop(&mut self) {
+            // SAFETY: the list was initialised in `handles`.
+            unsafe { DeleteProcThreadAttributeList(self.as_ptr()) };
+        }
+    }
+
+    pub(super) fn run_confined(
+        policy: &SandboxPolicy,
+        grants: &[AllowedPath],
+        program: &OsStr,
+        args: &[OsString],
+        cwd: &Path,
+        timeout: Option<Duration>,
+    ) -> Result<ConfinedOutcome, SandboxError> {
+        let Launched { job, process, .. } = launch(policy, grants, program, args, cwd, None)?;
 
         let wait_ms =
             timeout.map_or(INFINITE, |d| u32::try_from(d.as_millis()).unwrap_or(INFINITE));
@@ -891,6 +1131,53 @@ mod imp {
             return Err(last_error("GetExitCodeProcess"));
         }
         Ok(ConfinedOutcome { exit_code: Some(code as i32), timed_out: false })
+    }
+
+    /// An anonymous pipe, neither end inheritable: `(read, write)`.
+    fn pipe() -> Result<(Handle, Handle), SandboxError> {
+        let (mut read, mut write): (HANDLE, HANDLE) = (std::ptr::null_mut(), std::ptr::null_mut());
+        // SAFETY: both out-pointers are writable; no security attributes, so neither end is
+        // inheritable.
+        if unsafe { CreatePipe(&mut read, &mut write, std::ptr::null(), 0) } == 0 {
+            return Err(last_error("CreatePipe"));
+        }
+        Ok((Handle(read), Handle(write)))
+    }
+
+    /// The parent's end of a pipe as a file.
+    fn into_file(handle: Handle) -> std::fs::File {
+        let raw = handle.0;
+        std::mem::forget(handle);
+        // SAFETY: `raw` is an open handle this function now solely owns.
+        std::fs::File::from(unsafe { OwnedHandle::from_raw_handle(raw) })
+    }
+
+    pub(super) fn spawn_contained(
+        policy: &SandboxPolicy,
+        grants: &[AllowedPath],
+        program: &OsStr,
+        args: &[OsString],
+        cwd: &Path,
+    ) -> Result<ContainedChild, SandboxError> {
+        let (stdin_read, stdin_write) = pipe()?;
+        let (stdout_read, stdout_write) = pipe()?;
+        let (stderr_read, stderr_write) = pipe()?;
+        let stdio = ChildStdio { input: stdin_read, output: stdout_write, error: stderr_write };
+        let Launched { job, process, pid } =
+            launch(policy, grants, program, args, cwd, Some(&stdio))?;
+        // The child holds its own copies; closing these lets its output end when it does.
+        drop(stdio);
+        let raw = process.0;
+        std::mem::forget(process);
+        // SAFETY: `raw` is the open process handle this function now solely owns.
+        let process = ContainedProcess::new(unsafe { OwnedHandle::from_raw_handle(raw) }, pid);
+        Ok(ContainedChild {
+            job,
+            process,
+            stdin: Some(into_file(stdin_write)),
+            stdout: Some(into_file(stdout_read)),
+            stderr: Some(into_file(stderr_read)),
+        })
     }
 }
 

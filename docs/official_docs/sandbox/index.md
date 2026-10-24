@@ -284,7 +284,15 @@ with rules and `allow_network = false` blocks all network access and logs a warn
 | Network | **Not enforced** — Windows has no per-process network control without AppContainer |
 | Integrity level | Not lowered |
 
-A restricted token is set when the process is created, so it cannot be attached to a `tokio::process::Command` that the caller spawns. `probe()` therefore returns `EnforcerUnavailable` and `configure_command()` returns `EnforcerFailed`, naming `run_confined`: `sandboxed_command`, `ProcessBackend::with_sandbox` and the harness shell do not confine on Windows and report so. The PR tier's `windows` job runs the enforcer's tests.
+A restricted token is set when the process is created, so it cannot be attached to a `tokio::process::Command` that the caller spawns. `probe()` therefore returns `EnforcerUnavailable` and `configure_command()` returns `EnforcerFailed`, naming `run_confined`: `sandboxed_command` and `ProcessBackend::with_sandbox` do not confine on Windows and report so. The enforcer starts a command itself in two ways:
+
+| Call | Returns |
+|------|---------|
+| `run_confined(policy, program, args, cwd, timeout)` | Once the command exits or times out, its exit code; standard streams are not captured |
+| `spawn_contained(policy, program, args, cwd)` | At once, a `process_tree::ContainedChild`: the running process (`wait`, `try_wait`), its Job Object, and its standard input, output and error as pipes; it inherits those three handles and no other |
+| `probe_confined()` | `Ok` when `cmd.exe /d /c exit 0` runs under the restricted token, the probe of these two calls |
+
+The harness shell runs `bash` through `spawn_contained` on Windows (spec 3.2 §10 W5; see [Harness Shell and Sandbox](../harness/shell-and-sandbox.md)). The PR tier's `windows` job runs the enforcer's tests.
 
 ### Process trees on Windows
 

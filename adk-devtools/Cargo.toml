@@ -39,9 +39,11 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"
 
-# The Job Object tests wait for and end the processes a command started; the in-place
-# reparse point test sets a reparse point (spec 3.2 §10 W1, W6).
+# The Job Object tests wait for and end the processes a command started, and the contained
+# tests start them under the restricted-token enforcer; the in-place reparse point test sets
+# a reparse point (spec 3.2 §10 W1, W5, W6).
 [target.'cfg(windows)'.dev-dependencies]
+adk-sandbox = { path = "../adk-sandbox", features = ["sandbox-windows"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_Threading"] }
 
 [dev-dependencies]

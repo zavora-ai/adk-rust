@@ -246,6 +246,15 @@ starts it with `setsid`, which fails for a process that already leads a group. O
 Windows the tool replaces the command's creation flags with `CREATE_SUSPENDED`, so
 the process runs only once it is in the call's Job Object.
 
+On Windows a launcher whose confinement is set when the process is created — the
+restricted-token sandbox, whose token cannot be attached to a `Command` — starts the
+process itself by overriding `CommandLauncher::spawn_contained` (spec 3.2 §10 W5). It
+returns an `adk_sandbox::process_tree::ContainedChild`: the process, already in its Job
+Object, with its standard streams on pipes. `BashTool` closes its standard input at once
+and keeps the timeout ceiling, output cap, streaming and the job's kill around it, as for a
+command it spawns; the call runs on Tokio's blocking pool. The default returns `None`,
+and the tool spawns `command`'s result.
+
 So it is path-contained, environment-isolated, and bounded, but **not** OS-isolated. The policy vocabulary aligns with `adk-code`'s `SandboxPolicy`; for
 strong isolation, run `bash` behind a containerized executor (see the
 [design doc](https://github.com/zavora-ai/adk-rust/blob/main/docs/design/coding-agent.md#9-security--sandboxing)).

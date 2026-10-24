@@ -53,6 +53,10 @@ mod workspace;
 
 pub mod tools;
 
+/// A process a [`CommandLauncher`] started itself in a Job Object, which
+/// [`CommandLauncher::spawn_contained`] returns (Windows, spec 3.2 §10 W5).
+#[cfg(windows)]
+pub use adk_sandbox::process_tree::ContainedChild;
 pub use error::DevToolError;
 pub use launcher::{CommandLauncher, HostLauncher};
 pub use tools::{

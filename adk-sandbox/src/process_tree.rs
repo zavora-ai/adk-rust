@@ -8,15 +8,18 @@
 //! its owner — including when the owning process exits without cleaning up.
 //!
 //! The devtools `bash` tool, the stdio servers of `adk-tool`'s `McpServerManager` (the
-//! kernel's drivers) and the restricted-token enforcer's `WindowsEnforcer::run_confined` hold
-//! their processes this way.
+//! kernel's drivers) and the restricted-token enforcer's `WindowsEnforcer::run_confined` and
+//! `WindowsEnforcer::spawn_contained` hold their processes this way. A process the
+//! enforcer starts itself, outside `std::process`, comes back as a [`ContainedChild`]
+//! (spec 3.2 §10 W5).
 
 use std::io;
 use std::os::windows::io::{
     AsHandle, AsRawHandle as _, BorrowedHandle, FromRawHandle as _, OwnedHandle,
 };
+use std::sync::Arc;
 
-use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
@@ -26,8 +29,8 @@ use windows_sys::Win32::System::JobObjects::{
     SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, OpenThread, PROCESS_SET_QUOTA, PROCESS_TERMINATE, ResumeThread,
-    THREAD_SUSPEND_RESUME,
+    GetExitCodeProcess, INFINITE, OpenProcess, OpenThread, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    ResumeThread, THREAD_SUSPEND_RESUME, WaitForSingleObject,
 };
 
 /// The process creation flag that starts a process suspended, so
@@ -171,6 +174,113 @@ impl AsHandle for JobObject {
     fn as_handle(&self) -> BorrowedHandle<'_> {
         self.0.as_handle()
     }
+}
+
+/// A running process held in a Job Object of its own, with its standard streams on pipes,
+/// as `WindowsEnforcer::spawn_contained` starts it (spec 3.2 §10 W1, W5).
+///
+/// Dropping the child closes the job, which ends the process and everything it started; so
+/// does [`JobObject::terminate`] on `job`. Its standard input is the write end of a pipe the
+/// process reads: drop it for end of file. Read `stdout` and `stderr` to their end of file,
+/// which comes once every process holding them has exited.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use adk_sandbox::process_tree::ContainedChild;
+///
+/// # async fn run(child: ContainedChild) -> std::io::Result<()> {
+/// let ContainedChild { job, process, stdin, .. } = child;
+/// drop(stdin);
+/// let code = process.wait().await?;
+/// job.terminate();
+/// println!("exited with {code}");
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ContainedChild {
+    /// The job holding the process and every process it starts.
+    pub job: JobObject,
+    /// The process, to wait for.
+    pub process: ContainedProcess,
+    /// The write end of the process's standard input.
+    pub stdin: Option<std::fs::File>,
+    /// The read end of the process's standard output.
+    pub stdout: Option<std::fs::File>,
+    /// The read end of the process's standard error.
+    pub stderr: Option<std::fs::File>,
+}
+
+/// A process started outside `std::process`, which can be waited for (spec 3.2 §10 W5).
+///
+/// Clones wait for the same process.
+#[derive(Debug, Clone)]
+pub struct ContainedProcess {
+    handle: Arc<OwnedHandle>,
+    pid: u32,
+}
+
+impl ContainedProcess {
+    /// The process `handle`, which must allow `SYNCHRONIZE` and
+    /// `PROCESS_QUERY_LIMITED_INFORMATION`, with id `pid`.
+    #[cfg(feature = "sandbox-windows")]
+    pub(crate) fn new(handle: OwnedHandle, pid: u32) -> Self {
+        Self { handle: Arc::new(handle), pid }
+    }
+
+    /// The process id.
+    pub fn id(&self) -> u32 {
+        self.pid
+    }
+
+    /// Waits for the process to exit and returns its exit code.
+    ///
+    /// The wait blocks a thread of Tokio's blocking pool, so it must be called inside a
+    /// Tokio runtime. Dropping the future leaves that thread waiting until the process exits,
+    /// which terminating its job makes immediate.
+    ///
+    /// # Errors
+    ///
+    /// Returns the OS error when the wait or the exit-code query fails.
+    pub async fn wait(&self) -> io::Result<i32> {
+        let handle = Arc::clone(&self.handle);
+        tokio::task::spawn_blocking(move || {
+            // SAFETY: the handle is open while `handle` lives.
+            if unsafe { WaitForSingleObject(handle.as_raw_handle(), INFINITE) } != WAIT_OBJECT_0 {
+                return Err(io::Error::last_os_error());
+            }
+            exit_code(&handle)
+        })
+        .await
+        .map_err(io::Error::other)?
+    }
+
+    /// The exit code when the process has exited, `None` while it runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns the OS error when the state or the exit code cannot be queried.
+    pub fn try_wait(&self) -> io::Result<Option<i32>> {
+        // SAFETY: the handle is open while `self` lives.
+        match unsafe { WaitForSingleObject(self.handle.as_raw_handle(), 0) } {
+            WAIT_OBJECT_0 => exit_code(&self.handle).map(Some),
+            WAIT_TIMEOUT => Ok(None),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+}
+
+/// The exit code of the exited process `handle`, with Windows' `u32` read as `i32` as
+/// `std::process::ExitStatus::code` does.
+fn exit_code(handle: &OwnedHandle) -> io::Result<i32> {
+    let mut code: u32 = 0;
+    // SAFETY: the handle is open and `code` is writable.
+    if unsafe { GetExitCodeProcess(handle.as_raw_handle(), &raw mut code) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(code as i32)
 }
 
 /// Resumes the threads of the suspended process `pid`, which has only the primary thread it

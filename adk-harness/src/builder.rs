@@ -1694,7 +1694,8 @@ impl HarnessAgentBuilder {
         let switches = PolicySwitches {
             auto_allow_sandboxed: shell.auto_allow_sandboxed,
             allow_host_shell_in_auto: self.shell.allow_host_shell_in_auto,
-            enforcer_active: matches!(status, IsolationStatus::OsSandbox { .. }),
+            enforcer_active: matches!(status, IsolationStatus::OsSandbox { .. })
+                && shell.read_only_runs,
             sandbox_protects_paths: shell.protects_paths,
         };
         let policy = HarnessPolicy::new(PolicyInner {
@@ -2164,6 +2165,20 @@ fn build_hook_runner(
             "hooks with `inherit` isolation cannot run inside the container shell yet; give them \
              `isolation = \"host\"`, run the harness with the OS sandbox, or disable hooks \
              (spec 3.1 §9.2 I54)",
+        ));
+    }
+    // The Windows restricted-token sandbox starts its processes itself, and a hook needs a
+    // command it can spawn and feed (spec 3.2 §10 W5).
+    #[cfg(all(windows, feature = "sandbox"))]
+    if shell.launcher.as_ref().is_some_and(crate::shell::SandboxLauncher::starts_processes_itself)
+        && set.hooks.iter().any(|hook| hook.isolation == crate::hooks::HookIsolation::Inherit)
+    {
+        return Err(AdkError::new(
+            adk_core::ErrorComponent::Agent,
+            adk_core::ErrorCategory::InvalidInput,
+            crate::hooks::HOOK_CONFIG_CODE,
+            "hooks with `inherit` isolation cannot run inside the Windows restricted-token \
+             sandbox yet; give them `isolation = \"host\"`, or disable hooks (spec 3.2 §10 W5)",
         ));
     }
     #[cfg_attr(not(feature = "sandbox"), allow(unused_mut))]
