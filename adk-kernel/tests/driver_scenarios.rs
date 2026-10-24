@@ -16,7 +16,7 @@ use adk_core::{
     RevocationScope, ScopedToken, ToolOrigin, async_trait,
 };
 use adk_kernel::drivers::{
-    DriverPolicy, DriverProcessTree, DriverState, DriverSupervisor, driver_source,
+    DriverManifest, DriverPolicy, DriverProcessTree, DriverState, DriverSupervisor, driver_source,
 };
 use adk_kernel::stores::InMemoryDriverStore;
 use adk_kernel::{EventSubscriber, Kernel, KernelConfig, KernelEvent, PartitionId};
@@ -153,6 +153,79 @@ async fn k6_a_driver_restarts_after_a_crash_and_a_redeclared_tool_needs_reapprov
     }
     kernel.stop().await.unwrap();
     assert!(!work.path().join("drivers/run/notes").exists(), "the run directory is removed");
+}
+
+/// The `[kernel] drivers` path of `adk-rust up` (spec 3.2 §7.7, §8.2): manifests approved
+/// before the kernel starts are mounted by its start, on its audit trail and bus; at the next
+/// start the same manifests are already mounted as approved and keep their pins, and a
+/// changed manifest needs a new approval.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn drivers_approved_before_start_mount_with_the_kernel_and_keep_their_pins() {
+    let work = Workdir::new();
+    let store = Arc::new(InMemoryDriverStore::new());
+    let notes = work.manifest("notes", "");
+    let calendar = DriverManifest::from_toml(
+        "id = \"calendar\"\ncommand = \"mcp-calendar\"\npartitions = [\"work\"]\n",
+    )
+    .unwrap();
+
+    let recorder = Arc::new(InMemoryAuditRecorder::new());
+    let drivers = DriverSupervisor::builder(store.clone()).build();
+    drivers.mount_at_start(notes.clone(), "alice");
+    drivers.mount_at_start(calendar.clone(), "alice");
+    let first = kernel(work.path(), &drivers, AuditTrail::new(recorder.clone()));
+    let mut events = first.events();
+    assert!(drivers.mounted().is_empty(), "nothing mounts before the kernel starts");
+    first.start().await.unwrap();
+    assert_eq!(drivers.mounted(), ["calendar", "notes"]);
+    // Mounted in the order they were approved.
+    for id in ["notes", "calendar"] {
+        let reason = driver_event(&mut events, id, DriverState::Stopped).await;
+        assert_eq!(reason.as_deref(), Some("mounted by alice"));
+    }
+    let mounted: Vec<_> = recorder
+        .records()
+        .into_iter()
+        .filter(|record| record.action == "kernel.driver.mounted")
+        .collect();
+    assert_eq!(mounted.len(), 2, "one approval record per driver");
+    for record in &mounted {
+        assert_eq!(record.ext["by"], "alice");
+        assert!(record.actor.instance.as_deref().is_some_and(|id| id.starts_with("kernel-")));
+    }
+
+    // The first listing pins each tool's declaration.
+    let toolset = drivers.toolset_for(&PartitionId::default(), &["notes".to_string()]);
+    let ctx = RunContext::new(None, "s1", "call-1");
+    toolset.tools(ctx as Arc<dyn ReadonlyContext>).await.unwrap();
+    let pinned = drivers.record("notes").unwrap().manifest.declaration_digests;
+    assert_eq!(pinned.len(), 6);
+    first.stop().await.unwrap();
+
+    // The next start finds both mounted as approved: nothing is mounted again, and the pins
+    // and the approval stay.
+    let recorder = Arc::new(InMemoryAuditRecorder::new());
+    let drivers = DriverSupervisor::builder(store.clone()).build();
+    for manifest in [&notes, &calendar] {
+        assert!(drivers.is_mounted_as(manifest).await.unwrap(), "{}", manifest.id);
+        drivers.mount_at_start(manifest.clone(), "bob");
+    }
+    let second = kernel(work.path(), &drivers, AuditTrail::new(recorder.clone()));
+    second.start().await.unwrap();
+    let record = drivers.record("notes").unwrap();
+    assert_eq!(
+        (record.approved_by.as_str(), &record.manifest.declaration_digests),
+        ("alice", &pinned)
+    );
+    assert!(
+        recorder.records().iter().all(|record| record.action != "kernel.driver.mounted"),
+        "no new approval was recorded"
+    );
+
+    // A manifest that changed since its approval is not mounted as approved.
+    let narrowed = notes.clone().with_sampling(true);
+    assert!(!drivers.is_mounted_as(&narrowed).await.unwrap());
+    second.stop().await.unwrap();
 }
 
 /// Mints a fixed secret per resource, for the driver's agent only.

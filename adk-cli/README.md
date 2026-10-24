@@ -233,6 +233,10 @@ access. The binary has no flag for more hosts or origins; a custom binary lists 
 | `--auth-token` | `$ADK_SERVE_TOKEN` | Bearer token HTTP callers present |
 | `--store` | `harness.db` | `postgres://…` or `redis://…`: every store, the kernel's included, shared by replicas |
 
+The drivers `[kernel] drivers` lists in `harness.toml` — manifest files, directories of them,
+or inline manifests — mount when the kernel starts, each once you approve it at the terminal;
+see [`[kernel] drivers`](../docs/official_docs/kernel/cli.md#drivers).
+
 With `TELEGRAM_BOT_TOKEN` set, `up` also starts the Telegram chat thread: an account that
 writes to the bot is paired with `adk-rust pair accept <code>`; see
 [chat](../docs/official_docs/surfaces/chat.md#with-adk-rust-up).

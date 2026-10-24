@@ -28,6 +28,7 @@ use super::args::PROJECT_CONFIG_FILE;
 /// | `[kernel.consolidation] min_new_sessions`, `min_new_facts`, `min_interval_minutes`, `debounce_minutes` | The tick's admission gates | Ignored, with a note |
 /// | `[kernel.consolidation] max_tokens_per_tick` | The tick's token cap | Applies only when lower |
 /// | `[[kernel.partitions]]`, `coordinator` | The partitions `up` runs, one harness each, and the one whose harness may cross into the others (spec 3.2 §7.8) | Ignored |
+/// | `drivers` | The driver manifests `up` mounts once you approve each (spec 3.2 §7.7) | Ignored; its `.adk/drivers/<id>.toml` restricts the driver of that id |
 ///
 /// The consolidation tick is on in the CLI's Ask and Auto partitions with long-term memory
 /// and off otherwise ([`enable_consolidation`](Self::enable_consolidation), spec 3.2 §13 Q1);
@@ -40,8 +41,15 @@ use super::args::PROJECT_CONFIG_FILE;
 /// (`deny`, the default, or `coordinator_with_approval`). A partition's quiet hours and
 /// quotas apply beside the kernel's: every window holds, and each quota is the lower one.
 ///
-/// The drivers directory of the table arrives with its phase; until then it is reported
-/// as an unknown key. Flags win over both files (spec 3.2 §7.5, §7.8, §7.9).
+/// `drivers` is a path, or a list whose entries are paths and inline manifests (spec 3.2
+/// §7.7, §8.2). A path names a manifest file, or a directory whose `*.toml` files are
+/// manifests; `~/` is the home directory and a relative path is relative to the user
+/// config's directory. An inline manifest is a table with a manifest file's keys, written
+/// in the list or as `[[kernel.drivers]]`. A workspace's `.adk/drivers/<id>.toml` restricts
+/// the listed driver of the same id ([`DriverManifest::restrict_with`]). Flags win over both
+/// files (spec 3.2 §7.5, §7.8, §7.9).
+///
+/// [`DriverManifest::restrict_with`]: adk_kernel::drivers::DriverManifest::restrict_with
 ///
 /// # Example
 ///
@@ -59,7 +67,7 @@ use super::args::PROJECT_CONFIG_FILE;
 /// assert_eq!(settings.max_concurrent_runs, Some(2));
 /// assert!(settings.notes.iter().any(|note| note.contains("kernel.bind")));
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 #[non_exhaustive]
 pub struct KernelSettings {
     /// The kernel home; `None` keeps `<config dir>/adk-rust`.
@@ -94,6 +102,9 @@ pub struct KernelSettings {
     pub partitions: Vec<adk_kernel::Partition>,
     /// The partition whose harness is the coordinator, from `kernel.coordinator`.
     pub coordinator: Option<adk_kernel::PartitionId>,
+    /// The driver manifests `kernel.drivers` lists, each restricted by the workspace's
+    /// manifest of the same id; `up` mounts each one the person approves (spec 3.2 §7.7).
+    pub drivers: Vec<adk_kernel::drivers::DriverManifest>,
     /// Settings a file made that were ignored, and why.
     pub notes: Vec<String>,
 }
@@ -171,6 +182,7 @@ struct KernelTable {
     consolidation: Option<ConsolidationTable>,
     partitions: Option<Vec<PartitionTable>>,
     coordinator: Option<String>,
+    drivers: Option<toml::Value>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
 }
@@ -253,6 +265,73 @@ fn micro_usd(origin: &str, key: &str, usd: Option<f64>) -> Result<Option<u64>> {
             AdkError::config(format!("{origin}: `kernel.{key}` must be a positive amount of USD"))
         }),
     }
+}
+
+/// The manifests `kernel.drivers` lists in the user config at `origin`, whose relative
+/// paths are relative to `base` (spec 3.2 §7.7, §8.2).
+fn driver_manifests(
+    origin: &str,
+    base: &Path,
+    value: toml::Value,
+) -> Result<Vec<adk_kernel::drivers::DriverManifest>> {
+    use adk_kernel::drivers::{DriverManifest, load_dir};
+    let invalid =
+        |reason: String| AdkError::config(format!("{origin}: `kernel.drivers`: {reason}"));
+    let entries = match value {
+        toml::Value::Array(entries) => entries,
+        path @ toml::Value::String(_) => vec![path],
+        other => {
+            return Err(invalid(format!(
+                "expected a path or a list of paths and manifests, found a {}",
+                other.type_str()
+            )));
+        }
+    };
+    let mut manifests: Vec<DriverManifest> = Vec::new();
+    for entry in entries {
+        let found = match entry {
+            toml::Value::String(path) => {
+                let path = match path.strip_prefix("~/") {
+                    Some(rest) => dirs::home_dir()
+                        .ok_or_else(|| invalid(format!("`{path}` needs a home directory")))?
+                        .join(rest),
+                    None => base.join(&path),
+                };
+                let loaded = if path.is_dir() {
+                    load_dir(&path)
+                } else if path.is_file() {
+                    DriverManifest::from_file(&path).map(|manifest| vec![manifest])
+                } else {
+                    return Err(invalid(format!(
+                        "{} is neither a manifest nor a directory of manifests",
+                        path.display()
+                    )));
+                };
+                loaded.map_err(|error| invalid(error.to_string()))?
+            }
+            toml::Value::Table(table) => {
+                let text = toml::to_string(&table).map_err(|error| invalid(error.to_string()))?;
+                let manifest = DriverManifest::from_toml(&text).map_err(|error| {
+                    let id = table.get("id").and_then(toml::Value::as_str).unwrap_or("?");
+                    invalid(format!("inline manifest `{id}`: {error}"))
+                })?;
+                vec![manifest]
+            }
+            other => {
+                return Err(invalid(format!(
+                    "an entry is a {}; write a path or an inline manifest",
+                    other.type_str()
+                )));
+            }
+        };
+        for manifest in found {
+            if manifests.iter().any(|known| known.id == manifest.id) {
+                return Err(invalid(format!("driver `{}` is listed twice", manifest.id)));
+            }
+            manifests.push(manifest);
+        }
+    }
+    Ok(manifests)
 }
 
 /// The stricter of two approvals: `never` over `always_ask` over `follow_mode`.
@@ -364,7 +443,8 @@ impl KernelSettings {
     /// # Errors
     ///
     /// Returns a configuration error when a file cannot be read, its `[kernel]` table does
-    /// not parse, or `max_concurrent_runs` is 0.
+    /// not parse, `max_concurrent_runs` is 0, or a driver `kernel.drivers` lists is missing,
+    /// is not a valid manifest, is listed twice, or is loosened by the workspace's manifest.
     pub fn resolve(user_config: Option<&Path>, workspace: &Path) -> Result<Self> {
         Self::resolve_in(user_config, Some(workspace))
     }
@@ -432,6 +512,10 @@ impl KernelSettings {
                 }
                 settings.coordinator = Some(coordinator);
             }
+            if let Some(drivers) = user.drivers {
+                let base = path.parent().unwrap_or(Path::new("."));
+                settings.drivers = driver_manifests(&origin, base, drivers)?;
+            }
             for key in user.unknown.keys() {
                 settings.notes.push(format!("{origin}: unknown key `kernel.{key}` ignored"));
             }
@@ -453,6 +537,13 @@ impl KernelSettings {
                          user config"
                     ));
                 }
+            }
+            if project.drivers.is_some() {
+                settings.notes.push(format!(
+                    "{origin}: `kernel.drivers` ignored — which drivers the kernel mounts is \
+                     yours to choose; list them in your user config, and restrict one with \
+                     `.adk/drivers/<id>.toml`"
+                ));
             }
             if let Some(requested) = positive(origin, project.max_concurrent_runs)? {
                 match settings.max_concurrent_runs {
@@ -552,6 +643,24 @@ impl KernelSettings {
                 settings.notes.push(format!("{origin}: unknown key `kernel.{key}` ignored"));
             }
         }
+        // A workspace's manifest of a listed driver may only restrict it (spec 3.2 §7.7), as
+        // `adk-rust drivers mount` applies it.
+        if let Some(workspace) = workspace
+            && !settings.drivers.is_empty()
+        {
+            let dir = workspace.join(".adk").join("drivers");
+            let projects = adk_kernel::drivers::load_dir(&dir).map_err(AdkError::from)?;
+            for project in projects {
+                if let Some(driver) = settings.drivers.iter_mut().find(|d| d.id == project.id) {
+                    *driver = driver.restrict_with(&project).map_err(AdkError::from)?;
+                    settings.notes.push(format!(
+                        "driver `{}` restricted by {}",
+                        project.id,
+                        dir.display()
+                    ));
+                }
+            }
+        }
         Ok(settings)
     }
 }
@@ -598,7 +707,7 @@ mod tests {
     #[test]
     fn the_user_config_sets_the_kernel_and_unknown_keys_are_noted() {
         let (dir, user) = files(
-            "mode = \"ask\"\n[kernel]\nhome = \"/srv/kernel\"\nbind = \"127.0.0.1:9000\"\ndrivers = \"~/.adk/drivers\"\n",
+            "mode = \"ask\"\n[kernel]\nhome = \"/srv/kernel\"\nbind = \"127.0.0.1:9000\"\ncolour = \"blue\"\n",
             "",
         );
         let settings = KernelSettings::resolve(Some(&user), dir.path()).unwrap();
@@ -606,7 +715,155 @@ mod tests {
         assert_eq!(settings.bind, Some("127.0.0.1:9000".parse().unwrap()));
         assert_eq!(settings.max_concurrent_runs, None);
         assert_eq!(settings.notes.len(), 1);
-        assert!(settings.notes[0].contains("kernel.drivers"), "{:?}", settings.notes);
+        assert!(settings.notes[0].contains("kernel.colour"), "{:?}", settings.notes);
+    }
+
+    fn manifest(text: &str) -> adk_kernel::drivers::DriverManifest {
+        adk_kernel::drivers::DriverManifest::from_toml(text).unwrap()
+    }
+
+    #[test]
+    fn drivers_are_paths_directories_and_inline_manifests() {
+        let (dir, user) = files(
+            "[kernel]\ncolour = \"blue\"\ndrivers = [\n  \"drivers/email.toml\",\n  \"more\",\n  \
+             { id = \"calendar\", command = \"mcp-calendar\", partitions = [\"work\"], tools = { list_events = \"read\" } },\n]\n",
+            "",
+        );
+        std::fs::create_dir_all(dir.path().join("drivers")).unwrap();
+        std::fs::write(
+            dir.path().join("drivers/email.toml"),
+            "id = \"email\"\ncommand = \"mcp-email\"\n[tools]\nsend_draft = \"send_external\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("more")).unwrap();
+        std::fs::write(
+            dir.path().join("more/a-notes.toml"),
+            "id = \"notes\"\ncommand = \"mcp-notes\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("more/b-files.toml"),
+            "id = \"files\"\ncommand = \"mcp-files\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("more/README.md"), "not a manifest\n").unwrap();
+
+        let settings = KernelSettings::resolve(Some(&user), dir.path()).unwrap();
+        assert_eq!(
+            settings.drivers,
+            vec![
+                manifest(
+                    "id = \"email\"\ncommand = \"mcp-email\"\n[tools]\nsend_draft = \"send_external\"\n"
+                ),
+                manifest("id = \"notes\"\ncommand = \"mcp-notes\"\n"),
+                manifest("id = \"files\"\ncommand = \"mcp-files\"\n"),
+                manifest(
+                    "id = \"calendar\"\ncommand = \"mcp-calendar\"\npartitions = [\"work\"]\n[tools]\nlist_events = \"read\"\n"
+                ),
+            ]
+        );
+        // `drivers` is a known key now; other unknown keys are still noted.
+        assert_eq!(settings.notes.len(), 1, "{:?}", settings.notes);
+        assert!(settings.notes[0].contains("unknown key `kernel.colour`"), "{:?}", settings.notes);
+
+        // One path, the drivers directory of spec 3.2 §8.2, and the array-of-tables form.
+        let (dir, user) = files("[kernel]\ndrivers = \"more\"\n", "");
+        std::fs::create_dir_all(dir.path().join("more")).unwrap();
+        std::fs::write(
+            dir.path().join("more/notes.toml"),
+            "id = \"notes\"\ncommand = \"mcp-notes\"\n",
+        )
+        .unwrap();
+        let settings = KernelSettings::resolve(Some(&user), dir.path()).unwrap();
+        assert_eq!(settings.drivers, vec![manifest("id = \"notes\"\ncommand = \"mcp-notes\"\n")]);
+        let (dir, user) = files(
+            "[[kernel.drivers]]\nid = \"notes\"\ncommand = \"mcp-notes\"\nlifecycle = \"eager\"\n\
+             [kernel.drivers.tools]\nread_note = \"read\"\n",
+            "",
+        );
+        let settings = KernelSettings::resolve(Some(&user), dir.path()).unwrap();
+        assert_eq!(
+            settings.drivers,
+            vec![manifest(
+                "id = \"notes\"\ncommand = \"mcp-notes\"\nlifecycle = \"eager\"\n[tools]\nread_note = \"read\"\n"
+            )]
+        );
+        assert!(settings.notes.is_empty(), "{:?}", settings.notes);
+    }
+
+    #[test]
+    fn a_workspace_may_only_restrict_a_listed_driver() {
+        let listed = "[kernel]\ndrivers = [{ id = \"email\", command = \"mcp-email\", partitions = [\"work\", \"home\"], tools = { send_draft = \"write_local\" } }]\n";
+        let (dir, user) = files(listed, "[kernel]\ndrivers = [\"/elsewhere/evil.toml\"]\n");
+        std::fs::create_dir_all(dir.path().join(".adk/drivers")).unwrap();
+        std::fs::write(
+            dir.path().join(".adk/drivers/email.toml"),
+            "id = \"email\"\ncommand = \"mcp-email\"\npartitions = [\"work\"]\n[tools]\nsend_draft = \"publish_public\"\n",
+        )
+        .unwrap();
+        // A workspace manifest of a driver nobody listed restricts nothing.
+        std::fs::write(
+            dir.path().join(".adk/drivers/other.toml"),
+            "id = \"other\"\ncommand = \"mcp-other\"\n",
+        )
+        .unwrap();
+        let settings = KernelSettings::resolve(Some(&user), dir.path()).unwrap();
+        let expected = manifest(
+            "id = \"email\"\ncommand = \"mcp-email\"\npartitions = [\"work\"]\n[tools]\nsend_draft = \"publish_public\"\n",
+        );
+        assert_eq!(settings.drivers, vec![expected]);
+        assert!(
+            settings.notes.iter().any(|note| note.contains("`kernel.drivers` ignored")),
+            "the workspace adds no driver: {:?}",
+            settings.notes
+        );
+        assert!(
+            settings.notes.iter().any(|note| note.contains("driver `email` restricted by")),
+            "{:?}",
+            settings.notes
+        );
+        // The user config alone leaves the driver as written.
+        let settings = KernelSettings::resolve_user(Some(&user)).unwrap();
+        assert_eq!(settings.drivers[0].partitions.len(), 2);
+
+        // Loosening is refused.
+        let (dir, user) = files(listed, "");
+        std::fs::create_dir_all(dir.path().join(".adk/drivers")).unwrap();
+        std::fs::write(
+            dir.path().join(".adk/drivers/email.toml"),
+            "id = \"email\"\ncommand = \"mcp-email\"\npartitions = [\"work\", \"home\", \"public\"]\n",
+        )
+        .unwrap();
+        let error = KernelSettings::resolve(Some(&user), dir.path()).unwrap_err().to_string();
+        assert!(error.contains("adds partition `public`"), "{error}");
+    }
+
+    #[test]
+    fn bad_driver_entries_are_refused() {
+        for (user, expected) in [
+            ("[kernel]\ndrivers = 3\n", "expected a path or a list"),
+            ("[kernel]\ndrivers = [3]\n", "write a path or an inline manifest"),
+            ("[kernel]\ndrivers = [\"missing.toml\"]\n", "neither a manifest nor a directory"),
+            ("[kernel]\ndrivers = [{ id = \"x\" }]\n", "inline manifest `x`"),
+            (
+                "[kernel]\ndrivers = [{ id = \"x\", command = \"c\", colour = \"blue\" }]\n",
+                "unknown field",
+            ),
+            (
+                "[kernel]\ndrivers = [{ id = \"x\", command = \"c\" }, { id = \"x\", command = \"d\" }]\n",
+                "driver `x` is listed twice",
+            ),
+            (
+                "[kernel]\ndrivers = [{ id = \"x\", command = \"c\", env = { API_TOKEN = \"plain\" } }]\n",
+                "secret://",
+            ),
+        ] {
+            let (dir, user_path) = files(user, "");
+            let error =
+                KernelSettings::resolve(Some(&user_path), dir.path()).unwrap_err().to_string();
+            assert!(error.contains("kernel.drivers"), "{user}: {error}");
+            assert!(error.contains(expected), "{user}: {error}");
+        }
     }
 
     #[test]

@@ -28,7 +28,8 @@ use futures::StreamExt;
 
 use crate::cli::{DriversCommands, KernelTarget, PartitionsCommands, ProcView};
 use adk_kernel::drivers::{
-    DriverIsolation, DriverManifest, DriverProcessTree, DriverProposal, DriverView,
+    DriverIsolation, DriverManifest, DriverProcessTree, DriverProposal, DriverSupervisor,
+    DriverView,
 };
 
 /// The target a turn sent from the REPL runs: the harness, as `adk-rust up` registers it.
@@ -631,6 +632,46 @@ pub async fn drivers(target: &KernelTarget, command: DriversCommands) -> Result<
         }
         DriversCommands::Reapprove { id } => {
             println!("re-approved {}", driver_line(&client.reapprove_driver(&id).await?));
+        }
+    }
+    Ok(())
+}
+
+/// Asks the person at the terminal to approve each driver `[kernel] drivers` lists that is
+/// not mounted as written, and has the kernel mount each approved one as `by` when it
+/// starts (spec 3.2 §7.7, §8.2, K-I13). Without a terminal nothing new is mounted: a driver
+/// already approved keeps running as approved, and each one waiting for approval is noted.
+pub async fn approve_configured_drivers(
+    drivers: &DriverSupervisor,
+    manifests: &[DriverManifest],
+    by: &str,
+) -> Result<()> {
+    for manifest in manifests {
+        if drivers.is_mounted_as(manifest).await? {
+            continue;
+        }
+        let changed = drivers.record(&manifest.id).is_some();
+        if !std::io::stdin().is_terminal() {
+            let state = if changed {
+                "changed since you approved it; the approved manifest stays mounted"
+            } else {
+                "is not mounted"
+            };
+            println!(
+                "note: driver `{}` in [kernel] drivers {state}: mounting needs your approval, so \
+                 start `adk-rust up` in a terminal",
+                escape_control(&manifest.id)
+            );
+            continue;
+        }
+        if changed {
+            println!("driver {} changed since you approved it", escape_control(&manifest.id));
+        }
+        print_proposal(&drivers.propose(manifest));
+        if confirm("Mount this driver?")? {
+            drivers.mount_at_start(manifest.clone(), by);
+        } else {
+            println!("Not mounted.");
         }
     }
     Ok(())

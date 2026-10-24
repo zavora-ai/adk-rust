@@ -135,8 +135,9 @@ max_tokens_per_tick = 50000
 | `consolidation.min_new_sessions`, `min_new_facts`, `min_interval_minutes`, `debounce_minutes` | The tick's admission gates | Ignored, with a note |
 | `consolidation.max_tokens_per_tick` | The tick's token cap | Applies only when lower |
 | `[[kernel.partitions]]`, `coordinator` | The partitions `up` runs, and the one whose harness is the coordinator | Ignored, with a note |
+| `drivers` | The driver manifests `up` mounts once you approve each ([below](#drivers)) | Ignored, with a note; its `.adk/drivers/<id>.toml` restricts the listed driver of that id |
 
-See [Proactivity](proactivity.md), [Scheduling](scheduling.md) and [Partitions](partitions.md) for what each does.
+See [Proactivity](proactivity.md), [Scheduling](scheduling.md), [Partitions](partitions.md) and [Drivers](drivers.md) for what each does.
 
 Flags win over both files. Unknown keys are reported and ignored.
 
@@ -187,6 +188,58 @@ Each partition's harness runs as the targets `adk-rust@<partition>` and
 `harness.goal@<partition>`; the coordinator's also runs `adk-rust` and `harness.goal`, so
 `attach`, `goal` and `/api/runs` reach it. With the consolidation tick on, each partition in Ask
 or Auto ticks on its own, distilling only the sessions its harness ran.
+
+### Drivers
+
+`drivers` lists the [driver manifests](drivers.md#the-manifest) `up` mounts when the kernel
+starts. Each entry is a path or an inline manifest:
+
+```toml
+[kernel]
+drivers = [
+  "~/.adk/drivers/email.toml",   # a manifest file
+  "drivers",                     # every *.toml manifest in a directory
+  { id = "calendar", command = "mcp-calendar", partitions = ["work"], tools = { list_events = "read" } },
+]
+```
+
+| Entry | Means |
+|---|---|
+| A path to a file | One manifest |
+| A path to a directory | Every `*.toml` manifest in it, in file-name order |
+| An inline table | A manifest written in place, with a manifest file's keys; `[[kernel.drivers]]` tables are the same |
+
+`drivers = "~/.adk/drivers"` names one directory, the drivers directory of spec 3.2 §8.2. `~/`
+is your home directory, and a relative path is relative to the directory of `harness.toml`. A
+missing path, an invalid manifest or a driver listed twice stops `up` with the reason.
+
+Mounting is approving (K-I13), so `up` asks before it mounts each listed driver that is not
+mounted exactly as written:
+
+```text
+$ adk-rust up --mode ask
+driver calendar
+  command     mcp-calendar
+  partitions  work
+  sandbox     os
+  network     allowed
+  tools (any other tool is `other`):
+    list_events              read
+Mount this driver? [y/N] y
+  store harness.db: sessions, approvals, runs, processes, agenda, schedules, drivers, partitions, the activity ledger, paired devices
+  …
+ADK-Rust kernel up on http://127.0.0.1:8080
+```
+
+| At start | `up` does |
+|---|---|
+| The driver is mounted as written | Nothing: the approval and the pinned declarations stay |
+| It is not mounted, or its manifest changed since you approved it | Shows what you approve and mounts it once you answer `y` |
+| No terminal, as under a service | Mounts nothing new and notes each driver waiting for approval; a changed driver keeps running as you approved it |
+
+Mounting records `kernel.driver.mounted` with you as the actor, as `adk-rust drivers mount`
+does. A workspace's `.adk/drivers/<id>.toml` restricts the listed driver of the same id. Taking
+a driver out of the list does not unmount it: `adk-rust drivers unmount ID` does.
 
 ## `adk-rust attach` and the REPL on a kernel
 

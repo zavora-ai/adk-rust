@@ -175,6 +175,9 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                 as Arc<dyn adk_tool::sampling::SamplingHandler>)
         })
         .build();
+    // The drivers `[kernel] drivers` lists mount when the kernel starts, each once the person
+    // approves it here (spec 3.2 §7.7, §8.2, K-I13).
+    crate::kernel_cli::approve_configured_drivers(&drivers, &settings.drivers, &setup.user).await?;
     // One harness per partition when `[[kernel.partitions]]` names any (spec 3.2 §7.8).
     let table = match settings.partitions.is_empty() {
         true => None,

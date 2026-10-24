@@ -109,6 +109,17 @@ approval, the kernel pins each tool's declaration digest.
 `--home DIR`, or `--server URL` with `--token` for a kernel over HTTP, goes before the
 subcommand: `adk-rust drivers --home ~/.adk mount email.toml`.
 
+### Drivers in the user config
+
+`[kernel] drivers` in `harness.toml` lists manifests — files, directories of them, or inline
+tables — that `adk-rust up` mounts when the kernel starts ([`[kernel] drivers`](cli.md#drivers)).
+Each one still needs your approval: `up` shows the same proposal and asks before it mounts a
+driver that is not mounted exactly as written, and mounts nothing new without a terminal. A
+driver already mounted as written keeps its approval and its pinned declarations across
+restarts. From code, `DriverSupervisor::is_mounted_as(&manifest)` tells whether a manifest
+needs a new approval, and `DriverSupervisor::mount_at_start(manifest, by)` mounts an approved
+one when `Kernel::start` runs, on the kernel's audit trail and event bus.
+
 ## The sandbox and the environment
 
 A driver never inherits the kernel's environment. It gets `PATH`, the locale and terminal

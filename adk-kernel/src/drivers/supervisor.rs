@@ -342,6 +342,7 @@ impl DriverSupervisorBuilder {
                 loaded: tokio::sync::OnceCell::new(),
                 legacy: Arc::new(LegacyWaiters::default()),
                 crossings: RwLock::new(BTreeMap::new()),
+                approved: std::sync::Mutex::new(Vec::new()),
             }),
         }
     }
@@ -388,6 +389,9 @@ pub(crate) struct Inner {
     /// The driver tool each crossing tool wraps, by driver and crossing name, so a crossing
     /// is classed and governed as the tool it reaches (spec 3.2 §7.8).
     crossings: RwLock<BTreeMap<(String, String), String>>,
+    /// Manifests approved before the supervisor started, with who approved each; mounted
+    /// by [`DriverSupervisor::start`].
+    approved: std::sync::Mutex<Vec<(DriverManifest, String)>>,
 }
 
 /// The kernel's supervisor of drivers: MCP servers run as child processes under the
@@ -506,17 +510,29 @@ impl DriverSupervisor {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
-    /// Loads the mounted drivers and starts the eager ones. A driver that fails to start is
-    /// logged and left `FailedToStart`; the others start.
+    /// Loads the mounted drivers, mounts those approved with
+    /// [`mount_at_start`](Self::mount_at_start), and starts the eager ones. A driver that
+    /// fails to start is logged and left `FailedToStart`; the others start.
     ///
     /// # Errors
     ///
     /// Returns the store's error.
     pub async fn start(&self) -> Result<()> {
         self.inner.load().await?;
+        let approved =
+            std::mem::take(&mut *self.inner.approved.lock().unwrap_or_else(|e| e.into_inner()));
+        let mut mounted = BTreeSet::new();
+        for (manifest, by) in approved {
+            // Mounting again would clear the pins of a driver already mounted as approved.
+            if self.is_mounted_as(&manifest).await? {
+                continue;
+            }
+            mounted.insert(manifest.id.clone());
+            self.mount(manifest, &by).await?;
+        }
         let records: Vec<DriverRecord> =
             self.inner.view.read().unwrap_or_else(|e| e.into_inner()).values().cloned().collect();
-        for record in records {
+        for record in records.into_iter().filter(|record| !mounted.contains(record.id())) {
             self.inner.activate(&record).await;
             if record.manifest.lifecycle == DriverLifecycle::Eager
                 && let Err(error) = self.inner.ensure_started(record.id()).await
@@ -539,6 +555,70 @@ impl DriverSupervisor {
     /// What mounting `manifest` asks the person to approve.
     pub fn propose(&self, manifest: &DriverManifest) -> DriverProposal {
         DriverProposal::of(manifest)
+    }
+
+    /// Whether driver `manifest.id` is mounted under exactly `manifest`, so mounting it
+    /// needs no new approval (spec 3.2 §7.7, K-I13). The declaration digests pinned since
+    /// the approval are not compared: they are the kernel's, not the manifest's.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_kernel::drivers::{DriverManifest, DriverSupervisor};
+    /// use adk_kernel::stores::InMemoryDriverStore;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> adk_kernel::Result<()> {
+    /// let drivers = DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new())).build();
+    /// let manifest = DriverManifest::from_toml("id = \"fs\"\ncommand = \"mcp-fs\"\n")?;
+    /// assert!(!drivers.is_mounted_as(&manifest).await?);
+    /// drivers.mount(manifest.clone(), "alice").await?;
+    /// assert!(drivers.is_mounted_as(&manifest).await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the store's error.
+    pub async fn is_mounted_as(&self, manifest: &DriverManifest) -> Result<bool> {
+        self.inner.load().await?;
+        let Some(record) = self.record(&manifest.id) else { return Ok(false) };
+        let mut approved = record.manifest;
+        approved.declaration_digests.clone_from(&manifest.declaration_digests);
+        Ok(approved == *manifest)
+    }
+
+    /// Mounts `manifest`, approved by `by`, when [`start`](Self::start) runs — which a
+    /// kernel calls from `Kernel::start` — so the mount is recorded as
+    /// `kernel.driver.mounted` on the kernel's audit trail and published on its bus (spec
+    /// 3.2 §7.7, §8.2, K-I13). `adk-rust up` uses it for the drivers `[kernel] drivers`
+    /// lists, after the person approves each one at its terminal.
+    ///
+    /// A manifest already mounted as approved when the supervisor starts is left as it is,
+    /// with its pinned declarations. After `start`, call [`mount`](Self::mount) instead.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_kernel::drivers::{DriverManifest, DriverSupervisor};
+    /// use adk_kernel::stores::InMemoryDriverStore;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> adk_kernel::Result<()> {
+    /// let drivers = DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new())).build();
+    /// let manifest = DriverManifest::from_toml("id = \"fs\"\ncommand = \"mcp-fs\"\n")?;
+    /// drivers.mount_at_start(manifest.clone(), "alice");
+    /// assert!(drivers.mounted().is_empty(), "nothing is mounted before start");
+    /// drivers.start().await?;
+    /// assert_eq!(drivers.record("fs").unwrap().approved_by, "alice");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn mount_at_start(&self, manifest: DriverManifest, by: impl Into<String>) {
+        self.inner.approved.lock().unwrap_or_else(|e| e.into_inner()).push((manifest, by.into()));
     }
 
     /// Mounts `manifest`, approved by `by` (spec 3.2 §7.7, K-I13): records the approval as
