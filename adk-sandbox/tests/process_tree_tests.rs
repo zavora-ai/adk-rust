@@ -38,8 +38,8 @@ fn contained_shell() -> (tokio::process::Child, JobObject) {
 fn processes(job: &JobObject, count: usize) -> Vec<u32> {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        // Room for 64 process ids after the two counts.
-        let mut buffer = [0usize; 66];
+        // Room for 64 process ids after the header.
+        let mut buffer = [0usize; 65];
         // SAFETY: `buffer` is writable for its own size and holds the list's header; the
         // job's handle is open.
         let queried = unsafe {
@@ -54,7 +54,11 @@ fn processes(job: &JobObject, count: usize) -> Vec<u32> {
         assert_ne!(queried, 0, "{}", std::io::Error::last_os_error());
         // SAFETY: the call filled the header and as many ids as it reports.
         let list = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
-        let ids: Vec<u32> = buffer[2..2 + list.NumberOfProcessIdsInList as usize]
+        // The header is two `u32` counts, so the ids start at the list's own offset, not
+        // after two `usize`s; reading from the wrong slot yields a stray 0 as a process id.
+        let first = std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList)
+            / size_of::<usize>();
+        let ids: Vec<u32> = buffer[first..first + list.NumberOfProcessIdsInList as usize]
             .iter()
             .map(|id| *id as u32)
             .collect();
