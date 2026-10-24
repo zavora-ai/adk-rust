@@ -207,7 +207,8 @@ replica enqueued.
 
 A `Partition` is a policy class, a memory scope and a driver set, run by its own harness
 (spec 3.2 §7.8). `Partitions` keeps the table and the crossing ledger in a `PartitionStore`
-(in-memory, SQLite, PostgreSQL, Redis; `partition_store_conformance_tests!`).
+(in-memory, SQLite, PostgreSQL, Redis, and, Alpha, MongoDB, Firestore and Neo4j;
+`partition_store_conformance_tests!`).
 
 | Part | What it does |
 |---|---|
@@ -320,8 +321,8 @@ contract the kernel relies on.
 
 ### Alpha backends: MongoDB, Firestore, Neo4j
 
-The process, agenda, driver and ledger stores also run on MongoDB, Firestore and Neo4j
-(spec 3.2 §13 Q8); the partition store does not yet. Each backend is **Alpha** until its
+Every kernel store also runs on MongoDB, Firestore and Neo4j (spec 3.2 §13 Q8): the
+process, agenda, driver, ledger and partition stores. Each backend is **Alpha** until its
 live conformance suites pass in CI, so its storage layout may still change without a
 migration. Each feature also turns on the same backend of
 `adk-session`'s run, schedule and governance stores, and every store takes the handle
@@ -333,6 +334,7 @@ those stores use, so one client serves them all.
 | `AgendaStore` | `MongoAgendaStore` | `FirestoreAgendaStore` | `Neo4jAgendaStore` |
 | `DriverStore` (with `drivers`) | `stores::MongoDriverStore` | `stores::FirestoreDriverStore` | `stores::Neo4jDriverStore` |
 | `LedgerStore` (with `proc`) | `proc::MongoLedgerStore` | `proc::FirestoreLedgerStore` | `proc::Neo4jLedgerStore` |
+| `PartitionStore` | `MongoPartitionStore` | `FirestorePartitionStore` | `Neo4jPartitionStore` |
 | Opened with | `connect(url, database)` or `from_database(db)` | `connect(project)` or `from_db(db)` | `connect(uri, user, password)` or `from_graph(graph)` |
 
 ```rust,no_run

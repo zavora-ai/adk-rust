@@ -451,6 +451,7 @@ fn the_repl_refuses_the_home_directory_without_dir() {
 }
 
 #[test]
+#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn always_allow_remembers_a_rule_and_the_next_call_runs_without_asking() {
     let home = tempfile::tempdir().unwrap();
     let ws = workspace();
@@ -489,6 +490,7 @@ fn always_allow_remembers_a_rule_and_the_next_call_runs_without_asking() {
 }
 
 #[test]
+#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn a_denial_ends_the_turn() {
     let home = tempfile::tempdir().unwrap();
     let ws = workspace();
@@ -515,6 +517,7 @@ fn a_denial_ends_the_turn() {
 }
 
 #[test]
+#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn slash_commands_show_and_change_the_session() {
     let home = tempfile::tempdir().unwrap();
     let ws = workspace();

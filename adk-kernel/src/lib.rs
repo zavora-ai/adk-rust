@@ -33,7 +33,7 @@
 //! | [`QueueClass`], [`QuietHours`], [`Quotas`] | §7.9 |
 //! | [`drivers`]: `DriverManifest`, [`EffectClass`](drivers::EffectClass), `DriverStore`, `DriverSupervisor`, `DriverPolicy` (feature `drivers`) | §7.7 |
 //! | `proc` (feature `proc`): `Ledger`, `LedgerEntry`, `LedgerStore` on every backend, `LedgerSink`, `LedgerAuditTap`; `proc::baselines` (feature `proc-baselines`): `BaselinePass`, `BaselinePolicy`, `ObservationPhraser`, `Observation` | §7.10 |
-//! | [`PartitionId`], [`PartitionMode`], [`Partition`], [`CrossPartition`], [`PartitionStore`], [`InMemoryPartitionStore`], `SqlitePartitionStore`, `PostgresPartitionStore`, `RedisPartitionStore`, [`Partitions`] | §7.8 |
+//! | [`PartitionId`], [`PartitionMode`], [`Partition`], [`CrossPartition`], [`PartitionStore`], [`InMemoryPartitionStore`], `SqlitePartitionStore`, `PostgresPartitionStore`, `RedisPartitionStore`; Alpha: `MongoPartitionStore`, `FirestorePartitionStore`, `Neo4jPartitionStore`; [`Partitions`] | §7.8 |
 //! | [`Crossing`], [`CrossingResource`], [`CrossingAccess`], [`CrossingRun`], [`CrossingRecord`], [`CrossingOutcome`], [`CrossingFilter`], [`CrossingRoute`], [`PartitionPolicy`], [`CrossingTool`] | §7.8, §13 Q3, K-I15 |
 //! | [`control`]: [`ControlPlaneConfig`](control::ControlPlaneConfig), [`router`](control::router), [`ControlPlane`](control::ControlPlane), [`ControlClient`](control::ControlClient), [`api`](control::api) | §7.11 |
 //! | [`audit`] action names | §9.3 |
@@ -53,7 +53,7 @@
 //! |---|---|---|
 //! | `sqlite` | on | `SqliteProcessStore`, on the pool of `harness.db` |
 //! | `postgres`, `redis` | off | `PostgresProcessStore`, `RedisProcessStore`, opened from the URL of `adk-rust serve --store` |
-//! | `mongodb`, `firestore`, `neo4j` | off | **Alpha** until their live suites pass in CI: every kernel store on MongoDB, Firestore or Neo4j (`MongoProcessStore`, `FirestoreProcessStore`, `Neo4jProcessStore` and the agenda, driver and ledger stores beside them), with the same backend of `adk-session`'s run, schedule and governance stores |
+//! | `mongodb`, `firestore`, `neo4j` | off | **Alpha** until their live suites pass in CI: every kernel store on MongoDB, Firestore or Neo4j (`MongoProcessStore`, `FirestoreProcessStore`, `Neo4jProcessStore` and the agenda, driver, ledger and partition stores beside them), with the same backend of `adk-session`'s run, schedule and governance stores |
 //! | `webhooks` | on | `webhook_wake_hook` over `adk-server`'s `WebhookIngress` |
 //! | `drivers` | on | [`drivers`]: manifests, the driver store, the supervisor over `adk-tool`'s MCP manager, the stdio launcher on `adk-sandbox` |
 //! | `service` | on | The `service` module: `adk-rust up` as a launchd agent, a systemd user unit or a Windows service (`windows-service` on Windows) |
@@ -147,13 +147,19 @@ pub use sched::{QueueClass, QuietHours, Quotas};
 #[cfg(feature = "firestore")]
 pub use stores::FirestoreAgendaStore;
 #[cfg(feature = "firestore")]
+pub use stores::FirestorePartitionStore;
+#[cfg(feature = "firestore")]
 pub use stores::FirestoreProcessStore;
 #[cfg(feature = "mongodb")]
 pub use stores::MongoAgendaStore;
 #[cfg(feature = "mongodb")]
+pub use stores::MongoPartitionStore;
+#[cfg(feature = "mongodb")]
 pub use stores::MongoProcessStore;
 #[cfg(feature = "neo4j")]
 pub use stores::Neo4jAgendaStore;
+#[cfg(feature = "neo4j")]
+pub use stores::Neo4jPartitionStore;
 #[cfg(feature = "neo4j")]
 pub use stores::Neo4jProcessStore;
 #[cfg(feature = "postgres")]

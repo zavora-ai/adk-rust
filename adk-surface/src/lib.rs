@@ -62,6 +62,8 @@ mod origin;
 mod project;
 pub mod rules;
 mod source;
+#[cfg(feature = "tui")]
+pub mod tui;
 #[cfg(feature = "web")]
 pub mod web;
 pub mod words;
