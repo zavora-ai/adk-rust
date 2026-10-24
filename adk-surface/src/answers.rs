@@ -9,12 +9,14 @@
 //! |---|---|---|
 //! | [`InMemoryAnswerLog`] | No | What this process recorded |
 //! | [`AuditAnswerLog`] | Yes | The `surface.decide` records of an `AuditLogStore` (the signed audit log), newest first |
+//! | [`RecordAnswerLog`] | Yes | A kernel's record over its control plane (`GET /api/kernel/record`), for a surface attached to the kernel, such as a terminal |
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use adk_core::audit_log::{AuditLogStore, AuditRecord};
 use adk_core::principal::SubjectRef;
+use adk_kernel::control::{ControlClient, RecordLine};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
@@ -164,6 +166,111 @@ pub(crate) fn answer_of(record: &AuditRecord, approval_id: &str) -> Option<Answe
     })
 }
 
+/// How many of the record's latest actions [`RecordAnswerLog`] reads: the most one
+/// `GET /api/kernel/record` answers.
+pub const RECORD_LINES: usize = 500;
+
+/// An [`AnswerLog`] over a kernel's record, for a surface attached to the kernel over its
+/// control plane (spec 3.3 §5.2, §10 K5, §11): a decision answered in Telegram reads "You said
+/// yes in Telegram at 07:31" in the terminal too.
+///
+/// `find` reads the answers this surface gave first, then the `surface.decide` lines among the
+/// record's latest [`RECORD_LINES`] actions (`GET /api/kernel/record`, the operator's or a
+/// paired device's with `read`). A record line says how an answer was given, not on which
+/// surface: `chat` names its channel, `touch` reads as the phone, `pointer` as the home,
+/// `keyboard` as the terminal. An answer older than those lines, or a kernel that shows no
+/// record, reads without where it was given.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use std::sync::Arc;
+/// use adk_kernel::control::ControlClient;
+/// use adk_surface::{ControlSource, RecordAnswerLog, SurfaceEngine};
+///
+/// # async fn example(home: &std::path::Path) -> adk_surface::Result<()> {
+/// let client = ControlClient::connect_local(home).await?.expect("a kernel is running");
+/// let answers = Arc::new(RecordAnswerLog::new(client.clone()));
+/// let source = ControlSource::new(client, "adk-rust", "adk-rust");
+/// let engine = SurfaceEngine::builder(Arc::new(source)).answers(answers).build();
+/// # let _ = engine;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone)]
+pub struct RecordAnswerLog {
+    client: ControlClient,
+    given_here: InMemoryAnswerLog,
+}
+
+impl std::fmt::Debug for RecordAnswerLog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecordAnswerLog")
+            .field("endpoint", &self.client.endpoint())
+            .finish_non_exhaustive()
+    }
+}
+
+impl RecordAnswerLog {
+    /// Reads the record of the kernel `client` reaches.
+    pub fn new(client: ControlClient) -> Self {
+        Self { client, given_here: InMemoryAnswerLog::new() }
+    }
+}
+
+#[async_trait]
+impl AnswerLog for RecordAnswerLog {
+    async fn record(&self, record: &AnswerRecord) -> Result<()> {
+        self.given_here.record(record).await
+    }
+
+    async fn find(&self, approval_id: &str) -> Result<Option<AnswerRecord>> {
+        if let Some(found) = self.given_here.find(approval_id).await? {
+            return Ok(Some(found));
+        }
+        match self.client.record(Some(RECORD_LINES)).await {
+            Ok(lines) => Ok(lines.iter().find_map(|line| answer_of_line(line, approval_id))),
+            Err(error) => {
+                tracing::debug!(error = %error, "the kernel's record could not be read");
+                Ok(None)
+            }
+        }
+    }
+}
+
+/// The answer a record line of `surface.decide` holds for `approval_id`, when it decided it.
+pub(crate) fn answer_of_line(line: &RecordLine, approval_id: &str) -> Option<AnswerRecord> {
+    if line.action != SURFACE_AUDIT_DECIDE
+        || line.target.as_deref() != Some(approval_id)
+        || line.outcome.as_deref() != Some("decided")
+    {
+        return None;
+    }
+    let (surface, origin) = match line.how.as_deref()? {
+        "chat" => (
+            SurfaceKind::Chat,
+            Origin::Chat { channel: line.channel.clone().unwrap_or_else(|| "chat".into()) },
+        ),
+        "touch" => (SurfaceKind::Phone, Origin::Touch),
+        "pointer" => (SurfaceKind::Web, Origin::Pointer),
+        "keyboard" => (SurfaceKind::Terminal, Origin::Keyboard),
+        "voice" => (SurfaceKind::Voice, Origin::Voice),
+        _ => return None,
+    };
+    let answer = match line.decision.as_deref()? {
+        "approved" => Answer::AllowOnce,
+        "rejected" => Answer::Deny,
+        _ => return None,
+    };
+    Some(AnswerRecord {
+        approval_id: approval_id.to_string(),
+        by: SubjectRef::human(line.subject.clone()?),
+        via: Via { surface, origin },
+        answer,
+        at: line.at,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +323,49 @@ mod tests {
         assert_eq!(found.by, SubjectRef::human("ana"));
         assert_eq!(found.answer, Answer::AllowOnce);
         assert!(log.find("apr_2").await.unwrap().is_none(), "a refused answer decided nothing");
+    }
+
+    /// A kernel's record line of an answer given in Telegram says where it was given; a line
+    /// of another decision, a refused answer or another action says nothing (spec 3.3 §12
+    /// phase 1: the terminal shows "You said yes in Telegram").
+    #[test]
+    fn a_record_line_says_how_a_decision_was_answered() {
+        let at = Utc::now();
+        let line = |id: &str, outcome: &str| {
+            RecordLine::new(7, at, SURFACE_AUDIT_DECIDE)
+                .with_subject("ana")
+                .with_decision("approved")
+                .with_outcome(outcome)
+                .with_how("chat", Some("Telegram"))
+                .with_target(id)
+        };
+        let found = answer_of_line(&line("apr_1", "decided"), "apr_1").unwrap();
+        assert_eq!(
+            found,
+            AnswerRecord {
+                approval_id: "apr_1".into(),
+                by: SubjectRef::human("ana"),
+                via: Via {
+                    surface: SurfaceKind::Chat,
+                    origin: Origin::Chat { channel: "Telegram".into() },
+                },
+                answer: Answer::AllowOnce,
+                at,
+            }
+        );
+        assert_eq!(found.via.phrase(), "in Telegram");
+        assert!(answer_of_line(&line("apr_1", "decided"), "apr_2").is_none());
+        assert!(answer_of_line(&line("apr_1", "refused"), "apr_1").is_none());
+        let control =
+            RecordLine::new(8, at, "kernel.control").with_subject("ana").with_target("apr_1");
+        assert!(answer_of_line(&control, "apr_1").is_none());
+        let touch = RecordLine::new(9, at, SURFACE_AUDIT_DECIDE)
+            .with_subject("ana")
+            .with_decision("rejected")
+            .with_outcome("decided")
+            .with_how("touch", None)
+            .with_target("apr_3");
+        let found = answer_of_line(&touch, "apr_3").unwrap();
+        assert_eq!((found.via.phrase(), found.answer), ("on your phone".to_string(), Answer::Deny));
     }
 }

@@ -165,6 +165,9 @@ pub async fn run(
     let (engine, place, model_id, local, session, notices) = match reach {
         Reach::Kernel { client, token, local, home } => {
             let place = if local { "kernel".to_string() } else { client.endpoint().to_string() };
+            // How each answer was given comes from the kernel's record, so a decision answered
+            // in Telegram reads "You said yes in Telegram" here too (spec 3.3 §12 phase 1).
+            let answers = Arc::new(adk_surface::RecordAnswerLog::new(client.clone()));
             let mut source = ControlSource::new(client, APP_NAME, APP_NAME);
             if let Some(token) = token {
                 source = source.with_bearer_token(token);
@@ -182,8 +185,10 @@ pub async fn run(
             {
                 source = source.with_daily_limit(limit);
             }
-            let engine =
-                SurfaceEngine::builder(Arc::new(source)).agent_name(APP_NAME, APP_NAME).build();
+            let engine = SurfaceEngine::builder(Arc::new(source))
+                .agent_name(APP_NAME, APP_NAME)
+                .answers(answers)
+                .build();
             (engine, place, None, local, session, Vec::new())
         }
         Reach::InProcess => {

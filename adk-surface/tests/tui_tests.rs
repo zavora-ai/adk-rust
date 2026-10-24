@@ -113,3 +113,60 @@ async fn the_terminal_waits_on_a_held_call_draws_it_and_answers_it() {
     assert_eq!(code, EXIT_DONE, "{lines:?}");
     assert_eq!(std::fs::read_to_string(s.path.join("invoice.txt")).unwrap(), "INV-1");
 }
+
+/// Spec 3.3 §12 phase 1: a decision answered in Telegram reads so in the terminal. Attached
+/// without a message, `--output json` writes a `decided` line for each decision of the session
+/// answered before it came, with the words every other surface shows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn json_lines_say_a_decision_was_answered_in_telegram() {
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        vec![
+            ScriptedResponse::function_call(
+                "write_file",
+                json!({ "path": "invoice.txt", "content": "INV-1" }),
+            ),
+            ScriptedResponse::text("The invoice is written."),
+        ],
+    ));
+    let s = scenario(model).await;
+    let surface = || {
+        TerminalSurface::new(s.engine.clone(), terminal())
+            .session("s1")
+            .poll_interval(Duration::from_millis(20))
+    };
+    let mut out = Vec::new();
+    let code =
+        surface().run_json(Some("Write the October invoice".into()), &mut out).await.unwrap();
+    assert_eq!(code, EXIT_WAITING, "{:?}", json_lines(&out));
+    assert!(
+        !json_lines(&out).iter().any(|line| line["type"] == "decided"),
+        "nothing is decided yet"
+    );
+
+    // Ana taps Allow once in Telegram.
+    let card = s.engine.decisions(&telegram()).await.unwrap().remove(0);
+    let decide = Command::Decide {
+        decision_id: card.id.clone(),
+        version: card.version,
+        answer: Answer::AllowOnce,
+        edited_args: None,
+        reason: None,
+        expanded: false,
+    };
+    s.engine.execute(&telegram(), decide).await.unwrap();
+    eventually("the allowed write to run", WITHIN, || async {
+        s.path.join("invoice.txt").exists().then_some(())
+    })
+    .await;
+
+    let mut out = Vec::new();
+    let code = surface().run_json(None, &mut out).await.unwrap();
+    let lines = json_lines(&out);
+    assert_eq!(code, EXIT_DONE, "{lines:?}");
+    let decided: Vec<&Value> = lines.iter().filter(|line| line["type"] == "decided").collect();
+    assert_eq!(decided.len(), 1, "{lines:?}");
+    assert_eq!(decided[0]["card"]["id"], json!(card.id));
+    let text = decided[0]["card"]["decided"]["text"].as_str().unwrap();
+    assert!(text.starts_with("You said yes in Telegram at "), "{text}");
+}

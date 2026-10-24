@@ -1,8 +1,11 @@
 //! JSON lines for CI (spec 3.3 §5.2): the engine's events of one session, one per line, then
 //! how the turn ended, as a line and as the exit code.
 
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
+
+use adk_core::ApprovalState;
 
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -10,7 +13,7 @@ use serde_json::{Value, json};
 use super::{EXIT_BUDGET, EXIT_DONE, EXIT_ERROR, EXIT_WAITING, TerminalSurface};
 use crate::engine::{Command, FeedFrame, SurfaceEngine};
 use crate::error::SurfaceError;
-use crate::model::{AgentStatus, FeedEntry, Speaker, ThreadItem};
+use crate::model::{AgentStatus, DecisionCard, FeedEntry, Speaker, ThreadItem};
 use crate::origin::Caller;
 use crate::words;
 
@@ -199,6 +202,63 @@ fn frame_line(out: &mut impl Write, frame: &FeedFrame) -> io::Result<()> {
     line(out, &serde_json::to_value(frame).map_err(io::Error::other)?)
 }
 
+/// A `decided` line: a decision of the session answered, with who answered, where and when,
+/// as every other surface shows it ("You said yes in Telegram at 07:31", spec 3.3 §8.1).
+fn decided_line(out: &mut impl Write, card: &DecisionCard) -> io::Result<()> {
+    line(out, &json!({ "type": "decided", "card": card }))
+}
+
+/// The decisions of `session` answered before the terminal attached, oldest first.
+async fn answered_before(
+    engine: &SurfaceEngine,
+    caller: &Caller,
+    session: &str,
+) -> Vec<DecisionCard> {
+    let Ok(requests) = engine.source().requests(caller, Some(session), false).await else {
+        return Vec::new();
+    };
+    let mut ended: Vec<_> = requests
+        .into_iter()
+        .filter(|request| {
+            request.scope.session_id == session && request.state != ApprovalState::Pending
+        })
+        .map(|request| (request.resolved_at.unwrap_or(request.created_at), request.id))
+        .collect();
+    ended.sort();
+    let mut cards = Vec::with_capacity(ended.len());
+    for (_, id) in ended {
+        if let Ok(card) = engine.decision(caller, &id).await
+            && card.decided.is_some()
+        {
+            cards.push(card);
+        }
+    }
+    cards
+}
+
+/// Writes a `decided` line for each decision that was open and no longer is, once.
+async fn closed(
+    out: &mut impl Write,
+    engine: &SurfaceEngine,
+    caller: &Caller,
+    was_open: &[(String, u64)],
+    open: &[(String, u64)],
+    told: &mut HashSet<String>,
+) -> io::Result<()> {
+    for (id, _) in was_open {
+        if open.iter().any(|(still, _)| still == id) || told.contains(id) {
+            continue;
+        }
+        if let Ok(card) = engine.decision(caller, id).await
+            && card.decided.is_some()
+        {
+            decided_line(out, &card)?;
+            told.insert(id.clone());
+        }
+    }
+    Ok(())
+}
+
 fn end_line(out: &mut impl Write, end: &End, session: &str) -> io::Result<i32> {
     line(
         out,
@@ -227,7 +287,17 @@ pub(crate) async fn run<W: Write + Send>(
         Err(error) => return end_line(&mut out, &End::error(error.to_string()), &session),
     };
     let mut settler = Settler::new(baseline);
-    if let Some(text) = message.filter(|text| !text.trim().is_empty()) {
+    let message = message.filter(|text| !text.trim().is_empty());
+    // Attached without a message, the terminal says where the session stands: the decisions
+    // answered before it came, then its open ones (spec 3.3 §5.2, §8.1 "Decided").
+    let mut told = HashSet::new();
+    if message.is_none() {
+        for card in answered_before(engine, caller, &session).await {
+            decided_line(&mut out, &card)?;
+            told.insert(card.id.clone());
+        }
+    }
+    if let Some(text) = message {
         let command = Command::Send { session_id: session.clone(), text };
         match engine.execute(caller, command).await {
             Ok(outcome) => {
@@ -251,7 +321,10 @@ pub(crate) async fn run<W: Write + Send>(
                             last = entry.seq;
                         }
                         FeedFrame::Decisions { cards: open } => {
-                            cards = Some(open.iter().map(|card| (card.id.clone(), card.version)).collect());
+                            let now: Vec<(String, u64)> =
+                                open.iter().map(|card| (card.id.clone(), card.version)).collect();
+                            let was = cards.replace(now.clone()).unwrap_or_default();
+                            closed(&mut out, engine, caller, &was, &now, &mut told).await?;
                         }
                         FeedFrame::Reset { .. } => last = 0,
                     }
@@ -279,6 +352,8 @@ pub(crate) async fn run<W: Write + Send>(
                             open.into_iter().filter(|card| card.session_id == session).collect();
                         let signature: Vec<(String, u64)> =
                             open.iter().map(|card| (card.id.clone(), card.version)).collect();
+                        let was = cards.clone().unwrap_or_default();
+                        closed(&mut out, engine, caller, &was, &signature, &mut told).await?;
                         if cards.as_ref() != Some(&signature) && !(cards.is_none() && open.is_empty()) {
                             frame_line(&mut out, &FeedFrame::Decisions { cards: open })?;
                         }

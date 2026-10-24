@@ -72,7 +72,8 @@ pub mod web;
 pub mod words;
 
 pub use answers::{
-    AnswerLog, AnswerRecord, AuditAnswerLog, InMemoryAnswerLog, SURFACE_AUDIT_DECIDE,
+    AnswerLog, AnswerRecord, AuditAnswerLog, InMemoryAnswerLog, RECORD_LINES, RecordAnswerLog,
+    SURFACE_AUDIT_DECIDE,
 };
 pub use control::ControlSource;
 pub use engine::{
