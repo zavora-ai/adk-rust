@@ -14,7 +14,7 @@ use adk_kernel::control::{ControlClient, ControlPlaneConfig};
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_surface::{
     Answer, AnswerLog, Caller, Command, CommandOutcome, ControlSource, InMemoryAnswerLog, Origin,
-    Risk, SurfaceEngine, SurfaceKind, ThreadItem,
+    Risk, Source, SurfaceEngine, SurfaceKind, ThreadItem,
 };
 use common::*;
 use serde_json::json;
@@ -59,14 +59,15 @@ async fn remote(
     control: ControlPlaneConfig,
     client: impl FnOnce() -> ControlClient,
     path: &str,
-) -> (Scenario, SurfaceEngine, Arc<InMemoryAnswerLog>) {
+) -> (Scenario, SurfaceEngine, Arc<InMemoryAnswerLog>, Arc<ControlSource>) {
     let s = scenario_with(scripted(path), control, true).await;
     let answers = Arc::new(InMemoryAnswerLog::new());
-    let remote = SurfaceEngine::builder(Arc::new(ControlSource::new(client(), APP, APP)))
+    let source = Arc::new(ControlSource::new(client(), APP, APP));
+    let remote = SurfaceEngine::builder(source.clone())
         .answers(answers.clone())
         .poll_interval(Duration::from_millis(20))
         .build();
-    (s, remote, answers)
+    (s, remote, answers, source)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -75,7 +76,7 @@ async fn a_terminal_decides_through_the_control_plane() {
     let control = ControlPlaneConfig::default()
         .without_socket()
         .with_http(format!("127.0.0.1:{port}").parse().unwrap());
-    let (s, remote, answers) =
+    let (s, remote, answers, source) =
         remote(control, || ControlClient::http(format!("http://127.0.0.1:{port}")), "terminal.txt")
             .await;
     let me = os_user();
@@ -103,6 +104,38 @@ async fn a_terminal_decides_through_the_control_plane() {
         ThreadItem::Decision { decision_id: Some(id), .. } if *id == card.id
     )));
     assert!(remote.session_decisions(&terminal, "elsewhere").await.unwrap().is_empty());
+    // The inbox query itself names the session (spec 3.3 §10 C1): a request of another
+    // session never comes back from it.
+    let other = adk_core::ApprovalRequest::new(
+        "apr-other",
+        adk_core::ApprovalScope::new(APP, me.clone(), "other"),
+        &adk_core::ToolConfirmationRequest {
+            tool_name: "write_file".into(),
+            function_call_id: Some("c-other".into()),
+            args: json!({ "path": "other.txt" }),
+            origin: None,
+            acting: None,
+        },
+        adk_core::ApprovalPolicy::new([adk_core::ApproverSelector::group("operator")])
+            .allow_self_approval(),
+    );
+    s.service.submit(other).await.unwrap();
+    let read = |session| {
+        let source = source.clone();
+        let terminal = terminal.clone();
+        async move {
+            source
+                .requests(&terminal, session, true)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(read(Some("t1")).await, [card.id.as_str()]);
+    assert_eq!(read(Some("other")).await, ["apr-other"]);
+    assert_eq!(read(None).await.len(), 2);
 
     let outcome = remote.execute(&terminal, decide(&card.id, card.version)).await.unwrap();
     assert!(matches!(outcome, CommandOutcome::Answered { .. }), "{outcome:?}");
@@ -134,7 +167,7 @@ async fn a_local_terminal_edits_a_call_over_the_kernel_socket() {
     let socket = home.path().join("k.sock");
     let control = ControlPlaneConfig::default().with_socket(&socket);
     let path = socket.clone();
-    let (s, remote, _) = remote(control, move || ControlClient::socket(path), "draft.txt").await;
+    let (s, remote, _, _) = remote(control, move || ControlClient::socket(path), "draft.txt").await;
     let terminal =
         Caller::human(os_user(), SurfaceKind::Terminal, Origin::Keyboard).with_paired_local();
     remote
@@ -204,4 +237,80 @@ async fn a_harness_without_a_kernel_resumes_the_decided_call() {
         .filter(|item| matches!(item, ThreadItem::Result { tool, ok: true, .. } if tool == "write_file"))
         .count();
     assert_eq!(writes, 1);
+}
+
+/// Accepts `Authorization: Bearer s3cret` as the OS user with the `operator` scope.
+struct Token;
+
+#[async_trait::async_trait]
+impl adk_server::auth_bridge::RequestContextExtractor for Token {
+    async fn extract(
+        &self,
+        parts: &hyper::http::request::Parts,
+    ) -> Result<adk_core::RequestContext, adk_server::auth_bridge::RequestContextError> {
+        use adk_server::auth_bridge::RequestContextError;
+        let header = parts
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .ok_or(RequestContextError::MissingAuth)?;
+        if header != "Bearer s3cret" {
+            return Err(RequestContextError::InvalidToken("wrong token".into()));
+        }
+        Ok(adk_core::RequestContext {
+            user_id: os_user(),
+            scopes: vec!["operator".into()],
+            metadata: Default::default(),
+        })
+    }
+}
+
+/// A kernel that admits no caller without its token: the token given to the client once
+/// reaches the approvals inbox too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_token_given_to_the_client_once_reaches_the_inbox() {
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let control = ControlPlaneConfig::default()
+        .without_socket()
+        .with_http(format!("127.0.0.1:{port}").parse().unwrap())
+        .with_extractor(Arc::new(Token));
+    let url = format!("http://127.0.0.1:{port}");
+    let client_url = url.clone();
+    let (s, remote, _, _) = remote(
+        control,
+        move || ControlClient::http(client_url).with_bearer_token("s3cret"),
+        "token.txt",
+    )
+    .await;
+    let terminal = Caller::human(os_user(), SurfaceKind::Terminal, Origin::Keyboard);
+    remote
+        .execute(&terminal, Command::Send { session_id: "k1".into(), text: "write it".into() })
+        .await
+        .unwrap();
+    let card = eventually("the card through the token-protected inbox", WITHIN, || async {
+        remote.session_decisions(&terminal, "k1").await.unwrap().into_iter().next()
+    })
+    .await;
+    assert_eq!(card.risk, Risk::Medium);
+    let outcome = remote.execute(&terminal, decide(&card.id, card.version)).await.unwrap();
+    assert!(matches!(outcome, CommandOutcome::Answered { .. }), "{outcome:?}");
+    eventually("the decided call to run", WITHIN, || async {
+        std::fs::read_to_string(s.path.join("token.txt")).ok()
+    })
+    .await;
+
+    // Without the token the inbox refuses, as every other kernel route does.
+    let anonymous = ControlSource::new(ControlClient::http(url.clone()), APP, APP);
+    let error = anonymous.requests(&terminal, Some("k1"), true).await.unwrap_err();
+    assert_eq!(adk_core::AdkError::from(error).category, adk_core::ErrorCategory::Unauthorized);
+    // A token given to the source alone reaches the inbox, and replaces the client's.
+    let inbox_only =
+        ControlSource::new(ControlClient::http(url.clone()), APP, APP).with_bearer_token("s3cret");
+    assert_eq!(inbox_only.requests(&terminal, Some("k1"), false).await.unwrap().len(), 1);
+    let replaced =
+        ControlSource::new(ControlClient::http(url).with_bearer_token("s3cret"), APP, APP)
+            .with_bearer_token("stale");
+    let error = replaced.requests(&terminal, Some("k1"), false).await.unwrap_err();
+    assert_eq!(adk_core::AdkError::from(error).category, adk_core::ErrorCategory::Unauthorized);
+    s.kernel.stop().await.unwrap();
 }

@@ -113,6 +113,22 @@ impl ControlClient {
         self
     }
 
+    /// The bearer token the client sends, so a caller of other routes on the same control
+    /// plane (the approvals inbox, spec 3.3 §6) sends the same one.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_kernel::control::ControlClient;
+    ///
+    /// let client = ControlClient::http("https://kernel.example.com").with_bearer_token("token");
+    /// assert_eq!(client.bearer_token(), Some("token"));
+    /// assert_eq!(ControlClient::socket("/run/kernel.sock").bearer_token(), None);
+    /// ```
+    pub fn bearer_token(&self) -> Option<&str> {
+        self.token.as_deref()
+    }
+
     /// Where the client connects: `unix:<path>`, `pipe:<name>` or the base URL.
     pub fn endpoint(&self) -> String {
         match &self.transport {

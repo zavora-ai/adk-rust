@@ -536,7 +536,7 @@ impl SurfaceEngine {
     /// source's error.
     pub async fn thread(&self, caller: &Caller, session: &str) -> Result<Vec<FeedEntry>> {
         let events = self.transcript(caller, session).await?;
-        let links = self.links(caller, session).await?;
+        let links = self.links(caller, session, &events).await?;
         Ok(events
             .iter()
             .enumerate()
@@ -552,21 +552,23 @@ impl SurfaceEngine {
             .ok_or_else(|| SurfaceError::not_found(format!("session '{session}'")))
     }
 
-    /// Held calls to their inbox entries, for the session's thread items: by fingerprint,
-    /// or by the tool and its arguments where the source shows no fingerprints.
-    async fn links(&self, caller: &Caller, session: &str) -> Result<HashMap<String, String>> {
-        Ok(self
+    /// The inbox entry of each held call in the session's `events`, by `seq`
+    /// ([`project::links`]).
+    async fn links(
+        &self,
+        caller: &Caller,
+        session: &str,
+        events: &[adk_core::Event],
+    ) -> Result<HashMap<u64, String>> {
+        let requests: Vec<ApprovalRequest> = self
             .inner
             .source
             .requests(caller, Some(session), false)
             .await?
             .into_iter()
             .filter(|request| owns(caller, request) && request.scope.session_id == session)
-            .map(|request| match request.fingerprint.is_empty() {
-                true => (project::call_key(&request.tool_name, &request.args_redacted), request.id),
-                false => (request.fingerprint, request.id),
-            })
-            .collect())
+            .collect();
+        Ok(project::links(events, &requests))
     }
 
     /// The session's feed (spec 3.3 §6): every event after `after` (none: from the start) as
@@ -649,7 +651,7 @@ impl SurfaceEngine {
             sent = 0;
         }
         if sent < len {
-            let links = self.links(caller, session).await?;
+            let links = self.links(caller, session, &events).await?;
             for (index, event) in
                 events.iter().enumerate().skip(usize::try_from(sent).unwrap_or(usize::MAX))
             {

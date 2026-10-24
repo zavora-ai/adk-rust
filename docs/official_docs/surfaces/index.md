@@ -34,9 +34,12 @@ Both sources read decisions one session at a time where a surface shows one sess
 `SurfaceEngine::session_decisions` returns that session's cards.
 
 `ControlSource` reads the inbox over the same endpoint as its client: HTTP, or HTTP over the
-kernel's Unix socket. Pass the HTTP control plane's token to `ControlSource::with_bearer_token`
-as well as to the client. The inbox serves requests without their fingerprints, so a thread
-links a held call to its card by the tool and its arguments. Over the named pipe on Windows
+kernel's Unix socket. It sends the client's bearer token (`ControlClient::bearer_token`);
+`ControlSource::with_bearer_token` replaces it for the inbox alone. Every inbox call gives up
+after 30 seconds with `surface.kernel_timeout`, as the client's own calls do. The inbox serves
+requests without their fingerprints, so a thread links a held call to the request of the same
+tool by the same agent: the one showing the call's arguments, else the earliest one not yet
+linked, since a route may redact what approvers see. Over the named pipe on Windows
 the source keeps to `ControlClient`'s pending items, which carry no risk, agent or earlier
 decisions: every decision counts as high risk, "Edit" is not offered, and a decision
 answered elsewhere is no longer found.

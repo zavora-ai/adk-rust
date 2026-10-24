@@ -323,21 +323,17 @@ impl Projector {
         Some(QuietView { active, start, end, text })
     }
 
-    pub(crate) fn entry(
-        &self,
-        seq: u64,
-        event: &Event,
-        links: &HashMap<String, String>,
-    ) -> FeedEntry {
+    /// The event at `seq`, its held call linked to the decision [`links`] gives that `seq`.
+    pub(crate) fn entry(&self, seq: u64, event: &Event, links: &HashMap<u64, String>) -> FeedEntry {
         FeedEntry {
             seq,
             at: event.timestamp,
             at_text: self.hh_mm(event.timestamp),
-            items: self.items(event, links),
+            items: self.items(event, links.get(&seq).cloned()),
         }
     }
 
-    fn items(&self, event: &Event, links: &HashMap<String, String>) -> Vec<ThreadItem> {
+    fn items(&self, event: &Event, decision_id: Option<String>) -> Vec<ThreadItem> {
         let mut items = Vec::new();
         let from_person = event.author == "user";
         if let Some(content) = &event.llm_response.content {
@@ -390,10 +386,6 @@ impl Projector {
             }
         }
         if let Some(held) = &event.actions.tool_confirmation {
-            let decision_id = links
-                .get(&held.fingerprint())
-                .or_else(|| links.get(&call_key(&held.tool_name, &held.args)))
-                .cloned();
             items.push(ThreadItem::Decision {
                 decision_id,
                 tool: held.tool_name.clone(),
@@ -520,9 +512,54 @@ pub(crate) fn agent_name(request: &ApprovalRequest) -> String {
         .unwrap_or_else(|| request.scope.app_name.clone())
 }
 
-/// A held call's key where the source shows no fingerprint: the tool and its arguments.
-pub(crate) fn call_key(tool: &str, args: &Value) -> String {
-    format!("{tool}\u{0}{args}")
+/// The decision of each held call in a session's `events`, by the event's `seq` (its position
+/// from 1), out of the session's `requests` (spec 3.3 §7.1).
+///
+/// A request with a fingerprint decides the calls held with that fingerprint. A request
+/// served without one, as a kernel's approvals inbox serves them, decides a call of the same
+/// tool by the same acting agent: the one showing the call's arguments, else the earliest
+/// one, since a route may show approvers redacted arguments. No request decides two calls,
+/// and a call held again keeps its request until a decided request has a newer one.
+pub(crate) fn links(events: &[Event], requests: &[ApprovalRequest]) -> HashMap<u64, String> {
+    let mut order: Vec<&ApprovalRequest> = requests.iter().collect();
+    order.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+    let mut taken = vec![false; order.len()];
+    let mut held_by: HashMap<String, usize> = HashMap::new();
+    let mut links = HashMap::new();
+    for (index, event) in events.iter().enumerate() {
+        let Some(held) = &event.actions.tool_confirmation else { continue };
+        let fingerprint = held.fingerprint();
+        let agent = held.acting.as_deref().map(|acting| &acting.agent.id);
+        let decides = |request: &ApprovalRequest| match request.fingerprint.is_empty() {
+            false => request.fingerprint == fingerprint,
+            true => {
+                request.tool_name == held.tool_name
+                    && match (agent, &request.acting) {
+                        (Some(agent), Some(acting)) => *agent == acting.agent.id,
+                        _ => true,
+                    }
+            }
+        };
+        let free = |same_args: bool| {
+            (0..order.len()).find(|&position| {
+                let request = order[position];
+                !taken[position]
+                    && decides(request)
+                    && (!same_args || request.args_redacted == held.args)
+            })
+        };
+        let kept = held_by.get(&fingerprint).copied();
+        let next = match kept {
+            Some(position) if order[position].state == ApprovalState::Pending => Some(position),
+            _ => free(true).or_else(|| free(false)).or(kept),
+        };
+        if let Some(position) = next {
+            taken[position] = true;
+            held_by.insert(fingerprint, position);
+            links.insert(index as u64 + 1, order[position].id.clone());
+        }
+    }
+    links
 }
 
 /// The exact call, cut short past [`CALL_TEXT_LIMIT`] characters.

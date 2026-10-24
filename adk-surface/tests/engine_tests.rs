@@ -462,3 +462,33 @@ async fn an_answer_to_a_changed_open_decision_is_shown_again_not_retried() {
     assert_eq!(card.version, request.version + 1);
     assert_eq!(home.service.get(&request.id).await.unwrap().unwrap().decisions.len(), 1);
 }
+
+/// The source itself reads one session's requests (spec 3.3 §10 C1), not the engine's filter
+/// after it: `LocalSource` asks the approval service for that session only.
+#[tokio::test]
+async fn the_local_source_reads_one_sessions_requests() {
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let service: Arc<dyn ApprovalService> =
+        Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new())));
+    for (id, session) in [("apr-1", "s1"), ("apr-2", "s3")] {
+        let request = ApprovalRequest::new(
+            id,
+            ApprovalScope::new(APP, "ana", session),
+            &invoice(),
+            ApprovalPolicy::new([ApproverSelector::group("owner")]).allow_self_approval(),
+        );
+        service.submit(request).await.unwrap();
+    }
+    let source = LocalSource::builder(APP)
+        .sessions(sessions)
+        .approvals(Arc::clone(&service))
+        .build()
+        .unwrap();
+    let ids = |requests: Vec<ApprovalRequest>| -> Vec<String> {
+        requests.into_iter().map(|request| request.id).collect()
+    };
+    use adk_surface::Source;
+    assert_eq!(ids(source.requests(&web(), Some("s1"), true).await.unwrap()), ["apr-1"]);
+    assert_eq!(ids(source.requests(&web(), Some("s1"), false).await.unwrap()), ["apr-1"]);
+    assert_eq!(source.requests(&web(), None, true).await.unwrap().len(), 2);
+}

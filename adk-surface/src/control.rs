@@ -39,8 +39,10 @@ const QUIET_REREAD: Duration = Duration::from_secs(15);
 /// `GET /api/approvals?session=`, `GET /api/approvals/{id}`, `POST /api/approvals/{id}/decide`
 /// — over the same socket or HTTP endpoint, so cards carry their risk, agent and earlier
 /// decisions, "Edit" sends its arguments, and a decision answered elsewhere says who
-/// answered. Pass the HTTP control plane's token to [`with_bearer_token`](Self::with_bearer_token)
-/// as well as to the client. Over a named pipe (Windows) the source keeps to `ControlClient`'s
+/// answered. The inbox gets the client's bearer token
+/// ([`ControlClient::bearer_token`]); [`with_bearer_token`](Self::with_bearer_token) replaces
+/// it for the inbox alone. Every inbox call gives up after 30 seconds, as the client's calls
+/// do. Over a named pipe (Windows) the source keeps to `ControlClient`'s
 /// pending items, which carry none of these: every decision counts as high risk, "Edit" is
 /// not offered, and a decision answered elsewhere is no longer found.
 ///
@@ -85,7 +87,8 @@ impl ControlSource {
         app_name: impl Into<String>,
         target: impl Into<String>,
     ) -> Self {
-        let inbox = Inbox::for_endpoint(&client.endpoint());
+        let inbox =
+            Inbox::for_endpoint(&client.endpoint(), client.bearer_token().map(str::to_owned));
         Self {
             client,
             app: app_name.into(),
@@ -96,8 +99,8 @@ impl ControlSource {
         }
     }
 
-    /// Sends `token` as a bearer token to the approvals inbox, as the client sends it to the
-    /// kernel routes.
+    /// Sends `token` as a bearer token to the approvals inbox instead of the client's own
+    /// token, which [`new`](Self::new) already passes on.
     #[must_use]
     pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
         self.inbox = self.inbox.map(|inbox| inbox.with_token(token.into()));

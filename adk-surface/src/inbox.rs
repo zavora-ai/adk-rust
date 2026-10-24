@@ -18,6 +18,9 @@ use serde_json::{Value, json};
 
 use crate::error::{Result, SurfaceError};
 
+/// How long one inbox call waits for the kernel, as long as `ControlClient` waits.
+pub(crate) const INBOX_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// How many requests one page reads.
 const PAGE: usize = 200;
 
@@ -49,7 +52,7 @@ pub(crate) enum Inbox {
 impl Inbox {
     /// The inbox beside the control plane `endpoint` (`ControlClient::endpoint`), or `None`
     /// for a named pipe, whose clients keep to `ControlClient`.
-    pub(crate) fn for_endpoint(endpoint: &str) -> Option<Self> {
+    pub(crate) fn for_endpoint(endpoint: &str, token: Option<String>) -> Option<Self> {
         if let Some(path) = endpoint.strip_prefix("unix:") {
             return cfg!(unix).then(|| Self::Socket(PathBuf::from(path)));
         }
@@ -59,7 +62,7 @@ impl Inbox {
         Some(Self::Http {
             base: endpoint.trim_end_matches('/').to_string(),
             client: reqwest::Client::new(),
-            token: None,
+            token,
         })
     }
 
@@ -141,24 +144,31 @@ impl Inbox {
         request_of(view)
     }
 
+    /// One exchange with the inbox, bounded by [`INBOX_CALL_TIMEOUT`] from connect to the
+    /// last byte of the answer.
     async fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
-        let (status, bytes) = match self {
-            Self::Http { base, client, token } => {
-                let method = reqwest::Method::from_bytes(method.as_bytes())
-                    .map_err(|error| SurfaceError::Invalid(error.to_string()))?;
-                let mut request = client.request(method, format!("{base}{path}"));
-                if let Some(token) = token {
-                    request = request.bearer_auth(token);
+        let exchange = async {
+            match self {
+                Self::Http { base, client, token } => {
+                    let method = reqwest::Method::from_bytes(method.as_bytes())
+                        .map_err(|error| SurfaceError::Invalid(error.to_string()))?;
+                    let mut request = client.request(method, format!("{base}{path}"));
+                    if let Some(token) = token {
+                        request = request.bearer_auth(token);
+                    }
+                    if let Some(body) = &body {
+                        request = request.json(body);
+                    }
+                    let response = request.send().await.map_err(|error| unreachable(&error))?;
+                    let status = response.status().as_u16();
+                    let bytes = response.bytes().await.map_err(|error| unreachable(&error))?;
+                    Ok((status, bytes.to_vec()))
                 }
-                if let Some(body) = &body {
-                    request = request.json(body);
-                }
-                let response = request.send().await.map_err(|error| unreachable(&error))?;
-                let status = response.status().as_u16();
-                (status, response.bytes().await.map_err(|error| unreachable(&error))?.to_vec())
+                Self::Socket(socket) => socket_call(socket, method, path, body).await,
             }
-            Self::Socket(socket) => socket_call(socket, method, path, body).await?,
         };
+        let (status, bytes) =
+            tokio::time::timeout(INBOX_CALL_TIMEOUT, exchange).await.map_err(|_| timed_out())??;
         let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
         if (200..300).contains(&status) {
             return Ok(value);
@@ -220,6 +230,18 @@ fn unreachable(error: &dyn std::fmt::Display) -> SurfaceError {
         "surface.kernel_unreachable",
         format!(
             "the kernel's approvals inbox could not be reached: {error}; is the kernel running?"
+        ),
+    ))
+}
+
+fn timed_out() -> SurfaceError {
+    SurfaceError::Source(AdkError::new(
+        ErrorComponent::Server,
+        ErrorCategory::Timeout,
+        "surface.kernel_timeout",
+        format!(
+            "the kernel's approvals inbox did not answer within {}s; is the kernel stopped or overloaded?",
+            INBOX_CALL_TIMEOUT.as_secs()
         ),
     ))
 }
@@ -297,13 +319,83 @@ mod tests {
         assert_eq!((plain.code, plain.category), ("surface.source", ErrorCategory::Unauthorized));
     }
 
+    /// A kernel that accepts connections and never answers.
+    fn stalled<L, S, F>(accept: impl Fn(L) -> F + Send + 'static, listener: L)
+    where
+        L: Send + 'static,
+        F: std::future::Future<Output = (L, S)> + Send,
+        S: Send + 'static,
+    {
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            let mut listener = listener;
+            loop {
+                let (next, stream) = accept(listener).await;
+                listener = next;
+                held.push(stream);
+            }
+        });
+    }
+
+    /// Bounded like `ControlClient`'s calls: a kernel that stops answering fails the read in
+    /// `INBOX_CALL_TIMEOUT` instead of holding it forever.
+    async fn assert_times_out(inbox: Inbox) {
+        let started = tokio::time::Instant::now();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(600),
+            inbox.list("app", None, true),
+        )
+        .await
+        .expect("the inbox call gives up instead of waiting forever");
+        let Err(SurfaceError::Source(error)) = outcome else {
+            panic!("a stalled kernel is an error: {outcome:?}");
+        };
+        assert_eq!(error.category, ErrorCategory::Timeout);
+        assert!(started.elapsed() <= INBOX_CALL_TIMEOUT + std::time::Duration::from_secs(1));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_kernel_over_http_fails_in_time() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        stalled(
+            |listener: tokio::net::TcpListener| async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                (listener, stream)
+            },
+            listener,
+        );
+        assert_times_out(Inbox::for_endpoint(&format!("http://127.0.0.1:{port}"), None).unwrap())
+            .await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_kernel_over_the_socket_fails_in_time() {
+        let dir = tempfile::Builder::new().prefix("ib").tempdir_in("/tmp").unwrap();
+        let path = dir.path().join("k.sock");
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        stalled(
+            |listener: tokio::net::UnixListener| async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                (listener, stream)
+            },
+            listener,
+        );
+        assert_times_out(Inbox::for_endpoint(&format!("unix:{}", path.display()), None).unwrap())
+            .await;
+    }
+
     #[test]
     fn the_inbox_sits_beside_the_control_plane() {
         assert!(
-            matches!(Inbox::for_endpoint("http://127.0.0.1:8080/"), Some(Inbox::Http { ref base, .. }) if base == "http://127.0.0.1:8080")
+            matches!(Inbox::for_endpoint("http://127.0.0.1:8080/", None), Some(Inbox::Http { ref base, .. }) if base == "http://127.0.0.1:8080")
         );
-        assert!(Inbox::for_endpoint(r"pipe:\\.\pipe\adk-rust-kernel-1").is_none());
+        assert!(Inbox::for_endpoint(r"pipe:\\.\pipe\adk-rust-kernel-1", None).is_none());
         #[cfg(unix)]
-        assert!(matches!(Inbox::for_endpoint("unix:/home/a/kernel.sock"), Some(Inbox::Socket(_))));
+        assert!(matches!(
+            Inbox::for_endpoint("unix:/home/a/kernel.sock", None),
+            Some(Inbox::Socket(_))
+        ));
     }
 }
