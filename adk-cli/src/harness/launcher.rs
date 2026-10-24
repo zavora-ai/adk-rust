@@ -861,13 +861,16 @@ impl HarnessLauncher {
                 )));
             }
         };
+        // The claim route needs no caller but keeps the server's host and origin checks.
+        if let (Some(kernel), Some(_)) = (&kernel, &pairing) {
+            launcher = launcher.with_root_routes(adk_kernel::control::claim_router(kernel.clone()));
+        }
         let router = launcher.build_app()?;
-        // The claim route needs no caller, and every route checks a device token first.
+        // Every route checks a device token first.
         let router = match kernel {
-            Some(kernel) if pairing.is_some() => adk_kernel::control::guard_devices(
-                &kernel,
-                router.merge(adk_kernel::control::claim_router(kernel.clone())),
-            ),
+            Some(kernel) if pairing.is_some() => {
+                adk_kernel::control::guard_devices(&kernel, router)
+            }
             _ => router,
         };
         Ok(match loopback {

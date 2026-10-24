@@ -176,6 +176,9 @@ pub struct Launcher {
     /// Routes mounted under `/api` behind the auth middleware, such as a served harness's
     /// standing-rule routes.
     api_routes: Vec<Router>,
+    /// Routes merged at the root inside the server's middleware but outside its auth
+    /// middleware, such as a kernel's device pairing claim route.
+    root_routes: Vec<Router>,
     /// The kill switch the server shares and the delegate its admin freeze calls: a
     /// resident harness's kernel (spec 3.2 §7.2, §10 S4).
     #[cfg(feature = "harness")]
@@ -218,6 +221,7 @@ impl Launcher {
             approval_service: None,
             background_runs: None,
             api_routes: Vec::new(),
+            root_routes: Vec::new(),
             #[cfg(feature = "harness")]
             kernel_governance: None,
             #[cfg(feature = "harness")]
@@ -536,6 +540,14 @@ impl Launcher {
         self
     }
 
+    /// Merges `routes` at the root in serve mode, behind the host and origin checks but not
+    /// the auth middleware (spec 3.3 §10 K2: the device pairing claim needs no caller).
+    #[cfg(feature = "harness")]
+    pub(crate) fn with_root_routes(mut self, routes: Router) -> Self {
+        self.root_routes.push(routes);
+        self
+    }
+
     /// Shares `control` with the server and serves the admin governance endpoints, whose
     /// freeze `delegate` handles (spec 3.2 §10 S4: a kernel parks running processes).
     #[cfg(feature = "harness")]
@@ -839,6 +851,7 @@ impl Launcher {
         let api_routes = self.api_routes.clone();
         #[cfg(all(feature = "surface", feature = "harness"))]
         let surface = self.surface.clone();
+        let root_routes = self.root_routes.clone();
         #[cfg(feature = "harness")]
         let kernel_governance = self.kernel_governance.clone();
         #[cfg(feature = "harness")]
@@ -882,6 +895,9 @@ impl Launcher {
         }
         for routes in api_routes {
             builder = builder.add_api_routes(routes);
+        }
+        for routes in root_routes {
+            builder = builder.add_root_routes(routes);
         }
         Ok(builder.build())
     }

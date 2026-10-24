@@ -151,3 +151,43 @@ async fn a_revoked_device_is_refused_on_the_resident_app() {
         call(&app, request("GET", "/api/kernel/health", None, REMOTE, Some(&token))).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+/// Review finding 17: the claim route keeps the server's host and origin checks, so a page
+/// rebinding its name to the loopback address cannot spend the waiting codes.
+#[tokio::test]
+async fn the_claim_route_keeps_the_host_and_origin_checks() {
+    let (app, _workspace) = app();
+    let body = json!({ "code": "0000-0000-0000" });
+    let mut rebound =
+        request("POST", "/api/kernel/pairing/claim", Some(body.clone()), LOOPBACK, None);
+    rebound.headers_mut().insert("host", "evil.example:8080".parse().unwrap());
+    assert_eq!(call(&app, rebound).await.0, StatusCode::FORBIDDEN, "a foreign host");
+    let mut cross = request("POST", "/api/kernel/pairing/claim", Some(body), LOOPBACK, None);
+    cross.headers_mut().insert("origin", "https://evil.example".parse().unwrap());
+    assert_eq!(call(&app, cross).await.0, StatusCode::FORBIDDEN, "a foreign origin");
+}
+
+/// Review finding 18: a client still holding a removed device's token re-pairs on the
+/// resident app: the claim route skips the device guard.
+#[tokio::test]
+async fn a_client_holding_a_removed_token_re_pairs_on_the_resident_app() {
+    let (app, _workspace) = app();
+    let old = pair(&app, json!(["read"])).await;
+    let (_, devices) =
+        call(&app, request("GET", "/api/kernel/devices", None, LOOPBACK, None)).await;
+    let id = devices["devices"][0]["id"].as_str().unwrap().to_string();
+    let revoke = request("POST", &format!("/api/kernel/devices/{id}/revoke"), None, LOOPBACK, None);
+    assert_eq!(call(&app, revoke).await.0, StatusCode::OK);
+
+    let issue = request("POST", "/api/kernel/pairing", Some(json!({})), LOOPBACK, None);
+    let (_, issued) = call(&app, issue).await;
+    let claim = request(
+        "POST",
+        "/api/kernel/pairing/claim",
+        Some(json!({ "code": issued["code"] })),
+        REMOTE,
+        Some(&old),
+    );
+    let (status, claimed) = call(&app, claim).await;
+    assert_eq!(status, StatusCode::OK, "{claimed}");
+}

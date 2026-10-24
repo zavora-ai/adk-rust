@@ -608,7 +608,7 @@ pub enum Commands {
     /// list them, remove one (spec 3.3 §10 K1, K2)
     ///
     /// Example: `adk-rust pair --name "Ana's phone"`, then enter the code on the phone;
-    /// `adk-rust pair accept ABCD-2345` pairs the chat account that was sent that code.
+    /// `adk-rust pair accept ABCD-EFGH-2345` pairs the chat account that was sent that code.
     #[cfg(feature = "harness")]
     Pair {
         #[command(subcommand)]
