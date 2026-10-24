@@ -39,6 +39,8 @@
 //! | `service` (feature `service`): `ServiceDefinition`, `install`, `uninstall`, `run_as_service` (Windows) | §7.12, §10 W3 |
 //! | `conformance` (feature `conformance`) | §11 |
 //! | `managed` (feature `managed`): `KernelDef`, `TenantKernel`, `KernelResolver`, `ManagedKernels` | §7.13, §10 M1 |
+//! | [`pairing`]: `Pairing`, `DeviceScope`, `DeviceStore` on every backend, `DeviceTokenExtractor` | spec 3.3 §10 K2 |
+//! | `channels` (feature `channels`): `ChannelSink`, `ChannelGateway`, `ChannelBindingStore` on every backend, `InMemoryChannel` | spec 3.3 §10 K1 |
 //!
 //! Agenda and proactivity (§7.5) and attention and resources (§7.9) are phase 2; drivers
 //! (§7.7) and partitions (§7.8) phase 3; channel wakes phase 5. Each adds to these types
@@ -56,7 +58,7 @@
 //! | `service` | on | The `service` module: `adk-rust up` as a launchd agent, a systemd user unit or a Windows service (`windows-service` on Windows) |
 //! | `proc` | on | The content-free activity ledger (`proc`), its stores and `GET /api/kernel/proc/*`; the OTel GenAI histograms of the live aggregates |
 //! | `proc-baselines` | off | The daily baseline pass and observations over `adk-eval`'s ledger statistics (implies `proc`; the only `adk-eval` edge) |
-//! | `channels` | off | Empty until phase 5 |
+//! | `channels` | off | The chat channel contract (spec 3.3 §10 K1): the `channels` module, its binding store on every backend, and the adapter contract suite with `conformance` |
 //! | `managed` | off | The managed form: `KernelDef` in a managed definition, one kernel per tenant (`adk-managed`) |
 //! | `conformance` | off | The `conformance` module |
 //!
@@ -87,6 +89,8 @@
 pub mod agenda;
 pub mod audit;
 pub mod bus;
+#[cfg(feature = "channels")]
+pub mod channels;
 #[cfg(feature = "conformance")]
 pub mod conformance;
 pub mod consolidation;
@@ -96,6 +100,7 @@ pub mod error;
 pub mod kernel;
 #[cfg(feature = "managed")]
 pub mod managed;
+pub mod pairing;
 pub mod partition;
 #[cfg(feature = "proc")]
 pub mod proc;
