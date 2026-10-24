@@ -436,6 +436,122 @@ async fn a_workflow_sub_agent_resumed_without_parts_keeps_the_message() {
     assert_eq!(person_turns(&report_requests[0]), ["send 40 to Bob"]);
 }
 
+// --- IncludeContents::None ---
+
+/// A holder that sends its model only the current turn.
+fn current_turn_holder(model: Arc<dyn adk_core::Llm>, executions: &Executions) -> Arc<dyn Agent> {
+    Arc::new(
+        LlmAgentBuilder::new("ops")
+            .model(model)
+            .tool(Arc::new(Transfer { executions: executions.clone() }))
+            .require_tool_confirmation("transfer")
+            .include_contents(adk_core::IncludeContents::None)
+            .build()
+            .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn a_current_turn_agent_resumed_with_an_empty_turn_sees_the_message_the_call_and_its_result()
+{
+    for resume in [Content::new("user"), Content::new("user").with_text("")] {
+        let model = Arc::new(ScriptedLlm::new(
+            "scripted",
+            [
+                ScriptedResponse::text("Hello."),
+                calls(&[("call-1".to_string(), 40)]),
+                ScriptedResponse::text("Sent 40 to Bob."),
+                ScriptedResponse::text("You are welcome."),
+            ],
+        ));
+        let executions = Executions::default();
+        let conversation =
+            Conversation::new(current_turn_holder(model.clone(), &executions), None).await;
+
+        conversation.say("hello").await;
+        conversation.say("send 40 to Bob").await;
+        let held = conversation.held("ops").await;
+        assert_eq!(held.len(), 1, "the call is held");
+        let approve = RunConfig::builder()
+            .tool_approval(held[0].request.fingerprint(), ToolApproval::approve());
+        conversation.send(resume.clone(), Some(approve.build())).await;
+
+        assert_eq!(*executions.lock().unwrap(), vec![json!({ "amount": 40 })]);
+        // The turn the call belongs to, without the earlier "hello".
+        assert_eq!(
+            turns(&model.last_request().unwrap().contents),
+            asked_called_sent(),
+            "resumed with {resume:?}"
+        );
+
+        // With nothing held, the next run is its own message again.
+        conversation.say("thanks").await;
+        assert_eq!(
+            turns(&model.last_request().unwrap().contents),
+            turns(&[Content::new("user").with_text("thanks")])
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_current_turn_agent_resumed_after_a_later_message_sees_the_call_and_its_result() {
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        [
+            calls(&[("call-1".to_string(), 40)]),
+            ScriptedResponse::text("It waits for your approval."),
+            ScriptedResponse::text("Sent 40 to Bob."),
+        ],
+    ));
+    let executions = Executions::default();
+    let conversation =
+        Conversation::new(current_turn_holder(model.clone(), &executions), None).await;
+
+    conversation.say("send 40 to Bob").await;
+    conversation.say("is it done?").await;
+    let held = conversation.held("ops").await;
+    let approve =
+        RunConfig::builder().tool_approval(held[0].request.fingerprint(), ToolApproval::approve());
+    conversation.send(Content::new("user"), Some(approve.build())).await;
+
+    assert_eq!(*executions.lock().unwrap(), vec![json!({ "amount": 40 })]);
+    let request = model.last_request().unwrap();
+    assert_eq!(person_turns(&request), ["send 40 to Bob", "is it done?"]);
+    let sent_turns = turns(&request.contents);
+    let positions: Vec<usize> = asked_called_sent()
+        .iter()
+        .map(|wanted| {
+            sent_turns.iter().position(|turn| turn == wanted).unwrap_or_else(|| {
+                panic!("{wanted:?} is not in {:?}", request.contents);
+            })
+        })
+        .collect();
+    assert!(positions.is_sorted(), "{:?}", request.contents);
+    assert!(!has_blank_user_turn(&request), "{:?}", request.contents);
+}
+
+#[tokio::test]
+async fn a_current_turn_agent_resuming_a_call_with_a_new_message_sees_the_call_and_its_result() {
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        [calls(&[("call-1".to_string(), 40)]), ScriptedResponse::text("Sent; nothing new.")],
+    ));
+    let executions = Executions::default();
+    let conversation =
+        Conversation::new(current_turn_holder(model.clone(), &executions), None).await;
+
+    conversation.say("send 40 to Bob").await;
+    let held = conversation.held("ops").await;
+    let approve =
+        RunConfig::builder().tool_approval(held[0].request.fingerprint(), ToolApproval::approve());
+    conversation.send(Content::new("user").with_text("any news?"), Some(approve.build())).await;
+
+    assert_eq!(*executions.lock().unwrap(), vec![json!({ "amount": 40 })]);
+    let mut expected = asked_called_sent();
+    expected.extend(turns(&[Content::new("user").with_text("any news?")]));
+    assert_eq!(turns(&model.last_request().unwrap().contents), expected);
+}
+
 // --- Property ---
 
 /// A blank user turn of one of the shapes a resume run carries.
