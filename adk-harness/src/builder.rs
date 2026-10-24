@@ -132,6 +132,7 @@ pub struct HarnessAgentBuilder {
     kernel_agenda: adk_kernel::AgendaHandle,
     #[cfg(feature = "kernel")]
     kernel_ledger: adk_kernel::proc::LateLedgerSink,
+    #[cfg(feature = "kernel")]
     partition: crate::partition::PartitionOptions,
     action_ledger: Option<Arc<dyn ActionLedger>>,
     confirmation_timeout: Duration,
@@ -237,6 +238,7 @@ impl HarnessAgentBuilder {
             kernel_agenda: adk_kernel::AgendaHandle::default(),
             #[cfg(feature = "kernel")]
             kernel_ledger: adk_kernel::proc::LateLedgerSink::new(),
+            #[cfg(feature = "kernel")]
             partition: crate::partition::PartitionOptions::default(),
             action_ledger: None,
             confirmation_timeout: Duration::from_secs(300),
@@ -2311,6 +2313,7 @@ impl HarnessAgentBuilder {
                 kernel_agenda: self.kernel_agenda,
                 #[cfg(feature = "kernel")]
                 kernel_ledger: self.kernel_ledger,
+                #[cfg(feature = "kernel")]
                 partition: partition.map(|wired| wired.wiring),
                 #[cfg(feature = "web")]
                 provider_web,
