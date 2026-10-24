@@ -1165,14 +1165,19 @@ Order of evaluation in `LlmAgent` and `CodeActAgent`:
       approval, the `ApprovalStore`, the `ToolConfirmationHandler`, or a hold
 6. Action ledger (`ToolEffect::NonIdempotent` tools, `RunConfig::action_ledger`) — a recorded
    call is answered from its record without executing (`CodeActAgent` raises the answer into
-   the script); otherwise the call is begun under its `ToolContext::idempotency_key()`
+   the script); otherwise the call is begun under its `ToolContext::idempotency_key()`. The kill
+   switch is then checked again, since the ledger write can outlast a freeze: a call frozen
+   here never starts. It is answered `not run` as in 5.1 (`adk_core::not_run_text`), and its
+   begun record is completed as `ActionOutcome::Failed` with that text, so a replay is
+   answered `already_failed` with it rather than with an unknown outcome
 7. Tool executes under its timeout — the RBAC (`ProtectedTool`) and scope (`ScopeGuard`) wrappers
    check here, inside `execute()`, so a denial is a tool error: component `Tool`, category
    `Forbidden`, code `tool.permission_denied` (`adk_core::TOOL_PERMISSION_DENIED_CODE`), with
    the missing scopes (`missingScopes`, `requiredScopes`) or the RBAC permission (`permission`)
    in its details. The model is told the call was refused and which permission was missing,
    since `tool_error_response` always shows that code's message. Only `ReadOnly` and `Idempotent`
-   tools are retried, after a retryable error or a timeout, with backoff
+   tools are retried, after a retryable error or a timeout, with backoff; no retry starts once
+   a freeze is observed, and the last attempt's failure stands
 8. Action ledger completion — the outcome is recorded; a non-idempotent call that timed out or
    panicked keeps its begun record and is answered with an `outcome_unknown` response
 9. `on_tool_error` callbacks (plugins first) — when the tool failed, including an RBAC denial

@@ -2345,6 +2345,13 @@ impl Runner {
                         Some(adk_core::ActionOutcome::Succeeded { .. }) => {
                             AuditRecordOutcome::Succeeded
                         }
+                        // Refused by the kill switch between the ledger write and the
+                        // execution: it never ran.
+                        Some(adk_core::ActionOutcome::Failed { error })
+                            if adk_core::is_not_run(&error) =>
+                        {
+                            AuditRecordOutcome::NotRun
+                        }
                         Some(adk_core::ActionOutcome::Failed { .. }) => AuditRecordOutcome::Failed,
                         _ => AuditRecordOutcome::OutcomeUnknown,
                     }
