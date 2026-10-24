@@ -333,10 +333,11 @@ async fn each_tenant_runs_one_harness_per_partition_on_its_own_stores() {
     assert!(
         facts.list(adk_harness::FactFilter::user("tenant-b", "kernel")).await.unwrap().is_empty()
     );
+    // Tenant B's last model call carries its search's answer, and nothing of A's fact.
     let searched = model.requests().last().cloned().unwrap();
-    let answer = serde_json::to_string(&searched.contents.last()).unwrap();
-    assert!(answer.contains("memory_search"), "{answer}");
-    assert!(!answer.contains("nine"), "tenant B saw tenant A's fact: {answer}");
+    let seen = serde_json::to_string(&searched.contents).unwrap();
+    assert!(seen.contains("memory_search"), "{seen}");
+    assert!(!seen.contains("nine"), "tenant B saw tenant A's fact: {seen}");
     for tenant in tenants {
         tenant.stop().await.unwrap();
     }

@@ -125,7 +125,11 @@ async fn each_partition_reads_its_own_progress_source() {
     }
     assert_eq!(home.asked(), [home_pid.as_str()]);
     assert_eq!(work.asked(), [work_pid.as_str()]);
-    assert_eq!(main.asked(), [ops_pid.as_str()], "ops has no source of its own");
+    // Ops has no source of its own; the main one also answers for the kernel's own
+    // processes in `default`, and never for home's or work's.
+    let asked_main = main.asked();
+    assert!(asked_main.contains(&ops_pid), "{asked_main:?}");
+    assert!(!asked_main.contains(&home_pid) && !asked_main.contains(&work_pid), "{asked_main:?}");
 
     // Each source was handed the table and parks its own process with it.
     for source in [&main, &home, &work] {
@@ -156,14 +160,29 @@ async fn each_partition_reads_its_own_progress_source() {
                 "{name}'s source writes in {name}: {rows:?}"
             );
         }
-        // The kernel's process rows carry each process's own partition, ops's included,
-        // whose progress the main source answers.
-        let partitions: std::collections::BTreeSet<&str> = rows
+        // The kernel's rows of the three processes carry each one's own partition, ops's
+        // included, whose progress the main source answers; so do the wakes of home's and
+        // ops's finished runs, which nothing waited on.
+        let partitions = |kind: &str| -> std::collections::BTreeSet<&str> {
+            rows.iter()
+                .filter(|row| row.kind == kind && row.agent != "kernel")
+                .map(|row| row.partition.as_str())
+                .collect()
+        };
+        assert_eq!(partitions("process"), ["home", "ops", "work"].into(), "{rows:?}");
+        let wakes: std::collections::BTreeSet<&str> = rows
             .iter()
-            .filter(|row| row.kind == "process")
+            .filter(|row| row.kind == "wake")
             .map(|row| row.partition.as_str())
             .collect();
-        assert_eq!(partitions, ["home", "ops", "work"].into(), "{rows:?}");
+        assert_eq!(wakes, ["home", "ops"].into(), "{rows:?}");
+        // Only the kernel's own processes, which route those wakes, are `default`'s.
+        assert!(
+            rows.iter()
+                .filter(|row| row.partition.as_str() == "default")
+                .all(|row| row.agent == "kernel" && row.kind == "process"),
+            "{rows:?}"
+        );
     }
     kernel.stop().await.unwrap();
 }
