@@ -1353,9 +1353,9 @@ impl ToolConfirmationRequest {
 /// An error ends the turn after running tools finish; decisions still waiting in the same
 /// batch are dropped.
 ///
-/// When the run has an [`approval_store`](RunConfig::approval_store) or an
-/// [`approval_service`](RunConfig::approval_service), a call the handler does not decide in
-/// time is held there instead of denied, and the run ends with it waiting for a decision
+/// The timeout denies only in a run without an [`approval_store`](RunConfig::approval_store)
+/// or [`approval_service`](RunConfig::approval_service). With either, a call the handler does
+/// not decide in time is held there, and the run ends with it waiting for a decision
 /// (spec 3.3 §7.3); [`RunConfig::deny_on_confirmation_timeout`] restores the denial.
 #[async_trait]
 pub trait ToolConfirmationHandler: std::fmt::Debug + Send + Sync {
