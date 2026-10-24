@@ -245,7 +245,7 @@ adk_kernel::channel_contract_tests! { harness = InMemory }
 |---|---|
 | `kernel.control` with `pairing.issue`, `pairing.claim`, `devices.revoke`, `channels.pair`, `channels.revoke` | Pairing and removal, before they take effect |
 | `kernel.control` with `approvals.decide` and `device` | A decision a device answers |
-| `kernel.channel` with `surface: chat`, `channel`, `account`, `action`, `target` | A chat thread's pairing request (`pairing.requested`, `pairing.busy`), message (`message`), decision card (`notify`), answer (`decide`, `decide.refused`), stop (`stop`) and refused resume (`resume.refused`) |
+| `kernel.channel` with `surface: chat`, `origin: {"kind": "chat", "channel": …}`, `channel`, `account`, `action`, `target` | A chat thread's pairing request (`pairing.requested`, `pairing.busy`), message (`message`), decision card (`notify`), answer (`decide`, `decide.refused`), stop (`stop`) and refused resume (`resume.refused`) |
 
 A chat answer is recorded before `decide` runs and is refused when its record cannot be
 written; a stop takes effect regardless.

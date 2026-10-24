@@ -796,6 +796,8 @@ impl ChannelGateway {
         )
         .actor(actor)
         .ext("surface", json!("chat"))
+        // The origin as `adk-surface` records an answer's: how it was given (spec 3.3 §11).
+        .ext("origin", json!({ "kind": "chat", "channel": channel }))
         .ext("channel", json!(channel))
         .ext("account", json!(account))
         .ext("action", json!(action))

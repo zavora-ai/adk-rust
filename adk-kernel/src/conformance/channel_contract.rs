@@ -189,6 +189,16 @@ impl ContractHost {
         self.governance.is_frozen()
     }
 
+    /// The `origin` of every `kernel.channel` record written so far.
+    pub fn channel_origins(&self) -> Vec<serde_json::Value> {
+        self.recorder
+            .records()
+            .into_iter()
+            .filter(|record| record.action == crate::audit::CHANNEL)
+            .filter_map(|record| record.ext.get("origin").cloned())
+            .collect()
+    }
+
     /// The `kernel.channel` records written so far, as their actions.
     pub fn channel_actions(&self) -> Vec<String> {
         self.recorder
@@ -511,6 +521,12 @@ pub async fn stop_all_stops_and_resume_is_refused(harness: &dyn ChannelAdapterHa
     let actions = world.host.channel_actions();
     assert!(
         actions.contains(&"stop".to_string()) && actions.contains(&"resume.refused".to_string())
+    );
+    let origin = json!({ "kind": "chat", "channel": world.adapter.channel() });
+    let origins = world.host.channel_origins();
+    assert!(
+        !origins.is_empty() && origins.iter().all(|recorded| *recorded == origin),
+        "{origins:?}"
     );
 }
 
