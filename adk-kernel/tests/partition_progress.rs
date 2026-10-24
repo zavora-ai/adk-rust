@@ -175,12 +175,14 @@ async fn each_partition_reads_its_own_progress_source() {
             .filter(|row| row.kind == "wake")
             .map(|row| row.partition.as_str())
             .collect();
-        assert_eq!(wakes, ["home", "ops"].into(), "{rows:?}");
-        // Only the kernel's own processes, which route those wakes, are `default`'s.
+        assert!(wakes.contains("home") && wakes.contains("ops"), "{rows:?}");
+        assert!(!wakes.contains("work"), "work's run did not finish: {rows:?}");
+        // Only the kernel's own work is `default`'s: its maintenance processes, the
+        // processes routing wakes, and the wake of its own finished run.
         assert!(
             rows.iter()
                 .filter(|row| row.partition.as_str() == "default")
-                .all(|row| row.agent == "kernel" && row.kind == "process"),
+                .all(|row| row.agent == "kernel"),
             "{rows:?}"
         );
     }
