@@ -180,7 +180,10 @@ Every route requires an authenticated caller and answers `401` otherwise. The ca
 `human(user_id)` in the groups named by its scopes; `ApprovalEndpoints::with_identity` changes
 the mapping. Responses omit the call's fingerprint, which carries the unredacted arguments;
 approvers see `argsRedacted`, the acting agent, and the tool's `origin` (its publisher and
-declaration digest) on the request.
+declaration digest) on the request. `showsCallArgs` says whether `argsRedacted` are the call's
+own arguments (`ApprovalRequest::shows_call_args`): an `edit` replaces the call's arguments
+with `editedArgs` whole, so a client edits only a request that shows them, never a redacted
+view (spec 3.3 §7.2).
 
 ## Webhook Notifications
 

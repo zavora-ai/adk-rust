@@ -347,7 +347,9 @@
 //!
 //! The server exposes `GET /api/health`, the session endpoints under `/api/sessions` and
 //! `/api/apps/{app}/users/{user}/sessions`, `POST /api/run/{app}/{user}/{session}` (SSE),
-//! `POST /api/run_sse`, and the web UI at `/ui/`. See `adk-server` for the full list.
+//! and `POST /api/run_sse`. See `adk-server` for the full list. The web home of `adk-surface`
+//! (feature `surface`) is served by the harness launcher, or mounted on a server you build
+//! (spec 3.3 §5.1).
 //!
 //! ### Agent-to-Agent (A2A) Protocol
 //!
@@ -637,7 +639,7 @@ pub mod runner {
 /// Deploy agents as web services:
 /// - REST API for chat interactions
 /// - A2A (Agent-to-Agent) protocol support
-/// - Web UI integration
+/// - Routes of your own beside them, such as the web home of `adk-surface`
 ///
 /// Available with feature: `server`
 #[cfg(feature = "server")]
@@ -1168,11 +1170,12 @@ pub mod kernel {
     pub use adk_kernel::*;
 }
 
-/// Agent surfaces: the engine every surface runs on, and the web home's HTTP API (spec 3.3).
+/// Agent surfaces: the engine every surface runs on, and the web home (spec 3.3).
 ///
 /// Everything `adk-surface` exports: the [`SurfaceEngine`](surface::SurfaceEngine) with its
 /// sources, decision cards in the words of spec 3.3 §8, the rules of what each surface may
-/// decide, and [`web::router`](surface::web::router) for `ServerBuilder::add_api_routes`.
+/// decide, [`web::router`](surface::web::router) for `ServerBuilder::add_api_routes`, and
+/// [`web::home`](surface::web::home), the page, for `ServerBuilder::add_root_routes`.
 ///
 /// Available with feature: `surface` (opt-in, in no tier)
 ///

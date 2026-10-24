@@ -34,13 +34,16 @@
 //!
 //! - **Interactive**: rustyline REPL with history, streaming output, think-block rendering,
 //!   and approval prompts for tool calls held for confirmation
-//! - **Server**: HTTP server with web UI (`serve --port 8080`), listening on `127.0.0.1` by default
+//! - **Server**: HTTP server with the web home (`serve --port 8080`, feature `surface`), listening
+//!   on `127.0.0.1` by default
 
 pub mod console;
 #[cfg(feature = "harness")]
 pub mod harness;
 pub mod launcher;
 pub mod serve;
+#[cfg(all(feature = "surface", feature = "harness"))]
+mod surface;
 
 #[cfg(feature = "optimize")]
 pub mod optimize;

@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use adk_cli::harness::{BearerTokenExtractor, HarnessLauncher, KernelSettings, OPERATOR_SCOPE};
+use adk_cli::harness::{HarnessLauncher, KernelSettings, OPERATOR_SCOPE};
 use adk_core::audit_log::{AuditRecorder, AuditTrail};
 use adk_core::{
     ApprovalPolicy, ApprovalService, ApproverSelector, GovernanceControl, GovernanceStateStore,
@@ -133,6 +133,15 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         None => GovernanceControl::new(),
     };
     let audit = kernel_audit(&home, &setup, store.as_deref()).await?;
+    // The web home records its commands, and how each answer was given, on the same signed
+    // log, so "You said yes in Telegram" survives a restart (spec 3.3 §11).
+    #[cfg(feature = "surface")]
+    let surface_records = audit.as_ref().map(|(recorder, logs)| {
+        let answers: Arc<dyn adk_surface::AnswerLog> =
+            Arc::new(adk_surface::AuditAnswerLog::new(logs.clone()));
+        (AuditTrail::new(recorder.clone()), answers)
+    });
+    let audit = audit.map(|(recorder, _)| recorder);
     if let Some(recorder) = &audit {
         governance.attach_audit(AuditTrail::new(recorder.clone()));
     }
@@ -171,6 +180,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                     memory_with_inbox: true,
                     drivers: Some(drivers.clone()),
                     partition: None,
+                    #[cfg(feature = "tui")]
+                    local_console: false,
                 },
             )?);
             vec![host(&setup, agent, None, &governance, &run_store)?]
@@ -184,6 +195,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                 memory_with_inbox: true,
                 drivers: Some(drivers.clone()),
                 partition: Some((partition, table.clone(), coordinator)),
+                #[cfg(feature = "tui")]
+                local_console: false,
             };
             partition_harnesses(&setup, &settings, table, &service, &governance, &run_store, extras)
                 .await?
@@ -337,10 +350,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         .with_bind_address(bind.ip())
         .with_kernel(kernel);
     if let Some(token) = token {
-        launcher = launcher.with_request_context_extractor(Arc::new(BearerTokenExtractor::new(
-            token,
-            setup.user.clone(),
-        )));
+        launcher = launcher.with_auth_token(token);
+    }
+    #[cfg(feature = "surface")]
+    if let Some((trail, answers)) = surface_records {
+        launcher = launcher.with_surface_records(trail, answers);
     }
     println!(
         "  store {}: sessions, approvals, runs, processes, agenda, schedules, drivers, partitions, the activity ledger, paired devices",
@@ -501,7 +515,7 @@ pub(super) fn default_home() -> Result<PathBuf> {
 }
 
 /// The approval and run stores `serve` uses: the `--store` backend, `harness.db`, or memory.
-fn run_and_approval_stores(
+pub(super) fn run_and_approval_stores(
     setup: &Setup,
 ) -> (Arc<dyn adk_core::ApprovalStore>, Arc<dyn adk_core::DurableRunStore>) {
     if let Some(shared) = &setup.shared {
@@ -650,7 +664,7 @@ async fn kernel_audit(
     home: &Path,
     setup: &Setup,
     store: Option<&str>,
-) -> Result<Option<Arc<dyn AuditRecorder>>> {
+) -> Result<Option<(Arc<dyn AuditRecorder>, Arc<dyn adk_core::audit_log::AuditLogStore>)>> {
     use adk_auth::signed_audit::{AuditLog, Ed25519Signer};
     use adk_core::audit_log::AuditLogStore;
 
@@ -677,8 +691,9 @@ async fn kernel_audit(
             return Err(error).with_context(|| format!("failed to read {}", key_path.display()));
         }
     };
-    let log = AuditLog::builder(logs, format!("kernel-{id}"), Arc::new(signer)).open().await?;
-    Ok(Some(Arc::new(log)))
+    let log =
+        AuditLog::builder(logs.clone(), format!("kernel-{id}"), Arc::new(signer)).open().await?;
+    Ok(Some((Arc::new(log), logs)))
 }
 
 #[cfg(not(feature = "audit"))]
@@ -686,7 +701,7 @@ async fn kernel_audit(
     _home: &Path,
     _setup: &Setup,
     _store: Option<&str>,
-) -> Result<Option<Arc<dyn AuditRecorder>>> {
+) -> Result<Option<(Arc<dyn AuditRecorder>, Arc<dyn adk_core::audit_log::AuditLogStore>)>> {
     Ok(None)
 }
 

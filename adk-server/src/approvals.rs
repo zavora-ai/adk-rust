@@ -20,7 +20,9 @@
 //! Errors are problem documents with the service's error code: `409` for
 //! `approval.version_conflict` (re-read and decide again), `403` for self-approval or a
 //! caller who is not an approver, `404` for an unknown request. Request bodies omit the
-//! call's fingerprint, which carries the unredacted arguments. A resolution authorizes only
+//! call's fingerprint, which carries the unredacted arguments, and add `showsCallArgs`:
+//! whether `argsRedacted` are the call's own arguments, which an edit starting from them
+//! needs. A resolution authorizes only
 //! the call the request describes: the fingerprint names its acting agent and its tool's
 //! [`ToolOrigin`](adk_core::ToolOrigin), shown on the request.
 
@@ -198,11 +200,13 @@ fn not_found(id: &str) -> Response {
 }
 
 /// A request as shown to callers: without its fingerprint, which holds the raw
-/// arguments.
+/// arguments, and with `showsCallArgs`, whether `argsRedacted` are the call's own, so a
+/// client knows an edit that starts from them changes nothing else (spec 3.3 §7.2).
 fn view(request: &ApprovalRequest) -> Value {
     let mut value = serde_json::to_value(request).unwrap_or(Value::Null);
     if let Some(object) = value.as_object_mut() {
         object.remove("fingerprint");
+        object.insert("showsCallArgs".into(), Value::Bool(request.shows_call_args()));
     }
     value
 }

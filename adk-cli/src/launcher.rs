@@ -24,7 +24,7 @@
 //! # Interactive console (default)
 //! cargo run
 //!
-//! # Web server with UI, on loopback
+//! # Web server (the REST API under /api), on loopback
 //! cargo run -- serve
 //! cargo run -- serve --port 3000
 //!
@@ -181,6 +181,12 @@ pub struct Launcher {
     #[cfg(feature = "harness")]
     kernel_governance:
         Option<(adk_core::GovernanceControl, Arc<dyn adk_server::rest::FreezeDelegate>)>,
+    /// The kill switch shared with a served harness (spec 3.3 §11 S-I10).
+    #[cfg(feature = "harness")]
+    governance: Option<adk_core::GovernanceControl>,
+    /// The web home's engine, which a served harness mounts (spec 3.3 §5.1, §10 S1).
+    #[cfg(all(feature = "surface", feature = "harness"))]
+    surface: Option<adk_surface::SurfaceEngine>,
     thinking_mode: ThinkingDisplayMode,
     bind_address: IpAddr,
 }
@@ -214,6 +220,10 @@ impl Launcher {
             api_routes: Vec::new(),
             #[cfg(feature = "harness")]
             kernel_governance: None,
+            #[cfg(feature = "harness")]
+            governance: None,
+            #[cfg(all(feature = "surface", feature = "harness"))]
+            surface: None,
             thinking_mode: ThinkingDisplayMode::Auto,
             bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
         }
@@ -510,6 +520,22 @@ impl Launcher {
         self
     }
 
+    /// Serves the web home over `engine`: the page at `/ui/` and its API under
+    /// `/api/surface` (spec 3.3 §5.1, §10 S1).
+    #[cfg(all(feature = "surface", feature = "harness"))]
+    pub(crate) fn with_surface(mut self, engine: adk_surface::SurfaceEngine) -> Self {
+        self.surface = Some(engine);
+        self
+    }
+
+    /// Shares `control` with the server: its runs and background runs stop when it freezes
+    /// (spec 3.3 §11 S-I10).
+    #[cfg(feature = "harness")]
+    pub(crate) fn with_governance(mut self, control: adk_core::GovernanceControl) -> Self {
+        self.governance = Some(control);
+        self
+    }
+
     /// Shares `control` with the server and serves the admin governance endpoints, whose
     /// freeze `delegate` handles (spec 3.2 §10 S4: a kernel parks running processes).
     #[cfg(feature = "harness")]
@@ -787,7 +813,9 @@ impl Launcher {
     /// is set, the approval inbox and its ticker when
     /// [`with_approval_service`](Self::with_approval_service) is set (the ticker starts only
     /// inside a Tokio runtime), and background runs when
-    /// [`with_background_runs`](Self::with_background_runs) is set.
+    /// [`with_background_runs`](Self::with_background_runs) is set. The web home of
+    /// `adk-surface` is served by `adk-rust serve` and `adk-rust up`, over the harness
+    /// (spec 3.3 §5.1, §10 S1); a launcher serving a chat agent serves its REST API.
     ///
     /// # Errors
     ///
@@ -809,16 +837,30 @@ impl Launcher {
         let approval_service = self.approval_service.clone();
         let background_runs = self.background_runs.clone();
         let api_routes = self.api_routes.clone();
+        #[cfg(all(feature = "surface", feature = "harness"))]
+        let surface = self.surface.clone();
         #[cfg(feature = "harness")]
         let kernel_governance = self.kernel_governance.clone();
+        #[cfg(feature = "harness")]
+        let governance = self.governance.clone();
         #[cfg_attr(not(feature = "harness"), allow(unused_mut))]
         let mut config = self.into_server_config(span_exporter);
         #[cfg(feature = "harness")]
-        if let Some((control, _)) = &kernel_governance {
+        if let Some(control) =
+            kernel_governance.as_ref().map(|(control, _)| control).or(governance.as_ref())
+        {
             config = config.with_governance(control.clone());
         }
 
         let mut builder = ServerBuilder::new(config);
+        // The web home (spec 3.3 §5.1, §10 S1): the page at `/ui/` and the engine's API under
+        // `/api/surface`, behind the server's authentication (§11 S-I8).
+        #[cfg(all(feature = "surface", feature = "harness"))]
+        if let Some(surface) = surface {
+            builder = builder
+                .add_api_routes(adk_surface::web::router(surface))
+                .add_root_routes(adk_surface::web::home());
+        }
         #[cfg(feature = "harness")]
         if let Some((_, delegate)) = kernel_governance {
             builder = builder.with_freeze_delegate(delegate);
@@ -869,9 +911,7 @@ impl Launcher {
                 "serving beyond loopback; configure authentication, and list public host names in SecurityConfig::allowed_hosts"
             );
         }
-        println!("ADK Server starting on http://{addr}");
-        println!("Open http://localhost:{port} in your browser");
-        println!("Press Ctrl+C to stop\n");
+        print!("{}", serve_banner(addr));
 
         // The peer address lets an extractor such as the harness's loopback operator see who
         // connected.
@@ -882,6 +922,14 @@ impl Launcher {
 
         Ok(())
     }
+}
+
+/// What serve mode prints on start: where the REST API answers. The server mounts nothing at
+/// `/`; the web home is `adk-rust serve`'s and `adk-rust up`'s (spec 3.3 §10 S1).
+fn serve_banner(addr: SocketAddr) -> String {
+    format!(
+        "ADK Server starting on http://{addr}\n  REST API: http://{addr}/api (health: /api/health)\nPress Ctrl+C to stop\n\n"
+    )
 }
 
 /// Opens the console's session: `requested` when it exists, otherwise a new session,
@@ -1962,6 +2010,58 @@ mod tests {
         }
 
         assert!(!is_exit_command("hello"));
+    }
+
+    /// Every caller as `ana`.
+    struct Ana;
+
+    #[async_trait]
+    impl adk_server::RequestContextExtractor for Ana {
+        async fn extract(
+            &self,
+            _parts: &axum::http::request::Parts,
+        ) -> std::result::Result<adk_core::RequestContext, adk_server::RequestContextError>
+        {
+            Ok(adk_core::RequestContext {
+                user_id: "ana".into(),
+                scopes: Vec::new(),
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    /// A served chat agent has no web home (spec 3.3 §10 S1): its Stop all would freeze every
+    /// user's runs, and its runner has no approval inbox to show (`adk-rust serve` and `up`
+    /// serve the home, over the harness).
+    #[tokio::test]
+    async fn a_served_chat_agent_has_no_web_home_or_its_api() {
+        let app = test_launcher()
+            .with_request_context_extractor(Arc::new(Ana))
+            .build_app()
+            .expect("launcher app should build");
+        for uri in ["/ui/", "/api/surface/status?surface=web"] {
+            let response =
+                app.clone().oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap()).await;
+            assert_eq!(response.unwrap().status(), StatusCode::NOT_FOUND, "{uri}");
+        }
+        let stop = Request::builder()
+            .method("POST")
+            .uri("/api/surface/commands")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"surface":"web","origin":{"kind":"pointer"},"command":{"type":"stopAll"}}"#,
+            ))
+            .unwrap();
+        let response = app.oneshot(stop).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "no route freezes the server");
+    }
+
+    /// Serve mode names where the REST API answers; nothing is mounted at `/` to open.
+    #[test]
+    fn the_serve_banner_names_the_api_not_a_page_at_the_root() {
+        let banner = serve_banner(SocketAddr::from(([127, 0, 0, 1], 8080)));
+        assert!(banner.contains("http://127.0.0.1:8080/api"), "{banner}");
+        assert!(!banner.contains("in your browser"), "{banner}");
     }
 
     #[tokio::test]

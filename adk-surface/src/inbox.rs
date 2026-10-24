@@ -276,10 +276,17 @@ fn problem(status: u16, value: &Value) -> AdkError {
     AdkError::new(ErrorComponent::Server, category, code, message)
 }
 
-/// A request as the inbox serves it, without its fingerprint.
+/// A request as the inbox serves it, without its fingerprint. Where the shown arguments are
+/// not the call's own (`showsCallArgs`), Edit is not offered: it would submit them as the
+/// call's (spec 3.3 §7.2).
 fn request_of(mut view: Value) -> Result<ApprovalRequest> {
     if let Some(object) = view.as_object_mut() {
         object.entry("fingerprint").or_insert_with(|| Value::String(String::new()));
+        if object.get("showsCallArgs") == Some(&Value::Bool(false))
+            && let Some(Value::Array(actions)) = object.get_mut("allowedActions")
+        {
+            actions.retain(|action| action != "edit");
+        }
     }
     serde_json::from_value(view).map_err(|error| {
         SurfaceError::Invalid(format!(
@@ -305,6 +312,29 @@ fn encode(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Over the approvals API the engine cannot see the fingerprint, so the inbox's
+    /// `showsCallArgs` decides whether Edit is offered (spec 3.3 §7.2).
+    #[test]
+    fn a_redacted_request_from_the_inbox_offers_no_edit() {
+        let call = adk_core::ToolConfirmationRequest::new("pay", json!({ "card": "4242" }));
+        let request = ApprovalRequest::new(
+            "apr-1",
+            adk_core::ApprovalScope::new("home", "ana", "s1"),
+            &call,
+            adk_core::ApprovalPolicy::new([adk_core::ApproverSelector::human("ana")]),
+        )
+        .with_redacted_args(json!({ "card": "****" }));
+        let served = |shown: bool| {
+            let mut view = serde_json::to_value(&request).unwrap();
+            let object = view.as_object_mut().unwrap();
+            object.remove("fingerprint");
+            object.insert("showsCallArgs".into(), Value::Bool(shown));
+            request_of(view).unwrap().allowed_actions
+        };
+        assert!(!served(false).contains(&adk_core::ApprovalAction::Edit));
+        assert!(served(true).contains(&adk_core::ApprovalAction::Edit));
+    }
 
     #[test]
     fn an_inbox_conflict_keeps_its_code() {

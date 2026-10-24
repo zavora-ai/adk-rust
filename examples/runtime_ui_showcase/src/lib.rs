@@ -17,7 +17,7 @@ pub fn openai_model() -> anyhow::Result<Arc<dyn Llm>> {
     Ok(Arc::new(OpenAIClient::new(OpenAIConfig::new(api_key, model_id))?))
 }
 
-/// Serves one executable agent root through the built-in ADK runtime UI.
+/// Serves one executable agent root over the ADK REST and SSE API.
 pub async fn serve(agent: Arc<dyn Agent>, example: &str) -> anyhow::Result<()> {
     adk_core::ensure_crypto_provider();
     let loader = Arc::new(SingleAgentLoader::new(agent));
@@ -28,7 +28,7 @@ pub async fn serve(agent: Arc<dyn Agent>, example: &str) -> anyhow::Result<()> {
         .with_span_exporter(span_exporter);
     let address = std::env::var("ADK_UI_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8088".to_string());
     let listener = tokio::net::TcpListener::bind(&address).await?;
-    println!("Runtime UI: http://{address}/ui/");
+    println!("API: http://{address}/api/");
     axum::serve(listener, create_app(config)).await?;
     Ok(())
 }

@@ -45,6 +45,12 @@ async fn served(script: Vec<ScriptedResponse>, mode: HarnessMode, token: Option<
     served_with(script, mode, extractor, None).await
 }
 
+/// A served harness as `adk-rust serve` builds it: a turn runs as the operator only when its
+/// caller is authenticated, else Auto asks and standing rules are skipped (spec 3.1 §8.2).
+async fn served_gated(script: Vec<ScriptedResponse>, mode: HarnessMode) -> Served {
+    served_with_gate(script, mode, None, None, true).await
+}
+
 /// A served harness with sessions `s1` and `s2` of `ana`, authenticating with `extractor`
 /// (loopback peers when `None`) and recording into `audit`.
 async fn served_with(
@@ -52,6 +58,16 @@ async fn served_with(
     mode: HarnessMode,
     extractor: Option<Arc<dyn RequestContextExtractor>>,
     audit: Option<Arc<EphemeralAuditLog>>,
+) -> Served {
+    served_with_gate(script, mode, extractor, audit, false).await
+}
+
+async fn served_with_gate(
+    script: Vec<ScriptedResponse>,
+    mode: HarnessMode,
+    extractor: Option<Arc<dyn RequestContextExtractor>>,
+    audit: Option<Arc<EphemeralAuditLog>>,
+    identity_gate: bool,
 ) -> Served {
     let workspace = tempfile::tempdir().unwrap();
     let service = approval_service();
@@ -62,6 +78,9 @@ async fn served_with(
         .approval_service(service.clone());
     if let Some(audit) = audit {
         builder = builder.audit_log(audit);
+    }
+    if identity_gate {
+        builder = builder.require_authenticated_identity();
     }
     let agent = builder.build().unwrap();
     let sessions = Arc::new(InMemorySessionService::new());
@@ -229,6 +248,158 @@ async fn a_held_call_decided_over_http_runs_once_on_resume() {
         call(&served.app, request("POST", "/api/run", Some(run_body(None)), LOOPBACK)).await;
     assert_eq!(status, StatusCode::OK, "{events}");
     assert_eq!(std::fs::read_to_string(&count).unwrap(), "run\n", "the approval was reused");
+}
+
+/// The served harness mounts the web home (spec 3.3 §5.1, §10 S1): the page at `/ui/`, its
+/// API for the loopback operator only (§11 S-I8); a held call is a card the home allows once
+/// with the version it saw, a second answer is "already decided", and the call runs once.
+#[cfg(feature = "surface")]
+#[tokio::test]
+async fn the_web_home_allows_a_held_call_once() {
+    let served = served(
+        vec![
+            ScriptedResponse::function_call("bash", json!({ "command": "echo run >> count.txt" })),
+            ScriptedResponse::text("Ran it."),
+            ScriptedResponse::text("Nothing else to do."),
+        ],
+        HarnessMode::Ask,
+        None,
+    )
+    .await;
+    let count = served.workspace.path().join("count.txt");
+
+    let page = served.app.clone().oneshot(request("GET", "/ui/", None, LOOPBACK)).await.unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    assert!(page.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
+    let (status, _) = call(
+        &served.app,
+        request("GET", "/api/surface/status?surface=web", None, Some("203.0.113.9:40000")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "the home's API is the operator's only");
+
+    let (status, events) =
+        call(&served.app, request("POST", "/api/run", Some(run_body(Some("count"))), LOOPBACK))
+            .await;
+    assert_eq!(status, StatusCode::OK, "{events}");
+    let (status, page) =
+        call(&served.app, request("GET", "/api/surface/decisions?surface=web", None, LOOPBACK))
+            .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let card = &page["decisions"][0];
+    assert_eq!(card["call"]["tool"], "bash", "{page}");
+    assert_eq!(card["statusText"], "Waiting for you", "{page}");
+    let decide = |answer: &str| {
+        json!({
+            "surface": "web",
+            "origin": { "kind": "pointer" },
+            "command": {
+                "type": "decide",
+                "decisionId": card["id"],
+                "version": card["version"],
+                "answer": answer,
+                "expanded": true,
+            },
+        })
+    };
+    let (status, outcome) = call(
+        &served.app,
+        request("POST", "/api/surface/commands", Some(decide("allowOnce")), LOOPBACK),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{outcome}");
+    assert_eq!(outcome["type"], "answered", "{outcome}");
+    let (_, again) =
+        call(&served.app, request("POST", "/api/surface/commands", Some(decide("deny")), LOOPBACK))
+            .await;
+    assert_eq!(again["type"], "alreadyDecided", "{again}");
+
+    // The engine resumes the session; the call runs once.
+    for _ in 0..200 {
+        if count.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert_eq!(std::fs::read_to_string(&count).unwrap(), "run\n");
+    let (status, events) =
+        call(&served.app, request("POST", "/api/run", Some(run_body(None)), LOOPBACK)).await;
+    assert_eq!(status, StatusCode::OK, "{events}");
+    assert_eq!(std::fs::read_to_string(&count).unwrap(), "run\n", "the answer was reused");
+}
+
+fn home_command(command: Value) -> Value {
+    json!({ "surface": "web", "origin": { "kind": "pointer" }, "command": command })
+}
+
+/// The home's Stop all freezes what the server runs, not only the home's own turns (spec 3.3
+/// §11 S-I10): a run started over `POST /api/run` afterwards does not run, until Resume all.
+#[cfg(feature = "surface")]
+#[tokio::test]
+async fn the_home_s_stop_all_stops_the_server_s_runs() {
+    let served = served(
+        vec![
+            ScriptedResponse::function_call("bash", json!({ "command": "echo run >> count.txt" })),
+            ScriptedResponse::text("Ran it."),
+        ],
+        HarnessMode::Auto,
+        None,
+    )
+    .await;
+    let count = served.workspace.path().join("count.txt");
+    let stop = home_command(json!({ "type": "stopAll" }));
+    let (status, outcome) =
+        call(&served.app, request("POST", "/api/surface/commands", Some(stop), LOOPBACK)).await;
+    assert_eq!(status, StatusCode::OK, "{outcome}");
+    assert_eq!(outcome["type"], "stopped", "{outcome}");
+
+    let (_, events) =
+        call(&served.app, request("POST", "/api/run", Some(run_body(Some("count"))), LOOPBACK))
+            .await;
+    assert!(events.to_string().contains("governance.frozen"), "{events}");
+    assert!(!count.exists(), "nothing ran while stopped");
+
+    let resume = home_command(json!({ "type": "resumeAll" }));
+    let (_, outcome) =
+        call(&served.app, request("POST", "/api/surface/commands", Some(resume), LOOPBACK)).await;
+    assert_eq!(outcome["type"], "resumed", "{outcome}");
+    let (status, events) =
+        call(&served.app, request("POST", "/api/run", Some(run_body(Some("count"))), LOOPBACK))
+            .await;
+    assert_eq!(status, StatusCode::OK, "{events}");
+    assert_eq!(std::fs::read_to_string(&count).unwrap(), "run\n");
+}
+
+/// A message typed in the home runs as the operator the server admitted (spec 3.3 §5.1,
+/// spec 3.1 §8.2): in Auto mode its call runs without a decision, as the same message over
+/// `POST /api/run` does.
+#[cfg(feature = "surface")]
+#[tokio::test]
+async fn the_home_s_turns_run_as_the_operator() {
+    let served = served_gated(
+        vec![
+            ScriptedResponse::function_call("bash", json!({ "command": "echo run >> count.txt" })),
+            ScriptedResponse::text("Ran it."),
+        ],
+        HarnessMode::Auto,
+    )
+    .await;
+    let count = served.workspace.path().join("count.txt");
+    let send = home_command(json!({ "type": "send", "sessionId": "s1", "text": "count" }));
+    let (status, outcome) =
+        call(&served.app, request("POST", "/api/surface/commands", Some(send), LOOPBACK)).await;
+    assert_eq!(status, StatusCode::OK, "{outcome}");
+    for _ in 0..200 {
+        if count.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let (_, page) =
+        call(&served.app, request("GET", "/api/surface/decisions?surface=web", None, LOOPBACK))
+            .await;
+    assert_eq!(page["decisions"], json!([]), "Auto asked nothing: {page}");
+    assert_eq!(std::fs::read_to_string(&count).unwrap(), "run\n");
 }
 
 /// Callers named by the `x-user` header with the scopes in `x-scopes`; no header, no caller.

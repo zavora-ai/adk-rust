@@ -16,7 +16,7 @@ cd quickstart_agent
 ```
 
 This creates a complete Rust project with an OpenAI agent, in-memory sessions,
-the ADK HTTP runtime, streaming endpoints, and the embedded development UI.
+the ADK HTTP runtime and its streaming endpoints.
 
 ### Other Templates
 
@@ -27,7 +27,7 @@ cargo adk new my_agent --template tools
 # RAG agent with Gemini embeddings and in-memory vector search
 cargo adk new my_agent --template rag
 
-# REST API server with the embedded runtime UI
+# REST API server with streaming endpoints
 cargo adk new my_agent --template api
 
 # OpenAI agent with an interactive console
@@ -48,7 +48,7 @@ cargo adk new my_agent --template tools --addon docker --addon telemetry
 | `basic` | Gemini agent with interactive console (default; alias for `llm`) |
 | `tools` | Agent with `#[tool]` macro custom tools + schemars schema generation |
 | `rag` | RAG pipeline — Gemini embeddings, in-memory vector store, document ingestion |
-| `api` | Axum REST server, health check, streaming endpoints, and embedded runtime UI |
+| `api` | Axum REST server, health check, and streaming endpoints |
 | `openai` | OpenAI `gpt-5.6-terra` agent with console |
 | `a2a` | A2A protocol agent with `A2aServer` builder and agent card (alias for `a2a-server`) |
 
@@ -73,35 +73,17 @@ it.
 cargo run
 ```
 
-Open [http://127.0.0.1:8080/ui/](http://127.0.0.1:8080/ui/). The agent appears
-automatically; you do not need to create a session or call an endpoint first. The server binds
-`127.0.0.1` unless you set `BIND_HOST`, and `PORT` changes the port.
+The server binds `127.0.0.1` unless you set `BIND_HOST`, and `PORT` changes the port.
 
-## Step 4: Test it in the runtime UI
+## Step 4: Talk to it
 
-Enter a prompt such as:
-
-```
-Explain what this agent can do in three concise Markdown bullets.
-```
-
-The response streams into the conversation. Use the inspector on the right to
-review the execution topology, ordered event timeline, state changes, artifacts,
-sessions, protocol capabilities, and telemetry without leaving the page.
-
-![Entering a prompt, watching a team handoff, and opening the ADK Runtime telemetry inspector](images/adk-runtime-five-minute.gif)
-
-This recording uses the portable-team showcase so the animated handoff is easy
-to see. Your scaffolded agent uses the same runtime UI with a one-node topology.
-
-Verify the HTTP runtime separately if you want a smoke test:
+Check that the server is up:
 
 ```bash
 curl -fsS http://127.0.0.1:8080/api/health
 ```
 
-To call the agent without the UI, create a session and post a message; the reply streams as
-server-sent events:
+Create a session and post a message; the reply streams as server-sent events:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8080/api/sessions \
@@ -113,9 +95,11 @@ curl -N -X POST http://127.0.0.1:8080/api/run/quickstart_agent/user1/SESSION_ID 
   -d '{"new_message":"Explain what this agent can do in three concise Markdown bullets."}'
 ```
 
-You now have one executable that runs the agent, manages sessions, streams
-events, and serves its own test interface. No separate frontend install is
-required.
+You now have one executable that runs the agent, manages sessions and streams
+events. For a page where you talk to your agents, decide what they ask to do and review what
+they did, run [the web home](surfaces/web-home.md): `adk-rust serve` serves it at
+`http://127.0.0.1:8080/ui/`, and a server you build mounts it with `adk-surface`'s `web`
+feature.
 
 ### Prefer a terminal-only agent?
 
@@ -200,8 +184,8 @@ async fn main() -> anyhow::Result<()> {
 |------|-------------|
 | `OpenAIClient` | Creates the model client from `OPENAI_API_KEY` |
 | `LlmAgentBuilder` | Builder pattern: name, description, instruction (system prompt), model, tools |
-| `InMemorySessionService` | Stores local development sessions for the runner and UI |
-| `create_app` | Mounts the REST/SSE API and embedded runtime UI in one Axum router |
+| `InMemorySessionService` | Stores local development sessions for the runner and the server |
+| `create_app` | Mounts the REST/SSE API in one Axum router |
 
 ---
 
@@ -275,7 +259,7 @@ cp .env.example .env
 cargo run
 ```
 
-Open `http://127.0.0.1:8080/ui/`. The default basic template uses the
+The server answers on `http://127.0.0.1:8080/api/`. The default basic template uses the
 lightweight console launcher instead.
 
 ---
