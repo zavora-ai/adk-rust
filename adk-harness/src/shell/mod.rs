@@ -180,10 +180,16 @@ impl IsolationStatus {
     }
 }
 
+/// The Windows restricted-token enforcer, which leaves the network open (spec 3.2 §10 W5).
+const RESTRICTED_TOKEN: &str = "restricted-token";
+
 impl fmt::Display for IsolationStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Host => f.write_str("host (full user permissions, network)"),
+            Self::OsSandbox { enforcer } if enforcer == RESTRICTED_TOKEN => {
+                write!(f, "OS sandbox ({enforcer}, network not restricted)")
+            }
             Self::OsSandbox { enforcer } => write!(f, "OS sandbox ({enforcer}, no network)"),
             Self::Container { image } => write!(f, "container ({image})"),
             Self::Degraded { requested, reason } => write!(
@@ -218,6 +224,10 @@ pub(crate) struct ShellRuntime {
     /// by the enforcer conformance probe) and every root-level protected path exists, so
     /// sandboxed commands may run without approval where the mode table allows it (I26).
     pub(crate) protects_paths: bool,
+    /// An active OS sandbox runs a read-only launcher's commands with the workspace read-only
+    /// and no network, so Plan mode may run them without approval (spec 3.1 §7.4). The
+    /// Windows restricted-token enforcer does neither (spec 3.2 §10 W5).
+    pub(crate) read_only_runs: bool,
     /// `auto_allow_sandboxed` is in effect.
     pub(crate) auto_allow_sandboxed: bool,
 }
@@ -243,6 +253,7 @@ pub(crate) fn resolve_isolation(
             #[cfg(feature = "docker")]
             container: None,
             protects_paths: false,
+            read_only_runs: false,
             auto_allow_sandboxed: false,
         },
         #[cfg(feature = "sandbox")]
@@ -266,6 +277,7 @@ pub(crate) fn resolve_isolation(
             }
             ShellRuntime {
                 protects_paths: active && refusal.is_none(),
+                read_only_runs: active && launcher.keeps_read_only(),
                 auto_allow_sandboxed: config.auto_allow_sandboxed && active && refusal.is_none(),
                 launcher: active.then_some(launcher),
                 #[cfg(feature = "docker")]
@@ -299,6 +311,7 @@ pub(crate) fn resolve_isolation(
             }
             ShellRuntime {
                 protects_paths: active && refusal.is_none(),
+                read_only_runs: false,
                 auto_allow_sandboxed: config.auto_allow_sandboxed && active && refusal.is_none(),
                 #[cfg(feature = "sandbox")]
                 launcher: None,
@@ -331,6 +344,12 @@ pub(crate) fn resolve_isolation(
 fn auto_allow_refusal(launcher: &SandboxLauncher, root: &std::path::Path) -> Option<String> {
     if launcher.config().network {
         return Some("the sandbox allows the network".to_string());
+    }
+    if !launcher.denies_network() {
+        return Some(format!(
+            "the {} sandbox does not restrict the network",
+            adk_devtools::CommandLauncher::isolation(launcher)
+        ));
     }
     if let Err(reason) = launcher.nested_read_only_conformance() {
         return Some(reason);

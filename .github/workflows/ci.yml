@@ -555,18 +555,37 @@ jobs:
     - name: Run sandbox Rust compilation portability smoke
       run: cargo test -p adk-sandbox --test process_enforcement_tests a_working_program_still_runs -- --exact
 
-    # The restricted-token enforcer (spec 3.2 §10 W5) can only be exercised on Windows.
+    # The restricted-token enforcer (spec 3.2 §10 W5) can only be exercised on Windows: its
+    # confined runs, its contained processes with piped streams, and the harness shell that
+    # runs `bash` through them.
     - name: Run the Windows restricted-token enforcer tests
-      timeout-minutes: 15
+      timeout-minutes: 25
       run: |
         cargo test -p adk-sandbox --features sandbox-windows --lib sandbox::windows
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         cargo test -p adk-sandbox --features sandbox-windows --test windows_enforcer_tests
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cargo test -p adk-harness --test shell_sandbox_windows_tests
+
+    # The Job Objects that hold a process tree (spec 3.2 §10 W1): adk-sandbox's own, each
+    # stdio server of McpServerManager's, and a kernel driver's, which unmounting ends with
+    # every process the driver started. adk-devtools' bash runs in the same jobs below.
+    - name: Run the Windows process-tree tests
+      timeout-minutes: 20
+      run: |
+        cargo test -p adk-sandbox --features process-tree --test process_tree_tests
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cargo test -p adk-tool --features mcp --test mcp_manager_status_tests
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cargo test -p adk-kernel --lib -- drivers::launch::tests::the_plan_records
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cargo test -p adk-kernel --test driver_scenarios a_drivers_process_tree
 
     # adk-code spawns rustc from a cleared environment and adk-devtools resolves
     # workspace paths; both carry Windows-only behaviour that the compile-only build
     # cannot exercise and that the merge tier otherwise reports only after landing.
-    # adk-devtools' suite includes the Job Object and handle-verified open tests
-    # (spec 3.2 §10 W1, W6).
+    # adk-devtools' suite includes the Job Object, handle-verified open and contained-process
+    # tests (spec 3.2 §10 W1, W5, W6).
     # adk-managed's durable round trips drive two runtime replicas over one set of
     # SQLite files, whose rollback journals make every write slow on Windows.
     # PowerShell fails a step on its last command's exit code only, so each earlier

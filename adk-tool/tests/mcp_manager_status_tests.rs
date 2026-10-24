@@ -1,6 +1,7 @@
 //! `McpServerManager` status transitions and the stdio launcher (spec 3.2 §10 T1): a
 //! subscriber sees a killed server crash and restart in order, a server whose restarts all
-//! fail ends `FailedToStart`, and a launcher's command is the one the manager spawns.
+//! fail ends `FailedToStart`, and a launcher's command is the one the manager spawns. On
+//! Windows, stopping a server ends the processes it started (spec 3.2 §10 W1).
 //!
 //! The stdio server is this test binary, re-run as a child with [`SERVER_ENV`] set. The
 //! lines libtest prints before the server starts are not JSON-RPC, which the client skips.
@@ -8,14 +9,18 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use adk_core::{AdkError, ReadonlyContext, Toolset};
+#[cfg(unix)]
+use adk_core::AdkError;
+use adk_core::{ReadonlyContext, Toolset};
 use adk_tool::SimpleToolContext;
-use adk_tool::mcp::{
-    McpServerConfig, McpServerManager, RestartPolicy, ServerStatus, ServerStatusTransition,
-};
+use adk_tool::mcp::{McpServerConfig, McpServerManager, RestartPolicy};
+// The crash and restart tests kill the server with `kill -9`, so they run on Unix.
+#[cfg(unix)]
+use adk_tool::mcp::{ServerStatus, ServerStatusTransition};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
     InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities, Tool,
@@ -23,6 +28,7 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
 use serde_json::json;
+#[cfg(unix)]
 use tokio::sync::broadcast;
 
 /// Names the mode when this binary runs as the stdio MCP server.
@@ -32,10 +38,12 @@ const SERVER_ENV: &str = "ADK_TOOL_MCP_STATUS_TEST_SERVER";
 const TAG_ENV: &str = "ADK_TOOL_MCP_LAUNCH_TAG";
 
 /// Long enough that only a missed transition reaches it.
+#[cfg(unix)]
 const DEADLINE: Duration = Duration::from_secs(30);
 
-/// Publishes `server_pid`, returning this process's ID, and `launch_tag`, returning
-/// [`TAG_ENV`].
+/// Publishes `server_pid`, returning this process's ID, `launch_tag`, returning
+/// [`TAG_ENV`], and `spawn_descendant`, which starts a process that runs for five minutes on
+/// Windows unless something ends it, and returns its ID.
 #[derive(Clone)]
 struct Probe;
 
@@ -52,7 +60,8 @@ impl ServerHandler for Probe {
         let schema = Arc::new(serde_json::Map::new());
         Ok(ListToolsResult::with_all_items(vec![
             Tool::new("server_pid", "Returns the server's process ID.", Arc::clone(&schema)),
-            Tool::new("launch_tag", "Returns the tag the launcher set.", schema),
+            Tool::new("launch_tag", "Returns the tag the launcher set.", Arc::clone(&schema)),
+            Tool::new("spawn_descendant", "Starts a long-running process.", schema),
         ]))
     }
 
@@ -63,6 +72,20 @@ impl ServerHandler for Probe {
     ) -> Result<CallToolResponse, ErrorData> {
         let text = match params.name.as_ref() {
             "server_pid" => std::process::id().to_string(),
+            "spawn_descendant" => {
+                // Five minutes of `ping` on Windows, the platform whose tests call the tool.
+                let mut child = std::process::Command::new("ping")
+                    .args(["-n", "300", "127.0.0.1"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap();
+                let pid = child.id();
+                // Reaped in the background, so the server does not wait for it.
+                std::thread::spawn(move || child.wait());
+                pid.to_string()
+            }
             _ => std::env::var(TAG_ENV).unwrap_or_else(|_| "untagged".to_string()),
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]).into())
@@ -96,6 +119,7 @@ fn server_config(restart_policy: Option<RestartPolicy>) -> McpServerConfig {
     }
 }
 
+#[cfg(unix)]
 fn fast_restarts(max_restart_attempts: u32) -> RestartPolicy {
     RestartPolicy {
         initial_delay_ms: 20,
@@ -117,11 +141,13 @@ async fn call(manager: &McpServerManager, tool: &str) -> String {
     output.unwrap()["output"].as_str().unwrap().to_string()
 }
 
+#[cfg(unix)]
 fn transition(from: ServerStatus, to: ServerStatus) -> ServerStatusTransition {
     ServerStatusTransition { id: "probe".to_string(), from, to }
 }
 
 /// Receives the next `count` transitions.
+#[cfg(unix)]
 async fn next_transitions(
     receiver: &mut broadcast::Receiver<ServerStatusTransition>,
     count: usize,
@@ -355,4 +381,77 @@ async fn an_agents_tool_call_reaches_the_server_the_launcher_started() {
 
     assert_eq!(responses, vec![json!({ "output": "launched" })]);
     manager.shutdown().await.unwrap();
+}
+
+/// Whether the process `pid` has ended, or ends within `wait`.
+#[cfg(windows)]
+fn ends_within(pid: u32, wait: Duration) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+    // SAFETY: plain arguments; a null handle means no such process is left.
+    let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if process.is_null() {
+        return true;
+    }
+    let millis = u32::try_from(wait.as_millis()).unwrap_or(u32::MAX);
+    // SAFETY: the handle is open with `PROCESS_SYNCHRONIZE` and closed once.
+    unsafe {
+        let waited = WaitForSingleObject(process, millis);
+        CloseHandle(process);
+        waited == WAIT_OBJECT_0
+    }
+}
+
+/// Ends the process `pid`, should a test leave it running.
+#[cfg(windows)]
+fn terminate(pid: u32) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
+    // SAFETY: plain arguments; the handle is checked and closed once.
+    unsafe {
+        let process = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if !process.is_null() {
+            TerminateProcess(process, 1);
+            CloseHandle(process);
+        }
+    }
+}
+
+/// A server's Job Object holds every process it starts, so stopping the server ends them
+/// too; without it the descendant runs on after its server (spec 3.2 §10 W1).
+#[cfg(windows)]
+#[tokio::test]
+async fn stopping_a_server_ends_the_processes_it_started() {
+    let manager =
+        McpServerManager::new(HashMap::from([("probe".to_string(), server_config(None))]));
+    manager.start_server("probe").await.unwrap();
+    let descendant: u32 = call(&manager, "spawn_descendant").await.parse().unwrap();
+    assert!(!ends_within(descendant, Duration::from_millis(500)), "the descendant started");
+
+    manager.stop_server("probe").await.unwrap();
+
+    let ended = ends_within(descendant, Duration::from_secs(10));
+    terminate(descendant);
+    assert!(ended, "a process the server started outlived the server");
+    manager.shutdown().await.unwrap();
+}
+
+/// Dropping the manager without stopping its servers ends their trees as well, as the
+/// manager's process exiting would.
+#[cfg(windows)]
+#[tokio::test]
+async fn dropping_the_manager_ends_the_processes_its_servers_started() {
+    let manager =
+        McpServerManager::new(HashMap::from([("probe".to_string(), server_config(None))]));
+    manager.start_server("probe").await.unwrap();
+    let descendant: u32 = call(&manager, "spawn_descendant").await.parse().unwrap();
+    assert!(!ends_within(descendant, Duration::from_millis(500)), "the descendant started");
+
+    drop(manager);
+
+    let ended = ends_within(descendant, Duration::from_secs(10));
+    terminate(descendant);
+    assert!(ended, "a process a server started outlived the dropped manager");
 }

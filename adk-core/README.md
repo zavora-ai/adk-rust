@@ -560,7 +560,7 @@ Set per agent with `LlmAgentBuilder::tool_execution_strategy()`.
 |--------|-----------|
 | `ToolConfirmationRequest::fingerprint()` names the acting agent and the tool's `ToolOrigin` | Take fingerprints from the held call's request or `ToolConfirmationRequest::for_tool` |
 | `ErrorCategory` gains `Conflict` (409) and `ResourceExhausted` (429) | Add match arms |
-| `RunConfig` gains `acting`, `action_ledger`, `approval_store`, `approval_service`, `audit`, `budget`, `budget_tracker`, `governance`, `invocation_hooks`, `llm_spend_estimate`, `spend_ledger`, `tool_approvals`, `tool_policy`, and `tool_confirmation_timeout` | End struct literals with `..Default::default()` |
+| `RunConfig` gains `acting`, `action_ledger`, `approval_store`, `approval_service`, `audit`, `budget`, `budget_tracker`, `governance`, `invocation_hooks`, `llm_spend_estimate`, `spend_ledger`, `tool_approvals`, `tool_policy`, `tool_confirmation_timeout`, and `deny_on_confirmation_timeout` | End struct literals with `..Default::default()` |
 | `ToolApproval` carries `edited_args` and `message` and is no longer `Copy` | Build it with `approve()` / `deny()` |
 | `Tool` gains `effect()`, `timeout_override()`, `origin()`, and `annotations()`; `Agent` gains `close()`, `screen_user_input()`, and transfer flags | Wrappers forward them |
 | `LlmResponse` gains `model` and `provider`; `UsageMetadata` gains `builtin_tool_uses` | End struct literals with `..Default::default()` |

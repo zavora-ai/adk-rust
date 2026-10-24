@@ -62,7 +62,8 @@ fn text(result: impl Into<String>) -> CallToolResponse {
 }
 
 /// Notes: a read, a send that asks first (the 2026-07-28 input-required round), a file
-/// write, an environment report, and a crash.
+/// write, an environment report, a crash, and a long-running process started in the
+/// background (Windows only).
 #[derive(Clone, Default)]
 pub struct Notes;
 
@@ -110,6 +111,11 @@ impl ServerHandler for Notes {
             )
             .with_annotations(ToolAnnotations::new().read_only(true)),
             Tool::new("crash", "Exits the server.", schema(json!({ "type": "object" }))),
+            Tool::new(
+                "spawn_descendant",
+                "Starts a long-running process and returns its ID.",
+                schema(json!({ "type": "object" })),
+            ),
         ]))
     }
 
@@ -168,6 +174,26 @@ impl ServerHandler for Notes {
                 text(json!({ "env": env, "files": files }).to_string())
             }
             "crash" => std::process::exit(3),
+            "spawn_descendant" => {
+                // Five minutes of `ping` on Windows, the platform whose tests call the tool.
+                let child = std::process::Command::new("ping")
+                    .args(["-n", "300", "127.0.0.1"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+                match child {
+                    Ok(mut child) => {
+                        let pid = child.id();
+                        // Reaped in the background, so the server does not wait for it.
+                        std::thread::spawn(move || child.wait());
+                        text(pid.to_string())
+                    }
+                    Err(error) => {
+                        CallToolResult::error(vec![ContentBlock::text(error.to_string())]).into()
+                    }
+                }
+            }
             other => {
                 CallToolResult::error(vec![ContentBlock::text(format!("no tool {other}"))]).into()
             }
@@ -247,7 +273,8 @@ impl Workdir {
              send_note = \"send_external\"\n\
              write_file = \"write_local\"\n\
              env_report = \"read\"\n\
-             crash = \"other\"\n",
+             crash = \"other\"\n\
+             spawn_descendant = \"other\"\n",
             quote(&command.display().to_string()),
             quote(&self.log().display().to_string()),
             quote(&self.declaration().display().to_string()),

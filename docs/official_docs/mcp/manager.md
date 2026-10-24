@@ -83,7 +83,9 @@ instead, automatic restarts included — for example to run the server inside an
 OS sandbox. It receives the server's `McpServerConfig`; rmcp pipes the
 command's stdin and stdout for the MCP connection. An error from the launcher
 fails that start with the error unchanged and leaves the server
-`FailedToStart`.
+`FailedToStart`. On Windows the manager replaces the command's creation flags
+with `CREATE_SUSPENDED`, so the server runs only once it is in its Job Object
+(see [Shutdown behavior](#shutdown-behavior)).
 
 ```rust
 use adk_tool::mcp::McpServerManager;
@@ -322,6 +324,15 @@ background. The child process is owned by the `TokioChildProcess` transport
 rather than a separately retained process handle. `stop_server` and `shutdown`
 return once each stopped server's process has exited or its grace period has
 elapsed.
+
+On Windows each server starts suspended and runs only once it is in a Job
+Object of its own, so every process it starts belongs to the job and none can
+leave it (spec 3.2 §10 W1). The job closes with the server's transport, and
+closing it ends whatever is left in it: stopping, restarting, updating or
+removing a server, a crash's cleanup, a dropped manager, and the managing
+process exiting each end the server's whole process tree. A server that cannot
+be placed in a Job Object is not started. On Unix only the server's own process
+is ended; a process it started in the background keeps running.
 
 `Runner::close` and `Toolset::close` leave the manager's servers running: one
 manager is shared by every agent that uses it, and the application starts its

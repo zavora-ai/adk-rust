@@ -35,6 +35,7 @@ adk-rust = { version = "3.0", features = ["sandbox"] }
 | `sandbox-linux` | Linux bubblewrap enforcement        | ❌      | None (external `bwrap` binary) |
 | `sandbox-windows` | Windows restricted-token enforcement | ❌      | `windows-sys`      |
 | `sandbox-native` | All three enforcers; only the target platform's compiles | ❌ | All of the above |
+| `process-tree` | `process_tree::JobObject` and `ContainedChild`: a process tree held in a Job Object (Windows only; implied by `sandbox-windows`) | ❌ | `windows-sys` |
 | `workspace` | Workspace lifecycle + `LocalUnixClient` | ❌   | `tar`, `uuid`      |
 | `workspace-docker` | `DockerClient` (implies `workspace`) | ❌ | `bollard`, `futures` |
 
@@ -136,7 +137,7 @@ Under an enforcer, `ProcessBackend` runs each execution in a fresh scratch direc
 |---------|----------|----------|--------------------|
 | `sandbox-macos` | macOS | Seatbelt (`sandbox-exec`) | None |
 | `sandbox-linux` | Linux | bubblewrap (`bwrap`) | None (external binary) |
-| `sandbox-windows` | Windows | Restricted token (`WindowsEnforcer::run_confined`) | `windows-sys` |
+| `sandbox-windows` | Windows | Restricted token (`WindowsEnforcer::run_confined`, `spawn_contained`) | `windows-sys` |
 | `sandbox-native` | Auto-detect | Platform-appropriate | All of the above |
 
 ### Usage
@@ -246,7 +247,7 @@ does not exist yet cannot be protected this way.
 
 | Aspect | macOS Seatbelt | Linux bubblewrap | Windows restricted token |
 |--------|---------------|-----------------|---------------------|
-| Strategy | Deny-default profile plus the system runtime | Whitelist (mount only what's needed) | Restricted token plus ACL grants, through `WindowsEnforcer::run_confined` only; `probe` reports the `sandboxed_command` path unavailable |
+| Strategy | Deny-default profile plus the system runtime | Whitelist (mount only what's needed) | Restricted token plus ACL grants, through `WindowsEnforcer::run_confined` and `spawn_contained` only (probed by `probe_confined`); `probe` reports the `sandboxed_command` path unavailable |
 | Reads | System runtime and policy paths; home directories, `/tmp`, and `$TMPDIR` are unreadable unless allowed | Only bound paths exist | Ungranted paths that grant neither `Everyone` nor `Users` are refused; system binaries stay readable |
 | Writes | Only policy read-write paths (and `/dev/null`) | Only `--bind` paths writable | Policy paths (`RESTRICTED` is granted there), and paths that grant `Everyone` or `Users` write access |
 | Network | Denied unless `allow_network` | `--unshare-net` namespace | Not enforced |

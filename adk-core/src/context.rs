@@ -1352,6 +1352,11 @@ impl ToolConfirmationRequest {
 /// decision that takes longer than [`RunConfig::tool_confirmation_timeout`] denies the call.
 /// An error ends the turn after running tools finish; decisions still waiting in the same
 /// batch are dropped.
+///
+/// The timeout denies only in a run without an [`approval_store`](RunConfig::approval_store)
+/// or [`approval_service`](RunConfig::approval_service). With either, a call the handler does
+/// not decide in time is held there, and the run ends with it waiting for a decision
+/// (spec 3.3 §7.3); [`RunConfig::deny_on_confirmation_timeout`] restores the denial.
 #[async_trait]
 pub trait ToolConfirmationHandler: std::fmt::Debug + Send + Sync {
     /// Approve or deny one pending tool call.
@@ -1596,7 +1601,10 @@ pub struct RunConfig {
     /// a run enqueued by an authenticated caller ([`NewRun::authenticated`](crate::NewRun::authenticated)).
     pub request_context: Option<crate::RequestContext>,
     /// How long the [`tool_confirmation_handler`](Self::tool_confirmation_handler) may take
-    /// to decide one call before it is denied. Defaults to
+    /// to decide one call. A call it does not decide in time waits in the
+    /// [`approval_store`](Self::approval_store) or [`approval_service`](Self::approval_service)
+    /// when the run has one, and is denied otherwise or under
+    /// [`deny_on_confirmation_timeout`](Self::deny_on_confirmation_timeout). Defaults to
     /// [`DEFAULT_TOOL_CONFIRMATION_TIMEOUT`](crate::DEFAULT_TOOL_CONFIRMATION_TIMEOUT).
     pub tool_confirmation_timeout: std::time::Duration,
     /// Ledger that model calls and payment tools reserve budget against.
@@ -1637,6 +1645,15 @@ pub struct RunConfig {
     /// and appends the delegating agent to the delegation chain.
     /// See [`acting_context_for`](Self::acting_context_for).
     pub acting: crate::ActingConfig,
+    /// Deny a call whose [`tool_confirmation_handler`](Self::tool_confirmation_handler) does
+    /// not decide within [`tool_confirmation_timeout`](Self::tool_confirmation_timeout), even
+    /// when the run has an [`approval_store`](Self::approval_store) or
+    /// [`approval_service`](Self::approval_service).
+    ///
+    /// `false` (the default) holds such a call there instead: it is recorded as pending, the
+    /// run ends with it waiting, and a later decision resumes it, so nothing is decided by
+    /// silence (spec 3.3 §7.3, §10 C2). A run with neither denies the call either way.
+    pub deny_on_confirmation_timeout: bool,
 }
 
 impl Default for RunConfig {
@@ -1672,6 +1689,7 @@ impl Default for RunConfig {
             llm_spend_estimate: None,
             audit: None,
             acting: crate::ActingConfig::default(),
+            deny_on_confirmation_timeout: false,
         }
     }
 }
@@ -1964,6 +1982,25 @@ impl RunConfigBuilder {
     /// Sets how long the confirmation handler may take to decide one call.
     pub fn tool_confirmation_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.config.tool_confirmation_timeout = timeout;
+        self
+    }
+
+    /// Denies a call the confirmation handler does not decide in time, instead of holding
+    /// it in the run's approval store (spec 3.3 §10 C2).
+    ///
+    /// See [`RunConfig::deny_on_confirmation_timeout`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::RunConfig;
+    ///
+    /// assert!(!RunConfig::default().deny_on_confirmation_timeout);
+    /// let config = RunConfig::builder().deny_on_confirmation_timeout(true).build();
+    /// assert!(config.deny_on_confirmation_timeout);
+    /// ```
+    pub fn deny_on_confirmation_timeout(mut self, deny: bool) -> Self {
+        self.config.deny_on_confirmation_timeout = deny;
         self
     }
 

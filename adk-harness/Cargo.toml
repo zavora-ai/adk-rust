@@ -157,7 +157,8 @@ windows-sys = { version = "0.61", features = ["Win32_Security_Authorization"] }
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"], optional = true }
 
 [dev-dependencies]
-adk-model = { path = "../adk-model", default-features = false }
+# `anthropic` for the live confirmation-wait run (spec 3.3 §10 C2).
+adk-model = { path = "../adk-model", default-features = false, features = ["anthropic"] }
 # The scripted realtime provider of the voice surface tests (spec 3.1 §7.17).
 adk-realtime = { path = "../adk-realtime", features = ["integration", "scripted"] }
 # SQLite sessions, approvals and ledger, and the durable worker, for the durability tests;

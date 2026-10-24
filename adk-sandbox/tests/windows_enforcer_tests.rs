@@ -1,6 +1,7 @@
 //! The Windows restricted-token enforcer confines a shell (spec 3.2 §10 W5).
 //!
-//! Each test runs `cmd.exe /c` through `WindowsEnforcer::run_confined` and checks the file
+//! Each test runs `cmd.exe /c` through `WindowsEnforcer::run_confined`, or through
+//! `WindowsEnforcer::spawn_contained` with its standard streams on pipes, and checks the file
 //! system afterwards. Scripts name paths relative to the workspace, so they need no quoting,
 //! and every refusal is paired with a control that the same command form succeeds where the
 //! policy allows it. They run on the PR tier's `windows` job.
@@ -10,6 +11,9 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use std::io::{Read as _, Write as _};
+
+use adk_sandbox::process_tree::ContainedChild;
 use adk_sandbox::sandbox::SandboxPolicyBuilder;
 use adk_sandbox::sandbox::windows::{ConfinedOutcome, WindowsEnforcer};
 
@@ -140,4 +144,98 @@ fn a_timeout_terminates_the_job() {
     let outcome =
         run_for(&workspace, "for /l %i in (1,1,2000000000) do @rem", Duration::from_secs(2));
     assert_eq!(outcome, ConfinedOutcome { exit_code: None, timed_out: true });
+}
+
+/// Starts `script` under `cmd.exe /d /c` with `spawn_contained`, the workspace read-write.
+fn spawn(workspace: &Path, script: &str) -> ContainedChild {
+    let policy = SandboxPolicyBuilder::new().allow_read_write(workspace).build();
+    let system = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
+    WindowsEnforcer::new()
+        .spawn_contained(
+            &policy,
+            system.join("System32").join("cmd.exe").as_os_str(),
+            &[OsString::from("/d"), OsString::from("/c"), OsString::from(script)],
+            workspace,
+        )
+        .expect("the contained command starts")
+}
+
+#[test]
+fn the_probe_runs_a_command_under_the_restricted_token() {
+    WindowsEnforcer::new().probe_confined().expect("the restricted-token path is available");
+}
+
+#[tokio::test]
+async fn a_contained_command_streams_its_output_and_reports_its_exit_code() {
+    let (_root, _base, workspace) = layout();
+    let mut child = spawn(&workspace, "echo out& echo err 1>&2& exit /b 7");
+    drop(child.stdin.take());
+    let (mut stdout, mut stderr) = (String::new(), String::new());
+    child.stdout.take().expect("piped").read_to_string(&mut stdout).expect("stdout");
+    child.stderr.take().expect("piped").read_to_string(&mut stderr).expect("stderr");
+
+    assert_eq!(child.process.wait().await.expect("waited"), 7);
+    assert_eq!((stdout.trim(), stderr.trim()), ("out", "err"));
+}
+
+#[tokio::test]
+async fn a_contained_command_reads_its_standard_input() {
+    let (_root, _base, workspace) = layout();
+    // `sort` echoes its input and takes no quoted argument: `cmd /c` rereads the quoted
+    // script, so an inner `"` would reach the program escaped as `\"`.
+    let mut child = spawn(&workspace, "sort");
+    let mut stdin = child.stdin.take().expect("piped");
+    stdin.write_all(b"hello\r\n").expect("write stdin");
+    drop(stdin);
+    let mut stdout = String::new();
+    child.stdout.take().expect("piped").read_to_string(&mut stdout).expect("stdout");
+
+    assert_eq!(child.process.wait().await.expect("waited"), 0);
+    assert_eq!(stdout.trim(), "hello");
+}
+
+#[tokio::test]
+async fn a_contained_command_is_confined_to_its_grants() {
+    let (_root, base, workspace) = layout();
+    let outside = private_dir(&base, "outside");
+    let mut child = spawn(&workspace, r"echo yes> control.txt & echo no> ..\outside\outside.txt");
+    drop(child.stdin.take());
+
+    child.process.wait().await.expect("waited");
+
+    let control = std::fs::read_to_string(workspace.join("control.txt")).expect("control.txt");
+    assert_eq!(control.trim(), "yes", "the script ran");
+    assert!(!outside.join("outside.txt").exists(), "a file was written outside the workspace");
+}
+
+#[tokio::test]
+async fn dropping_a_contained_child_ends_every_process_it_started() {
+    let (_root, _base, workspace) = layout();
+    let mut child = spawn(
+        &workspace,
+        "start /b cmd /d /c for /l %i in (1,1,2000000000) do @echo x^>^> tick.txt \
+         & ping -n 300 127.0.0.1 >nul",
+    );
+    drop(child.stdin.take());
+    let tick = workspace.join("tick.txt");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !tick.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(child.process.try_wait().expect("queried"), None, "the shell still runs");
+
+    let process = child.process.clone();
+    drop(child);
+
+    tokio::time::timeout(Duration::from_secs(10), process.wait())
+        .await
+        .expect("the shell ended with its job")
+        .expect("waited");
+    let size = std::fs::metadata(&tick).expect("the background loop ran").len();
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        std::fs::metadata(&tick).expect("tick.txt").len(),
+        size,
+        "a descendant kept running"
+    );
 }

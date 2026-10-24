@@ -17,7 +17,9 @@ use crate::workspace::Workspace;
 /// a new session (`setsid`), which fails for a process that already leads a group. It also
 /// replaces the command's standard streams and sets `kill_on_drop`. On Windows it replaces
 /// the command's creation flags with `CREATE_SUSPENDED`, so the process runs only once it is
-/// in the call's Job Object (spec 3.2 §10 W1).
+/// in the call's Job Object (spec 3.2 §10 W1). A Windows launcher whose confinement cannot
+/// be set on a command, such as a restricted token, starts the process itself through
+/// `spawn_contained` instead (spec 3.2 §10 W5).
 ///
 /// Implements spec 3.1 §10 D1.
 ///
@@ -73,6 +75,34 @@ pub trait CommandLauncher: Send + Sync {
 
     /// A short label for the isolation this launcher provides, such as `"host"`.
     fn isolation(&self) -> &str;
+
+    /// Starts the process that runs `script` itself, for a launcher whose confinement is set
+    /// when the process is created, such as a restricted token on Windows (spec 3.2 §10 W5).
+    ///
+    /// `None`, the default, has [`BashTool`](crate::BashTool) spawn
+    /// [`command`](Self::command)'s result instead. A launcher that returns a child must
+    /// have started its process in the child's Job Object, with its standard streams on the
+    /// child's pipes and `env` added to its environment last; `env` carries what a wrapping
+    /// launcher adds, as it would add it to a command, and `BashTool` passes none. `BashTool`
+    /// closes standard input at once and keeps the timeout ceiling, output cap, streaming and
+    /// the job's kill around the process, as for a command it spawns. The call runs on Tokio's
+    /// blocking pool, since starting a confined process can take long.
+    ///
+    /// # Errors
+    ///
+    /// `Some(Err(..))` fails the call without running anything, for example when the
+    /// sandbox cannot start the process.
+    #[cfg(windows)]
+    fn spawn_contained(
+        &self,
+        ws: &Workspace,
+        script: &str,
+        env: &[(String, String)],
+        ctx: &dyn ToolContext,
+    ) -> Option<Result<crate::ContainedChild, DevToolError>> {
+        let _ = (ws, script, env, ctx);
+        None
+    }
 }
 
 /// Runs a script on the host as `sh -c <script>`, the default [`CommandLauncher`].

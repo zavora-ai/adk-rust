@@ -218,15 +218,16 @@ impl HarnessBashTool {
     fn declare(&mut self) {
         let host = self.status.behaves_as_host();
         #[cfg(feature = "sandbox")]
-        let (profile_digest, network) = match &self.sandbox {
+        let (profile_digest, network, protects) = match &self.sandbox {
             Some(sandbox) => (
                 Value::String(sandbox.launcher.profile_digest()),
-                sandbox.launcher.config().network,
+                !sandbox.launcher.denies_network(),
+                sandbox.launcher.keeps_read_only(),
             ),
-            None => (Value::Null, host),
+            None => (Value::Null, host, true),
         };
         #[cfg(not(feature = "sandbox"))]
-        let (profile_digest, network) = (Value::Null, host);
+        let (profile_digest, network, protects) = (Value::Null, host, true);
         self.annotations = json!({
             "enforcer": self.status.enforcer(),
             "profileDigest": profile_digest,
@@ -246,11 +247,17 @@ impl HarnessBashTool {
             } else {
                 ""
             };
+            let paths = if protects {
+                "The workspace is writable (read-only in plan mode), but .git, AGENTS.md and other \
+                 protected paths are read-only, nothing outside the workspace is writable, and \
+                 HOME is a scratch directory."
+            } else {
+                "The workspace is writable, including .git and AGENTS.md; outside it only \
+                 directories every user may write are writable, and HOME is a scratch directory."
+            };
             format!(
                 "Run a shell command in the workspace root inside an OS sandbox ({}) with {network}. \
-                 The workspace is writable (read-only in plan mode), but .git, AGENTS.md and other \
-                 protected paths are read-only, nothing outside the workspace is writable, and \
-                 HOME is a scratch directory.{retry}",
+                 {paths}{retry}",
                 self.status.enforcer()
             )
         };

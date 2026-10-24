@@ -272,6 +272,11 @@ macro_rules! approval_store_conformance_tests {
         }
         $(#[$attr])*
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_requests_list_by_session() {
+            $crate::conformance::approval_store::requests_list_by_session(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn approval_delegations_round_trip() {
             $crate::conformance::approval_store::delegations_round_trip(&$harness).await;
         }
@@ -338,6 +343,11 @@ macro_rules! approval_service_conformance_tests {
                 &$harness,
             )
             .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn approval_service_inbox_lists_one_session() {
+            $crate::conformance::approval_service::inbox_lists_one_session(&$harness).await;
         }
         $(#[$attr])*
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]

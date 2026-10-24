@@ -26,7 +26,9 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 
 use crate::cli::{DriversCommands, KernelTarget, ProcView};
-use adk_kernel::drivers::{DriverIsolation, DriverManifest, DriverProposal, DriverView};
+use adk_kernel::drivers::{
+    DriverIsolation, DriverManifest, DriverProcessTree, DriverProposal, DriverView,
+};
 
 /// The target a turn sent from the REPL runs: the harness, as `adk-rust up` registers it.
 const APP_TARGET: &str = "adk-rust";
@@ -544,12 +546,15 @@ pub async fn drivers(target: &KernelTarget, command: DriversCommands) -> Result<
 /// One driver as `drivers list` shows it.
 fn driver_line(driver: &DriverView) -> String {
     let record = &driver.record;
-    let isolation = match &record.isolation {
+    let mut isolation = match &record.isolation {
         Some(DriverIsolation::OsSandbox { enforcer, .. }) => format!("sandboxed ({enforcer})"),
         Some(DriverIsolation::Unsandboxed { reason }) => format!("unsandboxed: {reason}"),
         Some(_) => "isolated".to_string(),
         None => format!("{} (not started)", record.manifest.sandbox.as_str()),
     };
+    if record.process_tree == Some(DriverProcessTree::JobObject) {
+        isolation.push_str(", in a job object");
+    }
     let partitions: Vec<&str> =
         record.manifest.partitions.iter().map(PartitionId::as_str).collect();
     let mut line = format!(

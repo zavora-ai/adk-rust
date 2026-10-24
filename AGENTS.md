@@ -674,7 +674,9 @@ let runner = Runner::builder()
 ```
 
 2. **`ToolConfirmationPolicy`** — built-in HITL. A `ToolConfirmationHandler` decides each call
-   inside the run (bounded by `RunConfig::tool_confirmation_timeout`, denied when it expires);
+   inside the run (bounded by `RunConfig::tool_confirmation_timeout`; when it expires the call
+   waits in the run's approval store, or is denied without one or under
+   `RunConfig::deny_on_confirmation_timeout`);
    without one the agent holds the call, emits a `ToolConfirmationRequest` event, and ends the run.
 
 ```rust
@@ -1007,10 +1009,10 @@ gate that keeps it satisfiable. The current 11 tiers over 45 publishable crates:
 ```
 Tier 1: adk-anthropic, adk-core, adk-enterprise, adk-rust-macros, adk-telemetry,
         awp-types
-Tier 2: adk-action, adk-awp, adk-browser, adk-devtools, adk-gcp, adk-gemini,
-        adk-guardrail, adk-mistralrs, adk-plugin, adk-sandbox
-Tier 3: adk-artifact, adk-code, adk-deploy, adk-graph, adk-memory, adk-model,
-        adk-rag, adk-retry-reflect, adk-session, adk-skill
+Tier 2: adk-action, adk-awp, adk-browser, adk-gcp, adk-gemini, adk-guardrail,
+        adk-mistralrs, adk-plugin, adk-sandbox
+Tier 3: adk-artifact, adk-code, adk-deploy, adk-devtools, adk-graph, adk-memory,
+        adk-model, adk-rag, adk-retry-reflect, adk-session, adk-skill
 Tier 4: adk-realtime, adk-runner, adk-tool
 Tier 5: adk-acp, adk-agent, adk-audio, adk-eval
 Tier 6: adk-bench, adk-codeact-monty, adk-managed, adk-server

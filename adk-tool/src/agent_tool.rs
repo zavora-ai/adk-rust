@@ -246,6 +246,7 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         llm_spend_estimate,
         audit,
         acting,
+        deny_on_confirmation_timeout,
     } = parent;
     RunConfig {
         // The delegate's output is read whole.
@@ -284,6 +285,7 @@ fn delegated_run_config(parent: RunConfig) -> RunConfig {
         llm_spend_estimate,
         audit,
         acting,
+        deny_on_confirmation_timeout,
     }
 }
 

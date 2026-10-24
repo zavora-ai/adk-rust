@@ -39,7 +39,7 @@ required; everything else has a default.
 | `confirmation_handler(handler)` | the prompting handler | Replaces the confirmation handler |
 | `approval_store(store)` | in memory | Where held calls and decisions are kept |
 | `approval_service(service)` | none | The approval inbox held calls are submitted to |
-| `confirmation_timeout(duration)` | 300 s | How long a person may take; a timeout denies |
+| `confirmation_timeout(duration)` | 300 s | How long a person may take; a call nobody decides in time waits in the approval store |
 | `trust_mcp_read_only_hints(bool)` | `false` | Trusts an MCP server's `readOnlyHint` for external tools |
 | `require_authenticated_identity()` | off | Standing rules and `auto` apply only to authenticated users (served harnesses) |
 | `config(HarnessConfig)` | none | Applies `.adk/harness.toml`; see [below](#the-project-file) |

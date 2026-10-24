@@ -11,7 +11,7 @@ command is retried outside them, and what the harness records.
 | `ShellIsolation` | Where `bash` runs | Reported `IsolationStatus` |
 |---|---|---|
 | `Host` (default) | `sh -c` on the host, with the user's permissions and network | `Host` |
-| `OsSandbox(OsSandboxConfig)` | `sh -c` under Seatbelt (macOS) or bubblewrap (Linux) | `OsSandbox { enforcer }` |
+| `OsSandbox(OsSandboxConfig)` | `sh -c` under Seatbelt (macOS), bubblewrap (Linux) or a restricted token (Windows) | `OsSandbox { enforcer }` |
 | `OsSandbox(..)` with no working enforcer | the host, as `Host` | `Degraded { requested, reason }` |
 | `Container(ContainerConfig)` (feature `docker`) | `sh -c` in a container per session, the workspace mounted at `/workspace` | `Container { image }` |
 | `Container(..)` with no reachable Docker daemon | the host, as `Host` | `Degraded { requested: "container", reason }` |
@@ -26,10 +26,13 @@ and the sandbox again on every call:
 | Enforcer available at build, unavailable at a call | The call is refused with `harness.sandbox_unavailable` and a `harness.sandbox.unavailable` record; it never falls back to the host |
 | A session's container cannot be provisioned or started, or lets a protected path be written | The same refusal, with the reason in the record |
 
-On Windows the shell is `Host`, or `Degraded` when a sandbox is requested. The
-`restricted-token` enforcer confines commands it starts itself (`WindowsEnforcer::run_confined`),
-but a restricted token cannot be attached to the command the `bash` tool spawns, so its probe
-reports the shell's path as unavailable and the reason names it.
+On Windows the sandbox is the `restricted-token` enforcer (spec 3.2 §10 W5). A restricted
+token is set when a process is created, so the enforcer starts each command itself, through
+`WindowsEnforcer::spawn_contained`, and the `bash` tool reads its output from pipes. Its probe
+(`WindowsEnforcer::probe_confined`) runs `cmd.exe /d /c exit 0` under the token: the shell is
+`OsSandbox { enforcer: "restricted-token" }` when it succeeds, and `Degraded` with the reason,
+or refused under `fail_if_unavailable`, when it fails. See
+[The Windows sandbox](#the-windows-sandbox) for what it confines.
 
 ## Turning the sandbox on
 
@@ -97,6 +100,40 @@ out, since it would expose other projects' files.
 `PASSWD`, `API_KEY`, `CREDENTIAL`) never pass in, whatever the allowlist says. With
 `read_toolchains`, `CARGO_HOME`, `RUSTUP_HOME`, `PYENV_ROOT` and `NVM_DIR` point at the real
 toolchain directories, since `HOME` moved.
+
+## The Windows sandbox
+
+The restricted-token enforcer runs `sh -c <script>` — the `sh` the sandbox's `PATH` finds,
+from Git for Windows, as the host shell does — under a token whose groups are deny-only and
+whose restricting SIDs admit only what the policy grants (see the
+[sandbox reference](../sandbox/index.md)). The command starts in a Job Object, so the `bash`
+tool keeps its timeout ceiling, output cap, streaming, empty standard input, the kill of
+every process the command starts, and the freeze's kill (spec 3.2 §10 W1). It inherits its
+three standard handles and no other handle of the agent.
+
+| | Under the restricted token |
+|---|---|
+| Workspace root, scratch directory, `extra_write` | read-write: `RESTRICTED` is granted on each, once per process; the grant stays in the path's ACL |
+| Protected paths | **writable**: a path inside the workspace inherits its read-write grant |
+| Toolchains (`read_toolchains`) | read-only when they lie in your profile (`~/.cargo`, `~/.rustup`, …); program and system directories grant `Users` read access already and are not rewritten |
+| Your profile and other paths that grant neither `Everyone` nor `Users` | none |
+| Paths that grant `Everyone` or `Users` write access | writable |
+| Network | **not restricted**, whatever `network` says |
+| Environment | as on the other platforms, with `TEMP` and `TMP` also set to the scratch directory |
+
+What follows from that:
+
+| Behaviour | Windows | macOS, Linux |
+|---|---|---|
+| The `bash` declaration's `network` annotation and description | network access | `network` |
+| Plan mode | `bash` is denied: a read-write grant from an earlier command stays in the workspace's ACL, so the sandbox cannot promise a read-only workspace | sandboxed commands run read-only without a prompt |
+| Ask and Auto mode | every sandboxed command is asked | as the mode table says |
+| `auto_allow_sandboxed` | `build()` fails: the sandbox does not restrict the network | needs every protected path |
+| Hooks with `isolation = "inherit"` | `build()` fails: a hook needs a command it can spawn and feed; give it `isolation = "host"` | run in the sandbox |
+
+The first command of a process grants the workspace, and with `read_toolchains` the
+toolchain directories in your profile; Windows applies a grant to everything beneath the
+path, which takes a while on a large tree. Later commands reuse the grants.
 
 ## The container shell
 
@@ -234,7 +271,7 @@ replay of it is refused without a prompt.
 |---|---|---|---|---|
 | Standard input is `/dev/null` | yes | yes | yes | no standard input |
 | New session, no controlling terminal | `setsid` | `setsid` | `setsid` and `--new-session` | no terminal is attached |
-| Background processes die when the command exits | process-group kill; on Windows the command's Job Object | process-group kill | the PID namespace ends with `bwrap` | every process but the container's own is killed when the command exits |
+| Background processes die when the command exits | process-group kill; on Windows the command's Job Object | process-group kill; on Windows (restricted token) the command's Job Object | the PID namespace ends with `bwrap` | every process but the container's own is killed when the command exits |
 | A freeze kills the running command | within 250 ms of the poll | within 250 ms of the poll | within 250 ms of the poll | the container is stopped within 250 ms of the poll |
 
 A process that starts its own session (`setsid`) leaves the process group and survives the

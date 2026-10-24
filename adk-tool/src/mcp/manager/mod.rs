@@ -22,6 +22,8 @@ pub(crate) mod config;
 pub(crate) mod entry;
 #[allow(clippy::module_inception)]
 mod manager;
+#[cfg(windows)]
+mod process_tree;
 pub(crate) mod status;
 mod toolset_impl;
 

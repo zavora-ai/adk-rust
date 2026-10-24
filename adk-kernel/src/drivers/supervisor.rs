@@ -923,9 +923,12 @@ impl Inner {
             &self.enforcer,
         )
         .await?;
-        if record.isolation.as_ref() != Some(&plan.isolation) {
+        if record.isolation.as_ref() != Some(&plan.isolation)
+            || record.process_tree != plan.process_tree
+        {
             let mut record = record;
             record.isolation = Some(plan.isolation.clone());
+            record.process_tree = plan.process_tree;
             record.updated_at = Utc::now();
             self.store.put(record.clone()).await?;
             self.cache(&record);
@@ -1095,6 +1098,7 @@ impl Inner {
                 "effectClasses": record.manifest.tools,
                 "digests": record.manifest.declaration_digests,
                 "isolation": record.isolation,
+                "processTree": record.process_tree,
                 "attempt": attempt,
                 "from": format!("{from:?}"),
             })

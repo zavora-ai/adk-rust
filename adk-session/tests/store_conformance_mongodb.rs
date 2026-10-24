@@ -263,3 +263,44 @@ mod audit_log {
         harness = super::Mongo,
     }
 }
+
+/// A request stored before requests carried a session field lists by its session once
+/// `migrate` has run (spec 3.3 §10 C1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires a MongoDB server at MONGODB_URL"]
+async fn a_request_stored_without_a_session_lists_by_session_after_migrate() {
+    use adk_core::{
+        ApprovalPolicy, ApprovalRequest, ApprovalRequestQuery, ApprovalScope, ApproverSelector,
+        ToolConfirmationRequest,
+    };
+    use mongodb::bson::{Document, doc};
+
+    let app = format!("legacy-{}", uuid::Uuid::new_v4());
+    let call = ToolConfirmationRequest::new("send_invoice", serde_json::json!({ "n": 1 }));
+    let request = ApprovalRequest::new(
+        format!("{app}/legacy"),
+        ApprovalScope::new(&app, "user", "s-legacy"),
+        &call,
+        ApprovalPolicy::new([ApproverSelector::group("owners")]),
+    );
+    let client = mongodb::Client::with_uri_str(url()).await.expect("connect to mongodb");
+    client
+        .database(DATABASE)
+        .collection::<Document>("adk_approval_requests")
+        .insert_one(doc! {
+            "_id": &request.id,
+            "app": &app,
+            "state": request.state.as_str(),
+            "open": true,
+            "created_us": request.created_at.timestamp_micros(),
+            "version": 1_i64,
+            "record": serde_json::to_string(&request).expect("encode"),
+        })
+        .await
+        .expect("insert a request without a session field");
+
+    let store = MongoApprovalStore::new(&url(), DATABASE).await.expect("connect to mongodb");
+    store.migrate().await.expect("migrate");
+    let query = ApprovalRequestQuery::default().with_app_name(app).with_session_id("s-legacy");
+    assert_eq!(store.list_requests(&query).await.expect("list"), [request]);
+}
