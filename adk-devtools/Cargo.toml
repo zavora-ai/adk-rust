@@ -28,18 +28,21 @@ glob = "0.3"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# The handle-verified opens of the file tools and the Job Object that stops a `bash`
-# command's descendants (spec 3.2 §10 W1, W6).
+# The handle-verified opens of the file tools (spec 3.2 §10 W6), and the Job Object that
+# stops a `bash` command's descendants (W1), which `adk-sandbox` shares with the MCP
+# server manager and the restricted-token enforcer.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading"] }
+adk-sandbox = { workspace = true, features = ["process-tree"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem"] }
 
 # The bash boundary tests are `#![cfg(unix)]` and probe liveness with `libc::kill`.
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"
 
-# The in-place reparse point test sets a reparse point (spec 3.2 §10 W6).
+# The Job Object tests wait for and end the processes a command started; the in-place
+# reparse point test sets a reparse point (spec 3.2 §10 W1, W6).
 [target.'cfg(windows)'.dev-dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_IO", "Win32_System_Ioctl"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tempfile = "3"

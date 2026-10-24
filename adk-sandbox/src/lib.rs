@@ -43,6 +43,7 @@
 //! | `wasm`    | In-process WASM execution via wasmtime | ❌    |
 //! | `sandbox-macos`, `sandbox-linux`, `sandbox-windows` | OS enforcers for `ProcessBackend` (Seatbelt, bubblewrap; the Windows restricted-token enforcer confines only through `WindowsEnforcer::run_confined`) | ❌ |
 //! | `sandbox-native` | All three enforcers; only the target platform's compiles | ❌ |
+//! | `process-tree` | `process_tree::JobObject`, the Job Object that holds a process tree on Windows (implied by `sandbox-windows`); nothing on other platforms | ❌ |
 //! | `workspace` | Workspace lifecycle and `LocalUnixClient` | ❌ |
 //! | `workspace-docker` | `DockerClient` (implies `workspace`) | ❌ |
 //!
@@ -67,6 +68,9 @@ pub mod wasm;
 
 #[cfg(feature = "workspace")]
 pub mod workspace;
+
+#[cfg(all(windows, feature = "process-tree"))]
+pub mod process_tree;
 
 // Public re-exports
 pub use backend::{BackendCapabilities, EnforcedLimits, SandboxBackend};

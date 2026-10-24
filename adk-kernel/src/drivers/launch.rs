@@ -15,7 +15,7 @@ use adk_sandbox::sandbox::{
 use adk_tool::mcp::McpServerConfig;
 
 use super::manifest::{DriverManifest, DriverSandbox};
-use super::store::DriverIsolation;
+use super::store::{DriverIsolation, DriverProcessTree};
 use crate::error::{KernelError, Result};
 
 /// Picks the OS enforcer: the platform's, or a stand-in a test sets.
@@ -66,6 +66,9 @@ pub(crate) struct LaunchPlan {
     cwd: Option<PathBuf>,
     /// How the child is isolated.
     pub(crate) isolation: DriverIsolation,
+    /// What holds the child's process tree: on Windows the Job Object `McpServerManager`
+    /// starts every stdio server in (spec 3.2 §10 W1).
+    pub(crate) process_tree: Option<DriverProcessTree>,
     /// The enforcer and policy of a sandboxed child.
     sandbox: Option<(Arc<dyn SandboxEnforcer>, SandboxPolicy)>,
     /// The file the command resolves to, run in its place under the sandbox, which opens
@@ -79,6 +82,7 @@ impl std::fmt::Debug for LaunchPlan {
             .field("env", &self.env.keys().collect::<Vec<_>>())
             .field("cwd", &self.cwd)
             .field("isolation", &self.isolation)
+            .field("process_tree", &self.process_tree)
             .finish_non_exhaustive()
     }
 }
@@ -218,6 +222,7 @@ pub(crate) async fn prepare(
         env,
         cwd: None,
         isolation: DriverIsolation::Unsandboxed { reason },
+        process_tree: DriverProcessTree::platform(),
         sandbox: None,
         program: None,
     };
@@ -306,6 +311,7 @@ pub(crate) async fn prepare(
                     enforcer: enforcer.name().to_string(),
                     program_paths,
                 },
+                process_tree: DriverProcessTree::platform(),
                 sandbox: Some((enforcer, policy)),
                 program,
             })
@@ -686,6 +692,34 @@ mod tests {
         );
         clear_run_dir(dir.path());
         assert!(!file.exists());
+    }
+
+    /// On Windows every driver runs in a Job Object, sandboxed or not, and the plan records
+    /// it; elsewhere nothing holds the tree (spec 3.2 §10 W1).
+    #[tokio::test]
+    async fn the_plan_records_what_holds_the_process_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let expected = if cfg!(windows) { Some(DriverProcessTree::JobObject) } else { None };
+        for sandbox in ["unsandboxed", "os", "container"] {
+            let plan = prepare(
+                &manifest(sandbox),
+                dir.path(),
+                Some(&Vault),
+                &acting(),
+                false,
+                &unavailable(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(plan.process_tree, expected, "sandbox = {sandbox}");
+        }
+        let empty_root: EnforcerSource =
+            Arc::new(|| Ok(Arc::new(EmptyRoot) as Arc<dyn SandboxEnforcer>));
+        let plan = prepare(&manifest("os"), dir.path(), Some(&Vault), &acting(), true, &empty_root)
+            .await
+            .unwrap();
+        assert!(plan.isolation.is_sandboxed());
+        assert_eq!(plan.process_tree, expected, "a sandboxed driver");
     }
 
     #[tokio::test]

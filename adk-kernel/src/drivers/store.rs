@@ -51,6 +51,33 @@ impl DriverIsolation {
     }
 }
 
+/// What holds a driver's process tree when it starts, so that ending the driver ends every
+/// process it started (spec 3.2 §10 W1).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::drivers::DriverProcessTree;
+///
+/// assert_eq!(serde_json::to_value(DriverProcessTree::JobObject).unwrap(), "jobObject");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum DriverProcessTree {
+    /// A Windows Job Object that closes with the driver's connection: a stop, a restart, a
+    /// crash, or the kernel's own exit ends every process the driver started.
+    JobObject,
+}
+
+impl DriverProcessTree {
+    /// What holds a driver's process tree on this platform: a Job Object on Windows; `None`
+    /// elsewhere, where ending a driver ends its own process only.
+    pub(crate) fn platform() -> Option<Self> {
+        cfg!(windows).then_some(Self::JobObject)
+    }
+}
+
 /// A mounted driver: the manifest the user approved, with what the kernel recorded since
 /// (spec 3.2 §7.7, §9.3, K-I13).
 ///
@@ -79,6 +106,10 @@ pub struct DriverRecord {
     /// How the process was isolated when it last started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<DriverIsolation>,
+    /// What held the process tree when it last started: a Job Object on Windows (spec 3.2
+    /// §10 W1); `None` elsewhere, or before the first start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_tree: Option<DriverProcessTree>,
     /// Tools whose declaration differs from the pin, with the digest observed.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub stale: BTreeMap<String, String>,
@@ -95,6 +126,7 @@ impl DriverRecord {
             approved_by: by.into(),
             approved_at: at,
             isolation: None,
+            process_tree: None,
             stale: BTreeMap::new(),
             updated_at: at,
         }

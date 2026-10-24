@@ -38,6 +38,10 @@ type StdioLauncher =
 /// health, auto-restarts on crash with exponential backoff, and aggregates tools
 /// from all managed servers behind the [`Toolset`](adk_core::Toolset) trait.
 ///
+/// On Windows each server starts suspended and runs only once it is in a Job Object of its
+/// own, which closes with its connection: stopping, restarting or dropping a server, or the
+/// manager's process exiting, ends every process the server started (spec 3.2 §10 W1).
+///
 /// # Construction
 ///
 /// Use [`McpServerManager::new`] with a map of server configurations, then chain
@@ -231,7 +235,8 @@ impl Launcher {
         id: &str,
         config: &McpServerConfig,
     ) -> adk_core::Result<McpToolset<AdkClientHandler>> {
-        let cmd = match &self.stdio_launcher {
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut cmd = match &self.stdio_launcher {
             Some(launch) => launch(config)?,
             None => {
                 let mut cmd = tokio::process::Command::new(&config.command);
@@ -240,12 +245,24 @@ impl Launcher {
                 cmd
             }
         };
+        // The server runs only once it is in a Job Object, so nothing it starts is outside
+        // it (spec 3.2 §10 W1).
+        #[cfg(windows)]
+        cmd.creation_flags(adk_sandbox::process_tree::CREATE_SUSPENDED);
         let program = cmd.as_std().get_program().to_string_lossy().into_owned();
 
         // TokioChildProcess::new spawns the child; dropping the transport ends it.
         let transport = rmcp::transport::TokioChildProcess::new(cmd).map_err(|e| {
             AdkError::tool(format!(
                 "failed to spawn server '{id}': command '{program}' not found. Verify it is installed and on PATH: {e}"
+            ))
+        })?;
+        // On Windows the job closes with the transport, ending the server's whole tree.
+        #[cfg(windows)]
+        let transport = super::process_tree::JobTransport::contain(transport).map_err(|error| {
+            AdkError::tool(format!(
+                "MCP server '{id}' could not be placed in a Job Object, which stops the \
+                 processes it starts, so it was not started: {error}"
             ))
         })?;
 
@@ -647,7 +664,9 @@ impl McpServerManager {
     /// configured server wrapped in an OS sandbox. rmcp pipes the command's stdin and stdout
     /// for the MCP connection. An error from the launcher fails that start with the error
     /// unchanged and leaves the server `FailedToStart`. Without a launcher the manager
-    /// spawns the configured command, arguments and environment.
+    /// spawns the configured command, arguments and environment. On Windows the manager
+    /// replaces the command's creation flags with `CREATE_SUSPENDED`, so the server runs only
+    /// once it is in its Job Object (spec 3.2 §10 W1).
     ///
     /// # Example
     ///
