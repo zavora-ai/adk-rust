@@ -672,16 +672,17 @@ impl Harness {
 
     /// Records a person's decision for the pending call with `fingerprint`; the next
     /// [`resume`](Self::resume) runs or refuses it (spec 3.1 §7.3). The call's open request
-    /// in the approval service, if any, is cancelled, so it cannot decide the call again
-    /// (spec 3.3 §7.3).
+    /// in the approval service, if any, is withdrawn first, so it cannot decide the call
+    /// again and no run is woken before the person's decision is recorded (spec 3.3 §7.3).
     ///
     /// A remembered rule must pin the call's exact declaration, and no rule is remembered
     /// for a non-waivable call.
     ///
     /// # Errors
     ///
-    /// Returns `harness.decision.invalid` when no pending call has `fingerprint` or a rule
-    /// cannot be remembered for the call, or the store's error.
+    /// Returns `harness.decision.invalid` when no pending call has `fingerprint`, an
+    /// approver decided its inbox request first, or a rule cannot be remembered for the
+    /// call, or the store's error.
     pub async fn decide(
         &self,
         user: &UserId,
@@ -728,6 +729,47 @@ impl Harness {
                 Some((rule, StandingDecision::Deny { reason: format!("denied by {user}") })),
             ),
         };
+        // The inbox request is withdrawn, not cancelled: a cancel writes a denial and wakes
+        // the run before the person's decision is recorded (spec 3.3 §7.3).
+        if let Some(service) = runtime.approval_service() {
+            let mut query = adk_core::InboxQuery::default()
+                .with_session(&scope)
+                .with_states(adk_core::ApprovalState::ALL);
+            loop {
+                let page = service.inbox(query.clone()).await?;
+                let open = page
+                    .items
+                    .iter()
+                    .filter(|item| item.fingerprint == fingerprint && item.is_open());
+                for item in open {
+                    let mut attempts = 0;
+                    loop {
+                        match service
+                            .withdraw(&item.id, Some("decided in the harness".into()))
+                            .await
+                        {
+                            Ok(_) => break,
+                            // A partial quorum or an escalation step moved it; still pending.
+                            Err(error)
+                                if error.code == "approval.version_conflict" && attempts < 8 =>
+                            {
+                                attempts += 1;
+                            }
+                            Err(error) if error.code == "approval.already_resolved" => {
+                                return Err(store_error(
+                                    "an approver decided this call in the approvals inbox first",
+                                ));
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                }
+                match page.next_cursor {
+                    Some(cursor) => query = query.with_cursor(Some(cursor)),
+                    None => break,
+                }
+            }
+        }
         if let Some((suggestion, rule_decision)) = remember {
             let owner = RuleOwner {
                 app_name: self.app_name.clone(),
@@ -743,12 +785,6 @@ impl Harness {
                 audit.record("harness.rule.created", fields).await?;
             }
             runtime.standing_rules().grant(rule).await?;
-        }
-        // An inbox request left open for the call would decide it a second time
-        // (spec 3.3 §7.3).
-        if runtime.approval_service().is_some() {
-            let fingerprints = [fingerprint.to_string()];
-            self.clear_inbox(user, session, &fingerprints, "decided in the harness").await?;
         }
         runtime.approval_store().decide(&scope, fingerprint, approval).await?;
         self.wake_parked(user, session, fingerprint).await

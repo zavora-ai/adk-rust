@@ -199,6 +199,170 @@ async fn deciding_in_the_harness_cancels_the_inbox_request() {
     assert_eq!(std::fs::read_to_string(f.path("ran.txt")).unwrap(), "ran\n", "it ran once");
 }
 
+/// An in-memory approval store that records every decision written to it.
+#[derive(Debug, Default)]
+struct RecordingStore {
+    inner: InMemoryApprovalStore,
+    written: Mutex<Vec<ToolConfirmationDecision>>,
+}
+
+#[async_trait::async_trait]
+impl ApprovalStore for RecordingStore {
+    async fn record_pending(
+        &self,
+        scope: &ApprovalScope,
+        request: &ToolConfirmationRequest,
+    ) -> adk_core::Result<()> {
+        self.inner.record_pending(scope, request).await
+    }
+    async fn pending(
+        &self,
+        scope: &ApprovalScope,
+    ) -> adk_core::Result<Vec<adk_core::PendingApproval>> {
+        self.inner.pending(scope).await
+    }
+    async fn decide(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+        approval: adk_core::ToolApproval,
+    ) -> adk_core::Result<()> {
+        self.written.lock().unwrap().push(approval.decision);
+        self.inner.decide(scope, fingerprint, approval).await
+    }
+    async fn take_decision(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<Option<ToolConfirmationDecision>> {
+        self.inner.take_decision(scope, fingerprint).await
+    }
+    async fn has_decision(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<bool> {
+        self.inner.has_decision(scope, fingerprint).await
+    }
+    async fn record_pending_keyed(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+        request: &ToolConfirmationRequest,
+    ) -> adk_core::Result<()> {
+        self.inner.record_pending_keyed(scope, fingerprint, request).await
+    }
+    async fn take_approval(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<Option<adk_core::ToolApproval>> {
+        self.inner.take_approval(scope, fingerprint).await
+    }
+    async fn create_request(&self, request: &ApprovalRequest) -> adk_core::Result<ApprovalRequest> {
+        self.inner.create_request(request).await
+    }
+    async fn get_request(&self, id: &str) -> adk_core::Result<Option<ApprovalRequest>> {
+        self.inner.get_request(id).await
+    }
+    async fn replace_request(
+        &self,
+        request: &ApprovalRequest,
+        expected_version: u64,
+    ) -> adk_core::Result<bool> {
+        self.inner.replace_request(request, expected_version).await
+    }
+    async fn list_requests(
+        &self,
+        query: &adk_core::ApprovalRequestQuery,
+    ) -> adk_core::Result<Vec<ApprovalRequest>> {
+        self.inner.list_requests(query).await
+    }
+    async fn put_delegation(
+        &self,
+        delegation: &adk_core::ApprovalDelegation,
+    ) -> adk_core::Result<()> {
+        self.inner.put_delegation(delegation).await
+    }
+    async fn delegations_to(
+        &self,
+        to: &SubjectRef,
+    ) -> adk_core::Result<Vec<adk_core::ApprovalDelegation>> {
+        self.inner.delegations_to(to).await
+    }
+    async fn delete_delegation(&self, id: &str) -> adk_core::Result<bool> {
+        self.inner.delete_delegation(id).await
+    }
+}
+
+/// Review finding 4 of #1044: deciding in the harness withdraws the inbox request
+/// without writing a denial, so the only decision written for the call is the person's
+/// and no run can take another first.
+#[tokio::test]
+async fn deciding_in_the_harness_writes_only_the_persons_decision() {
+    let store = Arc::new(RecordingStore::default());
+    let service = inbox(store.clone());
+    let f = fixture(vec![append_line(), ScriptedResponse::text("done")], |b| {
+        b.prompter(Arc::new(Away)).confirmation_timeout(TIMEOUT).approval_service(service.clone())
+    })
+    .await;
+    f.send("append a line").await;
+    let pending = f.harness.pending_approvals(&f.user, &f.session).await.unwrap();
+    f.harness
+        .decide(&f.user, &f.session, &pending[0].fingerprint, adk_harness::HarnessDecision::Approve)
+        .await
+        .unwrap();
+
+    assert_eq!(*store.written.lock().unwrap(), [ToolConfirmationDecision::Approve]);
+    let scope = ApprovalScope::new(common::APP, f.user.to_string(), f.session.to_string());
+    let request = requests(&service, &scope).await.remove(0);
+    assert_eq!(request.state, ApprovalState::Cancelled, "the inbox request is closed");
+    f.resume().await;
+    assert_eq!(std::fs::read_to_string(f.path("ran.txt")).unwrap(), "ran\n", "it ran once");
+}
+
+/// An approver who decided the inbox request first keeps the decision: the harness
+/// refuses the person's, rather than write one after it (spec 3.3 §7.3).
+#[tokio::test]
+async fn deciding_in_the_harness_after_the_inbox_is_refused() {
+    let service = inbox(Arc::new(InMemoryApprovalStore::new()));
+    let f = fixture(vec![append_line(), ScriptedResponse::text("done")], |b| {
+        b.prompter(Arc::new(Away)).confirmation_timeout(TIMEOUT).approval_service(service.clone())
+    })
+    .await;
+    f.send("append a line").await;
+    let pending = f.harness.pending_approvals(&f.user, &f.session).await.unwrap();
+    let scope = ApprovalScope::new(common::APP, f.user.to_string(), f.session.to_string());
+    let request = requests(&service, &scope).await.remove(0);
+    // Resolved by the approver, its outcome not yet written.
+    let mut resolved = request.clone();
+    resolved.state = ApprovalState::Rejected;
+    resolved.version += 1;
+    assert!(
+        service
+            .approval_store()
+            .unwrap()
+            .replace_request(&resolved, request.version)
+            .await
+            .unwrap()
+    );
+
+    let error = f
+        .harness
+        .decide(&f.user, &f.session, &pending[0].fingerprint, adk_harness::HarnessDecision::Approve)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "harness.decision.invalid");
+    assert!(
+        !service
+            .approval_store()
+            .unwrap()
+            .has_decision(&scope, &pending[0].fingerprint)
+            .await
+            .unwrap()
+    );
+}
+
 /// Review finding 2: when the person approves the call again live, the request left
 /// waiting for it is cancelled and its entry cleared, so the next identical call is asked
 /// about, not run on the stale request.

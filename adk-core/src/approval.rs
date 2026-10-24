@@ -1587,6 +1587,22 @@ pub trait ApprovalService: fmt::Debug + Send + Sync {
     /// `approval.version_conflict` when it changed concurrently.
     async fn cancel(&self, id: &str, reason: Option<String>) -> Result<ApprovalRequest>;
 
+    /// Withdraws a pending request whose call was decided another way, such as by the run's
+    /// confirmation handler: the request is closed as cancelled, but no outcome is written
+    /// to the store and no run is woken, so the decision that closed the call stands
+    /// (spec 3.3 §7.3).
+    ///
+    /// The default cancels the request, which denies the call; [`StoreApprovalService`]
+    /// writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`cancel`](Self::cancel): `approval.not_found`, `approval.already_resolved`, or
+    /// `approval.version_conflict` when it changed concurrently.
+    async fn withdraw(&self, id: &str, reason: Option<String>) -> Result<ApprovalRequest> {
+        self.cancel(id, reason).await
+    }
+
     /// Expires overdue requests and fires due escalation steps, as of `now`, and
     /// applies resolutions an earlier failure left unapplied.
     ///
@@ -2146,11 +2162,14 @@ impl ApprovalService for StoreApprovalService {
             approval.state = next.state.as_str(),
             "approval decision recorded"
         );
-        self.notify(ApprovalEventKind::Decided, &next, Some(&decision), None).await;
         if !next.state.is_terminal() {
+            self.notify(ApprovalEventKind::Decided, &next, Some(&decision), None).await;
             return Ok(next);
         }
-        let applied = self.apply(next, false).await?;
+        // The outcome is written before any notifier runs, so a call that is decided
+        // another way meanwhile waits for it no longer than the store write (spec 3.3 §7.3).
+        let applied = self.apply(next.clone(), false).await?;
+        self.notify(ApprovalEventKind::Decided, &next, Some(&decision), None).await;
         self.notify(ApprovalEventKind::Resolved, &applied, None, None).await;
         Ok(applied)
     }
@@ -2207,6 +2226,26 @@ impl ApprovalService for StoreApprovalService {
         let applied = self.apply(next, false).await?;
         self.notify(ApprovalEventKind::Cancelled, &applied, None, None).await;
         Ok(applied)
+    }
+
+    async fn withdraw(&self, id: &str, reason: Option<String>) -> Result<ApprovalRequest> {
+        let request = self.store.get_request(id).await?.ok_or_else(|| not_found(id))?;
+        if request.state.is_terminal() {
+            return Err(conflict(
+                "approval.already_resolved",
+                format!("approval request '{id}' is already {}", request.state.as_str()),
+            ));
+        }
+        let mut next = request.clone();
+        next.state = ApprovalState::Cancelled;
+        next.version = request.version + 1;
+        next.resolved_at = Some(self.clock.now());
+        next.note = reason;
+        // The call was decided another way: there is no outcome to write or run to wake.
+        next.outcome_applied = true;
+        self.swap(&next, request.version).await?;
+        self.notify(ApprovalEventKind::Cancelled, &next, None, None).await;
+        Ok(next)
     }
 
     async fn tick(&self, now: DateTime<Utc>) -> Result<ApprovalTick> {
