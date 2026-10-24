@@ -226,6 +226,7 @@ async fn host(harness: &adk_harness::Harness) -> Result<(), Box<dyn std::error::
 | `kernel` | off | `adk-kernel`: `Harness::kernel`, the harness as a kernel's resident agent, and goal stall parking (spec 3.2 §10 HK1, HK3) |
 | `docker` | off | `adk-sandbox/workspace-docker`: the container shell (`ShellIsolation::Container`, `ContainerBashTool`) |
 | `skills-registry`, `team-acp`, `team-a2a`, `memory-graph` | off | registry skills, ACP and A2A members, graph memory |
+| `acp-server` | off | `StandingPermissions` for `HarnessAgent`: an editor's "Always allow" over ACP becomes a standing rule (spec 3.3 §10 A1) |
 | `payments` | off | the payments pack (spec 3.1 §7.16): `adk-payments` tools as class `Payment` under a `PaymentMandate`, `harness.payment` with the journal receipt |
 | `managed` | off | the managed form (spec 3.1 §7.18): `HarnessDef`, `HarnessResolver` on the managed runtime, `Pack::Managed`; with `kernel` also the kernel's managed form, one kernel per tenant (spec 3.2 §7.13) |
 | `browser` | off | the browser pack (spec 3.1 §7.24): `adk-browser`'s tools as `Read`, `Web` and `External` classes under the web rules, `BrowserPack`, `harness.browser.*` |
