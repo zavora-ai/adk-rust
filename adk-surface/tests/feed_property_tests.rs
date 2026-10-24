@@ -59,6 +59,7 @@ impl Source for Store {
     async fn requests(
         &self,
         _caller: &Caller,
+        _session: Option<&str>,
         _open_only: bool,
     ) -> adk_surface::Result<Vec<ApprovalRequest>> {
         Ok(Vec::new())

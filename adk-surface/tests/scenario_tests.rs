@@ -75,7 +75,9 @@ async fn two_surfaces_answer_one_held_call_and_it_runs_once() {
     assert!(!s.path.join("invoice.txt").exists(), "held, not written");
 
     // The card, from the inbox entry, in the words of §8 — the same on the web and in chat.
-    let (status, page) = call(&router, "GET", "/api/surface/decisions", None).await;
+    let (_, other) = call(&router, "GET", "/api/surface/decisions?session=other", None).await;
+    assert_eq!(other["decisions"], json!([]), "one session's decisions only");
+    let (status, page) = call(&router, "GET", "/api/surface/decisions?session=s1", None).await;
     assert_eq!(status, StatusCode::OK, "{page}");
     let page: DecisionsResponse = serde_json::from_value(page).unwrap();
     assert_eq!(page.decisions.len(), 1);

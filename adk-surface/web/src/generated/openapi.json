@@ -1472,7 +1472,7 @@
           },
           "session": {
             "default": null,
-            "description": "`GET /surface/status`: the session whose mode to show.",
+            "description": "`GET /surface/status`: the session whose mode to show; `GET /surface/decisions`: only\nthat session's decisions.",
             "type": [
               "string",
               "null"
@@ -1879,6 +1879,15 @@
             "name": "surface",
             "required": false,
             "schema": null
+          },
+          {
+            "description": "Only this session's decisions",
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
