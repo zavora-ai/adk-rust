@@ -7,6 +7,7 @@ mod common;
 
 use std::sync::Arc;
 
+use adk_core::Agent as _;
 use adk_harness::personal::{PERSONAL_SYSTEM_PROMPT, PersonalAgent};
 use adk_harness::{
     Harness, HarnessMode, IsolationStatus, Preset, ShellIsolation, coding::CODING_SYSTEM_PROMPT,
@@ -49,6 +50,83 @@ async fn the_personal_preset_offers_bash_only_inside_the_sandbox() {
         // host.
         _ => assert!(!info.tools.contains(&"bash".to_string()), "{:?}", info.tools),
     }
+}
+
+/// Review findings 3 and 5: inside the sandbox the personal preset's `bash` has no
+/// unsandboxed retry, whatever the builder asked for after the preset, and the policy refuses
+/// one as turned off. Without an enforcer the preset offers no `bash`; the policy unit test
+/// `the_personal_preset_turns_the_unsandboxed_retry_off` covers every host.
+#[tokio::test]
+async fn the_personal_preset_never_retries_on_the_host() {
+    let retry = json!({
+        "command": "cat ~/.ssh/id_ed25519",
+        "unsandboxed": true,
+        "retry_of": "1",
+        "reason": "the sandbox denied it",
+    });
+    let f = fixture(
+        vec![ScriptedResponse::function_call("bash", retry), ScriptedResponse::text("ok")],
+        |b| {
+            b.preset(Preset::Personal)
+                .shell(ShellIsolation::OsSandbox(Default::default()))
+                .allow_unsandboxed_retry(true)
+                .mode(HarnessMode::Auto)
+        },
+    )
+    .await;
+    let events = f.send("read my key").await;
+    let info = f.harness.agent().info().clone();
+    if !matches!(info.isolation, IsolationStatus::OsSandbox { .. }) {
+        // No enforcer here: the preset offers no shell at all.
+        assert!(!info.tools.contains(&"bash".to_string()), "{:?}", info.tools);
+        return;
+    }
+    let request = f.model.last_request().expect("a request");
+    let bash = request.tools.get("bash").expect("bash is declared").to_string();
+    assert!(!bash.contains("unsandboxed"), "{bash}");
+    let answer = common::response_of(&events, "bash");
+    // Refused because the retry is off, not because `retry_of` names no failed call.
+    assert!(answer.to_string().contains("turned off"), "the retry is refused: {answer}");
+}
+
+/// Review findings 11 and 13: the harness reports no shell when the personal preset offers
+/// none, so every surface shows the same.
+#[tokio::test]
+async fn the_harness_reports_no_shell_when_the_preset_offers_none() {
+    let f = fixture(vec![ScriptedResponse::text("ok")], |b| b.preset(Preset::Personal)).await;
+    assert_eq!(f.harness.agent().info().shell(), None);
+    let f = fixture(vec![ScriptedResponse::text("ok")], |b| b.preset(Preset::Coding)).await;
+    let info = f.harness.agent().info().clone();
+    assert_eq!(info.shell(), Some(&info.isolation));
+}
+
+/// Review finding 14: a second preset replaces what the first set.
+#[tokio::test]
+async fn a_second_preset_replaces_the_first() {
+    let f = fixture(vec![ScriptedResponse::text("ok")], |b| {
+        b.preset(Preset::Personal).preset(Preset::Coding)
+    })
+    .await;
+    let info = f.harness.agent().info().clone();
+    assert!(info.tools.contains(&"bash".to_string()), "the host shell is back: {:?}", info.tools);
+    assert_ne!(
+        f.harness.agent().description(),
+        adk_harness::personal::PERSONAL_DESCRIPTION,
+        "the personal description is gone"
+    );
+    f.send("hi").await;
+    let system = last_system_text(&f.model);
+    assert!(system.starts_with(CODING_SYSTEM_PROMPT), "{system}");
+    assert!(!system.contains("shell: none"), "{system}");
+}
+
+/// Review finding 17: on the builder the personal preset leaves long-term memory to the
+/// caller; `PersonalAgent` turns it on.
+#[tokio::test]
+async fn the_builder_preset_leaves_long_term_memory_to_the_caller() {
+    let f = fixture(vec![ScriptedResponse::text("ok")], |b| b.preset(Preset::Personal)).await;
+    let tools = &f.harness.agent().info().tools;
+    assert!(!tools.contains(&"memory_search".to_string()), "{tools:?}");
 }
 
 #[tokio::test]

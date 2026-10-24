@@ -788,7 +788,9 @@ impl HarnessAgentBuilder {
     }
 
     /// Applies `preset` (spec 3.1 §7.19, spec 3.3 §10 H1): its prompt, mode, members and
-    /// shell. Calls after it override what it sets.
+    /// shell, replacing what an earlier preset set. Calls after it override what it sets,
+    /// except the personal preset's shell: no later call gives it a host shell or an
+    /// unsandboxed retry on the host.
     ///
     /// # Example
     ///
@@ -812,10 +814,19 @@ impl HarnessAgentBuilder {
         preset.apply(self)
     }
 
-    /// Offers `bash` only when it runs in the OS sandbox or a container (spec 3.3 §10 H1).
-    pub(crate) fn isolated_shell_only(mut self) -> Self {
-        self.isolated_shell_only = true;
+    /// Offers `bash` only when it runs in the OS sandbox or a container, with no unsandboxed
+    /// retry (spec 3.3 §10 H1).
+    pub(crate) fn isolated_shell_only(mut self, yes: bool) -> Self {
+        self.isolated_shell_only = yes;
         self
+    }
+
+    /// Undoes what a preset set that another preset leaves alone (spec 3.3 §10 H1).
+    pub(crate) fn clear_preset(mut self) -> Self {
+        if self.description.as_deref() == Some(crate::personal::PERSONAL_DESCRIPTION) {
+            self.description = None;
+        }
+        self.isolated_shell_only(false)
     }
 
     /// Trusts an MCP server's `readOnlyHint` for the External class (default `false`).
@@ -1134,8 +1145,11 @@ impl HarnessAgentBuilder {
     /// typed value reaches the asking call only, and every occurrence of it in any call's
     /// result or error is replaced by
     /// [`TAKE_OVER_PLACEHOLDER`](crate::take_over::TAKE_OVER_PLACEHOLDER). Asking needs an
-    /// [`approval_service`](Self::approval_service); the wait is bounded by the
-    /// [`confirmation_timeout`](Self::confirmation_timeout).
+    /// [`approval_service`](Self::approval_service); the wait ends at the
+    /// [`confirmation_timeout`](Self::confirmation_timeout), or shortly before the call's
+    /// [`tool_timeout`](Self::tool_timeout) when that comes first. The shell never takes
+    /// over, so passing `take_over` to [`credentials`](Self::credentials) gives `bash` no
+    /// token.
     ///
     /// # Example
     ///
@@ -1559,6 +1573,9 @@ impl HarnessAgentBuilder {
                  shell or the OS sandbox with shell_credential (spec 3.1 §7.14)",
             ));
         }
+        // The personal preset's shell never retries on the host (spec 3.3 §10 H1).
+        let allow_unsandboxed_retry =
+            self.shell.allow_unsandboxed_retry && !self.isolated_shell_only;
         #[cfg(feature = "docker")]
         let container_pool = match &shell.container {
             Some(config) if self.shell_enabled && workspace.bash_allowed() => {
@@ -1567,7 +1584,7 @@ impl HarnessAgentBuilder {
                     config.clone(),
                     ledger.clone(),
                 )
-                .allow_unsandboxed_retry(self.shell.allow_unsandboxed_retry)
+                .allow_unsandboxed_retry(allow_unsandboxed_retry)
                 .with_file_gate(file_gate.clone());
                 let pool = bash.pool();
                 tools.push(Arc::new(bash));
@@ -1591,7 +1608,7 @@ impl HarnessAgentBuilder {
                 ledger.clone(),
             )
             .with_mode_store(mode_store.clone(), self.mode)
-            .allow_unsandboxed_retry(self.shell.allow_unsandboxed_retry)
+            .allow_unsandboxed_retry(allow_unsandboxed_retry)
             .with_file_gate(file_gate.clone());
             #[cfg(feature = "sandbox")]
             let bash = match shell.launcher.clone() {
@@ -1748,7 +1765,15 @@ impl HarnessAgentBuilder {
         // leaves it scrubbed before RBAC, hooks or members see the result.
         if let Some(take_over) = &self.take_over {
             take_over.bind(self.approval_service.clone(), self.confirmation_timeout);
-            tools = tools.into_iter().map(crate::take_over::ScopedTool::wrap).collect();
+            let tool_timeout = self.tool_timeout;
+            tools = tools
+                .into_iter()
+                .map(|tool| match tool.name() {
+                    // The shell runs model-written commands, so it never takes over.
+                    "bash" => crate::take_over::ScopedTool::wrap_shell(tool, tool_timeout),
+                    _ => crate::take_over::ScopedTool::wrap(tool, tool_timeout),
+                })
+                .collect();
         }
         let tool_names: Vec<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
         #[cfg(feature = "auth")]
@@ -1906,7 +1931,7 @@ impl HarnessAgentBuilder {
             workspace: workspace.clone(),
             shell: ShellView {
                 status: status.clone(),
-                allow_unsandboxed_retry: self.shell.allow_unsandboxed_retry,
+                allow_unsandboxed_retry,
                 fail_if_unavailable: self.shell.fail_if_unavailable,
             },
             switches,
@@ -2105,7 +2130,7 @@ impl HarnessAgentBuilder {
         }
         for tool in self.tools {
             let tool = match &self.take_over {
-                Some(_) => crate::take_over::ScopedTool::wrap(tool),
+                Some(_) => crate::take_over::ScopedTool::wrap(tool, self.tool_timeout),
                 None => tool,
             };
             #[cfg(feature = "auth")]
@@ -2114,7 +2139,7 @@ impl HarnessAgentBuilder {
         }
         for extra in self.toolsets {
             let extra = match &self.take_over {
-                Some(_) => crate::take_over::ScopedToolset::wrap(extra),
+                Some(_) => crate::take_over::ScopedToolset::wrap(extra, self.tool_timeout),
                 None => extra,
             };
             builder = builder.toolset(extra);
