@@ -23,6 +23,12 @@ sqlite = ["dep:sqlx", "sqlx/sqlite", "adk-session/sqlite"]
 # (spec 3.2 §7.1, §13 Q8).
 postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs", "adk-session/postgres"]
 redis = ["dep:fred"]
+# The phase-4 backends of the kernel-owned stores, Alpha until their live suites pass in CI
+# (spec 3.2 §7.1, §13 Q8). Each also turns on the same backend of adk-session's run,
+# schedule and governance stores, which a kernel on that backend keeps beside them.
+mongodb = ["dep:mongodb", "adk-session/mongodb"]
+firestore = ["dep:firestore", "adk-session/firestore"]
+neo4j = ["dep:neo4rs", "adk-session/neo4j"]
 # Webhook wake sources through `WebhookIngress` (spec 3.2 §7.4).
 webhooks = ["adk-core/webhooks", "adk-server/webhook-ingress"]
 # Supervised MCP drivers (spec 3.2 §7.7): manifests, the driver store, the supervisor over
@@ -70,6 +76,9 @@ async-trait.workspace = true
 axum = "0.8"
 chrono.workspace = true
 dirs = "7"
+# The Alpha backends (features `mongodb`, `firestore`, `neo4j`), at the versions adk-session
+# and adk-graph use.
+firestore = { version = "0.48", optional = true }
 fred = { version = "10", optional = true, features = ["i-scripts"] }
 futures.workspace = true
 # The ledger key's random bytes (feature `proc`).
@@ -81,6 +90,8 @@ hmac = { version = "0.12", optional = true }
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "service"] }
+mongodb = { version = "3", optional = true }
+neo4rs = { version = "0.8", optional = true }
 opentelemetry = { workspace = true, optional = true }
 # The control-plane client over HTTP.
 reqwest.workspace = true

@@ -66,7 +66,13 @@ mod ledger;
 mod observation;
 mod sources;
 
+#[cfg(feature = "firestore")]
+pub use crate::stores::FirestoreLedgerStore;
 pub use crate::stores::InMemoryLedgerStore;
+#[cfg(feature = "mongodb")]
+pub use crate::stores::MongoLedgerStore;
+#[cfg(feature = "neo4j")]
+pub use crate::stores::Neo4jLedgerStore;
 #[cfg(feature = "postgres")]
 pub use crate::stores::PostgresLedgerStore;
 #[cfg(feature = "redis")]

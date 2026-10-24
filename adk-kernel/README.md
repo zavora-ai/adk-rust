@@ -278,6 +278,43 @@ second.
 `process_store_conformance_tests!`, `agenda_store_conformance_tests!` and `driver_store_conformance_tests!` (feature
 `conformance`) check a backend against the contract the kernel relies on.
 
+### Alpha backends: MongoDB, Firestore, Neo4j
+
+Every kernel store also runs on MongoDB, Firestore and Neo4j (spec 3.2 §13 Q8), each
+backend **Alpha** until its live conformance suites pass in CI, so its storage layout may
+still change without a migration. Each feature also turns on the same backend of
+`adk-session`'s run, schedule and governance stores, and every store takes the handle
+those stores use, so one client serves them all.
+
+| Store | MongoDB (`mongodb`) | Firestore (`firestore`) | Neo4j (`neo4j`) |
+|---|---|---|---|
+| `ProcessStore` | `MongoProcessStore` | `FirestoreProcessStore` | `Neo4jProcessStore` |
+| `AgendaStore` | `MongoAgendaStore` | `FirestoreAgendaStore` | `Neo4jAgendaStore` |
+| `DriverStore` (with `drivers`) | `stores::MongoDriverStore` | `stores::FirestoreDriverStore` | `stores::Neo4jDriverStore` |
+| `LedgerStore` (with `proc`) | `proc::MongoLedgerStore` | `proc::FirestoreLedgerStore` | `proc::Neo4jLedgerStore` |
+| Opened with | `connect(url, database)` or `from_database(db)` | `connect(project)` or `from_db(db)` | `connect(uri, user, password)` or `from_graph(graph)` |
+
+```rust,no_run
+use adk_kernel::{MongoAgendaStore, MongoProcessStore};
+use adk_session::MongoRunStore;
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let processes = MongoProcessStore::connect("mongodb://localhost:27017", "adk").await?;
+let db = processes.database().clone();
+let runs = MongoRunStore::from_database(db.clone());
+let agenda = MongoAgendaStore::from_database(db);
+runs.migrate().await?;
+processes.migrate().await?;
+agenda.migrate().await?;
+# Ok(())
+# }
+```
+
+`adk-rust serve --store` and `adk-rust up --store` take PostgreSQL and Redis URLs only:
+`--store` also keeps the harness's modes and standing rules, which have no MongoDB,
+Firestore or Neo4j backend, so a kernel on these backends is built in code with
+`KernelBuilder`.
+
 ## `/proc`: the activity ledger and baselines
 
 With `KernelBuilder::ledger(Ledger::new(store, key))` the kernel keeps a content-free
@@ -290,7 +327,7 @@ a secret (spec 3.2 K-I19).
 
 | Store | Backends |
 |---|---|
-| `LedgerStore` | `InMemoryLedgerStore`; `SqliteLedgerStore` (`sqlite`); `PostgresLedgerStore` (`postgres`); `RedisLedgerStore` (`redis`); suite `ledger_store_conformance_tests!` |
+| `LedgerStore` | `InMemoryLedgerStore`; `SqliteLedgerStore` (`sqlite`); `PostgresLedgerStore` (`postgres`); `RedisLedgerStore` (`redis`); Alpha: `MongoLedgerStore`, `FirestoreLedgerStore`, `Neo4jLedgerStore`; suite `ledger_store_conformance_tests!` |
 
 With `proc-baselines`, the maintenance tick runs the daily `kernel.proc` pass over
 `adk-eval`'s ledger statistics — 28-day median and MAD baselines, a 14-day warm-up, the 7-
@@ -308,6 +345,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 |---|---|---|
 | `sqlite` | on | `SqliteProcessStore`, `SqliteAgendaStore` |
 | `postgres`, `redis` | off | `PostgresProcessStore`, `PostgresAgendaStore`, `RedisProcessStore`, `RedisAgendaStore` |
+| `mongodb`, `firestore`, `neo4j` | off | **Alpha**: every kernel store on MongoDB, Firestore or Neo4j, with the same backend of `adk-session`'s stores |
 | `webhooks` | on | `webhook_wake_hook` over `adk-server`'s `WebhookIngress` |
 | `proc` | on | The activity ledger (`proc`), its stores and `/api/kernel/proc/*`; the OpenTelemetry GenAI histograms of the live process aggregates |
 | `proc-baselines` | off | The daily baseline pass and observations over `adk-eval`'s ledger statistics (implies `proc`; on in adk-cli and the umbrella's `full`) |
@@ -326,6 +364,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `tests/wake_*.rs` | Matching, keys, expiry, reconciliation and each wake source |
 | `tests/proactivity_scenarios.rs` | K4: in Ask a follow-up waits in the inbox and nothing runs until it is approved, edited or rejected; in Auto it runs after quiet hours within the daily budget, a proposal past `max_proposed_open` is rejected with a reason on the bus, and an over-budget process sleeps until the budget replenishes. K8: three background runs at a quota of three, a typed message runs at once, the youngest background run parks and is requeued, no tool runs twice and the quota is never exceeded. A consolidation item waits for a person in Auto |
 | `tests/process_store_*.rs`, `tests/agenda_store*.rs`, `tests/driver_store_*.rs`, `tests/ledger_store_*.rs` | The conformance suites on every backend; PostgreSQL and Redis run `#[ignore]`d against a server (`scripts/test-postgres.sh`) |
+| `tests/store_conformance_mongodb.rs`, `tests/store_conformance_firestore.rs`, `tests/store_conformance_neo4j.rs` | The four suites on each Alpha backend, `#[ignore]`d; CI's nightly `durable-stores` job runs them against MongoDB (a replica set and a standalone server), Neo4j and the Firestore emulator |
 | `tests/driver_scenarios.rs` | K6 on a real stdio MCP server: mount, crash and restart with backoff, a redeclared tool stale and `NeedsReapproval`, re-approval; a `secret://` value reaches the server as a file and never in its environment |
 | `tests/driver_park_restart.rs` | An agent run's driver call parked on its server's question survives a kernel restart: answered in the inbox, it completes with the tool executed once; a call approved before its question is not asked about again |
 | `tests/driver_sandbox_tests.rs` | A driver under `sandbox = "os"` cannot write outside its allowed paths (Seatbelt, bubblewrap in the `sandbox-linux` job) |

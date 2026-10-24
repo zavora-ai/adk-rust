@@ -24,7 +24,7 @@
 //! |---|---|
 //! | [`Kernel`], [`KernelBuilder`], [`KernelConfig`], [`KernelHealth`], [`KernelState`] | §7.2 |
 //! | [`Process`], [`ProcessMeta`], [`ProcessView`], [`GoalProgress`], [`ProcessKind`], [`Suspension`], [`ProcessTable`], [`ProcessSpec`], [`ProgressSource`] | §7.3 |
-//! | [`ProcessStore`], [`ProcessFilter`], [`SpendScope`], [`InMemoryProcessStore`], `SqliteProcessStore`, `PostgresProcessStore`, `RedisProcessStore` | §7.3, §13 Q8 |
+//! | [`ProcessStore`], [`ProcessFilter`], [`SpendScope`], [`InMemoryProcessStore`], `SqliteProcessStore`, `PostgresProcessStore`, `RedisProcessStore`; Alpha: `MongoProcessStore`, `FirestoreProcessStore`, `Neo4jProcessStore` | §7.3, §13 Q8 |
 //! | [`Wake`], [`WakeSet`], [`ExpiryAction`], [`WakeSource`], [`WakeEvent`], [`keys`], [`Trigger`], [`WakeRouter`], [`WakeOutcome`], [`KernelWakeExecutor`], the wake source adapters | §7.4 |
 //! | [`KernelEvent`], [`EventRecord`], [`EventBus`], [`EventSubscriber`], [`EventSink`], [`AuditSink`], [`SpendDelta`] | §7.6 |
 //! | [`Agenda`], [`AgendaHandle`], [`ProposalOutcome`], [`AgendaItem`], [`AgendaState`], [`AgendaStateKind`], [`AgendaOrigin`], [`AgendaAnswer`], [`ObservationAudience`], [`PlanRef`], [`AgendaStore`], [`AgendaFilter`], [`InMemoryAgendaStore`], [`ProactivityPolicy`], [`ProactiveApproval`] | §7.5 |
@@ -50,6 +50,7 @@
 //! |---|---|---|
 //! | `sqlite` | on | `SqliteProcessStore`, on the pool of `harness.db` |
 //! | `postgres`, `redis` | off | `PostgresProcessStore`, `RedisProcessStore`, opened from the URL of `adk-rust serve --store` |
+//! | `mongodb`, `firestore`, `neo4j` | off | **Alpha** until their live suites pass in CI: every kernel store on MongoDB, Firestore or Neo4j (`MongoProcessStore`, `FirestoreProcessStore`, `Neo4jProcessStore` and the agenda, driver and ledger stores beside them), with the same backend of `adk-session`'s run, schedule and governance stores |
 //! | `webhooks` | on | `webhook_wake_hook` over `adk-server`'s `WebhookIngress` |
 //! | `drivers` | on | [`drivers`]: manifests, the driver store, the supervisor over `adk-tool`'s MCP manager, the stdio launcher on `adk-sandbox` |
 //! | `service` | on | The `service` module: `adk-rust up` as a launchd agent, a systemd user unit or a Windows service (`windows-service` on Windows) |
@@ -132,6 +133,18 @@ pub use process::{
 };
 pub use review::{AgedProcess, ReviewReport, RuleAge, StaleRule, StandingRuleSource};
 pub use sched::{QueueClass, QuietHours, Quotas};
+#[cfg(feature = "firestore")]
+pub use stores::FirestoreAgendaStore;
+#[cfg(feature = "firestore")]
+pub use stores::FirestoreProcessStore;
+#[cfg(feature = "mongodb")]
+pub use stores::MongoAgendaStore;
+#[cfg(feature = "mongodb")]
+pub use stores::MongoProcessStore;
+#[cfg(feature = "neo4j")]
+pub use stores::Neo4jAgendaStore;
+#[cfg(feature = "neo4j")]
+pub use stores::Neo4jProcessStore;
 #[cfg(feature = "postgres")]
 pub use stores::PostgresAgendaStore;
 #[cfg(feature = "postgres")]
