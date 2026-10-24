@@ -27,6 +27,10 @@ web = ["dep:axum", "dep:rust-embed", "dep:mime_guess"]
 # lines for CI, all on the engine. Light and dark from the §9 tokens, detected from the
 # terminal's background unless set.
 tui = ["dep:ratatui", "dep:crossterm", "dep:syntect", "dep:pulldown-cmark", "dep:terminal-colorsaurus", "dep:unicode-width", "tokio/signal", "tokio/io-std", "tokio/io-util"]
+# Chat channels (spec 3.3 §5.3, §6.1): the Telegram adapter over the kernel's channel
+# contract, reading the Bot API by long polling. It talks to Telegram with `reqwest`, which
+# the engine already uses.
+channels = ["adk-kernel/channels"]
 
 [dependencies]
 adk-core.workspace = true
@@ -71,11 +75,15 @@ uuid.workspace = true
 # Internal dev-deps are path-only (no version) so cargo strips them from the published
 # manifest.
 adk-devtools = { path = "../adk-devtools" }
+# The kernel's chat channel contract suite, run against the Telegram adapter.
+adk-kernel = { path = "../adk-kernel", features = ["channels", "conformance"] }
 # The kernel-hosted harness of the scenario tests.
 adk-harness = { path = "../adk-harness", features = ["kernel"] }
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic", "openai", "gemini"] }
 adk-server = { path = "../adk-server", features = ["approvals"] }
 adk-session = { path = "../adk-session" }
+# The fake Telegram Bot API the chat adapter's tests run against.
+axum = "0.8"
 dotenvy = "0.15"
 proptest = "1.5"
 tempfile = "3"

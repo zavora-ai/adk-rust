@@ -131,6 +131,9 @@
 # scripted scenario on a kernel-hosted harness drawn by `TerminalSurface::screen`.
 2 adk-surface tui doc
 2 adk-surface web,tui
+# Chat (spec 3.3 §5.3): the Telegram adapter, the kernel's channel contract suite against it
+# and the scripted scenario on a kernel-hosted harness, over a fake Bot API.
+2 adk-surface channels doc
 # `adk-rust` as the terminal surface in a pseudo-terminal: full screen, inline, JSON, a
 # kernel on its socket and a paired one over HTTP (spec 3.3 §5.2, §10 K2).
 2 adk-cli tui,scripted-model
