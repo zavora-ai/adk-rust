@@ -3,6 +3,7 @@
 //! a model, a tool or a file wrote passes through [`terminal_safe`](super::terminal_safe).
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::time::Instant;
 
 use chrono::{Local, Timelike};
@@ -263,7 +264,6 @@ impl Renderer {
     pub(crate) fn entry_lines(
         &mut self,
         entry: &FeedEntry,
-        open: &[OpenCard],
         results: Option<&HashMap<String, (bool, String)>>,
         width: usize,
     ) -> Vec<Line<'static>> {
@@ -333,26 +333,23 @@ impl Renderer {
                         ]));
                     }
                 }
-                ThreadItem::Decision { decision_id, tool, text } => {
-                    // An open decision is drawn as its box, from its inbox entry (S-I1).
-                    let is_open = decision_id
-                        .as_ref()
-                        .is_some_and(|id| open.iter().any(|open| open.card.id == *id));
-                    if !is_open && results.is_none() {
-                        lines.push(Line::from(vec![
-                            Span::styled("◆ ", t.accent()),
-                            Span::styled(fit(&safe_line(tool), width / 2), t.secondary()),
-                            Span::styled(format!(" · {text}"), t.label()),
-                        ]));
-                    }
-                }
+                // A decision is drawn only as its box, from its open inbox entry (S-I1): the
+                // event that held the call says "Waiting for you" also once it is decided.
+                ThreadItem::Decision { .. } => {}
             }
         }
         lines
     }
 
-    /// The thread of the shown session with its open decisions and notices.
-    pub(crate) fn thread(&mut self, app: &App, width: usize, now: Instant) -> Vec<Line<'static>> {
+    /// The thread of the shown session with its open decisions and notices, and the lines of
+    /// the box the keys answer. Only that box is drawn whole; the other open decisions wait
+    /// below it as one line each, so the box the keys answer is the one on screen (§7.1).
+    pub(crate) fn thread(
+        &mut self,
+        app: &App,
+        width: usize,
+        now: Instant,
+    ) -> (Vec<Line<'static>>, Option<Range<usize>>) {
         let mut results = HashMap::new();
         for entry in &app.entries {
             for item in &entry.items {
@@ -363,16 +360,26 @@ impl Renderer {
         }
         let mut lines = Vec::new();
         for entry in &app.entries {
-            lines.extend(self.entry_lines(entry, &app.cards, Some(&results), width));
+            lines.extend(self.entry_lines(entry, Some(&results), width));
         }
         let live = app.keys_answer(now);
-        for (index, open) in app.cards.iter().enumerate() {
-            lines.push(Line::default());
-            let hint = index == 0 && (app.typing || !app.composer.is_empty());
-            lines.extend(self.decision_box(open, width, index == 0 && live, hint));
-        }
+        let mut focused = None;
         if let Some(open) = app.cards.first() {
+            lines.push(Line::default());
+            let hint = app.typing || !app.composer.is_empty();
+            let start = lines.len();
+            lines.extend(self.decision_box(open, width, live, hint));
+            focused = Some(start..lines.len());
             lines.extend(self.also_shown(open, width));
+        }
+        let t = self.theme;
+        for open in app.cards.iter().skip(1) {
+            let text = format!("{} · {}", open.card.status_text, safe_line(&open.card.heading));
+            lines.push(Line::from(vec![
+                Span::styled("◆ ", t.accent()),
+                Span::styled(fit(&text, width.saturating_sub(16)), t.secondary()),
+                Span::styled(" · after this one", t.label()),
+            ]));
         }
         if !app.notices.is_empty() {
             lines.push(Line::default());
@@ -380,7 +387,7 @@ impl Renderer {
         for notice in &app.notices {
             lines.extend(self.notice(&notice.text, notice.tone, width));
         }
-        lines
+        (lines, focused)
     }
 
     pub(crate) fn also_shown(&self, open: &OpenCard, width: usize) -> Vec<Line<'static>> {
@@ -426,9 +433,7 @@ impl Renderer {
 
         // Heading: the pill and what will happen; the risk and whether it can be taken back.
         let right = format!("{} · {}", card.risk_text, card.reversibility_text);
-        let left_room = inner.saturating_sub(right.width() + 2);
-        let heading =
-            fit(&format!("{} · {}", card.status_text, safe_line(&card.heading)), left_room.max(12));
+        let heading = format!("{} · {}", card.status_text, safe_line(&card.heading));
         let accent = t.accent().add_modifier(Modifier::BOLD);
         if heading.width() + right.width() + 2 <= inner {
             let gap = inner - heading.width() - right.width();
@@ -441,7 +446,10 @@ impl Renderer {
                 strong,
             ));
         } else {
-            rows.push((vec![Span::styled(heading, accent)], strong));
+            // A narrow box: what will happen is wrapped whole, never cut (§7.1).
+            for line in wrap_spans(vec![Span::styled(heading, accent)], inner, 0) {
+                rows.push((line.spans, strong));
+            }
             rows.push((vec![Span::styled(right, t.accent())], strong));
         }
         rows.push((Vec::new(), body));
@@ -746,6 +754,8 @@ impl Renderer {
         }
         if app.keys_answer(now) {
             Some("Answer with a key above, or Esc to type a message")
+        } else if app.box_hidden && !app.cards.is_empty() {
+            Some("Make the window taller, or PageDown, to answer the decision")
         } else {
             Some("Type a message · / for commands")
         }
@@ -776,7 +786,9 @@ impl Renderer {
     // The whole screen
     // -----------------------------------------------------------------------
 
-    pub(crate) fn draw(&mut self, frame: &mut Frame<'_>, app: &App, now: Instant) {
+    /// Draws the whole screen; returns whether the box the keys answer, if any, is wholly on
+    /// screen (§7.1).
+    pub(crate) fn draw(&mut self, frame: &mut Frame<'_>, app: &App, now: Instant) -> bool {
         let t = self.theme;
         let area = frame.area();
         frame.buffer_mut().set_style(area, t.base());
@@ -828,11 +840,11 @@ impl Renderer {
         ])
         .areas(right);
 
-        let lines = match app.view {
+        let (lines, focused) = match app.view {
             View::Thread => self.thread(app, width, now),
-            View::Today => self.today(app, width),
-            View::Permissions => self.permissions(app, width),
-            View::Help => self.help(),
+            View::Today => (self.today(app, width), None),
+            View::Permissions => (self.permissions(app, width), None),
+            View::Help => (self.help(), None),
         };
         let height = usize::from(main.height);
         let scroll = if app.view == View::Thread {
@@ -840,9 +852,21 @@ impl Renderer {
         } else {
             0
         };
+        let mut box_shown = focused.is_none();
         let visible: Vec<Line<'static>> = if app.view == View::Thread {
-            let end = lines.len().saturating_sub(scroll);
-            let start = end.saturating_sub(height);
+            let mut end = lines.len().saturating_sub(scroll);
+            let mut start = end.saturating_sub(height);
+            // Unscrolled, the box the keys answer is kept in view from its top, before what
+            // follows it.
+            if let Some(focused) = &focused
+                && scroll == 0
+                && focused.start < start
+            {
+                start = focused.start;
+                end = (start + height).min(lines.len());
+            }
+            box_shown =
+                focused.as_ref().is_none_or(|focused| focused.start >= start && focused.end <= end);
             lines[start..end].to_vec()
         } else {
             lines.into_iter().take(height).collect()
@@ -871,6 +895,7 @@ impl Renderer {
             cursor_x.min(inner.right().saturating_sub(1)),
             inner.y,
         ));
+        box_shown
     }
 }
 

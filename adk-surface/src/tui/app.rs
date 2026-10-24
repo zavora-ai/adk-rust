@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use serde_json::Value;
 
+use super::view::needs_details;
 use crate::engine::{Command, CommandOutcome, FeedFrame};
 use crate::model::{AgentRow, Briefing, DecisionCard, FeedEntry, Mode, StatusLine};
 use crate::rules::Answer;
@@ -18,6 +19,18 @@ pub(crate) const ARM_DELAY: Duration = Duration::from_millis(700);
 
 /// How many notices the thread keeps.
 const NOTICES: usize = 4;
+
+/// How long the keys wait for an answer's outcome before they answer again.
+const ANSWER_WAIT: Duration = Duration::from_secs(10);
+
+/// A command that failed, as the terminal shows it: in the engine's words, never with an inbox
+/// id (spec 3.3 §8 "No internal identifiers").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Failure {
+    pub text: String,
+    /// The decision answered is no longer open: it was answered somewhere else.
+    pub gone: Option<String>,
+}
 
 /// What the engine reports to the terminal.
 #[derive(Debug, Clone)]
@@ -34,7 +47,7 @@ pub(crate) enum Update {
         lines: Vec<String>,
     },
     /// Boxed: a command's outcome may carry a whole decision card.
-    Outcome(Box<Result<CommandOutcome, String>>),
+    Outcome(Box<Result<CommandOutcome, Failure>>),
     Error(String),
 }
 
@@ -62,10 +75,10 @@ pub(crate) enum View {
 pub(crate) enum Input {
     /// A message, or a `/` command.
     Message,
-    /// The changed arguments of the decision `id`, as JSON.
-    EditArgs { id: String },
-    /// Why the decision `id` is denied, optional.
-    DenyReason { id: String },
+    /// The changed arguments of the decision `id`, as JSON, chosen at `version` (S-I2).
+    EditArgs { id: String, version: u64 },
+    /// Why the decision `id` is denied, optional, chosen at `version` (S-I2).
+    DenyReason { id: String, version: u64 },
 }
 
 /// The message box: text and a cursor, in characters.
@@ -185,6 +198,13 @@ pub(crate) struct App {
     pub app_name: String,
     /// The last keystroke into the message box.
     last_typed: Option<Instant>,
+    /// The decision the keys act on, and since when: a decision that takes the focus arms
+    /// again, so a repeated key never answers one the person did not have in front of them.
+    focus: Option<(String, Instant)>,
+    /// A decision answered by key whose outcome has not come back yet, and since when.
+    answering: Option<(String, Instant)>,
+    /// The focused decision's box is not wholly on screen: its keys do not answer it (§7.1).
+    pub box_hidden: bool,
     pub quit: bool,
 }
 
@@ -209,6 +229,9 @@ impl App {
             place: None,
             app_name: app_name.to_string(),
             last_typed: None,
+            focus: None,
+            answering: None,
+            box_hidden: false,
             quit: false,
         }
     }
@@ -231,12 +254,63 @@ impl App {
         let Some(open) = self.focused() else {
             return false;
         };
+        let focused = match &self.focus {
+            Some((id, since)) if *id == open.card.id => (*since).max(open.shown),
+            _ => now,
+        };
         self.input == Input::Message
             && self.view == View::Thread
             && self.composer.is_empty()
             && !self.typing
-            && now.saturating_duration_since(open.shown) >= ARM_DELAY
+            && !self.box_hidden
+            && !self.awaits_answer(now)
+            && now.saturating_duration_since(focused) >= ARM_DELAY
             && self.last_typed.is_none_or(|at| now.saturating_duration_since(at) >= ARM_DELAY)
+    }
+
+    /// An answer given by key is on its way: the keys wait for its outcome.
+    fn awaits_answer(&self, now: Instant) -> bool {
+        self.answering.as_ref().is_some_and(|(id, at)| {
+            self.cards.first().is_some_and(|open| open.card.id == *id)
+                && now.saturating_duration_since(*at) < ANSWER_WAIT
+        })
+    }
+
+    /// Notes which decision has the focus now; one that takes it arms again (§7.4 rule 2).
+    fn refocus(&mut self, now: Instant) {
+        let first = self.cards.first().map(|open| open.card.id.clone());
+        if self.focus.as_ref().map(|(id, _)| id) != first.as_ref() {
+            self.focus = first.map(|id| (id, now));
+        }
+    }
+
+    /// Whether the focused box was wholly on screen in the frame just drawn; one that comes
+    /// back into view arms again.
+    pub(crate) fn set_box_shown(&mut self, shown: bool, now: Instant) {
+        if self.box_hidden
+            && shown
+            && let Some((_, since)) = &mut self.focus
+        {
+            *since = now;
+        }
+        self.box_hidden = !shown;
+    }
+
+    /// Closes an edit or a reason being typed for `id`, which is no longer open, and says so;
+    /// returns whether one was.
+    fn answered_elsewhere(&mut self, id: &str) -> bool {
+        let what = match &self.input {
+            Input::EditArgs { id: editing, .. } if editing == id => "edit",
+            Input::DenyReason { id: denying, .. } if denying == id => "reason",
+            _ => return false,
+        };
+        self.input = Input::Message;
+        self.composer.take();
+        self.notice(
+            format!("{} — answered somewhere else, so your {what} was not sent.", words::DECIDED),
+            Tone::Decided,
+        );
+        true
     }
 
     /// The agent whose thread is shown, when the roster names it.
@@ -255,6 +329,8 @@ impl App {
         self.scroll = 0;
         self.input = Input::Message;
         self.typing = false;
+        self.focus = None;
+        self.answering = None;
         vec![Effect::Session(session)]
     }
 
@@ -271,10 +347,20 @@ impl App {
             Update::Queued { .. } => {}
             Update::Frame { session, frame } if session == self.session => self.frame(frame, now),
             Update::Frame { .. } => {}
-            Update::Outcome(outcome) => match *outcome {
-                Ok(outcome) => self.outcome(outcome, now),
-                Err(error) => self.notice(error, Tone::Problem),
-            },
+            Update::Outcome(outcome) => {
+                self.answering = None;
+                match *outcome {
+                    Ok(outcome) => self.outcome(outcome, now),
+                    Err(Failure { text, gone: Some(id) }) => {
+                        self.cards.retain(|open| open.card.id != id);
+                        self.refocus(now);
+                        if !self.answered_elsewhere(&id) {
+                            self.notice(text, Tone::Decided);
+                        }
+                    }
+                    Err(Failure { text, gone: None }) => self.notice(text, Tone::Problem),
+                }
+            }
             Update::Error(error) => self.notice(error, Tone::Problem),
         }
     }
@@ -301,12 +387,16 @@ impl App {
                     open.push(OpenCard { card, shown, details });
                 }
                 self.cards = open;
+                self.refocus(now);
                 if self.cards.is_empty() {
                     self.typing = false;
-                    if matches!(self.input, Input::EditArgs { .. } | Input::DenyReason { .. }) {
-                        self.input = Input::Message;
-                        self.composer.take();
-                    }
+                }
+                // An edit or a reason being typed for a decision answered somewhere else.
+                if let Input::EditArgs { id, .. } | Input::DenyReason { id, .. } = &self.input
+                    && !self.cards.iter().any(|open| open.card.id == *id)
+                {
+                    let id = id.clone();
+                    self.answered_elsewhere(&id);
                 }
             }
             FeedFrame::Reset { .. } => {
@@ -322,6 +412,7 @@ impl App {
                 let text = card.decided.as_ref().map(|decided| decided.text.clone());
                 if card.decided.is_some() {
                     self.cards.retain(|open| open.card.id != card.id);
+                    self.refocus(now);
                 }
                 if let Some(text) = text {
                     self.notice(text, Tone::Decided);
@@ -329,7 +420,14 @@ impl App {
             }
             CommandOutcome::AlreadyDecided { decided, card } => {
                 self.cards.retain(|open| open.card.id != card.id);
-                self.notice(format!("{} — {}", words::DECIDED, decided.text), Tone::Decided);
+                self.refocus(now);
+                // A source that no longer lists the decision cannot say how it was decided.
+                let text = if decided.text == words::DECIDED {
+                    format!("{} — answered somewhere else.", words::DECIDED)
+                } else {
+                    format!("{} — {}", words::DECIDED, decided.text)
+                };
+                self.notice(text, Tone::Decided);
             }
             CommandOutcome::Changed { card } => {
                 if let Some(open) = self.cards.iter_mut().find(|open| open.card.id == card.id) {
@@ -505,11 +603,14 @@ impl App {
                 return vec![Effect::Execute(Command::ResumeAll)];
             }
         }
-        if key.kind == KeyEventKind::Press
-            && matches!(c, 'y' | 'a' | 'e' | 'n' | '?')
-            && self.keys_answer(now)
-        {
-            return self.decide_by_key(c);
+        if key.kind == KeyEventKind::Press && matches!(c, 'y' | 'a' | 'e' | 'n' | '?') {
+            if self.keys_answer(now) {
+                return self.decide_by_key(c, now);
+            }
+            // A key repeated while its answer is on its way answers nothing and types nothing.
+            if self.composer.is_empty() && self.awaits_answer(now) {
+                return Vec::new();
+            }
         }
         self.composer.insert(c);
         self.last_typed = Some(now);
@@ -517,7 +618,7 @@ impl App {
     }
 
     /// A decision key on the focused decision (spec 3.3 §5.2, §7.1, §7.2).
-    fn decide_by_key(&mut self, c: char) -> Vec<Effect> {
+    fn decide_by_key(&mut self, c: char, now: Instant) -> Vec<Effect> {
         let Some(open) = self.cards.first_mut() else {
             return Vec::new();
         };
@@ -531,6 +632,13 @@ impl App {
             'e' => Answer::Edit,
             _ => Answer::Deny,
         };
+        // The box cuts a long call short: only `?` shows all of it, and only a call shown in
+        // full is answered other than by Deny (§7.1).
+        let cut_short = needs_details(open);
+        if cut_short && !open.details && answer != Answer::Deny {
+            self.notice("Press ? to see the whole call before you answer.", Tone::Problem);
+            return Vec::new();
+        }
         let card = &open.card;
         let Some(option) = card.allowed.option(answer) else {
             let note = card.allowed.note.clone().unwrap_or_else(|| {
@@ -544,39 +652,42 @@ impl App {
             self.notice("Press ? to see the whole call before you answer.", Tone::Problem);
             return Vec::new();
         }
-        let id = card.id.clone();
+        let (id, version) = (card.id.clone(), card.version);
+        let expanded = open.details || !cut_short;
         match answer {
             Answer::Edit => {
                 let args = serde_json::to_string(&card.call.args).unwrap_or_default();
-                self.input = Input::EditArgs { id };
+                self.input = Input::EditArgs { id, version };
                 self.composer.set(args);
                 Vec::new()
             }
             Answer::Deny => {
-                self.input = Input::DenyReason { id };
+                self.input = Input::DenyReason { id, version };
                 self.composer.take();
                 Vec::new()
             }
-            Answer::AllowOnce | Answer::AlwaysAllow => vec![Effect::Execute(Command::Decide {
-                decision_id: id,
-                version: card.version,
-                answer,
-                edited_args: None,
-                reason: None,
-                expanded: open.details || !card.call.truncated,
-            })],
+            Answer::AllowOnce | Answer::AlwaysAllow => {
+                self.answering = Some((id.clone(), now));
+                vec![Effect::Execute(Command::Decide {
+                    decision_id: id,
+                    version,
+                    answer,
+                    edited_args: None,
+                    reason: None,
+                    expanded,
+                })]
+            }
         }
     }
 
     fn enter(&mut self, now: Instant) -> Vec<Effect> {
         self.last_typed = Some(now);
         match self.input.clone() {
-            Input::EditArgs { id } => {
-                let Some(open) = self.cards.iter().find(|open| open.card.id == id) else {
-                    self.input = Input::Message;
-                    self.composer.take();
+            Input::EditArgs { id, version } => {
+                if !self.cards.iter().any(|open| open.card.id == id) {
+                    self.answered_elsewhere(&id);
                     return Vec::new();
-                };
+                }
                 let edited: Value = match serde_json::from_str(&self.composer.text) {
                     Ok(value) => value,
                     Err(error) => {
@@ -587,9 +698,10 @@ impl App {
                         return Vec::new();
                     }
                 };
+                self.answering = Some((id.clone(), now));
                 let command = Command::Decide {
                     decision_id: id,
-                    version: open.card.version,
+                    version,
                     answer: Answer::Edit,
                     edited_args: Some(edited),
                     reason: None,
@@ -599,20 +711,21 @@ impl App {
                 self.composer.take();
                 vec![Effect::Execute(command)]
             }
-            Input::DenyReason { id } => {
+            Input::DenyReason { id, version } => {
                 let Some(open) = self.cards.iter().find(|open| open.card.id == id) else {
-                    self.input = Input::Message;
-                    self.composer.take();
+                    self.answered_elsewhere(&id);
                     return Vec::new();
                 };
+                let expanded = open.details || !needs_details(open);
                 let reason = self.composer.take().trim().to_string();
+                self.answering = Some((id.clone(), now));
                 let command = Command::Decide {
                     decision_id: id,
-                    version: open.card.version,
+                    version,
                     answer: Answer::Deny,
                     edited_args: None,
                     reason: (!reason.is_empty()).then_some(reason),
-                    expanded: open.details || !open.card.call.truncated,
+                    expanded,
                 };
                 self.input = Input::Message;
                 vec![Effect::Execute(command)]

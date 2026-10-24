@@ -14,7 +14,7 @@ commands.
 | Mode | Flag | What it is |
 |---|---|---|
 | Full screen | none (the default on a capable terminal), or `--ui full` | The alternate screen in raw mode: status line, roster, coming up, "While you were away", the thread, decision boxes, the message box and key hints |
-| Inline | `--ui inline` (the default unless standard input and output are both a terminal of at least 60 by 16) | The same thread and decision boxes printed into the scrollback, the message box on the last line |
+| Inline | `--ui inline` (the default unless standard input and output are both a terminal of at least 60 by 16) | The same thread and decision boxes printed into the scrollback, the message box on the last line. With standard input piped, or `TERM=dumb`, plain lines only: each line read is a message, and decisions wait in the inbox |
 | JSON | `--output json` | One engine event per line, then an `end` line, and an exit code — for CI |
 
 ```bash
@@ -36,6 +36,20 @@ it (`COLORTERM=truecolor`), else the nearest of the 256 indexed colours.
 | The running kernel, on its machine | `adk-rust` finds the kernel at `--home` (default: the config directory's `adk-rust`) and attaches over its socket | Yes: a paired local terminal |
 | A kernel on another machine | `--server URL`, with a device token (`--pair CODE` once, then kept), `--token`, or `$ADK_SERVE_TOKEN` | No: high-risk decisions wait for the web home or a local terminal |
 | No kernel | The harness runs in this process (also with `--ephemeral` or `--continue`) | Yes |
+
+In process, the terminal keeps what the REPL keeps: long-term memory, `--yes` (held calls are
+allowed once, an unsandboxed retry only with `--allow-unsandboxed`), `--trust` (the
+workspace's instruction files and hooks load; without it an untrusted workspace says so), and
+the session's workspace — `--continue` opens the latest session of the workspace, a new
+session records the workspace, and a session that works in another workspace is refused.
+
+With the `surface` feature, `adk-rust` without a subcommand is the terminal in place of the
+REPL; `--voice` keeps the REPL. The REPL's other slash commands (`/hooks`, `/memory`,
+`/rules`, `/sandbox`, `/todos`, `/plan`, `/cost`, `/team`, `/skills`, `/web`, `/mcp`,
+`/effort`, `/approvals`) and tab completion are not in the terminal; `adk-rust memory`,
+`adk-rust rules`, `adk-rust approvals` and `adk-rust skills` cover several from the command
+line. `--server`, `--home` and `--token` go after a kernel subcommand (`adk-rust freeze
+--server URL`); before one they are refused.
 
 To pair a terminal on another machine, run `adk-rust pair` on the kernel's machine, then
 start the terminal with the code it shows:
@@ -64,11 +78,17 @@ after a stop is never one of them (S-I10). `adk-rust pair revoke` ends it.
 | `?` | Details: the whole call and how it got here |
 | `Esc` | Never decides: closes the details or a view, and switches between answering by key and typing |
 
-The keys answer only while the message box is empty, and only once the box has been on
-screen for a moment, so a keystroke meant for a message never answers a decision that just
-appeared (§7.4 rules 1 and 2, S-I4). A call shown cut short is answered only after `?` shows
-it in full. A message typed while a decision is open is queued and shown above the message
-box as "Queued", "Sent after this card is answered".
+The keys answer only while the message box is empty, and only once the box has had the focus
+for a moment, so a keystroke meant for a message, a double tap or a held key never answers a
+decision that just appeared or just took the focus (§7.4 rules 1 and 2, S-I4). The keys answer
+the oldest open decision of the shown thread; it is the one box drawn whole, the others are
+listed under it, and the keys answer only while it is wholly on screen. A call the box cuts
+short (more than ten arguments, or long values) is allowed or edited only after `?` shows it
+in full. Edit is offered only where the card shows the call's own arguments, never a redacted
+view of them. An edit or a reason is sent at the version the decision had when you chose it,
+and one whose decision is answered somewhere else first is not sent: the terminal says it was
+decided. A message typed while a decision is open is queued and shown above the message box as
+"Queued", "Sent after this card is answered".
 
 | Key | Does |
 |---|---|
@@ -99,7 +119,7 @@ engine events until the turn settles:
 | 0 | `done` | The turn finished |
 | 1 | `error` | The turn failed, ended without a reply, or every agent is stopped |
 | 3 | `waitingForYou` | A decision waits for a person; it stays in the inbox for any surface |
-| 4 | `budgetReached` | Today's spend reached the daily spending limit |
+| 4 | `budgetReached` | Today's spend reached the daily spending limit, on a kernel whose limit the terminal knows: one on this machine, whose `[kernel.quotas] daily_spend_cap_usd` or personal answer it reads. The control plane does not report the limit, so a kernel on another machine ends such a turn with 1; the harness in process has no daily limit |
 
 ```bash
 adk-rust --output json --message "Write the release notes" > events.jsonl
@@ -116,8 +136,9 @@ esac
 | Rule | How the terminal keeps it |
 |---|---|
 | Model, tool and file text is inert (S-I9) | Every such string passes through `terminal_safe`: control characters, the `ESC` of ANSI and OSC sequences, C1 controls, bidi and zero-width characters are written as `\u{..}` escapes. JSON lines escape `DEL`, C1 and bidi characters as `\uXXXX` |
-| The terminal is given back | Full screen restores raw mode, the alternate screen and the cursor on exit, on a panic and on `SIGINT`, `SIGTERM` and `SIGHUP` (exit 130, 143, 129) |
-| Logs do not draw over the screen | While the full screen is up, logs go to `terminal.log` in the config directory's `adk-rust` |
+| The terminal is given back | Full screen and inline restore raw mode, bracketed paste, and for full screen the alternate screen and the cursor, on exit, on a panic in the terminal's own code, and on `SIGINT`, `SIGTERM` and `SIGHUP` (exit 130, 143, 129), registered before the terminal changes. A panic another task catches, such as a tool's, leaves the screen up |
+| Pastes are pastes | Full screen and inline turn bracketed paste on, so pasted text goes into the message box and never answers a decision |
+| Nothing draws over the screen | While the full screen is up, logs and standard error — what a tool server writes there too — go to `terminal.log` in the config directory's `adk-rust` (Unix) |
 
 ## Embedding
 
@@ -147,7 +168,10 @@ async fn run(
 }
 ```
 
-`TerminalSurface::run_json` writes the JSON lines to any writer, and
+`TerminalSurface::notice` adds a line the terminal shows when it starts, and
+`TerminalSurface::restore_on_signals(false)` leaves `SIGINT`, `SIGTERM` and `SIGHUP` to an
+application that goes on after the terminal: the terminal's handlers are tokio's, which last as
+long as the process. `TerminalSurface::run_json` writes the JSON lines to any writer, and
 `TerminalSurface::screen` returns one frame of the full screen as a terminal receives it, for
 tests and documentation.
 

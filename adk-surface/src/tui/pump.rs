@@ -10,11 +10,12 @@ use futures::StreamExt;
 use tokio::sync::{Notify, mpsc, watch};
 use tokio::task::JoinHandle;
 
-use super::app::Update;
+use super::app::{Failure, Update};
 use crate::engine::Command;
 use crate::engine::{FeedFrame, SurfaceEngine};
 use crate::error::SurfaceError;
 use crate::origin::Caller;
+use crate::words;
 
 /// How many status reads pass between two reads of the briefing.
 const BRIEFING_EVERY: u32 = 12;
@@ -77,11 +78,37 @@ impl Pump {
         let engine = engine.clone();
         let caller = caller.clone();
         let tx = tx.clone();
+        let decision = match &command {
+            Command::Decide { decision_id, .. } => Some(decision_id.clone()),
+            _ => None,
+        };
         tokio::spawn(async move {
-            let outcome = engine.execute(&caller, command).await.map_err(|error| error.to_string());
+            let outcome = engine
+                .execute(&caller, command)
+                .await
+                .map_err(|error| failure(&error, decision.as_deref()));
             let _ = tx.send(Update::Outcome(Box::new(outcome)));
         });
     }
+}
+
+/// What a failed command shows (spec 3.3 §8): the engine's words, never an inbox id. A
+/// decision no longer found was answered somewhere else, so it reads as decided (§8.1).
+pub(crate) fn failure(error: &SurfaceError, decision: Option<&str>) -> Failure {
+    if let (Some(id), SurfaceError::NotFound { .. }) = (decision, error) {
+        return Failure {
+            text: format!("{} — answered somewhere else.", words::DECIDED),
+            gone: Some(id.to_string()),
+        };
+    }
+    let mut text = match error {
+        SurfaceError::Source(error) => error.message.clone(),
+        other => other.to_string(),
+    };
+    if let Some(id) = decision.filter(|id| !id.is_empty()) {
+        text = text.replace(&format!("'{id}'"), "this decision").replace(id, "this decision");
+    }
+    Failure { text, gone: None }
 }
 
 /// The start of today, local time: "While you were away" in the terminal counts from there.

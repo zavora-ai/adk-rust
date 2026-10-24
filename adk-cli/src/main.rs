@@ -67,6 +67,16 @@ async fn run() -> Result<()> {
     let Cli { command, options, harness, .. } = parsed;
     #[cfg(not(feature = "harness"))]
     let Cli { command, options } = parsed;
+    // A subcommand takes its own --server, --home and --token: before it, the terminal's
+    // would reach no kernel, or the local one in place of the named one (spec 3.3 §5.2).
+    #[cfg(feature = "surface")]
+    if command.is_some() && surface.given() {
+        anyhow::bail!(
+            "--server, --home, --token, --pair, --ui, --output, --theme and --message before a \
+             subcommand are the terminal's; give them after the subcommand, as in `adk-rust \
+             freeze --server URL`"
+        );
+    }
 
     match command {
         #[cfg(feature = "harness")]

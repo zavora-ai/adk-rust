@@ -1,9 +1,11 @@
 //! The inline terminal (spec 3.3 §5.2): the thread and its decision boxes printed into the
 //! scrollback, with the message box on the last line.
 //!
-//! On a terminal, keys work as in the full-screen UI (raw mode, without the alternate
-//! screen). With standard input piped, each line is a message, a decision is never answered
-//! from it, and the run ends as JSON mode does once input ends and the turn settles.
+//! On a terminal, keys work as in the full-screen UI (raw mode and bracketed paste, without the
+//! alternate screen), and the terminal is given back on exit, on a panic in the terminal's own
+//! code and on a signal. With standard input piped, or on a terminal that names itself
+//! `dumb`, each line is a message, a decision is never answered from it, nothing but plain
+//! text is written, and the run ends as JSON mode does once input ends and the turn settles.
 
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
@@ -13,7 +15,7 @@ use crossterm::event::{Event, EventStream};
 use crossterm::style::{
     Attribute, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
 };
-use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{Clear, ClearType};
 use crossterm::{cursor, queue};
 use futures::StreamExt;
 use ratatui::backend::IntoCrossterm;
@@ -23,26 +25,17 @@ use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
 
-use super::app::{App, Effect, Update, View};
+use super::app::{App, Effect, Tone, Update, View};
 use super::json::Settler;
 use super::pump::Pump;
+use super::safe::terminal_safe;
+use super::term::{self, Guard, Signals};
 use super::theme::{Appearance, Theme};
 use super::view::Renderer;
 use super::{EXIT_DONE, TerminalSurface};
 
 /// How often the prompt is redrawn while nothing happens, so a decision box arms on time.
 const TICK: Duration = Duration::from_millis(250);
-
-/// Restores cooked mode when the inline UI ends, however it ends.
-struct RawGuard(bool);
-
-impl Drop for RawGuard {
-    fn drop(&mut self) {
-        if self.0 {
-            let _ = disable_raw_mode();
-        }
-    }
-}
 
 /// What the scrollback already shows.
 pub(crate) struct Printer<W: Write> {
@@ -122,7 +115,7 @@ impl<W: Write> Printer<W> {
         for entry in &app.entries {
             if entry.seq > self.printed_seq {
                 self.printed_seq = entry.seq;
-                lines.extend(self.renderer.entry_lines(entry, &app.cards, None, width));
+                lines.extend(self.renderer.entry_lines(entry, None, width));
             }
         }
         let live = app.keys_answer(now);
@@ -266,8 +259,14 @@ impl<W: Write> Printer<W> {
 }
 
 pub(crate) async fn run(surface: TerminalSurface) -> io::Result<i32> {
-    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
-    let color = io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    term::scoped(inline(surface)).await
+}
+
+async fn inline(surface: TerminalSurface) -> io::Result<i32> {
+    // A terminal that names itself `dumb` takes no escape sequences: plain lines, as piped.
+    let dumb = std::env::var("TERM").is_ok_and(|term| term == "dumb");
+    let interactive = !dumb && io::stdin().is_terminal() && io::stdout().is_terminal();
+    let color = !dumb && io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     let theme = if interactive {
         Theme::detect(surface.theme)
     } else {
@@ -281,6 +280,9 @@ pub(crate) async fn run(surface: TerminalSurface) -> io::Result<i32> {
     let mut app = App::new(surface.engine.source().app_name(), session.clone());
     app.model = surface.model.clone();
     app.place = surface.place.clone();
+    for notice in &surface.notices {
+        app.notice(notice.clone(), Tone::Info);
+    }
     let (tx, mut rx) = mpsc::unbounded_channel();
     let pump = Pump::start(
         surface.engine.clone(),
@@ -294,8 +296,10 @@ pub(crate) async fn run(surface: TerminalSurface) -> io::Result<i32> {
         return piped(surface, app, rx, tx, pump, theme, color).await;
     }
 
-    enable_raw_mode()?;
-    let _raw = RawGuard(true);
+    // Registered before the terminal changes, so a signal at any moment gives it back.
+    let mut signals = Signals::install(surface.signals);
+    term::enter_inline(&mut io::stdout())?;
+    let _guard = Guard;
     let mut printer = Printer::new(io::stdout(), theme, color, true);
     let mut events = EventStream::new();
     let mut tick = tokio::time::interval(TICK);
@@ -307,6 +311,10 @@ pub(crate) async fn run(surface: TerminalSurface) -> io::Result<i32> {
         }
         printer.sync(&app, now)?;
         let effects = tokio::select! {
+            exit = signals.recv() => {
+                code = exit;
+                vec![Effect::Quit]
+            }
             event = events.next() => match event {
                 Some(Ok(Event::Key(key))) => app.key(key, Instant::now()),
                 Some(Ok(Event::Paste(text))) => {
@@ -333,10 +341,7 @@ pub(crate) async fn run(surface: TerminalSurface) -> io::Result<i32> {
                 }
                 Effect::Session(session) => pump.switch(session),
                 Effect::Briefing => pump.refresh_briefing(),
-                Effect::Quit => {
-                    quit = true;
-                    code = EXIT_DONE;
-                }
+                Effect::Quit => quit = true,
             }
         }
         if quit {
@@ -346,6 +351,7 @@ pub(crate) async fn run(surface: TerminalSurface) -> io::Result<i32> {
     let mut out = printer.into_inner();
     queue!(out, cursor::MoveToColumn(0), Clear(ClearType::CurrentLine))?;
     out.flush()?;
+    term::restore(&mut out);
     Ok(code)
 }
 
@@ -407,7 +413,9 @@ async fn piped(
                     printer.sync(&app, now)?;
                     drop(pump);
                     let mut out = printer.into_inner();
-                    writeln!(out, "{}", end.text)?;
+                    // The heading names the call's argument, and errors come from sources:
+                    // model, tool and file text never reaches the terminal raw (S-I9).
+                    writeln!(out, "{}", terminal_safe(&end.text))?;
                     return Ok(end.code);
                 }
             }

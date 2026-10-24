@@ -26,7 +26,7 @@
 //! | 1 | [`EXIT_ERROR`] | The turn failed, ended without a reply, or every agent is stopped |
 //! | 3 | [`EXIT_WAITING`] | A decision waits for a person; it stays in the inbox for any surface |
 //! | 4 | [`EXIT_BUDGET`] | Today's spend reached the daily spending limit |
-//! | 129, 130, 143 | — | `SIGHUP`, `SIGINT`, `SIGTERM`: the terminal was restored first |
+//! | 129, 130, 143 | — | `SIGHUP`, `SIGINT`, `SIGTERM` in the full-screen or inline UI: the terminal was restored first |
 //!
 //! # Example
 //!
@@ -52,6 +52,7 @@ mod json;
 mod markdown;
 mod pump;
 mod safe;
+mod term;
 #[cfg(test)]
 mod tests;
 mod theme;
@@ -172,6 +173,8 @@ pub struct TerminalSurface {
     model: Option<String>,
     place: Option<String>,
     poll: Duration,
+    notices: Vec<String>,
+    signals: bool,
 }
 
 impl TerminalSurface {
@@ -185,6 +188,8 @@ impl TerminalSurface {
             model: None,
             place: None,
             poll: POLL,
+            notices: Vec::new(),
+            signals: true,
         }
     }
 
@@ -224,6 +229,53 @@ impl TerminalSurface {
         self
     }
 
+    /// A line the full-screen and inline UIs show under the thread when they start, such as
+    /// a workspace that is not trusted (spec 3.3 §5.2). JSON mode writes none.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use std::sync::Arc;
+    /// # use adk_surface::tui::TerminalSurface;
+    /// # use adk_surface::{Caller, Origin, SurfaceEngine, SurfaceKind};
+    /// # fn example(engine: SurfaceEngine) {
+    /// let me = Caller::human("ana", SurfaceKind::Terminal, Origin::Keyboard);
+    /// let terminal = TerminalSurface::new(engine, me)
+    ///     .notice("Instruction files in this workspace are not loaded: it is not trusted.");
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn notice(mut self, text: impl Into<String>) -> Self {
+        self.notices.push(text.into());
+        self
+    }
+
+    /// Whether the full-screen and inline UIs give the terminal back on `SIGINT`, `SIGTERM`
+    /// and `SIGHUP` (Ctrl-C elsewhere) and end with 130, 143 or 129: on by default.
+    ///
+    /// The handlers are tokio's, which last as long as the process: once [`run`](Self::run)
+    /// has returned, these signals no longer end the process unless something else handles
+    /// them. An application that goes on after the terminal and relies on their default
+    /// action turns this off and handles them itself.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use adk_surface::tui::{TerminalSurface, UiMode};
+    /// # use adk_surface::{Caller, Origin, SurfaceEngine, SurfaceKind};
+    /// # async fn example(engine: SurfaceEngine) -> std::io::Result<()> {
+    /// let me = Caller::human("ana", SurfaceKind::Terminal, Origin::Keyboard);
+    /// // This application serves on after the terminal and handles its own signals.
+    /// TerminalSurface::new(engine, me).restore_on_signals(false).run(UiMode::FullScreen).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn restore_on_signals(mut self, enabled: bool) -> Self {
+        self.signals = enabled;
+        self
+    }
+
     /// Whether standard input and output are a terminal the full-screen UI (spec 3.3 §5.2) can
     /// draw on: both are terminals, `TERM` is not `dumb`, and the window is at least 60 by 16.
     pub fn capable_terminal() -> bool {
@@ -236,10 +288,14 @@ impl TerminalSurface {
     /// Runs the terminal until the person leaves, or a signal ends it; returns the exit code
     /// (spec 3.3 §5.2).
     ///
-    /// Full screen takes the alternate screen and raw mode and restores both on exit, on a
-    /// panic and on `SIGINT`, `SIGTERM` and `SIGHUP`. Inline prints into the scrollback; with
-    /// standard input not a terminal, each line read is a message, and the run ends as
-    /// [`run_json`](Self::run_json) does once input ends and the turn settles.
+    /// Full screen takes the alternate screen, raw mode and bracketed paste; inline takes raw
+    /// mode and bracketed paste and prints into the scrollback. Both give the terminal back on
+    /// exit, on a panic in the terminal's own code (a panic another task catches, such as a
+    /// tool's, leaves it), and on `SIGINT`, `SIGTERM` and `SIGHUP` unless
+    /// [`restore_on_signals`](Self::restore_on_signals) turns that off. With standard input
+    /// not a terminal, or `TERM=dumb`, inline writes plain lines, each line read is a message,
+    /// and the run ends as [`run_json`](Self::run_json) does once input ends and the turn
+    /// settles.
     ///
     /// # Errors
     ///
@@ -334,7 +390,9 @@ impl TerminalSurface {
         let options = TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, cols, rows)) };
         let bytes = Shared::default();
         let mut terminal = Terminal::with_options(CrosstermBackend::new(bytes.clone()), options)?;
-        terminal.draw(|frame| renderer.draw(frame, &app, now))?;
+        terminal.draw(|frame| {
+            renderer.draw(frame, &app, now);
+        })?;
         drop(terminal);
         Ok(std::mem::take(&mut *bytes.0.lock().unwrap_or_else(|e| e.into_inner())))
     }

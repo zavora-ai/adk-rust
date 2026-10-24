@@ -36,6 +36,23 @@ pub fn run(args: &[&str], home: &Path, cwd: &Path) -> Output {
     command.output().expect("adk-rust runs")
 }
 
+/// Runs the binary to completion without a terminal, with `input` piped to its standard
+/// input.
+pub fn run_input(args: &[&str], home: &Path, cwd: &Path, input: &str) -> Output {
+    use std::io::Write;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_adk-rust"));
+    command
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    isolate(&mut command, home);
+    let mut child = command.spawn().expect("adk-rust runs");
+    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    child.wait_with_output().expect("adk-rust runs")
+}
+
 /// Standard output and error of `output`, joined.
 pub fn text(output: &Output) -> String {
     format!(

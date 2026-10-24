@@ -248,14 +248,15 @@ fn typing_while_a_decision_is_open_is_queued_and_esc_never_decides() {
     terminal.send("Write the October invoice\r");
     expect_screen(&terminal, "Waiting for you · Write file invoice.txt");
 
-    // A key pressed as the box appears types into the message box: `n` and `y` start words.
-    terminal.send("yes, and also cc my accountant");
-    expect_screen(&terminal, "yes, and also cc my accountant");
+    // Typing while the box is open goes into the message box; the first key is not a
+    // decision key, so the test never races the arm delay (the unit tests cover that race).
+    terminal.send("Also cc my accountant");
+    expect_screen(&terminal, "Also cc my accountant");
     std::thread::sleep(Duration::from_millis(900));
     terminal.send("\r");
     let parser = expect_all(
         &terminal,
-        &["Queued › yes, and also cc my accountant", "Sent after this card is answered"],
+        &["Queued › Also cc my accountant", "Sent after this card is answered"],
     );
     dump("full-screen-queued-dark", &parser);
 
@@ -526,7 +527,7 @@ fn the_terminal_attaches_to_a_kernel_locally_and_paired_over_http() {
     let ws = workspace();
     let kernel = home.path().join("kernel");
     let port = free_port();
-    let up = kernel_up(home.path(), &kernel, ws.path(), port, WRITE_THEN_REPLY);
+    let mut up = kernel_up(home.path(), &kernel, ws.path(), port, WRITE_THEN_REPLY);
     let kernel_arg = kernel.display().to_string();
 
     // On the kernel's socket: the turn runs in the kernel, and the run waits for a decision.
@@ -591,7 +592,10 @@ fn the_terminal_attaches_to_a_kernel_locally_and_paired_over_http() {
     let listed = run(&["pair", "--home", &kernel_arg, "list"], home.path(), ws.path());
     assert!(text(&listed).contains("laptop"), "{}", text(&listed));
 
-    drop(up);
+    // Stop the kernel before its temporary home goes: dropping the handle stops nothing.
+    up.send("\x03");
+    let (stopped, output) = up.wait();
+    assert!(stopped.is_some(), "the kernel stopped:\n{output}");
 }
 
 /// Every screen of the terminal in light and dark, for the PR's screenshots: written only
@@ -754,4 +758,367 @@ fn live_model_write_is_decided_by_key() {
     assert!(std::fs::read_to_string(ws.path().join("notes.txt")).unwrap().contains("hello"));
     terminal.send("\x03");
     assert_eq!(terminal.wait().0, Some(0));
+}
+
+// ---------------------------------------------------------------------------
+// Review of #1041: each test fails on the branch before its fix.
+// ---------------------------------------------------------------------------
+
+/// Waits until the pseudo-terminal is back in cooked mode, or the timeout; returns its
+/// settings.
+fn cooked(terminal: &Terminal) -> libc::termios {
+    let started = Instant::now();
+    loop {
+        let termios = terminal.termios();
+        if termios.c_lflag & libc::ICANON != 0 || started.elapsed() > TIMEOUT {
+            return termios;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Sends `signal` to the binary.
+fn signal(terminal: &Terminal, signal: i32) {
+    // SAFETY: the child is ours and still running.
+    assert_eq!(unsafe { libc::kill(terminal.pid(), signal) }, 0);
+}
+
+/// Piped into inline, the line the run ends with names the held call through
+/// `terminal_safe`: a model's escape sequences never reach the terminal (S-I9).
+#[test]
+fn piped_inline_escapes_the_line_it_ends_with() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let dir = ws.path().display().to_string();
+    let script = r#"[{"call": {"name": "write_file", "args": {"path": "\u001b]0;owned\u0007\u001b[2Jnotes.txt", "content": "x"}}}]"#;
+    let output = common::run_input(
+        &[
+            "--ui",
+            "inline",
+            "--ephemeral",
+            "--dir",
+            &dir,
+            "--model-script",
+            script,
+            "--mode",
+            "ask",
+        ],
+        home.path(),
+        ws.path(),
+        "tidy my notes\n",
+    );
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Waiting for you"), "{stdout}");
+    assert!(!output.stdout.contains(&0x1b), "an escape sequence reached the terminal: {stdout:?}");
+}
+
+/// Inline turns bracketed paste on, so a paste reaches the message box as a paste and never
+/// answers a decision (§7.4 rule 2, S-I4), and turns it off again.
+#[test]
+fn inline_takes_a_paste_as_a_paste() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let mut terminal =
+        surface(home.path(), ws.path(), WRITE_THEN_REPLY, &["--ui", "inline", "--theme", "light"]);
+    expect_screen(&terminal, "Type a message");
+    terminal.send("Write the October invoice\r");
+    expect_screen(&terminal, "Waiting for you · Write file invoice.txt");
+    std::thread::sleep(Duration::from_millis(900));
+    terminal.send("\x1b[200~always use tabs\x1b[201~");
+    expect_screen(&terminal, "always use tabs");
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!ws.path().join("invoice.txt").exists(), "the paste answered the decision");
+    terminal.send("\x03");
+    std::thread::sleep(Duration::from_millis(200));
+    terminal.send("\x03");
+    let (code, output) = wait_exit(terminal);
+    assert_eq!(code, Some(0), "{output}");
+    let on = output.find("\x1b[?2004h").expect("bracketed paste is turned on");
+    let off = output.rfind("\x1b[?2004l").expect("bracketed paste is turned off");
+    assert!(off > on);
+}
+
+/// `--continue` opens the latest session of the workspace, as the REPL does.
+#[test]
+fn continue_opens_the_latest_session_of_the_workspace() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let dir = ws.path().display().to_string();
+    let first = run(
+        &[
+            "--output",
+            "json",
+            "--message",
+            "hello",
+            "--dir",
+            &dir,
+            "--model-script",
+            r#"[{"text": "Hello."}]"#,
+        ],
+        home.path(),
+        ws.path(),
+    );
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first));
+    let session = json_lines(&first.stdout).last().unwrap()["sessionId"].clone();
+    let again = run(
+        &[
+            "--continue",
+            "--output",
+            "json",
+            "--message",
+            "again",
+            "--dir",
+            &dir,
+            "--model-script",
+            r#"[{"text": "Again."}]"#,
+        ],
+        home.path(),
+        ws.path(),
+    );
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again));
+    assert_eq!(json_lines(&again.stdout).last().unwrap()["sessionId"], session);
+}
+
+/// A session that works in another workspace is refused, as the REPL and `code` refuse it.
+#[test]
+fn a_session_of_another_workspace_is_refused() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let other = workspace();
+    let (dir, other_dir) = (ws.path().display().to_string(), other.path().display().to_string());
+    let pinned = run(
+        &[
+            "code",
+            "hi",
+            "--session",
+            "pinned",
+            "--dir",
+            &dir,
+            "--model-script",
+            r#"[{"text": "Hi."}, {"text": "{\"facts\": []}"}]"#,
+        ],
+        home.path(),
+        ws.path(),
+    );
+    assert!(pinned.status.success(), "{}", text(&pinned));
+    let refused = run(
+        &[
+            "--session",
+            "pinned",
+            "--dir",
+            &other_dir,
+            "--output",
+            "json",
+            "--message",
+            "hello",
+            "--model-script",
+            r#"[{"text": "Hello."}]"#,
+        ],
+        home.path(),
+        other.path(),
+    );
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    assert!(text(&refused).contains("session pinned works in"), "{}", text(&refused));
+}
+
+/// A signal that arrives as the full screen starts, before its first frame, still gives the
+/// terminal back.
+#[test]
+fn a_signal_as_the_full_screen_starts_restores_the_terminal() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let terminal = surface(home.path(), ws.path(), WRITE_THEN_REPLY, &["--theme", "light"]);
+    let started = Instant::now();
+    while !terminal.bytes().windows(8).any(|bytes| bytes == b"\x1b[?1049h") {
+        assert!(started.elapsed() < TIMEOUT, "the full screen did not start");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    signal(&terminal, libc::SIGTERM);
+    let restored = cooked(&terminal);
+    let (code, output) = wait_exit(terminal);
+    assert_eq!(code, Some(143), "{output}");
+    assert_ne!(restored.c_lflag & libc::ICANON, 0, "cooked mode again");
+    assert_ne!(restored.c_lflag & libc::ECHO, 0, "echo again");
+}
+
+/// Inline gives the terminal back on a signal too.
+#[test]
+fn inline_restores_the_terminal_on_sigterm() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let terminal =
+        surface(home.path(), ws.path(), WRITE_THEN_REPLY, &["--ui", "inline", "--theme", "light"]);
+    expect_screen(&terminal, "Type a message");
+    assert_eq!(terminal.termios().c_lflag & (libc::ICANON | libc::ECHO), 0, "raw mode");
+    signal(&terminal, libc::SIGTERM);
+    let restored = cooked(&terminal);
+    let (code, output) = wait_exit(terminal);
+    assert_eq!(code, Some(143), "{output}");
+    assert_ne!(restored.c_lflag & libc::ICANON, 0, "cooked mode again");
+    assert_ne!(restored.c_lflag & libc::ECHO, 0, "echo again");
+}
+
+/// What a tool server writes to standard error goes to `terminal.log`, never over the full
+/// screen, and never to the terminal unescaped.
+#[test]
+fn a_tool_servers_stderr_never_reaches_the_full_screen() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let dir = ws.path().display().to_string();
+    std::fs::write(
+        ws.path().join(".mcp.json"),
+        r#"{"mcpServers": {"noisy": {"command": "sh", "args": ["-c", "echo NOISY-SERVER-STDERR >&2; sleep 2"]}}}"#,
+    )
+    .unwrap();
+    // Trust the workspace, so its servers start.
+    run(
+        &[
+            "code",
+            "hi",
+            "--trust",
+            "--dir",
+            &dir,
+            "--model-script",
+            r#"[{"text": "Hi."}, {"text": "{\"facts\": []}"}]"#,
+        ],
+        home.path(),
+        ws.path(),
+    );
+    let mut terminal =
+        surface(home.path(), ws.path(), r#"[{"text": "Hello back."}]"#, &["--theme", "light"]);
+    expect_screen(&terminal, "Type a message");
+    terminal.send("hello\r");
+    expect_screen(&terminal, "Hello back.");
+    std::thread::sleep(Duration::from_millis(1500));
+    let shown = String::from_utf8_lossy(&terminal.bytes()).into_owned();
+    terminal.send("\x03");
+    let _ = wait_exit(terminal);
+    assert!(!shown.contains("NOISY-SERVER-STDERR"), "a server wrote over the full screen");
+    let log = std::fs::read_to_string(home.path().join(".config/adk-rust/terminal.log"))
+        .unwrap_or_default();
+    assert!(log.contains("NOISY-SERVER-STDERR"), "the server's stderr is kept:\n{log}");
+}
+
+/// The terminal in process keeps long-term memory, as the REPL it replaces does.
+#[test]
+fn the_terminal_in_process_keeps_long_term_memory() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let dir = ws.path().display().to_string();
+    let script = r#"[
+        {"call": {"name": "memory_remember", "args": {"text": "Use pnpm, not npm", "kind": "preference"}}},
+        {"text": "Noted."}
+    ]"#;
+    let told = run(
+        &[
+            "--output",
+            "json",
+            "--message",
+            "From now on use pnpm, not npm",
+            "--dir",
+            &dir,
+            "--mode",
+            "ask",
+            "--model-script",
+            script,
+        ],
+        home.path(),
+        ws.path(),
+    );
+    assert_eq!(told.status.code(), Some(0), "{}", text(&told));
+    let listed = run(&["memory", "list", "--dir", &dir], home.path(), ws.path());
+    assert!(text(&listed).contains("Use pnpm, not npm"), "{}", text(&listed));
+}
+
+/// `--yes` approves held calls in the terminal as it does in the REPL.
+#[test]
+fn yes_approves_held_calls() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let dir = ws.path().display().to_string();
+    let output = run(
+        &[
+            "--output",
+            "json",
+            "--message",
+            "Write the October invoice",
+            "--ephemeral",
+            "--yes",
+            "--dir",
+            &dir,
+            "--model-script",
+            WRITE_THEN_REPLY,
+        ],
+        home.path(),
+        ws.path(),
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert_eq!(std::fs::read_to_string(ws.path().join("invoice.txt")).unwrap(), "INV-1");
+}
+
+/// An untrusted workspace with instruction files says so; `--trust` trusts it and the note
+/// goes, on that run and the next.
+#[test]
+fn an_untrusted_workspace_says_so_and_trust_loads_it() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    std::fs::write(ws.path().join("AGENTS.md"), "Answer briefly.\n").unwrap();
+    let dir = ws.path().display().to_string();
+    let reply = r#"[{"text": "Hello back."}]"#;
+    let args = |trust: bool| {
+        let mut args =
+            vec!["--ui", "inline", "--ephemeral", "--dir", dir.as_str(), "--model-script", reply];
+        if trust {
+            args.push("--trust");
+        }
+        args
+    };
+    let untrusted = common::run_input(&args(false), home.path(), ws.path(), "hello\n");
+    assert!(text(&untrusted).contains("--trust"), "{}", text(&untrusted));
+    let trusted = common::run_input(&args(true), home.path(), ws.path(), "hello\n");
+    assert!(!text(&trusted).contains("not trusted"), "{}", text(&trusted));
+    let next = common::run_input(&args(false), home.path(), ws.path(), "hello\n");
+    assert!(!text(&next).contains("not trusted"), "{}", text(&next));
+}
+
+/// `--server`, `--home` and `--token` before a subcommand are refused, never applied to the
+/// local kernel instead of the named one.
+#[test]
+fn kernel_flags_before_a_subcommand_are_refused() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let output =
+        run(&["--server", "http://127.0.0.1:9", "--token", "t", "freeze"], home.path(), ws.path());
+    assert_ne!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(text(&output).contains("after the subcommand"), "{}", text(&output));
+}
+
+/// On a terminal that names itself `dumb`, the terminal stays in cooked mode and writes plain
+/// lines: no escape sequences at all.
+#[test]
+fn a_dumb_terminal_gets_plain_lines() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let dir = ws.path().display().to_string();
+    let mut terminal = Terminal::spawn_sized_env(
+        &["--ephemeral", "--dir", &dir, "--model-script", r#"[{"text": "Hello back."}]"#],
+        home.path(),
+        ws.path(),
+        ROWS,
+        COLS,
+        &[("TERM", "dumb")],
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    assert_ne!(terminal.termios().c_lflag & libc::ICANON, 0, "cooked mode");
+    terminal.send("hello\r");
+    let started = Instant::now();
+    while !terminal.text().contains("Hello back.") {
+        assert!(started.elapsed() < TIMEOUT, "no reply:\n{}", terminal.text());
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    terminal.send("\x04");
+    let (code, output) = wait_exit(terminal);
+    assert_eq!(code, Some(0), "{output}");
+    assert!(!output.contains('\x1b'), "an escape sequence on a dumb terminal: {output:?}");
 }

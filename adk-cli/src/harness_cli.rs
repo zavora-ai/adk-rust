@@ -588,33 +588,42 @@ impl Setup {
     /// Says once, on the first run with long-term memory, what is stored and where
     /// (spec 3.1 §7.15.2).
     fn memory_notice(&self) {
-        if !self.memory_on() {
-            return;
+        if let Some(notice) =
+            self.memory_notice_text("/memory lists them, /memory forget ID removes one")
+        {
+            println!("{notice}\n");
         }
-        let Some(dir) = dirs::config_dir().map(|dir| dir.join("adk-rust")) else {
-            return;
-        };
+    }
+
+    /// The memory notice, once: `None` when memory is off or the notice was shown before.
+    /// `commands` says how the facts are listed and removed where it is shown.
+    fn memory_notice_text(&self, commands: &str) -> Option<String> {
+        if !self.memory_on() {
+            return None;
+        }
+        let dir = dirs::config_dir().map(|dir| dir.join("adk-rust"))?;
         let marker = dir.join("memory-notice");
         if marker.exists() {
-            return;
+            return None;
         }
         let recall = match &self.embedder {
             Some((_, name)) => format!("Facts are embedded with {name} so related ones are found."),
             None => "Facts are found by shared words; nothing leaves this machine for it.".into(),
         };
-        println!(
+        let notice = format!(
             "Long-term memory is on. The harness keeps short facts from your sessions: the \
              preferences you state, how a project builds and tests, what fixed a failure. They \
              live in {} on this machine, with personal data redacted and secrets refused, and \
              are recalled in later sessions. What you said is \"known\"; what the agent \
-             inferred is \"assumed\" until you confirm it. {recall}\n/memory lists them, \
-             /memory forget ID removes one, `adk-rust memory export` writes them out, and \
+             inferred is \"assumed\" until you confirm it. {recall}\n{commands}, \
+             `adk-rust memory export` writes them out, and \
              --no-memory turns memory off. Under `adk-rust up` in ask or auto mode, a \
              consolidation tick also tidies assumed facts after new sessions — `adk-rust memory \
-             undo TICK` reverts one, --no-consolidation turns it off. This notice is shown once.\n",
+             undo TICK` reverts one, --no-consolidation turns it off. This notice is shown once.",
             dir.join("harness.db").display()
         );
         let _ = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&marker, "shown\n"));
+        Some(notice)
     }
 
     fn memory_on(&self) -> bool {

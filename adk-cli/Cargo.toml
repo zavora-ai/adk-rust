@@ -175,7 +175,11 @@ voice-desktop = ["voice", "adk-audio/desktop-audio"]
 # capable terminal, `--ui inline` in the scrollback, `--output json` for CI; on the running
 # kernel (`--home`, or `--server` with a token) or the harness in process, every decision
 # through the approvals inbox
-surface = ["harness", "dep:adk-surface"]
+surface = ["harness", "dep:adk-surface", "dep:libc"]
+
+# Standard error to terminal.log while the full screen is up (spec 3.3 §5.2, S-I9)
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 # The scripted realtime provider the `--voice` end-to-end test writes its script with.

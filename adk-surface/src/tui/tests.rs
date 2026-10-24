@@ -14,7 +14,7 @@ use super::inline::Printer;
 use super::markdown::wrap_spans;
 use super::theme::{Appearance, Theme};
 use super::view::Renderer;
-use crate::engine::{Command, FeedFrame};
+use crate::engine::{Command, CommandOutcome, FeedFrame};
 use crate::model::{
     AgentRef, AgentRow, AgentStatus, Avatar, CallView, CardStatus, DecisionCard, FeedEntry,
     Reversibility, Speaker, ThreadItem, TimelineStep,
@@ -179,7 +179,7 @@ fn n_asks_for_a_reason_then_denies_and_e_edits_as_json() {
     let armed = shown + ARM_DELAY;
     let mut app = app_with(vec![invoice()], shown);
     assert!(app.key(key(KeyCode::Char('n')), armed).is_empty());
-    assert_eq!(app.input, Input::DenyReason { id: "apr_1".into() });
+    assert_eq!(app.input, Input::DenyReason { id: "apr_1".into(), version: 1 });
     // Esc cancels the reason: nothing was decided.
     assert!(!decides(&app.key(key(KeyCode::Esc), armed)));
     assert_eq!(app.input, Input::Message);
@@ -193,7 +193,7 @@ fn n_asks_for_a_reason_then_denies_and_e_edits_as_json() {
 
     let mut app = app_with(vec![invoice()], shown);
     app.key(key(KeyCode::Char('e')), armed);
-    assert_eq!(app.input, Input::EditArgs { id: "apr_1".into() });
+    assert_eq!(app.input, Input::EditArgs { id: "apr_1".into(), version: 1 });
     let edited: Value = serde_json::from_str(&app.composer.text).unwrap();
     assert_eq!(edited["to"], "[client email]");
     app.key(ctrl('u'), armed);
@@ -286,7 +286,11 @@ fn screen_text(app: &App, appearance: Appearance, cols: u16, rows: u16) -> Vec<S
     let mut renderer = Renderer::new(Theme::new(appearance, true));
     let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
     let now = Instant::now() + ARM_DELAY * 4;
-    terminal.draw(|frame| renderer.draw(frame, app, now)).unwrap();
+    terminal
+        .draw(|frame| {
+            renderer.draw(frame, app, now);
+        })
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     (0..rows)
         .map(|y| (0..cols).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
@@ -519,4 +523,277 @@ proptest! {
             prop_assert!(line.width() <= width, "{line:?} is wider than {width}");
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Review of #1041: each test fails on the branch before its fix.
+// ---------------------------------------------------------------------------
+
+fn ms(millis: u64) -> Duration {
+    Duration::from_millis(millis)
+}
+
+/// The `Decide` command among `effects`.
+fn decide_of(effects: &[Effect]) -> Option<&Command> {
+    effects.iter().find_map(|effect| match effect {
+        Effect::Execute(command @ Command::Decide { .. }) => Some(command),
+        _ => None,
+    })
+}
+
+fn decided_by_you() -> crate::model::Decided {
+    crate::model::Decided {
+        by: "You".into(),
+        by_you: true,
+        via: None,
+        at: Utc::now(),
+        at_text: "18:01".into(),
+        answer: crate::model::DecidedAnswer::Yes,
+        text: "You said yes in the terminal at 18:01".into(),
+    }
+}
+
+fn notices(app: &App) -> String {
+    app.notices.iter().map(|notice| notice.text.as_str()).collect::<Vec<_>>().join("\n")
+}
+
+/// A call the box cuts short — more than ten arguments, or a long value under the engine's
+/// own limit — is answered by `y`, `a` or `e` only once `?` has shown all of it (spec 3.3
+/// §7.1), and the answer says it was shown in full only then.
+#[test]
+fn a_call_the_box_cuts_short_is_answered_only_after_its_details_below_the_engine_limit() {
+    let many: serde_json::Map<String, Value> =
+        (0..12).map(|index| (format!("field{index}"), json!(index))).collect();
+    let long = json!({ "path": "notes.txt", "content": "x".repeat(900) });
+    for args in [Value::Object(many), long] {
+        let shown = Instant::now();
+        let armed = shown + ARM_DELAY;
+        let mut app = app_with(vec![card("apr_9", "write_file", args)], shown);
+        assert!(!app.cards[0].card.call.truncated, "under the engine's limit");
+        for c in ['y', 'a', 'e'] {
+            let effects = app.key(key(KeyCode::Char(c)), armed);
+            assert!(decide_of(&effects).is_none(), "{c} answered a call the box cut short");
+            assert_eq!(app.input, Input::Message, "{c} opened an answer for a cut call");
+        }
+        assert!(app.composer.is_empty(), "the keys did not type either");
+        app.key(key(KeyCode::Char('?')), armed);
+        let effects = app.key(key(KeyCode::Char('y')), armed);
+        assert!(
+            matches!(decide_of(&effects), Some(Command::Decide { expanded: true, .. })),
+            "{effects:?}"
+        );
+    }
+}
+
+/// The next decision arms only once it has had the focus for a moment, so a double tap, a
+/// held key, or a key meant for a decision answered elsewhere never answers another call
+/// (§7.4 rule 2, S-I4).
+#[test]
+fn the_next_decision_arms_when_it_takes_the_focus() {
+    let shown = Instant::now();
+    let later = shown + ARM_DELAY * 4;
+    let first = invoice();
+    let second = card("apr_2", "write_file", json!({ "path": "notes.txt", "content": "hi" }));
+
+    // A double tap: the first `y` answers the first card, whose answer comes straight back.
+    let mut app = app_with(vec![first.clone(), second.clone()], shown);
+    assert!(decide_of(&app.key(key(KeyCode::Char('y')), later)).is_some());
+    let mut answered = first.clone();
+    answered.decided = Some(decided_by_you());
+    app.update(Update::Outcome(Box::new(Ok(CommandOutcome::Answered { card: answered }))), later);
+    assert_eq!(app.cards[0].card.id, "apr_2");
+    let effects = app.key(key(KeyCode::Char('y')), later + ms(120));
+    assert!(decide_of(&effects).is_none(), "the second tap answered the next call");
+
+    // Answered on the phone just before the key: the next card takes the focus unarmed.
+    let mut app = app_with(vec![first, second.clone()], shown);
+    app.update(
+        Update::Frame {
+            session: SESSION.into(),
+            frame: FeedFrame::Decisions { cards: vec![second.clone()] },
+        },
+        later,
+    );
+    let effects = app.key(key(KeyCode::Char('y')), later + ms(40));
+    assert!(decide_of(&effects).is_none(), "a key meant for the first card answered the next");
+
+    // Once it has had the focus for the arm delay, its keys answer it.
+    let mut app = app_with(vec![second.clone()], shown);
+    app.update(
+        Update::Frame { session: SESSION.into(), frame: FeedFrame::Decisions { cards: vec![] } },
+        later,
+    );
+    app.update(
+        Update::Frame {
+            session: SESSION.into(),
+            frame: FeedFrame::Decisions { cards: vec![second] },
+        },
+        later,
+    );
+    assert!(decide_of(&app.key(key(KeyCode::Char('y')), later + ARM_DELAY)).is_some());
+}
+
+/// On a small terminal with two open decisions, the box the keys answer is the one on screen
+/// in full (§7.1): the first card's call shows, and the second is listed below it.
+#[test]
+fn the_box_the_keys_answer_is_on_screen() {
+    let shown = Instant::now() - ARM_DELAY * 2;
+    let first = invoice();
+    let second =
+        card("apr_2", "send_email", json!({ "to": "accountant@example.com", "subject": "Hi" }));
+    let app = app_with(vec![first, second], shown);
+    let lines = screen_text(&app, Appearance::Light, 80, 24);
+    let all = lines.join("\n");
+    assert!(all.contains("[client email]"), "the first card's call:\n{all}");
+    assert!(all.contains("Invoice INV-[NUMBER]"), "the first card's call:\n{all}");
+    assert!(all.contains("after this one"), "the second card is listed:\n{all}");
+}
+
+/// Edit and Deny go at the version the person chose them at: a decision that changes while the
+/// reason or the arguments are typed is a conflict the engine shows (S-I2).
+#[test]
+fn edit_and_deny_are_sent_at_the_version_they_were_chosen_at() {
+    for (answer_key, typed) in [('n', "not this month"), ('e', "")] {
+        let shown = Instant::now();
+        let armed = shown + ARM_DELAY;
+        let mut app = app_with(vec![invoice()], shown);
+        app.key(key(KeyCode::Char(answer_key)), armed);
+        let mut changed = invoice();
+        changed.version = 2;
+        app.update(
+            Update::Frame {
+                session: SESSION.into(),
+                frame: FeedFrame::Decisions { cards: vec![changed] },
+            },
+            armed + ms(10),
+        );
+        type_text(&mut app, typed, armed + ms(20));
+        let effects = app.key(key(KeyCode::Enter), armed + ms(30));
+        assert!(
+            matches!(decide_of(&effects), Some(Command::Decide { version: 1, .. })),
+            "{answer_key}: {effects:?}"
+        );
+    }
+}
+
+/// An edit or a reason being typed for a decision answered somewhere else is not dropped
+/// silently: the terminal says it was decided (§8.1 "Decided").
+#[test]
+fn an_answer_in_progress_says_decided_when_its_decision_is_answered_elsewhere() {
+    let shown = Instant::now();
+    let armed = shown + ARM_DELAY;
+    let other = card("apr_2", "write_file", json!({ "path": "notes.txt", "content": "hi" }));
+    for remaining in [vec![], vec![other]] {
+        let mut app =
+            app_with(std::iter::once(invoice()).chain(remaining.iter().cloned()).collect(), shown);
+        app.key(key(KeyCode::Char('n')), armed);
+        type_text(&mut app, "too much", armed + ms(10));
+        app.update(
+            Update::Frame {
+                session: SESSION.into(),
+                frame: FeedFrame::Decisions { cards: remaining.clone() },
+            },
+            armed + ms(20),
+        );
+        assert!(notices(&app).contains(crate::words::DECIDED), "{:?}", app.notices);
+        assert_eq!(app.input, Input::Message, "the reason box is closed");
+    }
+}
+
+/// Inline never prints a held call that is no longer open as "Waiting for you": only the
+/// inbox entry's box says a decision waits (S-I1).
+#[test]
+fn inline_never_prints_a_closed_decision_as_waiting() {
+    let now = Instant::now();
+    let mut app = App::new("adk-rust", SESSION.into());
+    let entry = thread_entry(
+        1,
+        vec![ThreadItem::Decision {
+            decision_id: Some("apr_old".into()),
+            tool: "write_file".into(),
+            text: crate::words::WAITING_FOR_YOU.into(),
+        }],
+    );
+    app.update(Update::Frame { session: SESSION.into(), frame: FeedFrame::Entry { entry } }, now);
+    let mut printer =
+        Printer::new(Vec::new(), Theme::new(Appearance::Light, false), false, false).with_width(80);
+    printer.sync(&app, now).unwrap();
+    let printed = String::from_utf8(printer.into_inner()).unwrap();
+    assert!(!printed.contains(crate::words::WAITING_FOR_YOU), "{printed}");
+}
+
+/// A decision answered elsewhere before the key reached the engine reads as decided, and its
+/// inbox id never reaches the screen (§8 "No internal identifiers").
+#[tokio::test]
+async fn a_decision_answered_elsewhere_shows_decided_without_its_id() {
+    use std::sync::Arc;
+
+    use adk_core::{ApprovalService, InMemoryApprovalStore, StoreApprovalService};
+    use adk_session::{InMemorySessionService, SessionService};
+
+    use crate::{Caller, LocalSource, Origin, SurfaceEngine, SurfaceKind};
+
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let approvals: Arc<dyn ApprovalService> =
+        Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new())));
+    let source = LocalSource::builder("adk-rust").sessions(sessions).approvals(approvals);
+    let engine = SurfaceEngine::builder(Arc::new(source.build().unwrap())).build();
+    let me = Caller::human("ana", SurfaceKind::Terminal, Origin::Keyboard);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let shown = Instant::now() - ARM_DELAY * 2;
+    let gone = card("apr_3f9a77", "send_email", json!({ "to": "[client email]" }));
+    let mut app = app_with(vec![gone], shown);
+    let effects = app.key(key(KeyCode::Char('y')), Instant::now());
+    let command = decide_of(&effects).cloned().expect("y answers the card");
+    super::pump::Pump::execute(&engine, &me, command, &tx);
+    let update = rx.recv().await.unwrap();
+    app.update(update, Instant::now());
+    let shown_text = notices(&app);
+    assert!(!shown_text.contains("apr_3f9a77"), "{shown_text}");
+    assert!(shown_text.contains(crate::words::DECIDED), "{shown_text}");
+    assert!(app.cards.is_empty(), "the card is gone");
+}
+
+/// A call whose arguments the inbox shows redacted offers no Edit: an edit would send the
+/// masks back as the call's arguments (spec 3.3 §7.2).
+#[tokio::test]
+async fn a_call_shown_redacted_offers_no_edit() {
+    use std::sync::Arc;
+
+    use adk_core::{
+        ApprovalPolicy, ApprovalRequest, ApprovalScope, ApprovalService, ApproverSelector,
+        InMemoryApprovalStore, StoreApprovalService, ToolConfirmationRequest,
+    };
+    use adk_session::{InMemorySessionService, SessionService};
+
+    use crate::{Caller, LocalSource, Origin, SurfaceEngine, SurfaceKind};
+
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let approvals: Arc<dyn ApprovalService> =
+        Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new())));
+    let scope = ApprovalScope::new("adk-rust", "ana", SESSION);
+    let policy = ApprovalPolicy::new([ApproverSelector::human("ana")]);
+    let pay =
+        ToolConfirmationRequest::new("pay", json!({ "amount": 500, "card": "4242424242424242" }));
+    let masked = ApprovalRequest::new("apr_masked", scope.clone(), &pay, policy.clone())
+        .with_redacted_args(json!({ "amount": 500, "card": "****4242" }));
+    approvals.submit(masked).await.unwrap();
+    let write = ToolConfirmationRequest::new("write_file", json!({ "path": "a.txt" }));
+    approvals.submit(ApprovalRequest::new("apr_plain", scope, &write, policy)).await.unwrap();
+    let source = LocalSource::builder("adk-rust").sessions(sessions).approvals(approvals);
+    let engine = SurfaceEngine::builder(Arc::new(source.build().unwrap())).build();
+    let me = Caller::human("ana", SurfaceKind::Terminal, Origin::Keyboard).with_paired_local();
+    let cards = engine.decisions(&me).await.unwrap();
+    let offers = |id: &str| -> Vec<Answer> {
+        let card = cards.iter().find(|card| card.id == id).unwrap();
+        card.allowed.options.iter().map(|option| option.answer).collect()
+    };
+    assert!(offers("apr_plain").contains(&Answer::Edit), "{:?}", offers("apr_plain"));
+    assert!(!offers("apr_masked").contains(&Answer::Edit), "{:?}", offers("apr_masked"));
+
+    let masked = cards.iter().find(|card| card.id == "apr_masked").cloned().unwrap();
+    let shown = Instant::now() - ARM_DELAY * 2;
+    let mut app = app_with(vec![masked], shown);
+    app.key(key(KeyCode::Char('e')), Instant::now());
+    assert_eq!(app.input, Input::Message, "no editor over a redacted call");
 }

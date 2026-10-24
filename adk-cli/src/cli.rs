@@ -168,6 +168,22 @@ pub struct SurfaceArgs {
 }
 
 #[cfg(feature = "surface")]
+impl SurfaceArgs {
+    /// Whether any of the terminal's flags was given: before a subcommand they would reach no
+    /// kernel, or the local one in place of the named one.
+    pub fn given(&self) -> bool {
+        self.ui.is_some()
+            || self.output != adk_surface::tui::OutputFormat::Text
+            || self.theme != adk_surface::tui::ThemeChoice::Auto
+            || self.message.is_some()
+            || self.pair.is_some()
+            || self.kernel.home.is_some()
+            || self.kernel.server.is_some()
+            || self.kernel.token.is_some()
+    }
+}
+
+#[cfg(feature = "surface")]
 fn parse_from_str<T: std::str::FromStr<Err = String>>(value: &str) -> Result<T, String> {
     value.parse()
 }
