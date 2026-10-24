@@ -30,6 +30,7 @@
 //! | `hooks::HookSpec`, `hooks::HookSet`, `hooks::HookRunner` (feature `hooks`) | §7.22 |
 //! | `packs::managed::{HarnessDef, HarnessResolver}` (feature `managed`) | §7.18 |
 //! | [`coding::CodingAgent`] | §7.19 |
+//! | [`Preset`], [`personal::PersonalAgent`], [`personal::PersonalWorkspace`], [`personal::PersonalSettings`] | spec 3.3 §10 H1 |
 //! | [`WebConfig`], [`SearchProvider`], [`ProviderWebTools`], [`WebSearchPath`], `web_fetch`, `web_search`, `SearxngSearch`, `DeepSeekSearch` (feature `web`) | §7.20 |
 //! | [`McpInteractionConfig`], `HarnessElicitationHandler`, `HarnessSamplingHandler`, `mcp_*_resource` (feature `mcp`) | §7.21 |
 //! | [`EffortPolicy`], [`Effort`] | §7.23 |
@@ -109,6 +110,10 @@ pub mod coding;
 pub mod conformance;
 #[cfg(feature = "hooks")]
 pub mod hooks;
+#[path = "presets/personal.rs"]
+pub mod personal;
+#[path = "presets/preset.rs"]
+mod preset;
 
 pub use agent::{HARNESS_UNGOVERNED_CODE, HarnessAgent, HarnessInfo, HarnessLayer, HarnessRuntime};
 #[cfg(feature = "postgres")]
@@ -227,6 +232,7 @@ pub use policy::{
     has_harness_layer,
 };
 pub use posture::{Effort, EffortPolicy};
+pub use preset::Preset;
 pub use prompt::HARNESS_SYSTEM_PROMPT;
 #[cfg(feature = "sqlite")]
 pub use shell::SqliteShellLedger;

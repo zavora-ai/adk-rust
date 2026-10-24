@@ -7,8 +7,6 @@ use adk_devtools::Workspace;
 
 use crate::agent::HarnessAgent;
 use crate::builder::HarnessAgentBuilder;
-use crate::mode::HarnessMode;
-use crate::shell::ShellIsolation;
 use crate::tools::{TodoItem, TodoList};
 
 /// The coding preset's base prompt (spec 3.1 §7.19).
@@ -165,8 +163,9 @@ impl CodingAgentBuilder {
         self
     }
 
-    /// Lowers the preset to `HarnessAgentBuilder::new(name).base_prompt(CODING_SYSTEM_PROMPT)
-    /// .mode(Ask).shell(Host).without_default_members()` and builds it.
+    /// Lowers the preset to `HarnessAgentBuilder::new(name).preset(Preset::Coding)` —
+    /// `base_prompt(CODING_SYSTEM_PROMPT).mode(Ask).shell(Host).without_default_members()` —
+    /// and builds it.
     ///
     /// # Errors
     ///
@@ -174,10 +173,7 @@ impl CodingAgentBuilder {
     pub fn build(self) -> Result<CodingAgent> {
         let last_todos = Arc::new(Mutex::new(TodoList::default()));
         let mut builder = HarnessAgentBuilder::new(self.name)
-            .base_prompt(CODING_SYSTEM_PROMPT)
-            .mode(HarnessMode::Ask)
-            .shell(ShellIsolation::Host)
-            .without_default_members()
+            .preset(crate::Preset::Coding)
             .with_last_todos(last_todos.clone());
         if let Some(model) = self.model {
             builder = builder.model(model);

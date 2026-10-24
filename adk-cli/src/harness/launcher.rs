@@ -746,11 +746,7 @@ impl HarnessLauncher {
             return serve_resident(kernel, listener, app, addr, &info).await;
         }
         println!("ADK-Rust harness serving on http://{addr}");
-        println!(
-            "  mode {} · shell {}",
-            info.default_mode,
-            terminal_safe(&info.isolation.to_string())
-        );
+        println!("  mode {} · shell {}", info.default_mode, terminal_safe(&shell_label(&info)));
         println!("  approvals: GET /api/approvals, POST /api/approvals/{{id}}/decide");
         println!("  standing rules: GET /api/rules, POST /api/rules, DELETE /api/rules/{{id}}");
         println!("Press Ctrl+C to stop\n");
@@ -758,6 +754,16 @@ impl HarnessLauncher {
             .with_graceful_shutdown(shutdown_signal())
             .await
             .map_err(|e| AdkError::config(format!("server error: {e}")))
+    }
+}
+
+/// Where `bash` runs, or `none` when the harness offers no shell, as the personal preset's
+/// does on the host (spec 3.3 §10 H1).
+fn shell_label(info: &adk_harness::HarnessInfo) -> String {
+    if info.tools.iter().any(|tool| tool == "bash") {
+        info.isolation.to_string()
+    } else {
+        "none".to_string()
     }
 }
 
@@ -783,7 +789,7 @@ async fn serve_resident(
         println!("  socket {}", socket.display());
     }
     println!("  home {}", config.home.display());
-    println!("  mode {} · shell {}", info.default_mode, terminal_safe(&info.isolation.to_string()));
+    println!("  mode {} · shell {}", info.default_mode, terminal_safe(&shell_label(info)));
     let queues: Vec<&str> = config.queues.iter().map(adk_kernel::QueueClass::as_str).collect();
     println!("  queues {}", queues.join(", "));
     println!(
@@ -1216,8 +1222,8 @@ impl Shared {
         println!("  Workspace : {}", terminal_safe(&self.workspace.display().to_string()));
         println!("  Mode      : {}", info.default_mode);
         let isolation = match &info.degraded_reason {
-            Some(reason) => format!("{} ({})", info.isolation, reason),
-            None => info.isolation.to_string(),
+            Some(reason) => format!("{} ({})", shell_label(info), reason),
+            None => shell_label(info),
         };
         println!("  Shell     : {}", terminal_safe(&isolation));
         let members =

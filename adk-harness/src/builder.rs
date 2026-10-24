@@ -136,6 +136,9 @@ pub struct HarnessAgentBuilder {
     confirmation_timeout: Duration,
     shell: ShellConfig,
     shell_enabled: bool,
+    /// The personal preset offers `bash` only in the OS sandbox or a container (spec 3.3
+    /// §10 H1).
+    isolated_shell_only: bool,
     /// `allow_unsandboxed_retry` was set explicitly, so a container shell keeps it.
     retry_explicit: bool,
     trust_mcp_read_only_hints: bool,
@@ -236,6 +239,7 @@ impl HarnessAgentBuilder {
             confirmation_timeout: Duration::from_secs(300),
             shell: ShellConfig::default(),
             shell_enabled: true,
+            isolated_shell_only: false,
             retry_explicit: false,
             trust_mcp_read_only_hints: false,
             todos: true,
@@ -671,6 +675,37 @@ impl HarnessAgentBuilder {
     /// Leaves `bash` out.
     pub fn without_shell(mut self) -> Self {
         self.shell_enabled = false;
+        self
+    }
+
+    /// Applies `preset` (spec 3.1 §7.19, spec 3.3 §10 H1): its prompt, mode, members and
+    /// shell. Calls after it override what it sets.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::{HarnessAgent, InstructionsConfig, Preset};
+    /// use adk_model::{ScriptedLlm, ScriptedResponse};
+    /// use std::sync::Arc;
+    ///
+    /// let dir = tempfile::tempdir().unwrap();
+    /// let harness = HarnessAgent::builder("assistant")
+    ///     .preset(Preset::Personal)
+    ///     .model(Arc::new(ScriptedLlm::new("scripted", vec![ScriptedResponse::text("ok")])))
+    ///     .workspace(adk_devtools::Workspace::new(dir.path()).allow_bash(true))
+    ///     .project_instructions(InstructionsConfig { user_file: None, ..InstructionsConfig::default() })
+    ///     .build()?;
+    /// assert!(harness.info().members.is_empty());
+    /// assert!(!harness.info().tools.contains(&"bash".to_string()), "no host shell");
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn preset(self, preset: crate::Preset) -> Self {
+        preset.apply(self)
+    }
+
+    /// Offers `bash` only when it runs in the OS sandbox or a container (spec 3.3 §10 H1).
+    pub(crate) fn isolated_shell_only(mut self) -> Self {
+        self.isolated_shell_only = true;
         self
     }
 
@@ -1407,7 +1442,11 @@ impl HarnessAgentBuilder {
         let container_shell = container_pool.is_some();
         #[cfg(not(feature = "docker"))]
         let container_shell = false;
-        if self.shell_enabled && workspace.bash_allowed() && !container_shell {
+        // The personal preset never offers a host shell (spec 3.3 §10 H1).
+        let isolated_shell = matches!(status, IsolationStatus::OsSandbox { .. });
+        let host_shell_refused = self.isolated_shell_only && !isolated_shell;
+        if self.shell_enabled && workspace.bash_allowed() && !container_shell && !host_shell_refused
+        {
             let bash = HarnessBashTool::new(
                 workspace.clone(),
                 status.clone(),
@@ -1773,7 +1812,11 @@ impl HarnessAgentBuilder {
         let environment = Environment {
             root: workspace.root().display().to_string(),
             branch: instruction_state.instructions.git_branch().map(str::to_string),
-            isolation: status.to_string(),
+            isolation: if host_shell_refused && !container_shell {
+                "none".to_string()
+            } else {
+                status.to_string()
+            },
             default_mode: self.mode,
             packs: packs.clone(),
         };

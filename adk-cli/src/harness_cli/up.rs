@@ -51,7 +51,7 @@ struct KernelStores {
 
 /// `adk-rust up` (spec 3.2 §8.1): runs until Ctrl-C or `SIGTERM`, then drains and stops.
 pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -> Result<()> {
-    let UpArgs { home, bind, auth_token, store, harness, .. } = up;
+    let UpArgs { home, bind, auth_token, store, mut harness, .. } = up;
     // The baseline pass's observations are worded by the harness's model (spec 3.2 §7.10).
     let phraser = Arc::new(LlmPhraser::new(model.llm.clone()));
     // Only `max_concurrent_runs` of a workspace's [kernel] table applies, so the directory
@@ -65,6 +65,13 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         Some(home) => home,
         None => default_home()?,
     };
+    // The personal preset's workspace is a folder under the home (spec 3.3 §10 H1); its
+    // `.adk/harness.toml` may restrict the kernel as a project's does.
+    if harness.preset == Some(adk_harness::Preset::Personal) && harness.dir.is_none() {
+        let personal = adk_harness::personal::PersonalWorkspace::create(&home)?;
+        settings = KernelSettings::resolve(user_config().as_deref(), personal.root())?;
+        harness.dir = Some(personal.root().to_path_buf());
+    }
     let bind = match bind.or(settings.bind) {
         Some(bind) => bind,
         None => DEFAULT_BIND.parse()?,
@@ -84,6 +91,16 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     setup.memory_notice();
     for note in &settings.notes {
         println!("note: {note}");
+    }
+    // The first-run answers become the kernel's quiet hours and every partition's daily
+    // spend cap, unless the user config's `[kernel]` table sets them (spec 3.3 §13 Q7).
+    if let Some(personal) = &setup.personal {
+        if settings.quiet_hours.is_none() {
+            settings.quiet_hours = personal.quiet_time.map(Into::into);
+        }
+        if settings.quotas.daily_spend_cap.is_none() {
+            settings.quotas.daily_spend_cap = personal.daily_spending_limit_micro_usd();
+        }
     }
     if !bind.ip().is_loopback()
         && setup.resolved.mode == HarnessMode::Auto
@@ -262,6 +279,22 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         stores.label
     );
     println!("  plans {}", setup.plans_note());
+    // Both limits are shown on every start (spec 3.3 §13 Q7).
+    if setup.personal.is_some() {
+        println!(
+            "  work  {} (personal preset: not a code repository, no host shell)",
+            setup.resolved.workspace.display()
+        );
+        let quiet = settings.quiet_hours.map_or_else(
+            || "off".to_string(),
+            |quiet| format!("{}–{}", quiet.start.format("%H:%M"), quiet.end.format("%H:%M")),
+        );
+        let limit = settings.quotas.daily_spend_cap.map_or_else(
+            || "none".to_string(),
+            |micro| format!("${:.2} a day", micro as f64 / 1_000_000.0),
+        );
+        println!("  quiet time {quiet} · daily spending limit {limit}");
+    }
     println!(
         "  tick  {}",
         if tick {
