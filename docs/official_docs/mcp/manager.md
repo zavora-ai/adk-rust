@@ -329,8 +329,9 @@ On Windows each server starts suspended and runs only once it is in a Job
 Object of its own, so every process it starts belongs to the job and none can
 leave it (spec 3.2 §10 W1). The job closes with the server's transport, and
 closing it ends whatever is left in it: stopping, restarting, updating or
-removing a server, a crash's cleanup, a dropped manager, and the managing
-process exiting each end the server's whole process tree. A server that cannot
+removing a server, a crash's cleanup, a dropped manager (once the runtime runs
+the server's cancelled connection task), and the managing process exiting each
+end the server's whole process tree. A server that cannot
 be placed in a Job Object is not started. On Unix only the server's own process
 is ended; a process it started in the background keeps running.
 
