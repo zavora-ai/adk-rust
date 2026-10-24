@@ -149,3 +149,41 @@ async fn a_released_job_leaves_its_processes_running() {
     }
     ids.iter().copied().for_each(terminate);
 }
+
+/// Terminating the job and waiting returns only once every process in it has exited, so a
+/// write the background process had in flight lands before the call returns, not after.
+#[tokio::test]
+async fn terminate_and_wait_returns_once_no_process_is_left() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let tick = dir.path().join("tick.txt");
+    let mut command = tokio::process::Command::new("cmd.exe");
+    command
+        .current_dir(dir.path())
+        .args([
+            "/d",
+            "/c",
+            "start /b cmd /d /c for /l %i in (1,1,2000000000) do @echo x^>^> tick.txt& \
+             ping -n 300 127.0.0.1 >nul",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_SUSPENDED)
+        .kill_on_drop(true);
+    let shell = command.spawn().expect("cmd.exe starts");
+    let job = JobObject::contain_suspended(shell.id().expect("the shell runs"))
+        .expect("the suspended shell is contained");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while std::fs::metadata(&tick).map_or(0, |meta| meta.len()) == 0 {
+        assert!(Instant::now() < deadline, "the background writer never started");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(job.active_processes().expect("the job is queried") >= 2);
+
+    assert!(job.terminate_and_wait(JobObject::TERMINATION_WAIT).expect("the job is queried"));
+
+    assert_eq!(job.active_processes().expect("the job is queried"), 0);
+    let size = std::fs::metadata(&tick).unwrap().len();
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(std::fs::metadata(&tick).unwrap().len(), size, "a write landed after the wait");
+}

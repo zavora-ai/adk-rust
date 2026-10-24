@@ -1327,6 +1327,18 @@ mod imp {
         timeout: Option<Duration>,
     ) -> Result<ConfinedOutcome, SandboxError> {
         let Launched { job, process, .. } = launch(policy, grants, program, args, cwd, None)?;
+        // Ends the tree and waits for it, so no write a process had in flight lands after
+        // the call returns.
+        let end_tree = |job: &JobObject| match job.terminate_and_wait(JobObject::TERMINATION_WAIT) {
+            Ok(true) => {}
+            Ok(false) => tracing::warn!(
+                wait = ?JobObject::TERMINATION_WAIT,
+                "a confined process had not exited when the call returned"
+            ),
+            Err(error) => {
+                tracing::warn!(error = %error, "could not wait for the confined processes to exit")
+            }
+        };
 
         let wait_ms =
             timeout.map_or(INFINITE, |d| u32::try_from(d.as_millis()).unwrap_or(INFINITE));
@@ -1334,12 +1346,12 @@ mod imp {
         let waited = unsafe { WaitForSingleObject(process.0, wait_ms) };
         if waited == WAIT_TIMEOUT {
             // Kill the whole tree.
-            job.terminate();
+            end_tree(&job);
             return Ok(ConfinedOutcome { exit_code: None, timed_out: true });
         }
         if waited == WAIT_FAILED {
             let err = last_error("WaitForSingleObject");
-            job.terminate();
+            end_tree(&job);
             return Err(err);
         }
         debug_assert_eq!(waited, WAIT_OBJECT_0);
@@ -1349,7 +1361,7 @@ mod imp {
         let got = unsafe { GetExitCodeProcess(process.0, &mut code) };
         // The process has exited, so terminating the job now only reaps any descendant that
         // outlived it.
-        job.terminate();
+        end_tree(&job);
         if got == 0 {
             return Err(last_error("GetExitCodeProcess"));
         }
