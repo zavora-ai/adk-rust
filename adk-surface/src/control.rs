@@ -20,6 +20,7 @@ use serde_json::json;
 use tokio::sync::watch;
 
 use crate::error::{Result, SurfaceError};
+use crate::inbox::Inbox;
 use crate::origin::Caller;
 use crate::source::{AgentState, Source, SpendToday};
 
@@ -29,16 +30,19 @@ const QUIET_REREAD: Duration = Duration::from_secs(15);
 /// The engine's source over a kernel's control plane (spec 3.3 §6, spec 3.2 §7.11): a
 /// terminal or a home attached to a kernel elsewhere, over its socket, named pipe or HTTP.
 ///
-/// Every read goes through `ControlClient`, so the caller is whoever the client
-/// authenticates as (the OS user on the socket, a bearer token over HTTP), and the kernel
-/// records each session read as `kernel.control`. The feed re-reads a session when the
-/// kernel's event bus reports a change, not on a timer.
+/// Sessions, processes, the ledger and the kill switch go through `ControlClient`, so the
+/// caller is whoever the client authenticates as (the OS user on the socket, a bearer token
+/// over HTTP), and the kernel records each session read as `kernel.control`. The feed re-reads
+/// a session when the kernel's event bus reports a change, not on a timer.
 ///
-/// The control plane's approvals inbox lists pending requests without their risk, acting
-/// agent or earlier decisions, and its `decide` takes no edited arguments. So through this
-/// source every decision counts as high risk — chat, voice and the tray never approve one,
-/// and the web home and phone ask the person to confirm it is them —, "Edit" is unavailable,
-/// and a decision answered elsewhere shows "Decided" without who or how.
+/// Decisions come from the approvals inbox beside the kernel routes, read in full —
+/// `GET /api/approvals?session=`, `GET /api/approvals/{id}`, `POST /api/approvals/{id}/decide`
+/// — over the same socket or HTTP endpoint, so cards carry their risk, agent and earlier
+/// decisions, "Edit" sends its arguments, and a decision answered elsewhere says who
+/// answered. Pass the HTTP control plane's token to [`with_bearer_token`](Self::with_bearer_token)
+/// as well as to the client. Over a named pipe (Windows) the source keeps to `ControlClient`'s
+/// pending items, which carry none of these: every decision counts as high risk, "Edit" is
+/// not offered, and a decision answered elsewhere is no longer found.
 ///
 /// # Example
 ///
@@ -60,6 +64,7 @@ pub struct ControlSource {
     target: String,
     daily_limit: Option<u64>,
     changes: Arc<std::sync::OnceLock<watch::Receiver<u64>>>,
+    inbox: Option<Inbox>,
 }
 
 impl fmt::Debug for ControlSource {
@@ -80,13 +85,23 @@ impl ControlSource {
         app_name: impl Into<String>,
         target: impl Into<String>,
     ) -> Self {
+        let inbox = Inbox::for_endpoint(&client.endpoint());
         Self {
             client,
             app: app_name.into(),
             target: target.into(),
             daily_limit: None,
             changes: Arc::new(std::sync::OnceLock::new()),
+            inbox,
         }
+    }
+
+    /// Sends `token` as a bearer token to the approvals inbox, as the client sends it to the
+    /// kernel routes.
+    #[must_use]
+    pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
+        self.inbox = self.inbox.map(|inbox| inbox.with_token(token.into()));
+        self
     }
 
     /// The daily spending limit in micro-USD, which the control plane does not report.
@@ -142,7 +157,7 @@ impl ControlSource {
     }
 }
 
-/// An inbox item as a request: risk high, as the control plane does not report it.
+/// An inbox item, over a named pipe, as a request: risk high, as the item does not say.
 fn request_of(item: ApprovalItem) -> Result<ApprovalRequest> {
     let policy = serde_json::to_value(ApprovalPolicy::new([]))
         .map_err(|error| SurfaceError::Invalid(error.to_string()))?;
@@ -198,11 +213,28 @@ impl Source for ControlSource {
         }
     }
 
-    async fn requests(&self, _caller: &Caller, _open_only: bool) -> Result<Vec<ApprovalRequest>> {
-        self.client.approvals().await?.into_iter().map(request_of).collect()
+    async fn requests(
+        &self,
+        _caller: &Caller,
+        session: Option<&str>,
+        open_only: bool,
+    ) -> Result<Vec<ApprovalRequest>> {
+        if let Some(inbox) = &self.inbox {
+            return inbox.list(&self.app, session, open_only).await;
+        }
+        self.client
+            .approvals()
+            .await?
+            .into_iter()
+            .filter(|item| session.is_none_or(|session| item.scope.session_id == session))
+            .map(request_of)
+            .collect()
     }
 
     async fn request(&self, id: &str) -> Result<Option<ApprovalRequest>> {
+        if let Some(inbox) = &self.inbox {
+            return inbox.get(id).await;
+        }
         Ok(self
             .client
             .approvals()
@@ -219,6 +251,9 @@ impl Source for ControlSource {
         expected_version: u64,
         decision: ApprovalDecision,
     ) -> Result<ApprovalRequest> {
+        if let Some(inbox) = &self.inbox {
+            return inbox.decide(id, expected_version, &decision).await;
+        }
         if decision.kind == ApprovalAction::Edit {
             return Err(SurfaceError::unsupported("editing a call over the control plane"));
         }

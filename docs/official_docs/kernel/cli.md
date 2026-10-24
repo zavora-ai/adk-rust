@@ -22,6 +22,8 @@ own (spec 3.2 §8.1, K-I17).
 | `adk-rust proc [ledger\|baselines\|observations]` | The activity ledger (`--export FILE` for JSONL), each partition's baselines, the observations ([`/proc`](proc.md)) |
 | `adk-rust goal TEXT --until CMD` | With a kernel running, enqueues the goal on its `background` queue and follows it |
 | `adk-rust drivers list\|mount FILE [--yes]\|unmount ID\|restart ID\|reapprove ID` | The kernel's [drivers](drivers.md): MCP servers it supervises under the manifests you mounted |
+| `adk-rust pair [--name NAME] [--scope decide,read,stop] [--days N]` | Issues a code that pairs one phone, tray or terminal ([pairing](pairing.md)) |
+| `adk-rust pair list\|revoke ID\|accept CODE` | The paired devices and chat accounts; remove one; pair the chat account that was sent `CODE` |
 
 `PID` is a process id or a unique prefix of one.
 

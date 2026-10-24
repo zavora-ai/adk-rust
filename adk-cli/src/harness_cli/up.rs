@@ -41,6 +41,8 @@ struct KernelStores {
     drivers: Arc<dyn adk_kernel::drivers::DriverStore>,
     /// The activity ledger, its observations and pass state (spec 3.2 §7.10).
     ledger: Arc<dyn LedgerStore>,
+    /// Paired devices and their waiting codes, hashed (spec 3.3 §10 K2).
+    devices: Arc<dyn adk_kernel::pairing::DeviceStore>,
     /// Whether nothing outlives the kernel (`--ephemeral`).
     ephemeral: bool,
     /// The kill switch's shared state; `None` keeps it in this process.
@@ -190,8 +192,12 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             .with_home(&home)
             .with_worker(worker)
             // The socket at the kernel home, or on Windows the named pipe named after it
-            // (spec 3.2 §10 W2).
-            .with_control(ControlPlaneConfig::default())
+            // (spec 3.2 §10 W2), pairing devices beside the kernel's other stores (spec 3.3
+            // §10 K2).
+            .with_control(
+                ControlPlaneConfig::default()
+                    .with_pairing(adk_kernel::pairing::Pairing::new(stores.devices.clone())),
+            )
             .with_clock(Arc::new(adk_core::SystemClock)),
     );
     // The subject key stays in the home; an ephemeral kernel's ledger and key end with it.
@@ -275,7 +281,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         )));
     }
     println!(
-        "  store {}: sessions, approvals, runs, processes, agenda, schedules, drivers, the activity ledger",
+        "  store {}: sessions, approvals, runs, processes, agenda, schedules, drivers, the activity ledger, paired devices",
         stores.label
     );
     println!("  plans {}", setup.plans_note());
@@ -352,12 +358,15 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
         drivers.migrate().await?;
         let ledger = adk_kernel::proc::SqliteLedgerStore::new(db.pool.clone());
         ledger.migrate().await?;
+        let devices = adk_kernel::pairing::SqliteDeviceStore::new(db.pool.clone());
+        devices.migrate().await?;
         return Ok(KernelStores {
             processes: Arc::new(processes),
             agenda: Arc::new(agenda),
             schedules: Arc::new(schedules),
             drivers: Arc::new(drivers),
             ledger: Arc::new(ledger),
+            devices: Arc::new(devices),
             ephemeral: false,
             governance: Some(Arc::new(governance)),
             label: "harness.db".into(),
@@ -370,6 +379,7 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
         schedules: Arc::new(adk_core::InMemoryScheduleStore::new()),
         drivers: Arc::new(adk_kernel::stores::InMemoryDriverStore::new()),
         ledger: Arc::new(adk_kernel::proc::InMemoryLedgerStore::new()),
+        devices: Arc::new(adk_kernel::pairing::InMemoryDeviceStore::new()),
         ephemeral: true,
         governance: None,
         label: "memory (--ephemeral): nothing outlives the kernel".into(),
@@ -394,12 +404,15 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             drivers.migrate().await?;
             let ledger = adk_kernel::proc::PostgresLedgerStore::new(processes.pool().clone());
             ledger.migrate().await?;
+            let devices = adk_kernel::pairing::PostgresDeviceStore::new(processes.pool().clone());
+            devices.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
                 agenda: Arc::new(agenda),
                 schedules: Arc::new(schedules),
                 drivers: Arc::new(drivers),
                 ledger: Arc::new(ledger),
+                devices: Arc::new(devices),
                 ephemeral: false,
                 governance: Some(Arc::new(governance)),
                 label,
@@ -420,12 +433,16 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             let ledger =
                 adk_kernel::proc::RedisLedgerStore::from_client(processes.client().clone());
             ledger.migrate().await?;
+            let devices =
+                adk_kernel::pairing::RedisDeviceStore::from_client(processes.client().clone());
+            devices.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
                 agenda: Arc::new(agenda),
                 schedules: Arc::new(schedules),
                 drivers: Arc::new(drivers),
                 ledger: Arc::new(ledger),
+                devices: Arc::new(devices),
                 ephemeral: false,
                 governance: Some(Arc::new(governance)),
                 label,

@@ -18,6 +18,7 @@ the `operator` scope.
 | HTTP with `--auth-token` | `Authorization: Bearer <token>` (`BearerTokenExtractor`) | Yes |
 | HTTP with an SSO extractor | The extractor's subject | When the extractor grants it |
 | HTTP beyond loopback without a token or extractor | Refused at start (K-I18) | — |
+| HTTP with a paired device's token (`Authorization: Bearer adkd_…`) | The person who paired the device, only on the routes its scopes open, on loopback too ([pairing](pairing.md)) | Only for `POST /kernel/freeze`, with the `stop` scope |
 
 | Answer | When |
 |---|---|
@@ -68,6 +69,10 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 | `POST /kernel/drivers/{id}/mount` | `{"manifest": "<toml>"}` answers what the mount approves; with `"confirm": true` mounts it as the caller | Yes | `drivers.mount` |
 | `POST /kernel/drivers/{id}/{unmount,restart,reapprove}` | Unmount, restart, re-approve as the caller | Yes | `drivers.unmount`, `drivers.restart`, `drivers.reapprove` |
 | `/approvals…` | The approvals inbox, unchanged; the socket and the pipe serve it too | Per inbox rules | Inbox records |
+| `POST /kernel/pairing` | Issue a device pairing code ([pairing](pairing.md)) | Yes | `pairing.issue` |
+| `POST /kernel/pairing/claim` | Claim a code; needs no caller, the code is the credential | — | `pairing.claim` |
+| `GET /kernel/devices`, `POST /kernel/devices/{id}/revoke` | The paired devices; remove one | Yes | `devices.revoke` |
+| `POST /kernel/channels/pair`, `GET /kernel/channels`, `POST /kernel/channels/{id}/revoke` (feature `channels`) | Accept the code a chat account was sent; the paired and waiting accounts; remove one | Yes | `channels.pair`, `channels.revoke` |
 | `GET /kernel/proc/ledger?partition=&kind=&agent=&from=&to=&after=&limit=&format=` | A page of the activity ledger, or JSONL with `format=jsonl` ([`/proc`](proc.md)) | Yes | `proc.ledger` |
 | `GET /kernel/proc/baselines`, `GET /kernel/proc/observations?partition=&since=&limit=` | Each partition's last baseline pass; the observations | Yes | — |
 | `/approvals…` | The approvals inbox, unchanged; the socket serves it too | Per inbox rules | Inbox records |
@@ -125,9 +130,10 @@ regardless:
 | `actor` | The caller as a `human` subject |
 | `subject` | `{"kind": "human", "id": "<user>"}` |
 | `transport` | `socket`, `pipe` or `http` |
-| `action` (ext) | `spawn`, `kill`, `nice`, `suspend`, `resume`, `freeze`, `unfreeze` or `attach` |
+| `action` (ext) | `spawn`, `kill`, `nice`, `suspend`, `resume`, `freeze`, `unfreeze`, `attach`, or a pairing action: `pairing.issue`, `pairing.claim`, `devices.revoke`, `channels.pair`, `channels.revoke`, `approvals.decide` |
 | `target` | The pid, session or spawned target |
 | `pid` | The new process, on `spawn` |
+| `device` | The paired device, on an action a device took |
 
 `freeze` and `unfreeze` also write `governance.freeze` and `governance.unfreeze`. When the
 freeze's own record fails, the freeze still takes effect, the kernel logs a warning, and the
