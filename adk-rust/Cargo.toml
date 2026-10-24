@@ -210,11 +210,13 @@ azure-ai = ["models", "adk-model/azure-ai"]
 # forwards to adk-auth and adk-server). Most require external
 # infrastructure (PostgreSQL, Redis, MongoDB, Firestore, Neo4j, Vertex AI); none is in `full`.
 # adk-auth's `postgres-audit` sink has no umbrella feature: enable it on adk-auth directly.
+# With `harness-kernel`, the MongoDB, Firestore and Neo4j features also put the kernel's stores
+# on that backend (Alpha; spec 3.2 §13 Q8).
 postgres-session = ["sessions", "adk-session/postgres"]
 redis-session = ["sessions", "adk-session/redis"]
-mongodb-session = ["sessions", "adk-session/mongodb"]
-firestore-session = ["sessions", "adk-session/firestore"]
-neo4j-session = ["sessions", "adk-session/neo4j"]
+mongodb-session = ["sessions", "adk-session/mongodb", "adk-kernel?/mongodb"]
+firestore-session = ["sessions", "adk-session/firestore", "adk-kernel?/firestore"]
+neo4j-session = ["sessions", "adk-session/neo4j", "adk-kernel?/neo4j"]
 vertex-session = ["sessions", "adk-session/vertex-session"]
 database-memory = ["memory", "adk-memory/database-memory"]
 sqlite-memory = ["memory", "adk-memory/sqlite-memory"]

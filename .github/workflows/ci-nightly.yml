@@ -8,9 +8,9 @@ name: CI Nightly
 #     (ci.yml) never builds (realtime `full`, audio ONNX backends, GPU features).
 #   • supply-chain — `cargo audit` (enforcing) + `cargo deny` (advisory) over the
 #     workspace dependency graph.
-#   • durable-stores — the store and graph checkpointer conformance suites and the
-#     multi-process durability gates against live PostgreSQL, Redis, MongoDB, Neo4j,
-#     and the Firestore emulator.
+#   • durable-stores — the store and graph checkpointer conformance suites, the
+#     kernel's Alpha store suites, and the multi-process durability gates against live
+#     PostgreSQL, Redis, MongoDB, Neo4j, and the Firestore emulator.
 #   • integration-tests — the `#[ignore]`d integration tests that hit real
 #     provider APIs, gated on the relevant secrets being configured.
 #
@@ -25,8 +25,15 @@ on:
   schedule:
     # 03:00 UTC every day — quiet period, off the merge-tier path.
     - cron: '0 3 * * *'
-  # Allow maintainers to trigger a nightly run on demand from the Actions tab.
+  # Allow maintainers to trigger a nightly run on demand from the Actions tab, or one job of
+  # it on a branch: `gh workflow run ci-nightly.yml --ref <branch> -f job=durable-stores`.
   workflow_dispatch:
+    inputs:
+      job:
+        description: The job to run; `all` runs every job
+        type: choice
+        default: all
+        options: [all, feature-combinations, supply-chain, durable-stores, integration-tests, harness-eval-live]
 
 permissions:
   contents: read
@@ -70,6 +77,7 @@ jobs:
   # `-D warnings`; keep GPU/hardware combos compile-only (`cargo check`) on a
   # runner whose toolchain supports them.
   feature-combinations:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'feature-combinations' }}
     name: features (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
@@ -179,6 +187,7 @@ jobs:
   #     additionally enforces the license allow-list, the registry allow-list, and
   #     the `quick-xml` and `zip` version floors. Both gates are ENFORCING.
   supply-chain:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'supply-chain' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -210,12 +219,15 @@ jobs:
 
   # ── Durable stores: conformance suites on live backends ────────
   # Every SpendLedger, ActionLedger, and ApprovalStore backend in adk-session runs the
-  # adk-core conformance suites. SQLite runs on every PR (feature-coverage shard 5); the
+  # adk-core conformance suites, and the kernel's process, agenda, driver and ledger stores
+  # run theirs on MongoDB, Neo4j and Firestore, the backends Alpha until this job passes
+  # (spec 3.2 §13 Q8). SQLite runs on every PR (feature-coverage shard 5); the
   # server-backed suites are #[ignore]d and run here against service containers. The
   # multi-process durability gates (adk-durability-gates) run here on every server
   # backend; their SQLite gates run on every PR in feature-coverage shard 2 (the
   # `adk-durability-gates sqlite` pair). Needs no secrets.
   durable-stores:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'durable-stores' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     services:
@@ -338,6 +350,28 @@ jobs:
         --run-ignored all --no-fail-fast
         --test store_conformance_mongodb
 
+    # The kernel's stores on the Alpha backends (spec 3.2 §7.1, §13 Q8). They need no
+    # multi-document transaction, so the standalone server runs the MongoDB suite as well.
+    - name: Run the kernel's Alpha store suites
+      if: ${{ !cancelled() }}
+      run: >-
+        cargo nextest run -p adk-kernel
+        --features mongodb,neo4j,firestore
+        --run-ignored all --no-fail-fast
+        --test store_conformance_mongodb
+        --test store_conformance_neo4j
+        --test store_conformance_firestore
+
+    - name: Run the kernel's MongoDB store suite on a standalone server
+      if: ${{ !cancelled() }}
+      env:
+        MONGODB_URL: mongodb://localhost:27018
+      run: >-
+        cargo nextest run -p adk-kernel
+        --features mongodb,neo4j,firestore
+        --run-ignored all --no-fail-fast
+        --test store_conformance_mongodb
+
     - name: Run graph checkpointer conformance suites
       if: ${{ !cancelled() }}
       run: >-
@@ -368,6 +402,7 @@ jobs:
   # fork, or before secrets are added) the tests are skipped with a notice rather
   # than failing. Secrets are passed through env so the tests can authenticate.
   integration-tests:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'integration-tests' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -427,6 +462,7 @@ jobs:
   # The scripted run of the same cases is `adk-harness`'s `eval_suite` test, in the PR tier.
   # Gated on each provider's secret, as the integration tests are.
   harness-eval-live:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'harness-eval-live' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:

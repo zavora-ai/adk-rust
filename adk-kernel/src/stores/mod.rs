@@ -25,8 +25,18 @@
 //! `InMemoryLedgerStore`, `SqliteLedgerStore`, `PostgresLedgerStore` and `RedisLedgerStore`
 //! (spec 3.2 §7.10, suite `ledger_store_conformance_tests!`).
 //!
-//! There is no file backend (§13 Q8). MongoDB, Firestore and Neo4j backends are phase 4,
-//! and the partition store arrives with its phase.
+//! Phase 4 adds every store on MongoDB, Firestore and Neo4j (§13 Q8), each **Alpha** until
+//! its live conformance suite passes in CI:
+//!
+//! | Store | MongoDB (`mongodb`) | Firestore (`firestore`) | Neo4j (`neo4j`) |
+//! |---|---|---|---|
+//! | [`ProcessStore`] | `MongoProcessStore` | `FirestoreProcessStore` | `Neo4jProcessStore` |
+//! | [`AgendaStore`](crate::AgendaStore) | `MongoAgendaStore` | `FirestoreAgendaStore` | `Neo4jAgendaStore` |
+//! | `drivers::DriverStore` (with `drivers`) | `MongoDriverStore` | `FirestoreDriverStore` | `Neo4jDriverStore` |
+//! | `proc::LedgerStore` (with `proc`) | `MongoLedgerStore` | `FirestoreLedgerStore` | `Neo4jLedgerStore` |
+//!
+//! There is no file backend and no Vertex AI backend (§13 Q8): no durable store on `main`
+//! is file-backed, and Vertex AI holds sessions only.
 
 use async_trait::async_trait;
 use chrono::NaiveDate;
@@ -41,13 +51,25 @@ use crate::process::ProcessMeta;
 use crate::sched::QueueClass;
 use crate::wake::WakeSet;
 
+#[cfg(feature = "firestore")]
+mod agenda_firestore;
 mod agenda_memory;
+#[cfg(feature = "mongodb")]
+mod agenda_mongodb;
+#[cfg(feature = "neo4j")]
+mod agenda_neo4j;
 #[cfg(feature = "redis")]
 mod agenda_redis;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 pub(crate) mod agenda_sql;
+#[cfg(all(feature = "drivers", feature = "firestore"))]
+mod driver_firestore;
 #[cfg(feature = "drivers")]
 mod driver_memory;
+#[cfg(all(feature = "drivers", feature = "mongodb"))]
+mod driver_mongodb;
+#[cfg(all(feature = "drivers", feature = "neo4j"))]
+mod driver_neo4j;
 #[cfg(all(feature = "drivers", feature = "postgres"))]
 mod driver_postgres;
 #[cfg(all(feature = "drivers", feature = "redis"))]
@@ -56,13 +78,25 @@ mod driver_redis;
 mod driver_sql;
 #[cfg(all(feature = "drivers", feature = "sqlite"))]
 mod driver_sqlite;
+#[cfg(feature = "firestore")]
+mod firestore;
+#[cfg(all(feature = "proc", feature = "firestore"))]
+mod ledger_firestore;
 #[cfg(feature = "proc")]
 mod ledger_memory;
+#[cfg(all(feature = "proc", feature = "mongodb"))]
+mod ledger_mongodb;
+#[cfg(all(feature = "proc", feature = "neo4j"))]
+mod ledger_neo4j;
 #[cfg(all(feature = "proc", feature = "redis"))]
 mod ledger_redis;
 #[cfg(all(feature = "proc", any(feature = "sqlite", feature = "postgres")))]
 pub(crate) mod ledger_sql;
 mod memory;
+#[cfg(feature = "mongodb")]
+mod mongodb;
+#[cfg(feature = "neo4j")]
+mod neo4j;
 #[cfg(feature = "postgres")]
 mod postgres;
 #[cfg(feature = "redis")]
@@ -72,23 +106,43 @@ mod sql;
 #[cfg(feature = "sqlite")]
 mod sqlite;
 
+#[cfg(feature = "firestore")]
+pub use agenda_firestore::FirestoreAgendaStore;
 pub use agenda_memory::InMemoryAgendaStore;
+#[cfg(feature = "mongodb")]
+pub use agenda_mongodb::MongoAgendaStore;
+#[cfg(feature = "neo4j")]
+pub use agenda_neo4j::Neo4jAgendaStore;
 #[cfg(feature = "redis")]
 pub use agenda_redis::RedisAgendaStore;
 #[cfg(feature = "postgres")]
 pub use agenda_sql::PostgresAgendaStore;
 #[cfg(feature = "sqlite")]
 pub use agenda_sql::SqliteAgendaStore;
+#[cfg(all(feature = "drivers", feature = "firestore"))]
+pub use driver_firestore::FirestoreDriverStore;
 #[cfg(feature = "drivers")]
 pub use driver_memory::InMemoryDriverStore;
+#[cfg(all(feature = "drivers", feature = "mongodb"))]
+pub use driver_mongodb::MongoDriverStore;
+#[cfg(all(feature = "drivers", feature = "neo4j"))]
+pub use driver_neo4j::Neo4jDriverStore;
 #[cfg(all(feature = "drivers", feature = "postgres"))]
 pub use driver_postgres::PostgresDriverStore;
 #[cfg(all(feature = "drivers", feature = "redis"))]
 pub use driver_redis::RedisDriverStore;
 #[cfg(all(feature = "drivers", feature = "sqlite"))]
 pub use driver_sqlite::SqliteDriverStore;
+#[cfg(feature = "firestore")]
+pub use firestore::FirestoreProcessStore;
+#[cfg(all(feature = "proc", feature = "firestore"))]
+pub use ledger_firestore::FirestoreLedgerStore;
 #[cfg(feature = "proc")]
 pub use ledger_memory::InMemoryLedgerStore;
+#[cfg(all(feature = "proc", feature = "mongodb"))]
+pub use ledger_mongodb::MongoLedgerStore;
+#[cfg(all(feature = "proc", feature = "neo4j"))]
+pub use ledger_neo4j::Neo4jLedgerStore;
 #[cfg(all(feature = "proc", feature = "redis"))]
 pub use ledger_redis::RedisLedgerStore;
 #[cfg(all(feature = "proc", feature = "postgres"))]
@@ -96,6 +150,10 @@ pub use ledger_sql::PostgresLedgerStore;
 #[cfg(all(feature = "proc", feature = "sqlite"))]
 pub use ledger_sql::SqliteLedgerStore;
 pub use memory::InMemoryProcessStore;
+#[cfg(feature = "mongodb")]
+pub use mongodb::MongoProcessStore;
+#[cfg(feature = "neo4j")]
+pub use neo4j::Neo4jProcessStore;
 #[cfg(feature = "postgres")]
 pub use postgres::PostgresProcessStore;
 #[cfg(feature = "redis")]
@@ -319,4 +377,32 @@ impl ProcessFilter {
             && self.parent.as_ref().is_none_or(|parent| meta.parent.as_ref() == Some(parent))
             && self.suspend_requested.is_none_or(|requested| requested == meta.suspend_requested)
     }
+}
+
+/// The stored form of a UTC day in the document and graph backends: its number of days from
+/// the common era, as the SQL backends store it, so a range compares as integers.
+#[cfg(any(feature = "mongodb", feature = "firestore", feature = "neo4j"))]
+pub(crate) fn day_number(day: NaiveDate) -> i64 {
+    i64::from(chrono::Datelike::num_days_from_ce(&day))
+}
+
+/// A spend delta as the document and graph backends store it, a signed 64-bit integer.
+#[cfg(any(feature = "mongodb", feature = "firestore", feature = "neo4j"))]
+pub(crate) fn stored_micro_usd(backend: &'static str, delta: SpendDelta) -> Result<i64> {
+    i64::try_from(delta.micro_usd).map_err(|_| crate::KernelError::Store {
+        backend,
+        reason: format!(
+            "a spend delta of {} micro-USD exceeds a signed 64-bit integer",
+            delta.micro_usd
+        ),
+    })
+}
+
+/// A summed spend total as returned.
+#[cfg(any(feature = "mongodb", feature = "firestore", feature = "neo4j"))]
+pub(crate) fn stored_total(backend: &'static str, total: i64) -> Result<u64> {
+    u64::try_from(total).map_err(|_| crate::KernelError::Store {
+        backend,
+        reason: format!("the stored spend total {total} is negative"),
+    })
 }

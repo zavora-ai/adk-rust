@@ -81,6 +81,17 @@ minor release. Every other crate was promoted to Stable in 1.0.0.
 | `adk-harness` | New in 3.0.0 (spec 3.1); the team, plan-graph, goal and pack layers are implemented and still taking shape in use | Review for Stable in 3.2.0 (spec 3.1 §12 phase 6) |
 | `adk-kernel` | New with spec 3.2; the agenda and the consolidation tick are in, and drivers, partitions, `/proc` and service installation land in later phases on top of the phase-1 API | Review for Stable once spec 3.2 phases 1–3 ship without breaking changes |
 
+### Alpha Backends
+
+A backend inside a Beta or Stable crate can be **Alpha**: it implements its store's whole
+contract and carries the store's conformance suite, but that suite has not yet passed
+against a live server in CI, so its storage layout may change in a minor release without a
+migration.
+
+| Crate | Features | Backends | Leaves Alpha when |
+|-------|----------|----------|-------------------|
+| `adk-kernel` | `mongodb`, `firestore`, `neo4j` | `ProcessStore`, `AgendaStore`, `DriverStore` and `LedgerStore` on MongoDB, Firestore and Neo4j (`Mongo*`, `Firestore*`, `Neo4j*`) | Each store's conformance suite passes on the backend in the nightly `durable-stores` job (spec 3.2 §13 Q8) |
+
 ### Excluded from Workspace
 
 The following crates are not part of the main workspace and are not covered by the tier system above:

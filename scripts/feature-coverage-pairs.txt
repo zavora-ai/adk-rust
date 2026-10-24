@@ -123,6 +123,11 @@
 # The harness's shared mode and rule stores and its plan checkpointer URLs over the same
 # backends (spec 3.1 §13 Q2, Q5); the live-server suites run in the postgres job.
 3 adk-harness postgres,redis,mongodb,neo4j,firestore
+# The kernel's stores on the Alpha backends (spec 3.2 §7.1, §13 Q8), one pair per backend so
+# each compiles alone; the live-server suites run in the nightly `durable-stores` job.
+3 adk-kernel mongodb
+3 adk-kernel firestore
+3 adk-kernel neo4j
 # Two entries on purpose: `memory` alone left `sandbox` unbuilt, and a renamed
 # EnforcedLimits field kept its old name at a call site for two releases.
 3 adk-managed memory

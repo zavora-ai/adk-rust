@@ -92,6 +92,8 @@ use crate::wake::{
 /// let background = config.worker_config(&QueueClass::Background);
 /// assert_eq!(background.queue, "background");
 /// assert_eq!(background.poll_interval, Duration::from_secs(2));
+/// // No control plane unless one is configured.
+/// assert_eq!((config.control.socket, config.control.http), (None, None));
 /// ```
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -115,7 +117,10 @@ pub struct KernelConfig {
     /// most 250 ms (K-I8). Defaults to a local control.
     pub governance: GovernanceControl,
     /// The control plane: socket path, HTTP bind and the caller's
-    /// `RequestContextExtractor` (spec 3.2 §7.11).
+    /// `RequestContextExtractor` (spec 3.2 §7.11). Defaults to none, neither a socket nor
+    /// an HTTP bind, so a kernel built from the defaults never takes the socket of a kernel
+    /// already serving the same home; `with_control(ControlPlaneConfig::default())` serves
+    /// the socket at [`home`](Self::home), as `adk-rust up` does.
     pub control: ControlPlaneConfig,
     /// Refuse to start a driver where no sandbox enforcer exists (spec 3.2 §7.7). Defaults
     /// to `false`.
@@ -146,7 +151,7 @@ impl Default for KernelConfig {
             worker: DurableWorkerConfig::default(),
             scheduler_tick: Duration::from_secs(1),
             governance: GovernanceControl::new(),
-            control: ControlPlaneConfig::default(),
+            control: ControlPlaneConfig::default().without_socket(),
             fail_if_sandbox_unavailable: false,
             clock: Arc::new(SystemClock),
             proactivity: ProactivityPolicy::default(),
@@ -1859,6 +1864,46 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("timed out waiting for {what}");
+    }
+
+    /// Two kernels built from the defaults in one process and one home both start: the
+    /// defaults serve no control plane, so neither takes the other's socket or pipe.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kernels_built_from_the_defaults_share_a_home() {
+        let home = tempfile::tempdir().unwrap();
+        let config = KernelConfig::default().with_home(home.path());
+        assert_eq!((config.control.socket.as_deref(), config.control.http), (None, None));
+        let build = || {
+            Kernel::builder()
+                .config(config.clone())
+                .run_store(Arc::new(InMemoryRunStore::new()))
+                .build()
+                .unwrap()
+        };
+        let (first, second) = (build(), build());
+        first.start().await.unwrap();
+        second.start().await.unwrap();
+        assert!(!home.path().join(ControlPlaneConfig::DEFAULT_SOCKET).exists());
+        second.stop().await.unwrap();
+        first.stop().await.unwrap();
+
+        // Asked for, the socket at the home is still one kernel's.
+        #[cfg(unix)]
+        {
+            let served = config.with_control(ControlPlaneConfig::default());
+            let build = || {
+                Kernel::builder()
+                    .config(served.clone())
+                    .run_store(Arc::new(InMemoryRunStore::new()))
+                    .build()
+                    .unwrap()
+            };
+            let (first, second) = (build(), build());
+            first.start().await.unwrap();
+            let error = second.start().await.unwrap_err();
+            assert!(error.to_string().contains("already listens"), "{error}");
+            first.stop().await.unwrap();
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
