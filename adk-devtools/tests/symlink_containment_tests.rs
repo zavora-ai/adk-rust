@@ -362,22 +362,33 @@ async fn read_file_never_follows_a_symlink_swapped_in_after_the_check() {
     };
     let workspace = Workspace::new(&f.root);
 
-    let (mut leaked, mut read) = (0, 0);
-    for _ in 0..3000 {
-        if let Ok(result) = run_tool(&workspace, "read_file", json!({"path": "notes.md"})).await {
-            let content = result["content"].as_str().unwrap_or_default().to_string();
-            if content.contains("host secret") {
-                leaked += 1;
-            } else {
-                read += 1;
+    // A refused read returns in microseconds, so a fixed count of reads can all fall while
+    // the swapper thread is descheduled with the link in place; the reads go on until they
+    // have met both the workspace file and the link.
+    let started = std::time::Instant::now();
+    let (mut leaked, mut read, mut refused, mut attempts) = (0, 0, 0, 0);
+    while attempts < 3000
+        || ((read == 0 || refused == 0) && started.elapsed() < std::time::Duration::from_secs(60))
+    {
+        attempts += 1;
+        match run_tool(&workspace, "read_file", json!({"path": "notes.md"})).await {
+            Ok(result) => {
+                let content = result["content"].as_str().unwrap_or_default().to_string();
+                if content.contains("host secret") {
+                    leaked += 1;
+                } else {
+                    read += 1;
+                }
             }
+            Err(_) => refused += 1,
         }
     }
     stop.store(true, Ordering::Relaxed);
     swapper.join().unwrap();
 
-    assert_eq!(leaked, 0, "{leaked} reads followed a link swapped in after the check");
-    assert!(read > 0, "no read saw the workspace file");
+    assert_eq!(leaked, 0, "{leaked} of {attempts} reads followed a link swapped in after the check");
+    assert!(read > 0, "none of {attempts} reads saw the workspace file");
+    assert!(refused > 0, "none of {attempts} reads met the swapped-in link");
 }
 
 #[tokio::test]
