@@ -229,6 +229,7 @@ pub(crate) async fn run(
                 }
                 _ => {}
             },
+            _ => {}
         }
     }
     if !spoken.trim().is_empty() {

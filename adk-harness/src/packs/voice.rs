@@ -222,8 +222,10 @@ impl VoiceConfig {
     }
 }
 
-/// What the voice surface reports.
+/// What the voice surface reports. New kinds of event can be added, so a `match` on it
+/// needs a wildcard arm.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum VoiceEvent {
     /// A provider event: audio, transcripts, responses.
     Provider(ServerEvent),
