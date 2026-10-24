@@ -26,7 +26,12 @@ cargo run --manifest-path examples/advanced_agents/Cargo.toml \
   --bin advanced-runtime
 ```
 
-Open `http://127.0.0.1:8088/ui/`.
+The runtime serves its REST, SSE and A2A APIs on `http://127.0.0.1:8088/api/`.
+
+> **Note:** `adk-server` no longer bundles a runtime UI (spec 3.3 §10 S1). The web home of
+> `adk-surface` replaces it, and these binaries serve the REST, SSE and A2A APIs, so `/ui/`
+> answers `404` on them. The screenshots show the bundled UI as it was. See
+> [The Web Home](../../docs/official_docs/surfaces/web-home.md).
 
 ## Walkthroughs
 

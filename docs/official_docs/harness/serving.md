@@ -41,8 +41,13 @@ caller was authenticated (spec 3.1 §9.2 I6); every caller the mount admits is. 
 held calls are routed to the `operator` group, so the operator approves the calls of their
 own runs.
 
-The bundled web UI sends no `Authorization` header and never calls `/api/approvals`: use it
-on loopback, and decide held calls with `adk-rust approvals` or `curl`.
+The [web home](../surfaces/web-home.md) at `http://127.0.0.1:8080/ui/` shows held calls as
+decision cards and answers them with the version it saw (spec 3.3 §5.1, §7). It is the
+operator's, as the mount's other routes are: on loopback it needs nothing more, and with
+`--auth-token` the page asks for the token once and sends it as `Authorization: Bearer` on
+every request. A message typed in the home runs as the operator, so the mode and standing
+rules apply to it as they do to `POST /api/run`, and its **Stop all** freezes the server's
+runs, the background runs and the home's turns alike (spec 3.3 §11 S-I10).
 
 ## Running replicas
 

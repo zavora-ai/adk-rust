@@ -271,3 +271,33 @@ async fn webhook_signatures_follow_standard_webhooks() {
     ));
     assert!(WebhookApprovalNotifier::new("https://x.invalid", "not base64!").is_err());
 }
+
+/// A request says whether its shown arguments are the call's own (spec 3.3 §7.2): an edit
+/// that starts from a redacted view would submit the masks as the call's arguments.
+#[tokio::test]
+async fn a_request_says_whether_it_shows_the_call_s_own_arguments() {
+    let fx = fixture();
+    let masked = submit(&fx, 1).await;
+    let call = ToolConfirmationRequest::new("transfer", json!({ "amount": 20 }));
+    let plain = fx
+        .service
+        .submit(ApprovalRequest::new(
+            "apr-plain",
+            ApprovalScope::new("bank", "carol", "s1"),
+            &call,
+            ApprovalPolicy::new([ApproverSelector::group("finance")]),
+        ))
+        .await
+        .unwrap();
+    for (request, shown) in [(&masked, false), (&plain, true)] {
+        let uri = format!("/api/approvals/{}", request.id);
+        let (status, body) = call_route(&fx, &uri).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["showsCallArgs"], json!(shown), "{body}");
+        assert!(body.get("fingerprint").is_none(), "the raw arguments stay hidden");
+    }
+}
+
+async fn call_route(fx: &Fixture, uri: &str) -> (StatusCode, Value) {
+    call(fx, "GET", uri, Some("bo"), Value::Null).await
+}

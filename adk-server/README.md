@@ -12,7 +12,7 @@ HTTP server and A2A protocol for Rust Agent Development Kit (ADK-Rust) agents.
 
 - **REST API** — session, runtime (SSE and JSON), artifact, and debug endpoints
 - **A2A** — agent card discovery and JSON-RPC endpoints, a client (`A2aClient`), and `RemoteA2aAgent` for remote agents as sub-agents; the `a2a-v1` feature adds the A2A v1.0.0 handlers for all 11 operations
-- **Runtime UI** — a built-in interface for agent and team execution at `/ui/`
+- **Custom routes** — `ServerBuilder` mounts routers such as `adk-surface`'s web home behind the same middleware
 - **Security defaults** — loopback hosts only, no cross-origin access, body and time limits, security headers
 - **Auth bridge** — flows authenticated identity from HTTP requests into agent execution
 - **Governance** — a kill switch shared by every runner the server builds, with admin endpoints
@@ -533,16 +533,16 @@ For embedded-host mappings, the additive HTTP bridge corresponds to MCP Apps hos
 - `notifications/tools/list_changed` -> `/api/ui/notifications/tools-list-changed`
 - queued host notifications -> `/api/ui/notifications/poll`
 
-### Web UI
+### The web home
 
-The built-in runtime interface is served from assets embedded in the crate, with no external font or asset dependency. It displays conversations and attachments, streaming tool activity, handoffs and team topology, realtime transcripts, event timelines, telemetry spans, session state, artifacts, and the negotiated UI protocols. See [`examples/advanced_agents/`](../examples/advanced_agents/) for an OpenAI-backed server demonstrating ambient scheduling, realtime voice, A2A, MCP, and telemetry.
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Redirect to `/ui/` |
-| `/ui/` | GET | Built-in agent and team runtime interface |
-| `/ui/assets/config/runtime-config.json` | GET | Runtime configuration |
-| `/ui/{*path}` | GET | Static UI assets |
+`adk-server` serves no page of its own (spec 3.3 §10 S1). The web home — Threads, Today and
+Memory & rules, and a developer panel with the topology, telemetry and state the `/api/ui/*`
+and `/api/debug/*` routes report — is `adk-surface`'s `web` feature, mounted with
+`ServerBuilder::add_api_routes(adk_surface::web::router(engine))` and
+`add_root_routes(adk_surface::web::home())` behind a `RequestContextExtractor`. Until 3.0 the
+server bundled a runtime UI at `/`, `/ui/` and `/ui/assets/config/runtime-config.json`; those
+paths now answer `404`. See
+[The Web Home](../docs/official_docs/surfaces/web-home.md).
 
 ## Security
 

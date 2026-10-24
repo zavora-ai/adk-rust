@@ -123,6 +123,7 @@ dependencies = [
  "adk-server",
  "adk-session",
  "adk-skill",
+ "adk-surface",
  "adk-telemetry",
  "adk-tool",
  "anyhow",
@@ -589,7 +590,6 @@ dependencies = [
  "futures",
  "mime_guess",
  "reqwest 0.12.28",
- "rust-embed",
  "serde",
  "serde_json",
  "thiserror",
@@ -637,6 +637,34 @@ dependencies = [
  "tokio",
  "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "adk-surface"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "adk-harness",
+ "adk-kernel",
+ "adk-runner",
+ "adk-session",
+ "async-trait",
+ "axum",
+ "chrono",
+ "futures",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "mime_guess",
+ "reqwest 0.12.28",
+ "rust-embed",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

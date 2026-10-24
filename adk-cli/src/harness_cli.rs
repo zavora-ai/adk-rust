@@ -13,8 +13,8 @@ use adk_cli::harness::ultracode::{
     UltracodeLimits, Verdict, WorkspaceSnapshot, route,
 };
 use adk_cli::harness::{
-    BearerTokenExtractor, ConsolePrompter, HarnessArgs, HarnessLauncher, OPERATOR_SCOPE,
-    ResolvedHarnessArgs, SearchArg, TurnOutcome,
+    ConsolePrompter, HarnessArgs, HarnessLauncher, OPERATOR_SCOPE, ResolvedHarnessArgs, SearchArg,
+    TurnOutcome,
 };
 use adk_core::audit_log::AuditRecorder;
 use adk_core::{
@@ -1909,12 +1909,16 @@ pub async fn serve(
         Some(service.clone()),
     )?;
 
+    // One kill switch for the server's runs, the background runs and the web home's turns,
+    // so the home's Stop all stops them all (spec 3.3 §11 S-I10).
+    let governance = adk_core::GovernanceControl::new();
     // A turn can run as a durable background run of the `adk-rust` target (spec 3.1 §7.12).
     let runner = adk_runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent.agent())
         .session_service(setup.sessions())
         .approval_store(agent.runtime().approval_store().clone())
+        .governance(governance.clone())
         .build()?;
     // The runner's root is the harness agent, which runs a session's goal while one runs, so
     // it also serves the durable goal target (spec 3.1 §7.11).
@@ -1923,7 +1927,8 @@ pub async fn serve(
         .with_run_store(run_store)
         .with_app_name(APP_NAME)
         .with_agent(APP_NAME, runner.clone())
-        .with_agent(adk_harness::GOAL_TARGET, runner);
+        .with_agent(adk_harness::GOAL_TARGET, runner)
+        .with_governance(governance.clone());
 
     let mut launcher = HarnessLauncher::new(agent)
         .app_name(APP_NAME)
@@ -1931,12 +1936,10 @@ pub async fn serve(
         .with_user_id(setup.user.clone())
         .with_approval_service(service)
         .with_background_runs(background)
+        .with_governance(governance)
         .with_bind_address(host);
     if let Some(token) = token {
-        launcher = launcher.with_request_context_extractor(Arc::new(BearerTokenExtractor::new(
-            token,
-            setup.user.clone(),
-        )));
+        launcher = launcher.with_auth_token(token);
     }
     if let Some(shared) = &setup.shared {
         println!(

@@ -10,7 +10,6 @@ pub use controllers::{
 use crate::{
     SecurityConfig, ServerConfig,
     auth_bridge::{RequestContext, RequestContextError, RequestContextExtractor},
-    web_ui,
 };
 use axum::{
     Json, Router,
@@ -437,7 +436,7 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
 /// Builder for constructing an ADK server with custom routes.
 ///
 /// `ServerBuilder` allows registering additional Axum routers alongside the
-/// built-in REST, A2A, and UI routes. Custom routes benefit from the same
+/// built-in REST and A2A routes. Custom routes benefit from the same
 /// middleware stack (host and origin checks, auth, CORS, tracing, timeout,
 /// security headers) as the built-in routes.
 ///
@@ -538,10 +537,10 @@ impl ServerBuilder {
 
     /// Add custom routes at the root level (not nested under `/api`).
     ///
-    /// These routes are merged at the top level of the application, alongside
-    /// the UI and A2A routes. They receive the full middleware stack (CORS,
-    /// tracing, timeout, security headers, host and origin checks) but NOT the auth
-    /// middleware.
+    /// These routes, such as the web home of `adk-surface`'s `web` feature, are merged at
+    /// the top level of the application, alongside the A2A routes. They receive the full
+    /// middleware stack (CORS, tracing, timeout, security headers, host and origin checks)
+    /// but NOT the auth middleware.
     ///
     /// Use this for routes that need their own auth handling or public endpoints.
     pub fn add_root_routes(mut self, routes: Router) -> Self {
@@ -1014,14 +1013,7 @@ impl ServerBuilder {
             None
         };
 
-        let ui_router = Router::new()
-            .route("/", get(web_ui::root_redirect))
-            .route("/ui/", get(web_ui::serve_ui_index))
-            .route("/ui/assets/config/runtime-config.json", get(web_ui::serve_runtime_config))
-            .with_state(config.clone())
-            .route("/ui/{*path}", get(web_ui::serve_ui_assets));
-
-        let mut app = Router::new().nest("/api", api_router).merge(ui_router);
+        let mut app = Router::new().nest("/api", api_router);
 
         #[cfg(feature = "webhook-ingress")]
         if let Some(ingress) = self.webhook_ingress {

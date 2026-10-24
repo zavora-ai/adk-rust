@@ -1,9 +1,9 @@
 # CodeQL ignore patterns for ADK-Rust
 # These paths contain minified/bundled vendor code that triggers false positives
 
-# Minified JavaScript bundles (Angular webui)
-adk-server/assets/webui/*.js
-adk-server/assets/webui/**/*.js
+# The web home's production bundle, built from adk-surface/web
+adk-surface/assets/web/*.js
+adk-surface/assets/web/**/*.js
 
 # Studio UI dist (Vite build output)
 adk-studio/ui/dist/

@@ -667,6 +667,35 @@ impl ApprovalRequest {
         self
     }
 
+    /// Whether [`args_redacted`](Self::args_redacted) are the call's own arguments, so an
+    /// [`Edit`](ApprovalAction::Edit) that starts from them changes only what the approver
+    /// changed (spec 3.3 §7.2). False when the shown arguments are a redacted view, a form
+    /// an MCP server asks for, or anything else in place of the call's, and for a request
+    /// without its fingerprint.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{
+    ///     ApprovalPolicy, ApprovalRequest, ApprovalScope, ApproverSelector,
+    ///     ToolConfirmationRequest,
+    /// };
+    /// use serde_json::json;
+    ///
+    /// let call = ToolConfirmationRequest::new("pay", json!({ "amount": 500, "card": "4242424242424242" }));
+    /// let scope = ApprovalScope::new("shop", "ana", "s1");
+    /// let policy = ApprovalPolicy::new([ApproverSelector::human("ana")]);
+    /// let plain = ApprovalRequest::new("apr-1", scope.clone(), &call, policy.clone());
+    /// assert!(plain.shows_call_args());
+    /// let masked = ApprovalRequest::new("apr-2", scope, &call, policy)
+    ///     .with_redacted_args(json!({ "amount": 500, "card": "****4242" }));
+    /// assert!(!masked.shows_call_args());
+    /// ```
+    pub fn shows_call_args(&self) -> bool {
+        let shown = crate::tool_call_fingerprint(&self.tool_name, &self.args_redacted);
+        self.fingerprint.strip_suffix(shown.as_str()).is_some_and(|rest| rest.ends_with('\u{1f}'))
+    }
+
     /// Whether the request still needs work: pending, or resolved but not yet applied.
     pub fn is_open(&self) -> bool {
         self.state == ApprovalState::Pending || !self.outcome_applied

@@ -104,7 +104,8 @@ team spans for the server's session telemetry interface.
 
 ### In-process session telemetry
 
-Servers can expose zero-infrastructure traces through the embedded runtime UI:
+Servers can expose zero-infrastructure traces at `GET /api/debug/trace/session/{id}`, which the
+[web home's developer panel](../surfaces/web-home.md#the-developer-panel) draws:
 
 ```rust
 let exporter = adk_telemetry::init_with_adk_exporter("my-agent")?;
@@ -672,7 +673,7 @@ export RUST_LOG=warn,my_app=info
    `init_with_gcp` built, including the one the tracing layer holds
 4. Check for network/firewall issues
 
-For the embedded runtime UI, check `services.telemetryStatus`. `configured`
+For the web home's developer panel, check `services.telemetryStatus`. `configured`
 means the exporter is attached but the selected session has not produced a
 retained runtime span; `collecting` confirms the collector has received data.
 

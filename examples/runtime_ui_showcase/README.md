@@ -1,5 +1,10 @@
 # Embedded runtime UI showcase
 
+> **Note:** `adk-server` no longer bundles a runtime UI (spec 3.3 §10 S1). The web home of
+> `adk-surface` replaces it, and these binaries serve the REST, SSE and A2A APIs, so `/ui/`
+> answers `404` on them. The screenshots show the bundled UI as it was. See
+> [The Web Home](../../docs/official_docs/surfaces/web-home.md).
+
 These three OpenAI-backed examples run ordinary ADK-Rust agent roots through
 the same embedded interface used by generated projects and deployments. They
 demonstrate tool calling, deterministic graph orchestration, and portable team
@@ -22,7 +27,7 @@ cp examples/runtime_ui_showcase/.env.example .env
 # Edit .env and set OPENAI_API_KEY.
 ```
 
-Run one binary, then open `http://127.0.0.1:8088/ui/`. Stop it before starting
+Run one binary; it serves the API on `http://127.0.0.1:8088/api/`. Stop it before starting
 another because all three use the same address by default. Override
 `ADK_UI_ADDRESS` or `RUNTIME_UI_MODEL` when needed.
 

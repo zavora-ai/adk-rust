@@ -1,4 +1,4 @@
-//! Serves a live OpenAI-backed team through the embedded ADK developer UI.
+//! Serves a live OpenAI-backed team over the ADK REST and SSE API.
 
 use std::sync::Arc;
 
@@ -24,8 +24,8 @@ async fn main() -> anyhow::Result<()> {
     let address = std::env::var("ADK_UI_ADDRESS")
         .unwrap_or_else(|_| "127.0.0.1:8088".to_string());
     let listener = tokio::net::TcpListener::bind(&address).await?;
-    println!("Embedded team UI: http://{address}/ui/");
-    println!("Choose support_team, start a session, and send a billing or technical request.");
+    println!("Team API: http://{address}/api/");
+    println!("Create a session with POST /api/sessions, then send a billing or technical request.");
     axum::serve(listener, create_app(config)).await?;
     Ok(())
 }

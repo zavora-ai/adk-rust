@@ -60,7 +60,7 @@ The table below assigns one stability tier to every public `adk-*` crate in the 
 | `adk-gcp` | **Beta** | Shared Google Cloud REST plumbing for Vertex AI backends (new in 2.1.0) |
 | `adk-harness` | **Beta** | Governed harness agent: modes, standing approvals, shell, todos, instructions, skills (new in 3.0.0) |
 | `adk-kernel` | **Beta** | Agent kernel: supervisor, process model, wake sources, event bus, control plane (spec 3.2) |
-| `adk-surface` | **Beta** | Agent surfaces: the engine every surface runs on and the web home's HTTP API (spec 3.3) |
+| `adk-surface` | **Beta** | Agent surfaces: the engine every surface runs on, and the web home with its HTTP API (spec 3.3) |
 | `adk-enterprise` | **Experimental** | Enterprise client SDK for ADK-Rust Managed Agent Service |
 | `adk-managed` | **Experimental** | Managed agent runtime engine |
 | `adk-codeact-monty` | **Experimental** | Python CodeRuntime for the CodeActAgent via the Monty interpreter |
@@ -81,7 +81,7 @@ minor release. Every other crate was promoted to Stable in 1.0.0.
 | `adk-gcp` | New in 2.1.0; the shared ADC/LRO surface is still absorbing the per-crate GCP clients | Promote once the remaining Vertex backends consume it without API changes |
 | `adk-harness` | New in 3.0.0 (spec 3.1); the team, plan-graph, goal and pack layers are implemented and still taking shape in use | Review for Stable in 3.2.0 (spec 3.1 §12 phase 6) |
 | `adk-kernel` | New with spec 3.2; the agenda and the consolidation tick are in, and drivers, partitions, `/proc` and service installation land in later phases on top of the phase-1 API | Review for Stable once spec 3.2 phases 1–3 ship without breaking changes |
-| `adk-surface` | New with spec 3.3; the engine and the `web` API are in, and the terminal, chat, phone, tray and voice surfaces arrive as features in later phases | Review for Stable once spec 3.3 phases 1–2 ship without breaking changes |
+| `adk-surface` | New with spec 3.3; the engine and the web home (`web`: its page and API) are in, and the terminal, chat, phone, tray and voice surfaces arrive as features in later phases | Review for Stable once spec 3.3 phases 1–2 ship without breaking changes |
 
 ### Alpha Backends
 

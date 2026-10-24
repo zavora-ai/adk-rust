@@ -110,7 +110,7 @@ The episode 3 video and slides are not in the repository: the video alone is abo
 
 ## Build and test an agent in five minutes
 
-Scaffold an OpenAI agent with the HTTP runtime and embedded UI:
+Scaffold an OpenAI agent with the HTTP runtime:
 
 ```bash
 cargo install cargo-adk
@@ -122,25 +122,21 @@ cargo run
 ```
 
 The server listens on `127.0.0.1:8080` (set `BIND_HOST=0.0.0.0` to listen on every interface).
-Open [http://127.0.0.1:8080/ui/](http://127.0.0.1:8080/ui/), enter a prompt,
-and press <kbd>Enter</kbd>. The UI creates the session, streams the run, renders
-Markdown and tool results, animates the active agent or workflow edge, and keeps
-the event timeline, state, artifacts, and telemetry beside the conversation.
-
-![Prompting an ADK-Rust team, watching its handoff topology, and opening runtime telemetry](docs/official_docs/images/adk-runtime-five-minute.gif)
-
-The animation uses the richer team showcase so the topology is visible; the
-single-agent project you just generated uses the same UI with a one-node graph.
-Confirm the server independently with:
+Confirm it with:
 
 ```bash
 curl -fsS http://127.0.0.1:8080/api/health
 ```
 
+For a page where you talk to your agents, decide what they ask to do and review what they
+did, `adk-rust serve` serves [the web home](docs/official_docs/surfaces/web-home.md) at
+[http://127.0.0.1:8080/ui/](http://127.0.0.1:8080/ui/): Threads, Today and Memory & rules, in
+light and dark.
+
+![The web home: agents, a thread with a decision waiting, and the Decisions list](docs/official_docs/images/surfaces/web-threads-light.png)
+
 The [five-minute quickstart](docs/official_docs/quickstart.md) explains the
-generated files and the console-only alternative. The runnable
-[`runtime_ui_showcase`](examples/runtime_ui_showcase) reproduces the UI above
-with tool, graph, and team agents.
+generated files and the console-only alternative.
 
 ### Add ADK-Rust to an existing project
 
@@ -238,7 +234,7 @@ Each row links to its guide and a runnable example.
 
 | Capability | Guide | Example |
 |------------|-------|---------|
-| Embedded runtime UI — conversations, Markdown, tools, workflow/team topology, realtime playback, protocols, state and telemetry | [deployment](docs/official_docs/deployment/server.md#web-ui) | [`examples/advanced_agents`](examples/advanced_agents) |
+| The web home — Threads, Today and Memory & rules: decisions with full detail, what happened while you were away, what your agents may do, and Stop all; a developer panel with topology, protocols, state and telemetry | [web home](docs/official_docs/surfaces/web-home.md) | `adk-rust serve`, `adk-rust up` |
 | Tools — `#[tool]` derives the JSON schema from your argument type | [tools](docs/official_docs/tools/function-tools.md) | [`examples/coding_agent`](examples/coding_agent) |
 | MCP clients and servers on `rmcp 3.1` — tools, resources, prompts, elicitation, tasks | [mcp](docs/official_docs/mcp/index.md) | [`examples/mcp_protocol_revisions`](examples/mcp_protocol_revisions) |
 | Workflow agents — sequential, parallel, loop | [agents](docs/official_docs/agents/workflow-agents.md) | [`examples/multi_perspective_analysis`](examples/multi_perspective_analysis) |

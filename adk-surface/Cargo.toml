@@ -9,6 +9,8 @@ description = "Agent surfaces for ADK-Rust: one engine that turns a kernel's ses
 repository.workspace = true
 documentation = "https://docs.rs/adk-surface"
 readme = "README.md"
+# The web home's built assets ship in the crate; its TypeScript source does not.
+include = ["src/**/*", "assets/**/*", "Cargo.toml", "README.md"]
 keywords = ["adk", "agent", "approvals", "ui", "kernel"]
 categories = ["asynchronous", "web-programming"]
 
@@ -16,10 +18,11 @@ categories = ["asynchronous", "web-programming"]
 # projection, commands and the rules of §7.2 and §7.4) is always compiled.
 [features]
 default = []
-# The web home's HTTP API under `/api/surface` (spec 3.3 §5.1, §6): an Axum router mounted
+# The web home (spec 3.3 §5.1, §6): its HTTP API under `/api/surface`, an Axum router mounted
 # with `ServerBuilder::add_api_routes`, the feed over server-sent events, and the OpenAPI
-# document the TypeScript types are generated from.
-web = ["dep:axum"]
+# document the TypeScript types are generated from; and the page itself, built from
+# `web/` and embedded, mounted with `ServerBuilder::add_root_routes` (§10 S1).
+web = ["dep:axum", "dep:rust-embed", "dep:mime_guess"]
 
 [dependencies]
 adk-core.workspace = true
@@ -37,8 +40,11 @@ futures.workspace = true
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
+mime_guess = { version = "2.0.5", optional = true }
 # The approvals inbox in full over the kernel's HTTP control plane (`ControlSource`).
 reqwest.workspace = true
+# The web home's built assets, embedded in the binary (spec 3.3 §6.1 `web`).
+rust-embed = { version = "8.9.0", optional = true }
 # JSON Schema for every projection and command type, so surfaces and third parties share
 # one contract (spec 3.3 §6).
 schemars = { version = "1.0", features = ["chrono04"] }
@@ -64,6 +70,11 @@ tempfile = "3"
 # `test-util`: the inbox's timeout tests run on paused time.
 tokio = { workspace = true, features = ["full", "test-util"] }
 tower = { version = "0.4", features = ["util"] }
+
+# The web home over a scripted kernel, which the end-to-end test in `web/e2e` opens.
+[[example]]
+name = "scripted_home"
+required-features = ["web"]
 
 [package.metadata.docs.rs]
 all-features = true

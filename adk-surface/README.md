@@ -20,7 +20,7 @@ from anywhere, and every other window shows who made it.
 | Projection | Decision cards (§7.1), thread items, agent rows, the status line and the "While you were away" briefing, in the plain words of §8 | `model`, `words` |
 | Commands | Decide at the version seen, send, queue, stop all, resume all, change the mode — each with the caller's subject and how the input was given, written to the audit log | `SurfaceEngine::execute`, `Command` |
 | Rules | What each surface may decide (§7.2) and the rules on every surface (§7.4), enforced by the engine | `rules` |
-| `web` | The web home's HTTP API under `/api/surface`, its OpenAPI document and generated TypeScript types | `web::router` |
+| `web` | The web home: its HTTP API under `/api/surface`, its OpenAPI document and generated TypeScript types, and the page itself at `/ui/` — Threads, Today and Memory & rules, in light and dark (spec 3.3 §5.1) | `web::router`, `web::home` |
 
 ## Sources
 
@@ -55,10 +55,12 @@ let engine = SurfaceEngine::builder(Arc::new(source))
     .places([Place::phone(), Place::chat("Telegram")])
     .build();
 
-// The web home's API beside the kernel's own routes, behind the server's auth middleware.
+// The web home's API beside the kernel's own routes, behind the server's auth middleware,
+// and its page at `/ui/`.
 let builder = builder
     .add_api_routes(adk_kernel::control::router(kernel))
-    .add_api_routes(adk_surface::web::router(engine.clone()));
+    .add_api_routes(adk_surface::web::router(engine.clone()))
+    .add_root_routes(adk_surface::web::home());
 
 // A chat adapter answers in process, with its channel as the origin.
 let me = Caller::human("ana", SurfaceKind::Chat, Origin::Chat { channel: "Telegram".into() });
@@ -96,21 +98,41 @@ A chat card carries the agent, the risk and a short summary, never the call's ar
 | `GET /surface/decisions/{id}` | One decision, waiting or decided |
 | `GET /surface/sessions/{session}/thread` | The session's entries |
 | `GET /surface/sessions/{session}/feed` | Server-sent events, resumable with `Last-Event-ID` |
+| `GET /surface/sessions/{session}/queued` | What the caller typed while a decision of the session was open |
 | `GET /surface/agents` | The roster |
 | `GET /surface/status` | The status line |
 | `GET /surface/briefing` | "While you were away" |
 | `POST /surface/commands` | A command with its surface and origin |
 | `GET /surface/openapi.json` | The OpenAPI 3.1 document |
+| `POST /surface/decisions/{id}/take-over` | The secret a person typed, for a take-over card (`web::take_over_router`, beside a harness that takes over) |
 
 Every route checks the caller against the session owner (S-I8). The OpenAPI document and the
 TypeScript types in `web/src/generated/` are generated from the Rust types;
 `scripts/check-surface-api.sh` fails CI when they drift, and `--write` regenerates them.
 
+## The web home
+
+The page is a React, Vite and TypeScript app in `web/`, built into `assets/web` and embedded
+by the `web` feature (§6.1, §10 S1). It reads and acts only through the routes above and the
+kernel and harness routes beside them, and holds no state a reload cannot rebuild. `adk-rust serve` and `adk-rust up` mount it. Every answer carries the version the card
+showed, a conflict renders as "already decided", Enter and Esc never decide, and typing while
+a decision is open is queued (§7.4). Controls whose kernel routes do not exist yet (quiet time,
+the spending limit and the mode; memory; the record check) render read-only through typed
+seams in `web/src/seams.ts`.
+
+```bash
+cd adk-surface/web
+npm ci && npm run verify   # type check, component tests, build into ../assets/web
+npm run e2e                # Playwright against examples/scripted_home.rs
+```
+
+See [The Web Home](../docs/official_docs/surfaces/web-home.md).
+
 ## Features
 
 | Feature | Surface | Stability |
 |---|---|---|
-| `web` | The web home's HTTP API | Beta |
+| `web` | The web home: its page and HTTP API | Beta |
 
 The terminal, chat channels, the phone, the desktop tray, voice, agent-drawn UI and the
 workflow observer arrive as further features (spec 3.3 §6.1, §12).

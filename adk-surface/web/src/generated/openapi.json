@@ -1255,6 +1255,27 @@
           }
         ]
       },
+      "QueuedResponse": {
+        "description": "`GET /surface/sessions/{session}/queued` answer (spec 3.3 §7.4 rule 2, S-I4).",
+        "properties": {
+          "queued": {
+            "description": "What the caller typed while a decision of the session was open, oldest first; each is\nsent once the session's decisions are answered.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sessionId": {
+            "description": "The session.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "queued"
+        ],
+        "type": "object"
+      },
       "QuietView": {
         "description": "Quiet time (spec 3.3 §8.1).",
         "properties": {
@@ -1500,6 +1521,31 @@
             "description": "The surface; defaults to the web home."
           }
         },
+        "type": "object"
+      },
+      "TakeOverRequest": {
+        "description": "`POST /surface/decisions/{id}/take-over` body: the secret typed on a surface, for the card\nat the version that surface showed (S-I2). Its `Debug` output redacts the secret.",
+        "properties": {
+          "secret": {
+            "description": "What the person typed.",
+            "type": "string"
+          },
+          "surface": {
+            "$ref": "#/components/schemas/SurfaceKind",
+            "default": "web",
+            "description": "The surface: the web home (default) or the phone, the two that take over (§8.2)."
+          },
+          "version": {
+            "description": "The card's `version`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "secret"
+        ],
         "type": "object"
       },
       "ThreadItem": {
@@ -1999,6 +2045,83 @@
         "summary": "One decision: waiting, or decided with who, where and when"
       }
     },
+    "/api/surface/decisions/{id}/take-over": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TakeOverRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandOutcome"
+                }
+              }
+            },
+            "description": "answered, alreadyDecided or changed"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Take over, then Done (spec 3.3 §8.2, §10 H2): the secret the person typed goes to the one call that asked; mounted beside a harness that takes over"
+      }
+    },
     "/api/surface/openapi.json": {
       "get": {
         "responses": {
@@ -2085,6 +2208,63 @@
           }
         },
         "summary": "The session's feed as server-sent events: `entry` frames carry `id` = `seq` and resume after `Last-Event-ID`; `decisions` and `reset` frames carry no id"
+      }
+    },
+    "/api/surface/sessions/{session}/queued": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueuedResponse"
+                }
+              }
+            },
+            "description": "The queued input, oldest first"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "What the caller typed while a decision of the session was open, sent once it is answered (spec 3.3 §7.4 rule 2)"
       }
     },
     "/api/surface/sessions/{session}/thread": {
