@@ -1,10 +1,13 @@
 - **Approved held tool calls execute when a run resumes** (`adk-agent`, `adk-core`,
   `adk-runner`, `adk-acp`): a call `LlmAgent` held for confirmation no longer depends on
   the model issuing it again. At the start of the next run, before its first model call, each
-  held call with a decision (call-ID decision, fingerprint approval, `ApprovalStore`, or
-  handler) is dispatched again under its original call ID through the full tool path; an
-  approval executes it once and a denial answers it with the confirmation refusal. A call
-  without a decision stays held across runs. The ACP server's resume runs execute the call
+  held call with a decision (a call-ID decision, a fingerprint approval, or a decision in
+  the run's `ApprovalStore`) is dispatched again under its original call ID through the full
+  tool path; an approval executes it once and a denial answers it with the confirmation
+  refusal. The run's confirmation handler is asked about a held call only when the call is
+  not waiting in the run's `ApprovalStore`: a call recorded there, held without a handler or
+  after the handler timed out, resumes only on a decision recorded for it. A call without a
+  decision stays held across runs. The ACP server's resume runs execute the call
   the client approved the same way.
   - A held call is answered with `confirmation_pending_response` (`"error"` plus
     `"status": "confirmation_pending"`). The real response supersedes it in the projected
