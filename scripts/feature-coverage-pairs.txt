@@ -103,9 +103,10 @@
 2 adk-cli gemini no-default
 # adk-cli with no provider at all: every `--provider` reports that it is not compiled.
 2 adk-cli - no-default
-# The kernel's shared process stores for replicas (spec 3.2 §13 Q8); the live-server
-# conformance suites run in the postgres job.
-2 adk-kernel postgres,redis
+# The kernel's shared process stores for replicas (spec 3.2 §13 Q8), and the chat channel
+# binding store on both (spec 3.3 §10 K1); the live-server conformance suites run in the
+# postgres job.
+2 adk-kernel postgres,redis,channels
 # The kernel without SQLite, webhooks or the histograms, with its conformance suites.
 2 adk-kernel conformance no-default
 # Service installation alone (spec 3.2 §7.12): definitions render without SQLite or webhooks.
@@ -116,9 +117,10 @@
 # §7.10, §13 Q4); adk-cli turns it on, so this also covers it without the CLI.
 2 adk-kernel proc-baselines
 # The chat channel contract (spec 3.3 §10 K1): the gateway, its scenarios and the adapter
-# contract suite; with no default features, the in-memory stores alone.
+# contract suite; then the library alone with no default features, as a consumer builds it
+# (the crate's tests turn the defaults back on through its self dev-dependency).
 2 adk-kernel channels
-2 adk-kernel channels,conformance no-default
+2 adk-kernel channels no-default,lib
 # The surface engine's web API (spec 3.3 §6): the router, the scenario on a kernel-hosted
 # harness, the control-plane source, and the generated-types drift test.
 2 adk-surface web doc

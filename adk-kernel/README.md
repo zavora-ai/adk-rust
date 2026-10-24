@@ -286,15 +286,17 @@ terminal reach the control plane with a device token instead of the operator's c
 (spec 3.3 §10 K2): `adk-rust pair` issues a ten-minute code, the device claims it at
 `POST /api/kernel/pairing/claim` and receives `adkd_<id>_<secret>` once, and the token opens
 only the routes its scopes name — `read`, `decide` (low and medium risk), `stop` — until it
-expires or `adk-rust pair revoke` removes it. Codes and tokens are stored hashed; pairing
-never widens the bind (S-I7).
+expires or `adk-rust pair revoke` removes it, which also ends an event stream it holds open.
+Codes (twelve characters, 60 bits) and tokens are stored hashed, and every claim counts
+toward a lockout the store shares between replicas; pairing never widens the bind (S-I7).
 
 With the `channels` feature, `channels::ChannelGateway` is the kernel's side of every chat
 thread (spec 3.3 §10 K1): an unpaired account gets a pairing code and starts nothing, a
 paired account's message is a turn whose reply returns to its thread, the `ChannelDoorbell`
 sends decision cards that carry the agent, a masked summary and the risk but never the
 arguments, chat answers **Allow once** or **Deny** at low and medium risk through
-`ApprovalService::decide`, and "stop all" freezes while "resume" is refused. A platform
+`ApprovalService::decide` but never a call that moves money, and "stop all" freezes while
+"resume" is refused. A platform
 adapter implements `ChannelSink` and passes `channel_contract_tests!`; `InMemoryChannel` is
 the test channel. See [Pairing devices and chat channels](../docs/official_docs/kernel/pairing.md).
 
@@ -417,7 +419,8 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `tests/managed_def_fixtures.rs`, `tests/managed_tenants.rs`, `tests/managed_tenant_property_tests.rs` (feature `managed`) | The kernel block's golden fixtures and refusals; a definition round-trips through the managed state store; a cron wake for one tenant runs on its stores only; a held call runs once after the tenant's approval; no wake, process or approval crosses tenants |
 | `tests/k10_baselines.rs` | K10 on a manual clock: six weeks of a routine whose last two end late yield one observation on the tenth day of the change, none in the warm-up or the cooldown, and again after it; each an agenda question that stays open in Auto, starts no run, is remembered once when confirmed and not at all when rejected; none without `proc-baselines` |
 | `tests/proc_property_tests.rs` | K-I19: no ledger row carries a payload of the event or audit record that produced it |
-| `tests/pairing_scenarios.rs` | Spec 3.3 K2 on loopback HTTP: a `read` device reads but cannot decide, and once revoked is refused; a `stop` device freezes but cannot resume; a device token is never the loopback operator; a device decides medium risk but not high; a code pairs one device; every pairing action is recorded |
+| `tests/pairing_scenarios.rs` | Spec 3.3 K2 on loopback HTTP: a `read` device reads but cannot decide, and once revoked is refused; a `stop` device freezes but cannot resume; a device token is never the loopback operator; a device decides medium risk but not high; a code pairs one device; every pairing action is recorded with what it grants; an open event stream ends on revocation and on expiry; a claim or a chat acceptance that cannot be recorded pairs nothing and keeps its code; a client holding a revoked token re-pairs; a waiting chat account is dismissed; a kernel without pairing says what it lacks |
+| `tests/channel_gateway.rs` (features `channels`, `conformance`) | The gateway's rules: chat never decides money, a restarted gateway keeps ringing, a decision is carded once, a quorum answer waits for the others, only who may answer gets a card, and concurrent unpaired messages keep the waiting limit |
 | `tests/channel_scenarios.rs`, `tests/channel_contract.rs` (feature `channels`) | Spec 3.3 K1 with a scripted agent: a stranger gets a code and starts nothing, once paired its message is answered in its thread; a held call's card reaches the chat without its arguments, "Allow once" runs it once, and a later answer from a paired phone or the chat is already decided. The adapter contract on `InMemoryChannel` |
 | `tests/device_store_*.rs`, `tests/channel_store_*.rs` | The device and channel binding suites on every backend |
 

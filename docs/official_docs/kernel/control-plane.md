@@ -18,7 +18,7 @@ the `operator` scope.
 | HTTP with `--auth-token` | `Authorization: Bearer <token>` (`BearerTokenExtractor`) | Yes |
 | HTTP with an SSO extractor | The extractor's subject | When the extractor grants it |
 | HTTP beyond loopback without a token or extractor | Refused at start (K-I18) | — |
-| HTTP with a paired device's token (`Authorization: Bearer adkd_…`) | The person who paired the device, only on the routes its scopes open, on loopback too ([pairing](pairing.md)) | Only for `POST /kernel/freeze`, with the `stop` scope |
+| HTTP with a paired device's token (`Authorization: Bearer adkd_…`) | The person who paired the device, only on the routes its scopes open, on loopback too ([pairing](pairing.md)); the socket and the pipe read no device token | Only for `POST /kernel/freeze`, with the `stop` scope |
 
 | Answer | When |
 |---|---|
@@ -71,7 +71,7 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 | `POST /kernel/pairing` | Issue a device pairing code ([pairing](pairing.md)) | Yes | `pairing.issue` |
 | `POST /kernel/pairing/claim` | Claim a code; needs no caller, the code is the credential | — | `pairing.claim` |
 | `GET /kernel/devices`, `POST /kernel/devices/{id}/revoke` | The paired devices; remove one | Yes | `devices.revoke` |
-| `POST /kernel/channels/pair`, `GET /kernel/channels`, `POST /kernel/channels/{id}/revoke` (feature `channels`) | Accept the code a chat account was sent; the paired and waiting accounts; remove one | Yes | `channels.pair`, `channels.revoke` |
+| `POST /kernel/channels/pair`, `GET /kernel/channels`, `POST /kernel/channels/{id}/revoke`, `POST /kernel/channels/waiting/{id}/dismiss` (feature `channels`) | Accept the code a chat account was sent; the paired and waiting accounts; remove one; dismiss a waiting one | Yes | `channels.pair`, `channels.revoke`, `channels.dismiss` |
 | `GET /kernel/proc/ledger?partition=&kind=&agent=&from=&to=&after=&limit=&format=` | A page of the activity ledger, or JSONL with `format=jsonl` ([`/proc`](proc.md)) | Yes | `proc.ledger` |
 | `GET /kernel/proc/baselines`, `GET /kernel/proc/observations?partition=&since=&limit=` | Each partition's last baseline pass; the observations | Yes | — |
 | `GET /kernel/partitions` | The [partition](partitions.md) table | — | — |
@@ -132,7 +132,7 @@ regardless:
 | `actor` | The caller as a `human` subject |
 | `subject` | `{"kind": "human", "id": "<user>"}` |
 | `transport` | `socket`, `pipe` or `http` |
-| `action` (ext) | `spawn`, `kill`, `nice`, `suspend`, `resume`, `freeze`, `unfreeze`, `attach`, or a pairing action: `pairing.issue`, `pairing.claim`, `devices.revoke`, `channels.pair`, `channels.revoke`, `approvals.decide` |
+| `action` (ext) | `spawn`, `kill`, `nice`, `suspend`, `resume`, `freeze`, `unfreeze`, `attach`, or a pairing action: `pairing.issue`, `pairing.claim`, `devices.revoke`, `channels.pair`, `channels.revoke`, `channels.dismiss`, `approvals.decide` |
 | `target` | The pid, session or spawned target |
 | `pid` | The new process, on `spawn` |
 | `device` | The paired device, on an action a device took |

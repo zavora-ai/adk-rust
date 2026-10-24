@@ -110,6 +110,11 @@ for crate in $DIRECT; do
         args=()
         [[ "$features" != "-" ]] && args=(--features "$features")
         [[ ",$flags," == *,no-default,* ]] && args=(--no-default-features ${args[@]+"${args[@]}"})
+        if [[ ",$flags," == *,lib,* ]]; then
+            step "feature coverage $package ${args[*]-} --lib" bash -c \
+                "cargo clippy -p '$package' ${args[*]-} --lib -- -D warnings"
+            continue
+        fi
         step "feature coverage $package ${args[*]-}" bash -c \
             "cargo clippy -p '$package' ${args[*]-} --all-targets -- -D warnings && cargo nextest run -p '$package' ${args[*]-}"
     done < scripts/feature-coverage-pairs.txt

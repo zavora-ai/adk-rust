@@ -50,7 +50,7 @@ pub(crate) fn new_code() -> Result<String> {
     let bits = bytes.iter().fold(0u64, |bits, byte| (bits << 8) | u64::from(*byte));
     let mut code = String::with_capacity(CODE_CHARS + 2);
     for index in 0..CODE_CHARS {
-        if index > 0 && index % 4 == 0 {
+        if index > 0 && index.is_multiple_of(4) {
             code.push('-');
         }
         let shift = 5 * (CODE_CHARS - 1 - index);
