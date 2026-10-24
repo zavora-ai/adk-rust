@@ -17,14 +17,7 @@ use super::LedgerStore;
 use crate::error::{KernelError, Result};
 use crate::partition::PartitionId;
 
-/// Error code of a ledger row the ledger refuses (spec 3.2 §9.2 K-I19).
-///
-/// # Example
-///
-/// ```rust
-/// assert_eq!(adk_kernel::proc::LEDGER_INVALID_CODE, "kernel.ledger.invalid_row");
-/// ```
-pub const LEDGER_INVALID_CODE: &str = "kernel.ledger.invalid_row";
+pub use crate::error::LEDGER_INVALID_CODE;
 
 /// The agent label of the rows the kernel writes about its own work (spec 3.2 §7.10).
 ///

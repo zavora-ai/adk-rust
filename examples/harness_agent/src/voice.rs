@@ -177,6 +177,7 @@ async fn exchange(surface: &VoiceSurface, deadline: Duration, rate: u32) -> Resu
                 }
                 _ => {}
             },
+            _ => {}
         }
     }
     Ok(exchange)

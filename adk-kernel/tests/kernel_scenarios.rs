@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -104,8 +105,28 @@ fn runner(stores: &Stores, control: &GovernanceControl, agent: LlmAgentBuilder) 
     )
 }
 
-/// A kernel replica named `name` over the stores: workers with at most `slots` runs each,
-/// a 50 ms scheduler tick on `clock`, and no control plane.
+/// The configuration of a kernel replica named `name`: workers with at most `slots` runs
+/// each, a 50 ms scheduler tick on `clock`, and no control plane.
+fn config(
+    name: &str,
+    control: &GovernanceControl,
+    clock: Arc<dyn Clock>,
+    slots: usize,
+) -> KernelConfig {
+    let worker = DurableWorkerConfig::default()
+        .with_worker_id(name)
+        .with_lease_ttl(Duration::from_secs(1))
+        .with_max_concurrent_runs(slots);
+    KernelConfig::default()
+        .with_app_name(APP)
+        .with_worker(worker)
+        .with_scheduler_tick(Duration::from_millis(50))
+        .with_governance(control.clone())
+        .with_clock(clock)
+        .with_control(ControlPlaneConfig::default().without_socket())
+}
+
+/// A kernel replica named `name` over the stores, configured by [`config`].
 fn kernel(
     name: &str,
     stores: &Stores,
@@ -113,19 +134,8 @@ fn kernel(
     clock: Arc<dyn Clock>,
     slots: usize,
 ) -> KernelBuilder {
-    let worker = DurableWorkerConfig::default()
-        .with_worker_id(name)
-        .with_lease_ttl(Duration::from_secs(1))
-        .with_max_concurrent_runs(slots);
-    let config = KernelConfig::default()
-        .with_app_name(APP)
-        .with_worker(worker)
-        .with_scheduler_tick(Duration::from_millis(50))
-        .with_governance(control.clone())
-        .with_clock(clock)
-        .with_control(ControlPlaneConfig::default().without_socket());
     Kernel::builder()
-        .config(config)
+        .config(config(name, control, clock, slots))
         .run_store(Arc::clone(&stores.runs))
         .process_store(Arc::clone(&stores.processes))
         .session_service(Arc::clone(&stores.sessions) as Arc<dyn SessionService>)
@@ -619,6 +629,191 @@ async fn k9_one_switch_stops_everything_on_both_replicas() {
     for kernel in &kernels {
         kernel.stop().await.unwrap();
     }
+}
+
+/// A step that returns only once `control` reports the freeze, so the run itself is the
+/// first on its replica to meet the freeze, at its next boundary.
+struct FreezeGate {
+    process: usize,
+    control: GovernanceControl,
+    entered: Arc<AtomicUsize>,
+    executions: Arc<Mutex<BTreeMap<(usize, u64), usize>>>,
+}
+
+#[async_trait]
+impl Tool for FreezeGate {
+    fn name(&self) -> &str {
+        "gate"
+    }
+
+    fn description(&self) -> &str {
+        "does the first step of the work"
+    }
+
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::NonIdempotent
+    }
+
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
+        let n = args["n"].as_u64().unwrap_or_default();
+        *self.executions.lock().unwrap().entry((self.process, n)).or_default() += 1;
+        self.entered.fetch_add(1, Ordering::SeqCst);
+        let started = tokio::time::Instant::now();
+        while !self.control.is_frozen() {
+            if started.elapsed() > Duration::from_secs(10) {
+                return Err(adk_core::AdkError::tool("the freeze never reached this replica"));
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        Ok(json!({ "step": n, "status": "done" }))
+    }
+}
+
+/// K9's race on the second replica: replica A freezes while replica B's two runs are inside
+/// a tool call, and each run meets the freeze through its own check before anything else on
+/// B acts on it — one at the next call of its batch (the tool-call boundary, answered `not
+/// run`), one at its next model call. Both park `Waiting` under the freeze instead of
+/// failing `governance.frozen`, and the unfreeze resumes both, every step run once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn k9_a_run_that_meets_the_freeze_itself_parks_on_the_second_replica() {
+    let db = tempfile::tempdir().unwrap();
+    let path = db.path().join("kernel.db");
+    let replicas =
+        [open(&path, Arc::new(SystemClock)).await, open(&path, Arc::new(SystemClock)).await];
+    let controls = replicas
+        .each_ref()
+        .map(|stores| KernelConfig::mirrored_governance(Arc::clone(&stores.governance) as _));
+    let executions = Arc::new(Mutex::new(BTreeMap::new()));
+    let entered = Arc::new(AtomicUsize::new(0));
+    let scripts = [
+        // Meets the freeze at step 2, the second call of its batch.
+        vec![
+            ScriptedResponse::function_calls([
+                ("gate", json!({ "n": 1 })),
+                ("step", json!({ "n": 2 })),
+            ]),
+            ScriptedResponse::function_call("step", json!({ "n": 2 })),
+            ScriptedResponse::text("Both steps done."),
+        ],
+        // Meets the freeze at its next model call.
+        vec![
+            ScriptedResponse::function_call("gate", json!({ "n": 1 })),
+            ScriptedResponse::text("The step is done."),
+        ],
+    ];
+    let models: Vec<Arc<ScriptedLlm>> = scripts
+        .into_iter()
+        .enumerate()
+        .map(|(i, script)| Arc::new(ScriptedLlm::new(format!("process-{i}"), script)))
+        .collect();
+    // Replica A serves only the interactive queue, so replica B runs both processes.
+    let freezer = kernel("replica-a", &replicas[0], &controls[0], Arc::new(SystemClock), 2)
+        .config(
+            config("replica-a", &controls[0], Arc::new(SystemClock), 2)
+                .with_queues([QueueClass::Interactive]),
+        )
+        .build()
+        .unwrap();
+    let mut builder = kernel("replica-b", &replicas[1], &controls[1], Arc::new(SystemClock), 2);
+    for (i, model) in models.iter().enumerate() {
+        let agent = LlmAgentBuilder::new("agent")
+            .model(Arc::clone(model) as Arc<dyn Llm>)
+            .tool(Arc::new(FreezeGate {
+                process: i,
+                control: controls[1].clone(),
+                entered: Arc::clone(&entered),
+                executions: Arc::clone(&executions),
+            }))
+            .tool(Arc::new(Step { process: i, executions: Arc::clone(&executions) }));
+        builder = builder.agent(format!("process-{i}"), runner(&replicas[1], &controls[1], agent));
+    }
+    let replica_b = builder.build().unwrap();
+    let mut events = replica_b.events();
+    freezer.start().await.unwrap();
+    replica_b.start().await.unwrap();
+
+    let mut pids = Vec::new();
+    for i in 0..models.len() {
+        let target = format!("process-{i}");
+        let run = run_on(QueueClass::Background, &target, "work through the steps")
+            .with_session_id(target.clone());
+        let process =
+            replica_b.processes().spawn(run, ProcessSpec::new(ProcessKind::Goal)).await.unwrap();
+        pids.push(process.meta.pid);
+    }
+    eventually("both runs inside their first step", Duration::from_secs(10), || async {
+        (entered.load(Ordering::SeqCst) == pids.len()).then_some(())
+    })
+    .await;
+
+    freezer.freeze("incident 9", operator()).await.unwrap();
+    let runs = &replicas[1].runs;
+    eventually("both runs freeze-parked", Duration::from_secs(5), || async {
+        for pid in &pids {
+            let run = runs.get(pid).await.ok().flatten()?;
+            assert_ne!(run.state, RunState::Failed, "{pid} failed: {:?}", run.error);
+            (run.state == RunState::Waiting && run.lease_owner.is_none()).then_some(())?;
+            let meta = replicas[1].processes.get(pid).await.ok().flatten()?;
+            (meta.suspended_by == Some(Suspension::Freeze)).then_some(())?;
+        }
+        Some(())
+    })
+    .await;
+    assert_eq!(
+        executions.lock().unwrap().clone(),
+        BTreeMap::from([((0, 1), 1), ((1, 1), 1)]),
+        "step 2 of the batch was answered `not run`"
+    );
+    let calls: Vec<usize> = models.iter().map(|model| model.requests().len()).collect();
+    assert_eq!(calls, [1, 1], "no model call met the freeze");
+    let session = replicas[1]
+        .sessions
+        .get(GetRequest {
+            app_name: APP.into(),
+            user_id: "alice".into(),
+            session_id: "process-0".into(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap();
+    let refused = session.events().all().iter().any(|event| {
+        event.llm_response.content.iter().flat_map(|content| &content.parts).any(|part| {
+            matches!(part, Part::FunctionResponse { function_response, .. }
+                if function_response.name == "step"
+                    && function_response.response.to_string().contains("not run"))
+        })
+    });
+    assert!(refused, "step 2 was answered `not run` at the tool-call boundary");
+
+    freezer.unfreeze(operator()).await.unwrap();
+    for pid in &pids {
+        in_state(runs, pid, RunState::Completed).await;
+    }
+    assert_eq!(
+        executions.lock().unwrap().clone(),
+        BTreeMap::from([((0, 1), 1), ((0, 2), 1), ((1, 1), 1)]),
+        "every step once"
+    );
+    let mut parked = 0;
+    while let Ok(Some(record)) =
+        tokio::time::timeout(Duration::from_millis(100), events.recv()).await
+    {
+        match record.event {
+            KernelEvent::Process { to: RunState::Waiting, reason: Some(reason), .. }
+                if reason == "frozen" =>
+            {
+                parked += 1;
+            }
+            KernelEvent::Process { to: RunState::Failed, .. } => {
+                panic!("a process failed: {record:?}")
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(parked, 2, "replica B parked both under the freeze");
+    replica_b.stop().await.unwrap();
+    freezer.stop().await.unwrap();
 }
 
 const CHAOS_DIR: &str = "ADK_KERNEL_CHAOS_DIR";
