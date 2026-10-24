@@ -21,7 +21,7 @@
 //! | `done`, `failed`, `stopped` | `process` of an agent, ending `completed`, `failed` or `cancelled` |
 //! | `suggestion` | `proposal` with effect `proposed` |
 //! | `question` | `observation` |
-//! | `decided` | `decided` |
+//! | `decided` | `approval` or `rejection`: a person's answer to a held call, from its audit record; `decided` |
 //! | `failed` | `loop_guard` |
 //! | `stoppedAll`, `resumedAll` | `governance`, `frozen` or `unfrozen` |
 //!
@@ -99,7 +99,9 @@ impl AwayKind {
             ("process", Some("cancelled")) if agent => Some(Self::Stopped),
             ("proposal", Some("proposed")) => Some(Self::Suggestion),
             ("observation", _) => Some(Self::Question),
-            ("decided", _) => Some(Self::Decided),
+            // The answer's audit record is the ledger's row of a decision (spec 3.3 §12
+            // phase 2): the kernel publishes no `decided` event of its own.
+            ("approval" | "rejection" | "decided", _) => Some(Self::Decided),
             ("loop_guard", _) => Some(Self::Failed),
             ("governance", Some("frozen")) => Some(Self::StoppedAll),
             ("governance", Some("unfrozen")) => Some(Self::ResumedAll),
@@ -134,13 +136,19 @@ impl AwayLine {
     /// The line `entry` makes, or `None`.
     pub fn of(entry: &LedgerEntry) -> Option<Self> {
         let kind = AwayKind::of(entry)?;
+        // An answer says which it was, as a `decided` row's effect does.
+        let effect = entry.effect.clone().or_else(|| match entry.kind.as_str() {
+            "approval" => Some("approve".to_string()),
+            "rejection" => Some("deny".to_string()),
+            _ => None,
+        });
         Some(Self {
             seq: entry.seq,
             at: entry.ts,
             partition: entry.partition.clone(),
             agent: entry.agent.clone(),
             kind,
-            effect: entry.effect.clone(),
+            effect,
             record: format!(
                 "{}{}",
                 paths::API_PREFIX,
@@ -522,5 +530,21 @@ mod tests {
         entry.kind = "governance".into();
         entry.effect = Some("frozen".into());
         assert_eq!(AwayKind::of(&entry), Some(AwayKind::StoppedAll));
+    }
+
+    /// A person's answer reaches the ledger as the `approval` or `rejection` row of its audit
+    /// record, and is a decided line saying which it was (spec 3.3 §12 phase 2).
+    #[test]
+    fn an_answer_is_a_decided_line() {
+        let mut entry = row(7, Utc::now());
+        entry.agent = "urn:adk:agent:adk-rust/adk-rust".into();
+        for (kind, effect) in [("approval", "approve"), ("rejection", "deny")] {
+            entry.kind = kind.into();
+            entry.effect = None;
+            let line = AwayLine::of(&entry).expect("an answer is a line");
+            assert_eq!((line.kind, line.effect.as_deref()), (AwayKind::Decided, Some(effect)));
+        }
+        entry.kind = "held".into();
+        assert_eq!(AwayKind::of(&entry), None, "a held call is no answer");
     }
 }

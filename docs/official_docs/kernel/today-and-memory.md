@@ -93,7 +93,7 @@ what Today shows:
 | `done`, `failed`, `stopped` | `process` of an agent ending `completed`, `failed` or `cancelled` |
 | `suggestion` | `proposal` with effect `proposed` |
 | `question` | `observation` |
-| `decided` | `decided` |
+| `decided` | `approval` or `rejection`, the audit record of a person's answer to a held call; `decided` |
 | `failed` | `loop_guard` |
 | `stoppedAll`, `resumedAll` | `governance`, `frozen` or `unfrozen` |
 
