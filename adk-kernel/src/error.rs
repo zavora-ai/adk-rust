@@ -41,6 +41,39 @@ pub const SERVICE_CODE: &str = "kernel.service";
 pub const IO_CODE: &str = "kernel.io";
 /// Error code of [`KernelError::Serde`].
 pub const SERDE_CODE: &str = "kernel.serde";
+/// Error code of a spawn the run store refuses because another run holds its concurrency
+/// key and the run does not queue behind it.
+pub const SPAWN_REJECTED_CODE: &str = "kernel.spawn_rejected";
+/// Error code of a ledger row the ledger refuses (spec 3.2 §9.2 K-I19).
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_kernel::error::LEDGER_INVALID_CODE, "kernel.ledger.invalid_row");
+/// ```
+pub const LEDGER_INVALID_CODE: &str = "kernel.ledger.invalid_row";
+
+/// Every code the kernel answers a control-plane call with: the codes a
+/// [`ControlClient`](crate::control::ControlClient) keeps, and reports any other code as
+/// [`CONTROL_PLANE_CODE`]. A test checks it against every `*_CODE` constant in the crate.
+pub(crate) const CODES: &[&str] = &[
+    NOT_FOUND_CODE,
+    INVALID_STATE_CODE,
+    FROZEN_CODE,
+    LIFECYCLE_CODE,
+    CONFIG_CODE,
+    STORE_CODE,
+    CONTROL_PLANE_CODE,
+    UNAUTHORIZED_CODE,
+    AGENDA_NOT_FOUND_CODE,
+    AGENDA_STATE_CODE,
+    QUOTA_CODE,
+    SERVICE_CODE,
+    IO_CODE,
+    SERDE_CODE,
+    SPAWN_REJECTED_CODE,
+    LEDGER_INVALID_CODE,
+];
 
 /// What went wrong in the kernel (spec 3.2 §7.1).
 ///
@@ -248,5 +281,98 @@ impl From<KernelError> for AdkError {
                 other.to_string(),
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+
+    /// Every `.rs` file under the crate's `src`.
+    fn sources() -> Vec<(PathBuf, String)> {
+        let mut pending = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut files = Vec::new();
+        while let Some(path) = pending.pop() {
+            if path.is_dir() {
+                pending
+                    .extend(std::fs::read_dir(&path).unwrap().map(|entry| entry.unwrap().path()));
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                files.push((path, text));
+            }
+        }
+        files
+    }
+
+    /// The `index`th top-level argument of the call whose text follows its opening
+    /// parenthesis, trimmed.
+    fn argument(call: &str, index: usize) -> String {
+        let (mut depth, mut current, mut in_string, mut escaped) = (0usize, 0, false, false);
+        let mut text = String::new();
+        for c in call.chars() {
+            if in_string {
+                in_string = c != '"' || escaped;
+                escaped = c == '\\' && !escaped;
+            } else {
+                match c {
+                    '"' => in_string = true,
+                    '(' | '[' | '{' => depth += 1,
+                    ')' | ']' | '}' if depth == 0 => break,
+                    ')' | ']' | '}' => depth -= 1,
+                    ',' if depth == 0 => {
+                        current += 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            if current == index {
+                text.push(c);
+            }
+        }
+        text.trim().to_string()
+    }
+
+    // A code the client does not list reaches its callers as `kernel.control_plane`, so
+    // every code the crate can answer with is a `*_CODE` constant listed in `CODES`.
+    #[test]
+    fn every_code_the_kernel_answers_with_is_listed() {
+        let mut constants = Vec::new();
+        let mut literals = Vec::new();
+        for (path, text) in sources() {
+            for line in text.lines() {
+                if let Some((_, value)) = line.split_once("_CODE: &str = \"")
+                    && let Some((code, _)) = value.split_once('"')
+                    && code.starts_with("kernel.")
+                {
+                    constants.push(code.to_string());
+                }
+            }
+            for call in text.split("AdkError::new(").skip(1) {
+                let code = argument(call, 2);
+                if code.starts_with("\"kernel.") {
+                    literals.push(format!("{}: {code}", path.display()));
+                }
+            }
+        }
+        assert!(constants.len() >= CODES.len(), "the scan found {constants:?}");
+        let unlisted: Vec<_> =
+            constants.iter().filter(|code| !CODES.contains(&code.as_str())).collect();
+        assert!(unlisted.is_empty(), "add these codes to error::CODES: {unlisted:?}");
+        assert!(
+            literals.is_empty(),
+            "name these codes as `*_CODE` constants in error.rs and list them in CODES: \
+             {literals:?}"
+        );
+    }
+
+    #[test]
+    fn the_argument_scan_skips_nested_calls_and_strings() {
+        let call = r#"ErrorComponent::Server, f(a, b), "a, (b", format!("{x}, y"))"#;
+        assert_eq!(argument(call, 1), "f(a, b)");
+        assert_eq!(argument(call, 2), r#""a, (b""#);
+        assert_eq!(argument(call, 3), r#"format!("{x}, y")"#);
     }
 }

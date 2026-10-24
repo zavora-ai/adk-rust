@@ -88,8 +88,9 @@ pub struct TurnOutcome {
 ///   such as [`BearerTokenExtractor`](super::BearerTokenExtractor).
 /// - With a kernel ([`with_kernel`](Self::with_kernel)) serve mode is the resident form
 ///   (spec 3.2 §8.1): the kernel's workers execute the runs, its control plane is mounted
-///   under `/api/kernel` and on its socket, and `POST /api/admin/freeze` parks running
-///   processes. [`run`](Self::run) parses `up [--port] [--host]` for it.
+///   under `/api/kernel` and, when its configuration serves one, on its socket, and
+///   `POST /api/admin/freeze` parks running processes. [`run`](Self::run) parses
+///   `up [--port] [--host]` for it, with the socket at the home.
 ///
 /// # Example
 ///
@@ -463,11 +464,12 @@ impl HarnessLauncher {
             .with_run_store(runs.clone())
             .with_goal_queue(adk_kernel::QueueClass::BACKGROUND);
         let home = dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join(&app_name);
-        let kernel = harness
-            .kernel()
-            .config(adk_kernel::KernelConfig::default().with_app_name(&app_name).with_home(home))
-            .build()
-            .map_err(AdkError::from)?;
+        // The socket at the home, as `adk-rust up` serves it; the defaults serve none.
+        let config = adk_kernel::KernelConfig::default()
+            .with_app_name(&app_name)
+            .with_home(home)
+            .with_control(adk_kernel::control::ControlPlaneConfig::default());
+        let kernel = harness.kernel().config(config).build().map_err(AdkError::from)?;
         // Decisions go through the harness's service, which wakes the kernel's approval
         // sleepers.
         if let Some(service) = self.agent.runtime().approval_service() {
