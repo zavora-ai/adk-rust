@@ -144,6 +144,7 @@ fn no_memory_learns_nothing() {
 }
 
 #[test]
+#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn the_repl_lists_and_forgets_facts() {
     let home = tempfile::tempdir().unwrap();
     let ws = workspace();

@@ -195,5 +195,6 @@ generated from the Rust types. `bash scripts/check-surface-api.sh` fails when th
 ## Related
 
 - [The Web Home](web-home.md) — the page at `/ui/` that reads and acts through this API
+- [The Terminal](terminal.md) — the `tui` feature: full screen, inline and JSON
 - [The Control Plane](../kernel/control-plane.md) — the kernel routes the web API sits beside
 - [Harness Modes and Approvals](../harness/modes-and-approvals.md) — held calls, standing rules, modes
