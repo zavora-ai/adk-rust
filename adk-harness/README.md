@@ -63,6 +63,8 @@ adk-rust memory accept <id>
 | Durability | Sessions, waiting approvals and completed actions survive a crash; a completed edit or command never runs twice |
 | Oversight | Every decision is written to an audit log, spend is metered per agent and person, and a looping session is stopped and made read-only |
 | Packs | Web search and fetch, MCP servers, voice, payments and browser control, each behind the same checkpoint |
+| Personal preset | `--preset personal` or `Preset::Personal`: a workspace of notes and files under the home instead of a repository, no host shell, long-term memory on, and quiet time and a daily spending limit asked at the first run |
+| Take over | A tool asks for a password or a one-time code; you type it on your phone or the web home, and it reaches that one call — the model sees a placeholder, and no store, log or audit record keeps it |
 
 With the `kernel` feature, the same harness runs as long-lived processes under `adk-rust up`;
 see [`adk-kernel`](https://github.com/zavora-ai/adk-rust/blob/main/adk-kernel/README.md).

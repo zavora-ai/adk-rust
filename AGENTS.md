@@ -363,6 +363,11 @@ adk-kernel/      Agent kernel (spec 3.2): Kernel supervisor with a DurableWorker
                  EventBus, freeze that parks across replicas, control plane on a Unix socket
                  and loopback HTTP with ControlClient. ProcessStore on in-memory, SQLite,
                  PostgreSQL, Redis. Beta.
+adk-surface/     Agent surfaces (spec 3.3): SurfaceEngine over a LocalSource (kernel, harness,
+                 runner) or a ControlSource (control plane), a per-session feed numbered by
+                 session-store position, decision cards and status in the plain words of §8,
+                 commands with subject and Origin on the audit record, the §7.2 rules.
+                 `web`: the API under /api/surface with OpenAPI and generated TypeScript. Beta.
 adk-bench/       Benchmarking framework: framework-level runtime performance with real LLM APIs
                  and cross-framework (Python ADK) comparison
 adk-sandbox/     Sandboxed execution environments — process/WASM backends, OS-level sandbox profiles
@@ -1004,7 +1009,7 @@ Always verify builds during publish — never use `--no-verify`. Verification en
 Crates must be published in dependency order. `cargo xtask publish` (via
 `./publish.sh`) computes the order from the workspace graph, so this list is
 documentation rather than configuration — `scripts/check-publish-order.sh` is the
-gate that keeps it satisfiable. The current 11 tiers over 45 publishable crates:
+gate that keeps it satisfiable. The current 11 tiers over 46 publishable crates:
 
 ```
 Tier 1: adk-anthropic, adk-core, adk-enterprise, adk-rust-macros, adk-telemetry,
@@ -1019,7 +1024,7 @@ Tier 6: adk-bench, adk-codeact-monty, adk-managed, adk-server
 Tier 7: adk-auth, adk-kernel, cargo-adk
 Tier 8: adk-computer-use, adk-payments
 Tier 9: adk-harness
-Tier 10: adk-cli
+Tier 10: adk-cli, adk-surface
 Tier 11: adk-rust (umbrella — always last)
 ```
 

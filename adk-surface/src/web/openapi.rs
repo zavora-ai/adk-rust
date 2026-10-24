@@ -101,7 +101,10 @@ pub fn openapi() -> Value {
         with(paths::DECISIONS),
         read(
             "The caller's open decisions as cards (spec 3.3 §7.1)",
-            json!([query("surface", "The surface the answers are computed for", surface.clone())]),
+            json!([
+                query("surface", "The surface the answers are computed for", surface.clone()),
+                query("session", "Only this session's decisions", json!({ "type": "string" })),
+            ]),
             answer("Open decisions, oldest first", decisions),
         ),
     );

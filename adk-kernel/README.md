@@ -261,6 +261,25 @@ shows any platform's definition without installing; `service::install` and
 `service::uninstall` act on the current platform, and `service::run_as_service` is the
 Windows service's entry point.
 
+## Pairing devices and chat channels
+
+`ControlPlaneConfig::with_pairing(Pairing::new(store))` lets a phone, a tray or a remote
+terminal reach the control plane with a device token instead of the operator's credentials
+(spec 3.3 §10 K2): `adk-rust pair` issues a ten-minute code, the device claims it at
+`POST /api/kernel/pairing/claim` and receives `adkd_<id>_<secret>` once, and the token opens
+only the routes its scopes name — `read`, `decide` (low and medium risk), `stop` — until it
+expires or `adk-rust pair revoke` removes it. Codes and tokens are stored hashed; pairing
+never widens the bind (S-I7).
+
+With the `channels` feature, `channels::ChannelGateway` is the kernel's side of every chat
+thread (spec 3.3 §10 K1): an unpaired account gets a pairing code and starts nothing, a
+paired account's message is a turn whose reply returns to its thread, the `ChannelDoorbell`
+sends decision cards that carry the agent, a masked summary and the risk but never the
+arguments, chat answers **Allow once** or **Deny** at low and medium risk through
+`ApprovalService::decide`, and "stop all" freezes while "resume" is refused. A platform
+adapter implements `ChannelSink` and passes `channel_contract_tests!`; `InMemoryChannel` is
+the test channel. See [Pairing devices and chat channels](../docs/official_docs/kernel/pairing.md).
+
 ## Replicas
 
 Kernels share one run store, process store and governance store. Give each replica
@@ -273,10 +292,14 @@ second.
 | `ProcessStore` | `InMemoryProcessStore`; `SqliteProcessStore` (feature `sqlite`, on the pool of `harness.db`); `PostgresProcessStore` (`postgres`); `RedisProcessStore` (`redis`) |
 | `AgendaStore` | `InMemoryAgendaStore`; `SqliteAgendaStore` (`sqlite`); `PostgresAgendaStore` (`postgres`); `RedisAgendaStore` (`redis`) |
 | `DriverStore` | `InMemoryDriverStore`; `SqliteDriverStore`; `PostgresDriverStore`; `RedisDriverStore` (feature `drivers` with the backend's) |
+| `pairing::DeviceStore` | `InMemoryDeviceStore`; `SqliteDeviceStore`; `PostgresDeviceStore`; `RedisDeviceStore` |
+| `channels::ChannelBindingStore` (feature `channels`) | `InMemoryChannelBindingStore`; `SqliteChannelBindingStore`; `PostgresChannelBindingStore`; `RedisChannelBindingStore` |
 | Runs, sessions, schedules, approvals, governance state, action ledger | `adk-session`'s stores on the same backend |
 
-`process_store_conformance_tests!`, `agenda_store_conformance_tests!` and `driver_store_conformance_tests!` (feature
-`conformance`) check a backend against the contract the kernel relies on.
+`process_store_conformance_tests!`, `agenda_store_conformance_tests!`,
+`driver_store_conformance_tests!`, `device_store_conformance_tests!` and
+`channel_binding_store_conformance_tests!` (feature `conformance`) check a backend against the
+contract the kernel relies on.
 
 ### Alpha backends: MongoDB, Firestore, Neo4j
 
@@ -353,7 +376,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `drivers` | on | `drivers`: manifests, the driver store, the supervisor over `adk-tool`'s MCP manager, the stdio launcher on `adk-sandbox`'s enforcers |
 | `service` | on | The `service` module; `windows-service` on Windows |
 | `managed` | off | `managed`: `KernelDef` under the `adk.kernel` metadata key of a managed definition, and `TenantKernel`, one kernel per tenant over its `ManagedStores` on `adk-managed`'s runtime (Experimental) |
-| `channels` | off | Reserved for a later phase of spec 3.2; empty in this release |
+| `channels` | off | The chat channel contract (spec 3.3 §10 K1): `channels`, the binding store on every backend, and with `conformance` the adapter contract suite |
 
 ## Tests
 
@@ -374,6 +397,9 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `tests/managed_def_fixtures.rs`, `tests/managed_tenants.rs`, `tests/managed_tenant_property_tests.rs` (feature `managed`) | The kernel block's golden fixtures and refusals; a definition round-trips through the managed state store; a cron wake for one tenant runs on its stores only; a held call runs once after the tenant's approval; no wake, process or approval crosses tenants |
 | `tests/k10_baselines.rs` | K10 on a manual clock: six weeks of a routine whose last two end late yield one observation on the tenth day of the change, none in the warm-up or the cooldown, and again after it; each an agenda question that stays open in Auto, starts no run, is remembered once when confirmed and not at all when rejected; none without `proc-baselines` |
 | `tests/proc_property_tests.rs` | K-I19: no ledger row carries a payload of the event or audit record that produced it |
+| `tests/pairing_scenarios.rs` | Spec 3.3 K2 on loopback HTTP: a `read` device reads but cannot decide, and once revoked is refused; a `stop` device freezes but cannot resume; a device token is never the loopback operator; a device decides medium risk but not high; a code pairs one device; every pairing action is recorded |
+| `tests/channel_scenarios.rs`, `tests/channel_contract.rs` (feature `channels`) | Spec 3.3 K1 with a scripted agent: a stranger gets a code and starts nothing, once paired its message is answered in its thread; a held call's card reaches the chat without its arguments, "Allow once" runs it once, and a later answer from a paired phone or the chat is already decided. The adapter contract on `InMemoryChannel` |
+| `tests/device_store_*.rs`, `tests/channel_store_*.rs` | The device and channel binding suites on every backend |
 
 ## License
 
