@@ -2,8 +2,9 @@
 # that builds and tests each one (`scripts/check-feature-coverage.sh <shard>`). A shard
 # groups pairs that share heavy dependencies, so each shard compiles them once.
 #
-# Format: <shard> <package> <features> [flags]. Features are comma-separated with no spaces;
-# flags too: `no-default` builds with `--no-default-features`, `doc` also runs the doctests.
+# Format: <shard> <package> <features> [flags]. Features are comma-separated with no spaces,
+# or `-` for none; flags too: `no-default` builds with `--no-default-features`, `doc` also
+# runs the doctests.
 # To cover another feature-gated module, add ONE line and pick the shard whose crates it
 # already depends on. Shards are numbered 0 to 7; `ci.yml` lists the same range.
 
@@ -93,6 +94,8 @@
 2 adk-cli voice,scripted-model
 # adk-cli without the harness: the chat agent and the legacy `code`, `goal` and `ultracode`.
 2 adk-cli gemini no-default
+# adk-cli with no provider at all: every `--provider` reports that it is not compiled.
+2 adk-cli - no-default
 # The kernel's shared process stores for replicas (spec 3.2 §13 Q8); the live-server
 # conformance suites run in the postgres job.
 2 adk-kernel postgres,redis

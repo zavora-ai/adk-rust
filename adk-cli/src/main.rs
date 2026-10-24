@@ -259,6 +259,7 @@ async fn run() -> Result<()> {
         }
         #[cfg(feature = "harness")]
         Some(Commands::Drivers { command, kernel }) => kernel_cli::drivers(&kernel, command).await,
+        #[cfg(feature = "harness")]
         Some(Commands::Proc { view, partition, kind, agent, since, limit, export, kernel }) => {
             let query = kernel_cli::ProcQuery { partition, kind, agent, since, limit, export };
             kernel_cli::proc(&kernel, view, query).await
@@ -462,6 +463,26 @@ async fn create_model(
     thinking_budget: Option<u32>,
 ) -> Result<BuiltModel> {
     let plain = |llm: Arc<dyn Llm>| BuiltModel { llm, cache_capable: None };
+    // `--no-default-features` compiles every provider out, and then each arm refuses; with
+    // only the key-less Ollama and mistral.rs compiled, no arm reads the key.
+    #[cfg(not(any(
+        feature = "gemini",
+        feature = "openai",
+        feature = "anthropic",
+        feature = "deepseek",
+        feature = "groq"
+    )))]
+    let _ = api_key;
+    #[cfg(not(any(
+        feature = "gemini",
+        feature = "openai",
+        feature = "anthropic",
+        feature = "deepseek",
+        feature = "groq",
+        feature = "ollama",
+        feature = "mistralrs"
+    )))]
+    let _ = (model, thinking_budget, plain);
     match provider {
         #[cfg(feature = "gemini")]
         Provider::Model(ModelProvider::Gemini) => {
@@ -571,6 +592,15 @@ fn openai_responses_model(model: &str) -> bool {
     }
 }
 
+/// Refuses a thinking budget for a provider without one: every provider but Anthropic.
+#[cfg(any(
+    feature = "gemini",
+    feature = "openai",
+    feature = "deepseek",
+    feature = "groq",
+    feature = "ollama",
+    feature = "mistralrs"
+))]
 fn reject_unsupported_thinking_budget(
     provider: Provider,
     thinking_budget: Option<u32>,
