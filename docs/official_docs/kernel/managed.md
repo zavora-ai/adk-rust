@@ -63,7 +63,7 @@ camelCase wire shape: its wakes are `Wake`s, its drivers `DriverManifest`s and i
 | `proactivity` | The tenant kernel's `ProactivityPolicy`: open proposals, the daily proactive budget, quiet hours and how proposals are approved. One kernel has one policy, so a second definition may repeat it or leave it out |
 | `proactivity.consolidation` | The only switch for the consolidation tick: it is off in the managed form unless a definition sets it (§13 Q1), and runs where the operator registered a consolidator |
 | `drivers` | `DriverManifest`s, validated and recorded; no driver is mounted without a person's approval |
-| `partitions` | The partition record's plain data, validated and recorded; the definition's agent runs in the default partition |
+| `partitions`, `coordinator` | One agent per partition — one harness per partition with `HarnessResolver` as the tenant's `partition_resolver` — as `<definition>@<partition>`, each partition in the tenant's partition table with the tenant as its tenant; the coordinator's agent serves the definition's own target. Without a partition resolver the partitions are recorded and the agent runs in the default partition ([partitions](partitions.md#partitions-in-the-managed-form)) |
 
 `KernelDef::from_agent_def` reads and validates a block; `KernelDef::apply_to` writes one into
 a definition, keeping its other metadata keys.
@@ -159,7 +159,7 @@ A definition comes from a tenant, so its kernel block cannot widen what the oper
 | The agent | A definition with a kernel block runs only an agent the operator's resolver builds, such as a harness definition under `HarnessResolver`; a plain definition stays in the session loop |
 | Drivers | `sandbox: "unsandboxed"`; pinned `declarationDigests`; a credential-named variable with a plain value instead of a `secret://` reference; a partition the block does not declare |
 | Wake sets | The `interactive` queue a person's turn holds; a `fileChange` wake on the host's files; approval, run-finished, time, budget and manual wakes, which name one sleeping process; an unparsable cron expression |
-| Partitions | A `tenant` key: the tenant is the hosting kernel's |
+| Partitions | A `tenant` key: the tenant is the hosting kernel's; an id declared twice; an unknown key; a `coordinator` the block does not declare; a partition another hosted definition of the tenant declares |
 | Consolidation | No field lets an agenda item of origin `Consolidation` start without a person's approval, in any mode (K-I23) |
 
 ## The managed approval path

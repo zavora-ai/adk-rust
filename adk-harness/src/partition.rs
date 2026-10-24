@@ -9,7 +9,7 @@
 //! | Identity | Every agent of the harness's runner acts as `urn:adk:agent:{app}/{agent}` with the partition's class and tenant (`Partition::identity_source`), so `PolicyRule::for_class` rules apply |
 //! | Long-term facts | `FactScope.project` is the partition's `memory_scope`, for every kind, preferences included; recall and `memory_search` read that scope only, never a user-wide fact |
 //! | Working notes | A memory root of the partition's own under the configured layout |
-//! | Drivers | The toolset of the drivers mounted for the partition ([`partition_drivers`](crate::HarnessAgentBuilder::partition_drivers)) |
+//! | Drivers | The drivers mounted for the partition ([`partition_drivers`](crate::HarnessAgentBuilder::partition_drivers)): a driver whose manifest lists the partition and whose id is in its `drivers`, classed by its manifest under the kernel's driver policy; any other driver is invisible |
 //! | Crossings | The partition's `PartitionPolicy` composed with the operator policy (strictest wins); [`PARTITION_MEMORY_SEARCH`] and [`PARTITION_MEMORY_REMEMBER`] reach another partition's facts, and [`partition_crossing_tool`](crate::HarnessAgentBuilder::partition_crossing_tool) offers the coordinator another partition's driver or session tool; all of them are non-waivable |
 //!
 //! A crossing by an agent that is not the coordinator is denied at the policy. The
@@ -88,6 +88,8 @@ pub(crate) struct PartitionOptions {
     pub(crate) partition: Option<(Partition, Partitions)>,
     pub(crate) coordinator: bool,
     pub(crate) crossings: Vec<CrossingSpec>,
+    /// The kernel's drivers, mounted for the partition at build.
+    pub(crate) drivers: Option<adk_kernel::drivers::DriverSupervisor>,
 }
 
 /// A partition's wiring and the coordinator's crossing tools, as the builder takes them.
@@ -118,10 +120,11 @@ impl PartitionOptions {
         registry: &mut ToolClassRegistry,
     ) -> Result<Option<WiredPartition>> {
         let Some((partition, partitions)) = self.partition else {
-            if self.coordinator || !self.crossings.is_empty() {
+            if self.coordinator || !self.crossings.is_empty() || self.drivers.is_some() {
                 return Err(AdkError::config(
-                    "partition_coordinator and partition_crossing_tool configure a partition's \
-                     harness; set the partition with HarnessAgentBuilder::partition (spec 3.2 §7.8)",
+                    "partition_coordinator, partition_crossing_tool and partition_drivers \
+                     configure a partition's harness; set the partition with \
+                     HarnessAgentBuilder::partition (spec 3.2 §7.8)",
                 ));
             }
             return Ok(None);
@@ -371,8 +374,12 @@ impl Harness {
 
     /// Hosts this partition's harness on `kernel` (spec 3.2 §7.8): its runner as the
     /// targets `<app>@<partition>` and `harness.goal@<partition>`, bound to the partition,
-    /// so a process of another partition cannot run it, and its `propose_followup` on the
-    /// kernel's agenda. A harness built without a partition is returned `kernel` unchanged.
+    /// so a process of another partition cannot run it; its `propose_followup` on the
+    /// kernel's agenda; and its progress source for the partition's processes
+    /// (`KernelBuilder::partition_progress_source`), so the kernel reads their goal progress,
+    /// loop-guard verdicts and usage from it and its ledger rows carry the partition. A
+    /// harness built without a partition is returned `kernel` unchanged. Hosting a partition
+    /// twice fails at `build`.
     ///
     /// # Example
     ///
@@ -381,6 +388,19 @@ impl Harness {
     /// let kernel = work.host_partition(kernel).build()?;
     /// ```
     pub fn host_partition(&self, kernel: KernelBuilder) -> KernelBuilder {
+        match self.agent().partition_wiring() {
+            Some(_) => self.host_partition_with(kernel, self.kernel_progress()),
+            None => kernel,
+        }
+    }
+
+    /// [`host_partition`](Self::host_partition) with `progress` as the partition's
+    /// progress source.
+    pub(crate) fn host_partition_with(
+        &self,
+        kernel: KernelBuilder,
+        progress: Arc<crate::kernel::HarnessProgress>,
+    ) -> KernelBuilder {
         let Some(wiring) = self.agent().partition_wiring() else {
             return kernel;
         };
@@ -388,7 +408,8 @@ impl Harness {
         let (goal, runner) = self.goal_target();
         kernel
             .partition_agent(id.clone(), partition_target(self.app_name(), &id), runner.clone())
-            .partition_agent(id, goal, runner)
+            .partition_agent(id.clone(), goal, runner)
+            .partition_progress_source(id, progress)
             .partitions(wiring.policy.partitions().clone())
             .agenda_handle(self.agent().runtime().kernel_agenda.clone())
     }

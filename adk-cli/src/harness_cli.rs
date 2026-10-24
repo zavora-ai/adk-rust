@@ -111,8 +111,9 @@ struct AgentExtras {
     /// Long-term memory with an approval service: `adk-rust up`, the user's own kernel,
     /// keeps it, where `serve` turns it off (spec 3.2 §8.1).
     memory_with_inbox: bool,
-    /// The kernel's drivers whose manifests list the default partition, classed by their
-    /// manifests and under the kernel's driver policy (spec 3.2 §7.7).
+    /// The kernel's drivers, classed by their manifests and under the kernel's driver
+    /// policy (spec 3.2 §7.7): those whose manifests list the default partition, or for a
+    /// partition's harness, those its own driver list names (§7.8).
     drivers: Option<adk_kernel::drivers::DriverSupervisor>,
     /// The partition the harness runs, the table its policy reads, and whether it is the
     /// coordinator.
@@ -426,19 +427,25 @@ impl Setup {
         if let Some(recorder) = extras.audit {
             builder = builder.audit_log(recorder);
         }
-        if let Some(drivers) = extras.drivers {
-            builder = builder
-                .toolset(drivers.toolset_for_manifests(&adk_kernel::PartitionId::default()))
-                .tool_classes(Arc::new(adk_harness::DriverClasses::new(drivers.clone())))
-                .add_operator_policy(drivers.policy());
-        }
-        // A partition's harness: its mode, identity, memory scope and crossing policy (spec
-        // 3.2 §7.8).
-        if let Some((partition, table, coordinator)) = extras.partition {
-            builder = builder.partition(partition, table);
-            if coordinator {
-                builder = builder.partition_coordinator();
+        match (extras.partition, extras.drivers) {
+            // A partition's harness: its mode, identity, memory scope, crossing policy and
+            // the drivers its own list names (spec 3.2 §7.7, §7.8).
+            (Some((partition, table, coordinator)), drivers) => {
+                builder = builder.partition(partition, table);
+                if coordinator {
+                    builder = builder.partition_coordinator();
+                }
+                if let Some(drivers) = drivers {
+                    builder = builder.partition_drivers(&drivers);
+                }
             }
+            (None, Some(drivers)) => {
+                builder = builder
+                    .toolset(drivers.toolset_for_manifests(&adk_kernel::PartitionId::default()))
+                    .tool_classes(Arc::new(adk_harness::DriverClasses::new(drivers.clone())))
+                    .add_operator_policy(drivers.policy());
+            }
+            (None, None) => {}
         }
         // Servers the workspace declares in `.mcp.json` start once the workspace is trusted
         // (spec 3.1 §7.21, I3).

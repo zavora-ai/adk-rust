@@ -115,6 +115,9 @@ pub(crate) struct Supervision {
     pub(crate) audit: Option<AuditTrail>,
     pub(crate) sessions: Option<Arc<dyn SessionService>>,
     pub(crate) progress: Option<Arc<dyn ProgressSource>>,
+    /// Each partition's own progress source (spec 3.2 §7.8,
+    /// [`KernelBuilder::partition_progress_source`](crate::KernelBuilder::partition_progress_source)).
+    pub(crate) partition_progress: BTreeMap<PartitionId, Arc<dyn ProgressSource>>,
     /// One worker per queue class, set once the hooks that reference this state exist.
     pub(crate) workers: OnceLock<Vec<(QueueClass, DurableWorker)>>,
     /// The claim loops while the kernel runs.
@@ -169,6 +172,23 @@ impl std::fmt::Debug for Supervision {
 }
 
 impl Supervision {
+    /// The progress source of a process of `partition`: the partition's own, else the
+    /// main one (spec 3.2 §7.8).
+    pub(crate) fn progress_for(&self, partition: &PartitionId) -> Option<&Arc<dyn ProgressSource>> {
+        self.partition_progress.get(partition).or(self.progress.as_ref())
+    }
+
+    /// Every distinct progress source, the main one first.
+    pub(crate) fn progress_sources(&self) -> Vec<Arc<dyn ProgressSource>> {
+        let mut sources: Vec<Arc<dyn ProgressSource>> = Vec::new();
+        for source in self.progress.iter().chain(self.partition_progress.values()) {
+            if !sources.iter().any(|seen| Arc::ptr_eq(seen, source)) {
+                sources.push(Arc::clone(source));
+            }
+        }
+        sources
+    }
+
     /// The side table a run gets when nothing recorded one: the kind read from its target
     /// and idempotency key, in the default partition.
     pub(crate) fn infer_meta(run: &RunRecord) -> ProcessMeta {
@@ -493,11 +513,11 @@ impl Supervision {
     /// Attributes the spend the hosted agent counted since the last attribution to `pid`,
     /// on today's row (spec 3.2 §7.10).
     pub(crate) async fn attribute(&self, pid: &str) {
-        let Some(progress) = &self.progress else { return };
         let Some(local) = self.local.lock().unwrap_or_else(|e| e.into_inner()).get(pid).cloned()
         else {
             return;
         };
+        let Some(progress) = self.progress_for(&local.partition) else { return };
         let usage = match progress.usage(&local.run).await {
             Ok(Some(usage)) => usage,
             Ok(None) => return,
@@ -1492,7 +1512,7 @@ impl WorkerHooks for KernelHooks {
         if admitted {
             sup.item_started(&meta).await;
         }
-        let baseline = match &sup.progress {
+        let baseline = match sup.progress_for(&meta.partition) {
             Some(progress) => progress.usage(run).await.ok().flatten(),
             None => None,
         };

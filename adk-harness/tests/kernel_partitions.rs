@@ -761,3 +761,113 @@ async fn a_partitions_followup_is_on_its_agenda_and_runs_its_partitions_harness(
     );
     kernel.stop().await.unwrap();
 }
+
+/// An observation of `partition` the baseline pass would put to alice (spec 3.2 §7.10).
+fn observation(id: &str, partition: &str, statement: &str) -> adk_kernel::AgendaItem {
+    adk_kernel::AgendaItem::new(
+        id,
+        adk_core::SubjectRef::human("alice"),
+        "Your routine has changed. Would you like to review what changed?",
+        statement,
+        adk_kernel::AgendaOrigin::Observation { id: id.into() },
+        chrono::Utc::now(),
+    )
+    .with_partition(partition)
+}
+
+/// Spec 3.2 §7.8, §7.10, K-I15: under a kernel with a ledger, each partition's harness
+/// writes its rows in its partition, not `default`; each partition's observation is put to
+/// its own harness only and, once confirmed, remembered in that partition's memory scope,
+/// where the other partition's facts never show it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rows_and_observations_stay_in_their_partition() {
+    use adk_kernel::ObservationAudience as _;
+    use adk_kernel::proc::{InMemoryLedgerStore, Ledger, LedgerKey, LedgerQuery, LedgerStore};
+
+    let mut world = World::new().await;
+    let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+    let (home, _) = world.harness("home", true, vec![text("home ok")], |b| b).await;
+    let (work, _) = world.harness("work", false, vec![text("work ok")], |b| b).await;
+    let home = home.with_run_store(Arc::clone(&runs));
+    let work = work.with_run_store(Arc::clone(&runs));
+    let alice = user("alice");
+    let (home_audience, work_audience) =
+        (home.observation_audience(&alice).unwrap(), work.observation_audience(&alice).unwrap());
+    let store = Arc::new(InMemoryLedgerStore::new());
+    let kernel = work
+        .host_partition(home.kernel())
+        .config(
+            KernelConfig::default()
+                .with_app_name(APP)
+                .with_scheduler_tick(Duration::from_millis(50))
+                .with_control(ControlPlaneConfig::default().without_socket()),
+        )
+        .ledger(Ledger::new(store.clone(), LedgerKey::from_bytes([3; 32])))
+        .observation_audience("home", Arc::new(home_audience.clone()))
+        .observation_audience("work", Arc::new(work_audience.clone()))
+        .build()
+        .unwrap();
+    kernel.start().await.unwrap();
+
+    // A work session's rows are work's, a home session's home's.
+    for (partition, session) in [("work", "w1"), ("home", "h1")] {
+        let target = adk_harness::partition_target(APP, &PartitionId::new(partition));
+        let process = kernel
+            .processes()
+            .spawn(turn(&target, session, "hello"), ProcessSpec::new(ProcessKind::Interactive))
+            .await
+            .unwrap();
+        in_state(&runs, &process.meta.pid, RunState::Completed).await;
+    }
+    let harness_agent = format!("urn:adk:agent:{APP}/harness");
+    let intents = eventually("both partitions' intent rows", || async {
+        let rows = store.list(&LedgerQuery::default()).await.unwrap();
+        let intents: Vec<String> = rows
+            .iter()
+            .filter(|row| row.kind == "intent" && row.agent == harness_agent)
+            .map(|row| row.partition.to_string())
+            .collect();
+        (intents.len() == 2).then_some(intents)
+    })
+    .await;
+    let mut intents = intents;
+    intents.sort();
+    assert_eq!(intents, ["home", "work"], "never `default`");
+
+    // An observation is put to its own partition's harness only.
+    let work_id = PartitionId::new("work");
+    assert!(home_audience.audience(&work_id).await.unwrap().is_none());
+    assert!(work_audience.audience(&work_id).await.unwrap().is_some());
+    let work_item = observation("obs-work", "work", "Standups have moved later.");
+    let refused = home_audience.confirm(&work_item, &adk_core::SubjectRef::human("alice")).await;
+    assert!(refused.is_err(), "home's harness does not remember work's observation");
+
+    // Confirmed: remembered in the partition's own scope, invisible to the other.
+    let agenda = kernel.agenda();
+    for (item, mode) in [
+        (work_item, adk_kernel::PartitionMode::Ask),
+        (
+            observation("obs-home", "home", "Evenings have got busier."),
+            adk_kernel::PartitionMode::Ask,
+        ),
+    ] {
+        let id = item.id.clone();
+        agenda.propose(item, mode).await.unwrap();
+        let confirmed = agenda.approve(&id, &adk_core::SubjectRef::human("alice")).await.unwrap();
+        assert!(confirmed.answer.unwrap().confirmed, "{id}");
+    }
+    let all = world.facts.list(adk_harness::FactFilter::user(APP, "alice")).await.unwrap();
+    let project_of = |text: &str| {
+        all.iter().find(|fact| fact.text == text).and_then(|fact| fact.scope.project.clone())
+    };
+    assert_eq!(project_of("Standups have moved later.").as_deref(), Some("work"));
+    assert_eq!(project_of("Evenings have got busier.").as_deref(), Some("home"));
+    let texts =
+        |facts: Vec<MemoryFact>| facts.into_iter().map(|fact| fact.text).collect::<Vec<_>>();
+    let home_facts = texts(home.facts(&alice).await.unwrap());
+    let work_facts = texts(work.facts(&alice).await.unwrap());
+    assert!(!home_facts.iter().any(|fact| fact.contains("Standups")), "{home_facts:?}");
+    assert!(!work_facts.iter().any(|fact| fact.contains("Evenings")), "{work_facts:?}");
+    assert!(work_facts.iter().any(|fact| fact.contains("Standups")), "{work_facts:?}");
+    kernel.stop().await.unwrap();
+}

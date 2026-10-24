@@ -1216,7 +1216,13 @@ impl ProcessTable {
             view.model_calls = last.model_calls.saturating_sub(base.model_calls);
             view.tool_calls = last.tool_calls.saturating_sub(base.tool_calls);
         }
-        if let Some(progress) = &self.progress {
+        // A partition's own source answers for its processes (spec 3.2 §7.8).
+        let progress = self
+            .sup
+            .as_ref()
+            .and_then(|sup| sup.partition_progress.get(&meta.partition))
+            .or(self.progress.as_ref());
+        if let Some(progress) = progress {
             match progress.loop_guard(run).await {
                 Ok(verdict) => view.loop_guard = verdict,
                 Err(error) => {

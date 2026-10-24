@@ -216,6 +216,8 @@ A `Partition` is a policy class, a memory scope and a driver set, run by its own
 | `PartitionPolicy` | Denies a request reaching another partition unless the coordinator makes it, then requires a non-waivable approval; an approved read holds for the rest of its run, keyed by the crossing fingerprint (the call's fingerprint with the target partition and resource class) |
 | `CrossingTool` | Offers the coordinator another partition's driver or session tool as a crossing |
 | `KernelBuilder::partition_agent` | Hosts a partition's runner as a target bound to its partition: a process of another partition cannot run it or continue its sessions |
+| `KernelBuilder::partition_progress_source` | The partition's own progress source: the kernel reads its processes' goal progress, loop-guard verdicts and usage from it, by the process's partition, and hands it the process table and the ledger; a partition without one falls back to the main source |
+| Managed form | `KernelDef::partitions` and `coordinator` run one agent per partition on a tenant's kernel through `TenantKernelBuilder::partition_resolver`, over the tenant's own partition table (`partition_store`) |
 | Audit | `kernel.partition.created`, `kernel.partition.changed`, and `kernel.partition.crossing` for every crossing, with a digest of its fingerprint |
 
 ## Lifecycle

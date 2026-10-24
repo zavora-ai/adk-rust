@@ -176,17 +176,17 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             vec![host(&setup, agent, None, &governance, &run_store)?]
         }
         Some(table) => {
-            partition_harnesses(
-                &setup,
-                &settings,
-                table,
-                &service,
-                audit.as_ref(),
-                &governance,
-                &run_store,
-                &drivers,
-            )
-            .await?
+            // Each partition's harness: its mode, identity, memory scope, crossing policy and
+            // the drivers its own list names (spec 3.2 §7.7, §7.8).
+            let extras = |partition: adk_kernel::Partition, coordinator: bool| AgentExtras {
+                budget: None,
+                audit: audit.clone(),
+                memory_with_inbox: true,
+                drivers: Some(drivers.clone()),
+                partition: Some((partition, table.clone(), coordinator)),
+            };
+            partition_harnesses(&setup, &settings, table, &service, &governance, &run_store, extras)
+                .await?
         }
     };
     let primary = &hosted[0];
@@ -279,11 +279,16 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             .consolidator(hosted.partition.clone().unwrap_or_default(), Arc::new(consolidator));
     }
     if setup.memory_on() {
-        // The pass's observations are put to the user; a confirmed one is remembered.
+        // The pass's observations are put to the user; a confirmed one is remembered — each
+        // partition's by its own harness, in its memory scope (spec 3.2 §7.8, §7.10).
         let user = adk_core::UserId::new(setup.user.clone())?;
-        let audience = primary.harness.observation_audience(&user)?;
-        kernel =
-            kernel.observation_audience(adk_kernel::PartitionId::default(), Arc::new(audience));
+        for hosted in &hosted {
+            let audience = hosted.harness.observation_audience(&user)?;
+            kernel = kernel.observation_audience(
+                hosted.partition.clone().unwrap_or_default(),
+                Arc::new(audience),
+            );
+        }
     }
     let kernel = kernel.build()?;
     // The inbox decides through the harness's approval service, which wakes the kernel's
@@ -460,10 +465,9 @@ async fn partition_harnesses(
     settings: &KernelSettings,
     table: &adk_kernel::Partitions,
     service: &Arc<dyn ApprovalService>,
-    audit: Option<&Arc<dyn AuditRecorder>>,
     governance: &GovernanceControl,
     run_store: &Arc<dyn adk_core::DurableRunStore>,
-    drivers: &adk_kernel::drivers::DriverSupervisor,
+    extras: impl Fn(adk_kernel::Partition, bool) -> AgentExtras,
 ) -> Result<Vec<Hosted>> {
     let mut partitions = table.list().await?;
     let coordinator = settings.coordinator.as_ref();
@@ -478,13 +482,7 @@ async fn partition_harnesses(
             setup.resolved.sandbox,
             None,
             Some(service.clone()),
-            AgentExtras {
-                budget: None,
-                audit: audit.cloned(),
-                memory_with_inbox: true,
-                drivers: Some(drivers.clone()),
-                partition: Some((partition.clone(), table.clone(), is_coordinator)),
-            },
+            extras(partition.clone(), is_coordinator),
         )?);
         hosted.push(host(setup, agent, Some(&partition), governance, run_store)?);
     }

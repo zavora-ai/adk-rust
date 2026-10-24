@@ -1,0 +1,7 @@
+{
+  "name": "K-15: A partition with an unknown key",
+  "description": "A partition takes the partition record's keys only; `quota` is not one of them.",
+  "agent_def": { "name": "assistant", "model": "claude-sonnet-5-5" },
+  "kernel": { "partitions": [{ "id": "work", "class": "work", "quota": 3 }] },
+  "expect": { "error_contains": ["adk.kernel", "unknown field `quota`"] }
+}

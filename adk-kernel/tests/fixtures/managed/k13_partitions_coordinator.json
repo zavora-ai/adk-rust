@@ -1,0 +1,29 @@
+{
+  "name": "K-13: Partitions and their coordinator",
+  "description": "Home and work as `[[kernel.partitions]]` and `kernel.coordinator` declare them in `harness.toml`: home's agent is the coordinator, work's wake set starts work's agent.",
+  "agent_def": { "name": "assistant", "model": "claude-sonnet-5-5" },
+  "kernel": {
+    "partitions": [
+      { "id": "home", "class": "home-agents", "crossPartition": "coordinator_with_approval" },
+      { "id": "work", "class": "work-agents", "defaultMode": "auto", "memoryScope": "office", "crossPartition": "coordinator_with_approval" }
+    ],
+    "coordinator": "home",
+    "wakeSets": [
+      { "name": "standup", "anyOf": [{ "webhook": { "hook": "standup" } }], "input": "Prepare the standup.", "partition": "work" }
+    ]
+  },
+  "expect": {
+    "canonical": {
+      "partitions": [
+        { "id": "home", "class": "home-agents", "defaultMode": "ask", "crossPartition": "coordinator_with_approval" },
+        { "id": "work", "class": "work-agents", "defaultMode": "auto", "memoryScope": "office", "crossPartition": "coordinator_with_approval" }
+      ],
+      "coordinator": "home",
+      "wakeSets": [
+        { "name": "standup", "anyOf": [{ "webhook": { "hook": "standup" } }], "input": "Prepare the standup.", "partition": "work", "overlap": "skip" }
+      ]
+    },
+    "consolidation": false,
+    "triggers": ["assistant/standup"]
+  }
+}

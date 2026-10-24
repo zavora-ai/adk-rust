@@ -5,7 +5,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use adk_agent::ambient::CronTrigger;
-use adk_core::audit_log::AuditTrail;
+use adk_core::audit_log::{AuditActor, AuditTrail};
 use adk_core::{
     ActionLedger, Agent, GovernanceControl, NewRun, OnConflict, RunConfig, ScheduleStore,
     SpendLedger,
@@ -24,8 +24,10 @@ use crate::consolidation::Consolidator;
 use crate::control::ControlPlaneConfig;
 use crate::error::{KernelError, Result};
 use crate::kernel::{Kernel, KernelConfig, KernelState};
-use crate::partition::PartitionId;
-use crate::stores::{InMemoryAgendaStore, InMemoryProcessStore, ProcessStore};
+use crate::partition::{Partition, PartitionId, PartitionStore, Partitions};
+use crate::stores::{
+    InMemoryAgendaStore, InMemoryPartitionStore, InMemoryProcessStore, ProcessStore,
+};
 use crate::wake::{CronWakeSource, Trigger, Wake};
 
 /// One kernel over one tenant's [`ManagedStores`]: the managed form of the kernel (spec 3.2
@@ -45,6 +47,7 @@ use crate::wake::{CronWakeSource, Trigger, Wake};
 /// | Triggers | the definitions' wake sets ([`KernelDef::wake_sets`]); a cron source per expression |
 /// | Proactivity | the hosted definitions' [`KernelDef::proactivity`], one policy per tenant; else the operator's with the consolidation tick off (§13 Q1); the tick runs where the builder registered a consolidator |
 /// | Agenda | the tenant's agenda store, and [`agenda_handle`](Self::agenda_handle) rebound to each kernel built |
+/// | Partitions | the tenant's partition table ([`partitions`](Self::partitions)) holding the definitions' [`KernelDef::partitions`], each with the tenant as its tenant; with a [`PartitionAgentResolver`], one agent per partition — one harness per partition — as `<definition>@<partition>`, bound to its partition and acting with its class and tenant (spec 3.2 §7.8) |
 /// | App name | the tenant: the `ManagedOwner::app_name` its sessions are created under |
 /// | Kill switch | its own `GovernanceControl`, unless the builder is given one |
 /// | Control plane | none of its own; mount `control::router(kernel)` on the host's server to serve one |
@@ -106,6 +109,8 @@ struct TenantInner {
     agenda: Arc<dyn AgendaStore>,
     agenda_handle: AgendaHandle,
     consolidators: BTreeMap<PartitionId, Arc<dyn Consolidator>>,
+    partitions: Partitions,
+    partition_resolver: Option<Arc<dyn PartitionAgentResolver>>,
     hosting: tokio::sync::Mutex<Hosting>,
 }
 
@@ -124,6 +129,9 @@ struct Hosted {
     /// same one rebuilt.
     digest: String,
     agent: Arc<dyn Agent>,
+    /// Each partition's agent, when the definition declares partitions and the tenant has a
+    /// partition resolver (spec 3.2 §7.8).
+    partitions: BTreeMap<PartitionId, (Partition, Arc<dyn Agent>)>,
 }
 
 impl fmt::Debug for TenantKernel {
@@ -158,6 +166,8 @@ impl TenantKernel {
             agenda: None,
             agenda_handle: None,
             consolidators: BTreeMap::new(),
+            partition_store: None,
+            partition_resolver: None,
         }
     }
 
@@ -179,6 +189,12 @@ impl TenantKernel {
     /// The tenant's kill switch.
     pub fn governance(&self) -> &GovernanceControl {
         &self.inner.config.governance
+    }
+
+    /// The tenant's partition table: its definitions' partitions, each with the tenant as
+    /// its tenant, and the crossing ledger (spec 3.2 §7.8).
+    pub fn partitions(&self) -> &Partitions {
+        &self.inner.partitions
     }
 
     /// The handle of the tenant kernel's agenda, rebound to every kernel the tenant builds:
@@ -234,6 +250,53 @@ impl TenantKernel {
     /// Returns [`KernelError::Config`] for an invalid kernel block, and the error of the
     /// restart when the kernel runs; a refused restart leaves the running kernel as it was.
     pub async fn host(&self, def: &ManagedAgentDef, agent: Arc<dyn Agent>) -> Result<bool> {
+        self.host_with(def, agent, BTreeMap::new()).await
+    }
+
+    /// Hosts `def` with one agent per partition its kernel block declares (spec 3.2 §7.8),
+    /// `agents` keyed by partition id: each runs as `<definition>@<partition>`, bound to its
+    /// partition and acting with its class and the tenant, and the coordinator's agent —
+    /// else the first partition's by id — also as the definition's own target. A wake set
+    /// in a partition starts that partition's agent. Every partition is written to the
+    /// tenant's partition table with the tenant as its tenant. [`KernelResolver`] calls this
+    /// with the agents the tenant's [`PartitionAgentResolver`] builds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Config`] for an invalid kernel block, a block without
+    /// partitions, `agents` not naming exactly the declared partitions, or a partition
+    /// another hosted definition declares; and the table's or the restart's error.
+    pub async fn host_partitions(
+        &self,
+        def: &ManagedAgentDef,
+        agents: BTreeMap<PartitionId, Arc<dyn Agent>>,
+    ) -> Result<bool> {
+        let Some(kernel) = KernelDef::from_agent_def(def)? else {
+            return Ok(false);
+        };
+        let declared: BTreeSet<PartitionId> =
+            kernel.partitions.iter().map(|partition| partition.id.clone()).collect();
+        let given: BTreeSet<PartitionId> = agents.keys().cloned().collect();
+        if declared.is_empty() || declared != given {
+            return Err(KernelError::Config {
+                reason: format!(
+                    "definition '{}' declares partitions {declared:?}, and agents were given for \
+                     {given:?}: host one agent per declared partition",
+                    def.name
+                ),
+            });
+        }
+        let primary = kernel.primary_partition().expect("a block with partitions has a primary");
+        let agent = Arc::clone(&agents[&primary]);
+        self.host_with(def, agent, agents).await
+    }
+
+    async fn host_with(
+        &self,
+        def: &ManagedAgentDef,
+        agent: Arc<dyn Agent>,
+        agents: BTreeMap<PartitionId, Arc<dyn Agent>>,
+    ) -> Result<bool> {
         let Some(kernel) = KernelDef::from_agent_def(def)? else {
             return Ok(false);
         };
@@ -263,18 +326,53 @@ impl TenantKernel {
                 });
             }
         }
-        if !kernel.partitions.is_empty() || !kernel.drivers.is_empty() {
+        for partition in &kernel.partitions {
+            let other = hosting.hosted.iter().find(|(name, hosted)| {
+                **name != def.name
+                    && hosted.kernel.partitions.iter().any(|theirs| theirs.id == partition.id)
+            });
+            if let Some((other, _)) = other {
+                return Err(KernelError::Config {
+                    reason: format!(
+                        "definition '{}' declares partition `{}`, which definition '{other}' \
+                         declares too, and tenant `{}` has one partition table: declare it in \
+                         one definition",
+                        def.name, partition.id, self.inner.tenant
+                    ),
+                });
+            }
+        }
+        if agents.is_empty() && !kernel.partitions.is_empty() {
             tracing::warn!(
                 tenant = %self.inner.tenant,
                 definition = %def.name,
                 partitions = kernel.partitions.len(),
-                drivers = kernel.drivers.len(),
-                "the definition's partitions and driver manifests are recorded; its agent runs \
-                 in the default partition, and no driver is mounted without a person's approval"
+                "the definition's partitions are recorded, and without a partition resolver its \
+                 agent runs in the default partition (TenantKernelBuilder::partition_resolver)"
             );
         }
+        if !kernel.drivers.is_empty() {
+            tracing::warn!(
+                tenant = %self.inner.tenant,
+                definition = %def.name,
+                drivers = kernel.drivers.len(),
+                "the definition's driver manifests are recorded; no driver is mounted without a \
+                 person's approval"
+            );
+        }
+        // The tenant's partition table holds the definition's partitions, the tenant theirs.
+        let mut partitions = BTreeMap::new();
+        for declared in &kernel.partitions {
+            let record = declared.to_partition(&self.inner.tenant)?;
+            if self.inner.partitions.get(&record.id).await?.as_ref() != Some(&record) {
+                self.inner.partitions.put(record.clone(), AuditActor::default()).await?;
+            }
+            if let Some(agent) = agents.get(&record.id) {
+                partitions.insert(record.id.clone(), (record, Arc::clone(agent)));
+            }
+        }
         let mut hosted = hosting.hosted.clone();
-        hosted.insert(def.name.clone(), Hosted { kernel, digest, agent });
+        hosted.insert(def.name.clone(), Hosted { kernel, digest, agent, partitions });
         if let Some(running) = hosting.kernel.take() {
             match self.restart(running, &hosted).await {
                 Ok(kernel) => hosting.kernel = Some(kernel),
@@ -354,7 +452,8 @@ impl TenantKernel {
             .process_store(Arc::clone(&inner.processes))
             .session_service(Arc::clone(&inner.sessions))
             .agenda_store(Arc::clone(&inner.agenda))
-            .agenda_handle(inner.agenda_handle.clone());
+            .agenda_handle(inner.agenda_handle.clone())
+            .partitions(inner.partitions.clone());
         for (partition, consolidator) in &inner.consolidators {
             builder = builder.consolidator(partition.clone(), Arc::clone(consolidator));
         }
@@ -372,9 +471,36 @@ impl TenantKernel {
         }
         let mut crons = BTreeSet::new();
         for (target, hosted) in hosted {
-            builder = builder.agent(target.clone(), self.runner(Arc::clone(&hosted.agent))?);
+            match hosted.kernel.primary_partition().filter(|_| !hosted.partitions.is_empty()) {
+                // One agent per partition, each bound to its partition; the primary's also
+                // serves the definition's own target (spec 3.2 §7.8).
+                Some(primary) => {
+                    for (id, (partition, agent)) in &hosted.partitions {
+                        let runner = self.partition_runner(Arc::clone(agent), partition)?;
+                        if *id == primary {
+                            builder =
+                                builder.partition_agent(id.clone(), target.clone(), runner.clone());
+                        }
+                        builder = builder.partition_agent(
+                            id.clone(),
+                            partition_target(target, id),
+                            runner,
+                        );
+                    }
+                }
+                None => {
+                    builder =
+                        builder.agent(target.clone(), self.runner(Arc::clone(&hosted.agent))?);
+                }
+            }
             for set in &hosted.kernel.wake_sets {
-                for trigger in triggers(&inner.tenant, target, set) {
+                let run_target = match &set.partition {
+                    Some(partition) if hosted.partitions.contains_key(partition) => {
+                        partition_target(target, partition)
+                    }
+                    _ => target.clone(),
+                };
+                for trigger in triggers(&inner.tenant, target, &run_target, set) {
                     builder = builder.trigger(trigger);
                 }
                 for wake in &set.any_of {
@@ -404,9 +530,28 @@ impl TenantKernel {
         policy
     }
 
+    /// The runner of partition `partition`'s agent: the tenant's, acting with the
+    /// partition's class and tenant (spec 3.2 §7.8).
+    fn partition_runner(
+        &self,
+        agent: Arc<dyn Agent>,
+        partition: &Partition,
+    ) -> Result<Arc<Runner>> {
+        let identity = partition.identity_source(&self.inner.tenant, agent.name());
+        self.runner_with(agent, Some(identity))
+    }
+
     /// The runner of a hosted definition's agent: the tenant's app, sessions, kill switch
     /// and approvals.
     fn runner(&self, agent: Arc<dyn Agent>) -> Result<Arc<Runner>> {
+        self.runner_with(agent, None)
+    }
+
+    fn runner_with(
+        &self,
+        agent: Arc<dyn Agent>,
+        identity: Option<Arc<dyn adk_core::IdentitySource>>,
+    ) -> Result<Arc<Runner>> {
         let inner = &self.inner;
         let mut config = RunConfig::builder();
         if let Some(service) = &inner.stores.approval_service {
@@ -425,13 +570,23 @@ impl TenantKernel {
         if let Some(spend) = &inner.spend {
             builder = builder.spend_ledger(Arc::clone(spend));
         }
+        if let Some(identity) = identity {
+            builder = builder.identity_source(identity);
+        }
         Ok(Arc::new(builder.build()?))
     }
 }
 
+/// The target of partition `partition`'s agent of definition `target`:
+/// `<definition>@<partition>` (spec 3.2 §7.8).
+fn partition_target(target: &str, partition: &PartitionId) -> String {
+    format!("{target}@{partition}")
+}
+
 /// The kernel triggers of `set` on definition `target`: one per wake, named
-/// `<target>/<set>`, each enqueueing a run of `target` for the tenant.
-fn triggers(tenant: &str, target: &str, set: &WakeSetDef) -> Vec<Trigger> {
+/// `<target>/<set>`, each enqueueing a run of `run_target` — the definition's target, or its
+/// partition's agent — for the tenant.
+fn triggers(tenant: &str, target: &str, run_target: &str, set: &WakeSetDef) -> Vec<Trigger> {
     let name = format!("{target}/{}", set.name);
     let on_conflict = match set.overlap {
         WakeOverlap::Queue => OnConflict::Enqueue,
@@ -441,7 +596,7 @@ fn triggers(tenant: &str, target: &str, set: &WakeSetDef) -> Vec<Trigger> {
         set.queue_class().as_str(),
         tenant,
         set.user(),
-        target,
+        run_target,
         json!({ "text": set.input }),
     )
     .with_concurrency_key(format!("wake-set:{name}"), on_conflict);
@@ -475,6 +630,8 @@ pub struct TenantKernelBuilder {
     agenda: Option<Arc<dyn AgendaStore>>,
     agenda_handle: Option<AgendaHandle>,
     consolidators: BTreeMap<PartitionId, Arc<dyn Consolidator>>,
+    partition_store: Option<Arc<dyn PartitionStore>>,
+    partition_resolver: Option<Arc<dyn PartitionAgentResolver>>,
 }
 
 impl fmt::Debug for TenantKernelBuilder {
@@ -576,6 +733,24 @@ impl TenantKernelBuilder {
         self
     }
 
+    /// Sets the tenant's partition table and crossing ledger, the tenant's own (spec 3.2
+    /// §7.8). Defaults to in memory.
+    #[must_use]
+    pub fn partition_store(mut self, store: Arc<dyn PartitionStore>) -> Self {
+        self.partition_store = Some(store);
+        self
+    }
+
+    /// Builds one agent per partition a definition declares with `resolver`, such as
+    /// `adk-harness`'s `HarnessResolver`: one harness per partition (spec 3.2 §7.8). Without
+    /// one, a definition's partitions are recorded and its agent runs in the default
+    /// partition.
+    #[must_use]
+    pub fn partition_resolver(mut self, resolver: Arc<dyn PartitionAgentResolver>) -> Self {
+        self.partition_resolver = Some(resolver);
+        self
+    }
+
     /// Builds the tenant's kernel. Nothing runs until [`TenantKernel::start`].
     ///
     /// # Errors
@@ -595,6 +770,12 @@ impl TenantKernelBuilder {
         if let Some(governance) = self.governance {
             config.governance = governance;
         }
+        let mut partitions = Partitions::new(
+            self.partition_store.unwrap_or_else(|| Arc::new(InMemoryPartitionStore::new())),
+        );
+        if let Some(trail) = &self.audit {
+            partitions = partitions.with_audit(trail.clone());
+        }
         Ok(TenantKernel {
             inner: Arc::new(TenantInner {
                 tenant: self.tenant,
@@ -610,6 +791,8 @@ impl TenantKernelBuilder {
                 agenda: self.agenda.unwrap_or_else(|| Arc::new(InMemoryAgendaStore::new())),
                 agenda_handle: self.agenda_handle.unwrap_or_default(),
                 consolidators: self.consolidators,
+                partitions,
+                partition_resolver: self.partition_resolver,
                 hosting: tokio::sync::Mutex::new(Hosting::default()),
             }),
         })
@@ -623,6 +806,7 @@ impl TenantKernelBuilder {
 /// |---|---|
 /// | no kernel block | whatever the tenant's resolver answers, `None` leaving it to `build_agent` |
 /// | a kernel block, an agent the tenant's resolver builds | that agent, hosted on the tenant's kernel |
+/// | a kernel block with partitions, and a [`PartitionAgentResolver`] | one agent per partition, hosted with [`TenantKernel::host_partitions`]; the runtime's sessions run the coordinator's, else the first partition's by id (spec 3.2 §7.8) |
 /// | a kernel block, no agent the resolver builds | refused: a kernel hosts an agent the operator's resolver builds, such as a harness definition |
 /// | an invalid kernel block | refused as an invalid request, naming the key |
 ///
@@ -661,9 +845,95 @@ impl AgentResolver for KernelResolver {
                 super::KERNEL_DEF_METADATA_KEY
             )));
         };
-        self.tenant.host(def, Arc::clone(&agent)).await.map_err(runtime_error)?;
+        let partitions = match &block {
+            Some(block) if !block.partitions.is_empty() => {
+                self.tenant.inner.partition_resolver.as_ref().map(|resolver| (block, resolver))
+            }
+            _ => None,
+        };
+        let Some((block, resolver)) = partitions else {
+            self.tenant.host(def, Arc::clone(&agent)).await.map_err(runtime_error)?;
+            return Ok(Some(agent));
+        };
+        // One agent per partition, each in the tenant's partition table (spec 3.2 §7.8).
+        let mut agents = BTreeMap::new();
+        for declared in &block.partitions {
+            let host = PartitionHost {
+                partition: declared.to_partition(self.tenant.tenant()).map_err(runtime_error)?,
+                partitions: self.tenant.partitions().clone(),
+                coordinator: block.coordinator.as_ref() == Some(&declared.id),
+            };
+            let Some(agent) = resolver.resolve_partition(def, &host, models).await? else {
+                return Err(RuntimeError::invalid_request(format!(
+                    "definition '{}' declares partition `{}`, and the tenant's partition \
+                     resolver builds no agent for it",
+                    def.name, declared.id
+                )));
+            };
+            agents.insert(declared.id.clone(), agent);
+        }
+        let primary = block.primary_partition().expect("a block with partitions has a primary");
+        let agent = Arc::clone(&agents[&primary]);
+        self.tenant.host_partitions(def, agents).await.map_err(runtime_error)?;
         Ok(Some(agent))
     }
+}
+
+/// Builds the agent of one partition of a hosted definition (spec 3.2 §7.8, §7.13): one
+/// harness per partition, built with the partition's mode, class and tenant, memory scope,
+/// drivers and crossing policy over the tenant's partition table. `adk-harness`'s
+/// `HarnessResolver` implements it.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use adk_core::Agent;
+/// use adk_kernel::managed::{PartitionAgentResolver, PartitionHost};
+/// use adk_managed::resolver::ModelResolver;
+/// use adk_managed::types::{ManagedAgentDef, RuntimeError};
+///
+/// struct Builds;
+///
+/// #[async_trait::async_trait]
+/// impl PartitionAgentResolver for Builds {
+///     async fn resolve_partition(
+///         &self,
+///         _def: &ManagedAgentDef,
+///         host: &PartitionHost,
+///         _models: &dyn ModelResolver,
+///     ) -> Result<Option<Arc<dyn Agent>>, RuntimeError> {
+///         // Build the partition's harness with `host.partition` and `host.partitions`.
+///         let _ = (&host.partition, &host.partitions, host.coordinator);
+///         Ok(None)
+///     }
+/// }
+/// ```
+#[async_trait]
+pub trait PartitionAgentResolver: Send + Sync {
+    /// The agent of `host.partition` for `def`, or `None` when this resolver builds none.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error that kept the agent from being built; the definition is refused.
+    async fn resolve_partition(
+        &self,
+        def: &ManagedAgentDef,
+        host: &PartitionHost,
+        models: &dyn ModelResolver,
+    ) -> std::result::Result<Option<Arc<dyn Agent>>, RuntimeError>;
+}
+
+/// The partition a [`PartitionAgentResolver`] builds an agent for (spec 3.2 §7.8).
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct PartitionHost {
+    /// The partition's record, its tenant the hosting tenant.
+    pub partition: Partition,
+    /// The tenant's partition table, which the partition's crossing policy reads.
+    pub partitions: Partitions,
+    /// Whether the partition's agent is the coordinator ([`KernelDef::coordinator`]).
+    pub coordinator: bool,
 }
 
 fn runtime_error(error: KernelError) -> RuntimeError {
@@ -676,8 +946,8 @@ fn runtime_error(error: KernelError) -> RuntimeError {
 /// The tenants a host runs, one kernel each (spec 3.2 §7.13).
 ///
 /// A tenant's stores are its own: [`insert`](Self::insert) refuses a tenant whose run
-/// store, decision store, state store, approval service or process store another tenant
-/// already holds, since a shared run store lets one tenant's workers claim the other's
+/// store, decision store, state store, approval service, process store or partition store
+/// another tenant already holds, since a shared run store lets one tenant's workers claim the other's
 /// runs. Stores that are distinct values over one database are not detected; give each
 /// tenant its own database, schema or key namespace.
 ///
@@ -810,6 +1080,9 @@ fn shared_store(a: &TenantKernel, b: &TenantKernel) -> Option<&'static str> {
     }
     if same(a.process_store(), b.process_store()) {
         return Some("process store");
+    }
+    if same(a.partitions().store(), b.partitions().store()) {
+        return Some("partition store");
     }
     None
 }

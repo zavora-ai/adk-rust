@@ -18,7 +18,7 @@ use chrono::{DateTime, Utc};
 
 use super::consolidate::{ConsolidationConfig, ConsolidationRecord, ConsolidationRequest};
 use super::runtime::FactsRuntime;
-use super::types::{FactFilter, FactKind};
+use super::types::{FactFilter, FactKind, FactScope};
 use crate::harness::Harness;
 use crate::mode::HarnessMode;
 
@@ -295,6 +295,11 @@ impl Harness {
 /// already remembered is promoted to `Known` rather than stored twice; a rejected
 /// observation records nothing, so any related fact stays as it was.
 ///
+/// A partition's harness is the audience of its own partition only (spec 3.2 §7.8,
+/// K-I15): it answers no one for another partition's observations, refuses to confirm one,
+/// and remembers a confirmed observation in the partition's `memory_scope`, where no other
+/// partition reads it.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -308,6 +313,16 @@ pub struct HarnessObservations {
     facts: Arc<FactsRuntime>,
     app: String,
     user: String,
+    /// The partition of a partition's harness.
+    partition: Option<PartitionId>,
+}
+
+impl HarnessObservations {
+    /// Whether `partition`'s observations are this audience's: any partition's for a
+    /// harness without one, else its own only.
+    fn serves(&self, partition: &PartitionId) -> bool {
+        self.partition.as_ref().is_none_or(|own| own == partition)
+    }
 }
 
 impl std::fmt::Debug for HarnessObservations {
@@ -320,12 +335,25 @@ impl std::fmt::Debug for HarnessObservations {
 impl ObservationAudience for HarnessObservations {
     async fn audience(
         &self,
-        _partition: &PartitionId,
+        partition: &PartitionId,
     ) -> adk_kernel::Result<Option<(SubjectRef, PartitionMode)>> {
+        if !self.serves(partition) {
+            return Ok(None);
+        }
         Ok(Some((SubjectRef::human(&self.user), partition_mode(self.facts.default_mode))))
     }
 
     async fn confirm(&self, item: &AgendaItem, by: &SubjectRef) -> adk_kernel::Result<String> {
+        if !self.serves(&item.partition) {
+            return Err(adk_kernel::KernelError::Config {
+                reason: format!(
+                    "agenda item {} is an observation of partition `{}`, which this harness \
+                     does not run; only its own partition's harness remembers it (spec 3.2 \
+                     K-I15)",
+                    item.id, item.partition
+                ),
+            });
+        }
         if item.subject.id != self.user {
             return Err(adk_kernel::KernelError::Config {
                 reason: format!(
@@ -335,7 +363,12 @@ impl ObservationAudience for HarnessObservations {
                 ),
             });
         }
-        let scope = self.facts.scope(&self.app, &self.user).user_wide();
+        // User-wide, or a partition's memory scope (spec 3.2 §7.8).
+        let scope = FactScope::new(
+            self.app.clone(),
+            self.user.clone(),
+            self.facts.project_of(FactKind::Preference),
+        );
         let fact = self.facts.confirm(by, scope, FactKind::Preference, &item.rationale).await?;
         Ok(fact.id)
     }
@@ -367,6 +400,11 @@ impl Harness {
                  this harness; turn it on with HarnessAgentBuilder::long_term_memory",
             )
         })?;
-        Ok(HarnessObservations { facts, app: self.app_name().to_string(), user: user.to_string() })
+        Ok(HarnessObservations {
+            facts,
+            app: self.app_name().to_string(),
+            user: user.to_string(),
+            partition: self.partition().map(|partition| partition.id.clone()),
+        })
     }
 }

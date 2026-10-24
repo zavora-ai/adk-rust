@@ -209,3 +209,135 @@ async fn a_harness_definition_on_a_tenant_kernel_runs_its_held_write_once_after_
     assert_eq!(ledger.begun.load(Ordering::SeqCst), 1);
     assert_eq!(model.remaining(), 0);
 }
+
+/// A tenant over its own in-memory stores, one harness per partition through
+/// `HarnessResolver` as both resolvers, every harness remembering in `facts`.
+fn partitioned_tenant(
+    name: &str,
+    workspaces: &std::path::Path,
+    facts: Arc<adk_harness::InMemoryFactStore>,
+) -> TenantKernel {
+    let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+    let stores = ManagedStores::new(
+        Arc::new(InMemoryManagedStateStore::new()),
+        Arc::clone(&runs),
+        Arc::new(InMemoryApprovalStore::new()),
+    );
+    let resolver =
+        Arc::new(HarnessResolver::new(workspaces.join(name)).configure(move |builder, _def| {
+            builder
+                .long_term_memory(adk_harness::LongTermMemoryConfig {
+                    distill: false,
+                    ..adk_harness::LongTermMemoryConfig::default()
+                })
+                .fact_store(facts.clone())
+        }));
+    TenantKernel::builder(name, stores, Arc::new(InMemorySessionService::new()))
+        .config(
+            KernelConfig::default().with_worker(
+                DurableWorkerConfig::default()
+                    .with_worker_id(name)
+                    .with_lease_ttl(Duration::from_millis(600))
+                    .with_poll_interval(Duration::from_millis(20)),
+            ),
+        )
+        .resolver(resolver.clone())
+        .partition_resolver(resolver)
+        .build()
+        .unwrap()
+}
+
+/// The definition both tenants host: home, the coordinator, and work, whose `standup` wake
+/// starts work's harness.
+fn partitioned_definition() -> ManagedAgentDef {
+    let harness: ManagedAgentDef =
+        HarnessDef::new("assistant", ModelRef::Shorthand("scripted".into()))
+            .with_mode(HarnessMode::Ask)
+            .with_shell(ShellPolicy::none())
+            .into();
+    KernelDef::new()
+        .with_partition(
+            adk_kernel::managed::PartitionDef::new("home", "home-agents")
+                .with_mode(adk_kernel::PartitionMode::Auto),
+        )
+        .with_partition(
+            adk_kernel::managed::PartitionDef::new("work", "work-agents")
+                .with_mode(adk_kernel::PartitionMode::Auto),
+        )
+        .with_coordinator("home")
+        .with_wake_set(
+            WakeSetDef::new("standup", [Wake::Webhook { hook: "standup".into() }], "Standup.")
+                .with_partition("work"),
+        )
+        .apply_to(harness)
+}
+
+/// Spec 3.2 §7.8, §7.13: a tenant kernel runs one harness per partition its definition
+/// declares, on the tenant's stores. Each tenant's partition table holds the partitions
+/// with that tenant as their tenant; a wake in work runs work's harness as
+/// `assistant@work`; what tenant A's work harness remembers is in A's work scope, and tenant
+/// B's work harness, on the same fact store, does not find it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn each_tenant_runs_one_harness_per_partition_on_its_own_stores() {
+    use adk_harness::FactStore as _;
+
+    let workspaces = tempfile::tempdir().unwrap();
+    let facts = Arc::new(adk_harness::InMemoryFactStore::new());
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        vec![
+            ScriptedResponse::function_call(
+                "memory_remember",
+                json!({ "text": "Standup is at nine.", "kind": "project_fact" }),
+            ),
+            ScriptedResponse::text("noted"),
+            ScriptedResponse::function_call("memory_search", json!({ "query": "standup" })),
+            ScriptedResponse::text("nothing on record"),
+        ],
+    ));
+    let mut pids = Vec::new();
+    let mut tenants = Vec::new();
+    for name in ["tenant-a", "tenant-b"] {
+        let tenant = partitioned_tenant(name, workspaces.path(), facts.clone());
+        let runtime = tenant.runtime(Arc::new(Models(Arc::clone(&model))));
+        runtime.create(partitioned_definition()).await.unwrap();
+        tenant.start().await.unwrap();
+
+        // The tenant's own partition table, the tenant on every record.
+        let partitions = tenant.partitions().list().await.unwrap();
+        let shown: Vec<(&str, Option<&str>)> = partitions
+            .iter()
+            .map(|partition| (partition.id.as_str(), partition.tenant.as_deref()))
+            .collect();
+        assert_eq!(shown, [("home", Some(name)), ("work", Some(name))]);
+
+        // A wake in work runs work's harness, in work.
+        let kernel = tenant.kernel().await.unwrap();
+        let delivery = WakeEvent::new("hook:standup", "hook:standup:evt-1", json!({}));
+        kernel.wake_router().submit(&delivery, name).await.unwrap();
+        let process = eventually("the standup process to complete", || async {
+            let processes = kernel.processes().ps(Default::default()).await.unwrap();
+            processes.into_iter().find(|process| process.run.state == RunState::Completed)
+        })
+        .await;
+        assert_eq!(process.run.target, "assistant@work");
+        assert_eq!(process.meta.partition.as_str(), "work");
+        pids.push(process.meta.pid.clone());
+        tenants.push(tenant);
+    }
+
+    // Tenant A's fact is in A's work scope; tenant B's search did not find it.
+    let remembered = facts.list(adk_harness::FactFilter::user("tenant-a", "kernel")).await.unwrap();
+    assert_eq!(remembered.len(), 1, "{remembered:?}");
+    assert_eq!(remembered[0].scope.project.as_deref(), Some("work"));
+    assert!(
+        facts.list(adk_harness::FactFilter::user("tenant-b", "kernel")).await.unwrap().is_empty()
+    );
+    let searched = model.requests().last().cloned().unwrap();
+    let answer = serde_json::to_string(&searched.contents.last()).unwrap();
+    assert!(answer.contains("memory_search"), "{answer}");
+    assert!(!answer.contains("nine"), "tenant B saw tenant A's fact: {answer}");
+    for tenant in tenants {
+        tenant.stop().await.unwrap();
+    }
+}

@@ -113,7 +113,7 @@ What the builder sets for the partition:
 | Follow-ups | `propose_followup` puts the item on the partition's agenda; approved, it runs as a process of the partition on its harness |
 | Working notes | A memory root of the partition's own: `<base>/partitions/<memoryScope>/…`, and `<workspace>/.adk/memory/partitions/<memoryScope>/…` for the project layout |
 | Project-scoped memory | `Partition::scope_memory` confines an `adk_core::Memory` to the partition's project; a search or a write naming another project is refused, and a memory without project scoping is refused outright |
-| Drivers | `partition_drivers(toolset)`: the toolset of the drivers mounted for the partition — a driver whose manifest lists the partition and whose id is in `drivers` |
+| Drivers | `partition_drivers(&supervisor)`: the kernel's [drivers](drivers.md) mounted for the partition — `kernel_drivers` with the partition's id and its own `drivers` list — classed by their manifests under the kernel's driver policy. A driver whose manifest does not list the partition, or that the partition does not list, is invisible to its harness |
 | Crossing tools | `partition_memory_search` (a read) and `partition_memory_remember` (a write) reach another partition's facts; `partition_crossing_tool` offers the coordinator another partition's driver or session tool as `<partition>__<tool>` |
 | Policy | The partition's `PartitionPolicy` composed with the operator policy through `StrictestPolicy`, so it never loosens the harness policy (K-I6) |
 
@@ -143,13 +143,16 @@ quotas = { max_running = 2, daily_spend_cap_usd = 1.5 }
 ```
 
 With long-term memory and consolidation on, each partition in Ask or Auto gets a consolidation
-tick of its own, which distils only the sessions its partition's harness ran.
+tick of its own, which distils only the sessions its partition's harness ran. Each partition's
+harness gets the mounted drivers its `drivers` list names, and is the audience of its own
+partition's `/proc` observations.
 
 ## Hosting partitions on a kernel
 
 `Harness::kernel` on a partition's harness registers its runner as the targets
-`<app>@<partition>` and `harness.goal@<partition>`, bound to the partition; `host_partition` adds
-another partition's harness to the same builder:
+`<app>@<partition>` and `harness.goal@<partition>`, bound to the partition, and its progress
+source as the partition's (`KernelBuilder::partition_progress_source`); `host_partition` adds
+another partition's harness to the same builder the same way:
 
 ```rust
 use std::sync::Arc;
@@ -177,6 +180,21 @@ fn kernel(
 | A run of `adk-rust@work` enqueued outside the kernel (`/api/runs`) | Listed in `work` by `ps` |
 | A process of `work` continuing a session a `home` agent ran | Refused with `kernel.config` |
 
+The kernel reads a process's goal progress, loop-guard verdict and usage from its partition's
+progress source — by the process's own partition — and hands every source the process table and
+the [ledger](proc.md) at start, so each partition's harness attributes its own spend, parks its own
+stalled goals and writes its own ledger rows. A partition with no source of its own falls back to
+the main one (`KernelBuilder::progress_source`); its processes keep their partition. Two sources
+for one partition are refused at `build`, and a source for a partition the table does not hold is
+warned about at start.
+
+## Self-observation per partition
+
+| Part | Per partition |
+|---|---|
+| Ledger rows | A partition's harness writes its rows — intents, tool calls, its audit records — in its partition, never `default`; the kernel's own rows carry the process's partition |
+| Observations | `KernelBuilder::observation_audience(partition, ..)` registers each partition's audience; an observation is put only to its own partition's audience, and `adk-rust up` registers each partition's harness for its partition |
+| A confirmed observation | `Harness::observation_audience` of a partition's harness remembers it as a `Known` fact in the partition's memory scope, not user-wide; it answers no one for another partition's observations and refuses to confirm one, so a partition's observation never reaches another partition's facts |
 ## Crossings
 
 The partition's `PartitionPolicy` decides the calls of its crossing tools and lets every other
@@ -296,6 +314,64 @@ impl PartitionStoreHarness for InMemory {
 }
 
 adk_kernel::partition_store_conformance_tests! { harness = InMemory }
+```
+
+## Partitions in the managed form
+
+A [managed](managed.md) definition declares partitions and their coordinator in its kernel block,
+as `[[kernel.partitions]]` and `kernel.coordinator` do in `harness.toml`:
+
+```json
+{
+  "partitions": [
+    { "id": "home", "class": "home-agents", "crossPartition": "coordinator_with_approval" },
+    { "id": "work", "class": "work-agents", "defaultMode": "auto", "crossPartition": "coordinator_with_approval" }
+  ],
+  "coordinator": "home",
+  "wakeSets": [
+    { "name": "standup", "anyOf": [{ "webhook": { "hook": "standup" } }], "input": "Prepare the standup.", "partition": "work" }
+  ]
+}
+```
+
+| Part | On the tenant's kernel |
+|---|---|
+| Partition table | The tenant's own (`TenantKernelBuilder::partition_store`, in memory by default): each partition with the tenant as its tenant; `ManagedKernels` refuses a tenant whose partition store another tenant holds |
+| Agents | `TenantKernelBuilder::partition_resolver` builds one agent per partition — `adk-harness`'s `HarnessResolver` builds one harness per partition with `partition` and, for the coordinator, `partition_coordinator` — as `<definition>@<partition>`, bound to its partition and acting with its class and the tenant |
+| The definition's own target | The coordinator's agent, else the first partition's by id; the runtime's sessions run it |
+| Wake sets | A wake set in a partition starts that partition's agent |
+| Refused | A coordinator the block does not declare, a partition declared twice, a partition key the record does not have (`tenant` included), a partition another hosted definition of the tenant declares |
+
+Without a partition resolver the partitions are recorded and the definition's agent runs in the
+default partition.
+
+```toml
+[dependencies]
+adk-kernel = { version = "3.0.0", features = ["managed"] }
+adk-harness = { version = "3.0.0", features = ["managed", "kernel"] }
+adk-managed = "3.0.0"
+adk-session = "3.0.0"
+```
+
+```rust
+use std::sync::Arc;
+
+use adk_harness::packs::managed::HarnessResolver;
+use adk_kernel::managed::TenantKernel;
+use adk_managed::ManagedStores;
+use adk_session::InMemorySessionService;
+
+fn tenant() -> adk_kernel::Result<TenantKernel> {
+    let harnesses = Arc::new(HarnessResolver::new("./workspaces/tenant-a"));
+    TenantKernel::builder(
+        "tenant-a",
+        ManagedStores::in_memory(),
+        Arc::new(InMemorySessionService::new()),
+    )
+    .resolver(harnesses.clone())
+    .partition_resolver(harnesses)
+    .build()
+}
 ```
 
 ## The control plane

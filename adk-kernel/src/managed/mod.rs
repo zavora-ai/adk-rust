@@ -5,9 +5,10 @@
 //!
 //! | Item | What it is |
 //! |---|---|
-//! | [`KernelDef`] | Partitions, driver manifests, the proactivity policy and wake sets, as a block under the [`KERNEL_DEF_METADATA_KEY`] metadata key of a `ManagedAgentDef`, beside the harness's `adk.harness` |
+//! | [`KernelDef`] | Partitions and their coordinator, driver manifests, the proactivity policy and wake sets, as a block under the [`KERNEL_DEF_METADATA_KEY`] metadata key of a `ManagedAgentDef`, beside the harness's `adk.harness` |
 //! | [`TenantKernel`] | One kernel over one tenant's `ManagedStores`: the tenant's definitions as targets, their wake sets as triggers, their proactivity policy, the tenant's approval service waking parked processes |
 //! | [`KernelResolver`] | The `AgentResolver` the tenant's runtime is built with: it hosts each definition carrying a kernel block on the tenant's kernel |
+//! | [`PartitionAgentResolver`], [`PartitionHost`] | One agent per partition a definition declares — one harness per partition — over the tenant's partition table (spec 3.2 §7.8) |
 //! | [`ManagedKernels`] | A host's tenants, one kernel each, refusing a tenant whose stores another holds |
 //!
 //! A definition comes from a tenant, so its kernel block cannot widen what the operator
@@ -37,4 +38,7 @@ pub use def::{
     CROSS_PARTITION_VALUES, DEFAULT_WAKE_USER, KERNEL_DEF_METADATA_KEY, KernelDef, PartitionDef,
     WakeOverlap, WakeSetDef,
 };
-pub use tenant::{KernelResolver, ManagedKernels, TenantKernel, TenantKernelBuilder};
+pub use tenant::{
+    KernelResolver, ManagedKernels, PartitionAgentResolver, PartitionHost, TenantKernel,
+    TenantKernelBuilder,
+};

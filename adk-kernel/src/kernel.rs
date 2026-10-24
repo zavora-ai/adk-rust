@@ -538,11 +538,19 @@ impl Kernel {
             tasks.push(mirror);
         }
         sup.draining.store(false, Ordering::SeqCst);
-        if let Some(progress) = &sup.progress {
+        for progress in sup.progress_sources() {
             progress.attach(ProcessHandle::new(&sup));
             #[cfg(feature = "proc")]
             if let Some(ledger) = &self.inner.ledger {
                 progress.attach_ledger(Arc::new(ledger.clone()));
+            }
+        }
+        for partition in sup.partition_progress.keys() {
+            if matches!(sup.partitions.get(partition).await, Ok(None)) {
+                tracing::warn!(
+                    partition = %partition,
+                    "a progress source is registered for a partition the partition table does not hold"
+                );
             }
         }
         if !governance.is_frozen() {
@@ -1429,6 +1437,7 @@ pub struct KernelBuilder {
     triggers: Vec<Trigger>,
     sinks: Vec<Arc<dyn EventSink>>,
     progress: Option<Arc<dyn ProgressSource>>,
+    partition_progress: Vec<(PartitionId, Arc<dyn ProgressSource>)>,
     queue_ingresses: Vec<QueueIngress>,
     agenda: Option<Arc<dyn AgendaStore>>,
     agenda_handles: Vec<AgendaHandle>,
@@ -1577,6 +1586,44 @@ impl KernelBuilder {
         self
     }
 
+    /// Sets the progress source of partition `partition` (spec 3.2 §7.8, §7.10): the
+    /// kernel asks it, not the [`progress_source`](Self::progress_source), for the goal
+    /// progress, loop-guard verdict and usage of that partition's processes — routed by the
+    /// process's own partition — and hands it the process table and the ledger at start, as
+    /// it does the main source. A partition without a source of its own falls back to the
+    /// main source; its processes keep their partition.
+    ///
+    /// [`build`](Self::build) refuses a second source for the same partition, and
+    /// [`Kernel::start`] warns about a partition the partition table does not hold.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::InMemoryRunStore;
+    /// use adk_kernel::{Kernel, ProgressSource};
+    ///
+    /// struct Work;
+    /// impl ProgressSource for Work {}
+    ///
+    /// let builder = || Kernel::builder().run_store(Arc::new(InMemoryRunStore::new()));
+    /// assert!(builder().partition_progress_source("work", Arc::new(Work)).build().is_ok());
+    /// let twice = builder()
+    ///     .partition_progress_source("work", Arc::new(Work))
+    ///     .partition_progress_source("work", Arc::new(Work))
+    ///     .build();
+    /// assert!(twice.is_err());
+    /// ```
+    #[must_use]
+    pub fn partition_progress_source(
+        mut self,
+        partition: impl Into<PartitionId>,
+        source: Arc<dyn ProgressSource>,
+    ) -> Self {
+        self.partition_progress.push((partition.into(), source));
+        self
+    }
+
     /// Adds a queue ingress the kernel runs while started, such as
     /// [`queue_wake_ingress`](crate::queue_wake_ingress).
     #[must_use]
@@ -1709,12 +1756,24 @@ impl KernelBuilder {
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::Config`] when no run store is set or the control plane
-    /// configuration is refused (K-I18).
+    /// Returns [`KernelError::Config`] when no run store is set, the control plane
+    /// configuration is refused (K-I18), or a partition has two progress sources.
     pub fn build(self) -> Result<Kernel> {
         let runs = self.runs.ok_or_else(|| KernelError::Config {
             reason: "a kernel needs a durable run store; call KernelBuilder::run_store".into(),
         })?;
+        let mut partition_progress = BTreeMap::new();
+        for (partition, source) in self.partition_progress {
+            if partition_progress.contains_key(&partition) {
+                return Err(KernelError::Config {
+                    reason: format!(
+                        "partition `{partition}` has two progress sources; register one per \
+                         partition with KernelBuilder::partition_progress_source"
+                    ),
+                });
+            }
+            partition_progress.insert(partition, source);
+        }
         let mut config = self.config;
         if let Some(governance) = self.governance {
             config.governance = governance;
@@ -1790,6 +1849,7 @@ impl KernelBuilder {
             audit: self.audit.clone(),
             sessions: self.sessions.clone(),
             progress: self.progress,
+            partition_progress,
             workers: std::sync::OnceLock::new(),
             handles: std::sync::Mutex::new(Vec::new()),
             draining: std::sync::atomic::AtomicBool::new(false),

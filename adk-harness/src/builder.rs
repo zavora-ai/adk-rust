@@ -519,7 +519,10 @@ impl HarnessAgentBuilder {
             self.long_term.project = Some(partition.memory_scope.clone());
         }
         self.partition.partition = Some((partition, partitions));
-        self
+        match self.partition.drivers.take() {
+            Some(drivers) => self.partition_drivers(&drivers),
+            None => self,
+        }
     }
 
     /// Makes this partition's harness the coordinator, the one agent that may reach
@@ -530,12 +533,33 @@ impl HarnessAgentBuilder {
         self
     }
 
-    /// The toolset of the drivers mounted for this partition (spec 3.2 §7.7, §7.8): only
-    /// mounted drivers whose manifest lists the partition and whose id is in its `drivers`.
+    /// Mounts `drivers` for this partition (spec 3.2 §7.7, §7.8), as
+    /// [`kernel_drivers`](Self::kernel_drivers) with the partition's id and its own `drivers`
+    /// list: the harness sees a driver only when its manifest lists the partition and the
+    /// partition lists its id, so a driver of another partition is invisible to it (K-I15).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let work = HarnessAgent::builder("harness")
+    ///     .model(model)
+    ///     .workspace(workspace)
+    ///     .partition(adk_kernel::Partition::new("work", "work").with_driver("calendar"), partitions)
+    ///     .partition_drivers(&drivers)
+    ///     .build()?;
+    /// ```
+    ///
+    /// Call it before or after [`partition`](Self::partition); `build` fails when no
+    /// partition is set.
     #[cfg(feature = "kernel")]
-    pub fn partition_drivers(mut self, drivers: Arc<dyn Toolset>) -> Self {
-        self.toolsets.push(drivers);
-        self
+    pub fn partition_drivers(mut self, drivers: &adk_kernel::drivers::DriverSupervisor) -> Self {
+        let Some((partition, _)) = &self.partition.partition else {
+            // Mounted once `partition` names the partition.
+            self.partition.drivers = Some(drivers.clone());
+            return self;
+        };
+        let (id, ids) = (partition.id.clone(), partition.drivers.clone());
+        self.kernel_drivers(drivers, &id, &ids)
     }
 
     /// Offers the coordinator `tool`, which reaches partition `to`'s `resource` named

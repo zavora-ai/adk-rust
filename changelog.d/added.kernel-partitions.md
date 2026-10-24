@@ -8,7 +8,8 @@
   - `HarnessAgentBuilder::partition` builds a partition's harness: its mode, its class and
     tenant on every agent's principal through the runner's identity source, every long-term
     fact and its working notes in the partition's memory scope (no user-wide fact is read or
-    written), its drivers (`partition_drivers`), and `partition_memory_search` and
+    written), the kernel's drivers its own list names and whose manifests serve it
+    (`partition_drivers`; any other driver is invisible), and `partition_memory_search` and
     `partition_memory_remember` to reach another partition's facts.
   - `PartitionPolicy` denies a request reaching another partition unless the coordinator
     (`partition_coordinator`) makes it, then requires an approval no standing rule, expiring
@@ -45,5 +46,20 @@
     (`adk-cli`).
   - `examples/harness_kernel`: K7 scripted (`k7_partitions`) and live through `adk-rust up`
     (`live_k7_partitions`).
+  - `KernelBuilder::partition_progress_source`: each partition's own progress source, which
+    the kernel asks for its processes' goal progress, loop-guard verdicts and usage and hands
+    the process table and the ledger; `host_partition` registers each partition's harness, so a
+    partition's harness writes its ledger rows in its partition rather than `default`. Two
+    sources for one partition are refused at `build`.
+  - `/proc` observations per partition: a partition's harness is the audience of its own
+    partition's observations only, and remembers a confirmed one in the partition's memory
+    scope; `adk-rust up` registers each partition's harness for its partition.
+  - The managed form: `KernelDef::coordinator` beside `partitions`, `PartitionDef::to_partition`,
+    and one agent per partition on a tenant's kernel through
+    `TenantKernelBuilder::partition_resolver` (`PartitionAgentResolver`, `PartitionHost`;
+    `HarnessResolver` implements it) over the tenant's own partition table
+    (`TenantKernelBuilder::partition_store`, `TenantKernel::partitions`,
+    `TenantKernel::host_partitions`); `ManagedKernels` refuses a tenant whose partition store
+    another tenant holds.
   - `PolicyCall::durable_run_id` (`adk-core`): the governed path tells a policy which durable
     run a call belongs to.
