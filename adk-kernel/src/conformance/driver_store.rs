@@ -28,8 +28,8 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde_json::json;
 
 use crate::drivers::{
-    DriverAccess, DriverIsolation, DriverLifecycle, DriverManifest, DriverPark, DriverRecord,
-    DriverSandbox, DriverStore, EffectClass,
+    DriverAccess, DriverIsolation, DriverLifecycle, DriverManifest, DriverPark, DriverProcessTree,
+    DriverRecord, DriverSandbox, DriverStore, EffectClass,
 };
 use crate::partition::PartitionId;
 
@@ -127,6 +127,7 @@ fn full_record(id: &str, sandbox: DriverSandbox, isolation: DriverIsolation) -> 
     .into();
     let mut record = DriverRecord::new(manifest, "alice ü", instant(0));
     record.isolation = Some(isolation);
+    record.process_tree = Some(DriverProcessTree::JobObject);
     record.stale = [("tool_3_send_external".to_string(), "sha256:cc".to_string())].into();
     record.updated_at = instant(60);
     record

@@ -286,6 +286,41 @@ with rules and `allow_network = false` blocks all network access and logs a warn
 
 A restricted token is set when the process is created, so it cannot be attached to a `tokio::process::Command` that the caller spawns. `probe()` therefore returns `EnforcerUnavailable` and `configure_command()` returns `EnforcerFailed`, naming `run_confined`: `sandboxed_command`, `ProcessBackend::with_sandbox` and the harness shell do not confine on Windows and report so. The PR tier's `windows` job runs the enforcer's tests.
 
+### Process trees on Windows
+
+A Windows process has no process group, so ending a process leaves what it started
+running. `adk_sandbox::process_tree::JobObject` (feature `process-tree`, implied by
+`sandbox-windows`; Windows only) holds a process tree in a Job Object that ends its
+processes when its last handle closes (spec 3.2 §10 W1). Start the process with
+`CREATE_SUSPENDED` and pass its id to `JobObject::contain_suspended`, which places it in a
+new job and only then lets it run, so nothing it starts is outside the job.
+
+| Call | Does |
+|------|------|
+| `JobObject::contain_suspended(pid)` | Places the suspended process in a new job, then resumes it |
+| `JobObject::new()`, `assign(handle)` | An empty job, and a process added to it |
+| `terminate()` | Ends every process in the job |
+| `kill_on_close(false)` | Lets the processes run on once the job's last handle closes |
+| Dropping the job | Ends every process left in it, also when the owning process exits |
+
+```rust,ignore
+use adk_sandbox::process_tree::{CREATE_SUSPENDED, JobObject};
+
+async fn run() -> std::io::Result<()> {
+    let mut command = tokio::process::Command::new("cmd.exe");
+    command.args(["/c", "start /b ping -n 100 127.0.0.1"]).creation_flags(CREATE_SUSPENDED);
+    let mut child = command.spawn()?;
+    let job = JobObject::contain_suspended(child.id().expect("the child runs"))?;
+    child.wait().await?;
+    // `ping`, which the shell left running, ends with the job.
+    drop(job);
+    Ok(())
+}
+```
+
+The devtools `bash` tool, each stdio server of `adk-tool`'s `McpServerManager` (and so each
+kernel driver), and `WindowsEnforcer::run_confined` hold their processes this way.
+
 ## Workspace Clients
 
 The `workspace` feature adds a `provision → session → exec → snapshot → resume` lifecycle.

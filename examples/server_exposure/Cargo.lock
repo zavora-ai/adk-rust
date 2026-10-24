@@ -128,6 +128,7 @@ name = "adk-devtools"
 version = "3.0.0"
 dependencies = [
  "adk-core",
+ "adk-sandbox",
  "async-trait",
  "glob",
  "libc",
@@ -250,6 +251,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-sandbox"
+version = "3.0.0"
+dependencies = [
+ "adk-core",
+ "async-trait",
+ "find-msvc-tools",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "adk-server"
 version = "3.0.0"
 dependencies = [
@@ -327,6 +345,7 @@ version = "3.0.0"
 dependencies = [
  "adk-core",
  "adk-rust-macros",
+ "adk-sandbox",
  "adk-telemetry",
  "async-trait",
  "base64 0.22.1",

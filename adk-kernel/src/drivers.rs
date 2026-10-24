@@ -9,6 +9,7 @@
     feature = "drivers",
     doc = r#"| [`DriverManifest`], [`DriverSandbox`], [`DriverLifecycle`], [`DriverAccess`], [`load_manifests`] (feature `drivers`) | §7.7 |
 | [`DriverStore`], [`DriverRecord`], [`DriverPark`], [`DriverIsolation`] (feature `drivers`) | §7.7, §9.3, §13 Q8, Q9 |
+| [`DriverProcessTree`] (feature `drivers`) | §10 W1 |
 | [`DriverSupervisor`], [`DriverSupervisorBuilder`], [`DriverProposal`], [`DriverView`], [`StandingRulePins`] (feature `drivers`) | §7.7, K-I13, K-I14 |
 | [`DriverPolicy`] (feature `drivers`) | §7.7, K-I9, K-I14 |"#
 )]
@@ -16,6 +17,7 @@
     not(feature = "drivers"),
     doc = r#"| `DriverManifest`, `DriverSandbox`, `DriverLifecycle`, `DriverAccess`, `load_manifests` (feature `drivers`) | §7.7 |
 | `DriverStore`, `DriverRecord`, `DriverPark`, `DriverIsolation` (feature `drivers`) | §7.7, §9.3, §13 Q8, Q9 |
+| `DriverProcessTree` (feature `drivers`) | §10 W1 |
 | `DriverSupervisor`, `DriverSupervisorBuilder`, `DriverProposal`, `DriverView`, `StandingRulePins` (feature `drivers`) | §7.7, K-I13, K-I14 |
 | `DriverPolicy` (feature `drivers`) | §7.7, K-I9, K-I14 |"#
 )]
@@ -30,8 +32,9 @@
 //!    `lifecycle = "eager"`. The stdio launcher runs the server under the OS sandbox where an
 //!    enforcer exists and records `Unsandboxed { reason }` otherwise, with an environment
 //!    cleared to an allowlist and each `secret://` reference minted by the credential broker
-//!    into a file only the user can read. The first listing after approval pins each tool's
-//!    declaration digest.
+//!    into a file only the user can read. On Windows the server runs in a Job Object of its
+//!    own, so ending the driver ends every process it started (spec 3.2 §10 W1). The first
+//!    listing after approval pins each tool's declaration digest.
 //! 3. **Supervise.** The MCP manager's status channel (spec 3.2 §10 T1) becomes
 //!    [`KernelEvent::Driver`](crate::KernelEvent::Driver) events and `kernel.driver.*`
 //!    records; a crash restarts with the manifest's backoff.
@@ -74,7 +77,7 @@ pub use manifest::{
 #[cfg(feature = "drivers")]
 pub use policy::DriverPolicy;
 #[cfg(feature = "drivers")]
-pub use store::{DriverIsolation, DriverPark, DriverRecord, DriverStore};
+pub use store::{DriverIsolation, DriverPark, DriverProcessTree, DriverRecord, DriverStore};
 #[cfg(feature = "drivers")]
 pub(crate) use supervisor::not_mounted;
 #[cfg(feature = "drivers")]

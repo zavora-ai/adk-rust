@@ -35,6 +35,7 @@ adk-rust = { version = "3.0", features = ["sandbox"] }
 | `sandbox-linux` | Linux bubblewrap enforcement        | ❌      | None (external `bwrap` binary) |
 | `sandbox-windows` | Windows restricted-token enforcement | ❌      | `windows-sys`      |
 | `sandbox-native` | All three enforcers; only the target platform's compiles | ❌ | All of the above |
+| `process-tree` | `process_tree::JobObject`: a process tree held in a Job Object (Windows only; implied by `sandbox-windows`) | ❌ | `windows-sys` |
 | `workspace` | Workspace lifecycle + `LocalUnixClient` | ❌   | `tar`, `uuid`      |
 | `workspace-docker` | `DockerClient` (implies `workspace`) | ❌ | `bollard`, `futures` |
 
