@@ -246,6 +246,12 @@ jobs:
     - name: Clippy and test the shard's pairs
       run: bash scripts/check-feature-coverage.sh ${{ matrix.shard }}
 
+    # adk-surface's OpenAPI document and TypeScript types are generated from its Rust types
+    # (spec 3.3 §6); the committed ones must match.
+    - name: Require adk-surface's generated API to match its Rust types
+      if: matrix.shard == 2
+      run: bash scripts/check-surface-api.sh
+
   # ── PostgreSQL: the database crates against a live server ───────
   # The PostgreSQL backends' tests are #[ignore]d because they need a server, so no
   # other PR-tier job runs them. The pgvector image is postgres:17 plus the extension,
