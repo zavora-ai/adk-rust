@@ -9,6 +9,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use super::pairing::{
+    AcceptChannelRequest, ChannelAccountResponse, ChannelAccountState, ChannelAccountView,
+    ChannelAccountsResponse, ChannelPairingView, ClaimRequest, DeviceResponse, DevicesResponse,
+    IssueRequest,
+};
 use crate::agenda::{AgendaFilter, AgendaItem, AgendaStateKind};
 use crate::partition::PartitionId;
 use crate::process::{Process, ProcessKind};

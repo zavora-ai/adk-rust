@@ -453,13 +453,38 @@ impl SurfaceEngine {
     ///
     /// Returns the source's error.
     pub async fn decisions(&self, caller: &Caller) -> Result<Vec<DecisionCard>> {
+        self.open_decisions(caller, None).await
+    }
+
+    /// The decisions of one session waiting for `caller`, oldest first (spec 3.3 §10 C1).
+    ///
+    /// # Errors
+    ///
+    /// Returns the source's error.
+    pub async fn session_decisions(
+        &self,
+        caller: &Caller,
+        session: &str,
+    ) -> Result<Vec<DecisionCard>> {
+        self.open_decisions(caller, Some(session)).await
+    }
+
+    async fn open_decisions(
+        &self,
+        caller: &Caller,
+        session: Option<&str>,
+    ) -> Result<Vec<DecisionCard>> {
         let mut requests: Vec<ApprovalRequest> = self
             .inner
             .source
-            .requests(caller, true)
+            .requests(caller, session, true)
             .await?
             .into_iter()
-            .filter(|request| owns(caller, request) && request.state == ApprovalState::Pending)
+            .filter(|request| {
+                owns(caller, request)
+                    && request.state == ApprovalState::Pending
+                    && session.is_none_or(|session| request.scope.session_id == session)
+            })
             .collect();
         requests.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
         let mut cards = Vec::with_capacity(requests.len());
@@ -527,16 +552,20 @@ impl SurfaceEngine {
             .ok_or_else(|| SurfaceError::not_found(format!("session '{session}'")))
     }
 
-    /// Held calls' fingerprints to their inbox entries, for the session's thread items.
+    /// Held calls to their inbox entries, for the session's thread items: by fingerprint,
+    /// or by the tool and its arguments where the source shows no fingerprints.
     async fn links(&self, caller: &Caller, session: &str) -> Result<HashMap<String, String>> {
         Ok(self
             .inner
             .source
-            .requests(caller, false)
+            .requests(caller, Some(session), false)
             .await?
             .into_iter()
             .filter(|request| owns(caller, request) && request.scope.session_id == session)
-            .map(|request| (request.fingerprint, request.id))
+            .map(|request| match request.fingerprint.is_empty() {
+                true => (project::call_key(&request.tool_name, &request.args_redacted), request.id),
+                false => (request.fingerprint, request.id),
+            })
             .collect())
     }
 
@@ -629,12 +658,7 @@ impl SurfaceEngine {
             }
             sent = len;
         }
-        let open: Vec<DecisionCard> = self
-            .decisions(caller)
-            .await?
-            .into_iter()
-            .filter(|card| card.session_id == session)
-            .collect();
+        let open = self.session_decisions(caller, session).await?;
         let signature: Vec<(String, u64)> =
             open.iter().map(|card| (card.id.clone(), card.version)).collect();
         if cards.as_ref() != Some(&signature) {
@@ -954,7 +978,7 @@ impl SurfaceEngine {
         if text.trim().is_empty() {
             return Err(SurfaceError::Invalid("the message is empty".into()));
         }
-        let open = self.decisions(caller).await?.iter().any(|card| card.session_id == session);
+        let open = !self.session_decisions(caller, &session).await?.is_empty();
         // A running turn takes the message next, as an open decision does (S-I4).
         let busy = !open && self.inner.source.busy(caller.user_id(), &session).await?;
         if open || busy || queue {
@@ -1010,8 +1034,8 @@ impl SurfaceEngine {
                 if started.elapsed() > DRAIN_PATIENCE {
                     break;
                 }
-                let open = match engine.decisions(&caller).await {
-                    Ok(cards) => cards.iter().any(|card| card.session_id == session),
+                let open = match engine.session_decisions(&caller, &session).await {
+                    Ok(cards) => !cards.is_empty(),
                     Err(_) => true,
                 };
                 if open {

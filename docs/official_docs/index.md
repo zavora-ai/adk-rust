@@ -74,6 +74,7 @@ The governed, durable harness agent (`adk-harness`, spec 3.1): modes, approvals,
 - [Harness Hooks](harness/hooks.md) - Hooks on tool events: deny, fail or annotate through the shell's launcher, never allow; workspace hooks under trust; `harness.hook.ran`
 - [Harness Payments](harness/payments.md) - The payments pack: `adk-payments` tools as class `Payment`, one non-waivable approval per call, mandate guardrails, spend ledger, `harness.payment` with the journal receipt
 - [Harness Voice](harness/voice.md) - The voice surface: the harness as the agent of an `IntegratedRealtimeRunner`, held calls surfaced as realtime events, spoken or inbox approvals, `harness.voice.*` in one audit trail
+- [The Personal Preset and Take Over](harness/personal.md) - `--preset personal`: a workspace of notes and files under the home, no host shell, quiet time and a daily spending limit asked at first run; take over: a typed secret reaches one tool call only
 
 ## Agent Kernel
 
@@ -82,6 +83,7 @@ The always-on form of the harness (`adk-kernel`, spec 3.2): durable processes th
 - [Overview](kernel/index.md) - What `adk-rust up` runs: workers per queue, the process table, the event bus, freezing, using the kernel from code
 - [Kernel Commands](kernel/cli.md) - `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`, `freeze`, `unfreeze`, `events`, `goal` on a running kernel, `[kernel]` in `harness.toml`
 - [The Control Plane](kernel/control-plane.md) - The socket, named-pipe and HTTP transports, the auth matrix, routes, `kernel.control` audit records, `ControlClient`
+- [Pairing Devices and Chat Channels](kernel/pairing.md) - `adk-rust pair`, scoped and revocable device tokens stored hashed, the chat channel gateway and its adapter contract suite
 - [Drivers](kernel/drivers.md) - MCP servers the kernel supervises under approved manifests: effect classes, the OS sandbox, brokered secrets, re-approval of changed tools, parked calls across a restart
 - [Running the Kernel as a Service](kernel/service.md) - `adk-rust up --install`, `--uninstall` and `--print`: a launchd agent, a systemd user unit or a Windows service that runs as you
 - [The Managed Form](kernel/managed.md) - One kernel per tenant on the managed runtime: `KernelDef` beside `adk.harness`, wake sets, the tenant's proactivity policy, the managed approval path, voice decisions on parked processes

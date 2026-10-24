@@ -157,6 +157,8 @@ pub struct HarnessRuntime {
     /// The payments pack's per-request reminder (spec 3.1 §7.16).
     #[cfg(feature = "payments")]
     pub(crate) payments: Option<Arc<crate::packs::payments::PaymentsReminder>>,
+    /// Take over, when the harness was built with it (spec 3.3 §10 H2).
+    pub(crate) take_over: Option<crate::take_over::TakeOver>,
 }
 
 /// The harness's audit trail, in Block mode: `recorder`, or with feature `auth` an
@@ -217,6 +219,12 @@ impl HarnessRuntime {
     /// The approval inbox, if configured.
     pub fn approval_service(&self) -> Option<&Arc<dyn ApprovalService>> {
         self.approval_service.as_ref()
+    }
+
+    /// Take over (spec 3.3 §8.2, §10 H2), when the harness was built with it: surfaces answer
+    /// a take-over entry through it.
+    pub fn take_over(&self) -> Option<&crate::take_over::TakeOver> {
+        self.take_over.as_ref()
     }
 
     /// Where non-idempotent calls are recorded when a run carries no ledger of its own

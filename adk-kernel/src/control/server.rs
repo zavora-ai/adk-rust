@@ -114,7 +114,8 @@ impl ControlPlane {
         }
         if let Some(addr) = config.http {
             let (local, task) =
-                serve_http(addr, api, config.extractor.clone(), plane.stop.clone()).await?;
+                serve_http(addr, api, &backend, config.extractor.clone(), plane.stop.clone())
+                    .await?;
             plane.tasks.push(task);
             plane.http = Some(local);
         }
@@ -358,10 +359,13 @@ async fn serve_socket(
 
 /// Serves `api` over HTTP on `addr`, authenticating with `extractor`, or admitting loopback
 /// peers as the OS user when there is none (a non-loopback bind without one never gets
-/// here: `ControlPlaneConfig::validate` refuses it).
+/// here: `ControlPlaneConfig::validate` refuses it). A request carrying a paired device's
+/// token is that device whatever else would admit it (spec 3.3 §10 K2), and the pairing
+/// claim route needs no caller.
 async fn serve_http(
     addr: SocketAddr,
     api: Router,
+    backend: &Arc<dyn ControlBackend>,
     extractor: Option<Arc<dyn RequestContextExtractor>>,
     stop: CancellationToken,
 ) -> Result<(SocketAddr, JoinHandle<()>)> {
@@ -370,11 +374,33 @@ async fn serve_http(
     })?;
     let local = listener.local_addr()?;
     let user = os_user();
+    let devices = backend.clone();
     let app = api.layer(middleware::from_fn(move |request: Request<Body>, next: Next| {
         let extractor = extractor.clone();
         let user = user.clone();
+        let backend = devices.clone();
         async move {
             let (parts, body) = request.into_parts();
+            if let Some(pairing) = backend.pairing()
+                && let Some(token) = crate::pairing::device_token(&parts.headers)
+            {
+                let (token, path) = (token.to_string(), parts.uri.path().to_string());
+                return match super::pairing::admit_device(
+                    backend.as_ref(),
+                    &pairing,
+                    &token,
+                    &parts.method,
+                    &path,
+                )
+                .await
+                {
+                    Ok(context) => {
+                        let request = Request::from_parts(parts, body);
+                        admit(request, next, context, ControlTransport::Http).await
+                    }
+                    Err(response) => response,
+                };
+            }
             let context = match &extractor {
                 Some(extractor) => match extractor.extract(&parts).await {
                     Ok(context) => context,
@@ -406,6 +432,10 @@ async fn serve_http(
             admit(Request::from_parts(parts, body), next, context, ControlTransport::Http).await
         }
     }));
+    let app = match backend.pairing() {
+        Some(_) => app.merge(super::pairing::claim_routes(backend.clone())),
+        None => app,
+    };
     let service = app.into_make_service_with_connect_info::<SocketAddr>();
     let task = tokio::spawn(async move {
         if let Err(error) =

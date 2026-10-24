@@ -82,6 +82,11 @@ pub(crate) trait ControlBackend: Send + Sync + 'static {
     fn ledger(&self) -> Option<crate::proc::Ledger> {
         None
     }
+
+    /// Device pairing (spec 3.3 §10 K2); `None` on a backend that pairs no devices.
+    fn pairing(&self) -> Option<crate::pairing::Pairing> {
+        None
+    }
 }
 
 #[async_trait]
@@ -179,6 +184,10 @@ impl ControlBackend for Kernel {
     fn ledger(&self) -> Option<crate::proc::Ledger> {
         Kernel::ledger(self).cloned()
     }
+
+    fn pairing(&self) -> Option<crate::pairing::Pairing> {
+        self.config().control.pairing.clone()
+    }
 }
 
 /// The routes over `backend`, relative to `/api`.
@@ -210,19 +219,24 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         .route(paths::PROC_LEDGER, get(proc_ledger))
         .route(paths::PROC_BASELINES, get(proc_baselines))
         .route(paths::PROC_OBSERVATIONS, get(proc_observations));
-    router.with_state(backend)
+    // Device pairing (spec 3.3 §10 K2); its tokens are admitted where the transport
+    // authenticates, and by `guard_devices` in front of a server's app.
+    match backend.pairing() {
+        Some(_) => router.with_state(backend.clone()).merge(super::pairing::routes(backend)),
+        None => router.with_state(backend),
+    }
 }
 
 type Backend = State<Arc<dyn ControlBackend>>;
 
 /// The authenticated caller of a route (K-I16).
 pub(crate) struct Caller {
-    context: RequestContext,
+    pub(super) context: RequestContext,
     transport: ControlTransport,
 }
 
 impl Caller {
-    fn subject(&self) -> SubjectRef {
+    pub(super) fn subject(&self) -> SubjectRef {
         SubjectRef::human(self.context.user_id.clone())
     }
 
@@ -231,7 +245,7 @@ impl Caller {
     }
 
     /// Refuses a caller without the `operator` scope the routes that change the kernel need.
-    fn require_operator(&self, action: &str) -> Result<()> {
+    pub(super) fn require_operator(&self, action: &str) -> Result<()> {
         if self.context.scopes.iter().any(|scope| scope == OPERATOR_SCOPE) {
             return Ok(());
         }
@@ -272,7 +286,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 /// # Errors
 ///
 /// The trail's error under `AuditFailureMode::Block`; the caller refuses the action.
-async fn record(
+pub(super) async fn record(
     backend: &dyn ControlBackend,
     caller: &Caller,
     action: &str,
@@ -298,6 +312,11 @@ async fn record(
     .ext("transport", json!(caller.transport))
     .ext("action", json!(action))
     .ext("target", json!(target));
+    // A paired device's action names the device (spec 3.3 §11).
+    let draft = match caller.context.metadata.get(crate::pairing::DEVICE_ID_METADATA) {
+        Some(device) => draft.ext("device", json!(device)),
+        None => draft,
+    };
     let draft = extra.iter().fold(draft, |draft, (key, value)| draft.ext(*key, value.clone()));
     trail.record(draft).await.map_err(KernelError::from)
 }

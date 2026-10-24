@@ -18,6 +18,7 @@
 //! | [`REVIEW`] | `partition`, `reviewPeriodMs`, `rules`, `sleepers`, `frozen` (ids and ages), `ask` |
 //! | [`DRIVER_MOUNTED`], [`DRIVER_UNMOUNTED`], [`DRIVER_STARTED`], [`DRIVER_CRASHED`], [`DRIVER_RESTARTED`], [`DRIVER_STALE`], [`DRIVER_REAPPROVED`] | `driverId`, `commandDigest`, `partitions`, `effectClasses`, `digests`, `attempt` |
 //! | [`OBSERVATION`] | `id`, `partition`, `dimensions`, `windows` — no value that identifies content |
+//! | [`CHANNEL`] | `surface`, `origin`, `channel`, `account`, `action`, `target` (spec 3.3 §11) |
 //!
 //! The partition actions of §9.3 arrive with their phase.
 //!
@@ -86,3 +87,7 @@ pub const DRIVER_STALE: &str = "kernel.driver.stale";
 pub const DRIVER_REAPPROVED: &str = "kernel.driver.reapproved";
 /// A baseline pass recorded an observation (spec 3.2 §7.10, feature `proc-baselines`).
 pub const OBSERVATION: &str = "kernel.observation";
+/// Something a chat thread did or was sent (spec 3.3 §10 K1, §11): a pairing request, a
+/// message, a decision card, an answer, a stop or a refused resume, with `surface: chat`,
+/// `origin`, `channel`, `account`, `action` and `target` (feature `channels`).
+pub const CHANNEL: &str = "kernel.channel";

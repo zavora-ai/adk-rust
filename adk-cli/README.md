@@ -162,6 +162,7 @@ adk-rust registry     Agent Registry registration and search (`vertex-agent-regi
 | `--trust` | ask once | Trust the workspace's `AGENTS.md` without asking |
 | `--pack`, `--member` | none | Packs and team members |
 | `--no-hooks` | off | Run no hooks, the workspace's included; `/hooks` lists the effective set |
+| `--preset` | none | `personal`: a workspace of notes and files under the home, no host shell, quiet time and a daily spending limit asked at first run (spec 3.3 §10 H1); `coding`: the coding agent's prompt |
 
 Settings also come from `.adk/harness.toml` in the workspace (which can only tighten) and
 `adk-rust/harness.toml` in the config directory, `[[hooks]]` tables included; flags win.

@@ -386,7 +386,12 @@ impl Source for LocalSource {
         }
     }
 
-    async fn requests(&self, caller: &Caller, open_only: bool) -> Result<Vec<ApprovalRequest>> {
+    async fn requests(
+        &self,
+        caller: &Caller,
+        session: Option<&str>,
+        open_only: bool,
+    ) -> Result<Vec<ApprovalRequest>> {
         let Some(approvals) = &self.approvals else {
             return Ok(Vec::new());
         };
@@ -396,6 +401,9 @@ impl Source for LocalSource {
             .with_states(states)
             .with_app_name(self.app.clone())
             .with_limit(INBOX_PAGE);
+        if let Some(session) = session {
+            query = query.with_session_id(session);
+        }
         let mut requests = Vec::new();
         loop {
             let page = approvals.inbox(query.clone()).await?;
