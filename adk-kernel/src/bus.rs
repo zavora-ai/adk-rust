@@ -7,15 +7,17 @@
 //! first and never blocks a process. A reconnecting surface catches up by cursor
 //! ([`EventBus::subscribe_after`]) rather than by holding a subscription open.
 //!
-//! Phase 1's sinks are the control plane's SSE stream (`GET /kernel/events`, a subscriber)
-//! and the signed audit log ([`AuditSink`]) for the events that are audit records (§9.3).
+//! The receivers are the control plane's SSE stream (`GET /kernel/events`, a subscriber),
+//! the signed audit log ([`AuditSink`]) for the events that are audit records (§9.3), and
+//! outbound webhooks (`WebhookSink`, feature `webhooks`): each event an [`EventFilter`]
+//! selects, signed with Standard Webhooks signatures as the webhook ingress verifies them.
 //! `Driver` events come from the MCP manager's status channel (spec 3.2 §10 T1), never
-//! polled. Channel notifiers and outbound webhooks arrive with later phases. With a
-//! ledger (feature `proc`), the kernel's ledger sink writes a content-free row for every
-//! event but `Health` (spec 3.2 §7.10).
+//! polled. With a ledger (feature `proc`), the kernel's ledger sink writes a content-free
+//! row for every event but `Health` (spec 3.2 §7.10).
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::fmt;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -29,11 +31,16 @@ use serde_json::json;
 use tokio::sync::{Notify, broadcast};
 
 use crate::agenda::AgendaState;
-use crate::error::Result;
+use crate::error::{KernelError, Result};
 use crate::kernel::KernelHealth;
 use crate::partition::PartitionId;
 use crate::review::ReviewReport;
 use crate::wake::WakeOutcome;
+
+#[cfg(feature = "webhooks")]
+mod webhook;
+#[cfg(feature = "webhooks")]
+pub use webhook::WebhookSink;
 
 /// How many events a subscriber may fall behind before it skips ahead.
 pub const DEFAULT_EVENT_CAPACITY: usize = 1024;
@@ -171,20 +178,211 @@ pub enum KernelEvent {
 impl KernelEvent {
     /// The event's type, as its `type` field serializes it.
     pub fn name(&self) -> &'static str {
+        self.kind().as_str()
+    }
+
+    /// The event's kind, which an [`EventFilter`] selects on.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_kernel::{EventKind, KernelEvent};
+    ///
+    /// let event = KernelEvent::Governance { frozen: true, reason: None };
+    /// assert_eq!(event.kind(), EventKind::Governance);
+    /// ```
+    pub fn kind(&self) -> EventKind {
         match self {
-            Self::Process { .. } => "process",
-            Self::Wake { .. } => "wake",
-            Self::Held { .. } => "held",
-            Self::Decided { .. } => "decided",
-            Self::RuleHit { .. } => "ruleHit",
-            Self::Spend { .. } => "spend",
-            Self::Agenda { .. } => "agenda",
-            Self::Review(_) => "review",
-            Self::Driver { .. } => "driver",
-            Self::Observation { .. } => "observation",
-            Self::Governance { .. } => "governance",
-            Self::Health(_) => "health",
+            Self::Process { .. } => EventKind::Process,
+            Self::Wake { .. } => EventKind::Wake,
+            Self::Held { .. } => EventKind::Held,
+            Self::Decided { .. } => EventKind::Decided,
+            Self::RuleHit { .. } => EventKind::RuleHit,
+            Self::Spend { .. } => EventKind::Spend,
+            Self::Agenda { .. } => EventKind::Agenda,
+            Self::Review(_) => EventKind::Review,
+            Self::Driver { .. } => EventKind::Driver,
+            Self::Observation { .. } => EventKind::Observation,
+            Self::Governance { .. } => EventKind::Governance,
+            Self::Health(_) => EventKind::Health,
         }
+    }
+}
+
+/// The kind of a [`KernelEvent`], named as its `type` field serializes it (spec 3.2 §7.6).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::EventKind;
+///
+/// let kind: EventKind = "ruleHit".parse().unwrap();
+/// assert_eq!(kind, EventKind::RuleHit);
+/// assert_eq!(kind.to_string(), "ruleHit");
+/// assert!("rule_hit".parse::<EventKind>().is_err());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum EventKind {
+    /// [`KernelEvent::Process`].
+    Process,
+    /// [`KernelEvent::Wake`].
+    Wake,
+    /// [`KernelEvent::Held`].
+    Held,
+    /// [`KernelEvent::Decided`].
+    Decided,
+    /// [`KernelEvent::RuleHit`].
+    RuleHit,
+    /// [`KernelEvent::Spend`].
+    Spend,
+    /// [`KernelEvent::Agenda`].
+    Agenda,
+    /// [`KernelEvent::Review`].
+    Review,
+    /// [`KernelEvent::Driver`].
+    Driver,
+    /// [`KernelEvent::Observation`].
+    Observation,
+    /// [`KernelEvent::Governance`].
+    Governance,
+    /// [`KernelEvent::Health`].
+    Health,
+}
+
+impl EventKind {
+    /// Every kind, in declaration order.
+    pub const ALL: [EventKind; 12] = [
+        Self::Process,
+        Self::Wake,
+        Self::Held,
+        Self::Decided,
+        Self::RuleHit,
+        Self::Spend,
+        Self::Agenda,
+        Self::Review,
+        Self::Driver,
+        Self::Observation,
+        Self::Governance,
+        Self::Health,
+    ];
+
+    /// The kind's name, as a [`KernelEvent`]'s `type` field serializes it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Process => "process",
+            Self::Wake => "wake",
+            Self::Held => "held",
+            Self::Decided => "decided",
+            Self::RuleHit => "ruleHit",
+            Self::Spend => "spend",
+            Self::Agenda => "agenda",
+            Self::Review => "review",
+            Self::Driver => "driver",
+            Self::Observation => "observation",
+            Self::Governance => "governance",
+            Self::Health => "health",
+        }
+    }
+}
+
+impl fmt::Display for EventKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for EventKind {
+    type Err = KernelError;
+
+    fn from_str(text: &str) -> Result<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == text.trim()).ok_or_else(|| {
+            KernelError::Config {
+                reason: format!(
+                    "unknown kernel event type `{text}`; use one of {}",
+                    Self::ALL.map(Self::as_str).join(", ")
+                ),
+            }
+        })
+    }
+}
+
+/// Which [`KernelEvent`]s a sink delivers, by kind (spec 3.2 §7.6).
+///
+/// The default selects every kind but [`EventKind::Health`], the periodic report a
+/// receiver outside the kernel rarely needs and the first event a slow sink drops.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::{EventFilter, EventKind, KernelEvent};
+///
+/// let frozen = KernelEvent::Governance { frozen: true, reason: None };
+/// assert!(EventFilter::default().matches(&frozen));
+/// assert!(!EventFilter::default().selects(EventKind::Health));
+/// assert!(EventFilter::all().selects(EventKind::Health));
+///
+/// let decisions = EventFilter::only([EventKind::Held, EventKind::Decided]);
+/// assert!(!decisions.matches(&frozen));
+/// assert_eq!(EventFilter::parse(["held", "decided"]).unwrap(), decisions);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventFilter {
+    kinds: BTreeSet<EventKind>,
+}
+
+impl Default for EventFilter {
+    fn default() -> Self {
+        Self::all().without(EventKind::Health)
+    }
+}
+
+impl EventFilter {
+    /// Every kind, `Health` included.
+    pub fn all() -> Self {
+        Self::only(EventKind::ALL)
+    }
+
+    /// Only `kinds`.
+    pub fn only(kinds: impl IntoIterator<Item = EventKind>) -> Self {
+        Self { kinds: kinds.into_iter().collect() }
+    }
+
+    /// Only the kinds named in `names`, as [`EventKind`] parses them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Config`] naming the first unknown type, so a misspelt name
+    /// is refused rather than silently selecting nothing.
+    pub fn parse<S: AsRef<str>>(names: impl IntoIterator<Item = S>) -> Result<Self> {
+        names
+            .into_iter()
+            .map(|name| name.as_ref().parse())
+            .collect::<Result<Vec<EventKind>>>()
+            .map(Self::only)
+    }
+
+    /// These kinds without `kind`.
+    #[must_use]
+    pub fn without(mut self, kind: EventKind) -> Self {
+        self.kinds.remove(&kind);
+        self
+    }
+
+    /// Whether the filter selects `kind`.
+    pub fn selects(&self, kind: EventKind) -> bool {
+        self.kinds.contains(&kind)
+    }
+
+    /// Whether the filter selects `event`.
+    pub fn matches(&self, event: &KernelEvent) -> bool {
+        self.selects(event.kind())
+    }
+
+    /// The selected kinds, in declaration order.
+    pub fn kinds(&self) -> impl Iterator<Item = EventKind> + '_ {
+        self.kinds.iter().copied()
     }
 }
 
@@ -255,6 +453,17 @@ pub trait EventSink: Send + Sync {
     ///
     /// Returns the sink's delivery error; the bus logs it and carries on.
     async fn emit(&self, event: &KernelEvent) -> Result<()>;
+
+    /// Delivers `record`, the event with its cursor and time; the bus calls this. The
+    /// default delivers the event alone through [`emit`](Self::emit); a sink whose receiver
+    /// orders or deduplicates by cursor, such as an outbound webhook, overrides it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the sink's delivery error; the bus logs it and carries on.
+    async fn emit_record(&self, record: &EventRecord) -> Result<()> {
+        self.emit(&record.event).await
+    }
 }
 
 /// The kernel's event bus (spec 3.2 §7.6).
@@ -265,7 +474,7 @@ pub trait EventSink: Send + Sync {
 /// | Receiver | Delivery | When it falls behind |
 /// |---|---|---|
 /// | [`EventSubscriber`] (the control plane's SSE stream) | A broadcast of `capacity` events | Skips to the oldest event still held |
-/// | [`EventSink`] | Its own queue of `capacity` events, drained by a task on the Tokio runtime | Drops a queued `Health` first, then its oldest event; [`publish`](Self::publish) never waits |
+/// | [`EventSink`] | Its own queue of `capacity` events, drained in order by a task on the Tokio runtime through [`EventSink::emit_record`] | Drops a queued `Health` first, then its oldest event; [`publish`](Self::publish) never waits |
 ///
 /// The bus keeps its last `capacity` events, so [`subscribe_after`](Self::subscribe_after)
 /// replays what a reconnecting surface missed before the live events, with no gap and no
@@ -315,7 +524,7 @@ impl Drop for BusInner {
 struct SinkQueue {
     sink: Arc<dyn EventSink>,
     capacity: usize,
-    queue: Mutex<VecDeque<KernelEvent>>,
+    queue: Mutex<VecDeque<EventRecord>>,
     ready: Notify,
     started: AtomicBool,
     closed: AtomicBool,
@@ -325,29 +534,29 @@ struct SinkQueue {
 impl SinkQueue {
     /// Queues `event`, shedding a `Health` event first and then the oldest when full, and
     /// starts the drain task when a runtime is available.
-    fn push(self: &Arc<Self>, event: KernelEvent) {
+    fn push(self: &Arc<Self>, record: EventRecord) {
         {
             let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
             if queue.len() >= self.capacity {
                 let dropped = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
-                if matches!(event, KernelEvent::Health(_)) {
+                if matches!(record.event, KernelEvent::Health(_)) {
                     tracing::warn!(sink.dropped = dropped, "event sink is behind; health dropped");
                     return;
                 }
                 let health =
-                    queue.iter().position(|queued| matches!(queued, KernelEvent::Health(_)));
+                    queue.iter().position(|queued| matches!(queued.event, KernelEvent::Health(_)));
                 let shed = match health {
                     Some(index) => queue.remove(index),
                     None => queue.pop_front(),
                 };
-                let shed = shed.as_ref().map_or("none", KernelEvent::name);
+                let shed = shed.as_ref().map_or("none", |shed| shed.event.name());
                 tracing::warn!(
                     event.dropped = shed,
                     sink.dropped = dropped,
                     "event sink is behind; event dropped"
                 );
             }
-            queue.push_back(event);
+            queue.push_back(record);
         }
         self.ready.notify_one();
         self.start();
@@ -369,9 +578,9 @@ impl SinkQueue {
         loop {
             let next = self.queue.lock().unwrap_or_else(PoisonError::into_inner).pop_front();
             match next {
-                Some(event) => {
-                    if let Err(error) = self.sink.emit(&event).await {
-                        tracing::warn!(event.kind = event.name(), error = %error, "event sink failed");
+                Some(record) => {
+                    if let Err(error) = self.sink.emit_record(&record).await {
+                        tracing::warn!(event.kind = record.event.name(), error = %error, "event sink failed");
                     }
                 }
                 None if self.closed.load(Ordering::Acquire) => return,
@@ -449,7 +658,7 @@ impl EventBus {
         };
         let sinks = self.inner.sinks.lock().unwrap_or_else(PoisonError::into_inner).clone();
         for sink in sinks {
-            sink.push(record.event.clone());
+            sink.push(record.clone());
         }
         record
     }
@@ -767,6 +976,36 @@ mod tests {
         assert_eq!(fields(2, "deduplicated"), Some(json!(true)));
         assert_eq!(fields(3, "matchedPid"), Some(json!("run-3")));
         assert_eq!(fields(3, "expiry"), Some(json!("cancel")));
+    }
+
+    #[test]
+    fn every_event_kind_round_trips_by_its_type_name() {
+        for kind in EventKind::ALL {
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
+            assert_eq!(kind.as_str().parse::<EventKind>().unwrap(), kind);
+            assert_eq!(kind.to_string(), kind.as_str());
+        }
+        let names: BTreeSet<&str> = EventKind::ALL.iter().map(|kind| kind.as_str()).collect();
+        assert_eq!(names.len(), EventKind::ALL.len(), "each kind has its own name");
+        for event in [governance(true), health(), wake(None)] {
+            assert_eq!(serde_json::to_value(&event).unwrap()["type"], event.kind().as_str());
+            assert_eq!(event.name(), event.kind().as_str());
+        }
+        assert!("Governance".parse::<EventKind>().is_err());
+    }
+
+    #[test]
+    fn a_filter_selects_by_kind_and_refuses_unknown_type_names() {
+        let filter = EventFilter::parse(["decided", "held"]).unwrap();
+        assert_eq!(filter.kinds().collect::<Vec<_>>(), [EventKind::Held, EventKind::Decided]);
+        assert!(!filter.matches(&governance(true)));
+        let error = EventFilter::parse(["held", "helth"]).unwrap_err().to_string();
+        assert!(error.contains("`helth`") && error.contains("governance"), "{error}");
+
+        let default = EventFilter::default();
+        assert!(!default.matches(&health()) && default.matches(&governance(false)));
+        assert_eq!(default.kinds().count(), EventKind::ALL.len() - 1);
+        assert_eq!(EventFilter::all().without(EventKind::Health), default);
     }
 
     #[test]

@@ -33,7 +33,7 @@ non-loopback refusal, the `--store` backend — and adds the kernel:
 | Workers | One `DurableWorker` per queue class: `interactive` (polls every 500 ms), `background` (2 s), `maintenance` (5 s); each parks a run a freeze refuses instead of failing it |
 | Scheduler | `DurableScheduler` over the schedule store, ticking every second |
 | Process table | The durable runs plus the kernel's side table: parent, partition, queue, kind, wake set, suspension |
-| Event bus | Every process change, wake, hold, decision and governance change, numbered by cursor |
+| Event bus | Every process change, wake, hold, decision and governance change, numbered by cursor, to subscribers and sinks such as outbound webhooks ([event bus](events.md)) |
 | Control plane | `/api/kernel/...` on the Unix socket at the kernel home (a named pipe on Windows) and on HTTP, beside the approvals inbox |
 | Kill switch | `GovernanceControl` mirrored from the store every 250 ms, so a freeze reaches every replica within a second |
 | Audit | One signed log per replica (`kernel-<id>`), holding the harness's tool-call records and the kernel's `kernel.*` records |
@@ -114,7 +114,7 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 | `sqlite` | on | `SqliteProcessStore` on the `harness.db` pool |
 | `postgres`, `redis` | off | The kernel's stores in the backend replicas share |
 | `mongodb`, `firestore`, `neo4j` | off | **Alpha**: the kernel's stores on MongoDB, Firestore or Neo4j, with the same backend of `adk-session`'s stores ([backends](backends.md)) |
-| `webhooks` | on | Webhook wake sources over `WebhookIngress` |
+| `webhooks` | on | Webhook wake sources over `WebhookIngress`; `WebhookSink`, the outbound webhook sink ([event bus](events.md)) |
 | `proc` | on | The content-free activity ledger and its stores; the live aggregates' OTel GenAI histograms |
 | `proc-baselines` | off | The daily baselines and observations ([`/proc`](proc.md)) |
 | `service` | on | `adk_kernel::service`: launchd, systemd and Windows service installation |
@@ -127,6 +127,8 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 - [Kernel commands](cli.md): `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`,
   `freeze`, `unfreeze`, `events`, and `goal` on a running kernel
 - [The control plane](control-plane.md): transports, authentication, routes and audit records
+- [The event bus and outbound webhooks](events.md): event types, sinks, and `WebhookSink`'s
+  signed deliveries, retries and dead letters
 - [Pairing devices and chat channels](pairing.md): `adk-rust pair`, scoped device tokens, and
   the chat channel contract
 - [Settings, while you were away, memory and record](today-and-memory.md): quiet time, the

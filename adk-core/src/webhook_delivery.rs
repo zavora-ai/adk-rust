@@ -11,7 +11,8 @@
 //! | Dead letter | Any other status, an egress refusal, or the last failed attempt; the message goes to the [`DeadLetterSink`] with its last error |
 //!
 //! Redirects are never followed: a public endpoint could otherwise bounce the request to
-//! an internal one.
+//! an internal one. Logs name the endpoint's origin, never its path or query, which may
+//! carry a token.
 //!
 //! # Example
 //!
@@ -567,6 +568,8 @@ impl WebhookDelivery {
         let response = match request.send().await {
             Ok(response) => response,
             Err(error) => {
+                // The URL's path or query may carry a token; the error is logged and kept.
+                let error = error.without_url();
                 let refused = std::error::Error::source(&error).is_some_and(|source| {
                     let mut current = Some(source);
                     while let Some(err) = current {
@@ -621,9 +624,13 @@ impl WebhookDelivery {
             body: message.body.clone(),
             failed_at: self.clock.now(),
         };
+        // The origin only: the URL's path or query may carry a token.
+        let origin = reqwest::Url::parse(&letter.url)
+            .map(|url| url.origin().ascii_serialization())
+            .unwrap_or_else(|_| "an invalid URL".to_string());
         tracing::warn!(
             webhook.id = %letter.message_id,
-            webhook.url = %letter.url,
+            webhook.origin = %origin,
             attempts,
             error = %letter.last_error,
             "webhook dead-lettered"

@@ -28,8 +28,9 @@ redis = ["dep:fred"]
 mongodb = ["dep:mongodb", "adk-session/mongodb"]
 firestore = ["dep:firestore", "adk-session/firestore"]
 neo4j = ["dep:neo4rs", "adk-session/neo4j"]
-# Webhook wake sources through `WebhookIngress` (spec 3.2 §7.4).
-webhooks = ["adk-core/webhooks", "adk-server/webhook-ingress"]
+# Webhook wake sources through `WebhookIngress` (spec 3.2 §7.4), and the outbound webhook
+# sink over `adk-core`'s signed delivery (spec 3.2 §7.6).
+webhooks = ["adk-core/webhooks", "adk-core/webhook-delivery", "adk-server/webhook-ingress"]
 # Supervised MCP drivers (spec 3.2 §7.7): manifests, the driver store, the supervisor over
 # `adk-tool`'s MCP manager, and the stdio launcher on `adk-sandbox`'s OS enforcers.
 drivers = [
@@ -134,6 +135,8 @@ rmcp = { version = "3.1", features = ["client", "server", "elicitation"] }
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }
+# Captures the webhook sink's logs to show they carry no secret.
+tracing-subscriber.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true

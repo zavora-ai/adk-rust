@@ -80,7 +80,7 @@ builds a kernel from a harness (`Harness::kernel`).
 | Scheduler | `DurableScheduler` over a `ScheduleStore`, every `KernelConfig::scheduler_tick` (1 s) on `KernelConfig::clock` |
 | Process table | `ProcessTable`: `ps`, `get`, `spawn`, `kill`, `nice`, `suspend`, `resume`. Each process is a run, a `ProcessMeta` row in a `ProcessStore`, and a live `ProcessView` |
 | Wakes | `WakeSet`s on sleeping processes and standing `Trigger`s, matched by the `WakeRouter`; every event becomes one `kernel.wake` run keyed by the event, so a redelivery wakes nothing |
-| Event bus | `KernelEvent`s to subscribers, with replay from a cursor, and to `EventSink`s such as `AuditSink` |
+| Event bus | `KernelEvent`s to subscribers, with replay from a cursor, and to `EventSink`s such as `AuditSink` and `WebhookSink`, which posts the events an `EventFilter` selects to an endpoint with Standard Webhooks signatures, bounded retry and dead letters |
 | Kill switch | `Kernel::freeze` parks every running process on every replica; `Kernel::unfreeze` resumes exactly the processes the freeze parked |
 | Control plane | `control::router` on a Unix socket (a named pipe on Windows) and loopback HTTP, merged into `ServerBuilder` by `adk-rust up`; `ControlClient` for terminals |
 | Service | `service::install` keeps `adk-rust up` running as the user: a launchd agent, a systemd user unit or a Windows service, logging to `<home>/kernel.log` and restarting on failure |
@@ -410,7 +410,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `sqlite` | on | `SqliteProcessStore`, `SqliteAgendaStore` |
 | `postgres`, `redis` | off | `PostgresProcessStore`, `PostgresAgendaStore`, `RedisProcessStore`, `RedisAgendaStore` |
 | `mongodb`, `firestore`, `neo4j` | off | **Alpha**: every kernel store on MongoDB, Firestore or Neo4j, with the same backend of `adk-session`'s stores |
-| `webhooks` | on | `webhook_wake_hook` over `adk-server`'s `WebhookIngress` |
+| `webhooks` | on | `webhook_wake_hook` over `adk-server`'s `WebhookIngress`; `WebhookSink`, the outbound webhook sink over `adk-core`'s signed delivery |
 | `proc` | on | The activity ledger (`proc`), its stores and `/api/kernel/proc/*`; the OpenTelemetry GenAI histograms of the live process aggregates |
 | `proc-baselines` | off | The daily baseline pass and observations over `adk-eval`'s ledger statistics (implies `proc`; on in adk-cli and the umbrella's `full`) |
 | `conformance` | off | The `conformance` module |

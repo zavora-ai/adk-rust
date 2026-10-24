@@ -1578,7 +1578,8 @@ impl KernelBuilder {
         self
     }
 
-    /// Adds an event sink.
+    /// Adds an event sink, such as an outbound `WebhookSink` (feature `webhooks`), that
+    /// receives every later event through its own bounded queue (spec 3.2 §7.6).
     #[must_use]
     pub fn event_sink(mut self, sink: Arc<dyn EventSink>) -> Self {
         self.sinks.push(sink);
