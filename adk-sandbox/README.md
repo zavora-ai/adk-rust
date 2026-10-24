@@ -247,9 +247,9 @@ does not exist yet cannot be protected this way.
 
 | Aspect | macOS Seatbelt | Linux bubblewrap | Windows restricted token |
 |--------|---------------|-----------------|---------------------|
-| Strategy | Deny-default profile plus the system runtime | Whitelist (mount only what's needed) | Restricted token plus ACL grants, through `WindowsEnforcer::run_confined` and `spawn_contained` only (probed by `probe_confined`); `probe` reports the `sandboxed_command` path unavailable |
-| Reads | System runtime and policy paths; home directories, `/tmp`, and `$TMPDIR` are unreadable unless allowed | Only bound paths exist | Ungranted paths that grant neither `Everyone` nor `Users` are refused; system binaries stay readable |
-| Writes | Only policy read-write paths (and `/dev/null`) | Only `--bind` paths writable | Policy paths (`RESTRICTED` is granted there), and paths that grant `Everyone` or `Users` write access |
+| Strategy | Deny-default profile plus the system runtime | Whitelist (mount only what's needed) | Restricted, Low-integrity token plus ACL grants and Low labels, through `WindowsEnforcer::run_confined` and `spawn_contained` only (probed by `probe_confined`); `probe` reports the `sandboxed_command` path unavailable |
+| Reads | System runtime and policy paths; home directories, `/tmp`, and `$TMPDIR` are unreadable unless allowed | Only bound paths exist | What the user may read (the user is a restricting SID, since Git for Windows' MSYS2 runtime needs it); paths only `Administrators` may read are refused |
+| Writes | Only policy read-write paths (and `/dev/null`) | Only `--bind` paths writable | Policy read-write paths, labelled Low; paths already labelled Low, such as `AppData\LocalLow` |
 | Network | Denied unless `allow_network` | `--unshare-net` namespace | Not enforced |
 | Process spawning | `process-fork` granted only with `allow_process_spawn` | seccomp filter fails `fork`, `vfork`, and non-thread `clone` (x86-64, AArch64) | Not restricted; every descendant is killed with the call's Job Object |
 | Terminal | The caller's session | Always a new session (`--new-session`) with no controlling terminal | No console is attached; standard streams are not captured |

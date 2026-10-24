@@ -252,8 +252,8 @@ impl HarnessBashTool {
                  protected paths are read-only, nothing outside the workspace is writable, and \
                  HOME is a scratch directory."
             } else {
-                "The workspace is writable, including .git and AGENTS.md; outside it only \
-                 directories every user may write are writable, and HOME is a scratch directory."
+                "The workspace is writable, including .git and AGENTS.md; nothing outside it is \
+                 writable, and HOME is a scratch directory."
             };
             format!(
                 "Run a shell command in the workspace root inside an OS sandbox ({}) with {network}. \

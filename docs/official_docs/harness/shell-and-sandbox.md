@@ -104,20 +104,20 @@ toolchain directories, since `HOME` moved.
 ## The Windows sandbox
 
 The restricted-token enforcer runs `sh -c <script>` — the `sh` the sandbox's `PATH` finds,
-from Git for Windows, as the host shell does — under a token whose groups are deny-only and
-whose restricting SIDs admit only what the policy grants (see the
-[sandbox reference](../sandbox/index.md)). The command starts in a Job Object, so the `bash`
+from Git for Windows, as the host shell does — under a Low-integrity token whose groups are
+deny-only (see the [sandbox reference](../sandbox/index.md)). The workspace and the scratch
+directory are labelled Low, so the command writes there and nowhere else. The command starts in a Job Object, so the `bash`
 tool keeps its timeout ceiling, output cap, streaming, empty standard input, the kill of
 every process the command starts, and the freeze's kill (spec 3.2 §10 W1). It inherits its
 three standard handles and no other handle of the agent.
 
 | | Under the restricted token |
 |---|---|
-| Workspace root, scratch directory, `extra_write` | read-write: `RESTRICTED` is granted on each, once per process; the grant stays in the path's ACL |
-| Protected paths | **writable**: a path inside the workspace inherits its read-write grant |
+| Workspace root, scratch directory, `extra_write` | read-write: `RESTRICTED` is granted on each and each is labelled Low, once per process; the grant and the label stay on the path |
+| Protected paths | **writable**: a path inside the workspace inherits its read-write grant and its Low label |
 | Toolchains (`read_toolchains`) | read-only when they lie in your profile (`~/.cargo`, `~/.rustup`, …); program and system directories grant `Users` read access already and are not rewritten |
-| Your profile and other paths that grant neither `Everyone` nor `Users` | none |
-| Paths that grant `Everyone` or `Users` write access | writable |
+| Your profile and anything else you may read | **readable**: MSYS2, the runtime of Git for Windows' `sh`, opens its own signal pipe and shared memory through an ACL that names only you, so you are one of the token's restricting SIDs |
+| Anything else you may write, including paths that grant `Everyone` or `Users` write access | none: an unlabelled path is Medium integrity, which the Low token cannot write; paths already labelled Low, such as `%USERPROFILE%\AppData\LocalLow`, stay writable |
 | Network | **not restricted**, whatever `network` says |
 | Environment | as on the other platforms, with `TEMP` and `TMP` also set to the scratch directory |
 

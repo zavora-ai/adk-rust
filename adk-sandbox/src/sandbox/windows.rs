@@ -1,12 +1,19 @@
 //! Windows restricted-token sandbox enforcer — the first Windows tier (spec 3.2 §10 W5).
 //!
-//! This enforcer confines a shell on Windows with a **restricted token plus explicit ACL
-//! grants**, following the restricted-token ladder (as Codex does); AppContainer stays out of
-//! scope. It runs the command under a token built with `CreateRestrictedToken` — every group
-//! that widens access deny-only, `Administrators` included, a restricting SID set that admits only what the policy
-//! allows — and grants the restricting `RESTRICTED` SID explicit access to the workspace and
-//! scratch paths the [`SandboxPolicy`] names. A Job Object kills every descendant with the
-//! call.
+//! This enforcer confines a shell on Windows with a **restricted, Low-integrity token plus
+//! explicit ACL grants and labels**, following the restricted-token ladder (as Codex does);
+//! AppContainer stays out of scope. It runs the command under a token built with
+//! `CreateRestrictedToken` — every group that widens access deny-only, `Administrators`
+//! included, and the restricting SIDs `Everyone`, `Users`, `RESTRICTED`, the logon SID and the
+//! user — at Low integrity. It grants `RESTRICTED` access to the paths the [`SandboxPolicy`]
+//! names and labels each read-write one Low, so the token may write there and, under the
+//! mandatory integrity policy's no-write-up rule, nowhere else. A Job Object kills every
+//! descendant with the call.
+//!
+//! The user is a restricting SID because the MSYS2 runtime of Git for Windows' `sh` creates its
+//! signal pipe and shared memory with a DACL that names only the user, `Administrators` and
+//! `SYSTEM`, and opens them again; without the user the shell could not start. That widens
+//! reads to what the user may read; the Low integrity level keeps writes confined.
 //!
 //! # Why it does not plug into the generic `wrap_command`/`configure_command` path
 //!
@@ -25,14 +32,15 @@
 //!
 //! | Aspect | Behaviour |
 //! |--------|-----------|
-//! | Write outside the granted paths | Denied — the restricted-SID access check fails off the granted paths, except where a path grants write access to `Everyone` or `Users` |
-//! | Write inside a read-write path | Allowed — `RESTRICTED` is granted there and the path keeps the user's own entry |
-//! | Read of a path the policy does not grant and that grants neither `Everyone` nor `Users` (a user's profile) | Denied by the restricted-SID check |
-//! | System binaries and DLLs (`System32` grants `Users`) | Readable, so the shell can start programs (`Everyone` and `Users` are restricting SIDs) |
+//! | Write outside the granted paths | Denied — an object without a label is Medium integrity, which a Low token cannot write; objects already labelled Low, such as `%USERPROFILE%\AppData\LocalLow`, stay writable |
+//! | Write inside a read-write path | Allowed — the path is labelled Low (inherited by what lies beneath it) and `RESTRICTED` is granted there |
+//! | Read of a path the policy does not grant | Allowed where the user may read it, the user's profile included, since the user is a restricting SID; denied where only groups the token holds deny-only (`Administrators`) or no SID it holds are granted |
+//! | System binaries and DLLs (`System32` grants `Users`) | Readable, so the shell can start programs |
+//! | Named objects and pipes | Created in the logon session's namespace, which grants the logon SID and admits Low integrity; MSYS2's objects that name the user are opened again |
 //! | Descendant processes | Killed with the call's Job Object |
 //! | Inherited handles | `spawn_contained`'s three standard handles only; `run_confined` inherits none |
 //! | Network | **Not enforced** — Windows offers no per-process network filter without AppContainer |
-//! | Integrity level | Left at the token's default; Low/Untrusted integrity needs the granted paths labelled and is a later rung |
+//! | Labels and grants | Persist on the granted paths after the call: `RESTRICTED`'s entry, and a Low label on each read-write path, so any Low-integrity process of the machine may write there |
 
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
@@ -451,6 +459,11 @@ mod token {
             Self::well_known(5, &[18])
         }
 
+        /// The Low mandatory integrity level, S-1-16-4096.
+        pub(super) fn low_integrity() -> Self {
+            Self::well_known(16, &[0x1000])
+        }
+
         /// `BUILTIN\Users`, S-1-5-32-545.
         pub(super) fn users() -> Self {
             Self::well_known(5, &[32, 545])
@@ -484,7 +497,7 @@ mod token {
         pub(super) default_dacl: Vec<Sid>,
     }
 
-    /// The plan for a token with `groups`.
+    /// The plan for a token of `user` with `groups`.
     ///
     /// Every group becomes deny-only — `Administrators` and any other group that widens
     /// access — except those the shell needs to start and run: `Everyone`, `Users`,
@@ -492,8 +505,9 @@ mod token {
     /// integrity labels, which cannot be disabled. The restricting SIDs are `Everyone` and
     /// `Users`, so the shell can open the system binaries it starts (`System32` grants read
     /// and execute to `Users`, not `Everyone`), `RESTRICTED`, which the policy's paths are
-    /// granted, and the logon SID. The default DACL grants the user, `SYSTEM`, `RESTRICTED` and the
-    /// logon SID. Returns `None` when the token has no logon SID.
+    /// granted, the logon SID, and the user, whom MSYS2's signal pipe and shared memory name
+    /// (spec 3.2 §10 W5). The default DACL grants the user, `SYSTEM`, `RESTRICTED` and the logon
+    /// SID. Returns `None` when the token has no logon SID.
     pub(super) fn plan(user: &Sid, groups: &[TokenGroup]) -> Option<TokenPlan> {
         let keep = [Sid::everyone(), Sid::users(), Sid::authenticated_users(), Sid::interactive()];
         let is_logon = |g: &TokenGroup| g.attributes & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID;
@@ -507,7 +521,13 @@ mod token {
             .collect();
         Some(TokenPlan {
             deny_only,
-            restricting: vec![Sid::everyone(), Sid::users(), Sid::restricted(), logon.clone()],
+            restricting: vec![
+                Sid::everyone(),
+                Sid::users(),
+                Sid::restricted(),
+                logon.clone(),
+                user.clone(),
+            ],
             default_dacl: vec![user.clone(), Sid::system(), Sid::restricted(), logon],
         })
     }
@@ -533,11 +553,13 @@ mod imp {
         TRUSTEE_IS_UNKNOWN, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
     };
     use windows_sys::Win32::Security::{
-        ACL, CreateRestrictedToken, DACL_SECURITY_INFORMATION, DISABLE_MAX_PRIVILEGE, GetLengthSid,
-        GetTokenInformation, NO_INHERITANCE, PSID, SID_AND_ATTRIBUTES,
-        SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetTokenInformation, TOKEN_ADJUST_DEFAULT,
-        TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY,
-        TOKEN_USER, TokenDefaultDacl, TokenGroups, TokenUser,
+        ACL, ACL_REVISION, AddMandatoryAce, CONTAINER_INHERIT_ACE, CreateRestrictedToken,
+        DACL_SECURITY_INFORMATION, DISABLE_MAX_PRIVILEGE, GetLengthSid, GetTokenInformation,
+        InitializeAcl, LABEL_SECURITY_INFORMATION, NO_INHERITANCE, OBJECT_INHERIT_ACE, PSID,
+        SID_AND_ATTRIBUTES, SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetTokenInformation,
+        TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE,
+        TOKEN_GROUPS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER, TokenDefaultDacl,
+        TokenGroups, TokenIntegrityLevel, TokenUser,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
@@ -734,12 +756,82 @@ mod imp {
         }
         let token = Handle(token);
         set_default_dacl(token.0, &plan.default_dacl)?;
+        set_low_integrity(token.0)?;
         Ok(token)
+    }
+
+    /// `SYSTEM_MANDATORY_LABEL_NO_WRITE_UP`: a token of lower integrity may not write the object.
+    const NO_WRITE_UP: u32 = 0x1;
+
+    /// Lowers `token` to Low integrity, so it writes only objects labelled Low (spec 3.2 §10
+    /// W5). The user is one of its restricting SIDs, so the level is what confines its writes.
+    fn set_low_integrity(token: HANDLE) -> Result<(), SandboxError> {
+        let low = Sid::low_integrity();
+        let label = TOKEN_MANDATORY_LABEL {
+            Label: SID_AND_ATTRIBUTES { Sid: psid(&low), Attributes: token::SE_GROUP_INTEGRITY },
+        };
+        // SAFETY: `low` is a valid SID that outlives the call.
+        let size = size_of::<TOKEN_MANDATORY_LABEL>() as u32 + unsafe { GetLengthSid(psid(&low)) };
+        // SAFETY: `label` and the SID it points to are readable for the call; the token is open
+        // with `TOKEN_ADJUST_DEFAULT`, and lowering the level needs no privilege.
+        let ok = unsafe {
+            SetTokenInformation(token, TokenIntegrityLevel, (&raw const label).cast(), size)
+        };
+        if ok == 0 {
+            return Err(last_error("SetTokenInformation(TokenIntegrityLevel)"));
+        }
+        Ok(())
+    }
+
+    /// Labels the file or directory `wide` (NUL-terminated) Low integrity with no-write-up,
+    /// inherited by what lies beneath it, so a Low token may write there.
+    fn label_low(wide: &mut [u16]) -> Result<(), SandboxError> {
+        let low = Sid::low_integrity();
+        // An ACL header and one mandatory label entry with its SID fit in 64 bytes.
+        let mut acl = [0u64; 8];
+        let acl_ptr: *mut ACL = acl.as_mut_ptr().cast();
+        // SAFETY: the buffer is writable for the size passed and outlives every use below.
+        if unsafe { InitializeAcl(acl_ptr, size_of_val(&acl) as u32, ACL_REVISION) } == 0 {
+            return Err(last_error("InitializeAcl"));
+        }
+        // SAFETY: the ACL was initialised above with room for the entry; `low` is valid.
+        let added = unsafe {
+            AddMandatoryAce(
+                acl_ptr,
+                ACL_REVISION,
+                OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+                NO_WRITE_UP,
+                psid(&low),
+            )
+        };
+        if added == 0 {
+            return Err(last_error("AddMandatoryAce"));
+        }
+        // SAFETY: `wide` is NUL-terminated and the ACL is valid for the call.
+        let status = unsafe {
+            SetNamedSecurityInfoW(
+                wide.as_mut_ptr(),
+                SE_FILE_OBJECT,
+                LABEL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                acl_ptr,
+            )
+        };
+        if status != 0 {
+            return Err(SandboxError::EnforcerFailed {
+                enforcer: ENFORCER_NAME.to_string(),
+                message: format!("SetNamedSecurityInfoW(label) failed (os error {status})"),
+            });
+        }
+        Ok(())
     }
 
     /// Grants `restricted_sid` the access `mode` needs on `path`, merged into the path's
     /// existing DACL so the user's own entry — which the restricted token's normal access
-    /// check still needs — is kept.
+    /// check still needs — is kept, and labels a read-write path Low so the Low token may
+    /// write there.
     fn grant_path(path: &Path, mode: AccessMode, restricted_sid: PSID) -> Result<(), SandboxError> {
         let access = match mode {
             AccessMode::ReadWrite => FILE_ALL_ACCESS,
@@ -813,6 +905,10 @@ mod imp {
                 enforcer: ENFORCER_NAME.to_string(),
                 message: format!("SetNamedSecurityInfoW failed (os error {status})"),
             });
+        }
+        // The Low token writes only what is labelled Low.
+        if mode == AccessMode::ReadWrite {
+            label_low(&mut wide)?;
         }
         Ok(())
     }
@@ -1252,6 +1348,10 @@ mod tests {
         assert_eq!(token::Sid::everyone().as_bytes(), [1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]);
         assert_eq!(token::Sid::restricted().as_bytes(), [1, 1, 0, 0, 0, 0, 0, 5, 12, 0, 0, 0]);
         assert_eq!(
+            token::Sid::low_integrity().as_bytes(),
+            [1, 1, 0, 0, 0, 0, 0, 16, 0, 0x10, 0, 0]
+        );
+        assert_eq!(
             token::Sid::users().as_bytes(),
             [1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 0x21, 0x02, 0, 0]
         );
@@ -1287,7 +1387,8 @@ mod tests {
                     token::Sid::everyone(),
                     token::Sid::users(),
                     token::Sid::restricted(),
-                    logon.clone()
+                    logon.clone(),
+                    user.clone()
                 ],
                 default_dacl: vec![user, token::Sid::system(), token::Sid::restricted(), logon],
             }

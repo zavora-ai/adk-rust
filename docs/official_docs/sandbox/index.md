@@ -272,17 +272,20 @@ the profile as escaped string literals, so a directory name cannot add directive
 bubblewrap has no domain-level control, so `allow_domain` cannot be enforced. A policy
 with rules and `allow_network = false` blocks all network access and logs a warning.
 
-**Windows (restricted token):** the first Windows tier (spec 3.2 §10 W5). `WindowsEnforcer::run_confined` starts the command with `CreateProcessAsUserW` under a restricted token and holds it in a Job Object; AppContainer is not used.
+**Windows (restricted token):** the first Windows tier (spec 3.2 §10 W5). `WindowsEnforcer::run_confined` starts the command with `CreateProcessAsUserW` under a restricted, Low-integrity token and holds it in a Job Object; AppContainer is not used.
 
 | Aspect | Behaviour |
 |--------|-----------|
-| Token | Privileges removed (`DISABLE_MAX_PRIVILEGE`); every group deny-only, `Administrators` included, except `Everyone`, `BUILTIN\Users`, Authenticated Users, `INTERACTIVE`, the logon SID and integrity labels, which the shell needs to start; restricting SIDs `Everyone`, `BUILTIN\Users`, `RESTRICTED` and the logon SID |
-| Paths | `RESTRICTED` is granted on each policy path — full access for read-write, read and execute for read-only — added to the path's existing ACL |
-| Writes | Refused outside the granted paths, except paths whose ACL grants write access to `Everyone` or `BUILTIN\Users` |
-| Reads | Refused for ungranted paths whose ACL grants neither `Everyone` nor `BUILTIN\Users`, such as a user's profile; system binaries and DLLs, which grant `Users`, stay readable so the shell can start programs |
+| Token | Privileges removed (`DISABLE_MAX_PRIVILEGE`); every group deny-only, `Administrators` included, except `Everyone`, `BUILTIN\Users`, Authenticated Users, `INTERACTIVE`, the logon SID and integrity labels, which the shell needs to start; restricting SIDs `Everyone`, `BUILTIN\Users`, `RESTRICTED`, the logon SID and the user; integrity level Low |
+| Paths | `RESTRICTED` is granted on each policy path — full access for read-write, read and execute for read-only — added to the path's existing ACL; each read-write path is labelled Low integrity (no write up), inherited by what lies beneath it |
+| Writes | Refused outside the read-write paths: an unlabelled object is Medium integrity, which a Low token cannot write. Paths already labelled Low, such as `%USERPROFILE%\AppData\LocalLow`, stay writable |
+| Reads | Allowed where the user may read, the user's profile included; refused where only groups the token holds deny-only, such as `Administrators`, are granted |
+| Named objects and pipes | Created in the logon session's namespace, which grants the logon SID and admits Low integrity |
 | Descendants | Killed with the call's Job Object, also on a timeout |
 | Network | **Not enforced** — Windows has no per-process network control without AppContainer |
-| Integrity level | Not lowered |
+| After the call | The grants and the Low labels stay on the policy's paths, so any Low-integrity process of the machine may write the read-write paths |
+
+The user is a restricting SID because the MSYS2 runtime of Git for Windows' `sh` and `bash` creates its signal pipe and its per-user shared memory with an ACL naming only the user, `Administrators` and `SYSTEM`, then opens them again: without the user among the restricting SIDs, the shell exits at start with `couldn't create signal pipe, Win32 error 5`. That widens reads from the paths the policy grants (and those granting `Everyone` or `Users`) to every path the user may read; the Low integrity level keeps writes to the read-write paths, and narrows them where a path's ACL grants `Everyone` or `Users` write access, which a Medium label still closes.
 
 A restricted token is set when the process is created, so it cannot be attached to a `tokio::process::Command` that the caller spawns. `probe()` therefore returns `EnforcerUnavailable` and `configure_command()` returns `EnforcerFailed`, naming `run_confined`: `sandboxed_command` and `ProcessBackend::with_sandbox` do not confine on Windows and report so. The enforcer starts a command itself in two ways:
 
