@@ -1,0 +1,245 @@
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import type { Command, DecisionCard, Origin } from "./generated/api";
+import type { HomeClient } from "./client";
+import { ApiError, problemText } from "./client";
+import type { TakeOverSeam } from "./components/DecisionCard";
+import { Header } from "./components/Header";
+import { Developer } from "./developer/Developer";
+import { labels } from "./labels";
+import { planned as plan, today as todays } from "./plan";
+import { usePoll } from "./poll";
+import type { Section } from "./route";
+import { pathOf, sectionOf } from "./route";
+import { MemoryRules } from "./screens/MemoryRules";
+import { Threads } from "./screens/Threads";
+import { Today } from "./screens/Today";
+import type { Seams } from "./seams";
+import { readStored, writeStored } from "./stored";
+import { applyTheme, nextTheme, storedTheme } from "./theme";
+import type { Theme } from "./theme";
+
+/** Where this tab keeps the session each agent's thread follows. */
+const FOLLOWED_KEY = "adk.home.followed";
+
+/**
+ * The web home (spec 3.3 §5.1): Threads, Today and Memory & rules under one header with the
+ * status line and Stop all. Everything it shows is read from the server; what it keeps itself
+ * — the conversation each thread follows — lasts across a reload of the tab (§6).
+ */
+export function App({
+  client,
+  seams = {},
+  takeOver,
+  initialSection,
+}: {
+  client: HomeClient;
+  seams?: Seams;
+  takeOver?: TakeOverSeam;
+  initialSection?: Section;
+}) {
+  const [section, setSection] = useState<Section>(() => initialSection ?? sectionOf(window.location.pathname));
+  const [theme, setTheme] = useState<Theme>(storedTheme);
+  const [problem, setProblem] = useState("");
+  const [selected, setSelected] = useState<string>();
+  const [focusDecision, setFocusDecision] = useState<string>();
+  // Each sign-in starts the thread's feed again, with the token.
+  const [signIns, setSignIns] = useState(0);
+  const [followed, setFollowed] = useState<Record<string, string>>(() => readStored(FOLLOWED_KEY, {}));
+  useEffect(() => writeStored(FOLLOWED_KEY, followed), [followed]);
+
+  useEffect(() => applyTheme(theme), [theme]);
+  useEffect(() => {
+    const back = () => setSection(sectionOf(window.location.pathname));
+    window.addEventListener("popstate", back);
+    return () => window.removeEventListener("popstate", back);
+  }, []);
+
+  const status = usePoll(() => client.status());
+  const agents = usePoll(() => client.agents());
+  const decisions = usePoll(() => client.decisions());
+  const kernel = usePoll(async () => {
+    const [processes, agenda] = await Promise.all([
+      client.processes().catch(() => undefined),
+      client.agenda().catch(() => undefined),
+    ]);
+    return { processes, agenda };
+  }, 10_000);
+
+  const { refresh: refreshStatus } = status;
+  const { refresh: refreshAgents } = agents;
+  const { refresh: refreshDecisions } = decisions;
+  const { refresh: refreshKernel } = kernel;
+  const refresh = useCallback(() => {
+    void refreshStatus();
+    void refreshAgents();
+    void refreshDecisions();
+    void refreshKernel();
+  }, [refreshStatus, refreshAgents, refreshDecisions, refreshKernel]);
+
+  const send = useCallback(
+    async (command: Command, origin: Origin) => {
+      const outcome = await client.command(command, origin);
+      refresh();
+      return outcome;
+    },
+    [client, refresh],
+  );
+
+  const navigate = useCallback((next: Section) => {
+    setSection(next);
+    if (window.location.pathname !== pathOf(next)) window.history.pushState(null, "", pathOf(next));
+    window.scrollTo?.({ top: 0 });
+  }, []);
+
+  const follow = useCallback(
+    (agent: string, session: string) =>
+      setFollowed((all) => (all[agent] === session ? all : { ...all, [agent]: session })),
+    [],
+  );
+  const select = useCallback((agent: string) => {
+    setSelected(agent);
+    setFocusDecision(undefined);
+  }, []);
+  // A decision opens in its own session's thread, whichever session the agent's row names.
+  const openDecision = useCallback(
+    (card: DecisionCard) => {
+      setSelected(card.agent.name);
+      follow(card.agent.name, card.sessionId);
+      setFocusDecision(card.id);
+      navigate("threads");
+    },
+    [follow, navigate],
+  );
+
+  async function act(command: Command, origin: Origin) {
+    setProblem("");
+    try {
+      await send(command, origin);
+    } catch (error) {
+      setProblem(problemText(error));
+    }
+  }
+
+  const unauthorized = [status.error, agents.error].some((error) => error instanceof ApiError && error.status === 401);
+  // The last read failed before reaching the server: what is on screen may be stale.
+  const unreachable = !unauthorized && status.error !== undefined && !(status.error instanceof ApiError);
+  const rows = agents.value ?? [];
+  // The plan follows the kernel's reads; the clock is read with them.
+  const planned = useMemo(
+    () => plan(kernel.value?.processes, kernel.value?.agenda, agents.value, new Date()),
+    [kernel.value, agents.value],
+  );
+  const routinesToday = useMemo(
+    () => todays(kernel.value?.processes, kernel.value?.agenda, agents.value, new Date()),
+    [kernel.value, agents.value],
+  );
+  const session = (selected && followed[selected]) ?? rows[0]?.sessionId ?? undefined;
+
+  return (
+    <div className="app">
+      <a className="skip-link" href="#content">
+        {labels.skipToContent}
+      </a>
+      <Header
+        section={section}
+        status={unreachable ? undefined : status.value}
+        decisions={unreachable ? 0 : (decisions.value?.length ?? 0)}
+        theme={theme}
+        onNavigate={navigate}
+        onTheme={() => setTheme(nextTheme)}
+        onStop={(origin) => void act({ type: "stopAll" }, origin)}
+        onResume={(origin) => void act({ type: "resumeAll" }, origin)}
+      />
+      {(problem || unauthorized || unreachable) && (
+        <p className="banner" role="alert">
+          {unauthorized ? labels.signInNeeded : unreachable ? labels.cantReach : problem}
+        </p>
+      )}
+      {unauthorized && client.signIn && (
+        <SignIn
+          onSignIn={(token) => {
+            client.signIn?.(token);
+            setSignIns((count) => count + 1);
+            refresh();
+          }}
+        />
+      )}
+      <div id="content" className="content">
+        {section === "threads" && (
+          <Threads
+            key={signIns}
+            client={client}
+            agents={rows}
+            decisions={decisions.value ?? []}
+            status={status.value}
+            planned={planned}
+            send={send}
+            onChanged={refresh}
+            onToday={() => navigate("today")}
+            onDeveloper={() => navigate("developer")}
+            takeOver={takeOver}
+            selected={selected}
+            onSelect={select}
+            followed={followed}
+            onFollow={follow}
+            focusDecision={focusDecision}
+            onOpenDecision={openDecision}
+          />
+        )}
+        {section === "today" && (
+          <Today
+            client={client}
+            agents={rows}
+            status={status.value}
+            agenda={kernel.value?.agenda}
+            routinesToday={routinesToday}
+            canAddRoutine={kernel.value?.processes !== undefined}
+            seams={seams}
+            onChanged={refresh}
+            onOpenAgent={(agent) => {
+              const waiting = decisions.value?.find((card) => card.agent.name === agent);
+              if (waiting) {
+                openDecision(waiting);
+                return;
+              }
+              select(agent);
+              navigate("threads");
+            }}
+          />
+        )}
+        {section === "memory" && <MemoryRules client={client} status={status.value} seams={seams} onChanged={refresh} />}
+        {section === "developer" && <Developer client={client} sessionId={session} />}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The server asked for its token (`adk-rust serve --auth-token`): the person types it once,
+ * and this tab sends it with every request.
+ */
+function SignIn({ onSignIn }: { onSignIn: (token: string) => void }) {
+  const [token, setToken] = useState("");
+  const field = useId();
+  return (
+    <form
+      className="sign-in"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (token.trim()) onSignIn(token);
+      }}
+    >
+      <label htmlFor={field}>{labels.serverToken}</label>
+      <input
+        id={field}
+        type="password"
+        autoComplete="off"
+        value={token}
+        onChange={(event) => setToken(event.target.value)}
+      />
+      <button type="submit" className="button button-primary" disabled={!token.trim()}>
+        {labels.signIn}
+      </button>
+    </form>
+  );
+}

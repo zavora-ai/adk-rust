@@ -13,8 +13,8 @@ use adk_cli::harness::ultracode::{
     UltracodeLimits, Verdict, WorkspaceSnapshot, route,
 };
 use adk_cli::harness::{
-    BearerTokenExtractor, ConsolePrompter, HarnessArgs, HarnessLauncher, OPERATOR_SCOPE,
-    ResolvedHarnessArgs, SearchArg, TurnOutcome,
+    ConsolePrompter, HarnessArgs, HarnessLauncher, OPERATOR_SCOPE, ResolvedHarnessArgs, SearchArg,
+    TurnOutcome,
 };
 use adk_core::audit_log::AuditRecorder;
 use adk_core::{
@@ -34,6 +34,8 @@ use crate::ultra::{self, UltraAgents};
 use crate::{BuiltModel, ResolvedModel};
 
 mod service;
+#[cfg(feature = "tui")]
+pub mod surface;
 mod up;
 #[cfg(windows)]
 pub use service::run_windows_service;
@@ -118,6 +120,11 @@ struct AgentExtras {
     /// The partition the harness runs, the table its policy reads, and whether it is the
     /// coordinator.
     partition: Option<(adk_kernel::Partition, adk_kernel::Partitions, bool)>,
+    /// The person at this console runs the harness and answers its inbox (the terminal
+    /// surface in process, spec 3.3 §5.2): its runs are theirs, so standing rules and Auto
+    /// apply without a server's authentication.
+    #[cfg(feature = "tui")]
+    local_console: bool,
 }
 
 /// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
@@ -370,7 +377,14 @@ impl Setup {
             builder = builder.prompter(prompter);
         }
         if let Some(service) = approval_service {
-            builder = builder.approval_service(service).require_authenticated_identity();
+            builder = builder.approval_service(service);
+            #[cfg(feature = "tui")]
+            let local_console = extras.local_console;
+            #[cfg(not(feature = "tui"))]
+            let local_console = false;
+            if !local_console {
+                builder = builder.require_authenticated_identity();
+            }
         }
         for pack in &self.resolved.packs {
             builder = builder.pack(*pack);
@@ -574,33 +588,42 @@ impl Setup {
     /// Says once, on the first run with long-term memory, what is stored and where
     /// (spec 3.1 §7.15.2).
     fn memory_notice(&self) {
-        if !self.memory_on() {
-            return;
+        if let Some(notice) =
+            self.memory_notice_text("/memory lists them, /memory forget ID removes one")
+        {
+            println!("{notice}\n");
         }
-        let Some(dir) = dirs::config_dir().map(|dir| dir.join("adk-rust")) else {
-            return;
-        };
+    }
+
+    /// The memory notice, once: `None` when memory is off or the notice was shown before.
+    /// `commands` says how the facts are listed and removed where it is shown.
+    fn memory_notice_text(&self, commands: &str) -> Option<String> {
+        if !self.memory_on() {
+            return None;
+        }
+        let dir = dirs::config_dir().map(|dir| dir.join("adk-rust"))?;
         let marker = dir.join("memory-notice");
         if marker.exists() {
-            return;
+            return None;
         }
         let recall = match &self.embedder {
             Some((_, name)) => format!("Facts are embedded with {name} so related ones are found."),
             None => "Facts are found by shared words; nothing leaves this machine for it.".into(),
         };
-        println!(
+        let notice = format!(
             "Long-term memory is on. The harness keeps short facts from your sessions: the \
              preferences you state, how a project builds and tests, what fixed a failure. They \
              live in {} on this machine, with personal data redacted and secrets refused, and \
              are recalled in later sessions. What you said is \"known\"; what the agent \
-             inferred is \"assumed\" until you confirm it. {recall}\n/memory lists them, \
-             /memory forget ID removes one, `adk-rust memory export` writes them out, and \
+             inferred is \"assumed\" until you confirm it. {recall}\n{commands}, \
+             `adk-rust memory export` writes them out, and \
              --no-memory turns memory off. Under `adk-rust up` in ask or auto mode, a \
              consolidation tick also tidies assumed facts after new sessions — `adk-rust memory \
-             undo TICK` reverts one, --no-consolidation turns it off. This notice is shown once.\n",
+             undo TICK` reverts one, --no-consolidation turns it off. This notice is shown once.",
             dir.join("harness.db").display()
         );
         let _ = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&marker, "shown\n"));
+        Some(notice)
     }
 
     fn memory_on(&self) -> bool {
@@ -1909,12 +1932,16 @@ pub async fn serve(
         Some(service.clone()),
     )?;
 
+    // One kill switch for the server's runs, the background runs and the web home's turns,
+    // so the home's Stop all stops them all (spec 3.3 §11 S-I10).
+    let governance = adk_core::GovernanceControl::new();
     // A turn can run as a durable background run of the `adk-rust` target (spec 3.1 §7.12).
     let runner = adk_runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent.agent())
         .session_service(setup.sessions())
         .approval_store(agent.runtime().approval_store().clone())
+        .governance(governance.clone())
         .build()?;
     // The runner's root is the harness agent, which runs a session's goal while one runs, so
     // it also serves the durable goal target (spec 3.1 §7.11).
@@ -1923,7 +1950,8 @@ pub async fn serve(
         .with_run_store(run_store)
         .with_app_name(APP_NAME)
         .with_agent(APP_NAME, runner.clone())
-        .with_agent(adk_harness::GOAL_TARGET, runner);
+        .with_agent(adk_harness::GOAL_TARGET, runner)
+        .with_governance(governance.clone());
 
     let mut launcher = HarnessLauncher::new(agent)
         .app_name(APP_NAME)
@@ -1931,12 +1959,10 @@ pub async fn serve(
         .with_user_id(setup.user.clone())
         .with_approval_service(service)
         .with_background_runs(background)
+        .with_governance(governance)
         .with_bind_address(host);
     if let Some(token) = token {
-        launcher = launcher.with_request_context_extractor(Arc::new(BearerTokenExtractor::new(
-            token,
-            setup.user.clone(),
-        )));
+        launcher = launcher.with_auth_token(token);
     }
     if let Some(shared) = &setup.shared {
         println!(

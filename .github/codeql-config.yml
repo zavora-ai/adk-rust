@@ -5,8 +5,8 @@ name: "ADK-Rust CodeQL Config"
 
 # Exclude paths from analysis
 paths-ignore:
-  # Generated production bundles; maintained source is in adk-server/webui/src.
-  - "adk-server/assets/webui/**/*.js"
+  # Generated production bundles; maintained source is in adk-surface/web/src.
+  - "adk-surface/assets/web/**/*.js"
   - "adk-studio/ui/dist/**"
   # Node modules
   - "**/node_modules/**"

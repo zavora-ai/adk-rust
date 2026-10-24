@@ -6,7 +6,7 @@ launchers, depending on the `cli` feature:
 | Feature set | `adk_rust::Launcher` is | Modes |
 |-------------|-------------------------|-------|
 | default (`minimal`) and other tiers without `cli` | `adk_runner::Launcher` | Console only |
-| `cli` (or `cli-openai`, `cli-anthropic`, `cli-deepseek`, `cli-groq`, `cli-ollama`, `cli-all-providers`) | `adk_cli::Launcher` | Console, and an HTTP server with the web UI (`serve`) |
+| `cli` (or `cli-openai`, `cli-anthropic`, `cli-deepseek`, `cli-groq`, `cli-ollama`, `cli-all-providers`) | `adk_cli::Launcher` | Console, and an HTTP server with the REST API (`serve`) |
 
 No tier includes `cli`; add it to the tier you use:
 
@@ -22,7 +22,8 @@ The `cli-*` variants also enable a model provider in `adk-cli`.
 With a single line of code, you can:
 
 - Run your agent in an interactive console for testing and development
-- Serve your agent over HTTP with a web UI (`cli` feature)
+- Serve your agent over HTTP (`cli` feature); the [web home](../surfaces/web-home.md) is
+  served by `adk-rust serve` and `adk-rust up`, or mounted on a server you build
 - Customize the application name and the session, memory, and (`cli` feature) artifact services
 
 ## Basic Usage
@@ -278,13 +279,12 @@ You > ORDER-12345
 
 In server mode, the `cli` launcher:
 
-1. Initializes telemetry: logs to stdout, and runtime spans for the web UI's telemetry view
+1. Initializes telemetry: logs to stdout, and runtime spans for the web home's developer panel
 2. Uses the configured session service, or an in-memory one
 3. Starts an HTTP server with the REST API, on `127.0.0.1` by default
-4. Serves the web UI
-5. Mounts the approval inbox (`with_approval_service`) and background runs
+4. Mounts the approval inbox (`with_approval_service`) and background runs
    (`with_background_runs`) when configured
-6. Stops on Ctrl+C or SIGTERM
+5. Stops on Ctrl+C or SIGTERM
 
 The app is built with `ServerBuilder`. The approval inbox answers `401` unless
 `with_request_context_extractor` authenticates the caller; see [Server API](server.md).
@@ -327,15 +327,13 @@ The server exposes, among others:
 
 See the [Server API](server.md) documentation for detailed endpoint specifications.
 
-### Web UI
+### Web home
 
-The server includes a built-in web UI at `http://localhost:8080/ui/`. The UI provides:
-
-- Interactive chat interface
-- Session, state, artifact, and event-timeline inspection
-- Real-time streaming responses and tool activity
-- Team delegation and handoff topology
-- Agent and UI-protocol capability discovery
+Serve mode serves the REST API and no page: nothing answers at `/` or `/ui/`. The
+[web home](../surfaces/web-home.md) is the harness's — `adk-rust serve` and `adk-rust up` serve
+it — because its **Stop all** freezes every run the server makes and its cards come from an
+approval inbox the harness files held calls in. A server you build with `ServerBuilder` mounts
+it as [Mount it on your own server](../surfaces/web-home.md#mount-it-on-your-own-server) shows.
 
 ## CLI Arguments
 
@@ -417,7 +415,7 @@ async fn main() -> Result<()> {
 
 ```bash
 cargo run              # console
-cargo run -- serve     # server and web UI on http://127.0.0.1:8080
+cargo run -- serve     # server on http://127.0.0.1:8080
 ```
 
 ## Pre-Deployment Verification
@@ -446,7 +444,7 @@ launcher for a `HarnessAgent` (spec 3.1). It is what the `adk-rust` binary runs:
 |------|------------|-------------------|
 | Console | REPL over any agent | Harness REPL: banner with workspace, mode and shell; approvals through the harness's prompter (`ConsolePrompter`, with `[a] always allow`); a denial ends the turn; `/mode`, `/sandbox`, `/todos`, `/rules`, `/approvals` and more |
 | One turn | — | `run_once(text)` returns the calls held for a decision |
-| Server | Web UI and REST API | The same server with the harness mounted behind an extractor: loopback peers are the operator by default (`LoopbackOperatorExtractor`), other addresses need one such as `BearerTokenExtractor` |
+| Server | REST API | The same server with the harness mounted behind an extractor: loopback peers are the operator by default (`LoopbackOperatorExtractor`), other addresses need `with_auth_token` or another extractor; with feature `surface` (on in the `adk-rust` binary), the web home at `/ui/` over the harness's modes, standing rules and inbox, its turns run as the operator, and one kill switch (`with_governance`) for the server's runs, the background runs and the home |
 
 ```rust
 use std::sync::Arc;

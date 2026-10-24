@@ -12,4 +12,6 @@
 - **Confirmation handlers are bounded and concurrent** (`adk-core`, `adk-agent`):
   `ToolConfirmationHandler::decide` is no longer serialized across a batch, and a decision
   that takes longer than `RunConfig::tool_confirmation_timeout` (default five minutes)
-  denies the call. A handler that prompts on a shared device serializes its own prompts.
+  leaves the call waiting in the run's `approval_store`, or denies it when the run has no
+  store or sets `RunConfig::deny_on_confirmation_timeout` (spec 3.3 §7.3). A handler that
+  prompts on a shared device serializes its own prompts.

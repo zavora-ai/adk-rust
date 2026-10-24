@@ -264,8 +264,8 @@ mod audit_log {
     }
 }
 
-/// A request stored before requests carried a session field lists by its session once
-/// `migrate` has run (spec 3.3 §10 C1).
+/// A request stored before requests carried user and session fields lists by its session
+/// once `migrate` has run (spec 3.3 §10 C1).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a MongoDB server at MONGODB_URL"]
 async fn a_request_stored_without_a_session_lists_by_session_after_migrate() {
@@ -301,6 +301,6 @@ async fn a_request_stored_without_a_session_lists_by_session_after_migrate() {
 
     let store = MongoApprovalStore::new(&url(), DATABASE).await.expect("connect to mongodb");
     store.migrate().await.expect("migrate");
-    let query = ApprovalRequestQuery::default().with_app_name(app).with_session_id("s-legacy");
+    let query = ApprovalRequestQuery::default().with_session(&request.scope);
     assert_eq!(store.list_requests(&query).await.expect("list"), [request]);
 }

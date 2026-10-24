@@ -36,6 +36,23 @@ pub fn run(args: &[&str], home: &Path, cwd: &Path) -> Output {
     command.output().expect("adk-rust runs")
 }
 
+/// Runs the binary to completion without a terminal, with `input` piped to its standard
+/// input.
+pub fn run_input(args: &[&str], home: &Path, cwd: &Path, input: &str) -> Output {
+    use std::io::Write;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_adk-rust"));
+    command
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    isolate(&mut command, home);
+    let mut child = command.spawn().expect("adk-rust runs");
+    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    child.wait_with_output().expect("adk-rust runs")
+}
+
 /// Standard output and error of `output`, joined.
 pub fn text(output: &Output) -> String {
     format!(
@@ -60,8 +77,25 @@ impl Terminal {
     }
 
     pub fn spawn_in(args: &[&str], home: &Path, cwd: &Path) -> Self {
+        Self::spawn_sized(args, home, cwd, 50, 220)
+    }
+
+    /// [`spawn_in`](Self::spawn_in) on a terminal of `rows` by `cols`.
+    pub fn spawn_sized(args: &[&str], home: &Path, cwd: &Path, rows: u16, cols: u16) -> Self {
+        Self::spawn_sized_env(args, home, cwd, rows, cols, &[])
+    }
+
+    /// [`spawn_sized`](Self::spawn_sized) with `env` set for the binary.
+    pub fn spawn_sized_env(
+        args: &[&str],
+        home: &Path,
+        cwd: &Path,
+        rows: u16,
+        cols: u16,
+        env: &[(&str, &str)],
+    ) -> Self {
         let (mut master_fd, mut slave_fd) = (0, 0);
-        let mut size = libc::winsize { ws_row: 50, ws_col: 220, ws_xpixel: 0, ws_ypixel: 0 };
+        let mut size = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
         // SAFETY: openpty writes two descriptors into the provided integers. glibc declares
         // `winp` as `*const winsize` and Apple's libc as `*mut`; a raw pointer fits both.
         let opened = unsafe {
@@ -80,6 +114,7 @@ impl Terminal {
 
         let mut command = Command::new(env!("CARGO_BIN_EXE_adk-rust"));
         isolate(&mut command, home);
+        command.envs(env.iter().copied());
         command
             .args(args)
             .current_dir(cwd)
@@ -122,6 +157,27 @@ impl Terminal {
 
     pub fn text(&self) -> String {
         String::from_utf8_lossy(&self.output.lock().unwrap()).into_owned()
+    }
+
+    /// Everything the binary wrote, as bytes.
+    pub fn bytes(&self) -> Vec<u8> {
+        self.output.lock().unwrap().clone()
+    }
+
+    /// The binary's process id.
+    pub fn pid(&self) -> i32 {
+        i32::try_from(self.child.id()).unwrap()
+    }
+
+    /// The pseudo-terminal's line settings, as the binary left them.
+    pub fn termios(&self) -> libc::termios {
+        use std::os::fd::AsRawFd;
+        // SAFETY: tcgetattr fills a zeroed termios from an open descriptor.
+        unsafe {
+            let mut termios: libc::termios = std::mem::zeroed();
+            assert_eq!(libc::tcgetattr(self.master.as_raw_fd(), &mut termios), 0);
+            termios
+        }
     }
 
     /// Waits for `needle` in the output not yet consumed, then consumes through it.

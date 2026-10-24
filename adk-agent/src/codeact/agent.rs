@@ -213,9 +213,64 @@ impl ToolPolicy<'_> {
 /// Drive CodeAct to completion as a stream of events.
 ///
 /// Yields durability/suspend events as it goes (persisted by the Runner) and a
-/// final event at the end. This is the whole loop; [`CodeActAgent::run`] just
-/// gathers [`LoopInputs`] from `self` + the context and forwards.
-fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>> {
+/// final event at the end. [`CodeActAgent::run`] just gathers [`LoopInputs`] from
+/// `self` + the context and forwards.
+///
+/// A call held for confirmation that has no decision yet is not put to the run's
+/// confirmation handler again: it waits for a decision recorded for it, as in
+/// [`LlmAgent`](crate::LlmAgent) (spec 3.3 §7.3). A run that brings a new message
+/// answers it in a turn of its own while the call keeps waiting: that turn cannot
+/// suspend, and the checkpoint of the waiting call stays in session state (§7.4).
+fn run_codeact(mut input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>> {
+    stream! {
+        let mut hold = None;
+        let mut waiting = None;
+        if let Some(cp) = input.pending.clone()
+            && cp.disposition == Disposition::AwaitingConfirmation
+            && let Some(tool) = input.tools.iter().find(|tool| tool.name() == cp.call.tool)
+        {
+            let gate = ToolGate::for_context(input.invocation_ctx.as_ref());
+            let request = ToolConfirmationRequest::for_tool(tool.as_ref(), cp.call.args.clone())
+                .with_function_call_id(cp.call.call_id.to_string())
+                .with_acting_context(gate.acting_context().clone());
+            match adk_core::confirmation_decision_available(&gate, &request).await {
+                Ok(true) => {}
+                Ok(false) if input.incoming.carries_user_input() => waiting = Some((cp, request)),
+                Ok(false) => hold = Some(request),
+                Err(error) => {
+                    yield Err(error);
+                    return;
+                }
+            }
+        }
+        let kept = match &waiting {
+            Some((cp, _)) => {
+                input.pending = None;
+                input.supports_suspension = false;
+                Some(serde_json::to_value(cp).expect("CodeActCheckpoint serialization cannot fail"))
+            }
+            None => None,
+        };
+        let mut inner = Box::pin(drive_codeact(input, hold, waiting.map(|(_, request)| request)));
+        while let Some(mut item) = inner.next().await {
+            // The turn that answered the message ends; the waiting call's checkpoint stays.
+            if let (Ok(event), Some(kept)) = (&mut item, &kept)
+                && event.actions.state_delta.get(PENDING_STATE_KEY).is_some_and(Value::is_null)
+            {
+                event.actions.state_delta.insert(PENDING_STATE_KEY.to_string(), kept.clone());
+            }
+            yield item;
+        }
+    }
+}
+
+/// The CodeAct loop. `hold` re-holds a pending checkpoint's call without asking about it
+/// again; `waiting` is the call that waits while this turn answers a new message.
+fn drive_codeact(
+    input: LoopInputs,
+    mut hold: Option<ToolConfirmationRequest>,
+    waiting: Option<ToolConfirmationRequest>,
+) -> impl Stream<Item = adk_core::Result<Event>> {
     stream! {
         let LoopInputs {
             model, runtime, tools, policy, invocation_ctx, incoming, system_prompt, conversation,
@@ -323,6 +378,11 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                 // A call still waiting for a decision, re-held with its final arguments.
                 let mut held: Option<ToolConfirmationRequest> = None;
                 let resolution: Option<ResolutionRecord> = match &cp.disposition {
+                    // No decision is recorded for the call: it keeps waiting, unasked.
+                    Disposition::AwaitingConfirmation if hold.is_some() => {
+                        held = hold.take();
+                        None
+                    }
                     // Recovery re-runs an unfinished call, and a confirmed call runs now.
                     // Both pass through the governed path, which finds the decision.
                     Disposition::PendingResult | Disposition::AwaitingConfirmation => {
@@ -701,9 +761,29 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                                 ));
                             let exec = match run_tool(&tool, &tool_ctx, args, &tool_policy, &mut circuit).await {
                                 ToolRun::Finished(exec) => exec,
-                                ToolRun::Held(_) => Err(format!(
-                                    "tool '{name}' requires confirmation but this runtime cannot pause"
-                                )),
+                                ToolRun::Held(request) => match &waiting {
+                                    // This turn answers a message while another call waits
+                                    // for a decision; it cannot wait for a second one.
+                                    Some(waiting) if request.fingerprint() == waiting.fingerprint() => {
+                                        Err(format!(
+                                            "this call to '{name}' is already waiting for a decision; it runs once that decision is made"
+                                        ))
+                                    }
+                                    Some(waiting) => {
+                                        let gate = ToolGate::for_context(invocation_ctx.as_ref());
+                                        if let Err(error) = adk_core::withdraw_held_call(&gate, &request).await {
+                                            yield Err(error);
+                                            return;
+                                        }
+                                        Err(format!(
+                                            "tool '{name}' needs a decision, but a call to '{}' is already waiting for one; call it again once that call is decided",
+                                            waiting.tool_name
+                                        ))
+                                    }
+                                    None => Err(format!(
+                                        "tool '{name}' requires confirmation but this runtime cannot pause"
+                                    )),
+                                },
                                 ToolRun::Abort(error) => {
                                     yield Err(error);
                                     return;
@@ -5198,5 +5278,163 @@ mod tests {
         }
         assert_eq!(executions.lock().unwrap().len(), 1);
         assert_eq!(ledger.begun.lock().unwrap().len(), 1);
+    }
+
+    /// Never answers, and counts how often it is asked.
+    #[derive(Debug, Default)]
+    struct NeverAnswers(std::sync::atomic::AtomicUsize);
+
+    #[async_trait]
+    impl adk_core::ToolConfirmationHandler for NeverAnswers {
+        async fn decide(
+            &self,
+            _request: &ToolConfirmationRequest,
+        ) -> adk_core::Result<ToolConfirmationDecision> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::future::pending().await
+        }
+    }
+
+    /// The checkpoint `event` leaves in session state, as stored.
+    fn kept(event: &Event) -> Option<Value> {
+        event.actions.state_delta.get(PENDING_STATE_KEY).cloned()
+    }
+
+    /// Loop inputs for a run of `echo` under a handler that never answers within 20 ms and
+    /// an approval store, so a call it is asked about waits in the store.
+    fn waiting_inputs(
+        model: Arc<dyn Llm>,
+        runtime: Arc<dyn CodeRuntime>,
+        incoming: Content,
+        handler: Arc<NeverAnswers>,
+        store: Arc<adk_core::InMemoryApprovalStore>,
+    ) -> LoopInputs {
+        let mut input = base_inputs(model, runtime, incoming.clone());
+        input.tools = vec![echo_tool()];
+        input.policy = ToolConfirmationPolicy::Always;
+        input.invocation_ctx = Arc::new(
+            MockInvocationContext::new(incoming).with_run_config(
+                adk_core::RunConfig::builder()
+                    .tool_confirmation_handler(handler)
+                    .tool_confirmation_timeout(Duration::from_millis(20))
+                    .approval_store(store)
+                    .build(),
+            ),
+        );
+        input
+    }
+
+    /// Review finding 1 of #1044 (spec 3.3 §7.3, §7.4): a call that timed out waits in the
+    /// store; later runs do not ask the handler about it again, a new message is answered
+    /// while it waits, and a decision recorded for it resumes it once.
+    #[tokio::test]
+    async fn a_waiting_call_is_not_asked_again_and_a_new_message_is_answered() {
+        use adk_core::ApprovalStore as _;
+        let handler = Arc::new(NeverAnswers::default());
+        let store = Arc::new(adk_core::InMemoryApprovalStore::new());
+        let program = vec![
+            Planned::call("echo", json!({"msg": "x"}), 7),
+            Planned::Complete(json!({"type": "final_result", "value": "after"})),
+        ];
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![program]));
+        let input =
+            waiting_inputs(FakeLlm::new("noop"), rt, user("go"), handler.clone(), store.clone());
+        let events = collect(input).await;
+        let held = events.last().unwrap();
+        let request = held.actions.tool_confirmation.clone().expect("the call waits");
+        let cp = pending_in(held).expect("its checkpoint is kept");
+        assert_eq!(handler.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let scope = adk_core::ApprovalScope::new("app", "user", "sess-test");
+        assert_eq!(store.pending(&scope).await.unwrap().len(), 1, "it waits in the store");
+
+        // A new message: the model answers it, the handler is not asked, the call waits on.
+        let model = FakeLlm::new("noop");
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![Planned::Complete(
+            json!({"type": "final_result", "value": "hello"}),
+        )]]));
+        let mut input = waiting_inputs(
+            model.clone(),
+            rt.clone(),
+            user("never mind, just say hello"),
+            handler.clone(),
+            store.clone(),
+        );
+        input.pending = Some(cp.clone());
+        let events = collect(input).await;
+        let last = events.last().unwrap();
+        assert_eq!(final_text(last).as_deref(), Some("hello"));
+        assert_eq!(kept(last), Some(json!(cp)), "the waiting call keeps its checkpoint");
+        assert_eq!(*model.calls.lock().unwrap(), 1);
+        assert_eq!(rt.last_value(), None, "the waiting call has not run");
+        assert_eq!(handler.0.load(std::sync::atomic::Ordering::SeqCst), 1, "not asked again");
+
+        // A run without a message keeps it waiting, unasked and without a model call.
+        let model = FakeLlm::new("noop");
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![]));
+        let mut input =
+            waiting_inputs(model.clone(), rt, Content::new("user"), handler.clone(), store.clone());
+        input.pending = Some(cp.clone());
+        let events = collect(input).await;
+        let last = events.last().unwrap();
+        assert_eq!(last.actions.tool_confirmation.as_ref(), Some(&request));
+        assert_eq!(kept(last), Some(json!(cp)));
+        assert_eq!(*model.calls.lock().unwrap(), 0);
+        assert_eq!(handler.0.load(std::sync::atomic::Ordering::SeqCst), 1, "not asked again");
+
+        // A decision recorded for it resumes it once.
+        store
+            .decide(&scope, &request.fingerprint(), adk_core::ToolApproval::approve())
+            .await
+            .unwrap();
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![]));
+        let mut input = waiting_inputs(
+            FakeLlm::new("noop"),
+            rt.clone(),
+            Content::new("user"),
+            handler.clone(),
+            store.clone(),
+        );
+        input.pending = Some(cp);
+        let events = collect(input).await;
+        assert_eq!(rt.last_value(), Some(json!({"msg": "x"})), "the approved call ran");
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("after"));
+        assert_eq!(handler.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// The turn that answers a message while a call waits cannot wait for a second
+    /// decision: a call it makes that needs one is not run, and is not left waiting.
+    #[tokio::test]
+    async fn a_turn_beside_a_waiting_call_does_not_leave_a_second_call_waiting() {
+        use adk_core::ApprovalStore as _;
+        let handler = Arc::new(NeverAnswers::default());
+        let store = Arc::new(adk_core::InMemoryApprovalStore::new());
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+            Planned::call("echo", json!({"msg": "x"}), 7),
+            Planned::Complete(json!({"type": "final_result", "value": "after"})),
+        ]]));
+        let input =
+            waiting_inputs(FakeLlm::new("noop"), rt, user("go"), handler.clone(), store.clone());
+        let cp = pending_in(collect(input).await.last().unwrap()).unwrap();
+
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+            Planned::call("echo", json!({"msg": "y"}), 1),
+            Planned::Complete(json!({"type": "final_result", "value": "later"})),
+        ]]));
+        let mut input = waiting_inputs(
+            FakeLlm::new("noop"),
+            rt.clone(),
+            user("also echo y"),
+            handler.clone(),
+            store.clone(),
+        );
+        input.pending = Some(cp.clone());
+        let events = collect(input).await;
+        let raised = rt.last_raise().expect("the second call is refused in the script");
+        assert!(raised.contains("already waiting"), "{raised}");
+        assert_eq!(kept(events.last().unwrap()), Some(json!(cp)));
+        let scope = adk_core::ApprovalScope::new("app", "user", "sess-test");
+        let pending = store.pending(&scope).await.unwrap();
+        assert_eq!(pending.len(), 1, "only the first call waits");
+        assert_eq!(pending[0].request.args, json!({"msg": "x"}));
     }
 }

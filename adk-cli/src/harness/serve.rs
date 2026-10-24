@@ -26,7 +26,8 @@ pub const OPERATOR_SCOPE: &str = "operator";
 /// per-process secret that a client cannot forge.
 const LOOPBACK_HEADER: &str = "x-adk-loopback-peer";
 
-fn operator(user_id: &str) -> RequestContext {
+/// The operator's request context: `user_id` with the [`OPERATOR_SCOPE`].
+pub(crate) fn operator(user_id: &str) -> RequestContext {
     RequestContext {
         user_id: user_id.to_string(),
         scopes: vec![OPERATOR_SCOPE.to_string()],

@@ -651,12 +651,9 @@ async fn check_history(workflow: bool, wait: Wait, steps: Vec<Step>) {
         let ops_requests = ops.requests();
         let report_requests = report.requests();
         let model_calls = ops_requests.len() - ops_seen;
-        match wait {
-            Wait::Held => assert_eq!(model_calls, 1, "step {index} ({step:?}) of {steps:?}"),
-            // A live handler is asked again for every call still waiting, and a run whose
-            // calls time out again ends before its model call.
-            Wait::TimedOut => assert!(model_calls <= 1, "step {index} ({step:?}) of {steps:?}"),
-        }
+        // A call still waiting is not put to the handler again, so every run reaches its model
+        // call (spec 3.3 §7.3, §7.4).
+        assert_eq!(model_calls, 1, "step {index} ({step:?}) of {steps:?}");
         for request in ops_requests[ops_seen..].iter().chain(&report_requests[report_seen..]) {
             assert_eq!(
                 person_turns(request),

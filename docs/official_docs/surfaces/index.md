@@ -2,11 +2,14 @@
 
 `adk-surface` is the interface to an always-on agent (spec 3.3): the web home, the terminal,
 chat, the phone, the desktop tray and voice are windows onto the same kernel. This page covers
-the engine every surface runs on and the `web` feature's HTTP API. A decision is made once,
+the engine every surface runs on and the `web` feature's HTTP API; [The Web Home](web-home.md)
+covers the page the `web` feature serves at `/ui/`. A decision is made once,
 from any surface, and every other surface shows who made it and how.
 
-> **Note:** `adk-surface` is Beta and opt-in (`default = []`). No library crate depends on it;
-> the umbrella crate reaches it through the `surface` feature, which no tier includes.
+> **Note:** `adk-surface` is Beta and opt-in (`default = []`). `adk-cli` depends on it, with
+> `web`, through its `surface` feature, which is on by default so the `adk-rust` binary serves
+> the web home; build `adk-cli` with `default-features = false` to leave it out. The umbrella
+> crate reaches it through its own `surface` feature, which no tier includes.
 
 ## The engine
 
@@ -158,11 +161,19 @@ the server's auth middleware authenticates every request.
 | `GET /surface/decisions/{id}` | One decision, waiting or decided |
 | `GET /surface/sessions/{session}/thread` | The session's entries |
 | `GET /surface/sessions/{session}/feed` | Server-sent events: `entry` (with `id` = `seq`), `decisions`, `reset`; resumes after `Last-Event-ID` or `?after=` |
+| `GET /surface/sessions/{session}/queued` | `QueuedResponse`: what the caller typed while a decision of the session was open, sent once it is answered (§7.4 rule 2) |
 | `GET /surface/agents` | The roster |
 | `GET /surface/status?session=` | The status line |
 | `GET /surface/briefing?since=` | "While you were away" |
 | `POST /surface/commands` | `{"surface", "origin", "command"}` → the outcome |
 | `GET /surface/openapi.json` | The OpenAPI 3.1 document |
+
+`adk_surface::web::take_over_router(engine, take_over)` adds `POST
+/surface/decisions/{id}/take-over` (`{"version", "secret"}` → the outcome) beside a harness that
+takes over (spec 3.3 §8.2, §10 H2): the secret goes to the harness's `TakeOver` for the one call
+that asked, never to the inbox or the engine's records. A take-over card is headed by what to
+type and offers only **Deny** as a decide; **Edit** is offered only where a card shows the
+call's own arguments.
 
 | Answer | When |
 |---|---|
@@ -183,5 +194,7 @@ generated from the Rust types. `bash scripts/check-surface-api.sh` fails when th
 
 ## Related
 
+- [The Web Home](web-home.md) — the page at `/ui/` that reads and acts through this API
+- [The Terminal](terminal.md) — the `tui` feature: full screen, inline and JSON
 - [The Control Plane](../kernel/control-plane.md) — the kernel routes the web API sits beside
 - [Harness Modes and Approvals](../harness/modes-and-approvals.md) — held calls, standing rules, modes

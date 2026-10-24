@@ -88,7 +88,7 @@ The always-on form of the harness (`adk-kernel`, spec 3.2): durable processes th
 - [Running the Kernel as a Service](kernel/service.md) - `adk-rust up --install`, `--uninstall` and `--print`: a launchd agent, a systemd user unit or a Windows service that runs as you
 - [The Managed Form](kernel/managed.md) - One kernel per tenant on the managed runtime: `KernelDef` beside `adk.harness`, wake sets, the tenant's proactivity policy, the managed approval path, voice decisions on parked processes
 - [Self-observation: `/proc`](kernel/proc.md) - The content-free activity ledger, daily baselines and observations offered as questions, `adk-rust proc`, exporting for `cargo adk eval --ledger`
-- [Kernel Store Backends](kernel/backends.md) - The process, agenda, driver and ledger stores on in-memory, SQLite, PostgreSQL and Redis, and on MongoDB, Firestore and Neo4j (Alpha)
+- [Kernel Store Backends](kernel/backends.md) - The process, agenda, driver, ledger and partition stores on in-memory, SQLite, PostgreSQL and Redis, and on MongoDB, Firestore and Neo4j (Alpha)
 - [Partitions](kernel/partitions.md) - One harness per partition, class and tenant identity, memory scoping, crossings by the coordinator under a non-waivable approval, `kernel.partition.*` audit records
 
 ## Agent Surfaces
@@ -96,6 +96,8 @@ The always-on form of the harness (`adk-kernel`, spec 3.2): durable processes th
 The interface to an always-on agent (`adk-surface`, spec 3.3): every surface is a window onto the same kernel, and a decision is made once, from anywhere.
 
 - [The Engine](surfaces/index.md) - Feed, projection and commands every surface shares: decision cards in plain words, what each surface may decide, one write path with the version seen, the `web` feature's HTTP API and its generated types
+- [The Web Home](surfaces/web-home.md) - Threads, Today and Memory & rules at `/ui/`, in light and dark: decisions with the version seen, what stays read-only until the kernel serves it, mounting it on your own server, the developer panel, and moving from `adk-server`'s bundled runtime UI
+- [The Terminal](surfaces/terminal.md) - Full screen, inline and JSON lines from the keyboard: decisions answered by key, Esc never decides, typing queued, device pairing for a kernel on another machine, exit codes for CI
 
 ## Realtime & Multimodal
 
@@ -187,7 +189,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 ## Deployment
 
 - [Launcher](deployment/launcher.md) - Running agents in console or server mode
-- [Server](deployment/server.md) - REST API and web UI integration
+- [Server](deployment/server.md) - REST API, streaming and A2A integration
 - [A2A Getting Started](a2a/getting-started.md) - Create and run an A2A agent
 - [A2A Protocol](deployment/a2a.md) - Agent-to-Agent communication
 - [Agentic Web Protocol](deployment/awp.md) - AWP protocol for agent-native web services

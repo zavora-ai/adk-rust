@@ -667,6 +667,35 @@ impl ApprovalRequest {
         self
     }
 
+    /// Whether [`args_redacted`](Self::args_redacted) are the call's own arguments, so an
+    /// [`Edit`](ApprovalAction::Edit) that starts from them changes only what the approver
+    /// changed (spec 3.3 §7.2). False when the shown arguments are a redacted view, a form
+    /// an MCP server asks for, or anything else in place of the call's, and for a request
+    /// without its fingerprint.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{
+    ///     ApprovalPolicy, ApprovalRequest, ApprovalScope, ApproverSelector,
+    ///     ToolConfirmationRequest,
+    /// };
+    /// use serde_json::json;
+    ///
+    /// let call = ToolConfirmationRequest::new("pay", json!({ "amount": 500, "card": "4242424242424242" }));
+    /// let scope = ApprovalScope::new("shop", "ana", "s1");
+    /// let policy = ApprovalPolicy::new([ApproverSelector::human("ana")]);
+    /// let plain = ApprovalRequest::new("apr-1", scope.clone(), &call, policy.clone());
+    /// assert!(plain.shows_call_args());
+    /// let masked = ApprovalRequest::new("apr-2", scope, &call, policy)
+    ///     .with_redacted_args(json!({ "amount": 500, "card": "****4242" }));
+    /// assert!(!masked.shows_call_args());
+    /// ```
+    pub fn shows_call_args(&self) -> bool {
+        let shown = crate::tool_call_fingerprint(&self.tool_name, &self.args_redacted);
+        self.fingerprint.strip_suffix(shown.as_str()).is_some_and(|rest| rest.ends_with('\u{1f}'))
+    }
+
     /// Whether the request still needs work: pending, or resolved but not yet applied.
     pub fn is_open(&self) -> bool {
         self.state == ApprovalState::Pending || !self.outcome_applied
@@ -957,8 +986,12 @@ pub struct ApprovalRequestQuery {
     pub open_only: bool,
     /// Only requests from this application.
     pub app_name: Option<String>,
-    /// Only requests from the session with this ID ([`ApprovalScope::session_id`]); with
-    /// [`app_name`](Self::app_name), one application's session (spec 3.3 §10 C1).
+    /// Only requests of this user ([`ApprovalScope::user_id`]) (spec 3.3 §10 C1).
+    pub user_id: Option<String>,
+    /// Only requests from sessions with this ID ([`ApprovalScope::session_id`]). A session
+    /// is an application's, user's and session ID together: set
+    /// [`app_name`](Self::app_name) and [`user_id`](Self::user_id) too, or use
+    /// [`with_session`](Self::with_session), to select exactly one (spec 3.3 §10 C1).
     pub session_id: Option<String>,
     /// Only requests listing after this position.
     pub after: Option<ApprovalCursor>,
@@ -972,6 +1005,7 @@ impl Default for ApprovalRequestQuery {
             states: Vec::new(),
             open_only: false,
             app_name: None,
+            user_id: None,
             session_id: None,
             after: None,
             limit: DEFAULT_APPROVAL_PAGE,
@@ -1001,7 +1035,8 @@ impl ApprovalRequestQuery {
         self
     }
 
-    /// Only requests from the session with ID `session_id` (spec 3.3 §10 C1).
+    /// Only requests from sessions with ID `session_id`, in any application and of any
+    /// user unless those are set too (spec 3.3 §10 C1).
     ///
     /// # Example
     ///
@@ -1015,6 +1050,44 @@ impl ApprovalRequestQuery {
     pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
         self.session_id = Some(session_id.into());
         self
+    }
+
+    /// Only requests of the user `user_id` (spec 3.3 §10 C1).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::ApprovalRequestQuery;
+    ///
+    /// let query = ApprovalRequestQuery::default().with_user_id("alice");
+    /// assert_eq!(query.user_id.as_deref(), Some("alice"));
+    /// ```
+    #[must_use]
+    pub fn with_user_id(mut self, user_id: impl Into<String>) -> Self {
+        self.user_id = Some(user_id.into());
+        self
+    }
+
+    /// Only requests from the one session `scope` names: its application, user and
+    /// session ID (spec 3.3 §10 C1).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{ApprovalRequestQuery, ApprovalScope};
+    ///
+    /// let query =
+    ///     ApprovalRequestQuery::default().with_session(&ApprovalScope::new("shop", "alice", "s-1"));
+    /// assert_eq!(
+    ///     (query.app_name.as_deref(), query.user_id.as_deref(), query.session_id.as_deref()),
+    ///     (Some("shop"), Some("alice"), Some("s-1"))
+    /// );
+    /// ```
+    #[must_use]
+    pub fn with_session(self, scope: &ApprovalScope) -> Self {
+        self.with_app_name(scope.app_name.clone())
+            .with_user_id(scope.user_id.clone())
+            .with_session_id(scope.session_id.clone())
     }
 
     /// Starts after `cursor`.
@@ -1036,6 +1109,7 @@ impl ApprovalRequestQuery {
         (self.states.is_empty() || self.states.contains(&request.state))
             && (!self.open_only || request.is_open())
             && self.app_name.as_ref().is_none_or(|app| *app == request.scope.app_name)
+            && self.user_id.as_ref().is_none_or(|user| *user == request.scope.user_id)
             && self.session_id.as_ref().is_none_or(|session| *session == request.scope.session_id)
             && self.after.as_ref().is_none_or(|cursor| cursor.precedes(request))
     }
@@ -1072,8 +1146,12 @@ pub struct InboxQuery {
     pub states: Vec<ApprovalState>,
     /// Only requests from this application.
     pub app_name: Option<String>,
-    /// Only requests from the session with this ID ([`ApprovalScope::session_id`]); with
-    /// [`app_name`](Self::app_name), one application's session (spec 3.3 §10 C1).
+    /// Only requests of this user ([`ApprovalScope::user_id`]) (spec 3.3 §10 C1).
+    pub user_id: Option<String>,
+    /// Only requests from sessions with this ID ([`ApprovalScope::session_id`]). A session
+    /// is an application's, user's and session ID together: set
+    /// [`app_name`](Self::app_name) and [`user_id`](Self::user_id) too, or use
+    /// [`with_session`](Self::with_session), to select exactly one (spec 3.3 §10 C1).
     pub session_id: Option<String>,
     /// The page token from the previous page.
     pub cursor: Option<String>,
@@ -1088,6 +1166,7 @@ impl Default for InboxQuery {
             groups: Vec::new(),
             states: Vec::new(),
             app_name: None,
+            user_id: None,
             session_id: None,
             cursor: None,
             limit: 50,
@@ -1127,8 +1206,8 @@ impl InboxQuery {
         self
     }
 
-    /// Only requests from the session with ID `session_id`, such as the decisions one
-    /// thread is waiting on (spec 3.3 §10 C1).
+    /// Only requests from sessions with ID `session_id`, in any application and of any
+    /// user unless those are set too (spec 3.3 §10 C1).
     ///
     /// # Example
     ///
@@ -1138,6 +1217,7 @@ impl InboxQuery {
     ///
     /// let query = InboxQuery::for_approver(SubjectRef::human("ana"), ["finance"])
     ///     .with_app_name("shop")
+    ///     .with_user_id("alice")
     ///     .with_session_id("s-1");
     /// assert_eq!(query.session_id.as_deref(), Some("s-1"));
     /// ```
@@ -1145,6 +1225,33 @@ impl InboxQuery {
     pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
         self.session_id = Some(session_id.into());
         self
+    }
+
+    /// Only requests of the user `user_id` (spec 3.3 §10 C1).
+    #[must_use]
+    pub fn with_user_id(mut self, user_id: impl Into<String>) -> Self {
+        self.user_id = Some(user_id.into());
+        self
+    }
+
+    /// Only requests from the one session `scope` names — its application, user and
+    /// session ID — such as the decisions one thread is waiting on (spec 3.3 §10 C1).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{ApprovalScope, InboxQuery};
+    /// use adk_core::principal::SubjectRef;
+    ///
+    /// let query = InboxQuery::for_approver(SubjectRef::human("ana"), ["finance"])
+    ///     .with_session(&ApprovalScope::new("shop", "alice", "s-1"));
+    /// assert_eq!(query.user_id.as_deref(), Some("alice"));
+    /// ```
+    #[must_use]
+    pub fn with_session(self, scope: &ApprovalScope) -> Self {
+        self.with_app_name(scope.app_name.clone())
+            .with_user_id(scope.user_id.clone())
+            .with_session_id(scope.session_id.clone())
     }
 
     /// Continues from a page token.
@@ -1405,6 +1512,9 @@ pub trait ApprovalService: fmt::Debug + Send + Sync {
     /// Submits the request for a call the governed path held, as the service's router
     /// presents it. Returns `None` when the service routes no request for the call.
     ///
+    /// A call held again while its request is still pending gets that request back, never
+    /// a second one (spec 3.3 §7.3).
+    ///
     /// # Errors
     ///
     /// Returns a store error.
@@ -1476,6 +1586,22 @@ pub trait ApprovalService: fmt::Debug + Send + Sync {
     /// Returns `approval.not_found`, `approval.already_resolved`, or
     /// `approval.version_conflict` when it changed concurrently.
     async fn cancel(&self, id: &str, reason: Option<String>) -> Result<ApprovalRequest>;
+
+    /// Withdraws a pending request whose call was decided another way, such as by the run's
+    /// confirmation handler: the request is closed as cancelled, but no outcome is written
+    /// to the store and no run is woken, so the decision that closed the call stands
+    /// (spec 3.3 §7.3).
+    ///
+    /// The default cancels the request, which denies the call; [`StoreApprovalService`]
+    /// writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`cancel`](Self::cancel): `approval.not_found`, `approval.already_resolved`, or
+    /// `approval.version_conflict` when it changed concurrently.
+    async fn withdraw(&self, id: &str, reason: Option<String>) -> Result<ApprovalRequest> {
+        self.cancel(id, reason).await
+    }
 
     /// Expires overdue requests and fires due escalation steps, as of `now`, and
     /// applies resolutions an earlier failure left unapplied.
@@ -1833,6 +1959,22 @@ impl ApprovalService for StoreApprovalService {
             // Decided between the hold and now; the next run takes the decision.
             return Ok(None);
         };
+        // One request per held call: a call held again keeps the request still open for it,
+        // even when its pending entry was recorded anew (spec 3.3 §7.3).
+        let mut open = ApprovalRequestQuery::default()
+            .with_session(&call.scope)
+            .with_states([ApprovalState::Pending]);
+        loop {
+            let batch = self.store.list_requests(&open).await?;
+            if let Some(existing) = batch.iter().find(|request| request.fingerprint == fingerprint)
+            {
+                return Ok(Some(existing.clone()));
+            }
+            if batch.len() < open.limit {
+                break;
+            }
+            open = open.with_after(batch.last().map(ApprovalRequest::cursor));
+        }
         let id = ApprovalRequest::id_for_call(&call.scope, &fingerprint, held.requested_at);
         let mut request = ApprovalRequest::new(id, call.scope.clone(), &call.request, route.policy)
             .with_summary(route.summary.unwrap_or(call.reason))
@@ -1879,6 +2021,7 @@ impl ApprovalService for StoreApprovalService {
                 .with_after(after.clone())
                 .with_limit(DEFAULT_APPROVAL_PAGE);
             store_query.app_name = query.app_name.clone();
+            store_query.user_id = query.user_id.clone();
             store_query.session_id = query.session_id.clone();
             let batch = self.store.list_requests(&store_query).await?;
             let exhausted = batch.len() < DEFAULT_APPROVAL_PAGE;
@@ -2019,11 +2162,14 @@ impl ApprovalService for StoreApprovalService {
             approval.state = next.state.as_str(),
             "approval decision recorded"
         );
-        self.notify(ApprovalEventKind::Decided, &next, Some(&decision), None).await;
         if !next.state.is_terminal() {
+            self.notify(ApprovalEventKind::Decided, &next, Some(&decision), None).await;
             return Ok(next);
         }
-        let applied = self.apply(next, false).await?;
+        // The outcome is written before any notifier runs, so a call that is decided
+        // another way meanwhile waits for it no longer than the store write (spec 3.3 §7.3).
+        let applied = self.apply(next.clone(), false).await?;
+        self.notify(ApprovalEventKind::Decided, &next, Some(&decision), None).await;
         self.notify(ApprovalEventKind::Resolved, &applied, None, None).await;
         Ok(applied)
     }
@@ -2080,6 +2226,26 @@ impl ApprovalService for StoreApprovalService {
         let applied = self.apply(next, false).await?;
         self.notify(ApprovalEventKind::Cancelled, &applied, None, None).await;
         Ok(applied)
+    }
+
+    async fn withdraw(&self, id: &str, reason: Option<String>) -> Result<ApprovalRequest> {
+        let request = self.store.get_request(id).await?.ok_or_else(|| not_found(id))?;
+        if request.state.is_terminal() {
+            return Err(conflict(
+                "approval.already_resolved",
+                format!("approval request '{id}' is already {}", request.state.as_str()),
+            ));
+        }
+        let mut next = request.clone();
+        next.state = ApprovalState::Cancelled;
+        next.version = request.version + 1;
+        next.resolved_at = Some(self.clock.now());
+        next.note = reason;
+        // The call was decided another way: there is no outcome to write or run to wake.
+        next.outcome_applied = true;
+        self.swap(&next, request.version).await?;
+        self.notify(ApprovalEventKind::Cancelled, &next, None, None).await;
+        Ok(next)
     }
 
     async fn tick(&self, now: DateTime<Utc>) -> Result<ApprovalTick> {

@@ -39,9 +39,9 @@
 //! | [`AgendaStore`](crate::AgendaStore) | `MongoAgendaStore` | `FirestoreAgendaStore` | `Neo4jAgendaStore` |
 //! | `drivers::DriverStore` (with `drivers`) | `MongoDriverStore` | `FirestoreDriverStore` | `Neo4jDriverStore` |
 //! | `proc::LedgerStore` (with `proc`) | `MongoLedgerStore` | `FirestoreLedgerStore` | `Neo4jLedgerStore` |
+//! | [`PartitionStore`](crate::PartitionStore) | `MongoPartitionStore` | `FirestorePartitionStore` | `Neo4jPartitionStore` |
 //!
-//! The partition store has no MongoDB, Firestore or Neo4j backend yet. There is no file
-//! backend and no Vertex AI backend (§13 Q8): no durable store on `main` is file-backed, and
+//! There is no file backend and no Vertex AI backend (§13 Q8): no durable store on `main` is file-backed, and
 //! Vertex AI holds sessions only.
 
 use async_trait::async_trait;
@@ -103,7 +103,13 @@ mod memory;
 mod mongodb;
 #[cfg(feature = "neo4j")]
 mod neo4j;
+#[cfg(feature = "firestore")]
+mod partition_firestore;
 mod partition_memory;
+#[cfg(feature = "mongodb")]
+mod partition_mongodb;
+#[cfg(feature = "neo4j")]
+mod partition_neo4j;
 #[cfg(feature = "redis")]
 mod partition_redis;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
@@ -165,7 +171,13 @@ pub use memory::InMemoryProcessStore;
 pub use mongodb::MongoProcessStore;
 #[cfg(feature = "neo4j")]
 pub use neo4j::Neo4jProcessStore;
+#[cfg(feature = "firestore")]
+pub use partition_firestore::FirestorePartitionStore;
 pub use partition_memory::InMemoryPartitionStore;
+#[cfg(feature = "mongodb")]
+pub use partition_mongodb::MongoPartitionStore;
+#[cfg(feature = "neo4j")]
+pub use partition_neo4j::Neo4jPartitionStore;
 #[cfg(feature = "redis")]
 pub use partition_redis::RedisPartitionStore;
 #[cfg(feature = "postgres")]

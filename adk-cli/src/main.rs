@@ -61,10 +61,22 @@ async fn run() -> Result<()> {
     let parsed = Cli::parse();
     #[cfg(feature = "voice")]
     let voice = parsed.voice.clone();
+    #[cfg(feature = "tui")]
+    let surface = parsed.surface.clone();
     #[cfg(feature = "harness")]
     let Cli { command, options, harness, .. } = parsed;
     #[cfg(not(feature = "harness"))]
     let Cli { command, options } = parsed;
+    // A subcommand takes its own --server, --home and --token: before it, the terminal's
+    // would reach no kernel, or the local one in place of the named one (spec 3.3 §5.2).
+    #[cfg(feature = "tui")]
+    if command.is_some() && surface.given() {
+        anyhow::bail!(
+            "--server, --home, --token, --pair, --ui, --output, --theme and --message before a \
+             subcommand are the terminal's; give them after the subcommand, as in `adk-rust \
+             freeze --server URL`"
+        );
+    }
 
     match command {
         #[cfg(feature = "harness")]
@@ -73,6 +85,20 @@ async fn run() -> Result<()> {
             let in_process = voice.voice.is_some();
             #[cfg(not(feature = "voice"))]
             let in_process = false;
+            // The terminal surface: full screen, inline or JSON, on the kernel or in process
+            // (spec 3.3 §5.2).
+            #[cfg(feature = "tui")]
+            if !in_process {
+                let reach = harness_cli::surface::reach(&surface, &harness).await?;
+                let model = match reach {
+                    harness_cli::surface::Reach::InProcess => Some(resolve_model(&options).await?),
+                    harness_cli::surface::Reach::Kernel { .. } => None,
+                };
+                let instruction = options.instruction.clone();
+                return exit_with(
+                    harness_cli::surface::run(reach, model, instruction, harness, surface).await?,
+                );
+            }
             // A running kernel owns the sessions, so the REPL attaches to it; --ephemeral,
             // --continue and --voice keep the in-process REPL (spec 3.2 §7.11).
             if !in_process

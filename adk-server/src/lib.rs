@@ -54,7 +54,6 @@ pub mod config;
 pub mod rest;
 pub mod ui_protocol;
 pub mod ui_types;
-pub mod web_ui;
 
 #[cfg(feature = "yaml-agent")]
 pub mod yaml_agent;

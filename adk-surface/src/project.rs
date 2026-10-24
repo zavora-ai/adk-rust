@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use adk_core::{ApprovalAction, ApprovalRequest, ApprovalState, Event, Part, RunState};
 use adk_harness::HarnessMode;
+use adk_harness::take_over::TAKE_OVER_TOOL;
 use adk_kernel::QuietHours;
 use adk_kernel::proc::LedgerEntry;
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
@@ -126,12 +127,27 @@ impl Projector {
         request: &ApprovalRequest,
         always_label: Option<String>,
     ) -> DecisionFacts {
+        // Edit replaces the call's arguments with what the surface sends back, so it is
+        // offered only where the card shows those arguments (spec 3.3 §7.2): never over a
+        // redacted view or an elicitation's form, which would be submitted as written. A take
+        // over is answered with the secret the person types, or refused (§8.2, §10 H2).
+        let own_args = shows_own_arguments(request);
+        let take_over = request.tool_name == TAKE_OVER_TOOL;
         DecisionFacts {
             risk: request.risk.into(),
             money: (self.money)(request),
             truncated: call_view(request).truncated,
-            allows: request.allowed_actions.clone(),
-            always_label,
+            allows: request
+                .allowed_actions
+                .iter()
+                .copied()
+                .filter(|action| match action {
+                    ApprovalAction::Reject => true,
+                    ApprovalAction::Edit => own_args && !take_over,
+                    ApprovalAction::Approve | ApprovalAction::Respond => !take_over,
+                })
+                .collect(),
+            always_label: always_label.filter(|_| !take_over),
         }
     }
 
@@ -592,6 +608,13 @@ pub(crate) fn call_view(request: &ApprovalRequest) -> CallView {
     }
 }
 
+/// The arguments the inbox shows are the call's own (`ApprovalRequest::shows_call_args`). A
+/// source that serves no fingerprints, the approvals API, removes Edit itself where they are
+/// not (`inbox::request_of`).
+fn shows_own_arguments(request: &ApprovalRequest) -> bool {
+    request.fingerprint.is_empty() || request.shows_call_args()
+}
+
 /// `tool(key: value, …)`, each value as JSON.
 fn call_text(tool: &str, args: &Value) -> String {
     match args {
@@ -608,6 +631,10 @@ fn call_text(tool: &str, args: &Value) -> String {
 /// What will happen, in plain words, from the call: "Write file note.txt",
 /// "Send email to [client email]" (spec 3.3 §7.1, §8 "Name the outcome").
 pub(crate) fn heading(request: &ApprovalRequest) -> String {
+    // A take over says what to type, in the words of the tool that asks (spec 3.3 §8.2).
+    if request.tool_name == TAKE_OVER_TOOL && !request.summary.trim().is_empty() {
+        return request.summary.clone();
+    }
     describe_call(&request.tool_name, &request.args_redacted)
 }
 

@@ -1,5 +1,5 @@
-//! The kernel's Neo4j stores (spec 3.2 §7.1, §11, §13 Q8): the process, agenda, driver and
-//! ledger conformance suites against a live server, replicas migrating together, and the
+//! The kernel's Neo4j stores (spec 3.2 §7.1, §11, §13 Q8): the process, agenda, driver, ledger
+//! and partition conformance suites against a live server, replicas migrating together, and the
 //! stores sharing one connection with adk-session's run, schedule and governance stores.
 //!
 //! The tests are `#[ignore]`d because they need a server; CI's nightly `durable-stores` job
@@ -81,6 +81,15 @@ impl adk_kernel::conformance::LedgerStoreHarness for Neo4j {
     }
 }
 
+#[async_trait::async_trait]
+impl adk_kernel::conformance::PartitionStoreHarness for Neo4j {
+    async fn open(&self) -> Arc<dyn adk_kernel::PartitionStore> {
+        let store = adk_kernel::Neo4jPartitionStore::from_graph(graph().await);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+}
+
 mod process {
     use super::*;
 
@@ -114,6 +123,15 @@ mod ledger {
     use super::*;
 
     adk_kernel::ledger_store_conformance_tests! {
+        #[ignore = "needs NEO4J_URI and NEO4J_PASSWORD; CI's nightly durable-stores job runs it"]
+        harness = Neo4j
+    }
+}
+
+mod partition {
+    use super::*;
+
+    adk_kernel::partition_store_conformance_tests! {
         #[ignore = "needs NEO4J_URI and NEO4J_PASSWORD; CI's nightly durable-stores job runs it"]
         harness = Neo4j
     }

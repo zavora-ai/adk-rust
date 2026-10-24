@@ -173,8 +173,9 @@ harness-memory-local = ["harness", "adk-harness/memory-embeddings-local"]
 # with `cli` the `adk-rust up` composition through `HarnessLauncher::with_kernel`.
 harness-kernel = ["harness", "dep:adk-kernel", "adk-harness/kernel"]
 # Agent surfaces (spec 3.3 §6.1): `adk_rust::surface`, the engine every surface runs on and
-# the web home's HTTP API. Opt-in, in no tier.
-surface = ["dep:adk-surface", "adk-surface/web"]
+# the web home, its page and HTTP API; with `cli` and `harness`, the harness launcher
+# (`adk-rust serve`, `up`) mounts the home. Opt-in, in no tier.
+surface = ["dep:adk-surface", "adk-surface/web", "adk-cli?/surface"]
 
 # Managed agent runtime (feature-gated, experimental). The provider features below also
 # let its `DefaultModelResolver` construct that provider's models.
