@@ -857,7 +857,7 @@ impl ProcessTable {
                 return Err(AdkError::new(
                     ErrorComponent::Server,
                     ErrorCategory::Conflict,
-                    "kernel.spawn_rejected",
+                    crate::error::SPAWN_REJECTED_CODE,
                     format!(
                         "run {blocking_run_id} holds the concurrency key and the run refuses to \
                          queue behind it; wait for it to finish or enqueue with OnConflict::Enqueue"
