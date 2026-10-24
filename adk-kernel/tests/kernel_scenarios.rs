@@ -167,7 +167,17 @@ where
 }
 
 async fn in_state(runs: &Arc<dyn DurableRunStore>, pid: &str, state: RunState) -> RunRecord {
-    eventually(&format!("{pid} to be {state:?}"), Duration::from_secs(10), || async {
+    in_state_within(runs, pid, state, Duration::from_secs(10)).await
+}
+
+/// [`in_state`] with its own `limit`.
+async fn in_state_within(
+    runs: &Arc<dyn DurableRunStore>,
+    pid: &str,
+    state: RunState,
+    limit: Duration,
+) -> RunRecord {
+    eventually(&format!("{pid} to be {state:?}"), limit, || async {
         runs.get(pid).await.ok().flatten().filter(|run| run.state == state)
     })
     .await
@@ -247,6 +257,7 @@ async fn k2_sleep_is_free_for_an_hour() {
         WakeSet::any_of([Wake::Webhook { hook: "linear".into() }])
             .with_expiry(two_hours, ExpiryAction::Run),
     ];
+    let spawned = tokio::time::Instant::now();
     let mut pids = Vec::new();
     for (n, set) in sets.iter().enumerate() {
         let process = kernel
@@ -262,6 +273,10 @@ async fn k2_sleep_is_free_for_an_hour() {
     for pid in &pids {
         in_state(&stores.runs, pid, RunState::Waiting).await;
     }
+    // Putting ten processes to sleep is store writes, as running three woken ones is: the
+    // wait for those three scales with the pace measured here, between a floor and a ceiling
+    // a stalled run still fails at.
+    let settle = (spawned.elapsed() * 3).clamp(Duration::from_secs(10), Duration::from_secs(60));
 
     // An hour in one-minute steps, each long enough for the maintenance tick to sweep.
     for minute in 1..=60 {
@@ -295,9 +310,9 @@ async fn k2_sleep_is_free_for_an_hour() {
     // Past two hours on the same clock: the time wake and the expiry wake their sleepers,
     // and the schedule due at 90 minutes fires once.
     clock.advance(Duration::from_secs(61 * 60));
-    in_state(&stores.runs, &pids[8], RunState::Completed).await;
-    in_state(&stores.runs, &pids[9], RunState::Completed).await;
-    let scheduled = eventually("the scheduled run", Duration::from_secs(10), || async {
+    in_state_within(&stores.runs, &pids[8], RunState::Completed, settle).await;
+    in_state_within(&stores.runs, &pids[9], RunState::Completed, settle).await;
+    let scheduled = eventually("the scheduled run", settle, || async {
         all_runs(&stores.runs).await.into_iter().find(|run| {
             run.idempotency_key.as_deref().is_some_and(|key| key.starts_with("schedule:report:"))
                 && run.state == RunState::Completed

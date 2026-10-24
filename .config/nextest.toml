@@ -33,6 +33,12 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 filter = "binary(store_conformance_firestore)"
 slow-timeout = { period = "60s", terminate-after = 4 }
 
+# The SQLite process store's sustained-write suites commit a few thousand times to files
+# opened as harness.db is, synchronized; a Windows runner's disk takes 45–90 s for that.
+[[profile.default.overrides]]
+filter = "binary(process_store_sqlite)"
+slow-timeout = { period = "60s", terminate-after = 4 }
+
 # The durability gates on one server share its stores (schedules are global to a
 # store), so they run one at a time per backend; different backends run in parallel.
 # Each gate starts several processes and waits out leases and staleness limits.
