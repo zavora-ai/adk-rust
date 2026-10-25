@@ -175,6 +175,8 @@
 # `mcp-sampling` gates three rmcp model types nothing in the workspace enables; an rmcp
 # rename broke the sampling handler while workspace clippy stayed at zero.
 4 adk-tool mcp-sampling
+# The MCP server (spec 3.5 §7.9); its round-trip tests also need the HTTP client.
+4 adk-tool mcp-server,http-transport doc
 4 adk-agent codeact
 # Guardrails are not in adk-agent's default features, so `tool_guardrail_tests` ran in no
 # required check.

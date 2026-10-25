@@ -18,6 +18,7 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 - **GoogleSearchTool** - Web search via Gemini's grounding
 - **Provider-native wrappers** - Typed declarations for Gemini, Anthropic, and OpenAI built-in tools, each declaring a `ToolEffect`: search, URL context, Maps and file search are `ReadOnly`; code execution, computer use, image generation, shell, apply-patch and MCP tools are `NonIdempotent`
 - **McpToolset** - Model Context Protocol integration (local and remote servers)
+- **McpServer** - Publish a set of tools as a Streamable HTTP MCP server with an MCP Server Card (SEP-2127) and an AI Catalog entry (feature: `mcp-server`, experimental)
 - **McpServerManager** - Multi-server lifecycle management with health monitoring and auto-restart; on Windows each server runs in a Job Object, so stopping it ends every process it started
 - **BasicToolset / FilteredToolset / MergedToolset / PrefixedToolset** - Group, filter, combine, and namespace toolsets
 - **ExitLoopTool** - Control flow for loop agents
@@ -42,6 +43,9 @@ adk-tool = "3.0"
 
 # Or, for remote MCP servers via HTTP (implies `mcp`):
 # adk-tool = { version = "3.0", features = ["http-transport"] }
+
+# Or, to publish tools as an MCP server (implies `mcp`):
+# adk-tool = { version = "3.0", features = ["mcp-server"] }
 ```
 
 Or use the meta-crate:
@@ -720,6 +724,60 @@ read-only tools or operations protected by a stable provider idempotency guarant
 MCP annotations are server-published hints. Trust them only for servers inside
 the application's security boundary.
 
+### MCP Server (Publish Tools over Streamable HTTP)
+
+The `mcp-server` feature publishes a set of `Tool`s as an MCP server (experimental; the
+Server Card extension is experimental upstream). Each tool's name, description and parameters
+schema become its MCP definition, an object response schema becomes its `outputSchema`, and
+its `ToolEffect` sets the annotations:
+
+| Effect | `readOnlyHint` | `idempotentHint` | `destructiveHint` |
+|--------|----------------|------------------|-------------------|
+| `ReadOnly` | `true` | `true` | `false` |
+| `Idempotent` | `false` | `true` | the tool's own hint, else `true` |
+| `NonIdempotent` | `false` | `false` | the tool's own hint, else `true` |
+
+```rust
+use std::sync::Arc;
+
+use adk_core::Url;
+use adk_tool::FunctionTool;
+use adk_tool::mcp::server::{McpRouterBuilder, McpServer};
+use serde_json::json;
+
+async fn serve() -> Result<(), Box<dyn std::error::Error>> {
+    let quote = FunctionTool::new("get_quote", "Quotes a solar installation", |_ctx, args| async move {
+        Ok(json!({ "kw": args["kw"], "price": 4200 }))
+    })
+    .with_read_only(true);
+    let server = McpServer::builder("com.example/solar", "1.0.0")
+        .description("Quotes for Example Solar installations")
+        .tool(Arc::new(quote))
+        .build()?;
+    let router = McpRouterBuilder::new(server)
+        .public_url(Url::parse("http://127.0.0.1:8080/mcp")?)
+        .build()?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
+    axum::serve(listener, router).await?;
+    Ok(())
+}
+```
+
+| Hook | Default | Role |
+|------|---------|------|
+| `McpCallExecutor` | `DirectExecutor` (`Tool::execute` with a `SimpleToolContext`) | Runs or refuses every call; filters `tools/list` with `is_visible` |
+| `McpCallerResolver` | `AnonymousCallers` | Turns each HTTP request into the `McpCaller` the executor receives; an error refuses the request with its HTTP status |
+
+The router serves the endpoint at `/mcp` and, with a public URL, the Server Card at
+`/mcp/server-card` (the location SEP-2127 reserves), an AI Catalog at
+`/.well-known/ai-catalog.json` whose entry points at that card, and the same card at
+`/.well-known/mcp/server-card.json` as an alias. It bounds request bodies (1 MiB),
+answers malformed JSON-RPC with `-32700`, `-32600` or `-32602`, binds each session to the
+caller that opened it, caps live sessions, and accepts loopback `Host` headers until
+`allowed_hosts` names the public ones. A refused call is a JSON-RPC error that carries the
+error's message only when its category is a rejection; a tool that ran and failed answers
+`isError: true`.
+
 ### MCP examples and guides
 
 [`examples/mcp_manager`](https://github.com/zavora-ai/adk-rust/tree/main/examples/mcp_manager)
@@ -800,6 +858,7 @@ fn python_tool() -> Result<MontyPythonCodeTool, Box<dyn std::error::Error>> {
 |---------|-------------|
 | `mcp` | Local MCP clients via stdio, `McpToolset`, and `McpServerManager` |
 | `http-transport` | Remote MCP servers via streamable HTTP, with bearer, API-key, OAuth2, and brokered auth (implies `mcp`) |
+| `mcp-server` | `McpServer`: publish tools over MCP Streamable HTTP with a Server Card and an AI Catalog entry (implies `mcp`; experimental) |
 | `mcp-sampling` | `LlmSamplingHandler` for server-initiated `sampling/createMessage`; deprecated upstream (implies `mcp`) |
 | `memory-tools` | `LoadMemoryTool` and `PreloadMemoryTool` over `adk-memory` |
 | `graph-memory-tools` | `GraphMemoryToolset`, `RememberTool`, and `RelateTool` (implies `memory-tools`) |
