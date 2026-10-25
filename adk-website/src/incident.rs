@@ -345,7 +345,7 @@ impl IncidentPath {
     ) -> Result<Incident> {
         let id = format!("incident-{}", self.next.fetch_add(1, Ordering::Relaxed));
         tracing::Span::current().record("website.incident", id.as_str());
-        self.set_status(SiteState::Incident, "drift", Some(to_release)).await?;
+        self.set_status(SiteState::Incident, "drift_detected", Some(to_release)).await?;
         let demoted = match area {
             Some(area) => self
                 .ladder

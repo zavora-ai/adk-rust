@@ -28,28 +28,41 @@ adk-core.workspace = true
 # `TeamSpec` with delegate edges (spec 3.5 §7.19).
 adk-agent = { workspace = true, features = ["ambient", "team-tools"] }
 adk-auth = { workspace = true, features = ["web-bot-auth"] }
+# The contract, keys and charter documents, and `awp verify` (spec 3.5 §7.2, §7.7).
+adk-awp = { workspace = true, features = ["signing", "verify"] }
+adk-deploy.workspace = true
+# The inbox drivers' in-thread replies (spec 3.5 §7.10, §7.13).
+adk-drivers.workspace = true
 adk-devtools.workspace = true
 # The website runtime: preset, toolsets, partitions, ladder, onboarding machinery (WP I).
 adk-harness = { workspace = true, features = ["website"] }
 adk-kernel = { workspace = true, features = ["charter", "channels"] }
 adk-payments = { workspace = true, features = ["wallet"] }
-# `WorkflowExecutor` for the site's deterministic jobs (spec 3.5 §7.20).
-adk-server = { workspace = true, features = ["background"] }
-adk-session.workspace = true
+# `WorkflowExecutor` for the site's deterministic jobs (spec 3.5 §7.20); the agent edge and
+# its SQLite stores (spec 3.5 §7.9).
+adk-server = { workspace = true, features = ["background", "awp", "awp-sqlite"] }
+adk-session = { workspace = true, features = ["sqlite"] }
 # Migration sources, freeze, quarantine and probes for onboarding and the Guardian (§7.8).
 adk-site = { workspace = true, features = ["migrate"] }
 awp-types.workspace = true
 async-trait.workspace = true
+axum = "0.8"
 chrono.workspace = true
 # Quiet hours in the owner's IANA time zone (spec 3.5 §7.21).
 chrono-tz = "0.10"
+# The site's key seeds, made on first start (spec 3.5 D-11).
+getrandom = "0.3"
 # The third-party script check parses generated HTML, as the launch gate does.
 scraper = "0.25"
 serde.workspace = true
+# The edge's SQLite stores in a served project (spec 3.5 §7.9).
+sqlx = { workspace = true, features = ["sqlite"] }
 serde_json.workspace = true
 toml.workspace = true
-tokio = { workspace = true, features = ["fs", "macros", "rt", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+# Agency mode dispatches each request to its site's edge by host (spec 3.5 A-I22).
+tower = { version = "0.5", features = ["util"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 url = "2.5"
@@ -60,6 +73,8 @@ uuid.workspace = true
 # manifest. `anthropic` for the live onboarding interview.
 adk-model = { path = "../adk-model", default-features = false, features = ["anthropic"] }
 adk-skill = { path = "../adk-skill" }
+# `SimpleToolContext` for calling the Guardian's edge tool directly.
+adk-tool = { path = "../adk-tool" }
 dotenvy = "0.15"
 futures.workspace = true
 proptest = "1.5"

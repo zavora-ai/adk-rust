@@ -121,8 +121,12 @@ fn object(properties: Value, required: &[&str]) -> Value {
     })
 }
 
+/// The policy version every pack's consent requirement names: the charter's public terms
+/// (spec 3.5 §7.5).
+pub const POLICY_VERSION: &str = "1";
+
 fn consent(scope: ConsentScope) -> Option<ConsentRequirement> {
-    Some(ConsentRequirement { scope, policy_version: "1".into() })
+    Some(ConsentRequirement { scope, policy_version: POLICY_VERSION.into() })
 }
 
 fn custom(scope: &str) -> ConsentScope {

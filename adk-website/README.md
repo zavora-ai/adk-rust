@@ -28,6 +28,9 @@ is for each kind of site.
 | `onboarding` | The nine-stage plan, three starting points, the setup-code gate, discovery, release 1, the live preview, the cost estimate, the scaffold | §7.17, §7.18 |
 | `themes` | `paper`, `harbour` and `meadow`, each with light and dark tokens that pass WCAG 2.2 AA | §7.16 |
 | `packs` | Capability declarations: contact, quote, booking, order, search, components | §7.16, §7.4 |
+| `edge` | The site on `adk-server`'s agent edge: the packs' handlers, the adapters to the back office and the pipeline, the read-only step, the public router with the release behind the edge | §7.9, §7.10, §7.16, A-I11 |
+| `contract` | The site's keys and signed documents: the contract, the key set with its delegations, the public terms, the `_awp-root` record | §7.2, §7.3, §7.7 |
+| `deploy` | The four deployment shapes, `serve` for one site and `serve_agency` for many, agency isolation at the kernel and the edge | §7.22, §7.17, A-I22 |
 | `playbooks` | A skill file for every job, installed into each agent's workspace | §7.16, §7.15 |
 | `incident` | Drift, incident status, rollback to the last good release by standing rule or proposal, a person's exit | §7.20, A-I11 |
 | `alarms` | P1, P2 and P3 routing to the owner's channels | §7.21 |
@@ -104,9 +107,39 @@ async fn start() -> adk_core::Result<()> {
 | `adk-website new <dir> [--kind <kind>] [--name <name>] [--domain <domain>] [--language <tag>]... [--theme <theme>] [--currency <code>]` | Scaffolds the site project: `site.toml`, `theme/`, `charter.draft.json`, `capabilities.json`, `public-terms.json`, `content/`, `data/`, `public/index.html` |
 | `adk-website kinds` | Lists the kinds, their agents and capabilities |
 | `adk-website plan [nothing \| site <url> \| presence <url>...]` | Prints the onboarding plan for a starting point |
+| `adk-website start <dir> [--edge <addr>] [--kernel <addr>] [--edge-url <url>] [--owner <name>]` | Serves the site: the kernel's control plane with device pairing, and the agent edge with the release (or the holding page) behind it; prints the setup code |
+| `adk-website agency <file> [--edge <addr>] [--kernel <addr>] [--owner <name>]` | Serves every site an agency file lists from one harness, each at its own host |
+| `adk-website deploy <dir> --shape local\|container\|managed\|agency [--hosting <minor>] [--domain-cost <minor>] [--price <in>/<out>]` | Writes the shape's files into the project and prints its commands and monthly running cost |
 
-Serving the site, the agent edge and the kernel from the binary arrives with the deployment
-shapes (spec 3.5 §7.22).
+## The agent edge
+
+`edge::SiteEdge::build` declares the kind's capabilities on `adk-server`'s `AwpEdge` with the
+packs' handlers; the edge runs the governed path — trust tiers, schemas, idempotency keys,
+consent receipts, holds — before a handler sees a call.
+
+| Handler | Capabilities |
+|---------|--------------|
+| `FormHandler` | `submit_inquiry`, `subscribe_newsletter`, `request_prospectus`, `licensing_enquiry`, `volunteer`, `register`, `submit_service_form`: a lead, a contact, one `lead_captured` signal |
+| `QuoteHandler`, `OrderHandler` | `get_quote`, `place_order`, `order_status`, `request_return`: the quote keeps the signed release's price into the order (A-I25) |
+| `PaymentHandler` | `pay_order`, `donate`, `subscribe`, `buy_ticket`: through the owner's `PaymentDesk`, refused without one |
+| `BookingHandler` | `check_availability`, `book`, `book_appointment` |
+| `SearchHandler`, `ListingHandler`, `StatusHandler` | `search_site`, the listings of published items, `lookup_status` |
+
+`SiteEdge::status` is the incident path's `StatusSink`: drift puts the edge in read-only mode,
+so every non-read capability answers `503 read_only` with the signed status while pages and
+read-only capabilities keep working; a person's close resumes it (A-I11).
+
+## Deployment shapes
+
+| Shape | Content | Edge and kernel | Fits |
+|-------|---------|-----------------|------|
+| `local` | `DirectoryHost`, or any host driver | `adk-rust up --install` on the owner's machine | Trials, developers |
+| `container` | Any static host | One container: one process serving the edge and the kernel on two listeners | Most small sites |
+| `managed` | Any static host | The managed agent runtime or another agent platform through `adk-deploy` | Owners who want no servers |
+| `agency` | Per-site hosts | One harness for many sites, each isolated (A-I22) | Developers running sites for clients |
+
+The keys are made on first start under `data/keys/`, owner-only. The root signs the contract
+and the delegations and never enters an agent's context (A-I5).
 
 ## Incidents and alarms
 

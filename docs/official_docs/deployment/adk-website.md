@@ -99,6 +99,65 @@ experiments, incidents, leads, the promotions the jobs earned and the demotions 
 reasons, the alarms that waited, and the owner's questions. It sends a one-line summary to
 the owner's channel and returns the document for the web home.
 
+## The agent edge
+
+`edge::SiteEdge::build` serves the kind's capabilities on `adk-server`'s agent edge (spec 3.5
+§7.9) with the packs' handlers. The edge runs the governed path before a handler sees a
+call; the handlers keep leads, contacts, quotes and orders, and file signals into the back
+office's agenda through the kernel's `SignalSink`, each text field screened (A-I3).
+
+| Adapter | Joins |
+|---------|-------|
+| `KernelSignals` | The edge's signals to the back office's agenda |
+| `ReleaseSearch` | `search_site` to the index of the release's Markdown twins |
+| `InboxThreads` | In-thread replies to the inbox drivers |
+| `SiteSubjectData` | Consent export and erasure to the leads and the contact book |
+| `EdgeAnnouncer`, `DeferredAnnouncer` | Each release to `site.release.published` and `catalog.changed` on the edge's events |
+| `ReceiptEntrySigner` | Stream entries to the edge's delegated `receipt` key |
+
+`edge::site_router` serves the edge's routes with the release the host serves behind them,
+each file with its release media type. `edge::consent_config` asks for the consent scopes the
+kind's capabilities name.
+
+| Incident step | The edge |
+|---------------|----------|
+| Drift opens an incident | Read-only mode: non-read capabilities answer `503 read_only` with the signed status |
+| The Guardian's `edge_read_only` | Read-only for a reason, or back with `resume: true` |
+| A person closes the incident | Serving again, status `operational` |
+
+## The contract
+
+`contract::site_documents` signs the contract, the key set and the public terms with the
+site's root; `contract::add_to_project` puts them in the project every release is built from.
+
+| Key | Delegated | Signs |
+|-----|-----------|-------|
+| Root | — | The contract and the delegations; anchored by the `_awp-root` TXT record from `SiteKeys::root_record` |
+| Release | `release` | The site log's checkpoints; the same seed as `adk-site`'s `Ed25519ReleaseSigner` |
+| Edge | `card`, `receipt` | The Agent Card, the status, consent receipts and stream entries |
+
+`adk_awp::verify::Verifier` verifies a served site end to end: the contract, the anchored
+root, the delegations, the signed Agent Card, the log, the release and the public terms.
+
+## Deployment
+
+| Shape | Content | Edge and kernel | Files `deploy::plan` writes |
+|-------|---------|-----------------|-----------------------------|
+| `local` | `DirectoryHost`, or any host driver | `adk-rust up --install`, then `adk-website start .` | None |
+| `container` | Any static host | One process serving the edge publicly and the kernel on loopback | `Dockerfile`, `.dockerignore`, `scripts/build-image.sh` |
+| `managed` | Any static host | The managed agent runtime through `adk-deploy` | `adk-deploy.toml` |
+| `agency` | Per-site hosts | `adk-website agency agency.toml` | `agency.toml` |
+
+Each plan carries the month's running cost estimate before deployment. `deploy::serve` starts
+the kernel with device pairing on its control plane, writes the setup code to the logs, and
+serves the edge; before the launch `/` answers the holding page. `deploy::serve_agency` runs
+many sites from one harness:
+
+| Layer | Isolation (A-I22) |
+|-------|-------------------|
+| Kernel | Each site's partitions carry the site as tenant and deny crossings; a request from one site's back office into another's — the agency coordinator's too — is denied and recorded as a crossing |
+| Edge | `AgencyRouter` sends each request only to the edge of the site its host names; any other host is refused with `404` and recorded as `awp.request.refused` |
+
 ## Audit records
 
 | Record | Written by |
@@ -108,3 +167,4 @@ the owner's channel and returns the document for the web home.
 | `website.alarm.raised`, `website.alarm.acknowledged` | `AlarmRouter` |
 | `website.review.sent` | `ReviewComposer::send` |
 | `site.status.changed`, `site.rollback` | `IncidentPath` |
+| `awp.request.refused` | `deploy::AgencyRouter` |

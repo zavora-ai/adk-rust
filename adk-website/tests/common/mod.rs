@@ -4,6 +4,8 @@
 
 #![allow(dead_code)]
 
+pub mod edge;
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -33,6 +35,7 @@ use adk_site::generator::BuiltinGenerator;
 use adk_site::host::DirectoryHost;
 use adk_site::log::SiteLog;
 use adk_site::signer::{Ed25519ReleaseSigner, ReleaseSigner};
+use adk_website::edge::adapters::DeferredAnnouncer;
 use adk_website::kinds::{KindTemplate, template};
 use adk_website::team::SiteTeam;
 use adk_website::themes::{ThemeId, theme};
@@ -191,6 +194,8 @@ pub struct Site {
     pub log: Arc<SiteLog>,
     pub release_key: NoteVerifier,
     pub audit: InMemoryAuditRecorder,
+    /// Every runtime announces through it; the fixture's edge sets its target.
+    pub announcer: Arc<DeferredAnnouncer>,
     pub dirs: Vec<tempfile::TempDir>,
 }
 
@@ -228,6 +233,7 @@ impl Site {
         let store = Arc::new(InMemoryContentStore::default());
         let history = Arc::new(InMemoryContentHistory::default());
         let audit = InMemoryAuditRecorder::new();
+        let announcer = Arc::new(DeferredAnnouncer::default());
         let runtime = assemble_runtime(
             &site,
             &template,
@@ -242,6 +248,7 @@ impl Site {
             &facts,
             &partitions,
             &audit,
+            &announcer,
         );
         Self {
             runtime,
@@ -266,6 +273,7 @@ impl Site {
             log,
             release_key,
             audit,
+            announcer,
             dirs: vec![host_dir, work],
         }
     }
@@ -287,6 +295,7 @@ impl Site {
             &self.facts,
             &self.partitions,
             &self.audit,
+            &self.announcer,
         )
     }
 
@@ -390,6 +399,7 @@ fn assemble_runtime(
     facts: &Arc<InMemoryFactStore>,
     partitions: &SitePartitions,
     audit: &InMemoryAuditRecorder,
+    announcer: &Arc<DeferredAnnouncer>,
 ) -> Arc<SiteRuntime> {
     let mut base = base.clone();
     if let Some(id) = chosen {
@@ -409,6 +419,7 @@ fn assemble_runtime(
     .facts(facts.clone(), partitions.fact_scope(OWNER))
     .gate(template.gate(&site.origin))
     .audit(AuditTrail::new(Arc::new(audit.clone())))
+    .announcer(announcer.clone())
     .build()
 }
 

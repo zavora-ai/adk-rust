@@ -6,12 +6,19 @@
 //!
 //! Pass condition: charter v1 signed with every KPI carrying a baseline source and no target;
 //! every page maps to a charter goal; zero published claims from `Assumed` facts; launch gate
-//! green; release 1 signed and verified. `awp verify` of the full contract runs with the edge.
+//! green; release 1 signed and verified; and `awp verify` of the full contract passes against
+//! the site's edge with the release behind it: the DNS-anchored root, the delegations, the
+//! signed Agent Card, the log, the release and the public terms.
 
 mod common;
 
 use std::sync::Arc;
 
+use adk_awp::signing::anchor::FixedTxtResolver;
+use adk_awp::signing::jws::DocumentSigner;
+use adk_awp::verify::Verifier;
+use adk_awp::verify::fetch::RouterFetcher;
+use adk_awp::verify::pins::InMemoryPinStore;
 use adk_core::audit_log::AuditTrail;
 use adk_core::principal::SubjectRef;
 use adk_harness::website::CONNECTION_NOTICE;
@@ -20,6 +27,7 @@ use adk_kernel::charter::{CharterStore, RoleApproval};
 use adk_kernel::pairing::{InMemoryDeviceStore, Pairing};
 use adk_model::ScriptedResponse;
 use adk_site::content::ContentStore;
+use adk_website::contract::{ContractInputs, add_to_project, site_documents};
 use adk_website::kinds::CharterInputs;
 use adk_website::onboarding::build::{
     LivePreview, SitePlan, known_facts, page_goal, stage_release_one,
@@ -173,7 +181,22 @@ async fn s1_from_nothing_to_a_signed_verified_release() {
     }
     progress.complete(Stage::Charter, None).await;
 
-    // 6 Build: the owner picks the harbour direction; release 1 is staged from Known facts.
+    // 6 Build: the root signs the contract over the charter's public terms; the owner picks
+    // the harbour direction; release 1 is staged from Known facts.
+    let keys = edge::site_keys("juniper.example");
+    let contract_inputs = ContractInputs {
+        id: site.site.id,
+        name: "Juniper Bakery".into(),
+        domain: "juniper.example".into(),
+        languages: vec!["en".parse().unwrap()],
+        edge: Some(site.site.origin.clone()),
+        release_seq: 1,
+        terms: charter.public.clone(),
+    };
+    let (documents, contract) =
+        site_documents(&keys, &contract_inputs, chrono::Utc::now()).await.unwrap();
+    assert_eq!(contract.proof.as_ref().unwrap().kid, keys.root.kid(), "the root signs it (A-I5)");
+    add_to_project(&mut site.base, documents, charter.public.clone());
     site.runtime = site.assemble(Some(ThemeId::Harbour));
     let known = known_facts(site.facts.as_ref(), &site.partitions.fact_scope(OWNER)).await.unwrap();
     assert_eq!(known.len(), 2);
@@ -221,6 +244,32 @@ async fn s1_from_nothing_to_a_signed_verified_release() {
     assert_eq!(launch_prompter.held(), ["site_publish"], "the launch is the owner's decision");
     let release = verify_served(&site.host, "juniper.example", &site.release_key).await;
     assert_eq!(release, 1, "release 1 is signed and verifies");
+
+    // `awp verify` of the whole contract, against the edge with the release behind it: GET
+    // only, the root anchored by its `_awp-root` TXT record (spec 3.5 §7.7, A-I9).
+    let site_edge = edge::edge(&site, "juniper.example").await;
+    let (record, value) = keys.root_record("juniper.example");
+    let verifier = Verifier::new(
+        Arc::new(RouterFetcher::new(site_edge.router.clone())),
+        Arc::new(FixedTxtResolver::default().with(&record, &value)),
+        Arc::new(InMemoryPinStore::default()),
+    );
+    let report = verifier.verify("juniper.example").await;
+    assert!(report.failure.is_none(), "{:?}", report.failure);
+    assert_eq!(report.release_seq, Some(1));
+    assert!(report.posture.a2a, "the edge's Agent Card is signed by a delegated card key");
+    assert!(
+        report.posture.security_txt && report.posture.hsts && report.posture.csp,
+        "{:?}",
+        report.posture
+    );
+    assert!(!report.sampled.is_empty());
+    let forged = Verifier::new(
+        Arc::new(RouterFetcher::new(site_edge.router.clone())),
+        Arc::new(FixedTxtResolver::default().with(&record, "v=awp1; k=ed25519; kid=forged")),
+        Arc::new(InMemoryPinStore::default()),
+    );
+    assert!(forged.verify("juniper.example").await.failure.is_some(), "an unanchored root fails");
     progress.complete(Stage::ConnectAndDeploy, Some(release)).await;
 
     // Every page maps to a charter goal; no claim rests on an Assumed fact (A-I18).

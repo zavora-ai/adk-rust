@@ -24,6 +24,9 @@
 //! | [`review`] | The weekly review | §7.21 |
 //! | [`wallet`] | The wallet as a KPI source and the site's commerce outcomes | §7.14 |
 //! | [`workflows`] | The probe and the weekly review as kernel runs | §7.20 |
+//! | [`contract`] | The signed contract, key set and charter terms released with the site | §7.2, §7.7, D-11 |
+//! | [`deploy`] | The four deployment shapes, agency mode and serving the kernel and the edge | §7.22, A-I22 |
+//! | [`edge`] | The site on the agent edge: the packs' handlers, the adapters to the back office, the read-only step | §7.9, §7.16, A-I11 |
 //! | [`observability`] | Spans, metrics and the site view | §7.24 |
 //!
 //! # Example
@@ -48,6 +51,9 @@
 
 pub mod alarms;
 pub mod audit;
+pub mod contract;
+pub mod deploy;
+pub mod edge;
 pub mod incident;
 pub mod jobs;
 pub mod kinds;
