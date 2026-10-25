@@ -224,6 +224,12 @@
   overflow-wrap: anywhere;
 }
 
+.tray-card-summary {
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
 .tray-card-details,
 .tray-card-note {
   color: var(--label);

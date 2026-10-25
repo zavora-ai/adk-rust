@@ -69,6 +69,12 @@ export class TrayFixture implements TrayClient {
     return [...this.cards.values()].filter((card) => card.status === "waiting");
   }
 
+  async decision(id: string) {
+    const card = this.cards.get(id);
+    if (!card) throw new ApiError(404, "decision not found", "surface.not_found");
+    return card;
+  }
+
   async agentsWithPrimary(): Promise<AgentsResponse> {
     return {
       agents: [

@@ -27,10 +27,11 @@ export function trayAnswers(card: DecisionCard): AnswerOption[] {
 
 /**
  * A decision on the tray (spec 3.3 §5.5, §7.1, §7.2): drawn from its inbox entry with who
- * asks, the exact call in full and whether it can be taken back. The tray says yes once or no
- * to everyday calls; approving anything else — always allow, edit, high risk, money, a call
- * shown cut short — opens the home at the decision ("open to decide"). Enter and Esc never
- * decide (§7.4); ids and versions are never shown. Once decided it is one line, a
+ * asks, the engine's plain words for what it means when it has them (an agenda suggestion, a
+ * driver to start), the exact call in full and whether it can be taken back. The tray says yes
+ * once or no to everyday calls; approving anything else — always allow, edit, high risk,
+ * money, a call shown cut short — opens the home at the decision ("open to decide"). Enter and
+ * Esc never decide (§7.4); ids and versions are never shown. Once decided it is one line, a
  * `DecidedLine`, which opens to show the call again.
  */
 export function TrayDecision({
@@ -75,8 +76,12 @@ export function TrayDecision({
       );
       if (outcome.type === "answered" || outcome.type === "alreadyDecided") {
         setCard(outcome.card);
-        setAnsweredHere(true);
-        onSettled(outcome.card);
+        // An approval a quorum still waits on leaves the card waiting: it is a line only once
+        // it is decided, here or by the others.
+        if (outcome.card.status === "decided") {
+          setAnsweredHere(true);
+          onSettled(outcome.card);
+        }
       } else if (outcome.type === "changed") {
         setCard(outcome.card);
         setNote(trayLabels.changed);
@@ -95,6 +100,7 @@ export function TrayDecision({
     </code>
   );
   const details = <p className="tray-card-details">{card.reversibilityText}</p>;
+  const summary = card.summary ? <p className="tray-card-summary">{visible(card.summary)}</p> : null;
 
   if (decided) {
     return (
@@ -103,6 +109,7 @@ export function TrayDecision({
           <p className="tray-card-meta">
             {agent} · {card.sinceText} · {card.riskText}
           </p>
+          {summary}
           {call}
           {details}
         </DecidedLine>
@@ -136,6 +143,7 @@ export function TrayDecision({
           </svg>
         </a>
       </div>
+      {summary}
       {call}
       {details}
       {note && (

@@ -174,6 +174,32 @@ test("the tray panel fills its window: its cards scroll inside it, its buttons s
   await expectShell(page, ".tray");
 });
 
+test("a decided line never cuts off who answered, however long its heading", async ({ page }) => {
+  await page.setViewportSize({ width: 420, height: 700 });
+  await page.goto("/ui/fixture.html?screen=tray");
+  const invoice = page.getByRole("article", { name: "Send the October invoice" });
+  await invoice.getByRole("button", { name: "Allow once" }).click();
+  const line = invoice.getByRole("button", { name: /You said yes from the tray at/ });
+  await expect(line).toBeVisible();
+  // A heading as long as the engine writes them: the tool and up to 60 characters of its
+  // argument, here an unbroken path, on the tray's narrowest panel.
+  const answer = await line.evaluate((button) => {
+    const heading = button.querySelector(".decided-heading");
+    if (heading) heading.textContent = "Write file reports/2026/october/customer-invoices/acme-corp-final-reconciled.txt";
+    const words = button.querySelector(".decided-words")?.getBoundingClientRect();
+    const text = button.querySelector(".decided-text");
+    const rects = [...(text?.getClientRects() ?? [])];
+    return {
+      shown: rects.length > 0 && words !== undefined && rects.every((rect) => rect.bottom <= words.bottom + 0.5 && rect.right <= words.right + 0.5),
+      headingLines: heading ? Math.round(heading.getBoundingClientRect().height / parseFloat(getComputedStyle(heading).lineHeight)) : 0,
+    };
+  });
+  expect(answer.shown, "the answer is cut off").toBe(true);
+  expect(answer.headingLines).toBeLessThanOrEqual(2);
+  await shoot(page, "shell-tray-decided-long");
+  await expectShell(page, ".tray");
+});
+
 test("the phone fills its screen: each screen scrolls inside it above the tabs", async ({ page }) => {
   for (const size of [
     { width: 390, height: 844 },
