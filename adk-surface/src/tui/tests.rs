@@ -566,6 +566,7 @@ fn decided_by_you() -> crate::model::Decided {
         at_text: "18:01".into(),
         answer: crate::model::DecidedAnswer::Yes,
         text: "You said yes in the terminal at 18:01".into(),
+        scope_text: None,
     }
 }
 
