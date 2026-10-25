@@ -1,6 +1,168 @@
 // Generated from the Rust types of adk-surface by `scripts/check-surface-api.sh --write`.
 // Do not edit: CI fails when this file drifts from the Rust source (spec 3.3 §6).
 
+/**
+ * The definition on the decision that adds a suggested agent (spec 3.3 §5.7 "The decision
+ * that adds an agent", S-I13): every field, from the inbox entry the kernel wrote, never from
+ * the model.
+ */
+export interface AgentCardView {
+  /** What it can do, in plain words. */
+  abilities: string[];
+  /** The agent it would add. */
+  agent: AgentRef;
+  /** What it would start with: "Nothing yet". */
+  allowedWithoutAsking: string;
+  /** "It can do less than ADK-Rust: no shell, no web". */
+  compared?: string | null;
+  /** "What it does", in one line. */
+  description: string;
+  /** The suggestion, for **Change it first**. */
+  draft: AgentDraft;
+  /** The id the suggested agent would get: what **Change it first** replaces. Never shown. */
+  id: string;
+  /** The instructions, quoted, cut short past the call limit. */
+  instructions: string;
+  /** The instructions are cut short: they must be expanded before the agent can be added. */
+  instructionsTruncated: boolean;
+  /**
+   * The definition, one line per field: area, how much it asks first, what it runs on,
+   * files, shell, web, packs, drivers, the daily limit.
+   */
+  lines: CardLine[];
+}
+
+/**
+ * What a person may choose for an agent on this kernel (spec 3.3 §5.7, decision 21): the
+ * models of the providers whose key the kernel has, the packs, the areas and the colours.
+ */
+export interface AgentChoices {
+  /** The areas. */
+  areas: AreaChoice[];
+  /** The eight colours. */
+  colors: ColorChoice[];
+  /** The models, the primary agent's first. */
+  models: ModelView[];
+  /** The packs. */
+  packs: string[];
+}
+
+/** An agent's colour: one of the eight avatar colours, never a free value (spec 3.3 §5.7). */
+export type AgentColor = "orange" | "green" | "blue" | "violet" | "slate" | "amber" | "teal" | "pink";
+
+/** One agent a person added (spec 3.3 §5.7): what **Settings** shows. */
+export interface AgentDetail {
+  /** The agent as threads and decisions name it. */
+  agent: AgentRef;
+  /** Why the kernel cannot build it: "No key for Anthropic". */
+  cantStart?: string | null;
+  /** When it was last changed. */
+  changedAt: string;
+  /** Its definition. */
+  draft: AgentDraft;
+  /** Its kernel target, for commands. Never shown. */
+  id: string;
+  /** How much it asks first, with its words. */
+  mode: ModeView;
+  /** "Added by you on 25 Oct", or "Suggested by ADK-Rust, added by you on 25 Oct". */
+  originText: string;
+  /** Where it is in its life. */
+  state: AgentLife;
+  /** The version a change is made against. Never shown. */
+  version: number;
+}
+
+/**
+ * An agent's definition as **Set it up yourself** and **Settings** edit it, in the order of
+ * spec 3.3 §5.7 "The definition".
+ */
+export interface AgentDraft {
+  /** Its area. */
+  area: string;
+  /** Its colour. */
+  color: AgentColor;
+  /** Its daily spending limit, micro-USD. */
+  dailyLimitMicroUsd?: number | null;
+  /** What it does, in one line. */
+  description: string;
+  /** Its name: "Finance". */
+  displayName: string;
+  /** How it works. */
+  instructions: string;
+  /** How much it asks first. */
+  mode: Mode;
+  /** What it runs on; none for the primary agent's model. */
+  model?: ModelView | null;
+  /** What it can use. */
+  uses: UsesDraft;
+}
+
+/** Where an agent is in its life, as a surface shows it (spec 3.3 §5.7, §8.1). */
+export type AgentLife = "suggested" | "active" | "paused" | "removing" | "removed" | "refused";
+
+/**
+ * **Here is what Finance can do** (spec 3.3 §5.7): what a change lets an agent do, its risk,
+ * and the digest the change is confirmed with.
+ */
+export interface AgentPreview {
+  /** What it can do, one plain sentence each. */
+  abilities: string[];
+  /** The change: `create`, `change`, `pause`, `resume` or `remove`. */
+  action: string;
+  /** The first six characters of the digest: the terminal's `--confirm` code. */
+  code: string;
+  /** The digest the change applies with. Never shown. */
+  digest: string;
+  /** What removing it ends. */
+  ended?: EndedWork | null;
+  /** The fields a change changes. */
+  fields?: string[];
+  /** "Here is what Finance can do". */
+  heading: string;
+  /** The agent's kernel target; for an agent not added yet, the id it would get. Never shown. */
+  id: string;
+  /** It can spend money. */
+  money: boolean;
+  /** Confirming needs presence: "Confirm it's you" in the home, or a paired local terminal. */
+  needsPresence: boolean;
+  /** "Now": the definition after it. */
+  now?: AgentDraft | null;
+  /** The risk of the result. */
+  risk: Risk;
+  /** "Medium risk". */
+  riskText: string;
+  /** "Was": the definition before a change. */
+  was?: AgentDraft | null;
+  /**
+   * The change lets the agent do more: it needs what adding it at that risk needs, and it
+   * first ends the agent's waiting decisions.
+   */
+  widens: boolean;
+}
+
+/** What `POST /surface/agents/preview` previews (spec 3.3 §5.7 "Show, then confirm"). */
+export type AgentPreviewRequest = {
+  action: "create";
+  /** The definition. */
+  draft: AgentDraft;
+  /** The suggestion it replaces, when it came from **Change it first**. */
+  replaces?: string | null;
+} | {
+  action: "change";
+  /** The agent. */
+  agent: string;
+  /** The definition after the change. */
+  draft: AgentDraft;
+  /** The version seen. */
+  version: number;
+} | {
+  action: "remove";
+  /** The agent. */
+  agent: string;
+  /** The version seen. */
+  version: number;
+};
+
 /** An agent as a decision or a thread names it. */
 export interface AgentRef {
   /** The avatar. */
@@ -13,8 +175,19 @@ export interface AgentRef {
 
 /** One agent in the roster (spec 3.3 §5.1, §8.1). */
 export interface AgentRow {
+  /**
+   * An agent the person added: it has settings beyond its mode and rules (spec 3.3 §5.7).
+   * Absent when false.
+   */
+  added?: boolean;
   /** The agent. */
   agent: AgentRef;
+  /** Its area, for an agent the person added (spec 3.3 §5.7). */
+  area?: string | null;
+  /** The caller may change it here (spec 3.3 §7.2). Absent when false. */
+  canChange?: boolean;
+  /** How much it asks first, for an agent the person added (spec 3.3 §5.7). */
+  mode?: ModeView | null;
   /** The session of its latest work, to open its thread. */
   sessionId?: string | null;
   /** What it is doing. */
@@ -26,12 +199,17 @@ export interface AgentRow {
 }
 
 /** What an agent is doing (spec 3.3 §8.1). */
-export type AgentStatus = "working" | "waitingForYou" | "asleep" | "done" | "failed";
+export type AgentStatus = "working" | "waitingForYou" | "asleep" | "done" | "failed" | "ready" | "paused" | "cantStart";
 
 /** `GET /surface/agents` answer. */
 export interface AgentsResponse {
   /** The caller's agents. */
   agents: AgentRow[];
+  /**
+   * The roster ends with **New agent**: the source keeps agents a person adds and the
+   * caller may add one here (spec 3.3 §5.7). Absent when false.
+   */
+  canAdd?: boolean;
   /**
    * The agent a message goes to when the person names none: the tray's "Ask Finance"
    * (spec 3.3 §5.5). Absent when the source has no single primary agent.
@@ -81,6 +259,18 @@ export interface AnswerRequest {
   reason?: string | null;
   /** The card's `version`. */
   version: number;
+}
+
+/** An area a person may put an agent in. */
+export interface AreaChoice {
+  /** The drivers mounted for it. */
+  drivers: string[];
+  /** The area's id. */
+  id: string;
+  /** Its mode: an agent there asks at least this much. */
+  mode: ModeView;
+  /** Its name: "Home". */
+  name: string;
 }
 
 /** An agent's avatar: a rounded monogram in the agent's own colour (spec 3.3 §9). */
@@ -142,8 +332,28 @@ export interface CallView {
   truncated: boolean;
 }
 
+/** One line of an agent's definition on a card: "Area · Home". */
+export interface CardLine {
+  /** "Runs on". */
+  label: string;
+  /** The value is a technical name, shown in mono. Absent when false. */
+  mono?: boolean;
+  /** "claude-sonnet-5-5". */
+  value: string;
+}
+
 /** Where a decision is in its life. */
 export type CardStatus = "waiting" | "decided";
+
+/** A colour a person may choose. */
+export interface ColorChoice {
+  /** The colour. */
+  color: AgentColor;
+  /** What is drawn, `#RRGGBB`. */
+  hex: string;
+  /** Its name: "Green". */
+  label: string;
+}
 
 /**
  * A command from a surface (spec 3.3 §6). Every command runs as an authenticated
@@ -196,6 +406,54 @@ export type Command = {
   /** The session. */
   sessionId: string;
   type: "setMode";
+} | {
+  /** The agent: a roster row's name. */
+  agent: string;
+  /** The new session. */
+  sessionId: string;
+  /** The first message. */
+  text: string;
+  type: "newThread";
+} | {
+  /** The digest of the preview the person confirmed. */
+  digest: string;
+  /** The definition. */
+  draft: AgentDraft;
+  /** The suggestion **Change it first** replaces, by the agent id it would get. */
+  replaces?: string | null;
+  type: "addAgent";
+} | {
+  /** The agent. */
+  agent: string;
+  /** The digest of the preview the person confirmed. */
+  digest: string;
+  /** The definition after the change. */
+  draft: AgentDraft;
+  type: "changeAgent";
+  /** The version seen. */
+  version: number;
+} | {
+  /** The agent. */
+  agent: string;
+  type: "pauseAgent";
+} | {
+  /** The agent. */
+  agent: string;
+  type: "resumeAgent";
+} | {
+  /** The agent. */
+  agent: string;
+  /** The digest of the preview that named what ends. */
+  digest: string;
+  type: "removeAgent";
+  /** The version seen. */
+  version: number;
+} | {
+  /** The agent. */
+  agent: string;
+  /** The rule. */
+  ruleId: string;
+  type: "copyRuleToAgent";
 };
 
 /** What a command did (spec 3.3 §6). */
@@ -247,6 +505,38 @@ export type CommandOutcome = {
   /** The mode now. */
   mode: ModeView;
   type: "modeSet";
+} | {
+  /** The agent now. */
+  agent: AgentDetail;
+  type: "agentAdded";
+} | {
+  /** The agent now. */
+  agent: AgentDetail;
+  type: "agentChanged";
+} | {
+  /** The agent now. */
+  agent: AgentDetail;
+  type: "agentPaused";
+} | {
+  /** The agent now. */
+  agent: AgentDetail;
+  type: "agentResumed";
+} | {
+  /** What ended. */
+  ended: EndedWork;
+  type: "agentRemoved";
+} | {
+  /** The agent now. */
+  agent: AgentDetail;
+  /** "Finance was changed elsewhere at 10:01". */
+  text: string;
+  type: "agentOutOfDate";
+} | {
+  /** The agent. */
+  agent: string;
+  /** The rule's words. */
+  label: string;
+  type: "ruleCopied";
 };
 
 /** `POST /surface/commands` body: the command, the surface it was given on and how. */
@@ -341,6 +631,8 @@ export type DecidedAnswer = "yes" | "no" | "edited" | "replied" | "ended" | "unk
  * output (spec 3.3 §7.1, §11 S-I1).
  */
 export interface DecisionCard {
+  /** The agent a suggestion would add, shown in place of the call (spec 3.3 §5.7, S-I13). */
+  addsAgent?: AgentCardView | null;
   /** Who asks. */
   agent: AgentRef;
   /** The answers this surface may give; empty once decided. */
@@ -412,6 +704,25 @@ export interface Delivery {
   sentAt: string;
 }
 
+/** What removing an agent ends, counted (spec 3.3 §5.7 "Pausing and removing"). */
+export interface EndedWork {
+  /** Decisions waiting for you that end without an answer. */
+  decisions: number;
+  /** Follow-ups withdrawn. */
+  followUps: number;
+  /** Routines ended. */
+  routines: number;
+  /** "Allowed without asking" rules removed. */
+  rules: number;
+  /**
+   * "Removing Finance stops 1 piece of work, ends 2 decisions waiting for you and 1
+   * routine. Its threads stay."
+   */
+  text: string;
+  /** Pieces of work stopped. */
+  work: number;
+}
+
 /** One event of a session's store, numbered by its position there (spec 3.3 §6). */
 export interface FeedEntry {
   /** When. */
@@ -442,6 +753,9 @@ export type FeedFrame = {
   type: "reset";
 };
 
+/** Where an agent's files are: none, read, or read and change (spec 3.3 §5.7). */
+export type FileUse = "none" | "read" | "readWrite";
+
 /** One of the three switches of "What it can see" (spec 3.3 §5.6). */
 export type InputSource = "mic" | "camera" | "screen";
 
@@ -456,6 +770,14 @@ export interface ModeView {
   mode: Mode;
   /** As a status: "Asks first". */
   status: string;
+}
+
+/** A model an agent runs on; never a key (spec 3.3 decision 21). */
+export interface ModelView {
+  /** The model, shown in mono: `claude-sonnet-5-5`. */
+  model: string;
+  /** The provider: `anthropic`, `openai`, `gemini`. */
+  provider: string;
 }
 
 /**
@@ -598,10 +920,13 @@ export interface QuietView {
 }
 
 /** Whether a call can be taken back (spec 3.3 §7.1). */
-export type Reversibility = "cantBeUnsent" | "cantBeUndone";
+export type Reversibility = "cantBeUnsent" | "cantBeUndone" | "canBeRemoved";
 
 /** How much harm a call can do, as approvers see it (spec 3.3 §7.1). */
 export type Risk = "low" | "medium" | "high";
+
+/** Where an agent's commands run: nowhere, in the sandbox, or on this computer. */
+export type ShellUse = "none" | "sandboxed" | "host";
 
 /** Who wrote a message in a thread. */
 export type Speaker = "you" | "agent";
@@ -745,6 +1070,22 @@ export interface TimelineStep {
   text: string;
 }
 
+/** What an agent can use (spec 3.3 §5.7 "What it can use"). */
+export interface UsesDraft {
+  /** The drivers mounted for its area that it may use. */
+  drivers: string[];
+  /** Its files. */
+  files: FileUse;
+  /** One folder inside its area's workspace, relative to it; none for the whole workspace. */
+  folder?: string | null;
+  /** Its packs. */
+  packs: string[];
+  /** Its shell. */
+  shell: ShellUse;
+  /** Its web. */
+  web: WebUse;
+}
+
 /**
  * Where and how an answer was given, as a decision answered elsewhere shows it
  * (spec 3.3 §8.1 "Decided").
@@ -882,4 +1223,15 @@ export type VoiceUpdate = {
   /** What happened, in plain words. */
   message: string;
   type: "error";
+};
+
+/** What of the web an agent reaches. */
+export type WebUse = {
+  access: "none";
+} | {
+  access: "listed";
+  /** The sites, such as `example.com`. */
+  hosts: string[];
+} | {
+  access: "any";
 };
