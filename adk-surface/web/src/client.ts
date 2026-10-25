@@ -18,15 +18,38 @@ import type {
   TakeOverRequest,
 } from "./generated/api";
 import type { TakeOverSeam } from "./components/DecisionCard";
-import type { AgendaItem, ChannelAccount, KernelDevice, KernelProcess, StandingRule, WakeSet } from "./kernel";
+import { mergeAway } from "./away";
+import type {
+  AgendaItem,
+  AreaMode,
+  AreaSettings,
+  AwayPage,
+  AwayRecord,
+  ChannelAccount,
+  ChannelWaiting,
+  KernelDevice,
+  KernelProcess,
+  QuietWindow,
+  StandingRule,
+  WakeSet,
+} from "./kernel";
 import { devicePowers } from "./kernel";
 import { labels } from "./labels";
-import type { DevicesSeam } from "./seams";
+import type { DevicesSeam, LimitsSeam, WhileAwaySeam } from "./seams";
 import { parseSse } from "./sse";
 import { readStored, writeStored } from "./stored";
 
 /** Where this tab keeps the server's token, when the server asks for one. */
 const TOKEN_KEY = "adk.home.token";
+
+/**
+ * The name the home reads "While you were away" as (spec 3.3 §10 K4). A paired device reads as
+ * itself whatever it names, so each phone keeps its own place.
+ */
+export const VIEWER = "home";
+
+/** At most this many pages of "While you were away" are read at once, 2,000 rows each. */
+const AWAY_PAGES = 10;
 
 /** A problem document from the server, with its `surface.*`, `approval.*` or other code. */
 export class ApiError extends Error {
@@ -142,6 +165,10 @@ export class HttpClient implements HomeClient {
       if (error instanceof ApiError && (error.status === 404 || error.status === 405)) return undefined;
       throw error;
     }
+  }
+
+  private post<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
   }
 
   status() {
@@ -291,6 +318,56 @@ export class HttpClient implements HomeClient {
         await this.request(`${path}/${encodeURIComponent(rest)}/revoke`, { method: "POST", body: "{}" });
       },
       pair: async () => (await this.request<{ code: string }>("/kernel/pairing", { method: "POST", body: "{}" })).code,
+      waiting: async () => (await this.optional<{ waiting?: ChannelWaiting[] }>("/kernel/channels"))?.waiting ?? [],
+      accept: async (code: string) => {
+        await this.post("/kernel/channels/pair", { code: code.trim() });
+      },
+    };
+  }
+
+  /**
+   * "While you were away" (spec 3.3 §10 K4): the kernel's page after this viewer's cursor,
+   * read on in pages while the kernel has more, and marked seen only when the person says so.
+   * `read` answers `undefined` when the server keeps no `/proc` ledger.
+   */
+  whileAway(): WhileAwaySeam {
+    return {
+      read: async () => {
+        let page: AwayPage | undefined;
+        try {
+          page = await this.optional<AwayPage>(`/kernel/away?viewer=${VIEWER}`);
+        } catch (error) {
+          // A kernel without an activity ledger says so; the home shows the engine's briefing.
+          if (error instanceof ApiError && error.status === 400 && error.code === "kernel.config") return undefined;
+          throw error;
+        }
+        for (let read = 1; page?.more && page.through !== undefined && read < AWAY_PAGES; read++) {
+          const next = await this.request<AwayPage>(`/kernel/away?viewer=${VIEWER}&after=${page.through}`);
+          // A page held back for a row still being written ends the reading for now.
+          if (next.through === undefined || next.through === page.through) break;
+          page = mergeAway(page, next);
+        }
+        return page;
+      },
+      markSeen: async (through: number) => {
+        await this.post("/kernel/away/seen", { viewer: VIEWER, through });
+      },
+      record: (seq: number) => this.request<AwayRecord>(`/kernel/away/lines/${seq}`),
+    };
+  }
+
+  /** Quiet time, the daily spending limit and the mode of each area (spec 3.3 §10 K3). */
+  limits(): LimitsSeam {
+    const area = (partition: string) => `/kernel/settings/${encodeURIComponent(partition)}`;
+    return {
+      areas: async () => (await this.optional<{ areas: AreaSettings[] }>("/kernel/settings"))?.areas,
+      area: async (partition: string) => (await this.request<{ area: AreaSettings }>(area(partition))).area,
+      setQuietTime: async (partition: string, window: QuietWindow | null) =>
+        (await this.post<{ area: AreaSettings }>(`${area(partition)}/quiet-time`, { window })).area,
+      setSpendingLimit: async (partition: string, microUsd: number | null) =>
+        (await this.post<{ area: AreaSettings }>(`${area(partition)}/spending-limit`, { microUsd })).area,
+      setMode: async (partition: string, mode: AreaMode) =>
+        (await this.post<{ area: AreaSettings }>(`${area(partition)}/mode`, { mode })).area,
     };
   }
 }

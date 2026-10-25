@@ -706,7 +706,8 @@ impl SurfaceEngine {
     }
 
     /// "While you were away" since `since` (spec 3.3 §5.1, §8.1): spend, waiting decisions,
-    /// and one line per `/proc` ledger row.
+    /// and one line per event on the `/proc` ledger — the events the kernel's
+    /// `GET /kernel/away` lists (§10 K4) — each agent by the name the roster gives it.
     ///
     /// # Errors
     ///
@@ -717,8 +718,7 @@ impl SurfaceEngine {
             .ledger(since)
             .await?
             .iter()
-            .filter(|entry| entry.kind != "audit")
-            .map(|entry| self.inner.projector.briefing_line(entry))
+            .filter_map(|entry| self.inner.projector.briefing_line(entry))
             .collect();
         let waiting = self.decisions(caller).await?.len();
         Ok(Briefing {

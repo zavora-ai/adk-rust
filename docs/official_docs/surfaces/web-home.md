@@ -120,8 +120,8 @@ all** appears; resuming happens only here or on a paired local terminal (§11 S-
 | Section | What it shows | Where it reads it |
 |---|---|---|
 | **Threads** | The roster (avatar, name, status word), the selected agent's thread with its decisions inline on their own background, **Decisions** with a filled count badge, **Coming up**. A thread follows one conversation: the session the agent's row names when it is first shown, or a new one, kept for the tab until a decision of another session is opened from **Decisions** or **Today** | `GET /surface/agents`, the session feed, `GET /surface/decisions`, the kernel's processes and agenda |
-| **Today** | "While you were away": spent, quiet time, how many things wait, one line per event since you left with a status pill and its actions, and today's routines with **Add a routine** | `GET /surface/briefing`, `GET /surface/status`, the kernel's agenda; **Do it** and **Not now** answer a suggestion through `POST /kernel/agenda/{id}/approve` or `reject` |
-| **Memory & rules** | "Agent Memory and Rules": **What your agents remember**, **What your agents can do** and **What your agents did**, as bordered lists | `GET /rules` (with **Stop allowing**), `GET /surface/status`, `GET /surface/briefing`; **Where you can say yes from** from `GET /kernel/devices` and `GET /kernel/channels`, with **Remove** and **Add a phone or app** (a pairing code from `POST /kernel/pairing`) when the kernel pairs devices |
+| **Today** | "While you were away": spent, quiet time, how many things wait, one line per event since you last marked it seen with a status pill, its actions and its record, **Mark as seen**, and today's routines with **Add a routine** | `GET /kernel/away`, `GET /kernel/away/lines/{seq}`, `POST /kernel/away/seen`, `GET /kernel/settings`, the kernel's agenda; **Do it** and **Not now** answer a suggestion through `POST /kernel/agenda/{id}/approve` or `reject`. Without a kernel ledger, `GET /surface/briefing` |
+| **Memory & rules** | "Agent Memory and Rules": **What your agents remember**, **What your agents can do** and **What your agents did**, as bordered lists | `GET /rules` (with **Stop allowing**), `GET /kernel/settings` and its changes, `GET /surface/briefing`; **Where you can say yes from** from `GET /kernel/devices` and `GET /kernel/channels`, with **Remove**, **Add a phone or app** (a pairing code from `POST /kernel/pairing`) and **Pair a chat account** (`POST /kernel/channels/pair`) when the kernel pairs devices |
 
 | Light | Dark |
 |---|---|
@@ -129,16 +129,66 @@ all** appears; resuming happens only here or on a paired local terminal (§11 S-
 | ![Today](../images/surfaces/web-today-light.png) | ![Today, dark](../images/surfaces/web-today-dark.png) |
 | ![Memory and rules](../images/surfaces/web-memory-light.png) | ![Memory and rules, dark](../images/surfaces/web-memory-dark.png) |
 
+### Today and the morning briefing
+
+Today reads the kernel's "While you were away" (spec 3.3 §10 K4,
+[Settings, While You Were Away, Memory and Record](../kernel/today-and-memory.md)) as the
+viewer `home`; a paired phone reads as itself, so each keeps its own place.
+
+| Part | Behaviour |
+|---|---|
+| The counts | **Spent** (the page's spend rows), **Quiet time** **Respected** or **Not kept** (or **Not set** without quiet time), **Waiting for you** |
+| The lines | One per event the kernel lists — finished, failed, stopped, a suggestion, a question, a decision, stopped or resumed all — failures first, then as they happened, each agent by the name the roster gives it. A suggestion or question shows its agenda item's words and is answered here |
+| **Details** | Opens the line's record (`GET /kernel/away/lines/{seq}`): when it was recorded, the area, what it cost and how long it took, and a link to the record itself |
+| **Mark as seen** | The only thing that moves the home's place (`POST /kernel/away/seen` with the page's `through`); opening or reloading Today reads and moves nothing |
+| The morning briefing | Once quiet time ends, Threads shows the start of the same page — spent, quiet time, what waits, how many things happened — with **See what happened** (to Today) and **Not now**. It shows once for each end of quiet time, and not again after the page was marked seen; putting it away marks nothing seen |
+| Routines today | Each routine's time today, the **Morning briefing** at the end of quiet time, and **Quiet time starts** |
+
+A kernel without a `/proc` ledger, and `adk-rust serve` without a kernel, show the engine's
+briefing of the last day instead, read-only.
+
+`adk-rust up --mode ask` on `claude-sonnet-5-5`, its quiet time set to have ended an hour
+before, after one held write allowed from the home:
+
+| The briefing on Threads (light) | Today (dark) |
+|---|---|
+| ![The morning briefing on a live run](../images/surfaces/web-live-briefing-light.png) | ![Today on a live run, dark](../images/surfaces/web-live-today-dark.png) |
+
+| Light | Dark |
+|---|---|
+| ![The morning briefing on Threads](../images/surfaces/web-briefing-light.png) | ![The morning briefing, dark](../images/surfaces/web-briefing-dark.png) |
+
+### What your agents can do
+
+Quiet time, the daily spending limit and the mode are read per area from
+`GET /kernel/settings` and changed with its `POST` routes (spec 3.3 §10 K3). With more than
+one area, a switch picks the area. **Change** opens the setting in place (Esc closes it);
+quiet time can be turned off and the limit removed. The page reads the area again just before
+a change, so "Was 22:00–07:00. Now 23:00–06:00." shows the values the kernel records as the
+change's `from` and `to`. Only the person changes them: the kernel refuses a caller without the
+`operator` scope and every paired device's token, and the page shows its answer. With one
+area, the header's status line follows its settings in force.
+
+| Light | Dark |
+|---|---|
+| ![Changing quiet time](../images/surfaces/web-settings-light.png) | ![Changing quiet time, dark](../images/surfaces/web-settings-dark.png) |
+
+### Pairing a chat account
+
+A stranger who writes to the agents from a chat app gets a code and starts nothing (spec 3.3
+§5.3). **Where you can say yes from** lists who asked and has a field for that code: **Pair**
+claims it as `adk-rust pair accept <code>` does (`POST /kernel/channels/pair`, `operator`
+scope), and the account is listed with **Remove** from then on.
+
 ### What is read-only until the kernel serves it
 
-Some controls need kernel routes that are not built yet (spec 3.3 §10). The home shows what
-exists, read-only, and renders each control through a typed seam (`adk-surface/web/src/seams.ts`)
-that a client implementing the route fills, with no change to the screens.
+Some controls need kernel routes the home does not read yet (spec 3.3 §10). The home shows
+what exists, read-only, and renders each control through a typed seam
+(`adk-surface/web/src/seams.ts`) that a client implementing the route fills, with no change to
+the screens.
 
 | Control | Needs | Shown today |
 |---|---|---|
-| Quiet time, the daily spending limit and the mode: **Change**, **Just look · Suggest · Ask first · Go ahead** | K3 | The values from the status line |
-| Today since you last looked, quiet time **Respected**, and a record link per line | K4 | The last 24 hours (the engine's default); the quiet hours, with no claim about whether they were kept |
 | **What your agents remember**: **That's right**, **Fix it**, **Forget it**, **Undo** | K5 | "Nothing your agents remember is shown here yet." |
 | **Every action is on record** and **Check again** | K5 | The latest lines of the activity ledger |
 | **Confirm it's you and approve** | The passkey route of the phone package | The answer, refused until the server confirms presence |
@@ -183,7 +233,7 @@ to the audit record, so **What your agents did** can say "You let Finance send o
 | ![The phone layout](../images/surfaces/web-phone-light.png) | ![The phone layout, dark](../images/surfaces/web-phone-dark.png) |
 
 The screenshots on this page render the example of spec 3.3 §5.1 (`/ui/fixture.html`), with
-the routes the kernel does not serve yet filled by the example's seams.
+the kernel's routes filled by the example's seams.
 
 ## The developer panel
 
@@ -207,11 +257,14 @@ npm run e2e        # Playwright against the scripted kernel of examples/scripted
 ```
 
 `npm run dev` also serves `/ui/fixture.html`, the screens over the example of spec 3.3 §5.1.
-The end-to-end test starts `cargo run -p adk-surface --features web --example scripted_home`
-in a new, empty workspace each run (`HOME_E2E_BIN` names an example already built), opens the
-home, sees the call the scripted agent's harness holds, allows it once and checks that it ran
-once. Against a home already running, set `HOME_E2E_URL` and `HOME_E2E_WORKSPACE` to its
-address and its workspace.
+The end-to-end tests start `cargo run -p adk-surface --features web --example scripted_home`
+in a new, empty workspace each run (`HOME_E2E_BIN` names an example already built). The
+example's kernel keeps a `/proc` ledger, and its quiet time ended an hour before it started.
+The first test opens the home, sees the call the scripted agent's harness holds, allows it
+once and checks that it ran once; the second runs a turn with one decision, sees the morning
+briefing on Threads, checks every line of Today links to its record, that a reload moves
+nothing and **Mark as seen** does, and changes quiet time. Against a home already running, set
+`HOME_E2E_URL` and `HOME_E2E_WORKSPACE` to its address and its workspace.
 
 ## Moving from the bundled runtime UI
 

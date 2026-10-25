@@ -1,14 +1,16 @@
 import { useEffect, useId, useState } from "react";
-import type { Briefing, Mode, StatusLine } from "../generated/api";
+import type { ReactNode } from "react";
+import type { Briefing, StatusLine } from "../generated/api";
 import type { HomeClient } from "../client";
 import { problemText } from "../client";
 import { Icon } from "../components/Icon";
 import { Pill } from "../components/Pill";
-import { dayMonth, dollars, hhmm } from "../format";
-import type { StandingRule } from "../kernel";
+import { dayMonth, dollars, hhmm, sameDay } from "../format";
+import type { AreaSettings, ChannelWaiting, QuietWindow, StandingRule } from "../kernel";
 import { allows } from "../kernel";
-import { labels, modes } from "../labels";
+import { labels, modes, words } from "../labels";
 import type { Device, MemoryFact, RecordCheck, RecordLine, Seams, TidyUp } from "../seams";
+import { areaName, kernelMode, limitValue, modeOf, modeValue, quietValue, windowText } from "../settings";
 
 const provenance = {
   youSaidThis: { text: labels.youSaidThis, kind: "decided" },
@@ -24,11 +26,14 @@ const provenance = {
 export function MemoryRules({
   client,
   status,
+  areas,
   seams,
   onChanged,
 }: {
   client: HomeClient;
   status?: StatusLine;
+  /** Each area's settings in force (spec 3.3 §10 K3), when the kernel serves them. */
+  areas?: AreaSettings[];
   seams: Seams;
   onChanged: () => void;
 }) {
@@ -40,7 +45,7 @@ export function MemoryRules({
       <p className="subhead subhead-memory">{labels.memorySubhead}</p>
       <div className="memory-grid">
         <Remember seams={seams} />
-        <CanDo client={client} status={status} seams={seams} onChanged={onChanged} />
+        <CanDo client={client} status={status} areas={areas} seams={seams} onChanged={onChanged} />
         <Did client={client} seams={seams} />
       </div>
     </main>
@@ -158,18 +163,24 @@ function Remember({ seams }: { seams: Seams }) {
 function CanDo({
   client,
   status,
+  areas,
   seams,
   onChanged,
 }: {
   client: HomeClient;
   status?: StatusLine;
+  areas?: AreaSettings[];
   seams: Seams;
   onChanged: () => void;
 }) {
   const [rules, setRules] = useState<StandingRule[]>();
   const [problem, setProblem] = useState("");
+  const [chosen, setChosen] = useState<string>();
+  // What each change was and became, by area and setting, as the kernel recorded it.
+  const [notes, setNotes] = useState<Record<string, string>>({});
   const limits = seams.limits;
-  const current = status?.mode?.mode;
+  const kernelAreas = limits && areas && areas.length > 0 ? areas : undefined;
+  const area = kernelAreas?.find((candidate) => candidate.partition === chosen) ?? kernelAreas?.[0];
 
   const load = () => client.rules().then(setRules).catch((error: unknown) => setProblem(problemText(error)));
   useEffect(() => {
@@ -187,24 +198,60 @@ function CanDo({
     }
   }
 
+  /**
+   * Changes one setting of the area shown (spec 3.3 §10 K3): reads the area just before, so
+   * the old value shown is the one the kernel records as `from`, then shows it beside the new.
+   */
+  async function change(
+    setting: "quiet" | "limit" | "mode",
+    apply: (partition: string) => Promise<AreaSettings>,
+    value: (area: AreaSettings) => string,
+  ): Promise<boolean> {
+    if (!area || !limits) return false;
+    setProblem("");
+    try {
+      const before = await limits.area(area.partition);
+      const after = await apply(area.partition);
+      setNotes((all) => ({ ...all, [`${area.partition}:${setting}`]: labels.wasNow(value(before), value(after)) }));
+      onChanged();
+      return true;
+    } catch (error) {
+      setProblem(problemText(error));
+      return false;
+    }
+  }
+
   const allowed = (rules ?? []).filter(allows);
-  const quiet = status?.quiet ? `${status.quiet.start}–${status.quiet.end}` : labels.notSet;
-  const limit =
-    status?.spend?.limitMicroUsd !== undefined && status?.spend?.limitMicroUsd !== null
-      ? dollars(status.spend.limitMicroUsd)
-      : labels.notSet;
+  const current = area?.mode ? modeOf(area.mode) : status?.mode?.mode;
+  const note = (setting: string) => (area ? notes[`${area.partition}:${setting}`] : undefined);
 
   return (
     <section className="card memory-card" aria-labelledby="can-do-heading">
       <h2 id="can-do-heading" className="card-heading">
         {labels.whatTheyCanDo}
       </h2>
+      {kernelAreas && kernelAreas.length > 1 && (
+        <div className="segmented segmented-areas" role="radiogroup" aria-label={labels.areas}>
+          {kernelAreas.map((candidate) => (
+            <button
+              key={candidate.partition}
+              type="button"
+              role="radio"
+              aria-checked={candidate.partition === area?.partition}
+              className="segment"
+              onClick={() => setChosen(candidate.partition)}
+            >
+              {areaName(candidate.partition) ?? words.YOUR_AGENTS}
+            </button>
+          ))}
+        </div>
+      )}
       {current && (
         <>
           <p className="card-label" id="mode-label">
-            {labels.yourAgentsMode}
+            {area && areaName(area.partition) ? labels.inArea(areaName(area.partition)!) : labels.yourAgentsMode}
           </p>
-          {limits ? (
+          {area && limits ? (
             <div className="segmented" role="radiogroup" aria-labelledby="mode-label">
               {modes.map(({ mode, label }) => (
                 <button
@@ -213,7 +260,9 @@ function CanDo({
                   role="radio"
                   aria-checked={mode === current}
                   className="segment"
-                  onClick={() => void act(() => limits.setMode(mode as Mode))}
+                  onClick={() => {
+                    if (mode !== current) void change("mode", (partition) => limits.setMode(partition, kernelMode(mode)), modeValue);
+                  }}
                 >
                   {label}
                 </button>
@@ -227,6 +276,11 @@ function CanDo({
                 </li>
               ))}
             </ul>
+          )}
+          {note("mode") && (
+            <p className="change-note" role="status">
+              {note("mode")}
+            </p>
           )}
         </>
       )}
@@ -260,81 +314,232 @@ function CanDo({
         </>
       )}
       <p className="always-asks">{labels.alwaysAsks}</p>
-      <ul className="bordered settings">
-        <Setting
-          label={labels.quietTime}
-          value={quiet}
-          onChange={
-            limits
-              ? (value) => {
-                  const [start, end] = value.split(/[–-]/).map((part) => part.trim());
-                  return act(() => limits.setQuietTime(start ?? "", end ?? ""));
-                }
-              : undefined
-          }
-        />
-        <Setting
-          label={labels.dailySpendingLimit}
-          value={limit}
-          onChange={
-            limits
-              ? (value) => {
-                  const amount = Number(value.replace(/[$,\s]/g, ""));
-                  return act(() => limits.setDailyLimit(Number.isFinite(amount) ? Math.round(amount * 1_000_000) : null));
-                }
-              : undefined
-          }
-        />
-      </ul>
+      {area && limits ? (
+        <ul className="bordered settings">
+          <SettingRow
+            label={labels.quietTime}
+            value={area.quietTime.length === 0 ? labels.off : area.quietTime.map(windowText).join(", ")}
+            sub={[
+              area.alsoQuiet?.length ? labels.workspaceAlsoQuiet(area.alsoQuiet.map(windowText).join(", ")) : undefined,
+              !note("quiet") && area.changed?.quietTime ? labels.changedAt(changedWhen(area.changed.quietTime.at)) : undefined,
+            ]}
+            note={note("quiet")}
+            editor={(close) => (
+              <QuietEditor
+                window={area.quietTime[0]}
+                onCancel={close}
+                onSave={async (window) => {
+                  if (await change("quiet", (partition) => limits.setQuietTime(partition, window), quietValue)) close();
+                }}
+              />
+            )}
+          />
+          <SettingRow
+            label={labels.dailySpendingLimit}
+            value={limitValue(area)}
+            sub={[
+              labels.spentToday(dollars(area.spentToday)),
+              !note("limit") && area.changed?.dailySpendingLimit
+                ? labels.changedAt(changedWhen(area.changed.dailySpendingLimit.at))
+                : undefined,
+            ]}
+            note={note("limit")}
+            editor={(close) => (
+              <LimitEditor
+                microUsd={area.dailySpendingLimit}
+                onCancel={close}
+                onSave={async (microUsd) => {
+                  if (await change("limit", (partition) => limits.setSpendingLimit(partition, microUsd), limitValue)) close();
+                }}
+              />
+            )}
+          />
+        </ul>
+      ) : (
+        <ul className="bordered settings">
+          <SettingRow label={labels.quietTime} value={status?.quiet ? `${status.quiet.start}–${status.quiet.end}` : labels.notSet} />
+          <SettingRow
+            label={labels.dailySpendingLimit}
+            value={
+              status?.spend?.limitMicroUsd !== undefined && status?.spend?.limitMicroUsd !== null
+                ? dollars(status.spend.limitMicroUsd)
+                : labels.notSet
+            }
+          />
+        </ul>
+      )}
     </section>
   );
 }
 
-function Setting({ label, value, onChange }: { label: string; value: string; onChange?: (value: string) => Promise<void> }) {
+/** "at 18:02" today, else "on 23 October". */
+function changedWhen(at: string): string {
+  const when = new Date(at);
+  return sameDay(when, new Date()) ? labels.atTime(hhmm(when)) : `on ${dayMonth(when)}`;
+}
+
+/**
+ * One setting: its value, what goes with it, the change just made, and **Change**, which opens
+ * its editor in place; Esc closes it without changing anything.
+ */
+function SettingRow({
+  label,
+  value,
+  sub = [],
+  note,
+  editor,
+}: {
+  label: string;
+  value: string;
+  sub?: Array<string | undefined>;
+  note?: string;
+  editor?: (close: () => void) => ReactNode;
+}) {
   const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(value);
-  const field = useId();
+  const heading = useId();
   return (
-    <li className="setting">
-      <div>
-        <label className="setting-label" htmlFor={field}>
+    <li className="setting" aria-labelledby={heading}>
+      <div className="setting-main">
+        <p className="setting-label" id={heading}>
           {label}
-        </label>
-        {editing && onChange ? (
-          <form
-            className="inline-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void onChange(text).then(() => setEditing(false));
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setEditing(false);
-            }}
-          >
-            <input id={field} value={text} onChange={(event) => setText(event.target.value)} autoFocus />
-            <button type="submit" className="button button-secondary">
-              {labels.change}
-            </button>
-          </form>
+        </p>
+        {editing && editor ? (
+          editor(() => setEditing(false))
         ) : (
-          <p className="setting-value" id={field}>
-            {value}
+          <>
+            <p className="setting-value">{value}</p>
+            {sub
+              .filter((line): line is string => !!line)
+              .map((line) => (
+                <p key={line} className="setting-sub">
+                  {line}
+                </p>
+              ))}
+          </>
+        )}
+        {note && (
+          <p className="change-note" role="status">
+            {note}
           </p>
         )}
       </div>
-      {onChange && !editing && (
-        <button
-          type="button"
-          className="link link-accent"
-          onClick={() => {
-            setText(value);
-            setEditing(true);
-          }}
-        >
+      {editor && !editing && (
+        <button type="button" className="link link-accent" aria-describedby={heading} onClick={() => setEditing(true)}>
           {labels.change}
         </button>
       )}
     </li>
+  );
+}
+
+/** Quiet time from one time to another, or off. */
+function QuietEditor({
+  window,
+  onSave,
+  onCancel,
+}: {
+  window?: QuietWindow;
+  onSave: (window: QuietWindow | null) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [start, setStart] = useState(window?.start ?? "22:00");
+  const [end, setEnd] = useState(window?.end ?? "07:00");
+  const ids = { start: useId(), end: useId() };
+  const same = start === end;
+  return (
+    <form
+      className="setting-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!same) void onSave({ start, end, ...(window?.utcOffsetMinutes !== undefined ? { utcOffsetMinutes: window.utcOffsetMinutes } : {}) });
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") onCancel();
+      }}
+    >
+      <div className="setting-fields">
+        <label htmlFor={ids.start}>{labels.from}</label>
+        <input id={ids.start} type="time" value={start} onChange={(event) => setStart(event.target.value)} autoFocus />
+        <label htmlFor={ids.end}>{labels.to}</label>
+        <input id={ids.end} type="time" value={end} onChange={(event) => setEnd(event.target.value)} />
+      </div>
+      <div className="setting-buttons">
+        <button type="submit" className="button button-secondary" disabled={same}>
+          {labels.save}
+        </button>
+        {window && (
+          <button type="button" className="button button-quiet" onClick={() => void onSave(null)}>
+            {labels.turnOff}
+          </button>
+        )}
+        <button type="button" className="button button-quiet" onClick={onCancel}>
+          {labels.cancel}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** The daily spending limit in dollars, or none. */
+function LimitEditor({
+  microUsd,
+  onSave,
+  onCancel,
+}: {
+  microUsd?: number;
+  onSave: (microUsd: number | null) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState(microUsd === undefined ? "" : (microUsd / 1_000_000).toFixed(2));
+  const [invalid, setInvalid] = useState(false);
+  const field = useId();
+  return (
+    <form
+      className="setting-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const amount = Number(text.replace(/[$,\s]/g, ""));
+        if (!text.trim() || !Number.isFinite(amount) || amount < 0) {
+          setInvalid(true);
+          return;
+        }
+        setInvalid(false);
+        void onSave(Math.round(amount * 1_000_000));
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") onCancel();
+      }}
+    >
+      <div className="setting-fields">
+        <label htmlFor={field}>{labels.limitInDollars}</label>
+        <input
+          id={field}
+          inputMode="decimal"
+          value={text}
+          aria-invalid={invalid}
+          onChange={(event) => setText(event.target.value)}
+          autoFocus
+        />
+      </div>
+      {invalid && (
+        <p className="decision-problem" role="alert">
+          {labels.notAMoney}
+        </p>
+      )}
+      <div className="setting-buttons">
+        <button type="submit" className="button button-secondary">
+          {labels.save}
+        </button>
+        {microUsd !== undefined && (
+          <button type="button" className="button button-quiet" onClick={() => void onSave(null)}>
+            {labels.noLimit}
+          </button>
+        )}
+        <button type="button" className="button button-quiet" onClick={onCancel}>
+          {labels.cancel}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -348,8 +553,12 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
   const [check, setCheck] = useState<RecordCheck>();
   const [recent, setRecent] = useState<RecordLine[]>([]);
   const [devices, setDevices] = useState<Device[]>();
+  const [waiting, setWaiting] = useState<ChannelWaiting[]>([]);
   const [code, setCode] = useState("");
+  const [chatCode, setChatCode] = useState("");
+  const [paired, setPaired] = useState("");
   const [problem, setProblem] = useState("");
+  const chatField = useId();
   const { record, devices: pairing } = seams;
 
   useEffect(() => {
@@ -373,6 +582,7 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
         .catch(() => undefined);
     }
     void pairing?.list().then((value) => live && setDevices(value)).catch(() => undefined);
+    void pairing?.waiting?.().then((value) => live && setWaiting(value)).catch(() => undefined);
     return () => {
       live = false;
     };
@@ -468,6 +678,67 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
           {code && <p className="pairing-code mono">{code}</p>}
         </>
       )}
+      {pairing?.accept && devices && (
+        <form
+          className="pair-chat"
+          aria-labelledby={`${chatField}-heading`}
+          onSubmit={(event) => {
+            event.preventDefault();
+            const entered = chatCode.trim();
+            if (!entered || !pairing.accept) return;
+            const asked = waiting.length === 1 ? waiting[0] : undefined;
+            setProblem("");
+            setPaired("");
+            void pairing
+              .accept(entered)
+              .then(async () => {
+                setChatCode("");
+                setPaired(
+                  asked ? labels.paired(channelName(asked.channel), asked.displayName ?? asked.account) : labels.chatPaired,
+                );
+                setDevices(await pairing.list());
+                setWaiting((await pairing.waiting?.()) ?? []);
+              })
+              .catch((error: unknown) => setProblem(problemText(error)));
+          }}
+        >
+          <p className="card-label" id={`${chatField}-heading`}>
+            {labels.pairChat}
+          </p>
+          <p className="setting-sub">{labels.pairChatHint}</p>
+          {waiting.map((asked) => (
+            <p key={asked.id} className="setting-sub">
+              {labels.waitingToPair(channelName(asked.channel), asked.displayName ?? asked.account)}
+            </p>
+          ))}
+          <label htmlFor={chatField} className="setting-label">
+            {labels.theCodeItWasSent}
+          </label>
+          <div className="inline-form">
+            <input
+              id={chatField}
+              className="mono"
+              value={chatCode}
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(event) => setChatCode(event.target.value)}
+            />
+            <button type="submit" className="button button-secondary" disabled={!chatCode.trim()}>
+              {labels.pair}
+            </button>
+          </div>
+          {paired && (
+            <p className="change-note" role="status">
+              {paired}
+            </p>
+          )}
+        </form>
+      )}
     </section>
   );
+}
+
+/** A chat channel's name as the person knows it: `telegram` is Telegram. */
+function channelName(channel: string): string {
+  return channel.charAt(0).toUpperCase() + channel.slice(1);
 }

@@ -174,3 +174,113 @@ export function devicePowers(scopes: DeviceScope[]): string {
   if (stop) return labels.stopOnly;
   return labels.lookOnly;
 }
+
+/** A chat account that asked to pair and waits for its code (`ChannelPairingView`, spec 3.3 §10 K1). */
+export interface ChannelWaiting {
+  id: string;
+  channel: string;
+  account: string;
+  displayName?: string;
+  requestedAt: string;
+  expiresAt: string;
+}
+
+/** What a line of "While you were away" says happened (`adk_kernel::control::api::AwayKind`). */
+export type AwayKind = "done" | "failed" | "stopped" | "suggestion" | "question" | "decided" | "stoppedAll" | "resumedAll";
+
+/** One line of "While you were away", from one `/proc` ledger row (`AwayLine`, spec 3.3 §10 K4). */
+export interface AwayLine {
+  /** The ledger row's sequence number. */
+  seq: number;
+  at: string;
+  partition: string;
+  /** The agent's label on the ledger: its acting identity, such as `urn:adk:agent:app/finance`, or `kernel`. */
+  agent: string;
+  kind: AwayKind | string;
+  /** The row's effect, such as `failed` or `approve`. */
+  effect?: string;
+  /** The line's record: `GET` it for the ledger row. */
+  record: string;
+}
+
+/** How many lines of each kind a page holds (`AwayCounts`). */
+export interface AwayCounts {
+  done: number;
+  failed: number;
+  stopped: number;
+  suggestions: number;
+  questions: number;
+  decided: number;
+}
+
+/** `GET /kernel/away` (`AwayResponse`, spec 3.3 §10 K4). */
+export interface AwayPage {
+  viewer: string;
+  /** When this viewer last marked it seen; a new viewer's day. */
+  since: string;
+  after?: number;
+  /** The last ledger row the page covers: what marking it seen marks. */
+  through?: number;
+  /** Rows after `through` wait for the next page. */
+  more: boolean;
+  counts: AwayCounts;
+  spentMicroUsd: number;
+  quietTime: { respected: boolean; breaches?: number[] };
+  /** Decisions waiting for the caller now. */
+  waiting: number;
+  lines: AwayLine[];
+}
+
+/** A `/proc` ledger row as the record of a line shows it (`adk_kernel::proc::LedgerEntry`). */
+export interface LedgerRow {
+  seq: number;
+  ts: string;
+  partition: string;
+  agent: string;
+  kind: string;
+  effect?: string;
+  durationMs?: number;
+  meta?: Record<string, unknown>;
+}
+
+/** `GET /kernel/away/lines/{seq}` (`AwayLineResponse`): a line's record. */
+export interface AwayRecord {
+  line?: AwayLine;
+  entry: LedgerRow;
+}
+
+/** A quiet window (`adk_kernel::QuietHours`): local `HH:MM`, at `utcOffsetMinutes` east of UTC when set. */
+export interface QuietWindow {
+  start: string;
+  end: string;
+  utcOffsetMinutes?: number;
+}
+
+/** How much an area's agents act alone, as the kernel names it (`PartitionMode`). */
+export type AreaMode = "read_only" | "plan" | "ask" | "auto";
+
+/** A setting a person changed while the kernel ran (`adk_kernel::control::Change`). */
+export interface SettingChange<T> {
+  value: T;
+  at: string;
+  by: string;
+}
+
+/** One area's settings in force (`AreaView`, spec 3.3 §10 K3). */
+export interface AreaSettings {
+  /** The area: a partition, `default` on a kernel without partitions. */
+  partition: string;
+  /** The person's quiet time; empty is none. */
+  quietTime: QuietWindow[];
+  /** Windows a workspace sets, which hold beside the person's. */
+  alsoQuiet?: QuietWindow[];
+  /** Micro-USD per day; absent is no limit. */
+  dailySpendingLimit?: number;
+  spentToday: number;
+  mode?: AreaMode;
+  changed?: {
+    quietTime?: SettingChange<QuietWindow | null>;
+    dailySpendingLimit?: SettingChange<number | null>;
+    mode?: SettingChange<AreaMode>;
+  };
+}

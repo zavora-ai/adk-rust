@@ -100,6 +100,15 @@ pub const AREAS: &str = "Areas";
 pub const WHERE_YOU_CAN_SAY_YES_FROM: &str = "Where you can say yes from";
 /// Pairs a device.
 pub const ADD_A_PHONE_OR_APP: &str = "Add a phone or app";
+/// Who did something when no one agent did: the kernel's own work, such as a question it
+/// asks.
+pub const YOUR_AGENTS: &str = "Your agents";
+/// A suggestion in "While you were away" that names no one agent.
+pub const AGENTS_SUGGEST: &str = "Your agents suggest something. Nothing happens until you say so.";
+/// A question from the kernel in "While you were away", before its own words are known.
+pub const NOTICED_SOMETHING: &str = "Your agents noticed something. Is that right?";
+/// Everything resumed after a stop, in "While you were away".
+pub const ALL_AGENTS_RESUMED: &str = "All agents resumed.";
 
 /// An agent asleep until a local time, `"Asleep until 07:00"`.
 ///
@@ -480,6 +489,10 @@ mod tests {
         AREAS,
         WHERE_YOU_CAN_SAY_YES_FROM,
         ADD_A_PHONE_OR_APP,
+        YOUR_AGENTS,
+        AGENTS_SUGGEST,
+        NOTICED_SOMETHING,
+        ALL_AGENTS_RESUMED,
         ALLOW_ONCE,
         ALWAYS_ALLOW_FOR_THIS_PERSON,
         ALWAYS_ALLOW_FOR_THIS_FOLDER,

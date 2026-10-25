@@ -17,7 +17,7 @@ import type {
 } from "../generated/api";
 import type { FeedMessage, HomeClient } from "../client";
 import { ApiError } from "../client";
-import type { AgendaItem, KernelProcess, StandingRule, WakeSet } from "../kernel";
+import type { AgendaItem, AreaSettings, AwayLine, AwayPage, KernelProcess, StandingRule, WakeSet } from "../kernel";
 import type { Seams } from "../seams";
 
 const ref = (name: string, displayName: string, monogram: string, color: string): AgentRef => ({
@@ -233,6 +233,47 @@ export function briefing(): Briefing {
   };
 }
 
+/** The example's "While you were away" as the kernel reads it (spec 3.3 §10 K4). */
+export function awayPage(): AwayPage {
+  const line = (seq: number, at: string, agent: string, kind: string, effect?: string): AwayLine => ({
+    seq,
+    at,
+    partition: "default",
+    agent,
+    kind,
+    ...(effect ? { effect } : {}),
+    record: `/api/kernel/away/lines/${seq}`,
+  });
+  return {
+    viewer: "home",
+    since: at(22, 4, -1),
+    through: 30,
+    more: false,
+    counts: { done: 1, failed: 1, stopped: 0, suggestions: 1, questions: 1, decided: 1 },
+    spentMicroUsd: 620_000,
+    quietTime: { respected: true },
+    waiting: 3,
+    lines: [
+      line(11, at(22, 40, -1), "urn:adk:agent:home/research", "done", "completed"),
+      line(14, at(23, 5, -1), "kernel", "suggestion", "proposed"),
+      line(17, at(23, 30, -1), "urn:adk:agent:home/code", "decided", "approve"),
+      line(22, at(2, 0), "urn:adk:agent:home/household", "failed", "failed"),
+      line(29, at(6, 0), "kernel", "question"),
+    ],
+  };
+}
+
+/** The example's one area (spec 3.3 §10 K3). */
+export function area(): AreaSettings {
+  return {
+    partition: "default",
+    quietTime: [{ start: "22:00", end: "07:00" }],
+    dailySpendingLimit: 5_000_000,
+    spentToday: 1_840_000,
+    mode: "ask",
+  };
+}
+
 /** The status line of the example. */
 export function status(stopped = false): StatusLine {
   return {
@@ -432,10 +473,44 @@ function decidedCard(card: DecisionCard, said: string, byYou: boolean): Decision
   };
 }
 
-/** The seams of the example: what K2, K3, K4 and K5 will serve. */
-export function fixtureSeams(): Seams {
+/** What the example's seams were asked to do, for tests. */
+export interface SeamCalls {
+  seen: number[];
+  records: number[];
+  accepted: string[];
+}
+
+/** The seams of the example: what K2, K3, K4 and K5 serve. */
+export function fixtureSeams(calls: SeamCalls = { seen: [], records: [], accepted: [] }): Seams {
+  let page = awayPage();
+  let settings = area();
+  const change = (next: Partial<AreaSettings>) => {
+    settings = { ...settings, ...next };
+    return settings;
+  };
   return {
-    whileAway: { read: async () => ({ quietRespected: true, records: {} }) },
+    whileAway: {
+      read: async () => page,
+      markSeen: async (through) => {
+        calls.seen.push(through);
+        page = {
+          ...page,
+          since: new Date().toISOString(),
+          after: through,
+          counts: { done: 0, failed: 0, stopped: 0, suggestions: 0, questions: 0, decided: 0 },
+          spentMicroUsd: 0,
+          lines: [],
+        };
+      },
+      record: async (seq) => {
+        calls.records.push(seq);
+        const line = awayPage().lines.find((candidate) => candidate.seq === seq);
+        return {
+          line,
+          entry: { seq, ts: line?.at ?? new Date().toISOString(), partition: "default", agent: line?.agent ?? "kernel", kind: "process" },
+        };
+      },
+    },
     memory: {
       facts: async () => ({
         tidyUp: { id: "tick-1", text: "Overnight, Finance merged two notes about your accountant." },
@@ -465,7 +540,30 @@ export function fixtureSeams(): Seams {
       ],
       remove: async () => {},
       pair: async () => "482 913",
+      waiting: async () =>
+        calls.accepted.length > 0
+          ? []
+          : [
+              {
+                id: "telegram:4242",
+                channel: "telegram",
+                account: "4242",
+                displayName: "Sam",
+                requestedAt: at(7, 10),
+                expiresAt: at(8, 10),
+              },
+            ],
+      accept: async (code) => {
+        if (code !== "ABCD-EFGH-2345") throw new ApiError(401, "that code is wrong, used or expired", "kernel.unauthorized");
+        calls.accepted.push(code);
+      },
     },
-    limits: { setQuietTime: async () => {}, setDailyLimit: async () => {}, setMode: async () => {} },
+    limits: {
+      areas: async () => [settings],
+      area: async () => settings,
+      setQuietTime: async (_, window) => change({ quietTime: window ? [window] : [] }),
+      setSpendingLimit: async (_, microUsd) => change({ dailySpendingLimit: microUsd ?? undefined }),
+      setMode: async (_, mode) => change({ mode }),
+    },
   };
 }

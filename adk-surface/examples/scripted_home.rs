@@ -3,9 +3,12 @@
 //!
 //! A kernel hosts a harness agent in "Ask first" whose model is `ScriptedLlm`: the first turn
 //! writes `invoice.txt`, a call the harness holds for the person, and after the answer the
-//! agent says "The invoice is written." The kernel, its durable worker, the approval inbox, the
-//! session store and the engine are real. The server is `adk-server`'s `ServerBuilder` with the
-//! engine under `/api/surface` and the page at `/ui/`, as `adk-rust serve` mounts them; a
+//! agent says "The invoice is written."; a second turn does the same for `notes.txt`. The
+//! kernel, its durable worker, its `/proc` ledger, the approval inbox, the session store and
+//! the engine are real. Quiet time ended an hour before the example started, so Today and the
+//! morning briefing have something to show once a turn ran (spec 3.3 §5.1, §10 K3, K4). The
+//! server is `adk-server`'s `ServerBuilder` with the engine under `/api/surface`, the kernel's
+//! routes under `/api/kernel` and the page at `/ui/`, as `adk-rust up` mounts them; a
 //! stand-in extractor admits every request as the owner.
 //!
 //! ```sh
@@ -22,7 +25,8 @@ use adk_core::{
 };
 use adk_harness::{Harness, HarnessAgent, HarnessMode, InstructionsConfig};
 use adk_kernel::control::ControlPlaneConfig;
-use adk_kernel::{InMemoryProcessStore, KernelConfig, ProcessStore};
+use adk_kernel::proc::{InMemoryLedgerStore, Ledger, LedgerKey};
+use adk_kernel::{InMemoryProcessStore, KernelConfig, PartitionMode, ProcessStore, QuietHours};
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_runner::Runner;
 use adk_server::auth_bridge::{RequestContextError, RequestContextExtractor};
@@ -31,6 +35,7 @@ use adk_server::{ServerBuilder, ServerConfig};
 use adk_session::{InMemorySessionService, SessionService};
 use adk_surface::{LocalSource, Place, SurfaceEngine};
 use async_trait::async_trait;
+use chrono::{Local, Timelike as _};
 use serde_json::json;
 
 const APP: &str = "home";
@@ -68,6 +73,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 json!({ "path": "invoice.txt", "content": "INV-1" }),
             ),
             ScriptedResponse::text("The invoice is written."),
+            ScriptedResponse::function_call(
+                "write_file",
+                json!({ "path": "notes.txt", "content": "Notes" }),
+            ),
+            ScriptedResponse::text("The notes are written."),
         ],
     ));
     let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
@@ -101,17 +111,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     let harness =
         Arc::new(Harness::with_runner(agent.clone(), runner)?.with_run_store(Arc::clone(&runs)));
+    // Quiet time from three hours ago to an hour ago, local time: it has ended.
+    let hours_ago = |hours: i64| {
+        let at = Local::now() - chrono::Duration::hours(hours);
+        at.time().with_second(0).and_then(|time| time.with_nanosecond(0)).unwrap_or_default()
+    };
+    let quiet = QuietHours::new(hours_ago(3), hours_ago(1));
     let kernel = harness
         .kernel()
+        .ledger(Ledger::new(Arc::new(InMemoryLedgerStore::new()), LedgerKey::generate()?))
         .config(
             KernelConfig::default()
                 .with_app_name(APP)
+                .with_quiet_hours(quiet)
                 .with_worker(
                     DurableWorkerConfig::default()
                         .with_worker_id("home")
                         .with_poll_interval(Duration::from_millis(50)),
                 )
-                .with_control(ControlPlaneConfig::default().without_socket()),
+                .with_control(
+                    ControlPlaneConfig::default()
+                        .without_socket()
+                        .with_start_mode("default", PartitionMode::Ask),
+                ),
         )
         .process_store(Arc::new(InMemoryProcessStore::new()) as Arc<dyn ProcessStore>)
         .build()?;

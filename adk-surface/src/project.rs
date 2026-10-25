@@ -9,7 +9,8 @@ use adk_core::{ApprovalAction, ApprovalRequest, ApprovalState, Event, Part, RunS
 use adk_harness::HarnessMode;
 use adk_harness::take_over::TAKE_OVER_TOOL;
 use adk_kernel::QuietHours;
-use adk_kernel::proc::LedgerEntry;
+use adk_kernel::control::api::{AwayKind, AwayLine};
+use adk_kernel::proc::{KERNEL_AGENT, LedgerEntry};
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use serde_json::Value;
 
@@ -439,38 +440,65 @@ impl Projector {
         }
     }
 
-    pub(crate) fn briefing_line(&self, entry: &LedgerEntry) -> BriefingLine {
+    /// The line of "While you were away" a ledger row makes, or `None` for a row that is no
+    /// event of its own (spec 3.3 §5.1, §10 K4): the line the kernel's `GET /kernel/away`
+    /// lists for it ([`AwayLine`]), so every surface shows the same lines and the kernel's
+    /// own housekeeping (wakes, its processes' state changes) is never one.
+    pub(crate) fn briefing_line(&self, entry: &LedgerEntry) -> Option<BriefingLine> {
+        let line = AwayLine::of(entry)?;
+        // A decision says which answer it was, whether its row is the harness's or the kernel's.
+        let denied = line.effect.as_deref() == Some("deny");
         let at = entry.utc();
-        let agent = self.agent(&entry.agent).display_name;
-        let pill = match entry.kind.as_str() {
-            "approval" | "rejection" | "decided" => Some(Pill::YouDecided),
-            "held" => Some(Pill::WaitingForYou),
-            "proposal" => Some(Pill::Suggestion),
-            "observation" => Some(Pill::Question),
-            "loop_guard" | "denial" => Some(Pill::Failed),
-            "turn" | "rule_hit" => Some(Pill::Done),
-            "process" => match entry.meta.get("state").and_then(Value::as_str) {
-                Some("failed") => Some(Pill::Failed),
-                Some("completed") => Some(Pill::Done),
-                _ => None,
+        let agent = self.ledger_agent(&entry.agent);
+        let who = agent.clone().unwrap_or_else(|| words::YOUR_AGENTS.to_string());
+        // The `/proc` ledger writes the state a process entered as the row's effect (spec 3.2
+        // §7.10); the loop guard's row carries none.
+        let failed = entry.effect.as_deref() == Some("failed");
+        // Mid-sentence, as the object of the decision.
+        let whom = agent.as_deref().unwrap_or("your agents");
+        let (pill, text) = match line.kind {
+            AwayKind::Done => (Some(Pill::Done), words::briefing_sentence("turn", &who)),
+            AwayKind::Failed if failed => (Some(Pill::Failed), format!("{who} failed.")),
+            AwayKind::Failed => (Some(Pill::Failed), words::briefing_sentence("loop_guard", &who)),
+            AwayKind::Stopped => (None, format!("{who} was stopped.")),
+            AwayKind::Suggestion => match &agent {
+                Some(agent) => {
+                    (Some(Pill::Suggestion), words::briefing_sentence("proposal", agent))
+                }
+                None => (Some(Pill::Suggestion), words::AGENTS_SUGGEST.to_string()),
             },
-            _ => None,
+            AwayKind::Question => (Some(Pill::Question), words::NOTICED_SOMETHING.to_string()),
+            AwayKind::Decided if denied => {
+                (Some(Pill::YouDecided), words::briefing_sentence("rejection", whom))
+            }
+            AwayKind::Decided => {
+                (Some(Pill::YouDecided), words::briefing_sentence("approval", whom))
+            }
+            AwayKind::StoppedAll => (None, format!("{}.", words::ALL_AGENTS_STOPPED)),
+            AwayKind::ResumedAll => (None, words::ALL_AGENTS_RESUMED.to_string()),
+            // A kind a later kernel adds says what kind of thing happened, never more.
+            _ => (None, words::briefing_sentence("", &who)),
         };
-        let text = match (entry.kind.as_str(), pill) {
-            ("process", Some(Pill::Failed)) => format!("{agent} failed."),
-            ("process", Some(Pill::Done)) => format!("{agent} finished."),
-            ("process", _) => format!("{agent} changed what it is doing."),
-            (kind, _) => words::briefing_sentence(kind, &agent),
-        };
-        BriefingLine {
+        Some(BriefingLine {
             seq: entry.seq,
             at,
             at_text: self.hh_mm(at),
-            agent,
+            agent: who,
             pill,
             pill_text: pill.map(|pill| pill_words(pill).to_string()),
             text,
+        })
+    }
+
+    /// The display name of the agent a ledger row names: its acting identity
+    /// (`urn:adk:agent:{app}/{agent}`) or its target, as the roster names it; `None` for the
+    /// kernel's own work, which no agent did.
+    fn ledger_agent(&self, label: &str) -> Option<String> {
+        if label == KERNEL_AGENT || label.is_empty() {
+            return None;
         }
+        let name = label.rsplit(['/', ':']).next().filter(|name| !name.is_empty()).unwrap_or(label);
+        Some(self.agent(name).display_name)
     }
 }
 
@@ -856,28 +884,52 @@ mod tests {
 
     #[test]
     fn briefing_lines_come_from_ledger_rows() {
-        let projector = Projector::new(FixedOffset::east_opt(3 * 3600).unwrap());
-        let row = |kind: &str| -> LedgerEntry {
+        let mut projector = Projector::new(FixedOffset::east_opt(3 * 3600).unwrap());
+        projector.names.insert("adk-rust".into(), "ADK-Rust".into());
+        let row = |kind: &str, agent: &str, effect: Option<&str>| -> LedgerEntry {
             serde_json::from_value(json!({
                 "seq": 7,
                 "ts": "2026-10-23T23:05:00+03:00",
                 "partition": "default",
-                "agent": "finance",
+                "agent": agent,
                 "kind": kind,
+                "effect": effect,
             }))
             .unwrap()
         };
-        let line = projector.briefing_line(&row("proposal"));
+        let line = projector.briefing_line(&row("proposal", "kernel", Some("proposed"))).unwrap();
         assert_eq!(
-            (line.at_text.as_str(), line.pill_text.as_deref()),
-            ("23:05", Some("Suggestion"))
+            (line.at_text.as_str(), line.pill_text.as_deref(), line.seq),
+            ("23:05", Some("Suggestion"), 7)
         );
-        assert_eq!(line.text, "Finance suggests something. Nothing happens until you say so.");
-        assert_eq!(line.seq, 7);
+        assert_eq!(line.text, "Your agents suggest something. Nothing happens until you say so.");
+        let agent = "urn:adk:agent:adk-rust/adk-rust";
+        let decided = projector.briefing_line(&row("decided", agent, Some("approve"))).unwrap();
         assert_eq!(
-            projector.briefing_line(&row("approval")).pill_text.as_deref(),
-            Some("You decided")
+            (decided.pill_text.as_deref(), decided.text.as_str()),
+            (Some("You decided"), "You allowed ADK-Rust to go ahead once.")
         );
-        assert_eq!(projector.briefing_line(&row("observation")).text, "Is that right?");
+        // The person's answer recorded by the harness is the decision's row.
+        let said_no = projector.briefing_line(&row("rejection", agent, None)).unwrap();
+        assert_eq!(said_no.text, "You said no to ADK-Rust.");
+        let question = projector.briefing_line(&row("observation", "kernel", None)).unwrap();
+        assert_eq!(question.text, "Your agents noticed something. Is that right?");
+        // The kernel's housekeeping and an agent's steps that are no event of their own make no
+        // line.
+        for (kind, agent, effect) in [
+            ("wake", "kernel", Some("woke")),
+            ("process", "kernel", Some("completed")),
+            ("process", agent, Some("running")),
+            ("spend", agent, None),
+            ("intent", agent, None),
+            ("tool_call", agent, None),
+            ("proposal", "kernel", Some("running")),
+        ] {
+            assert_eq!(
+                projector.briefing_line(&row(kind, agent, effect)),
+                None,
+                "{kind} {effect:?}"
+            );
+        }
     }
 }

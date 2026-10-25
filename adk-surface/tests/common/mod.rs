@@ -50,6 +50,25 @@ pub async fn scenario_with(
     control: ControlPlaneConfig,
     hosted: bool,
 ) -> Scenario {
+    build(model, control, hosted, None).await
+}
+
+/// The hosted harness of [`scenario`] on a kernel that writes the `/proc` ledger to `ledger`
+/// and serves `control` (spec 3.3 §10 K3, K4).
+pub async fn scenario_with_ledger(
+    model: Arc<dyn Llm>,
+    control: ControlPlaneConfig,
+    ledger: adk_kernel::proc::Ledger,
+) -> Scenario {
+    build(model, control, true, Some(ledger)).await
+}
+
+async fn build(
+    model: Arc<dyn Llm>,
+    control: ControlPlaneConfig,
+    hosted: bool,
+    ledger: Option<adk_kernel::proc::Ledger>,
+) -> Scenario {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().to_path_buf();
     let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
@@ -94,8 +113,11 @@ pub async fn scenario_with(
         .unwrap();
     let harness =
         Arc::new(Harness::with_runner(agent, runner).unwrap().with_run_store(Arc::clone(&runs)));
-    let kernel = harness
-        .kernel()
+    let mut builder = harness.kernel();
+    if let Some(ledger) = ledger {
+        builder = builder.ledger(ledger);
+    }
+    let kernel = builder
         .config(
             KernelConfig::default()
                 .with_app_name(APP)
