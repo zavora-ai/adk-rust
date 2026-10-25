@@ -62,13 +62,27 @@ A card is drawn from the decision's inbox entry, never from agent output (S-I1):
 |---|---|---|
 | Who and when | `agent`, `sinceText`, `statusText` | Finance · since 18:00 · Waiting for you |
 | Heading | `heading` | Send email to [client email] |
+| What the heading leaves out | `summary`, on a decision the kernel itself asks | Finance suggests this. Once you say yes, it runs every 5 minutes. |
 | The exact call | `call.text`, `call.args`, `call.truncated` | `send_email(to: "…", subject: "…")` |
 | How it got here | `timeline` | Asked at 18:00 — Waited through quiet time — Waiting for you |
 | Actions | `allowed.options` | Allow once · Always allow for this person · Edit · Deny |
 | Details | `riskText`, `reversibilityText`, `alsoShown` | Medium risk · Can't be unsent · Also on your phone and in Telegram |
 
 The answers depend on the surface and on how the input was given: a spoken answer in the web
-home follows the voice row.
+home follows the voice row. The high-risk column is about approving: the tray and voice keep
+**Deny** on every decision, and only chat, where a high-risk decision never resolves (S-I6),
+offers no answer there. A decision that needs more than one approver never offers "Always
+allow", and the standing rule of "Always allow" is granted only once the request is approved.
+
+A decision the kernel itself asks is drawn in the same plain words: an agent's proposed routine
+shows its title as the heading, who suggests it and when it runs as the summary, and **Do it**
+and **Not now** as its answers (§8.1 "Suggestion"); a question from `/proc` answers **That's
+right** or **Forget it**. The kernel's tool name and the item's JSON stay in the exact call.
+
+> **Note:** spec 3.3 §7.5 shows a change to a file as a diff against the current file before
+> anything is written. The engine reads no workspace files, so a file change's card shows the
+> call's new arguments (`write_file(path: …, content: …)`), not a diff; the diff needs the
+> harness's change sets (spec 3.1 §7.26).
 
 | Surface | Allow once | Always allow | Edit | Deny | High risk |
 |---|---|---|---|---|---|
@@ -111,11 +125,16 @@ match outcome {
 |---|---|
 | `decide` | `ApprovalService::decide` at the version the surface saw. A version conflict becomes `alreadyDecided` with who, where and when ("You said yes in Telegram at 07:31") and is never retried (S-I2); a decision still open at a newer version comes back as `changed` |
 | `cancelAnswer` | Cancels a spoken "allow once" inside its cancel window |
-| `send` | Starts a turn; while a decision of the session is open, or a turn runs, the message is queued instead (S-I4) |
+| `send` | Starts a turn; while a decision of the session is open (whoever may answer it), a turn runs, or earlier input waits, the message is queued instead and sent, oldest first, once the session is free, whichever surface answered the decision (S-I4) |
 | `queue` | Queues the message as the session's next |
 | `stopAll` | Freezes every agent, from any surface (S-I10) |
 | `resumeAll` | Unfreezes, only from the web home or a paired local terminal (S-I10) |
 | `setMode` | Changes the session's mode; making agents act more on their own is a standing permission, so only the web home, the phone and the terminal may loosen it |
+
+> **Note:** §6 also names "steer", a message that reaches a turn while it runs. No runtime
+> under the engine takes input in the middle of a turn, so there is no steer command: a message
+> sent during a turn is queued as the session's next message, and **Stop all** stops a turn that
+> has gone wrong.
 
 ### Error codes
 
@@ -181,7 +200,7 @@ the server's auth middleware authenticates every request.
 | `GET /surface/decisions/{id}` | One decision, waiting or decided |
 | `GET /surface/sessions/{session}/thread` | The session's entries |
 | `GET /surface/sessions/{session}/feed` | Server-sent events: `entry` (with `id` = `seq`), `decisions`, `reset`; resumes after `Last-Event-ID` or `?after=` |
-| `GET /surface/sessions/{session}/queued` | `QueuedResponse`: what the caller typed while a decision of the session was open, sent once it is answered (§7.4 rule 2) |
+| `GET /surface/sessions/{session}/queued` | `QueuedResponse`: what the caller typed while a decision of the session was open or a turn ran, sent oldest first once the session is free (§7.4 rule 2) |
 | `GET /surface/agents` | The roster |
 | `GET /surface/status?session=` | The status line |
 | `GET /surface/briefing?since=` | "While you were away" |

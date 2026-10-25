@@ -88,8 +88,9 @@ for card in engine.decisions(&me).await? {
 
 A decision answered on one surface is shown on every other as "Decided — You said yes in
 Telegram at 07:31": a second answer gets `approval.version_conflict` from the approval
-service and the engine never retries it (S-I2). Input typed while a decision is open is queued
-as the next message, never an answer (S-I4). "Stop all" works from every surface; "Resume all"
+service and the engine never retries it (S-I2). Input typed while a decision is open, or a
+turn runs, is queued as the next message, never an answer, and sent oldest first once the
+session is free, whichever surface answered (S-I4). "Stop all" works from every surface; "Resume all"
 only from the web home or a paired local terminal (S-I10). No agent answers a decision (§7.4).
 A chat card carries the agent, the risk and a short summary, never the call's arguments (S-I5).
 
@@ -101,7 +102,7 @@ A chat card carries the agent, the risk and a short summary, never the call's ar
 | `GET /surface/decisions/{id}` | One decision, waiting or decided |
 | `GET /surface/sessions/{session}/thread` | The session's entries |
 | `GET /surface/sessions/{session}/feed` | Server-sent events, resumable with `Last-Event-ID` |
-| `GET /surface/sessions/{session}/queued` | What the caller typed while a decision of the session was open |
+| `GET /surface/sessions/{session}/queued` | What the caller typed while a decision of the session was open or a turn ran, not yet sent |
 | `GET /surface/agents` | The roster |
 | `GET /surface/status` | The status line |
 | `GET /surface/briefing` | "While you were away": the events the kernel's `GET /kernel/away` lists, from the `/proc` ledger |
