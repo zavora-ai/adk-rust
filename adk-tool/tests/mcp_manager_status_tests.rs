@@ -1,7 +1,8 @@
 //! `McpServerManager` status transitions and the stdio launcher (spec 3.2 §10 T1): a
 //! subscriber sees a killed server crash and restart in order, a server whose restarts all
-//! fail ends `FailedToStart`, and a launcher's command is the one the manager spawns. On
-//! Windows, stopping a server ends the processes it started (spec 3.2 §10 W1).
+//! fail ends `FailedToStart`, and a launcher's command is the one the manager spawns.
+//! Stopping a server ends the processes it started: on Windows through its Job Object (spec
+//! 3.2 §10 W1), on Unix through its process group, before the stop returns (§7.7, K-I5).
 //!
 //! The stdio server is this test binary, re-run as a child with [`SERVER_ENV`] set. The
 //! lines libtest prints before the server starts are not JSON-RPC, which the client skips.
@@ -42,8 +43,8 @@ const TAG_ENV: &str = "ADK_TOOL_MCP_LAUNCH_TAG";
 const DEADLINE: Duration = Duration::from_secs(30);
 
 /// Publishes `server_pid`, returning this process's ID, `launch_tag`, returning
-/// [`TAG_ENV`], and `spawn_descendant`, which starts a process that runs for five minutes on
-/// Windows unless something ends it, and returns its ID.
+/// [`TAG_ENV`], and `spawn_descendant`, which starts a process that runs for five minutes
+/// unless something ends it, and returns its ID.
 #[derive(Clone)]
 struct Probe;
 
@@ -73,9 +74,16 @@ impl ServerHandler for Probe {
         let text = match params.name.as_ref() {
             "server_pid" => std::process::id().to_string(),
             "spawn_descendant" => {
-                // Five minutes of `ping` on Windows, the platform whose tests call the tool.
-                let mut child = std::process::Command::new("ping")
-                    .args(["-n", "300", "127.0.0.1"])
+                // Five minutes of `ping` on Windows and of `sleep` on Unix.
+                #[cfg(windows)]
+                let mut command = std::process::Command::new("ping");
+                #[cfg(windows)]
+                command.args(["-n", "300", "127.0.0.1"]);
+                #[cfg(not(windows))]
+                let mut command = std::process::Command::new("sleep");
+                #[cfg(not(windows))]
+                command.arg("300");
+                let mut child = command
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
@@ -458,5 +466,116 @@ async fn dropping_the_manager_ends_the_processes_its_servers_started() {
             .await
             .unwrap();
     terminate(descendant);
+    assert!(ended, "a process a server started outlived the dropped manager");
+}
+
+/// Whether a process with id `pid` exists, a zombie included.
+#[cfg(unix)]
+fn exists(pid: &str) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", pid])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// Waits, for at most [`DEADLINE`], until the process `pid` no longer exists.
+#[cfg(unix)]
+async fn ends(pid: &str) -> bool {
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    while exists(pid) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    !exists(pid)
+}
+
+/// A server leads a process group of its own, which every process it starts joins; stopping
+/// the server ends the group, and the stop returns only once each process has exited and
+/// been reaped (spec 3.2 §7.7, K-I5). Without the group the descendant runs on.
+#[cfg(unix)]
+#[tokio::test]
+async fn stopping_a_server_ends_the_processes_it_started_before_it_returns() {
+    let manager =
+        McpServerManager::new(HashMap::from([("probe".to_string(), server_config(None))]));
+    manager.start_server("probe").await.unwrap();
+    let server = call(&manager, "server_pid").await;
+    let descendant = call(&manager, "spawn_descendant").await;
+    assert!(exists(&server) && exists(&descendant), "both processes run");
+
+    manager.stop_server("probe").await.unwrap();
+
+    let (server_left, descendant_left) = (exists(&server), exists(&descendant));
+    let _ = std::process::Command::new("kill").args(["-9", &descendant]).status();
+    assert!(!server_left, "the server outlived its stop");
+    assert!(!descendant_left, "a process the server started outlived the server's stop");
+    manager.shutdown().await.unwrap();
+}
+
+/// A restart ends the old server's group before the new server starts, and `shutdown` ends
+/// the new one's.
+#[cfg(unix)]
+#[tokio::test]
+async fn restarting_and_shutting_down_end_the_processes_a_server_started() {
+    let manager =
+        McpServerManager::new(HashMap::from([("probe".to_string(), server_config(None))]));
+    manager.start_server("probe").await.unwrap();
+    let before = call(&manager, "spawn_descendant").await;
+
+    manager.restart_server("probe").await.unwrap();
+
+    let before_left = exists(&before);
+    let after = call(&manager, "spawn_descendant").await;
+    manager.shutdown().await.unwrap();
+    let after_left = exists(&after);
+    for pid in [&before, &after] {
+        let _ = std::process::Command::new("kill").args(["-9", pid]).status();
+    }
+    assert!(!before_left, "a process the old server started outlived the restart");
+    assert!(!after_left, "a process the new server started outlived the shutdown");
+}
+
+/// A server that crashes leaves its descendants in its group, and the crash's cleanup ends
+/// them before the manager reports the crash.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_crashed_servers_cleanup_ends_the_processes_it_started() {
+    let manager =
+        McpServerManager::new(HashMap::from([("probe".to_string(), server_config(None))]))
+            .with_health_check_interval(Duration::from_millis(50));
+    let mut transitions = manager.subscribe_status_transitions();
+    manager.start_server("probe").await.unwrap();
+    let server = call(&manager, "server_pid").await;
+    let descendant = call(&manager, "spawn_descendant").await;
+    manager.start_monitoring();
+
+    let killed = std::process::Command::new("kill").args(["-9", &server]).status().unwrap();
+    assert!(killed.success());
+    tokio::time::timeout(DEADLINE, async {
+        while transitions.recv().await.unwrap().to != ServerStatus::Crashed {}
+    })
+    .await
+    .expect("the manager reports the crash");
+
+    let descendant_left = exists(&descendant);
+    let _ = std::process::Command::new("kill").args(["-9", &descendant]).status();
+    assert!(!descendant_left, "a process the crashed server started outlived its cleanup");
+    manager.shutdown().await.unwrap();
+}
+
+/// Dropping the manager without stopping its servers ends their groups as well, once the
+/// runtime runs each server's cancelled connection task.
+#[cfg(unix)]
+#[tokio::test]
+async fn dropping_the_manager_ends_the_processes_its_servers_started_on_unix() {
+    let manager =
+        McpServerManager::new(HashMap::from([("probe".to_string(), server_config(None))]));
+    manager.start_server("probe").await.unwrap();
+    let descendant = call(&manager, "spawn_descendant").await;
+
+    drop(manager);
+
+    let ended = ends(&descendant).await;
+    let _ = std::process::Command::new("kill").args(["-9", &descendant]).status();
     assert!(ended, "a process a server started outlived the dropped manager");
 }

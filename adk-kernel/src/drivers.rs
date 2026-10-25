@@ -9,7 +9,7 @@
     feature = "drivers",
     doc = r#"| [`DriverManifest`], [`DriverSandbox`], [`DriverLifecycle`], [`DriverAccess`], [`load_manifests`] (feature `drivers`) | §7.7 |
 | [`DriverStore`], [`DriverRecord`], [`DriverPark`], [`DriverIsolation`] (feature `drivers`) | §7.7, §9.3, §13 Q8, Q9 |
-| [`DriverProcessTree`] (feature `drivers`) | §10 W1 |
+| [`DriverProcessTree`] (feature `drivers`) | §7.7, §10 W1, K-I5 |
 | [`DriverSupervisor`], [`DriverSupervisorBuilder`], [`DriverProposal`], [`DriverView`], [`StandingRulePins`] (feature `drivers`) | §7.7, K-I13, K-I14 |
 | [`DriverPolicy`] (feature `drivers`) | §7.7, K-I9, K-I14 |"#
 )]
@@ -17,7 +17,7 @@
     not(feature = "drivers"),
     doc = r#"| `DriverManifest`, `DriverSandbox`, `DriverLifecycle`, `DriverAccess`, `load_manifests` (feature `drivers`) | §7.7 |
 | `DriverStore`, `DriverRecord`, `DriverPark`, `DriverIsolation` (feature `drivers`) | §7.7, §9.3, §13 Q8, Q9 |
-| `DriverProcessTree` (feature `drivers`) | §10 W1 |
+| `DriverProcessTree` (feature `drivers`) | §7.7, §10 W1, K-I5 |
 | `DriverSupervisor`, `DriverSupervisorBuilder`, `DriverProposal`, `DriverView`, `StandingRulePins` (feature `drivers`) | §7.7, K-I13, K-I14 |
 | `DriverPolicy` (feature `drivers`) | §7.7, K-I9, K-I14 |"#
 )]

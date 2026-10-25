@@ -84,8 +84,10 @@ OS sandbox. It receives the server's `McpServerConfig`; rmcp pipes the
 command's stdin and stdout for the MCP connection. An error from the launcher
 fails that start with the error unchanged and leaves the server
 `FailedToStart`. On Windows the manager replaces the command's creation flags
-with `CREATE_SUSPENDED`, so the server runs only once it is in its Job Object
-(see [Shutdown behavior](#shutdown-behavior)).
+with `CREATE_SUSPENDED`, so the server runs only once it is in its Job Object.
+On Unix it pipes the command's standard input and output, leaves standard error
+inherited, and starts the command in a new session, so the server leads a
+process group of its own (see [Shutdown behavior](#shutdown-behavior)).
 
 ```rust
 use adk_tool::mcp::McpServerManager;
@@ -317,13 +319,12 @@ not contain `__` to avoid both cases.
 ## Shutdown behavior
 
 Stopping a server cancels its pending MCP tasks and its MCP session, then waits
-up to the configured grace period for the child process to exit; rmcp kills a
-process still running 3 seconds after its input closed. A transport still
+up to the configured grace period for the child process to exit; a process
+still running 3 seconds after its input closed is ended. A transport still
 closing when the grace period ends is dropped, which ends its child in the
-background. The child process is owned by the `TokioChildProcess` transport
-rather than a separately retained process handle. `stop_server` and `shutdown`
-return once each stopped server's process has exited or its grace period has
-elapsed.
+background. The child process is owned by the server's transport rather than a
+separately retained process handle. `stop_server` and `shutdown` return once
+each stopped server's process has exited or its grace period has elapsed.
 
 On Windows each server starts suspended and runs only once it is in a Job
 Object of its own, so every process it starts belongs to the job and none can
@@ -332,8 +333,30 @@ closing it ends whatever is left in it: stopping, restarting, updating or
 removing a server, a crash's cleanup, a dropped manager (once the runtime runs
 the server's cancelled connection task), and the managing process exiting each
 end the server's whole process tree. A server that cannot
-be placed in a Job Object is not started. On Unix only the server's own process
-is ended; a process it started in the background keeps running.
+be placed in a Job Object is not started.
+
+On Unix each server leads a session and process group of its own, which every
+process it starts joins (spec 3.2 §7.7, K-I5). The group closes with the
+server's transport: stopping, restarting, updating or removing a server, a
+crash's cleanup, and a dropped manager (once the runtime runs the server's
+cancelled connection task) each end the whole group, the background processes
+of a server that has already exited included, and return once every process in
+it has exited:
+
+| Step | What happens |
+|---|---|
+| 1 | The server's standard input closes, and it has 3 seconds to exit |
+| 2 | The group is sent `SIGTERM` |
+| 3 | The group is sent `SIGKILL` once the server has exited, or after 1 second |
+| 4 | The transport closes once no process of the group is left, for at most 2 seconds after step 2 |
+
+A dropped transport skips step 1. A server has no controlling terminal: it
+cannot read from or inject input into the application's terminal, and the
+terminal's Ctrl-C does not reach it; the manager ends it. A process group is not
+a boundary the way a Job Object is: a process that leaves the group (`setsid`,
+`setpgid`) is not ended with the server, and when the managing process is
+killed outright it runs no cleanup, so each server sees its input close and the
+processes it started keep running.
 
 `Runner::close` and `Toolset::close` leave the manager's servers running: one
 manager is shared by every agent that uses it, and the application starts its

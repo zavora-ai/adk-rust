@@ -686,8 +686,10 @@ fn driver_line(driver: &DriverView) -> String {
         Some(_) => "isolated".to_string(),
         None => format!("{} (not started)", record.manifest.sandbox.as_str()),
     };
-    if record.process_tree == Some(DriverProcessTree::JobObject) {
-        isolation.push_str(", in a job object");
+    match record.process_tree {
+        Some(DriverProcessTree::JobObject) => isolation.push_str(", in a job object"),
+        Some(DriverProcessTree::ProcessGroup) => isolation.push_str(", in a process group"),
+        _ => {}
     }
     let partitions: Vec<&str> =
         record.manifest.partitions.iter().map(PartitionId::as_str).collect();

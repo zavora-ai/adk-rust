@@ -1,7 +1,7 @@
 //! Drivers on a real stdio MCP server (spec 3.2 §7.7, §11): K6 — mount, crash and restart
 //! with backoff, a redeclared tool going stale and needing re-approval — secrets that reach
-//! the server as files, never in its environment, and on Windows the Job Object that ends a
-//! driver's whole process tree with it (§10 W1).
+//! the server as files, never in its environment, and what ends a driver's whole process
+//! tree with it: the Job Object on Windows (§10 W1), the process group on Unix (K-I5).
 
 #![cfg(feature = "drivers")]
 
@@ -308,9 +308,10 @@ fn answer_text(answer: &Value) -> String {
         .unwrap_or_else(|| answer.to_string())
 }
 
-/// What holds a driver's process tree is recorded when it starts. On Windows it is the
-/// driver's Job Object, and unmounting the driver ends a process the driver started, which
-/// otherwise runs on after it (spec 3.2 §10 W1).
+/// What holds a driver's process tree is recorded when it starts: the driver's Job Object on
+/// Windows (spec 3.2 §10 W1), its process group on Unix (§7.7, K-I5). Unmounting the driver
+/// ends a process the driver started, which otherwise runs on after it; on Unix it has
+/// exited before the unmount returns.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_drivers_process_tree_is_recorded_and_ends_with_it() {
     let work = Workdir::new();
@@ -325,7 +326,11 @@ async fn a_drivers_process_tree_is_recorded_and_ends_with_it() {
         .await
         .unwrap();
 
-    let expected = if cfg!(windows) { Some(DriverProcessTree::JobObject) } else { None };
+    let expected = if cfg!(windows) {
+        Some(DriverProcessTree::JobObject)
+    } else {
+        Some(DriverProcessTree::ProcessGroup)
+    };
     assert_eq!(drivers.record("notes").unwrap().process_tree, expected);
 
     #[cfg(windows)]
@@ -341,9 +346,38 @@ async fn a_drivers_process_tree_is_recorded_and_ends_with_it() {
         process::terminate(pid);
         assert!(ended, "a process the driver started outlived the driver");
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    {
+        let spawn = tools.iter().find(|tool| tool.name() == "spawn_descendant").unwrap();
+        let answer = spawn.execute(ctx, json!({})).await.unwrap();
+        let pid = answer_text(&answer);
+        assert!(process::exists(&pid), "the descendant started");
+
+        assert!(drivers.unmount("notes", "alice").await.unwrap());
+
+        let left = process::exists(&pid);
+        process::terminate(&pid);
+        assert!(!left, "a process the driver started outlived the unmount");
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = (tools, ctx, answer_text);
     drivers.shutdown().await;
+}
+
+/// Checking for and ending a process by its ID.
+#[cfg(unix)]
+mod process {
+    use std::process::{Command, Stdio};
+
+    /// Whether the process `pid` exists, a zombie included.
+    pub fn exists(pid: &str) -> bool {
+        Command::new("kill").args(["-0", pid]).stderr(Stdio::null()).status().unwrap().success()
+    }
+
+    /// Ends the process `pid`, should a test leave it running.
+    pub fn terminate(pid: &str) {
+        let _ = Command::new("kill").args(["-9", pid]).stderr(Stdio::null()).status();
+    }
 }
 
 /// Waiting for and ending a process by its ID.

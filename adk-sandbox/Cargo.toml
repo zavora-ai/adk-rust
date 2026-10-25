@@ -66,7 +66,8 @@ sandbox-macos = []       # Seatbelt via sandbox-exec (no extra deps)
 sandbox-linux = []       # Bubblewrap via bwrap binary (no extra deps)
 sandbox-windows = ["process-tree"]  # restricted-token enforcer via Win32 API (spec 3.2 §10 W5)
 
-# Job Objects that hold a process tree on Windows (spec 3.2 §10 W1); nothing elsewhere.
+# What holds a process tree (spec 3.2 §10 W1, K-I5): Job Objects on Windows, sessions and
+# process groups on Unix.
 process-tree = ["dep:windows-sys"]
 
 # Convenience: enables all platform enforcers — only the target platform's code

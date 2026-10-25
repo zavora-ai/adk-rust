@@ -66,8 +66,9 @@ pub(crate) struct LaunchPlan {
     cwd: Option<PathBuf>,
     /// How the child is isolated.
     pub(crate) isolation: DriverIsolation,
-    /// What holds the child's process tree: on Windows the Job Object `McpServerManager`
-    /// starts every stdio server in (spec 3.2 §10 W1).
+    /// What holds the child's process tree: the Job Object on Windows (spec 3.2 §10 W1), and
+    /// the process group on Unix (§7.7, K-I5), that `McpServerManager` starts every stdio
+    /// server in.
     pub(crate) process_tree: Option<DriverProcessTree>,
     /// The enforcer and policy of a sandboxed child.
     sandbox: Option<(Arc<dyn SandboxEnforcer>, SandboxPolicy)>,
@@ -699,7 +700,11 @@ mod tests {
     #[tokio::test]
     async fn the_plan_records_what_holds_the_process_tree() {
         let dir = tempfile::tempdir().unwrap();
-        let expected = if cfg!(windows) { Some(DriverProcessTree::JobObject) } else { None };
+        let expected = if cfg!(windows) {
+            Some(DriverProcessTree::JobObject)
+        } else {
+            Some(DriverProcessTree::ProcessGroup)
+        };
         for sandbox in ["unsandboxed", "os", "container"] {
             let plan = prepare(
                 &manifest(sandbox),

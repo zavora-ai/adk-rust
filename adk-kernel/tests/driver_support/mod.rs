@@ -63,7 +63,7 @@ fn text(result: impl Into<String>) -> CallToolResponse {
 
 /// Notes: a read, a send that asks first (the 2026-07-28 input-required round), a file
 /// write, an environment report, a crash, and a long-running process started in the
-/// background (Windows only).
+/// background.
 #[derive(Clone, Default)]
 pub struct Notes;
 
@@ -175,9 +175,26 @@ impl ServerHandler for Notes {
             }
             "crash" => std::process::exit(3),
             "spawn_descendant" => {
-                // Five minutes of `ping` on Windows, the platform whose tests call the tool.
-                let child = std::process::Command::new("ping")
-                    .args(["-n", "300", "127.0.0.1"])
+                // Five minutes of `ping` on Windows and of `sleep` on Unix; on Unix, with a
+                // `heartbeat` path, a shell that appends to it every 20 ms until it is ended
+                // or the write fails, as it does once the test removes the file's directory.
+                #[cfg(windows)]
+                let mut command = std::process::Command::new("ping");
+                #[cfg(windows)]
+                command.args(["-n", "300", "127.0.0.1"]);
+                #[cfg(not(windows))]
+                let heartbeat = arg("heartbeat");
+                #[cfg(not(windows))]
+                let mut command = if heartbeat.is_empty() {
+                    let mut sleep = std::process::Command::new("sleep");
+                    sleep.arg("300");
+                    sleep
+                } else {
+                    let mut shell = std::process::Command::new("/bin/sh");
+                    shell.args(["-c", "while echo . >> \"$0\"; do sleep 0.02; done", &heartbeat]);
+                    shell
+                };
+                let child = command
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())

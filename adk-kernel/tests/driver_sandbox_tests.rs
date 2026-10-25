@@ -1,7 +1,8 @@
 //! A driver started with `sandbox = "os"` cannot write outside its allowed paths (spec 3.2
 //! §7.7, K-I13): Seatbelt on macOS, bubblewrap on Linux. A driver whose program lives
 //! outside the system directories — reached through a link, or a script whose interpreter
-//! is elsewhere — starts under the sandbox and is confined the same way.
+//! is elsewhere — starts under the sandbox and is confined the same way. What a sandboxed
+//! driver starts has exited when unmounting it returns (K-I5).
 //!
 //! Where the platform has no working enforcer the tests report it and pass, unless
 //! `ADK_SANDBOX_REQUIRE_ENFORCER=1` (the `sandbox-linux` CI job) makes them fail.
@@ -12,6 +13,7 @@ mod driver_support;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use adk_core::ReadonlyContext;
 use adk_kernel::PartitionId;
@@ -161,4 +163,58 @@ async fn a_script_driver_whose_interpreter_is_outside_the_system_directories_sta
         "the interpreter's directory is opened: {isolation:?}"
     );
     assert!(opened.contains(&canonical(scripts.path())), "and the script's: {isolation:?}");
+}
+
+/// A sandboxed driver's descendants end with it (spec 3.2 §7.7, K-I5). The descendant
+/// appends to a file every 20 ms. Under Seatbelt it stays in the driver's process group, so
+/// it has exited when the unmount returns and the file stops growing then. Under bubblewrap it
+/// runs in the sandbox's own session and PID namespace, which `--die-with-parent` kills as the
+/// group ends, so it may finish exiting just after the unmount returns; the file stops
+/// growing within 100 ms.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sandboxed_drivers_descendants_have_exited_when_the_unmount_returns() {
+    if !enforcer_available() {
+        return;
+    }
+    let work = Workdir::new();
+    let drivers = DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new()))
+        .home(work.path())
+        .fail_if_sandbox_unavailable(true)
+        .build();
+    drivers.start().await.unwrap();
+    drivers.mount(work.manifest("notes", "sandbox = \"os\""), "alice").await.unwrap();
+    let ctx = RunContext::new(None, "s1", "call-1");
+    let tools = drivers
+        .toolset_for(&PartitionId::default(), &["notes".to_string()])
+        .tools(ctx.clone() as Arc<dyn ReadonlyContext>)
+        .await
+        .expect("the driver starts under the sandbox and lists its tools");
+    let isolation = drivers.record("notes").unwrap().isolation.unwrap();
+    assert!(isolation.is_sandboxed(), "the driver runs under the OS sandbox: {isolation:?}");
+
+    let heartbeat = work.path().join("heartbeat.log");
+    let beats = || std::fs::metadata(&heartbeat).map_or(0, |metadata| metadata.len());
+    let spawn = tools.iter().find(|tool| tool.name() == "spawn_descendant").unwrap();
+    let answer =
+        spawn.execute(ctx, json!({ "heartbeat": heartbeat.display().to_string() })).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while beats() < 6 && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(beats() >= 6, "the descendant writes under the sandbox: {answer}");
+
+    assert!(drivers.unmount("notes", "alice").await.unwrap());
+
+    let at_return = beats();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let settled = beats();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(beats(), settled, "a descendant of the driver outlived the unmount");
+    if matches!(&isolation, DriverIsolation::OsSandbox { enforcer, .. } if enforcer == "seatbelt") {
+        assert_eq!(
+            settled, at_return,
+            "a descendant of the driver wrote after the unmount returned"
+        );
+    }
+    drivers.shutdown().await;
 }
