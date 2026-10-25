@@ -124,7 +124,7 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 |---|---|---|
 | `sqlite` | on | `SqliteProcessStore` on the `harness.db` pool |
 | `postgres`, `redis` | off | The kernel's stores in the backend replicas share |
-| `mongodb`, `firestore`, `neo4j` | off | **Alpha**: the kernel's stores on MongoDB, Firestore or Neo4j, with the same backend of `adk-session`'s stores ([backends](backends.md)) |
+| `mongodb`, `firestore`, `neo4j` | off | The kernel's stores on MongoDB, Firestore or Neo4j, with the same backend of `adk-session`'s stores ([backends](backends.md)) |
 | `webhooks` | on | Webhook wake sources over `WebhookIngress`; `WebhookSink`, the outbound webhook sink ([event bus](events.md)) |
 | `proc` | on | The content-free activity ledger and its stores; the live aggregates' OTel GenAI histograms |
 | `proc-baselines` | off | The daily baselines and observations ([`/proc`](proc.md)) |
@@ -151,6 +151,6 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 - [Self-observation: `/proc`](proc.md): the content-free activity ledger, baselines and
   observations
 - [Kernel store backends](backends.md): every kernel store on in-memory, SQLite, PostgreSQL
-  and Redis, and on MongoDB, Firestore and Neo4j (Alpha)
+  and Redis, and on MongoDB, Firestore and Neo4j
 - [Partitions](partitions.md): one harness per partition, memory scoping, and crossings by the
   coordinator under approval

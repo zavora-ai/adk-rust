@@ -13,7 +13,7 @@ use crate::error::Result;
 const AGENDA: &str = "adk_kernel_agenda";
 
 /// An [`AgendaStore`] in MongoDB, shared by every replica (spec 3.2 §7.1, §7.5, §13 Q8,
-/// feature `mongodb`). **Alpha** until its live conformance suite passes in CI.
+/// feature `mongodb`).
 ///
 /// One `adk_kernel_agenda` document per item, `_id` its id: `partition`, `state` (its kind)
 /// and `created_us` (microseconds since the Unix epoch), the fields `list` filters and sorts

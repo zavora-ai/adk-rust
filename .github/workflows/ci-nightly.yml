@@ -9,7 +9,7 @@ name: CI Nightly
 #   • supply-chain — `cargo audit` (enforcing) + `cargo deny` (advisory) over the
 #     workspace dependency graph.
 #   • durable-stores — the store and graph checkpointer conformance suites, the
-#     kernel's Alpha store suites, and the multi-process durability gates against live
+#     kernel's store suites, and the multi-process durability gates against live
 #     PostgreSQL, Redis, MongoDB, Neo4j, and the Firestore emulator.
 #   • integration-tests — the `#[ignore]`d integration tests that hit real
 #     provider APIs, gated on the relevant secrets being configured.
@@ -219,9 +219,9 @@ jobs:
 
   # ── Durable stores: conformance suites on live backends ────────
   # Every SpendLedger, ActionLedger, and ApprovalStore backend in adk-session runs the
-  # adk-core conformance suites, and the kernel's process, agenda, driver and ledger stores
-  # run theirs on MongoDB, Neo4j and Firestore, the backends Alpha until this job passes
-  # (spec 3.2 §13 Q8). SQLite runs on every PR (feature-coverage shard 5); the
+  # adk-core conformance suites, and the kernel's process, agenda, driver, ledger, partition
+  # and cron watermark stores run theirs on MongoDB, Neo4j and Firestore (spec 3.2 §13 Q8).
+  # SQLite runs on every PR (feature-coverage shard 5); the
   # server-backed suites are #[ignore]d and run here against service containers. The
   # multi-process durability gates (adk-durability-gates) run here on every server
   # backend; their SQLite gates run on every PR in feature-coverage shard 2 (the
@@ -350,9 +350,9 @@ jobs:
         --run-ignored all --no-fail-fast
         --test store_conformance_mongodb
 
-    # The kernel's stores on the Alpha backends (spec 3.2 §7.1, §13 Q8). They need no
+    # The kernel's stores on MongoDB, Firestore and Neo4j (spec 3.2 §7.1, §13 Q8). They need no
     # multi-document transaction, so the standalone server runs the MongoDB suite as well.
-    - name: Run the kernel's Alpha store suites
+    - name: Run the kernel's MongoDB, Firestore and Neo4j store suites
       if: ${{ !cancelled() }}
       run: >-
         cargo nextest run -p adk-kernel

@@ -18,7 +18,7 @@ MERGE (g:AdkKernelCrossingGrant {key: $key}) \
 ON CREATE SET g.run = $run, g.fingerprint = $fingerprint, g.order_key = $order_key";
 
 /// A [`PartitionStore`] in Neo4j, shared by every replica (spec 3.2 §7.1, §7.8, §13 Q8,
-/// feature `neo4j`). **Alpha** until its live conformance suite passes in CI.
+/// feature `neo4j`).
 ///
 /// | Label | Key (unique) | Properties |
 /// |-------|--------------|------------|

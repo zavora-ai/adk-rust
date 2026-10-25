@@ -28,7 +28,7 @@ MATCH (a:AdkKernelAgendaItem {id: $id}) \
 SET a.partition = $partition, a.state = $state, a.created_us = $created_us, a.item = $item";
 
 /// An [`AgendaStore`] in Neo4j, shared by every replica (spec 3.2 §7.1, §7.5, §13 Q8,
-/// feature `neo4j`). **Alpha** until its live conformance suite passes in CI.
+/// feature `neo4j`).
 ///
 /// One `AdkKernelAgendaItem` node per item, unique by `id`: `partition`, `state` (its kind)
 /// and `created_us` (microseconds since the Unix epoch), the properties `list` filters and

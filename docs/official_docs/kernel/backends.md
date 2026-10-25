@@ -7,7 +7,7 @@ table with its crossing ledger, and the cron watermarks, where each cron wake so
 (spec 3.2 §7.1, §7.4, §7.8, §13 Q8). Every backend a store runs on
 passes the store's conformance suite.
 
-| Store | In-memory | SQLite (`sqlite`, default) | PostgreSQL (`postgres`) | Redis (`redis`) | MongoDB (`mongodb`, Alpha) | Firestore (`firestore`, Alpha) | Neo4j (`neo4j`, Alpha) |
+| Store | In-memory | SQLite (`sqlite`, default) | PostgreSQL (`postgres`) | Redis (`redis`) | MongoDB (`mongodb`) | Firestore (`firestore`) | Neo4j (`neo4j`) |
 |---|---|---|---|---|---|---|---|
 | `ProcessStore` | `InMemoryProcessStore` | `SqliteProcessStore` | `PostgresProcessStore` | `RedisProcessStore` | `MongoProcessStore` | `FirestoreProcessStore` | `Neo4jProcessStore` |
 | `AgendaStore` | `InMemoryAgendaStore` | `SqliteAgendaStore` | `PostgresAgendaStore` | `RedisAgendaStore` | `MongoAgendaStore` | `FirestoreAgendaStore` | `Neo4jAgendaStore` |
@@ -28,19 +28,18 @@ There is no file backend: no durable store is file-backed, and the CLI keeps its
 |---|---|---|
 | One machine, `adk-rust up` | SQLite | `harness.db` in the kernel home, on the harness's pool with a migration table per store |
 | Replicas, `adk-rust up --store` | PostgreSQL or Redis | The `--store` URL, which also holds sessions, approvals, runs, modes, standing rules and plan checkpoints |
-| A kernel built in code on MongoDB, Firestore or Neo4j | The Alpha backends | `KernelBuilder` with the stores below |
+| A kernel built in code on MongoDB, Firestore or Neo4j | MongoDB, Firestore or Neo4j | `KernelBuilder` with the stores below |
 
 `--store` takes PostgreSQL and Redis URLs only: it also keeps the harness's modes and
 standing rules, which have no MongoDB, Firestore or Neo4j backend.
 
-## Alpha backends
+## MongoDB, Firestore and Neo4j
 
-MongoDB, Firestore and Neo4j are **Alpha**: each implements the whole contract of every
-kernel store — process, agenda, driver, ledger, partition and cron watermark — and carries their
-conformance suites, but stays Alpha until those suites pass against a live server in CI, so
-its storage layout may still change in a minor release without a migration ([STABILITY.md](../../../STABILITY.md)). CI's nightly `durable-stores`
-job runs them against a MongoDB replica set and a standalone server, Neo4j 5 and the
-Firestore emulator.
+MongoDB, Firestore and Neo4j are **Beta**, as the rest of `adk-kernel`: each implements the whole
+contract of every kernel store — process, agenda, driver, ledger, partition and cron watermark —
+and passes their conformance suites against a live server in CI. CI's nightly `durable-stores` job
+runs them against a MongoDB replica set and a standalone server, Neo4j 5 and the Firestore
+emulator. Their storage layout follows the Beta contract of [STABILITY.md](../../../STABILITY.md).
 
 Each feature also turns on the same backend of `adk-session`'s run, schedule and governance
 stores, and each of those kernel stores takes the client handle those stores take, so one
@@ -126,8 +125,8 @@ bytes above only keep the example short.
 The conformance suites — `process_store_conformance_tests!`, `agenda_store_conformance_tests!`,
 `driver_store_conformance_tests!`, `ledger_store_conformance_tests!`,
 `partition_store_conformance_tests!` and `cron_watermark_store_conformance_tests!` (feature
-`conformance`) — check a backend against the contract the kernel relies on. The Alpha suites
-are `#[ignore]`d and need a server:
+`conformance`) — check a backend against the contract the kernel relies on. The MongoDB,
+Firestore and Neo4j suites are `#[ignore]`d and need a server:
 
 ```bash
 MONGODB_URL=mongodb://localhost:27017 \

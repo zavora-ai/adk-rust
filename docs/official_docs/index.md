@@ -89,7 +89,7 @@ The always-on form of the harness (`adk-kernel`, spec 3.2): durable processes th
 - [Running the Kernel as a Service](kernel/service.md) - `adk-rust up --install`, `--uninstall` and `--print`: a launchd agent, a systemd user unit or a Windows service that runs as you
 - [The Managed Form](kernel/managed.md) - One kernel per tenant on the managed runtime: `KernelDef` beside `adk.harness`, wake sets, the tenant's proactivity policy, the managed approval path, voice decisions on parked processes
 - [Self-observation: `/proc`](kernel/proc.md) - The content-free activity ledger, daily baselines and observations offered as questions, `adk-rust proc`, exporting for `cargo adk eval --ledger`
-- [Kernel Store Backends](kernel/backends.md) - The process, agenda, driver, ledger, partition and cron watermark stores on in-memory, SQLite, PostgreSQL and Redis, and on MongoDB, Firestore and Neo4j (Alpha)
+- [Kernel Store Backends](kernel/backends.md) - The process, agenda, driver, ledger, partition and cron watermark stores on in-memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore and Neo4j
 - [Partitions](kernel/partitions.md) - One harness per partition, class and tenant identity, memory scoping, crossings by the coordinator under a non-waivable approval, `kernel.partition.*` audit records
 
 ## Agent Surfaces
@@ -220,6 +220,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Agent Identity](security/agent-identity.md) - Stable agent ids on every policy decision, approval, spend record, and audit event; resource-scoped credential brokers
 - [Durable Stores](security/durable-stores.md) - Spend ledger, action ledger, and approval store backends, their conformance suite, and the no-duplicate guarantee
 - [Audit Log](security/audit-log.md) - Signed, Merkle-hashed audit log with checkpoints, key rotation, and offline verification
+- [Web Bot Auth](security/web-bot-auth.md) - Verified identity for automated clients: RFC 9421 request signatures, key directories, signer and verifier
 
 ## Compliance
 

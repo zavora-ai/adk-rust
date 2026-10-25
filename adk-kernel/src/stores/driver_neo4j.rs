@@ -10,7 +10,7 @@ use crate::drivers::{DriverPark, DriverRecord, DriverStore};
 use crate::error::Result;
 
 /// A [`DriverStore`] in Neo4j, shared by every replica (spec 3.2 §7.7, §13 Q8; features
-/// `drivers`, `neo4j`). **Alpha** until its live conformance suite passes in CI.
+/// `drivers`, `neo4j`).
 ///
 /// | Label | Key (unique) | Properties |
 /// |-------|--------------|------------|

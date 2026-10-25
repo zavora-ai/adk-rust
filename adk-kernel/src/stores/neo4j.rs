@@ -219,7 +219,7 @@ ON CREATE SET s.pid = $pid, s.partition = $partition, s.day = $day, s.micro_usd 
 SET s.micro_usd = s.micro_usd + $amount";
 
 /// A [`ProcessStore`] in Neo4j, shared by every replica (spec 3.2 §7.1, §13 Q8, feature
-/// `neo4j`). **Alpha** until its live conformance suite passes in CI.
+/// `neo4j`).
 ///
 /// | Label | Key (unique) | Properties |
 /// |-------|--------------|------------|

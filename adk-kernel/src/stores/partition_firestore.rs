@@ -40,7 +40,7 @@ struct GrantDoc {
 }
 
 /// A [`PartitionStore`] in Firestore, shared by every replica (spec 3.2 §7.1, §7.8, §13 Q8,
-/// feature `firestore`). **Alpha** until its live conformance suite passes in CI.
+/// feature `firestore`).
 ///
 /// | Collection (document ID) | Contents |
 /// |--------------------------|----------|
