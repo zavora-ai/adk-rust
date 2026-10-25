@@ -221,6 +221,25 @@ store write — `rest` for the REST routes, `cli` for `adk-rust rules add` and `
 | `HarnessAgent::grant_rule(rule, surface, from)` | Stores the rule after its `harness.rule.created` record |
 | `HarnessAgent::revoke_rule(app, user, id, surface)` | Revokes one of `user`'s rules after its `harness.rule.revoked` record; `None` for a rule `user` does not own |
 
+## Agents a person adds
+
+On the always-on kernel a person adds agents of their own beside the primary agent (spec 3.3
+§5.7, §10 H3). The harness builds each one, suggests them, and keeps their threads and rules
+apart:
+
+| Item | What it does |
+|---|---|
+| `propose_agent` | Class `Todo`, on a harness given `HarnessAgentBuilder::agents_handle`: the primary agent only. It suggests an agent by name, what it does and its instructions, optionally its mode, what it can use and its model, in its own area. The suggestion's instructions are screened and redacted, and anything over the suggesting agent's own limits — a looser mode, a shell on this computer, payments, computer use, a pack, site, folder or driver it lacks, another area — is refused in plain words. It answers "Suggested; waiting for the person": only a person adds the agent |
+| `suggester_ceiling`, `Harness::agent_ceiling` | The suggesting agent's limits now: the session's mode, its file tools, its shell (sandboxed or on this computer), its web tools, its packs and the drivers mounted for its area |
+| `assess_agent` | The risk table of §5.7, money for the payments and computer-use packs, and the abilities as plain sentences |
+| `HarnessAgentBuilder::added_agent(&record)` | The harness of an added agent: its id as its name, its description and instructions, the stricter of its mode and its area's, no members, goals or `propose_agent`; the workspace narrowed to its folder and a deny layer for the files, shell and web its definition does not give |
+| `HarnessAgentBuilder::hosted_beside(&primary)` | Shares the primary agent's approval service and agenda handle, so its decisions wake the kernel and its follow-ups go on the kernel's agenda |
+| `HarnessAgentBuilder::session_stamp(target)`, `AGENT_STATE_KEY` | Stamps a session `harness:agent` on the harness's first run of it; every other agent refuses it with `harness.agent_session` |
+| `PinnedOnlyRules`, `RuleSuggestion::into_pinned_rule`, `copy_rule_to` | An added agent applies only rules whose agent is exactly its own id — never `None` or a glob — and a rule granted through it is pinned to it; a person copies one of their rules to it |
+
+An added agent's instructions shape what it says and tries, never what it may do: its mode,
+tools and rules are code. See [Your Agents](../surfaces/agents.md).
+
 ## Related
 
 - [Configuration](configuration.md): every builder option with its default.
