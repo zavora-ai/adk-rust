@@ -389,6 +389,12 @@ pub(crate) struct App {
     runs: u64,
     /// Rows scrolled down in a view other than the thread.
     pub view_scroll: usize,
+    /// The rows one page of a view other than the thread shows, as drawn last: PageDown moves
+    /// by it, so no row is skipped.
+    pub view_page: usize,
+    /// Inline: every view is printed into the scrollback above the box printed last, so the
+    /// box's keys answer it whatever view was printed (spec 3.3 §5.2).
+    pub inline: bool,
     /// The Agents view (spec 3.3 §5.7).
     pub agents_pane: super::agents::AgentsPane,
     /// An added agent with no thread yet, and the new session opened for it once open: the
@@ -446,6 +452,8 @@ impl App {
             output: None,
             runs: 0,
             view_scroll: 0,
+            view_page: PAGE,
+            inline: false,
             agents_pane: super::agents::AgentsPane::default(),
             fresh: None,
             quit: false,
@@ -523,13 +531,20 @@ impl App {
             _ => now,
         };
         self.input == Input::Message
-            && self.view == View::Thread
+            && self.thread_shown()
             && self.composer.is_empty()
             && !self.typing
             && !self.box_hidden
             && !self.awaits_answer(now)
             && now.saturating_duration_since(focused) >= ARM_DELAY
             && self.last_typed.is_none_or(|at| now.saturating_duration_since(at) >= ARM_DELAY)
+    }
+
+    /// Whether the person sees the thread and the box the keys answer: the full screen shows
+    /// one view at a time; inline prints each view into the scrollback, above the box printed
+    /// last, except the Agents view, whose keys are its own.
+    fn thread_shown(&self) -> bool {
+        self.view == View::Thread || (self.inline && self.view != View::Agents)
     }
 
     /// An answer given by key is on its way: the keys wait for its outcome.
@@ -1047,15 +1062,19 @@ impl App {
             // An edit or a reason belongs to its decision: Tab never carries it to another
             // agent's thread.
             (KeyCode::Tab | KeyCode::BackTab, _) if self.input != Input::Message => Vec::new(),
+            // Nor does a command being typed, its arguments included (spec 3.3 §5.2).
+            (KeyCode::Tab | KeyCode::BackTab, _) if self.composer.text.starts_with('/') => {
+                Vec::new()
+            }
             (KeyCode::Tab, _) => self.next_agent(1),
             (KeyCode::BackTab, _) => self.next_agent(-1),
             // Help, Today and a command's output scroll by a page.
             (KeyCode::PageUp, _) if self.view != View::Thread => {
-                self.view_scroll = self.view_scroll.saturating_sub(PAGE);
+                self.view_scroll = self.view_scroll.saturating_sub(self.view_page.max(1));
                 Vec::new()
             }
             (KeyCode::PageDown, _) if self.view != View::Thread => {
-                self.view_scroll = self.view_scroll.saturating_add(PAGE);
+                self.view_scroll = self.view_scroll.saturating_add(self.view_page.max(1));
                 Vec::new()
             }
             // Within a box whose call shows a window at a time, the keys move the window by
@@ -1287,7 +1306,7 @@ impl App {
     fn box_waits(&self, now: Instant) -> bool {
         !self.cards.is_empty()
             && self.input == Input::Message
-            && self.view == View::Thread
+            && self.thread_shown()
             && self.composer.is_empty()
             && !self.typing
             && self.last_typed.is_none_or(|at| now.saturating_duration_since(at) >= ARM_DELAY)
@@ -1316,19 +1335,25 @@ impl App {
         if now.saturating_duration_since(at) >= CLOSE_HOLD
             || !self.composer.is_empty()
             || self.input != Input::Message
-            || self.view != View::Thread
+            || !self.thread_shown()
             || self.typing
         {
             return None;
         }
         if !self.closed_said {
-            let place = self
-                .decided
-                .iter()
-                .find(|line| line.id == id)
-                .and_then(|line| line.place.clone())
-                .unwrap_or_else(|| "somewhere else".to_string());
-            self.notice(format!("Already answered {place}."), Tone::Decided);
+            // A decision also closes with no answer: cancelled, expired, or its agent removed
+            // (S-I16); only an answer is said to be one.
+            let text = match self.decided.iter().find(|line| line.id == id) {
+                Some(line) if line.answer == DecidedAnswer::Ended => {
+                    format!("{}.", words::ENDED_WITHOUT_AN_ANSWER)
+                }
+                Some(line) => format!(
+                    "Already answered {}.",
+                    line.place.as_deref().unwrap_or("somewhere else")
+                ),
+                None => "No longer waiting for you.".to_string(),
+            };
+            self.notice(text, Tone::Decided);
         }
         // `n` opens a reason as it would have, so the reason typed next goes nowhere instead
         // of into a message; Enter then says it was not sent.

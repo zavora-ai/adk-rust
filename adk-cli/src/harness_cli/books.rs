@@ -5,15 +5,20 @@
 
 use std::sync::Arc;
 
+use adk_core::AdkError;
+#[cfg(feature = "persist")]
 use adk_core::principal::SubjectRef;
-use adk_core::{AdkError, ErrorCategory, ErrorComponent, UserId};
-use adk_harness::{
-    FactSource, FactStatus, FactStore, HarnessMode, MemoryFact, ModeRecord, ModeSource, ModeStore,
-};
-use adk_kernel::control::{
-    ControlStore, FactOrigin, MemoryBook, RememberedFact, TidyUp, TidyUpUndo,
-};
-use adk_kernel::{KernelError, PartitionId, PartitionMode};
+#[cfg(feature = "persist")]
+use adk_core::{ErrorCategory, ErrorComponent, UserId};
+#[cfg(feature = "persist")]
+use adk_harness::{FactSource, FactStatus, FactStore, MemoryFact};
+use adk_harness::{HarnessMode, ModeRecord, ModeSource, ModeStore};
+#[cfg(any(feature = "persist", feature = "audit"))]
+use adk_kernel::KernelError;
+use adk_kernel::control::ControlStore;
+#[cfg(feature = "persist")]
+use adk_kernel::control::{FactOrigin, MemoryBook, RememberedFact, TidyUp, TidyUpUndo};
+use adk_kernel::{PartitionId, PartitionMode};
 use async_trait::async_trait;
 
 use super::APP_NAME;
@@ -110,11 +115,14 @@ impl ModeStore for AreaModeStore {
 
 /// The memory of each area's harness, read and corrected through the harness, so recall,
 /// the index and the harness's own audit records follow every correction (spec 3.3 §10 K5).
+/// Built over `harness.db`'s fact store (feature `persist`).
+#[cfg(feature = "persist")]
 pub(super) struct HarnessMemoryBook {
     areas: Vec<(PartitionId, Arc<adk_harness::Harness>)>,
     store: Arc<dyn FactStore>,
 }
 
+#[cfg(feature = "persist")]
 impl HarnessMemoryBook {
     /// The book over `areas`' harnesses, whose facts and tidy-ups `store` keeps.
     pub(super) fn new(
@@ -126,6 +134,7 @@ impl HarnessMemoryBook {
 }
 
 /// The error a fact no area's harness holds answers with.
+#[cfg(feature = "persist")]
 fn no_fact(id: &str) -> KernelError {
     KernelError::Core(AdkError::new(
         ErrorComponent::Agent,
@@ -136,6 +145,7 @@ fn no_fact(id: &str) -> KernelError {
 }
 
 /// The caller as the harness names users.
+#[cfg(feature = "persist")]
 fn user_id(user: &str) -> adk_kernel::Result<UserId> {
     UserId::new(user).map_err(|error| {
         KernelError::Core(AdkError::new(
@@ -148,11 +158,13 @@ fn user_id(user: &str) -> adk_kernel::Result<UserId> {
 }
 
 /// Whether `error` says the harness holds no such fact of the user.
+#[cfg(feature = "persist")]
 fn not_held(error: &AdkError) -> bool {
     error.code == "harness.memory.fact_not_found"
 }
 
 /// A fact as the home shows it.
+#[cfg(feature = "persist")]
 fn remembered(fact: MemoryFact, area: &PartitionId) -> RememberedFact {
     let origin = match (&fact.status, fact.provenance.source) {
         (FactStatus::Known, FactSource::UserStated) => FactOrigin::YouSaidThis,
@@ -173,6 +185,7 @@ fn remembered(fact: MemoryFact, area: &PartitionId) -> RememberedFact {
     }
 }
 
+#[cfg(feature = "persist")]
 #[async_trait]
 impl MemoryBook for HarnessMemoryBook {
     async fn facts(
@@ -416,16 +429,19 @@ impl adk_kernel::control::RecordBook for SignedRecordBook {
 
 #[cfg(test)]
 mod tests {
+    use adk_harness::InMemoryModeStore;
+    #[cfg(feature = "persist")]
     use adk_harness::{
-        ConsolidationRecord, FactKind, FactScope, InMemoryFactStore, InMemoryModeStore,
-        InstructionsConfig, Provenance,
+        ConsolidationRecord, FactKind, FactScope, InMemoryFactStore, InstructionsConfig, Provenance,
     };
     use adk_kernel::control::{AreaSettings, Change, InMemoryControlStore};
+    #[cfg(feature = "persist")]
     use adk_model::{ScriptedLlm, ScriptedResponse};
 
     use super::*;
 
     /// A harness with long-term memory in `store`, over a fresh workspace.
+    #[cfg(feature = "persist")]
     fn harness(store: Arc<InMemoryFactStore>) -> (tempfile::TempDir, Arc<adk_harness::Harness>) {
         let dir = tempfile::tempdir().unwrap();
         let model = Arc::new(ScriptedLlm::new("m", Vec::<ScriptedResponse>::new()));
@@ -453,6 +469,7 @@ mod tests {
         (dir, Arc::new(adk_harness::Harness::with_runner(agent, runner).unwrap()))
     }
 
+    #[cfg(feature = "persist")]
     fn fact(
         dir: &tempfile::TempDir,
         text: &str,
@@ -471,6 +488,7 @@ mod tests {
 
     /// The book lists the person's live facts in the home's words, and confirms, fixes and
     /// forgets them through the harness that holds them (spec 3.3 §10 K5).
+    #[cfg(feature = "persist")]
     #[tokio::test]
     async fn the_memory_book_shows_provenance_and_corrects_through_the_harness() {
         let store = Arc::new(InMemoryFactStore::new());
@@ -533,6 +551,7 @@ mod tests {
 
     /// Tidy-ups come from the fact store's consolidation records, and undo reverts one
     /// (spec 3.2 §7.5, spec 3.3 §8.2 "Undo").
+    #[cfg(feature = "persist")]
     #[tokio::test]
     async fn the_memory_book_lists_and_undoes_tidy_ups() {
         let store = Arc::new(InMemoryFactStore::new());
@@ -668,6 +687,7 @@ mod tests {
         use adk_core::audit_log::{
             AuditActor, AuditLogStore, AuditRecordDraft, AuditRecordKind, InMemoryAuditLogStore,
         };
+        use adk_core::principal::SubjectRef;
         use adk_kernel::control::RecordBook;
 
         let logs: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
@@ -707,6 +727,7 @@ mod tests {
             AuditActor, AuditDecision, AuditLogStore, AuditRecordDraft, AuditRecordKind,
             InMemoryAuditLogStore,
         };
+        use adk_core::principal::SubjectRef;
         use adk_kernel::control::RecordBook;
 
         let logs: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());

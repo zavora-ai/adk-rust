@@ -818,6 +818,8 @@ fn draw(app: &mut App, cols: u16, rows: u16, now: Instant) -> Vec<String> {
     let mut view = None;
     terminal.draw(|frame| view = renderer.draw(frame, app, now)).unwrap();
     app.set_box_view(view, now);
+    app.view_scroll = app.view_scroll.min(renderer.view_max_scroll);
+    app.view_page = renderer.view_page;
     let buffer = terminal.backend().buffer().clone();
     (0..rows)
         .map(|y| (0..cols).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
@@ -1134,7 +1136,7 @@ fn a_key_just_after_a_close_elsewhere_never_becomes_a_message() {
     effects.extend(app.key(key(KeyCode::Enter), armed + ms(150)));
     assert!(effects.is_empty(), "{effects:?}");
     assert!(app.composer.is_empty(), "{:?}", app.composer.text);
-    assert!(notices(&app).contains("Already answered somewhere else."), "{}", notices(&app));
+    assert!(notices(&app).contains("No longer waiting for you."), "{}", notices(&app));
 
     let mut app = app_with(vec![invoice()], shown);
     app.update(frame(FeedFrame::Decisions { cards: vec![] }), armed);
@@ -2291,4 +2293,134 @@ fn agents_view_keys_never_answer_a_decision() {
         app.agents_pane.pane = super::agents::Pane::List;
     }
     assert!(!decides(&app.key(key(KeyCode::Enter), later)));
+}
+
+/// Wave 3 review finding 12: Tab completes a command's name and then does nothing while the
+/// command, its arguments included, is in the message box; it never moves to another agent's
+/// thread with the command (spec 3.3 §5.2).
+#[test]
+fn tab_never_moves_threads_while_a_command_with_arguments_is_typed() {
+    let now = Instant::now();
+    let mut app = app_with_commands();
+    let rows = ["s1", "s2"].map(|session| AgentRow {
+        agent: agent(session),
+        status: AgentStatus::Working,
+        status_text: "Working".into(),
+        wake_at: None,
+        session_id: Some(session.into()),
+        area: None,
+        mode: None,
+        added: false,
+        can_change: false,
+    });
+    app.update(Update::Agents(rows.to_vec()), now);
+    type_text(&mut app, "/todo", now);
+    app.key(key(KeyCode::Tab), now);
+    assert_eq!(app.composer.text, "/todos ");
+    assert!(app.key(key(KeyCode::Tab), now).is_empty(), "a second Tab after the name");
+    assert!(app.key(key(KeyCode::BackTab), now).is_empty());
+    assert_eq!(app.session, SESSION, "the command stays in its thread");
+    type_text(&mut app, "rm 2", now);
+    assert!(app.key(key(KeyCode::Tab), now).is_empty());
+    assert_eq!(app.session, SESSION);
+    app.key(ctrl('u'), now);
+    assert!(!app.key(key(KeyCode::Tab), now).is_empty(), "with a message box free of a command");
+}
+
+/// Wave 3 review finding 13: PageDown in a command's output moves by the rows a page shows,
+/// so on a pane of fewer than eleven rows (a 60 by 16 terminal with queued messages) no row
+/// is skipped.
+#[test]
+fn page_down_reads_every_row_of_a_long_output_on_a_short_pane() {
+    let now = Instant::now();
+    let mut app = app_with_commands();
+    type_text(&mut app, "/rules", now);
+    app.key(key(KeyCode::Enter), now);
+    let text: Vec<String> = (1..=25).map(|n| format!("rule {n:02}")).collect();
+    app.update(Update::CommandDone { serial: 1, result: Ok(text.join("\n")) }, now);
+    let mut seen = std::collections::BTreeSet::new();
+    for _ in 0..10 {
+        let rows = draw(&mut app, 60, 14, now);
+        for n in 1..=25 {
+            if rows.iter().any(|row| row.contains(&format!("rule {n:02}"))) {
+                seen.insert(n);
+            }
+        }
+        app.key(key(KeyCode::PageDown), now);
+    }
+    let missed: Vec<u32> = (1..=25).filter(|n| !seen.contains(n)).collect();
+    assert!(missed.is_empty(), "rows never shown: {missed:?}");
+}
+
+/// Wave 3 review finding 14: inline, a command's output is printed into the scrollback above
+/// the box printed last, so the box's keys answer it as they do in the thread; a key meant for
+/// the box never becomes a message.
+#[test]
+fn inline_a_decision_key_answers_the_box_printed_after_a_commands_output() {
+    let shown = Instant::now();
+    let armed = shown + ARM_DELAY * 2;
+    let mut app = app_with(vec![invoice()], shown);
+    app.inline = true;
+    app.commands = repl_commands();
+    type_text(&mut app, "/todos", armed);
+    app.key(key(KeyCode::Enter), armed);
+    assert_eq!(app.view, View::Output);
+    let later = armed + ARM_DELAY * 2;
+    let effects = app.key(key(KeyCode::Char('y')), later);
+    assert!(decide_of(&effects).is_some(), "{effects:?}");
+    assert!(app.composer.is_empty(), "{:?}", app.composer.text);
+}
+
+/// Wave 3 review finding 15: a decision that ended without an answer — cancelled, expired,
+/// or its agent removed — is never said to have been answered.
+#[test]
+fn a_key_after_a_decision_ended_without_an_answer_says_so() {
+    let shown = Instant::now();
+    let armed = shown + ARM_DELAY * 2;
+    let mut app = app_with(vec![invoice()], shown);
+    app.update(frame(FeedFrame::Decisions { cards: vec![] }), armed);
+    let mut ended = invoice();
+    ended.decided = Some(crate::model::Decided {
+        by: String::new(),
+        by_you: false,
+        answer: crate::model::DecidedAnswer::Ended,
+        text: crate::words::ENDED_WITHOUT_AN_ANSWER.into(),
+        ..decided_by_you()
+    });
+    ended.status = CardStatus::Decided;
+    app.update(Update::Decided { generation: 0, card: Box::new(ended) }, armed + ms(10));
+    let effects = app.key(key(KeyCode::Char('y')), armed + ms(100));
+    assert!(effects.is_empty(), "{effects:?}");
+    assert!(app.composer.is_empty());
+    assert!(notices(&app).contains("Ended without an answer."), "{}", notices(&app));
+    assert!(!notices(&app).contains("Already answered"), "{}", notices(&app));
+}
+
+/// Wave 3 review findings 16 and 17: a decision the kernel asks shows the engine's summary —
+/// who suggests it and when it runs — in the full screen and inline, as the home does
+/// (spec 3.3 §7.1, §8.1).
+#[test]
+fn a_kernel_asked_decision_shows_its_summary() {
+    let shown = Instant::now();
+    let mut agenda = card(
+        "apr_agenda",
+        "kernel:agenda",
+        json!({ "id": "01J", "partition": "default", "when": { "cron": "*/5 * * * *" } }),
+    );
+    agenda.heading = "Check the invoices".into();
+    agenda.summary =
+        Some("Finance suggests this. Once you say yes, it runs every 5 minutes.".into());
+    let mut app = app_with(vec![agenda], shown);
+    let rows = draw(&mut app, 150, 40, shown + ARM_DELAY * 2);
+    let summary = row_of(&rows, "Finance suggests this.").expect("the summary is drawn");
+    let heading = row_of(&rows, "Check the invoices").unwrap();
+    let tool = row_of(&rows, "kernel:agenda").unwrap();
+    assert!(heading < summary && summary < tool, "{rows:#?}");
+    assert!(rows[summary].contains("it runs every 5 minutes."), "{}", rows[summary]);
+
+    let mut printer =
+        Printer::new(Vec::new(), Theme::new(Appearance::Dark, false), false, false).with_width(90);
+    printer.sync(&app, shown).unwrap();
+    let printed = String::from_utf8(printer.into_inner()).unwrap();
+    assert!(printed.contains("Finance suggests this."), "{printed}");
 }

@@ -11,6 +11,7 @@ use adk_harness::{
     OriginPin, PLAN_STATE_KEY, RuleScope, SkillsConfig, StandingDecision, StandingRule,
     TODOS_STATE_KEY, escape_control,
 };
+use adk_session::{CreateRequest, GetRequest};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -148,7 +149,8 @@ impl HarnessCommands {
     }
 
     /// Whether `/name args` changes something — the mode, a rule, the memory, the shell, the
-    /// effort — rather than reads: a kernel refuses it while everything is stopped.
+    /// effort — rather than reads: while everything is stopped, a kernel refuses it unless it
+    /// [`tightens`](Self::tightens).
     ///
     /// # Example
     ///
@@ -163,6 +165,54 @@ impl HarnessCommands {
             .iter()
             .find(|(_, known, _)| *known == name)
             .is_some_and(|(kind, _, _)| kind.changes(args))
+    }
+
+    /// Whether `/name args`, run for `user` in `session`, only makes the agents do less:
+    /// `/rules rm`, `/memory forget`, `/sandbox on`, or a `/mode` stricter than the session's.
+    /// A kernel runs it while everything is stopped, so a person can clean up before Resume
+    /// all (spec 3.3 §5.2, S-I10).
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-input error for an empty user or session, or the mode store's error.
+    pub async fn tightens(
+        &self,
+        name: &str,
+        args: &str,
+        user: &str,
+        session: &str,
+    ) -> Result<bool> {
+        let Some((kind, _, _)) = COMMANDS.iter().find(|(_, known, _)| *known == name) else {
+            return Ok(false);
+        };
+        let first = args.split_whitespace().next();
+        Ok(match kind {
+            Kind::Rules => first == Some("rm"),
+            Kind::Memory => first == Some("forget"),
+            Kind::Sandbox => first == Some("on"),
+            Kind::Mode => match requested_mode(args) {
+                Some(requested) => {
+                    let current =
+                        self.harness.mode(&UserId::new(user)?, &SessionId::new(session)?).await?;
+                    ModeChange::between(current, requested) == ModeChange::Tighten
+                }
+                None => false,
+            },
+            Kind::Effort | Kind::Web | Kind::Todos | Kind::Approvals | Kind::Plan => false,
+            Kind::Cost | Kind::Team | Kind::Session | Kind::Skills | Kind::Mcp => false,
+            Kind::Hooks | Kind::Agent => false,
+        })
+    }
+
+    /// The mode of `user`'s `session`, as the harness names it: `read_only`, `plan`, `ask` or
+    /// `auto`, the default for a session with no mode of its own (spec 3.3 §5.2).
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-input error for an empty user or session, or the mode store's error.
+    pub async fn session_mode(&self, user: &str, session: &str) -> Result<String> {
+        let mode = self.harness.mode(&UserId::new(user)?, &SessionId::new(session)?).await?;
+        Ok(mode.as_str().to_string())
     }
 
     /// Runs `/name args` for `user` in `session` by the REPL's code; returns what it shows,
@@ -376,15 +426,44 @@ async fn mode(shared: &Shared, args: &str) -> Result<String> {
              calls held in this session"
         ));
     }
-    let requested: HarnessMode = match args.trim() {
-        "read-only" | "readonly" => HarnessMode::ReadOnly,
-        "plan" => HarnessMode::Plan,
-        "ask" => HarnessMode::Ask,
-        "auto" => HarnessMode::Auto,
-        other => return Ok(format!("unknown mode '{other}'; use read-only, plan, ask or auto")),
+    let Some(requested) = requested_mode(args) else {
+        let other = args.trim();
+        return Ok(format!("unknown mode '{other}'; use read-only, plan, ask or auto"));
     };
     if requested == current {
         return Ok(format!("mode: {current} (unchanged)"));
+    }
+    // A thread with no message yet takes a mode too: its session is opened for the caller,
+    // as its first message would (spec 3.3 §5.2).
+    let opened = shared
+        .sessions
+        .get(GetRequest {
+            app_name: shared.app_name.clone(),
+            user_id: shared.user.to_string(),
+            session_id: shared.session.to_string(),
+            num_recent_events: Some(1),
+            after: None,
+        })
+        .await;
+    match opened {
+        Ok(_) => {}
+        Err(error) if error.is_not_found() => {
+            let created = shared
+                .sessions
+                .create(CreateRequest {
+                    app_name: shared.app_name.clone(),
+                    user_id: shared.user.to_string(),
+                    session_id: Some(shared.session.to_string()),
+                    state: Default::default(),
+                })
+                .await;
+            match created {
+                Ok(_) => {}
+                Err(error) if error.category == adk_core::ErrorCategory::Conflict => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(error) => return Err(error),
     }
     harness.set_mode(&shared.user, &shared.session, requested).await?;
     Ok(match ModeChange::between(current, requested) {
@@ -393,6 +472,17 @@ async fn mode(shared: &Shared, args: &str) -> Result<String> {
         }
         _ => format!("mode: {requested} (was {current})"),
     })
+}
+
+/// The mode `/mode` names: the harness's words.
+fn requested_mode(args: &str) -> Option<HarnessMode> {
+    match args.trim() {
+        "read-only" | "readonly" => Some(HarnessMode::ReadOnly),
+        "plan" => Some(HarnessMode::Plan),
+        "ask" => Some(HarnessMode::Ask),
+        "auto" => Some(HarnessMode::Auto),
+        _ => None,
+    }
 }
 
 fn sandbox(shared: &Shared, args: &str) -> Result<String> {

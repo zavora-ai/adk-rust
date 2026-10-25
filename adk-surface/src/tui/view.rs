@@ -80,6 +80,8 @@ pub(crate) struct Renderer {
     markdown: HashMap<(u64, usize, usize), (String, Vec<Line<'static>>)>,
     /// How far the view other than the thread drawn last can scroll.
     pub view_max_scroll: usize,
+    /// The rows of one page of that view: all but the last, which says how much more there is.
+    pub view_page: usize,
 }
 
 /// One row of a decision box: its spans and its background.
@@ -115,7 +117,7 @@ pub(crate) struct FocusedBox {
 
 impl Renderer {
     pub(crate) fn new(theme: Theme) -> Self {
-        Self { theme, markdown: HashMap::new(), view_max_scroll: 0 }
+        Self { theme, markdown: HashMap::new(), view_max_scroll: 0, view_page: 1 }
     }
 
     // -----------------------------------------------------------------------
@@ -604,6 +606,14 @@ impl Renderer {
             }
             heading.push((vec![Span::styled(right, t.accent())], strong));
         }
+        // What the heading alone does not say, for a decision the kernel itself asks: who
+        // suggests the work and when it runs once allowed (spec 3.3 §7.1, §8.1).
+        let mut summary: Vec<Row> = Vec::new();
+        if let Some(text) = &card.summary {
+            for line in wrap_spans(vec![Span::styled(safe_line(text), t.text())], inner, 0) {
+                summary.push((line.spans, body));
+            }
+        }
         let agent: Row = (
             vec![Span::styled(
                 format!("{} · {}", safe_line(&card.agent.display_name), card.since_text),
@@ -703,6 +713,7 @@ impl Renderer {
             [0, 1, 2, 3, 4, 5, 6];
         let others = |keep: &[bool; 7]| {
             2 + heading.len()
+                + summary.len()
                 + 1
                 + note.len()
                 + key_rows.len()
@@ -739,6 +750,7 @@ impl Renderer {
 
         let mut rows: Vec<Row> = Vec::new();
         rows.extend(heading);
+        rows.extend(summary);
         if keep[blank_head] {
             rows.push(blank.clone());
         }
@@ -1289,6 +1301,7 @@ impl Renderer {
             // how much more there is.
             let max = lines.len().saturating_sub(height);
             self.view_max_scroll = max;
+            self.view_page = height.saturating_sub(1).max(1);
             let from = app.view_scroll.min(max);
             let below = lines.len().saturating_sub(from + height);
             let mut shown: Vec<Line<'static>> = lines.into_iter().skip(from).take(height).collect();

@@ -190,12 +190,17 @@ pub async fn run(
             {
                 source = source.with_daily_limit(limit);
             }
-            let engine = SurfaceEngine::builder(Arc::new(source))
+            let (commands, notices, operator) = kernel_commands(&source_client).await;
+            let trail = source.audit_trail();
+            let mut engine = SurfaceEngine::builder(Arc::new(source))
                 .agent_name(APP_NAME, APP_NAME)
-                .answers(answers)
-                .build();
-            let (commands, notices) = kernel_commands(&source_client).await;
-            (engine, place, None, local, session, notices, None, commands)
+                .answers(answers);
+            // Every answer and stop, with the surface and how it was given, on the kernel's
+            // signed log (spec 3.3 §11); a paired device's answers the kernel records itself.
+            if operator {
+                engine = engine.audit(trail);
+            }
+            (engine.build(), place, None, local, session, notices, None, commands)
         }
         Reach::InProcess => {
             let model = model.context("the harness in this process needs a model")?;
@@ -277,9 +282,11 @@ pub async fn run(
 }
 
 /// The REPL's slash commands the kernel serves, each run there in the thread the terminal
-/// shows (spec 3.3 §5.2), and what the terminal says when it has none: a paired device's
-/// token reaches none of them.
-async fn kernel_commands(client: &ControlClient) -> (Vec<Arc<dyn TerminalCommand>>, Vec<String>) {
+/// shows (spec 3.3 §5.2), what the terminal says when it has none, and whether the kernel
+/// admits the terminal as the operator: a paired device's token reaches none of them.
+async fn kernel_commands(
+    client: &ControlClient,
+) -> (Vec<Arc<dyn TerminalCommand>>, Vec<String>, bool) {
     match client.commands().await {
         Ok(listed) => {
             let commands = listed
@@ -289,7 +296,7 @@ async fn kernel_commands(client: &ControlClient) -> (Vec<Arc<dyn TerminalCommand
                         as Arc<dyn TerminalCommand>
                 })
                 .collect();
-            (commands, Vec::new())
+            (commands, Vec::new(), true)
         }
         Err(error)
             if matches!(
@@ -297,16 +304,20 @@ async fn kernel_commands(client: &ControlClient) -> (Vec<Arc<dyn TerminalCommand
                 adk_core::ErrorCategory::Forbidden | adk_core::ErrorCategory::Unauthorized
             ) =>
         {
-            let notice = "The REPL's commands (/todos, /rules, /memory, ...) run only on the                           kernel's own machine or with its operator token; this paired terminal                           has the terminal's own."
-                .to_string();
-            (Vec::new(), vec![notice])
+            (Vec::new(), vec![PAIRED_TERMINAL.to_string()], false)
         }
         Err(error) => {
             tracing::debug!(error = %error, "the kernel offers no commands");
-            (Vec::new(), Vec::new())
+            (Vec::new(), Vec::new(), true)
         }
     }
 }
+
+/// What a terminal paired as a device says as it starts: the REPL's commands are the kernel
+/// operator's (spec 3.3 §5.2).
+const PAIRED_TERMINAL: &str = "The REPL's commands (/todos, /rules, /memory, ...) run only on \
+                               the kernel's own machine or with its operator token; this paired \
+                               terminal has the terminal's own.";
 
 /// One of the REPL's commands, run on the kernel the terminal is attached to.
 struct KernelCommand {
@@ -704,6 +715,14 @@ mod tests {
 
         assert!(!terminal_caller("ana".into(), false).paired_local);
         assert!(terminal_caller("ana".into(), true).paired_local);
+    }
+
+    /// The paired terminal's notice reads as one sentence, with no run of spaces from a lost
+    /// line continuation (wave 3 review).
+    #[test]
+    fn the_paired_terminals_notice_is_one_sentence() {
+        assert!(!PAIRED_TERMINAL.contains("  "), "{PAIRED_TERMINAL}");
+        assert!(PAIRED_TERMINAL.ends_with("this paired terminal has the terminal's own."));
     }
 
     /// `--output json` ends with 4 against the daily spending limit in force, as the kernel

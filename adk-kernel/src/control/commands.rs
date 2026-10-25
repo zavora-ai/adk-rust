@@ -13,11 +13,27 @@
 //! | `POST /kernel/commands/run` | the person, no device | Runs one in the caller's session ([`RunCommandRequest`] → [`RunCommandResponse`]); one that changes something is refused while everything is stopped |
 //! | `GET /kernel/rules/always-allow/{id}` | the person, no device | What "Always allow" creates for the caller's waiting decision `id` ([`AlwaysAllowResponse`]); `404` when no standing rule applies |
 //! | `POST /kernel/rules/always-allow/{id}/prepare` | the person, no device | Prepares that rule, before the decision is answered |
-//! | `POST /kernel/rules/always-allow/{id}/grant` | the person, no device | Grants the prepared rule, once the decision was allowed |
+//! | `POST /kernel/rules/always-allow/{id}/grant` | the person, no device | Grants the prepared rule, once the caller's own yes was recorded |
+//! | `GET /kernel/sessions/{session}/mode` | the person, no device | The mode of the caller's session ([`SessionModeResponse`]), read without a record; `404` when the host keeps no modes |
+//! | `POST /kernel/surface/records` | the person, no device | Writes one record of a surface engine attached to the kernel ([`SurfaceRecord`]) on the kernel's signed log |
 //!
 //! "Always allow" takes two steps because the rule is made from the held call, which the
 //! answer clears, and is granted only once the answer was recorded: an answer that loses to
-//! one given elsewhere grants nothing, as in process.
+//! one given elsewhere grants nothing, as in process. The routes never make a standing rule
+//! of a high-risk call, and grant one only when the decision's last answer is the caller's
+//! own "Allow once": an edit, or someone else's yes, grants nothing (spec 3.3 §7.2).
+//!
+//! While everything is stopped, a command that lets the agents do more is refused with
+//! `409 kernel.frozen`; one that only makes them do less — the host says which
+//! ([`CommandHost::tightens`]) — still runs, so a rule can be revoked or a fact forgotten
+//! before Resume all (S-I10).
+//!
+//! A surface engine in another process, such as a terminal attached to the kernel, writes
+//! its records — every answer with the surface and how it was given, Stop all, Resume all,
+//! a mode change, a message sent — through `POST /kernel/surface/records`, so they reach the
+//! same signed log as the home's (spec 3.3 §11). The kernel names the caller as the record's
+//! actor and the transport it came over, whatever the record says; only `surface.*` actions
+//! are written, and an answer's record only for the caller's own decision.
 //!
 //! A paired device's token is refused with `403`: commands and standing rules change what
 //! the agents may do, which only the person at the kernel's socket, pipe or loopback, or
@@ -29,10 +45,15 @@
 //! the command and how the caller reached the kernel, so a command can decide what it allows
 //! by it.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use adk_core::audit_log::{AuditActor, AuditDecision, AuditRecordDraft, AuditRecordKind};
 use adk_core::principal::SubjectRef;
-use adk_core::{AdkError, ApprovalRequest, ApprovalState, ErrorCategory, ErrorComponent};
+use adk_core::{
+    AdkError, ApprovalAction, ApprovalRequest, ApprovalRisk, ApprovalState, ErrorCategory,
+    ErrorComponent,
+};
 use async_trait::async_trait;
 use axum::Json;
 use axum::Router;
@@ -219,6 +240,86 @@ pub struct AlwaysAllowResponse {
     pub label: String,
 }
 
+/// `GET /kernel/sessions/{session}/mode` answer: the mode of the caller's session, so a
+/// terminal attached to the kernel shows the mode in force and knows whether a change
+/// loosens it (spec 3.3 §5.2, §8.1).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::control::SessionModeResponse;
+///
+/// let answer: SessionModeResponse = serde_json::from_value(serde_json::json!({ "mode": "ask" })).unwrap();
+/// assert_eq!(answer.mode, "ask");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModeResponse {
+    /// The mode, as the harness names it: `read_only`, `plan`, `ask` or `auto`.
+    pub mode: String,
+}
+
+/// `POST /kernel/surface/records` body: one record of a surface engine attached to the
+/// kernel — an answer with the surface and how it was given, Stop all, Resume all, a mode
+/// change, a message sent — for the kernel's signed log (spec 3.3 §11).
+///
+/// The kernel writes it with the caller as its actor and the transport it came over as
+/// `transport`; whatever the record says of either is dropped.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::audit_log::AuditRecordKind;
+/// use adk_kernel::control::SurfaceRecord;
+///
+/// let record = SurfaceRecord::new(AuditRecordKind::Governance, "surface.stop_all")
+///     .with_ext("surface", serde_json::json!("terminal"))
+///     .with_ext("origin", serde_json::json!({ "kind": "keyboard" }));
+/// assert_eq!(serde_json::to_value(&record).unwrap()["kind"], "governance");
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct SurfaceRecord {
+    /// What the record is about.
+    pub kind: AuditRecordKind,
+    /// The action: `surface.decide`, `surface.stop_all`, …
+    pub action: String,
+    /// The decision an answer's record carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<AuditDecision>,
+    /// Its fields: the surface, how it was given, the decision's id, the outcome.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ext: BTreeMap<String, serde_json::Value>,
+}
+
+impl SurfaceRecord {
+    /// A record of `action`, of `kind`, with no fields yet.
+    pub fn new(kind: AuditRecordKind, action: impl Into<String>) -> Self {
+        Self { kind, action: action.into(), decision: None, ext: BTreeMap::new() }
+    }
+
+    /// Sets the decision.
+    #[must_use]
+    pub fn with_decision(mut self, decision: AuditDecision) -> Self {
+        self.decision = Some(decision);
+        self
+    }
+
+    /// Adds the field `key`.
+    #[must_use]
+    pub fn with_ext(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+        self.ext.insert(key.into(), value);
+        self
+    }
+}
+
+/// The prefix of the actions a surface engine writes (spec 3.3 §11).
+const SURFACE_ACTIONS: &str = "surface.";
+
+/// The fields of a surface's record the kernel sets itself: who the caller is and how it came.
+const KERNEL_FIELDS: &[&str] = &["transport", "device", "deviceName", "presence"];
+
 /// What the harness gives the kernel so a surface attached to it runs the REPL's commands
 /// and answers "Always allow" (spec 3.3 §5.2, §7.2). A run's [`CommandCall`] names the
 /// caller; the host runs a command in that person's session only.
@@ -252,8 +353,33 @@ pub trait CommandHost: Send + Sync {
     fn commands(&self) -> Vec<CommandInfo>;
 
     /// Whether `/name args` changes something — a rule, the memory, the mode — rather than
-    /// reads: it is refused while everything is stopped.
+    /// reads: while everything is stopped, it is refused unless it
+    /// [`tightens`](Self::tightens).
     fn changes(&self, name: &str, args: &str) -> bool;
+
+    /// Whether `call`, which changes something, only makes the agents do less — revokes a
+    /// rule, forgets a fact, turns the sandbox on, sets a stricter mode — so it runs while
+    /// everything is stopped, and a person can clean up before Resume all (spec 3.3 §5.2,
+    /// S-I10). By default nothing does, and every change is refused until Resume all.
+    ///
+    /// # Errors
+    ///
+    /// The host's error, such as a store it reads the session's mode from.
+    async fn tightens(&self, call: &CommandCall) -> Result<bool> {
+        let _ = call;
+        Ok(false)
+    }
+
+    /// The mode of `user`'s session `session`, as the harness names it (`read_only`,
+    /// `plan`, `ask`, `auto`); `None` when the host keeps no modes, and by default.
+    ///
+    /// # Errors
+    ///
+    /// The host's error.
+    async fn session_mode(&self, user: &str, session: &str) -> Result<Option<String>> {
+        let _ = (user, session);
+        Ok(None)
+    }
 
     /// Runs `call`: `/name args` for its user in their session; returns what to show.
     ///
@@ -320,6 +446,8 @@ pub(super) fn routes() -> Router<Arc<dyn ControlBackend>> {
         .route(paths::ALWAYS_ALLOW, get(offer))
         .route(paths::ALWAYS_ALLOW_PREPARE, post(prepare))
         .route(paths::ALWAYS_ALLOW_GRANT, post(grant))
+        .route(paths::SESSION_MODE, get(session_mode))
+        .route(paths::SURFACE_RECORDS, post(surface_record))
 }
 
 /// The command host of `backend`, or a `Config` error naming why there is none.
@@ -357,19 +485,6 @@ async fn run(
         )));
     }
     let changes = host.changes(&name, &args);
-    let governance = backend.governance();
-    if changes && governance.is_frozen() {
-        let reason = governance.reason().unwrap_or_default();
-        return Err(KernelError::Core(AdkError::new(
-            ErrorComponent::Server,
-            ErrorCategory::Conflict,
-            FROZEN_CODE,
-            format!(
-                "everything is stopped ({reason}), so /{name} changes nothing now; resume all \
-                 first"
-            ),
-        )));
-    }
     let mut reach = CommandReach::new(caller.transport);
     if let Some(device) = caller.context.metadata.get(crate::pairing::DEVICE_ID_METADATA) {
         reach = reach.with_device(device.clone());
@@ -378,14 +493,28 @@ async fn run(
         reach = reach.with_peer_pid(pid);
     }
     let recorded: String = args.chars().take(RECORDED_ARGS).collect();
+    let call = CommandCall::new(caller.context.user_id.clone(), &session_id, &name, args, reach);
+    // Stopped, the agents may still be made to do less: cleaning up never waits (S-I10).
+    let governance = backend.governance();
+    if changes && governance.is_frozen() && !host.tightens(&call).await? {
+        let reason = governance.reason().unwrap_or_default();
+        return Err(KernelError::Core(AdkError::new(
+            ErrorComponent::Server,
+            ErrorCategory::Conflict,
+            FROZEN_CODE,
+            format!(
+                "everything is stopped ({reason}), so /{name} cannot let the agents do more \
+                 until you resume all; what makes them do less still runs"
+            ),
+        )));
+    }
     let extra = [
         ("session", json!(session_id)),
         ("args", json!(recorded)),
         ("changes", json!(changes)),
-        ("reach", json!(reach)),
+        ("reach", json!(call.reach)),
     ];
     record(backend.as_ref(), &caller, "commands.run", Some(&name), &extra).await?;
-    let call = CommandCall::new(caller.context.user_id.clone(), session_id, name, args, reach);
     let text = host.run(&call).await?;
     Ok(Json(RunCommandResponse { text }))
 }
@@ -431,6 +560,22 @@ async fn waiting(
     Ok(request)
 }
 
+/// Whether `request` is high risk, as it says or as the kernel rates its tool: "Always allow"
+/// is never offered for it, on any surface (spec 3.3 §7.2).
+fn high_risk(backend: &dyn ControlBackend, request: &ApprovalRequest) -> bool {
+    request.risk >= ApprovalRisk::High || super::pairing::rated_high(backend.kernel(), request)
+}
+
+/// The answer of a call no standing rule may be made of.
+fn no_rule_applies() -> KernelError {
+    KernelError::Core(AdkError::new(
+        ErrorComponent::Server,
+        ErrorCategory::NotFound,
+        NOT_FOUND_CODE,
+        "no standing rule applies to this call; allow it once",
+    ))
+}
+
 async fn offer(
     State(backend): Backend,
     caller: Caller,
@@ -439,14 +584,12 @@ async fn offer(
     require_owner(&caller, "see what Always allow creates")?;
     let host = host_of(backend.as_ref())?;
     let request = waiting(backend.as_ref(), &caller, &id).await?;
+    if high_risk(backend.as_ref(), &request) {
+        return Err(no_rule_applies());
+    }
     match host.always_allow_offer(&request).await? {
         Some(label) => Ok(Json(AlwaysAllowResponse { label })),
-        None => Err(KernelError::Core(AdkError::new(
-            ErrorComponent::Server,
-            ErrorCategory::NotFound,
-            NOT_FOUND_CODE,
-            "no standing rule applies to this call; allow it once",
-        ))),
+        None => Err(no_rule_applies()),
     }
 }
 
@@ -458,6 +601,11 @@ async fn prepare(
     require_owner(&caller, "create a standing rule")?;
     let host = host_of(backend.as_ref())?;
     let request = waiting(backend.as_ref(), &caller, &id).await?;
+    if high_risk(backend.as_ref(), &request) {
+        return Err(crate::pairing::forbidden(format!(
+            "decision {id} is high risk: no standing rule is ever made of it; allow it once"
+        )));
+    }
     let label = host.prepare_always_allow(&request, &caller.subject()).await?;
     Ok(Json(AlwaysAllowResponse { label }))
 }
@@ -470,18 +618,85 @@ async fn grant(
     require_owner(&caller, "create a standing rule")?;
     let host = host_of(backend.as_ref())?;
     let request = owned_request(backend.as_ref(), &caller, &id).await?;
-    // The rule follows a yes recorded first: an answer that lost grants nothing.
-    if request.state != ApprovalState::Approved {
+    // The rule follows the caller's own yes, recorded first: an answer that lost, an edit, or
+    // someone else's yes grants nothing.
+    let own_yes = request.decisions.last().is_some_and(|decision| {
+        decision.kind == ApprovalAction::Approve && decision.approver.id == caller.context.user_id
+    });
+    if request.state != ApprovalState::Approved || !own_yes || high_risk(backend.as_ref(), &request)
+    {
         return Err(KernelError::Core(AdkError::new(
             ErrorComponent::Server,
             ErrorCategory::Conflict,
             INVALID_STATE_CODE,
-            format!("decision {id} was not allowed, so no rule is made from it"),
+            format!("decision {id} was not allowed by your yes, so no rule is made from it"),
         )));
     }
     record(backend.as_ref(), &caller, "rules.always_allow", Some(&id), &[]).await?;
     host.grant_always_allow(&request).await?;
     Ok(Json(json!({ "granted": id })))
+}
+
+async fn session_mode(
+    State(backend): Backend,
+    caller: Caller,
+    UrlPath(session): UrlPath<String>,
+) -> Result<Json<SessionModeResponse>> {
+    require_owner(&caller, "read a session's mode")?;
+    let host = host_of(backend.as_ref())?;
+    match host.session_mode(&caller.context.user_id, &session).await? {
+        Some(mode) => Ok(Json(SessionModeResponse { mode })),
+        None => Err(KernelError::Core(AdkError::new(
+            ErrorComponent::Server,
+            ErrorCategory::NotFound,
+            NOT_FOUND_CODE,
+            "this kernel keeps no mode for its sessions",
+        ))),
+    }
+}
+
+async fn surface_record(
+    State(backend): Backend,
+    caller: Caller,
+    Json(record): Json<SurfaceRecord>,
+) -> Result<Json<serde_json::Value>> {
+    require_owner(&caller, "write a surface's records")?;
+    let SurfaceRecord { kind, action, decision, ext } = record;
+    let kinds = [
+        AuditRecordKind::Approval,
+        AuditRecordKind::Governance,
+        AuditRecordKind::Configuration,
+        AuditRecordKind::Other("surface".into()),
+    ];
+    if !action.starts_with(SURFACE_ACTIONS) || !kinds.contains(&kind) {
+        return Err(KernelError::Core(AdkError::new(
+            ErrorComponent::Server,
+            ErrorCategory::InvalidInput,
+            CONFIG_CODE,
+            format!("only a surface's records (`surface.…`) are written here, not `{action}`"),
+        )));
+    }
+    // An answer is on record for the caller's own decision only (S-I8).
+    if let Some(id) = ext.get("approvalId") {
+        let id = id.as_str().unwrap_or_default();
+        owned_request(backend.as_ref(), &caller, id).await?;
+    }
+    let Some(trail) = backend.audit_trail() else {
+        return Ok(Json(json!({ "recorded": false })));
+    };
+    let mut draft =
+        AuditRecordDraft::new(kind, action).actor(AuditActor::subject(caller.subject()));
+    if let Some(decision) = decision {
+        draft = draft.decision(decision);
+    }
+    for (key, value) in ext {
+        if !KERNEL_FIELDS.contains(&key.as_str()) {
+            draft = draft.ext(key, value);
+        }
+    }
+    draft = draft.ext("transport", json!(caller.transport));
+    trail.record(draft).await?;
+    Ok(Json(json!({ "recorded": true })))
 }
 
 impl super::ControlClient {
@@ -557,6 +772,38 @@ impl super::ControlClient {
     pub async fn grant_always_allow(&self, id: &str) -> Result<()> {
         let path = paths::ALWAYS_ALLOW_GRANT.replace("{id}", &encode(id));
         let _: serde_json::Value = self.call(Method::POST, path, Some(&())).await?;
+        Ok(())
+    }
+
+    /// `GET /kernel/sessions/{session}/mode`: the mode of the caller's session `session`, as
+    /// the harness names it, or `None` when the kernel keeps no modes (spec 3.3 §5.2).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the error
+    /// the kernel answered: `403` for a device token, `400` when the kernel offers no
+    /// commands.
+    pub async fn session_mode(&self, session: &str) -> Result<Option<String>> {
+        let path = paths::SESSION_MODE.replace("{session}", &encode(session));
+        match self.call::<SessionModeResponse>(Method::GET, path, None::<&()>).await {
+            Ok(answer) => Ok(Some(answer.mode)),
+            Err(error) if error.category() == ErrorCategory::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// `POST /kernel/surface/records`: writes `record`, one record of a surface engine in this
+    /// process, on the kernel's signed log, with the caller as its actor (spec 3.3 §11).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the error
+    /// the kernel answered: `403` for a device token, `400` for an action that is not a
+    /// surface's, `404` for an answer to a decision that is not the caller's, or the log's
+    /// error.
+    pub async fn record_surface(&self, record: &SurfaceRecord) -> Result<()> {
+        let path = paths::SURFACE_RECORDS.to_string();
+        let _: serde_json::Value = self.call(Method::POST, path, Some(record)).await?;
         Ok(())
     }
 }

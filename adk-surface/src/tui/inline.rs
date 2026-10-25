@@ -399,6 +399,7 @@ async fn inline(surface: TerminalSurface) -> io::Result<i32> {
     }
     let session = surface.initial_session().await;
     let (mut app, pump, tx, mut rx) = start(&surface, session.clone());
+    app.inline = true;
 
     term::enter_inline(&mut io::stdout())?;
     let guard = Guard;

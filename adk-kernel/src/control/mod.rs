@@ -33,7 +33,8 @@
 //! | `GET /kernel/away`, `POST /kernel/away/seen`, `GET /kernel/away/lines/{seq}` (feature `proc`) | "While you were away" over the `/proc` ledger with a cursor per device (spec 3.3 §10 K4) |
 //! | `GET /kernel/memory`, `POST /kernel/memory/facts/{id}/{confirm,fix,forget}`, `POST /kernel/memory/undo` | what the agents remember, with provenance, and its corrections (spec 3.3 §10 K5) |
 //! | `GET /kernel/record`, `GET /kernel/record/check` | the latest actions on record, and the check that the record is complete (spec 3.3 §10 K5) |
-//! | `GET /kernel/commands`, `POST /kernel/commands/run`, `GET /kernel/rules/always-allow/{id}`, `POST /kernel/rules/always-allow/{id}/{prepare,grant}` | the REPL's slash commands and "Always allow", when [`ControlPlaneConfig::with_commands`] sets a host (spec 3.3 §5.2); see [`CommandHost`] |
+//! | `GET /kernel/commands`, `POST /kernel/commands/run`, `GET /kernel/rules/always-allow/{id}`, `POST /kernel/rules/always-allow/{id}/{prepare,grant}`, `GET /kernel/sessions/{session}/mode` | the REPL's slash commands, "Always allow" and a session's mode, when [`ControlPlaneConfig::with_commands`] sets a host (spec 3.3 §5.2); see [`CommandHost`] |
+//! | `POST /kernel/surface/records` | the records of a surface engine attached to the kernel, on its signed log (spec 3.3 §11); see [`SurfaceRecord`] |
 //!
 //! The approvals inbox, `/api/runs`, `/api/cron`, `/api/admin/freeze` and `/hooks/{name}`
 //! are the existing server routes, unchanged; `POST /api/admin/freeze` delegates to
@@ -136,7 +137,7 @@ mod tests;
 pub use client::ControlClient;
 pub use commands::{
     AlwaysAllowResponse, CommandCall, CommandHost, CommandInfo, CommandReach, CommandsResponse,
-    RunCommandRequest, RunCommandResponse,
+    RunCommandRequest, RunCommandResponse, SessionModeResponse, SurfaceRecord,
 };
 pub use memory::{FactOrigin, MemoryBook, RememberedFact, TidyUp, TidyUpUndo};
 #[cfg(feature = "channels")]
@@ -267,6 +268,10 @@ pub mod paths {
     pub const ALWAYS_ALLOW_PREPARE: &str = "/kernel/rules/always-allow/{id}/prepare";
     /// `POST`: grant it, once the decision was allowed (spec 3.3 §8.2).
     pub const ALWAYS_ALLOW_GRANT: &str = "/kernel/rules/always-allow/{id}/grant";
+    /// `GET`: the mode of the caller's session (spec 3.3 §5.2).
+    pub const SESSION_MODE: &str = "/kernel/sessions/{session}/mode";
+    /// `POST`: write a surface engine's record on the kernel's signed log (spec 3.3 §11).
+    pub const SURFACE_RECORDS: &str = "/kernel/surface/records";
 }
 
 /// Where the control plane listens and how it authenticates HTTP callers (spec 3.2 §7.11).

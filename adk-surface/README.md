@@ -33,7 +33,7 @@ with `default-features = false` to leave it out.
 | Source | For |
 |---|---|
 | `LocalSource` | Surfaces in the same process as the agents: the session store, the approval service, and an in-process `Kernel`, `Harness` or `Runner` |
-| `ControlSource` | A kernel in another process or on another machine, through `adk_kernel::control::ControlClient`, with the approvals inbox read in full over the same HTTP or Unix-socket endpoint |
+| `ControlSource` | A kernel in another process or on another machine, through `adk_kernel::control::ControlClient`, with the approvals inbox read in full over the same HTTP or Unix-socket endpoint; the session's mode read and set through the kernel's command host, and the engine's records written on the kernel's signed log (`ControlSource::audit_trail`) |
 
 ## Quick start
 

@@ -328,6 +328,7 @@ async fn the_web_home_allows_a_held_call_once() {
     assert_eq!(std::fs::read_to_string(&count).unwrap(), "run\n", "the answer was reused");
 }
 
+#[cfg(feature = "surface")]
 fn home_command(command: Value) -> Value {
     json!({ "surface": "web", "origin": { "kind": "pointer" }, "command": command })
 }

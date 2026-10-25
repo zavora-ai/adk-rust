@@ -9,12 +9,17 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use adk_core::{ApprovalState, RunState};
-use adk_kernel::control::{ControlClient, ControlPlaneConfig};
+use adk_kernel::control::{
+    CommandCall, CommandHost, CommandInfo, ControlClient, ControlPlaneConfig,
+};
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_surface::{
-    Answer, AnswerLog, Caller, Command, CommandOutcome, ControlSource, InMemoryAnswerLog, Origin,
-    Risk, Source, SurfaceEngine, SurfaceKind, ThreadItem,
+    Answer, AnswerLog, Caller, Command, CommandOutcome, ControlSource, InMemoryAnswerLog, Mode,
+    Origin, Risk, Source, SurfaceEngine, SurfaceKind, ThreadItem,
 };
 use common::*;
 use serde_json::json;
@@ -455,4 +460,165 @@ async fn always_allow_from_a_surface_says_what_it_covers_and_is_on_record() {
         std::fs::read_to_string(s.path.join("notes.txt")).ok()
     })
     .await;
+}
+
+/// A kernel's command host as `adk-rust up` gives it, its modes in a map: `/mode` sets the
+/// session's, and "Always allow" fails once, as a kernel out of reach for a moment would.
+#[derive(Default)]
+struct KernelHost {
+    modes: Mutex<HashMap<String, String>>,
+    runs: Mutex<Vec<(String, String, String)>>,
+    offers: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl CommandHost for KernelHost {
+    fn commands(&self) -> Vec<CommandInfo> {
+        vec![CommandInfo::new("mode", "Show or set the mode: /mode read-only|plan|ask|auto")]
+    }
+
+    fn changes(&self, name: &str, args: &str) -> bool {
+        name == "mode" && !args.is_empty()
+    }
+
+    async fn run(&self, call: &CommandCall) -> adk_kernel::Result<String> {
+        self.runs.lock().unwrap().push((
+            call.name.clone(),
+            call.args.clone(),
+            call.session.clone(),
+        ));
+        self.modes.lock().unwrap().insert(call.session.clone(), call.args.replace('-', "_"));
+        Ok(format!("mode: {}", call.args))
+    }
+
+    async fn session_mode(&self, _: &str, session: &str) -> adk_kernel::Result<Option<String>> {
+        Ok(Some(self.modes.lock().unwrap().get(session).cloned().unwrap_or_else(|| "ask".into())))
+    }
+
+    async fn always_allow_offer(
+        &self,
+        _: &adk_core::ApprovalRequest,
+    ) -> adk_kernel::Result<Option<String>> {
+        if self.offers.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            return Err(adk_kernel::KernelError::Core(adk_core::AdkError::new(
+                adk_core::ErrorComponent::Server,
+                adk_core::ErrorCategory::Unavailable,
+                "test.unavailable",
+                "the harness is restarting",
+            )));
+        }
+        Ok(Some("Always allow for this folder".into()))
+    }
+}
+
+/// A kernel served over loopback HTTP with `host` as its command host, and the terminal's
+/// engine over it, which writes its records on the kernel's log.
+async fn on_a_kernel(host: Arc<KernelHost>) -> (Scenario, SurfaceEngine, Arc<ControlSource>) {
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let control = ControlPlaneConfig::default()
+        .without_socket()
+        .with_http(format!("127.0.0.1:{port}").parse().unwrap())
+        .with_commands(host);
+    let (s, _, _, source) =
+        remote(control, || ControlClient::http(format!("http://127.0.0.1:{port}")), "kernel.txt")
+            .await;
+    let terminal = SurfaceEngine::builder(source.clone())
+        .audit(source.audit_trail())
+        .poll_interval(Duration::from_millis(20))
+        .build();
+    (s, terminal, source)
+}
+
+/// Wave 3 review findings 3–5 and 11: on a kernel, the terminal sets the mode — on a thread
+/// with no message yet too — through the kernel's `/mode`, and its status shows the mode the
+/// kernel reports.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_terminal_on_a_kernel_sets_the_mode_of_a_new_thread() {
+    let host = Arc::new(KernelHost::default());
+    let (s, remote, _) = on_a_kernel(host.clone()).await;
+    let terminal = Caller::human(os_user(), SurfaceKind::Terminal, Origin::Keyboard);
+    let status = remote.status(&terminal, Some("fresh")).await.unwrap();
+    assert_eq!(status.mode.map(|view| view.mode), Some(Mode::AskFirst));
+
+    let set = Command::SetMode { session_id: "fresh".into(), mode: Mode::JustLook };
+    let outcome = remote.execute(&terminal, set).await.unwrap();
+    assert!(matches!(outcome, CommandOutcome::ModeSet { .. }), "{outcome:?}");
+    assert_eq!(
+        *host.runs.lock().unwrap(),
+        [("mode".to_string(), "read-only".to_string(), "fresh".to_string())],
+        "the REPL's words, in the shown thread"
+    );
+    let status = remote.status(&terminal, Some("fresh")).await.unwrap();
+    assert_eq!(status.mode.map(|view| view.mode), Some(Mode::JustLook));
+    s.kernel.stop().await.unwrap();
+}
+
+/// Wave 3 review finding 1: a terminal on a kernel answers and changes the mode, and each
+/// record — with the surface and how it was given — is on the kernel's log, as the caller.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_terminal_on_a_kernel_writes_its_answers_on_the_kernels_log() {
+    let (s, remote, _) = on_a_kernel(Arc::new(KernelHost::default())).await;
+    let me = os_user();
+    let terminal = Caller::human(me.clone(), SurfaceKind::Terminal, Origin::Keyboard);
+    remote
+        .execute(&terminal, Command::Send { session_id: "t2".into(), text: "write it".into() })
+        .await
+        .unwrap();
+    let card = eventually("the card over the control plane", WITHIN, || async {
+        remote.session_decisions(&terminal, "t2").await.unwrap().into_iter().next()
+    })
+    .await;
+    let outcome = remote.execute(&terminal, decide(&card.id, card.version)).await.unwrap();
+    assert!(matches!(outcome, CommandOutcome::Answered { .. }), "{outcome:?}");
+    remote
+        .execute(&terminal, Command::SetMode { session_id: "t2".into(), mode: Mode::Suggest })
+        .await
+        .unwrap();
+
+    let of_terminal = |action: &str| -> Vec<adk_core::audit_log::AuditRecordDraft> {
+        s.audit
+            .records()
+            .into_iter()
+            .filter(|record| {
+                record.action == action && record.ext.get("surface") == Some(&json!("terminal"))
+            })
+            .collect()
+    };
+    let decided = of_terminal("surface.decide");
+    assert_eq!(decided.len(), 1, "{decided:?}");
+    assert_eq!(decided[0].actor.on_behalf_of, Some(adk_core::principal::SubjectRef::human(me)));
+    assert_eq!(decided[0].ext["origin"], json!({ "kind": "keyboard" }));
+    assert_eq!(decided[0].ext["approvalId"], json!(card.id));
+    assert_eq!(decided[0].ext["outcome"], "decided");
+    assert_eq!(decided[0].ext["transport"], "http");
+    let mode = of_terminal("surface.set_mode");
+    assert_eq!(mode.len(), 1, "{mode:?}");
+    assert_eq!(mode[0].ext["mode"], "plan");
+    s.kernel.stop().await.unwrap();
+}
+
+/// Wave 3 review finding 10: a kernel that could not say what "Always allow" creates, for a
+/// moment, is asked again; only its answer is kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn always_allow_is_asked_again_after_the_kernel_could_not_answer() {
+    let (s, _, source) = on_a_kernel(Arc::new(KernelHost::default())).await;
+    let call = adk_core::ToolConfirmationRequest {
+        tool_name: "write_file".into(),
+        function_call_id: Some("c-offer".into()),
+        args: json!({ "path": "offer.txt" }),
+        origin: None,
+        acting: None,
+    };
+    let request = adk_core::ApprovalRequest::new(
+        "apr-offer",
+        adk_core::ApprovalScope::new(APP, os_user(), "t3"),
+        &call,
+        adk_core::ApprovalPolicy::new([adk_core::ApproverSelector::group("operator")])
+            .allow_self_approval(),
+    );
+    let request = s.service.submit(request).await.unwrap();
+    assert!(source.always_allow_offer(&request).await.is_none(), "the kernel failed once");
+    let offer = source.always_allow_offer(&request).await.expect("asked again");
+    assert_eq!(offer.label, "Always allow for this folder");
+    s.kernel.stop().await.unwrap();
 }
