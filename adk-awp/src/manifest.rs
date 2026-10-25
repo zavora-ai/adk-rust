@@ -4,8 +4,9 @@ use awp_types::{BusinessContext, CapabilityEntry, CapabilityManifest};
 
 /// Build a JSON-LD capability manifest from a business context.
 ///
-/// Produces one [`CapabilityEntry`] per [`BusinessCapability`](awp_types::BusinessCapability)
-/// with `@context` set to `"https://schema.org"` and `@type` set to `"WebAPI"`.
+/// Produces one [`CapabilityEntry`] per [`BusinessCapability`](awp_types::BusinessCapability),
+/// carrying its access level and schemas, with `@context` set to `"https://schema.org"` and
+/// `@type` set to `"WebAPI"`.
 ///
 /// # Example
 ///
@@ -20,10 +21,13 @@ use awp_types::{BusinessContext, CapabilityEntry, CapabilityManifest};
 ///     endpoint: "/api/data".to_string(),
 ///     method: "GET".to_string(),
 ///     access_level: TrustLevel::Anonymous,
+///     input_schema: None,
+///     output_schema: Some("DataResponse".to_string()),
 /// }];
 /// let manifest = build_manifest(&ctx);
 /// assert_eq!(manifest.context, "https://schema.org");
-/// assert_eq!(manifest.capabilities.len(), 1);
+/// assert_eq!(manifest.capabilities[0].access_level, Some(TrustLevel::Anonymous));
+/// assert_eq!(manifest.capabilities[0].output_schema.as_deref(), Some("DataResponse"));
 /// ```
 pub fn build_manifest(ctx: &BusinessContext) -> CapabilityManifest {
     CapabilityManifest {
@@ -39,8 +43,9 @@ pub fn build_manifest(ctx: &BusinessContext) -> CapabilityManifest {
                 description: cap.description.clone(),
                 endpoint: cap.endpoint.clone(),
                 method: cap.method.clone(),
-                input_schema: None,
-                output_schema: None,
+                access_level: Some(cap.access_level),
+                input_schema: cap.input_schema.clone(),
+                output_schema: cap.output_schema.clone(),
             })
             .collect(),
     }
@@ -60,6 +65,8 @@ mod tests {
                 endpoint: "/api/data".to_string(),
                 method: "GET".to_string(),
                 access_level: TrustLevel::Anonymous,
+                input_schema: None,
+                output_schema: None,
             },
             BusinessCapability {
                 name: "write_data".to_string(),
@@ -67,6 +74,8 @@ mod tests {
                 endpoint: "/api/data".to_string(),
                 method: "POST".to_string(),
                 access_level: TrustLevel::Known,
+                input_schema: Some(r#"{"type":"object"}"#.to_string()),
+                output_schema: Some("WriteResult".to_string()),
             },
         ];
         ctx.policies = vec![BusinessPolicy {
@@ -105,8 +114,22 @@ mod tests {
         assert_eq!(first.description, "Read data");
         assert_eq!(first.endpoint, "/api/data");
         assert_eq!(first.method, "GET");
+        assert_eq!(first.access_level, Some(TrustLevel::Anonymous));
         assert!(first.input_schema.is_none());
         assert!(first.output_schema.is_none());
+    }
+
+    /// The manifest carries each capability's access level and schemas (spec 3.5 §10 X1).
+    #[test]
+    fn test_build_manifest_carries_access_level_and_schemas() {
+        let manifest = build_manifest(&sample_context());
+        let write = &manifest.capabilities[1];
+        assert_eq!(write.access_level, Some(TrustLevel::Known));
+        assert_eq!(write.input_schema.as_deref(), Some(r#"{"type":"object"}"#));
+        assert_eq!(write.output_schema.as_deref(), Some("WriteResult"));
+        let json = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(json["capabilities"][1]["accessLevel"], "known");
+        assert_eq!(json["capabilities"][1]["outputSchema"], "WriteResult");
     }
 
     #[test]

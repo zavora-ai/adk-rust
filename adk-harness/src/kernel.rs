@@ -25,7 +25,8 @@ use adk_core::{
     AdkError, ApprovalCall, ApprovalDecision, ApprovalDelegation, ApprovalEventKind,
     ApprovalNotification, ApprovalNotifier, ApprovalRequest, ApprovalService, ApprovalState,
     ApprovalStore, ApprovalTick, ErrorCategory, ErrorComponent, InboxPage, InboxQuery, Result,
-    RunCheckpointRef, RunRecord, SubjectRef, Tool, ToolContext, ToolEffect,
+    RunCheckpointRef, RunRecord, SubjectRef, Tool, ToolApproval, ToolConfirmationDecision,
+    ToolContext, ToolEffect,
 };
 use adk_kernel::proc::{Activity, LateLedgerSink, LedgerAuditTap, LedgerSink};
 use adk_kernel::{
@@ -525,6 +526,23 @@ impl LateApprovalNotifier {
         let _ = self.bound.set(notifier);
     }
 
+    /// Reports a request `Harness::decide` withdrew: resolved by the person's `decision` once
+    /// it is recorded, or cancelled when none was (spec 3.3 §7.3).
+    pub(crate) async fn decided_in_the_harness(
+        &self,
+        request: &ApprovalRequest,
+        decision: Option<&ToolApproval>,
+    ) {
+        let mut reported = request.clone();
+        if let Some(decision) = decision {
+            reported.state = match decision.decision {
+                ToolConfirmationDecision::Approve => ApprovalState::Approved,
+                ToolConfirmationDecision::Deny => ApprovalState::Rejected,
+            };
+        }
+        self.notify(&reported, None).await;
+    }
+
     async fn notify(&self, request: &ApprovalRequest, decision: Option<ApprovalDecision>) {
         let Some(notifier) = self.bound.get() else { return };
         let kind = match request.state {
@@ -614,8 +632,13 @@ impl ApprovalService for NotifyingApprovals {
     }
 
     async fn withdraw(&self, id: &str, reason: Option<String>) -> Result<ApprovalRequest> {
+        // `Harness::decide` reports its withdrawal once the person's decision is recorded, so
+        // no sleeper wakes before the decision exists (spec 3.3 §7.3).
+        let reported_later = reason.as_deref() == Some(crate::harness::DECIDED_IN_THE_HARNESS);
         let request = self.inner.withdraw(id, reason).await?;
-        self.late.notify(&request, None).await;
+        if !reported_later {
+            self.late.notify(&request, None).await;
+        }
         Ok(request)
     }
 
@@ -907,6 +930,56 @@ mod tests {
             self.0.lock().unwrap().push(notification.kind);
             Ok(())
         }
+    }
+
+    #[derive(Debug, Default)]
+    struct States(Mutex<Vec<(ApprovalEventKind, ApprovalState)>>);
+
+    #[async_trait]
+    impl ApprovalNotifier for States {
+        async fn notify(&self, notification: &ApprovalNotification) -> Result<()> {
+            self.0.lock().unwrap().push((notification.kind, notification.request.state));
+            Ok(())
+        }
+    }
+
+    /// Wave 2 review finding 21 (spec 3.3 §7.3): the request `Harness::decide` withdraws wakes
+    /// no kernel sleeper until the person's decision is recorded, and is then reported with
+    /// that decision; a withdrawal for a call decided another way is reported at once.
+    #[tokio::test]
+    async fn a_request_withdrawn_by_the_harness_is_reported_with_the_persons_decision() {
+        let late = Arc::new(LateApprovalNotifier::default());
+        let states = Arc::new(States::default());
+        late.bind_to(states.clone());
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let service =
+            NotifyingApprovals::wrap(Arc::new(StoreApprovalService::new(store.clone())), &late);
+        let scope = ApprovalScope::new("app", "alice", "s1");
+        let call = ToolConfirmationRequest::new("transfer", serde_json::json!({ "amount": 10 }));
+        store.record_pending(&scope, &call).await.unwrap();
+        let policy = ApprovalPolicy::new([ApproverSelector::human("bob")]);
+        let first = service
+            .submit(ApprovalRequest::new("req-1", scope.clone(), &call, policy.clone()))
+            .await
+            .unwrap();
+
+        let reason = Some(crate::harness::DECIDED_IN_THE_HARNESS.to_string());
+        let withdrawn = service.withdraw(&first.id, reason).await.unwrap();
+        assert!(states.0.lock().unwrap().is_empty(), "the withdrawal alone wakes nothing");
+        late.decided_in_the_harness(&withdrawn, Some(&ToolApproval::approve())).await;
+        assert_eq!(
+            *states.0.lock().unwrap(),
+            [(ApprovalEventKind::Resolved, ApprovalState::Approved)]
+        );
+
+        let second =
+            service.submit(ApprovalRequest::new("req-2", scope, &call, policy)).await.unwrap();
+        let note = Some("the call was decided another way (handler)".to_string());
+        service.withdraw(&second.id, note).await.unwrap();
+        assert_eq!(
+            states.0.lock().unwrap().last(),
+            Some(&(ApprovalEventKind::Cancelled, ApprovalState::Cancelled))
+        );
     }
 
     #[tokio::test]

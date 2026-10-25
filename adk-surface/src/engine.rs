@@ -1186,10 +1186,17 @@ impl SurfaceEngine {
     // -----------------------------------------------------------------------
 
     fn draft(caller: &Caller, kind: AuditRecordKind, action: &str) -> AuditRecordDraft {
-        AuditRecordDraft::new(kind, action)
+        let mut draft = AuditRecordDraft::new(kind, action)
             .actor(AuditActor::subject(caller.subject.clone()))
             .ext("surface", serde_json::to_value(caller.surface).unwrap_or(Value::Null))
-            .ext("origin", serde_json::to_value(&caller.origin).unwrap_or(Value::Null))
+            .ext("origin", serde_json::to_value(&caller.origin).unwrap_or(Value::Null));
+        if let Some(device) = &caller.device {
+            draft = draft.ext("device", json!(device));
+        }
+        if caller.presence_confirmed {
+            draft = draft.ext("presence", json!("confirmed"));
+        }
+        draft
     }
 
     async fn audit_decide(

@@ -108,6 +108,11 @@ impl std::fmt::Debug for Harness {
     }
 }
 
+/// The note `Harness::decide` withdraws a call's inbox requests with. Under a kernel the
+/// withdrawal wakes nothing; the person's decision is reported once it is recorded
+/// (spec 3.3 §7.3).
+pub(crate) const DECIDED_IN_THE_HARNESS: &str = "decided in the harness";
+
 fn store_error(message: impl Into<String>) -> AdkError {
     AdkError::new(
         ErrorComponent::Agent,
@@ -744,9 +749,10 @@ impl Harness {
     ///
     /// # Errors
     ///
-    /// Returns `harness.decision.invalid` when no pending call has `fingerprint`, an
-    /// approver decided its inbox request first, or a rule cannot be remembered for the
-    /// call, or the store's error.
+    /// Returns `harness.decision.invalid` when no pending call has `fingerprint`, a rule
+    /// cannot be remembered for the call, or an approver, an expiry or another decision
+    /// settled the call first — before its inbox request was withdrawn or while the person's
+    /// decision was being recorded — or the store's error.
     pub async fn decide(
         &self,
         user: &UserId,
@@ -793,6 +799,24 @@ impl Harness {
                 Some((rule, StandingDecision::Deny { reason: format!("denied by {user}") })),
             ),
         };
+        // A rule that cannot be remembered refuses the decision before the inbox request is
+        // withdrawn, so the call stays where every surface shows it (spec 3.3 §7.1).
+        let remember = match remember {
+            Some((suggestion, rule_decision)) => {
+                let owner = RuleOwner {
+                    app_name: self.app_name.clone(),
+                    user_id: user.to_string(),
+                    subject_kind: SubjectKind::Human,
+                    session_id: session.to_string(),
+                    created_by: SubjectRef::new(SubjectKind::Human, user.to_string()),
+                };
+                Some(self.agent.rule_for_held_call(&request, suggestion, rule_decision, &owner)?)
+            }
+            None => None,
+        };
+        // Withdrawn requests, reported to the kernel once the person's decision is recorded.
+        #[cfg(feature = "kernel")]
+        let mut withdrawn = Vec::new();
         // The inbox request is withdrawn, not cancelled: a cancel writes a denial and wakes
         // the run before the person's decision is recorded (spec 3.3 §7.3).
         if let Some(service) = runtime.approval_service() {
@@ -808,11 +832,13 @@ impl Harness {
                 for item in open {
                     let mut attempts = 0;
                     loop {
-                        match service
-                            .withdraw(&item.id, Some("decided in the harness".into()))
-                            .await
+                        match service.withdraw(&item.id, Some(DECIDED_IN_THE_HARNESS.into())).await
                         {
-                            Ok(_) => break,
+                            Ok(_closed) => {
+                                #[cfg(feature = "kernel")]
+                                withdrawn.push(_closed);
+                                break;
+                            }
                             // A partial quorum or an escalation step moved it; still pending.
                             Err(error)
                                 if error.code == "approval.version_conflict" && attempts < 8 =>
@@ -834,23 +860,39 @@ impl Harness {
                 }
             }
         }
-        if let Some((suggestion, rule_decision)) = remember {
-            let owner = RuleOwner {
-                app_name: self.app_name.clone(),
-                user_id: user.to_string(),
-                subject_kind: SubjectKind::Human,
-                session_id: session.to_string(),
-                created_by: SubjectRef::new(SubjectKind::Human, user.to_string()),
-            };
-            let rule =
-                self.agent.rule_for_held_call(&request, suggestion, rule_decision, &owner)?;
-            if let Some(audit) = self.audit(user, session) {
-                let fields = rule_audit_fields(&rule, request.function_call_id.as_deref());
-                audit.record("harness.rule.created", fields).await?;
+        #[cfg(feature = "kernel")]
+        let reported = approval.clone();
+        let recorded = async move {
+            // An approver's outcome, an expiry or another run's decision may have settled the
+            // call while its requests were withdrawn; the person's decision must not outlive
+            // it (spec 3.3 §7.3, §11 S-I2).
+            if !runtime
+                .approval_store()
+                .pending(&scope)
+                .await?
+                .iter()
+                .any(|entry| entry.fingerprint == fingerprint)
+            {
+                return Err(store_error(
+                    "the call was decided another way while this decision was being recorded",
+                ));
             }
-            runtime.standing_rules().grant(rule).await?;
+            if let Some(rule) = remember {
+                if let Some(audit) = self.audit(user, session) {
+                    let fields = rule_audit_fields(&rule, request.function_call_id.as_deref());
+                    audit.record("harness.rule.created", fields).await?;
+                }
+                runtime.standing_rules().grant(rule).await?;
+            }
+            runtime.approval_store().decide(&scope, fingerprint, approval).await
         }
-        runtime.approval_store().decide(&scope, fingerprint, approval).await?;
+        .await;
+        #[cfg(feature = "kernel")]
+        for closed in &withdrawn {
+            let outcome = recorded.as_ref().ok().map(|()| &reported);
+            runtime.kernel_approvals.decided_in_the_harness(closed, outcome).await;
+        }
+        recorded?;
         self.wake_parked(user, session, fingerprint).await
     }
 

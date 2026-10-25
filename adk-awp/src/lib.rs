@@ -57,8 +57,10 @@ pub use detect::detect_requester_type;
 pub use discovery::generate_discovery_document;
 pub use events::{
     AwpEvent, EventSubscription, EventSubscriptionService, InMemoryEventSubscriptionService,
-    sign_payload, verify_signature,
 };
+// Re-exported for existing callers; each use outside this crate still warns (spec 3.5 §10 X5).
+#[allow(deprecated)]
+pub use events::{sign_payload, verify_signature};
 pub use health::{HealthState, HealthStateMachine, HealthStateSnapshot};
 pub use loader::BusinessContextLoader;
 pub use manifest::build_manifest;

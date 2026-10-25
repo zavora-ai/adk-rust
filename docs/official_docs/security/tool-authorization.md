@@ -570,7 +570,8 @@ any), and the run ends with it held; nothing is decided by silence. Only a decis
 for the call resumes it: later runs do not ask the handler about it again, so a new message
 goes on to the model (`LlmAgent`, `CodeActAgent` and the realtime runners alike). A decision
 from any source clears the call's pending entry and withdraws its open inbox request, after
-waiting for any inbox outcome already on its way to the store. A run without a store — including one with only an `approval_service`, whose
+waiting for any inbox outcome already on its way to the store; an inbox outcome already
+written for the call is absorbed, so it cannot authorize a later identical call. A run without a store — including one with only an `approval_service`, whose
 decisions the run cannot read — or with `RunConfig::deny_on_confirmation_timeout` set, denies
 the call:
 

@@ -483,17 +483,21 @@ impl PromptConfig {
         // An agent limited to its current turn sees the latest user input and what followed.
         // A run that resumes held calls begins that turn at the message that led to the
         // earliest one, so each resumed result answers a call the model can see; an empty
-        // turn without held calls begins it at the person's last message. Any other run sends
-        // the current user turn alone.
+        // turn that resumes none begins it at the person's last message. Any other run sends
+        // the current user turn alone, also while a call waits for a decision (spec 3.3 §7.3).
         let turn_start = match self.include_contents {
             adk_core::IncludeContents::Default => None,
             adk_core::IncludeContents::None => {
-                let held: Vec<String> = ctx
-                    .session()
-                    .held_tool_calls(agent_name, ctx.branch())
-                    .into_iter()
-                    .filter_map(|call| call.id)
-                    .collect();
+                // The held calls this run resumes: those with a decision.
+                let gate = ToolGate::for_context(ctx.as_ref());
+                let mut held = Vec::<String>::new();
+                for call in ctx.session().held_tool_calls(agent_name, ctx.branch()) {
+                    if let Some(id) = call.id
+                        && adk_core::confirmation_decision_available(&gate, &call.request).await?
+                    {
+                        held.push(id);
+                    }
+                }
                 let earliest_held = session_history.iter().position(|content| {
                     content.parts.iter().any(|part| {
                         matches!(part, Part::FunctionCall { id: Some(id), .. } if held.contains(id))

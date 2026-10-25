@@ -1,6 +1,12 @@
 //! The OpenAPI document of the web API, generated from the Rust types, and the TypeScript
 //! types generated from it (spec 3.3 §6). `scripts/check-surface-api.sh` writes both under
 //! `adk-surface/web/src/generated/` and CI fails when they drift from the Rust source.
+//!
+//! **One document in every build.** Every surface's wire types and paths — the phone's, voice's,
+//! the tray's — compile under `web`, never under that surface's own feature (`mobile`,
+//! `voice`), so this document is the same in every `web` build, including adk-cli's default
+//! one. `tests/api_contract.rs` and `scripts/check-surface-api.sh` check it with
+//! `--features web` alone.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

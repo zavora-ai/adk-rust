@@ -300,7 +300,12 @@ impl EventSubscriptionService for InMemoryEventSubscriptionService {
 ///
 /// Returns the signature in `sha256={hex_digest}` format. Deliveries from
 /// [`InMemoryEventSubscriptionService`] carry Standard Webhooks signatures instead;
-/// this helper remains for receivers of the older format.
+/// this helper remains for receivers of the older format and is deprecated (spec 3.5
+/// §10 X5).
+#[deprecated(
+    since = "3.0.0",
+    note = "AWP deliveries carry Standard Webhooks signatures; verify them with `adk_core::webhook::WebhookVerifier`"
+)]
 pub fn sign_payload(payload: &[u8], secret: &str) -> String {
     let mut mac =
         HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
@@ -311,7 +316,12 @@ pub fn sign_payload(payload: &[u8], secret: &str) -> String {
 
 /// Verify an HMAC-SHA256 signature against a payload and secret.
 ///
-/// The `signature` should be in `sha256={hex_digest}` format.
+/// The `signature` should be in `sha256={hex_digest}` format. Deprecated with
+/// [`sign_payload`] (spec 3.5 §10 X5).
+#[deprecated(
+    since = "3.0.0",
+    note = "AWP deliveries carry Standard Webhooks signatures; verify them with `adk_core::webhook::WebhookVerifier`"
+)]
 pub fn verify_signature(payload: &[u8], secret: &str, signature: &str) -> bool {
     // Constant-time comparison via the hmac crate
     let mut mac =
@@ -430,7 +440,9 @@ mod tests {
         svc.deliver(sample_event()).await.unwrap();
     }
 
+    // The deprecated legacy pair stays tested until it is removed (spec 3.5 §10 X5).
     #[test]
+    #[allow(deprecated)]
     fn test_sign_payload() {
         let payload = b"hello world";
         let sig = sign_payload(payload, "secret");
@@ -439,6 +451,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_verify_signature_valid() {
         let payload = b"test payload";
         let secret = "my-secret";
@@ -447,6 +460,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_verify_signature_wrong_payload() {
         let secret = "my-secret";
         let sig = sign_payload(b"original", secret);
@@ -454,6 +468,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_verify_signature_wrong_secret() {
         let payload = b"test payload";
         let sig = sign_payload(payload, "secret1");
@@ -461,11 +476,13 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_verify_signature_invalid_format() {
         assert!(!verify_signature(b"payload", "secret", "not-a-signature"));
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_verify_signature_invalid_hex() {
         assert!(!verify_signature(b"payload", "secret", "sha256=not-hex"));
     }
@@ -550,6 +567,12 @@ mod tests {
 
         let (headers, body) = captured.lock().unwrap()[0].clone();
         assert_eq!(headers["webhook-id"], event.id.to_string());
+        // Deliveries carry only Standard Webhooks signatures; the deprecated `sha256=` pair
+        // (spec 3.5 §10 X5) cannot verify one.
+        #[allow(deprecated)]
+        let legacy =
+            verify_signature(&body, &sub.secret, headers["webhook-signature"].to_str().unwrap());
+        assert!(!legacy);
         let parsed =
             WebhookHeaders::from_lookup(|name| headers.get(name).and_then(|v| v.to_str().ok()))
                 .unwrap();

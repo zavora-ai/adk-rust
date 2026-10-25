@@ -155,6 +155,8 @@ description = "Place an order"
 endpoint = "/api/orders"
 method = "POST"
 access_level = "known"
+input_schema = "OrderInput"
+output_schema = "OrderReceipt"
 
 [[products]]
 sku = "WIDGET-001"
@@ -287,11 +289,25 @@ The manifest at `/awp/manifest` uses JSON-LD format:
       "name": "browse_products",
       "description": "Browse the product catalog",
       "endpoint": "/api/products",
-      "method": "GET"
+      "method": "GET",
+      "accessLevel": "anonymous"
+    },
+    {
+      "name": "place_order",
+      "description": "Place an order",
+      "endpoint": "/api/orders",
+      "method": "POST",
+      "accessLevel": "known",
+      "inputSchema": "OrderInput",
+      "outputSchema": "OrderReceipt"
     }
   ]
 }
 ```
+
+Each entry carries the capability's `access_level` from `business.toml` as `accessLevel`, and its
+optional `input_schema` and `output_schema`. The access level is metadata; the application
+handler enforces it.
 
 ## Trust Levels
 
@@ -454,8 +470,8 @@ fn verify(
 }
 ```
 
-`adk_awp::sign_payload` and `verify_signature` remain for receivers of the
-earlier `sha256=<hex_digest>` format; the built-in service no longer sends it.
+`adk_awp::sign_payload` and `verify_signature`, the earlier `sha256=<hex_digest>` HMAC pair,
+are deprecated; the built-in service no longer sends that format.
 
 ## Health State Machine
 
@@ -495,7 +511,8 @@ AWP includes a consent storage interface, `ConsentService`, with in-memory and f
 (`FileConsentService`) implementations. Regulatory compliance also requires
 application-specific notice, lawful basis, retention, access controls, and
 deletion policy; selecting a storage implementation does not establish
-compliance:
+compliance. `FileConsentService` writes each change to a synced temporary file and renames it
+over the target on a blocking thread, so a reader or a crash never sees a partial file:
 
 ```rust
 use adk_awp::{ConsentService, InMemoryConsentService};
@@ -585,6 +602,10 @@ let decision = policy.evaluate(60_000, TrustLevel::Partner);
 // PaymentPolicyDecision::RequireApproval (amount $600 > $50 threshold)
 ```
 
+`PaymentIntent` is the AWP 1.x payment type; no crate in this workspace executes one, and
+`adk-gateway`, a separate repository, uses it. AWP 2.0 settles payments through `adk-payments`
+rails and signed receipts.
+
 `evaluate` auto-approves an amount at or below `auto_approve_threshold` (default 5000 cents)
 from a caller at or above `min_trust_for_auto_approve` (default `Known`), and requires approval
 for everything else. `require_approval_threshold` (default 50,000) does not change the decision.
@@ -599,7 +620,7 @@ The full schema supports rich business configuration:
 | `[business]` | `name`, `country`, `languages`, `currency`, `timezone` | No |
 | `[brand_voice]` | `tone`, `greeting`, `escalation_message` | No |
 | `[[products]]` | `sku`, `name`, `price`, `inventory`, `tags`, `description` | No |
-| `[[capabilities]]` | `name`, `description`, `endpoint`, `method`, `access_level` | Yes |
+| `[[capabilities]]` | `name`, `description`, `endpoint`, `method`, `access_level`; optional `input_schema`, `output_schema` | Yes |
 | `[[policies]]` | `name`, `description`, `policy_type` | Yes |
 | `[channels]` | `whatsapp`, `email`, `website`, `sms` | No |
 | `[payments]` | `providers`, `auto_approve_threshold`, `require_approval_threshold` | No |
