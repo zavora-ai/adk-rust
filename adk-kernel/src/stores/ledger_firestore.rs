@@ -80,8 +80,7 @@ fn row_id(seq: i64) -> String {
 }
 
 /// A [`LedgerStore`] in Firestore, shared by every replica (spec 3.2 §7.1, §7.10, §13 Q8,
-/// features `proc` and `firestore`). **Alpha** until its live conformance suite passes in
-/// CI.
+/// features `proc` and `firestore`).
 ///
 /// | Collection (document ID) | Contents |
 /// |--------------------------|----------|

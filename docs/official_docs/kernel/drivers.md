@@ -297,7 +297,7 @@ approval in the tenant's inbox per driver, and reach that tenant's partitions on
 
 Mounted drivers and parked calls are kept in a `DriverStore` beside the kernel's process
 store: `SqliteDriverStore` in `harness.db`, `PostgresDriverStore` and `RedisDriverStore`
-from `adk-rust up --store`, `InMemoryDriverStore` with `--ephemeral`, and, Alpha, in code,
+from `adk-rust up --store`, `InMemoryDriverStore` with `--ephemeral`, and, in code,
 `MongoDriverStore`, `FirestoreDriverStore` and `Neo4jDriverStore`
 ([backends](backends.md)). Each passes
 `driver_store_conformance_tests!` (feature `conformance`).

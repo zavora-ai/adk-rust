@@ -42,7 +42,7 @@ impl AgendaDoc {
 }
 
 /// An [`AgendaStore`] in Firestore, shared by every replica (spec 3.2 §7.1, §7.5, §13 Q8,
-/// feature `firestore`). **Alpha** until its live conformance suite passes in CI.
+/// feature `firestore`).
 ///
 /// One `adk_kernel_agenda` document per item, named by the hex of its id: `id`,
 /// `partition`, `state` (its kind), `created_us` (microseconds since the Unix epoch) and
