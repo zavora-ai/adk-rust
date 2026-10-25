@@ -459,7 +459,25 @@ impl TenantKernel {
                 }
             }
         }
+        let dropped: Vec<String> = cron_expressions(&hosting.hosted)
+            .difference(&cron_expressions(&hosted))
+            .cloned()
+            .collect();
         hosting.hosted = hosted;
+        // An expression no hosted wake set uses any more was idle from here on, not missed:
+        // its cursor goes with its source, so a wake set that uses it later starts at its
+        // first watch (spec 3.2 §7.4).
+        for expr in dropped {
+            let source = cron_source_name(&expr);
+            match self.inner.watermarks.delete(&source).await {
+                Ok(_) => {
+                    tracing::info!(tenant = %self.inner.tenant, cron = %expr, "cron watermark dropped with the last wake set on it")
+                }
+                Err(error) => {
+                    tracing::warn!(tenant = %self.inner.tenant, cron = %expr, error = %error, "could not drop the cron watermark of an expression no wake set uses")
+                }
+            }
+        }
         tracing::info!(tenant = %self.inner.tenant, definition = %def.name, "definition hosted");
         Ok(true)
     }
@@ -646,7 +664,8 @@ impl TenantKernel {
             .session_service(Arc::clone(&inner.sessions))
             .agenda_store(Arc::clone(&inner.agenda))
             .agenda_handle(inner.agenda_handle.clone())
-            .partitions(inner.partitions.clone());
+            .partitions(inner.partitions.clone())
+            .watermark_store(Arc::clone(&inner.watermarks));
         for (partition, consolidator) in &inner.consolidators {
             builder = builder.consolidator(partition.clone(), Arc::clone(consolidator));
         }
@@ -701,7 +720,9 @@ impl TenantKernel {
                 }
                 for wake in &set.any_of {
                     if let Wake::Cron { expr, missed } = wake {
-                        let widest = crons.get(expr).map_or(*missed, |held| widest(*held, *missed));
+                        let widest = crons
+                            .get(expr)
+                            .map_or(*missed, |held| crate::wake::widest_policy(*held, *missed));
                         crons.insert(expr.clone(), widest);
                     }
                 }
@@ -810,26 +831,22 @@ fn triggers(tenant: &str, target: &str, run_target: &str, set: &WakeSetDef) -> V
         .collect()
 }
 
+/// The cron expressions the wake sets of `hosted` use.
+fn cron_expressions(hosted: &BTreeMap<String, Hosted>) -> BTreeSet<String> {
+    hosted
+        .values()
+        .flat_map(|hosted| hosted.kernel.wake_sets.iter())
+        .flat_map(|set| set.any_of.iter())
+        .filter_map(|wake| match wake {
+            Wake::Cron { expr, .. } => Some(expr.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The cron source of `expr`, named by the expression with `_` for spaces.
 fn cron_source_name(expr: &str) -> String {
     expr.split_whitespace().collect::<Vec<_>>().join("_")
-}
-
-/// The policy that plans every missed tick either `a` or `b` picks: `catchUp` of the larger
-/// count, else `fireOnce`, else `skip` (spec 3.2 §7.4). `catchUp(1)` fires what `fireOnce`
-/// does, the latest however late.
-fn widest(a: MissedFirePolicy, b: MissedFirePolicy) -> MissedFirePolicy {
-    let fires = |policy: MissedFirePolicy| match policy {
-        MissedFirePolicy::Skip => 0,
-        MissedFirePolicy::CatchUp(count) => count,
-        // `fireOnce`, and a policy this release does not know: the latest, however late.
-        _ => 1,
-    };
-    match fires(a).max(fires(b)) {
-        0 => MissedFirePolicy::Skip,
-        1 => MissedFirePolicy::FireOnce,
-        count => MissedFirePolicy::CatchUp(count),
-    }
 }
 
 /// The approval-inbox tool name of a driver mount a hosted definition asks for (spec 3.2

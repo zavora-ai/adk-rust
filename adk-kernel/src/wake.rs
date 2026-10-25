@@ -455,6 +455,50 @@ fn picks_tick(missed: MissedFirePolicy, payload: &Value) -> bool {
     }
 }
 
+/// The policy that plans every missed tick either `a` or `b` picks: `catchUp` of the larger
+/// count, else `fireOnce`, else `skip` (spec 3.2 §7.4). `catchUp(1)` fires what `fireOnce`
+/// does, the latest however late.
+pub(crate) fn widest_policy(a: MissedFirePolicy, b: MissedFirePolicy) -> MissedFirePolicy {
+    let fires = |policy: MissedFirePolicy| match policy {
+        MissedFirePolicy::Skip => 0,
+        MissedFirePolicy::CatchUp(count) => count,
+        // `fireOnce`, and a policy this release does not know: the latest, however late.
+        _ => 1,
+    };
+    match fires(a).max(fires(b)) {
+        0 => MissedFirePolicy::Skip,
+        1 => MissedFirePolicy::FireOnce,
+        count => MissedFirePolicy::CatchUp(count),
+    }
+}
+
+/// Whether `wake` of the sleeping process `run` fires for `event` (spec 3.2 §7.4 step 2): it
+/// matches, and the event is not a missed cron tick scheduled before the sleeper's series
+/// began ([`series_start`](crate::supervise::series_start)), so a sleeper replays nothing
+/// from before it existed.
+pub(crate) fn wakes_sleeper(wake: &Wake, event: &WakeEvent, run: &RunRecord) -> bool {
+    wake_matches(wake, event) && !predates_series(event, run)
+}
+
+/// Whether `event` is a missed cron tick scheduled before the cron series of `run` began.
+fn predates_series(event: &WakeEvent, run: &RunRecord) -> bool {
+    if !event.key.starts_with("cron:")
+        || event.payload.get("catch_up").and_then(Value::as_bool) != Some(true)
+    {
+        return false;
+    }
+    let scheduled_for = event
+        .payload
+        .get("scheduled_for")
+        .and_then(Value::as_str)
+        .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+        .map(|at| at.with_timezone(&Utc));
+    match (scheduled_for, crate::supervise::series_start(run)) {
+        (Some(at), Some(began)) => at < began,
+        _ => false,
+    }
+}
+
 /// Whether `wake` fires for `event` (spec 3.2 §7.4 step 2).
 ///
 /// Each kernel source keys its events with its own prefix ([`keys`]); the payload carries
@@ -776,7 +820,7 @@ impl WakeRouter {
         let mut outcomes = Vec::new();
         for (meta, wake, run) in self.sleepers().await? {
             let expired = wake.expires_at.is_some_and(|at| at <= now);
-            if expired || !wake.any_of.iter().any(|wake| wake_matches(wake, &event)) {
+            if expired || !wake.any_of.iter().any(|wake| wakes_sleeper(wake, &event, &run)) {
                 continue;
             }
             self.wake_sleeper(&meta, &run).await?;

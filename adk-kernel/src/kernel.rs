@@ -68,12 +68,15 @@ use crate::proc::{Ledger, LedgerEventSink};
 use crate::process::{ProcessHandle, ProcessTable, ProgressSource, Suspension};
 use crate::sched::{QueueClass, QuietHours, Quotas};
 use crate::stores::ProcessFilter;
-use crate::stores::{InMemoryAgendaStore, InMemoryProcessStore, ProcessStore};
+use crate::stores::{
+    InMemoryAgendaStore, InMemoryCronWatermarkStore, InMemoryProcessStore, ProcessStore,
+};
 use crate::supervise::{KernelHooks, Supervision};
 use crate::wake::{
     FileWakeSource, KernelWakeExecutor, RunFinishedWakeSource, Trigger, Wake, WakeRouter,
     WakeSource,
 };
+use crate::watermark::CronWatermarkStore;
 
 /// How the kernel runs (spec 3.2 §7.2).
 ///
@@ -538,6 +541,9 @@ impl Kernel {
             tasks.push(mirror);
         }
         sup.draining.store(false, Ordering::SeqCst);
+        // Sleepers' cron occurrences missed while stopped are planned from the stored cursors.
+        sup.crons.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        *sup.cron_started.lock().unwrap_or_else(|e| e.into_inner()) = None;
         for progress in sup.progress_sources() {
             progress.attach(ProcessHandle::new(&sup));
             #[cfg(feature = "proc")]
@@ -1460,6 +1466,7 @@ pub struct KernelBuilder {
     phraser: Option<Arc<dyn crate::proc::baselines::ObservationPhraser>>,
     partitions: Option<Partitions>,
     partition_targets: BTreeMap<String, PartitionId>,
+    watermarks: Option<Arc<dyn CronWatermarkStore>>,
 }
 
 impl fmt::Debug for KernelBuilder {
@@ -1759,6 +1766,34 @@ impl KernelBuilder {
         self
     }
 
+    /// Sets where the cron wakes of sleepers keep their cursors (spec 3.2 §7.4). Defaults to
+    /// [`InMemoryCronWatermarkStore`], which keeps nothing across a restart.
+    ///
+    /// The kernel fires a sleeper's cron wake itself and keeps the expression's cursor here
+    /// under `kernel:<expression>`. With a durable store shared by every replica, a restart
+    /// or another replica fires each occurrence missed while no kernel ran once, as the
+    /// sleepers' `missed` policies pick them, and never one that already fired.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::InMemoryRunStore;
+    /// use adk_kernel::{InMemoryCronWatermarkStore, Kernel};
+    ///
+    /// let kernel = Kernel::builder()
+    ///     .run_store(Arc::new(InMemoryRunStore::new()))
+    ///     .watermark_store(Arc::new(InMemoryCronWatermarkStore::new()))
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = kernel;
+    /// ```
+    #[must_use]
+    pub fn watermark_store(mut self, store: Arc<dyn CronWatermarkStore>) -> Self {
+        self.watermarks = Some(store);
+        self
+    }
+
     /// Builds the kernel. Nothing runs until [`Kernel::start`].
     ///
     /// # Errors
@@ -1872,6 +1907,10 @@ impl KernelBuilder {
             rule_source: self.rule_source,
             reviewed: std::sync::Mutex::new(None),
             crons: std::sync::Mutex::new(BTreeMap::new()),
+            watermarks: self
+                .watermarks
+                .unwrap_or_else(|| Arc::new(InMemoryCronWatermarkStore::new())),
+            cron_started: std::sync::Mutex::new(None),
             triggers: trigger_names,
             #[cfg(feature = "proc-baselines")]
             proc: proc.clone(),

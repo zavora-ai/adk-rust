@@ -348,7 +348,11 @@ The process runs on the `background` queue, in a new session unless `--session I
 `adk-rust ps` shows it `waiting`, asleep on its wake set. A file or webhook sleeper wakes once.
 A cron sleeper recurs: the kernel fires the expression itself on its clock (one wake per
 occurrence across replicas) and, when a run completes or fails, starts its successor asleep
-with the finished run as its parent; `adk-rust kill` on the sleeper ends the series.
+with the finished run as its parent; `adk-rust kill` on the sleeper ends the series. The
+expression's cursor is kept in `harness.db` (or the `--store` backend), so after the kernel was
+down it fires the missed occurrence once if it is no more than a minute late, the sleeper's
+`skip` policy, and never one that already fired. A new series replays nothing from before it
+began.
 
 ## `adk-rust partitions`
 

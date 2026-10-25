@@ -271,3 +271,83 @@ async fn each_tenant_keeps_its_own_watermarks() {
     let error = kernels.insert(shared).unwrap_err();
     assert!(error.to_string().contains("cron watermark store"), "{error}");
 }
+
+/// Every second.
+const EVERY_SECOND: &str = "* * * * * *";
+/// The tenant kernel's cron source of [`EVERY_SECOND`].
+const EVERY_SECOND_SOURCE: &str = "*_*_*_*_*_*";
+
+/// The definition `digest` with one wake set on `expr` that catches up to ten missed ticks.
+fn ticking(expr: &str) -> ManagedAgentDef {
+    KernelDef::new()
+        .with_wake_set(
+            WakeSetDef::new(
+                "tick",
+                [Wake::Cron { expr: expr.into(), missed: MissedFirePolicy::CatchUp(10) }],
+                "Look again.",
+            )
+            .with_overlap(WakeOverlap::Queue),
+        )
+        .apply_to(ManagedAgentDef::new(
+            "digest",
+            ModelRef::Shorthand("gemini-3.5-flash-lite".into()),
+        ))
+}
+
+/// The ticks of `source` that reached the tenant's `kernel.wake` runs, oldest first.
+async fn wake_ticks(runs: &Arc<dyn DurableRunStore>, source: &str) -> Vec<DateTime<Utc>> {
+    let prefix = format!("cron:{source}:");
+    let mut ticks: Vec<DateTime<Utc>> = runs
+        .list(RunFilter::default().queue("maintenance"))
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(|run| run.idempotency_key.as_deref()?.strip_prefix(&prefix))
+        .filter_map(|tick| DateTime::parse_from_rfc3339(tick).ok())
+        .map(|tick| tick.with_timezone(&Utc))
+        .collect();
+    ticks.sort();
+    ticks
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_expression_hosted_again_after_it_was_idle_replays_nothing_from_the_idle_time() {
+    let deployment = Deployment::new("tenant-a", Arc::new(InMemoryCronWatermarkStore::new()));
+    let tenant = deployment.instance("replica-1", &ticking(EVERY_SECOND)).await;
+    tenant.start().await.unwrap();
+    eventually("a live tick", || async {
+        (!wake_ticks(&deployment.runs, EVERY_SECOND_SOURCE).await.is_empty()).then_some(())
+    })
+    .await;
+
+    // The definition changes to a yearly wake: no wake set uses the every-second expression,
+    // which is idle from here on, so its cursor goes with its source.
+    tenant.runtime(Arc::new(Models)).create(ticking(YEARLY)).await.unwrap();
+    let dropped = Utc::now();
+    assert_eq!(
+        deployment.watermarks.read(EVERY_SECOND_SOURCE).await.unwrap(),
+        None,
+        "the idle expression keeps no cursor"
+    );
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // Hosted on it again, the expression starts at its first watch: the ticks of the idle
+    // seconds were never missed, so none of them replays.
+    let readded = Utc::now();
+    tenant.runtime(Arc::new(Models)).create(ticking(EVERY_SECOND)).await.unwrap();
+    eventually("a live tick after the expression is hosted again", || async {
+        wake_ticks(&deployment.runs, EVERY_SECOND_SOURCE)
+            .await
+            .last()
+            .is_some_and(|tick| *tick > readded)
+            .then_some(())
+    })
+    .await;
+    tenant.stop().await.unwrap();
+    let idle: Vec<_> = wake_ticks(&deployment.runs, EVERY_SECOND_SOURCE)
+        .await
+        .into_iter()
+        .filter(|tick| *tick > dropped && *tick < readded)
+        .collect();
+    assert_eq!(idle, Vec::<DateTime<Utc>>::new(), "no tick of the idle time fired");
+}
