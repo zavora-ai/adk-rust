@@ -25,7 +25,7 @@ use adk_kernel::{KernelConfig, ProcessStore, QueueClass};
 use adk_server::background::{BackgroundState, DurableWorkerConfig};
 use anyhow::{Context, Result, bail};
 
-use super::{APP_NAME, AgentExtras, Setup, user_config};
+use super::{APP_NAME, AgentExtras, Setup, agents, user_config};
 use crate::ResolvedModel;
 use crate::cli::UpArgs;
 
@@ -58,6 +58,8 @@ struct KernelStores {
     control: Arc<dyn adk_kernel::control::ControlStore>,
     /// Where the cron wakes of sleepers left off (spec 3.2 §7.4).
     watermarks: Arc<dyn adk_kernel::CronWatermarkStore>,
+    /// The agents a person added (spec 3.3 §5.7, §10 K7, L1).
+    agents: Arc<dyn adk_kernel::agents::AgentStore>,
     /// Whether nothing outlives the kernel (`--ephemeral`).
     ephemeral: bool,
     /// The kill switch's shared state; `None` keeps it in this process.
@@ -116,9 +118,14 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         );
     }
 
-    let setup =
+    // Shared with the agent factory, which builds each added agent with this composition
+    // (spec 3.3 §10 L1).
+    let setup = Arc::new(
         Setup::open(model, instruction, harness, HarnessMode::Plan, store.as_deref(), Some(&home))
-            .await?;
+            .await?,
+    );
+    // The agent table the primary agent's `propose_agent` suggests to (spec 3.3 §5.7).
+    let agents_handle = adk_kernel::agents::AgentsHandle::new();
     setup.print_notes();
     setup.memory_notice();
     for note in &settings.notes {
@@ -160,6 +167,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         None => service,
     };
     let service: Arc<dyn ApprovalService> = Arc::new(service);
+    let added_service = service.clone();
     let stores = kernel_stores(&setup, store.as_deref()).await?;
     // One kill switch for the runner, the kernel and the server, mirrored from the store
     // replicas share (K-I8).
@@ -234,6 +242,9 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                     #[cfg(feature = "tui")]
                     local_console: false,
                     driver_crossings: Vec::new(),
+                    agents: Some(agents_handle.clone()),
+                    session_stamp: Some(adk_harness::PRIMARY_AGENT_STAMP.to_string()),
+                    added: None,
                 },
             )?);
             vec![host(&setup, agent, None, &governance, &run_store)?]
@@ -251,12 +262,96 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                 #[cfg(feature = "tui")]
                 local_console: false,
                 driver_crossings: Vec::new(),
+                agents: Some(agents_handle.clone()),
+                session_stamp: Some(adk_harness::PRIMARY_AGENT_STAMP.to_string()),
+                added: None,
             };
             partition_harnesses(&setup, &settings, table, &service, &governance, &run_store, extras)
                 .await?
         }
     };
     let primary = &hosted[0];
+    // The agents a person adds, built with the primary agent's composition in their own
+    // area, on their own model, beside the primary (spec 3.3 §5.7, §10 L1).
+    let factory = {
+        let composed = setup.clone();
+        let beside = primary.harness.clone();
+        let audit = audit.clone();
+        let drivers = drivers.clone();
+        let control = stores.control.clone();
+        let table = table.clone();
+        let governance = governance.clone();
+        let run_store = run_store.clone();
+        let scripted = setup.model_id == "scripted";
+        let build: agents::BuildAgent = Arc::new(move |record: adk_kernel::agents::AgentRecord| {
+            let setup = composed.clone();
+            let beside = beside.clone();
+            let service = added_service.clone();
+            let audit = audit.clone();
+            let drivers = drivers.clone();
+            let control = control.clone();
+            let table = table.clone();
+            let governance = governance.clone();
+            let run_store = run_store.clone();
+            Box::pin(async move {
+                let model = agents::model_of(&record, scripted).await?;
+                let partition = match &table {
+                    Some(table) => table.get(&record.area).await?,
+                    None => None,
+                };
+                let area_mode = partition
+                    .as_ref()
+                    .map_or(setup.resolved.mode, |partition| partition.default_mode.into());
+                let modes = Arc::new(super::books::AreaModeStore::new(
+                    agents::modes_of(&setup),
+                    control.clone(),
+                    record.area.clone(),
+                    area_mode,
+                    auto_refused,
+                ));
+                let added = agents::Added { record: record.clone(), beside, model, modes };
+                let agent = Arc::new(setup.agent_with(
+                    setup.resolved.effort,
+                    &record.id,
+                    area_mode,
+                    setup.resolved.sandbox,
+                    None,
+                    Some(service),
+                    AgentExtras {
+                        audit,
+                        memory_with_inbox: true,
+                        drivers: Some(drivers),
+                        partition: match (partition.clone(), table) {
+                            (Some(partition), Some(table)) => Some((partition, table, false)),
+                            _ => None,
+                        },
+                        area_modes: Some((control, record.area.clone(), auto_refused)),
+                        added: Some(added),
+                        ..AgentExtras::default()
+                    },
+                )?);
+                Ok(host(&setup, agent, partition.as_ref(), &governance, &run_store)?.harness)
+            })
+        });
+        let mut choices = adk_kernel::agents::AgentChoices::default();
+        for model in agents::model_choices(None, agents::has_key) {
+            choices = choices.with_model(model);
+        }
+        for pack in &setup.resolved.packs {
+            if let Some(name) = agents::pack_name(*pack) {
+                choices = choices.with_pack(name);
+            }
+        }
+        agents::HarnessAgentFactory::new(
+            APP_NAME,
+            setup.user.clone(),
+            primary.harness.clone(),
+            "ADK-Rust",
+            choices,
+            primary.harness.agent().runtime().standing_rules().clone(),
+            build,
+        )
+    };
     // Re-approving a driver carries the re-approving person's standing rules forward.
     drivers.set_rule_pins(primary.harness.driver_rule_pins());
     let mut worker = DurableWorkerConfig::default();
@@ -317,6 +412,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     // primary harness the web home answers decisions over (spec 3.3 §5.2).
     let commands =
         adk_cli::harness::HarnessCommands::new(primary.harness.clone(), APP_NAME, setup.sessions())
+            .agents(agents_handle.clone())
             .run_store(run_store.clone())
             .effort(setup.args.effort)
             .hooks_disabled(!setup.resolved.hooks);
@@ -377,6 +473,9 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     }
     let mut kernel = builder
         .config(config)
+        .agent_store(stores.agents.clone())
+        .agent_factory(Arc::new(factory))
+        .agents_handle(agents_handle.clone())
         .process_store(stores.processes)
         .agenda_store(stores.agenda)
         .watermark_store(stores.watermarks)
@@ -718,7 +817,10 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
         control.migrate().await?;
         let watermarks = adk_kernel::SqliteCronWatermarkStore::new(db.pool.clone());
         watermarks.migrate().await?;
+        let agents = adk_kernel::stores::SqliteAgentStore::new(db.pool.clone());
+        agents.migrate().await?;
         return Ok(KernelStores {
+            agents: Arc::new(agents),
             processes: Arc::new(processes),
             agenda: Arc::new(agenda),
             partitions: Arc::new(partitions),
@@ -744,6 +846,7 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
         devices: Arc::new(adk_kernel::pairing::InMemoryDeviceStore::new()),
         control: Arc::new(adk_kernel::control::InMemoryControlStore::new()),
         watermarks: Arc::new(adk_kernel::InMemoryCronWatermarkStore::new()),
+        agents: Arc::new(adk_kernel::stores::InMemoryAgentStore::new()),
         ephemeral: true,
         governance: None,
         label: "memory (--ephemeral): nothing outlives the kernel".into(),
@@ -776,7 +879,10 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             control.migrate().await?;
             let watermarks = adk_kernel::PostgresCronWatermarkStore::new(processes.pool().clone());
             watermarks.migrate().await?;
+            let agents = adk_kernel::stores::PostgresAgentStore::new(processes.pool().clone());
+            agents.migrate().await?;
             Ok(KernelStores {
+                agents: Arc::new(agents),
                 processes: Arc::new(processes),
                 agenda: Arc::new(agenda),
                 partitions: Arc::new(partitions),
@@ -818,7 +924,11 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             let watermarks =
                 adk_kernel::RedisCronWatermarkStore::from_client(processes.client().clone());
             watermarks.migrate().await?;
+            let agents =
+                adk_kernel::stores::RedisAgentStore::from_client(processes.client().clone());
+            agents.migrate().await?;
             Ok(KernelStores {
+                agents: Arc::new(agents),
                 processes: Arc::new(processes),
                 agenda: Arc::new(agenda),
                 partitions: Arc::new(partitions),

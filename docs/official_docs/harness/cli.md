@@ -28,6 +28,7 @@ adk-rust --ui repl             # the harness REPL
 | `adk-rust sessions list\|show\|rm` | Your harness sessions |
 | `adk-rust rules list\|add\|rm` | Your standing rules |
 | `adk-rust memory list\|show\|forget\|accept\|export\|import\|undo` | The long-term facts the harness learned; see [Long-term memory](#long-term-memory) |
+| `adk-rust agents list\|show\|new\|edit\|pause\|resume\|remove` | Your own agents on the running kernel: each change shows what it does and asks before it applies (`--yes` is refused at high risk); `/agent` runs the same command in the REPL and the terminal; see [Your Agents](../surfaces/agents.md) |
 | `adk-rust approvals list\|approve\|deny` | Calls waiting for a decision, here or on a served harness with `--server URL --token T` |
 | `adk-rust store status\|rotate-key` | The key `harness.db` is sealed under and which stores are wrapped; rotation to a new key (spec 3.1 §7.12); see [The encrypted store](#the-encrypted-store) |
 

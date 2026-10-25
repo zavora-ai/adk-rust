@@ -623,6 +623,7 @@ impl HarnessLauncher {
             run_store: self.run_store.clone(),
             hooks_disabled: self.hooks_disabled,
             reach: None,
+            agents: None,
         });
         shared.decide_trust(self.trust).await?;
         self.opened = Some(shared.clone());
@@ -1200,6 +1201,8 @@ pub(crate) struct Shared {
     /// How a command's caller reached the kernel, when a kernel's control route runs it;
     /// `None` in the REPL and the terminal in process (spec 3.3 §5.2).
     pub(crate) reach: Option<adk_kernel::control::CommandReach>,
+    /// The agent table `/agent` changes, on a kernel (spec 3.3 §5.7).
+    pub(crate) agents: Option<adk_kernel::agents::AgentsHandle>,
 }
 
 /// The harness REPL's slash commands over a harness, for the surfaces that are not the REPL:
@@ -1228,6 +1231,7 @@ pub struct HarnessCommands {
     pub(crate) run_store: Option<Arc<dyn DurableRunStore>>,
     pub(crate) effort: Option<Effort>,
     pub(crate) hooks_disabled: bool,
+    pub(crate) agents: Option<adk_kernel::agents::AgentsHandle>,
 }
 
 impl std::fmt::Debug for HarnessCommands {
@@ -1253,7 +1257,16 @@ impl HarnessCommands {
             run_store: None,
             effort: None,
             hooks_disabled: false,
+            agents: None,
         }
+    }
+
+    /// The agent table of the kernel `handle` is bound to, which `/agent` changes (spec 3.3
+    /// §5.7, §10 L1); without one `/agent` says to start `adk-rust up`.
+    #[must_use]
+    pub fn agents(mut self, handle: adk_kernel::agents::AgentsHandle) -> Self {
+        self.agents = Some(handle);
+        self
     }
 
     /// The durable run store the harness runs on.
@@ -1302,6 +1315,7 @@ impl HarnessCommands {
             run_store: self.run_store.clone(),
             hooks_disabled: self.hooks_disabled,
             reach,
+            agents: self.agents.clone(),
         }
     }
 }

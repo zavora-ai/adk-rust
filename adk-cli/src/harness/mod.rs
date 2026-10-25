@@ -30,6 +30,7 @@
 //! }
 //! ```
 
+mod agents;
 mod args;
 mod commands;
 mod goal;

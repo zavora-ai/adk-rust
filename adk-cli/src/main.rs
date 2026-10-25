@@ -271,6 +271,10 @@ async fn run() -> Result<()> {
             kernel_cli::act(&kernel, &pid, kernel_cli::Action::Resume).await
         }
         #[cfg(feature = "harness")]
+        Some(Commands::Agents { output, yes, kernel, args }) => {
+            harness_cli::agents::command(&kernel, &args, output == "json", yes).await
+        }
+        #[cfg(feature = "harness")]
         Some(Commands::Partitions { command, kernel }) => {
             kernel_cli::partitions(command, kernel).await
         }
