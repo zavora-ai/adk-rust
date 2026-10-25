@@ -12,8 +12,8 @@ use std::sync::Arc;
 use adk_core::{AgentId, AgentPrincipal};
 use adk_harness::{Harness, HarnessMode, ModeRecord, ModeStore, StandingRuleStore};
 use adk_kernel::agents::{
-    AgentAssessment, AgentCeiling, AgentChoices, AgentFactory, AgentRecord, HostedAgent,
-    ModelChoice,
+    AgentAssessment, AgentCeiling, AgentChoices, AgentDefinition, AgentFactory, AgentRecord,
+    HostedAgent, ModelChoice,
 };
 use adk_kernel::{KernelError, PartitionMode};
 use async_trait::async_trait;
@@ -54,6 +54,9 @@ pub(crate) struct HarnessAgentFactory {
     app: String,
     user: String,
     primary: Arc<Harness>,
+    /// The primary agent of each area, when the kernel has areas: a suggestion's ceiling is
+    /// the limits of the one in its area (spec 3.3 S-I12).
+    areas: Vec<(adk_kernel::PartitionId, Arc<Harness>)>,
     primary_name: String,
     choices: AgentChoices,
     rules: Arc<dyn StandingRuleStore>,
@@ -79,12 +82,27 @@ impl HarnessAgentFactory {
             app: app.into(),
             user: user.into(),
             primary,
+            areas: Vec::new(),
             primary_name: primary_name.into(),
             choices,
             rules,
             build,
             reserved,
         }
+    }
+
+    /// The primary agent of each area, by area.
+    pub(crate) fn with_areas(
+        mut self,
+        areas: impl IntoIterator<Item = (adk_kernel::PartitionId, Arc<Harness>)>,
+    ) -> Self {
+        self.areas = areas.into_iter().collect();
+        self
+    }
+
+    /// The primary agent's harness in `area`.
+    fn primary_in(&self, area: &adk_kernel::PartitionId) -> &Arc<Harness> {
+        self.areas.iter().find(|(id, _)| id == area).map_or(&self.primary, |(_, harness)| harness)
     }
 }
 
@@ -99,16 +117,29 @@ impl AgentFactory for HarnessAgentFactory {
         agent: &AgentId,
         session: &str,
     ) -> adk_kernel::Result<Option<AgentCeiling>> {
-        // Only the primary agent suggests agents; an added agent has no propose_agent.
-        let primary =
-            AgentPrincipal::derived(&self.app, self.primary.agent().info().name.as_str()).id;
+        self.ceiling_in(agent, session, &self.primary.agent_area()).await
+    }
+
+    async fn ceiling_in(
+        &self,
+        agent: &AgentId,
+        session: &str,
+        area: &adk_kernel::PartitionId,
+    ) -> adk_kernel::Result<Option<AgentCeiling>> {
+        // Only the primary agent suggests agents; an added agent has no propose_agent. With
+        // areas, the suggester is the primary agent of the suggestion's area (spec 3.3 S-I12).
+        let suggester = self.primary_in(area);
+        let primary = AgentPrincipal::derived(&self.app, suggester.agent().info().name.as_str()).id;
         let app_target = AgentPrincipal::derived(&self.app, &self.app).id;
         if *agent != primary && *agent != app_target {
             return Ok(None);
         }
-        let ceiling =
-            self.primary.agent_ceiling(&self.user, session).await.map_err(kernel_error)?;
+        let ceiling = suggester.agent_ceiling(&self.user, session).await.map_err(kernel_error)?;
         Ok(Some(ceiling))
+    }
+
+    async fn screen(&self, definition: AgentDefinition) -> AgentDefinition {
+        adk_harness::screen_agent_definition(definition).await
     }
 
     async fn choices(&self) -> adk_kernel::Result<AgentChoices> {
@@ -117,7 +148,8 @@ impl AgentFactory for HarnessAgentFactory {
 
     async fn build(&self, record: &AgentRecord) -> adk_kernel::Result<HostedAgent> {
         let harness = (self.build)(record.clone()).await.map_err(kernel_error)?;
-        Ok(harness.hosted_agent())
+        // The kernel closes the harness once it stops serving this build (spec 3.3 §5.7).
+        Ok(harness.hosted_agent().with_close(harness))
     }
 
     async fn retired(&self, record: &AgentRecord) -> adk_kernel::Result<u64> {
@@ -194,6 +226,12 @@ pub(crate) struct Added {
     pub(crate) model: Option<crate::BuiltModel>,
     /// The session modes it reads, capped at its own.
     pub(crate) modes: Arc<dyn ModeStore>,
+}
+
+/// The drivers `record` reaches in an area whose drivers are `area`: those its definition
+/// names, never the rest of the area's (spec 3.3 §5.7, S-I12).
+pub(crate) fn area_drivers(record: &AgentRecord, area: &[String]) -> Vec<String> {
+    area.iter().filter(|driver| record.uses.drivers.contains(driver)).cloned().collect()
 }
 
 impl Added {
@@ -324,6 +362,10 @@ pub(crate) async fn command(
                 println!("{}", serde_json::to_string_pretty(&views)?);
                 return Ok(());
             }
+            let views: Vec<_> = views
+                .into_iter()
+                .filter(|view| view.agent.state != adk_kernel::agents::AgentRecordState::Removed)
+                .collect();
             if views.is_empty() {
                 println!(
                     "No agents of your own yet. Add one with `adk-rust agents new --name NAME`, or ask ADK-Rust to suggest one."
@@ -429,29 +471,12 @@ fn adk_surface_line(text: &str) -> String {
         .collect()
 }
 
+/// What the change does, in the words `/agent` shows: "Here is what Finance can do" with each
+/// change as "Was … Now …", or what a removal ends (spec 3.3 §5.7). Each line is escaped.
 fn print_preview(answer: &serde_json::Value) {
-    let preview = &answer["preview"];
-    let name = adk_surface_line(answer["name"].as_str().unwrap_or_default());
-    if let Some(ended) = preview.get("ended").filter(|ended| !ended.is_null()) {
-        let count = |key: &str| ended[key].as_array().map_or(0, Vec::len);
-        println!(
-            "Removing {name} stops {} piece(s) of work, ends {} decision(s) waiting for you and {} routine(s). Its threads stay.",
-            count("work"),
-            count("decisions"),
-            count("routines")
-        );
-        return;
+    for line in answer["text"].as_str().unwrap_or_default().lines() {
+        println!("{}", adk_surface_line(line));
     }
-    println!("Here is what {name} can do:");
-    for ability in preview["abilities"].as_array().into_iter().flatten() {
-        println!("  - {}", adk_surface_line(ability.as_str().unwrap_or_default()));
-    }
-    let risk = match preview["risk"].as_str() {
-        Some("low") => "Low risk",
-        Some("medium") => "Medium risk",
-        _ => "High risk",
-    };
-    println!("{risk} · You can remove it later");
 }
 
 #[cfg(test)]
@@ -474,6 +499,26 @@ mod tests {
             ]
         );
         assert!(model_choices(None, |_| false).is_empty());
+    }
+
+    /// Wave 3 finding 2: an added agent in an area gets only the drivers its definition names.
+    #[test]
+    fn an_added_agent_reaches_only_the_area_drivers_it_names() {
+        use adk_kernel::agents::{AgentDefinition, AgentOrigin, AgentRecordState, AgentUses};
+        let record = |uses: AgentUses| {
+            AgentRecord::new(
+                "finance",
+                AgentDefinition::new("Finance", "home").with_uses(uses),
+                AgentRecordState::Active,
+                AgentOrigin::ByHand,
+                adk_core::SubjectRef::human("alice"),
+                chrono::Utc::now(),
+            )
+        };
+        let area = ["calendar".to_string(), "mail".to_string()];
+        assert!(area_drivers(&record(AgentUses::default()), &area).is_empty());
+        let calendar = record(AgentUses::default().with_driver("calendar").with_driver("bank"));
+        assert_eq!(area_drivers(&calendar, &area), ["calendar"]);
     }
 
     #[tokio::test]

@@ -566,9 +566,10 @@ impl Setup {
             builder = builder.pack(*pack);
         }
         // `--pack browser` (spec 3.1 §7.24): the WebDriver endpoint from ADK_WEBDRIVER_URL, else
-        // adk-browser's default `http://localhost:4444`; `--allow-domain` is the allowlist.
+        // adk-browser's default `http://localhost:4444`; `--allow-domain` is the allowlist. An
+        // added agent gets it only when its definition names it (spec 3.3 §5.7).
         #[cfg(feature = "browser")]
-        if self.resolved.packs.contains(&adk_harness::Pack::Browser) {
+        if packs.contains(&adk_harness::Pack::Browser) {
             let mut config = adk_browser::BrowserConfig::default();
             if let Ok(url) = std::env::var("ADK_WEBDRIVER_URL")
                 && !url.trim().is_empty()
@@ -624,12 +625,21 @@ impl Setup {
             // the drivers its own list names (spec 3.2 §7.7, §7.8); the coordinator's also
             // reaches the other partitions' drivers, each call a crossing (K-I15).
             (Some((partition, table, coordinator)), drivers) => {
+                let (area, area_drivers) = (partition.id.clone(), partition.drivers.clone());
                 builder = builder.partition(partition, table);
                 if coordinator {
                     builder = builder.partition_coordinator();
                 }
                 if let Some(drivers) = drivers {
-                    builder = builder.partition_drivers(&drivers);
+                    // An added agent reaches only the area's drivers its definition names
+                    // (spec 3.3 §5.7, S-I12).
+                    builder = match &extras.added {
+                        Some(added) => {
+                            let ids = agents::area_drivers(&added.record, &area_drivers);
+                            builder.kernel_drivers(&drivers, &area, &ids)
+                        }
+                        None => builder.partition_drivers(&drivers),
+                    };
                     if coordinator && !extras.driver_crossings.is_empty() {
                         builder =
                             builder.partition_driver_crossings(&drivers, extras.driver_crossings);

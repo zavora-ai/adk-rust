@@ -30,7 +30,7 @@ use adk_kernel::agents::{
     ShellAccess, WebAccess,
 };
 use adk_kernel::control::{CommandReach, ControlTransport};
-use serde_json::{Value, json};
+use serde_json::json;
 
 /// What `/agent` answers without a kernel (spec 3.3 §10 L1).
 pub(crate) const NO_KERNEL: &str =
@@ -119,6 +119,8 @@ struct Line {
     target: Option<String>,
     fields: Vec<(String, String)>,
     confirm: Option<String>,
+    /// The version an edit or removal was made against: the one the person saw.
+    version: Option<u64>,
     json: bool,
 }
 
@@ -165,6 +167,10 @@ fn parse(args: &str) -> Result<Line> {
         };
         if flag == "confirm" {
             line.confirm = Some(value);
+        } else if flag == "version" {
+            line.version = Some(value.parse().map_err(|_| {
+                invalid(format!("--version is the agent's version as shown, not `{value}`"))
+            })?);
         } else if FIELDS.contains(&flag.as_str()) {
             line.fields.push((flag, value));
         } else {
@@ -310,13 +316,15 @@ fn apply_fields(
     Ok(definition)
 }
 
-/// The agent `target` names: its id, or its name ignoring case.
+/// The agent `target` names: its id, or its name ignoring case. A removed agent is not one of
+/// the person's agents any more.
 async fn find(agents: &Agents, target: Option<&str>) -> Result<AgentRecord> {
     let target = target.ok_or_else(|| invalid("name the agent: /agent show Finance"))?;
     let views = agents.list().await.map_err(AdkError::from)?;
     views
         .into_iter()
         .map(|view| view.agent)
+        .filter(|record| record.state != AgentRecordState::Removed)
         .find(|record| record.id == target || record.display_name.eq_ignore_ascii_case(target))
         .ok_or_else(|| {
             AdkError::new(
@@ -408,7 +416,72 @@ fn adk_surface_safe(text: &str) -> String {
         .collect()
 }
 
-fn preview_text(preview: &AgentPreview, name: &str, confirm_line: &str) -> String {
+/// One field of a definition in the words of "Here is what Finance can do": its label and its
+/// value as the person reads it.
+fn field_words(field: &str, definition: &AgentDefinition) -> (&'static str, String) {
+    let uses = &definition.uses;
+    match field {
+        "displayName" => ("Name", definition.display_name.clone()),
+        "color" => ("Colour", definition.color.to_string()),
+        "description" => ("What it does", definition.description.clone()),
+        "instructions" => ("Instructions", definition.instructions.clone()),
+        "area" => ("Area", definition.area.to_string()),
+        "mode" => (
+            "How much it asks first",
+            match definition.mode {
+                PartitionMode::ReadOnly => "Just look",
+                PartitionMode::Plan => "Suggest",
+                PartitionMode::Ask => "Ask first",
+                _ => "Go ahead",
+            }
+            .to_string(),
+        ),
+        "model" => (
+            "Runs on",
+            definition
+                .model
+                .as_ref()
+                .map_or("the primary agent's model".to_string(), |model| model.model.clone()),
+        ),
+        "dailyLimitMicroUsd" => (
+            "Daily spending limit",
+            definition.daily_limit_micro_usd.map_or("the area's".to_string(), |limit| {
+                format!("${:.2}", limit as f64 / 1_000_000.0)
+            }),
+        ),
+        _ => {
+            let place = uses.folder.as_deref().unwrap_or("the workspace");
+            let files = match uses.files {
+                FileAccess::None => "no files".to_string(),
+                FileAccess::Read => format!("reads files in {place}"),
+                FileAccess::ReadWrite => format!("reads and changes files in {place}"),
+            };
+            let shell = match uses.shell {
+                ShellAccess::None => "no shell",
+                ShellAccess::Sandboxed => "the shell in the sandbox",
+                ShellAccess::Host => "a shell on this computer",
+            };
+            let web = match &uses.web {
+                WebAccess::None => "no web".to_string(),
+                WebAccess::Listed { hosts } => format!("listed sites only ({})", hosts.join(", ")),
+                WebAccess::Any => "any site".to_string(),
+            };
+            let mut parts = vec![files, shell.to_string(), web];
+            if !uses.packs.is_empty() {
+                parts.push(format!("packs {}", uses.packs.join(", ")));
+            }
+            if !uses.drivers.is_empty() {
+                parts.push(format!("drivers {}", uses.drivers.join(", ")));
+            }
+            ("What it can use", parts.join("; "))
+        }
+    }
+}
+
+/// What a change does, as the person reads it before confirming (spec 3.3 §5.7): **Here is
+/// what Finance can do** with each changed field as "Was … Now …" and the risk, or for a
+/// removal the sentence naming what ends.
+pub(crate) fn preview_words(preview: &AgentPreview, name: &str) -> String {
     let mut out = String::new();
     if let Some(ended) = &preview.ended {
         let count = |n: usize, one: &str, many: &str| {
@@ -445,44 +518,42 @@ fn preview_text(preview: &AgentPreview, name: &str, confirm_line: &str) -> Strin
             ),
         };
         let _ = writeln!(out, "{body}. Its threads stay.");
-    } else {
-        let _ = writeln!(out, "Here is what {name} can do:");
-        for ability in &preview.abilities {
-            let _ = writeln!(out, "  - {}", adk_surface_safe(ability));
-        }
-        if let (Some(was), Some(now)) = (&preview.was, &preview.now) {
-            for field in &preview.fields {
-                let pick = |definition: &AgentDefinition| {
-                    serde_json::to_value(definition)
-                        .ok()
-                        .and_then(|value| value.get(field).cloned())
-                        .map_or_else(String::new, |value| match value {
-                            Value::String(text) => text,
-                            other => other.to_string(),
-                        })
-                };
-                let _ = writeln!(
-                    out,
-                    "  {field}: was {} now {}",
-                    adk_surface_safe(&pick(was)),
-                    adk_surface_safe(&pick(now))
-                );
-            }
-        }
-        let risk = match preview.risk {
-            adk_core::ApprovalRisk::Low => "Low risk",
-            adk_core::ApprovalRisk::Medium => "Medium risk",
-            _ => "High risk",
-        };
-        let money = if preview.money { " · spends money" } else { "" };
-        let _ = writeln!(out, "{risk}{money} · You can remove it later");
-        if preview.needs_presence() {
+        return out;
+    }
+    let _ = writeln!(out, "Here is what {name} can do:");
+    for ability in &preview.abilities {
+        let _ = writeln!(out, "  - {}", adk_surface_safe(ability));
+    }
+    if let (Some(was), Some(now)) = (&preview.was, &preview.now) {
+        for field in &preview.fields {
+            let (label, before) = field_words(field, was);
+            let (_, after) = field_words(field, now);
             let _ = writeln!(
                 out,
-                "High risk: confirm it on the kernel's own terminal, or in the web home after confirming it's you."
+                "  {label}: Was {} · Now {}",
+                adk_surface_safe(&before),
+                adk_surface_safe(&after)
             );
         }
     }
+    let risk = match preview.risk {
+        adk_core::ApprovalRisk::Low => "Low risk",
+        adk_core::ApprovalRisk::Medium => "Medium risk",
+        _ => "High risk",
+    };
+    let money = if preview.money { " · spends money" } else { "" };
+    let _ = writeln!(out, "{risk}{money} · You can remove it later");
+    if preview.needs_presence() {
+        let _ = writeln!(
+            out,
+            "High risk: confirm it on the kernel's own terminal, or in the web home after confirming it's you."
+        );
+    }
+    out
+}
+
+fn preview_text(preview: &AgentPreview, name: &str, confirm_line: &str) -> String {
+    let mut out = preview_words(preview, name);
     let _ = write!(out, "To confirm: {confirm_line} --confirm {}", preview.code());
     out
 }
@@ -507,9 +578,15 @@ pub(crate) async fn run(
     match line.verb.as_str() {
         "list" | "ls" => {
             let views = agents.list().await.map_err(AdkError::from)?;
+            // The JSON carries every agent with its state, removed ones included, for the
+            // Agents view's "Removed agents" (spec 3.3 §5.7); the words list the person's own.
             if line.json {
                 return Ok(json!({ "agents": views }).to_string());
             }
+            let views: Vec<AgentView> = views
+                .into_iter()
+                .filter(|view| view.agent.state != AgentRecordState::Removed)
+                .collect();
             if views.is_empty() {
                 return Ok(
                     "No agents of your own yet. Add one with /agent new --name NAME, or ask ADK-Rust to suggest one."
@@ -568,9 +645,11 @@ pub(crate) async fn run(
             let record = find(&agents, line.target.as_deref()).await?;
             let definition = apply_fields(record.definition(), &line.fields)?;
             let name = definition.display_name.clone();
+            // Against the version the person saw: a change made since is not overwritten
+            // (spec 3.3 §5.7).
             let action = AgentAction::Change {
                 id: record.id.clone(),
-                expected_version: record.version,
+                expected_version: line.version.unwrap_or(record.version),
                 definition,
             };
             confirm_or_preview(
@@ -588,9 +667,10 @@ pub(crate) async fn run(
             let action = match line.verb.as_str() {
                 "pause" => AgentAction::Pause { id: record.id.clone() },
                 "resume" => AgentAction::Resume { id: record.id.clone() },
-                _ => {
-                    AgentAction::Remove { id: record.id.clone(), expected_version: record.version }
-                }
+                _ => AgentAction::Remove {
+                    id: record.id.clone(),
+                    expected_version: line.version.unwrap_or(record.version),
+                },
             };
             let name = record.display_name.clone();
             confirm_or_preview(
@@ -650,9 +730,13 @@ async fn confirm_or_preview(
     let preview = agents.preview(caller, &action).await.map_err(AdkError::from)?;
     let Some(code) = &line.confirm else {
         if line.json {
-            return Ok(
-                json!({ "preview": preview, "code": preview.code(), "name": name }).to_string()
-            );
+            return Ok(json!({
+                "preview": preview,
+                "code": preview.code(),
+                "name": name,
+                "text": preview_words(&preview, &adk_surface_safe(name)),
+            })
+            .to_string());
         }
         return Ok(preview_text(&preview, name, confirm_line));
     };
@@ -697,6 +781,8 @@ async fn confirm_or_preview(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
+
     use super::*;
 
     #[test]
@@ -781,6 +867,101 @@ mod tests {
             args_without_confirm(r#"new --name "Finance team" --confirm abc123 --json"#),
             r#"new --name "Finance team""#
         );
+    }
+
+    /// A kernel whose agents are kept but never built: a change is all these tests need.
+    fn kernel() -> (adk_kernel::Kernel, AgentsHandle) {
+        struct NoBuild;
+
+        #[async_trait::async_trait]
+        impl adk_kernel::agents::AgentFactory for NoBuild {
+            fn assess(&self, _record: &AgentRecord) -> adk_kernel::agents::AgentAssessment {
+                adk_kernel::agents::AgentAssessment::new(adk_core::ApprovalRisk::Low)
+            }
+            async fn ceiling(
+                &self,
+                _agent: &adk_core::AgentId,
+                _session: &str,
+            ) -> adk_kernel::Result<Option<adk_kernel::agents::AgentCeiling>> {
+                Ok(None)
+            }
+            async fn choices(&self) -> adk_kernel::Result<adk_kernel::agents::AgentChoices> {
+                Ok(adk_kernel::agents::AgentChoices::default())
+            }
+            async fn build(
+                &self,
+                _record: &AgentRecord,
+            ) -> adk_kernel::Result<adk_kernel::agents::HostedAgent> {
+                Err(adk_kernel::KernelError::Config { reason: "not built in this test".into() })
+            }
+            async fn retired(&self, _record: &AgentRecord) -> adk_kernel::Result<u64> {
+                Ok(0)
+            }
+        }
+
+        let handle = AgentsHandle::new();
+        let kernel =
+            adk_kernel::Kernel::builder()
+                .config(adk_kernel::KernelConfig::default().with_app_name("adk-rust").with_control(
+                    adk_kernel::control::ControlPlaneConfig::default().without_socket(),
+                ))
+                .run_store(std::sync::Arc::new(adk_core::InMemoryRunStore::new()))
+                .agent_factory(std::sync::Arc::new(NoBuild))
+                .agents_handle(handle.clone())
+                .build()
+                .unwrap();
+        (kernel, handle)
+    }
+
+    /// `/agent args` previewed, then confirmed with its code, as `reach`.
+    async fn confirmed(handle: &AgentsHandle, reach: &CommandReach, args: &str) -> Result<String> {
+        let preview = run(Some(handle), "ana", Some(reach), &format!("{args} --json")).await?;
+        let preview: Value = serde_json::from_str(&preview).unwrap();
+        let code = preview["code"].as_str().unwrap().to_string();
+        run(Some(handle), "ana", Some(reach), &format!("{args} --confirm {code}")).await
+    }
+
+    /// Wave 3 findings 14 and 22: an edit is made against the version the person saw, so one
+    /// made since is never overwritten; the preview shows each change as "Was … Now …".
+    #[tokio::test]
+    async fn an_edit_is_made_against_the_version_the_person_saw() {
+        let (_kernel, handle) = kernel();
+        let local = CommandReach::new(ControlTransport::Socket);
+        confirmed(&handle, &local, "new --name Finance --asks ask-first").await.unwrap();
+        confirmed(&handle, &local, r#"edit finance --instructions "Draft only""#).await.unwrap();
+        let stale =
+            run(Some(&handle), "ana", Some(&local), "edit finance --version 1 --asks suggest")
+                .await
+                .unwrap_err();
+        assert_eq!(stale.code, "kernel.agent.out_of_date", "{stale}");
+        let preview =
+            run(Some(&handle), "ana", Some(&local), "edit finance --version 2 --asks suggest")
+                .await
+                .unwrap();
+        assert!(
+            preview.contains("How much it asks first: Was Ask first · Now Suggest"),
+            "{preview}"
+        );
+        let json = run(Some(&handle), "ana", Some(&local), "remove finance --json").await.unwrap();
+        let json: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            json["text"],
+            "Removing Finance ends nothing that is running. Its threads stay.\n"
+        );
+    }
+
+    /// Wave 3 findings 17–19: a terminal over HTTP pauses an agent but never resumes one;
+    /// the kernel's own terminal does.
+    #[tokio::test]
+    async fn resume_over_http_is_refused() {
+        let (_kernel, handle) = kernel();
+        let local = CommandReach::new(ControlTransport::Socket);
+        let http = CommandReach::new(ControlTransport::Http);
+        confirmed(&handle, &local, "new --name Finance --asks suggest").await.unwrap();
+        confirmed(&handle, &http, "pause finance").await.unwrap();
+        let error = confirmed(&handle, &http, "resume finance").await.unwrap_err();
+        assert_eq!(error.code, "kernel.agent.refused", "{error}");
+        assert!(confirmed(&handle, &local, "resume finance").await.unwrap().contains("runs again"));
     }
 
     #[tokio::test]

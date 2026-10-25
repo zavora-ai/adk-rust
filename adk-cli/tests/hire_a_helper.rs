@@ -528,6 +528,13 @@ async fn hire_a_helper_on(store: Option<String>) {
     let code = preview["code"].as_str().expect("a confirming code").to_string();
     let removed = api.agent(&format!("remove finance --confirm {code} --json")).await;
     assert_eq!(removed["outcome"]["outcome"], "removed", "{removed}");
+    // Its rule — the one copied to it — is revoked with it (S-I16).
+    assert_eq!(removed["outcome"]["ended"]["rules"], 1, "{removed}");
+    let rules = api.get("/api/rules").await;
+    assert!(
+        !rules.to_string().contains("\"urn:adk:agent:adk-rust/finance\""),
+        "the removed agent's rule is gone: {rules}"
+    );
     assert!(api.row("finance").await.is_none());
     // The decision ended without an answer; answering it now changes nothing.
     let ended_card = eventually("the decision ended", || async {

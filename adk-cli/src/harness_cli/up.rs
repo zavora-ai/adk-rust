@@ -383,6 +383,9 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             primary.harness.agent().runtime().standing_rules().clone(),
             build,
         )
+        .with_areas(hosted.iter().filter_map(|hosted| {
+            hosted.partition.clone().map(|area| (area, hosted.harness.clone()))
+        }))
     };
     // Re-approving a driver carries the re-approving person's standing rules forward.
     drivers.set_rule_pins(primary.harness.driver_rule_pins());
