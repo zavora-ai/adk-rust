@@ -340,3 +340,87 @@ async fn a_held_call_is_allowed_once_from_the_chat_and_a_second_answer_is_alread
     assert_eq!(bindings.len(), 1);
     world.stop().await;
 }
+
+/// Removing an account stops its turns that have not finished, the one waiting on a
+/// decision and the one queued behind it: neither runs as the person afterwards (spec 3.3
+/// §10 K1, S-I6).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn removing_an_account_stops_its_unfinished_turns() {
+    let world = World::start(vec![
+        ScriptedResponse::function_call("send_email", json!({ "to": CANARY, "subject": "Q3" })),
+        ScriptedResponse::text("Sent."),
+        ScriptedResponse::text("Done."),
+    ])
+    .await;
+    world.pair("4217", "dm-4217").await;
+    let first = world.chat.text("4217", "dm-4217", "email the Q3 folder");
+    let InboundOutcome::TurnStarted { pid: held } = world.gateway.receive(first).await.unwrap()
+    else {
+        panic!("the message starts a turn");
+    };
+    let runs = world.runs.clone();
+    eventually("the held turn", || {
+        let (runs, held) = (runs.clone(), held.clone());
+        async move {
+            (runs.get(&held).await.unwrap().unwrap().state == RunState::Waiting).then_some(())
+        }
+    })
+    .await;
+    let second = world.chat.text("4217", "dm-4217", "and the Q4 folder");
+    let InboundOutcome::TurnStarted { pid: queued } = world.gateway.receive(second).await.unwrap()
+    else {
+        panic!("the second message starts a turn");
+    };
+    assert_eq!(world.runs.get(&queued).await.unwrap().unwrap().state, RunState::Queued);
+
+    let account = world.operator().channel_accounts().await.unwrap().accounts.remove(0);
+    world.operator().revoke_channel_account(&account.id).await.unwrap();
+    for pid in [&held, &queued] {
+        let runs = runs.clone();
+        let pid = pid.clone();
+        eventually("the turn stopped", || {
+            let (runs, pid) = (runs.clone(), pid.clone());
+            async move { runs.get(&pid).await.unwrap().unwrap().state.is_terminal().then_some(()) }
+        })
+        .await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(world.calls.load(Ordering::SeqCst), 0, "nothing ran as the person");
+    assert_eq!(world.model.requests().len(), 1, "the queued turn made no model call");
+    world.stop().await;
+}
+
+/// A decision asked inside the quiet time the person set while the kernel runs is not
+/// carded until it ends (spec 3.3 §8.1, §10 K3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_card_waits_for_the_quiet_time_the_person_set() {
+    use chrono::Timelike as _;
+
+    let world = World::start(vec![
+        ScriptedResponse::function_call("send_email", json!({ "to": CANARY, "subject": "Q3" })),
+        ScriptedResponse::text("Sent."),
+    ])
+    .await;
+    world.pair("4217", "dm-4217").await;
+    let now = chrono::Utc::now();
+    let hour = |offset: i64| (now + chrono::Duration::hours(offset)).hour();
+    let window = format!("{:02}:00-{:02}:00", hour(-1), hour(1))
+        .parse::<adk_kernel::QuietHours>()
+        .unwrap()
+        .with_utc_offset_minutes(0);
+    world.operator().set_quiet_time("default", Some(window)).await.unwrap();
+
+    let message = world.chat.text("4217", "dm-4217", "send the October invoice");
+    let InboundOutcome::TurnStarted { pid } = world.gateway.receive(message).await.unwrap() else {
+        panic!("the message starts a turn");
+    };
+    let runs = world.runs.clone();
+    eventually("the held call", || {
+        let (runs, pid) = (runs.clone(), pid.clone());
+        async move { (runs.get(&pid).await.unwrap().unwrap().state == RunState::Waiting).then_some(()) }
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(world.chat.last_card("dm-4217").is_none(), "no card during quiet time");
+    world.stop().await;
+}
