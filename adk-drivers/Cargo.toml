@@ -1,0 +1,79 @@
+[package]
+name = "adk-drivers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Service drivers for ADK-Rust agents: DNS and registrar, email, analytics and search console, social and advertising, each with a kernel driver manifest, a conformance suite and reference adapters"
+repository.workspace = true
+documentation = "https://docs.rs/adk-drivers"
+readme = "README.md"
+keywords = ["adk", "agent", "dns", "email", "drivers"]
+categories = ["asynchronous", "network-programming"]
+
+# Spec 3.5 §7.13: the contracts, manifests, rules, toolsets and in-memory adapters always
+# build; each reference adapter is a feature, so a host takes only the protocols it uses.
+[features]
+default = ["rfc2136", "rdap", "imap-smtp", "system-dns", "plausible", "search-console", "mastodon"]
+# DNS records over RFC 2136 dynamic update with TSIG, read by AXFR (spec 3.5 §7.13).
+rfc2136 = ["dep:hickory-proto", "dep:hmac"]
+# Domain expiry over RDAP, RFC 9083 (spec 3.5 §7.13).
+rdap = ["dep:reqwest", "adk-core/rustls"]
+# Email over IMAP and SMTP, plain on loopback or under TLS (spec 3.5 §7.13).
+imap-smtp = ["dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "adk-core/rustls"]
+# SPF, DKIM and DMARC lookups through the system's resolver (spec 3.5 §7.13).
+system-dns = ["dep:hickory-resolver"]
+# Analytics through the Plausible Stats API v2 (spec 3.5 §7.12, §7.13).
+plausible = ["dep:reqwest", "adk-core/rustls"]
+# Search performance through a search-console Search Analytics API (spec 3.5 §7.12, §7.13).
+search-console = ["dep:reqwest", "adk-core/rustls"]
+# Social through the Mastodon client API of an ActivityPub server (spec 3.5 §7.13).
+mastodon = ["dep:reqwest", "adk-core/rustls"]
+# The conformance suites for every driver contract (spec 3.5 §11).
+conformance = []
+
+[dependencies]
+adk-core.workspace = true
+# Driver manifests, effect classes and the partitions they serve (spec 3.2 §7.7), and the
+# KPI tracker's source contract the metric drivers implement (spec 3.5 §7.11).
+adk-kernel = { workspace = true, features = ["charter"] }
+# The MCP server configuration a driver manifest names.
+adk-tool = { workspace = true, features = ["mcp"] }
+async-trait.workspace = true
+# The charter's autonomy levels a driver tool's default cap starts a job at (spec 3.5 §7.11).
+awp-types.workspace = true
+base64 = "0.22"
+chrono.workspace = true
+futures.workspace = true
+hickory-proto = { version = "0.26", optional = true }
+hickory-resolver = { version = "0.26", optional = true }
+hmac = { version = "0.12", optional = true }
+reqwest = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+rustls-native-certs = { version = "0.8", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "net", "io-util", "macros", "rt"] }
+tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["logging", "tls12"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# Internal dev-deps are path-only (no version) so cargo strips them from the published
+# manifest. The self dependency lets the crate's own tests run the conformance suites.
+adk-drivers = { path = ".", features = ["conformance"] }
+adk-agent = { path = "../adk-agent" }
+adk-model = { path = "../adk-model", default-features = false, features = ["anthropic"] }
+adk-runner = { path = "../adk-runner" }
+adk-session = { path = "../adk-session" }
+axum = "0.8"
+dotenvy = "0.15"
+proptest = "1.5"
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }
+tokio = { workspace = true, features = ["full"] }
+
+[package.metadata.docs.rs]
+all-features = true

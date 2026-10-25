@@ -1,0 +1,5 @@
+{
+  "results": [{"metrics": [0], "dimensions": []}],
+  "meta": {},
+  "query": {"site_id": "bakery.example", "metrics": ["visitors"], "date_range": ["2026-10-20T00:00:00+00:00", "2026-10-20T23:59:59+00:00"], "filters": [], "dimensions": []}
+}

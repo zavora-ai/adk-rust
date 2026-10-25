@@ -521,6 +521,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-drivers"
+version = "3.0.0"
+dependencies = [
+ "adk-agent",
+ "adk-core",
+ "adk-drivers",
+ "adk-kernel",
+ "adk-model",
+ "adk-runner",
+ "adk-session",
+ "adk-tool",
+ "async-trait",
+ "awp-types",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "dotenvy",
+ "futures",
+ "hickory-proto",
+ "hickory-resolver",
+ "hmac 0.12.1",
+ "proptest",
+ "rcgen",
+ "reqwest 0.12.28",
+ "rustls",
+ "rustls-native-certs 0.8.4",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "uuid 1.25.0",
+]
+
+[[package]]
 name = "adk-durability-gates"
 version = "0.0.0"
 dependencies = [

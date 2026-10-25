@@ -1,0 +1,22 @@
+{
+  "id": "0",
+  "created_at": "2026-10-20T08:00:00.000Z",
+  "in_reply_to_id": null,
+  "in_reply_to_account_id": null,
+  "sensitive": false,
+  "spoiler_text": "",
+  "visibility": "public",
+  "language": "en",
+  "uri": "https://social.example/users/ana/statuses/0",
+  "url": "https://social.example/@ana/0",
+  "replies_count": 0,
+  "reblogs_count": 0,
+  "favourites_count": 0,
+  "content": "",
+  "reblog": null,
+  "account": {"id": "1", "username": "ana", "acct": "ana@social.example", "display_name": "Ana", "url": "https://social.example/@ana"},
+  "media_attachments": [],
+  "mentions": [],
+  "tags": [],
+  "emojis": []
+}

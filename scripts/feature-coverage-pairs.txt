@@ -146,6 +146,9 @@
 # `adk-rust` as the terminal surface in a pseudo-terminal: full screen, inline, JSON, a
 # kernel on its socket and a paired one over HTTP (spec 3.3 §5.2, §10 K2).
 2 adk-cli tui,scripted-model
+# Service drivers (spec 3.5 §7.13): the contracts, manifests, rules and in-memory adapters
+# without a reference adapter, with their conformance suites.
+2 adk-drivers conformance no-default
 
 # Shard 3 — adk-graph, adk-managed, adk-code.
 # No workspace member enables these four; four clippy failures and two uncompilable doc
