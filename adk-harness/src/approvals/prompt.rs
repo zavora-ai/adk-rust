@@ -19,6 +19,54 @@ use crate::mode::HarnessMode;
 use crate::policy::{HarnessPolicy, PromptContext, ToolKind};
 use crate::shell::IsolationStatus;
 
+/// A standing rule that allowed a call without asking (spec 3.1 §7.33 fix 3).
+///
+/// # Example
+///
+/// ```rust
+/// let hit = adk_harness::RuleHit::new("r1", Some(3), "bash", "bash: cargo test …");
+/// assert_eq!(hit.to_string(), "[allowed by rule 3] bash: cargo test …");
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RuleHit {
+    /// The rule's id.
+    pub rule_id: String,
+    /// The rule's number as `/rules` lists it: every rule of the user, oldest first.
+    pub number: Option<usize>,
+    /// The tool the call was made to.
+    pub tool: String,
+    /// What the rule matches.
+    pub label: String,
+}
+
+impl RuleHit {
+    /// A rule hit.
+    pub fn new(
+        rule_id: impl Into<String>,
+        number: Option<usize>,
+        tool: impl Into<String>,
+        label: impl Into<String>,
+    ) -> Self {
+        Self { rule_id: rule_id.into(), number, tool: tool.into(), label: label.into() }
+    }
+}
+
+/// `[allowed by rule N] <tool>: <label>`, the label alone when it already names the tool.
+impl fmt::Display for RuleHit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.number {
+            Some(number) => write!(f, "[allowed by rule {number}] ")?,
+            None => write!(f, "[allowed by a standing rule] ")?,
+        }
+        if self.label.starts_with(&format!("{}:", self.tool)) {
+            write!(f, "{}", self.label)
+        } else {
+            write!(f, "{}: {}", self.tool, self.label)
+        }
+    }
+}
+
 /// Asks a person to decide one held call (spec 3.1 §7.5).
 ///
 /// Implemented by interactive surfaces: a terminal, an editor, a chat channel.
@@ -43,6 +91,14 @@ use crate::shell::IsolationStatus;
 pub trait ApprovalPrompter: fmt::Debug + Send + Sync {
     /// Shows `prompt` and returns the person's answer.
     async fn prompt(&self, prompt: ApprovalPrompt) -> Result<PromptAnswer>;
+
+    /// Tells the person a standing rule allowed a call the mode would have asked about, so
+    /// the call does not run unannounced (spec 3.1 §7.33 fix 3). The policy calls it for a
+    /// call a rule allows when it is evaluated, and the handler when a rule granted for an
+    /// earlier call of the batch answers a held one. The default shows nothing.
+    fn rule_applied(&self, hit: &RuleHit) {
+        let _ = hit;
+    }
 
     /// Shows a partition crossing (spec 3.2 §7.8) and returns the person's answer: "allow
     /// this read of *X* for this run" (once, for a change), "deny", or "deny and block
@@ -511,8 +567,14 @@ impl PromptingConfirmationHandler {
             None => evaluated.decision.clone(),
         };
         match &composed {
-            // Held by the harness alone, and the harness now allows it.
-            PolicyDecision::Allow if context.harness_held => return Ok(ToolApproval::approve()),
+            // Held by the harness alone, and the harness now allows it: a rule granted for an
+            // earlier call of the batch answers it, and the person is told so.
+            PolicyDecision::Allow if context.harness_held => {
+                if let Some(hit) = &evaluated.rule {
+                    self.prompter.rule_applied(hit);
+                }
+                return Ok(ToolApproval::approve());
+            }
             // Held by another layer or the agent's confirmation policy: the person decides.
             PolicyDecision::Allow => {}
             PolicyDecision::Deny { reason } => return Ok(refuse(reason.clone())),

@@ -9,7 +9,7 @@ mod store;
 pub(crate) use prompt::rule_audit_fields;
 pub use prompt::{
     ApprovalPrompt, ApprovalPrompter, DEFAULT_PROMPTS_PER_TURN, PromptAnswer,
-    PromptingConfirmationHandler, RENDERED_CALL_MAX_BYTES, RenderedCall, escape_control,
+    PromptingConfirmationHandler, RENDERED_CALL_MAX_BYTES, RenderedCall, RuleHit, escape_control,
 };
 pub use rule::{
     ArgSpec, OriginPin, RuleOwner, RulePredicate, RuleScope, RuleSuggestion,

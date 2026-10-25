@@ -238,6 +238,11 @@ fn kind_label(kind: &ToolKind) -> String {
 
 #[async_trait]
 impl ApprovalPrompter for ConsolePrompter {
+    /// `[allowed by rule N] bash: cargo test …` before the call runs (spec 3.1 §7.33 fix 3).
+    fn rule_applied(&self, hit: &adk_harness::RuleHit) {
+        self.console.print(&format!("{}\n", terminal_safe(&hit.to_string())));
+    }
+
     async fn prompt(&self, prompt: ApprovalPrompt) -> Result<PromptAnswer> {
         if let Some(allow_unsandboxed) = self.approve_all {
             return Ok(self.approved_unattended(&prompt, allow_unsandboxed));
@@ -396,6 +401,47 @@ mod tests {
         let shown = console.transcript();
         assert!(shown.contains("[1] bash: cargo test … (every session)"), "{shown}");
         assert!(shown.contains("runs project scripts"), "{shown}");
+    }
+
+    #[test]
+    fn a_rule_hit_is_printed_before_the_call_runs() {
+        let (prompter, console) = scripted([]);
+        prompter.rule_applied(&adk_harness::RuleHit::new(
+            "r1",
+            Some(3),
+            "bash",
+            "bash: cargo test …",
+        ));
+        assert!(console.transcript().contains("[allowed by rule 3] bash: cargo test …\n"));
+    }
+
+    #[tokio::test]
+    async fn an_edit_suggestion_names_its_scope_once() {
+        let request = ToolConfirmationRequest::new(
+            "edit_file",
+            json!({ "path": "src/lib.rs", "old_string": "a", "new_string": "b" }),
+        )
+        .with_function_call_id("call-1")
+        .with_origin(ToolOrigin::new("static", &json!({ "name": "edit_file" }), None));
+        let suggestions = StandingRule::suggestions(&request);
+        let rendered = RenderedCall::render(&request, &IsolationStatus::Host, 4096);
+        let prompt = ApprovalPrompt {
+            request,
+            kind: ToolKind::Edit,
+            mode: HarnessMode::Ask,
+            isolation: IsolationStatus::Host,
+            suggestions,
+            rendered,
+        };
+        let (prompter, console) = scripted([line("a"), line("1")]);
+        prompter.prompt(prompt).await.unwrap();
+        let shown = console.transcript();
+        assert!(
+            shown.contains("[1] edit_file: anywhere in the workspace (this session)"),
+            "{shown}"
+        );
+        assert!(shown.contains("[2] edit_file: within src/ (this session)"), "{shown}");
+        assert!(!shown.contains("(this session) (this session)"), "{shown}");
     }
 
     #[tokio::test]
