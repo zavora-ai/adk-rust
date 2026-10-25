@@ -34,6 +34,7 @@ use crate::ultra::{self, UltraAgents};
 use crate::{BuiltModel, ResolvedModel};
 
 mod books;
+mod manifest;
 mod service;
 #[cfg(feature = "tui")]
 pub mod surface;
@@ -393,7 +394,10 @@ impl Setup {
             .effort(effort)
             .workspace(workspace)
             .mode(mode)
-            .confirmation_timeout(adk_cli::launcher::CONSOLE_CONFIRMATION_TIMEOUT);
+            .confirmation_timeout(adk_cli::launcher::CONSOLE_CONFIRMATION_TIMEOUT)
+            // What the person can type, so the model names it (spec 3.1 §7.25); `up` keeps
+            // the inbox-backed memory, so it marks a harness under the kernel.
+            .surface(manifest::cli_surface(extras.memory_with_inbox));
         // Hooks (spec 3.1 §7.22, §8.1): the user config's run before the workspace's, which
         // the harness reads at build; --no-hooks runs none.
         if !self.resolved.hooks {

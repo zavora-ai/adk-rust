@@ -577,6 +577,7 @@ impl HarnessManifest {
         sections.push(("commands", self.render_commands(false)));
         sections.push(("setup", self.render_setup()));
         sections.push(("safety", self.render_safety()));
+        sections.push(("flags", self.render_commands(true)));
         sections.push((
             "help",
             format!(
@@ -591,9 +592,8 @@ impl HarnessManifest {
             if text.is_empty() {
                 continue;
             }
-            if cut.is_empty()
-                && out.len() + text.len() + footer.len() + reserve <= HARNESS_BLOCK_MAX_BYTES
-            {
+            // A section that does not fit is cut; the smaller ones after it still go in.
+            if out.len() + text.len() + footer.len() + reserve <= HARNESS_BLOCK_MAX_BYTES {
                 out.push_str(&text);
             } else {
                 cut.push(name);
@@ -635,25 +635,31 @@ impl HarnessManifest {
         out
     }
 
-    /// The surface's commands: in the block the slash commands, subcommands and flags with
-    /// their summaries; with `full`, each subcommand's usage too.
-    fn render_commands(&self, full: bool) -> String {
-        if self.surface.commands.is_empty() {
+    /// The surface's commands with their summaries: the slash commands and subcommands, or
+    /// with `flags` the flags.
+    fn render_commands(&self, flags: bool) -> String {
+        let mut commands: Vec<CommandEntry> = self
+            .surface
+            .commands
+            .iter()
+            .filter(|command| (command.kind == CommandKind::Flag) == flags)
+            .cloned()
+            .collect();
+        if commands.is_empty() {
             return String::new();
         }
-        let mut commands = self.surface.commands.clone();
         commands.sort_by(|a, b| (a.kind, &a.name).cmp(&(b.kind, &b.name)));
-        let mut out = String::from(
-            "Commands the person types (you cannot run them; when input looks like a mistyped \
-             command, name the closest one and say what it does, and never claim a command ran):\n",
-        );
+        let mut out = if flags {
+            String::from("Flags the person passes:\n")
+        } else {
+            String::from(
+                "Commands the person types (you cannot run them; when input looks like a \
+                 mistyped command, name the closest one and say what it does, and never claim a \
+                 command ran):\n",
+            )
+        };
         for command in &commands {
             let _ = writeln!(out, "  {}  {}", command.typed(&self.surface.name), command.summary);
-            if full && let Some(usage) = &command.usage {
-                for line in usage.lines() {
-                    let _ = writeln!(out, "      {line}");
-                }
-            }
         }
         out
     }
@@ -745,7 +751,8 @@ impl HarnessManifest {
                 format!("Topics: {}\n\n{}", topics.join(", "), self.render())
             }
             Some("commands") => {
-                let commands = self.render_commands(false);
+                let commands =
+                    format!("{}{}", self.render_commands(false), self.render_commands(true));
                 if commands.is_empty() {
                     "This surface has no commands: the harness runs as a library.".to_string()
                 } else {
@@ -846,7 +853,8 @@ mod tests {
     fn a_long_block_is_cut_at_its_cap_and_names_what_it_cut() {
         let block = manifest(400).render();
         assert!(block.len() <= HARNESS_BLOCK_MAX_BYTES, "{} bytes", block.len());
-        assert!(block.contains("Cut for length: commands"), "{block}");
+        assert!(block.contains("Cut for length: flags"), "{block}");
+        assert!(block.contains("Safety"), "the sections after a cut one still go in: {block}");
         assert!(
             block.contains("edit (edit_file): deny | deny | ask | allow"),
             "classes are never cut"

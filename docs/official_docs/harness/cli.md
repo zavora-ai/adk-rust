@@ -214,6 +214,11 @@ asks again.
 | `/hooks` | The hooks on tool events — each with its source, isolation, timeout and whether it runs — and the bounds of one turn (spec 3.1 §7.22); a workspace hook runs only under the workspace's trust |
 | `/help`, `exit` | Lists the commands; leaves the REPL |
 
+A slash line that names no command goes to the agent as typed, after one dim line on the
+console: `no command /aprovals: sent to the agent`. The model knows every command, subcommand
+and flag of `adk-rust` from the `<harness>` block and `harness_help`, so it names the command
+you meant (see [What the harness knows about itself](self-knowledge.md)).
+
 Opening a session that has held calls with decisions resumes them first.
 
 Tab completes a slash command at the start of a line and an `@server:uri` mention

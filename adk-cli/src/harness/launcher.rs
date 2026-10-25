@@ -713,6 +713,11 @@ impl HarnessLauncher {
                 }
                 continue;
             }
+            // The line goes to the agent as typed; the person is told it was no command
+            // (spec 3.1 §7.25).
+            if let Some(notice) = unknown_slash_notice(&trimmed) {
+                println!("\x1b[2m{}\x1b[0m", terminal_safe(&notice));
+            }
             println!();
             let text = shared.expand_mentions(&trimmed).await;
             report(&shared.turn(Some(&text), true).await?);
@@ -1429,5 +1434,31 @@ impl Shared {
 impl std::fmt::Debug for Shared {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Shared").field("session", &self.session).finish_non_exhaustive()
+    }
+}
+
+/// The one line printed when a slash line names no command and goes to the agent
+/// (spec 3.1 §7.25): `no command /aprovals: sent to the agent`. A line starting with a path
+/// (`/src/main.rs`) is no slash command and gets no notice.
+pub(crate) fn unknown_slash_notice(line: &str) -> Option<String> {
+    let word = line.split_whitespace().next()?;
+    let name = word.strip_prefix('/')?;
+    (!name.is_empty() && !name.contains('/'))
+        .then(|| format!("no command {word}: sent to the agent"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unknown_slash_notice;
+
+    #[test]
+    fn a_slash_line_no_command_matches_gets_one_notice() {
+        assert_eq!(
+            unknown_slash_notice("/aprovals please").as_deref(),
+            Some("no command /aprovals: sent to the agent")
+        );
+        assert_eq!(unknown_slash_notice("/src/main.rs explain this"), None, "a path is no command");
+        assert_eq!(unknown_slash_notice("fix the build"), None);
+        assert_eq!(unknown_slash_notice("/"), None);
     }
 }

@@ -82,6 +82,12 @@ read nothing from the workspace or the network.
 
 ## Describing your surface
 
+`adk-rust` describes itself: every slash command of the REPL, every subcommand with its
+`about` and long help, and the flags of the REPL and of `rules add`, `memory`, `sessions`,
+`up` and `wake`, generated from its command table and its clap tree, and whether the session
+runs under `adk-rust up`. The flags are the first section cut when the block runs past
+6 KiB; `harness_help commands` returns them.
+
 A harness built as a library reports `SurfaceManifest::library()`. An application that puts
 its own commands in front of the harness describes them, so the model can name them:
 

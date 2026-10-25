@@ -43,6 +43,7 @@ pub mod ultracode;
 pub use args::{
     HarnessArgs, MemberArg, MemberKindArg, PROJECT_CONFIG_FILE, ResolvedHarnessArgs, SearchArg,
 };
+pub use commands::slash_command_entries;
 pub use kernel::KernelSettings;
 pub use launcher::{HarnessEffortRebuild, HarnessLauncher, HarnessRebuild, TurnOutcome};
 pub use prompter::ConsolePrompter;

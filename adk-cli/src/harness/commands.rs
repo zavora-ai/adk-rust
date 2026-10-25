@@ -54,6 +54,36 @@ const COMMANDS: &[(Kind, &str, &str)] = &[
     (Kind::Hooks, "hooks", "Hooks on tool events: source, isolation and whether each runs"),
 ];
 
+/// The REPL's built-in commands, which take precedence over a registered one of the same
+/// name.
+const BUILT_INS: &[(&str, &str)] = &[
+    ("help", "List the commands"),
+    ("clear", "Clear display (session state is kept)"),
+    ("exit", "Leave the REPL; /quit does the same"),
+];
+
+/// The harness REPL's slash commands, built-in and registered, as the harness manifest
+/// lists them (spec 3.1 §7.25).
+///
+/// # Example
+///
+/// ```rust
+/// let entries = adk_cli::harness::slash_command_entries();
+/// assert!(entries.iter().any(|entry| entry.name == "approvals"));
+/// assert!(entries.iter().any(|entry| entry.name == "help"));
+/// ```
+pub fn slash_command_entries() -> Vec<adk_harness::CommandEntry> {
+    BUILT_INS
+        .iter()
+        .map(|(name, summary)| adk_harness::CommandEntry::slash(*name, *summary))
+        .chain(
+            COMMANDS
+                .iter()
+                .map(|(_, name, summary)| adk_harness::CommandEntry::slash(*name, *summary)),
+        )
+        .collect()
+}
+
 /// One data-driven slash command over the REPL's shared state.
 struct HarnessCommand {
     kind: Kind,
