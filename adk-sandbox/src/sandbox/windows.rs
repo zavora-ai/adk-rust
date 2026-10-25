@@ -41,7 +41,7 @@
 //! | The user's MSYS2 namespace of the program's installation and of each installation on `PATH` | Held at the user's integrity level by an unconfined `cat` of that installation for the call's life, so the Low token can neither create nor write it; an MSYS2 program that a program outside MSYS2 starts itself, such as a hook's `sh` that `git` starts, therefore cannot start |
 //! | The MSYS2 or Cygwin namespace of any other installation | **Not protected** — a command that starts such an installation's program by its path while none of the user's runs creates that namespace at Low integrity, and a program of it the user starts before the command ends shares it |
 //! | Descendant processes | Killed with the call's Job Object |
-//! | Inherited handles | `spawn_contained`'s three standard handles only; `run_confined` inherits none |
+//! | Inherited handles | `spawn_contained`'s three standard handles only, never inheritable in this process, so no process another thread starts can take one; `run_confined` inherits none |
 //! | Network | **Not enforced** — Windows offers no per-process network filter without AppContainer |
 //! | Labels and grants | Persist on the granted paths after the call: `RESTRICTED`'s entry, and a Low label on each read-write path, so any Low-integrity process of the machine may write there |
 
@@ -146,6 +146,12 @@ impl WindowsEnforcer {
     /// The process is held, with every process it starts, by the returned child's Job Object
     /// from before it runs (spec 3.2 §10 W1); dropping the child ends them all. Its standard
     /// input, output and error are pipes, and it inherits those three handles and no other.
+    /// None of them is ever inheritable in this process, so a process another thread starts
+    /// meanwhile — through `std::process::Command` or otherwise — cannot take one and hold the
+    /// output open after the child exits: the child names a suspended `cmd.exe` from the
+    /// system directory, which never runs and ends once the child exists, as its parent and
+    /// inherits the three handles from it, so its parent process id is that of an exited
+    /// process (spec 3.2 §10 W5).
     /// The environment is built as for `run_confined`. `program` should be a full
     /// path: a bare name is searched for as `CreateProcessAsUserW` does, from the directory
     /// of this process and its working directory before the system directories and `PATH`.
@@ -577,13 +583,14 @@ mod imp {
 
     use std::ffi::{OsStr, OsString, c_void};
     use std::os::windows::ffi::OsStrExt as _;
-    use std::os::windows::io::{BorrowedHandle, FromRawHandle as _, OwnedHandle};
+    use std::os::windows::io::{AsHandle as _, AsRawHandle as _, FromRawHandle as _, OwnedHandle};
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     use windows_sys::Win32::Foundation::{
-        CloseHandle, GENERIC_ALL, GetLastError, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
-        LocalFree, SetHandleInformation, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+        CloseHandle, DUPLICATE_CLOSE_SOURCE, DUPLICATE_SAME_ACCESS, DuplicateHandle, GENERIC_ALL,
+        GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_FAILED, WAIT_OBJECT_0,
+        WAIT_TIMEOUT,
     };
     use windows_sys::Win32::Security::Authorization::{
         EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, NO_MULTIPLE_TRUSTEE,
@@ -604,11 +611,13 @@ mod imp {
         FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
     };
     use windows_sys::Win32::System::Pipes::CreatePipe;
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
     use windows_sys::Win32::System::Threading::{
-        CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
-        DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
-        GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList,
-        LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcessToken, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        CREATE_NEW_CONSOLE, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
+        CreateProcessAsUserW, CreateProcessW, DETACHED_PROCESS, DeleteProcThreadAttributeList,
+        EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess, INFINITE,
+        InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcessToken,
+        PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_PARENT_PROCESS,
         PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
         TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
     };
@@ -1058,8 +1067,8 @@ mod imp {
         out
     }
 
-    /// The command line `CreateProcessAsUserW` receives: program then args, each quoted.
-    fn command_line(program: &OsStr, args: &[OsString]) -> Vec<u16> {
+    /// The command line a new process receives: program then args, each quoted.
+    pub(super) fn command_line(program: &OsStr, args: &[OsString]) -> Vec<u16> {
         let mut line = quote_arg(program);
         for arg in args {
             line.push(b' ' as u16);
@@ -1071,7 +1080,7 @@ mod imp {
 
     /// The UTF-16 environment block of `pairs`, sorted by name without regard to case as
     /// Windows expects.
-    fn environment_block(mut pairs: Vec<(OsString, OsString)>) -> Vec<u16> {
+    pub(super) fn environment_block(mut pairs: Vec<(OsString, OsString)>) -> Vec<u16> {
         pairs.sort_by_key(|(k, _)| k.to_string_lossy().to_uppercase());
         let mut block: Vec<u16> = Vec::new();
         for (k, v) in pairs {
@@ -1092,23 +1101,354 @@ mod imp {
         }
     }
 
-    /// The child's ends of its standard streams, inheritable only while the child is created.
-    struct ChildStdio {
-        input: Handle,
-        output: Handle,
-        error: Handle,
+    /// The ends of its standard streams a new process inherits. None is inheritable in this
+    /// process: [`create_suspended`] hands them over through a [`Broker`].
+    pub(super) struct ChildStdio {
+        pub(super) input: OwnedHandle,
+        pub(super) output: OwnedHandle,
+        pub(super) error: OwnedHandle,
+    }
+
+    /// An anonymous pipe, neither end inheritable: `(read, write)`.
+    pub(super) fn pipe() -> Result<(OwnedHandle, OwnedHandle), SandboxError> {
+        let (mut read, mut write): (HANDLE, HANDLE) = (std::ptr::null_mut(), std::ptr::null_mut());
+        // SAFETY: both out-pointers are writable; no security attributes, so neither end is
+        // inheritable.
+        if unsafe { CreatePipe(&mut read, &mut write, std::ptr::null(), 0) } == 0 {
+            return Err(last_error("CreatePipe"));
+        }
+        // SAFETY: both handles were just created and nothing else owns them.
+        Ok(unsafe { (OwnedHandle::from_raw_handle(read), OwnedHandle::from_raw_handle(write)) })
+    }
+
+    /// A process created suspended in its job, which runs once resumed.
+    pub(super) struct Suspended {
+        pub(super) process: OwnedHandle,
+        thread: OwnedHandle,
+        pub(super) pid: u32,
+    }
+
+    impl Suspended {
+        /// Lets the process run.
+        pub(super) fn resume(&self) -> Result<(), SandboxError> {
+            // SAFETY: the thread handle is open; resuming a suspended primary thread is safe.
+            if unsafe { ResumeThread(self.thread.as_raw_handle()) } == u32::MAX {
+                return Err(last_error("ResumeThread"));
+            }
+            Ok(())
+        }
+    }
+
+    /// The creation flags that choose a process's console; a broker gets those of the
+    /// process it stands parent to.
+    const CONSOLE_FLAGS: u32 = CREATE_NEW_CONSOLE | CREATE_NO_WINDOW | DETACHED_PROCESS;
+
+    /// Creates `command` suspended in `job` (spec 3.2 §10 W1, W5), under `token` when one is
+    /// given and this process's token otherwise, with the UTF-16 `environment` block, in `cwd`
+    /// (this process's directory when `None`) and with the creation `flags`.
+    ///
+    /// With `stdio`, the process inherits those three handles and no other, and none of them
+    /// is ever inheritable in this process. `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` names only
+    /// inheritable handles, and a process another thread starts meanwhile with inheritance and
+    /// no list — as `std::process::Command` starts every process — takes every inheritable
+    /// handle this process holds; holding a pipe's write end, it would delay the call's end of
+    /// output until it exits. Inheritable copies are therefore made only in a [`Broker`],
+    /// which the process names as its parent (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`) and
+    /// inherits them from. Without `stdio`, the process inherits nothing.
+    ///
+    /// The process is in `job` before it can run: a process is born in its parent's jobs, and
+    /// one created without a broker is added while suspended.
+    pub(super) fn create_suspended(
+        job: &JobObject,
+        token: Option<HANDLE>,
+        command: &mut [u16],
+        environment: &[u16],
+        cwd: Option<&[u16]>,
+        flags: u32,
+        stdio: Option<&ChildStdio>,
+    ) -> Result<Suspended, SandboxError> {
+        let flags = flags | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT;
+        let suspended = match stdio {
+            None => {
+                // SAFETY: `STARTUPINFOW` is a plain C struct that all zeroes initialises.
+                let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+                startup.cb = size_of::<STARTUPINFOW>() as u32;
+                // SAFETY: `startup` is a `STARTUPINFOW` naming its size and pointing at nothing.
+                unsafe {
+                    create(token, command, environment, cwd, false, flags, &raw const startup)
+                }?
+            }
+            Some(io) => {
+                let mut broker = Broker::start(job, flags & CONSOLE_FLAGS)?;
+                let inherited = [
+                    broker.inherit(&io.input)?,
+                    broker.inherit(&io.output)?,
+                    broker.inherit(&io.error)?,
+                ];
+                let parent = broker.process.as_raw_handle();
+                let mut attributes = AttributeList::new(2)?;
+                // SAFETY: `parent` and `inherited` outlive the list's use by `create` below.
+                unsafe {
+                    attributes.set(
+                        PROC_THREAD_ATTRIBUTE_PARENT_PROCESS,
+                        (&raw const parent).cast(),
+                        size_of::<HANDLE>(),
+                    )?;
+                    attributes.set(
+                        PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                        inherited.as_ptr().cast(),
+                        size_of_val(&inherited),
+                    )?;
+                }
+                // SAFETY: `STARTUPINFOEXW` is a plain C struct that all zeroes initialises.
+                let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+                startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+                startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+                // The values are the copies in the broker, which is where the process inherits
+                // its handles from.
+                startup.StartupInfo.hStdInput = inherited[0];
+                startup.StartupInfo.hStdOutput = inherited[1];
+                startup.StartupInfo.hStdError = inherited[2];
+                startup.lpAttributeList = attributes.as_ptr();
+                let flags = flags | EXTENDED_STARTUPINFO_PRESENT;
+                // SAFETY: `startup` is a `STARTUPINFOEXW` naming its size, and its attribute list
+                // and the handles it names live until the end of this block.
+                unsafe {
+                    create(
+                        token,
+                        command,
+                        environment,
+                        cwd,
+                        true,
+                        flags,
+                        (&raw const startup).cast(),
+                    )
+                }?
+                // The broker closes its copies and ends here; the process holds its own.
+            }
+        };
+        if !job.contains(suspended.process.as_handle()).unwrap_or(false)
+            && let Err(error) = job.assign(suspended.process.as_handle())
+        {
+            // SAFETY: the process handle is open; the process never ran.
+            unsafe { TerminateProcess(suspended.process.as_raw_handle(), 1) };
+            return Err(job_error("AssignProcessToJobObject", error));
+        }
+        Ok(suspended)
+    }
+
+    /// `CreateProcessAsUserW` under `token`, or `CreateProcessW` without one.
+    ///
+    /// # Safety
+    ///
+    /// `startup` must point at a `STARTUPINFOW` naming its size, or at a `STARTUPINFOEXW` when
+    /// `flags` holds `EXTENDED_STARTUPINFO_PRESENT`, valid for the call with all it points to.
+    /// `command` and `cwd` must be NUL-terminated and `environment` a UTF-16 environment block.
+    unsafe fn create(
+        token: Option<HANDLE>,
+        command: &mut [u16],
+        environment: &[u16],
+        cwd: Option<&[u16]>,
+        inherit: bool,
+        flags: u32,
+        startup: *const STARTUPINFOW,
+    ) -> Result<Suspended, SandboxError> {
+        // SAFETY: `PROCESS_INFORMATION` is a plain C struct that all zeroes initialises.
+        let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        let environment: *const c_void = environment.as_ptr().cast();
+        let cwd = cwd.map_or(std::ptr::null(), <[u16]>::as_ptr);
+        let (created, call) = match token {
+            // SAFETY: the token is a restricted child of this process's token, and the caller
+            // guarantees every pointer as stated above.
+            Some(token) => (
+                unsafe {
+                    CreateProcessAsUserW(
+                        token,
+                        std::ptr::null(),
+                        command.as_mut_ptr(),
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        i32::from(inherit),
+                        flags,
+                        environment,
+                        cwd,
+                        startup,
+                        &mut info,
+                    )
+                },
+                "CreateProcessAsUserW",
+            ),
+            // SAFETY: the caller guarantees every pointer as stated above.
+            None => (
+                unsafe {
+                    CreateProcessW(
+                        std::ptr::null(),
+                        command.as_mut_ptr(),
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        i32::from(inherit),
+                        flags,
+                        environment,
+                        cwd,
+                        startup,
+                        &mut info,
+                    )
+                },
+                "CreateProcessW",
+            ),
+        };
+        if created == 0 {
+            return Err(last_error(call));
+        }
+        // SAFETY: both handles were just returned and nothing else owns them.
+        let (process, thread) = unsafe {
+            (
+                OwnedHandle::from_raw_handle(info.hProcess),
+                OwnedHandle::from_raw_handle(info.hThread),
+            )
+        };
+        Ok(Suspended { process, thread, pid: info.dwProcessId })
+    }
+
+    /// How long a broker may take to exit once terminated; it never ran, so it exits at once.
+    const BROKER_EXIT_WAIT_MS: u32 = 5_000;
+
+    /// A process that never runs, whose handle table is the only place a new process's
+    /// standard handles are ever inheritable (spec 3.2 §10 W5).
+    ///
+    /// It is `cmd.exe` from the system directory, created suspended, inheriting nothing, in
+    /// the new process's job and with its console flags; no process starts in it but the one
+    /// that names it as parent, with a list of exactly its handles. Dropping it closes the
+    /// copies made in it and ends it.
+    struct Broker {
+        process: OwnedHandle,
+        copies: Vec<HANDLE>,
+    }
+
+    impl Broker {
+        /// Starts a broker in `job` with the creation flags `console`.
+        fn start(job: &JobObject, console: u32) -> Result<Self, SandboxError> {
+            let mut application = system_directory()?;
+            application.extend(r"\cmd.exe".encode_utf16().chain(Some(0)));
+            let mut command: Vec<u16> = "cmd.exe".encode_utf16().chain(Some(0)).collect();
+            // SAFETY: `STARTUPINFOW` and `PROCESS_INFORMATION` are plain C structs that all
+            // zeroes initialises.
+            let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+            startup.cb = size_of::<STARTUPINFOW>() as u32;
+            let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+            // SAFETY: the application name and the command line are NUL-terminated and the
+            // command line is mutable as the API requires; the startup structure names its
+            // size; no handle is inherited and this process's environment and directory apply.
+            let created = unsafe {
+                CreateProcessW(
+                    application.as_ptr(),
+                    command.as_mut_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    CREATE_SUSPENDED | console,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &startup,
+                    &mut info,
+                )
+            };
+            if created == 0 {
+                return Err(last_error("CreateProcessW(broker)"));
+            }
+            // SAFETY: both handles were just returned and nothing else owns them; the thread's
+            // is closed at once, since the broker is never resumed.
+            let process = unsafe {
+                drop(OwnedHandle::from_raw_handle(info.hThread));
+                OwnedHandle::from_raw_handle(info.hProcess)
+            };
+            let broker = Self { process, copies: Vec::new() };
+            // In the job from the start, so it cannot outlive this process; dropped on failure,
+            // which ends it.
+            job.assign(broker.process.as_handle())
+                .map_err(|error| job_error("AssignProcessToJobObject(broker)", error))?;
+            Ok(broker)
+        }
+
+        /// An inheritable copy of `handle` in the broker, valid only there.
+        fn inherit(&mut self, handle: &OwnedHandle) -> Result<HANDLE, SandboxError> {
+            let mut copy: HANDLE = std::ptr::null_mut();
+            // SAFETY: `handle` is open in this process, the broker's handle has every access
+            // right, `PROCESS_DUP_HANDLE` among them, and `copy` is writable.
+            let duplicated = unsafe {
+                DuplicateHandle(
+                    GetCurrentProcess(),
+                    handle.as_raw_handle(),
+                    self.process.as_raw_handle(),
+                    &mut copy,
+                    0,
+                    1,
+                    DUPLICATE_SAME_ACCESS,
+                )
+            };
+            if duplicated == 0 {
+                return Err(last_error("DuplicateHandle"));
+            }
+            self.copies.push(copy);
+            Ok(copy)
+        }
+    }
+
+    impl Drop for Broker {
+        fn drop(&mut self) {
+            let process = self.process.as_raw_handle();
+            for copy in self.copies.drain(..) {
+                // SAFETY: `copy` is open in the broker, whose handle allows closing it there.
+                unsafe {
+                    DuplicateHandle(
+                        process,
+                        copy,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        0,
+                        0,
+                        DUPLICATE_CLOSE_SOURCE,
+                    )
+                };
+            }
+            // SAFETY: the process handle is open; the broker never ran.
+            unsafe {
+                TerminateProcess(process, 0);
+                WaitForSingleObject(process, BROKER_EXIT_WAIT_MS);
+            }
+        }
+    }
+
+    /// The system directory, such as `C:\Windows\System32`, without a terminating NUL.
+    fn system_directory() -> Result<Vec<u16>, SandboxError> {
+        let mut buffer = vec![0u16; 260];
+        loop {
+            // SAFETY: `buffer` is writable for the length passed.
+            let len =
+                unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+            if len == 0 {
+                return Err(last_error("GetSystemDirectoryW"));
+            }
+            if len < buffer.len() {
+                buffer.truncate(len);
+                return Ok(buffer);
+            }
+            // Too small: `len` is the size needed, its NUL included.
+            buffer.resize(len, 0);
+        }
     }
 
     /// A process the restricted token runs, in its job and resumed.
     struct Launched {
         job: JobObject,
-        process: Handle,
+        process: OwnedHandle,
         pid: u32,
     }
 
     /// Builds the restricted token, grants the policy's paths, and starts `program` with
-    /// `args` in `cwd` under the token, suspended; places it in a new Job Object and only
-    /// then resumes it. With `stdio`, the child inherits those three handles and no other.
+    /// `args` in `cwd` under the token, suspended in a new Job Object, and only then resumes
+    /// it. With `stdio`, the child inherits those three handles and no other (see
+    /// [`create_suspended`]).
     ///
     /// An MSYS2 program starts from a private copy of its runtime, and the user's MSYS2
     /// namespaces the call can reach are held first; both live as long as the job's
@@ -1180,122 +1520,70 @@ mod imp {
         job.attach(Box::new(msys2::Held { _runtime: runtime, _keepers: keepers }));
 
         let mut command = command_line(&program, args);
-        let cwd_wide: Vec<u16> =
+        let cwd: Vec<u16> =
             strip_unc_prefix(cwd).as_os_str().encode_wide().chain(Some(0)).collect();
-        let env = environment_block(env);
-        // SAFETY: `STARTUPINFOEXW` and `PROCESS_INFORMATION` are plain C structs that an
-        // all-zero bit pattern initialises validly.
-        let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
-        startup.StartupInfo.cb = size_of::<STARTUPINFOW>() as u32;
-        let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-
-        let mut flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT;
-        let env_ptr: *const c_void = env.as_ptr().cast();
-
-        // The child inherits exactly its three standard handles: a handle list keeps every
-        // other inheritable handle of this process, which the restricted token's access
-        // check never saw, out of the sandbox.
-        let inherited: Vec<HANDLE> =
-            stdio.map(|io| vec![io.input.0, io.output.0, io.error.0]).unwrap_or_default();
-        let attributes = match stdio {
-            Some(io) => {
-                for handle in &inherited {
-                    // SAFETY: the handle is open; only its inherit flag changes.
-                    if unsafe {
-                        SetHandleInformation(*handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)
-                    } == 0
-                    {
-                        return Err(last_error("SetHandleInformation"));
-                    }
-                }
-                let mut attributes = AttributeList::handles(&inherited)?;
-                startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
-                startup.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
-                startup.StartupInfo.hStdInput = io.input.0;
-                startup.StartupInfo.hStdOutput = io.output.0;
-                startup.StartupInfo.hStdError = io.error.0;
-                startup.lpAttributeList = attributes.as_ptr();
-                flags |= EXTENDED_STARTUPINFO_PRESENT;
-                Some(attributes)
-            }
-            None => None,
-        };
-
-        // SAFETY: the token is a restricted child of the caller's token, the command line is
-        // NUL-terminated and mutable as the API requires, the directory and environment are
-        // NUL-terminated, the startup structure is valid for the call with `cb` naming its
-        // size, and the attribute list and the handles it names outlive the call.
-        let ok = unsafe {
-            CreateProcessAsUserW(
-                token.0,
-                std::ptr::null(),
-                command.as_mut_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                i32::from(stdio.is_some()),
-                flags,
-                env_ptr,
-                cwd_wide.as_ptr(),
-                (&raw const startup).cast::<STARTUPINFOW>(),
-                &mut info,
-            )
-        };
-        drop(attributes);
-        if ok == 0 {
-            return Err(last_error("CreateProcessAsUserW"));
-        }
-        let process = Handle(info.hProcess);
-        let thread = Handle(info.hThread);
-
-        // Put the process in the job before it runs, so every descendant it starts is
-        // captured and killed with it.
-        // SAFETY: the process handle is open for the borrow, which ends with the call.
-        if let Err(error) = job.assign(unsafe { BorrowedHandle::borrow_raw(process.0) }) {
-            // SAFETY: the process handle is open; terminate the stillborn process.
-            unsafe { TerminateProcess(process.0, 1) };
-            return Err(job_error("AssignProcessToJobObject", error));
-        }
-        // SAFETY: the thread handle is open; resuming a suspended primary thread is safe.
-        if unsafe { ResumeThread(thread.0) } == u32::MAX {
-            let err = last_error("ResumeThread");
+        let suspended = create_suspended(
+            &job,
+            Some(token.0),
+            &mut command,
+            &environment_block(env),
+            Some(&cwd),
+            0,
+            stdio,
+        )?;
+        if let Err(error) = suspended.resume() {
             job.terminate();
-            return Err(err);
+            return Err(error);
         }
-        Ok(Launched { job, process, pid: info.dwProcessId })
+        Ok(Launched { job, process: suspended.process, pid: suspended.pid })
     }
 
-    /// A `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` attribute list, freed on drop.
+    /// A process-thread attribute list, freed on drop.
     struct AttributeList {
         // `u64` storage keeps the list pointer-aligned.
         buffer: Vec<u64>,
     }
 
     impl AttributeList {
-        /// A list whose one attribute names `handles`, which must outlive the list's use.
-        fn handles(handles: &[HANDLE]) -> Result<Self, SandboxError> {
+        /// An empty list with room for `count` attributes.
+        fn new(count: u32) -> Result<Self, SandboxError> {
             let mut size = 0usize;
             // SAFETY: a null list asks only for the size, written to `size`; the call fails
             // with ERROR_INSUFFICIENT_BUFFER by design.
-            unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size) };
+            unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), count, 0, &mut size) };
             if size == 0 {
                 return Err(last_error("InitializeProcThreadAttributeList(size)"));
             }
             let mut list = Self { buffer: vec![0u64; size.div_ceil(8)] };
             // SAFETY: the buffer holds at least `size` writable bytes.
-            if unsafe { InitializeProcThreadAttributeList(list.as_ptr(), 1, 0, &mut size) } == 0 {
+            if unsafe { InitializeProcThreadAttributeList(list.as_ptr(), count, 0, &mut size) } == 0
+            {
                 // An uninitialised list must not be deleted.
                 std::mem::forget(list);
                 return Err(last_error("InitializeProcThreadAttributeList"));
             }
-            // SAFETY: the list is initialised; `handles` is readable for its stated size and
-            // outlives the list's use, as the caller guarantees.
+            Ok(list)
+        }
+
+        /// Sets `attribute` to the `size` bytes at `value`.
+        ///
+        /// # Safety
+        ///
+        /// `value` must stay readable for `size` bytes for as long as the list is used.
+        unsafe fn set(
+            &mut self,
+            attribute: u32,
+            value: *const c_void,
+            size: usize,
+        ) -> Result<(), SandboxError> {
+            // SAFETY: the list is initialised, and the caller keeps `value` readable.
             let updated = unsafe {
                 UpdateProcThreadAttribute(
-                    list.as_ptr(),
+                    self.as_ptr(),
                     0,
-                    PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                    handles.as_ptr().cast(),
-                    size_of_val(handles),
+                    attribute as usize,
+                    value,
+                    size,
                     std::ptr::null_mut(),
                     std::ptr::null(),
                 )
@@ -1303,7 +1591,7 @@ mod imp {
             if updated == 0 {
                 return Err(last_error("UpdateProcThreadAttribute"));
             }
-            Ok(list)
+            Ok(())
         }
 
         fn as_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
@@ -1313,7 +1601,7 @@ mod imp {
 
     impl Drop for AttributeList {
         fn drop(&mut self) {
-            // SAFETY: the list was initialised in `handles`.
+            // SAFETY: the list was initialised in `new`.
             unsafe { DeleteProcThreadAttributeList(self.as_ptr()) };
         }
     }
@@ -1327,6 +1615,7 @@ mod imp {
         timeout: Option<Duration>,
     ) -> Result<ConfinedOutcome, SandboxError> {
         let Launched { job, process, .. } = launch(policy, grants, program, args, cwd, None)?;
+        let process = process.as_raw_handle();
         // Ends the tree and waits for it, so no write a process had in flight lands after
         // the call returns.
         let end_tree = |job: &JobObject| match job.terminate_and_wait(JobObject::TERMINATION_WAIT) {
@@ -1343,7 +1632,7 @@ mod imp {
         let wait_ms =
             timeout.map_or(INFINITE, |d| u32::try_from(d.as_millis()).unwrap_or(INFINITE));
         // SAFETY: the process handle is open.
-        let waited = unsafe { WaitForSingleObject(process.0, wait_ms) };
+        let waited = unsafe { WaitForSingleObject(process, wait_ms) };
         if waited == WAIT_TIMEOUT {
             // Kill the whole tree.
             end_tree(&job);
@@ -1358,7 +1647,7 @@ mod imp {
 
         let mut code: u32 = 0;
         // SAFETY: the process handle is open and `code` is writable.
-        let got = unsafe { GetExitCodeProcess(process.0, &mut code) };
+        let got = unsafe { GetExitCodeProcess(process, &mut code) };
         // The process has exited, so terminating the job now only reaps any descendant that
         // outlived it.
         end_tree(&job);
@@ -1366,25 +1655,6 @@ mod imp {
             return Err(last_error("GetExitCodeProcess"));
         }
         Ok(ConfinedOutcome { exit_code: Some(code as i32), timed_out: false })
-    }
-
-    /// An anonymous pipe, neither end inheritable: `(read, write)`.
-    fn pipe() -> Result<(Handle, Handle), SandboxError> {
-        let (mut read, mut write): (HANDLE, HANDLE) = (std::ptr::null_mut(), std::ptr::null_mut());
-        // SAFETY: both out-pointers are writable; no security attributes, so neither end is
-        // inheritable.
-        if unsafe { CreatePipe(&mut read, &mut write, std::ptr::null(), 0) } == 0 {
-            return Err(last_error("CreatePipe"));
-        }
-        Ok((Handle(read), Handle(write)))
-    }
-
-    /// The parent's end of a pipe as a file.
-    fn into_file(handle: Handle) -> std::fs::File {
-        let raw = handle.0;
-        std::mem::forget(handle);
-        // SAFETY: `raw` is an open handle this function now solely owns.
-        std::fs::File::from(unsafe { OwnedHandle::from_raw_handle(raw) })
     }
 
     pub(super) fn spawn_contained(
@@ -1402,17 +1672,72 @@ mod imp {
             launch(policy, grants, program, args, cwd, Some(&stdio))?;
         // The child holds its own copies; closing these lets its output end when it does.
         drop(stdio);
-        let raw = process.0;
-        std::mem::forget(process);
-        // SAFETY: `raw` is the open process handle this function now solely owns.
-        let process = ContainedProcess::new(unsafe { OwnedHandle::from_raw_handle(raw) }, pid);
         Ok(ContainedChild {
             job,
-            process,
-            stdin: Some(into_file(stdin_write)),
-            stdout: Some(into_file(stdout_read)),
-            stderr: Some(into_file(stderr_read)),
+            process: ContainedProcess::new(process, pid),
+            stdin: Some(stdin_write.into()),
+            stdout: Some(stdout_read.into()),
+            stderr: Some(stderr_read.into()),
         })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::io::Read as _;
+        use std::os::windows::ffi::OsStringExt as _;
+
+        use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
+
+        use super::*;
+
+        /// Whether `handle` is inheritable in this process.
+        fn inheritable(handle: &OwnedHandle) -> bool {
+            let mut flags = 0;
+            // SAFETY: the handle is open and `flags` is writable.
+            let queried = unsafe { GetHandleInformation(handle.as_raw_handle(), &mut flags) };
+            assert_ne!(queried, 0, "GetHandleInformation");
+            flags & HANDLE_FLAG_INHERIT != 0
+        }
+
+        /// A process created with standard handles inherits them from its broker. Here they
+        /// stay non-inheritable throughout, so a process another thread starts cannot take
+        /// one, and the process is in its job before it runs (spec 3.2 §10 W5).
+        #[test]
+        fn a_new_processs_standard_handles_are_never_inheritable_here() {
+            let (input, input_write) = pipe().expect("stdin pipe");
+            let (output_read, output) = pipe().expect("stdout pipe");
+            let (error_read, error) = pipe().expect("stderr pipe");
+            let stdio = ChildStdio { input, output, error };
+            let job = JobObject::new().expect("job");
+            let cmd = PathBuf::from(OsString::from_wide(&system_directory().expect("system")))
+                .join("cmd.exe");
+            let args: Vec<OsString> =
+                ["/d", "/c", "echo out& echo err 1>&2"].iter().map(OsString::from).collect();
+            let suspended = create_suspended(
+                &job,
+                None,
+                &mut command_line(cmd.as_os_str(), &args),
+                &environment_block(std::env::vars_os().collect()),
+                None,
+                CREATE_NO_WINDOW,
+                Some(&stdio),
+            )
+            .expect("the process is created");
+
+            for handle in [&stdio.input, &stdio.output, &stdio.error] {
+                assert!(!inheritable(handle), "a standard handle became inheritable here");
+            }
+            assert!(
+                job.contains(suspended.process.as_handle()).expect("membership"),
+                "the process is born in its job"
+            );
+            suspended.resume().expect("resumed");
+            drop((stdio, input_write));
+            let (mut out, mut err) = (String::new(), String::new());
+            std::fs::File::from(output_read).read_to_string(&mut out).expect("stdout");
+            std::fs::File::from(error_read).read_to_string(&mut err).expect("stderr");
+            assert_eq!((out.trim(), err.trim()), ("out", "err"));
+        }
     }
 }
 

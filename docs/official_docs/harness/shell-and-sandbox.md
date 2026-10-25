@@ -109,7 +109,9 @@ deny-only (see the [sandbox reference](../sandbox/index.md)). The workspace and 
 directory are labelled Low, so the command writes there and nowhere else. The command starts in a Job Object, so the `bash`
 tool keeps its timeout ceiling, output cap, streaming, empty standard input, the kill of
 every process the command starts, and the freeze's kill (spec 3.2 §10 W1). It inherits its
-three standard handles and no other handle of the agent.
+three standard handles and no other handle of the agent, and none of the three is ever
+inheritable in the agent's process, so a process the agent starts meanwhile — an MCP server,
+a hook — cannot hold the command's output open after it exits.
 
 | | Under the restricted token |
 |---|---|

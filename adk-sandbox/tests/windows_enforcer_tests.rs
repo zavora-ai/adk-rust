@@ -560,3 +560,87 @@ async fn dropping_a_contained_child_ends_every_process_it_started() {
         "a descendant kept running"
     );
 }
+
+/// Contained commands run on several threads while another thread keeps starting processes
+/// that live for seconds through `std::process::Command`, which hands every inheritable
+/// handle of this process to the process it starts. Each command's output ends as soon as
+/// the command has exited: no process the other thread started holds one of its pipes
+/// (spec 3.2 §10 W5).
+#[test]
+fn each_contained_commands_output_ends_when_it_exits_while_other_threads_spawn() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
+
+    /// Contained commands per thread, and threads.
+    const CALLS: usize = 12;
+    const CALLERS: usize = 4;
+    /// A process that took a pipe end holds it for its life: `ping -n 9` lives about 8 s.
+    const HOLDER_PINGS: &str = "9";
+    /// How long after its command exits an output may take to end.
+    const BOUND: Duration = Duration::from_secs(4);
+
+    let (_root, _base, workspace) = layout();
+    let system =
+        PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot")).join("System32");
+    let stop = Arc::new(AtomicBool::new(false));
+    let spawner = {
+        let (stop, ping) = (Arc::clone(&stop), system.join("PING.EXE"));
+        std::thread::spawn(move || {
+            let mut started = Vec::new();
+            while !stop.load(Ordering::Relaxed) {
+                let child = std::process::Command::new(&ping)
+                    .args(["-n", HOLDER_PINGS, "127.0.0.1"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .expect("ping starts");
+                started.push(child);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            for mut child in started {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        })
+    };
+
+    let callers: Vec<_> = (0..CALLERS)
+        .map(|caller| {
+            let workspace = workspace.clone();
+            std::thread::spawn(move || -> Option<(usize, Duration)> {
+                let runtime =
+                    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                for call in 0..CALLS {
+                    let expected = format!("{caller}-{call}");
+                    let mut child = spawn(&workspace, &format!("echo {expected}"));
+                    drop(child.stdin.take());
+                    let code = runtime.block_on(child.process.wait()).expect("waited");
+                    let exited = Instant::now();
+                    let (mut stdout, mut stderr) = (String::new(), String::new());
+                    child.stdout.take().expect("piped").read_to_string(&mut stdout).expect("out");
+                    child.stderr.take().expect("piped").read_to_string(&mut stderr).expect("err");
+                    let ended = exited.elapsed();
+                    assert_eq!((code, stdout.trim()), (0, expected.as_str()), "stderr {stderr}");
+                    if ended >= BOUND {
+                        return Some((call, ended));
+                    }
+                }
+                None
+            })
+        })
+        .collect();
+    let held: Vec<_> = callers.into_iter().map(|caller| caller.join().expect("caller")).collect();
+    stop.store(true, Ordering::Relaxed);
+    spawner.join().expect("spawner");
+
+    for (caller, held) in held.iter().enumerate() {
+        if let Some((call, ended)) = held {
+            panic!(
+                "caller {caller}, call {call}: the output ended {ended:?} after the command \
+                 exited; a process another thread started held its pipe"
+            );
+        }
+    }
+}

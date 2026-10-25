@@ -181,6 +181,22 @@ impl JobObject {
         Ok(())
     }
 
+    /// Whether `process` belongs to the job, as a process does from birth when its parent
+    /// does (spec 3.2 §10 W5).
+    ///
+    /// # Errors
+    ///
+    /// Returns the OS error when membership cannot be queried.
+    #[cfg(feature = "sandbox-windows")]
+    pub(crate) fn contains(&self, process: BorrowedHandle<'_>) -> io::Result<bool> {
+        let mut member = 0;
+        // SAFETY: both handles are open for the call and `member` is writable.
+        let queried = unsafe {
+            IsProcessInJob(process.as_raw_handle(), self.handle.as_raw_handle(), &raw mut member)
+        };
+        if queried == 0 { Err(io::Error::last_os_error()) } else { Ok(member != 0) }
+    }
+
     /// Keeps `companion` until the job's processes end: it is dropped after the job's handle
     /// closes, or kept for the life of this process once `kill_on_close(false)` let them
     /// outlive the job.

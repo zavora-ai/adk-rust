@@ -207,19 +207,20 @@ pub(super) use os::{Keeper, PrivateRuntime};
 
 #[cfg(all(target_os = "windows", feature = "sandbox-windows"))]
 mod os {
+    use std::ffi::OsString;
     use std::io::{Read as _, Write as _};
     use std::os::windows::fs::OpenOptionsExt as _;
-    use std::os::windows::process::CommandExt as _;
     use std::path::{Path, PathBuf};
-    use std::process::{Child, ChildStdin, Command, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime};
 
     use super::{Installation, Program, fstab, private_files, shown, within};
     use crate::error::SandboxError;
-    use crate::process_tree::{CREATE_SUSPENDED, JobObject};
+    use crate::process_tree::JobObject;
     use crate::sandbox::windows::ENFORCER_NAME;
-    use crate::sandbox::windows::imp::protect_owner_only;
+    use crate::sandbox::windows::imp::{
+        ChildStdio, command_line, create_suspended, environment_block, pipe, protect_owner_only,
+    };
 
     /// `CREATE_NO_WINDOW`: the keeper gets no console window.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -384,14 +385,18 @@ mod os {
     /// installation at the user's integrity level while a call runs.
     #[derive(Debug)]
     pub(crate) struct Keeper {
-        child: Child,
-        stdin: Option<ChildStdin>,
-        _job: JobObject,
+        /// Holds `cat`, which ends with it.
+        job: JobObject,
+        stdin: Option<std::fs::File>,
     }
 
     impl Keeper {
         /// Starts the keeper of `installation` and waits until its runtime is up, which
         /// creates or opens the namespace.
+        ///
+        /// Like the call's own process, `cat` inherits exactly its standard streams, which are
+        /// never inheritable in this process (spec 3.2 §10 W5): it lives as long as the call,
+        /// so a pipe end of another call it took would hold that call's output open.
         pub(crate) fn start(installation: &Installation) -> Result<Self, SandboxError> {
             let cat = installation.bin.join("cat.exe");
             let fail = |what: String| {
@@ -401,37 +406,42 @@ mod os {
                     installation.root.display()
                 ))
             };
-            let mut child = Command::new(&cat)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .env_remove(super::TESTING_VARIABLE)
-                .creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED)
-                .spawn()
-                .map_err(|error| {
-                    fail(format!("{} did not start: {error}", shown(cat.as_os_str())))
-                })?;
-            let job = match JobObject::contain_suspended(child.id()) {
-                Ok(job) => job,
-                Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(fail(format!("its job: {error}")));
-                }
-            };
-            let mut stdin = child.stdin.take();
-            let mut stdout = child.stdout.take();
-            let mut keeper = Self { child, stdin: None, _job: job };
-            let written = stdin.as_mut().map(|stdin| stdin.write_all(b"held\n"));
+            let (stdin_read, stdin_write) = pipe()?;
+            let (stdout_read, stdout_write) = pipe()?;
+            let null = std::fs::OpenOptions::new()
+                .write(true)
+                .open("NUL")
+                .map_err(|error| fail(format!("NUL did not open: {error}")))?;
+            let stdio = ChildStdio { input: stdin_read, output: stdout_write, error: null.into() };
+            let job = JobObject::new().map_err(|error| fail(format!("its job: {error}")))?;
+            let environment: Vec<(OsString, OsString)> = std::env::vars_os()
+                .filter(|(name, _)| !name.eq_ignore_ascii_case(super::TESTING_VARIABLE))
+                .collect();
+            let started = create_suspended(
+                &job,
+                None,
+                &mut command_line(cat.as_os_str(), &[]),
+                &environment_block(environment),
+                None,
+                CREATE_NO_WINDOW,
+                Some(&stdio),
+            )
+            .and_then(|started| started.resume())
+            .map_err(|error| fail(format!("{} did not start: {error}", shown(cat.as_os_str()))));
+            // `cat` holds its own copies; on failure the job ends it.
+            drop(stdio);
+            started?;
+            let mut keeper = Self { job, stdin: Some(stdin_write.into()) };
+            let written = keeper.stdin.as_mut().map(|stdin| stdin.write_all(b"held\n"));
             if !matches!(written, Some(Ok(()))) {
                 return Err(fail("its input closed".to_string()));
             }
-            keeper.stdin = stdin;
+            let mut stdout = std::fs::File::from(stdout_read);
             let (sender, receiver) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let mut echoed = [0u8; 5];
-                let read = stdout.as_mut().map(|stdout| stdout.read_exact(&mut echoed));
-                let _ = sender.send(matches!(read, Some(Ok(()))) && &echoed == b"held\n");
+                let read = stdout.read_exact(&mut echoed);
+                let _ = sender.send(read.is_ok() && &echoed == b"held\n");
             });
             match receiver.recv_timeout(KEEPER_START) {
                 Ok(true) => Ok(keeper),
@@ -444,8 +454,10 @@ mod os {
     impl Drop for Keeper {
         fn drop(&mut self) {
             drop(self.stdin.take());
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            // Ends `cat` and waits for it to exit.
+            if let Err(error) = self.job.terminate_and_wait(JobObject::TERMINATION_WAIT) {
+                tracing::debug!(error = %error, "could not wait for an MSYS2 keeper to exit");
+            }
         }
     }
 
