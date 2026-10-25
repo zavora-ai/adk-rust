@@ -28,6 +28,8 @@ type Answer = Box<dyn Fn(&ApprovalPrompt) -> PromptAnswer + Send + Sync>;
 pub struct ScriptedPrompter {
     answers: Mutex<VecDeque<Answer>>,
     pub prompts: Mutex<Vec<ApprovalPrompt>>,
+    /// Every standing-rule hit the person was told about.
+    pub rule_hits: Mutex<Vec<adk_harness::RuleHit>>,
 }
 
 impl std::fmt::Debug for ScriptedPrompter {
@@ -60,6 +62,10 @@ impl ScriptedPrompter {
 
 #[async_trait::async_trait]
 impl ApprovalPrompter for ScriptedPrompter {
+    fn rule_applied(&self, hit: &adk_harness::RuleHit) {
+        self.rule_hits.lock().unwrap().push(hit.clone());
+    }
+
     async fn prompt(&self, prompt: ApprovalPrompt) -> adk_core::Result<PromptAnswer> {
         let answer = self.answers.lock().unwrap().pop_front();
         let decided = match &answer {

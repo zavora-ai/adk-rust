@@ -591,7 +591,7 @@ export function fixtureSeams(calls: SeamCalls = { seen: [], records: [], accepte
         { id: "d2", name: "Telegram: Ana (1001)", may: "yes once, or no" },
       ],
       remove: async () => {},
-      pair: async () => "482 913",
+      pair: async () => ({ code: "482 913", url: "https://home.example.ts.net/ui/pair#code=482913", expiresAt: at(8, 10) }),
       waiting: async () =>
         calls.accepted.length > 0
           ? []

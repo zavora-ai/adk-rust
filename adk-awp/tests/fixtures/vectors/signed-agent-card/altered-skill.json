@@ -1,0 +1,82 @@
+{
+  "at": "2026-10-25T09:00:00Z",
+  "cardSeed": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM",
+  "delegations": [
+    {
+      "kid": "release-2026-10",
+      "notAfter": "2026-12-29T00:00:00Z",
+      "notBefore": "2026-10-01T00:00:00Z",
+      "proof": {
+        "alg": "EdDSA",
+        "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6InNpdGUtcm9vdC0yMDI2In0..zC5gWUPbAUFnixfX273Njj5g1wqwaZYAuNu0fyhFb73FnG3DJ4wXesKAVWbcyFtGRP3qx_3kDKZvQbPVEYf_Dw",
+        "kid": "site-root-2026"
+      },
+      "publicKey": {
+        "crv": "Ed25519",
+        "kty": "OKP",
+        "x": "oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA"
+      },
+      "scopes": [
+        "release"
+      ]
+    },
+    {
+      "kid": "edge-2026-10",
+      "notAfter": "2026-12-29T00:00:00Z",
+      "notBefore": "2026-10-01T00:00:00Z",
+      "proof": {
+        "alg": "EdDSA",
+        "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6InNpdGUtcm9vdC0yMDI2In0..TRGtA0fSprfuqjjJAByVFuloj_dvcXj33UZV9Ww9zoeDS-qRZOxlwzBlZNO7p_6C0-GEIxrNU9kDvu-b1iizCQ",
+        "kid": "site-root-2026"
+      },
+      "publicKey": {
+        "crv": "Ed25519",
+        "kty": "OKP",
+        "x": "F8t5-ytBIPKx7GXkGY1uCLKOgT_rAeSkAIObheGAgM4"
+      },
+      "scopes": [
+        "card",
+        "receipt"
+      ]
+    }
+  ],
+  "description": "A skill altered after signing.",
+  "document": {
+    "capabilities": {},
+    "defaultInputModes": [
+      "text/plain"
+    ],
+    "defaultOutputModes": [
+      "application/json"
+    ],
+    "description": "Answers questions about Example Solar's panels.",
+    "name": "Example Solar",
+    "protocolVersion": "1.0",
+    "signatures": [
+      {
+        "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6ImVkZ2UtMjAyNi0xMCIsInR5cCI6IkpPU0UifQ",
+        "signature": "b4ZjcHCz6NNc1t_I6vNs39KwQ0J5WnXNnKmMPGp3ijVNCrVNs933WEbmLuPFxz_-Cil2yY2jZtiOGqZtB66_CA"
+      }
+    ],
+    "skills": [
+      {
+        "description": "Search the site and place orders",
+        "id": "search_site",
+        "name": "search_site",
+        "tags": []
+      }
+    ],
+    "url": "https://example.com/a2a",
+    "version": "1.0.0"
+  },
+  "expected": {
+    "failure": "card.signature",
+    "valid": false
+  },
+  "rootKid": "site-root-2026",
+  "rootPublicKey": {
+    "crv": "Ed25519",
+    "kty": "OKP",
+    "x": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc"
+  }
+}

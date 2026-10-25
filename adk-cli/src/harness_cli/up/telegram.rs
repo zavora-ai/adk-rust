@@ -85,6 +85,15 @@ impl Chat {
     /// the home says "You said yes in Telegram". Returns once the gateway runs: the cards of
     /// decisions that waited through a restart are sent in the background, so Telegram never
     /// holds up the home.
+    /// Links cards to `home` unless `TELEGRAM_HOME_URL` names another address.
+    #[cfg(feature = "mobile")]
+    pub(super) fn linking_to(mut self, home: String) -> Self {
+        if self.home.is_none() {
+            self.home = Some(home);
+        }
+        self
+    }
+
     pub(super) async fn start(
         self,
         host: Arc<dyn ChannelHost>,

@@ -130,9 +130,9 @@ pub use approvals::SqliteStandingRuleStore;
 pub use approvals::{
     ApprovalPrompt, ApprovalPrompter, ArgSpec, DEFAULT_PROMPTS_PER_TURN, FileStandingRuleStore,
     InMemoryStandingRuleStore, OriginPin, PromptAnswer, PromptingConfirmationHandler,
-    RENDERED_CALL_MAX_BYTES, RenderedCall, RuleOwner, RulePredicate, RuleScope, RuleSuggestion,
-    SHELL_PREFIX_SUGGESTION_DENYLIST, StandingDecision, StandingRule, StandingRuleStore,
-    SuggestedScope, escape_control,
+    RENDERED_CALL_MAX_BYTES, RenderedCall, RuleHit, RuleOwner, RulePredicate, RuleScope,
+    RuleSuggestion, SHELL_PREFIX_SUGGESTION_DENYLIST, StandingDecision, StandingRule,
+    StandingRuleStore, SuggestedScope, escape_control,
 };
 #[cfg(feature = "observe")]
 pub use builder::LoopGuard;

@@ -74,8 +74,8 @@ let harness = HarnessAgent::builder("harness")
 | Resolution | The URL parses under the `DomainIn` grammar (no user information, backslashes, percent-encoded hosts or characters outside `[a-z0-9.-]`); the host resolves before connecting, and a loopback, link-local, private, IPv4-mapped or `.local`/`.internal` address is refused as `harness.web.private_target`; a literal of those kinds is hard-denied by the policy before the tool runs |
 | Redirects | Followed by the tool: each target is parsed, resolved and re-classified; a redirect off the host, to a host outside the allowlist, is returned as `redirect_to` for a new call; a redirect to a private target is refused |
 | Content | `text/html` becomes text (scripts, styles and hidden elements dropped, links kept as `[text](url)`); `text/*` and `application/json` pass; `application/pdf` is a stub naming the bytes and digest; any other type is refused with its mime type |
-| Delivery | `{ url, final_url, status, content_type, sha256, bytes, truncated, screened, content }` with `content` inside `<untrusted-content source="web" url="…" sha256="…">` and the closing tag neutralized inside |
-| Screening | Injection patterns (imperatives addressed to the agent, tool-call syntax, role markers) label the line `[screened: injection-pattern]`; secret patterns are replaced by `[redacted: secret-pattern]`; both before the result is stored, and recorded as `harness.web.screened` |
+| Delivery | `{ url, final_url, status, content_type, sha256, bytes, truncated, screening, content }` with `content` inside `<untrusted-content source="web" url="…" sha256="…">` and the closing tag neutralized inside |
+| Screening | Injection patterns (imperatives addressed to the agent, tool-call syntax, role markers) label the line `[screened: injection-pattern]`; secret patterns are replaced by `[redacted: secret-pattern]`; both before the result is stored, and recorded as `harness.web.screened`. The result's `screening` says what happened: `clean` (screened, nothing found), `labelled`, `redacted`, `labelled, redacted`, or `not_screened` for content that is not screened, such as a PDF stub; `web_search` and the browser pack's results carry the same field |
 | Exfiltration | A URL over `max_url_len`, whose query or fragment matches a secret pattern or carries more than 256 bytes outside the path, is refused before any request; so is a query over `max_query_len` or matching a secret pattern; the record carries a digest, never the value |
 
 ### Web search
@@ -233,7 +233,7 @@ prompts. Nothing a server sends changes its trust, its tools' class or any rule.
 
 | Action | Fields |
 |---|---|
-| `harness.web.fetched` | functionCallId, phase (request, response, refused), url, host, finalHost, allowlisted, status, bytes, contentSha256, redirects, truncated, screened, refusal (privateTarget, urlTooLong, secretInQuery, …), urlDigest |
+| `harness.web.fetched` | functionCallId, phase (request, response, refused), url, host, finalHost, allowlisted, status, bytes, contentSha256, redirects, truncated, screening, refusal (privateTarget, urlTooLong, secretInQuery, …), urlDigest |
 | `harness.web.searched` | provider, queryDigest, site, results, hosts, refusal |
 | `harness.web.screened` | url, contentSha256, patterns, lines, redactions, action |
 | `harness.web.provider_enabled` | provider, tool, allowlist, mode |

@@ -15,6 +15,11 @@ use schemars::JsonSchema;
 use schemars::generate::{Contract, SchemaGenerator, SchemaSettings};
 use serde_json::{Map, Value, json};
 
+use super::phone::{
+    AnswerRequest, ConfirmOptions, ConfirmOptionsRequest, ConfirmRequest, DeliveriesResponse,
+    PasskeyOptions, PasskeyRegistration, PhoneDevicesResponse, PhoneInfo, PushReceivedRequest,
+    PushSubscriptionRequest, QrRequest, StopRequest,
+};
 use super::{
     AgentsResponse, CommandRequest, DecisionsResponse, QueuedResponse, SurfaceQuery,
     TakeOverRequest, ThreadResponse, paths,
@@ -67,6 +72,36 @@ fn query(name: &str, description: &str, schema: Value) -> Value {
     json!({ "name": name, "in": "query", "required": false, "description": description, "schema": schema })
 }
 
+/// A `POST` (or `PUT`, `DELETE`) route with a JSON body when `body` is set.
+fn write(
+    method: &str,
+    summary: &str,
+    parameters: Value,
+    body: Option<Value>,
+    ok: (&str, Value),
+) -> Value {
+    let mut operation = Map::new();
+    operation.insert("summary".into(), json!(summary));
+    operation.insert("parameters".into(), parameters);
+    if let Some(body) = body {
+        operation.insert(
+            "requestBody".into(),
+            json!({ "required": true, "content": { "application/json": { "schema": body } } }),
+        );
+    }
+    let mut responses = Map::new();
+    responses.insert(ok.0.into(), ok.1);
+    responses.insert("400".into(), problem());
+    operation.insert("responses".into(), errors(responses));
+    let mut route = Map::new();
+    route.insert(method.into(), Value::Object(operation));
+    Value::Object(route)
+}
+
+fn no_content(description: &str) -> (&'static str, Value) {
+    ("204", json!({ "description": description }))
+}
+
 fn path_param(name: &str) -> Value {
     json!({ "name": name, "in": "path", "required": true, "schema": { "type": "string" } })
 }
@@ -93,11 +128,24 @@ pub fn openapi() -> Value {
     let frame = schema_ref::<FeedFrame>(&mut out);
     let entry = schema_ref::<FeedEntry>(&mut out);
     let queued = schema_ref::<QueuedResponse>(&mut out);
+    let phone = schema_ref::<PhoneInfo>(&mut out);
+    let deliveries = schema_ref::<DeliveriesResponse>(&mut out);
+    let passkey_options = schema_ref::<PasskeyOptions>(&mut out);
+    let confirm_options = schema_ref::<ConfirmOptions>(&mut out);
+    let phone_devices = schema_ref::<PhoneDevicesResponse>(&mut out);
     let mut schemas = out.take_definitions(true);
 
     let mut input = generator(Contract::Deserialize);
     let request = schema_ref::<CommandRequest>(&mut input);
     let take_over = schema_ref::<TakeOverRequest>(&mut input);
+    let answer_body = schema_ref::<AnswerRequest>(&mut input);
+    let stop_body = schema_ref::<StopRequest>(&mut input);
+    let confirm_options_body = schema_ref::<ConfirmOptionsRequest>(&mut input);
+    let confirm_body = schema_ref::<ConfirmRequest>(&mut input);
+    let push_body = schema_ref::<PushSubscriptionRequest>(&mut input);
+    let received_body = schema_ref::<PushReceivedRequest>(&mut input);
+    let registration_body = schema_ref::<PasskeyRegistration>(&mut input);
+    let qr_body = schema_ref::<QrRequest>(&mut input);
     let surface_query = input.subschema_for::<SurfaceQuery>().to_value();
     for (name, schema) in input.take_definitions(true) {
         schemas.entry(name).or_insert(schema);
@@ -212,11 +260,146 @@ pub fn openapi() -> Value {
             "requestBody": { "required": true, "content": { "application/json": { "schema": take_over } } },
             "responses": errors({
                 let mut ok = Map::new();
-                ok.insert("200".into(), answer("answered, alreadyDecided or changed", outcome));
+                ok.insert("200".into(), answer("answered, alreadyDecided or changed", outcome.clone()));
                 ok.insert("422".into(), problem());
                 ok
             }),
         } }),
+    );
+    // Paired devices and the phone (spec 3.3 §5.4, §8.2, §10 K2).
+    let outcome_of = |description: &str| ("200", answer(description, outcome.clone()));
+    routes.insert(
+        with(paths::ANSWER),
+        write(
+            "post",
+            "A paired device's answer at the version it saw, as its kind's surface (spec 3.3 §7.2, §10 K2)",
+            json!([path_param("id")]),
+            Some(answer_body),
+            outcome_of("answered, alreadyDecided or changed"),
+        ),
+    );
+    routes.insert(
+        with(paths::STOP),
+        write(
+            "post",
+            "Stop all from a paired device (spec 3.3 §11 S-I10); every other caller sends a stopAll command",
+            json!([]),
+            Some(stop_body),
+            outcome_of("stopped"),
+        ),
+    );
+    routes.insert(
+        with(paths::CONFIRM_OPTIONS),
+        write(
+            "post",
+            "Starts Confirm it's you for one answer, bound to the decision, its version and the edited arguments; feature mobile (spec 3.3 §8.2)",
+            json!([path_param("id")]),
+            Some(confirm_options_body),
+            ("200", answer("The options for navigator.credentials.get", confirm_options)),
+        ),
+    );
+    routes.insert(
+        with(paths::CONFIRM),
+        write(
+            "post",
+            "The passkey's assertion for the bound answer, which is then decided with presence; feature mobile (spec 3.3 §8.2)",
+            json!([path_param("id")]),
+            Some(confirm_body),
+            outcome_of("answered, alreadyDecided or changed"),
+        ),
+    );
+    routes.insert(
+        with(paths::PHONE),
+        read(
+            "What the phone needs to subscribe and to confirm it is you; feature mobile (spec 3.3 §5.4)",
+            json!([]),
+            answer("The phone's settings", phone),
+        ),
+    );
+    let mut push = write(
+        "put",
+        "The phone's push subscription: https, on a browser's push service; feature mobile (spec 3.3 §5.4)",
+        json!([]),
+        Some(push_body),
+        no_content("Subscribed"),
+    );
+    push["delete"] = write(
+        "delete",
+        "Stops the phone's wake-ups",
+        json!([]),
+        None,
+        no_content("Removed"),
+    )["delete"]
+        .take();
+    routes.insert(with(paths::PHONE_PUSH), push);
+    routes.insert(
+        with(paths::PHONE_PUSH_RECEIVED),
+        write(
+            "post",
+            "The phone received a wake-up; its latency is recorded",
+            json!([]),
+            Some(received_body),
+            no_content("Recorded"),
+        ),
+    );
+    routes.insert(
+        with(paths::PHONE_PUSH_DELIVERIES),
+        read(
+            "The latest acknowledged wake-ups, for the operator",
+            json!([]),
+            answer("Deliveries, oldest first", deliveries),
+        ),
+    );
+    routes.insert(
+        with(paths::PHONE_PASSKEY_OPTIONS),
+        write(
+            "post",
+            "Starts setting up a passkey: a phone within 10 minutes of pairing, or the person at the web home (spec 3.3 §8.2)",
+            json!([]),
+            None,
+            ("200", answer("The options for navigator.credentials.create", passkey_options)),
+        ),
+    );
+    routes.insert(
+        with(paths::PHONE_PASSKEY),
+        write(
+            "post",
+            "Finishes setting up a passkey",
+            json!([]),
+            Some(registration_body),
+            no_content("Set up"),
+        ),
+    );
+    routes.insert(
+        with(paths::PHONE_PASSKEY_ONE),
+        write(
+            "delete",
+            "Removes one of the caller's computer passkeys",
+            json!([path_param("id")]),
+            None,
+            no_content("Removed"),
+        ),
+    );
+    routes.insert(
+        with(paths::PHONE_QR),
+        write(
+            "post",
+            "A pairing link into this home as a QR code, for the operator",
+            json!([]),
+            Some(qr_body),
+            (
+                "200",
+                json!({ "description": "The QR code", "content": { "image/svg+xml": { "schema": { "type": "string" } } } }),
+            ),
+        ),
+    );
+    routes.insert(
+        with(paths::PHONE_DEVICES),
+        read(
+            "Each paired device's passkey and push, and the caller's computer passkeys, for the operator",
+            json!([]),
+            answer("The devices", phone_devices),
+        ),
     );
     routes.insert(
         with(paths::OPENAPI),

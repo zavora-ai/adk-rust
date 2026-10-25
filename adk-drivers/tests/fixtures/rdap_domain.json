@@ -1,0 +1,32 @@
+{
+  "objectClassName": "domain",
+  "handle": "2336799_DOMAIN_EXAMPLE-VRSN",
+  "ldhName": "BAKERY.EXAMPLE",
+  "links": [
+    {"value": "https://rdap.registry.example/domain/BAKERY.EXAMPLE", "rel": "self", "href": "https://rdap.registry.example/domain/BAKERY.EXAMPLE", "type": "application/rdap+json"}
+  ],
+  "status": ["client delete prohibited", "client transfer prohibited", "client update prohibited"],
+  "entities": [
+    {
+      "objectClassName": "entity",
+      "handle": "376",
+      "roles": ["registrar"],
+      "publicIds": [{"type": "IANA Registrar ID", "identifier": "376"}],
+      "vcardArray": ["vcard", [["version", {}, "text", "4.0"], ["fn", {}, "text", "Example Registrar, Inc."]]]
+    }
+  ],
+  "events": [
+    {"eventAction": "registration", "eventDate": "2019-11-20T09:15:00Z"},
+    {"eventAction": "expiration", "eventDate": "2026-11-20T09:15:00Z"},
+    {"eventAction": "last changed", "eventDate": "2025-11-01T10:00:00Z"},
+    {"eventAction": "last update of RDAP database", "eventDate": "2026-10-25T07:11:42Z"}
+  ],
+  "secureDNS": {"delegationSigned": false},
+  "nameservers": [
+    {"objectClassName": "nameserver", "ldhName": "NS1.BAKERY.EXAMPLE"}
+  ],
+  "rdapConformance": ["rdap_level_0", "icann_rdap_technical_implementation_guide_1", "icann_rdap_response_profile_1"],
+  "notices": [
+    {"title": "Terms of Use", "description": ["Service subject to Terms of Use."]}
+  ]
+}

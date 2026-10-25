@@ -191,6 +191,10 @@ pub struct Launcher {
     /// The web home's engine, which a served harness mounts (spec 3.3 §5.1, §10 S1).
     #[cfg(all(feature = "surface", feature = "harness"))]
     surface: Option<adk_surface::SurfaceEngine>,
+    /// The kernel's pairing, when devices reach the surface: their routes, and feeds that end
+    /// with the device (spec 3.3 §10 K2).
+    #[cfg(all(feature = "surface", feature = "harness"))]
+    surface_pairing: Option<adk_kernel::pairing::Pairing>,
     thinking_mode: ThinkingDisplayMode,
     bind_address: IpAddr,
 }
@@ -229,6 +233,8 @@ impl Launcher {
             governance: None,
             #[cfg(all(feature = "surface", feature = "harness"))]
             surface: None,
+            #[cfg(all(feature = "surface", feature = "harness"))]
+            surface_pairing: None,
             thinking_mode: ThinkingDisplayMode::Auto,
             bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
         }
@@ -530,6 +536,14 @@ impl Launcher {
     #[cfg(all(feature = "surface", feature = "harness"))]
     pub(crate) fn with_surface(mut self, engine: adk_surface::SurfaceEngine) -> Self {
         self.surface = Some(engine);
+        self
+    }
+
+    /// Serves the surface to `pairing`'s devices too: their answer and Stop all routes, and a
+    /// device's feed ending with it (spec 3.3 §10 K2, S-I7).
+    #[cfg(all(feature = "surface", feature = "harness"))]
+    pub(crate) fn with_surface_pairing(mut self, pairing: adk_kernel::pairing::Pairing) -> Self {
+        self.surface_pairing = Some(pairing);
         self
     }
 
@@ -852,6 +866,8 @@ impl Launcher {
         let api_routes = self.api_routes.clone();
         #[cfg(all(feature = "surface", feature = "harness"))]
         let surface = self.surface.clone();
+        #[cfg(all(feature = "surface", feature = "harness"))]
+        let surface_pairing = self.surface_pairing.clone();
         let root_routes = self.root_routes.clone();
         #[cfg(feature = "harness")]
         let kernel_governance = self.kernel_governance.clone();
@@ -872,9 +888,12 @@ impl Launcher {
         // all and Resume all for the operator (S-I10).
         #[cfg(all(feature = "surface", feature = "harness"))]
         if let Some(surface) = surface {
-            builder = builder
-                .add_api_routes(adk_surface::web::router(surface))
-                .add_root_routes(adk_surface::web::home());
+            let routes = match surface_pairing {
+                Some(pairing) => adk_surface::web::router_with_devices(surface.clone(), pairing)
+                    .merge(adk_surface::web::devices_router(surface)),
+                None => adk_surface::web::router(surface),
+            };
+            builder = builder.add_api_routes(routes).add_root_routes(adk_surface::web::home());
         }
         #[cfg(feature = "harness")]
         if let Some((_, delegate)) = kernel_governance {

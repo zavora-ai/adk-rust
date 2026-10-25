@@ -11,9 +11,10 @@ import type { AreaSettings, ChannelWaiting, KernelRecordLine, QuietWindow, Stand
 import { accountName, allows, channelName } from "../kernel";
 import { labels, modes, words } from "../labels";
 import { undoText } from "../memory";
+import { phoneLabels } from "../phone/labels";
 import { RECORD_READ, recentLines } from "../record";
 import { dateValue, earliestExtension, endOfDay, ended, ruleSentence, suggestedExtension } from "../rules";
-import type { AgentSpend, Device, MemoryFact, RecordCheck, RecordLine, Seams, TidyUp } from "../seams";
+import type { AgentSpend, Device, MemoryFact, PairingIssued, RecordCheck, RecordLine, Seams, TidyUp } from "../seams";
 import { onThisDevice, typedWindow } from "../away";
 import { areaName, kernelMode, limitValue, modeOf, modeValue, quietValue, windowText } from "../settings";
 
@@ -750,7 +751,9 @@ function Did({ client, agents, seams }: { client: HomeClient; agents: AgentRow[]
   const [recorded, setRecorded] = useState(true);
   const [devices, setDevices] = useState<Device[]>();
   const [waiting, setWaiting] = useState<ChannelWaiting[]>([]);
-  const [code, setCode] = useState("");
+  const [issued, setIssued] = useState<PairingIssued>();
+  const [qr, setQr] = useState<string>();
+  const [canAddPasskey, setCanAddPasskey] = useState(false);
   const [chatCode, setChatCode] = useState("");
   const [paired, setPaired] = useState("");
   const [problem, setProblem] = useState("");
@@ -776,6 +779,7 @@ function Did({ client, agents, seams }: { client: HomeClient; agents: AgentRow[]
     };
     load();
     const timer = window.setInterval(load, 10_000);
+    void pairing.canAddPasskey?.().then((value) => live && setCanAddPasskey(value)).catch(() => undefined);
     return () => {
       live = false;
       window.clearInterval(timer);
@@ -898,7 +902,10 @@ function Did({ client, agents, seams }: { client: HomeClient; agents: AgentRow[]
                   setProblem("");
                   void pairing
                     .remove(device.id)
-                    .then(() => pairing.list().then(setDevices))
+                    .then(async () => {
+                      setDevices(await pairing.list());
+                      setCanAddPasskey((await pairing.canAddPasskey?.()) ?? false);
+                    })
                     .catch((error: unknown) => setProblem(problemText(error)));
                 }}
               >
@@ -925,15 +932,48 @@ function Did({ client, agents, seams }: { client: HomeClient; agents: AgentRow[]
             className="button button-primary"
             onClick={() => {
               setProblem("");
+              setQr(undefined);
               void pairing
                 .pair()
-                .then(setCode)
+                .then(async (value) => {
+                  setIssued(value);
+                  // The QR code holds the link that opens the installed app's pairing screen (§8.3).
+                  if (value.url && pairing.qr) setQr(await pairing.qr(value.url));
+                })
                 .catch((error: unknown) => setProblem(problemText(error)));
             }}
           >
             {labels.addPhoneOrApp}
           </button>
-          {code && <p className="pairing-code mono">{code}</p>}
+          {issued && (
+            <div className="pairing">
+              {qr && <img className="pairing-qr" src={qr} alt={phoneLabels.pairingQr} width={200} height={200} />}
+              {issued.url && (
+                <p className="setting-sub">
+                  {phoneLabels.pairingLink} <span className="mono pairing-link">{issued.url}</span>
+                </p>
+              )}
+              {issued.url && <p className="setting-sub">{phoneLabels.pairingCodeToType}</p>}
+              <p className="pairing-code mono">{issued.code}</p>
+            </div>
+          )}
+          {canAddPasskey && pairing.addPasskey && (
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={() => {
+                setProblem("");
+                void pairing.addPasskey?.()
+                  .then(async () => {
+                    setCanAddPasskey(false);
+                    setDevices(await pairing.list());
+                  })
+                  .catch((error: unknown) => setProblem(problemText(error)));
+              }}
+            >
+              {phoneLabels.useYourFaceOrFingerprintOnThisComputer}
+            </button>
+          )}
         </>
       )}
       {pairing?.accept && devices && (

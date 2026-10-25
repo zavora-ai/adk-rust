@@ -89,6 +89,18 @@ impl Screened {
         !self.injection_lines.is_empty() || self.redactions > 0
     }
 
+    /// What screening did, as a result's `screening` field says it (spec 3.1 §7.33 fix 4):
+    /// `clean`, `labelled`, `redacted` or `labelled, redacted`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// assert_eq!(adk_harness::web::Screened::default().screening(), "clean");
+    /// ```
+    pub fn screening(&self) -> &'static str {
+        screening_label(!self.injection_lines.is_empty(), self.redactions > 0)
+    }
+
     /// `labelled`, `redacted`, both, or `none`, for the audit record.
     pub fn action(&self) -> &'static str {
         match (!self.injection_lines.is_empty(), self.redactions > 0) {
@@ -99,6 +111,22 @@ impl Screened {
         }
     }
 }
+
+/// The `screening` value of content screened with `labelled` injection lines and
+/// `redacted` secrets: `clean` when screening found nothing (spec 3.1 §7.33 fix 4).
+/// Content the harness did not screen, such as a PDF it does not extract, is
+/// [`NOT_SCREENED`].
+pub fn screening_label(labelled: bool, redacted: bool) -> &'static str {
+    match (labelled, redacted) {
+        (true, true) => "labelled, redacted",
+        (true, false) => "labelled",
+        (false, true) => "redacted",
+        (false, false) => "clean",
+    }
+}
+
+/// The `screening` value of content the harness did not screen (spec 3.1 §7.33 fix 4).
+pub const NOT_SCREENED: &str = "not_screened";
 
 fn phrase_filter() -> &'static ContentFilter {
     static FILTER: OnceLock<ContentFilter> = OnceLock::new();

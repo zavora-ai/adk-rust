@@ -138,6 +138,13 @@ pub trait Source: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// The agent a message goes to when the person names none, by its name in the runtime: the
+    /// one the tray's "Ask Finance" box addresses (spec 3.3 §5.5). `None`, the default, when
+    /// the source has no single primary agent.
+    fn primary_agent(&self) -> Option<String> {
+        None
+    }
+
     /// Whether a turn of the session is running now.
     async fn busy(&self, user: &str, session: &str) -> Result<bool> {
         let _ = (user, session);

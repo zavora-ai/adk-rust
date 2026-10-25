@@ -1,0 +1,21 @@
+{
+  "name": "adk-desktop-pages",
+  "private": true,
+  "version": "3.0.0",
+  "type": "module",
+  "description": "The desktop shell's bundled pages (spec 3.3 §5.5): \"Can't reach your agents\" and the WebKitGTK probe, built into ../dist for generate_context!",
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "@xterm/addon-webgl": "0.19.0",
+    "@xterm/xterm": "6.0.0",
+    "diff": "9.0.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vite": "6.4.4"
+  }
+}

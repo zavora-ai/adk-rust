@@ -184,6 +184,41 @@ describe("Where you can say yes from", () => {
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("removing a paired device"));
     expect(screen.getByText("Ana's phone")).toBeTruthy();
   });
+
+  it("shows the pairing QR code, link and code, and sets up a passkey on this computer (spec 3.3 §8.2, §8.3)", async () => {
+    let computer = false;
+    const qr = vi.fn(async (url: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg data-url="${url}"/>`)}`);
+    const devices: DevicesSeam = {
+      list: async () => [
+        { id: "device:1", name: "Your phone", may: "asks for your face or fingerprint" },
+        ...(computer ? [{ id: "passkey:k1", name: "Face or fingerprint on this computer", may: "asks for your face or fingerprint" }] : []),
+      ],
+      remove: async () => {
+        computer = false;
+      },
+      pair: async () => ({ code: "ABCD-2345", url: "https://home.example.ts.net/ui/pair#code=ABCD-2345" }),
+      qr,
+      canAddPasskey: async () => !computer,
+      addPasskey: async () => {
+        computer = true;
+      },
+    };
+    render(<App client={new FixtureClient()} seams={{ devices }} initialSection="memory" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add a phone or app" }));
+    const image = await screen.findByRole("img", { name: /QR code of the pairing link/ });
+    expect(qr).toHaveBeenCalledWith("https://home.example.ts.net/ui/pair#code=ABCD-2345");
+    expect(decodeURIComponent(image.getAttribute("src") ?? "")).toContain("#code=ABCD-2345");
+    expect(screen.getByText("https://home.example.ts.net/ui/pair#code=ABCD-2345")).toBeTruthy();
+    expect(screen.getByText("ABCD-2345")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "Use your face or fingerprint on this computer" }));
+    expect(await screen.findByText("Face or fingerprint on this computer")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Use your face or fingerprint on this computer" })).toBeNull();
+    const row = screen.getByText("Face or fingerprint on this computer").closest("li")!;
+    await userEvent.click(within(row).getByRole("button", { name: "Remove" }));
+    expect(await screen.findByRole("button", { name: "Use your face or fingerprint on this computer" })).toBeTruthy();
+    expect(screen.queryByText("Face or fingerprint on this computer")).toBeNull();
+  });
 });
 
 describe("the developer panel", () => {

@@ -1,0 +1,37 @@
+{
+  "path": "/products/panel-400/",
+  "releaseSeq": 101,
+  "kind": "product",
+  "language": "en",
+  "title": "Panel 400 W monocrystalline",
+  "resource": {
+    "sku": "PANEL-400",
+    "price": {
+      "amount": 2500000,
+      "currency": "KES"
+    },
+    "warrantyYears": 25,
+    "stock": {
+      "value": 12,
+      "asOf": "2026-10-24T09:00:00Z",
+      "capability": "check_availability"
+    }
+  },
+  "capabilities": [
+    "check_availability",
+    "get_quote",
+    "book"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    "name": "Panel 400 W monocrystalline",
+    "sku": "PANEL-400",
+    "offers": {
+      "@type": "Offer",
+      "price": "25000.00",
+      "priceCurrency": "KES"
+    }
+  },
+  "markdown": "https://example.com/products/panel-400/index.md"
+}

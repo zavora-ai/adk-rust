@@ -41,10 +41,10 @@ fn covers(suggestion: &RuleSuggestion) -> StandingOffer {
         Some(RulePredicate::Arg(_)) => "for this site",
         None => "for this person",
     };
-    // A session-scoped suggestion's label already says "(this session)".
+    // A label states what the rule matches, never its scope (spec 3.1 §7.33 fix 1).
     let scope = match suggestion.scope {
         SuggestedScope::User => ", every session",
-        SuggestedScope::Session => "",
+        SuggestedScope::Session => ", this session",
     };
     let offer = StandingOffer::new(format!("{what} ({}{scope})", suggestion.label));
     if suggestion.runs_scripts {

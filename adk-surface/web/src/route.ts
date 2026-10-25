@@ -40,11 +40,13 @@ export function decisionPath(id: string): string {
  * The shell a page under `/ui/` starts (spec 3.3 §5), by the first part of its path: the web
  * home for every section and deep link; the tray panel and the phone add their own branches.
  */
-export type Shell = "home";
+export type Shell = "home" | "tray";
 
 export function shellOf({ pathname }: Pick<Location, "pathname">): Shell {
   const first = pathname.startsWith(BASE) ? pathname.slice(BASE.length).split("/")[0] : "";
   switch (first) {
+    case "tray":
+      return "tray";
     default:
       return "home";
   }

@@ -407,7 +407,7 @@ impl GovernedBrowserTool {
         Ok(json!({
             "url": url,
             "sha256": sha256,
-            "screened": flagged,
+            "screening": screened.screening(),
             "content": untrusted_block("browser", &attributes, &screened.text),
         }))
     }
@@ -560,12 +560,12 @@ impl GovernedBrowserTool {
                         "functionCallId": call_id,
                         "tool": self.inner.name(),
                         "outcome": if delivered.is_ok() { "executed" } else { "failed" },
-                        "screened": delivered
+                        "screening": delivered
                             .as_ref()
                             .ok()
-                            .and_then(|value| value.get("screened"))
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
+                            .and_then(|value| value.get("screening"))
+                            .and_then(Value::as_str)
+                            .unwrap_or(crate::web::NOT_SCREENED),
                     }),
                 )
                 .await?;

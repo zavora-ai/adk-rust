@@ -143,9 +143,17 @@
 # Chat (spec 3.3 §5.3): the Telegram adapter, the kernel's channel contract suite against it
 # and the scripted scenario on a kernel-hosted harness, over a fake Bot API.
 2 adk-surface channels doc
+# The phone (spec 3.3 §5.4): Web Push, the phone's routes and "Confirm it's you", whose
+# webauthn-rs verifier links OpenSSL.
+2 adk-surface mobile doc
+# `adk-rust up --home-url` serving the phone on SQLite with a scripted model.
+2 adk-cli mobile,scripted-model
 # `adk-rust` as the terminal surface in a pseudo-terminal: full screen, inline, JSON, a
 # kernel on its socket and a paired one over HTTP (spec 3.3 §5.2, §10 K2).
 2 adk-cli tui,scripted-model
+# Service drivers (spec 3.5 §7.13): the contracts, manifests, rules and in-memory adapters
+# without a reference adapter, with their conformance suites.
+2 adk-drivers conformance no-default
 
 # Shard 3 — adk-graph, adk-managed, adk-code.
 # No workspace member enables these four; four clippy failures and two uncompilable doc
@@ -266,6 +274,10 @@
 6 awp-types json-schema
 # adk-awp without `awp-v1`: the 2.0 edge alone, with the 1.x routes compiled out.
 6 adk-awp - no-default
+# AWP 2.0 signing (adk-auth signed-audit) and verify (reqwest): the verifier, the conformance
+# kit and the committed test vectors run only here.
+6 adk-awp signing
+6 adk-awp verify
 
 # Shard 7 — adk-rag's SurrealDB backend on its own: it and lancedb each compile for about
 # fifteen minutes, and together they made shard 0 the longest job in the tier.

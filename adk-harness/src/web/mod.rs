@@ -43,8 +43,8 @@ pub use fetch::{
 pub use html::{TextShape, decode_entities, html_to_text};
 #[cfg(feature = "web")]
 pub use screen::{
-    INJECTION_LABEL, INJECTION_PHRASES, SECRET_REDACTION, Screened, has_secret, redact_secrets,
-    screen,
+    INJECTION_LABEL, INJECTION_PHRASES, NOT_SCREENED, SECRET_REDACTION, Screened, has_secret,
+    redact_secrets, screen, screening_label,
 };
 #[cfg(feature = "web")]
 pub use search::{DeepSeekSearch, SearxngSearch};

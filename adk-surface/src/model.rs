@@ -225,6 +225,11 @@ pub struct Decided {
     pub answer: DecidedAnswer,
     /// "You said yes in Telegram at 07:31".
     pub text: String,
+    /// How far the answer reaches, shown after the text: "done once" for allow once, the
+    /// standing rule's label for always allow (spec 3.3 §5.4); `None` when no surface
+    /// recorded the answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_text: Option<String>,
 }
 
 /// Where a decision is in its life.

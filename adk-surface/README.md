@@ -24,6 +24,8 @@ with `default-features = false` to leave it out.
 | Rules | What each surface may decide (§7.2) and the rules on every surface (§7.4), enforced by the engine | `rules` |
 | `web` | The web home: its HTTP API under `/api/surface`, its OpenAPI document and generated TypeScript types, and the page itself at `/ui/` — Threads, Today and Memory & rules, in light and dark (spec 3.3 §5.1) | `web::router`, `web::home` |
 | `channels` | Chat: the Telegram adapter over the kernel's channel contract — cards with Allow once and Deny, never the call's arguments, pairing, "stop all" (spec 3.3 §5.3) | `channels::TelegramAdapter` |
+| `mobile` | The phone: the web home installed on a phone, woken by Web Push from the person's own kernel with a wake-up that says nothing, and "Confirm it's you" with a passkey on the phone or the computer before a high-risk approval (spec 3.3 §5.4, §8.2). Links OpenSSL through webauthn-rs | `mobile::Phone`, `mobile::router` |
+| Desktop tray | Experimental and not a feature: an unpublished Tauri 2 app in `desktop/` whose windows load the web home and its tray panel at `/ui/tray`, with the decisions badge on a tray icon (spec 3.3 §5.5) | `desktop/README.md` |
 
 ## Sources
 
@@ -109,6 +111,8 @@ A chat card carries the agent, the risk and a short summary, never the call's ar
 | `POST /surface/commands` | A command with its surface and origin |
 | `GET /surface/openapi.json` | The OpenAPI 3.1 document |
 | `POST /surface/decisions/{id}/take-over` | The secret a person typed, for a take-over card (`web::take_over_router`, beside a harness that takes over) |
+| `POST /surface/decisions/{id}/answer`, `POST /surface/stop` | A paired device's answer by touch and its Stop all (`web::devices_router`) |
+| `/surface/phone/**`, `POST /surface/decisions/{id}/confirm[/options]` | The phone's push subscription, passkeys, pairing QR code and device list, and "Confirm it's you" (`mobile::router`, feature `mobile`) |
 
 Every route checks the caller against the session owner (S-I8). The OpenAPI document and the
 TypeScript types in `web/src/generated/` are generated from the Rust types;

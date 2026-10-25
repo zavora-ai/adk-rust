@@ -1,0 +1,67 @@
+{
+  "awp": "2.0",
+  "site": {
+    "id": "018f2c7e-6a4b-7c8d-9e0f-1a2b3c4d5e6f",
+    "name": "Example Solar",
+    "domain": "example.com",
+    "languages": [
+      "en",
+      "sw"
+    ]
+  },
+  "profile": "static+edge",
+  "surfaces": {
+    "a2aCard": "https://agent.example.com/.well-known/agent-card.json",
+    "mcpServerCard": "https://agent.example.com/mcp/server-card",
+    "manifest": "https://agent.example.com/awp/v2/manifest",
+    "llmsTxt": "https://example.com/llms.txt",
+    "machineViews": true
+  },
+  "identity": {
+    "accepts": [
+      "web-bot-auth",
+      "oauth2-client-credentials"
+    ],
+    "trustRules": "https://agent.example.com/awp/v2/trust"
+  },
+  "release": {
+    "seq": 42,
+    "manifest": "https://example.com/.well-known/awp/releases/42.json",
+    "checkpoint": "https://example.com/.well-known/awp/log/checkpoint"
+  },
+  "status": {
+    "url": "https://agent.example.com/awp/v2/status",
+    "lastKnown": "operational"
+  },
+  "events": {
+    "subscribe": "https://agent.example.com/awp/v2/events",
+    "catalog": [
+      "site.release.published",
+      "site.status.changed",
+      "catalog.changed",
+      "order.updated",
+      "consent.revoked"
+    ]
+  },
+  "payments": {
+    "rails": [
+      "ap2",
+      "acp"
+    ]
+  },
+  "charter": {
+    "public": "https://example.com/.well-known/awp/charter.json",
+    "digest": "sha256:52772bd5d771e927522bebfa70e65dbc940993db8ece34468816e15cab54036b"
+  },
+  "contact": {
+    "security": "https://example.com/.well-known/security.txt",
+    "email": "hello@example.com",
+    "page": "https://example.com/contact/"
+  },
+  "keys": "https://example.com/.well-known/awp/keys.json",
+  "proof": {
+    "alg": "EdDSA",
+    "kid": "site-root-2026",
+    "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6InNpdGUtcm9vdC0yMDI2In0..9Pq9hGFVsHQREmYiA8zGi7I-ouXrvv2IcT1SwLLdJfY1W6or0Uz3sU2_p1h5gmno_o2yuXES1K-QKHhTvoI_AQ"
+  }
+}

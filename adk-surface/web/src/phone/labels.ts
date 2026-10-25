@@ -1,0 +1,57 @@
+/**
+ * The phone's words (spec 3.3 §8): the engine's, generated from `words.rs`, and the few the
+ * phone shell adds. The service worker repeats the two wake-up words; a test keeps them equal.
+ */
+import * as words from "../generated/words";
+
+export const phoneLabels = {
+  decisions: words.DECISIONS,
+  decided: words.DECIDED,
+  stopAll: words.STOP_ALL,
+  allStopped: words.ALL_AGENTS_STOPPED_RESUME_IN_HOME,
+  aDecisionIsWaiting: words.A_DECISION_IS_WAITING,
+  openTheAppToSeeIt: words.OPEN_THE_APP_TO_SEE_IT,
+  yourPhone: words.YOUR_PHONE,
+  asksForFaceOrFingerprint: words.ASKS_FOR_FACE_OR_FINGERPRINT,
+  useYourFaceOrFingerprintOnThisComputer: words.USE_YOUR_FACE_OR_FINGERPRINT_ON_THIS_COMPUTER,
+  needsFaceOrFingerprint: words.NEEDS_FACE_OR_FINGERPRINT,
+  doneOnce: words.DONE_ONCE,
+  wantsToRun: (agent: string) => `${agent} ${words.WANTS_TO_RUN_THIS_COMMAND}`,
+  useYourFaceOrFingerprint: words.USE_YOUR_FACE_OR_FINGERPRINT,
+  allowNotifications: words.ALLOW_NOTIFICATIONS,
+  addToHomeScreenFirst: words.ADD_TO_HOME_SCREEN_FIRST,
+  approveItInTheHome: words.APPROVE_IT_IN_THE_HOME,
+  answeredElsewhereUpdates: words.ANSWERED_ELSEWHERE_UPDATES,
+  confirmItsYou: words.CONFIRM_ITS_YOU_AND_APPROVE,
+  waitingForYou: words.WAITING_FOR_YOU,
+  whileYouWereAway: words.WHILE_YOU_WERE_AWAY,
+  whatYourAgentsRemember: words.WHAT_YOUR_AGENTS_REMEMBER,
+  // The shell's own.
+  back: "Decisions",
+  theExactCommand: "The exact command",
+  threads: "Threads",
+  today: "Today",
+  memory: "Memory",
+  nothingWaiting: "Nothing is waiting for you.",
+  changedSinceSeen: "This decision changed since you saw it. Check it, then answer again.",
+  pairTitle: "Add this phone",
+  pairIntro: "Type the code shown in the home on your computer.",
+  pairCode: "Pairing code",
+  pair: "Pair this phone",
+  install: "Install the app",
+  iosSteps: "In Safari, tap Share, then Add to Home Screen. Open the app from your Home Screen and type this code:",
+  paired: "This phone is paired.",
+  notificationsOn: "Notifications are on.",
+  notificationsOff: (why: string) => `Notifications are off: ${why}`,
+  passkeyOn: "This phone asks for your face or fingerprint.",
+  done: "Go to Decisions",
+  signOut: "Sign out",
+  showFullCommand: "Show the full command",
+  passkeyNotUsed: "Your face or fingerprint was not checked. Tap the answer again to try once more.",
+  passkeyNotSetUp: "The passkey was not set up. Try again.",
+  // The home's pairing and passkey rows (spec 3.3 §8.3).
+  passkeyOnThisComputer: "Face or fingerprint on this computer",
+  pairingQr: "QR code of the pairing link: scan it with the phone's camera",
+  pairingLink: "Or open this link on the phone:",
+  pairingCodeToType: "Or type this code in the app:",
+} as const;

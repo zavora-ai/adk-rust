@@ -779,6 +779,8 @@ pub(crate) struct Evaluated {
     pub(crate) kind: ToolKind,
     pub(crate) mode: HarnessMode,
     pub(crate) base: TableDecision,
+    /// The standing rule that turned an approval into Allow (spec 3.1 §7.33 fix 3).
+    pub(crate) rule: Option<crate::approvals::RuleHit>,
 }
 
 /// What the confirmation handler needs to know about a call the policy did not deny.
@@ -943,6 +945,8 @@ pub(crate) struct PolicyInner {
     pub(crate) identity: Arc<crate::identity::IdentityGate>,
     #[cfg(feature = "observe")]
     pub(crate) root_agent: String,
+    /// The prompter told about calls a standing rule allows (spec 3.1 §7.33 fix 3).
+    pub(crate) rule_observer: std::sync::OnceLock<Arc<dyn crate::approvals::ApprovalPrompter>>,
 }
 
 /// The harness [`ToolPolicy`] (spec 3.1 §7.4, §7.5).
@@ -1004,6 +1008,12 @@ impl HarnessPolicy {
     pub(crate) fn with_governance(mut self, governance: Vec<adk_core::GovernanceControl>) -> Self {
         self.governance = governance;
         self
+    }
+
+    /// Tells `prompter` about every call a standing rule allows when it is evaluated
+    /// (spec 3.1 §7.33 fix 3); the first prompter set is kept.
+    pub(crate) fn observe_rules(&self, prompter: Arc<dyn crate::approvals::ApprovalPrompter>) {
+        let _ = self.inner.rule_observer.set(prompter);
     }
 
     /// Identifies the harness this policy belongs to; every clone of the harness shares it.
@@ -1253,6 +1263,7 @@ impl HarnessPolicy {
     ) -> Evaluated {
         let kind = self.classify(request, origin);
         let deny = |decision: PolicyDecision, mode: HarnessMode| Evaluated {
+            rule: None,
             decision,
             kind,
             mode,
@@ -1365,6 +1376,7 @@ impl HarnessPolicy {
                 Err(error) => {
                     tracing::warn!(error = %error, "standing rules unavailable; asking instead");
                     return Evaluated {
+                        rule: None,
                         decision: PolicyDecision::require_approval(format!(
                             "{reason}; standing rules are unavailable"
                         )),
@@ -1382,11 +1394,28 @@ impl HarnessPolicy {
         }
 
         let decision = apply_rule(base, &evaluation.outcome, &reason);
+        let mut rule_hit = None;
         if let (PolicyDecision::Allow, RuleOutcome::Allow { rule_id }) =
             (&decision, &evaluation.outcome)
             && base != TableDecision::Allow
         {
             tracing::Span::current().record("harness.rule_id", rule_id.as_str());
+            if let Some(rule) = matched_rules.iter().find(|rule| rule.id == *rule_id) {
+                let number = match self.inner.rules.list(&request.app_name, &request.user_id).await
+                {
+                    Ok(mut all) => {
+                        all.sort_by_key(|rule| rule.created_at);
+                        all.iter().position(|listed| listed.id == rule.id).map(|index| index + 1)
+                    }
+                    Err(_) => None,
+                };
+                rule_hit = Some(crate::approvals::RuleHit::new(
+                    rule.id.clone(),
+                    number,
+                    request.tool_name.clone(),
+                    rule.label.clone(),
+                ));
+            }
             tracing::info!(
                 tool.name = %request.tool_name,
                 harness.rule_id = %rule_id,
@@ -1421,6 +1450,7 @@ impl HarnessPolicy {
                 if let Err(error) = recorded {
                     tracing::warn!(error = %error, "could not record harness.rule.matched");
                     return Evaluated {
+                        rule: None,
                         decision: PolicyDecision::require_approval(format!(
                             "{reason}; the standing rule's audit record could not be written"
                         )),
@@ -1462,7 +1492,13 @@ impl HarnessPolicy {
                 },
             );
         }
-        Evaluated { decision, kind, mode, base }
+        // A call a rule allows runs without a prompt; the person is told (spec 3.1 §7.33
+        // fix 3). The handler's re-check reports its own hits.
+        if governed && let (Some(hit), Some(observer)) = (&rule_hit, self.inner.rule_observer.get())
+        {
+            observer.rule_applied(hit);
+        }
+        Evaluated { decision, kind, mode, base, rule: rule_hit }
     }
 
     async fn record_rule_observations(

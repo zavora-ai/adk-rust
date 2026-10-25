@@ -101,6 +101,17 @@
               "$ref": "#/components/schemas/AgentRow"
             },
             "type": "array"
+          },
+          "primary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The agent a message goes to when the person names none: the tray's \"Ask Finance\"\n(spec 3.3 §5.5). Absent when the source has no single primary agent."
           }
         },
         "required": [
@@ -195,6 +206,41 @@
           "label",
           "needsPresence",
           "needsExpanded"
+        ],
+        "type": "object"
+      },
+      "AnswerRequest": {
+        "description": "`POST /surface/decisions/{id}/answer` body: an answer from a paired device, at the version\nit saw (spec 3.3 §7.2, S-I2).",
+        "properties": {
+          "answer": {
+            "$ref": "#/components/schemas/Answer",
+            "description": "The answer."
+          },
+          "editedArgs": {
+            "description": "The changed arguments of an `edit`."
+          },
+          "expanded": {
+            "default": false,
+            "description": "The device showed the call in full (§7.1).",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why, for a `deny`; reported to the agent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The card's `version`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "answer"
         ],
         "type": "object"
       },
@@ -769,6 +815,101 @@
         ],
         "type": "object"
       },
+      "ComputerPasskey": {
+        "description": "A passkey the person set up on a computer for the web home.",
+        "properties": {
+          "createdAt": {
+            "description": "When it was set up.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "Its id, which **Remove** names.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "ConfirmOptions": {
+        "description": "`POST /surface/decisions/{id}/confirm/options` answer: the options for\n`navigator.credentials.get`, single use, for two minutes.",
+        "properties": {
+          "challengeId": {
+            "description": "What the confirmation answers, with the assertion.",
+            "type": "string"
+          },
+          "publicKey": {
+            "description": "`PublicKeyCredentialRequestOptionsJSON`: user verification required."
+          }
+        },
+        "required": [
+          "challengeId",
+          "publicKey"
+        ],
+        "type": "object"
+      },
+      "ConfirmOptionsRequest": {
+        "description": "`POST /surface/decisions/{id}/confirm/options` body: the answer the person is about to\nconfirm, bound on the server to this decision, its version and these arguments (spec 3.3\n§8.2).",
+        "properties": {
+          "answer": {
+            "$ref": "#/components/schemas/Answer",
+            "description": "`allowOnce` or `edit`."
+          },
+          "editedArgs": {
+            "description": "The changed arguments of an `edit`."
+          },
+          "expanded": {
+            "default": false,
+            "description": "The surface showed the call in full (§7.1).",
+            "type": "boolean"
+          },
+          "version": {
+            "description": "The card's `version`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "answer"
+        ],
+        "type": "object"
+      },
+      "ConfirmRequest": {
+        "description": "`POST /surface/decisions/{id}/confirm` body: the passkey's assertion for the bound answer.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Answer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The answer, when the page sends it again: it must be the bound one."
+          },
+          "challengeId": {
+            "description": "The options' `challengeId`.",
+            "type": "string"
+          },
+          "credential": {
+            "description": "The `PublicKeyCredential` as JSON (`credential.toJSON()`)."
+          },
+          "editedArgs": {
+            "description": "The changed arguments, when the page sends them again: they must be the bound ones."
+          }
+        },
+        "required": [
+          "challengeId",
+          "credential"
+        ],
+        "type": "object"
+      },
       "Decided": {
         "description": "A decision answered, here or elsewhere (spec 3.3 §8.1 \"Decided\", §11 S-I2): who answered,\nwhere and how, and when.",
         "properties": {
@@ -792,6 +933,13 @@
           "byYou": {
             "description": "The caller answered.",
             "type": "boolean"
+          },
+          "scopeText": {
+            "description": "How far the answer reaches, shown after the text: \"done once\" for allow once, the\nstanding rule's label for always allow (spec 3.3 §5.4); `None` when no surface\nrecorded the answer.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "text": {
             "description": "\"You said yes in Telegram at 07:31\".",
@@ -991,6 +1139,54 @@
         },
         "required": [
           "decisions"
+        ],
+        "type": "object"
+      },
+      "DeliveriesResponse": {
+        "description": "`GET /surface/phone/push/deliveries` answer, for the operator.",
+        "properties": {
+          "deliveries": {
+            "description": "The latest acknowledged wake-ups, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/Delivery"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "deliveries"
+        ],
+        "type": "object"
+      },
+      "Delivery": {
+        "description": "One wake-up a phone acknowledged, for \"Push delivery\" (spec 3.3 §5.4).",
+        "properties": {
+          "deviceId": {
+            "description": "The phone.",
+            "type": "string"
+          },
+          "latencyMs": {
+            "description": "The time between, in milliseconds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "receivedAt": {
+            "description": "When the phone acknowledged it.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "sentAt": {
+            "description": "When the kernel sent it.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "sentAt",
+          "receivedAt",
+          "latencyMs"
         ],
         "type": "object"
       },
@@ -1233,6 +1429,120 @@
           }
         ]
       },
+      "PasskeyOptions": {
+        "description": "`POST /surface/phone/passkey/options` answer: the options for\n`navigator.credentials.create`, as WebAuthn's JSON form gives them (spec 3.3 §8.2).",
+        "properties": {
+          "publicKey": {
+            "description": "`PublicKeyCredentialCreationOptionsJSON`: a platform authenticator, user verification\nrequired, attestation none."
+          },
+          "registrationId": {
+            "description": "What the registration answers, with the credential.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "registrationId",
+          "publicKey"
+        ],
+        "type": "object"
+      },
+      "PasskeyRegistration": {
+        "description": "`POST /surface/phone/passkey` body: the new passkey.",
+        "properties": {
+          "credential": {
+            "description": "The `PublicKeyCredential` as JSON (`credential.toJSON()`)."
+          },
+          "registrationId": {
+            "description": "The options' `registrationId`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "registrationId",
+          "credential"
+        ],
+        "type": "object"
+      },
+      "PhoneDevice": {
+        "description": "A paired device's phone attachments, as \"Where you can say yes from\" lists them.",
+        "properties": {
+          "deviceId": {
+            "description": "The device.",
+            "type": "string"
+          },
+          "passkey": {
+            "description": "It asks for the person's face or fingerprint.",
+            "type": "boolean"
+          },
+          "push": {
+            "description": "It is woken by push.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deviceId",
+          "passkey",
+          "push"
+        ],
+        "type": "object"
+      },
+      "PhoneDevicesResponse": {
+        "description": "`GET /surface/phone/devices` answer, for the operator.",
+        "properties": {
+          "computerPasskeys": {
+            "description": "The caller's computer passkeys.",
+            "items": {
+              "$ref": "#/components/schemas/ComputerPasskey"
+            },
+            "type": "array"
+          },
+          "devices": {
+            "description": "Every paired device with a passkey or a push subscription.",
+            "items": {
+              "$ref": "#/components/schemas/PhoneDevice"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "devices",
+          "computerPasskeys"
+        ],
+        "type": "object"
+      },
+      "PhoneInfo": {
+        "description": "`GET /surface/phone` answer: what the phone needs to subscribe and to confirm it is you\n(spec 3.3 §5.4, §8.2).",
+        "properties": {
+          "canAddPasskey": {
+            "description": "The caller may set up a passkey now: a phone within 10 minutes of pairing without one,\nor the person at the web home.",
+            "type": "boolean"
+          },
+          "passkey": {
+            "description": "The caller has a passkey here: this phone's, or for the web home, the person's.",
+            "type": "boolean"
+          },
+          "push": {
+            "description": "This phone is subscribed to wake-ups.",
+            "type": "boolean"
+          },
+          "pushKey": {
+            "description": "The kernel's push key, which the phone subscribes with (`applicationServerKey`).",
+            "type": "string"
+          },
+          "rpId": {
+            "description": "The passkeys' relying party: the home's host.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pushKey",
+          "rpId",
+          "passkey",
+          "push",
+          "canAddPasskey"
+        ],
+        "type": "object"
+      },
       "Pill": {
         "description": "A pill on a briefing line (spec 3.3 §5.1 Today).",
         "oneOf": [
@@ -1267,6 +1577,68 @@
             "type": "string"
           }
         ]
+      },
+      "PushKeys": {
+        "description": "The keys a browser gives with its push subscription.",
+        "properties": {
+          "auth": {
+            "description": "The subscription's authentication secret, base64url.",
+            "type": "string"
+          },
+          "p256dh": {
+            "description": "The subscription's P-256 public key, base64url.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "p256dh",
+          "auth"
+        ],
+        "type": "object"
+      },
+      "PushReceivedRequest": {
+        "description": "`POST /surface/phone/push/received` body: the phone's acknowledgement of a wake-up.",
+        "properties": {
+          "id": {
+            "description": "The wake-up's `id`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "PushSubscriptionRequest": {
+        "description": "`PUT /surface/phone/push` body: the phone's push subscription, as `PushSubscription.toJSON()`\ngives it (spec 3.3 §5.4).",
+        "properties": {
+          "endpoint": {
+            "description": "The push service URL: https, on Apple's, Google's, Mozilla's or Microsoft's service.",
+            "type": "string"
+          },
+          "keys": {
+            "$ref": "#/components/schemas/PushKeys",
+            "description": "The browser's keys."
+          }
+        },
+        "required": [
+          "endpoint",
+          "keys"
+        ],
+        "type": "object"
+      },
+      "QrRequest": {
+        "description": "`POST /surface/phone/qr` body: the pairing link to draw, for the operator.",
+        "properties": {
+          "url": {
+            "description": "The link: it starts with the home's URL.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
       },
       "QueuedResponse": {
         "description": "`GET /surface/sessions/{session}/queued` answer (spec 3.3 §7.4 rule 2, S-I4).",
@@ -1464,6 +1836,19 @@
         ],
         "type": "object"
       },
+      "StopRequest": {
+        "description": "`POST /surface/stop` body: **Stop all** from a paired device (spec 3.3 §11 S-I10).",
+        "properties": {
+          "reason": {
+            "description": "Why.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "SurfaceKind": {
         "description": "The surface a person uses (spec 3.3 §5, §7.2).\n\nWhat a surface may decide is fixed by §7.2 and computed by\n`rules::allowed_answers`; a surface never grants more\nthan the web home.",
         "oneOf": [
@@ -1509,6 +1894,15 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "decidedSince": {
+            "default": null,
+            "description": "`GET /surface/decisions`: also the decisions answered or ended since then, newest\nfirst, after the open ones (spec 3.3 §5.4).",
+            "format": "date-time",
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -2066,6 +2460,237 @@
         "summary": "One decision: waiting, or decided with who, where and when"
       }
     },
+    "/api/surface/decisions/{id}/answer": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandOutcome"
+                }
+              }
+            },
+            "description": "answered, alreadyDecided or changed"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "A paired device's answer at the version it saw, as its kind's surface (spec 3.3 §7.2, §10 K2)"
+      }
+    },
+    "/api/surface/decisions/{id}/confirm": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandOutcome"
+                }
+              }
+            },
+            "description": "answered, alreadyDecided or changed"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The passkey's assertion for the bound answer, which is then decided with presence; feature mobile (spec 3.3 §8.2)"
+      }
+    },
+    "/api/surface/decisions/{id}/confirm/options": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmOptionsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmOptions"
+                }
+              }
+            },
+            "description": "The options for navigator.credentials.get"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Starts Confirm it's you for one answer, bound to the decision, its version and the edited arguments; feature mobile (spec 3.3 §8.2)"
+      }
+    },
     "/api/surface/decisions/{id}/take-over": {
       "post": {
         "parameters": [
@@ -2151,6 +2776,568 @@
           }
         },
         "summary": "This document"
+      }
+    },
+    "/api/surface/phone": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneInfo"
+                }
+              }
+            },
+            "description": "The phone's settings"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "What the phone needs to subscribe and to confirm it is you; feature mobile (spec 3.3 §5.4)"
+      }
+    },
+    "/api/surface/phone/devices": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneDevicesResponse"
+                }
+              }
+            },
+            "description": "The devices"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Each paired device's passkey and push, and the caller's computer passkeys, for the operator"
+      }
+    },
+    "/api/surface/phone/passkey": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Set up"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Finishes setting up a passkey"
+      }
+    },
+    "/api/surface/phone/passkey/options": {
+      "post": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyOptions"
+                }
+              }
+            },
+            "description": "The options for navigator.credentials.create"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Starts setting up a passkey: a phone within 10 minutes of pairing, or the person at the web home (spec 3.3 §8.2)"
+      }
+    },
+    "/api/surface/phone/passkey/{id}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Removes one of the caller's computer passkeys"
+      }
+    },
+    "/api/surface/phone/push": {
+      "delete": {
+        "parameters": [],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Stops the phone's wake-ups"
+      },
+      "put": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushSubscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Subscribed"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The phone's push subscription: https, on a browser's push service; feature mobile (spec 3.3 §5.4)"
+      }
+    },
+    "/api/surface/phone/push/deliveries": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveriesResponse"
+                }
+              }
+            },
+            "description": "Deliveries, oldest first"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The latest acknowledged wake-ups, for the operator"
+      }
+    },
+    "/api/surface/phone/push/received": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushReceivedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The phone received a wake-up; its latency is recorded"
+      }
+    },
+    "/api/surface/phone/qr": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QrRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "image/svg+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The QR code"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "A pairing link into this home as a QR code, for the operator"
       }
     },
     "/api/surface/sessions/{session}/feed": {
@@ -2401,6 +3588,74 @@
           }
         },
         "summary": "The status line: mode, spend against the daily limit, quiet time, decisions"
+      }
+    },
+    "/api/surface/stop": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StopRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandOutcome"
+                }
+              }
+            },
+            "description": "stopped"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "Stop all from a paired device (spec 3.3 §11 S-I10); every other caller sends a stopAll command"
       }
     }
   }

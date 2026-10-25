@@ -1,0 +1,11 @@
+{
+  "id": "evt_01JB7M3Q9W8F6D4S2A0P9O8I7U",
+  "type": "site.release.published",
+  "timestamp": "2026-10-24T09:00:29Z",
+  "data": {
+    "seq": 101,
+    "manifest": "https://example.com/.well-known/awp/releases/101.json",
+    "digest": "sha256:7a83485ad13ecd39c73dc968d6c2be968eea0a17fefa56251d87e0bdbd5646b4",
+    "base": 100
+  }
+}

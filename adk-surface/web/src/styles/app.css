@@ -1551,6 +1551,17 @@ button.segment {
   cursor: pointer;
 }
 
+/* The pairing QR code is drawn dark on white, in light and dark (spec 3.3 §8.3). */
+.pairing-qr {
+  display: block;
+  margin: 12px 0;
+  border-radius: 8px;
+}
+
+.pairing-link {
+  word-break: break-all;
+}
+
 /* ── Developer panel ────────────────────────────────────────── */
 
 .developer {

@@ -31,6 +31,11 @@ tui = ["dep:ratatui", "dep:crossterm", "dep:syntect", "dep:pulldown-cmark", "dep
 # contract, reading the Bot API by long polling. It talks to Telegram with `reqwest`, which
 # the engine already uses.
 channels = ["adk-kernel/channels"]
+# The phone (spec 3.3 §5.4, §6.1): the web home installed on a phone, its routes, Web Push
+# from the person's own kernel (aes128gcm, the VAPID key signed here with p256), pairing QR
+# codes and "Confirm it's you" (passkeys checked by webauthn-rs, which links the system's
+# OpenSSL). Implies `web`; its wire types compile under `web`.
+mobile = ["web", "dep:web-push-native", "dep:p256", "dep:qrcode", "dep:base64ct", "dep:sha2", "dep:getrandom", "dep:webauthn-rs", "dep:url"]
 
 [dependencies]
 adk-core.workspace = true
@@ -70,6 +75,17 @@ tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "net"] }
 tracing.workspace = true
 unicode-width = { version = "0.2", optional = true }
 uuid.workspace = true
+# The phone (`mobile`): Web Push encryption without its VAPID signer, which pulls jwt-simple;
+# the VAPID token is signed here with p256.
+web-push-native = { version = "=0.5.0", optional = true, default-features = false }
+p256 = { version = "0.13.2", optional = true, default-features = false, features = ["ecdsa", "ecdh", "std"] }
+qrcode = { version = "=0.14.1", optional = true, default-features = false, features = ["svg"] }
+base64ct = { version = "1.8", optional = true, features = ["alloc"] }
+sha2 = { workspace = true, optional = true }
+getrandom = { version = "0.3", optional = true }
+# "Confirm it's you" (`mobile`): passkey registration and assertions. Its core links OpenSSL.
+webauthn-rs = { version = "=0.5.5", optional = true, default-features = false }
+url = { version = "2", optional = true }
 
 [dev-dependencies]
 # Internal dev-deps are path-only (no version) so cargo strips them from the published
@@ -92,11 +108,23 @@ tokio = { workspace = true, features = ["full", "test-util"] }
 tower = { version = "0.4", features = ["util"] }
 # Parses what the terminal surface writes, as a terminal would (spec 3.3 WP-E).
 vt100 = "0.16"
+# The phone's passkey tests rebuild a ceremony around a recorded browser's challenge.
+webauthn-rs = { version = "=0.5.5", default-features = false, features = ["danger-allow-state-serialisation"] }
 
 # The web home over a scripted kernel, which the end-to-end test in `web/e2e` opens.
 [[example]]
 name = "scripted_home"
 required-features = ["web"]
+
+# The tray panel over a scripted kernel with two agents (spec 3.3 §5.5).
+[[example]]
+name = "scripted_tray"
+required-features = ["web"]
+
+# The phone and the home over a scripted kernel, which the phone's end-to-end test opens.
+[[example]]
+name = "scripted_phone"
+required-features = ["mobile"]
 
 [package.metadata.docs.rs]
 all-features = true

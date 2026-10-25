@@ -1,0 +1,178 @@
+{
+  "tier": "known",
+  "capabilities": [
+    {
+      "name": "search_site",
+      "description": "Search the site's current release.",
+      "effect": "read_only",
+      "minTrust": "public",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "check_availability",
+      "description": "Current stock and the next installation dates for a product; live state, never a price.",
+      "effect": "read_only",
+      "minTrust": "public",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sku": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sku"
+        ]
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding",
+      "rateClass": "standard"
+    },
+    {
+      "name": "get_quote",
+      "description": "A quote for panels and installation, held for seven days.",
+      "effect": "idempotent",
+      "minTrust": "known",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sku": {
+                  "type": "string"
+                },
+                "quantity": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "sku",
+                "quantity"
+              ]
+            }
+          }
+        },
+        "required": [
+          "lines"
+        ]
+      },
+      "outputSchema": {
+        "$ref": "https://agenticwebprotocol.com/schemas/2.0/quote.schema.json"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "book",
+      "description": "Book an installation against an open quote; bookings above KES 50,000 wait for the owner.",
+      "effect": "non_idempotent",
+      "minTrust": "known",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "quote": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "required": [
+          "quote",
+          "date"
+        ]
+      },
+      "outputSchema": {
+        "$ref": "https://agenticwebprotocol.com/schemas/2.0/receipt.schema.json"
+      },
+      "price": {
+        "amount": 500000,
+        "currency": "KES",
+        "rails": [
+          "ap2",
+          "acp"
+        ]
+      },
+      "approval": {
+        "mode": "above_amount",
+        "amount": 5000000
+      },
+      "idempotency": "binding"
+    },
+    {
+      "name": "submit_inquiry",
+      "description": "Send an enquiry to the owner.",
+      "effect": "non_idempotent",
+      "minTrust": "public",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          }
+        },
+        "required": [
+          "message",
+          "email"
+        ]
+      },
+      "consent": {
+        "scope": "contact",
+        "policyVersion": "2026-10"
+      },
+      "approval": {
+        "mode": "never"
+      },
+      "idempotency": "idempotency_key"
+    }
+  ]
+}

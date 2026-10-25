@@ -1,0 +1,222 @@
+{
+  "version": 3,
+  "siteId": "018f2c7e-6a4b-7c8d-9e0f-1a2b3c4d5e6f",
+  "kind": "business",
+  "governance": {
+    "roles": [
+      {
+        "principal": "user:amina",
+        "roles": [
+          "owner",
+          "publisher"
+        ]
+      },
+      {
+        "principal": "user:joseph",
+        "roles": [
+          "editor"
+        ]
+      }
+    ],
+    "approvalChains": [
+      {
+        "action": "publish",
+        "roles": [
+          "editor",
+          "publisher"
+        ]
+      },
+      {
+        "action": "charter_change",
+        "roles": [
+          "owner"
+        ]
+      }
+    ]
+  },
+  "mission": "Help households and small businesses in Nairobi switch to solar power they can afford and maintain.",
+  "strategy": [
+    {
+      "name": "Answers first",
+      "description": "Every question about cost, payback and maintenance has a page with a source."
+    },
+    {
+      "name": "Fast quotes",
+      "description": "Quotes within a day, for people and their agents alike."
+    }
+  ],
+  "goals": [
+    {
+      "id": "enquiries",
+      "name": "More qualified installation enquiries",
+      "kpis": [
+        "leads-qualified"
+      ]
+    },
+    {
+      "id": "found",
+      "name": "Be cited by answer engines for solar questions in Nairobi",
+      "kpis": [
+        "answer-citations"
+      ]
+    }
+  ],
+  "kpis": [
+    {
+      "id": "leads-qualified",
+      "name": "Qualified leads per week",
+      "metric": "leads.qualified",
+      "source": "commerce",
+      "direction": "up",
+      "baseline": {
+        "value": 14,
+        "window": 604800,
+        "measuredAt": "2026-10-07T00:00:00Z"
+      },
+      "target": {
+        "value": 20,
+        "horizon": "2027-01-31T00:00:00Z"
+      },
+      "cadence": "weekly"
+    },
+    {
+      "id": "answer-citations",
+      "name": "Answer-engine citations per week",
+      "metric": "pages.answer_citations",
+      "source": "analytics:search-console",
+      "direction": "up",
+      "cadence": "weekly"
+    }
+  ],
+  "guardrails": [
+    {
+      "id": "unsubscribes",
+      "metric": "email.unsubscribe_rate",
+      "threshold": 0.02,
+      "breach": "above",
+      "window": 604800,
+      "action": "pause_job",
+      "jobs": [
+        "revenue.nurture"
+      ]
+    },
+    {
+      "id": "complaints",
+      "metric": "email.spam_reports",
+      "threshold": 1,
+      "breach": "above",
+      "window": 2592000,
+      "action": "alert"
+    }
+  ],
+  "authority": [
+    {
+      "job": "guardian.defend",
+      "level": "act_reversible_only"
+    },
+    {
+      "job": "growth.freshness",
+      "level": "act_within_budget",
+      "limits": {
+        "spendCap": 200000,
+        "actionsPerDay": 40
+      }
+    },
+    {
+      "job": "revenue.nurture",
+      "level": "propose"
+    }
+  ],
+  "budget": {
+    "period": "monthly",
+    "currency": "KES",
+    "caps": {
+      "hosting": 300000,
+      "models": 600000,
+      "domains": 150000,
+      "advertising": 0,
+      "other": 50000
+    }
+  },
+  "voice": {
+    "tone": "Plain, practical and warm; numbers before adjectives.",
+    "languages": [
+      "en",
+      "sw"
+    ],
+    "disclosure": "This message was written by Example Solar's AI agent on behalf of Amina Wanjiru."
+  },
+  "redLines": [
+    {
+      "kind": "claim",
+      "text": "No payback period without the customer's own tariff and usage."
+    },
+    {
+      "kind": "action",
+      "text": "Never contact a person who has not consented to outreach."
+    }
+  ],
+  "reporting": {
+    "review": "weekly",
+    "routes": [
+      {
+        "urgency": "p1",
+        "channels": [
+          "whatsapp",
+          "voice"
+        ]
+      },
+      {
+        "urgency": "p2",
+        "channels": [
+          "whatsapp"
+        ]
+      },
+      {
+        "urgency": "p3",
+        "channels": [
+          "email"
+        ]
+      }
+    ],
+    "quietHours": {
+      "start": "21:00:00",
+      "end": "07:00:00",
+      "timezone": "Africa/Nairobi"
+    }
+  },
+  "public": {
+    "usage": "train-ai=n, search=y",
+    "policies": [
+      {
+        "name": "privacy",
+        "url": "https://example.com/privacy/",
+        "version": "2026-10"
+      },
+      {
+        "name": "terms",
+        "url": "https://example.com/terms/",
+        "version": "2026-10"
+      }
+    ],
+    "consentScopes": [
+      "contact",
+      "newsletter",
+      "proactive_outreach"
+    ],
+    "contact": {
+      "security": "https://example.com/.well-known/security.txt",
+      "email": "hello@example.com",
+      "page": "https://example.com/contact/"
+    }
+  },
+  "priceRule": {
+    "autoWithinPct": 10
+  },
+  "signed": {
+    "decision": "dec_01JB2C4E6G8J0K2M4N6P8Q0R2S",
+    "principal": "user:amina",
+    "note": "audit.example.com/owner\n1287\nNPRqzWDYhZ8dWJbL8Hc6Pf2iJWkVyY5Vt0sJ4XTJmIA=\n\n— audit.example.com/owner Az3gL0r8kHq1mVn2Yw9XcT5uJp7sB4dE6fG8hI0jK2lM3nO5pQ7rS9tU1vW3xY5zA==\n",
+    "signedAt": "2026-10-20T07:30:00Z"
+  }
+}

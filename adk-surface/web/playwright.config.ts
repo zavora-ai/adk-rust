@@ -7,9 +7,9 @@ import type { PlaywrightTestConfig } from "@playwright/test";
 // Each surface's end-to-end tests run as one project against its own scripted kernel, an
 // example of adk-surface on its own port (spec 3.3 §5). Each run starts every example in a new,
 // empty workspace, so a rerun never finds the files of the last one. Per project, with its
-// prefix (`HOME`, …): `<PREFIX>_E2E_PORT` moves the port; `<PREFIX>_E2E_BIN` starts an example
-// already built instead of `cargo run`; `<PREFIX>_E2E_URL` points the project at a server
-// already running, with `<PREFIX>_E2E_WORKSPACE` naming that server's workspace.
+// prefix (`HOME`, `TRAY`, `MEMORY`, …): `<PREFIX>_E2E_PORT` moves the port; `<PREFIX>_E2E_BIN`
+// starts an example already built instead of `cargo run`; `<PREFIX>_E2E_URL` points the project
+// at a server already running, with `<PREFIX>_E2E_WORKSPACE` naming that server's workspace.
 interface Surface {
   /** The project's name: `npx playwright test --project <name>`. */
   name: string;
@@ -19,12 +19,18 @@ interface Surface {
   example?: string;
   /** The command that serves it instead of an example, given the port and the workspace. */
   command?: string;
+  /** The adk-surface features the example needs; `web` unless named. */
+  features?: string;
+  /** The host the page is opened at: `127.0.0.1` unless named; `localhost` where WebAuthn needs a domain. */
+  host?: string;
   /** Its default port. */
   port: number;
   /** Its tests under `e2e/`. */
   testMatch: string[];
   /** The page the server is ready at. */
   ready: string;
+  /** The example's arguments after its port and workspace. */
+  args?: string;
 }
 
 const surfaces: Surface[] = [
@@ -37,6 +43,15 @@ const surfaces: Surface[] = [
     ready: "/ui/",
   },
   {
+    name: "tray",
+    prefix: "TRAY",
+    example: "scripted_tray",
+    port: 8792,
+    testMatch: ["tray.spec.ts"],
+    ready: "/ui/tray",
+    args: "--code-turn",
+  },
+  {
     // Memory and rules over `adk-rust up` with a scripted model (`e2e/memory-kernel.sh`), whose
     // harness keeps the facts, the standing rules and the signed record the page reads.
     name: "memory",
@@ -45,6 +60,19 @@ const surfaces: Surface[] = [
     // 8792 is taken by the tray and the voice view.
     port: 8796,
     testMatch: ["memory.spec.ts"],
+    ready: "/ui/",
+  },
+  {
+    // The phone pairs, sets up its passkey and confirms a high-risk call (spec 3.3 §5.4,
+    // §8.2): a passkey's relying party is the page's domain, so the page is opened at
+    // `localhost`, never an IP address.
+    name: "phone",
+    prefix: "PHONE",
+    example: "scripted_phone",
+    features: "mobile",
+    host: "localhost",
+    port: 8799,
+    testMatch: ["phone.spec.ts"],
     ready: "/ui/",
   },
 ];
@@ -64,16 +92,27 @@ const servers = surfaces.map((surface) => {
   process.env[`${surface.prefix}_E2E_WORKSPACE`] = workspace;
   const port = Number(env(surface, "PORT") ?? surface.port);
   const command =
-    env(surface, "BIN") ?? surface.command ?? `cargo run -p adk-surface --features web --example ${surface.example} --`;
-  return { surface, url: url ?? `http://127.0.0.1:${port}`, external: url !== undefined, port, workspace, command };
+    env(surface, "BIN") ??
+    surface.command ??
+    `cargo run -p adk-surface --features ${surface.features ?? "web"} --example ${surface.example} --`;
+  return {
+    surface,
+    url: url ?? `http://${surface.host ?? "127.0.0.1"}:${port}`,
+    // Readiness is checked on the address the server binds.
+    ready: url ?? `http://127.0.0.1:${port}`,
+    external: url !== undefined,
+    port,
+    workspace,
+    command,
+  };
 });
 
 const webServer: PlaywrightTestConfig["webServer"] = servers
   .filter((server) => !server.external)
   .map((server) => ({
-    command: `${server.command} ${server.port} ${server.workspace}`,
+    command: `${server.command} ${server.port} ${server.workspace} ${server.surface.args ?? ""}`.trim(),
     cwd: "../..",
-    url: `${server.url}${server.surface.ready}`,
+    url: `${server.ready}${server.surface.ready}`,
     reuseExistingServer: false,
     timeout: 20 * 60_000,
     stdout: "pipe" as const,

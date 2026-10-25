@@ -14,6 +14,7 @@ import type {
   DecisionsResponse,
   FeedEntry,
   Origin,
+  PhoneDevicesResponse,
   QueuedResponse,
   StatusLine,
   SurfaceKind,
@@ -42,7 +43,18 @@ import type {
 import { accountName, channelName, devicePowers } from "./kernel";
 import { labels } from "./labels";
 import { memoryOf, undoOutcome } from "./memory";
-import type { AgentSpend, DevicesSeam, LimitsSeam, MemorySeam, RecordSeam, RosterSeam, WhileAwaySeam } from "./seams";
+import { phoneLabels } from "./phone/labels";
+import { confirmAnswer, platformPasskeys, registerPasskey } from "./phone/passkey";
+import type {
+  AgentSpend,
+  DevicesSeam,
+  LimitsSeam,
+  MemorySeam,
+  PairingIssued,
+  RecordSeam,
+  RosterSeam,
+  WhileAwaySeam,
+} from "./seams";
 import { parseSse } from "./sse";
 import { readStored, writeStored } from "./stored";
 
@@ -217,6 +229,11 @@ export class HttpClient implements HomeClient {
     return (await this.request<AgentsResponse>(`/surface/agents?surface=${this.surface}`)).agents;
   }
 
+  /** The agents with the one a message goes to when the person names none (spec 3.3 §5.5). */
+  agentsWithPrimary() {
+    return this.request<AgentsResponse>(`/surface/agents?surface=${this.surface}`);
+  }
+
   async decisions() {
     return (await this.request<DecisionsResponse>(`/surface/decisions?surface=${this.surface}`)).decisions;
   }
@@ -230,11 +247,28 @@ export class HttpClient implements HomeClient {
     return this.request<Briefing>(`/surface/briefing?surface=${this.surface}${query}`);
   }
 
-  command(command: Command, origin: Origin) {
-    return this.request<CommandOutcome>("/surface/commands", {
-      method: "POST",
-      body: JSON.stringify({ surface: this.surface, origin, command }),
-    });
+  async command(command: Command, origin: Origin) {
+    try {
+      return await this.request<CommandOutcome>("/surface/commands", {
+        method: "POST",
+        body: JSON.stringify({ surface: this.surface, origin, command }),
+      });
+    } catch (error) {
+      // A high-risk answer goes through "Confirm it's you" with the person's passkey on this
+      // computer (spec 3.3 §8.2); a server without the phone routes keeps its refusal.
+      if (command.type !== "decide" || !(error instanceof ApiError) || error.code !== "surface.confirm_presence") {
+        throw error;
+      }
+      const request = {
+        version: command.version,
+        answer: command.answer,
+        expanded: command.expanded ?? false,
+        ...(command.editedArgs === undefined ? {} : { editedArgs: command.editedArgs }),
+      };
+      return confirmAnswer(this.post.bind(this), command.decisionId, request).catch((failure: unknown) => {
+        throw failure instanceof ApiError && (failure.status === 404 || failure.status === 405) ? error : failure;
+      });
+    }
   }
 
   async *feed(session: string, after: number | undefined, signal: AbortSignal): AsyncIterable<FeedMessage> {
@@ -295,6 +329,30 @@ export class HttpClient implements HomeClient {
     return page?.processes;
   }
 
+  /** What is working now: the kernel's running processes (spec 3.3 §5.5); `undefined` without a kernel. */
+  async running() {
+    const page = await this.optional<{ processes: KernelProcess[] }>("/kernel/processes?state=running&limit=50");
+    return page?.processes;
+  }
+
+  /**
+   * One wake-up per frame of the kernel's event stream (`GET /api/kernel/events`), until
+   * `signal` aborts or the stream ends, so the tray changes within one event (spec 3.3 §12).
+   */
+  async *events(signal: AbortSignal): AsyncIterable<void> {
+    const response = await fetch(`${this.base}/kernel/events`, {
+      headers: this.headers({ accept: "text/event-stream" }),
+      signal,
+      credentials: "same-origin",
+    });
+    if (!response.ok) throw await problem(response);
+    if (!response.body) return;
+    for await (const frame of parseSse(response.body)) {
+      void frame;
+      yield;
+    }
+  }
+
   async agenda() {
     const pages = await Promise.all(
       LIVE_AGENDA.map((state) =>
@@ -341,19 +399,33 @@ export class HttpClient implements HomeClient {
   }
 
   /**
-   * Where you can say yes from (spec 3.3 §10 K1, K2): the kernel's paired devices and chat
-   * accounts, removed and added through its pairing routes.
+   * Where you can say yes from (spec 3.3 §10 K1, K2, §8.3): the kernel's paired devices and chat
+   * accounts, removed and added through its pairing routes, with what each phone confirms with
+   * and the passkeys on this computer when the server serves the phone.
    */
   devices(): DevicesSeam {
+    // The phone routes answer 404 without the `mobile` feature and 400 without a home URL.
+    const phones = () => this.optional<PhoneDevicesResponse>("/surface/phone/devices").catch(() => undefined);
     return {
       list: async () => {
         const paired = await this.optional<{ devices: KernelDevice[] }>("/kernel/devices");
         if (!paired) return undefined;
         const channels = await this.optional<{ accounts: ChannelAccount[] }>("/kernel/channels");
+        const phone = await phones();
+        const confirms = new Set(phone?.devices.filter((device) => device.passkey).map((device) => device.deviceId));
         return [
           ...paired.devices
             .filter((device) => device.state === "active")
-            .map((device) => ({ id: `device:${device.id}`, name: device.name, may: devicePowers(device.scopes) })),
+            .map((device) => ({
+              id: `device:${device.id}`,
+              name: device.name,
+              may: confirms.has(device.id) ? phoneLabels.asksForFaceOrFingerprint : devicePowers(device.scopes),
+            })),
+          ...(phone?.computerPasskeys ?? []).map((passkey) => ({
+            id: `passkey:${passkey.id}`,
+            name: phoneLabels.passkeyOnThisComputer,
+            may: phoneLabels.asksForFaceOrFingerprint,
+          })),
           ...(channels?.accounts ?? [])
             .filter((account) => account.state === "active")
             .map((account) => ({
@@ -365,10 +437,33 @@ export class HttpClient implements HomeClient {
       },
       remove: async (id: string) => {
         const [kind, rest] = [id.slice(0, id.indexOf(":")), id.slice(id.indexOf(":") + 1)];
+        if (kind === "passkey") {
+          await this.request(`/surface/phone/passkey/${encodeURIComponent(rest)}`, { method: "DELETE" });
+          return;
+        }
         const path = kind === "channel" ? "/kernel/channels" : "/kernel/devices";
         await this.request(`${path}/${encodeURIComponent(rest)}/revoke`, { method: "POST", body: "{}" });
       },
-      pair: async () => (await this.request<{ code: string }>("/kernel/pairing", { method: "POST", body: "{}" })).code,
+      // A phone, so its link opens the installed app and it may set up its passkey (§8.3).
+      pair: async () => {
+        const issued = await this.post<PairingIssued>("/kernel/pairing", { name: phoneLabels.yourPhone, kind: "phone" });
+        return { code: issued.code, url: issued.url, expiresAt: issued.expiresAt };
+      },
+      qr: async (url: string) => {
+        const response = await fetch(`${this.base}/surface/phone/qr`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: this.headers({ accept: "image/svg+xml", "content-type": "application/json" }),
+          body: JSON.stringify({ url }),
+        });
+        if (!response.ok) return undefined;
+        return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(await response.text())}`;
+      },
+      canAddPasskey: async () => {
+        const phone = await phones();
+        return phone !== undefined && phone.computerPasskeys.length === 0 && (await platformPasskeys());
+      },
+      addPasskey: () => registerPasskey(this.post.bind(this)),
       waiting: async () => (await this.optional<{ waiting?: ChannelWaiting[] }>("/kernel/channels"))?.waiting ?? [],
       accept: async (code: string) =>
         (await this.post<{ account?: ChannelAccount } | undefined>("/kernel/channels/pair", { code: code.trim() }))?.account,

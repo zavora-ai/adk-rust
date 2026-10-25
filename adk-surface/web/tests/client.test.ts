@@ -134,26 +134,94 @@ describe("the HTTP client", () => {
                   waiting: [],
                 }
               : url === "/api/kernel/pairing"
-                ? { code: "ABCD-2345", expiresAt: "", scopes: ["decide", "read", "stop"] }
-                : {};
+                ? { code: "ABCD-2345", url: "http://localhost/ui/pair#code=ABCD-2345", expiresAt: "", scopes: ["decide", "read", "stop"] }
+                : url === "/api/surface/phone/devices"
+                  ? { devices: [{ deviceId: "d1", passkey: true, push: true }], computerPasskeys: [{ id: "k1", createdAt: "" }] }
+                  : {};
         return new Response(JSON.stringify(body), { status: 200 });
       }),
     );
     const devices = new HttpClient().devices();
     expect(await devices.list()).toEqual([
-      { id: "device:d1", name: "Ana's phone", may: "yes or no, and stop all" },
+      // A phone with its passkey says so; the person's passkey on this computer has its own row.
+      { id: "device:d1", name: "Ana's phone", may: "asks for your face or fingerprint" },
+      { id: "passkey:k1", name: "Face or fingerprint on this computer", may: "asks for your face or fingerprint" },
       // Each paired account by its name and its account, so two on one channel differ.
       { id: "channel:c1", name: "Telegram: 42", may: "yes once, or no" },
       { id: "channel:c2", name: "Telegram: Ana (77)", may: "yes once, or no" },
     ]);
     await devices.remove("device:d1");
     await devices.remove("channel:c1");
-    expect(await devices.pair()).toBe("ABCD-2345");
-    expect(seen.slice(2).map(({ url, init }) => [init?.method ?? "GET", url])).toEqual([
+    await devices.remove("passkey:k1");
+    expect(await devices.pair()).toEqual({ code: "ABCD-2345", url: "http://localhost/ui/pair#code=ABCD-2345", expiresAt: "" });
+    expect(seen.slice(3).map(({ url, init }) => [init?.method ?? "GET", url])).toEqual([
       ["POST", "/api/kernel/devices/d1/revoke"],
       ["POST", "/api/kernel/channels/c1/revoke"],
+      ["DELETE", "/api/surface/phone/passkey/k1"],
       ["POST", "/api/kernel/pairing"],
     ]);
+    // "Add a phone or app" pairs a phone, so its link opens the installed app (spec 3.3 §8.3).
+    expect(JSON.parse(String(seen.at(-1)?.init?.body))).toEqual({ name: "Your phone", kind: "phone" });
+  });
+
+  it("confirms a high-risk answer with this computer's passkey, never with request metadata", async () => {
+    const calls: string[] = [];
+    const answered = { type: "answered", card: { id: "apr_1" } };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push(`${init?.method ?? "GET"} ${url}`);
+        const reply = (body: unknown, status = 200) =>
+          new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+        if (url === "/api/surface/commands") {
+          return reply({ error: { code: "surface.confirm_presence", message: "confirm it's you first" } }, 403);
+        }
+        if (url.endsWith("/confirm/options")) {
+          expect(JSON.parse(String(init?.body))).toEqual({ version: 3, answer: "allowOnce", expanded: true });
+          return reply({ challengeId: "c1", publicKey: { challenge: "AAAA", rpId: "localhost", allowCredentials: [] } });
+        }
+        if (url.endsWith("/confirm")) {
+          expect(JSON.parse(String(init?.body))).toMatchObject({ challengeId: "c1", credential: { id: "AQID" } });
+          return reply(answered);
+        }
+        return reply({}, 404);
+      }),
+    );
+    const get = vi.fn(async () => ({ toJSON: () => ({ id: "AQID", rawId: "AQID", type: "public-key", response: {} }) }));
+    vi.stubGlobal("navigator", { ...navigator, credentials: { get } });
+    const outcome = await new HttpClient().command(
+      { type: "decide", decisionId: "apr_1", version: 3, answer: "allowOnce", expanded: true },
+      { kind: "pointer" },
+    );
+    expect(outcome).toEqual(answered);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual([
+      "POST /api/surface/commands",
+      "POST /api/surface/decisions/apr_1/confirm/options",
+      "POST /api/surface/decisions/apr_1/confirm",
+    ]);
+  });
+
+  it("keeps the refusal of a high-risk answer when the server serves no passkeys, and a cancelled check says so", async () => {
+    let options = 404;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/api/surface/commands"
+          ? new Response(JSON.stringify({ error: { code: "surface.confirm_presence", message: "confirm it's you first" } }), { status: 403 })
+          : new Response(JSON.stringify({ challengeId: "c1", publicKey: { challenge: "AAAA" } }), { status: options }),
+      ),
+    );
+    const get = vi.fn(async () => {
+      throw new DOMException("The operation either timed out or was not allowed.", "NotAllowedError");
+    });
+    vi.stubGlobal("navigator", { ...navigator, credentials: { get } });
+    const decide = () =>
+      new HttpClient().command({ type: "decide", decisionId: "apr_1", version: 3, answer: "allowOnce" }, { kind: "pointer" });
+    await expect(decide()).rejects.toMatchObject({ status: 403, code: "surface.confirm_presence" });
+    expect(get).not.toHaveBeenCalled();
+    options = 200;
+    await expect(decide()).rejects.toMatchObject({ status: 403, code: "surface.phone.passkey_not_used" });
   });
 
   it("sends the server's token, once given, with every request and the feed, and keeps it for the tab", async () => {

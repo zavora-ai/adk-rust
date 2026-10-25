@@ -141,6 +141,8 @@ pub struct HarnessLauncher {
     opened: Option<Arc<Shared>>,
     #[cfg(feature = "surface")]
     surface_records: Option<crate::surface::SurfaceRecords>,
+    #[cfg(feature = "mobile")]
+    phone: Option<super::PhoneSetup>,
 }
 
 impl std::fmt::Debug for HarnessLauncher {
@@ -205,6 +207,8 @@ impl HarnessLauncher {
             opened: None,
             #[cfg(feature = "surface")]
             surface_records: None,
+            #[cfg(feature = "mobile")]
+            phone: None,
         }
     }
 
@@ -427,6 +431,15 @@ impl HarnessLauncher {
     /// ```
     pub fn with_kernel(mut self, kernel: adk_kernel::Kernel) -> Self {
         self.kernel = Some(kernel);
+        self
+    }
+
+    /// Serves the phone (spec 3.3 §5.4): the home at `setup`'s URL as an installable app,
+    /// woken by push from the kernel, with "Confirm it's you". Needs the kernel's pairing and an
+    /// auth token: the server answers the home's host and origin, and every caller signs in.
+    #[cfg(feature = "mobile")]
+    pub fn with_phone(mut self, setup: super::PhoneSetup) -> Self {
+        self.phone = Some(setup);
         self
     }
 
@@ -795,6 +808,7 @@ impl HarnessLauncher {
                 self.approval_service.clone(),
                 kernel.clone(),
                 self.surface_records.clone(),
+                cfg!(feature = "mobile") && self.has_phone(),
             )?;
             (engine, sessions, self.agent.runtime().take_over().cloned())
         };
@@ -827,16 +841,55 @@ impl HarnessLauncher {
                     take_over,
                 ));
             }
+            // Paired devices answer and stop through their own routes, and a device's feed
+            // ends with it (spec 3.3 §10 K2, S-I7).
+            if let Some(pairing) = &pairing {
+                launcher = launcher.with_surface_pairing(pairing.clone());
+            }
+            // The phone's routes, on a kernel that pairs devices; without a home URL they say
+            // how to start the server (spec 3.3 §5.4).
+            #[cfg(feature = "mobile")]
+            if let Some(pairing) = &pairing {
+                let mut phone =
+                    adk_surface::mobile::Phone::builder(surface.clone(), pairing.clone());
+                if let Some(setup) = &self.phone {
+                    phone = phone
+                        .home_url(setup.home_url.clone())
+                        .push_key(setup.key.clone())
+                        .doorbell(setup.doorbell.clone());
+                }
+                if let Some(approvals) = &self.approval_service {
+                    phone = phone.approvals(approvals.clone());
+                }
+                if let Some(records) = &self.surface_records {
+                    phone = phone.audit(records.trail.clone());
+                }
+                if let Some(kernel) = &kernel {
+                    phone = phone.kernel(kernel.clone());
+                }
+                let phone = phone.build().map_err(AdkError::from)?;
+                if self.phone.is_some() {
+                    phone.start_push().map_err(AdkError::from)?;
+                }
+                launcher = launcher.with_api_routes(adk_surface::mobile::router(phone));
+            }
             launcher = launcher.with_session_service(sessions).with_surface(surface);
         }
         #[cfg(not(feature = "surface"))]
         if let Some(sessions) = self.session_service {
             launcher = launcher.with_session_service(sessions);
         }
-        let security = self.security_config.unwrap_or_else(|| SecurityConfig {
+        #[cfg_attr(not(feature = "mobile"), allow(unused_mut))]
+        let mut security = self.security_config.clone().unwrap_or_else(|| SecurityConfig {
             request_timeout: SERVE_REQUEST_TIMEOUT,
             ..SecurityConfig::default()
         });
+        // Behind a proxy such as Tailscale Serve, requests name the home's host and origin.
+        #[cfg(feature = "mobile")]
+        if let Some(setup) = &self.phone {
+            security.allowed_hosts.push(setup.host().to_string());
+            security.allowed_origins.push(setup.origin().to_string());
+        }
         launcher = launcher.with_security_config(security);
         if let Some(service) = self.approval_service {
             launcher = launcher.with_approval_service(service);
@@ -879,6 +932,13 @@ impl HarnessLauncher {
             Some(extractor) => extractor.layer(router),
             None => router,
         })
+    }
+
+    fn has_phone(&self) -> bool {
+        #[cfg(feature = "mobile")]
+        return self.phone.is_some();
+        #[cfg(not(feature = "mobile"))]
+        false
     }
 
     /// Serves the harness on the bind address and `port` until Ctrl-C (spec 3.1 §8.2).

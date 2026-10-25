@@ -1,0 +1,29 @@
+{
+  "id": "0b7e9a52-3c4d-4e6f-8a1b-2c3d4e5f6a7b",
+  "capability": "get_quote",
+  "requester": "wba:https://agents.buyer.example#61htr5smhwVtn-uoJlPJcIrlIhwNukpd4WmSkOZU2T0",
+  "lines": [
+    {
+      "sku": "PANEL-400",
+      "description": "Panel 400 W monocrystalline",
+      "quantity": 8,
+      "unitAmount": 2500000
+    },
+    {
+      "sku": "INSTALL-STD",
+      "description": "Standard roof installation",
+      "quantity": 1,
+      "unitAmount": 4500000
+    }
+  ],
+  "total": 24500000,
+  "currency": "KES",
+  "releaseSeq": 101,
+  "issuedAt": "2026-10-24T09:05:00Z",
+  "validUntil": "2026-10-31T09:05:00Z",
+  "proof": {
+    "alg": "EdDSA",
+    "kid": "edge-2026-10",
+    "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImVkZ2UtMjAyNi0xMCJ9..21o3GOFoDjY2kzy7dCNJT1gXMAo_QbFonKYuo0RV5GL1RdC8AiirpdKoiZd72_jIDR3aFjYWBBmLnqZNvcUsBQ"
+  }
+}

@@ -430,7 +430,8 @@ pub enum SuggestedScope {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleSuggestion {
-    /// Human-readable label.
+    /// What the rule matches, never its scope: surfaces render the scope from
+    /// [`scope`](Self::scope) (spec 3.1 §7.33 fix 1).
     pub label: String,
     /// Proposed scope.
     pub scope: SuggestedScope,
@@ -685,7 +686,7 @@ impl StandingRule {
                 return Vec::new();
             }
             let mut out = vec![RuleSuggestion {
-                label: format!("{name}: anywhere in the workspace (this session)"),
+                label: format!("{name}: anywhere in the workspace"),
                 scope: SuggestedScope::Session,
                 tool: name.to_string(),
                 origin: pin.clone(),
@@ -701,7 +702,7 @@ impl StandingRule {
                 .filter(|parent| !parent.is_empty() && !parent.starts_with('/'));
             if let Some(dir) = dir {
                 out.push(RuleSuggestion {
-                    label: format!("{name}: within {dir}/ (this session)"),
+                    label: format!("{name}: within {dir}/"),
                     scope: SuggestedScope::Session,
                     tool: name.to_string(),
                     origin: pin,
