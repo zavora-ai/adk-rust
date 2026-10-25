@@ -252,7 +252,7 @@ impl Snapshots {
             )
         })?;
         if let Some(location) = objects.location() {
-            let location = location.canonicalize().unwrap_or_else(|_| location.to_path_buf());
+            let location = canonical_prefix(location);
             if location.starts_with(&root) {
                 return Err(snapshot_error(
                     "harness.snapshot.inside_workspace",
@@ -638,6 +638,25 @@ impl Snapshots {
             tracing::debug!(objects.removed = removed, "snapshot objects collected");
         }
         Ok(())
+    }
+}
+
+/// `path` with its longest existing prefix resolved, so a directory not created yet is
+/// compared as it will be.
+fn canonical_prefix(path: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut current = path.to_path_buf();
+    loop {
+        if let Ok(resolved) = current.canonicalize() {
+            return missing.iter().rev().fold(resolved, |acc: PathBuf, part| acc.join(part));
+        }
+        match (current.file_name().map(std::ffi::OsStr::to_os_string), current.parent()) {
+            (Some(name), Some(parent)) => {
+                missing.push(name);
+                current = parent.to_path_buf();
+            }
+            _ => return path.to_path_buf(),
+        }
     }
 }
 
