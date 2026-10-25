@@ -30,6 +30,7 @@
 //! | [`deploy`] | The four deployment shapes, agency mode and serving the kernel and the edge | §7.22, A-I22 |
 //! | [`edge`] | The site on the agent edge: the packs' handlers, the adapters to the back office, the read-only step | §7.9, §7.16, A-I11 |
 //! | [`observability`] | Spans, metrics and the site view | §7.24 |
+//! | [`ui`] | Onboarding and owner views on the web home: setup code, onboarding, charter cards, the site view, the weekly review, the web editor | §7.16, §7.18, §7.21, §7.24, §8.2 |
 //!
 //! # Example
 //!
@@ -68,5 +69,6 @@ pub mod playbooks;
 pub mod review;
 pub mod team;
 pub mod themes;
+pub mod ui;
 pub mod wallet;
 pub mod workflows;

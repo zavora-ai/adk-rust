@@ -22,6 +22,9 @@ import type { Seams } from "./seams";
 import { readStored, writeStored } from "./stored";
 import { applyTheme, nextTheme, storedTheme } from "./theme";
 import type { Theme } from "./theme";
+import type { WebsiteClient } from "./website/client";
+import { websiteLabels } from "./website/labels";
+import { Website } from "./website/Website";
 
 /** Where this tab keeps the session each agent's thread follows. */
 const FOLLOWED_KEY = "adk.home.followed";
@@ -36,11 +39,14 @@ export function App({
   seams = {},
   takeOver,
   initialSection,
+  website,
 }: {
   client: HomeClient;
   seams?: Seams;
   takeOver?: TakeOverSeam;
   initialSection?: Section;
+  /** The website's views, where the server serves a website (spec 3.5 §8.2). */
+  website?: WebsiteClient;
 }) {
   const [section, setSection] = useState<Section>(() => initialSection ?? sectionOf(window.location.pathname));
   const [theme, setTheme] = useState<Theme>(storedTheme);
@@ -73,6 +79,8 @@ export function App({
   const status = usePoll(() => client.status(conversation.current));
   const agents = usePoll(() => client.agents());
   const decisions = usePoll(() => client.decisions());
+  // Whether the server serves a website: its tab shows only then (spec 3.5 §8.2).
+  const site = usePoll(async () => (website ? ((await website.home()) ?? null) : null), 60_000);
   // Whether the roster ends with New agent, and the primary agent a description goes to.
   const roster = usePoll(async () => (client.agentsWithPrimary ? await client.agentsWithPrimary() : undefined), 10_000);
   const agentsSeam = useMemo(() => client.agentsSeam?.(), [client]);
@@ -226,6 +234,7 @@ export function App({
         areas={unreachable ? undefined : areas.value}
         conversationMode={section === "threads" && session ? status.value?.mode?.status : undefined}
         decisions={unreachable ? 0 : (decisions.value?.length ?? 0)}
+        website={site.value ? websiteLabels.tab : undefined}
         theme={theme}
         onNavigate={navigate}
         onTheme={() => setTheme(nextTheme)}
@@ -312,6 +321,7 @@ export function App({
           />
         )}
         {section === "developer" && <Developer client={client} sessionId={session} />}
+        {section === "website" && website && <Website client={website} onThreads={() => navigate("threads")} />}
         {section === "agents" && agentsSeam && agentsPlace && (
           <AgentsScreen
             place={agentsPlace}

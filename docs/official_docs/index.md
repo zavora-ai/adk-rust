@@ -108,6 +108,7 @@ The interface to an always-on agent (`adk-surface`, spec 3.3): every surface is 
 - [The Phone](surfaces/phone.md) - The web home installed on a phone: wake-ups from your own kernel that say nothing, answers by touch, "Confirm it's you" with a passkey on the phone or the computer, pairing by QR code, `adk-rust up --home-url` behind Tailscale Serve
 - [The Desktop Tray](surfaces/desktop.md) - Experimental: the web home in a desktop window and a tray icon with the decisions badge; its panel says yes once or no to everyday calls, opens the home for the rest, and stops everything; loopback only
 - [Voice and Video](surfaces/voice.md) - Spoken "allow once" and "deny" through the engine with a cancel window, bound to the decision on screen, a digest on record and never the recording; the camera and the screen while their switches are on; the voice view and the terminal's voice line
+- [The Website's Views](surfaces/website.md) - Experimental, the `website` feature: a prebuilt website's setup code, onboarding, charter, site view, weekly review and web editor at `/ui/website`, over `adk-website`'s desk; who may decide what, and mounting it on your own server
 - [Scenarios](surfaces/scenarios.md) - The phase scenarios as programs you can run: "Approve it tomorrow" (a decision that waits through quiet time and a `kill -9`, answered in Telegram) and "The morning after" (one exact briefing across a restart), on SQLite and PostgreSQL
 
 ## Realtime & Multimodal

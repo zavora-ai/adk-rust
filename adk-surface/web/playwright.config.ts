@@ -118,6 +118,28 @@ const surfaces: Surface[] = [
     testMatch: ["agents.spec.ts"],
     ready: "/ui/",
   },
+  {
+    // The website's views (spec 3.5 §8.2): a fresh site claimed and onboarded to release 1.
+    name: "website",
+    prefix: "WEBSITE",
+    example: "scripted_website",
+    features: "website",
+    // 8791 to 8801 are taken.
+    port: 8803,
+    testMatch: ["website.spec.ts"],
+    ready: "/api/surface/website/setup",
+  },
+  {
+    // The same site a week after launch: the site view, the weekly review and the web editor.
+    name: "website-live",
+    prefix: "WEBSITE_LIVE",
+    example: "scripted_website",
+    features: "website",
+    port: 8804,
+    testMatch: ["website-live.spec.ts"],
+    ready: "/api/surface/website/setup",
+    args: "--live",
+  },
 ];
 
 /** One second of a 440 Hz tone, 16 kHz mono PCM16, for Chromium's fake microphone. */
@@ -172,8 +194,15 @@ const servers = surfaces.map((surface) => {
   };
 });
 
+// `--project <name>` starts only the servers of the projects named, so running one surface's
+// tests never builds every other surface's example.
+const named = process.argv.flatMap((arg, index, all) =>
+  arg === "--project" ? [all[index + 1]] : arg.startsWith("--project=") ? [arg.slice("--project=".length)] : [],
+);
+
 const webServer: PlaywrightTestConfig["webServer"] = servers
   .filter((server) => !server.external)
+  .filter((server) => named.length === 0 || named.includes(server.surface.name))
   .map((server) => ({
     command: `${server.command} ${server.port} ${server.workspace} ${server.surface.args ?? ""}`.trim(),
     cwd: "../..",

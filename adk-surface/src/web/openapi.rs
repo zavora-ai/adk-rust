@@ -31,6 +31,10 @@ use crate::voice::{
     paths as voice_paths,
 };
 
+// The website's document (spec 3.5 §8.2): its own, so this one is the same in every `web` build.
+#[cfg(feature = "website")]
+pub(super) mod website;
+
 fn generator(contract: Contract) -> SchemaGenerator {
     SchemaSettings::draft2020_12()
         .with(|settings| {

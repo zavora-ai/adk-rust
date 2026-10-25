@@ -26,6 +26,7 @@ export function Header({
   areas,
   conversationMode,
   decisions,
+  website,
   theme,
   onNavigate,
   onTheme,
@@ -43,6 +44,8 @@ export function Header({
    */
   conversationMode?: string;
   decisions: number;
+  /** The website section's tab, when the server serves a website (spec 3.5 §8.2). */
+  website?: string;
   theme: Theme;
   onNavigate: (section: Section) => void;
   onTheme: () => void;
@@ -74,7 +77,7 @@ export function Header({
         {labels.brand}
       </a>
       <nav className="tabs" aria-label={labels.sections}>
-        {tabs.map((tab) => (
+        {(website ? [...tabs, { section: "website" as const, label: website }] : tabs).map((tab) => (
           <a
             key={tab.section}
             className="tab"
