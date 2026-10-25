@@ -47,7 +47,7 @@ export function Header({
     section === "memory"
       ? [labels.keptOnYourComputer]
       : areas?.length === 1
-        ? areaStatus(areas[0], new Date())
+        ? areaStatus(areas[0], new Date(), status?.hostUtcOffsetMinutes ?? undefined)
         : [status?.mode?.status, status?.spend?.text, status?.quiet?.text].filter((part): part is string => !!part);
   const themeLabel =
     theme === "system" ? labels.themeSystem : theme === "light" ? labels.themeLight : labels.themeDark;

@@ -729,6 +729,9 @@ impl SurfaceEngine {
             decisions: u32::try_from(decisions).unwrap_or(u32::MAX),
             stopped,
             stopped_text: stopped.then(|| words::ALL_AGENTS_STOPPED.to_string()),
+            host_utc_offset_minutes: Some(
+                self.now().with_timezone(&Local).offset().local_minus_utc() / 60,
+            ),
         })
     }
 

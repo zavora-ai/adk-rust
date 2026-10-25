@@ -375,3 +375,15 @@ async fn only_the_operator_stops_or_resumes_every_run_of_a_mounted_home() {
     assert_eq!((status, outcome["type"].clone()), (StatusCode::OK, json!("resumed")), "{outcome}");
     assert!(!control.is_frozen());
 }
+
+/// The kernel reads a quiet window without an offset in the server's time zone, so the status
+/// line says which zone that is, and a page elsewhere reads the window there (spec 3.3 §5.1).
+#[tokio::test]
+async fn the_status_line_names_the_server_s_time_zone() {
+    let source = LocalSource::builder(APP).sessions(sessions().await).build().unwrap();
+    let app = api(SurfaceEngine::builder(Arc::new(source)).build(), None);
+    let (status, line) = call(&app, "GET", "/api/surface/status?surface=web", None).await;
+    assert_eq!(status, StatusCode::OK, "{line}");
+    let here = chrono::Local::now().offset().local_minus_utc() / 60;
+    assert_eq!(line["hostUtcOffsetMinutes"], json!(here), "{line}");
+}

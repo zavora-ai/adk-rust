@@ -10,6 +10,7 @@ import type { AreaSettings, ChannelWaiting, QuietWindow, StandingRule } from "..
 import { allows } from "../kernel";
 import { labels, modes, words } from "../labels";
 import type { Device, MemoryFact, RecordCheck, RecordLine, Seams, TidyUp } from "../seams";
+import { deviceOffset, onThisDevice } from "../away";
 import { areaName, kernelMode, limitValue, modeOf, modeValue, quietValue, windowText } from "../settings";
 
 const provenance = {
@@ -223,6 +224,10 @@ function CanDo({
 
   const allowed = (rules ?? []).filter(allows);
   const current = area?.mode ? modeOf(area.mode) : status?.mode?.mode;
+  // Quiet time on this device's clock: the kernel keeps a window without an offset in the
+  // server's time zone (spec 3.3 §5.1).
+  const host = status?.hostUtcOffsetMinutes ?? undefined;
+  const here = (window: QuietWindow) => windowText(onThisDevice(window, host));
   const note = (setting: string) => (area ? notes[`${area.partition}:${setting}`] : undefined);
 
   return (
@@ -318,18 +323,19 @@ function CanDo({
         <ul className="bordered settings">
           <SettingRow
             label={labels.quietTime}
-            value={area.quietTime.length === 0 ? labels.off : area.quietTime.map(windowText).join(", ")}
+            value={area.quietTime.length === 0 ? labels.off : area.quietTime.map(here).join(", ")}
             sub={[
-              area.alsoQuiet?.length ? labels.workspaceAlsoQuiet(area.alsoQuiet.map(windowText).join(", ")) : undefined,
+              area.alsoQuiet?.length ? labels.workspaceAlsoQuiet(area.alsoQuiet.map(here).join(", ")) : undefined,
               !note("quiet") && area.changed?.quietTime ? labels.changedAt(changedWhen(area.changed.quietTime.at)) : undefined,
             ]}
             note={note("quiet")}
             editor={(close) => (
               <QuietEditor
-                window={area.quietTime[0]}
+                window={area.quietTime[0] && onThisDevice(area.quietTime[0], host)}
                 onCancel={close}
                 onSave={async (window) => {
-                  if (await change("quiet", (partition) => limits.setQuietTime(partition, window), quietValue)) close();
+                  const value = (read: AreaSettings) => quietValue(read, host);
+                  if (await change("quiet", (partition) => limits.setQuietTime(partition, window), value)) close();
                 }}
               />
             )}
@@ -357,7 +363,10 @@ function CanDo({
         </ul>
       ) : (
         <ul className="bordered settings">
-          <SettingRow label={labels.quietTime} value={status?.quiet ? `${status.quiet.start}–${status.quiet.end}` : labels.notSet} />
+          <SettingRow
+            label={labels.quietTime}
+            value={status?.quiet ? here({ start: status.quiet.start, end: status.quiet.end }) : labels.notSet}
+          />
           <SettingRow
             label={labels.dailySpendingLimit}
             value={
@@ -432,7 +441,10 @@ function SettingRow({
   );
 }
 
-/** Quiet time from one time to another, or off. */
+/**
+ * Quiet time from one time to another, or off, on this device's clock: the window is saved with
+ * this device's offset, so the kernel keeps it at the hours the person typed.
+ */
 function QuietEditor({
   window,
   onSave,
@@ -451,7 +463,7 @@ function QuietEditor({
       className="setting-form"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!same) void onSave({ start, end, ...(window?.utcOffsetMinutes !== undefined ? { utcOffsetMinutes: window.utcOffsetMinutes } : {}) });
+        if (!same) void onSave({ start, end, utcOffsetMinutes: deviceOffset() });
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape") onCancel();

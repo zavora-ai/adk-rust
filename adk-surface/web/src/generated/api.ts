@@ -419,6 +419,12 @@ export interface SpendView {
 export interface StatusLine {
   /** Decisions waiting for the caller: the filled badge. */
   decisions: number;
+  /**
+   * Minutes east of UTC of the server's time zone now: the kernel reads a quiet window that
+   * carries no offset of its own there, so a page in another zone reads it there too
+   * (spec 3.3 §5.1).
+   */
+  hostUtcOffsetMinutes?: number | null;
   /** The mode, when the source runs a harness. */
   mode?: ModeView | null;
   /** Quiet time, when set. */

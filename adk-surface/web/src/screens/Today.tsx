@@ -12,6 +12,7 @@ import { agendaState, dailyCron, isQuestion } from "../kernel";
 import { labels, words } from "../labels";
 import type { Planned } from "../plan";
 import { visible } from "../safe";
+import { windowText } from "../settings";
 import type { Seams, WhileAwaySeam } from "../seams";
 
 const pillKind: Record<PillKindApi, PillKind> = {
@@ -159,8 +160,8 @@ export function Today({
       : away.quietTime.respected
         ? labels.quietRespected
         : labels.quietNotKept
-    : status?.quiet
-      ? `${status.quiet.start}–${status.quiet.end}`
+    : first
+      ? windowText(first)
       : labels.notSet;
   const quietLarge = kernel && windows.length > 0;
   const spent = away ? dollars(away.spentMicroUsd) : briefing?.spend ? dollars(briefing.spend.spentMicroUsd) : "—";

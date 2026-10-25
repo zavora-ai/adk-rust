@@ -5,7 +5,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { agentOf, briefingDue, insideQuiet, lineWords, mergeAway, quietEnded } from "../src/away";
+import { agentOf, briefingDue, deviceOffset, insideQuiet, lineWords, mergeAway, onThisDevice, quietEnded } from "../src/away";
 import { ApiError, HttpClient } from "../src/client";
 import { FixtureClient, awayPage, fixtureSeams } from "../src/fixture/fixture";
 import type { SeamCalls } from "../src/fixture/fixture";
@@ -241,6 +241,38 @@ describe("quiet time and the morning briefing", () => {
     expect(screen.queryByRole("region", { name: "While you were away" })).toBeNull();
   });
 
+  // The kernel keeps a window without an offset in the server's time zone; a page in another
+  // zone reads it on its own clock (spec 3.3 §5.1).
+  it("reads a window the server keeps in its own zone on this device's clock", () => {
+    expect(onThisDevice({ start: "22:00", end: "07:00" }, 0, 180)).toEqual({ start: "01:00", end: "10:00", utcOffsetMinutes: 180 });
+    expect(onThisDevice({ start: "01:00", end: "06:00" }, 180, 0)).toEqual({ start: "22:00", end: "03:00", utcOffsetMinutes: 0 });
+    expect(onThisDevice({ start: "22:00", end: "07:00", utcOffsetMinutes: 180 }, 0, 180)).toEqual({
+      start: "22:00",
+      end: "07:00",
+      utcOffsetMinutes: 180,
+    });
+    expect(onThisDevice({ start: "22:00", end: "07:00" }, undefined, 180)).toEqual({ start: "22:00", end: "07:00" });
+    // 23:30 in Nairobi is 20:30 in UTC: outside a 22:00–07:00 window kept in UTC.
+    const nairobi = onThisDevice({ start: "22:00", end: "07:00" }, 0, 180);
+    expect(insideQuiet(nairobi, utc("2026-10-24T20:30:00Z"))).toBe(false);
+    expect(insideQuiet(nairobi, utc("2026-10-24T22:30:00Z"))).toBe(true);
+  });
+
+  it("says quiet time holds when the server keeps it, not when this device's clock would", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const night = new Date();
+    night.setHours(23, 30, 0, 0);
+    vi.setSystemTime(night);
+    // The server is three hours behind this device, so its 22:00 is this device's 01:00.
+    const client = new FixtureClient();
+    const status = client.status.bind(client);
+    client.status = async () => ({ ...(await status()), hostUtcOffsetMinutes: deviceOffset(night) - 180 });
+    render(<App client={client} seams={fixtureSeams()} initialSection="threads" />);
+    const header = screen.getByRole("banner");
+    expect(await within(header).findByText("Quiet from 01:00")).toBeTruthy();
+    expect(within(header).queryByText("Quiet until 07:00")).toBeNull();
+  });
+
   it("does not show during quiet time", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const night = new Date();
@@ -282,6 +314,22 @@ describe("What your agents can do", () => {
     const header = screen.getByRole("banner");
     await within(header).findByText("Goes ahead");
     expect(within(header).getByText("$1.84 of $8.00 today")).toBeTruthy();
+  });
+
+  it("saves quiet time with this device's offset, so the kernel keeps the hours the person typed", async () => {
+    const seams: Seams = fixtureSeams();
+    const saved: unknown[] = [];
+    const set = seams.limits!.setQuietTime;
+    seams.limits!.setQuietTime = async (partition, window) => {
+      saved.push(window);
+      return set(partition, window);
+    };
+    render(<App client={new FixtureClient()} seams={seams} initialSection="memory" />);
+    const card = (await screen.findByRole("heading", { name: "What your agents can do" })).closest("section")!;
+    await userEvent.click((await within(card).findAllByRole("button", { name: "Change" }))[0]);
+    await userEvent.click(within(card).getByRole("button", { name: "Save" }));
+    await within(card).findByText(/^Was /);
+    expect(saved).toEqual([{ start: "22:00", end: "07:00", utcOffsetMinutes: deviceOffset() }]);
   });
 
   it("shows why the kernel refused a change, such as from a paired device", async () => {

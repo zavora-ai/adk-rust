@@ -177,6 +177,13 @@ change's `from` and `to`. Only the person changes them: the kernel refuses a cal
 `operator` scope and every paired device's token, and the page shows its answer. With one
 area, the header's status line follows its settings in force.
 
+Quiet time reads and saves on the clock of the device the page is open on. A window saved
+from the home carries that device's offset (`utcOffsetMinutes`), so the kernel keeps the hours
+the person typed. A window without one — from `--quiet-hours` or `harness.toml` — is kept in
+the server's time zone, which `GET /surface/status` names as `hostUtcOffsetMinutes`; the page
+moves its times to the device's clock, so 22:00–07:00 on a server in UTC reads 01:00–10:00 in
+Nairobi.
+
 | Light | Dark |
 |---|---|
 | ![Changing quiet time](../images/surfaces/web-settings-light.png) | ![Changing quiet time, dark](../images/surfaces/web-settings-dark.png) |
