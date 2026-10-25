@@ -102,6 +102,7 @@ The interface to an always-on agent (`adk-surface`, spec 3.3): every surface is 
 - [The Web Home](surfaces/web-home.md) - Threads, Today and Memory & rules at `/ui/`, in light and dark: decisions with the version seen, what stays read-only until the kernel serves it, mounting it on your own server, the developer panel, and moving from `adk-server`'s bundled runtime UI
 - [The Terminal](surfaces/terminal.md) - Full screen, inline and JSON lines from the keyboard: decisions answered by key, Esc never decides, typing queued, device pairing for a kernel on another machine, exit codes for CI
 - [Chat](surfaces/chat.md) - The Telegram adapter over the kernel's channel contract: cards with Allow once and Deny and never the call's arguments, pairing by code, "stop all", long polling
+- [The Desktop Tray](surfaces/desktop.md) - Experimental: the web home in a desktop window and a tray icon with the decisions badge; its panel says yes once or no to everyday calls, opens the home for the rest, and stops everything; loopback only
 - [Scenarios](surfaces/scenarios.md) - The phase scenarios as programs you can run: "Approve it tomorrow" (a decision that waits through quiet time and a `kill -9`, answered in Telegram) and "The morning after" (one exact briefing across a restart), on SQLite and PostgreSQL
 
 ## Realtime & Multimodal
