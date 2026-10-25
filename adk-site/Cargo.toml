@@ -82,6 +82,8 @@ url = { version = "2.5", optional = true }
 x509-parser = { version = "0.18", optional = true }
 
 [dev-dependencies]
+# Stream entries are checked against the edge's proof format.
+adk-awp = { path = "../adk-awp", default-features = false, features = ["signing"] }
 axum = "0.8"
 proptest = "1.5"
 tempfile = "3"

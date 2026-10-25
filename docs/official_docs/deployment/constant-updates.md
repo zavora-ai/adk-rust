@@ -118,6 +118,42 @@ async fn shop(config: SiteConfig) -> adk_site::Result<()> {
 }
 ```
 
+## Streams
+
+A live blog, a ticker or an emergency update is a stream on a published story. Each entry is a
+`StreamEntry` signed by the edge's delegated key — a detached JWS over the entry's JCS form, the
+same proof every AWP 2.0 document carries — and the edge serves it at once in a feed the page
+polls. Every `fold_interval` (default five minutes) and when the stream closes, the entries fold
+into the story's stream field and release through the batcher, so every entry ends up in a signed
+release; a fold refuses an entry whose proof does not verify.
+
+```rust
+use std::sync::Arc;
+
+use adk_site::stream::{Ed25519EntrySigner, StreamLane};
+use adk_site::updates::UpdateEngine;
+use awp_types::ContentId;
+
+async fn election_night(engine: &UpdateEngine) -> adk_site::Result<()> {
+    // The engine was built with `.streams(Arc::new(StreamLane::new(edge_key)))`.
+    let story = ContentId::from("articles/election-night/en");
+    engine.open_stream(&story, "entries").await?;
+    let entry = engine.append_entry(&story, "Results from the first district.", None).await?;
+    assert_eq!(engine.stream_since(&story, 0).await?, vec![entry]);
+    engine.close_stream(&story).await?;
+    engine.tick().await?; // the closing fold
+    Ok(())
+}
+
+fn lane() -> adk_site::Result<StreamLane> {
+    Ok(StreamLane::new(Arc::new(Ed25519EntrySigner::generate("edge-receipt-2026-11")?)))
+}
+```
+
+The story must already be published, and the field must be one its kind declares under
+`stream`; feeds never fill a stream field. The page renders folded entries newest first under a
+`data-awp-stream` hook, with corrections marked.
+
 ## Operating
 
 | Library call | CLI | Shows or does |
@@ -150,3 +186,21 @@ Each batch produces one `Announcement` for the edge: `site.release.published` an
 next page at `<changes_url>/<seq>/<page>` and `Announcement::catalog_pages` holds the pages for
 the edge to serve; `PublishingPipelineBuilder::changes_url` sets the base, by default
 `<base_url>/awp/v2/events/changes`.
+
+## Scenario S19
+
+`adk-site/tests/s19_constant_updates.rs` runs spec 3.5's scenario S19 on a warped clock against
+`DirectoryHost`: a generated shop fed every minute with 2% stock and 0.5% price changes, a
+corrupted delivery at hour three that changes 60% of the prices, an election-night live blog, a
+bad product edit that is reverted, and the Guardian's `Prober` sampling the host and the origin
+while releases go out. It asserts that stock never makes a release, that each price change
+publishes once with p95 approval-to-live under the window plus 60 s, that the corrupted delivery
+is held whole with a P2 alarm, that every entry is folded into a signed release, that the revert
+keeps every other change, that no probe reports drift, that each subscriber gets one
+`catalog.changed` per batch, and that feed updates make no model call. Every pull request runs
+it with 600 products over four hours; the nightly soak runs 50,000 products over 24 hours:
+
+```bash
+ADK_SITE_S19_FULL=1 cargo nextest run -p adk-site --features migrate --cargo-profile ci \
+  --run-ignored only -E 'test(s19_full_day)' --no-capture
+```

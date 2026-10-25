@@ -9,6 +9,7 @@
 //! |--------|----------|----------|
 //! | [`batch`] | [`batch::Batcher`]: windows per kind, flush triggers, size limits; [`batch::check_host`] | §7.8.3, Q15, Q16 |
 //! | [`content`] | `site.toml`, items as Markdown with front matter, [`content::ContentStore`] and [`content::ContentHistory`] with conformance suites | §7.8.2 |
+//! | [`stream`] | [`stream::StreamLane`]: entries signed by the edge key, served at once, folded into releases | §7.8.3, A-I26 |
 //! | [`theme`] | Templates and design tokens, WCAG contrast | §7.8, §7.16 |
 //! | [`generator`] | [`generator::SiteGenerator`] and the built-in renderer: pages per language, Markdown and structured twins, `llms.txt`, `robots.txt`, `security.txt`, sitemaps, feeds, JSON-LD, redirects, incremental builds | §7.4, §7.8 |
 //! | [`feed`] | [`feed::ContentSource`], model-free [`feed::FeedMapping`]s, feed bounds | §7.8.2, §7.8.3, A-I27 |
@@ -89,6 +90,7 @@ pub mod redirects;
 pub mod release;
 pub mod scan;
 pub mod signer;
+pub mod stream;
 pub mod theme;
 pub mod translation;
 pub mod updates;

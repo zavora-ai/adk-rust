@@ -26,6 +26,7 @@ adk-site = "3.0.0"
 | Publishing | `PublishingPipeline` | Draft, check, preview, approve, release, publish, announce, measure; corrections, withdrawals (notice or 410), schedules, per-item revert, whole-site rollback |
 | Media | `MediaPipeline` | Type sniffing, executables and polyglots refused, location metadata stripped by re-encoding, resizing, alt text that a person confirms |
 | Lanes | `lanes`, `LiveStore` | Release, live and stream lanes per field, declared per kind in `site.toml`; claims stay in releases (A-I26) |
+| Streams | `StreamLane`, `EntrySigner` | Live-blog entries signed by the edge key in the AWP 2.0 proof format, served at once, folded into signed releases every five minutes and at the close |
 | Constant updates | `UpdateEngine`, `Batcher`, `FeedMapping` | Model-free feed mappings, feed bounds that hold a delivery whole (A-I27), batch windows per kind, exceptions held alone, fast checks per item, one release and one `catalog.changed` per batch, scheduled full checks, per-item revert and replay |
 
 ## Content repository
@@ -98,6 +99,7 @@ A shop syncing its supplier every minute or a newsroom on election night stays s
 signed: `UpdateEngine` sorts each update into its lane, batches releases per kind (30 s by
 default, 10 s for articles, 60 s for products), holds a feed delivery that breaks its bounds
 whole with a P2 alarm, holds out-of-rule changes alone and publishes the rest without a model.
+Live blogs run as streams whose signed entries fold into releases every five minutes.
 `DirectoryHost::new(root).materialise(false).retain_releases(n)` publishes at the cost of
 what changed. See [Constantly updated sites](../docs/official_docs/deployment/constant-updates.md).
 
