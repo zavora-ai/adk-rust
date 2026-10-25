@@ -77,6 +77,12 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 | `GET /kernel/partitions` | The [partition](partitions.md) table | — | — |
 | `POST /kernel/partitions` | Create or replace a partition; body: the partition record | Yes | `partition.put` |
 | `POST /kernel/partitions/{id}/mode` | Set a partition's mode; body `{"mode": "auto"}` | Yes | `partition.mode` |
+| `GET /kernel/settings`, `GET /kernel/settings/{partition}` | Each area's quiet time, daily spending limit, spend today and mode in force ([settings](today-and-memory.md#settings-while-the-kernel-runs)) | Yes, or a device with `read` | — |
+| `POST /kernel/settings/{partition}/{quiet-time,spending-limit,mode}` | Change one while the kernel runs; never from a device token | Yes, no device | `settings.quiet_time`, `settings.spending_limit`, `settings.mode` |
+| `GET /kernel/away?viewer=&after=&limit=`, `POST /kernel/away/seen`, `GET /kernel/away/lines/{seq}` (feature `proc`) | "While you were away" from the viewer's cursor; move the cursor; one line's ledger row ([while you were away](today-and-memory.md#while-you-were-away)) | Yes, or a device with `read` | — |
+| `GET /kernel/memory?area=` | What the agents remember, with provenance, and the overnight tidy-ups ([memory](today-and-memory.md#what-your-agents-remember)) | Yes, or a device with `read` | — |
+| `POST /kernel/memory/facts/{id}/{confirm,fix,forget}`, `POST /kernel/memory/undo` | "That's right", "Fix it", "Forget it", "Undo"; never from a device token | Yes, no device | `memory.confirm`, `memory.fix`, `memory.forget`, `memory.undo` |
+| `GET /kernel/record?limit=`, `GET /kernel/record/check` | The latest actions on record; the check `adk-rust audit verify` makes ([record](today-and-memory.md#what-your-agents-did)) | Yes, or a device with `read` | — |
 | `/approvals…` | The approvals inbox, unchanged; the socket and the pipe serve it too | Per inbox rules | Inbox records |
 
 On HTTP the server's own routes stay beside them: `/api/runs` (submissions land on the
@@ -132,7 +138,7 @@ regardless:
 | `actor` | The caller as a `human` subject |
 | `subject` | `{"kind": "human", "id": "<user>"}` |
 | `transport` | `socket`, `pipe` or `http` |
-| `action` (ext) | `spawn`, `kill`, `nice`, `suspend`, `resume`, `freeze`, `unfreeze`, `attach`, or a pairing action: `pairing.issue`, `pairing.claim`, `devices.revoke`, `channels.pair`, `channels.revoke`, `channels.dismiss`, `approvals.decide` |
+| `action` (ext) | `spawn`, `kill`, `nice`, `suspend`, `resume`, `freeze`, `unfreeze`, `attach`, a pairing action: `pairing.issue`, `pairing.claim`, `devices.revoke`, `channels.pair`, `channels.revoke`, `channels.dismiss`, `approvals.decide`, or a change the home makes: `settings.quiet_time`, `settings.spending_limit`, `settings.mode` (with `from` and `to`), `memory.confirm`, `memory.fix`, `memory.forget`, `memory.undo` (ids only) |
 | `target` | The pid, session or spawned target |
 | `pid` | The new process, on `spawn` |
 | `device` | The paired device, on an action a device took |

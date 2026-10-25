@@ -300,6 +300,19 @@ arguments, chat answers **Allow once** or **Deny** at low and medium risk throug
 adapter implements `ChannelSink` and passes `channel_contract_tests!`; `InMemoryChannel` is
 the test channel. See [Pairing devices and chat channels](../docs/official_docs/kernel/pairing.md).
 
+## Settings, while you were away, memory and record
+
+The routes behind the home's Today and "Agent Memory and Rules" (spec 3.3 §10 K3–K5):
+`/api/kernel/settings` reads and changes each area's quiet time, daily spending limit and
+mode while the kernel runs, from the agents' next step; `/api/kernel/away` is "While you were
+away" over the `/proc` ledger with a cursor per device, exact across restarts;
+`/api/kernel/memory` lists and corrects what the agents remember through a `MemoryBook`;
+`/api/kernel/record` reads the latest actions and checks the signed audit log through a
+`RecordBook`. Devices with `read` read them; only the person changes a setting or a memory.
+Changed settings and cursors live in the `ControlStore`
+(`ControlPlaneConfig::with_control_store`). See
+[Settings, while you were away, memory and record](../docs/official_docs/kernel/today-and-memory.md).
+
 ## Replicas
 
 Kernels share one run store, process store and governance store. Give each replica
@@ -313,6 +326,7 @@ second.
 | `AgendaStore` | `InMemoryAgendaStore`; `SqliteAgendaStore` (`sqlite`); `PostgresAgendaStore` (`postgres`); `RedisAgendaStore` (`redis`) |
 | `DriverStore` | `InMemoryDriverStore`; `SqliteDriverStore`; `PostgresDriverStore`; `RedisDriverStore` (feature `drivers` with the backend's) |
 | `pairing::DeviceStore` | `InMemoryDeviceStore`; `SqliteDeviceStore`; `PostgresDeviceStore`; `RedisDeviceStore` |
+| `control::ControlStore` | `InMemoryControlStore`; `SqliteControlStore`; `PostgresControlStore`; `RedisControlStore` |
 | `channels::ChannelBindingStore` (feature `channels`) | `InMemoryChannelBindingStore`; `SqliteChannelBindingStore`; `PostgresChannelBindingStore`; `RedisChannelBindingStore` |
 | Runs, sessions, schedules, approvals, governance state, action ledger | `adk-session`'s stores on the same backend |
 
@@ -423,6 +437,9 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `tests/channel_gateway.rs` (features `channels`, `conformance`) | The gateway's rules: chat never decides money, a restarted gateway keeps ringing, a decision is carded once, a quorum answer waits for the others, only who may answer gets a card, and concurrent unpaired messages keep the waiting limit |
 | `tests/channel_scenarios.rs`, `tests/channel_contract.rs` (feature `channels`) | Spec 3.3 K1 with a scripted agent: a stranger gets a code and starts nothing, once paired its message is answered in its thread; a held call's card reaches the chat without its arguments, "Allow once" runs it once, and a later answer from a paired phone or the chat is already decided. The adapter contract on `InMemoryChannel` |
 | `tests/device_store_*.rs`, `tests/channel_store_*.rs` | The device and channel binding suites on every backend |
+| `tests/surface_routes.rs` | Spec 3.3 K3–K5 on loopback HTTP: settings start as configured, each change replaces its value, is recorded, survives a restart and holds or releases work at its next admission; "While you were away" counts, spends, says whether quiet time was respected, links each line to its record and moves on only once seen, each device on its own cursor, exactly across a restart; memory and record reach every reader; no device and no caller without `operator` changes a setting or a memory |
+| `tests/away_property_tests.rs` | Spec 3.3 K4: whatever rows are written, pages read and marked, and restarts made, the lines a viewer marks seen are every line of the ledger once, in order, with its spend |
+| `tests/control_store_*.rs` | The control store suite on every backend |
 
 ## License
 
