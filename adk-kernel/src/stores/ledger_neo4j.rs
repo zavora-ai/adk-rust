@@ -32,7 +32,7 @@ MERGE (s:AdkKernelPassState {partition: $partition}) \
 SET s.order_key = $order_key, s.body = $body";
 
 /// A [`LedgerStore`] in Neo4j, shared by every replica (spec 3.2 §7.1, §7.10, §13 Q8,
-/// features `proc` and `neo4j`). **Alpha** until its live conformance suite passes in CI.
+/// features `proc` and `neo4j`).
 ///
 /// | Label | Key (unique) | Properties |
 /// |-------|--------------|------------|

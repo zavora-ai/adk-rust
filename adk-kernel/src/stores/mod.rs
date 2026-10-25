@@ -30,8 +30,8 @@
 //! ([`InMemoryPartitionStore`], `SqlitePartitionStore`, `PostgresPartitionStore`,
 //! `RedisPartitionStore`, suite `partition_store_conformance_tests!`).
 //!
-//! Phase 4 adds these stores on MongoDB, Firestore and Neo4j (§13 Q8), each **Alpha** until
-//! its live conformance suite passes in CI:
+//! Phase 4 adds these stores on MongoDB, Firestore and Neo4j (§13 Q8), each checked by its
+//! conformance suite against a live server in CI:
 //!
 //! | Store | MongoDB (`mongodb`) | Firestore (`firestore`) | Neo4j (`neo4j`) |
 //! |---|---|---|---|
@@ -45,7 +45,7 @@
 //! The [`CronWatermarkStore`](crate::CronWatermarkStore) — where each cron wake source left
 //! off (§7.4) — runs on in-memory, SQLite, PostgreSQL and Redis
 //! ([`InMemoryCronWatermarkStore`], `SqliteCronWatermarkStore`, `PostgresCronWatermarkStore`,
-//! `RedisCronWatermarkStore`, suite `cron_watermark_store_conformance_tests!`), and, Alpha, on
+//! `RedisCronWatermarkStore`, suite `cron_watermark_store_conformance_tests!`), and on
 //! MongoDB, Firestore and Neo4j.
 //!
 //! There is no file backend and no Vertex AI backend (§13 Q8): no durable store on `main` is file-backed, and

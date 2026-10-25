@@ -88,11 +88,14 @@ minor release. Every other crate was promoted to Stable in 1.0.0.
 A backend inside a Beta or Stable crate can be **Alpha**: it implements its store's whole
 contract and carries the store's conformance suite, but that suite has not yet passed
 against a live server in CI, so its storage layout may change in a minor release without a
-migration.
+migration. A backend leaves Alpha when its store's conformance suite passes against a live
+server in CI, and then carries its crate's tier.
 
-| Crate | Features | Backends | Leaves Alpha when |
-|-------|----------|----------|-------------------|
-| `adk-kernel` | `mongodb`, `firestore`, `neo4j` | `ProcessStore`, `AgendaStore`, `DriverStore`, `LedgerStore`, `PartitionStore` and `CronWatermarkStore` on MongoDB, Firestore and Neo4j (`Mongo*`, `Firestore*`, `Neo4j*`) | Each store's conformance suite passes on the backend in the nightly `durable-stores` job (spec 3.2 §13 Q8) |
+No backend is Alpha. Backends that have left Alpha:
+
+| Crate | Features | Backends | Left Alpha | Tier |
+|-------|----------|----------|------------|------|
+| `adk-kernel` | `mongodb`, `firestore`, `neo4j` | `ProcessStore`, `AgendaStore`, `DriverStore`, `LedgerStore`, `PartitionStore` and `CronWatermarkStore` on MongoDB, Firestore and Neo4j (`Mongo*`, `Firestore*`, `Neo4j*`) | 2026-10-25, once each store's conformance suite had passed on the backend in the nightly `durable-stores` job (spec 3.2 §13 Q8) | **Beta** |
 
 ### Excluded from Workspace
 

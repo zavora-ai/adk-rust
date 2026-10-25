@@ -22,9 +22,9 @@ sqlite = ["dep:sqlx", "sqlx/sqlite", "adk-session/sqlite"]
 # (spec 3.2 §7.1, §13 Q8).
 postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs", "adk-session/postgres"]
 redis = ["dep:fred"]
-# The phase-4 backends of the kernel-owned stores, Alpha until their live suites pass in CI
-# (spec 3.2 §7.1, §13 Q8). Each also turns on the same backend of adk-session's run,
-# schedule and governance stores, which a kernel on that backend keeps beside them.
+# The phase-4 backends of the kernel-owned stores (spec 3.2 §7.1, §13 Q8). Each also turns on
+# the same backend of adk-session's run, schedule and governance stores, which a kernel on that
+# backend keeps beside them.
 mongodb = ["dep:mongodb", "adk-session/mongodb"]
 firestore = ["dep:firestore", "adk-session/firestore"]
 neo4j = ["dep:neo4rs", "adk-session/neo4j"]
@@ -77,8 +77,8 @@ async-trait.workspace = true
 axum = "0.8"
 chrono.workspace = true
 dirs = "7"
-# The Alpha backends (features `mongodb`, `firestore`, `neo4j`), at the versions adk-session
-# and adk-graph use.
+# The MongoDB, Firestore and Neo4j backends (features `mongodb`, `firestore`, `neo4j`), at the
+# versions adk-session and adk-graph use.
 firestore = { version = "0.48", optional = true }
 fred = { version = "10", optional = true, features = ["i-scripts"] }
 futures.workspace = true

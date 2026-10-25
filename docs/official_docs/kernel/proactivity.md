@@ -158,7 +158,7 @@ async fn main() -> anyhow::Result<()> {
 
 The items live in an `AgendaStore`: `InMemoryAgendaStore`, `SqliteAgendaStore` (in
 `harness.db`), `PostgresAgendaStore` (feature `postgres`) or `RedisAgendaStore` (feature
-`redis`), or, Alpha, `MongoAgendaStore`, `FirestoreAgendaStore` or `Neo4jAgendaStore`
+`redis`), or `MongoAgendaStore`, `FirestoreAgendaStore` or `Neo4jAgendaStore`
 (features `mongodb`, `firestore`, `neo4j`; [backends](backends.md)), set with
 `KernelBuilder::agenda_store`. Every backend passes
 `agenda_store_conformance_tests!` (feature `conformance`); `transition` is a compare-and-set on

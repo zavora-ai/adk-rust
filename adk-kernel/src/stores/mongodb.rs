@@ -136,7 +136,7 @@ where
 }
 
 /// A [`ProcessStore`] in MongoDB, shared by every replica (spec 3.2 §7.1, §13 Q8, feature
-/// `mongodb`). **Alpha** until its live conformance suite passes in CI.
+/// `mongodb`).
 ///
 /// It works on a standalone `mongod`, a replica set or a sharded cluster: every change is a
 /// single-document write, so it needs no multi-document transaction.

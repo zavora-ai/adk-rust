@@ -24,7 +24,7 @@ const PASS_STATES: &str = "adk_kernel_proc_state";
 const SEQUENCE: &str = "ledger";
 
 /// A [`LedgerStore`] in MongoDB, shared by every replica (spec 3.2 §7.1, §7.10, §13 Q8,
-/// features `proc` and `mongodb`). **Alpha** until its live conformance suite passes in CI.
+/// features `proc` and `mongodb`).
 ///
 /// | Collection | `_id` | Contents |
 /// |------------|-------|----------|
