@@ -219,7 +219,7 @@ pub fn openapi() -> Value {
 
     let mut schemas = Value::Object(schemas);
     clean_descriptions(&mut schemas);
-    json!({
+    sorted(json!({
         "openapi": "3.1.0",
         "info": {
             "title": "adk-surface",
@@ -228,7 +228,22 @@ pub fn openapi() -> Value {
         },
         "paths": routes,
         "components": { "schemas": schemas },
-    })
+    }))
+}
+
+/// `value` with every object's keys in sorted order, as `serde_json`'s default map keeps
+/// them: the same document, and the same TypeScript, whether or not a crate in the build
+/// turns on `serde_json/preserve_order`, which keeps keys in insertion order.
+fn sorted(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<(String, Value)> = map.into_iter().collect();
+            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+            Value::Object(entries.into_iter().map(|(key, child)| (key, sorted(child))).collect())
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(sorted).collect()),
+        other => other,
+    }
 }
 
 /// Keeps each description's prose: no rustdoc sections, no intra-doc link targets.
@@ -432,4 +447,45 @@ fn merge_siblings(parent: &Value, variant: &Value) -> Value {
         merged.insert("type".into(), kind.clone());
     }
     Value::Object(merged)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every object of `value` lists its keys in sorted order.
+    fn keys_sorted(value: &Value) -> bool {
+        match value {
+            Value::Object(map) => {
+                map.keys().zip(map.keys().skip(1)).all(|(a, b)| a <= b)
+                    && map.values().all(keys_sorted)
+            }
+            Value::Array(items) => items.iter().all(keys_sorted),
+            _ => true,
+        }
+    }
+
+    /// Keys inserted in any order give the same document: with `serde_json/preserve_order`
+    /// on, a map keeps insertion order, and `sorted` puts it back.
+    #[test]
+    fn the_document_is_the_same_in_any_key_order() {
+        let mut forward = Map::new();
+        let mut backward = Map::new();
+        for key in ["b", "a", "c"] {
+            forward.insert(key.to_string(), json!({ "z": 1, "y": [{ "q": 2, "p": 3 }] }));
+        }
+        for key in ["c", "a", "b"] {
+            let mut inner = Map::new();
+            inner.insert("y".into(), json!([{ "p": 3, "q": 2 }]));
+            inner.insert("z".into(), json!(1));
+            backward.insert(key.to_string(), Value::Object(inner));
+        }
+        let (forward, backward) = (sorted(Value::Object(forward)), sorted(Value::Object(backward)));
+        assert_eq!(forward.to_string(), backward.to_string());
+        assert_eq!(
+            forward.to_string(),
+            r#"{"a":{"y":[{"p":3,"q":2}],"z":1},"b":{"y":[{"p":3,"q":2}],"z":1},"c":{"y":[{"p":3,"q":2}],"z":1}}"#
+        );
+        assert!(keys_sorted(&openapi()), "the OpenAPI document's keys are sorted");
+    }
 }

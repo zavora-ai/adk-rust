@@ -14,6 +14,7 @@
 //! | [`DeviceStore`](crate::pairing::DeviceStore) (spec 3.3 §10 K2) | [`DeviceStoreHarness`] | [`device_store_conformance_tests!`](crate::device_store_conformance_tests) | [`device_store`] |
 //! | `channels::ChannelBindingStore` (feature `channels`; spec 3.3 §10 K1) | `ChannelBindingStoreHarness` | `channel_binding_store_conformance_tests!` | `channel_binding_store` |
 //! | [`PartitionStore`](crate::PartitionStore) | [`PartitionStoreHarness`] | [`partition_store_conformance_tests!`](crate::partition_store_conformance_tests) | [`partition_store`] |
+//! | [`ControlStore`](crate::control::ControlStore) (spec 3.3 §10 K3, K4) | [`ControlStoreHarness`] | [`control_store_conformance_tests!`](crate::control_store_conformance_tests) | [`control_store`] |
 //!
 //! Chat channel adapters pass `channel_contract` (feature `channels`; spec 3.3 §10 K1): a
 //! `ChannelAdapterHarness` makes a fresh adapter per case and `channel_contract_tests!`
@@ -57,6 +58,7 @@ pub mod agenda_store;
 pub mod channel_binding_store;
 #[cfg(feature = "channels")]
 pub mod channel_contract;
+pub mod control_store;
 pub mod device_store;
 #[cfg(feature = "drivers")]
 pub mod driver_store;
@@ -70,6 +72,7 @@ pub use agenda_store::AgendaStoreHarness;
 pub use channel_binding_store::ChannelBindingStoreHarness;
 #[cfg(feature = "channels")]
 pub use channel_contract::{ChannelAdapter, ChannelAdapterHarness, ContractHost};
+pub use control_store::ControlStoreHarness;
 pub use device_store::DeviceStoreHarness;
 #[cfg(feature = "drivers")]
 pub use driver_store::DriverStoreHarness;

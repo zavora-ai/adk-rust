@@ -77,6 +77,7 @@ suite "adk-kernel" -p adk-kernel --features postgres,redis,channels --test proce
     --test driver_store_postgres \
     --test ledger_store_postgres \
     --test device_store_postgres \
+    --test control_store_postgres \
     --test channel_store_postgres \
     --test partition_store_postgres
 
