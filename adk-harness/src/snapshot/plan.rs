@@ -242,11 +242,18 @@ impl RewindPlan {
     pub fn render(&self) -> String {
         let mut out = String::new();
         let when = self.taken_at.format("%Y-%m-%d %H:%M:%S UTC");
-        let _ = writeln!(
-            out,
-            "Rewind {} — snapshot {} ({}, {when})",
-            self.target, self.snapshot_id, self.snapshot_kind
-        );
+        let _ = match self.snapshot_kind {
+            SnapshotKind::Rewind => writeln!(
+                out,
+                "Redo: put back what the rewind at {when} replaced (snapshot {})",
+                self.snapshot_id
+            ),
+            _ => writeln!(
+                out,
+                "Rewind {} — snapshot {} ({}, {when})",
+                self.target, self.snapshot_id, self.snapshot_kind
+            ),
+        };
         for (change, heading) in [
             (ChangeKind::Restore, "modified since, put back"),
             (ChangeKind::Recreate, "deleted since, written again"),
