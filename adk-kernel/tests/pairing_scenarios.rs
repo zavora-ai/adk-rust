@@ -133,10 +133,7 @@ impl Plane {
             ..IssueRequest::default()
         };
         let issued = self.operator().issue_pairing_code(&request).await.unwrap();
-        assert_eq!(
-            issued.url.as_deref(),
-            Some(&*format!("https://home.example/pair#code={}", issued.code))
-        );
+        assert_eq!(issued.url, None, "a remote terminal's code carries no phone link");
         // The claim needs no caller: the code is the credential.
         let claimed =
             ControlClient::http(self.base()).claim_pairing(&issued.code, None).await.unwrap();

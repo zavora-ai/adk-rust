@@ -154,10 +154,13 @@ See [The Web Home](../docs/official_docs/surfaces/web-home.md).
 | `web` | The web home: its page and HTTP API | Beta |
 | `tui` | The terminal: full screen, inline and JSON lines (`adk_surface::tui`), decisions answered by key; the `adk-rust` binary's `tui` feature | Beta |
 | `channels` | Chat: the Telegram adapter (`adk_surface::channels`), over the kernel's channel contract, by long polling | Beta |
+| `mobile` | The phone: its routes, Web Push from the person's own kernel and "Confirm it's you" (`adk_surface::mobile`); implies `web` and links OpenSSL through webauthn-rs | Beta |
+| `voice` | Voice and video: spoken "allow once" and "deny" through the engine (`adk_surface::voice`); `voice-live` adds Gemini Live and the OpenAI Realtime API for the live test and the `voice_home` example | Beta |
 
-The phone, the desktop tray, voice, agent-drawn UI and the workflow observer arrive as
-further features (spec 3.3 §6.1, §12). See
-[the terminal](../docs/official_docs/surfaces/terminal.md) for its keys, modes and exit codes.
+The desktop tray is a separate, unpublished app in `desktop/`, not a feature. Agent-drawn UI
+and the workflow observer arrive as further features (spec 3.3 §6.1, §12). See
+[the terminal](../docs/official_docs/surfaces/terminal.md) for its keys, modes and exit codes,
+and [the phone](../docs/official_docs/surfaces/phone.md) for serving it.
 
 ## Chat
 

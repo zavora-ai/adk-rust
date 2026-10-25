@@ -31,8 +31,10 @@ opens it ([control plane](control-plane.md), S-I7).
    ```
 
    The code works for ten minutes and pairs one device. With a home address set
-   (`Pairing::with_home_url`) the answer also carries `<home>/pair#code=7K2M-QX4D-9HWT`, the
-   URL a phone opens; the code sits in the fragment, so no server log keeps it.
+   (`Pairing::with_home_url`), a code of kind `phone` (`adk-rust pair --kind phone`) also
+   carries `<home>/pair#code=7K2M-QX4D-9HWT`, the URL the phone opens; the code sits in the
+   fragment, so no server log keeps it. A terminal's or a tray's code carries no link: it is
+   typed on the device.
 
 2. On the device, claim it. The claim is the one route that needs no caller, since the code
    is the credential:

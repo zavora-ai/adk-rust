@@ -174,8 +174,15 @@ async fn record(phone: &Phone, action: &str, who: &Who, fields: Value) {
     }
 }
 
+/// Whether `holder` has a subscription this server wakes: one made with its push key. One made
+/// with a key since replaced is not, so the phone offers "Allow notifications" again (spec 3.3
+/// §5.4).
 async fn has_push(phone: &Phone, holder: &Holder) -> Result<bool, MobileError> {
-    Ok(!phone.inner.store.list(holder, PUSH).await?.is_empty())
+    let key = phone.inner.sender.vapid().key().id();
+    Ok(phone.inner.store.list(holder, PUSH).await?.into_iter().any(|row| {
+        serde_json::from_value::<Subscription>(row.record)
+            .is_ok_and(|subscription| subscription.key_id == key)
+    }))
 }
 
 async fn info(State(phone): State<Phone>, context: Context) -> Response {

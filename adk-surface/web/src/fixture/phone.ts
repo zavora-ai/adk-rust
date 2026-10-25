@@ -90,6 +90,9 @@ export class FixturePhoneClient implements PhoneClient {
   async answer(card: DecisionCard, answer: Answer) {
     return this.settle(card, answer);
   }
+  async takeOver(card: DecisionCard) {
+    return this.settle(card, "allowOnce");
+  }
   async confirm(card: DecisionCard, answer: Answer) {
     return this.settle(card, answer);
   }

@@ -8,6 +8,8 @@ import { Pill } from "../components/Pill";
 import { ApiError, problemText } from "../client";
 import { enterNeverDecides } from "../origin";
 import { visible, visibleJson } from "../safe";
+import { takeOverOf } from "../takeOver";
+import { shownCall } from "./call";
 import type { PhoneClient } from "./client";
 import { decidedLine } from "./Decisions";
 import { phoneLabels } from "./labels";
@@ -34,8 +36,10 @@ function TwoTone({ text }: { text: string }) {
 
 /**
  * One decision on the phone (spec 3.3 §5.4, §7.1, §8.2): who asks and since when, what will
- * happen, the exact command in full, how it got here, and the answers the phone may give. An
- * answer that needs presence goes through "Confirm it's you" and never the plain answer route.
+ * happen and what else the kernel says of it, the exact command in full — a long one drawn
+ * whole once expanded — how it got here, where else it is shown, and the answers the phone
+ * may give. An answer that needs presence goes through "Confirm it's you" and never the plain
+ * answer route. A call that asks the person to type a secret is taken over here.
  * The screen follows the session's feed: answered elsewhere, it shows who answered; changed,
  * it shows the new card and needs a new tap. Enter and Esc never decide. Decided, here or
  * elsewhere, the card is one line that opens to show the command again.
@@ -159,7 +163,7 @@ export function Decide({
       settle(
         option.needsPresence
           ? await client.confirm(card, option.answer, shownInFull, editedArgs)
-          : await client.answer(card, option.answer, shownInFull),
+          : await client.answer(card, option.answer, shownInFull, editedArgs),
       );
     } catch (error) {
       setProblem(problemText(error));
@@ -171,6 +175,23 @@ export function Decide({
     }
   }
 
+  async function takeOver(secret: string) {
+    if (!card) return false;
+    setBusy(true);
+    setProblem("");
+    setNote("");
+    try {
+      settle(await client.takeOver(card, secret));
+      return true;
+    } catch (error) {
+      setProblem(problemText(error));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const ask = takeOverOf(card.call);
   const offered = card.allowed.options.filter((option) => !inTheHome || !option.needsPresence);
   const presence = offered.find((option) => option.needsPresence && option.answer === "allowOnce");
   const others = offered.filter((option) => option !== presence);
@@ -191,23 +212,42 @@ export function Decide({
       {phoneLabels.wantsToRun(visible(card.agent.displayName))} {card.reversibilityText}.
     </p>
   );
+  const summary = card.summary ? <p className="phone-note">{visible(card.summary)}</p> : null;
+  const what = ask?.secret === "oneTimeCode" ? phoneLabels.aOneTimeCode : ask?.secret === "password" ? phoneLabels.aPassword : phoneLabels.aSecret;
   const command = addsAgent ? (
     <AgentCard view={addsAgent} decisionId={card.id} expanded={expanded} onExpand={() => setExpanded(true)} decided={decided} changeable={false} />
+  ) : ask ? (
+    <figure className="phone-command">
+      <figcaption>
+        <i aria-hidden="true" className="phone-lights" /> {phoneLabels.theExactCommand}
+      </figcaption>
+      <p>
+        <code>{visible(ask.tool)}</code> {phoneLabels.asksFor(what)}
+      </p>
+      {ask.resource && (
+        <p>
+          {phoneLabels.forResource} <code>{visible(ask.resource)}</code>
+        </p>
+      )}
+      <p className="phone-footnote">{phoneLabels.secretGoesToTheCall}</p>
+    </figure>
   ) : (
     <figure className="phone-command">
       <figcaption>
         <i aria-hidden="true" className="phone-lights" /> {phoneLabels.theExactCommand}
       </figcaption>
       <pre>
-        <code>{visible(shownInFull ? card.call.text : card.call.text)}</code>
+        <code>{visible(shownCall(card.call, expanded || decided))}</code>
       </pre>
-      {card.call.truncated && !expanded && (
+      {card.call.truncated && !expanded && !decided && (
         <button type="button" className="phone-link" onClick={() => setExpanded(true)}>
           {phoneLabels.showFullCommand}
         </button>
       )}
+      {card.call.truncated && (expanded || decided) && <p className="phone-footnote">{phoneLabels.wholeCommandShown}</p>}
     </figure>
   );
+  const alsoShown = card.alsoShown ? <p className="phone-footnote">{visible(card.alsoShown)}</p> : null;
   const timeline = (
     <ol className="phone-timeline">
       {card.timeline.map((step, index) => (
@@ -228,8 +268,10 @@ export function Decide({
           <DecidedLine card={card} headingId={decidedHeading} said={decidedLine(card)} focus={answeredHere}>
             {who}
             {lede}
+            {summary}
             {command}
             {timeline}
+            {alsoShown}
           </DecidedLine>
         </article>
       </section>
@@ -246,6 +288,7 @@ export function Decide({
         <TwoTone text={visible(card.heading)} />
       </h1>
       {lede}
+      {summary}
       {command}
       {timeline}
       {card.allowed.note && <p className="phone-note">{visible(card.allowed.note)}</p>}
@@ -273,8 +316,9 @@ export function Decide({
           {problem}
         </p>
       )}
-      {!editing && offered.length > 0 && (
+      {!editing && (offered.length > 0 || ask) && (
         <footer className="phone-actions">
+          {ask && <TakeOver heading={visible(card.heading)} busy={busy} onDone={takeOver} />}
           {presence && (
             <button
               type="button"
@@ -303,7 +347,60 @@ export function Decide({
           <p className="phone-footnote">{phoneLabels.answeredElsewhereUpdates}</p>
         </footer>
       )}
+      {alsoShown}
     </section>
+  );
+}
+
+/** "Take over", then "Done": the person types the secret; Enter never sends it (§7.4, §8.2). */
+function TakeOver({
+  heading,
+  busy,
+  onDone,
+}: {
+  heading: string;
+  busy: boolean;
+  onDone: (secret: string) => Promise<boolean | undefined>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const field = useId();
+  if (!open) {
+    return (
+      <button type="button" className="phone-button phone-button-primary" onKeyDown={enterNeverDecides} onClick={() => setOpen(true)}>
+        {phoneLabels.takeOver}
+      </button>
+    );
+  }
+  return (
+    <div className="phone-form">
+      <label className="phone-label" htmlFor={field}>
+        {heading}
+      </label>
+      <input
+        id={field}
+        className="phone-input"
+        type="password"
+        autoComplete="off"
+        placeholder={phoneLabels.typeItHere}
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.preventDefault();
+        }}
+      />
+      <button
+        type="button"
+        className="phone-button phone-button-primary"
+        disabled={busy || value.length === 0}
+        onKeyDown={enterNeverDecides}
+        onClick={async () => {
+          if (await onDone(value)) setValue("");
+        }}
+      >
+        {phoneLabels.takeOverDone}
+      </button>
+    </div>
   );
 }
 
