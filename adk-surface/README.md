@@ -26,6 +26,7 @@ with `default-features = false` to leave it out.
 | `channels` | Chat: the Telegram adapter over the kernel's channel contract — cards with Allow once and Deny, never the call's arguments, pairing, "stop all" (spec 3.3 §5.3) | `channels::TelegramAdapter` |
 | `mobile` | The phone: the web home installed on a phone, woken by Web Push from the person's own kernel with a wake-up that says nothing, and "Confirm it's you" with a passkey on the phone or the computer before a high-risk approval (spec 3.3 §5.4, §8.2). Links OpenSSL through webauthn-rs | `mobile::Phone`, `mobile::router` |
 | Desktop tray | Experimental and not a feature: an unpublished Tauri 2 app in `desktop/` whose windows load the web home and its tray panel at `/ui/tray`, with the decisions badge on a tray icon (spec 3.3 §5.5) | `desktop/README.md` |
+| `voice` | Voice and video: spoken "allow once" and "deny" through the engine with a cancel window, a transcript digest on record and never the recording; the camera and the screen while their switches are on; with `web`, the voice view at `/ui/voice` and its socket; with `tui`, the terminal's voice line (spec 3.3 §5.6) | `voice::VoiceHub`, `voice::router`, `SurfaceEngine::decide_spoken` |
 
 ## Sources
 

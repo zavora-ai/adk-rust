@@ -102,6 +102,19 @@ const WORDS: &[(&str, &str)] = listed![
     ALLOW_NOTIFICATIONS,
     ADD_TO_HOME_SCREEN_FIRST,
     APPROVE_IT_IN_THE_HOME,
+    LISTENING,
+    SPEAKING,
+    SAY_ALLOW_ONCE_OR_DENY,
+    SAY_DENY_OR_DECIDE_ON_SCREEN,
+    DECIDE_ON_SCREEN,
+    CANCEL,
+    END,
+    WHAT_IT_CAN_SEE,
+    VOICE_PRIVACY_NOTE,
+    SPOKEN_ANSWER_CANCELLED,
+    CHANGED_WHILE_YOU_SPOKE,
+    VOICE_CANT_APPROVE_THIS,
+    STOPPING_NEEDS_THE_OPERATOR,
 ];
 
 /// The words of [`words`](crate::words) as a TypeScript module, one exported constant each

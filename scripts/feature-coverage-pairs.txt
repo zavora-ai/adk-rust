@@ -154,6 +154,12 @@
 2 adk-surface mobile doc
 # `adk-rust up --home-url` serving the phone on SQLite with a scripted model.
 2 adk-cli mobile,scripted-model
+# Voice and video (spec 3.3 §5.6): spoken answers through the engine, the voice conversation on
+# a scripted realtime model, the camera and screen gate; with `web`, the voice routes and
+# socket; with `tui`, the terminal's voice line.
+2 adk-surface voice doc
+2 adk-surface web,voice
+2 adk-surface tui,voice
 # `adk-rust` as the terminal surface in a pseudo-terminal: full screen, inline, JSON, a
 # kernel on its socket and a paired one over HTTP (spec 3.3 §5.2, §10 K2).
 2 adk-cli tui,scripted-model

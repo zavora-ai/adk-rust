@@ -629,6 +629,104 @@ pub fn wants_to_run(agent: &str) -> String {
     format!("{agent} {WANTS_TO_RUN_THIS_COMMAND}")
 }
 
+// ---------------------------------------------------------------------------
+// Voice (spec 3.3 §5.6)
+// ---------------------------------------------------------------------------
+
+/// The voice view while the model waits for the person.
+pub const LISTENING: &str = "Listening";
+/// The voice view while the model speaks.
+pub const SPEAKING: &str = "Speaking";
+/// What to say to a prompted decision voice may allow once.
+pub const SAY_ALLOW_ONCE_OR_DENY: &str = "Say \"allow once\" or \"deny\".";
+/// What to say to a prompted decision voice cannot approve.
+pub const SAY_DENY_OR_DECIDE_ON_SCREEN: &str = "Say \"deny\", or decide on screen.";
+/// Where the voice view sends a decision voice cannot approve.
+pub const DECIDE_ON_SCREEN: &str = "Decide on screen";
+/// Cancels a spoken "allow once" inside its cancel window.
+pub const CANCEL: &str = "Cancel";
+/// Ends a voice conversation.
+pub const END: &str = "End";
+/// The voice view's card of the camera and the screen.
+pub const WHAT_IT_CAN_SEE: &str = "What it can see";
+/// What voice may decide, and what is kept of it.
+pub const VOICE_PRIVACY_NOTE: &str = "By voice you can say yes once to everyday things, and no \
+     to anything. Serious ones need a screen to approve. We keep a note of your answer, never \
+     the recording.";
+/// A spoken "allow once" cancelled inside its window.
+pub const SPOKEN_ANSWER_CANCELLED: &str = "Cancelled. It still waits for you.";
+/// Nothing was decided: the prompted decision changed while the person spoke.
+pub const CHANGED_WHILE_YOU_SPOKE: &str =
+    "Nothing was decided: the decision changed while you were speaking.";
+/// A spoken approval of a call voice cannot approve.
+pub const VOICE_CANT_APPROVE_THIS: &str = "Voice can't approve this one. Decide on screen.";
+/// A spoken "stop all" from someone who may not stop every agent.
+pub const STOPPING_NEEDS_THE_OPERATOR: &str =
+    "Stopping every agent needs the operator. Ask them, or stop from their home app.";
+
+/// The voice view's header, `"Talking with Chief of staff"`.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::talking_with("Chief of staff"), "Talking with Chief of staff");
+/// ```
+pub fn talking_with(agent: &str) -> String {
+    format!("Talking with {agent}")
+}
+
+/// What the person said, as transcribed, `"Heard \"allow once\""`.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::heard("allow once"), "Heard \"allow once\"");
+/// ```
+pub fn heard(text: &str) -> String {
+    format!("Heard \"{text}\"")
+}
+
+/// A prompted decision, `"Finance wants to send the October invoice to [CLIENT]."`.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(
+///     adk_surface::words::wants_to("Finance", "Send the October invoice to [CLIENT]"),
+///     "Finance wants to send the October invoice to [CLIENT]."
+/// );
+/// ```
+pub fn wants_to(agent: &str, heading: &str) -> String {
+    let mut chars = heading.chars();
+    let heading = match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    };
+    format!("{agent} wants to {heading}.")
+}
+
+/// Why voice cannot approve a decision, `"\"Publish the release\" is high risk, so voice can't
+/// approve it."`; `money` for a call that spends money.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::words;
+///
+/// assert_eq!(
+///     words::voice_cant_approve("Publish the release", false),
+///     "\"Publish the release\" is high risk, so voice can't approve it."
+/// );
+/// assert_eq!(
+///     words::voice_cant_approve("Pay the invoice", true),
+///     "\"Pay the invoice\" spends money, so voice can't approve it."
+/// );
+/// ```
+pub fn voice_cant_approve(heading: &str, money: bool) -> String {
+    let why = if money { "spends money" } else { "is high risk" };
+    format!("\"{heading}\" {why}, so voice can't approve it.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,6 +809,19 @@ mod tests {
         ALLOW_NOTIFICATIONS,
         ADD_TO_HOME_SCREEN_FIRST,
         APPROVE_IT_IN_THE_HOME,
+        LISTENING,
+        SPEAKING,
+        SAY_ALLOW_ONCE_OR_DENY,
+        SAY_DENY_OR_DECIDE_ON_SCREEN,
+        DECIDE_ON_SCREEN,
+        CANCEL,
+        END,
+        WHAT_IT_CAN_SEE,
+        VOICE_PRIVACY_NOTE,
+        SPOKEN_ANSWER_CANCELLED,
+        CHANGED_WHILE_YOU_SPOKE,
+        VOICE_CANT_APPROVE_THIS,
+        STOPPING_NEEDS_THE_OPERATOR,
     ];
 
     #[test]

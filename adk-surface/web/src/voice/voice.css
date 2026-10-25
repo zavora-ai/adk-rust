@@ -1,0 +1,294 @@
+/* The voice view (spec 3.3 §5.6, §9): the tokens of tokens.css, decisions on their own background. */
+
+/* The app shell's pattern: the page never scrolls; the view's main part scrolls inside itself. */
+.voice {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background:
+    radial-gradient(circle at 100% 0%, var(--glow), transparent 32rem),
+    var(--bg);
+  color: var(--text);
+}
+
+.voice-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 14px 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.voice-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.voice-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--brand);
+}
+
+.voice-with {
+  color: var(--text-2);
+  font-size: 16px;
+}
+
+.voice-with strong {
+  color: var(--text);
+}
+
+.voice-spacer {
+  flex: 1;
+}
+
+.voice-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.voice-model select {
+  min-width: 152px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+}
+
+.voice-main {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: none;
+  display: grid;
+  grid-template-columns: minmax(0, 600px) 300px;
+  align-content: start;
+  justify-content: center;
+  gap: 136px;
+  padding: 44px 28px;
+}
+
+.voice-state {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 22px;
+  font-size: 36px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.voice-wave {
+  width: 50px;
+  height: 36px;
+  fill: var(--brand);
+}
+
+.voice-prompt {
+  margin: 0 0 18px;
+  color: var(--text-2);
+  font-size: 19px;
+  line-height: 1.5;
+}
+
+.voice-said {
+  margin: 0 0 24px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.voice-pending {
+  margin: 0 0 28px;
+  padding: 22px 20px 20px;
+  border: 1px solid var(--decision-border);
+  border-radius: var(--radius-lg);
+  background: var(--decision);
+  box-shadow: var(--shadow-decision);
+}
+
+.voice-pending-top,
+.voice-pending-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.voice-heard {
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.voice-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--pill-waiting-bg);
+  color: var(--pill-waiting);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.voice-pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--brand);
+}
+
+.voice-pending-heading {
+  margin: 14px 0 18px;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.voice-pending-meta {
+  color: var(--label);
+  font-size: 14px;
+}
+
+.voice-pending .voice-cancel {
+  border-color: var(--decision-border);
+  background: var(--decision-button);
+  color: var(--text);
+}
+
+.voice-outcome,
+.voice-screen {
+  color: var(--text-2);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.voice-prompt a,
+.voice-screen a {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.voice-see {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.voice-see h2 {
+  margin: 0 0 14px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.voice-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 150px;
+  overflow: hidden;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--raised);
+  color: var(--label);
+  font-size: 13px;
+  text-align: center;
+}
+
+.voice-preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.voice-preview-empty {
+  padding: 0 16px;
+}
+
+.voice-switches {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-top: 14px;
+  padding: 4px;
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.voice-switch {
+  min-height: 40px;
+  padding: 0 4px;
+  border: 0;
+  white-space: nowrap;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.voice-switch-on {
+  background: var(--tab-active);
+  box-shadow: var(--tab-shadow);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.voice-switch:focus-visible,
+.voice-model select:focus-visible,
+.voice-prompt a:focus-visible,
+.voice-screen a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.voice-note {
+  margin: 14px 4px 0;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+@media (max-width: 900px) {
+  .voice-header {
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 12px 16px;
+  }
+
+  .voice-main {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+    padding: 28px 16px;
+  }
+}
+
+/* The microphone in the shared message box. */
+.composer-mic {
+  min-width: 44px;
+  padding: 0 10px;
+  border-color: var(--border);
+  background: var(--card);
+  color: var(--text);
+}
+
+.composer-mic:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

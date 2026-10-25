@@ -1220,13 +1220,25 @@ impl Renderer {
             _ => Vec::new(),
         };
         let completion_height = u16::try_from(completion.len()).unwrap_or(0);
-        let [main, completion_area, queued_area, input] = Layout::vertical([
+        #[cfg(feature = "voice")]
+        let voice_height = u16::from(app.voice.is_some());
+        #[cfg(not(feature = "voice"))]
+        let voice_height = 0;
+        let [main, completion_area, queued_area, voice_area, input] = Layout::vertical([
             Constraint::Min(1),
             Constraint::Length(completion_height),
             Constraint::Length(queued_height),
+            Constraint::Length(voice_height),
             Constraint::Length(3),
         ])
         .areas(right);
+        #[cfg(feature = "voice")]
+        if let Some(voice) = &app.voice {
+            let line = Line::from(Span::styled(voice.text(now), t.accent()));
+            frame.render_widget(Paragraph::new(line).style(t.base()), voice_area);
+        }
+        #[cfg(not(feature = "voice"))]
+        let _ = voice_area;
 
         let height = usize::from(main.height);
         let (lines, focused) = match app.view {

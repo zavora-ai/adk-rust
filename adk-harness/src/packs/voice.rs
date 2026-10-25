@@ -182,6 +182,9 @@ pub struct VoiceConfig {
     pub tool_timeout: Duration,
     /// The identity the server authenticated for the session, on a served surface.
     pub request_context: Option<RequestContext>,
+    /// Gemini Live context window compression, so a session that sends camera or screen
+    /// frames is not ended after about two minutes (spec 3.3 §5.6).
+    pub context_window_compression: bool,
 }
 
 impl VoiceConfig {
@@ -194,6 +197,7 @@ impl VoiceConfig {
             pricing: None,
             tool_timeout: Duration::from_secs(300),
             request_context: None,
+            context_window_compression: false,
         }
     }
 
@@ -222,6 +226,25 @@ impl VoiceConfig {
     #[must_use]
     pub fn with_request_context(mut self, request_context: RequestContext) -> Self {
         self.request_context = Some(request_context);
+        self
+    }
+
+    /// Turns on Gemini Live context window compression with the server's defaults
+    /// (`RealtimeConfig::with_context_window_compression`): without it, a session that sends
+    /// camera or screen frames ends after about two minutes (spec 3.3 §5.6). Set it for a
+    /// Gemini Live model whenever video may be sent.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::VoiceConfig;
+    ///
+    /// let config = VoiceConfig::new("adk-rust").with_context_window_compression();
+    /// assert!(config.context_window_compression);
+    /// ```
+    #[must_use]
+    pub fn with_context_window_compression(mut self) -> Self {
+        self.context_window_compression = true;
         self
     }
 }
@@ -405,6 +428,9 @@ impl VoiceSurface {
             .with_transcription();
         if let Some(voice) = &config.voice {
             realtime = realtime.with_voice(voice.clone());
+        }
+        if config.context_window_compression {
+            realtime = realtime.with_context_window_compression(None);
         }
 
         #[cfg(feature = "kernel")]
@@ -1128,6 +1154,49 @@ fn voice_instruction(harness: &HarnessAgent, extra: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Context window compression reaches the provider's session config only when asked for
+    /// (spec 3.3 §5.6): a Gemini Live session sending video ends after about two minutes
+    /// without it.
+    #[tokio::test]
+    async fn context_window_compression_reaches_the_provider() {
+        use adk_realtime::scripted::ScriptedRealtimeModel;
+
+        let dir = tempfile::tempdir().unwrap();
+        let harness = Arc::new(
+            HarnessAgent::builder("harness")
+                .model(Arc::new(adk_model::ScriptedLlm::new(
+                    "scripted",
+                    Vec::<adk_model::ScriptedResponse>::new(),
+                )))
+                .workspace(adk_devtools::Workspace::new(dir.path()))
+                .pack(crate::Pack::Voice)
+                .build()
+                .unwrap(),
+        );
+        for compressed in [false, true] {
+            let model = ScriptedRealtimeModel::new(Vec::new());
+            let mut config = VoiceConfig::new("adk-rust");
+            if compressed {
+                config = config.with_context_window_compression();
+            }
+            let surface = VoiceSurface::open(
+                harness.clone(),
+                Arc::new(model.clone()),
+                Arc::new(adk_session::InMemorySessionService::new()),
+                "ana",
+                "voice-1",
+                config,
+            )
+            .unwrap();
+            surface.runner().connect().await.unwrap();
+            let sent = model.log().configs()[0]
+                .extra
+                .as_ref()
+                .and_then(|extra| extra.get("context_window_compression").cloned());
+            assert_eq!(sent, compressed.then_some(serde_json::Value::Bool(true)));
+        }
+    }
 
     #[test]
     fn plain_answers_decide_and_anything_else_waits() {

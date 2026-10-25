@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineConfig } from "@playwright/test";
@@ -31,6 +31,8 @@ interface Surface {
   ready: string;
   /** The example's arguments after its port and workspace. */
   args?: string;
+  /** What the project's browser runs with. */
+  use?: PlaywrightTestConfig["use"];
 }
 
 const surfaces: Surface[] = [
@@ -85,7 +87,49 @@ const surfaces: Surface[] = [
     testMatch: ["shell.spec.ts"],
     ready: "/ui/fixture.html",
   },
+  {
+    // The voice view (spec 3.3 §5.6): Chromium's fake microphone plays a tone recorded here, and
+    // grants the microphone and the camera without asking.
+    name: "voice",
+    prefix: "VOICE",
+    example: "scripted_voice_home",
+    port: 8797,
+    testMatch: ["voice.spec.ts"],
+    ready: "/ui/voice",
+    features: "web,voice",
+    use: {
+      launchOptions: {
+        args: [
+          "--use-fake-ui-for-media-stream",
+          "--use-fake-device-for-media-stream",
+          `--use-file-for-fake-audio-capture=${toneWav()}`,
+        ],
+      },
+    },
+  },
 ];
+
+/** One second of a 440 Hz tone, 16 kHz mono PCM16, for Chromium's fake microphone. */
+function toneWav(): string {
+  const rate = 16_000;
+  const samples = new Int16Array(rate).map((_, i) => Math.round(Math.sin((2 * Math.PI * 440 * i) / rate) * 8_000));
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + samples.byteLength, 4);
+  header.write("WAVEfmt ", 8);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(samples.byteLength, 40);
+  const path = join(tmpdir(), "adk-voice-e2e-tone.wav");
+  writeFileSync(path, Buffer.concat([header, Buffer.from(samples.buffer)]));
+  return path;
+}
 
 function env(surface: Surface, name: string): string | undefined {
   return process.env[`${surface.prefix}_E2E_${name}`];
@@ -142,7 +186,7 @@ export default defineConfig({
   projects: servers.map((server) => ({
     name: server.surface.name,
     testMatch: server.surface.testMatch,
-    use: { baseURL: server.url },
+    use: { ...server.surface.use, baseURL: server.url },
   })),
   webServer,
 });

@@ -13,6 +13,9 @@ import { decisionOf, pathOf, sectionOf } from "./route";
 import { MemoryRules } from "./screens/MemoryRules";
 import { Threads } from "./screens/Threads";
 import { Today } from "./screens/Today";
+import { Voice } from "./screens/Voice";
+import type { VoiceClient } from "./screens/Voice";
+import { VoiceEntryContext, voiceOffered } from "./voice/context";
 import type { Seams } from "./seams";
 import { readStored, writeStored } from "./stored";
 import { applyTheme, nextTheme, storedTheme } from "./theme";
@@ -190,7 +193,19 @@ export function App({
     void refreshStatus();
   }, [session, refreshStatus]);
 
-  return (
+  // Voice, where the server offers it and the page may use the microphone (spec 3.3 §5.6).
+  const voiceModels = usePoll(async () => client.voiceModels?.(), 60_000);
+  const voice = useMemo(() => voiceClient(client), [client]);
+  const voiceEntry = useMemo(
+    () =>
+      voice && voiceOffered(voiceModels.value?.models.length ?? 0) ? { open: () => navigate("voice") } : undefined,
+    [voice, voiceModels.value, navigate],
+  );
+  if (section === "voice" && voice) {
+    return <Voice client={voice} onEnd={() => navigate("threads")} />;
+  }
+
+  const home = (
     <div className="app">
       <a className="skip-link" href="#content">
         {labels.skipToContent}
@@ -289,6 +304,20 @@ export function App({
       </div>
     </div>
   );
+  return <VoiceEntryContext.Provider value={voiceEntry}>{home}</VoiceEntryContext.Provider>;
+}
+
+/** The client's voice routes, when it has them. */
+function voiceClient(client: HomeClient): VoiceClient | undefined {
+  const { voiceModels, voiceTicket, voiceDecisions, voiceCommand } = client;
+  if (!voiceModels || !voiceTicket || !voiceDecisions || !voiceCommand) return undefined;
+  return {
+    voiceModels: () => voiceModels.call(client),
+    voiceTicket: (model, sessionId) => voiceTicket.call(client, model, sessionId),
+    voiceDecisions: () => voiceDecisions.call(client),
+    voiceCommand: (command, origin) => voiceCommand.call(client, command, origin),
+    status: () => client.status(),
+  };
 }
 
 /**

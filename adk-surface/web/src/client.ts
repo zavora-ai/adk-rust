@@ -19,6 +19,9 @@ import type {
   StatusLine,
   SurfaceKind,
   TakeOverRequest,
+  VoiceModels,
+  VoiceTicket,
+  VoiceTicketRequest,
 } from "./generated/api";
 import type { TakeOverSeam } from "./components/DecisionCard";
 import { mergeAway } from "./away";
@@ -138,6 +141,14 @@ export interface HomeClient {
   get<T>(path: string): Promise<T>;
   /** Sends the server's token from now on, for a server that asks for one. */
   signIn?(token: string): void;
+  /** The models voice can talk on; `undefined` when the server does not offer voice (spec 3.3 §5.6). */
+  voiceModels?(): Promise<VoiceModels | undefined>;
+  /** A single-use ticket for the voice socket, continuing the voice session `sessionId` when given. */
+  voiceTicket?(model: string, sessionId?: string): Promise<VoiceTicket>;
+  /** The open decisions with the answers voice may give them. */
+  voiceDecisions?(): Promise<DecisionCard[]>;
+  /** A command given on the voice view: surface voice. */
+  voiceCommand?(command: Command, origin: Origin): Promise<CommandOutcome>;
 }
 
 async function problem(response: Response): Promise<ApiError> {
@@ -396,6 +407,22 @@ export class HttpClient implements HomeClient {
 
   get<T>(path: string) {
     return this.request<T>(path);
+  }
+
+  voiceModels() {
+    return this.optional<VoiceModels>("/surface/voice");
+  }
+
+  voiceTicket(model: string, sessionId?: string) {
+    return this.post<VoiceTicket>("/surface/voice/sessions", { model, sessionId } satisfies VoiceTicketRequest);
+  }
+
+  voiceDecisions() {
+    return new HttpClient(this.base, "voice").decisions();
+  }
+
+  voiceCommand(command: Command, origin: Origin) {
+    return new HttpClient(this.base, "voice").command(command, origin);
   }
 
   /**
