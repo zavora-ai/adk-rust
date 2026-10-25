@@ -46,7 +46,7 @@ describe("Today", () => {
       "Household failed.",
       "Research finished.",
       "Finance suggests paying the [SUPPLIER] invoice due Monday. Nothing happens until you say so.",
-      "You allowed Code to go ahead once.",
+      "You allowed Code to go ahead.",
       "You seem to start work at 08:30 on Fridays now. Is that right?",
     ]);
     // The suggestion and the question are answered here.
@@ -164,12 +164,23 @@ describe("Today", () => {
     // One message and one decision allowed from the home (the coordinator's run on main).
     const run = [line(5, "decided", "approve"), line(9, "done", "completed")];
     const said = run.map((each) => lineWords(each, agents).text);
-    expect(said).toEqual(["You allowed ADK-Rust to go ahead once.", "ADK-Rust finished."]);
+    expect(said).toEqual(["You allowed ADK-Rust to go ahead.", "ADK-Rust finished."]);
     for (const text of said) expect(text).not.toMatch(/urn:|Urn:|Kernel/);
     expect(lineWords(line(6, "suggestion", "proposed", "kernel"), agents).text).toBe(
       "Your agents suggest something. Nothing happens until you say so.",
     );
     expect(lineWords(line(7, "failed"), agents).text).toBe("ADK-Rust stopped because it was repeating itself.");
+    // Every line has its status pill (spec 3.3 §5.1), Stop all and Resume all too.
+    expect(lineWords(line(8, "stoppedAll", "frozen", "kernel"), agents)).toEqual({
+      pill: "neutral",
+      pillText: "Stopped",
+      text: "All agents stopped.",
+    });
+    expect(lineWords(line(10, "resumedAll", "unfrozen", "kernel"), agents)).toEqual({
+      pill: "neutral",
+      pillText: "Resumed",
+      text: "All agents resumed.",
+    });
     expect(agentOf("urn:adk:agent:home/finance_bot", [])).toBe("Finance bot");
     expect(agentOf("kernel", agents)).toBeUndefined();
   });

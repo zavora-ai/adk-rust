@@ -113,12 +113,12 @@ export function lineWords(line: AwayLine, agents: AgentRow[]): LineWords {
         text:
           line.effect === "deny"
             ? `You said no to ${agent ?? "your agents"}.`
-            : `You allowed ${agent ?? "your agents"} to go ahead once.`,
+            : `You allowed ${agent ?? "your agents"} to go ahead.`,
       };
     case "stoppedAll":
-      return { text: `${words.ALL_AGENTS_STOPPED}.` };
+      return { pill: "neutral", pillText: labels.stoppedPill, text: `${words.ALL_AGENTS_STOPPED}.` };
     case "resumedAll":
-      return { text: words.ALL_AGENTS_RESUMED };
+      return { pill: "neutral", pillText: labels.resumedPill, text: words.ALL_AGENTS_RESUMED };
     default:
       return { text: `${who} did something.` };
   }

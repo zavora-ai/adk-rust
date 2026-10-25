@@ -99,6 +99,7 @@ export const labels = {
   recordTook: (seconds: string) => `Took ${seconds}`,
   inAreaShort: (area: string) => `In ${area}`,
   stoppedPill: "Stopped",
+  resumedPill: "Resumed",
   since: (time: string) => `Since ${time}`,
   // The morning briefing (spec 3.3 §5.1, §12 phase 2).
   seeWhatHappened: "See what happened",
