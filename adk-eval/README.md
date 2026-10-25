@@ -27,6 +27,7 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 - **JUnit XML Output**: CI-friendly report generation (feature: `ci-helpers`)
 - **Human Annotation**: JSONL export/import workflow for human review
 - **A/B Comparison**: Statistical significance testing with Wilcoxon signed-rank (feature: `statistics`)
+- **Web Experiments**: `ExperimentAnalyzer` — always-valid sequential tests with a fixed error budget for proportions and means, effect intervals, guardrail monitoring and a Bayesian option (feature: `experiments`)
 - **Vertex AI Gen AI Evaluation Service**: Service-backed judge and trajectory metrics via `evaluateInstances` (feature: `vertex-eval`)
 - **Test Case Generation**: LLM-driven or event-based eval case creation
 - **Prompt Optimizer**: `PromptOptimizer::optimize_candidates` iterates on an agent's instruction against an eval set, evaluating the agent built from each proposal (`InstructionCandidates`)
@@ -353,6 +354,7 @@ adk-eval = { version = "3.0.0", features = ["embedding", "ci-helpers", "statisti
 | `statistics` | `statrs` | Wilcoxon signed-rank for A/B comparison |
 | `vertex-eval` | `adk-gcp` | Vertex AI Gen AI Evaluation Service bridge (`VertexEvalClient`, `VertexEvalJudge`) |
 | `personas` | none | The `personas` module: simulated users for multi-turn evaluation |
+| `experiments` | `libm` | `ExperimentAnalyzer`: sequential analysis of web experiments with guardrails |
 
 All other features (structured judge, cost tracker, trace analyzer, baselines, annotations, test generator, conversation scorer) work without extra feature flags.
 
@@ -494,6 +496,48 @@ async fn compare(
     Ok(())
 }
 ```
+
+### Web Experiments
+
+`ExperimentAnalyzer` (feature `experiments`) analyses an experiment that splits visitors between a control and a variant, look by look, without spending more than its error budget however often it is consulted. Guardrails are checked first at every look; a proven harm beyond a guardrail's tolerance stops the experiment and keeps the control.
+
+```rust
+use adk_eval::experiments::{
+    Decision, ExperimentAnalyzer, ExperimentConfig, GuardrailSpec, Look, MetricDirection,
+    MetricSpec, Sample, Tolerance,
+};
+
+fn analyse(looks: &[Look]) -> adk_eval::Result<Decision> {
+    let config = ExperimentConfig::new(
+        "headline",
+        MetricSpec::proportion("signups", MetricDirection::HigherIsBetter),
+    )
+    .with_guardrail(GuardrailSpec::new(
+        MetricSpec::proportion("unsubscribes", MetricDirection::LowerIsBetter),
+        Tolerance::Relative(0.1),
+    ));
+    let mut analyzer = ExperimentAnalyzer::new(config)?;
+    let mut decision = Decision::Continue;
+    for look in looks {
+        // Each look carries the cumulative totals of every metric in both arms.
+        decision = analyzer.observe(look)?.decision;
+        if decision.is_final() {
+            break;
+        }
+    }
+    Ok(decision)
+}
+
+fn main() -> adk_eval::Result<()> {
+    let look = Look::new()
+        .with_metric("signups", Sample::proportion(600, 24), Sample::proportion(600, 30))
+        .with_metric("unsubscribes", Sample::proportion(600, 3), Sample::proportion(600, 6));
+    assert_eq!(analyse(&[look])?, Decision::Continue);
+    Ok(())
+}
+```
+
+See [Web Experiments](../docs/official_docs/evaluation/experiments.md) for the method, its assumptions and the simulation results.
 
 ### Auto-Generated Test Cases
 

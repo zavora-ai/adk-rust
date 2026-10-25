@@ -547,6 +547,7 @@ let score = scorer.score("expected text", "actual text").await?;
 | `embedding` | `adk-memory` | Embedding-based semantic similarity |
 | `ci-helpers` | `quick-xml` | JUnit XML report generation |
 | `statistics` | `statrs` | Wilcoxon signed-rank test for A/B comparison |
+| `experiments` | `libm` | `ExperimentAnalyzer`: sequential analysis of web experiments with guardrails; see [Web Experiments](experiments.md) |
 
 All other features (structured judge, cost tracker, trace analyzer, baselines, ledger statistics, annotations, test generator, conversation scorer) work without any additional feature flags.
 

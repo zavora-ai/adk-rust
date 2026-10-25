@@ -205,6 +205,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Agent Evaluation](evaluation/evaluation.md) - Testing and validating agent behavior
 - [Benchmark Results](evaluation/benchmarks.md) - Published performance comparison data
 - [Vertex AI Evaluation](evaluation/vertex-eval.md) - The Gen AI Evaluation Service bridge
+- [Web Experiments](evaluation/experiments.md) - Sequential A/B analysis with guardrails and a Bayesian option
 
 ## Managed Agents
 
