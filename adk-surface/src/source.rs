@@ -17,6 +17,9 @@ use adk_kernel::proc::LedgerEntry;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
+use crate::agents::{
+    AgentChoices, AgentDetail, AgentDraft, AgentPreview, AgentPreviewRequest, EndedWork,
+};
 use crate::error::{Result, SurfaceError};
 use crate::origin::Caller;
 
@@ -216,6 +219,118 @@ pub trait Source: Send + Sync {
     async fn ledger(&self, since: DateTime<Utc>) -> Result<Vec<LedgerEntry>> {
         let _ = since;
         Ok(Vec::new())
+    }
+
+    // -----------------------------------------------------------------------
+    // Agents a person adds (spec 3.3 §5.7)
+    // -----------------------------------------------------------------------
+
+    /// Whether the source keeps agents a person adds: the roster ends with **New agent**.
+    fn keeps_agents(&self) -> bool {
+        false
+    }
+
+    /// The agents `user` added, suggested ones included; none by default.
+    async fn agent_definitions(&self, user: &str) -> Result<Vec<AgentDetail>> {
+        let _ = user;
+        Ok(Vec::new())
+    }
+
+    /// One agent `user` added.
+    async fn agent(&self, user: &str, id: &str) -> Result<Option<AgentDetail>> {
+        let _ = (user, id);
+        Ok(None)
+    }
+
+    /// What a person may choose for an agent.
+    async fn agent_choices(&self) -> Result<AgentChoices> {
+        Err(SurfaceError::unsupported("agents of your own"))
+    }
+
+    /// What a change would let an agent do, with the digest it applies with.
+    async fn preview_agent(
+        &self,
+        caller: &Caller,
+        request: AgentPreviewRequest,
+    ) -> Result<AgentPreview> {
+        let _ = (caller, request);
+        Err(SurfaceError::unsupported("agents of your own"))
+    }
+
+    /// Adds the agent `draft` previewed with `digest`; `replaces` names the suggestion **Change
+    /// it first** ends.
+    async fn add_agent(
+        &self,
+        caller: &Caller,
+        draft: AgentDraft,
+        digest: &str,
+        replaces: Option<String>,
+    ) -> Result<AgentDetail> {
+        let _ = (caller, draft, digest, replaces);
+        Err(SurfaceError::unsupported("adding an agent"))
+    }
+
+    /// Changes `agent` at `version` to `draft`, previewed with `digest`.
+    async fn change_agent(
+        &self,
+        caller: &Caller,
+        agent: &str,
+        version: u64,
+        draft: AgentDraft,
+        digest: &str,
+    ) -> Result<AgentDetail> {
+        let _ = (caller, agent, version, draft, digest);
+        Err(SurfaceError::unsupported("changing an agent"))
+    }
+
+    /// Pauses `agent`.
+    async fn pause_agent(&self, caller: &Caller, agent: &str) -> Result<AgentDetail> {
+        let _ = (caller, agent);
+        Err(SurfaceError::unsupported("pausing an agent"))
+    }
+
+    /// Resumes `agent`, paused by hand.
+    async fn resume_agent(&self, caller: &Caller, agent: &str) -> Result<AgentDetail> {
+        let _ = (caller, agent);
+        Err(SurfaceError::unsupported("resuming an agent"))
+    }
+
+    /// Removes `agent` at `version`, previewed with `digest`; returns what ended.
+    async fn remove_agent(
+        &self,
+        caller: &Caller,
+        agent: &str,
+        version: u64,
+        digest: &str,
+    ) -> Result<EndedWork> {
+        let _ = (caller, agent, version, digest);
+        Err(SurfaceError::unsupported("removing an agent"))
+    }
+
+    /// Copies the person's standing rule `rule` to `agent`, pinned to it (S-I19); returns its
+    /// words.
+    async fn copy_rule_to_agent(&self, caller: &Caller, agent: &str, rule: &str) -> Result<String> {
+        let _ = (caller, agent, rule);
+        Err(SurfaceError::unsupported("copying a rule"))
+    }
+
+    /// The agent whose thread `session` is: its stamp, else the target of its latest run.
+    async fn agent_of_session(&self, user: &str, session: &str) -> Result<Option<String>> {
+        let _ = (user, session);
+        Ok(None)
+    }
+
+    /// Starts a thread of `session` with `agent` on `text` (spec 3.3 §5.7 "Threads"); the
+    /// default starts a turn of the source's own agent.
+    async fn start_turn_with(
+        &self,
+        caller: &Caller,
+        agent: &str,
+        session: &str,
+        text: &str,
+    ) -> Result<()> {
+        let _ = agent;
+        self.start_turn(caller, session, text).await
     }
 }
 

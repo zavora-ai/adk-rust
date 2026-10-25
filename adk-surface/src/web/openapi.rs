@@ -140,6 +140,9 @@ pub fn openapi() -> Value {
     let voice_models = schema_ref::<VoiceModels>(&mut out);
     let voice_ticket = schema_ref::<VoiceTicket>(&mut out);
     let voice_update = schema_ref::<VoiceUpdate>(&mut out);
+    let agent_detail = schema_ref::<crate::agents::AgentDetail>(&mut out);
+    let agent_choices = schema_ref::<crate::agents::AgentChoices>(&mut out);
+    let agent_preview = schema_ref::<crate::agents::AgentPreview>(&mut out);
     let mut schemas = out.take_definitions(true);
 
     let mut input = generator(Contract::Deserialize);
@@ -155,6 +158,7 @@ pub fn openapi() -> Value {
     let qr_body = schema_ref::<QrRequest>(&mut input);
     let voice_request = schema_ref::<VoiceTicketRequest>(&mut input);
     let voice_message = schema_ref::<VoiceClientMessage>(&mut input);
+    let preview_body = schema_ref::<crate::agents::AgentPreviewRequest>(&mut input);
     let surface_query = input.subschema_for::<SurfaceQuery>().to_value();
     for (name, schema) in input.take_definitions(true) {
         schemas.entry(name).or_insert(schema);
@@ -223,6 +227,33 @@ pub fn openapi() -> Value {
     routes.insert(
         with(paths::AGENTS),
         read("The caller's agents (spec 3.3 §8.1)", json!([]), answer("The roster", agents)),
+    );
+    // Agents a person adds (spec 3.3 §5.7); every change goes through `POST /surface/commands`.
+    routes.insert(
+        with(paths::AGENT),
+        read(
+            "One agent the caller added: its definition, version and how it was added",
+            json!([path_param("id")]),
+            answer("The agent", agent_detail),
+        ),
+    );
+    routes.insert(
+        with(paths::AGENT_CHOICES),
+        read(
+            "What the caller may choose for an agent: the models whose key the kernel has, the packs, the areas and the colours",
+            json!([]),
+            answer("The choices", agent_choices),
+        ),
+    );
+    routes.insert(
+        with(paths::AGENT_PREVIEW),
+        write(
+            "post",
+            "Here is what Finance can do: the abilities, the risk and the digest a change applies with; closed to paired devices",
+            json!([]),
+            Some(preview_body),
+            ("200", answer("The preview", agent_preview)),
+        ),
     );
     routes.insert(
         with(paths::STATUS),

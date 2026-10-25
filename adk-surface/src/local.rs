@@ -328,11 +328,83 @@ impl LocalSource {
             session_id: request.scope.session_id.clone(),
             created_by,
         };
-        let rule = harness
+        let mut rule = harness
             .agent()
             .rule_for_held_call(&held.request, suggestion, StandingDecision::Allow, &owner)
             .ok()?;
+        // "Always allow" on an added agent's card makes a rule for that agent alone (spec 3.3
+        // S-I19).
+        if let (Some((kernel, _)), Some(acting)) = (&self.kernel, &request.acting)
+            && kernel
+                .agents()
+                .get(&crate::project::agent_name(request))
+                .await
+                .ok()
+                .flatten()
+                .is_some()
+        {
+            rule.agent = Some(acting.agent.id.as_str().to_string());
+        }
         Some((label, rule, held.request))
+    }
+}
+
+impl LocalSource {
+    /// The kernel target of `agent`: the source's own for the primary agent, else the added
+    /// agent's id.
+    fn target_of(&self, agent: &str) -> Option<String> {
+        let (_, own) = self.kernel.as_ref()?;
+        Some(if agent == adk_harness::PRIMARY_AGENT_STAMP || agent == own || agent == self.app {
+            own.clone()
+        } else {
+            agent.to_string()
+        })
+    }
+
+    /// The target a message to `session` goes to (spec 3.3 §5.7 "Threads"): the agent its
+    /// stamp names, before the first run the agent of its latest run, else the primary agent.
+    async fn target_for(&self, user: &str, session: &str) -> Result<String> {
+        let own = self.kernel.as_ref().map(|(_, target)| target.clone()).unwrap_or_default();
+        Ok(match self.agent_of_session(user, session).await? {
+            Some(agent) => self.target_of(&agent).unwrap_or(own),
+            None => own,
+        })
+    }
+}
+
+/// The primary agent's name on screen, as the suggesting agent of an added one.
+const PRIMARY_NAME: &str = "ADK-Rust";
+
+/// The host's offset from UTC now: dates on screen are the host's.
+fn local_offset() -> chrono::FixedOffset {
+    *chrono::Local::now().offset()
+}
+
+impl LocalSource {
+    /// Applies `action` with the digest its preview showed, through the kernel's agent table.
+    async fn apply_agent(
+        &self,
+        caller: &Caller,
+        action: adk_kernel::agents::AgentAction,
+        digest: &str,
+    ) -> Result<crate::agents::AgentDetail> {
+        let (kernel, _) =
+            self.kernel.as_ref().ok_or_else(|| SurfaceError::unsupported("agents of your own"))?;
+        match crate::agents::local::apply(
+            kernel.agents(),
+            caller,
+            action,
+            digest,
+            PRIMARY_NAME,
+            local_offset(),
+        )
+        .await?
+        {
+            crate::agents::local::Applied::Agent(detail) => Ok(*detail),
+            crate::agents::local::Applied::Removed(_) => {
+                Err(SurfaceError::Invalid("the agent was removed".into()))
+            }
+        }
     }
 }
 
@@ -514,7 +586,7 @@ impl Source for LocalSource {
     }
 
     async fn agents(&self, user: &str) -> Result<Vec<AgentState>> {
-        if self.kernel.is_some() {
+        if let Some((kernel, _)) = &self.kernel {
             let mut latest: BTreeMap<String, AgentState> = BTreeMap::new();
             for process in self.processes(user).await? {
                 let run = &process.run;
@@ -537,6 +609,21 @@ impl Source for LocalSource {
                     },
                 );
             }
+            // A removed agent leaves the roster; its past runs stay in its threads.
+            let mut gone = Vec::new();
+            for name in latest.keys() {
+                let state = kernel.agents().get(name).await?.map(|view| view.agent.state);
+                if matches!(
+                    state,
+                    Some(
+                        adk_kernel::agents::AgentRecordState::Removing
+                            | adk_kernel::agents::AgentRecordState::Removed
+                    )
+                ) {
+                    gone.push(name.clone());
+                }
+            }
+            latest.retain(|name, _| !gone.contains(name));
             return Ok(latest.into_values().collect());
         }
         let name = match (&self.harness, &self.runner) {
@@ -630,12 +717,14 @@ impl Source for LocalSource {
     async fn start_turn(&self, caller: &Caller, session: &str, text: &str) -> Result<()> {
         let user = caller.user_id();
         self.ensure_session(user, session).await?;
-        if let Some((kernel, target)) = &self.kernel {
+        if let Some((kernel, _)) = &self.kernel {
+            // A thread belongs to one agent: its stamp, then its latest run (spec 3.3 §5.7).
+            let target = self.target_for(user, session).await?;
             let run = NewRun::new(
                 QueueClass::Interactive.as_str(),
                 self.app.clone(),
                 user,
-                target.clone(),
+                target,
                 serde_json::json!({ "text": text }),
             )
             .with_session_id(session)
@@ -733,6 +822,201 @@ impl Source for LocalSource {
             query = query.after(last);
         }
         Ok(entries)
+    }
+
+    fn keeps_agents(&self) -> bool {
+        self.kernel.is_some()
+    }
+
+    async fn agent_definitions(&self, user: &str) -> Result<Vec<crate::agents::AgentDetail>> {
+        let Some((kernel, _)) = &self.kernel else {
+            return Ok(Vec::new());
+        };
+        crate::agents::local::definitions(kernel.agents(), user, PRIMARY_NAME, local_offset()).await
+    }
+
+    async fn agent(&self, user: &str, id: &str) -> Result<Option<crate::agents::AgentDetail>> {
+        let Some((kernel, _)) = &self.kernel else {
+            return Ok(None);
+        };
+        match crate::agents::local::agent(kernel.agents(), id, user, PRIMARY_NAME, local_offset())
+            .await
+        {
+            Ok(detail) => Ok(Some(detail)),
+            Err(SurfaceError::NotFound { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn agent_choices(&self) -> Result<crate::agents::AgentChoices> {
+        let (kernel, _) =
+            self.kernel.as_ref().ok_or_else(|| SurfaceError::unsupported("agents of your own"))?;
+        crate::agents::local::choices(kernel.agents(), kernel.partitions()).await
+    }
+
+    async fn preview_agent(
+        &self,
+        caller: &Caller,
+        request: crate::agents::AgentPreviewRequest,
+    ) -> Result<crate::agents::AgentPreview> {
+        let (kernel, _) =
+            self.kernel.as_ref().ok_or_else(|| SurfaceError::unsupported("agents of your own"))?;
+        crate::agents::local::preview(kernel.agents(), caller, request).await
+    }
+
+    async fn add_agent(
+        &self,
+        caller: &Caller,
+        draft: crate::agents::AgentDraft,
+        digest: &str,
+        replaces: Option<String>,
+    ) -> Result<crate::agents::AgentDetail> {
+        let action = adk_kernel::agents::AgentAction::Create {
+            definition: draft.into_definition(),
+            replaces,
+        };
+        self.apply_agent(caller, action, digest).await
+    }
+
+    async fn change_agent(
+        &self,
+        caller: &Caller,
+        agent: &str,
+        version: u64,
+        draft: crate::agents::AgentDraft,
+        digest: &str,
+    ) -> Result<crate::agents::AgentDetail> {
+        let action = adk_kernel::agents::AgentAction::Change {
+            id: agent.to_string(),
+            expected_version: version,
+            definition: draft.into_definition(),
+        };
+        self.apply_agent(caller, action, digest).await
+    }
+
+    async fn pause_agent(
+        &self,
+        caller: &Caller,
+        agent: &str,
+    ) -> Result<crate::agents::AgentDetail> {
+        let action = adk_kernel::agents::AgentAction::Pause { id: agent.to_string() };
+        let digest = action.digest();
+        self.apply_agent(caller, action, &digest).await
+    }
+
+    async fn resume_agent(
+        &self,
+        caller: &Caller,
+        agent: &str,
+    ) -> Result<crate::agents::AgentDetail> {
+        let action = adk_kernel::agents::AgentAction::Resume { id: agent.to_string() };
+        let digest = action.digest();
+        self.apply_agent(caller, action, &digest).await
+    }
+
+    async fn remove_agent(
+        &self,
+        caller: &Caller,
+        agent: &str,
+        version: u64,
+        digest: &str,
+    ) -> Result<crate::agents::EndedWork> {
+        let (kernel, _) =
+            self.kernel.as_ref().ok_or_else(|| SurfaceError::unsupported("removing an agent"))?;
+        let action = adk_kernel::agents::AgentAction::Remove {
+            id: agent.to_string(),
+            expected_version: version,
+        };
+        match crate::agents::local::apply(
+            kernel.agents(),
+            caller,
+            action,
+            digest,
+            PRIMARY_NAME,
+            local_offset(),
+        )
+        .await?
+        {
+            crate::agents::local::Applied::Removed(ended) => Ok(ended),
+            crate::agents::local::Applied::Agent(_) => Ok(crate::agents::EndedWork::default()),
+        }
+    }
+
+    async fn copy_rule_to_agent(&self, caller: &Caller, agent: &str, rule: &str) -> Result<String> {
+        let harness =
+            self.harness.as_ref().ok_or_else(|| SurfaceError::unsupported("copying a rule"))?;
+        let (kernel, _) =
+            self.kernel.as_ref().ok_or_else(|| SurfaceError::unsupported("copying a rule"))?;
+        if kernel.agents().get(agent).await?.is_none() {
+            return Err(SurfaceError::not_found(format!("agent '{agent}'")));
+        }
+        let store = harness.agent().runtime().standing_rules().clone();
+        let original = store
+            .list(&self.app, caller.user_id())
+            .await?
+            .into_iter()
+            .find(|candidate| candidate.id == rule)
+            .ok_or_else(|| SurfaceError::not_found(format!("rule '{rule}'")))?;
+        let pinned = adk_core::AgentPrincipal::derived(&self.app, agent).id.as_str().to_string();
+        let copy = adk_harness::copy_rule_to(&original, &pinned, caller.subject.clone())?;
+        let label = copy.label.clone();
+        store.grant(copy).await?;
+        Ok(label)
+    }
+
+    async fn agent_of_session(&self, user: &str, session: &str) -> Result<Option<String>> {
+        if self.kernel.is_none() {
+            return Ok(None);
+        }
+        let stamped = self
+            .sessions
+            .get(GetRequest {
+                app_name: self.app.clone(),
+                user_id: user.to_string(),
+                session_id: session.to_string(),
+                num_recent_events: Some(1),
+                after: None,
+            })
+            .await
+            .ok()
+            .and_then(|found| found.state().get(adk_harness::AGENT_STATE_KEY))
+            .and_then(|stamp| stamp.as_str().map(str::to_string));
+        if stamped.is_some() {
+            return Ok(stamped);
+        }
+        Ok(self
+            .processes(user)
+            .await?
+            .into_iter()
+            .find(|process| process.run.session_id.as_deref() == Some(session))
+            .map(|process| process.run.target))
+    }
+
+    async fn start_turn_with(
+        &self,
+        caller: &Caller,
+        agent: &str,
+        session: &str,
+        text: &str,
+    ) -> Result<()> {
+        let Some(target) = self.target_of(agent) else {
+            return self.start_turn(caller, session, text).await;
+        };
+        let (kernel, _) =
+            self.kernel.as_ref().ok_or_else(|| SurfaceError::unsupported("sending a message"))?;
+        let user = caller.user_id();
+        self.ensure_session(user, session).await?;
+        let run = NewRun::new(
+            QueueClass::Interactive.as_str(),
+            self.app.clone(),
+            user,
+            target,
+            serde_json::json!({ "text": text }),
+        )
+        .with_session_id(session)
+        .with_authenticated_user();
+        kernel.processes().spawn(run, ProcessSpec::new(ProcessKind::Interactive)).await?;
+        Ok(())
     }
 }
 

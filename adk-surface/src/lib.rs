@@ -54,6 +54,7 @@
 
 #![warn(missing_docs)]
 
+mod agents;
 pub mod answers;
 #[cfg(feature = "channels")]
 pub mod channels;
@@ -77,6 +78,11 @@ pub mod voice;
 pub mod web;
 pub mod words;
 
+pub use agents::{
+    AgentCardView, AgentChoices, AgentColor, AgentDetail, AgentDraft, AgentLife, AgentPreview,
+    AgentPreviewRequest, AreaChoice, CardLine, ColorChoice, EndedWork, FileUse, ModelView,
+    ShellUse, UsesDraft, WebUse,
+};
 pub use answers::{
     AnswerLog, AnswerRecord, AuditAnswerLog, InMemoryAnswerLog, RECORD_LINES, RecordAnswerLog,
     SURFACE_AUDIT_DECIDE,
