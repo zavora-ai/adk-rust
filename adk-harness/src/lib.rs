@@ -131,6 +131,8 @@ pub mod personal;
 mod preset;
 
 pub use agent::{HARNESS_UNGOVERNED_CODE, HarnessAgent, HarnessInfo, HarnessLayer, HarnessRuntime};
+#[cfg(all(feature = "kernel", feature = "web"))]
+pub use agents::screen_agent_definition;
 #[cfg(feature = "kernel")]
 pub use agents::{
     AGENT_SESSION_CODE, AGENT_STATE_KEY, AddedAgent, PRIMARY_AGENT_STAMP, PROPOSE_AGENT,
