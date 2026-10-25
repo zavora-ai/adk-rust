@@ -353,6 +353,14 @@ jobs:
         --run-ignored only --no-fail-fast
         --test shared_store_redis_tests
 
+    # The feature set matches the adk-payments suite of scripts/test-postgres.sh, so the
+    # build is reused.
+    - name: Run the wallet's Redis store suite
+      if: ${{ !cancelled() }}
+      run: >-
+        cargo nextest run --profile ci -p adk-payments --features sqlite,postgres,redis
+        --run-ignored only --no-fail-fast --test wallet_store_redis
+
     # The feature set matches the adk-kernel suite of scripts/test-postgres.sh, so the
     # build is reused.
     - name: Run the kernel's Redis store suites

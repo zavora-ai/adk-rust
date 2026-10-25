@@ -15,6 +15,7 @@
 //! | Funding | [`WalletProvider`], [`InMemoryWalletProvider`], [`CardIssuer`], [`PrepaidCardProvider`], [`InMemoryCardIssuer`] |
 //! | Rails | [`PaymentRail`], [`UseBasedRail`] over a [`UseBasedScheme`], [`ProviderBillingRail`] over a [`BillingAccount`], `Ap2Rail` (with `ap2`) |
 //! | Payments | [`Wallet`], [`PaymentRequest`], [`PaymentOutcome`], [`PaymentRecord`], [`WalletStore`] |
+//! | Durable stores | `SqliteWalletStore` (`sqlite`), `PostgresWalletStore` (`postgres`), `RedisWalletStore` (`redis`) |
 //! | Oversight | [`WalletAlarm`] through a [`WalletAlarmHook`], [`ReconciliationReport`], [`WalletKpiSource`] |
 //! | Tools | [`WalletToolset`]: `wallet_pay` and `wallet_status` |
 //! | Commerce receipts | [`ReceiptSigner`], [`ReceiptVerifier`], [`issue_receipt`], [`verify_receipt`] |
@@ -30,6 +31,8 @@ mod anomaly;
 #[cfg(feature = "ap2")]
 mod ap2;
 pub mod conformance;
+#[cfg(any(feature = "sqlite", feature = "postgres", feature = "redis"))]
+mod durable;
 mod engine;
 mod error;
 mod kpi;
@@ -46,6 +49,14 @@ pub use anomaly::{InMemoryAlarmHook, WalletAlarm, WalletAlarmHook, WalletAlarmKi
 #[cfg(feature = "ap2")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ap2")))]
 pub use ap2::{Ap2MerchantEndpoint, Ap2Rail, Ap2RailData, Ap2Settlement, Ap2UserAuthorizer};
+#[cfg(feature = "postgres")]
+pub use durable::PostgresWalletStore;
+#[cfg(feature = "redis")]
+pub use durable::RedisWalletStore;
+#[cfg(feature = "sqlite")]
+pub use durable::SqliteWalletStore;
+#[cfg(any(feature = "sqlite", feature = "postgres", feature = "redis"))]
+pub use durable::{WALLET_STORE_CORRUPT_CODE, WALLET_STORE_UNAVAILABLE_CODE};
 pub use engine::{
     CategoryStatus, PaymentOutcome, PaymentRequest, Wallet, WalletBuilder, WalletCaller,
 };
