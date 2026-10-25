@@ -1,0 +1,286 @@
+{
+  "$defs": {
+    "ApprovalHint": {
+      "description": "When a call is held for the owner's decision (spec 3.5 §7.4).\n\nSerialized with a `mode` tag: `{\"mode\": \"never\"}`, `{\"mode\": \"above_amount\", \"amount\":\n<minor units>}` or `{\"mode\": \"always\"}`.",
+      "oneOf": [
+        {
+          "description": "Calls are never held.",
+          "properties": {
+            "mode": {
+              "const": "never",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Calls above this amount in minor units are held.",
+          "properties": {
+            "amount": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mode": {
+              "const": "above_amount",
+              "type": "string"
+            }
+          },
+          "required": [
+            "amount",
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Every call is held.",
+          "properties": {
+            "mode": {
+              "const": "always",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CapabilityEffect": {
+      "description": "Side-effect class of a capability: the three tool effect classes of ADK-Rust's governed\npath (spec 3.5 §7.4).",
+      "oneOf": [
+        {
+          "const": "read_only",
+          "description": "Reads without changing anything.",
+          "type": "string"
+        },
+        {
+          "const": "idempotent",
+          "description": "Repeating a call leaves the same state as making it once.",
+          "type": "string"
+        },
+        {
+          "const": "non_idempotent",
+          "description": "Repeating a call repeats the change; requires an idempotency key.",
+          "type": "string"
+        }
+      ]
+    },
+    "ConsentRequirement": {
+      "description": "The consent a call needs: a live receipt for `scope` under `policyVersion`\n(spec 3.5 §7.4, §7.5, A-I8).",
+      "properties": {
+        "policyVersion": {
+          "description": "The policy version the receipt must name.",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/ConsentScope",
+          "description": "The consent scope."
+        }
+      },
+      "required": [
+        "policyVersion",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "ConsentScope": {
+      "examples": [
+        "session_continuity",
+        "proactive_outreach",
+        "persistent_profile",
+        "payment_data",
+        "newsletter"
+      ],
+      "minLength": 1,
+      "type": "string"
+    },
+    "Deprecation": {
+      "description": "A capability's deprecation (spec 3.5 §7.4).",
+      "properties": {
+        "successor": {
+          "description": "Name of the capability that replaces it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sunset": {
+          "description": "When the capability stops answering.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "IdempotencySource": {
+      "description": "Where a call's idempotency key comes from (spec 3.5 §7.4).",
+      "oneOf": [
+        {
+          "const": "binding",
+          "description": "The binding that carried the call: the A2A message id, the MCP request id, or the\n`Idempotency-Key` header of `POST /awp/v2/capabilities/{name}`.",
+          "type": "string"
+        },
+        {
+          "const": "a2a_message_id",
+          "description": "The A2A message id.",
+          "type": "string"
+        },
+        {
+          "const": "mcp_request_id",
+          "description": "The MCP request id.",
+          "type": "string"
+        },
+        {
+          "const": "idempotency_key",
+          "description": "The `Idempotency-Key` HTTP header.",
+          "type": "string"
+        }
+      ]
+    },
+    "Price": {
+      "description": "A capability's price (spec 3.5 §7.4).",
+      "properties": {
+        "amount": {
+          "description": "Amount in the currency's minor units.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "currency": {
+          "description": "ISO 4217 currency code.",
+          "type": "string"
+        },
+        "rails": {
+          "description": "Accepted payment rails, such as `ap2` or `acp`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "type": "object"
+    },
+    "TrustTier": {
+      "description": "A requester's trust tier, ordered `Public < Known < Verified < Partner` (spec 3.5 §7.3).\n\nTrust above `Public` requires a verified credential (A-I6); claims never raise it.",
+      "oneOf": [
+        {
+          "const": "public",
+          "description": "Earned by nothing.",
+          "type": "string"
+        },
+        {
+          "const": "known",
+          "description": "A valid Web Bot Auth signature, an OAuth client-credentials token, or an owner-issued\nAPI key.",
+          "type": "string"
+        },
+        {
+          "const": "verified",
+          "description": "A known identity from a key directory or DID issuer on the owner's verified list.",
+          "type": "string"
+        },
+        {
+          "const": "partner",
+          "description": "An owner allowlist entry.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/capability.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A typed capability: one declaration exposed as an A2A skill, an MCP tool and\n`POST /awp/v2/capabilities/{name}`, under one policy (spec 3.5 §7.4).",
+  "properties": {
+    "approval": {
+      "$ref": "#/$defs/ApprovalHint",
+      "description": "When a call is held for the owner; a held call answers 202."
+    },
+    "consent": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ConsentRequirement"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Scope and policy version a live consent receipt must cover."
+    },
+    "deprecated": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Deprecation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Successor and sunset."
+    },
+    "description": {
+      "description": "What the capability does.",
+      "type": "string"
+    },
+    "effect": {
+      "$ref": "#/$defs/CapabilityEffect",
+      "description": "Side-effect class."
+    },
+    "idempotency": {
+      "$ref": "#/$defs/IdempotencySource",
+      "description": "Where the idempotency key of a call comes from."
+    },
+    "inputSchema": {
+      "description": "JSON Schema of the input."
+    },
+    "minTrust": {
+      "$ref": "#/$defs/TrustTier",
+      "description": "Lowest trust tier that may see and call the capability."
+    },
+    "name": {
+      "description": "Stable id: the A2A skill id and the MCP tool name.",
+      "type": "string"
+    },
+    "outputSchema": {
+      "description": "JSON Schema of the output."
+    },
+    "price": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Price"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Price in minor units, currency and accepted rails."
+    },
+    "rateClass": {
+      "description": "Rate-limit class.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "approval",
+    "description",
+    "effect",
+    "idempotency",
+    "minTrust",
+    "name"
+  ],
+  "title": "CapabilityV2",
+  "type": "object"
+}

@@ -1,0 +1,155 @@
+{
+  "$defs": {
+    "ErrorBody": {
+      "description": "The body of an `ErrorEnvelope` (spec 3.5 §7.5).",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode",
+          "description": "Error code."
+        },
+        "message": {
+          "description": "Human-readable message with no internal detail.",
+          "type": "string"
+        },
+        "retryAfter": {
+          "description": "Seconds to wait before retrying.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "retryable": {
+          "description": "Whether the same request can succeed if retried.",
+          "type": "boolean"
+        },
+        "traceId": {
+          "description": "Trace id for support.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "type": "object"
+    },
+    "ErrorCode": {
+      "examples": [
+        "invalid_request",
+        "schema_validation_failed",
+        "idempotency_key_required",
+        "unauthorized",
+        "payment_policy_rejected",
+        "forbidden",
+        "capability_not_found",
+        "resource_not_found",
+        "version_not_supported",
+        "idempotency_conflict",
+        "inventory_unavailable",
+        "quote_expired",
+        "subscription_suspended",
+        "rate_limit_exceeded",
+        "consent_required",
+        "internal_error",
+        "payment_failed",
+        "service_degraded",
+        "read_only"
+      ],
+      "minLength": 1,
+      "type": "string"
+    },
+    "HeldCallState": {
+      "description": "Where a held call stands (spec 3.5 §7.4).",
+      "oneOf": [
+        {
+          "const": "pending",
+          "description": "Waiting for the owner.",
+          "type": "string"
+        },
+        {
+          "const": "approved",
+          "description": "Approved and executing.",
+          "type": "string"
+        },
+        {
+          "const": "rejected",
+          "description": "Rejected; the call did not run.",
+          "type": "string"
+        },
+        {
+          "const": "expired",
+          "description": "Not decided in time; the call did not run.",
+          "type": "string"
+        },
+        {
+          "const": "completed",
+          "description": "Executed; `result` holds the output.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/held-call.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A capability call the owner must decide (spec 3.5 §7.4).\n\nThe call answers `202 Accepted` with `Location: /awp/v2/calls/{id}`; `GET` on that URL\nreturns this document until the call reaches a terminal state.",
+  "properties": {
+    "capability": {
+      "description": "Name of the capability called.",
+      "type": "string"
+    },
+    "createdAt": {
+      "description": "When the call was held.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorBody"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Why a rejected or expired call did not run."
+    },
+    "expiresAt": {
+      "description": "When an undecided call expires.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "Call id.",
+      "type": "string"
+    },
+    "result": {
+      "description": "The capability's output once the call completed."
+    },
+    "state": {
+      "$ref": "#/$defs/HeldCallState",
+      "description": "Where the call stands."
+    },
+    "status": {
+      "description": "Status URL, `/awp/v2/calls/{id}`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "capability",
+    "createdAt",
+    "id",
+    "state",
+    "status"
+  ],
+  "title": "HeldCall",
+  "type": "object"
+}

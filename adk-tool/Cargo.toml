@@ -43,6 +43,15 @@ bigquery = ["dep:gcp-bigquery-client"]
 spanner = ["dep:google-cloud-spanner"]
 # Enable MCP sampling callback support (sampling/createMessage handling)
 mcp-sampling = ["mcp"]
+# Publish a set of adk_core::Tool as a Streamable HTTP MCP server with a Server Card
+# (spec 3.5 §7.9).
+mcp-server = [
+    "mcp",
+    "rmcp/server",
+    "rmcp/transport-streamable-http-server",
+    "dep:axum",
+    "dep:sha2",
+]
 # Enable the Vertex AI Example Store client and few-shot retrieval provider
 example-store = ["adk-gcp", "google-cloud-auth", "reqwest"]
 # Enable the Google Agent Registry client and the agent discovery tool
@@ -84,6 +93,9 @@ google-cloud-spanner = { version = "0.33", optional = true }
 google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
 # Optional: shared Google Cloud REST plumbing for the Example Store and Agent Registry clients
 adk-gcp = { workspace = true, optional = true }
+# Optional: the MCP server's HTTP router and its Server Card validators
+axum = { version = "0.8", optional = true }
+sha2 = { workspace = true, optional = true }
 
 # The Job Object that holds each managed stdio server's process tree on Windows
 # (spec 3.2 §10 W1).
@@ -111,6 +123,11 @@ axum = "0.8"
 adk-agent = { path = "../adk-agent" }
 adk-runner = { path = "../adk-runner" }
 adk-session = { path = "../adk-session" }
+# The scripted and live agent runs against the MCP server.
+adk-model = { path = "../adk-model", default-features = false, features = ["anthropic"] }
+dotenvy = "0.15"
+# Drives the MCP server router in process in the HTTP tests.
+tower = { version = "0.5", features = ["util"] }
 
 [[test]]
 name = "mcp_server_lifecycle_integration_tests"
@@ -123,6 +140,22 @@ required-features = ["mcp"]
 [[test]]
 name = "mcp_close_tests"
 required-features = ["mcp"]
+
+[[test]]
+name = "mcp_server_tests"
+required-features = ["mcp-server", "http-transport"]
+
+[[test]]
+name = "mcp_server_http_tests"
+required-features = ["mcp-server"]
+
+[[test]]
+name = "mcp_server_card_tests"
+required-features = ["mcp-server"]
+
+[[test]]
+name = "mcp_server_agent_tests"
+required-features = ["mcp-server", "http-transport"]
 
 [[test]]
 name = "example_store_contract"

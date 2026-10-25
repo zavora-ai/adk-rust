@@ -1,0 +1,143 @@
+{
+  "$defs": {
+    "IdentityMethod": {
+      "description": "A way a requester proves its identity (spec 3.5 §7.3).",
+      "oneOf": [
+        {
+          "const": "web-bot-auth",
+          "description": "Web Bot Auth over HTTP Message Signatures (RFC 9421).",
+          "type": "string"
+        },
+        {
+          "const": "oauth2-client-credentials",
+          "description": "An OAuth 2.0 client-credentials token.",
+          "type": "string"
+        },
+        {
+          "const": "mtls",
+          "description": "Mutual TLS.",
+          "type": "string"
+        },
+        {
+          "const": "did",
+          "description": "A decentralized identifier.",
+          "type": "string"
+        },
+        {
+          "const": "api-key",
+          "description": "An API key the owner issued.",
+          "type": "string"
+        }
+      ]
+    },
+    "RateClass": {
+      "description": "The limits of one rate class (spec 3.5 §7.3).",
+      "properties": {
+        "callsPerDay": {
+          "description": "Capability calls per day.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requestsPerMinute": {
+          "description": "Requests per minute.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "callsPerDay",
+        "requestsPerMinute"
+      ],
+      "type": "object"
+    },
+    "TrustRule": {
+      "description": "An owner rule granting a tier to verified identities (spec 3.5 §7.3).\n\n`subject` is a `RequesterId`, or a prefix ending in `*` that matches every id it\nstarts — for example `wba:https://bots.example.com#*` for every key of one directory.",
+      "properties": {
+        "note": {
+          "description": "Owner's note.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rateClass": {
+          "description": "Rate-limit class for matching identities.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "description": "A requester id, or a prefix ending in `*`.",
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/TrustTier",
+          "description": "The tier granted to matching identities."
+        }
+      },
+      "required": [
+        "subject",
+        "tier"
+      ],
+      "type": "object"
+    },
+    "TrustTier": {
+      "description": "A requester's trust tier, ordered `Public < Known < Verified < Partner` (spec 3.5 §7.3).\n\nTrust above `Public` requires a verified credential (A-I6); claims never raise it.",
+      "oneOf": [
+        {
+          "const": "public",
+          "description": "Earned by nothing.",
+          "type": "string"
+        },
+        {
+          "const": "known",
+          "description": "A valid Web Bot Auth signature, an OAuth client-credentials token, or an owner-issued\nAPI key.",
+          "type": "string"
+        },
+        {
+          "const": "verified",
+          "description": "A known identity from a key directory or DID issuer on the owner's verified list.",
+          "type": "string"
+        },
+        {
+          "const": "partner",
+          "description": "An owner allowlist entry.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/trust-rules.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The trust rules the edge publishes at the contract's `identity.trustRules` (spec 3.5 §7.3).",
+  "properties": {
+    "accepts": {
+      "default": [],
+      "description": "The identity methods the edge verifies.",
+      "items": {
+        "$ref": "#/$defs/IdentityMethod"
+      },
+      "type": "array"
+    },
+    "rateClasses": {
+      "additionalProperties": {
+        "$ref": "#/$defs/RateClass"
+      },
+      "description": "Limits per rate class.",
+      "type": "object"
+    },
+    "rules": {
+      "default": [],
+      "description": "Trust rules.",
+      "items": {
+        "$ref": "#/$defs/TrustRule"
+      },
+      "type": "array"
+    }
+  },
+  "title": "TrustRules",
+  "type": "object"
+}

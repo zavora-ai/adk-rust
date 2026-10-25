@@ -17,6 +17,7 @@ Access control and authentication for Rust Agent Development Kit (ADK-Rust).
 - Secret providers — AWS Secrets Manager, Azure Key Vault, and GCP Secret Manager
 - SSO/OAuth — JWT validation with Google, Azure AD, Okta, Auth0, and generic OIDC providers
 - Auth bridge — flow authenticated identity from HTTP requests into agent execution via `adk-server`
+- Web Bot Auth — verify and sign RFC 9421 request signatures so automated clients have a verified identity
 
 ## Installation
 
@@ -32,6 +33,9 @@ adk-auth = { version = "3.0.0", features = ["auth-bridge"] }
 
 # With the signed, Merkle-hashed audit log
 adk-auth = { version = "3.0.0", features = ["signed-audit"] }
+
+# With Web Bot Auth request signatures
+adk-auth = { version = "3.0.0", features = ["web-bot-auth"] }
 ```
 
 ## Features
@@ -44,6 +48,7 @@ Core RBAC, scope-based security, and audit logging are always available with no 
 | `auth-bridge` | `JwtRequestContextExtractor` for `adk-server` identity flow (implies `sso`) |
 | `token-exchange` | `TokenExchangeBroker`: RFC 8693 token exchange of the agent's credential, or of the subject's token with the agent as actor (`on_behalf_of`), for resource-scoped tokens |
 | `signed-audit` | `signed_audit::AuditLog`: the signed, Merkle-hashed audit log, and `signed_audit::verify` |
+| `web-bot-auth` | `web_bot_auth`: RFC 9421 Ed25519 request signatures, `HttpSignatureVerifier`, `HttpSignatureSigner`, key directories |
 | `postgres-audit` | `PostgresAuditSink` |
 | `otlp-audit` | `OtlpAuditSink` |
 | `aws-secrets` | `secrets::AwsSecretProvider` (AWS Secrets Manager) |
@@ -290,6 +295,49 @@ cut together with its later checkpoints, or an empty one, verifies unless the an
 checkpoints are passed as well (`--checkpoints`). See the
 [Audit Log guide](../docs/official_docs/security/audit-log.md).
 
+## Web Bot Auth (`web-bot-auth`)
+
+`web_bot_auth` implements the IETF Web Bot Auth draft
+(`draft-ietf-webbotauth-httpsig-protocol-00`) over HTTP Message Signatures (RFC 9421) with
+Ed25519 keys. An automated client signs each request and names, in `Signature-Agent`, the
+origin whose `/.well-known/http-message-signatures-directory` publishes its key; a site
+verifies the signature against that directory instead of trusting a `User-Agent` claim.
+
+| Type | Role |
+|------|------|
+| `HttpSignatureVerifier` | Verifies a request; returns `VerifiedRequester` with `id = "wba:{directory origin}#{key thumbprint}"`, or `None` for an unsigned request |
+| `HttpSignatureSigner` | Signs an `http::Request` or `reqwest::Request` with a site's key and `Signature-Agent` |
+| `HttpKeyDirectorySource` | Fetches directories over HTTPS: public addresses only, no redirects, 5 s timeout, 64 KiB and 64 keys at most |
+| `InMemoryKeyDirectorySource` | Directories from memory, for tests and out-of-band keys |
+| `KeyDirectory` | Parses a directory, and builds the one a site publishes, with its possession proof |
+| `Ed25519SigningKey` | Ed25519 key on `aws-lc-rs`; the seed is zeroized and never printed |
+
+```rust
+use std::sync::Arc;
+
+use adk_auth::web_bot_auth::{HttpKeyDirectorySource, HttpSignatureVerifier, VerifiedRequester};
+
+async fn requester(
+    verifier: &HttpSignatureVerifier,
+    request: &http::Request<()>,
+) -> Option<VerifiedRequester> {
+    // Unsigned requests and failed signatures both earn no identity.
+    verifier.verify_request(request).await.ok().flatten()
+}
+
+fn verifier() -> HttpSignatureVerifier {
+    let directories = Arc::new(HttpKeyDirectorySource::new().expect("HTTP client"));
+    HttpSignatureVerifier::builder(directories).build()
+}
+```
+
+The verifier requires `created`, `expires`, `keyid` and `tag="web-bot-auth"`, coverage of
+`@authority` (or `@target-uri`) and the signature's `Signature-Agent` member, and accepts
+`created`/`expires` within 60 s of clock skew. Directories are cached for their HTTP cache
+lifetime, bounded to 60 s–24 h. The RFC 9421 test key is rejected unless
+`allow_test_keys(true)`. The verifier assigns no trust tier; that is the AWP edge's decision.
+See the [Web Bot Auth guide](../docs/official_docs/security/web-bot-auth.md).
+
 ## Credential Brokers
 
 Both brokers implement `adk_core::CredentialBroker` and mint a `ScopedToken` whose audience is
@@ -309,7 +357,7 @@ See [Agent Identity](https://github.com/zavora-ai/adk-rust/blob/main/docs/offici
 | A guarded tool whose audit sink fails is refused with `auth.audit_failed` (`AuditFailureMode::Block`) | `with_audit_failure_mode(AuditFailureMode::Warn)` keeps running when the sink is down |
 | `AuditEvent` gains `agent_id` and `on_behalf_of` | Set them in struct literals |
 | `AuditFailureMode` moves to `adk_core::audit_log` and is re-exported here | — |
-| Signed audit log, credential brokers, and token exchange are new | — |
+| Signed audit log, credential brokers, token exchange, and Web Bot Auth are new | — |
 | `PostgresAuditSink` writes `agent_id` and `on_behalf_of` columns | Call `migrate()` once before the first write; until then inserts fail and guarded tools are refused |
 | `PostgresAuditSink` uses SQLx 0.9 | See SQLx compatibility below |
 | HTTP requests to IdPs and token endpoints have connect and request timeouts | — |
@@ -325,6 +373,7 @@ See the [2.x to 3.0 migration guide](../docs/official_docs/migration/2.x-to-3.0.
 | `ScopeDenied` | Scope check fails (missing required scopes) |
 | `TokenError` | JWT validation failure (expired, bad signature, missing claims) |
 | `SsoError` | Token validation, access denied, or a grant the audit sink failed to record in SSO flow |
+| `web_bot_auth::WebBotAuthError` | A Web Bot Auth signature is malformed, invalid, or unverifiable (`is_unverified`) |
 
 ## Examples
 

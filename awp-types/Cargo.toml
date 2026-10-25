@@ -12,7 +12,7 @@ documentation = "https://docs.rs/awp-types"
 readme = "README.md"
 keywords = ["awp", "agent", "protocol", "agentic", "web"]
 categories = ["web-programming", "data-structures"]
-include = ["src/**/*", "Cargo.toml", "README.md"]
+include = ["src/**/*", "schemas/**/*", "Cargo.toml", "README.md"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -20,7 +20,15 @@ serde_json = "1"
 uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
+schemars = { version = "1.0", optional = true, features = ["chrono04", "uuid1"] }
+
+[features]
+# JSON Schema (2020-12) for every AWP 2.0 type (spec 3.5 §7.2–§7.8.3).
+json-schema = ["dep:schemars"]
 
 [dev-dependencies]
 proptest = "1"
 toml = "0.8"
+
+[package.metadata.docs.rs]
+features = ["json-schema"]

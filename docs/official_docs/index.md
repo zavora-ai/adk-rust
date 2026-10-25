@@ -220,6 +220,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Agent Identity](security/agent-identity.md) - Stable agent ids on every policy decision, approval, spend record, and audit event; resource-scoped credential brokers
 - [Durable Stores](security/durable-stores.md) - Spend ledger, action ledger, and approval store backends, their conformance suite, and the no-duplicate guarantee
 - [Audit Log](security/audit-log.md) - Signed, Merkle-hashed audit log with checkpoints, key rotation, and offline verification
+- [Web Bot Auth](security/web-bot-auth.md) - Verified identity for automated clients: RFC 9421 request signatures, key directories, signer and verifier
 
 ## Compliance
 

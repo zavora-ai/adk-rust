@@ -1,0 +1,236 @@
+{
+  "$defs": {
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` and 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "FileEntry": {
+      "description": "One file of a release (spec 3.5 §7.7).",
+      "properties": {
+        "contentType": {
+          "description": "Media type.",
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest",
+          "description": "SHA-256 digest of the file's bytes."
+        },
+        "size": {
+          "description": "Size in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "contentType",
+        "sha256",
+        "size"
+      ],
+      "type": "object"
+    },
+    "GeneratorRef": {
+      "description": "The generator that built a release (spec 3.5 §7.7).",
+      "properties": {
+        "name": {
+          "description": "Generator name.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Generator version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
+    "Redirect": {
+      "description": "A redirect in the host's format (spec 3.5 §7.7).",
+      "properties": {
+        "from": {
+          "description": "Source path.",
+          "type": "string"
+        },
+        "status": {
+          "description": "HTTP status, such as 301.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "to": {
+          "description": "Target path or URL.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "status",
+        "to"
+      ],
+      "type": "object"
+    },
+    "ReleaseSource": {
+      "description": "What produced a release (spec 3.5 §7.7).\n\nSerialized with a `kind` tag: `{\"kind\": \"edit\", \"job\": \"...\", \"decision\": \"...\"}`.",
+      "oneOf": [
+        {
+          "description": "Release 1, built during onboarding.",
+          "properties": {
+            "kind": {
+              "const": "onboarding",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A migration from an existing site.",
+          "properties": {
+            "kind": {
+              "const": "migration",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An edit by a job.",
+          "properties": {
+            "decision": {
+              "description": "The decision that approved it; absent when the job acted within its autonomy.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "job": {
+              "description": "The job that made the edit.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "edit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "job",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A rollback to an earlier release.",
+          "properties": {
+            "kind": {
+              "const": "rollback",
+              "type": "string"
+            },
+            "toSeq": {
+              "description": "The release rolled back to.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "toSeq"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/release-manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A release manifest, `/.well-known/awp/releases/{seq}.json` (spec 3.5 §7.7, §7.8.3).\n\nA snapshot lists every file. A delta names a `base` release and lists only added and\nchanged files in `files` and removed paths in `removed`; its full file set is its base's\nwith `removed` taken away and `files` added or replaced. `redirects` is always the full\nset.",
+  "properties": {
+    "base": {
+      "description": "For a delta, the release it lists changes against; `None` for a snapshot.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "charterVersion": {
+      "description": "The charter version in effect when the release was built.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "createdAt": {
+      "description": "When the release was built.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "files": {
+      "additionalProperties": {
+        "$ref": "#/$defs/FileEntry"
+      },
+      "description": "Path → file. A snapshot lists every file; a delta, the added and changed ones.",
+      "type": "object"
+    },
+    "generator": {
+      "$ref": "#/$defs/GeneratorRef",
+      "description": "Generator name and version, for reproduction."
+    },
+    "previous": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Digest"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Digest of the previous release's manifest."
+    },
+    "redirects": {
+      "description": "Redirects, in full.",
+      "items": {
+        "$ref": "#/$defs/Redirect"
+      },
+      "type": "array"
+    },
+    "removed": {
+      "description": "Paths a delta removes from its base; always empty on a snapshot.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "seq": {
+      "description": "Sequence number; releases are serialised per site.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "source": {
+      "$ref": "#/$defs/ReleaseSource",
+      "description": "What produced the release."
+    }
+  },
+  "required": [
+    "charterVersion",
+    "createdAt",
+    "files",
+    "generator",
+    "seq",
+    "source"
+  ],
+  "title": "ReleaseManifest",
+  "type": "object"
+}
