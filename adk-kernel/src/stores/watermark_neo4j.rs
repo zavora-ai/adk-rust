@@ -18,7 +18,7 @@ SET w.cursor_us = CASE WHEN w.cursor_us < $cursor_us THEN $cursor_us ELSE w.curs
 RETURN w.cursor_us AS cursor_us";
 
 /// A [`CronWatermarkStore`] in Neo4j, shared by every replica (spec 3.2 §7.4, §13 Q8,
-/// feature `neo4j`). **Alpha** until its live conformance suite passes in CI.
+/// feature `neo4j`).
 ///
 /// | Label | Key (unique) | Properties |
 /// |-------|--------------|------------|

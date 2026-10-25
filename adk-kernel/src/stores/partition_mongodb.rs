@@ -15,7 +15,7 @@ const CROSSINGS: &str = "adk_kernel_crossings";
 const GRANTS: &str = "adk_kernel_crossing_grants";
 
 /// A [`PartitionStore`] in MongoDB, shared by every replica (spec 3.2 §7.1, §7.8, §13 Q8,
-/// feature `mongodb`). **Alpha** until its live conformance suite passes in CI.
+/// feature `mongodb`).
 ///
 /// | Collection | `_id` | Contents |
 /// |------------|-------|----------|

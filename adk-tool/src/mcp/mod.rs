@@ -8,6 +8,8 @@ mod parked;
 mod reconnect;
 mod resource_notifications;
 mod schema_limits;
+#[cfg(feature = "mcp-server")]
+pub mod server;
 mod task;
 mod toolset;
 

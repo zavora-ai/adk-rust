@@ -204,7 +204,7 @@ from the kernel's own per-process daily totals, fed by a `ProgressSource`.
 A `Trigger` spawns a new process for an event no sleeper takes, keyed
 `<event key>#<trigger name>`. Changes to watched files while the kernel was down are
 reconciled on start. `CronWakeSource::watermarked` keeps where a cron source left off in a
-`CronWatermarkStore` (in-memory, SQLite, PostgreSQL, Redis, and, Alpha, MongoDB, Firestore and
+`CronWatermarkStore` (in-memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore and
 Neo4j; `cron_watermark_store_conformance_tests!`), so the ticks missed while no kernel watched fire
 once each, as the wake's `MissedFirePolicy` picks them. A local event reaches `Running` in under 2 s: in-process sources
 enqueue and claim at once, and the tick claims wake runs an external ingress or another
@@ -214,7 +214,7 @@ replica enqueued.
 
 A `Partition` is a policy class, a memory scope and a driver set, run by its own harness
 (spec 3.2 §7.8). `Partitions` keeps the table and the crossing ledger in a `PartitionStore`
-(in-memory, SQLite, PostgreSQL, Redis, and, Alpha, MongoDB, Firestore and Neo4j;
+(in-memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore and Neo4j;
 `partition_store_conformance_tests!`).
 
 | Part | What it does |
@@ -343,13 +343,13 @@ second.
 `channel_binding_store_conformance_tests!` (feature `conformance`) check a backend against the
 contract the kernel relies on.
 
-### Alpha backends: MongoDB, Firestore, Neo4j
+### MongoDB, Firestore, Neo4j
 
 The process, agenda, driver, ledger, partition and cron watermark stores also run on MongoDB,
 Firestore and Neo4j (spec 3.2 §13 Q8); the device, control and channel binding stores do not.
-Each backend is **Alpha** until its
-live conformance suites pass in CI, so its storage layout may still change without a
-migration. Each feature also turns on the same backend of
+These backends are **Beta**, as the rest of the crate: each store's conformance suite passes
+against a live server in CI's nightly `durable-stores` job, and their storage layout follows the
+Beta contract of [STABILITY.md](../STABILITY.md). Each feature also turns on the same backend of
 `adk-session`'s run, schedule and governance stores, and every store takes the handle
 those stores use, so one client serves them all.
 
@@ -396,7 +396,7 @@ a secret (spec 3.2 K-I19).
 
 | Store | Backends |
 |---|---|
-| `LedgerStore` | `InMemoryLedgerStore`; `SqliteLedgerStore` (`sqlite`); `PostgresLedgerStore` (`postgres`); `RedisLedgerStore` (`redis`); Alpha: `MongoLedgerStore`, `FirestoreLedgerStore`, `Neo4jLedgerStore`; suite `ledger_store_conformance_tests!` |
+| `LedgerStore` | `InMemoryLedgerStore`; `SqliteLedgerStore` (`sqlite`); `PostgresLedgerStore` (`postgres`); `RedisLedgerStore` (`redis`); `MongoLedgerStore` (`mongodb`); `FirestoreLedgerStore` (`firestore`); `Neo4jLedgerStore` (`neo4j`); suite `ledger_store_conformance_tests!` |
 
 With `proc-baselines`, the maintenance tick runs the daily `kernel.proc` pass over
 `adk-eval`'s ledger statistics — 28-day median and MAD baselines, a 14-day warm-up, the 7-
@@ -414,7 +414,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 |---|---|---|
 | `sqlite` | on | `SqliteProcessStore`, `SqliteAgendaStore` |
 | `postgres`, `redis` | off | `PostgresProcessStore`, `PostgresAgendaStore`, `RedisProcessStore`, `RedisAgendaStore` |
-| `mongodb`, `firestore`, `neo4j` | off | **Alpha**: the process, agenda, driver, ledger, partition and cron watermark stores on MongoDB, Firestore or Neo4j, with the same backend of `adk-session`'s stores |
+| `mongodb`, `firestore`, `neo4j` | off | The process, agenda, driver, ledger, partition and cron watermark stores on MongoDB, Firestore or Neo4j, with the same backend of `adk-session`'s stores |
 | `webhooks` | on | `webhook_wake_hook` over `adk-server`'s `WebhookIngress`; `WebhookSink`, the outbound webhook sink over `adk-core`'s signed delivery |
 | `proc` | on | The activity ledger (`proc`), its stores and `/api/kernel/proc/*`; the OpenTelemetry GenAI histograms of the live process aggregates |
 | `proc-baselines` | off | The daily baseline pass and observations over `adk-eval`'s ledger statistics (implies `proc`; on in adk-cli and the umbrella's `full`) |
@@ -433,7 +433,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `tests/wake_*.rs` | Matching, keys, expiry, reconciliation and each wake source |
 | `tests/proactivity_scenarios.rs` | K4: in Ask a follow-up waits in the inbox and nothing runs until it is approved, edited or rejected; in Auto it runs after quiet hours within the daily budget, a proposal past `max_proposed_open` is rejected with a reason on the bus, and an over-budget process sleeps until the budget replenishes. K8: three background runs at a quota of three, a typed message runs at once, the youngest background run parks and is requeued, no tool runs twice and the quota is never exceeded. A consolidation item waits for a person in Auto |
 | `tests/process_store_*.rs`, `tests/agenda_store*.rs`, `tests/driver_store_*.rs`, `tests/ledger_store_*.rs` | The conformance suites on every backend; PostgreSQL and Redis run `#[ignore]`d against a server (`scripts/test-postgres.sh`) |
-| `tests/store_conformance_mongodb.rs`, `tests/store_conformance_firestore.rs`, `tests/store_conformance_neo4j.rs` | The process, agenda, driver, ledger, partition and cron watermark suites on each Alpha backend, `#[ignore]`d; CI's nightly `durable-stores` job runs them against MongoDB (a replica set and a standalone server), Neo4j and the Firestore emulator |
+| `tests/store_conformance_mongodb.rs`, `tests/store_conformance_firestore.rs`, `tests/store_conformance_neo4j.rs` | The process, agenda, driver, ledger, partition and cron watermark suites on MongoDB, Firestore and Neo4j, `#[ignore]`d; CI's nightly `durable-stores` job runs them against MongoDB (a replica set and a standalone server), Neo4j and the Firestore emulator |
 | `tests/driver_scenarios.rs` | K6 on a real stdio MCP server: mount, crash and restart with backoff, a redeclared tool stale and `NeedsReapproval`, re-approval; a `secret://` value reaches the server as a file and never in its environment; what holds the driver's process tree is recorded, and on Windows unmounting ends a process the driver started |
 | `tests/driver_park_restart.rs` | An agent run's driver call parked on its server's question survives a kernel restart: answered in the inbox, it completes with the tool executed once; a call approved before its question is not asked about again |
 | `tests/driver_sandbox_tests.rs` | A driver under `sandbox = "os"` cannot write outside its allowed paths (Seatbelt, bubblewrap in the `sandbox-linux` job) |

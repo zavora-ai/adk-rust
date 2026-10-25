@@ -152,7 +152,7 @@
 # The harness's shared mode and rule stores and its plan checkpointer URLs over the same
 # backends (spec 3.1 §13 Q2, Q5); the live-server suites run in the postgres job.
 3 adk-harness postgres,redis,mongodb,neo4j,firestore
-# The kernel's stores on the Alpha backends (spec 3.2 §7.1, §13 Q8), one pair per backend so
+# The kernel's stores on MongoDB, Firestore and Neo4j (spec 3.2 §7.1, §13 Q8), one pair per backend so
 # each compiles alone; the live-server suites run in the nightly `durable-stores` job.
 3 adk-kernel mongodb
 3 adk-kernel firestore
@@ -175,6 +175,8 @@
 # `mcp-sampling` gates three rmcp model types nothing in the workspace enables; an rmcp
 # rename broke the sampling handler while workspace clippy stayed at zero.
 4 adk-tool mcp-sampling
+# The MCP server (spec 3.5 §7.9); its round-trip tests also need the HTTP client.
+4 adk-tool mcp-server,http-transport doc
 4 adk-agent codeact
 # Guardrails are not in adk-agent's default features, so `tool_guardrail_tests` ran in no
 # required check.
@@ -231,6 +233,8 @@
 # compile either.
 6 adk-auth postgres-audit
 6 adk-auth token-exchange
+# Web Bot Auth (spec 3.5 §7.3): RFC 9421 and draft test vectors, directory fetch and cache.
+6 adk-auth web-bot-auth doc
 # The GCS artifact backend must keep blob-name parity with adk-python.
 6 adk-artifact gcs
 6 adk-telemetry gcp

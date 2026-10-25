@@ -226,7 +226,7 @@ struct SpendDoc {
 }
 
 /// A [`ProcessStore`] in Firestore, shared by every replica (spec 3.2 §7.1, §13 Q8, feature
-/// `firestore`). **Alpha** until its live conformance suite passes in CI.
+/// `firestore`).
 ///
 /// | Collection (document ID) | Contents |
 /// |--------------------------|----------|

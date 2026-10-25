@@ -328,9 +328,9 @@ The same entries are kept in the partition store's crossing ledger
 | SQLite | `SqlitePartitionStore`: `adk_kernel_partitions` and `adk_kernel_crossings` on the `harness.db` pool, migrations in `_adk_kernel_partition_migrations` | `sqlite` (default) |
 | PostgreSQL | `PostgresPartitionStore`, migrating under an advisory lock | `postgres` |
 | Redis | `RedisPartitionStore`, under the `{adk:kernel}` hash tag beside the process store | `redis` |
-| MongoDB (Alpha) | `MongoPartitionStore`: `adk_kernel_partitions`, `adk_kernel_crossings` and `adk_kernel_crossing_grants` in the database the run store uses | `mongodb` |
-| Firestore (Alpha) | `FirestorePartitionStore`: the same three collections, queried without composite indexes | `firestore` |
-| Neo4j (Alpha) | `Neo4jPartitionStore`: `AdkKernelPartition`, `AdkKernelCrossing` and `AdkKernelCrossingGrant` nodes | `neo4j` |
+| MongoDB | `MongoPartitionStore`: `adk_kernel_partitions`, `adk_kernel_crossings` and `adk_kernel_crossing_grants` in the database the run store uses | `mongodb` |
+| Firestore | `FirestorePartitionStore`: the same three collections, queried without composite indexes | `firestore` |
+| Neo4j | `Neo4jPartitionStore`: `AdkKernelPartition`, `AdkKernelCrossing` and `AdkKernelCrossingGrant` nodes | `neo4j` |
 
 A new backend passes `partition_store_conformance_tests!` (feature `conformance`):
 
