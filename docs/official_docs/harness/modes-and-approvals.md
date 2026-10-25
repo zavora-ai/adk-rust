@@ -110,6 +110,44 @@ impl ApprovalPrompter for CargoTestOnly {
 
 Pass it with `.prompter(Arc::new(CargoTestOnly))` on the builder.
 
+### Change sets
+
+Two or more edits of one model turn that need approval are reviewed as one change set and
+decided once (spec 3.1 §7.26). The agent hands the handler the turn's batch before any call
+runs (`ToolConfirmationHandler::batch_started`); at the batch's first held edit the handler
+re-checks every `write_file`, `edit_file` and `apply_patch` call of it against the policy and
+composes them in call order over an in-memory copy of the workspace, read under the file
+tools' own rules, so successive edits of one file compose.
+
+| Part of the card | Content |
+|---|---|
+| Files | A unified diff per file with line numbers, and its sha256 before and after |
+| Digest | `sha256:` over the sorted (path, before, after) triples |
+| Calls that would fail | Shown failing — no match, an escape, a hunk that does not apply — and answered with the reason, without running |
+| Edits a standing rule allows | Not held, so not in the card: counted as "N more edits run under standing rules" |
+| Protected paths (I29) | Not merged in: asked about on their own after the card, as is an edit of a file a call outside the card also changes |
+
+`ApprovalPrompter::prompt_change_set` shows the card and returns one `ChangeSetAnswer`:
+
+| `ChangeSetAnswer` | Effect |
+|---|---|
+| `ApproveAll` | Every call that does not fail runs |
+| `ApproveFiles(paths)` | The calls that change only those files run; the others are denied |
+| `DenyAll { message }` | No call runs; `message` is reported to the model |
+| `Edit(calls)` | Replaces calls' arguments by call ID and shows the change set again; the policy checks the edited calls again |
+
+Each approved call is answered with its own arguments plus `expect_sha256`: the hash its
+file had at that point of the composition — the batch's base for the first call on a file,
+the intermediate hash for the next — so the call writes only against the content the person
+saw, and a file changed in between is refused as `devtools.stale` (I66). The calls still run
+one at a time: a stale call refuses only itself, and `apply_patch` is the all-or-nothing unit.
+The handler answers each call of the card from the one decision, whichever order the calls
+are dispatched in; a call whose arguments differ from the reviewed ones is asked about on its
+own. `harness.changeset.decided` records the digest, the files, the call IDs and the answer.
+A prompter that does not override `prompt_change_set` asks about each call on its own.
+`ChangeSet::compose` is public, so a surface that groups held edits itself — spec 3.3's
+decision card — computes the same change set and the same `expect_sha256` per call.
+
 ### Held calls
 
 Without a prompter nothing waits in the run: the call is recorded in the approval store,

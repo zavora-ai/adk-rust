@@ -599,6 +599,12 @@ returns a `ToolApproval`. The default maps `decide`: `Approve` to `ToolApproval:
 
 The approval's expiry is ignored: a handler decides one call.
 
+`ToolConfirmationHandler::batch_started(&self, calls: &[BatchCall])` is called once per model
+turn with every call of the turn (name, call ID, arguments, tool origin), before any of them
+is dispatched and after the run budget reserved the batch. The default does nothing; a handler
+that reviews several held calls as one — the harness's change set of edits — keeps the batch
+and answers each call's `decide_approval` from one decision.
+
 ```rust
 use adk_core::{
     Result, ToolApproval, ToolConfirmationDecision, ToolConfirmationHandler,
