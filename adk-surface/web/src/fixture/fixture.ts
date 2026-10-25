@@ -545,7 +545,7 @@ export function fixtureSeams(calls: SeamCalls = { seen: [], records: [], accepte
     devices: {
       list: async () => [
         { id: "d1", name: "Your phone", may: "asks for your face or fingerprint" },
-        { id: "d2", name: "Telegram", may: "yes once, or no" },
+        { id: "d2", name: "Telegram: Ana (1001)", may: "yes once, or no" },
       ],
       remove: async () => {},
       pair: async () => "482 913",
