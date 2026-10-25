@@ -83,8 +83,10 @@ session's stamp names, else the agent of its latest run, else the primary agent.
 
 A suggestion is one `kernel:agent.create` decision. Its card carries the kernel's heading ("Add
 an agent called Finance"), the definition in full (`DecisionCard::adds_agent`), what it can do,
-what it would start with ("Nothing yet") and "How it got here". The answers follow the "Always
-allow" column of §7.2:
+what it would start with ("Nothing yet") and "How it got here". The kernel checks every
+suggestion against the suggesting agent's own limits: one over them is refused, recorded as
+`kernel.agent.refused`, and makes no decision. The answers follow the "Always allow" column of
+§7.2:
 
 | Surface | Answers |
 |---|---|
@@ -102,6 +104,7 @@ agent can be added. **Change it first** opens **Set it up yourself** holding the
 | Roster | **New agent** at the foot; **Settings** on each row on hover and focus |
 | New agent (`/ui/agents/new`) | **Describe it**, which starts a thread with ADK-Rust, and **Set it up yourself**: the form beside **Here is what Finance can do**, kept current, then **Add Finance** |
 | Settings (`/ui/agents/<id>`) | How it was added; the definition with "Was … Now …" before **Save changes**; **Copy one of your rules**; its routines; **Pause** and **Remove**, which names what ends first |
+| Memory & rules | "What your agents can do" lists every agent with its area, how much it asks first, and **Settings** |
 
 | Light | Dark |
 |---|---|
@@ -131,7 +134,14 @@ adk-rust agents --output json show finance
 ```
 
 `adk-rust agents` asks on the terminal before a change applies; `--yes` is refused at high
-risk, and with no terminal to ask on a change is refused.
+risk, and with no terminal to ask on a change is refused. `--output json` writes one `agent`
+line per change of an agent a person added while the run lasts: `added`, `changed`, `paused`,
+`resumed` or `removed`, with its roster row ([The Terminal](terminal.md)).
+
+> **Note:** the kernel's socket is the person at the kernel. A shell an agent runs in the OS
+> sandbox (`adk-rust up --sandbox`) cannot reach it, so an agent cannot add, change or remove
+> agents through `adk-rust agents` or `/agent`. Each `kernel.agent.*` record carries the
+> transport (`socket` or `http`) and, on the socket, the process at its other end (`peerPid`).
 
 ## Related
 
