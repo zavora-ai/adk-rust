@@ -52,7 +52,7 @@ use axum::Router;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -1319,6 +1319,9 @@ pub struct StreamPrinter<W: Write = io::Stdout> {
     /// Why each held call is waiting, by function call id (tool name for calls without
     /// one), from its pending response.
     hold_reasons: HashMap<String, String>,
+    /// Provider-executed calls and results already shown, by id, so the copy a complete
+    /// response repeats is not shown again.
+    shown_server_items: HashSet<String>,
     out: W,
 }
 
@@ -1349,6 +1352,7 @@ impl<W: Write> StreamPrinter<W> {
             in_thinking_part_stream: false,
             think_buffer: String::new(),
             hold_reasons: HashMap::new(),
+            shown_server_items: HashSet::new(),
             out,
         }
     }
@@ -1396,9 +1400,32 @@ impl<W: Write> StreamPrinter<W> {
         for part in parts {
             match part {
                 Part::FunctionCall { .. } if event.llm_response.partial => continue,
-                // Provider items replayed to the model (such as OpenAI Responses commentary)
-                // stream as partial chunks; the complete item is shown once.
-                Part::ServerToolCall { .. } if event.llm_response.partial => continue,
+                // A provider-executed call is shown once, at its first chunk, so a search
+                // shows before the answer it informs (spec 3.1 §7.33 fix 2b). A model message
+                // kept for replay (OpenAI Responses commentary) streams its text in pieces,
+                // and an item without an id cannot be matched to its copy, so for those only
+                // the complete item is shown.
+                Part::ServerToolCall { server_tool_call } => {
+                    let id = server_tool_call
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .filter(|_| message_text(server_tool_call).is_none());
+                    let skip = match id {
+                        Some(id) => !self.shown_server_items.insert(format!("call:{id}")),
+                        None => event.llm_response.partial,
+                    };
+                    if skip {
+                        continue;
+                    }
+                }
+                Part::ServerToolResponse { server_tool_response } => {
+                    if let Some(id) =
+                        server_tool_response.get("tool_use_id").and_then(Value::as_str)
+                        && !self.shown_server_items.insert(format!("result:{id}"))
+                    {
+                        continue;
+                    }
+                }
                 // The held call's line below says what the text says, with the call.
                 Part::Text { .. } if held.is_some() => continue,
                 Part::FunctionResponse { function_response, id, .. } => {
@@ -1837,6 +1864,56 @@ mod tests {
 
         let printed = String::from_utf8(printer.out).unwrap();
         assert_eq!(printed.matches("[tool-call] get_weather").count(), 1, "{printed}");
+    }
+
+    #[test]
+    fn a_provider_search_is_shown_before_the_answer_it_informs() {
+        let search = Part::ServerToolCall {
+            server_tool_call: serde_json::json!({
+                "type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search",
+                "input": {"query": "rust 1.95"},
+            }),
+        };
+        let result = Part::ServerToolResponse {
+            server_tool_response: serde_json::json!({
+                "type": "web_search_tool_result", "tool_use_id": "srvtoolu_1", "content": [],
+            }),
+        };
+        let text = |text: &str| Part::Text { text: text.into() };
+        let mut chunks: Vec<Event> =
+            [text("Let me check. "), search.clone(), result.clone(), text("Rust 1.95 is out.")]
+                .into_iter()
+                .map(|part| {
+                    let mut chunk = Event::with_id("response", "invocation");
+                    chunk.llm_response.partial = true;
+                    chunk.set_content(Content { role: "model".into(), parts: vec![part] });
+                    chunk
+                })
+                .collect();
+        let mut complete = Event::with_id("response", "invocation");
+        complete.llm_response.provider_metadata =
+            Some(serde_json::json!({"content_complete": true}));
+        complete.set_content(Content {
+            role: "model".into(),
+            parts: vec![text("Let me check. "), search, result, text("Rust 1.95 is out.")],
+        });
+        chunks.push(complete);
+
+        let captured = Captured::default();
+        let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, captured.clone());
+        let mut deltas = adk_core::EventTextDeltas::default();
+        for event in &chunks {
+            printer.handle_event(&deltas.push(event));
+        }
+        printer.finish();
+
+        let output = captured.text();
+        assert_eq!(output.matches("[server-tool-call]").count(), 1, "{output}");
+        assert_eq!(output.matches("[server-tool-response]").count(), 1, "{output}");
+        let searched = output.find("[server-tool-call]").unwrap();
+        let answered = output.find("Rust 1.95 is out.").unwrap();
+        assert!(searched < answered, "{output}");
+        assert_eq!(output.matches("Rust 1.95 is out.").count(), 1, "{output}");
     }
 
     #[test]
