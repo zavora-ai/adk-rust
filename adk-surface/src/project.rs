@@ -907,7 +907,7 @@ mod tests {
         let decided = projector.briefing_line(&row("decided", agent, Some("approve"))).unwrap();
         assert_eq!(
             (decided.pill_text.as_deref(), decided.text.as_str()),
-            (Some("You decided"), "You allowed ADK-Rust to go ahead once.")
+            (Some("You decided"), "You allowed ADK-Rust to go ahead.")
         );
         // The person's answer recorded by the harness is the decision's row.
         let said_no = projector.briefing_line(&row("rejection", agent, None)).unwrap();

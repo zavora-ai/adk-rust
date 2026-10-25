@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Command, DecisionCard, Origin } from "./generated/api";
 import type { HomeClient } from "./client";
 import { ApiError, problemText } from "./client";
@@ -57,7 +57,10 @@ export function App({
     return () => window.removeEventListener("popstate", back);
   }, []);
 
-  const status = usePoll(() => client.status());
+  // The status line carries the mode of the conversation shown: a session's own mode moves on
+  // from the agent's default with an approved plan exit or a change elsewhere (spec 3.3 §5.1).
+  const conversation = useRef<string | undefined>(undefined);
+  const status = usePoll(() => client.status(conversation.current));
   const agents = usePoll(() => client.agents());
   const decisions = usePoll(() => client.decisions());
   // "While you were away" and each area's settings, read once for every section that shows
@@ -149,6 +152,10 @@ export function App({
     [kernel.value, agents.value],
   );
   const session = (selected && followed[selected]) ?? rows[0]?.sessionId ?? undefined;
+  conversation.current = session;
+  useEffect(() => {
+    void refreshStatus();
+  }, [session, refreshStatus]);
 
   return (
     <div className="app">
@@ -159,6 +166,7 @@ export function App({
         section={section}
         status={unreachable ? undefined : status.value}
         areas={unreachable ? undefined : areas.value}
+        conversationMode={section === "threads" && session ? status.value?.mode?.status : undefined}
         decisions={unreachable ? 0 : (decisions.value?.length ?? 0)}
         theme={theme}
         onNavigate={navigate}

@@ -428,13 +428,13 @@ pub const YOU_DECIDED: &str = "You decided";
 /// use adk_surface::words;
 ///
 /// assert_eq!(words::briefing_sentence("held", "Finance"), "Finance asked you first.");
-/// assert_eq!(words::briefing_sentence("approval", "Finance"), "You allowed Finance to go ahead once.");
+/// assert_eq!(words::briefing_sentence("approval", "Finance"), "You allowed Finance to go ahead.");
 /// ```
 pub fn briefing_sentence(kind: &str, agent: &str) -> String {
     match kind {
         "intent" => format!("{agent} started on your message."),
         "tool_call" => format!("{agent} used a tool."),
-        "approval" => format!("You allowed {agent} to go ahead once."),
+        "approval" => format!("You allowed {agent} to go ahead."),
         "rejection" => format!("You said no to {agent}."),
         "denial" => format!("{agent} was not allowed to do something."),
         "held" => format!("{agent} asked you first."),

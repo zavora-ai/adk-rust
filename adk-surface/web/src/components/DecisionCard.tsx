@@ -4,6 +4,7 @@ import type { Answer, AnswerOption, Command, CommandOutcome, DecisionCard as Car
 import { problemText } from "../client";
 import { labels, words } from "../labels";
 import { enterNeverDecides, originOf } from "../origin";
+import { visible, visibleJson } from "../safe";
 import { TAKE_OVER_TOOL } from "../takeOver";
 import { Avatar } from "./Avatar";
 import { CallView } from "./CallView";
@@ -142,24 +143,24 @@ export function DecisionCard({
       <header className="decision-who">
         <Avatar agent={card.agent} size="sm" />
         <span>
-          <strong>{card.agent.displayName}</strong> · {card.sinceText}
+          <strong>{visible(card.agent.displayName)}</strong> · {card.sinceText}
         </span>
         <Pill kind={decided ? "decided" : "waiting"} dot={!decided}>
           {card.statusText}
         </Pill>
       </header>
       <h3 id={heading} className="decision-heading">
-        {card.heading}
+        {visible(card.heading)}
       </h3>
       <CallView call={card.call} expanded={expanded} onExpand={() => setExpanded(true)} />
       <ol className="timeline" aria-label={labels.howItGotHere}>
         {card.timeline.map((step, index) => (
           <li key={index} className={step.current ? "current" : undefined} aria-current={step.current ? "step" : undefined}>
-            {step.text}
+            {visible(step.text)}
           </li>
         ))}
       </ol>
-      {card.allowed.note && <p className="decision-note">{card.allowed.note}</p>}
+      {card.allowed.note && <p className="decision-note">{visible(card.allowed.note)}</p>}
       {note && (
         <p className="decision-note" role="status">
           {note}
@@ -169,7 +170,7 @@ export function DecisionCard({
         <div className="decision-actions">
           {isTakeOver && takeOver && (
             <TakeOverButton
-              heading={card.heading}
+              heading={visible(card.heading)}
               busy={busy}
               onDone={(value, origin) => takeOverWith(takeOver, value, origin)}
             />
@@ -207,7 +208,7 @@ export function DecisionCard({
       <p className="decision-details">
         <span>{card.riskText}</span>
         <span>{card.reversibilityText}</span>
-        {card.alsoShown && <span>{card.alsoShown}</span>}
+        {card.alsoShown && <span>{visible(card.alsoShown)}</span>}
       </p>
     </article>
   );
@@ -237,7 +238,8 @@ function EditCall({
   onCancel: () => void;
   onAllow: (args: unknown, origin: Origin) => void;
 }) {
-  const [text, setText] = useState(() => JSON.stringify(card.call.args ?? {}, null, 2));
+  // Escaped as JSON, so what is edited reads as it runs and parses back unchanged (S-I9).
+  const [text, setText] = useState(() => visibleJson(JSON.stringify(card.call.args ?? {}, null, 2)));
   const [invalid, setInvalid] = useState(false);
   const field = useId();
   const area = useRef<HTMLTextAreaElement>(null);

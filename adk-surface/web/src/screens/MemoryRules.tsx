@@ -5,11 +5,12 @@ import type { HomeClient } from "../client";
 import { problemText } from "../client";
 import { Icon } from "../components/Icon";
 import { Pill } from "../components/Pill";
-import { dayMonth, dollars, hhmm, sameDay } from "../format";
+import { dayMonth, dollars, hhmm, parseDollars, sameDay } from "../format";
 import type { AreaSettings, ChannelWaiting, QuietWindow, StandingRule } from "../kernel";
-import { allows } from "../kernel";
+import { accountName, allows, channelName } from "../kernel";
 import { labels, modes, words } from "../labels";
 import type { Device, MemoryFact, RecordCheck, RecordLine, Seams, TidyUp } from "../seams";
+import { deviceOffset, onThisDevice } from "../away";
 import { areaName, kernelMode, limitValue, modeOf, modeValue, quietValue, windowText } from "../settings";
 
 const provenance = {
@@ -223,6 +224,10 @@ function CanDo({
 
   const allowed = (rules ?? []).filter(allows);
   const current = area?.mode ? modeOf(area.mode) : status?.mode?.mode;
+  // Quiet time on this device's clock: the kernel keeps a window without an offset in the
+  // server's time zone (spec 3.3 §5.1).
+  const host = status?.hostUtcOffsetMinutes ?? undefined;
+  const here = (window: QuietWindow) => windowText(onThisDevice(window, host));
   const note = (setting: string) => (area ? notes[`${area.partition}:${setting}`] : undefined);
 
   return (
@@ -318,18 +323,20 @@ function CanDo({
         <ul className="bordered settings">
           <SettingRow
             label={labels.quietTime}
-            value={area.quietTime.length === 0 ? labels.off : area.quietTime.map(windowText).join(", ")}
+            value={area.quietTime.length === 0 ? labels.off : area.quietTime.map(here).join(", ")}
             sub={[
-              area.alsoQuiet?.length ? labels.workspaceAlsoQuiet(area.alsoQuiet.map(windowText).join(", ")) : undefined,
+              area.alsoQuiet?.length ? labels.workspaceAlsoQuiet(area.alsoQuiet.map(here).join(", ")) : undefined,
               !note("quiet") && area.changed?.quietTime ? labels.changedAt(changedWhen(area.changed.quietTime.at)) : undefined,
             ]}
             note={note("quiet")}
             editor={(close) => (
               <QuietEditor
-                window={area.quietTime[0]}
+                window={area.quietTime[0] && onThisDevice(area.quietTime[0], host)}
+                others={area.quietTime.length > 1 ? area.quietTime.map(here).join(", ") : undefined}
                 onCancel={close}
                 onSave={async (window) => {
-                  if (await change("quiet", (partition) => limits.setQuietTime(partition, window), quietValue)) close();
+                  const value = (read: AreaSettings) => quietValue(read, host);
+                  if (await change("quiet", (partition) => limits.setQuietTime(partition, window), value)) close();
                 }}
               />
             )}
@@ -357,7 +364,10 @@ function CanDo({
         </ul>
       ) : (
         <ul className="bordered settings">
-          <SettingRow label={labels.quietTime} value={status?.quiet ? `${status.quiet.start}–${status.quiet.end}` : labels.notSet} />
+          <SettingRow
+            label={labels.quietTime}
+            value={status?.quiet ? here({ start: status.quiet.start, end: status.quiet.end }) : labels.notSet}
+          />
           <SettingRow
             label={labels.dailySpendingLimit}
             value={
@@ -432,13 +442,19 @@ function SettingRow({
   );
 }
 
-/** Quiet time from one time to another, or off. */
+/**
+ * Quiet time from one time to another, or off, on this device's clock: the window is saved with
+ * this device's offset, so the kernel keeps it at the hours the person typed.
+ */
 function QuietEditor({
   window,
+  others,
   onSave,
   onCancel,
 }: {
   window?: QuietWindow;
+  /** Every window in force, when there are several: the kernel keeps one in their place. */
+  others?: string;
   onSave: (window: QuietWindow | null) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -451,12 +467,13 @@ function QuietEditor({
       className="setting-form"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!same) void onSave({ start, end, ...(window?.utcOffsetMinutes !== undefined ? { utcOffsetMinutes: window.utcOffsetMinutes } : {}) });
+        if (!same) void onSave({ start, end, utcOffsetMinutes: deviceOffset() });
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape") onCancel();
       }}
     >
+      {others && <p className="setting-sub">{labels.replacesWindows(others)}</p>}
       <div className="setting-fields">
         <label htmlFor={ids.start}>{labels.from}</label>
         <input id={ids.start} type="time" value={start} onChange={(event) => setStart(event.target.value)} autoFocus />
@@ -498,13 +515,13 @@ function LimitEditor({
       className="setting-form"
       onSubmit={(event) => {
         event.preventDefault();
-        const amount = Number(text.replace(/[$,\s]/g, ""));
-        if (!text.trim() || !Number.isFinite(amount) || amount < 0) {
+        const microUsd = parseDollars(text);
+        if (microUsd === undefined) {
           setInvalid(true);
           return;
         }
         setInvalid(false);
-        void onSave(Math.round(amount * 1_000_000));
+        void onSave(microUsd);
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape") onCancel();
@@ -552,14 +569,40 @@ function checkedWhen(at: string): string {
 function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
   const [check, setCheck] = useState<RecordCheck>();
   const [recent, setRecent] = useState<RecordLine[]>([]);
+  const [recorded, setRecorded] = useState(true);
   const [devices, setDevices] = useState<Device[]>();
   const [waiting, setWaiting] = useState<ChannelWaiting[]>([]);
   const [code, setCode] = useState("");
   const [chatCode, setChatCode] = useState("");
   const [paired, setPaired] = useState("");
   const [problem, setProblem] = useState("");
+  const [devicesProblem, setDevicesProblem] = useState("");
   const chatField = useId();
   const { record, devices: pairing } = seams;
+
+  // Who can say yes is read again every few seconds: a failed read says so and keeps what was
+  // shown, never an empty list that looks like nobody else can approve (spec 3.3 §5.1).
+  useEffect(() => {
+    if (!pairing) return;
+    let live = true;
+    const load = () => {
+      void pairing
+        .list()
+        .then((value) => {
+          if (!live) return;
+          setDevices(value);
+          setDevicesProblem("");
+        })
+        .catch(() => live && setDevicesProblem(labels.devicesUnread));
+      void pairing.waiting?.().then((value) => live && setWaiting(value)).catch(() => undefined);
+    };
+    load();
+    const timer = window.setInterval(load, 10_000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [pairing]);
 
   useEffect(() => {
     let live = true;
@@ -572,6 +615,7 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
         .briefing()
         .then((briefing: Briefing) => {
           if (!live) return;
+          setRecorded(briefing.recorded !== false);
           setRecent(
             briefing.lines
               .slice(-3)
@@ -581,12 +625,10 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
         })
         .catch(() => undefined);
     }
-    void pairing?.list().then((value) => live && setDevices(value)).catch(() => undefined);
-    void pairing?.waiting?.().then((value) => live && setWaiting(value)).catch(() => undefined);
     return () => {
       live = false;
     };
-  }, [client, record, pairing]);
+  }, [client, record]);
 
   return (
     <section className="card memory-card" aria-labelledby="did-heading">
@@ -617,7 +659,7 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
         </p>
       )}
       {recent.length === 0 ? (
-        <p className="card-empty">{labels.recentEmpty}</p>
+        <p className="card-empty">{recorded ? labels.recentEmpty : labels.notRecorded}</p>
       ) : (
         <ul className="bordered">
           {recent.map((line, index) => (
@@ -660,6 +702,11 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
           </span>
         </li>
       </ul>
+      {devicesProblem && (
+        <p className="decision-problem" role="alert">
+          {devicesProblem}
+        </p>
+      )}
       {pairing && devices && (
         <>
           <button
@@ -686,16 +733,14 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
             event.preventDefault();
             const entered = chatCode.trim();
             if (!entered || !pairing.accept) return;
-            const asked = waiting.length === 1 ? waiting[0] : undefined;
             setProblem("");
             setPaired("");
             void pairing
               .accept(entered)
-              .then(async () => {
+              .then(async (account) => {
                 setChatCode("");
-                setPaired(
-                  asked ? labels.paired(channelName(asked.channel), asked.displayName ?? asked.account) : labels.chatPaired,
-                );
+                // The account the kernel paired, never a guess from who asked.
+                setPaired(account ? labels.paired(channelName(account.channel), accountName(account)) : labels.chatPaired);
                 setDevices(await pairing.list());
                 setWaiting((await pairing.waiting?.()) ?? []);
               })
@@ -708,7 +753,7 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
           <p className="setting-sub">{labels.pairChatHint}</p>
           {waiting.map((asked) => (
             <p key={asked.id} className="setting-sub">
-              {labels.waitingToPair(channelName(asked.channel), asked.displayName ?? asked.account)}
+              {labels.waitingToPair(channelName(asked.channel), accountName(asked))}
             </p>
           ))}
           <label htmlFor={chatField} className="setting-label">
@@ -738,7 +783,3 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
   );
 }
 
-/** A chat channel's name as the person knows it: `telegram` is Telegram. */
-function channelName(channel: string): string {
-  return channel.charAt(0).toUpperCase() + channel.slice(1);
-}

@@ -4,7 +4,7 @@
  * shows what exists read-only. The routes arrive with the kernel work packages named below;
  * wiring one is a client implementing the interface, with no change to the screens.
  */
-import type { AreaMode, AreaSettings, AwayPage, AwayRecord, ChannelWaiting, QuietWindow } from "./kernel";
+import type { AreaMode, AreaSettings, AwayPage, AwayRecord, ChannelAccount, ChannelWaiting, QuietWindow } from "./kernel";
 
 /**
  * K3: each area's quiet time, daily spending limit and mode, read and changed while the kernel
@@ -104,9 +104,10 @@ export interface DevicesSeam {
   waiting?(): Promise<ChannelWaiting[]>;
   /**
    * Pairs the chat account that was sent `code`, as `adk-rust pair accept <code>` does (K1):
-   * the kernel takes it from the person only, with the `operator` scope.
+   * the kernel takes it from the person only, with the `operator` scope. Resolves to the
+   * account the kernel paired, which the page names.
    */
-  accept?(code: string): Promise<void>;
+  accept?(code: string): Promise<ChannelAccount | undefined>;
 }
 
 /** Every seam the page renders through when given. */

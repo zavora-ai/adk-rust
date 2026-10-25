@@ -1,5 +1,6 @@
 import type { DecisionCard } from "../generated/api";
 import { labels } from "../labels";
+import { visible } from "../safe";
 
 /** "Decisions" with a filled count badge (spec 3.3 §5.1, §7.1): every open decision. */
 export function DecisionList({
@@ -24,9 +25,9 @@ export function DecisionList({
         {decisions.map((card) => (
           <li key={card.id}>
             <button type="button" className="mini-decision" onClick={() => onOpen(card)}>
-              <span className="mini-heading">{card.heading}</span>
+              <span className="mini-heading">{visible(card.heading)}</span>
               <span className={`mini-meta${card.risk === "high" || card.money ? " mini-high" : ""}`}>
-                {card.agent.displayName} · {card.riskText}
+                {visible(card.agent.displayName)} · {card.riskText}
               </span>
             </button>
           </li>

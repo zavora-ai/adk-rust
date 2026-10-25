@@ -8,7 +8,7 @@ import { App } from "../src/App";
 import { Thread } from "../src/components/Thread";
 import type { DecisionCard, FeedEntry } from "../src/generated/api";
 import { ApiError } from "../src/client";
-import { FixtureClient, invoiceCard } from "../src/fixture/fixture";
+import { FixtureClient, fixtureSeams, invoiceCard } from "../src/fixture/fixture";
 
 /** A second decision of Finance, in a session the Finance row does not name. */
 function payrollCard(): DecisionCard {
@@ -16,6 +16,30 @@ function payrollCard(): DecisionCard {
 }
 
 describe("a thread", () => {
+  // The head shows the mode this conversation runs in, which an approved plan exit or a change
+  // in the terminal moves on from the agent's default (spec 3.3 §5.1, §8.1).
+  it("shows under the agent's name the mode its conversation runs in", async () => {
+    const client = new FixtureClient();
+    client.modes["s-finance"] = { mode: "goAhead", label: "Go ahead", status: "Goes ahead" };
+    render(<App client={client} initialSection="threads" />);
+    const thread = screen.getByRole("main");
+    await within(thread).findByRole("heading", { name: "Finance" });
+    expect(await within(thread).findByText("Goes ahead")).toBeTruthy();
+    expect(within(thread).queryByText("Asks first")).toBeNull();
+  });
+
+  // With one area the header reads its settings, but a conversation runs in its own mode once
+  // an approved plan exit moved it on from the area's (spec 3.3 §5.1, §8.1).
+  it("shows in the header the mode the conversation shown runs in, not its area's", async () => {
+    const client = new FixtureClient();
+    client.modes["s-finance"] = { mode: "goAhead", label: "Go ahead", status: "Goes ahead" };
+    render(<App client={client} seams={fixtureSeams()} initialSection="threads" />);
+    const header = screen.getByRole("banner");
+    expect(await within(header).findByText("Goes ahead")).toBeTruthy();
+    expect(within(header).getByText("$1.84 of $5.00 today")).toBeTruthy();
+    expect(within(header).queryByText("Asks first")).toBeNull();
+  });
+
   it("opens a decision of another session of the same agent in that session, where it can be answered", async () => {
     const client = new FixtureClient();
     client.hold(payrollCard());

@@ -868,11 +868,12 @@ impl Launcher {
 
         let mut builder = ServerBuilder::new(config);
         // The web home (spec 3.3 §5.1, §10 S1): the page at `/ui/` and the engine's API under
-        // `/api/surface`, behind the server's authentication (§11 S-I8).
+        // `/api/surface`, behind the server's authentication (§11 S-I8); its engine keeps Stop
+        // all and Resume all for the operator (S-I10).
         #[cfg(all(feature = "surface", feature = "harness"))]
         if let Some(surface) = surface {
             builder = builder
-                .add_api_routes(crate::surface::operator_stops(adk_surface::web::router(surface)))
+                .add_api_routes(adk_surface::web::router(surface))
                 .add_root_routes(adk_surface::web::home());
         }
         #[cfg(feature = "harness")]

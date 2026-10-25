@@ -3,7 +3,7 @@
  * the engine's status line uses (`adk_surface::words`), so the header reads the same whether
  * the engine or the kernel's settings fill it.
  */
-import { insideQuiet } from "./away";
+import { insideQuiet, onThisDevice } from "./away";
 import { dollars } from "./format";
 import type { Mode } from "./generated/api";
 import type { AreaMode, AreaSettings, QuietWindow } from "./kernel";
@@ -65,11 +65,15 @@ export function areaName(partition: string): string | undefined {
   return partition === "default" ? undefined : partition.charAt(0).toUpperCase() + partition.slice(1);
 }
 
-/** The status line of one area (spec 3.3 §5.1): its mode, spend against its limit, quiet time. */
-export function areaStatus(area: AreaSettings, now: Date): string[] {
+/**
+ * The status line of one area (spec 3.3 §5.1): its mode — or `conversation`, the mode the
+ * conversation shown runs in — spend against its limit, quiet time, read on this device's clock
+ * (`host`: the server's offset, where the kernel keeps a window without one).
+ */
+export function areaStatus(area: AreaSettings, now: Date, host?: number, conversation?: string): string[] {
   const name = areaName(area.partition);
-  const mode = area.mode ? modeStatus(modeOf(area.mode)) : undefined;
-  const window = area.quietTime[0];
+  const mode = conversation ?? (area.mode ? modeStatus(modeOf(area.mode)) : undefined);
+  const window = area.quietTime[0] && onThisDevice(area.quietTime[0], host);
   return [
     mode && (name ? `${name} · ${mode.charAt(0).toLowerCase()}${mode.slice(1)}` : mode),
     spentText(area.spentToday, area.dailySpendingLimit),
@@ -77,9 +81,14 @@ export function areaStatus(area: AreaSettings, now: Date): string[] {
   ].filter((part): part is string => !!part);
 }
 
-/** "Was 22:00–07:00. Now 23:00–06:00." from what the setting read before and after a change. */
-export function quietValue(area: AreaSettings): string {
-  return area.quietTime.length === 0 ? "Off" : area.quietTime.map(windowText).join(", ");
+/**
+ * "Was 22:00–07:00. Now 23:00–06:00." from what the setting read before and after a change, on
+ * this device's clock.
+ */
+export function quietValue(area: AreaSettings, host?: number): string {
+  return area.quietTime.length === 0
+    ? "Off"
+    : area.quietTime.map((window) => windowText(onThisDevice(window, host))).join(", ");
 }
 
 /** The daily limit as the home writes it, or "No limit". */

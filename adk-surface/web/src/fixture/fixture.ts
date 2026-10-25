@@ -18,6 +18,7 @@ import type {
 import type { FeedMessage, HomeClient } from "../client";
 import { ApiError } from "../client";
 import type { AgendaItem, AreaSettings, AwayLine, AwayPage, KernelProcess, StandingRule, WakeSet } from "../kernel";
+import { agendaState } from "../kernel";
 import type { Seams } from "../seams";
 
 const ref = (name: string, displayName: string, monogram: string, color: string): AgentRef => ({
@@ -225,6 +226,7 @@ export function briefing(): Briefing {
     sinceText: "Since 22:04",
     spend: { spentMicroUsd: 620_000, limitMicroUsd: 5_000_000, text: "$0.62 of $5.00 today" },
     waiting: 3,
+    recorded: true,
     lines: [
       { seq: 11, at: at(22, 40, -1), atText: "22:40", agent: "Research", pill: "done", pillText: "Done", text: 'Research finished "Compare health insurers", with three sources.' },
       { seq: 12, at: at(23, 30, -1), atText: "23:30", agent: "Code", pill: "youDecided", pillText: "You decided", text: "From your phone, you allowed Code to run the tests once. They ran once and passed." },
@@ -326,8 +328,12 @@ export class FixtureClient implements HomeClient {
     return rows.map((row) => (row.agent.name in this.sessionOf ? { ...row, sessionId: this.sessionOf[row.agent.name] } : row));
   }
 
-  async status() {
-    return { ...status(this.stopped), decisions: (await this.decisions()).length };
+  /** The mode of each session the person changed, by session; others run in the default. */
+  readonly modes: Record<string, StatusLine["mode"]> = {};
+
+  async status(session?: string) {
+    const line = { ...status(this.stopped), decisions: (await this.decisions()).length };
+    return session && this.modes[session] ? { ...line, mode: this.modes[session] } : line;
   }
 
   async agents() {
@@ -427,12 +433,15 @@ export class FixtureClient implements HomeClient {
     return processes;
   }
 
+  /** As `HttpClient` reads the kernel's agenda: the items open or under way, never the finished. */
   async agenda() {
-    return this.agendaList;
+    return this.agendaList.filter((item) => !["done", "rejected", "expired"].includes(agendaState(item)));
   }
 
-  async answerAgenda(id: string) {
-    this.agendaList = this.agendaList.filter((item) => item.id !== id);
+  /** As the kernel answers: the item is approved or rejected, and kept. */
+  async answerAgenda(id: string, yes: boolean) {
+    this.agendaList = this.agendaList.map((item) => (item.id === id ? { ...item, state: yes ? "approved" : "rejected" } : item));
+    return this.agendaList.find((item) => item.id === id);
   }
 
   async addRoutine(target: string, text: string, wake: WakeSet) {
@@ -536,7 +545,7 @@ export function fixtureSeams(calls: SeamCalls = { seen: [], records: [], accepte
     devices: {
       list: async () => [
         { id: "d1", name: "Your phone", may: "asks for your face or fingerprint" },
-        { id: "d2", name: "Telegram", may: "yes once, or no" },
+        { id: "d2", name: "Telegram: Ana (1001)", may: "yes once, or no" },
       ],
       remove: async () => {},
       pair: async () => "482 913",
@@ -556,6 +565,7 @@ export function fixtureSeams(calls: SeamCalls = { seen: [], records: [], accepte
       accept: async (code) => {
         if (code !== "ABCD-EFGH-2345") throw new ApiError(401, "that code is wrong, used or expired", "kernel.unauthorized");
         calls.accepted.push(code);
+        return { id: "c-sam", channel: "telegram", account: "4242", displayName: "Sam", state: "active" };
       },
     },
     limits: {

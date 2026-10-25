@@ -10,7 +10,11 @@ beside it. Nothing lives in the page that a reload cannot rebuild.
 
 > **Note:** the web home replaces the runtime UI that `adk-server` bundled at `/ui/` (spec 3.3
 > §10 S1). `adk-server` keeps its APIs and serves no page of its own; see
-> [Moving from the bundled runtime UI](#moving-from-the-bundled-runtime-ui).
+> [Moving from the bundled runtime UI](#moving-from-the-bundled-runtime-ui). The UI-protocol
+> code (`adk_server::ui_protocol`, `adk_server::ui_types`) stays in `adk-server`, a deviation
+> from S1: the server's own `/api/run_sse` profiles and `/api/ui/...` routes use it, and
+> `adk-surface` depends on `adk-server` through `adk-kernel`, so the move would make the two
+> crates depend on each other.
 
 ## Open it
 
@@ -43,6 +47,12 @@ the page as root routes. Both go on `ServerBuilder`, behind the extractor that i
 caller: every route of the API checks its caller against the session owner (spec 3.3 §11 S-I8)
 and answers `401` without one.
 
+> **Important:** **Stop all** and **Resume all** are the exception to S-I8: they freeze and
+> unfreeze every run of the source, whoever started it, and with a shared `GovernanceControl`
+> every run of the server. Build the engine with `.stops_need("operator")`, and give that scope
+> to the operator only in your extractor; any other caller gets `403 surface.operator_only`
+> (§11 S-I10). Without `stops_need`, every caller the server admits may stop and resume.
+
 ```rust
 use std::sync::Arc;
 
@@ -53,7 +63,8 @@ use adk_session::SessionService;
 use adk_surface::{LocalSource, SurfaceEngine};
 use async_trait::async_trait;
 
-/// Admits every request as `ana`; a deployment uses its own authentication.
+/// Admits every request as `ana`, who runs this server; a deployment uses its own
+/// authentication and gives the `operator` scope to its operator only.
 struct Owner;
 
 #[async_trait]
@@ -64,7 +75,7 @@ impl RequestContextExtractor for Owner {
     ) -> Result<RequestContext, RequestContextError> {
         Ok(RequestContext {
             user_id: "ana".into(),
-            scopes: vec!["owner".into()],
+            scopes: vec!["operator".into()],
             metadata: Default::default(),
         })
     }
@@ -91,7 +102,8 @@ fn app(
         .approvals(approvals)
         .runner(Arc::new(runner))
         .build()?;
-    let engine = SurfaceEngine::builder(Arc::new(source)).build();
+    // Stop all and Resume all reach every run of the server: the operator's only.
+    let engine = SurfaceEngine::builder(Arc::new(source)).stops_need("operator").build();
     let config = ServerConfig::new(loader, sessions)
         .with_request_context(Arc::new(Owner))
         .with_governance(control);
@@ -114,12 +126,13 @@ section (`/ui/today`, `/ui/memory`, `/ui/developer`) serves the same page.
 ## The three sections
 
 One header carries the brand, **Threads**, **Today** and **Memory & rules**, the status line
-(mode, what was spent of the daily limit, quiet time) and **Stop all**. After a stop, **Resume
-all** appears; resuming happens only here or on a paired local terminal (§11 S-I10).
+(the mode — on **Threads**, the one the conversation shown runs in — what was spent of the
+daily limit, quiet time) and **Stop all**. After a stop, **Resume all** appears; resuming
+happens only here or on a paired local terminal (§11 S-I10).
 
 | Section | What it shows | Where it reads it |
 |---|---|---|
-| **Threads** | The roster (avatar, name, status word), the selected agent's thread with its decisions inline on their own background, **Decisions** with a filled count badge, **Coming up**. A thread follows one conversation: the session the agent's row names when it is first shown, or a new one, kept for the tab until a decision of another session is opened from **Decisions** or **Today** | `GET /surface/agents`, the session feed, `GET /surface/decisions`, the kernel's processes and agenda |
+| **Threads** | The roster (avatar, name, status word), the selected agent's thread with its decisions inline on their own background, **Decisions** with a filled count badge, **Coming up**. A thread follows one conversation: the session the agent's row names when it is first shown, or a new one, kept for the tab. A decision of another session, opened from **Decisions** or **Today**, shows in that session's thread with "A decision from another conversation" and **Back to your conversation**, and no message box; the thread still follows its own conversation | `GET /surface/agents`, the session feed, `GET /surface/decisions`, the kernel's processes and agenda |
 | **Today** | "While you were away": spent, quiet time, how many things wait, one line per event since you last marked it seen with a status pill, its actions and its record, **Mark as seen**, and today's routines with **Add a routine** | `GET /kernel/away`, `GET /kernel/away/lines/{seq}`, `POST /kernel/away/seen`, `GET /kernel/settings`, the kernel's agenda; **Do it** and **Not now** answer a suggestion through `POST /kernel/agenda/{id}/approve` or `reject`. Without a kernel ledger, `GET /surface/briefing` |
 | **Memory & rules** | "Agent Memory and Rules": **What your agents remember**, **What your agents can do** and **What your agents did**, as bordered lists | `GET /rules` (with **Stop allowing**), `GET /kernel/settings` and its changes, `GET /surface/briefing`; **Where you can say yes from** from `GET /kernel/devices` and `GET /kernel/channels`, with **Remove**, **Add a phone or app** (a pairing code from `POST /kernel/pairing`) and **Pair a chat account** (`POST /kernel/channels/pair`) when the kernel pairs devices |
 
@@ -139,13 +152,15 @@ viewer `home`; a paired phone reads as itself, so each keeps its own place.
 |---|---|
 | The counts | **Spent** (the page's spend rows), **Quiet time** **Respected** or **Not kept** (or **Not set** without quiet time), **Waiting for you** |
 | The lines | One per event the kernel lists — finished, failed, stopped, a suggestion, a question, a decision, stopped or resumed all — failures first, then as they happened, each agent by the name the roster gives it. A suggestion or question shows its agenda item's words and is answered here |
-| **Details** | Opens the line's record (`GET /kernel/away/lines/{seq}`): when it was recorded, the area, what it cost and how long it took, and a link to the record itself |
+| **Details** | Opens the line's record (`GET /kernel/away/lines/{seq}`, read with the page's sign-in): its entry on the record, when it was recorded, the area, what it cost and how long it took. Nothing links the tab away to the raw route, which needs the token the page sends and shows internal identifiers |
 | **Mark as seen** | The only thing that moves the home's place (`POST /kernel/away/seen` with the page's `through`); opening or reloading Today reads and moves nothing |
 | The morning briefing | Once quiet time ends, Threads shows the start of the same page — spent, quiet time, what waits, how many things happened — with **See what happened** (to Today) and **Not now**. It shows once for each end of quiet time, and not again after the page was marked seen; putting it away marks nothing seen |
 | Routines today | Each routine's time today, the **Morning briefing** at the end of quiet time, and **Quiet time starts** |
 
 A kernel without a `/proc` ledger, and `adk-rust serve` without a kernel, show the engine's
-briefing of the last day instead, read-only.
+briefing of the last day instead, read-only. Without a ledger the briefing can list nothing,
+so Today says what your agents do is not recorded on that server rather than that nothing
+happened (`Briefing::recorded` is `false`).
 
 `adk-rust up --mode ask` on `claude-sonnet-5-5`, its quiet time set to have ended an hour
 before, after one held write allowed from the home:
@@ -169,6 +184,13 @@ change's `from` and `to`. Only the person changes them: the kernel refuses a cal
 `operator` scope and every paired device's token, and the page shows its answer. With one
 area, the header's status line follows its settings in force.
 
+Quiet time reads and saves on the clock of the device the page is open on. A window saved
+from the home carries that device's offset (`utcOffsetMinutes`), so the kernel keeps the hours
+the person typed. A window without one — from `--quiet-hours` or `harness.toml` — is kept in
+the server's time zone, which `GET /surface/status` names as `hostUtcOffsetMinutes`; the page
+moves its times to the device's clock, so 22:00–07:00 on a server in UTC reads 01:00–10:00 in
+Nairobi.
+
 | Light | Dark |
 |---|---|
 | ![Changing quiet time](../images/surfaces/web-settings-light.png) | ![Changing quiet time, dark](../images/surfaces/web-settings-dark.png) |
@@ -178,7 +200,10 @@ area, the header's status line follows its settings in force.
 A stranger who writes to the agents from a chat app gets a code and starts nothing (spec 3.3
 §5.3). **Where you can say yes from** lists who asked and has a field for that code: **Pair**
 claims it as `adk-rust pair accept <code>` does (`POST /kernel/channels/pair`, `operator`
-scope), and the account is listed with **Remove** from then on.
+scope), and the account is listed with **Remove** from then on. Every account, waiting or
+paired, reads as its name and its account on the channel — "Telegram: Ana (4242)" — since the
+name is the account's own choice, and **Pair** confirms the account the kernel answers it
+paired, never the one that asked when the section opened.
 
 ### What is read-only until the kernel serves it
 
@@ -191,6 +216,7 @@ the screens.
 |---|---|---|
 | **What your agents remember**: **That's right**, **Fix it**, **Forget it**, **Undo** | K5 | "Nothing your agents remember is shown here yet." |
 | **Every action is on record** and **Check again** | K5 | The latest lines of the activity ledger |
+| **Extend** for what is allowed without asking | A route that extends a standing rule; `/rules` lists, creates and stops them only | Each rule's end date, with **Stop allowing** |
 | **Confirm it's you and approve** | The passkey route of the phone package | The answer, refused until the server confirms presence |
 
 ## Decisions
@@ -262,7 +288,7 @@ in a new, empty workspace each run (`HOME_E2E_BIN` names an example already buil
 example's kernel keeps a `/proc` ledger, and its quiet time ended an hour before it started.
 The first test opens the home, sees the call the scripted agent's harness holds, allows it
 once and checks that it ran once; the second runs a turn with one decision, sees the morning
-briefing on Threads, checks every line of Today links to its record, that a reload moves
+briefing on Threads, checks every line of Today opens its record, that a reload moves
 nothing and **Mark as seen** does, and changes quiet time. Against a home already running, set
 `HOME_E2E_URL` and `HOME_E2E_WORKSPACE` to its address and its workspace.
 

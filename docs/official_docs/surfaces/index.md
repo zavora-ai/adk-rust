@@ -32,6 +32,10 @@ adk-surface = { version = "3.0.0", features = ["web"] }
 | `LocalSource` | The session store, the approval service, an in-process kernel's process table and `/proc` ledger, a harness's mode | Decide, start a turn (a kernel process, a harness turn or a runner turn), freeze and unfreeze, set the mode, create the standing rule of "Always allow" |
 | `ControlSource` | A kernel's control plane through `ControlClient` (attach, processes, health, the ledger) and the approvals inbox beside it, read in full | Decide (edits included), spawn, freeze, unfreeze |
 
+`Source::keeps_ledger` says whether a source keeps the `/proc` ledger the briefing reads;
+`LocalSource` keeps one only over a kernel with a ledger. Without one, `Briefing::recorded` is
+`false`, and a surface says nothing is recorded rather than that nothing happened.
+
 Both sources read decisions one session at a time where a surface shows one session
 (`InboxQuery::with_session_id`, `GET /api/approvals?session=`; spec 3.3 §10 C1), and
 `SurfaceEngine::session_decisions` returns that session's cards.
@@ -194,7 +198,7 @@ call's own arguments.
 | Answer | When |
 |---|---|
 | `401` | No authenticated caller |
-| `403` | A rule of §7.2 or §7.4 refuses the command |
+| `403` | A rule of §7.2 or §7.4 refuses the command; `surface.operator_only` for **Stop all** or **Resume all** from a caller outside the group `SurfaceEngineBuilder::stops_need` names (§11 S-I10) |
 | `404` | Not the caller's session or decision |
 | `400` | A malformed command, or a chat or agent origin, which reach the engine in process from their adapters |
 

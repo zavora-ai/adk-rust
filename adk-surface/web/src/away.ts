@@ -6,7 +6,8 @@
  */
 import type { AgentRow, StatusLine } from "./generated/api";
 import type { PillKind } from "./components/Pill";
-import type { AreaSettings, AwayLine, AwayPage, QuietWindow } from "./kernel";
+import type { AgendaItem, AreaSettings, AwayLine, AwayPage, QuietWindow } from "./kernel";
+import { agendaState, isQuestion } from "./kernel";
 import { labels, words } from "./labels";
 
 /** The ledger's label for the kernel's own work, which names no agent. */
@@ -112,15 +113,50 @@ export function lineWords(line: AwayLine, agents: AgentRow[]): LineWords {
         text:
           line.effect === "deny"
             ? `You said no to ${agent ?? "your agents"}.`
-            : `You allowed ${agent ?? "your agents"} to go ahead once.`,
+            : `You allowed ${agent ?? "your agents"} to go ahead.`,
       };
     case "stoppedAll":
-      return { text: `${words.ALL_AGENTS_STOPPED}.` };
+      return { pill: "neutral", pillText: labels.stoppedPill, text: `${words.ALL_AGENTS_STOPPED}.` };
     case "resumedAll":
-      return { text: words.ALL_AGENTS_RESUMED };
+      return { pill: "neutral", pillText: labels.resumedPill, text: words.ALL_AGENTS_RESUMED };
     default:
       return { text: `${who} did something.` };
   }
+}
+
+/**
+ * A suggestion's or question's sentence from its agenda item (spec 3.3 §5.1, §8 "Name the
+ * outcome"): what it is about, then what happens now — nothing until the person says so while
+ * it is open, else what became of it.
+ */
+export function itemSentence(item: AgendaItem): string {
+  const question = isQuestion(item);
+  const state = agendaState(item);
+  let outcome: string;
+  switch (state) {
+    case "proposed":
+      outcome = question ? words.IS_THAT_RIGHT : labels.nothingHappensUntilYouSay;
+      break;
+    case "approved":
+    case "scheduled":
+      outcome = question ? labels.answeredYes : labels.willBeDone;
+      break;
+    case "running":
+      outcome = question ? labels.answeredYes : labels.workingOnIt;
+      break;
+    case "done":
+      outcome = question ? labels.answeredYes : labels.itIsDone;
+      break;
+    case "rejected":
+      outcome = question ? labels.answeredNo : labels.wontBeDone;
+      break;
+    case "expired":
+      outcome = labels.endedWithoutAnswer;
+      break;
+    default:
+      return item.title;
+  }
+  return `${item.title} ${outcome}`;
 }
 
 /**
@@ -134,17 +170,51 @@ export function inOrder<T extends { at: Date; failed: boolean }>(rows: T[]): T[]
 // ── Quiet time ────────────────────────────────────────────────────────────
 
 /**
- * Every quiet window in force: each area's own and the ones its workspace keeps beside them,
- * or the engine's quiet hours where the kernel serves no settings.
+ * Every quiet window in force, as this device's clock reads it: each area's own and the ones its
+ * workspace keeps beside them, or the engine's quiet hours where the kernel serves no settings.
  */
 export function quietWindows(areas: AreaSettings[] | undefined, status: StatusLine | undefined): QuietWindow[] {
-  if (areas) return areas.flatMap((area) => [...area.quietTime, ...(area.alsoQuiet ?? [])]);
-  return status?.quiet ? [{ start: status.quiet.start, end: status.quiet.end }] : [];
+  const host = status?.hostUtcOffsetMinutes ?? undefined;
+  const windows = areas
+    ? areas.flatMap((area) => [...area.quietTime, ...(area.alsoQuiet ?? [])])
+    : status?.quiet
+      ? [{ start: status.quiet.start, end: status.quiet.end }]
+      : [];
+  return windows.map((window) => onThisDevice(window, host));
 }
 
 function minutes(hhmm: string): number {
   const [hours, mins] = hhmm.split(":").map(Number);
   return (hours ?? 0) * 60 + (mins ?? 0);
+}
+
+/** `HH:MM` of a minute of the day, wrapped into one day. */
+function hhmmOf(minute: number): string {
+  const day = ((minute % 1440) + 1440) % 1440;
+  return `${String(Math.floor(day / 60)).padStart(2, "0")}:${String(day % 60).padStart(2, "0")}`;
+}
+
+/** Minutes east of UTC of this device's time zone at `now`. */
+export function deviceOffset(now: Date = new Date()): number {
+  return -now.getTimezoneOffset();
+}
+
+/**
+ * A quiet window as this device's clock reads it (spec 3.3 §5.1). The kernel reads a window
+ * without an offset of its own in the server's time zone (`host`, the status line's
+ * `hostUtcOffsetMinutes`), so its times move from the offset it is kept at to this device's
+ * (`here`): 22:00–07:00 kept in UTC reads 01:00–10:00 in Nairobi. Without `host`, a window
+ * without an offset is read here as it is.
+ */
+export function onThisDevice(window: QuietWindow, host: number | undefined, here: number = deviceOffset()): QuietWindow {
+  const offset = window.utcOffsetMinutes ?? host;
+  if (offset === undefined) return { start: window.start, end: window.end };
+  const shift = here - offset;
+  return {
+    start: shift === 0 ? window.start : hhmmOf(minutes(window.start) + shift),
+    end: shift === 0 ? window.end : hhmmOf(minutes(window.end) + shift),
+    utcOffsetMinutes: here,
+  };
 }
 
 /** The wall clock at `now` where the window's times are read: its offset, else this device's zone. */

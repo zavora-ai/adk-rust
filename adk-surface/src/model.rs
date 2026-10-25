@@ -146,6 +146,11 @@ pub struct StatusLine {
     /// "All agents stopped", while stopped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped_text: Option<String>,
+    /// Minutes east of UTC of the server's time zone now: the kernel reads a quiet window that
+    /// carries no offset of its own there, so a page in another zone reads it there too
+    /// (spec 3.3 §5.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_utc_offset_minutes: Option<i32>,
 }
 
 /// The exact call a decision is about (spec 3.3 §7.1).
@@ -413,4 +418,12 @@ pub struct Briefing {
     pub waiting: u32,
     /// One line per event, oldest first.
     pub lines: Vec<BriefingLine>,
+    /// The source keeps an activity record. Without one, `lines` is empty whatever ran, so a
+    /// surface says nothing is recorded rather than that nothing happened.
+    #[serde(default = "kept")]
+    pub recorded: bool,
+}
+
+fn kept() -> bool {
+    true
 }

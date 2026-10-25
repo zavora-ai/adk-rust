@@ -48,6 +48,32 @@ describe("a decision card", () => {
     expect(container.textContent).not.toContain(card.id);
   });
 
+  // S-I9: a bidi override or a zero-width space from a tool's arguments would make the call read
+  // differently from what runs; the card shows each as its escape, as the terminal does.
+  it("shows bidi and zero-width characters from the call as escapes, and edits them unchanged", async () => {
+    const args = { to: "billing@corp\u200b.com", attachment: "invoice_\u202efdp.exe\u202c" };
+    const card: Card = {
+      ...invoiceCard(),
+      heading: "Send invoice_\u202efdp.exe to billing@corp\u200b.com",
+      call: { tool: "send_email", args, text: `send_email(to: "billing@corp\u200b.com")`, truncated: false },
+      timeline: [{ text: "Asked by \u2066Finance\u2069 at 18:00", current: true }],
+    };
+    const send = vi.fn(async (): Promise<CommandOutcome> => ({ type: "queued", text: "" }) as unknown as CommandOutcome);
+    const { container } = render(<DecisionCard card={card} send={send} />);
+    const text = container.textContent ?? "";
+    for (const hidden of ["\u200b", "\u202e", "\u202c", "\u2066", "\u2069"]) expect(text).not.toContain(hidden);
+    expect(text).toContain('"billing@corp\\u{200b}.com"');
+    expect(text).toContain('"invoice_\\u{202e}fdp.exe\\u{202c}"');
+    expect(text).toContain("Send invoice_\\u{202e}fdp.exe to billing@corp\\u{200b}.com");
+    expect(text).toContain("Asked by \\u{2066}Finance\\u{2069} at 18:00");
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const field = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(field.value).not.toContain("\u202e");
+    expect(field.value).toContain("\\u202e");
+    expect(JSON.parse(field.value)).toEqual(args);
+  });
+
   it("answers through decide with the version it showed", async () => {
     const client = new FixtureClient();
     const send = sendThrough(client);

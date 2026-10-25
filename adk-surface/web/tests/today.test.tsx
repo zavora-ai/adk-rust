@@ -5,7 +5,8 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { agentOf, briefingDue, insideQuiet, lineWords, mergeAway, quietEnded } from "../src/away";
+import { Today } from "../src/screens/Today";
+import { agentOf, briefingDue, deviceOffset, insideQuiet, lineWords, mergeAway, onThisDevice, quietEnded } from "../src/away";
 import { ApiError, HttpClient } from "../src/client";
 import { FixtureClient, awayPage, fixtureSeams } from "../src/fixture/fixture";
 import type { SeamCalls } from "../src/fixture/fixture";
@@ -46,7 +47,7 @@ describe("Today", () => {
       "Household failed.",
       "Research finished.",
       "Finance suggests paying the [SUPPLIER] invoice due Monday. Nothing happens until you say so.",
-      "You allowed Code to go ahead once.",
+      "You allowed Code to go ahead.",
       "You seem to start work at 08:30 on Fridays now. Is that right?",
     ]);
     // The suggestion and the question are answered here.
@@ -59,9 +60,11 @@ describe("Today", () => {
     render(<App client={new FixtureClient()} seams={fixtureSeams(seen)} initialSection="today" />);
     const row = (await screen.findByText("Household failed.")).closest("li")!;
     await userEvent.click(within(row).getByRole("button", { name: "Details" }));
-    const link = await within(row).findByRole("link", { name: "The record" });
-    expect(link.getAttribute("href")).toBe("/api/kernel/away/lines/22");
+    // The record is read through the page's client, with its sign-in, and told in plain words;
+    // nothing links the tab away to the raw route.
+    expect(await within(row).findByText("On record as entry 22")).toBeTruthy();
     expect(within(row).getByText(/^Recorded /)).toBeTruthy();
+    expect(within(row).queryByRole("link")).toBeNull();
     expect(seen.records).toEqual([22]);
     expect(seen.seen).toEqual([]);
 
@@ -74,6 +77,74 @@ describe("Today", () => {
       "Finance suggests paying the [SUPPLIER] invoice due Monday. Nothing happens until you say so.",
       "You seem to start work at 08:30 on Fridays now. Is that right?",
     ]);
+  });
+
+  // §8 "Name the outcome": once answered, a line no longer says nothing happens until the person
+  // says so, or asks again.
+  it("answers a suggestion and a question here, then says what became of each", async () => {
+    render(<App client={new FixtureClient()} seams={fixtureSeams()} initialSection="today" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Do it" }));
+    await screen.findByText("Finance suggests paying the [SUPPLIER] invoice due Monday. It will be done.");
+    await userEvent.click(screen.getByRole("button", { name: "No" }));
+    await screen.findByText("You seem to start work at 08:30 on Fridays now. Answered no.");
+    for (const name of ["Do it", "Not now", "Yes, remember it", "No"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    expect(lines().join(" ")).not.toMatch(/Nothing happens until you say so|Is that right/);
+  });
+
+  // An agenda keeps every finished item, oldest first: the home reads the items still open or
+  // under way, so a new question past the oldest 200 is still answered here (spec 3.3 §5.1).
+  it("answers a question that is newer than two hundred finished items", async () => {
+    const old = Array.from({ length: 210 }, (_, index) => ({
+      id: `ag_old_${index}`,
+      title: `Old suggestion ${index}.`,
+      origin: "user",
+      state: "done",
+      createdAt: new Date(Date.UTC(2026, 8, 1, 0, index)).toISOString(),
+    }));
+    const question = {
+      id: "ag_new",
+      title: "You seem to start work at 08:30 on Fridays now.",
+      origin: { observation: { id: "obs-9" } },
+      state: "proposed",
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+    const page: AwayPage = {
+      ...awayPage(),
+      counts: { done: 0, failed: 0, stopped: 0, suggestions: 0, questions: 1, decided: 0 },
+      lines: [{ seq: 300, at: question.createdAt, partition: "default", agent: "kernel", kind: "question", record: "/api/kernel/away/lines/300" }],
+    };
+    const answered: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const state = new URL(url, "http://home").searchParams.get("state");
+        const limit = Number(new URL(url, "http://home").searchParams.get("limit") ?? Infinity);
+        const body = url.startsWith("/api/kernel/agenda/")
+          ? (answered.push(url), (question.state = "approved"), { item: question })
+          : url.startsWith("/api/kernel/agenda")
+            ? { items: [...old, question].filter((item) => !state || item.state === state).slice(0, limit) }
+            : url.startsWith("/api/kernel/away")
+              ? page
+              : url.startsWith("/api/surface/agents")
+                ? { agents: [] }
+                : url.startsWith("/api/surface/decisions")
+                  ? { decisions: [] }
+                  : url.startsWith("/api/surface/status")
+                    ? { decisions: 0, stopped: false }
+                    : undefined;
+        return body === undefined
+          ? new Response("", { status: 404 })
+          : new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+    const client = new HttpClient();
+    render(<App client={client} seams={{ whileAway: client.whileAway() }} initialSection="today" />);
+    await screen.findByText("You seem to start work at 08:30 on Fridays now. Is that right?");
+    await userEvent.click(screen.getByRole("button", { name: "Yes, remember it" }));
+    expect(answered).toEqual(["/api/kernel/agenda/ag_new/approve"]);
+    await screen.findByText("You seem to start work at 08:30 on Fridays now. Answered yes.");
   });
 
   it("names each agent as the roster does, and keeps the kernel's own work out of the list", async () => {
@@ -96,14 +167,62 @@ describe("Today", () => {
     // One message and one decision allowed from the home (the coordinator's run on main).
     const run = [line(5, "decided", "approve"), line(9, "done", "completed")];
     const said = run.map((each) => lineWords(each, agents).text);
-    expect(said).toEqual(["You allowed ADK-Rust to go ahead once.", "ADK-Rust finished."]);
+    expect(said).toEqual(["You allowed ADK-Rust to go ahead.", "ADK-Rust finished."]);
     for (const text of said) expect(text).not.toMatch(/urn:|Urn:|Kernel/);
     expect(lineWords(line(6, "suggestion", "proposed", "kernel"), agents).text).toBe(
       "Your agents suggest something. Nothing happens until you say so.",
     );
     expect(lineWords(line(7, "failed"), agents).text).toBe("ADK-Rust stopped because it was repeating itself.");
+    // Every line has its status pill (spec 3.3 §5.1), Stop all and Resume all too.
+    expect(lineWords(line(8, "stoppedAll", "frozen", "kernel"), agents)).toEqual({
+      pill: "neutral",
+      pillText: "Stopped",
+      text: "All agents stopped.",
+    });
+    expect(lineWords(line(10, "resumedAll", "unfrozen", "kernel"), agents)).toEqual({
+      pill: "neutral",
+      pillText: "Resumed",
+      text: "All agents resumed.",
+    });
     expect(agentOf("urn:adk:agent:home/finance_bot", [])).toBe("Finance bot");
     expect(agentOf("kernel", agents)).toBeUndefined();
+  });
+
+  it("drops a failed read of the engine's briefing once the kernel's page shows", async () => {
+    const client = new FixtureClient();
+    client.briefing = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    const props = {
+      client,
+      agents: [],
+      routinesToday: [],
+      canAddRoutine: false,
+      seams: fixtureSeams(),
+      onOpenAgent: () => {},
+      onChanged: () => {},
+      onAwayChanged: () => {},
+    };
+    const { rerender } = render(<Today {...props} />);
+    expect((await screen.findByRole("alert")).textContent).toBe("Can't reach your agents right now. Trying again.");
+    rerender(<Today {...props} away={awayPage()} />);
+    await screen.findByText("Household failed.");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  // Without a ledger the engine's briefing lists nothing, whatever ran (`adk-rust serve`):
+  // Today says nothing is recorded, never that nothing happened.
+  it("says nothing is recorded where the server keeps no record, never that nothing happened", async () => {
+    const client = new FixtureClient();
+    const briefing = client.briefing.bind(client);
+    client.briefing = async () => ({ ...(await briefing()), lines: [], recorded: false });
+    const seams = fixtureSeams();
+    seams.whileAway!.read = async () => undefined;
+    render(<App client={client} seams={seams} initialSection="today" />);
+    expect(
+      await screen.findByText("What your agents do is not recorded on this server, so it can't be listed here. adk-rust up keeps a record."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Nothing happened while you were away.")).toBeNull();
   });
 
   it("reads the engine's briefing where the kernel keeps no ledger", async () => {
@@ -173,6 +292,53 @@ describe("quiet time and the morning briefing", () => {
     expect(screen.queryByRole("region", { name: "While you were away" })).toBeNull();
   });
 
+  // The kernel keeps a window without an offset in the server's time zone; a page in another
+  // zone reads it on its own clock (spec 3.3 §5.1).
+  it("reads a window the server keeps in its own zone on this device's clock", () => {
+    expect(onThisDevice({ start: "22:00", end: "07:00" }, 0, 180)).toEqual({ start: "01:00", end: "10:00", utcOffsetMinutes: 180 });
+    expect(onThisDevice({ start: "01:00", end: "06:00" }, 180, 0)).toEqual({ start: "22:00", end: "03:00", utcOffsetMinutes: 0 });
+    expect(onThisDevice({ start: "22:00", end: "07:00", utcOffsetMinutes: 180 }, 0, 180)).toEqual({
+      start: "22:00",
+      end: "07:00",
+      utcOffsetMinutes: 180,
+    });
+    expect(onThisDevice({ start: "22:00", end: "07:00" }, undefined, 180)).toEqual({ start: "22:00", end: "07:00" });
+    // 23:30 in Nairobi is 20:30 in UTC: outside a 22:00–07:00 window kept in UTC.
+    const nairobi = onThisDevice({ start: "22:00", end: "07:00" }, 0, 180);
+    expect(insideQuiet(nairobi, utc("2026-10-24T20:30:00Z"))).toBe(false);
+    expect(insideQuiet(nairobi, utc("2026-10-24T22:30:00Z"))).toBe(true);
+  });
+
+  it("says quiet time holds when the server keeps it, not when this device's clock would", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const night = new Date();
+    night.setHours(23, 30, 0, 0);
+    vi.setSystemTime(night);
+    // The server is three hours behind this device, so its 22:00 is this device's 01:00.
+    const client = new FixtureClient();
+    const status = client.status.bind(client);
+    client.status = async () => ({ ...(await status()), hostUtcOffsetMinutes: deviceOffset(night) - 180 });
+    render(<App client={client} seams={fixtureSeams()} initialSection="threads" />);
+    const header = screen.getByRole("banner");
+    expect(await within(header).findByText("Quiet from 01:00")).toBeTruthy();
+    expect(within(header).queryByText("Quiet until 07:00")).toBeNull();
+  });
+
+  it("reads the engine's quiet hours on this device's clock where the kernel serves no settings", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const night = new Date();
+    night.setHours(23, 30, 0, 0);
+    vi.setSystemTime(night);
+    // No areas: the header reads the engine's quiet hours, kept three hours behind this device.
+    const client = new FixtureClient();
+    const status = client.status.bind(client);
+    client.status = async (session) => ({ ...(await status(session)), hostUtcOffsetMinutes: deviceOffset(night) - 180 });
+    render(<App client={client} initialSection="threads" />);
+    const header = screen.getByRole("banner");
+    expect(await within(header).findByText("Quiet from 01:00")).toBeTruthy();
+    expect(within(header).queryByText("Quiet from 22:00")).toBeNull();
+  });
+
   it("does not show during quiet time", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const night = new Date();
@@ -216,6 +382,45 @@ describe("What your agents can do", () => {
     expect(within(header).getByText("$1.84 of $8.00 today")).toBeTruthy();
   });
 
+  it("saves quiet time with this device's offset, so the kernel keeps the hours the person typed", async () => {
+    const seams: Seams = fixtureSeams();
+    const saved: unknown[] = [];
+    const set = seams.limits!.setQuietTime;
+    seams.limits!.setQuietTime = async (partition, window) => {
+      saved.push(window);
+      return set(partition, window);
+    };
+    render(<App client={new FixtureClient()} seams={seams} initialSection="memory" />);
+    const card = (await screen.findByRole("heading", { name: "What your agents can do" })).closest("section")!;
+    await userEvent.click((await within(card).findAllByRole("button", { name: "Change" }))[0]);
+    await userEvent.click(within(card).getByRole("button", { name: "Save" }));
+    await within(card).findByText(/^Was /);
+    expect(saved).toEqual([{ start: "22:00", end: "07:00", utcOffsetMinutes: deviceOffset() }]);
+  });
+
+  // The kernel keeps one window in place of all an area had: the editor says so before it saves.
+  it("says that saving quiet time replaces every window the area has", async () => {
+    const seams: Seams = fixtureSeams();
+    const areas = seams.limits!.areas;
+    seams.limits!.areas = async () =>
+      (await areas())?.map((area) => ({
+        ...area,
+        quietTime: [
+          { start: "22:00", end: "07:00", utcOffsetMinutes: deviceOffset() },
+          { start: "19:00", end: "08:00", utcOffsetMinutes: deviceOffset() },
+        ],
+      }));
+    render(<App client={new FixtureClient()} seams={seams} initialSection="memory" />);
+    const card = (await screen.findByRole("heading", { name: "What your agents can do" })).closest("section")!;
+    await within(card).findByText("22:00–07:00, 19:00–08:00");
+    await userEvent.click(within(card).getAllByRole("button", { name: "Change" })[0]);
+    expect(
+      within(card).getByText(
+        "Your agents are quiet 22:00–07:00, 19:00–08:00 now. Saving keeps one window in their place; Turn off ends them all.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("shows why the kernel refused a change, such as from a paired device", async () => {
     const seams: Seams = fixtureSeams();
     seams.limits!.setQuietTime = async () => {
@@ -235,16 +440,41 @@ describe("Where you can say yes from", () => {
     const seen = calls();
     render(<App client={new FixtureClient()} seams={fixtureSeams(seen)} initialSection="memory" />);
     const form = await screen.findByRole("form", { name: "Pair a chat account" });
-    expect(within(form).getByText("Telegram: Sam asked to pair.")).toBeTruthy();
+    expect(within(form).getByText("Telegram: Sam (4242) asked to pair.")).toBeTruthy();
     const field = within(form).getByLabelText("The code it was sent");
     await userEvent.type(field, "WRONG-CODE{Enter}");
     expect((await screen.findByRole("alert")).textContent).toContain("that code is wrong");
     await userEvent.clear(field);
     await userEvent.type(field, "ABCD-EFGH-2345");
     await userEvent.click(within(form).getByRole("button", { name: "Pair" }));
-    expect(await within(form).findByText("Telegram: Sam is paired.")).toBeTruthy();
+    expect(await within(form).findByText("Telegram: Sam (4242) is paired.")).toBeTruthy();
     expect(seen.accepted).toEqual(["ABCD-EFGH-2345"]);
-    await waitFor(() => expect(within(form).queryByText("Telegram: Sam asked to pair.")).toBeNull());
+    await waitFor(() => expect(within(form).queryByText("Telegram: Sam (4242) asked to pair.")).toBeNull());
+  });
+
+  it("says when it cannot read who can say yes, instead of showing only this computer", async () => {
+    const seams = fixtureSeams();
+    seams.devices!.list = async () => {
+      throw new ApiError(500, "the channel binding store is unavailable");
+    };
+    render(<App client={new FixtureClient()} seams={seams} initialSection="memory" />);
+    expect(
+      await screen.findByText("Can't read the phones and chat accounts that can say yes right now. Trying again."),
+    ).toBeTruthy();
+  });
+
+  // S-I6: the confirmation names the account the kernel paired, never the one that asked when
+  // the section opened, so a stranger's code is not taken for a known person's.
+  it("names the account the kernel paired, whoever was waiting", async () => {
+    const seams = fixtureSeams();
+    seams.devices!.accept = async () => ({ id: "c-carol", channel: "telegram", account: "7777", displayName: "Carol", state: "active" });
+    render(<App client={new FixtureClient()} seams={seams} initialSection="memory" />);
+    const form = await screen.findByRole("form", { name: "Pair a chat account" });
+    expect(within(form).getByText("Telegram: Sam (4242) asked to pair.")).toBeTruthy();
+    await userEvent.type(within(form).getByLabelText("The code it was sent"), "CAROL-CODE");
+    await userEvent.click(within(form).getByRole("button", { name: "Pair" }));
+    expect(await within(form).findByText("Telegram: Carol (7777) is paired.")).toBeTruthy();
+    expect(within(form).queryByText(/Sam \(4242\) is paired/)).toBeNull();
   });
 });
 
@@ -326,6 +556,31 @@ describe("the HTTP client's kernel routes", () => {
       60,
       10,
     ]);
+  });
+});
+
+describe("typed dollars", () => {
+  // A decimal comma is a decimal mark, never dropped: `5,50` is $5.50, not $550 (spec 3.3 §10 K3).
+  it("reads a decimal comma or point, groups of thousands, and refuses the rest", async () => {
+    const { parseDollars } = await import("../src/format");
+    expect(["5", "5.5", "5.50", "5,50", "$ 5,50", "1,000", "1.000", "1,000.50", "1.000,50", "1234,5", "0"].map(parseDollars)).toEqual([
+      5_000_000, 5_500_000, 5_500_000, 5_500_000, 5_500_000, 1_000_000_000, 1_000_000_000, 1_000_500_000, 1_000_500_000,
+      1_234_500_000, 0,
+    ]);
+    for (const text of ["", "-5", "5,500,5", "1,000,50", "1.000.50", "1,000.000", "1,2,3", "five", "5.5.5"]) {
+      expect(parseDollars(text), text).toBeUndefined();
+    }
+  });
+
+  it("sets the limit a person typed with a decimal comma", async () => {
+    render(<App client={new FixtureClient()} seams={fixtureSeams()} initialSection="memory" />);
+    const card = (await screen.findByRole("heading", { name: "What your agents can do" })).closest("section")!;
+    await userEvent.click((await within(card).findAllByRole("button", { name: "Change" }))[1]);
+    const amount = within(card).getByLabelText("Dollars a day");
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "5,50");
+    await userEvent.click(within(card).getByRole("button", { name: "Save" }));
+    expect(await within(card).findByText("Was $5.00. Now $5.50.")).toBeTruthy();
   });
 });
 

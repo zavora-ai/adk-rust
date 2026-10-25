@@ -27,9 +27,10 @@ function newSession() {
  * Threads (spec 3.3 §5.1): the roster on the left, the selected agent's thread in the middle
  * with its decisions inline, and Decisions with a count badge and Coming up on the right.
  *
- * A thread follows one conversation. The first time an agent is shown, that is the session
- * its roster row names, or a new one; from then on the thread stays on it, whatever the row
- * says later, until the person opens a decision of another session (`followed`).
+ * A thread follows one conversation (`followed`). The first time an agent is shown, that is
+ * the session its roster row names, or a new one; from then on the thread stays on it, whatever
+ * the row says later. A decision of another session is shown in that session's thread
+ * (`visiting`) until the person goes back; the followed conversation never moves to it.
  */
 export function Threads({
   client,

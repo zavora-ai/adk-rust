@@ -125,6 +125,7 @@ async fn one_decision_makes_a_short_plain_while_you_were_away() {
         briefing.lines.iter().map(|line| (line.pill_text.as_deref(), line.text.as_str())).collect();
     assert!(lines.contains(&(Some("Done"), "Finance finished.")), "{lines:?}");
     assert!(lines.len() <= 3, "a short list: {lines:?}");
+    assert!(briefing.recorded, "a kernel with a ledger keeps the record");
     for (_, text) in &lines {
         for noise in
             ["urn:", "Urn:", "Kernel", "changed what it is doing", "woke up", "spent money"]

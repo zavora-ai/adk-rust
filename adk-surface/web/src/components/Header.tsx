@@ -1,7 +1,8 @@
 import type { MouseEvent } from "react";
 import type { Origin, StatusLine } from "../generated/api";
 import type { AreaSettings } from "../kernel";
-import { areaStatus } from "../settings";
+import { onThisDevice } from "../away";
+import { areaStatus, quietText } from "../settings";
 import { labels } from "../labels";
 import { originOf } from "../origin";
 import type { Section } from "../route";
@@ -23,6 +24,7 @@ export function Header({
   section,
   status,
   areas,
+  conversationMode,
   decisions,
   theme,
   onNavigate,
@@ -34,6 +36,12 @@ export function Header({
   status?: StatusLine;
   /** Each area's settings in force (spec 3.3 §10 K3): with one area, the status line reads them. */
   areas?: AreaSettings[];
+  /**
+   * The mode the conversation on Threads runs in (`status.mode` read with its session): a
+   * session's own mode moves on from its area's with an approved plan exit (§8.1). Elsewhere no
+   * conversation is shown, and the line reads the area's settings in force.
+   */
+  conversationMode?: string;
   decisions: number;
   theme: Theme;
   onNavigate: (section: Section) => void;
@@ -42,13 +50,16 @@ export function Header({
   onResume: (origin: Origin) => void;
 }) {
   // One area's settings change while the kernel runs; the engine's line holds the ones it
-  // started with, so the kernel's are shown once read.
+  // started with, so the kernel's are shown once read. Quiet time reads on this device's clock.
+  const host = status?.hostUtcOffsetMinutes ?? undefined;
+  const now = new Date();
+  const quiet = status?.quiet && quietText(onThisDevice({ start: status.quiet.start, end: status.quiet.end }, host), now);
   const line =
     section === "memory"
       ? [labels.keptOnYourComputer]
       : areas?.length === 1
-        ? areaStatus(areas[0], new Date())
-        : [status?.mode?.status, status?.spend?.text, status?.quiet?.text].filter((part): part is string => !!part);
+        ? areaStatus(areas[0], now, host, conversationMode)
+        : [status?.mode?.status, status?.spend?.text, quiet].filter((part): part is string => !!part);
   const themeLabel =
     theme === "system" ? labels.themeSystem : theme === "light" ? labels.themeLight : labels.themeDark;
   const go = (target: Section) => (event: MouseEvent<HTMLAnchorElement>) => {

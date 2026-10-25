@@ -226,6 +226,11 @@
             },
             "type": "array"
           },
+          "recorded": {
+            "default": true,
+            "description": "The source keeps an activity record. Without one, `lines` is empty whatever ran, so a\nsurface says nothing is recorded rather than that nothing happened.",
+            "type": "boolean"
+          },
           "since": {
             "description": "Since when.",
             "format": "date-time",
@@ -262,7 +267,8 @@
           "since",
           "sinceText",
           "waiting",
-          "lines"
+          "lines",
+          "recorded"
         ],
         "type": "object"
       },
@@ -1391,6 +1397,14 @@
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
+          },
+          "hostUtcOffsetMinutes": {
+            "description": "Minutes east of UTC of the server's time zone now: the kernel reads a quiet window that\ncarries no offset of its own there, so a page in another zone reads it there too\n(spec 3.3 §5.1).",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "mode": {
             "anyOf": [
