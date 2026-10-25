@@ -9,7 +9,7 @@ use adk_core::principal::{SubjectKind, SubjectRef};
 use adk_core::{
     AdkError, AgentId, ApprovalAction, ApprovalPolicy, ApprovalRequest, ApprovalRisk,
     ApprovalScope, ApprovalService, ApprovalState, ApproverSelector, ErrorCategory, ErrorComponent,
-    InboxQuery, ToolConfirmationRequest,
+    InboxQuery, RunState, ToolConfirmationRequest,
 };
 use adk_server::background::WorkflowExecutor;
 use serde::{Deserialize, Serialize};
@@ -1101,7 +1101,19 @@ impl Agents {
             return Err(out_of_date(&now, current.version));
         }
         inner.targets.set_paused(&next.id, false);
-        inner.sup.wake_suspended(&Suspension::Paused { agent: next.id.clone() }).await;
+        let paused = Suspension::Paused { agent: next.id.clone() };
+        // A queued process the pause caught before its claim runs at its claim again; a
+        // parked one is woken, and a sleeper among them sleeps on its own wake set again.
+        let filter = ProcessFilter::default().target(next.id.clone()).states([RunState::Queued]);
+        for process in inner.processes.ps(filter).await.unwrap_or_default() {
+            if process.meta.suspended_by.as_ref() == Some(&paused) && process.meta.wake.is_none() {
+                let mut meta = process.meta;
+                meta.suspended_by = None;
+                meta.suspend_requested = false;
+                inner.sup.put_meta(meta).await;
+            }
+        }
+        inner.sup.wake_suspended(&paused).await;
         inner.sup.nudge();
         inner.sup.publish(KernelEvent::Agent {
             id: next.id.clone(),
@@ -1236,7 +1248,9 @@ impl Agents {
                     let acting =
                         request.acting.as_ref().is_some_and(|acting| acting.agent.id == agent);
                     let run = request.run_id.as_ref().is_some_and(|run| pids.contains(run));
-                    if request.state == ApprovalState::Pending && (acting || run) {
+                    // A follow-up's own request ends with the follow-up, counted once.
+                    let follow_up = request.tool_name == crate::agenda::AGENDA_TOOL_NAME;
+                    if request.state == ApprovalState::Pending && (acting || run) && !follow_up {
                         decisions.insert(request.id);
                     }
                 }
@@ -1388,7 +1402,12 @@ impl Agents {
         inner.targets.host(
             &record.id,
             hosted.runner,
-            Added { area: record.area.clone(), progress: hosted.progress, version: record.version },
+            Added {
+                area: record.area.clone(),
+                progress: hosted.progress,
+                version: record.version,
+                daily_limit: record.daily_limit_micro_usd,
+            },
         );
         Ok(())
     }

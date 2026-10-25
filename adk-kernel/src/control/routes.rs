@@ -264,6 +264,8 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         .merge(super::settings::routes())
         .merge(super::memory::routes())
         .merge(super::record::routes())
+        // The agents a person adds, read only (spec 3.3 §10 K7).
+        .merge(super::agents::routes())
         // The REPL's commands and "Always allow" for a terminal on the kernel (spec 3.3 §5.2).
         .merge(super::commands::routes());
     #[cfg(feature = "proc")]

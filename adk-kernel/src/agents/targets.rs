@@ -23,6 +23,8 @@ pub(crate) struct Added {
     pub(crate) progress: Option<Arc<dyn ProgressSource>>,
     /// The version of the record it was built from.
     pub(crate) version: u64,
+    /// Its own daily spending limit in micro-USD.
+    pub(crate) daily_limit: Option<u64>,
 }
 
 /// Every target the kernel serves: the partition agents the host bound at build, and the
@@ -82,6 +84,11 @@ impl Targets {
     /// The progress source of an added agent's processes.
     pub(crate) fn progress_of(&self, target: &str) -> Option<Arc<dyn ProgressSource>> {
         self.read_added().get(target).and_then(|added| added.progress.clone())
+    }
+
+    /// The daily spending limit of the added agent `target`, when it has one.
+    pub(crate) fn daily_limit(&self, target: &str) -> Option<u64> {
+        self.read_added().get(target).and_then(|added| added.daily_limit)
     }
 
     /// The added agent hosted as `target` here, if any.

@@ -645,6 +645,25 @@ impl Supervision {
         })
     }
 
+    /// What the added agent `target` spent today, in micro-USD: the daily totals of its
+    /// processes in `partition` (spec 3.3 §5.7).
+    pub(crate) async fn agent_spent(&self, target: &str, partition: &PartitionId) -> u64 {
+        let today = self.clock.now().date_naive();
+        let filter = ProcessFilter::default().partition(partition.clone());
+        let Ok(metas) = self.processes.list(&filter).await else { return u64::MAX };
+        let mut spent: u64 = 0;
+        for meta in metas {
+            if !matches!(self.runs.get(&meta.pid).await, Ok(Some(run)) if run.target == target) {
+                continue;
+            }
+            let scope = crate::stores::SpendScope::Process(meta.pid.clone());
+            spent = spent.saturating_add(
+                self.processes.spend(&scope, today, today).await.unwrap_or(u64::MAX),
+            );
+        }
+        spent
+    }
+
     /// The partition's proactive spend today: the daily totals of its agenda and maintenance
     /// processes, in micro-USD.
     pub(crate) async fn proactive_spent(&self, partition: &PartitionId) -> u64 {
@@ -859,6 +878,21 @@ impl Supervision {
             return Admission::Admit;
         }
         let class = class_of(run, meta);
+        // An added agent's own daily limit holds its unattended work until the next UTC day
+        // (spec 3.3 §5.7, K-I11).
+        if class != ProcessClass::Interactive
+            && let Some(limit) = self.targets.daily_limit(&run.target)
+            && self.agent_spent(&run.target, &meta.partition).await >= limit
+        {
+            let next_day = self.clock.now().date_naive() + chrono::Days::new(1);
+            meta.wake = Some(WakeSet::any_of([Wake::At(
+                next_day.and_time(chrono::NaiveTime::MIN).and_utc(),
+            )]));
+            meta.labels.insert(ADMISSION_LABEL.to_string(), "the agent's daily limit".to_string());
+            self.put_meta(meta.clone()).await;
+            self.suspend_local(&run.run_id);
+            return Admission::Budget;
+        }
         let quiet = self.quiet_windows(&meta.partition).await;
         let quotas = self.quotas_of(&meta.partition).await;
         let _gate = self.admission.lock().await;
