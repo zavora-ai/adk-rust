@@ -91,6 +91,9 @@ exclude = [
 
     # Local-only directories (gitignored, not part of CI)
     "learning",
+
+    # The desktop tray: its own unpublished, Experimental workspace (spec 3.3 §5.5)
+    "adk-surface/desktop",
 ]
 
 [profile.dev]

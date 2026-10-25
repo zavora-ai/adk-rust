@@ -7,9 +7,9 @@ import type { PlaywrightTestConfig } from "@playwright/test";
 // Each surface's end-to-end tests run as one project against its own scripted kernel, an
 // example of adk-surface on its own port (spec 3.3 §5). Each run starts every example in a new,
 // empty workspace, so a rerun never finds the files of the last one. Per project, with its
-// prefix (`HOME`, …): `<PREFIX>_E2E_PORT` moves the port; `<PREFIX>_E2E_BIN` starts an example
-// already built instead of `cargo run`; `<PREFIX>_E2E_URL` points the project at a server
-// already running, with `<PREFIX>_E2E_WORKSPACE` naming that server's workspace.
+// prefix (`HOME`, `TRAY`, `MEMORY`, …): `<PREFIX>_E2E_PORT` moves the port; `<PREFIX>_E2E_BIN`
+// starts an example already built instead of `cargo run`; `<PREFIX>_E2E_URL` points the project
+// at a server already running, with `<PREFIX>_E2E_WORKSPACE` naming that server's workspace.
 interface Surface {
   /** The project's name: `npx playwright test --project <name>`. */
   name: string;
@@ -25,6 +25,8 @@ interface Surface {
   testMatch: string[];
   /** The page the server is ready at. */
   ready: string;
+  /** The example's arguments after its port and workspace. */
+  args?: string;
 }
 
 const surfaces: Surface[] = [
@@ -35,6 +37,15 @@ const surfaces: Surface[] = [
     port: 8791,
     testMatch: ["held-call.spec.ts", "today.spec.ts"],
     ready: "/ui/",
+  },
+  {
+    name: "tray",
+    prefix: "TRAY",
+    example: "scripted_tray",
+    port: 8792,
+    testMatch: ["tray.spec.ts"],
+    ready: "/ui/tray",
+    args: "--code-turn",
   },
   {
     // Memory and rules over `adk-rust up` with a scripted model (`e2e/memory-kernel.sh`), whose
@@ -71,7 +82,7 @@ const servers = surfaces.map((surface) => {
 const webServer: PlaywrightTestConfig["webServer"] = servers
   .filter((server) => !server.external)
   .map((server) => ({
-    command: `${server.command} ${server.port} ${server.workspace}`,
+    command: `${server.command} ${server.port} ${server.workspace} ${server.surface.args ?? ""}`.trim(),
     cwd: "../..",
     url: `${server.url}${server.surface.ready}`,
     reuseExistingServer: false,

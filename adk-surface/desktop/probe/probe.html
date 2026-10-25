@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>ADK-Rust · WebKitGTK probe</title>
+    <link rel="stylesheet" href="/src/pages.css" />
+  </head>
+  <body class="probe">
+    <h1>WebKitGTK probe</h1>
+    <section aria-labelledby="dom-heading">
+      <h2 id="dom-heading">Terminal, DOM renderer</h2>
+      <div id="term-dom" class="term"></div>
+    </section>
+    <section aria-labelledby="gl-heading">
+      <h2 id="gl-heading">Terminal, WebGL renderer</h2>
+      <div id="term-gl" class="term"></div>
+    </section>
+    <section aria-labelledby="diff-heading">
+      <h2 id="diff-heading">Diff, 3,000 lines</h2>
+      <div id="diff" class="diff" tabindex="0"></div>
+    </section>
+    <div id="mix" class="mix"></div>
+    <div id="dvh" class="dvh"></div>
+    <pre id="report" class="report"></pre>
+    <script type="module" src="/src/probe.ts"></script>
+  </body>
+</html>

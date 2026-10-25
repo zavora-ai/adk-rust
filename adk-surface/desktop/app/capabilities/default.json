@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "The shell's windows show the kernel's pages and its bundled ones, and no page calls into the shell (spec 3.3 §5.5). There is no remote entry: a page the kernel serves gets no IPC.",
+  "windows": ["home", "panel"],
+  "permissions": []
+}

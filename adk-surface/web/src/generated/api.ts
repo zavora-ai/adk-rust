@@ -32,6 +32,11 @@ export type AgentStatus = "working" | "waitingForYou" | "asleep" | "done" | "fai
 export interface AgentsResponse {
   /** The caller's agents. */
   agents: AgentRow[];
+  /**
+   * The agent a message goes to when the person names none: the tray's "Ask Finance"
+   * (spec 3.3 §5.5). Absent when the source has no single primary agent.
+   */
+  primary?: AgentRef | null;
 }
 
 /** The answers a surface may give one decision (spec 3.3 §7.2). */

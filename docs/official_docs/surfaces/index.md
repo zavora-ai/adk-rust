@@ -201,7 +201,7 @@ the server's auth middleware authenticates every request.
 | `GET /surface/sessions/{session}/thread` | The session's entries |
 | `GET /surface/sessions/{session}/feed` | Server-sent events: `entry` (with `id` = `seq`), `decisions`, `reset`; resumes after `Last-Event-ID` or `?after=` |
 | `GET /surface/sessions/{session}/queued` | `QueuedResponse`: what the caller typed while a decision of the session was open or a turn ran, sent oldest first once the session is free (§7.4 rule 2) |
-| `GET /surface/agents` | The roster |
+| `GET /surface/agents` | The roster, and `primary`: the agent a message goes to when the person names none (`Source::primary_agent`; `LocalSource`'s kernel target, else its harness's agent), absent when the source has none |
 | `GET /surface/status?session=` | The status line |
 | `GET /surface/briefing?since=` | "While you were away" |
 | `POST /surface/commands` | `{"surface", "origin", "command"}` → the outcome |
@@ -242,5 +242,6 @@ generated from the Rust types. `bash scripts/check-surface-api.sh` fails when th
 - [The Web Home](web-home.md) — the page at `/ui/` that reads and acts through this API
 - [The Terminal](terminal.md) — the `tui` feature: full screen, inline and JSON
 - [Chat](chat.md) — the `channels` feature: the Telegram adapter over the kernel's channel contract
+- [The Desktop Tray](desktop.md) — Experimental, a separate app: the home in a desktop window and the tray panel at `/ui/tray`
 - [The Control Plane](../kernel/control-plane.md) — the kernel routes the web API sits beside
 - [Harness Modes and Approvals](../harness/modes-and-approvals.md) — held calls, standing rules, modes

@@ -98,5 +98,10 @@ vt100 = "0.16"
 name = "scripted_home"
 required-features = ["web"]
 
+# The tray panel over a scripted kernel with two agents (spec 3.3 §5.5).
+[[example]]
+name = "scripted_tray"
+required-features = ["web"]
+
 [package.metadata.docs.rs]
 all-features = true

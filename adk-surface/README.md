@@ -24,6 +24,7 @@ with `default-features = false` to leave it out.
 | Rules | What each surface may decide (§7.2) and the rules on every surface (§7.4), enforced by the engine | `rules` |
 | `web` | The web home: its HTTP API under `/api/surface`, its OpenAPI document and generated TypeScript types, and the page itself at `/ui/` — Threads, Today and Memory & rules, in light and dark (spec 3.3 §5.1) | `web::router`, `web::home` |
 | `channels` | Chat: the Telegram adapter over the kernel's channel contract — cards with Allow once and Deny, never the call's arguments, pairing, "stop all" (spec 3.3 §5.3) | `channels::TelegramAdapter` |
+| Desktop tray | Experimental and not a feature: an unpublished Tauri 2 app in `desktop/` whose windows load the web home and its tray panel at `/ui/tray`, with the decisions badge on a tray icon (spec 3.3 §5.5) | `desktop/README.md` |
 
 ## Sources
 

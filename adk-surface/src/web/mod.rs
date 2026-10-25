@@ -69,7 +69,7 @@ pub use vocabulary::words_typescript;
 
 use crate::engine::{Command, CommandOutcome, FeedFrame, SurfaceEngine};
 use crate::error::SurfaceError;
-use crate::model::{AgentRow, Briefing, DecisionCard, FeedEntry, StatusLine};
+use crate::model::{AgentRef, AgentRow, Briefing, DecisionCard, FeedEntry, StatusLine};
 use crate::origin::{Caller, Origin, SurfaceKind};
 
 /// The route paths, relative to the `/api` prefix (spec 3.3 §6).
@@ -176,6 +176,10 @@ pub struct QueuedResponse {
 pub struct AgentsResponse {
     /// The caller's agents.
     pub agents: Vec<AgentRow>,
+    /// The agent a message goes to when the person names none: the tray's "Ask Finance"
+    /// (spec 3.3 §5.5). Absent when the source has no single primary agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary: Option<AgentRef>,
 }
 
 /// `POST /surface/commands` body: the command, the surface it was given on and how.
@@ -405,7 +409,9 @@ async fn agents(
 ) -> Response {
     let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
     match engine.agents(&caller).await {
-        Ok(agents) => Json(AgentsResponse { agents }).into_response(),
+        Ok(agents) => {
+            Json(AgentsResponse { agents, primary: engine.primary_agent() }).into_response()
+        }
         Err(error) => failed(error),
     }
 }

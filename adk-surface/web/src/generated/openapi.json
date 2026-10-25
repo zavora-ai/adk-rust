@@ -101,6 +101,17 @@
               "$ref": "#/components/schemas/AgentRow"
             },
             "type": "array"
+          },
+          "primary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The agent a message goes to when the person names none: the tray's \"Ask Finance\"\n(spec 3.3 §5.5). Absent when the source has no single primary agent."
           }
         },
         "required": [

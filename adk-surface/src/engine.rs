@@ -21,7 +21,8 @@ use tokio::task::JoinHandle;
 use crate::answers::{AnswerLog, AnswerRecord, InMemoryAnswerLog, SURFACE_AUDIT_DECIDE};
 use crate::error::{Result, SurfaceError};
 use crate::model::{
-    AgentRow, Briefing, Decided, DecisionCard, FeedEntry, Mode, ModeView, Reversibility, StatusLine,
+    AgentRef, AgentRow, Briefing, Decided, DecisionCard, FeedEntry, Mode, ModeView, Reversibility,
+    StatusLine,
 };
 use crate::origin::{Caller, Origin};
 use crate::project::{self, Place, Projector};
@@ -789,6 +790,13 @@ impl SurfaceEngine {
             .iter()
             .map(|state| self.inner.projector.agent_row(state))
             .collect())
+    }
+
+    /// The agent a message goes to when the person names none (spec 3.3 §5.5): the tray's
+    /// "Ask Finance". `None` when the source has no single primary agent
+    /// ([`Source::primary_agent`]).
+    pub fn primary_agent(&self) -> Option<AgentRef> {
+        self.inner.source.primary_agent().map(|name| self.inner.projector.agent(&name))
     }
 
     /// The status line (spec 3.3 §5.1): the mode word of `session` (or the default), spend

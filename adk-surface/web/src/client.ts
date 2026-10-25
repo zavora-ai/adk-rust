@@ -217,6 +217,11 @@ export class HttpClient implements HomeClient {
     return (await this.request<AgentsResponse>(`/surface/agents?surface=${this.surface}`)).agents;
   }
 
+  /** The agents with the one a message goes to when the person names none (spec 3.3 §5.5). */
+  agentsWithPrimary() {
+    return this.request<AgentsResponse>(`/surface/agents?surface=${this.surface}`);
+  }
+
   async decisions() {
     return (await this.request<DecisionsResponse>(`/surface/decisions?surface=${this.surface}`)).decisions;
   }
@@ -293,6 +298,30 @@ export class HttpClient implements HomeClient {
   async processes() {
     const page = await this.optional<{ processes: KernelProcess[] }>("/kernel/processes?state=waiting&limit=200");
     return page?.processes;
+  }
+
+  /** What is working now: the kernel's running processes (spec 3.3 §5.5); `undefined` without a kernel. */
+  async running() {
+    const page = await this.optional<{ processes: KernelProcess[] }>("/kernel/processes?state=running&limit=50");
+    return page?.processes;
+  }
+
+  /**
+   * One wake-up per frame of the kernel's event stream (`GET /api/kernel/events`), until
+   * `signal` aborts or the stream ends, so the tray changes within one event (spec 3.3 §12).
+   */
+  async *events(signal: AbortSignal): AsyncIterable<void> {
+    const response = await fetch(`${this.base}/kernel/events`, {
+      headers: this.headers({ accept: "text/event-stream" }),
+      signal,
+      credentials: "same-origin",
+    });
+    if (!response.ok) throw await problem(response);
+    if (!response.body) return;
+    for await (const frame of parseSse(response.body)) {
+      void frame;
+      yield;
+    }
   }
 
   async agenda() {
