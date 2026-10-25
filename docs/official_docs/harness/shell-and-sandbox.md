@@ -82,6 +82,20 @@ empty standard input, new session and process-group kill.
 | Anything else, including the real home directory and `~/.ssh` | none | none |
 | Network | `network` | `network` |
 
+**Git.** Of a `.git` directory the sandbox keeps `hooks`, `config` and `info` read-only, the
+entries that decide which commands git runs, and leaves the index, refs and objects
+writable, so `git add` and `git commit` work inside it. The same holds for a nested
+repository's `.git` and for each submodule gitdir under `.git/modules`.
+
+| `.git` | Kept read-only |
+|---|---|
+| A directory with `hooks`, `config` and `info`, none a symbolic link | Those three entries |
+| A directory missing one of them, or with one a symbolic link | The whole directory; `git commit` needs the unsandboxed retry |
+| A file naming the gitdir (a linked worktree or a submodule checkout) | The file. The gitdir lies outside the workspace, so `git commit` needs the unsandboxed retry |
+
+The file tools keep all of `.git` protected, and rewriting history is reversible through the
+reflog.
+
 **Toolchains.** With `read_toolchains`, the sandbox can read the `PATH` directories, the
 Cargo, rustup, pyenv and nvm homes, `/opt/homebrew` and `/usr/local`, and on Linux `/usr`,
 `/bin`, `/lib`, `/lib64` and `/etc`. A `PATH` entry that is the home directory, a directory
@@ -325,6 +339,7 @@ Windows host no process the command starts can leave its Job Object.
 | A protected name that does not exist below the root (a new nested `AGENTS.md`, `.envrc` or `.git`) can be created by a sandboxed command | Root-level names gate `auto_allow_sandboxed`; nested files are listed, never inlined, by the instruction loader |
 | On a case-sensitive file system a differently cased protected name (`agents.md`) is a different file | File tools match protected names case-folded; the sandbox protects names that exist |
 | Network access is all or nothing | `network: false` is required for unapproved sandboxed commands |
+| Git runs code from places the sandbox leaves writable: a `core.hooksPath` inside the workspace (Husky's `.husky`), or a repository a command creates and registers as a submodule through the writable index, whose own `config` git honours when it recurses into it | Documented; the sandbox protects the gitdirs that exist when the command starts |
 | A protected name created inside the container after it started is not mounted read-only | The container's protected mounts are fixed when it starts; root-level names must exist for `auto_allow_sandboxed`, and the next container mounts new ones |
 | A container from a `client` of your own keeps a background process a command leaves, since the harness cannot tell that its sessions are isolated from the host | Containers the harness builds end them after each command; stop them in your client's `exec_command` |
 | A sandboxed command can read the workspace's secret files (`.env`) | `grep` and `glob` skip them and `read_file` refuses them; `bash` needs approval unless `auto_allow_sandboxed` is on |

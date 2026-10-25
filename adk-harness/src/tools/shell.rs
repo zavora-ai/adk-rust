@@ -259,8 +259,9 @@ impl HarnessBashTool {
                 ""
             };
             let paths = if protects {
-                "The workspace is writable (read-only in plan mode), but .git, AGENTS.md and other \
-                 protected paths are read-only, nothing outside the workspace is writable, and \
+                "The workspace is writable (read-only in plan mode), but AGENTS.md, git's hooks \
+                 and config, and other protected paths are read-only (the rest of .git is \
+                 writable, so git commit works), nothing outside the workspace is writable, and \
                  HOME is a scratch directory."
             } else {
                 "The workspace is writable, including .git and AGENTS.md; nothing outside it is \
