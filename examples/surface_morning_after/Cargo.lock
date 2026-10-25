@@ -49,6 +49,7 @@ dependencies = [
  "cron",
  "futures",
  "hmac 0.12.1",
+ "http",
  "reqwest",
  "serde",
  "serde_json",

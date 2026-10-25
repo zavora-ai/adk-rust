@@ -47,6 +47,7 @@ dependencies = [
  "chrono",
  "futures",
  "hmac",
+ "http",
  "rustls",
  "serde",
  "serde_json",

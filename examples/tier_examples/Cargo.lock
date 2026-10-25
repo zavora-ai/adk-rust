@@ -257,6 +257,7 @@ dependencies = [
  "cron",
  "futures",
  "hmac 0.12.1",
+ "http",
  "reqwest 0.12.28",
  "rustls",
  "serde",
