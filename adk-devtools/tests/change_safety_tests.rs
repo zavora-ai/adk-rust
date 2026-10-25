@@ -275,6 +275,7 @@ async fn a_write_that_fails_midway_restores_the_files_already_written() {
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
+#[cfg(unix)]
 fn walk(dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
