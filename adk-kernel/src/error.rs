@@ -44,6 +44,9 @@ pub const SERDE_CODE: &str = "kernel.serde";
 /// Error code of a spawn the run store refuses because another run holds its concurrency
 /// key and the run does not queue behind it.
 pub const SPAWN_REJECTED_CODE: &str = "kernel.spawn_rejected";
+/// Error code of a call a store does not support, such as attachments on a device store
+/// that keeps none.
+pub const UNSUPPORTED_CODE: &str = "kernel.unsupported";
 /// Error code of a ledger row the ledger refuses (spec 3.2 §9.2 K-I19).
 ///
 /// # Example
@@ -80,6 +83,7 @@ pub(crate) const CODES: &[&str] = &[
     IO_CODE,
     SERDE_CODE,
     SPAWN_REJECTED_CODE,
+    UNSUPPORTED_CODE,
     LEDGER_INVALID_CODE,
     CROSSING_DENIED_CODE,
     MEMORY_CROSSING_CODE,
