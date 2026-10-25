@@ -38,6 +38,7 @@ cargo adk new my-agent --template api        # REST API server
 cargo adk new my-agent --template graph      # graph-based workflow
 cargo adk new my-agent --template realtime   # realtime voice/audio agent
 cargo adk new my-agent --template harness    # governed harness: REPL with approvals
+cargo adk new my-site --template website     # AWP 2.0 website and its edge
 
 # Compose with addons
 cargo adk new my-agent --template tools --addon telemetry --addon auth
@@ -191,6 +192,7 @@ cargo adk eval --ledger ledger.jsonl --format json --output ledger-report.json
 | `agent-engine` | Gemini Enterprise Agent Engine BYOC container: `serve_agent_engine` binary, `Dockerfile`, and `deploy/terraform/` |
 | `openai` | OpenAI-powered LLM agent |
 | `harness` | The governed harness: `HarnessAgent` over SQLite sessions run by `HarnessLauncher` (`cargo run` is the REPL with approvals, `cargo run -- serve` serves it), `.adk/harness.toml`, an `AGENTS.md` skeleton, an example skill, and a scripted smoke test |
+| `website` | An AWP 2.0 website (spec 3.5 §7.17): the site project `adk-website new` scaffolds — `site.toml`, the `paper` theme, a business draft charter with its own site id, capabilities, public terms, draft legal pages, `data/`, the holding page — and an edge binary: `cargo run` serves the release `adk-rust site publish` puts in `data/host` with `search_site` on the AWP edge, `cargo run -- check` builds and runs the launch gate; a smoke test. Takes no addon |
 | `managed-agents` | Anthropic Managed Agents session with SSE streaming |
 
 Each template generates `Cargo.toml` with the right dependencies and features, a `src/main.rs` that compiles and runs, `.env.example` with the required API key variables, `README.md`, and `.gitignore`.

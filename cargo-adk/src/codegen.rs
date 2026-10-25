@@ -66,8 +66,10 @@ pub fn generate_project_with_registry(
     // A fragment with the same path as an earlier file replaces it, so a
     // template can override a base file (the agent-engine template ships its
     // own README.md).
+    // `{site_id}` gives a generated website its own site id (spec 3.5 §7.6).
+    let site_id = fresh_site_id(project_name);
     let push_or_replace = |files: &mut Vec<GeneratedFile>, path: &str, content: &str| {
-        let content = content.replace("{name}", project_name);
+        let content = content.replace("{name}", project_name).replace("{site_id}", &site_id);
         match files.iter_mut().find(|f| f.path == path) {
             Some(existing) => existing.content = content,
             None => files.push(GeneratedFile { path: path.to_string(), content }),
@@ -87,6 +89,22 @@ pub fn generate_project_with_registry(
     }
 
     files
+}
+
+/// A version 4 UUID derived from `project_name` and the current time, for the `{site_id}`
+/// placeholder.
+fn fresh_site_id(project_name: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let digest = Sha256::digest(format!("{project_name}:{nanos}:{}", std::process::id()));
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex = hex::encode(bytes);
+    format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..])
 }
 
 /// Generate `Cargo.toml` with minimal dependencies from the composition manifest.

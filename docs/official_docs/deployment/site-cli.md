@@ -16,7 +16,8 @@ cargo install adk-cli --features website
 ## The site project
 
 Every `site` command acts on a project directory: the current one, or `--site DIR`.
-`adk-website new` scaffolds one; a `site.toml` is enough to start.
+`adk-website new` scaffolds one, `cargo adk new my-site --template website` scaffolds the same
+project with an edge binary that serves it, and a `site.toml` is enough to start.
 
 ```toml
 name = "Example Solar"

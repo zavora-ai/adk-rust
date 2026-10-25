@@ -270,6 +270,7 @@ cargo adk new my-agent --template graph      # graph workflow with checkpoints
 cargo adk new my-agent --template realtime   # realtime voice agent
 cargo adk new my-agent --template agent-engine # Gemini Enterprise Agent Engine BYOC
 cargo adk new my-agent --template harness    # governed harness: REPL with approvals, AGENTS.md, skills
+cargo adk new my-site --template website     # AWP 2.0 website: content, theme, charter, data and its edge
 
 # Compose addons with any template
 cargo adk new my-agent --template tools --addon telemetry --addon sessions

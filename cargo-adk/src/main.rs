@@ -1831,8 +1831,16 @@ fn create_project_composable(
         println!();
         println!("Next steps:");
         println!("  cd {}", project_path.display());
-        println!("  cp .env.example .env    # add your API key");
-        println!("  cargo run");
+        if base_template == "website" {
+            // A website needs no key to build or serve (spec 3.5 §7.17).
+            println!("  cargo run -- check         # build and run the launch gate");
+            println!(
+                "  cargo run                  # serve the site and its edge on 127.0.0.1:8080"
+            );
+        } else {
+            println!("  cp .env.example .env    # add your API key");
+            println!("  cargo run");
+        }
     }
 
     Ok(())
