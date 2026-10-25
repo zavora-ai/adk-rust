@@ -12,6 +12,10 @@ use crate::{DesktopError, Result};
 /// Where `adk-rust up` listens unless told otherwise.
 pub const DEFAULT_SERVER: &str = "http://127.0.0.1:8080";
 
+/// Where the web home keeps the server's token: tab storage, one per window
+/// (`adk-surface/web/src/client.ts`).
+pub const HOME_TOKEN_KEY: &str = "adk.home.token";
+
 /// The kernel's token (`adk-rust up --auth-token`). Never logged: its `Debug` hides it, and it
 /// has no `Display`.
 #[derive(Clone, PartialEq, Eq)]
@@ -127,6 +131,35 @@ impl ServerTarget {
     /// Whether `url` is on this server.
     pub fn same_origin(&self, url: &Url) -> bool {
         url.origin() == self.origin.origin()
+    }
+
+    /// The script each window runs before a page's own scripts (spec 3.3 §5.5): on the
+    /// kernel's origin only, it puts the token where the web home keeps it,
+    /// [`HOME_TOKEN_KEY`] in tab storage, so the home and the panel are signed in. It runs on
+    /// every page either window loads, the bundled ones included, so the origin check is what
+    /// keeps the token to the kernel. The origin, the key and the token are JSON strings, so
+    /// no value can end the script early. Empty without a token.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_desktop_core::ServerTarget;
+    ///
+    /// let target = ServerTarget::resolve(Some("127.0.0.1:8792"), Some("t0ken"), None).unwrap();
+    /// assert!(target.token_script().starts_with(
+    ///     r#"(function () { if (window.location.origin !== "http://127.0.0.1:8792") return;"#
+    /// ));
+    /// assert_eq!(ServerTarget::resolve(Some("127.0.0.1:8792"), None, None).unwrap().token_script(), "");
+    /// ```
+    pub fn token_script(&self) -> String {
+        let Some(token) = &self.token else { return String::new() };
+        let json = |text: &str| serde_json::Value::from(text).to_string();
+        let (origin, key, token) =
+            (json(&self.page_origin()), json(HOME_TOKEN_KEY), json(token.expose()));
+        format!(
+            "(function () {{ if (window.location.origin !== {origin}) return; \
+             try {{ window.sessionStorage.setItem({key}, JSON.stringify({token})); }} catch (e) {{}} }})();"
+        )
     }
 
     /// `reference` (a path, with a query when it has one) on the server.
@@ -296,6 +329,30 @@ mod tests {
         assert_eq!(target.token().map(Token::expose), Some("s3cret"));
         assert!(!format!("{target:?}").contains("s3cret"));
         assert_eq!(ServerTarget::resolve(None, Some("  "), None).unwrap().token(), None);
+    }
+
+    #[test]
+    fn the_token_script_signs_in_the_kernel_s_origin_only() {
+        let script = |token: Option<&str>| {
+            ServerTarget::resolve(Some("http://0.0.0.0:8792"), token, None).unwrap().token_script()
+        };
+        assert_eq!(script(None), "");
+        assert_eq!(
+            script(Some("t0ken")),
+            "(function () { if (window.location.origin !== \"http://127.0.0.1:8792\") return; \
+             try { window.sessionStorage.setItem(\"adk.home.token\", JSON.stringify(\"t0ken\")); } catch (e) {} })();"
+        );
+
+        // A token that would close the string, the call or the script stays one JSON string,
+        // written after the origin check.
+        let hostile = r#"a"b\c'); alert(1); //</script>"#;
+        let text = script(Some(hostile));
+        let encoded = serde_json::Value::from(hostile).to_string();
+        let guard = text.find("if (window.location.origin !== \"http://127.0.0.1:8792\") return;");
+        let stored = text.find(&format!("JSON.stringify({encoded})"));
+        assert!(matches!((guard, stored), (Some(guard), Some(stored)) if guard < stored), "{text}");
+        assert!(!text.contains(hostile), "{text}");
+        assert_eq!(text.matches("setItem").count(), 1, "{text}");
     }
 
     #[test]
