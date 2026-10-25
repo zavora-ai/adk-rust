@@ -1422,13 +1422,9 @@ impl Agents {
     pub(crate) async fn reconcile(&self) -> Result<()> {
         let inner = &self.inner;
         let records = inner.store.list().await?;
-        let mut live = BTreeSet::new();
         for record in &records {
             match record.state {
-                AgentRecordState::Active | AgentRecordState::Paused => {
-                    live.insert(record.id.clone());
-                    self.host(record).await;
-                }
+                AgentRecordState::Active | AgentRecordState::Paused => self.host(record).await,
                 AgentRecordState::Removing => {
                     if let Err(error) = self.finish_removal(record, None).await {
                         tracing::warn!(agent.id = %record.id, error = %error, "could not finish removing an agent; the next tick retries");
@@ -1438,6 +1434,15 @@ impl Agents {
                 AgentRecordState::Removed | AgentRecordState::Refused => {}
             }
         }
+        // Read again: a suggestion settled above is live now.
+        let live: BTreeSet<String> = inner
+            .store
+            .list()
+            .await?
+            .into_iter()
+            .filter(|record| record.state.is_hosted())
+            .map(|record| record.id)
+            .collect();
         for id in inner.targets.hosted_ids() {
             if !live.contains(&id) {
                 inner.targets.retire(&id);

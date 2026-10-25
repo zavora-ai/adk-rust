@@ -280,8 +280,18 @@ where
 
 /// Waits until run `pid` is in `state`.
 pub async fn in_state(runs: &Arc<dyn DurableRunStore>, pid: &str, state: RunState) -> RunRecord {
-    eventually(&format!("{pid} to be {state:?}"), || async {
-        runs.get(pid).await.ok().flatten().filter(|run| run.state == state)
-    })
-    .await
+    let started = tokio::time::Instant::now();
+    loop {
+        let run = runs.get(pid).await.unwrap().expect("the run exists");
+        if run.state == state {
+            return run;
+        }
+        assert!(
+            started.elapsed() <= Duration::from_secs(5),
+            "{pid} is {:?}, not {state:?}: {:?}",
+            run.state,
+            run.error
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
