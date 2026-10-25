@@ -383,4 +383,67 @@ mod tests {
         let reopened = open_in(dir.path()).await.unwrap();
         assert_eq!(latest(reopened.as_ref(), "ana").await.unwrap().as_deref(), Some("first"));
     }
+
+    /// Creates the session `id` of user `ana` in `store`, which writes to the log.
+    async fn write(store: &SqliteSessionService, id: &str) {
+        store
+            .create(CreateRequest {
+                app_name: APP_NAME.into(),
+                user_id: "ana".into(),
+                session_id: Some(id.into()),
+                state: Default::default(),
+            })
+            .await
+            .unwrap();
+    }
+
+    /// SQLite deletes `harness.db-wal` and `-shm` when the file's last connection closes and
+    /// creates them again at the next open, whichever process opens it, so their protection
+    /// comes from the directory: only the owner has access after a checkpoint, after a plain
+    /// SQLite open re-creates them and after `open_in` reopens the store (spec 3.2 §10 W4).
+    #[tokio::test]
+    async fn the_wal_files_stay_owner_only_through_checkpoints_and_reopens() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = ["harness.db-wal", "harness.db-shm"].map(|file| dir.path().join(file));
+        let owner_only = |stage: &str| {
+            for path in &files {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+                    assert_eq!(mode, 0o600, "{} after {stage}", path.display());
+                }
+                #[cfg(windows)]
+                assert!(
+                    crate::owner_only::only_the_owner_has_access(path).unwrap(),
+                    "{} is not owner-only after {stage}",
+                    path.display()
+                );
+            }
+        };
+
+        let store = open_in(dir.path()).await.unwrap();
+        write(&store, "first").await;
+        owner_only("the first open");
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(store.pool()).await.unwrap();
+        write(&store, "second").await;
+        owner_only("a checkpoint");
+        store.pool().close().await;
+        drop(store);
+        for path in &files {
+            assert!(!path.exists(), "{} outlived the last connection", path.display());
+        }
+
+        let plain =
+            SqliteSessionService::new(&sqlite_url(&dir.path().join("harness.db"))).await.unwrap();
+        write(&plain, "third").await;
+        owner_only("a plain SQLite open re-created them");
+        plain.pool().close().await;
+        drop(plain);
+
+        let reopened = open_in(dir.path()).await.unwrap();
+        write(&reopened, "fourth").await;
+        owner_only("reopening");
+        assert_eq!(latest(reopened.as_ref(), "ana").await.unwrap().as_deref(), Some("fourth"));
+    }
 }
