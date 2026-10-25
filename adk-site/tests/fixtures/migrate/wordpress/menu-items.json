@@ -1,0 +1,29 @@
+[
+ {
+  "id": 40,
+  "title": {
+   "rendered": "Home"
+  },
+  "url": "https://solar.test/",
+  "menu_order": 1,
+  "parent": 0
+ },
+ {
+  "id": 41,
+  "title": {
+   "rendered": "About us"
+  },
+  "url": "https://solar.test/about/",
+  "menu_order": 2,
+  "parent": 0
+ },
+ {
+  "id": 42,
+  "title": {
+   "rendered": "Contact"
+  },
+  "url": "https://solar.test/contact/",
+  "menu_order": 3,
+  "parent": 0
+ }
+]

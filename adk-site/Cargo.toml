@@ -19,6 +19,27 @@ include = ["src/**/*", "tests/**/*", "Cargo.toml", "README.md"]
 # adapters arrive later as their own features.
 [features]
 default = []
+# Spec 3.5 §7.8 migration: sources, domain claim, sanitiser, feature mapping, freeze, parity,
+# probes and the encrypted legacy archive.
+migrate = [
+    "adk-auth/web-bot-auth",
+    "dep:adk-artifact",
+    "dep:adk-guardrail",
+    "dep:aws-lc-rs",
+    "dep:ego-tree",
+    "dep:hickory-resolver",
+    "dep:image-compare",
+    "dep:quick-xml",
+    "dep:regex",
+    "dep:reqwest",
+    "dep:similar",
+    "dep:tempfile",
+    "dep:url",
+    "dep:x509-parser",
+    "tokio/io-util",
+    "tokio/net",
+    "tokio/process",
+]
 
 [dependencies]
 adk-core.workspace = true
@@ -45,8 +66,23 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "sync", "rt", "time"] }
 toml.workspace = true
 tracing.workspace = true
+# Migration (feature `migrate`).
+adk-artifact = { workspace = true, optional = true }
+adk-guardrail = { workspace = true, optional = true }
+aws-lc-rs = { version = "1.18", optional = true }
+ego-tree = { version = "0.10", optional = true }
+hickory-resolver = { version = "0.26", optional = true }
+image-compare = { version = "0.5", optional = true }
+quick-xml = { version = "0.41", optional = true }
+regex = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+similar = { version = "3", optional = true }
+tempfile = { version = "3", optional = true }
+url = { version = "2.5", optional = true }
+x509-parser = { version = "0.18", optional = true }
 
 [dev-dependencies]
+axum = "0.8"
 proptest = "1.5"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

@@ -1,0 +1,29 @@
+[
+ {
+  "id": 21,
+  "name": "Panel 400 W",
+  "slug": "panel-400",
+  "permalink": "https://solar.test/products/panel-400/",
+  "sku": "P-400",
+  "description": "<p>A 400 W monocrystalline panel with a 25-year output warranty.</p>\n<img src=\"https://solar.test/wp-content/uploads/2026/10/panel.jpg\" alt=\"The 400 W panel\">",
+  "short_description": "<p>A 400 W monocrystalline panel.</p>",
+  "prices": {
+   "price": "2500000",
+   "currency_code": "KES",
+   "currency_minor_unit": 2
+  },
+  "images": [
+   {
+    "src": "https://solar.test/wp-content/uploads/2026/10/panel.jpg",
+    "alt": "The 400 W panel"
+   }
+  ],
+  "categories": [
+   {
+    "id": 30,
+    "name": "Panels",
+    "slug": "panels"
+   }
+  ]
+ }
+]

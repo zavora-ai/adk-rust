@@ -284,6 +284,9 @@
 # kit and the committed test vectors run only here.
 6 adk-awp signing
 6 adk-awp verify
+# Site migration (spec 3.5 §7.8): sources, sanitiser, detectors, freeze, parity, probes and the
+# archive, with the S3 and S4 scenario tests, compile and run only here.
+6 adk-site migrate doc
 
 # Shard 7 — adk-rag's SurrealDB backend on its own: it and lancedb each compile for about
 # fifteen minutes, and together they made shard 0 the longest job in the tier.

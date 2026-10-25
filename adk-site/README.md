@@ -114,6 +114,27 @@ async fn verify(host: &dyn SiteHost, domain: &str, key: &NoteVerifier) -> adk_si
 }
 ```
 
+## Migrating a site (feature `migrate`)
+
+```toml
+[dependencies]
+adk-site = { version = "3.0.0", features = ["migrate"] }
+```
+
+| Stage | Type | Behaviour |
+|-------|------|-----------|
+| Domain claim | `DomainClaim`, `ProvenDomain` | DNS TXT or well-known token; until proven only polite public reads run (A-I9) |
+| Sources | `WordPressRest`, `Wxr`, `Crawl`, `Presence`, `IsolatedReplay` | A `SiteInventory`; requests signed with the site's Web Bot Auth key, robots-respecting, rate-limited, recorded |
+| Detectors and quarantine | `Detectors`, `QuarantineBook` | Hidden-link spam, cloaking, executables and MIME mismatches, obfuscated scripts; released per item through an `ApprovalGate`, executables never |
+| Sanitiser | `Sanitiser` | HTML to Markdown through an allowlist |
+| Feature mapping | `map_features` | `submit_inquiry`, `search_site`, `get_quote`, `place_order`, `check_availability`, `book`; owner decisions for comments and accounts |
+| Freeze | `Freeze` | A private-vantage crawl published as a signed release; no upstream request at serve time |
+| Parity | `MigrationParity` | URL coverage, perceptual difference, main-text similarity, metadata |
+| Probes | `Prober` | Drift on the host and at the origin against the release window; certificate, DNS, headers |
+| Archive | `LegacyArchive` | The legacy export encrypted through `adk-artifact`; never deleted (A-I10) |
+
+See [Site migration](../docs/official_docs/deployment/site-migration.md).
+
 ## Writing a host
 
 Implement `SiteHost` and run `adk_site::host::conformance::run_all` in its tests: it checks

@@ -1,0 +1,13 @@
+{
+ "name": "Example Solar",
+ "description": "Clean power for homes",
+ "url": "https://solar.test",
+ "home": "https://solar.test",
+ "namespaces": [
+  "oembed/1.0",
+  "wp/v2",
+  "wp-site-health/v1",
+  "contact-form-7/v1",
+  "wc/store/v1"
+ ]
+}

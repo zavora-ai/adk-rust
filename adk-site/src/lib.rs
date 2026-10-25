@@ -20,6 +20,7 @@
 //! | [`media`] | Uploads sniffed, executables and polyglots refused, location stripped, resized | §7.8.2 |
 //! | [`translation`] | Translation policy as data | §7.8.2, §7.8.3 |
 //! | [`redirects`] | Redirects in each host's format | §7.8 |
+//! | `migrate` (feature `migrate`) | Sources, domain claim, sanitiser, feature mapping, freeze, parity, probes, archive | §7.8, §7.8.1, §7.18 |
 //!
 //! # Example
 //!
@@ -72,6 +73,8 @@ pub mod generator;
 pub mod host;
 pub mod log;
 pub mod media;
+#[cfg(feature = "migrate")]
+pub mod migrate;
 pub mod pipeline;
 pub mod redirects;
 pub mod release;

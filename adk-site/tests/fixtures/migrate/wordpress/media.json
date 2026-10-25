@@ -1,0 +1,20 @@
+[
+ {
+  "id": 15,
+  "source_url": "https://solar.test/wp-content/uploads/2026/10/team.png",
+  "mime_type": "image/png",
+  "alt_text": "The installation team on a roof",
+  "media_details": {
+   "sizes": {}
+  }
+ },
+ {
+  "id": 16,
+  "source_url": "https://solar.test/wp-content/uploads/2026/10/panel.jpg",
+  "mime_type": "image/jpeg",
+  "alt_text": "The 400 W panel",
+  "media_details": {
+   "sizes": {}
+  }
+ }
+]

@@ -1,0 +1,72 @@
+[
+ {
+  "id": 9,
+  "date_gmt": "2026-10-12T08:00:00",
+  "modified_gmt": "2026-10-12T08:00:00",
+  "slug": "panel-care",
+  "status": "publish",
+  "type": "post",
+  "link": "https://solar.test/2026/10/12/panel-care/",
+  "title": {
+   "rendered": "Caring for your panels"
+  },
+  "content": {
+   "rendered": "<p>Dust costs a panel up to a fifth of its output in the dry season. Rinse panels with clean water early in the morning, never with soap, and never climb onto the roof yourself.</p>\n<p>We include two cleaning visits a year with every installation.</p>",
+   "protected": false
+  },
+  "excerpt": {
+   "rendered": "<p>Keep your panels producing.</p>\n",
+   "protected": false
+  },
+  "comment_status": "open",
+  "categories": [
+   3
+  ],
+  "tags": [
+   5
+  ],
+  "_embedded": {
+   "author": [
+    {
+     "id": 1,
+     "name": "Otieno"
+    }
+   ]
+  }
+ },
+ {
+  "id": 7,
+  "date_gmt": "2026-10-01T09:00:00",
+  "modified_gmt": "2026-10-01T09:00:00",
+  "slug": "hello-sun",
+  "status": "publish",
+  "type": "post",
+  "link": "https://solar.test/2026/10/01/hello-sun/",
+  "title": {
+   "rendered": "Hello, sun"
+  },
+  "content": {
+   "rendered": "<p>Our first panel went up in 2019 on a school roof in Kibera. It still produces more than it did on day one, because we clean it every quarter.</p>\n<p>This blog is where we share what we learn from every installation.</p>",
+   "protected": false
+  },
+  "excerpt": {
+   "rendered": "<p>Why we started.</p>\n",
+   "protected": false
+  },
+  "comment_status": "open",
+  "categories": [
+   3
+  ],
+  "tags": [
+   5
+  ],
+  "_embedded": {
+   "author": [
+    {
+     "id": 1,
+     "name": "Amina"
+    }
+   ]
+  }
+ }
+]
