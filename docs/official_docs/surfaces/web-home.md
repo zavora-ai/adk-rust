@@ -10,7 +10,11 @@ beside it. Nothing lives in the page that a reload cannot rebuild.
 
 > **Note:** the web home replaces the runtime UI that `adk-server` bundled at `/ui/` (spec 3.3
 > §10 S1). `adk-server` keeps its APIs and serves no page of its own; see
-> [Moving from the bundled runtime UI](#moving-from-the-bundled-runtime-ui).
+> [Moving from the bundled runtime UI](#moving-from-the-bundled-runtime-ui). The UI-protocol
+> code (`adk_server::ui_protocol`, `adk_server::ui_types`) stays in `adk-server`, a deviation
+> from S1: the server's own `/api/run_sse` profiles and `/api/ui/...` routes use it, and
+> `adk-surface` depends on `adk-server` through `adk-kernel`, so the move would make the two
+> crates depend on each other.
 
 ## Open it
 
@@ -128,7 +132,7 @@ all** appears; resuming happens only here or on a paired local terminal (§11 S-
 
 | Section | What it shows | Where it reads it |
 |---|---|---|
-| **Threads** | The roster (avatar, name, status word), the selected agent's thread with its decisions inline on their own background, **Decisions** with a filled count badge, **Coming up**. A thread follows one conversation: the session the agent's row names when it is first shown, or a new one, kept for the tab until a decision of another session is opened from **Decisions** or **Today** | `GET /surface/agents`, the session feed, `GET /surface/decisions`, the kernel's processes and agenda |
+| **Threads** | The roster (avatar, name, status word), the selected agent's thread with its decisions inline on their own background, **Decisions** with a filled count badge, **Coming up**. A thread follows one conversation: the session the agent's row names when it is first shown, or a new one, kept for the tab. A decision of another session, opened from **Decisions** or **Today**, shows in that session's thread with "A decision from another conversation" and **Back to your conversation**, and no message box; the thread still follows its own conversation | `GET /surface/agents`, the session feed, `GET /surface/decisions`, the kernel's processes and agenda |
 | **Today** | "While you were away": spent, quiet time, how many things wait, one line per event since you last marked it seen with a status pill, its actions and its record, **Mark as seen**, and today's routines with **Add a routine** | `GET /kernel/away`, `GET /kernel/away/lines/{seq}`, `POST /kernel/away/seen`, `GET /kernel/settings`, the kernel's agenda; **Do it** and **Not now** answer a suggestion through `POST /kernel/agenda/{id}/approve` or `reject`. Without a kernel ledger, `GET /surface/briefing` |
 | **Memory & rules** | "Agent Memory and Rules": **What your agents remember**, **What your agents can do** and **What your agents did**, as bordered lists | `GET /rules` (with **Stop allowing**), `GET /kernel/settings` and its changes, `GET /surface/briefing`; **Where you can say yes from** from `GET /kernel/devices` and `GET /kernel/channels`, with **Remove**, **Add a phone or app** (a pairing code from `POST /kernel/pairing`) and **Pair a chat account** (`POST /kernel/channels/pair`) when the kernel pairs devices |
 
@@ -154,7 +158,9 @@ viewer `home`; a paired phone reads as itself, so each keeps its own place.
 | Routines today | Each routine's time today, the **Morning briefing** at the end of quiet time, and **Quiet time starts** |
 
 A kernel without a `/proc` ledger, and `adk-rust serve` without a kernel, show the engine's
-briefing of the last day instead, read-only.
+briefing of the last day instead, read-only. Without a ledger the briefing can list nothing,
+so Today says what your agents do is not recorded on that server rather than that nothing
+happened (`Briefing::recorded` is `false`).
 
 `adk-rust up --mode ask` on `claude-sonnet-5-5`, its quiet time set to have ended an hour
 before, after one held write allowed from the home:
@@ -210,6 +216,7 @@ the screens.
 |---|---|---|
 | **What your agents remember**: **That's right**, **Fix it**, **Forget it**, **Undo** | K5 | "Nothing your agents remember is shown here yet." |
 | **Every action is on record** and **Check again** | K5 | The latest lines of the activity ledger |
+| **Extend** for what is allowed without asking | A route that extends a standing rule; `/rules` lists, creates and stops them only | Each rule's end date, with **Stop allowing** |
 | **Confirm it's you and approve** | The passkey route of the phone package | The answer, refused until the server confirms presence |
 
 ## Decisions

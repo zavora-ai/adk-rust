@@ -73,6 +73,11 @@ export interface Avatar {
 export interface Briefing {
   /** One line per event, oldest first. */
   lines: BriefingLine[];
+  /**
+   * The source keeps an activity record. Without one, `lines` is empty whatever ran, so a
+   * surface says nothing is recorded rather than that nothing happened.
+   */
+  recorded: boolean;
   /** Since when. */
   since: string;
   /** "Since 22:04". */

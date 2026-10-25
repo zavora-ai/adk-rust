@@ -226,6 +226,11 @@
             },
             "type": "array"
           },
+          "recorded": {
+            "default": true,
+            "description": "The source keeps an activity record. Without one, `lines` is empty whatever ran, so a\nsurface says nothing is recorded rather than that nothing happened.",
+            "type": "boolean"
+          },
           "since": {
             "description": "Since when.",
             "format": "date-time",
@@ -262,7 +267,8 @@
           "since",
           "sinceText",
           "waiting",
-          "lines"
+          "lines",
+          "recorded"
         ],
         "type": "object"
       },

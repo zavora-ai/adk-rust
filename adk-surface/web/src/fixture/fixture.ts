@@ -226,6 +226,7 @@ export function briefing(): Briefing {
     sinceText: "Since 22:04",
     spend: { spentMicroUsd: 620_000, limitMicroUsd: 5_000_000, text: "$0.62 of $5.00 today" },
     waiting: 3,
+    recorded: true,
     lines: [
       { seq: 11, at: at(22, 40, -1), atText: "22:40", agent: "Research", pill: "done", pillText: "Done", text: 'Research finished "Compare health insurers", with three sources.' },
       { seq: 12, at: at(23, 30, -1), atText: "23:30", agent: "Code", pill: "youDecided", pillText: "You decided", text: "From your phone, you allowed Code to run the tests once. They ran once and passed." },

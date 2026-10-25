@@ -387,3 +387,17 @@ async fn the_status_line_names_the_server_s_time_zone() {
     let here = chrono::Local::now().offset().local_minus_utc() / 60;
     assert_eq!(line["hostUtcOffsetMinutes"], json!(here), "{line}");
 }
+
+/// Without a kernel ledger the briefing can list nothing, whatever ran, so it says no record is
+/// kept and the home never reads that as "nothing happened" (spec 3.3 §5.1).
+#[tokio::test]
+async fn a_briefing_without_a_ledger_says_nothing_is_recorded() {
+    let source = LocalSource::builder(APP).sessions(sessions().await).build().unwrap();
+    let app = api(SurfaceEngine::builder(Arc::new(source)).build(), None);
+    let (status, briefing) = call(&app, "GET", "/api/surface/briefing?surface=web", None).await;
+    assert_eq!(status, StatusCode::OK, "{briefing}");
+    assert_eq!(
+        (briefing["lines"].clone(), briefing["recorded"].clone()),
+        (json!([]), json!(false))
+    );
+}

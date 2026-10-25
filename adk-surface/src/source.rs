@@ -188,6 +188,12 @@ pub trait Source: Send + Sync {
         None
     }
 
+    /// Whether the source keeps the `/proc` ledger [`ledger`](Self::ledger) reads: without
+    /// one, "While you were away" is empty whatever ran (spec 3.3 §5.1).
+    fn keeps_ledger(&self) -> bool {
+        true
+    }
+
     /// The `/proc` ledger rows since `since`, oldest first.
     async fn ledger(&self, since: DateTime<Utc>) -> Result<Vec<LedgerEntry>> {
         let _ = since;

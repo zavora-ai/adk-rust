@@ -758,6 +758,7 @@ impl SurfaceEngine {
             spend: source.spend(caller.user_id()).await?.map(project::spend_view),
             waiting: u32::try_from(waiting).unwrap_or(u32::MAX),
             lines,
+            recorded: source.keeps_ledger(),
         })
     }
 

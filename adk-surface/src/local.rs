@@ -639,6 +639,10 @@ impl Source for LocalSource {
         self.kernel.as_ref().and_then(|(kernel, _)| kernel.config().quiet_hours)
     }
 
+    fn keeps_ledger(&self) -> bool {
+        self.kernel.as_ref().is_some_and(|(kernel, _)| kernel.ledger().is_some())
+    }
+
     async fn ledger(&self, since: DateTime<Utc>) -> Result<Vec<adk_kernel::proc::LedgerEntry>> {
         let Some(ledger) = self.kernel.as_ref().and_then(|(kernel, _)| kernel.ledger()) else {
             return Ok(Vec::new());

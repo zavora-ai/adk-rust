@@ -418,4 +418,12 @@ pub struct Briefing {
     pub waiting: u32,
     /// One line per event, oldest first.
     pub lines: Vec<BriefingLine>,
+    /// The source keeps an activity record. Without one, `lines` is empty whatever ran, so a
+    /// surface says nothing is recorded rather than that nothing happened.
+    #[serde(default = "kept")]
+    pub recorded: bool,
+}
+
+fn kept() -> bool {
+    true
 }

@@ -569,6 +569,7 @@ function checkedWhen(at: string): string {
 function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
   const [check, setCheck] = useState<RecordCheck>();
   const [recent, setRecent] = useState<RecordLine[]>([]);
+  const [recorded, setRecorded] = useState(true);
   const [devices, setDevices] = useState<Device[]>();
   const [waiting, setWaiting] = useState<ChannelWaiting[]>([]);
   const [code, setCode] = useState("");
@@ -614,6 +615,7 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
         .briefing()
         .then((briefing: Briefing) => {
           if (!live) return;
+          setRecorded(briefing.recorded !== false);
           setRecent(
             briefing.lines
               .slice(-3)
@@ -657,7 +659,7 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
         </p>
       )}
       {recent.length === 0 ? (
-        <p className="card-empty">{labels.recentEmpty}</p>
+        <p className="card-empty">{recorded ? labels.recentEmpty : labels.notRecorded}</p>
       ) : (
         <ul className="bordered">
           {recent.map((line, index) => (

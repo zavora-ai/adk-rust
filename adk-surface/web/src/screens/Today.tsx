@@ -224,7 +224,11 @@ export function Today({
         <ol className="briefing">
           {loaded && rows.length === 0 && (
             <li className="briefing-empty">
-              {away ? labels.nothingSince(dayAndTime(new Date(away.since))) : labels.nothingHappened}
+              {away
+                ? labels.nothingSince(dayAndTime(new Date(away.since)))
+                : briefing?.recorded === false
+                  ? labels.notRecorded
+                  : labels.nothingHappened}
             </li>
           )}
           {rows.map((row) => {

@@ -210,6 +210,21 @@ describe("Today", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  // Without a ledger the engine's briefing lists nothing, whatever ran (`adk-rust serve`):
+  // Today says nothing is recorded, never that nothing happened.
+  it("says nothing is recorded where the server keeps no record, never that nothing happened", async () => {
+    const client = new FixtureClient();
+    const briefing = client.briefing.bind(client);
+    client.briefing = async () => ({ ...(await briefing()), lines: [], recorded: false });
+    const seams = fixtureSeams();
+    seams.whileAway!.read = async () => undefined;
+    render(<App client={client} seams={seams} initialSection="today" />);
+    expect(
+      await screen.findByText("What your agents do is not recorded on this server, so it can't be listed here. adk-rust up keeps a record."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Nothing happened while you were away.")).toBeNull();
+  });
+
   it("reads the engine's briefing where the kernel keeps no ledger", async () => {
     const seams = fixtureSeams();
     seams.whileAway!.read = async () => undefined;

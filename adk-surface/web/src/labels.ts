@@ -63,6 +63,7 @@ export const labels = {
   notSet: "Not set",
   waitingForYou: words.WAITING_FOR_YOU,
   nothingHappened: "Nothing happened while you were away.",
+  notRecorded: "What your agents do is not recorded on this server, so it can't be listed here. adk-rust up keeps a record.",
   details: "Details",
   open: "Open",
   doIt: words.DO_IT,
