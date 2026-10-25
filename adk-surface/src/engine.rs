@@ -938,7 +938,7 @@ impl SurfaceEngine {
     /// | `surface.call_not_expanded` | A truncated call approved before it was expanded |
     /// | `surface.not_here` | An agent answering, resuming outside the home, loosening the mode from chat or voice |
     /// | `surface.operator_only` | Stop all or Resume all from a caller outside the group [`stops_need`](SurfaceEngineBuilder::stops_need) names |
-    /// | `surface.invalid` | A spoken answer: it goes through [`decide_spoken`](Self::decide_spoken) with its transcript (feature `voice`) |
+    /// | `surface.invalid` | A spoken answer: it goes through `decide_spoken` with its transcript (feature `voice`) |
     /// | `surface.unsupported` | The source cannot do it |
     /// | the source's code | The source failed |
     pub async fn execute(&self, caller: &Caller, command: Command) -> Result<CommandOutcome> {

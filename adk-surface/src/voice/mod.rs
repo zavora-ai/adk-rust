@@ -2,18 +2,18 @@
 //!
 //! A spoken answer is one more way to give the answer a click or a key gives, under the same
 //! rules: the person says the label of the engine's action — "allow once", "deny", "cancel",
-//! "stop all" ([`spoken`]) — and the engine decides it, never the model and never the realtime
+//! "stop all" (`spoken`) — and the engine decides it, never the model and never the realtime
 //! session. What voice may decide is the voice row of §7.2: **Allow once** for everyday calls,
 //! after a cancel window, and **Deny** for any call. A high-risk or money call needs the
 //! person to confirm it is them, which voice cannot do, so the view says "Decide on screen".
 //!
 //! | Part | What | Feature |
 //! |---|---|---|
-//! | [`spoken`] | The words that answer, and nothing else | `voice` |
-//! | [`VisualInputs`] | The camera and the screen reach the model only while their switches are on, no faster than it takes them | `voice` |
-//! | [`VoiceSource`] | Sends a decision on a call a live voice conversation holds back to that conversation, never to the text runner | `voice` |
-//! | [`VoiceHub`] | Opens voice conversations ([`VoiceLink`]): one realtime session of the harness each, in its own session | `voice` |
-//! | [`router`], [`socket_routes`] | `GET /surface/voice`, `POST /surface/voice/sessions` and the voice socket | `voice` and `web` |
+//! | `spoken` | The words that answer, and nothing else | `voice` |
+//! | `VisualInputs` | The camera and the screen reach the model only while their switches are on, no faster than it takes them | `voice` |
+//! | `VoiceSource` | Sends a decision on a call a live voice conversation holds back to that conversation, never to the text runner | `voice` |
+//! | `VoiceHub` | Opens voice conversations (`VoiceLink`): one realtime session of the harness each, in its own session | `voice` |
+//! | `router`, `socket_routes` | `GET /surface/voice`, `POST /surface/voice/sessions` and the voice socket | `voice` and `web` |
 //! | The wire types ([`VoiceModels`], [`VoiceTicket`], [`VoiceUpdate`], ...) | What the view and the server say, in the OpenAPI document of every `web` build | `web` or `voice` |
 //!
 //! # How a spoken answer binds to a decision
