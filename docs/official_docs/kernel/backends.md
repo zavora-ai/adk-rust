@@ -19,6 +19,22 @@ passes the store's conformance suite.
 A [tenant kernel](managed.md#cron-wakes-missed-while-a-tenant-was-down) keeps its cron
 watermarks in the tenant's own store (`TenantKernelBuilder::watermark_store`).
 
+### Cron sleepers
+
+The kernel fires a sleeper's cron wake itself and keeps each expression's cursor in its
+`CronWatermarkStore` under `kernel:<expression>` (`KernelBuilder::watermark_store`; in memory by
+default). `adk-rust up` opens it on `harness.db`, or in the `--store` backend every replica shares
+(spec 3.2 §7.4):
+
+| Occurrences | What fires |
+|---|---|
+| Due while a kernel watched the expression | The latest since the last scheduler tick, to every sleeper on it |
+| After the cursor and before the kernel's first tick since it started | The missed ones, one at a time, ranked from the latest as the widest `missed` policy of the sleepers plans them; each sleeper wakes for those its own policy picks, and a recurring series takes the next one when its successor sleeps |
+| Before a series began, or due while a kernel ran and nothing slept on the expression | None |
+
+The cursor moves past each occurrence after its wake is submitted, and every occurrence keeps its
+key (`cron:kernel:<expression>:<time>`), so a restart or a second replica never fires one twice.
+
 There is no file backend: no durable store is file-backed, and the CLI keeps its state in
 `harness.db`. Vertex AI holds sessions only, so it has no kernel backend.
 

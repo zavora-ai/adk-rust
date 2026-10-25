@@ -51,6 +51,8 @@ struct KernelStores {
     /// Settings changed while the kernel runs and each device's place in "While you were
     /// away" (spec 3.3 §10 K3, K4).
     control: Arc<dyn adk_kernel::control::ControlStore>,
+    /// Where the cron wakes of sleepers left off (spec 3.2 §7.4).
+    watermarks: Arc<dyn adk_kernel::CronWatermarkStore>,
     /// Whether nothing outlives the kernel (`--ephemeral`).
     ephemeral: bool,
     /// The kill switch's shared state; `None` keeps it in this process.
@@ -325,6 +327,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         .config(config)
         .process_store(stores.processes)
         .agenda_store(stores.agenda)
+        .watermark_store(stores.watermarks)
         .schedule_store(stores.schedules)
         .drivers(drivers)
         .ledger(Ledger::new(stores.ledger, key))
@@ -650,6 +653,8 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
         devices.migrate().await?;
         let control = adk_kernel::control::SqliteControlStore::new(db.pool.clone());
         control.migrate().await?;
+        let watermarks = adk_kernel::SqliteCronWatermarkStore::new(db.pool.clone());
+        watermarks.migrate().await?;
         return Ok(KernelStores {
             processes: Arc::new(processes),
             agenda: Arc::new(agenda),
@@ -659,6 +664,7 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
             ledger: Arc::new(ledger),
             devices: Arc::new(devices),
             control: Arc::new(control),
+            watermarks: Arc::new(watermarks),
             ephemeral: false,
             governance: Some(Arc::new(governance)),
             label: "harness.db".into(),
@@ -674,6 +680,7 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
         ledger: Arc::new(adk_kernel::proc::InMemoryLedgerStore::new()),
         devices: Arc::new(adk_kernel::pairing::InMemoryDeviceStore::new()),
         control: Arc::new(adk_kernel::control::InMemoryControlStore::new()),
+        watermarks: Arc::new(adk_kernel::InMemoryCronWatermarkStore::new()),
         ephemeral: true,
         governance: None,
         label: "memory (--ephemeral): nothing outlives the kernel".into(),
@@ -704,6 +711,8 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             devices.migrate().await?;
             let control = adk_kernel::control::PostgresControlStore::new(processes.pool().clone());
             control.migrate().await?;
+            let watermarks = adk_kernel::PostgresCronWatermarkStore::new(processes.pool().clone());
+            watermarks.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
                 agenda: Arc::new(agenda),
@@ -713,6 +722,7 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
                 ledger: Arc::new(ledger),
                 devices: Arc::new(devices),
                 control: Arc::new(control),
+                watermarks: Arc::new(watermarks),
                 ephemeral: false,
                 governance: Some(Arc::new(governance)),
                 label,
@@ -742,6 +752,9 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             let control =
                 adk_kernel::control::RedisControlStore::from_client(processes.client().clone());
             control.migrate().await?;
+            let watermarks =
+                adk_kernel::RedisCronWatermarkStore::from_client(processes.client().clone());
+            watermarks.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
                 agenda: Arc::new(agenda),
@@ -751,6 +764,7 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
                 ledger: Arc::new(ledger),
                 devices: Arc::new(devices),
                 control: Arc::new(control),
+                watermarks: Arc::new(watermarks),
                 ephemeral: false,
                 governance: Some(Arc::new(governance)),
                 label,

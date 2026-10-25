@@ -206,7 +206,10 @@ A `Trigger` spawns a new process for an event no sleeper takes, keyed
 reconciled on start. `CronWakeSource::watermarked` keeps where a cron source left off in a
 `CronWatermarkStore` (in-memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore and
 Neo4j; `cron_watermark_store_conformance_tests!`), so the ticks missed while no kernel watched fire
-once each, as the wake's `MissedFirePolicy` picks them. A local event reaches `Running` in under 2 s: in-process sources
+once each, as the wake's `MissedFirePolicy` picks them. A sleeper's cron wake keeps its cursor in
+the kernel's own store (`KernelBuilder::watermark_store`), so a restarted kernel or another replica
+fires the occurrences missed while no kernel ran, one at a time as each series sleeps again, and
+none from before a series began. A local event reaches `Running` in under 2 s: in-process sources
 enqueue and claim at once, and the tick claims wake runs an external ingress or another
 replica enqueued.
 
@@ -441,7 +444,8 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `src/control/tests.rs` | The auth matrix on every transport: socket peers of another uid refused; on Windows the pipe's owner-only descriptor, its owner admitted, and a client of another identity refused by the DACL and, behind an open DACL, by the token check |
 | `src/service/tests.rs` | The launchd plist, systemd unit and Windows service rendered for each platform on every platform; `plutil` accepts the plist; the log is created `0600`. Real installs run in `.github/workflows/kernel-service.yml` |
 | `tests/managed_def_fixtures.rs`, `tests/managed_tenants.rs`, `tests/managed_tenant_property_tests.rs` (feature `managed`) | The kernel block's golden fixtures and refusals; a definition round-trips through the managed state store; a cron wake for one tenant runs on its stores only; a held call runs once after the tenant's approval; no wake, process or approval crosses tenants |
-| `tests/managed_drivers.rs`, `tests/managed_cron_watermarks.rs` (feature `managed`) | A definition's driver mounts on its tenant only when a person approves, and another tenant never sees it; missed cron ticks fire once each as each wake set's policy picks them, across a restart and two replicas |
+| `tests/managed_drivers.rs`, `tests/managed_cron_watermarks.rs` (feature `managed`) | A definition's driver mounts on its tenant only when a person approves, and another tenant never sees it; missed cron ticks fire once each as each wake set's policy picks them, across a restart and two replicas; an expression hosted again after it was idle replays nothing from the idle time |
+| `tests/sleeper_cron_watermarks.rs` | Cron sleepers over SQLite on a manual clock: a restarted kernel, or two replicas taking over, fire the occurrences missed while no kernel ran once each as `fireOnce`, `catchUp(2)` and `skip` pick them; a second restart replays nothing; a new series replays nothing from before it began |
 | `tests/cron_watermark_store_sqlite.rs`, `tests/cron_watermark_store_postgres.rs`, `tests/cron_watermark_store_redis.rs` | The cron watermark store's suite in memory and on SQLite; PostgreSQL and Redis in CI's `postgres` job; MongoDB, Firestore and Neo4j in `tests/store_conformance_*.rs` |
 | `tests/k10_baselines.rs` | K10 on a manual clock: six weeks of a routine whose last two end late yield one observation on the tenth day of the change, none in the warm-up or the cooldown, and again after it; each an agenda question that stays open in Auto, starts no run, is remembered once when confirmed and not at all when rejected; none without `proc-baselines` |
 | `tests/proc_property_tests.rs` | K-I19: no ledger row carries a payload of the event or audit record that produced it |

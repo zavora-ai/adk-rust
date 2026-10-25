@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind, AuditTrail};
 use adk_core::principal::SubjectRef;
+use adk_core::schedule::{DEFAULT_MISFIRE_GRACE, MissedFirePolicy, ScheduleSpec, plan_fires};
 use adk_core::{
     Clock, DurableRunStore, GovernanceControl, Part, RunCheckpointRef, RunFilter, RunRecord,
     RunState, SpendKey,
@@ -41,6 +42,20 @@ pub(crate) const GOAL_TARGET: &str = "harness.goal";
 pub(crate) const ASLEEP_KEY_PREFIX: &str = "kernel:asleep:";
 /// The idempotency-key prefix of a run `spawn` enqueued awake.
 pub(crate) const SPAWN_KEY_PREFIX: &str = "kernel:spawn:";
+/// The key, after [`ASLEEP_KEY_PREFIX`], of a cron sleeper's successor: `recur:<pid of the
+/// finished sleeper>` (spec 3.2 §7.4).
+pub(crate) const RECUR_KEY_PREFIX: &str = "recur:";
+
+/// When the cron series of the sleeper `run` began (spec 3.2 §7.4): its own creation, or
+/// `None` for a successor the kernel re-armed, which continues its predecessor's series.
+pub(crate) fn series_start(run: &RunRecord) -> Option<DateTime<Utc>> {
+    let continues = run
+        .idempotency_key
+        .as_deref()
+        .and_then(|key| key.strip_prefix(ASLEEP_KEY_PREFIX))
+        .is_some_and(|key| key.starts_with(RECUR_KEY_PREFIX));
+    (!continues).then_some(run.created_at)
+}
 
 /// Whether `ProcessTable::spawn` enqueued `run`, so `spawn`, not a hook, writes its row.
 pub(crate) fn spawned_by_kernel(run: &RunRecord) -> bool {
@@ -145,9 +160,15 @@ pub(crate) struct Supervision {
     pub(crate) rule_source: Option<Arc<dyn crate::review::StandingRuleSource>>,
     /// The UTC day this replica last reviewed.
     pub(crate) reviewed: Mutex<Option<chrono::NaiveDate>>,
-    /// The cron expressions of sleepers the kernel fires itself, each with the occurrence
-    /// it last fired, or when it was first needed (spec 3.2 §7.4).
-    pub(crate) crons: Mutex<BTreeMap<String, DateTime<Utc>>>,
+    /// The cron expressions of sleepers the kernel fires itself, each with where this
+    /// replica stands on it (spec 3.2 §7.4).
+    pub(crate) crons: Mutex<BTreeMap<String, CronWatch>>,
+    /// Where the cron wakes of sleepers keep their cursors, under `kernel:<expression>`
+    /// ([`KernelBuilder::watermark_store`](crate::KernelBuilder::watermark_store)).
+    pub(crate) watermarks: Arc<dyn crate::watermark::CronWatermarkStore>,
+    /// When this kernel's first maintenance pass since its start listed the sleepers:
+    /// occurrences after a cursor and up to then came due while no kernel fired them.
+    pub(crate) cron_started: Mutex<Option<DateTime<Utc>>>,
     /// The names of the router's [`Trigger`](crate::Trigger)s, whose runs the router
     /// records itself.
     pub(crate) triggers: BTreeSet<String>,
@@ -1282,15 +1303,54 @@ impl Supervision {
     }
 }
 
+/// Where a replica stands on one cron expression it fires for sleepers (spec 3.2 §7.4).
+#[derive(Debug, Clone)]
+pub(crate) struct CronWatch {
+    /// Through when this replica fired the expression's occurrences as they came due.
+    since: DateTime<Utc>,
+    /// Whether the occurrences missed while no kernel fired them are still going out.
+    catching_up: bool,
+}
+
+/// Whether `wake` holds a cron wake on `expr`.
+fn names_cron(wake: Option<&WakeSet>, expr: &str) -> bool {
+    wake.into_iter()
+        .flat_map(|wake| wake.any_of.iter())
+        .any(|wake| matches!(wake, Wake::Cron { expr: theirs, .. } if theirs == expr))
+}
+
+/// What one pass of [`Supervision::fire_crons`] read.
+struct CronPass<'a> {
+    router: &'a crate::wake::WakeRouter,
+    /// Every process row.
+    metas: &'a [ProcessMeta],
+    /// This kernel's first pass since its start.
+    started: DateTime<Utc>,
+    now: DateTime<Utc>,
+}
+
 impl Supervision {
-    /// Fires the cron wakes of sleepers on the kernel's clock (spec 3.2 §7.4): for each
+    /// Fires the cron wakes of sleepers on the kernel's clock (spec 3.2 §7.4), for each
     /// expression a sleeper's wake set names and no standing trigger uses (a trigger's cron
-    /// expression has its registered `CronWakeSource`), the latest occurrence due since the
-    /// last one fired is submitted as a `kernel.wake` event keyed as a cron source keys it,
-    /// so replicas fire it once. An expression no sleeper names any more is forgotten.
+    /// expression has its registered `CronWakeSource`). Each tick is submitted as a
+    /// `kernel.wake` event keyed as a cron source keys it, so replicas fire it once.
+    ///
+    /// The expression's cursor is kept in the kernel's [`CronWatermarkStore`] under
+    /// `kernel:<expression>`, moved past each tick after it is submitted:
+    ///
+    /// | Occurrences | What fires |
+    /// |---|---|
+    /// | Due while this replica watched the expression | The latest since the last pass, to every sleeper |
+    /// | After the cursor, up to this kernel's first pass since its start | The missed ones, planned with the widest `missed` policy of the expression's sleepers and ranked from the latest, one at a time once the sleepers the previous one went to sleep again, so each wakes for those its own policy picks |
+    /// | Before a sleeper's series began, or due while this kernel ran and nothing slept on the expression | None |
+    ///
+    /// An expression with no cursor starts at its first watch. An expression no sleeper
+    /// names any more is forgotten by the replica and keeps its cursor.
+    ///
+    /// [`CronWatermarkStore`]: crate::CronWatermarkStore
     pub(crate) async fn fire_crons(&self, router: &crate::wake::WakeRouter) {
         let now = self.clock.now();
-        let triggered: std::collections::BTreeSet<&str> = router
+        let triggered: BTreeSet<&str> = router
             .triggers()
             .iter()
             .filter_map(|trigger| match &trigger.wake {
@@ -1298,61 +1358,254 @@ impl Supervision {
                 _ => None,
             })
             .collect();
-        let needed: std::collections::BTreeSet<String> =
-            match self.processes.list(&ProcessFilter::default()).await {
-                Ok(metas) => metas
-                    .iter()
-                    .filter_map(|meta| meta.wake.as_ref())
-                    .flat_map(|wake| wake.any_of.iter())
-                    .filter_map(|wake| match wake {
-                        Wake::Cron { expr, .. } if !triggered.contains(expr.as_str()) => {
-                            Some(expr.clone())
-                        }
-                        _ => None,
-                    })
-                    .collect(),
-                Err(error) => {
-                    tracing::debug!(error = %error, "could not list the sleepers' cron wakes");
-                    return;
-                }
-            };
-        let due: Vec<(String, DateTime<Utc>)> = {
-            let mut crons = self.crons.lock().unwrap_or_else(|e| e.into_inner());
-            crons.retain(|expr, _| needed.contains(expr));
-            let mut due = Vec::new();
-            for expr in &needed {
-                let since = *crons.entry(expr.clone()).or_insert(now);
-                let spec = adk_core::schedule::ScheduleSpec::Cron {
-                    expr: expr.clone(),
-                    timezone: "UTC".into(),
-                };
-                let mut latest = None;
-                let mut cursor = since;
-                while let Ok(Some(next)) = spec.next_after(cursor) {
-                    if next > now {
-                        break;
-                    }
-                    latest = Some(next);
-                    cursor = next;
-                }
-                if let Some(at) = latest {
-                    crons.insert(expr.clone(), at);
-                    due.push((expr.clone(), at));
+        let metas = match self.processes.list(&ProcessFilter::default()).await {
+            Ok(metas) => metas,
+            Err(error) => {
+                tracing::debug!(error = %error, "could not list the sleepers' cron wakes");
+                return;
+            }
+        };
+        let started =
+            *self.cron_started.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert(now);
+        let mut needed: BTreeMap<String, Vec<(&ProcessMeta, MissedFirePolicy)>> = BTreeMap::new();
+        for meta in &metas {
+            for wake in meta.wake.iter().flat_map(|wake| wake.any_of.iter()) {
+                if let Wake::Cron { expr, missed } = wake
+                    && !triggered.contains(expr.as_str())
+                {
+                    needed.entry(expr.clone()).or_default().push((meta, *missed));
                 }
             }
-            due
-        };
-        for (expr, at) in due {
+        }
+        let pass = CronPass { router, metas: &metas, started, now };
+        // Only this loop writes the map; tests read it while the pass awaits the stores.
+        let mut watches = self.crons.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        watches.retain(|expr, _| needed.contains_key(expr));
+        for (expr, sleepers) in &needed {
+            let watch = watches
+                .entry(expr.clone())
+                .or_insert_with(|| CronWatch { since: now, catching_up: true });
+            if watch.catching_up {
+                self.catch_up_cron(&pass, expr, sleepers, watch).await;
+            }
             let source = format!("kernel:{expr}");
+            let spec = ScheduleSpec::Cron { expr: expr.clone(), timezone: "UTC".into() };
+            let mut latest = None;
+            let mut cursor = watch.since;
+            while let Ok(Some(next)) = spec.next_after(cursor) {
+                if next > now {
+                    break;
+                }
+                latest = Some(next);
+                cursor = next;
+            }
+            let Some(at) = latest else { continue };
+            watch.since = at;
             let event = crate::wake::WakeEvent::new(
                 source.clone(),
                 crate::wake::keys::cron(&source, at),
                 json!({ "expression": expr, "scheduled_for": at, "catch_up": false }),
             )
             .with_at(at);
-            if let Err(error) = router.submit(&event, &self.app_name).await {
-                tracing::warn!(cron = %expr, error = %error, "could not submit a cron wake");
+            match router.submit(&event, &self.app_name).await {
+                // A catch-up still out keeps the cursor at its last missed occurrence.
+                Ok(_) if !watch.catching_up => self.record_cron(&source, at).await,
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(cron = %expr, error = %error, "could not submit a cron wake");
+                }
             }
+        }
+        *self.crons.lock().unwrap_or_else(|e| e.into_inner()) = watches;
+    }
+
+    /// Sends the next occurrence of `expr` missed while no kernel fired it, or ends the
+    /// catch-up when none is left (spec 3.2 §7.4). `sleepers` are the expression's sleepers
+    /// with their policies.
+    ///
+    /// One goes out at a time, and only once every sleeper on the expression is parked and
+    /// no series on it is running, so a recurring sleeper's successor takes the next one.
+    /// Every replica reads that from the stores, in an order that sees a wake another
+    /// replica sent: the cursor, then the wakes not yet routed, then the sleepers.
+    async fn catch_up_cron(
+        &self,
+        pass: &CronPass<'_>,
+        expr: &str,
+        sleepers: &[(&ProcessMeta, MissedFirePolicy)],
+        watch: &mut CronWatch,
+    ) {
+        let source = format!("kernel:{expr}");
+        let spec = ScheduleSpec::Cron { expr: expr.to_string(), timezone: "UTC".into() };
+        let cursor = match self.watermarks.read(&source).await {
+            Ok(cursor) => cursor,
+            Err(error) => {
+                tracing::warn!(cron = %expr, error = %error, "could not read the cron watermark");
+                return;
+            }
+        };
+        let Some(cursor) = cursor else {
+            // A new expression replays nothing from before it was first watched.
+            self.record_cron(&source, watch.since).await;
+            watch.catching_up = false;
+            return;
+        };
+        if self.cron_wake_unrouted(&source).await {
+            return;
+        }
+        // A suspended sleeper wakes on no tick, so the catch-up neither waits for it nor plans
+        // for it. The rows are read again: a wake routed since the pass began cleared the
+        // set, and a woken run stays `Waiting` until a worker claims it.
+        let mut asleep = Vec::with_capacity(sleepers.len());
+        for (meta, missed) in sleepers {
+            let meta = match self.processes.get(&meta.pid).await {
+                Ok(Some(meta)) => meta,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::debug!(process.pid = %meta.pid, error = %error, "could not read a cron sleeper");
+                    return;
+                }
+            };
+            if meta.suspended_by.is_some() {
+                continue;
+            }
+            if !names_cron(meta.wake.as_ref(), expr) {
+                return;
+            }
+            match self.runs.get(&meta.pid).await {
+                Ok(Some(run)) if run.state.is_terminal() => {}
+                // Spawned asleep and not parked yet: the router would pass it by.
+                Ok(Some(run)) if run.state != RunState::Waiting => return,
+                Ok(Some(run)) => asleep.push((*missed, run)),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::debug!(process.pid = %meta.pid, error = %error, "could not read a cron sleeper");
+                    return;
+                }
+            }
+        }
+        if self.cron_series_running(pass, expr).await {
+            return;
+        }
+        // A series replays nothing from before it began, and a re-armed successor
+        // continues its predecessor's series.
+        let mut from = cursor;
+        if let Some(begins) = asleep.iter().map(|(_, run)| series_start(run)).min().flatten() {
+            from = from.max(begins);
+        }
+        let Some(widest) =
+            asleep.iter().map(|(missed, _)| *missed).reduce(crate::wake::widest_policy)
+        else {
+            return;
+        };
+        let plan = spec.next_after(from).and_then(|due| match due {
+            Some(due) => plan_fires(&spec, widest, due, pass.started, DEFAULT_MISFIRE_GRACE)
+                .map(|plan| plan.fire_times),
+            None => Ok(Vec::new()),
+        });
+        let fire_times = match plan {
+            Ok(fire_times) => fire_times,
+            Err(error) => {
+                tracing::warn!(cron = %expr, error = %error, "could not plan the missed cron occurrences");
+                return;
+            }
+        };
+        let Some(&at) = fire_times.first() else {
+            // Caught up: the occurrences fired since the first watch are accounted for too.
+            self.record_cron(&source, watch.since).await;
+            watch.catching_up = false;
+            return;
+        };
+        let rank = fire_times.len() - 1;
+        let on_time = (pass.now - at).to_std().unwrap_or_default() <= DEFAULT_MISFIRE_GRACE;
+        let event = crate::wake::WakeEvent::new(
+            source.clone(),
+            crate::wake::keys::cron(&source, at),
+            json!({
+                "expression": expr,
+                "scheduled_for": at,
+                "catch_up": true,
+                "catch_up_rank": rank,
+                "on_time": on_time,
+            }),
+        )
+        .with_at(at);
+        let picked = asleep.iter().any(|(missed, run)| {
+            crate::wake::wakes_sleeper(
+                &Wake::Cron { expr: expr.to_string(), missed: *missed },
+                &event,
+                run,
+            )
+        });
+        // An occurrence no sleeper picks is passed over.
+        if picked {
+            if let Err(error) = pass.router.submit(&event, &self.app_name).await {
+                tracing::warn!(cron = %expr, error = %error, "could not submit a missed cron wake");
+                return;
+            }
+            tracing::info!(cron = %expr, scheduled_for = %at, catch_up.rank = rank, "replaying a missed cron occurrence");
+        }
+        self.record_cron(&source, at).await;
+    }
+
+    /// Whether a `kernel.wake` run of the cron source `source` is still to be routed.
+    async fn cron_wake_unrouted(&self, source: &str) -> bool {
+        let prefix = format!("cron:{source}:");
+        let pending = RunFilter::default()
+            .queue(QueueClass::MAINTENANCE)
+            .states([RunState::Queued, RunState::Running]);
+        match self.runs.list(pending).await {
+            Ok(runs) => runs.iter().any(|run| {
+                run.idempotency_key.as_deref().is_some_and(|key| key.starts_with(&prefix))
+            }),
+            Err(_) => true,
+        }
+    }
+
+    /// Whether a cron series on `expr` is running: its latest process was woken and has not
+    /// finished, or finished within the misfire grace and is being re-armed.
+    async fn cron_series_running(&self, pass: &CronPass<'_>, expr: &str) -> bool {
+        let on_expr = |meta: &&ProcessMeta| {
+            meta.wake.is_none()
+                && names_cron(
+                    meta.labels
+                        .get(RECUR_LABEL)
+                        .and_then(|wake| serde_json::from_str::<WakeSet>(wake).ok())
+                        .as_ref(),
+                    expr,
+                )
+        };
+        for meta in pass.metas.iter().filter(on_expr) {
+            // A member with a successor finished; each successor names it as its parent.
+            let continued = pass.metas.iter().any(|next| {
+                next.parent.as_deref() == Some(meta.pid.as_str())
+                    && next.labels.contains_key(RECUR_LABEL)
+            });
+            if continued {
+                continue;
+            }
+            let running = match self.runs.get(&meta.pid).await {
+                Ok(Some(run)) => match run.state {
+                    RunState::Cancelled => false,
+                    RunState::Completed | RunState::Failed => {
+                        (pass.now - run.updated_at).to_std().unwrap_or_default()
+                            <= DEFAULT_MISFIRE_GRACE
+                    }
+                    _ => true,
+                },
+                Ok(None) => false,
+                Err(_) => true,
+            };
+            if running {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Moves the cron cursor of `source` to `at`.
+    async fn record_cron(&self, source: &str, at: DateTime<Utc>) {
+        if let Err(error) = self.watermarks.advance(source, at).await {
+            tracing::warn!(wake.source = %source, error = %error, "could not record the cron watermark");
         }
     }
 
@@ -1467,7 +1720,7 @@ impl KernelHooks {
         next.session_id = run.session_id.clone();
         next.principal = run.principal.clone();
         next.authenticated = run.authenticated;
-        next.idempotency_key = Some(format!("recur:{}", run.run_id));
+        next.idempotency_key = Some(format!("{RECUR_KEY_PREFIX}{}", run.run_id));
         let mut spec = crate::process::ProcessSpec::new(meta.kind.clone())
             .with_parent(run.run_id.clone())
             .with_partition(meta.partition.clone())

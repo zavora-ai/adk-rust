@@ -216,7 +216,10 @@ each tick keeps its key (`cron:<source>:<time>`), so replicas that start togethe
 once (K-I3). A catch-up's processes follow the wake set's `overlap`: they queue behind each other
 (`queue`), or the later ones start nothing while one is unfinished (`skip`), so a long outage is
 never a burst. A source with no cursor yet starts at its first watch and replays nothing from
-before it existed. The store runs on in-memory, SQLite, PostgreSQL and Redis, and on
+before it existed. When a definition hosted again leaves no wake set on an expression, the tenant
+deletes that expression's cursor: the time it is idle is not missed, so a wake set that uses it
+later starts at its first watch. The tenant kernel's sleepers keep their cron cursors in the same
+store ([backends](backends.md#cron-sleepers)). The store runs on in-memory, SQLite, PostgreSQL and Redis, and on
 MongoDB, Firestore and Neo4j ([backends](backends.md));
 `ManagedKernels` refuses a tenant whose watermark store another tenant holds.
 
@@ -262,7 +265,7 @@ record: only `unfreeze` wakes it (K-I21).
 | `adk-harness/tests/voice_kernel_tests.rs` | A scripted spoken yes wakes a parked process; a freeze-parked process is refused and wakes only on unfreeze |
 | `adk-kernel/tests/managed_drivers.rs` | A definition's driver is proposed in each tenant's own inbox, mounted only when a person approves, pinned at its first listing, run under the tenant's own home; another tenant's approval mounts nothing; a changed manifest is asked again; an approval by a service mounts nothing; tenants never share a supervisor or a driver store |
 | `adk-harness/tests/managed_partition_drivers.rs` | With real harnesses: tenant A's approved driver serves A's work partition, the coordinator reaches it only as a crossing its process parks on until approved, and tenant B, hosting the same definition, is offered nothing |
-| `adk-kernel/tests/managed_cron_watermarks.rs`, `cron_watermark_store_sqlite.rs` | Missed ticks fire once each as `skip`, `fireOnce` and `catchUp(2)` pick them; a restart replays nothing; two replicas starting together fire each tick once; each tenant keeps its own cursors; the store's conformance suite in memory and on SQLite (PostgreSQL and Redis in CI's `postgres` job) |
+| `adk-kernel/tests/managed_cron_watermarks.rs`, `cron_watermark_store_sqlite.rs` | Missed ticks fire once each as `skip`, `fireOnce` and `catchUp(2)` pick them; a restart replays nothing; two replicas starting together fire each tick once; each tenant keeps its own cursors; an expression hosted again after it was idle replays nothing from the idle time; the store's conformance suite in memory and on SQLite (PostgreSQL and Redis in CI's `postgres` job) |
 | `examples/harness_kernel` `m1_one_kernel_per_tenant`, `m2_a_tenants_drivers`, `m3_missed_ticks_replay_once`, `v1_voice_answers_a_parked_process`, `live_managed_tenant_approval`, `live_managed_tenant_drivers`, `live_tenant_missed_ticks`, `live_voice_parked_process` | The managed form with two tenants scripted and one tenant live on `claude-sonnet-5-5` and `gemini-3.5-flash-lite`; a parked process decided by voice, scripted and live on Gemini Live |
 
 ## Related
