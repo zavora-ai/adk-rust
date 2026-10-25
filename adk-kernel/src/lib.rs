@@ -29,6 +29,7 @@
 //! | [`CronWatermarkStore`], [`SourceWatermark`], [`InMemoryCronWatermarkStore`], `SqliteCronWatermarkStore`, `PostgresCronWatermarkStore`, `RedisCronWatermarkStore`, `MongoCronWatermarkStore`, `FirestoreCronWatermarkStore`, `Neo4jCronWatermarkStore` | §7.4, §7.13, §13 Q8 |
 //! | [`KernelEvent`], [`EventKind`], [`EventFilter`], [`EventRecord`], [`EventBus`], [`EventSubscriber`], [`EventSink`], [`AuditSink`], [`SpendDelta`]; `WebhookSink` (feature `webhooks`) | §7.6 |
 //! | [`Agenda`], [`AgendaHandle`], [`ProposalOutcome`], [`AgendaItem`], [`AgendaState`], [`AgendaStateKind`], [`AgendaOrigin`], [`AgendaAnswer`], [`ObservationAudience`], [`PlanRef`], [`AgendaStore`], [`AgendaFilter`], [`InMemoryAgendaStore`], [`ProactivityPolicy`], [`ProactiveApproval`] | §7.5 |
+//! | [`agents`]: [`AgentRecord`](agents::AgentRecord), [`AgentStore`](agents::AgentStore) on every backend, [`AgentFactory`](agents::AgentFactory), [`AgentCaller`](agents::AgentCaller), [`AgentPreview`](agents::AgentPreview) | spec 3.3 §5.7, §10 K7 |
 //! | [`ConsolidationTick`], [`Consolidator`], [`admit_tick`], [`TickInputs`], [`TickAdmission`], [`TickMaterial`], [`TickRun`], [`TickOutcome`], [`TickProposal`], [`TickSpend`], [`CONSOLIDATION_TARGET`], [`CONSOLIDATION_LABEL`] | §7.5, §13 Q1, Q12 |
 //! | [`ReviewReport`], [`StandingRuleSource`], [`RuleAge`], [`StaleRule`], [`AgedProcess`] | §7.4, §9.1 |
 //! | [`QueueClass`], [`QuietHours`], [`Quotas`] | §7.9 |
@@ -90,6 +91,7 @@
 #![deny(missing_docs)]
 
 pub mod agenda;
+pub mod agents;
 pub mod audit;
 pub mod bus;
 #[cfg(feature = "channels")]
