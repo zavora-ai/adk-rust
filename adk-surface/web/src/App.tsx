@@ -99,10 +99,12 @@ export function App({
     [client, refresh],
   );
 
+  // The page never scrolls; the section does, under the header, and starts at its top.
+  const content = useRef<HTMLDivElement>(null);
   const navigate = useCallback((next: Section) => {
     setSection(next);
     if (window.location.pathname !== pathOf(next)) window.history.pushState(null, "", pathOf(next));
-    window.scrollTo?.({ top: 0 });
+    if (content.current) content.current.scrollTop = 0;
   }, []);
 
   const follow = useCallback(
@@ -219,7 +221,7 @@ export function App({
           }}
         />
       )}
-      <div id="content" className="content" key={signIns}>
+      <div id="content" className="content" key={signIns} ref={content}>
         {section === "threads" && (
           <Threads
             client={client}

@@ -75,6 +75,16 @@ const surfaces: Surface[] = [
     testMatch: ["phone.spec.ts"],
     ready: "/ui/",
   },
+  {
+    // The app shell's layout over the web home's example (`e2e/fixture-server.sh`): no page
+    // scroll at any size, panes that scroll inside themselves, the tray panel's too.
+    name: "shell",
+    prefix: "SHELL",
+    command: "bash adk-surface/web/e2e/fixture-server.sh",
+    port: 8800,
+    testMatch: ["shell.spec.ts"],
+    ready: "/ui/fixture.html",
+  },
 ];
 
 function env(surface: Surface, name: string): string | undefined {

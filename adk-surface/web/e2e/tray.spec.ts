@@ -31,8 +31,9 @@ test("glance, say yes once, stop", async ({ page, request, context }) => {
   await expect(page.getByText("$0.00 of $5.00 today")).toBeVisible();
   await expect(page.getByText(/^Quiet (from|until) /)).toBeVisible();
 
-  // b. The Finance card offers yes once or no; the Code card is approved only in the home.
-  const finance = page.locator("article", { hasText: "write_file" });
+  // b. The Finance card offers yes once or no; the Code card is approved only in the home. The
+  // Finance card is found by its heading, which still names it once answered and one line.
+  const finance = page.getByRole("article", { name: /invoice\.txt/ });
   await expect(finance.getByRole("button")).toHaveText(["Allow once", "Deny"]);
   await expect(finance.getByText(/^Finance · since \d\d:\d\d · Medium risk$/)).toBeVisible();
   await expect(finance.getByText("invoice.txt", { exact: false }).first()).toBeVisible();
@@ -76,9 +77,12 @@ test("glance, say yes once, stop", async ({ page, request, context }) => {
   await expect(finance.getByRole("button", { name: "Allow once" })).toBeVisible();
   expect(existsSync(join(workspace, "invoice.txt"))).toBe(false);
 
-  // e. Allow once: the file is written once, the badge shows 1, and the record says "from the tray".
+  // e. Allow once: the file is written once, the badge shows 1, and the record says "from the
+  // tray"; the card is one line with the answer.
   await finance.getByRole("button", { name: "Allow once" }).click();
   await expect(finance.getByText(/^You said yes from the tray at \d\d:\d\d$/)).toBeVisible({ timeout: 20_000 });
+  await expect(finance.getByRole("button", { expanded: false })).toBeVisible();
+  await expect(finance.getByText("write_file", { exact: false })).toHaveCount(0);
   await expect(decisions.locator(".tray-badge")).toHaveText("1", { timeout: 20_000 });
   await expect.poll(() => existsSync(join(workspace, "invoice.txt")), { timeout: 20_000 }).toBe(true);
   expect(readFileSync(join(workspace, "invoice.txt"), "utf8")).toBe("INV-1");

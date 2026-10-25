@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { AnswerOption, CommandOutcome, DecisionCard } from "../generated/api";
 import { Avatar } from "../components/Avatar";
+import { DECIDED_CLASS, DecidedLine } from "../components/DecidedLine";
 import { PhoneIcon as Icon } from "./PhoneIcon";
 import { Pill } from "../components/Pill";
 import { ApiError, problemText } from "../client";
@@ -35,7 +36,8 @@ function TwoTone({ text }: { text: string }) {
  * happen, the exact command in full, how it got here, and the answers the phone may give. An
  * answer that needs presence goes through "Confirm it's you" and never the plain answer route.
  * The screen follows the session's feed: answered elsewhere, it shows who answered; changed,
- * it shows the new card and needs a new tap. Enter and Esc never decide.
+ * it shows the new card and needs a new tap. Enter and Esc never decide. Decided, here or
+ * elsewhere, the card is one line that opens to show the command again.
  *
  * A phone without its passkey, or whose passkey check fails (an installed iOS home-screen app
  * may refuse WebAuthn), offers only the answers that need no presence and says to approve in
@@ -59,6 +61,9 @@ export function Decide({
   const [problem, setProblem] = useState("");
   const [note, setNote] = useState("");
   const [inTheHome, setInTheHome] = useState(false);
+  // The answer was given on this screen: the line takes the focus the answer buttons had.
+  const [answeredHere, setAnsweredHere] = useState(false);
+  const decidedHeading = useId();
   const settledRef = useRef(onSettled);
   settledRef.current = onSettled;
 
@@ -133,6 +138,7 @@ export function Decide({
     if (outcome.type === "answered" || outcome.type === "alreadyDecided") {
       setCard(outcome.card);
       setEditing(false);
+      setAnsweredHere(true);
       settledRef.current(outcome.card);
     } else if (outcome.type === "changed") {
       setCard(outcome.card);
@@ -166,48 +172,79 @@ export function Decide({
   const presence = offered.find((option) => option.needsPresence && option.answer === "allowOnce");
   const others = offered.filter((option) => option !== presence);
 
+  const who = (
+    <header className="phone-decide-who">
+      <Avatar agent={card.agent} size="md" />
+      <span>
+        <strong>{visible(card.agent.displayName)}</strong> · {card.sinceText}
+      </span>
+      <Pill kind={decided ? "decided" : card.risk === "high" ? "waiting" : "neutral"} dot={!decided && card.risk === "high"}>
+        {decided ? phoneLabels.decided : card.riskText}
+      </Pill>
+    </header>
+  );
+  const lede = (
+    <p className="phone-lede">
+      {phoneLabels.wantsToRun(visible(card.agent.displayName))} {card.reversibilityText}.
+    </p>
+  );
+  const command = (
+    <figure className="phone-command">
+      <figcaption>
+        <i aria-hidden="true" className="phone-lights" /> {phoneLabels.theExactCommand}
+      </figcaption>
+      <pre>
+        <code>{visible(shownInFull ? card.call.text : card.call.text)}</code>
+      </pre>
+      {card.call.truncated && !expanded && (
+        <button type="button" className="phone-link" onClick={() => setExpanded(true)}>
+          {phoneLabels.showFullCommand}
+        </button>
+      )}
+    </figure>
+  );
+  const timeline = (
+    <ol className="phone-timeline">
+      {card.timeline.map((step, index) => (
+        <li key={index} className={step.current ? "current" : undefined} aria-current={step.current ? "step" : undefined}>
+          {visible(step.text)}
+        </li>
+      ))}
+    </ol>
+  );
+
+  if (decided) {
+    return (
+      <section className="phone-decide phone-decide-decided" aria-labelledby={decidedHeading}>
+        <button type="button" className="phone-back" onClick={onBack}>
+          <Icon name="back" /> {phoneLabels.back}
+        </button>
+        <article className={DECIDED_CLASS} aria-labelledby={decidedHeading}>
+          <DecidedLine card={card} headingId={decidedHeading} said={decidedLine(card)} focus={answeredHere}>
+            {who}
+            {lede}
+            {command}
+            {timeline}
+          </DecidedLine>
+        </article>
+      </section>
+    );
+  }
+
   return (
-    <section className={`phone-decide${decided ? " phone-decide-decided" : ""}`} aria-labelledby="phone-decide-heading">
+    <section className="phone-decide" aria-labelledby="phone-decide-heading">
       <button type="button" className="phone-back" onClick={onBack}>
         <Icon name="back" /> {phoneLabels.back}
       </button>
-      <header className="phone-decide-who">
-        <Avatar agent={card.agent} size="md" />
-        <span>
-          <strong>{visible(card.agent.displayName)}</strong> · {card.sinceText}
-        </span>
-        <Pill kind={decided ? "decided" : card.risk === "high" ? "waiting" : "neutral"} dot={!decided && card.risk === "high"}>
-          {decided ? phoneLabels.decided : card.riskText}
-        </Pill>
-      </header>
+      {who}
       <h1 id="phone-decide-heading" className="phone-display">
         <TwoTone text={visible(card.heading)} />
       </h1>
-      <p className="phone-lede">
-        {phoneLabels.wantsToRun(visible(card.agent.displayName))} {card.reversibilityText}.
-      </p>
-      <figure className="phone-command">
-        <figcaption>
-          <i aria-hidden="true" className="phone-lights" /> {phoneLabels.theExactCommand}
-        </figcaption>
-        <pre>
-          <code>{visible(shownInFull ? card.call.text : card.call.text)}</code>
-        </pre>
-        {card.call.truncated && !expanded && (
-          <button type="button" className="phone-link" onClick={() => setExpanded(true)}>
-            {phoneLabels.showFullCommand}
-          </button>
-        )}
-      </figure>
-      <ol className="phone-timeline">
-        {card.timeline.map((step, index) => (
-          <li key={index} className={step.current ? "current" : undefined} aria-current={step.current ? "step" : undefined}>
-            {visible(step.text)}
-          </li>
-        ))}
-      </ol>
+      {lede}
+      {command}
+      {timeline}
       {card.allowed.note && <p className="phone-note">{visible(card.allowed.note)}</p>}
-      {!decided && inTheHome && offered.length < card.allowed.options.length && (
+      {inTheHome && offered.length < card.allowed.options.length && (
         <p className="phone-note">{phoneLabels.approveItInTheHome}</p>
       )}
       {note && (
@@ -215,8 +252,7 @@ export function Decide({
           {note}
         </p>
       )}
-      {decided && <p className="phone-decided">{visible(decidedLine(card))}</p>}
-      {!decided && editing && (
+      {editing && (
         <EditArgs
           card={card}
           busy={busy}
@@ -232,7 +268,7 @@ export function Decide({
           {problem}
         </p>
       )}
-      {!decided && !editing && offered.length > 0 && (
+      {!editing && offered.length > 0 && (
         <footer className="phone-actions">
           {presence && (
             <button

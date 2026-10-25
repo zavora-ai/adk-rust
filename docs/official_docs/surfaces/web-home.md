@@ -295,8 +295,9 @@ Every card is drawn from its inbox entry (spec 3.3 §7.1, §11 S-I1) and answers
 |---|---|
 | One write path | **Allow once**, **Always allow for this person** (or this folder, this command), **Edit** and **Deny** send `decide` with the card's `version` |
 | The version you saw | A card keeps the version it showed when a newer one arrives; an answer to it comes back as changed, and the card shows the new one with "This decision changed since you saw it." |
-| Answered elsewhere | A conflict shows "You said yes in Telegram at 07:31" as the card's last step; the answer is never retried |
-| Answered here | The card stays in the thread, decided, with who decided and where as its last step |
+| Answered elsewhere | A conflict collapses the card to its line with "You said yes in Telegram at 07:31"; the answer is never retried |
+| Answered here | The card keeps its place in the thread as one line: a check, its heading, then who decided and where — "Send the October invoice to [CLIENT] · You said yes in the home app at 07:40". The line takes the focus the answer had |
+| Opening a decided card | A click, Enter or Space on the line shows the exact call, how it got here and the details again, and hides them; opening it answers nothing |
 | **Edit** | Offered only where the card shows the call's own arguments: never over a redacted view or an MCP server's form, which would be submitted as written |
 | **Take over**, then **Done** | A tool that asks for a password or a one-time code shows what asks and what for; what the person types goes through `POST /surface/decisions/{id}/take-over` to that one call, never the inbox, the model or a log line (§8.2, §10 H2) |
 | The exact call | A truncated call cannot be approved until **Show the whole call** expands it |
@@ -318,8 +319,13 @@ to the audit record, so **What your agents did** can say "You let Finance send o
   choice in this browser only.
 - **Keyboard**: every control is reachable, focus is always visible, and **Skip to the content**
   is the first stop.
+- **Layout**: the page fills the window and never scrolls or bounces as a page. The header
+  stays put; on **Threads** the roster, the thread and the right panel each scroll inside
+  themselves, with the message box at the foot of the thread; **Today** and **Memory & rules**
+  scroll under the header.
 - **Phone**: under 640 px the page is one column — Decisions first, then the roster as a row,
-  then the thread.
+  then the thread. The column scrolls under the header, and the message box stays at the foot
+  of the screen while the thread is in view.
 
 | Light | Dark |
 |---|---|

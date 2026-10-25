@@ -2,8 +2,11 @@
  * The phone (spec 3.3 §5.4, §9): the home's tokens at phone size. Decisions sit on their own
  * background; the display heading is two-tone; the waiting count is a filled badge.
  */
+/* The app fills the screen and never scrolls or bounces as a page: each screen scrolls inside
+   itself above the tabs. */
 .phone {
-  min-height: 100dvh;
+  height: 100%;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -16,7 +19,11 @@
 .phone-main,
 .phone-decide,
 .phone-pair {
-  flex: 1;
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: none;
   padding: 20px 20px 24px;
   display: flex;
   flex-direction: column;
@@ -117,11 +124,6 @@
   background: var(--decision);
   border-color: var(--decision-border);
   box-shadow: var(--shadow-decision);
-}
-
-.phone-card-decided {
-  background: var(--raised);
-  border-color: transparent;
 }
 
 .phone-card-who {
@@ -267,9 +269,16 @@
   margin: 0;
 }
 
-.phone-decided {
+.phone-decided-call {
   margin: 0;
-  font-weight: 600;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  font-family: var(--mono);
+  font-size: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .phone-actions {
@@ -385,8 +394,7 @@
 }
 
 .phone-tabs {
-  position: sticky;
-  bottom: 0;
+  flex: none;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   border-top: 1px solid var(--border);

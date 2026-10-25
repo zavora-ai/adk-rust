@@ -107,10 +107,14 @@ describe("a decision card", () => {
       expanded: true,
     });
     expect(send.mock.calls[0][1]).toEqual({ kind: "pointer" });
-    // The answer is the last step of how it got here (§8.1 "Decided").
-    const step = await screen.findByText("You said yes in the home app at 07:40");
-    expect(step.getAttribute("aria-current")).toBe("step");
+    // The card is one line with the answer; opened, the answer is the last step of how it got
+    // here (§8.1 "Decided").
+    const line = await screen.findByRole("button", { expanded: false });
+    expect(within(line).getByText("You said yes in the home app at 07:40")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+    await userEvent.click(line);
+    const steps = screen.getByRole("list", { name: "How it got here" });
+    expect(within(steps).getByText("You said yes in the home app at 07:40").getAttribute("aria-current")).toBe("step");
   });
 
   it("shows an answer given elsewhere first, and never retries it", async () => {
@@ -119,7 +123,11 @@ describe("a decision card", () => {
     const send = sendThrough(client);
     render(<DecisionCard card={invoiceCard()} send={send} />);
     await userEvent.click(screen.getByRole("button", { name: "Deny" }));
-    expect((await screen.findByText("You said yes in Telegram at 07:31")).getAttribute("aria-current")).toBe("step");
+    const line = await screen.findByRole("button", { expanded: false });
+    expect(within(line).getByText("You said yes in Telegram at 07:31")).toBeTruthy();
+    await userEvent.click(line);
+    const steps = screen.getByRole("list", { name: "How it got here" });
+    expect(within(steps).getByText("You said yes in Telegram at 07:31").getAttribute("aria-current")).toBe("step");
     expect(screen.getByText("Decided")).toBeTruthy();
     expect(send).toHaveBeenCalledTimes(1);
   });

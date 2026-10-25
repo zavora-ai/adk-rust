@@ -128,7 +128,8 @@ describe("a decision on the tray", () => {
         origin: { kind: "pointer" },
       },
     ]);
-    expect(buttons(invoice)).toEqual([]);
+    // What is left is the card's one line, which answers nothing.
+    expect(buttons(invoice)).toEqual(["Send the October invoice · You said yes from the tray at 07:40"]);
   });
 
   it("never decides on Enter, Esc, hiding the panel or closing it", async () => {

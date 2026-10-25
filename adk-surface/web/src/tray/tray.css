@@ -2,24 +2,31 @@
  * The tray panel (spec 3.3 §5.5, §9), 420×700 in the desktop shell. Its own classes over the
  * shared tokens and buttons; decisions sit on their own background (§7.1).
  */
-/* The header and the footer stay put; decisions and what comes next scroll between them. */
+/* The panel fills its window and never scrolls as a page: the header and the footer with
+   Open home and Stop all stay put; decisions and what comes next scroll between them. */
 .tray {
   display: flex;
   flex-direction: column;
-  height: 100dvh;
+  height: 100%;
+  overflow: hidden;
   background: var(--card);
   color: var(--text);
 }
 
+/* It holds what is positioned inside it, such as a hidden label, so nothing reaches past the
+   window. */
 .tray-body {
+  position: relative;
   display: flex;
-  flex: 1;
+  flex: 1 1 0;
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: none;
 }
 
 .tray-head {
+  flex: none;
   padding: 22px 20px 0;
 }
 
@@ -95,6 +102,7 @@
 }
 
 .tray-banner {
+  flex: none;
   margin: 14px 20px 0;
   padding: 9px 12px;
   border: 1px solid var(--decision-border);
@@ -222,10 +230,8 @@
   font-size: 13px;
 }
 
-.tray-card-decided-text {
-  color: var(--pill-decided);
-  font-size: 14px;
-  font-weight: 600;
+.tray-decided .tray-card-meta {
+  margin-top: 0;
 }
 
 .tray-card-actions {
@@ -300,6 +306,7 @@
 
 .tray-foot {
   display: grid;
+  flex: none;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
   padding: 14px 20px 18px;

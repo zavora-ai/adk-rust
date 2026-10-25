@@ -6,8 +6,18 @@
   box-sizing: border-box;
 }
 
+/* A fixed app shell: the page fills the window and never scrolls or bounces as a page. Each
+   screen scrolls inside itself, under a header that stays put. */
+html,
+body,
+#root {
+  height: 100%;
+}
+
 html,
 body {
+  overflow: hidden;
+  overscroll-behavior: none;
   margin: 0;
   background: var(--bg);
   color: var(--text);
@@ -299,7 +309,24 @@ pre {
   font-size: 18px;
 }
 
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* The section under the header: Threads fills it, and Today, Memory & rules and the
+   developer panel scroll inside it. */
+.content {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: none;
+}
+
 .banner {
+  flex: none;
   padding: 10px 28px;
   border-bottom: 1px solid var(--border);
   background: var(--decision);
@@ -308,6 +335,7 @@ pre {
 
 .sign-in {
   display: flex;
+  flex: none;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
@@ -341,6 +369,7 @@ pre {
   top: 0;
   z-index: 5;
   display: flex;
+  flex: none;
   align-items: center;
   gap: 24px;
   height: var(--header-height);
@@ -423,18 +452,24 @@ pre {
 
 /* ── Threads ────────────────────────────────────────────────── */
 
+/* The rail, the thread and the right panel each scroll inside themselves. */
 .threads {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr) 300px;
-  height: calc(100dvh - var(--header-height));
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
 }
 
+/* Each pane that scrolls holds what is positioned inside it, such as a hidden label, so
+   nothing reaches past the window. */
 .rail {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 24px;
   padding: 24px 16px;
   overflow-y: auto;
+  overscroll-behavior: none;
   border-right: 1px solid var(--border);
 }
 
@@ -526,12 +561,14 @@ pre {
 }
 
 .thread-scroll {
+  position: relative;
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
   padding: 30px 36px 8px;
   overflow-y: auto;
+  overscroll-behavior: none;
 }
 
 .thread-head {
@@ -758,6 +795,12 @@ pre {
   gap: 8px;
 }
 
+/* A long answer, such as "Always allow for this folder (…)", wraps inside the thread's width. */
+.decision-actions .button {
+  max-width: 100%;
+  white-space: normal;
+}
+
 .decision-note {
   color: var(--text-2);
   font-size: 14px;
@@ -895,11 +938,13 @@ pre {
 }
 
 .side {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 30px;
   padding: 24px 22px;
   overflow-y: auto;
+  overscroll-behavior: none;
   border-left: 1px solid var(--border);
 }
 
@@ -1829,8 +1874,10 @@ marker path {
     display: none;
   }
 
+  /* One column that scrolls inside the section; the header stays above it. */
   .threads {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
     height: auto;
   }
 
@@ -1872,7 +1919,11 @@ marker path {
     overflow: visible;
   }
 
+  /* The message box stays at the foot of the screen while the thread is in view. */
   .composer-wrap {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
     padding: 8px 16px 20px;
   }
 
