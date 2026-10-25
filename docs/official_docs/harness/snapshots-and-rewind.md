@@ -22,15 +22,27 @@ Turns (/rewind N goes back to before turn N):
     1  write the notes and run the script  (3 files changed)
 /redo undoes the last rewind.
 You > /rewind 1
-Rewind before turn 1 — snapshot snap-6f2c… (turn, 2026-10-25 14:02:11 UTC)
+Rewind before turn 1 — snapshot snap-89903be9… (turn, 2026-10-25 15:01:47 UTC)
   delete    1 file created since, removed: notes.txt
   conflicts 2 files changed since the latest snapshot by a command or by you, kept unless you choose them: kept.txt (restore), shell.txt (delete)
-  not undone (effects outside the workspace stay): bash: echo 'from bash' > shell.txt && …
-  transcript forks before turn 1: 7 events removed
+  not undone (effects outside the workspace stay): bash: echo 'from bash' > shell.txt && sed -i.bak 's/old/new/' kept.txt && rm kept.txt.bak
+  transcript forks before turn 1: 6 events removed
 Rewind? [y] yes, keep the conflicting files  [a] yes, restore them too  [N] no > a
-Rewound: 1 restored, 0 recreated, 2 deleted; transcript: 7 events removed, 0 events put back.
+Rewound: 1 restored, 0 recreated, 2 deleted; transcript: 6 events removed, 0 events put back.
+  not undone: 1
 /redo restores what was there before this rewind.
+You > /redo
+Redo: put back what the rewind at 2026-10-25 15:01:47 UTC replaced (snapshot snap-a92b3902…)
+  restore   1 file modified since, put back: kept.txt
+  recreate  2 files deleted since, written again: notes.txt, shell.txt
+  transcript 0 events removed, 6 events put back
+Rewind? [y/N] > y
+Rewound: 1 restored, 2 recreated, 0 deleted; transcript: 0 events removed, 6 events put back.
 ```
+
+In this session the model wrote `notes.txt` with `write_file`, and a `bash` command wrote
+`shell.txt` and edited `kept.txt` with `sed -i`. The harness's own file write is restored
+without asking; the command's writes are shown as conflicts, and `[a]` restores them too.
 
 | Command | Effect |
 |---|---|
