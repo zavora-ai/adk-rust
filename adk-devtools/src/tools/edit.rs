@@ -124,6 +124,34 @@ pub(crate) fn apply_replacements(
     Ok((updated, total))
 }
 
+/// The content `edit_file` with `args` would leave in a file holding `original`: the
+/// replacements of `args` applied in order, or the error the call would fail with
+/// (spec 3.1 §7.26: a reviewer sees the edit before it runs).
+///
+/// # Errors
+///
+/// Returns the argument, no-match or ambiguity error the call would return.
+///
+/// # Example
+///
+/// ```rust
+/// use serde_json::json;
+///
+/// let args = json!({ "path": "a.rs", "edits": [
+///     { "old_string": "one", "new_string": "1" },
+///     { "old_string": "two", "new_string": "2" }
+/// ] });
+/// assert_eq!(adk_devtools::tools::edit::preview("one two", &args, "a.rs").unwrap(), "1 2");
+/// ```
+pub fn preview(original: &str, args: &Value, display: &str) -> Result<String> {
+    let replacements = replacements(args)?;
+    let pairs: Vec<(&str, &str, bool)> = replacements
+        .iter()
+        .map(|r| (r.old_string.as_str(), r.new_string.as_str(), r.replace_all))
+        .collect();
+    Ok(apply_replacements(original, &pairs, display)?.0)
+}
+
 #[async_trait]
 impl Tool for EditFileTool {
     fn name(&self) -> &str {

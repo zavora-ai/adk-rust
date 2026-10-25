@@ -242,7 +242,7 @@ pub use context::{
     InvocationContext, MAX_STATE_KEY_LEN, Memory, MemoryEntry, ReadonlyContext, ReadonlyState,
     RunConfig, RunConfigBuilder, RuntimeToolset, STATIC_TOOL_ORIGIN, SecretRequest, SecretService,
     Session, State, StreamingMode, ToolCallbackContext, ToolConcurrencyConfig,
-    ToolConfirmationDecision, ToolConfirmationHandler, ToolConfirmationPolicy,
+    BatchCall, ToolConfirmationDecision, ToolConfirmationHandler, ToolConfirmationPolicy,
     ToolConfirmationRequest, ToolOrigin, ToolOutcome, tool_call_fingerprint, validate_state_key,
 };
 pub use credential::{

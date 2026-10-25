@@ -716,6 +716,57 @@ impl Workspace {
         })
     }
 
+    /// The key a read record and an `expect_sha256` map name `path` by, after the
+    /// containment check: its path relative to the root with `/` separators.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DevToolError::PathEscape`] for a path outside the root.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let ws = adk_devtools::Workspace::new("./my-repo");
+    /// assert_eq!(ws.record_key("./src/../src/lib.rs").unwrap(), "src/lib.rs");
+    /// assert!(ws.record_key("../outside").is_err());
+    /// ```
+    pub fn record_key(&self, path: &str) -> Result<String, DevToolError> {
+        let (resolved, _) = self.resolve_target(path)?;
+        Ok(self.record_path(&resolved))
+    }
+
+    /// Reads `path` for a reviewer under the file tools' rules — containment, no symlink
+    /// followed, excluded secret files refused — returning `None` when it does not exist
+    /// (spec 3.1 §7.26: a change set is composed over what the tools would read).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DevToolError::PathEscape`], [`DevToolError::Excluded`], or the read error.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # async fn example() -> Result<(), adk_devtools::DevToolError> {
+    /// let ws = adk_devtools::Workspace::new("./my-repo");
+    /// let current = ws.read_for_review("src/lib.rs").await?;
+    /// # let _ = current;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn read_for_review(&self, path: &str) -> Result<Option<Vec<u8>>, DevToolError> {
+        let (resolved, target) = self.resolve_target(path)?;
+        if self.is_excluded(&resolved) || self.is_excluded(&target) {
+            return Err(DevToolError::Excluded(self.display(&resolved)));
+        }
+        match self.read_contained_bytes(&target).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(DevToolError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Records the current content of `path` as what the session and agent behind `ctx`
     /// last saw, for a host step that changes a file right after the agent wrote it — a
     /// formatter hook — so the agent's next edit is not refused as stale (spec 3.1 §7.22,
