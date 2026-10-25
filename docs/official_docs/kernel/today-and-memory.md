@@ -24,7 +24,7 @@ An area is a [partition](partitions.md), or `default` on a kernel without partit
 
 | Setting | Route | Body | Started from |
 |---|---|---|---|
-| Quiet time | `POST /kernel/settings/{partition}/quiet-time` | `{"window": {"start": "22:00", "end": "07:00"}}`, or `{"window": null}` for none | `KernelConfig::quiet_hours` (`[kernel] quiet_hours`, the first-run answer) and the partition record's own |
+| Quiet time | `POST /kernel/settings/{partition}/quiet-time` | `{"window": {"start": "22:00", "end": "07:00", "timeZone": "Europe/London"}}`, or `{"window": null}` for none. The times are read in the IANA `timeZone`, across daylight saving time; else at `utcOffsetMinutes` east of UTC, a fixed offset that moves the window by an hour when the clocks change; else in the kernel host's time zone | `KernelConfig::quiet_hours` (`[kernel] quiet_hours`, the first-run answer) and the partition record's own |
 | Daily spending limit | `POST /kernel/settings/{partition}/spending-limit` | `{"microUsd": 5000000}`, or `{"microUsd": null}` for none | The lower of `KernelConfig::quotas` and the partition record's |
 | Mode | `POST /kernel/settings/{partition}/mode` | `{"mode": "ask"}`: `read_only`, `plan`, `ask` or `auto` | The mode the area's harness started in (`ControlPlaneConfig::with_start_mode`), else the partition record's |
 

@@ -767,6 +767,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "chrono-tz 0.10.4",
  "dirs 7.0.0",
  "firestore",
  "fred",

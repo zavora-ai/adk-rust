@@ -652,6 +652,36 @@ mod tests {
         );
     }
 
+    /// A window kept in a named time zone keeps its local times when the clocks change,
+    /// where a fixed offset moves it by an hour (spec 3.3 §10 K3).
+    #[test]
+    fn a_window_in_a_time_zone_follows_daylight_saving_time() {
+        use chrono::TimeZone;
+
+        let body: QuietTimeRequest = serde_json::from_value(json!({
+            "window": { "start": "22:00", "end": "07:00", "timeZone": "Europe/London" }
+        }))
+        .unwrap();
+        let zoned = body.window.unwrap();
+        assert_eq!(serde_json::to_value(zoned).unwrap()["timeZone"], "Europe/London");
+        // Saved in summer from a browser at UTC+1.
+        let fixed = window("22:00-07:00").with_utc_offset_minutes(60);
+        let summer = Utc.with_ymd_and_hms(2026, 7, 1, 21, 30, 0).unwrap();
+        let winter = Utc.with_ymd_and_hms(2026, 12, 1, 21, 30, 0).unwrap();
+        assert!(zoned.contains(summer) && fixed.contains(summer), "22:30 in London");
+        assert!(!zoned.contains(winter), "21:30 in London: not quiet yet");
+        assert!(fixed.contains(winter), "a fixed offset has moved the window by an hour");
+        assert_eq!(
+            zoned.release_at(Utc.with_ymd_and_hms(2026, 12, 2, 6, 0, 0).unwrap()),
+            Utc.with_ymd_and_hms(2026, 12, 2, 7, 0, 0).unwrap()
+        );
+        let error = serde_json::from_value::<QuietTimeRequest>(json!({
+            "window": { "start": "22:00", "end": "07:00", "timeZone": "Mars/Olympus" }
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("IANA"), "{error}");
+    }
+
     #[test]
     fn a_changed_limit_replaces_the_start_cap() {
         assert_eq!(spend_cap(Some(5), None), Some(5));
