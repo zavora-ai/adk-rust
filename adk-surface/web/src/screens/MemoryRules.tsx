@@ -575,8 +575,33 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
   const [chatCode, setChatCode] = useState("");
   const [paired, setPaired] = useState("");
   const [problem, setProblem] = useState("");
+  const [devicesProblem, setDevicesProblem] = useState("");
   const chatField = useId();
   const { record, devices: pairing } = seams;
+
+  // Who can say yes is read again every few seconds: a failed read says so and keeps what was
+  // shown, never an empty list that looks like nobody else can approve (spec 3.3 §5.1).
+  useEffect(() => {
+    if (!pairing) return;
+    let live = true;
+    const load = () => {
+      void pairing
+        .list()
+        .then((value) => {
+          if (!live) return;
+          setDevices(value);
+          setDevicesProblem("");
+        })
+        .catch(() => live && setDevicesProblem(labels.devicesUnread));
+      void pairing.waiting?.().then((value) => live && setWaiting(value)).catch(() => undefined);
+    };
+    load();
+    const timer = window.setInterval(load, 10_000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [pairing]);
 
   useEffect(() => {
     let live = true;
@@ -598,12 +623,10 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
         })
         .catch(() => undefined);
     }
-    void pairing?.list().then((value) => live && setDevices(value)).catch(() => undefined);
-    void pairing?.waiting?.().then((value) => live && setWaiting(value)).catch(() => undefined);
     return () => {
       live = false;
     };
-  }, [client, record, pairing]);
+  }, [client, record]);
 
   return (
     <section className="card memory-card" aria-labelledby="did-heading">
@@ -677,6 +700,11 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
           </span>
         </li>
       </ul>
+      {devicesProblem && (
+        <p className="decision-problem" role="alert">
+          {devicesProblem}
+        </p>
+      )}
       {pairing && devices && (
         <>
           <button

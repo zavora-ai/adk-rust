@@ -160,6 +160,7 @@ export const labels = {
   recordBroken: "Something on record was changed or deleted.",
   recentEmpty: "Your agents have not acted yet.",
   thisComputer: "This computer",
+  devicesUnread: "Can't read the phones and chat accounts that can say yes right now. Trying again.",
   everything: "everything",
   remove: "Remove",
   yesOrNoAndStop: "yes or no, and stop all",

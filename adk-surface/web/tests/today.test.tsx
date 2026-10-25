@@ -397,6 +397,17 @@ describe("Where you can say yes from", () => {
     await waitFor(() => expect(within(form).queryByText("Telegram: Sam (4242) asked to pair.")).toBeNull());
   });
 
+  it("says when it cannot read who can say yes, instead of showing only this computer", async () => {
+    const seams = fixtureSeams();
+    seams.devices!.list = async () => {
+      throw new ApiError(500, "the channel binding store is unavailable");
+    };
+    render(<App client={new FixtureClient()} seams={seams} initialSection="memory" />);
+    expect(
+      await screen.findByText("Can't read the phones and chat accounts that can say yes right now. Trying again."),
+    ).toBeTruthy();
+  });
+
   // S-I6: the confirmation names the account the kernel paired, never the one that asked when
   // the section opened, so a stranger's code is not taken for a known person's.
   it("names the account the kernel paired, whoever was waiting", async () => {
