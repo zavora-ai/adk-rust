@@ -59,6 +59,8 @@ pub(crate) struct Printer<W: Write> {
     focused: Option<(String, BoxView)>,
     /// The slash command whose output was printed last.
     printed_output: Option<u64>,
+    /// The Agents view as last printed (spec 3.3 §5.7): printed again when it changes.
+    printed_agents: Option<super::agents::AgentsPane>,
 }
 
 impl<W: Write> Printer<W> {
@@ -80,6 +82,7 @@ impl<W: Write> Printer<W> {
             prompt: None,
             focused: None,
             printed_output: None,
+            printed_agents: None,
         }
     }
 
@@ -196,7 +199,18 @@ impl<W: Write> Printer<W> {
                 View::Help => lines.extend(self.renderer.help(app, width)),
                 // Printed once it has returned, below.
                 View::Output => {}
+                // Printed once the kernel answered, below.
+                View::Agents => {}
             }
+        }
+        // The Agents view, each time what it shows changes (spec 3.3 §5.7): `/agents` lists
+        // the agents, and changes use `/agent`.
+        if app.view == View::Agents
+            && app.agents_pane.waiting.is_none()
+            && self.printed_agents.as_ref() != Some(&app.agents_pane)
+        {
+            self.printed_agents = Some(app.agents_pane.clone());
+            lines.extend(super::agents::lines(&app.agents_pane, &self.renderer.theme, width));
         }
         // A slash command's output, once, when it returns (spec 3.3 §5.2).
         if let Some(output) = &app.output

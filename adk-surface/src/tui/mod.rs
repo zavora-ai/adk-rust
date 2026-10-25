@@ -45,6 +45,7 @@
 //! # }
 //! ```
 
+mod agents;
 mod app;
 mod commands;
 mod full;

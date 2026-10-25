@@ -87,6 +87,7 @@ pub(crate) const BUILT_IN: &[(&str, &str)] = &[
     ("help", "Keys and commands"),
     ("today", "Today: while you were away"),
     ("permissions", "Permissions: what your agents can do"),
+    ("agents", "Your agents"),
     ("mode", "Show or set the mode: just look, suggest, ask first or go ahead"),
     ("session", "This session; /session new or /session ID opens another"),
     ("stop", "Stop all"),

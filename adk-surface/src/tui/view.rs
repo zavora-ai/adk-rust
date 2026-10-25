@@ -179,7 +179,8 @@ impl Renderer {
     pub(crate) fn footer(&self) -> Line<'static> {
         let t = &self.theme;
         let hints = [
-            ("tab", "agents"),
+            ("tab", "next agent"),
+            ("ctrl-g", "agents"),
             ("ctrl-t", "today"),
             ("ctrl-r", "permissions"),
             ("/", "commands"),
@@ -207,6 +208,10 @@ impl Renderer {
             AgentStatus::Asleep => ('○', t.label()),
             AgentStatus::Done => ('✓', t.fg(p.done)),
             AgentStatus::Failed => ('✗', t.fg(p.failed)),
+            // Agents a person added (spec 3.3 §5.7).
+            AgentStatus::Ready => ('○', t.label()),
+            AgentStatus::Paused => ('‖', t.label()),
+            AgentStatus::CantStart => ('✗', t.fg(p.failed)),
         }
     }
 
@@ -966,6 +971,7 @@ impl Renderer {
             ("tab", "The next agent's thread"),
             ("ctrl-t", "Today: while you were away"),
             ("ctrl-r", "Permissions: what your agents can do"),
+            ("ctrl-g", "Your agents"),
             ("ctrl-k", "Stop all"),
             ("pgup pgdn", "Scroll the thread, or the call in a decision box"),
             ("↑", "Take back the newest queued message, into the empty message box"),
@@ -1247,6 +1253,7 @@ impl Renderer {
             View::Permissions => (self.permissions(app, width), None),
             View::Help => (self.help(app, width), None),
             View::Output => (self.output(app, width), None),
+            View::Agents => (super::agents::lines(&app.agents_pane, &self.theme, width), None),
         };
         let scroll = if app.view == View::Thread {
             app.scroll.min(lines.len().saturating_sub(height))
