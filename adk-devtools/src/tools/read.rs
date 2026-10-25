@@ -146,7 +146,9 @@ impl Tool for ReadFileTool {
         }
 
         let bytes = self.workspace.read_contained_bytes(&target).await?;
-        self.workspace.mark_read(ctx.as_ref(), &resolved);
+        self.workspace
+            .record_digest(ctx.as_ref(), &resolved, &crate::read_ledger::sha256_hex(&bytes))
+            .await;
         let display = self.workspace.display(&resolved);
 
         if let Some(mime_type) = sniff_inline_mime(&bytes) {

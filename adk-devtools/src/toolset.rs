@@ -5,13 +5,15 @@ use std::sync::Arc;
 use adk_core::{ReadonlyContext, Result, Tool, Toolset};
 use async_trait::async_trait;
 
-use crate::tools::{BashTool, EditFileTool, GlobTool, GrepTool, ReadFileTool, WriteFileTool};
+use crate::tools::{
+    ApplyPatchTool, BashTool, EditFileTool, GlobTool, GrepTool, ReadFileTool, WriteFileTool,
+};
 use crate::workspace::Workspace;
 
-/// Bundles the developer tools (`read_file`, `write_file`, `edit_file`, `glob`,
-/// `grep`, `bash`) so they can be attached to an agent in one call.
+/// Bundles the developer tools (`read_file`, `write_file`, `edit_file`, `apply_patch`,
+/// `glob`, `grep`, `bash`) so they can be attached to an agent in one call.
 ///
-/// Mutating tools (`write_file`, `edit_file`) are omitted when the workspace is
+/// Mutating tools (`write_file`, `edit_file`, `apply_patch`) are omitted when the workspace is
 /// read-only, and `bash` is omitted when bash is disabled — so the toolset the
 /// model sees always matches what the workspace actually permits.
 pub struct DevToolset {
@@ -49,6 +51,7 @@ impl Toolset for DevToolset {
         if ws.is_writable() {
             tools.push(Arc::new(WriteFileTool::new(ws.clone())));
             tools.push(Arc::new(EditFileTool::new(ws.clone())));
+            tools.push(Arc::new(ApplyPatchTool::new(ws.clone())));
         }
         if self.include_bash && ws.bash_allowed() {
             tools.push(Arc::new(BashTool::new(ws.clone())));

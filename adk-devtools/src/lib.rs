@@ -1,7 +1,7 @@
 //! # adk-devtools
 //!
 //! Developer tools for ADK-Rust coding agents — `read_file`, `write_file`,
-//! `edit_file`, `glob`, `grep`, and `bash` — all scoped to a sandboxed
+//! `edit_file`, `apply_patch`, `glob`, `grep`, and `bash` — all scoped to a sandboxed
 //! [`Workspace`].
 //!
 //! These are the inner-loop tools a coding agent needs: read and edit files,
@@ -32,7 +32,11 @@
 //! can shorten but not extend, and **secret exclusion**: `grep` and `glob` skip
 //! files matching [`DEFAULT_EXCLUDE_GLOBS`] and `read_file` refuses them with
 //! [`DevToolError::Excluded`]. `edit_file` requires a prior `read_file` by the same
-//! session and agent.
+//! session and agent, and refuses a file that changed since with
+//! [`DevToolError::Stale`]: every read and write records the file's sha256 in a
+//! [`ReadLedger`], which a host can persist with [`Workspace::with_read_ledger`].
+//! `edit_file`, `write_file` and `apply_patch` also take `expect_sha256`, the content a
+//! decision approved, and write nothing when the file differs (spec 3.1 §7.26).
 //!
 //! `bash` runs host-local through [`HostLauncher`] with a cleared environment plus
 //! [`DEFAULT_ENV_ALLOWLIST`], so provider API keys in the agent process are not
@@ -48,9 +52,11 @@
 mod beneath;
 mod error;
 mod launcher;
+mod read_ledger;
 mod toolset;
 mod workspace;
 
+pub mod patch;
 pub mod tools;
 
 /// A process a [`CommandLauncher`] started itself in a Job Object, which
@@ -59,9 +65,10 @@ pub mod tools;
 pub use adk_sandbox::process_tree::ContainedChild;
 pub use error::DevToolError;
 pub use launcher::{CommandLauncher, HostLauncher};
+pub use read_ledger::{InMemoryReadLedger, ReadLedger, ReadScope, sha256_hex};
 pub use tools::{
-    BashTool, DEFAULT_MAX_INLINE_BYTES, EditFileTool, GlobTool, GrepTool, ReadFileTool,
-    WriteFileTool, sniff_inline_mime,
+    ApplyPatchTool, BashTool, DEFAULT_MAX_INLINE_BYTES, EditFileTool, GlobTool, GrepTool,
+    ReadFileTool, WriteFileTool, sniff_inline_mime,
 };
 pub use toolset::DevToolset;
 pub use workspace::{DEFAULT_ENV_ALLOWLIST, DEFAULT_EXCLUDE_GLOBS, Workspace};
