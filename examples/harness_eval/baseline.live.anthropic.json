@@ -5,7 +5,10 @@
     "passed": {
       "plan_mode_writes_nothing": 1.0,
       "goal_until": 1.0,
-      "fix_failing_test": 1.0
+      "fix_failing_test": 1.0,
+      "capability_mistyped_command": 1.0,
+      "capability_resume": 1.0,
+      "capability_deny_rule": 1.0
     }
   }
 }
