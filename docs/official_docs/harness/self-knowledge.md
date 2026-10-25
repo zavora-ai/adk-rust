@@ -42,6 +42,11 @@ harness_help explains the harness on demand; topics: cli <subcommand>, commands,
 </harness>
 ```
 
+With snapshots on — adk-cli's default — the `rewind` line says instead that the whole
+workspace is snapshotted before each user turn and plan step, shell writes included, that
+`/rewind` restores files, transcript and plan, what is skipped, and that a snapshot reaching
+the file cap is partial ([Snapshots and rewind](snapshots-and-rewind.md)).
+
 | Property | Rule |
 |---|---|
 | Size | At most 6 KiB (`HARNESS_BLOCK_MAX_BYTES`); a longer block ends with the sections it cut and points at `harness_help` |

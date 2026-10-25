@@ -57,6 +57,7 @@ The REPL, `code`, `goal`, `ultracode` and `serve` take the same harness flags.
 | `--effort low\|medium\|high` | The reasoning effort of every model call in this session, whatever the mode or role (spec 3.1 §7.23); without it the `[effort]` policy applies per mode: plan high, members low, everything else medium |
 | `--store-key keychain:<entry>\|secret:<provider>/<name>\|env:<VAR>` | Where the key sealing `harness.db` is kept (spec 3.1 §7.12); without it `[store] key` in the user config, else the store is plaintext |
 | `--no-hooks` | Runs no hooks, the workspace's included (spec 3.1 §7.22); `/hooks` lists the effective set |
+| `--no-snapshots` | Takes no snapshot before each turn, so `/rewind` restores no file (spec 3.1 §7.27); see [Snapshots and rewind](snapshots-and-rewind.md) |
 | `--web` / `--no-web` | Declares the web tools (on by default) or none at all (spec 3.1 §7.20) |
 | `--allow-domain HOST` | A host `web_fetch` reads without approval: exact, or `*.example.com`; repeatable |
 | `--search provider\|off\|searxng\|deepseek` | Where web search runs (spec 3.1 §7.20): `provider` (the default) is the built-in search of the provider the model's client serves; `searxng` and `deepseek` replace it with the governed `web_search` over a SearXNG instance (`[web] searxng_url`, else `SEARXNG_URL`) or DeepSeek's Search API (`DEEPSEEK_API_KEY`); `off` declares none. The banner's `Search` line and `/web` name the path |
@@ -110,6 +111,10 @@ max_rounds = 2
 [plan]                       # the user config only (spec 3.1 §7.11)
 checkpointer = "postgres://plans@db/harness"
 
+[snapshots]                  # the user config only (spec 3.1 §7.27)
+enabled = true
+keep_turns = 50
+
 [[hooks]]                    # spec 3.1 §7.22; see Hooks
 event = "post_edit"
 command = "cargo fmt"
@@ -123,7 +128,9 @@ a project file may set `search = "off"`, and any other `search` or a `searxng_ur
 ignored with a note, since it would choose where the agent's queries go. `[plan] checkpointer` is read from the
 user config only: a checkpointer location is not a permission, but a workspace file naming one would send
 plan state to a server the repository chose, so the flag wins, then the user config, then
-the store the sessions are in. `[[hooks]]` tables are hooks on
+the store the sessions are in. `[snapshots]` sets whether the workspace is snapshotted before
+each turn and how many turns and bytes are kept; it is read from the user config only, and a
+project file setting it is ignored with a note. `[[hooks]]` tables are hooks on
 tool events ([Hooks](hooks.md#in-the-cli)): the user config's run before the workspace's,
 and the workspace's run only once the workspace is trusted.
 
@@ -231,6 +238,8 @@ asks again.
 | `/cost` | Your spend: model calls, tokens and cost per acting agent and vendor |
 | `/memory` | Working notes and long-term facts with their status, kind, source and session; `/memory forget ID` and `/memory accept ID` act on one fact (a unique prefix of the id is enough) |
 | `/effort [low\|medium\|high]` | Shows the session's reasoning effort and the policy; with a level, sets every mode and role to it from the next model call (spec 3.1 §7.23) |
+| `/rewind [N]` | The session's turns with the files each changed; with `N`, shows what going back to before turn N restores, recreates and deletes, what it cannot undo, and asks once (spec 3.1 §7.27) |
+| `/redo` | Undoes the last `/rewind`: files, transcript and plan |
 | `/hooks` | The hooks on tool events — each with its source, isolation, timeout and whether it runs — and the bounds of one turn (spec 3.1 §7.22); a workspace hook runs only under the workspace's trust |
 | `/help`, `exit` | Lists the commands; leaves the REPL |
 
@@ -252,8 +261,8 @@ records them.
 
 ## Sessions and `harness.db`
 
-Sessions, held calls, durable runs, modes, standing rules, long-term facts and plan
-checkpoints live in one SQLite file,
+Sessions, held calls, durable runs, modes, standing rules, long-term facts, plan
+checkpoints and snapshot records live in one SQLite file,
 `<config dir>/adk-rust/harness.db`, created readable by you only. An approved plan therefore
 runs in the next process, and the banner's `Plans` line, or the `plans` line of `code` and
 `goal`, says where plans are kept. `serve --store` moves them with the other stores; see
@@ -264,6 +273,8 @@ continue from another `--dir`. `--ephemeral` keeps everything in memory.
 ```bash
 adk-rust sessions list
 adk-rust sessions show 6754153c-…
+adk-rust sessions rewind 6754153c-…                  # its turns and the files each changed
+adk-rust sessions rewind 6754153c-… 2                # back to before turn 2, asked once
 adk-rust rules add bash --prefix "cargo test"        # allow `cargo test …` everywhere
 adk-rust rules add bash --prefix "git push" --deny "push from the release branch only"
 adk-rust rules list

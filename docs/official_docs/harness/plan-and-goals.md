@@ -83,6 +83,11 @@ async fn rewind(harness: &HarnessAgent) -> adk_core::Result<()> {
 after the step completed: the steps up to it never run again; the steps after it run on the
 next turn, and their Approve gates ask again.
 
+`PlanGraphs::rewind` moves the plan only; no file is restored. With snapshots on, the harness
+also snapshots the workspace before each step, and `Harness::rewind_plan(.., RewindTarget::PlanStep(id))`
+puts back the files and the plan together, so the step and the ones after it run again over
+the files they first saw ([Snapshots and rewind](snapshots-and-rewind.md)).
+
 | Record | Fields |
 |---|---|
 | `harness.plan.compiled` | `planHash`, `steps` (`id`, `title`, `dependsOn`, `gate`), `nodes`, `interruptBefore` |
