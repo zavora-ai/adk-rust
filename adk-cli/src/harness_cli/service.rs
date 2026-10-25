@@ -328,16 +328,21 @@ pub async fn run_windows_service(
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
         service::run_as_service(&name, log, move || {
-            runtime.block_on(async move {
-                let ran = async {
-                    let model = crate::resolve_model(&options).await?;
-                    super::up(model, options.instruction.clone(), up).await
-                };
-                ran.await.map_err(|error| {
-                    eprintln!("adk-rust up: {error:#}");
-                    format!("{error:#}")
+            // The dispatcher's service thread has the executable's 1 MiB stack, which a debug
+            // build of `up` outgrows as it would the main thread's.
+            crate::on_command_stack("service", move || {
+                runtime.block_on(async move {
+                    let ran = async {
+                        let model = crate::resolve_model(&options).await?;
+                        super::up(model, options.instruction.clone(), up).await
+                    };
+                    ran.await.map_err(|error| {
+                        eprintln!("adk-rust up: {error:#}");
+                        format!("{error:#}")
+                    })
                 })
             })
+            .map_err(|error| format!("could not start the service's thread: {error}"))?
         })
     })
     .await

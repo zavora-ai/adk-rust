@@ -42,19 +42,31 @@ use cli::{AgentOptions, ChatArgs, Cli, Commands, Provider, ThinkingMode};
 use std::sync::Arc;
 
 /// The stack the commands run on. Debug builds of the argument parser and the command
-/// futures outgrow the 1 MiB Windows gives a process's main thread, so every platform runs
-/// them with the 8 MiB Linux and macOS give theirs.
+/// futures outgrow the 1 MiB Windows gives a process's main thread and the service
+/// dispatcher's thread, so every platform runs them with the 8 MiB Linux and macOS give
+/// their main thread.
 const COMMAND_STACK: usize = 8 * 1024 * 1024;
 
 fn main() -> Result<()> {
-    std::thread::Builder::new()
-        .name("main".into())
-        .stack_size(COMMAND_STACK)
-        .spawn(|| {
-            tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(run())
-        })?
-        .join()
-        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    on_command_stack("main", || {
+        tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(run())
+    })?
+}
+
+/// Runs `work` on a thread named `name` with [`COMMAND_STACK`] and returns its result; a
+/// panic in `work` is resumed on the caller. The process's main thread and the Windows
+/// service's thread both run their command this way.
+///
+/// # Errors
+///
+/// Returns the error when the thread cannot be started.
+fn on_command_stack<T: Send + 'static>(
+    name: &str,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> std::io::Result<T> {
+    let thread =
+        std::thread::Builder::new().name(name.to_string()).stack_size(COMMAND_STACK).spawn(work)?;
+    Ok(thread.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
 }
 
 async fn run() -> Result<()> {

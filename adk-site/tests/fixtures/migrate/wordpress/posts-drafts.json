@@ -1,0 +1,35 @@
+[
+ {
+  "id": 11,
+  "date_gmt": "2026-10-20T08:00:00",
+  "modified_gmt": "2026-10-20T08:00:00",
+  "slug": "choosing-an-inverter",
+  "status": "draft",
+  "type": "post",
+  "link": "https://solar.test/?p=11",
+  "title": {
+   "rendered": "Choosing an inverter"
+  },
+  "content": {
+   "rendered": "<p>Draft text about inverters.</p>",
+   "protected": false
+  },
+  "excerpt": {
+   "rendered": "<p>A draft.</p>\n",
+   "protected": false
+  },
+  "comment_status": "open",
+  "categories": [
+   3
+  ],
+  "tags": [],
+  "_embedded": {
+   "author": [
+    {
+     "id": 1,
+     "name": "Amina"
+    }
+   ]
+  }
+ }
+]

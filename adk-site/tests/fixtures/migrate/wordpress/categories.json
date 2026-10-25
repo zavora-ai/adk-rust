@@ -1,0 +1,9 @@
+[
+ {
+  "id": 3,
+  "name": "News",
+  "slug": "news",
+  "parent": 0,
+  "link": "https://solar.test/category/news/"
+ }
+]

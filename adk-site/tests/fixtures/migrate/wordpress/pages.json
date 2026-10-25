@@ -1,0 +1,65 @@
+[
+ {
+  "id": 4,
+  "date_gmt": "2026-09-01T08:00:00",
+  "modified_gmt": "2026-10-01T08:00:00",
+  "slug": "home",
+  "status": "publish",
+  "type": "page",
+  "link": "https://solar.test/",
+  "title": {
+   "rendered": "Home"
+  },
+  "content": {
+   "rendered": "<h2>Clean power for homes</h2>\n<p>Example Solar installs rooftop panels and batteries for homes and small businesses in Nairobi. We have installed more than four hundred systems since 2019, each one designed for the roof it sits on.</p>\n<p>Read <a href=\"https://solar.test/2026/10/01/hello-sun/\">why we started</a>, see our <a href=\"https://solar.test/products/panel-400/\">400 W panel</a>, or <a href=\"https://solar.test/contact/\">ask for a quote</a>.</p>\n<p><a href=\"https://solar.test/private/\">Staff notes</a></p>",
+   "protected": false
+  },
+  "excerpt": {
+   "rendered": "<p>Rooftop solar for homes in Nairobi.</p>\n",
+   "protected": false
+  },
+  "comment_status": "closed"
+ },
+ {
+  "id": 2,
+  "date_gmt": "2026-09-01T08:00:00",
+  "modified_gmt": "2026-10-01T08:00:00",
+  "slug": "about",
+  "status": "publish",
+  "type": "page",
+  "link": "https://solar.test/about/",
+  "title": {
+   "rendered": "About us"
+  },
+  "content": {
+   "rendered": "<p>We are a team of eight engineers and installers. Every installation is surveyed, designed and wired by our own staff, and we stay on call for the life of the system.</p>\n<figure class=\"wp-block-image\"><img src=\"https://solar.test/wp-content/uploads/2026/10/team.png\" alt=\"The installation team on a roof\"><figcaption>The team in October.</figcaption></figure>\n<h2>How we work</h2>\n<ul><li>A free site survey</li><li>A written design and quote</li><li>Installation in two days</li></ul>",
+   "protected": false
+  },
+  "excerpt": {
+   "rendered": "<p>Who we are and how we work.</p>\n",
+   "protected": false
+  },
+  "comment_status": "closed"
+ },
+ {
+  "id": 5,
+  "date_gmt": "2026-09-01T08:00:00",
+  "modified_gmt": "2026-10-01T08:00:00",
+  "slug": "contact",
+  "status": "publish",
+  "type": "page",
+  "link": "https://solar.test/contact/",
+  "title": {
+   "rendered": "Contact"
+  },
+  "content": {
+   "rendered": "<p>Tell us about your roof and we will reply within one working day.</p>\n<div class=\"wpcf7\"><form action=\"/contact/#wpcf7-f12-p5-o1\" method=\"post\" class=\"wpcf7-form init\">\n<input type=\"hidden\" name=\"_wpcf7\" value=\"12\">\n<p><label>Your name <input type=\"text\" name=\"your-name\" required></label></p>\n<p><label>Your email <input type=\"email\" name=\"your-email\" required></label></p>\n<p><label>Your message <textarea name=\"your-message\"></textarea></label></p>\n<p><input type=\"submit\" value=\"Send\"></p>\n</form></div>",
+   "protected": false
+  },
+  "excerpt": {
+   "rendered": "<p>Ask for a quote.</p>\n",
+   "protected": false
+  },
+  "comment_status": "closed"
+ }
+]

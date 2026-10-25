@@ -1,0 +1,4 @@
+/* Theme: Solar (migration fixture) */
+body { font-family: Georgia, serif; margin: 0; color: #222; background: #fffdf6; }
+.site-header { background: url(/wp-content/themes/solar/logo.png) no-repeat 8px 8px; padding: 16px 16px 16px 40px; border-bottom: 2px solid #f2b705; }
+.site-main { max-width: 720px; margin: 24px auto; padding: 0 16px; }

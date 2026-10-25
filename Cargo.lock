@@ -1312,28 +1312,41 @@ dependencies = [
 name = "adk-site"
 version = "3.0.0"
 dependencies = [
+ "adk-artifact",
  "adk-auth",
  "adk-core",
+ "adk-guardrail",
  "async-trait",
  "awp-types",
+ "aws-lc-rs",
+ "axum",
  "base64 0.22.1",
  "bytes",
  "chrono",
+ "ego-tree",
  "hex",
+ "hickory-resolver",
  "image",
+ "image-compare",
  "minijinja",
  "proptest",
  "pulldown-cmark",
+ "quick-xml 0.41.0",
+ "regex",
+ "reqwest 0.12.28",
  "scraper",
  "serde",
  "serde_json",
  "serde_yaml",
  "sha2 0.10.9",
+ "similar",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "toml 0.8.23",
  "tracing",
+ "url",
+ "x509-parser 0.18.1",
 ]
 
 [[package]]
@@ -9889,6 +9902,18 @@ dependencies = [
  "tiff",
  "zune-core",
  "zune-jpeg",
+]
+
+[[package]]
+name = "image-compare"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "176623a137baf75908084aff53578d6336cbd932bffaf12fabe26b343eb13338"
+dependencies = [
+ "image",
+ "itertools 0.14.0",
+ "rayon",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
