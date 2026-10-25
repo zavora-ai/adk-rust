@@ -399,8 +399,8 @@ fn drive_codeact(
         // Count of output-schema correction retries used so far.
         let mut schema_retries: usize = 0;
 
-        // The message a resuming run brought, until a model request carries it.
-        let mut unanswered: Option<Content> = None;
+        // Whether the transcript carries a message the model has not been sent yet.
+        let mut unanswered = false;
 
         // ----- self-route: resume a pending checkpoint, or start fresh -----
         match pending {
@@ -413,7 +413,7 @@ fn drive_codeact(
                 iteration = 0;
                 pending_step = None;
             }
-            Some(cp) => {
+            Some(mut cp) => {
                 if cp.tool_roster != roster {
                     yield Err(AdkError::new(
                         ErrorComponent::Agent,
@@ -424,19 +424,32 @@ fn drive_codeact(
                     return;
                 }
                 // A script resumed on a decision continues the earlier transcript, so a message
-                // this run brought joins it before the next model request (spec 3.3 §12). A run
-                // replayed with the message that started the script brings nothing new.
-                let started_by =
-                    cp.transcript.iter().take_while(|content| content.role != "model").last();
-                let replayed = started_by.is_some_and(|content| {
-                    serde_json::to_value(content).ok() == serde_json::to_value(&incoming).ok()
-                });
+                // this run brought joins it, and every checkpoint after it, until a model request
+                // carries it (spec 3.3 §12). A run replayed with a message the transcript already
+                // holds brings nothing new. After the script's last model turn the transcript
+                // holds only its printed output, so anything else there is such a message.
+                let incoming_value = serde_json::to_value(&incoming).ok();
                 if cp.disposition == Disposition::AwaitingConfirmation
                     && incoming.carries_user_input()
-                    && !replayed
+                    && !cp
+                        .transcript
+                        .iter()
+                        .any(|content| serde_json::to_value(content).ok() == incoming_value)
                 {
-                    unanswered = Some(incoming.clone());
+                    cp.transcript.push(incoming.clone());
                 }
+                let script_turn =
+                    cp.transcript.iter().rposition(|content| content.role == "model");
+                unanswered = script_turn.is_some_and(|turn| {
+                    cp.transcript[turn + 1..].iter().any(|content| {
+                        content.carries_user_input()
+                            && !content
+                                .parts
+                                .first()
+                                .and_then(Part::text)
+                                .is_some_and(|text| text.starts_with(STDOUT_PREFIX))
+                    })
+                });
                 // Resolve the value/error to feed back. For the dispositions
                 // that execute (or decide) a tool now, capture a
                 // [`ResolutionRecord`] so we can persist a SAVE-AFTER checkpoint
@@ -568,9 +581,7 @@ fn drive_codeact(
                         yield Err(error);
                         return;
                     }
-                    if let Some(message) = unanswered.take() {
-                        transcript.push(message);
-                    }
+                    unanswered = false;
                     let script = match next_script(
                         model.as_ref(),
                         &transcript,
@@ -905,9 +916,9 @@ fn drive_codeact(
                             transcript.push(error_content(&truncate_middle(&message, max_error_chars)));
                             break 'script;
                         }
-                        // The resumed script finished before any model request carried the
-                        // message this run brought; the model answers it with the result in view.
-                        ScriptOutput::FinalResult { value } if unanswered.is_some() => {
+                        // The resumed script finished before any model request carried a
+                        // message a run brought; the model answers it with the result in view.
+                        ScriptOutput::FinalResult { value } if unanswered => {
                             transcript.push(observation_content(&value));
                             break 'script;
                         }
@@ -1776,9 +1787,12 @@ fn error_content(message: &str) -> Content {
     Content::new("user").with_text(format!("Error during execution:\n{message}"))
 }
 
+/// How [`stdout_content`] begins.
+const STDOUT_PREFIX: &str = "Output (stdout):\n";
+
 /// Surface captured stdout (`print` output) back to the model.
 fn stdout_content(output: &str) -> Content {
-    Content::new("user").with_text(format!("Output (stdout):\n{output}"))
+    Content::new("user").with_text(format!("{STDOUT_PREFIX}{output}"))
 }
 
 /// A *copy* of `transcript` with any stdout printed this turn appended, for
@@ -5839,11 +5853,76 @@ mod tests {
         let seen = model.seen.lock().unwrap().last().cloned().unwrap();
         let texts: Vec<&str> =
             seen.iter().flat_map(|c| c.parts.iter()).filter_map(|p| p.text()).collect();
+        let message = texts.iter().position(|t| *t == "and email me the receipt");
+        let result = texts.iter().position(|t| t.starts_with("Observation:") && t.contains("sent"));
         assert!(
-            texts.iter().any(|t| t.contains("sent")),
-            "the resumed result is in view: {texts:?}"
+            message.is_some() && result.is_some(),
+            "the message and the resumed result are in view: {texts:?}"
         );
-        assert_eq!(texts.last(), Some(&"and email me the receipt"));
+        assert_eq!(
+            final_text(events.last().unwrap()).as_deref(),
+            Some("sent, and the receipt is on its way")
+        );
+    }
+
+    /// Wave 2 review finding 10 (spec 3.3 §12): a message brought by a run whose resumed
+    /// script stops at a second call that needs a decision stays in the checkpoint, so the
+    /// run that resumes the second call gives it to the model.
+    #[tokio::test]
+    async fn a_message_survives_a_second_held_call() {
+        use adk_core::ApprovalStore as _;
+        let store = Arc::new(adk_core::InMemoryApprovalStore::new());
+        let scope = adk_core::ApprovalScope::new("app", "user", "sess-test");
+        let inputs = |model: Arc<FakeLlm>, rt: Arc<ScriptedRuntime>, incoming: Content| {
+            let mut input = base_inputs(model, rt, incoming.clone());
+            input.tools = vec![echo_tool()];
+            input.policy = ToolConfirmationPolicy::Always;
+            input.invocation_ctx = Arc::new(MockInvocationContext::new(incoming).with_run_config(
+                adk_core::RunConfig::builder().approval_store(store.clone()).build(),
+            ));
+            input
+        };
+        let approve = |event: &Event| {
+            let fingerprint = event.actions.tool_confirmation.as_ref().unwrap().fingerprint();
+            let store = store.clone();
+            let scope = scope.clone();
+            async move {
+                store.decide(&scope, &fingerprint, adk_core::ToolApproval::approve()).await.unwrap()
+            }
+        };
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+            Planned::call("echo", json!({"msg": "x"}), 7),
+            Planned::call("echo", json!({"msg": "y"}), 8),
+            Planned::Complete(json!({"type": "final_result", "value": "sent"})),
+        ]]));
+        let first = collect(inputs(FakeLlm::new("noop"), rt, user("go"))).await.pop().unwrap();
+        approve(&first).await;
+
+        let model = FakeLlm::new("noop");
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![]));
+        let mut input = inputs(model.clone(), rt.clone(), user("and email me the receipt"));
+        input.pending = pending_in(&first);
+        let second = collect(input).await.pop().unwrap();
+        assert_eq!(rt.last_value(), Some(json!({"msg": "x"})), "the first call ran");
+        assert_eq!(model.calls(), 0, "the script stopped at the second call");
+        approve(&second).await;
+
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![Planned::Complete(
+            json!({"type": "final_result", "value": "sent, and the receipt is on its way"}),
+        )]]));
+        let mut input = inputs(model.clone(), rt.clone(), Content::new("user"));
+        input.pending = pending_in(&second);
+        let events = collect(input).await;
+        assert_eq!(rt.last_value(), Some(json!({"msg": "y"})), "the second call ran");
+        assert_eq!(model.calls(), 1, "the model answers the message");
+        let seen = model.seen.lock().unwrap().last().cloned().unwrap();
+        let texts: Vec<&str> =
+            seen.iter().flat_map(|c| c.parts.iter()).filter_map(|p| p.text()).collect();
+        assert_eq!(
+            texts.iter().filter(|t| **t == "and email me the receipt").count(),
+            1,
+            "the message is in view once: {texts:?}"
+        );
         assert_eq!(
             final_text(events.last().unwrap()).as_deref(),
             Some("sent, and the receipt is on its way")

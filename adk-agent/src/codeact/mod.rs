@@ -64,9 +64,10 @@
 //! turn that needs a decision is refused into the script and withdrawn
 //! ([`withdraw_held_call`](adk_core::withdraw_held_call)), since only one call waits
 //! at a time (§7.4). An identical call that turn decides answers the waiting call,
-//! whose checkpoint is then cleared. A run that resumes the call on its decision gives
-//! the message it brought to the model once the resumed script hands back, and a
-//! runtime that cannot pause leaves no call waiting.
+//! whose checkpoint is then cleared. A run that resumes the call on its decision adds
+//! the message it brought to the transcript, and every checkpoint after it, so the next
+//! model request carries it — also when the resumed script finishes, or first stops at
+//! another call that needs a decision. A runtime that cannot pause leaves no call waiting.
 //!
 //! # Tool side effects
 //!

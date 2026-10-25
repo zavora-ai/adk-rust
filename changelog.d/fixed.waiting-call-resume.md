@@ -7,8 +7,9 @@
   from its held event, so its decision resumes it and an identical call in a turn beside it
   is recognised. A turn that decides an identical call answers the waiting call and clears
   its checkpoint; a turn beside a waiting call that ends with a result runs the after-agent
-  callbacks; a run that resumes a call on its decision and brings a message gives the
-  message to the model once the resumed script hands back.
+  callbacks; a run that resumes a call on its decision and brings a message keeps the
+  message in the transcript and every later checkpoint until a model request carries it,
+  also when the resumed script finishes or stops at another call that needs a decision.
 - **A current-turn agent sends its own turn while a call waits** (`adk-agent`; spec 3.3
   §7.3): an `IncludeContents::None` agent begins its turn at the message before a held call
   only in a run that resumes that call; while the call waits for a decision, each run sends
