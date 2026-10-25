@@ -65,7 +65,7 @@ routes its scopes open and on no other route:
 | Scope | Routes (under `/api`) |
 |---|---|
 | `read` | `GET /kernel/health`, `GET /kernel/processes`, `GET /kernel/events`, `POST /kernel/attach/{session}`, `GET /kernel/agenda`, `GET /approvals`, `GET /approvals/{id}`; what Today and "Agent Memory and Rules" read ([settings, away, memory and record](today-and-memory.md)): `GET /kernel/settings[/{partition}]`, `GET /kernel/away`, `POST /kernel/away/seen` (the device's own cursor), `GET /kernel/away/lines/{seq}`, `GET /kernel/memory`, `GET /kernel/record`, `GET /kernel/record/check`. No device changes a setting or a memory |
-| `decide` | `POST /approvals/{id}/decide` at low and medium risk; a high-risk decision, or one whose risk the kernel cannot read, answers `403` and waits for the person to confirm it is them in the home (spec 3.3 §7.2). The device guard checks the risk and records the decision; `DeviceTokenExtractor` refuses a device's decision the guard did not admit |
+| `decide` | `POST /approvals/{id}/decide` at low and medium risk; a high-risk decision, or one whose risk the kernel cannot read, answers `403` and waits for the person to confirm it is them in the home (spec 3.3 §7.2). A call of a tool a mounted driver declares `publish_public` or `financial`, the classes nothing may allow without a person (spec 3.2 K-I9), is high risk whatever its request says. A take-over, whose secret the person types in the home, may only be denied. The device guard checks the risk and records the decision; `DeviceTokenExtractor` refuses a device's decision the guard did not admit |
 | `stop` | `POST /kernel/freeze` |
 
 | Answer | When |
@@ -106,14 +106,17 @@ list its chat accounts as the error it is, not as having none.
 
 | Route | Purpose | `operator` | Recorded |
 |---|---|---|---|
-| `POST /kernel/pairing` | Issues a code; body `{"name": "...", "scopes": ["read"], "expiresInDays": 30}`, 1 to 365 days | Yes | `pairing.issue`, with the scopes the code grants and the name as stored |
+| `POST /kernel/pairing` | Issues a code; body `{"name": "...", "scopes": ["read"], "expiresInDays": 30}`, 1 to 365 days | Yes | `pairing.issue`, with the scopes the code grants and the name as stored; a request refused for its length records nothing |
 | `POST /kernel/pairing/claim` | Claims a code; body `{"code": "...", "name": "..."}` | — (the code) | `pairing.claim`, as the device's owner |
 | `GET /kernel/devices` | Every device, revoked and expired ones included | Yes | — |
 | `POST /kernel/devices/{id}/revoke` | Removes a device | Yes | `devices.revoke` |
 
 Every action a device takes is recorded with `device` in its `kernel.control` record, and a
-decision a device answers writes `approvals.decide` with the device before it reaches the
-inbox, so "What your agents did" can say where the person said yes from (spec 3.3 §11).
+decision a device answers writes `approvals.decide` before it reaches the inbox, with
+`surface: device`, the device, its name (`deviceName`) and the answer it sent (`answer`:
+`approve`, `edit`, `reject` or `respond`). The record's line in `GET /kernel/record` carries
+the action (`kernelAction`), the answer (`decision`) and the device's name (`channel`), so
+"What your agents did" can say where the person said yes from (spec 3.3 §11).
 
 The routes are mounted on every kernel: one built without `ControlPlaneConfig::with_pairing`
 answers `400` naming it, and one without chat channels lists no chat accounts and answers
@@ -136,12 +139,15 @@ adk-kernel = { version = "3.0.0", features = ["channels"] }
 | Only paired accounts reach an agent (S-I6) | An unpaired account's message, or a pressed button, gets a pairing code and starts nothing |
 | A paired account's message is a turn | It starts a turn as the paired person in the thread's session, keyed by the platform's message id, so a redelivery starts nothing; the reply goes back to the same thread |
 | Cards carry no arguments (S-I5) | A decision card holds the agent, a summary of at most 160 characters with every argument value masked as `[…]`, and the risk. A value of three or more characters is masked wherever it appears, ignoring case; a shorter one, `true` or `false` where it stands as a word or number of its own; newlines and other control characters read as spaces |
-| Chat says yes once or no, never money (§7.2, §7.4) | **Allow once** and **Deny** at low and medium risk only, through `ApprovalService::decide` at the version the card showed. A high-risk card, and the card of a call that moves money, offers no button and links to the home: a tool a mounted driver declares `financial`, a `payments_*` tool of `adk-payments`, or one `ChannelGatewayBuilder::money_tools` names |
+| Chat says yes once or no, never money (§7.2, §7.4) | **Allow once** and **Deny** at low and medium risk only, through `ApprovalService::decide` at the version the card showed. A high-risk card, and the card of a call that moves money, offers no button and links to the home: a tool a mounted driver declares `financial`, a `payments_*` tool of `adk-payments`, or one `ChannelGatewayBuilder::money_tools` names. A tool a mounted driver declares `publish_public` or `financial` is high risk whatever its request says (spec 3.2 K-I9). A take-over, whose secret the person types in the home (§8.2), offers **Deny** only |
 | Only who may answer is asked | A card goes to the decision's person when the policy lets that person answer it; an answer from anyone else is told the decision waits for someone else |
 | A second answer is shown, never retried (S-I2) | "Decided already: you said yes at 07:31."; an answer that counts toward a quorum is told the decision also waits for someone else |
 | One card per decision | Whether the doorbell or `ring_waiting` rings a decision first, it is carded once; a gateway stopped and started again keeps ringing the doorbell, and starting a running gateway changes nothing |
 | Stop all from anywhere, resume only at home (S-I10) | "stop all" or `/stop` freezes the kernel; "resume" or `/resume` is refused |
-| Nothing notifies during quiet time | A card for a decision asked in quiet time is sent when quiet time ends, if it still waits; after a restart, `ChannelGateway::ring_waiting` rings every decision that still waits |
+| Nothing notifies during quiet time | A card for a decision asked in quiet time is sent when quiet time ends, if it still waits: the quiet time of the decision's area in force, a change made in the home included. The wait reads the wall clock at least once a minute, so a laptop that slept through the night sends the card when quiet time ends |
+| Every waiting decision reaches the thread | Every minute (`ChannelGatewayBuilder::resweep`) the gateway rings the decisions that still wait: a card that could not be sent is sent again, and a decision another replica holds is carded too; after a restart, `ChannelGateway::ring_waiting` does the same at once |
+| A turn's reply reaches the thread from any replica | The gateway asks the run store after the turns it started, so a turn another replica's worker ran is answered too, once |
+| A removed account reaches no agent | Removing it stops its turns that have not finished, the one waiting on a decision and those queued behind it |
 
 ### Pairing a chat account
 
@@ -152,14 +158,16 @@ adk-kernel = { version = "3.0.0", features = ["channels"] }
    `POST /api/kernel/channels/pair` with `{"code": "3HWT-9PQA-K7M2"}` as the operator. The
    acceptance is recorded before the account is stored; when the record cannot be written,
    nothing is paired and the code still works.
-3. The account's next message starts a turn. `adk-rust pair revoke <id>` removes it.
+3. The account's next message starts a turn. `adk-rust pair revoke <id>` removes it and
+   stops its turns that have not finished.
 
 At most five accounts of one channel wait to be paired at once; the account that asked is
 told to try later and nothing is stored. The gateway takes unpaired accounts' messages one
 at a time, so the limit holds for messages that arrive together and an account that writes
 twice at once gets one code. `adk-rust pair list` shows the waiting accounts, and
-`adk-rust pair revoke <id>` (`POST /api/kernel/channels/waiting/{id}/dismiss`) dismisses one,
-so strangers cannot hold every place.
+`adk-rust pair revoke <id>` (`POST /api/kernel/channels/waiting/{id}/dismiss`) dismisses one:
+its code stops working, its place frees, and for a day its messages get no new code and no
+answer, so strangers cannot hold every place.
 
 ### Building the gateway
 
@@ -272,7 +280,7 @@ adk_kernel::channel_contract_tests! { harness = InMemory }
 | Record | Written for |
 |---|---|
 | `kernel.control` with `pairing.issue`, `pairing.claim`, `devices.revoke`, `channels.pair`, `channels.revoke`, `channels.dismiss` | Pairing and removal, before they take effect: a claim or an acceptance takes its code, writes the record, then stores the device or account, and puts the code back when the record cannot be written |
-| `kernel.control` with `approvals.decide` and `device` | A decision a device answers |
+| `kernel.control` with `approvals.decide`, `surface: device`, `device`, `deviceName` and `answer` | A decision a device answers |
 | `kernel.channel` with `surface: chat`, `origin: {"kind": "chat", "channel": …}`, `channel`, `account`, `action`, `target` | A chat thread's pairing request (`pairing.requested`, `pairing.busy`), message (`message`), decision card (`notify`), answer (`decide`, `decide.refused`), stop (`stop`) and refused resume (`resume.refused`) |
 
 A chat answer is recorded before `decide` runs and is refused when its record cannot be
