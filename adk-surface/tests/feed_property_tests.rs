@@ -171,6 +171,45 @@ async fn a_shorter_history_resets_the_feed() {
     assert_eq!(entry.seq, 1);
 }
 
+/// Wave 2 review finding 14: a history replaced while the feed runs — rewound or started
+/// again, then grown back past what was sent — resets the feed instead of skipping the new
+/// events at positions already sent.
+#[tokio::test]
+async fn a_history_replaced_while_the_feed_runs_resets_it() {
+    let store = Arc::new(GrowingSession::default());
+    store.append(3);
+    let engine = SurfaceEngine::builder(Arc::new(Store(Arc::clone(&store)))).build();
+    let mut feed = engine.feed(me(), "s1".into(), None);
+    let mut seen = 0;
+    while seen < 3 {
+        if let FeedFrame::Entry { .. } = feed.next().await.unwrap().unwrap() {
+            seen += 1;
+        }
+    }
+    // Rewound to one event, then a new turn writes four more: five events, all new after
+    // the first.
+    store.events.lock().unwrap().truncate(1);
+    store.append(4);
+    let frame = loop {
+        let frame = tokio::time::timeout(Duration::from_secs(5), feed.next())
+            .await
+            .expect("the feed reports the new history")
+            .unwrap()
+            .unwrap();
+        if !matches!(frame, FeedFrame::Decisions { .. }) {
+            break frame;
+        }
+    };
+    assert_eq!(frame, FeedFrame::Reset { len: 5 });
+    let mut seqs = Vec::new();
+    while seqs.len() < 5 {
+        if let FeedFrame::Entry { entry } = feed.next().await.unwrap().unwrap() {
+            seqs.push(entry.seq);
+        }
+    }
+    assert_eq!(seqs, [1, 2, 3, 4, 5]);
+}
+
 #[tokio::test]
 async fn another_persons_session_is_not_found() {
     let store = Arc::new(GrowingSession::default());

@@ -60,7 +60,10 @@ mod view;
 
 use std::io::{IsTerminal, Write};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
+
+use futures::future::BoxFuture;
 
 pub use safe::terminal_safe;
 pub use theme::{Appearance, Theme, ThemeChoice};
@@ -157,6 +160,21 @@ impl FromStr for OutputFormat {
     }
 }
 
+/// Opens the session `/session` names, or a new one for `None`: the id to show, or why not, in
+/// words the terminal shows as they are.
+type Opener =
+    Arc<dyn Fn(Option<String>) -> BoxFuture<'static, Result<String, String>> + Send + Sync>;
+
+/// How `/session` opens a session: the application's rule, or any id as given.
+#[derive(Clone, Default)]
+struct SessionGate(Option<Opener>);
+
+impl std::fmt::Debug for SessionGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "SessionGate(set)" } else { "SessionGate(none)" })
+    }
+}
+
 /// The terminal surface over an engine, for one caller (spec 3.3 §5.2).
 ///
 /// The caller is the person at the keyboard: [`SurfaceKind::Terminal`](crate::SurfaceKind)
@@ -175,6 +193,7 @@ pub struct TerminalSurface {
     poll: Duration,
     notices: Vec<String>,
     signals: bool,
+    gate: SessionGate,
 }
 
 impl TerminalSurface {
@@ -190,6 +209,7 @@ impl TerminalSurface {
             poll: POLL,
             notices: Vec::new(),
             signals: true,
+            gate: SessionGate::default(),
         }
     }
 
@@ -247,6 +267,39 @@ impl TerminalSurface {
     #[must_use]
     pub fn notice(mut self, text: impl Into<String>) -> Self {
         self.notices.push(text.into());
+        self
+    }
+
+    /// How `/session` opens a session in the full-screen and inline UIs: `open` gets the id
+    /// typed, or `None` for `/session new`, and returns the session to show, or why it may not
+    /// be opened, which the terminal shows. Without it, any id opens as given. An application
+    /// whose sessions are bound to something, such as the workspace a harness works in, checks
+    /// and records that binding here (spec 3.3 §5.2).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use adk_surface::tui::TerminalSurface;
+    /// # use adk_surface::{Caller, Origin, SurfaceEngine, SurfaceKind};
+    /// # fn example(engine: SurfaceEngine) {
+    /// let me = Caller::human("ana", SurfaceKind::Terminal, Origin::Keyboard);
+    /// let terminal = TerminalSurface::new(engine, me).open_sessions_with(|requested| {
+    ///     Box::pin(async move {
+    ///         match requested {
+    ///             Some(id) if id.starts_with("ops-") => Ok(id),
+    ///             Some(id) => Err(format!("session {id} is not one of this workspace's")),
+    ///             None => Ok(format!("ops-{}", uuid::Uuid::new_v4())),
+    ///         }
+    ///     })
+    /// });
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn open_sessions_with<F>(mut self, open: F) -> Self
+    where
+        F: Fn(Option<String>) -> BoxFuture<'static, Result<String, String>> + Send + Sync + 'static,
+    {
+        self.gate = SessionGate(Some(Arc::new(open)));
         self
     }
 
@@ -369,7 +422,7 @@ impl TerminalSurface {
         };
         for entry in thread {
             let frame = crate::FeedFrame::Entry { entry };
-            app.update(app::Update::Frame { session: session.clone(), frame }, now);
+            app.update(app::Update::Frame { session: session.clone(), generation: 0, frame }, now);
         }
         let cards = engine
             .decisions(caller)
@@ -379,7 +432,7 @@ impl TerminalSurface {
             .filter(|card| card.session_id == session)
             .collect();
         let frame = crate::FeedFrame::Decisions { cards };
-        app.update(app::Update::Frame { session: session.clone(), frame }, armed);
+        app.update(app::Update::Frame { session: session.clone(), generation: 0, frame }, armed);
         app.queued = engine.queued(caller, &session);
 
         let appearance = match self.theme {
@@ -395,6 +448,82 @@ impl TerminalSurface {
         })?;
         drop(terminal);
         Ok(std::mem::take(&mut *bytes.0.lock().unwrap_or_else(|e| e.into_inner())))
+    }
+
+    /// The session `/session` asked for, through the application's gate.
+    async fn open_session(&self, requested: Option<String>) -> Result<String, String> {
+        match &self.gate.0 {
+            Some(open) => open(requested).await,
+            None => Ok(requested.unwrap_or_else(|| uuid::Uuid::new_v4().to_string())),
+        }
+    }
+
+    /// What the full-screen and inline loops do with an effect of a key; returns whether the
+    /// person is leaving.
+    async fn apply(
+        &self,
+        effect: app::Effect,
+        app: &mut app::App,
+        pump: &pump::Pump,
+        commands: &mut pump::Commands,
+        tx: &tokio::sync::mpsc::UnboundedSender<app::Update>,
+        shown: &mut Vec<String>,
+    ) -> bool {
+        match effect {
+            app::Effect::Execute(command) => {
+                commands.execute(&self.engine, &self.caller, command, tx);
+            }
+            app::Effect::Session(session) => {
+                if !shown.contains(&session) {
+                    shown.push(session.clone());
+                }
+                pump.switch(session);
+            }
+            app::Effect::OpenSession(requested) => match self.open_session(requested).await {
+                Ok(session) => {
+                    for effect in app.switch_session(session) {
+                        if let app::Effect::Session(session) = effect {
+                            if !shown.contains(&session) {
+                                shown.push(session.clone());
+                            }
+                            pump.switch(session);
+                        }
+                    }
+                }
+                Err(why) => app.notice(why, app::Tone::Problem),
+            },
+            app::Effect::Unqueue(session) => {
+                app.took_back(self.engine.unqueue_last(&self.caller, &session));
+            }
+            app::Effect::Briefing => pump.refresh_briefing(),
+            app::Effect::Quit => return true,
+        }
+        false
+    }
+
+    /// What leaving does not deliver, said once the terminal is given back: input queued in
+    /// this process, and commands that had not finished (spec 3.3 §7.4 rule 2, S-I10).
+    async fn leave(&self, commands: pump::Commands, shown: &[String], out: &mut impl Write) {
+        if commands.running() {
+            let _ = writeln!(out, "Finishing what you sent…");
+        }
+        let left = commands.finish(pump::FINISH_WAIT).await;
+        if !left.is_empty() {
+            let _ = writeln!(out, "Left before this finished: {}.", left.join(", "));
+        }
+        let queued: Vec<String> = shown
+            .iter()
+            .flat_map(|session| self.engine.queued(&self.caller, session))
+            .map(|text| format!("\"{}\"", safe::safe_line(&text)))
+            .collect();
+        if !queued.is_empty() {
+            let _ = writeln!(
+                out,
+                "Not sent — queued in this terminal, which has closed: {}",
+                queued.join(", ")
+            );
+        }
+        let _ = out.flush();
     }
 
     /// The session to open: the one set, the session of the oldest decision waiting, or new.

@@ -429,7 +429,12 @@ pub async fn agenda_list(
     limit: Option<usize>,
 ) -> Result<()> {
     let client = client(target).await?;
-    let query = AgendaQuery { partition: partition.map(PartitionId::from), state, limit };
+    let query = AgendaQuery {
+        partition: partition.map(PartitionId::from),
+        state,
+        limit,
+        ..AgendaQuery::default()
+    };
     let items = client.agenda(&query).await?;
     if items.is_empty() {
         println!("The agenda is empty.");

@@ -214,6 +214,85 @@ async fn a_call_without_a_request_of_its_own_takes_no_other_calls_card() {
     assert_eq!(links(&thread), [None, Some("apr-small".to_string())]);
 }
 
+/// Wave 2 review findings 24 and 27: a call whose request is missing takes no redacted card
+/// of a later call either, whichever of the two is the larger transfer.
+#[tokio::test]
+async fn a_call_without_a_request_takes_no_redacted_card_of_a_later_call() {
+    for (unrouted, routed) in [(50, 5_000), (5_000, 50)] {
+        let missing = call("billing", "transfer", json!({ "iban": "DE89", "amount": unrouted }));
+        let shown = call("billing", "transfer", json!({ "iban": "GB29", "amount": routed }));
+        let source = Inbox {
+            events: vec![
+                // Its request is not in the caller's inbox: unrouted, or for other approvers.
+                held("billing", &missing, 3),
+                // A later turn holds the next transfer; its route masks the IBAN.
+                held("billing", &shown, 7),
+            ],
+            requests: vec![request(
+                "apr-shown",
+                "billing",
+                &shown,
+                6_800,
+                Some(json!({ "iban": "****", "amount": routed })),
+            )],
+        };
+        let engine = SurfaceEngine::builder(Arc::new(source)).build();
+        let me = Caller::human("ana", SurfaceKind::Web, Origin::Pointer);
+        let thread = engine.thread(&me, "s1").await.unwrap();
+        assert_eq!(links(&thread), [None, Some("apr-shown".to_string())], "{unrouted}");
+    }
+}
+
+/// Wave 2 review finding 25: a held call's line says "Waiting for you" only while the
+/// caller's own decision is open; a call waiting on someone else waits for an answer, and a
+/// call answered since reads decided.
+#[tokio::test]
+async fn a_held_calls_line_says_who_it_waits_for() {
+    let mine = call("billing", "send_email", json!({ "to": "[client email]" }));
+    let theirs = call("billing", "transfer", json!({ "amount": 5_000 }));
+    let answered = call("billing", "write_file", json!({ "path": "out.txt" }));
+    let mut approved = request("apr-answered", "billing", &answered, 500, None);
+    approved.state = ApprovalState::Approved;
+    approved.resolved_at = Some(t0() + Duration::seconds(5));
+    // The approved call ran: its response follows in the session.
+    let mut ran = Event::new("inv");
+    ran.author = "billing".into();
+    ran.timestamp = t0() + Duration::seconds(6);
+    ran.llm_response.content = Some(adk_core::Content {
+        role: "function".into(),
+        parts: vec![adk_core::Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new(
+                "write_file",
+                json!({ "status": "ok" }),
+            ),
+            id: answered.function_call_id.clone(),
+            annotations: None,
+        }],
+    });
+    let source = Inbox {
+        events: vec![
+            held("billing", &answered, 1),
+            ran,
+            held("billing", &mine, 10),
+            // Routed to finance, which the caller is not in.
+            held("billing", &theirs, 20),
+        ],
+        requests: vec![approved, request("apr-mine", "billing", &mine, 9_800, None)],
+    };
+    let engine = SurfaceEngine::builder(Arc::new(source)).build();
+    let me = Caller::human("ana", SurfaceKind::Web, Origin::Pointer);
+    let thread = engine.thread(&me, "s1").await.unwrap();
+    let lines: Vec<&str> = thread
+        .iter()
+        .flat_map(|entry| &entry.items)
+        .filter_map(|item| match item {
+            ThreadItem::Decision { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines, ["Decided", "Waiting for you", "Waiting for an answer"]);
+}
+
 #[tokio::test]
 async fn a_call_held_again_before_its_decision_keeps_its_request() {
     let first = call("billing", "write_file", json!({ "path": "out.txt", "content": "x" }));

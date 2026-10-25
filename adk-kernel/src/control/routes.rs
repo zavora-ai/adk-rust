@@ -29,7 +29,7 @@ use super::api::{
     RejectRequest, ScheduleRequest, SpawnRequest,
 };
 use super::{ControlTransport, paths};
-use crate::agenda::Agenda;
+use crate::agenda::{Agenda, AgendaItem};
 use crate::audit;
 use crate::bus::EventSubscriber;
 use crate::error::{KernelError, Result, UNAUTHORIZED_CODE};
@@ -672,7 +672,35 @@ async fn agenda(
     _caller: Caller,
     Query(query): Query<AgendaQuery>,
 ) -> Result<Json<AgendaResponse>> {
-    let items = agenda_of(backend.as_ref())?.list(&query.to_filter()).await?;
+    let agenda = agenda_of(backend.as_ref())?;
+    if !query.newest_first && query.after.is_none() {
+        return Ok(Json(AgendaResponse { items: agenda.list(&query.to_filter()).await? }));
+    }
+    // Every store lists oldest first: the order and the page are made here (spec 3.3 §5.1).
+    let all = AgendaQuery { limit: None, ..query.clone() };
+    let mut items = agenda.list(&all.to_filter()).await?;
+    let key = |item: &AgendaItem| (item.created_at, item.id.clone());
+    items.sort_by_key(key);
+    if query.newest_first {
+        items.reverse();
+    }
+    if let Some(after) = &query.after {
+        // The anchor may have left the state asked for since: its place still holds.
+        let anchor = match items.iter().find(|item| item.id == *after) {
+            Some(item) => key(item),
+            None => key(&agenda
+                .get(after)
+                .await?
+                .ok_or_else(|| KernelError::AgendaNotFound { item: after.clone() })?),
+        };
+        items.retain(|item| match query.newest_first {
+            true => key(item) < anchor,
+            false => key(item) > anchor,
+        });
+    }
+    if let Some(limit) = query.limit {
+        items.truncate(limit);
+    }
     Ok(Json(AgendaResponse { items }))
 }
 
@@ -835,7 +863,7 @@ fn ledger_of(backend: &dyn ControlBackend) -> Result<crate::proc::Ledger> {
 
 /// `GET /kernel/proc/ledger` (spec 3.2 §7.10): a page of rows as JSON, or as JSONL with the
 /// next cursor in `x-ledger-next`. Operator only, and recorded: the ledger leaves the host
-/// only through here.
+/// only through here; "While you were away" serves only the rows of its lines.
 #[cfg(feature = "proc")]
 async fn proc_ledger(
     State(backend): Backend,

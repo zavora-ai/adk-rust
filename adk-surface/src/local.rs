@@ -12,7 +12,10 @@ use adk_core::{
     Event, GovernanceControl, InboxQuery, NewRun, RequestContext, RunCheckpointRef, RunState,
     SessionId, UserId,
 };
-use adk_harness::{Harness, HarnessMode, RuleOwner, StandingDecision, StandingRule};
+use adk_harness::{
+    ArgSpec, Harness, HarnessMode, RuleOwner, RulePredicate, RuleSuggestion, StandingDecision,
+    StandingRule, SuggestedScope,
+};
 use adk_kernel::proc::LedgerQuery;
 use adk_kernel::{Kernel, ProcessFilter, ProcessKind, ProcessSpec, QueueClass, QuietHours};
 use adk_runner::Runner;
@@ -243,11 +246,14 @@ impl LocalSource {
         }
     }
 
-    /// Runs a turn of the session in the background through the harness or the runner;
-    /// `text` empty resumes the session's decided calls. With `caller`, the turn carries the
-    /// caller's identity, so the harness applies the session's mode and standing rules as
-    /// it does to a request a server admitted (spec 3.3 §6).
-    fn run_turn(
+    /// Starts a turn of the session through the harness or the runner and runs it in the
+    /// background; `text` empty resumes the session's decided calls. With `caller`, the turn
+    /// carries the caller's identity, so the harness applies the session's mode and standing
+    /// rules as it does to a request a server admitted (spec 3.3 §6).
+    ///
+    /// Returns once the turn is registered as running, so [`busy`](Source::busy) sees it and
+    /// input queued behind it waits for it (S-I4).
+    async fn run_turn(
         &self,
         user: &str,
         session: &str,
@@ -262,50 +268,44 @@ impl LocalSource {
                 scopes: caller.groups.clone(),
                 metadata: Default::default(),
             });
-        if let Some(harness) = &self.harness {
-            let harness = Arc::clone(harness);
-            tokio::spawn(async move {
-                let stream = match (text.is_empty(), context) {
-                    (true, None) => harness.resume(&user_id, &session_id).await,
-                    (true, Some(context)) => {
-                        harness.resume_as(&user_id, &session_id, context).await
-                    }
-                    (false, None) => harness.send(&user_id, &session_id, text).await,
-                    (false, Some(context)) => {
-                        harness.send_as(&user_id, &session_id, text, context).await
-                    }
-                };
-                drain(stream, session_id.as_ref()).await;
+        let stream = if let Some(harness) = &self.harness {
+            match (text.is_empty(), context) {
+                (true, None) => harness.resume(&user_id, &session_id).await,
+                (true, Some(context)) => harness.resume_as(&user_id, &session_id, context).await,
+                (false, None) => harness.send(&user_id, &session_id, text).await,
+                (false, Some(context)) => {
+                    harness.send_as(&user_id, &session_id, text, context).await
+                }
+            }
+        } else if let Some(runner) = &self.runner {
+            let content = if text.is_empty() {
+                Content::new("user")
+            } else {
+                Content::new("user").with_text(text)
+            };
+            let config = context.map(|context| adk_core::RunConfig {
+                request_context: Some(context),
+                ..runner.run_config().clone()
             });
-            return Ok(());
-        }
-        if let Some(runner) = &self.runner {
-            let runner = Arc::clone(runner);
-            tokio::spawn(async move {
-                let content = if text.is_empty() {
-                    Content::new("user")
-                } else {
-                    Content::new("user").with_text(text)
-                };
-                let config = context.map(|context| adk_core::RunConfig {
-                    request_context: Some(context),
-                    ..runner.run_config().clone()
-                });
-                let stream =
-                    runner.run_with_config(user_id, session_id.clone(), content, config).await;
-                drain(stream, session_id.as_ref()).await;
-            });
-            return Ok(());
-        }
-        Err(SurfaceError::unsupported("sending a message without a kernel, harness or runner"))
+            runner.run_with_config(user_id, session_id.clone(), content, config).await
+        } else {
+            return Err(SurfaceError::unsupported(
+                "sending a message without a kernel, harness or runner",
+            ));
+        };
+        let stream = stream?;
+        let session = session_id.to_string();
+        tokio::spawn(async move { drain(stream, &session).await });
+        Ok(())
     }
 
-    /// The harness's pending call for `request`, with the standing rule "Always allow" makes.
+    /// The harness's pending call for `request`, with the standing rule "Always allow" makes
+    /// and the words that say what it covers.
     async fn always_allow_rule(
         &self,
         caller: Option<&Caller>,
         request: &ApprovalRequest,
-    ) -> Option<(String, StandingRule)> {
+    ) -> Option<(String, StandingRule, adk_core::ToolConfirmationRequest)> {
         let harness = self.harness.as_ref()?;
         let runtime = harness.agent().runtime();
         let pending = runtime.approval_store().pending(&request.scope).await.ok()?;
@@ -316,13 +316,7 @@ impl LocalSource {
             .find(|suggestion| suggestion.label.contains("within"))
             .or_else(|| suggestions.first())?
             .clone();
-        let label = if suggestion.tool == "bash" {
-            words::ALWAYS_ALLOW_FOR_THIS_COMMAND
-        } else if suggestion.label.contains("within") || suggestion.label.contains("workspace") {
-            words::ALWAYS_ALLOW_FOR_THIS_FOLDER
-        } else {
-            words::ALWAYS_ALLOW_FOR_THIS_PERSON
-        };
+        let label = always_allow_label(&suggestion);
         let created_by = caller.map_or_else(
             || adk_core::principal::SubjectRef::human(request.scope.user_id.clone()),
             |caller| caller.subject.clone(),
@@ -338,37 +332,71 @@ impl LocalSource {
             .agent()
             .rule_for_held_call(&held.request, suggestion, StandingDecision::Allow, &owner)
             .ok()?;
-        Some((label.to_string(), rule))
+        Some((label, rule, held.request))
     }
+}
+
+/// "Always allow …" for the rule `suggestion` makes, saying all it covers: the command
+/// prefix, the folder or the whole workspace, the site, or the tool with any arguments, in
+/// every session or this one, and that commands running project scripts allow whatever they
+/// do (spec 3.3 §8.2, spec 3.1 §7.5).
+fn always_allow_label(suggestion: &RuleSuggestion) -> String {
+    let (label, covers) = match suggestion.predicates.first() {
+        Some(RulePredicate::ShellPrefix { tokens, .. }) => {
+            (words::ALWAYS_ALLOW_FOR_THIS_COMMAND, format!("{} …", tokens.join(" ")))
+        }
+        Some(RulePredicate::PathWithin { dir, .. }) if dir == "." => {
+            (words::ALWAYS_ALLOW_FOR_THIS_FOLDER, "anywhere in the workspace".to_string())
+        }
+        Some(RulePredicate::PathWithin { dir, .. }) => {
+            (words::ALWAYS_ALLOW_FOR_THIS_FOLDER, format!("anywhere in {dir}/"))
+        }
+        Some(RulePredicate::Arg(ArgSpec::DomainIn { domains, .. })) => {
+            (words::ALWAYS_ALLOW_FOR_THIS_SITE, format!("any page on {}", domains.join(", ")))
+        }
+        Some(RulePredicate::Arg(ArgSpec::Equals { value, .. })) => (
+            words::ALWAYS_ALLOW_FOR_THIS_SITE,
+            format!("{} on {}", suggestion.tool, value.as_str().unwrap_or_default()),
+        ),
+        // Any other condition on the arguments, and none: the tool, with any arguments.
+        Some(RulePredicate::Arg(_)) | None => {
+            (words::ALWAYS_ALLOW_FOR_THIS_PERSON, format!("{} with any arguments", suggestion.tool))
+        }
+    };
+    words::always_allow_covering(
+        label,
+        &covers,
+        suggestion.scope == SuggestedScope::User,
+        suggestion.runs_scripts,
+    )
 }
 
 /// Runs a turn's stream to its end, so its events reach the session store.
-async fn drain(stream: adk_core::Result<adk_core::EventStream>, session: &str) {
-    match stream {
-        Ok(mut stream) => {
-            while let Some(event) = stream.next().await {
-                if let Err(error) = event {
-                    tracing::warn!(session.id = %session, error = %error, "a turn a surface started failed");
-                    break;
-                }
-            }
-        }
-        Err(error) => {
-            tracing::warn!(session.id = %session, error = %error, "a turn a surface started could not run");
+async fn drain(mut stream: adk_core::EventStream, session: &str) {
+    while let Some(event) = stream.next().await {
+        if let Err(error) = event {
+            tracing::warn!(session.id = %session, error = %error, "a turn a surface started failed");
+            break;
         }
     }
 }
 
-/// A standing rule granted once the decision it was made for is recorded.
+/// A standing rule granted once the decision it was made for approved the call, through the
+/// harness, so `harness.rule.created` is recorded before the rule is stored (spec 3.1 §7.5,
+/// §9.3).
 struct GrantRule {
     harness: Arc<Harness>,
     rule: StandingRule,
+    /// The held call the rule was made from.
+    from: adk_core::ToolConfirmationRequest,
+    /// The surface it was made on, such as `web`.
+    surface: String,
 }
 
 #[async_trait]
 impl RuleCommit for GrantRule {
     async fn commit(self: Box<Self>) -> Result<()> {
-        self.harness.agent().runtime().standing_rules().grant(self.rule).await?;
+        self.harness.agent().grant_rule(self.rule, &self.surface, Some(&self.from)).await?;
         Ok(())
     }
 }
@@ -456,15 +484,15 @@ impl Source for LocalSource {
     }
 
     async fn resolved(&self, request: &ApprovalRequest) -> Result<()> {
-        self.resume_decided(request, None)
+        self.resume_decided(request, None).await
     }
 
     async fn resolved_by(&self, caller: &Caller, request: &ApprovalRequest) -> Result<()> {
-        self.resume_decided(request, Some(caller))
+        self.resume_decided(request, Some(caller)).await
     }
 
     async fn always_allow_offer(&self, request: &ApprovalRequest) -> Option<AlwaysAllowOffer> {
-        self.always_allow_rule(None, request).await.map(|(label, _)| AlwaysAllowOffer { label })
+        self.always_allow_rule(None, request).await.map(|(label, ..)| AlwaysAllowOffer { label })
     }
 
     async fn prepare_always_allow(
@@ -474,10 +502,15 @@ impl Source for LocalSource {
     ) -> Result<Box<dyn RuleCommit>> {
         let harness =
             self.harness.clone().ok_or_else(|| SurfaceError::unsupported("always allow"))?;
-        let (_, rule) = self.always_allow_rule(Some(caller), request).await.ok_or_else(|| {
-            SurfaceError::Invalid("no standing rule applies to this call; allow it once".into())
-        })?;
-        Ok(Box::new(GrantRule { harness, rule }))
+        let (_, rule, from) =
+            self.always_allow_rule(Some(caller), request).await.ok_or_else(|| {
+                SurfaceError::Invalid("no standing rule applies to this call; allow it once".into())
+            })?;
+        let surface = serde_json::to_value(caller.surface)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| "surface".to_string());
+        Ok(Box::new(GrantRule { harness, rule, from, surface }))
     }
 
     async fn agents(&self, user: &str) -> Result<Vec<AgentState>> {
@@ -511,18 +544,20 @@ impl Source for LocalSource {
             (None, Some(_)) => self.app.clone(),
             (None, None) => return Ok(Vec::new()),
         };
-        let active = self.active_sessions();
+        let active = self.active_sessions(user);
         let waiting = match &self.approvals {
-            Some(approvals) => {
-                let page = approvals
-                    .inbox(
-                        InboxQuery::default()
-                            .with_app_name(self.app.clone())
-                            .with_limit(INBOX_PAGE),
-                    )
-                    .await?;
-                page.items.into_iter().find(|request| request.scope.user_id == user)
-            }
+            Some(approvals) => approvals
+                .inbox(
+                    InboxQuery::default()
+                        .with_app_name(self.app.clone())
+                        .with_user_id(user)
+                        .with_states(vec![ApprovalState::Pending])
+                        .with_limit(1),
+                )
+                .await?
+                .items
+                .into_iter()
+                .next(),
             None => None,
         };
         let state = if !active.is_empty() {
@@ -551,7 +586,36 @@ impl Source for LocalSource {
                     && matches!(process.run.state, RunState::Running | RunState::Queued)
             }));
         }
-        Ok(self.active_sessions().iter().any(|active| active == session))
+        Ok(self.active_sessions(user).iter().any(|active| active == session))
+    }
+
+    async fn waiting_on_decision(&self, user: &str, session: &str) -> Result<bool> {
+        if self.kernel.is_some() {
+            return Ok(self.processes(user).await?.iter().any(|process| {
+                process.run.session_id.as_deref() == Some(session)
+                    && process.run.state == RunState::Waiting
+                    && matches!(
+                        process.run.checkpoint,
+                        Some(RunCheckpointRef::AwaitingApproval { .. })
+                    )
+            }));
+        }
+        let Some(approvals) = &self.approvals else {
+            return Ok(false);
+        };
+        // Every open request of the caller's session, whoever may answer it; only whether
+        // one exists leaves this source.
+        let page = approvals
+            .inbox(
+                InboxQuery::default()
+                    .with_app_name(self.app.clone())
+                    .with_user_id(user)
+                    .with_session_id(session)
+                    .with_states(vec![ApprovalState::Pending])
+                    .with_limit(1),
+            )
+            .await?;
+        Ok(!page.items.is_empty())
     }
 
     async fn start_turn(&self, caller: &Caller, session: &str, text: &str) -> Result<()> {
@@ -570,7 +634,7 @@ impl Source for LocalSource {
             kernel.processes().spawn(run, ProcessSpec::new(ProcessKind::Interactive)).await?;
             return Ok(());
         }
-        self.run_turn(user, session, text, Some(caller))
+        self.run_turn(user, session, text, Some(caller)).await
     }
 
     async fn stop_all(&self, caller: &Caller, reason: &str) -> Result<()> {
@@ -667,21 +731,34 @@ impl LocalSource {
     /// Resumes the session of a decided `request` (spec 3.3 §7.3): a durable run parked on the
     /// call is woken by the approval service; a call held in a plain run resumes with an
     /// empty turn, as `Harness::resume` does, as the person who answered when it is theirs.
-    fn resume_decided(&self, request: &ApprovalRequest, caller: Option<&Caller>) -> Result<()> {
+    async fn resume_decided(
+        &self,
+        request: &ApprovalRequest,
+        caller: Option<&Caller>,
+    ) -> Result<()> {
         if request.run_id.is_some() && self.kernel.is_some() {
             return Ok(());
         }
         if self.harness.is_none() && self.runner.is_none() {
             return Ok(());
         }
-        self.run_turn(&request.scope.user_id, &request.scope.session_id, "", caller)
+        self.run_turn(&request.scope.user_id, &request.scope.session_id, "", caller).await
     }
 
-    fn active_sessions(&self) -> Vec<String> {
-        match (&self.harness, &self.runner) {
-            (Some(harness), _) => harness.runner().active_session_ids(),
-            (None, Some(runner)) => runner.active_session_ids(),
+    /// The sessions of `user` in this application with a run in flight, oldest first.
+    fn active_sessions(&self, user: &str) -> Vec<String> {
+        let runs = match (&self.harness, &self.runner) {
+            (Some(harness), _) => harness.runner().active_runs(),
+            (None, Some(runner)) => runner.active_runs(),
             (None, None) => Vec::new(),
-        }
+        };
+        let mut sessions: Vec<String> = runs
+            .into_iter()
+            .filter(|run| run.user_id.as_ref() == user && run.app_name.as_ref() == self.app)
+            .map(|run| run.session_id.as_ref().to_string())
+            .collect();
+        sessions.sort();
+        sessions.dedup();
+        sessions
     }
 }

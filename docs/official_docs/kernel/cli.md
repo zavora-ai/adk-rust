@@ -369,7 +369,7 @@ $ adk-rust partitions add team --driver tracker --coordinator-crossings
 |---|---|
 | `list` (the default) | The partition table |
 | `add ID [--class C] [--tenant T] [--mode M] [--memory-scope S] [--driver D]… [--coordinator-crossings]` | Adds a partition, or replaces one; its harness starts at the next `up` |
-| `set-mode P MODE` | Sets a partition's mode: `read_only`, `plan`, `ask` or `auto`; its harness takes it at the next `up` |
+| `set-mode P MODE` | Sets a partition's mode: `read_only`, `plan`, `ask` or `auto`; its harness takes it at the next `up`, over a mode changed in the home before |
 
 `add` and `set-mode` need the `operator` scope and are recorded as `kernel.control` and
 `kernel.partition.created` or `kernel.partition.changed`.

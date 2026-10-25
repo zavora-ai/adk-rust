@@ -260,7 +260,13 @@ pub struct DecisionCard {
     pub status_text: String,
     /// What will happen, in plain words.
     pub heading: String,
-    /// The exact call.
+    /// What the heading alone does not say, in plain words, for a decision the kernel itself
+    /// asks: who suggests the work and when it runs once allowed, such as "Finance suggests
+    /// this. Once you say yes, it runs every 5 minutes." (spec 3.3 §7.1, §8.1). Never on a
+    /// chat card (S-I5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// The exact call: the details under the plain words.
     pub call: CallView,
     /// How it got here.
     pub timeline: Vec<TimelineStep>,

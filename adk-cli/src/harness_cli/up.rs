@@ -34,6 +34,8 @@ mod telegram;
 
 /// Where `up` listens over HTTP when neither `--bind` nor `[kernel] bind` says.
 pub(super) const DEFAULT_BIND: &str = "127.0.0.1:8080";
+/// Why Go ahead is refused beyond loopback without a sandbox.
+const AUTO_REFUSED: &str = "edits would run unattended on this host";
 
 /// The kernel's own stores, in the backend the harness's stores are in.
 struct KernelStores {
@@ -117,13 +119,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         let user = KernelSettings::resolve_user(user_config().as_deref())?;
         apply_personal(&mut settings, &user, &personal.settings);
     }
-    if !bind.ip().is_loopback()
-        && setup.resolved.mode == HarnessMode::Auto
-        && !setup.resolved.sandbox
-    {
-        bail!(
-            "--mode auto beyond loopback needs --sandbox: edits would run unattended on this host"
-        );
+    // Edits would run unattended on a network-reachable host: refused at start, and through
+    // the home while the kernel runs (spec 3.3 §10 K3).
+    let auto_refused = !bind.ip().is_loopback() && !setup.resolved.sandbox;
+    if auto_refused && setup.resolved.mode == HarnessMode::Auto {
+        bail!("--mode auto beyond loopback needs --sandbox: {AUTO_REFUSED}");
     }
 
     let (approval_store, run_store) = run_and_approval_stores(&setup);
@@ -209,7 +209,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                     memory_with_inbox: true,
                     drivers: Some(drivers.clone()),
                     partition: None,
-                    area_modes: Some((stores.control.clone(), adk_kernel::PartitionId::default())),
+                    area_modes: Some((
+                        stores.control.clone(),
+                        adk_kernel::PartitionId::default(),
+                        auto_refused,
+                    )),
                     #[cfg(feature = "tui")]
                     local_console: false,
                     driver_crossings: Vec::new(),
@@ -225,7 +229,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                 audit: audit.clone(),
                 memory_with_inbox: true,
                 drivers: Some(drivers.clone()),
-                area_modes: Some((stores.control.clone(), partition.id.clone())),
+                area_modes: Some((stores.control.clone(), partition.id.clone(), auto_refused)),
                 partition: Some((partition, table.clone(), coordinator)),
                 #[cfg(feature = "tui")]
                 local_console: false,
@@ -265,6 +269,12 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     let mut control = ControlPlaneConfig::default()
         .with_pairing(pairing)
         .with_control_store(stores.control.clone());
+    if auto_refused {
+        control = control.with_refused_mode(
+            adk_kernel::PartitionMode::Auto,
+            format!("Go ahead beyond loopback needs `adk-rust up --sandbox`: {AUTO_REFUSED}"),
+        );
+    }
     for hosted in &hosted {
         let mode = super::books::partition_mode(hosted.agent.info().default_mode);
         control = control.with_start_mode(hosted.partition.clone().unwrap_or_default(), mode);

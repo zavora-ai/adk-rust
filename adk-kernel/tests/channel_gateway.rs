@@ -44,16 +44,36 @@ const GROUP: &str = "operator";
 struct Host {
     contract: ContractHost,
     approvals: Arc<dyn ApprovalService>,
+    /// The wall clock, when the test sets it.
+    clock: std::sync::Mutex<Option<DateTime<Utc>>>,
+    /// The end of quiet time, when the test sets it.
+    quiet: std::sync::Mutex<Option<DateTime<Utc>>>,
+    /// Tools the host rates high risk.
+    high: Vec<String>,
+    /// Turns another replica ran, as the run store holds them.
+    elsewhere: std::sync::Mutex<std::collections::BTreeMap<String, RunRecord>>,
 }
 
 impl Host {
     fn new(doorbell: Option<Arc<ChannelDoorbell>>) -> Arc<Self> {
+        Self::with(doorbell, Vec::new())
+    }
+
+    /// A host that rates calls of `high` high risk.
+    fn with(doorbell: Option<Arc<ChannelDoorbell>>, high: Vec<String>) -> Arc<Self> {
         let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()));
         let service = match doorbell {
             Some(doorbell) => service.with_notifier(doorbell),
             None => service,
         };
-        Arc::new(Self { contract: ContractHost::new(), approvals: Arc::new(service) })
+        Arc::new(Self {
+            contract: ContractHost::new(),
+            approvals: Arc::new(service),
+            clock: std::sync::Mutex::default(),
+            quiet: std::sync::Mutex::default(),
+            high,
+            elsewhere: std::sync::Mutex::default(),
+        })
     }
 
     /// Submits a decision of the person calling `tool` at `risk` under `policy`.
@@ -79,7 +99,19 @@ impl ChannelHost for Host {
     }
 
     fn now(&self) -> DateTime<Utc> {
-        self.contract.now()
+        self.clock.lock().unwrap().unwrap_or_else(|| self.contract.now())
+    }
+
+    fn quiet_until(&self, at: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        self.quiet.lock().unwrap().filter(|until| *until > at)
+    }
+
+    fn rates_high(&self, request: &ApprovalRequest) -> bool {
+        self.high.contains(&request.tool_name)
+    }
+
+    async fn turn(&self, pid: &str) -> adk_kernel::Result<Option<RunRecord>> {
+        Ok(self.elsewhere.lock().unwrap().get(pid).cloned())
     }
 
     fn approvals(&self) -> Option<Arc<dyn ApprovalService>> {
@@ -116,7 +148,22 @@ async fn paired(
     ) -> adk_kernel::channels::ChannelGatewayBuilder,
 ) -> (ChannelGateway, Arc<InMemoryChannel>) {
     let chat = Arc::new(InMemoryChannel::new(CHANNEL));
-    let gateway = build(ChannelGateway::builder(host, bindings.clone()).sink(chat.clone())).build();
+    let gateway = paired_through(host, bindings, chat.clone(), chat.clone(), build).await;
+    (gateway, chat)
+}
+
+/// A gateway over `host` sending through `sink`, which delivers to `chat`, the person's
+/// account paired in `t-ana`.
+async fn paired_through(
+    host: Arc<Host>,
+    bindings: Arc<dyn ChannelBindingStore>,
+    sink: Arc<dyn adk_kernel::channels::ChannelSink>,
+    chat: Arc<InMemoryChannel>,
+    build: impl FnOnce(
+        adk_kernel::channels::ChannelGatewayBuilder,
+    ) -> adk_kernel::channels::ChannelGatewayBuilder,
+) -> ChannelGateway {
+    let gateway = build(ChannelGateway::builder(host, bindings.clone()).sink(sink)).build();
     let hello = chat.text("ana-chat", "t-ana", "hello");
     assert_eq!(gateway.receive(hello).await.unwrap(), InboundOutcome::PairingRequested);
     let code = chat.pairing_code("t-ana").expect("a code");
@@ -124,7 +171,7 @@ async fn paired(
         .await
         .expect("paired");
     chat.clear("t-ana");
-    (gateway, chat)
+    gateway
 }
 
 /// The cards delivered to `thread` for decision `id`.
@@ -443,4 +490,240 @@ async fn concurrent_unpaired_messages_keep_the_limits() {
         .filter(|notice| matches!(notice, ChannelNotice::PairingCode { .. }))
         .count();
     assert_eq!(codes, 1, "one code for the account");
+}
+
+/// A sink whose first `failures` decision cards fail, as a network error does.
+struct Flaky {
+    chat: Arc<InMemoryChannel>,
+    failures: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl adk_kernel::channels::ChannelSink for Flaky {
+    fn channel(&self) -> &str {
+        CHANNEL
+    }
+    async fn send_message(&self, thread: &str, text: &str) -> adk_kernel::Result<()> {
+        self.chat.send_message(thread, text).await
+    }
+    async fn send_decision(
+        &self,
+        thread: &str,
+        card: &adk_kernel::channels::DecisionCard,
+    ) -> adk_kernel::Result<()> {
+        use std::sync::atomic::Ordering;
+        if self
+            .failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            return Err(adk_kernel::KernelError::ControlPlane {
+                reason: "the network is down".into(),
+            });
+        }
+        self.chat.send_decision(thread, card).await
+    }
+    async fn send_stopped(
+        &self,
+        thread: &str,
+        notice: &adk_kernel::channels::StopNotice,
+    ) -> adk_kernel::Result<()> {
+        self.chat.send_stopped(thread, notice).await
+    }
+    async fn send_notice(&self, thread: &str, notice: &ChannelNotice) -> adk_kernel::Result<()> {
+        self.chat.send_notice(thread, notice).await
+    }
+}
+
+/// A card that could not be sent is sent again while the decision waits, without a
+/// restart (spec 3.3 §7.3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_card_that_could_not_be_sent_is_sent_again() {
+    let host = Host::new(None);
+    let bindings: Arc<dyn ChannelBindingStore> = Arc::new(InMemoryChannelBindingStore::new());
+    let chat = Arc::new(InMemoryChannel::new(CHANNEL));
+    let sink = Arc::new(Flaky { chat: chat.clone(), failures: 1.into() });
+    let gateway = paired_through(host.clone(), bindings, sink, chat.clone(), |builder| {
+        builder.resweep(Duration::from_millis(50))
+    })
+    .await;
+    gateway.start().await.unwrap();
+    let request = host.ask("send_email", ApprovalRisk::Low, operators()).await;
+    assert_eq!(gateway.ring(&request).await.unwrap(), 0, "the first send fails");
+    eventually("the card sent again", || cards_for(&chat, "t-ana", &request.id) == 1).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(cards_for(&chat, "t-ana", &request.id), 1, "sent once it got through");
+}
+
+/// A card held for quiet time is sent when quiet time ends on the wall clock, however long
+/// the machine slept meanwhile: the wait reads the clock again at least every minute.
+#[tokio::test(start_paused = true)]
+async fn a_card_held_for_quiet_time_follows_the_wall_clock() {
+    let host = Host::new(None);
+    let bindings: Arc<dyn ChannelBindingStore> = Arc::new(InMemoryChannelBindingStore::new());
+    let (gateway, chat) = paired(host.clone(), bindings, |builder| builder).await;
+    let night = Utc::now();
+    *host.clock.lock().unwrap() = Some(night);
+    *host.quiet.lock().unwrap() = Some(night + chrono::Duration::hours(8));
+    let request = host.ask("send_email", ApprovalRisk::Low, operators()).await;
+    assert_eq!(gateway.ring(&request).await.unwrap(), 0, "held through quiet time");
+    let started = tokio::time::Instant::now();
+    // The held card starts waiting.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    // The machine sleeps through the night: the wall clock jumps, the timers do not move.
+    *host.clock.lock().unwrap() =
+        Some(night + chrono::Duration::hours(8) + chrono::Duration::minutes(1));
+    while cards_for(&chat, "t-ana", &request.id) == 0
+        && started.elapsed() < Duration::from_secs(10 * 60)
+    {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert_eq!(cards_for(&chat, "t-ana", &request.id), 1, "the card arrives");
+    assert!(
+        started.elapsed() <= Duration::from_secs(2 * 60),
+        "within a minute or so of waking, not after eight hours of timer time: {:?}",
+        started.elapsed()
+    );
+}
+
+/// A take-over asks the person to type a secret in the home: its card offers only Deny, and
+/// a forged Allow once is refused (spec 3.3 §8.2).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chat_only_denies_a_take_over() {
+    let host = Host::new(None);
+    let bindings: Arc<dyn ChannelBindingStore> = Arc::new(InMemoryChannelBindingStore::new());
+    let (gateway, chat) = paired(host.clone(), bindings, |builder| builder).await;
+    let request = host.ask("harness:take-over", ApprovalRisk::Medium, operators()).await;
+    gateway.ring(&request).await.unwrap();
+    let card = chat.last_card("t-ana").expect("the card");
+    assert_eq!(card.answers, [ChannelAnswer::Deny]);
+    assert!(card.text().contains("Decide in the home"), "{}", card.text());
+    let forged = ChannelInbound::answer(
+        CHANNEL,
+        "ana-chat",
+        "t-ana",
+        "m-yes",
+        &card,
+        ChannelAnswer::AllowOnce,
+    );
+    assert!(matches!(
+        gateway.receive(forged).await.unwrap(),
+        InboundOutcome::DecisionRefused { .. }
+    ));
+    assert_eq!(
+        host.approvals.get(&request.id).await.unwrap().unwrap().state,
+        ApprovalState::Pending
+    );
+    let deny = chat.press("ana-chat", "t-ana", &card, ChannelAnswer::Deny).unwrap();
+    assert!(matches!(gateway.receive(deny).await.unwrap(), InboundOutcome::Decided { .. }));
+    assert_eq!(
+        host.approvals.get(&request.id).await.unwrap().unwrap().state,
+        ApprovalState::Rejected
+    );
+}
+
+/// A call the host rates high risk — a public post — links to the home with no answer,
+/// whatever risk its request carries (spec 3.3 §7.2, S-I6).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chat_sends_what_the_host_rates_high_to_the_home() {
+    let host = Host::with(None, vec!["post_update".into()]);
+    let bindings: Arc<dyn ChannelBindingStore> = Arc::new(InMemoryChannelBindingStore::new());
+    let (gateway, chat) = paired(host.clone(), bindings, |builder| builder).await;
+    let request = host.ask("post_update", ApprovalRisk::Medium, operators()).await;
+    gateway.ring(&request).await.unwrap();
+    let card = chat.last_card("t-ana").expect("the card");
+    assert!(card.answers.is_empty());
+    assert_eq!(card.risk, ApprovalRisk::High);
+    assert!(card.text().contains("High risk"), "{}", card.text());
+    let forged = ChannelInbound::answer(
+        CHANNEL,
+        "ana-chat",
+        "t-ana",
+        "m-post",
+        &card,
+        ChannelAnswer::AllowOnce,
+    );
+    assert!(matches!(
+        gateway.receive(forged).await.unwrap(),
+        InboundOutcome::DecisionRefused { .. }
+    ));
+    assert_eq!(
+        host.approvals.get(&request.id).await.unwrap().unwrap().state,
+        ApprovalState::Pending
+    );
+}
+
+/// On the kernel, a tool a mounted driver declares `publish_public` or `financial` is
+/// rated high risk; an everyday one is not.
+#[cfg(feature = "drivers")]
+#[tokio::test]
+async fn the_kernel_rates_what_nothing_may_allow_alone_high() {
+    use adk_kernel::drivers::{DriverManifest, DriverSupervisor};
+    use adk_kernel::stores::InMemoryDriverStore;
+
+    let drivers = DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new())).build();
+    let manifest = DriverManifest::from_toml(
+        r#"
+        id        = "social"
+        command   = "mcp-social"
+        lifecycle = "lazy"
+
+        [tools]
+        post_update = "publish_public"
+        pay_invoice = "financial"
+        send_note   = "send_external"
+        "#,
+    )
+    .unwrap();
+    drivers.mount(manifest, PERSON).await.unwrap();
+    let kernel = adk_kernel::Kernel::builder()
+        .config(adk_kernel::KernelConfig::default().with_app_name("adk-rust"))
+        .run_store(Arc::new(adk_core::InMemoryRunStore::new()))
+        .drivers(drivers)
+        .build()
+        .unwrap();
+    let request = |tool: &str| {
+        ApprovalRequest::new(
+            "d1",
+            ApprovalScope::new("adk-rust", PERSON, "s1"),
+            &ToolConfirmationRequest::new(tool, json!({})),
+            operators(),
+        )
+    };
+    assert!(ChannelHost::rates_high(&kernel, &request("post_update")));
+    assert!(ChannelHost::rates_high(&kernel, &request("pay_invoice")));
+    assert!(
+        !ChannelHost::rates_high(&kernel, &request("send_note")),
+        "an email can't be unsent, at medium risk"
+    );
+}
+
+/// A turn another replica ran finishes on that replica's bus; the gateway that started it
+/// still sends its reply, once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_another_replica_ran_is_answered_once() {
+    let host = Host::new(None);
+    let bindings: Arc<dyn ChannelBindingStore> = Arc::new(InMemoryChannelBindingStore::new());
+    let (gateway, chat) = paired(host.clone(), bindings, |builder| builder).await;
+    gateway.start().await.unwrap();
+    let message = chat.text("ana-chat", "t-ana", "what is on today?");
+    let InboundOutcome::TurnStarted { pid } = gateway.receive(message).await.unwrap() else {
+        panic!("the message starts a turn");
+    };
+    let run = host.contract.turns().into_iter().find(|(id, _)| *id == pid).unwrap().1;
+    let mut record = RunRecord::queued(&pid, run, Utc::now());
+    record.state = adk_core::RunState::Completed;
+    record.result = Some(json!({ "text": "Two meetings." }));
+    host.elsewhere.lock().unwrap().insert(pid.clone(), record);
+    let started = tokio::time::Instant::now();
+    while !chat.messages("t-ana").contains(&"Two meetings.".to_string()) {
+        assert!(started.elapsed() < Duration::from_secs(10), "the reply from the run store");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // The same turn seen finishing on this replica's bus too is not answered twice.
+    host.contract.finish(&pid, "Two meetings.");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let replies = chat.messages("t-ana").iter().filter(|text| *text == "Two meetings.").count();
+    assert_eq!(replies, 1);
 }

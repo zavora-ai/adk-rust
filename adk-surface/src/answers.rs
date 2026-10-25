@@ -11,9 +11,10 @@
 //! | [`AuditAnswerLog`] | Yes | The `surface.decide` records of an `AuditLogStore` (the signed audit log), newest first |
 //! | [`RecordAnswerLog`] | Yes | A kernel's record over its control plane (`GET /api/kernel/record`), for a surface attached to the kernel, such as a terminal |
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use adk_core::ApprovalRequest;
 use adk_core::audit_log::{AuditLogStore, AuditRecord};
 use adk_core::principal::SubjectRef;
 use adk_kernel::control::{ControlClient, RecordLine};
@@ -50,6 +51,13 @@ pub trait AnswerLog: Send + Sync {
 
     /// The answer that decided `approval_id`, when it was given through a surface.
     async fn find(&self, approval_id: &str) -> Result<Option<AnswerRecord>>;
+
+    /// The answer that decided `request`, when it was given through a surface: what the
+    /// engine reads for a decided card. A log may use the request's times to read less; the
+    /// default calls [`find`](Self::find).
+    async fn find_for(&self, request: &ApprovalRequest) -> Result<Option<AnswerRecord>> {
+        self.find(&request.id).await
+    }
 }
 
 /// An [`AnswerLog`] in memory, for one process.
@@ -95,9 +103,16 @@ impl AnswerLog for InMemoryAnswerLog {
 /// (the engine's [`AuditTrail`](adk_core::audit_log::AuditTrail) already wrote the
 /// `surface.decide` record), and `find` reads it back from the store, newest first, so every
 /// process over the same store, and a restarted one, sees how a decision was answered.
+///
+/// [`find_for`](AnswerLog::find_for), which the engine reads, stops at records older than the
+/// request, and remembers what it found: an answer, and the absence of one for a request
+/// decided long enough ago that its record would have been written. So a decision answered
+/// outside the surfaces, expired or cancelled reads the log once, back to its creation.
 #[derive(Clone)]
 pub struct AuditAnswerLog {
     store: Arc<dyn AuditLogStore>,
+    found: Arc<Mutex<HashMap<String, AnswerRecord>>>,
+    absent: Arc<Mutex<HashSet<String>>>,
 }
 
 impl std::fmt::Debug for AuditAnswerLog {
@@ -109,23 +124,19 @@ impl std::fmt::Debug for AuditAnswerLog {
 impl AuditAnswerLog {
     /// Reads the `surface.decide` records of `store`.
     pub fn new(store: Arc<dyn AuditLogStore>) -> Self {
-        Self { store }
-    }
-}
-
-/// How many entries one read of the audit log takes.
-const AUDIT_PAGE: u64 = 256;
-
-#[async_trait]
-impl AnswerLog for AuditAnswerLog {
-    async fn record(&self, _record: &AnswerRecord) -> Result<()> {
-        Ok(())
+        Self { store, found: Arc::default(), absent: Arc::default() }
     }
 
-    async fn find(&self, approval_id: &str) -> Result<Option<AnswerRecord>> {
+    /// The `surface.decide` record of `approval_id`, read newest first, back to `since` when
+    /// set.
+    async fn scan(
+        &self,
+        approval_id: &str,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Option<AnswerRecord>> {
         for log in self.store.logs().await? {
             let mut end = self.store.size(&log).await?;
-            while end > 0 {
+            'log: while end > 0 {
                 let start = end.saturating_sub(AUDIT_PAGE);
                 let entries = self.store.read(&log, start..end).await?;
                 for entry in entries.iter().rev() {
@@ -134,11 +145,75 @@ impl AnswerLog for AuditAnswerLog {
                     if let Some(answer) = answer_of(&record, approval_id) {
                         return Ok(Some(answer));
                     }
+                    if since.is_some_and(|since| record.ts < since) {
+                        break 'log;
+                    }
                 }
                 end = start;
             }
         }
         Ok(None)
+    }
+}
+
+/// How many entries one read of the audit log takes.
+const AUDIT_PAGE: u64 = 256;
+
+/// How much earlier than its request an answer's record is still looked for, for clocks
+/// that disagree.
+const CLOCK_SLACK: chrono::Duration = chrono::Duration::minutes(5);
+
+/// How long after a decision its `surface.decide` record may still be on its way, so a
+/// missing one is not yet remembered as missing.
+const RECORD_DELAY: chrono::Duration = chrono::Duration::minutes(5);
+
+/// How many requests [`AuditAnswerLog`] remembers before it starts again.
+const REMEMBERED: usize = 10_000;
+
+#[async_trait]
+impl AnswerLog for AuditAnswerLog {
+    async fn record(&self, _record: &AnswerRecord) -> Result<()> {
+        Ok(())
+    }
+
+    async fn find(&self, approval_id: &str) -> Result<Option<AnswerRecord>> {
+        self.scan(approval_id, None).await
+    }
+
+    async fn find_for(&self, request: &ApprovalRequest) -> Result<Option<AnswerRecord>> {
+        if let Some(found) =
+            self.found.lock().unwrap_or_else(|e| e.into_inner()).get(&request.id).cloned()
+        {
+            return Ok(Some(found));
+        }
+        if self.absent.lock().unwrap_or_else(|e| e.into_inner()).contains(&request.id) {
+            return Ok(None);
+        }
+        let found = self.scan(&request.id, Some(request.created_at - CLOCK_SLACK)).await?;
+        match &found {
+            Some(answer) => {
+                let mut remembered = self.found.lock().unwrap_or_else(|e| e.into_inner());
+                if remembered.len() >= REMEMBERED {
+                    remembered.clear();
+                }
+                remembered.insert(request.id.clone(), answer.clone());
+            }
+            None => {
+                let decided = request
+                    .resolved_at
+                    .or_else(|| request.decisions.last().map(|decision| decision.decided_at));
+                if request.state.is_terminal()
+                    && decided.is_some_and(|at| at + RECORD_DELAY < Utc::now())
+                {
+                    let mut remembered = self.absent.lock().unwrap_or_else(|e| e.into_inner());
+                    if remembered.len() >= REMEMBERED {
+                        remembered.clear();
+                    }
+                    remembered.insert(request.id.clone());
+                }
+            }
+        }
+        Ok(found)
     }
 }
 

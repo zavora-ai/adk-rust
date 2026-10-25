@@ -13,8 +13,10 @@
 //! The row comes from how the input was given before the surface it arrived on: a spoken
 //! answer in the web home follows the voice row, a chat message the chat row, and an agent's
 //! request decides nothing at all (§7.4 rule 6). A call that spends money follows the
-//! high-risk column and is never allowed "always" (rule 4). A call shown truncated cannot be
-//! approved until it was expanded (§7.1).
+//! high-risk column and is never allowed "always" (rule 4). The high-risk column is about
+//! approving: Deny stays on the tray and in voice for every decision, since saying no is
+//! always safe, and only chat, where a high-risk decision never resolves (S-I6), loses it. A
+//! call shown truncated cannot be approved until it was expanded (§7.1).
 
 use adk_core::ApprovalAction;
 use schemars::JsonSchema;
@@ -139,7 +141,8 @@ pub fn row(caller: &Caller) -> Row {
 pub struct DecisionFacts {
     /// The risk the inbox entry carries.
     pub risk: Risk,
-    /// The call spends money: never "always", never from chat, voice or the tray (§7.4 rule 4).
+    /// The call spends money: never "always", never approved from chat, voice or the tray
+    /// (§7.4 rule 4).
     pub money: bool,
     /// The call is shown truncated and must be expanded before it is approved (§7.1).
     pub truncated: bool,
@@ -256,13 +259,25 @@ pub fn allowed_answers(caller: &Caller, facts: &DecisionFacts) -> Allowed {
             }
             if !high_ok {
                 allowed.open_in_home = true;
-                allowed.note = Some(words::NEEDS_A_SCREEN.to_string());
+                allowed.note = Some(words::APPROVE_IN_THE_HOME.to_string());
             }
         }
         Row::Tray | Row::Chat | Row::Voice => {
             if consequential {
+                // Saying no is always safe, so the tray and voice keep Deny; a high-risk
+                // decision never resolves in chat (S-I6), and chat never touches money (§7.4
+                // rule 4).
+                if row != Row::Chat && can(ApprovalAction::Reject) {
+                    push(&mut allowed, Answer::Deny, words::DENY, false);
+                }
                 allowed.open_in_home = row != Row::Voice;
-                allowed.note = Some(words::NEEDS_A_SCREEN.to_string());
+                allowed.note = Some(
+                    match row {
+                        Row::Tray => words::APPROVE_IN_THE_HOME,
+                        _ => words::NEEDS_A_SCREEN,
+                    }
+                    .to_string(),
+                );
             } else {
                 if can(ApprovalAction::Approve) {
                     push(&mut allowed, Answer::AllowOnce, words::ALLOW_ONCE, false);
@@ -448,22 +463,30 @@ mod tests {
         }
         assert_eq!(answers(&paired, &high), vec![AllowOnce, Edit, Deny]);
         assert_eq!(answers(&terminal, &high), vec![Deny]);
-        assert!(allowed_answers(&terminal, &high).open_in_home);
-        for away in [&tray, &chat, &voice] {
-            assert!(answers(away, &high).is_empty());
-        }
+        let unpaired = allowed_answers(&terminal, &high);
+        assert!(unpaired.open_in_home);
+        // An unpaired terminal says where the call can be approved; it is at a screen already.
+        assert_eq!(unpaired.note.as_deref(), Some(words::APPROVE_IN_THE_HOME));
+        // Deny is always safe: the tray and voice keep it on every decision; chat never
+        // resolves a high-risk one (S-I6).
+        assert_eq!(answers(&tray, &high), vec![Deny]);
+        assert_eq!(answers(&voice, &high), vec![Deny]);
+        assert!(answers(&chat, &high).is_empty());
         assert!(allowed_answers(&tray, &high).open_in_home);
         assert!(allowed_answers(&chat, &high).open_in_home);
+        assert!(!allowed_answers(&voice, &high).open_in_home);
+        assert_eq!(allowed_answers(&voice, &high).note.as_deref(), Some(words::NEEDS_A_SCREEN));
+        assert_eq!(allowed_answers(&voice, &high).cancel_window_secs, None);
         assert_eq!(allowed_answers(&voice, &everyday).cancel_window_secs, Some(5));
     }
 
     #[test]
-    fn money_is_never_always_and_never_from_chat_or_voice() {
+    fn money_is_never_always_and_never_approved_from_chat_or_voice() {
         let money = DecisionFacts { money: true, ..facts(Risk::Low) };
         let web = caller(SurfaceKind::Web, Origin::Pointer);
         assert_eq!(answers(&web, &money), vec![AllowOnce, Edit, Deny]);
         assert!(answers(&caller(SurfaceKind::Chat, telegram()), &money).is_empty());
-        assert!(answers(&caller(SurfaceKind::Web, Origin::Voice), &money).is_empty());
+        assert_eq!(answers(&caller(SurfaceKind::Web, Origin::Voice), &money), vec![Deny]);
     }
 
     #[test]

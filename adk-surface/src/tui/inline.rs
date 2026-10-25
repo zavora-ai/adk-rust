@@ -7,7 +7,7 @@
 //! `dumb`, each line is a message, a decision is never answered from it, nothing but plain
 //! text is written, and the run ends as JSON mode does once input ends and the turn settles.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, IsTerminal, Write};
 use std::time::{Duration, Instant};
 
@@ -25,13 +25,13 @@ use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
 
-use super::app::{App, Effect, Tone, Update, View};
-use super::json::Settler;
-use super::pump::Pump;
+use super::app::{App, BoxView, Effect, Tone, Update, View};
+use super::json::{End, Settler};
+use super::pump::{Commands, Pump};
 use super::safe::terminal_safe;
 use super::term::{self, Guard, Signals};
 use super::theme::{Appearance, Theme};
-use super::view::Renderer;
+use super::view::{Fit, Renderer};
 use super::{EXIT_DONE, TerminalSurface};
 
 /// How often the prompt is redrawn while nothing happens, so a decision box arms on time.
@@ -45,14 +45,18 @@ pub(crate) struct Printer<W: Write> {
     raw: bool,
     session: Option<String>,
     printed_seq: u64,
-    printed_cards: HashMap<String, (u64, bool)>,
+    /// Each open decision as printed: its version, its details, and whether whole.
+    printed_cards: HashMap<String, (u64, bool, bool)>,
     printed_notices: usize,
     printed_queued: Vec<String>,
     status: Option<String>,
     view: View,
     width: Option<usize>,
+    height: Option<usize>,
     /// The message box as last drawn.
     prompt: Option<String>,
+    /// What was printed of the box the keys answer, by decision.
+    focused: Option<(String, BoxView)>,
 }
 
 impl<W: Write> Printer<W> {
@@ -70,7 +74,9 @@ impl<W: Write> Printer<W> {
             status: None,
             view: View::Thread,
             width: None,
+            height: None,
             prompt: None,
+            focused: None,
         }
     }
 
@@ -79,6 +85,24 @@ impl<W: Write> Printer<W> {
     pub(crate) fn with_width(mut self, width: usize) -> Self {
         self.width = Some(width);
         self
+    }
+
+    /// A fixed height instead of the terminal's.
+    #[cfg(test)]
+    pub(crate) fn with_height(mut self, height: usize) -> Self {
+        self.height = Some(height);
+        self
+    }
+
+    /// How many rows a decision box may take: the terminal's, less the message box and the
+    /// line under the box.
+    fn box_rows(&self) -> usize {
+        self.height
+            .unwrap_or_else(|| {
+                crossterm::terminal::size().map_or(40, |(_, rows)| usize::from(rows))
+            })
+            .saturating_sub(2)
+            .max(8)
     }
 
     fn width(&self) -> usize {
@@ -94,8 +118,9 @@ impl<W: Write> Printer<W> {
         self.out
     }
 
-    /// Prints what changed since the last call, then the message box.
-    pub(crate) fn sync(&mut self, app: &App, now: Instant) -> io::Result<()> {
+    /// Prints what changed since the last call, then the message box; returns what was
+    /// printed of the box the keys answer (§7.1).
+    pub(crate) fn sync(&mut self, app: &App, now: Instant) -> io::Result<Option<BoxView>> {
         let width = self.width();
         let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -118,14 +143,33 @@ impl<W: Write> Printer<W> {
                 lines.extend(self.renderer.entry_lines(entry, None, width));
             }
         }
-        let live = app.keys_answer(now);
+        // Only the decision the keys answer is printed as a box, and it is the last box
+        // printed: the others wait as one line each until they take the focus (§7.1). The box
+        // fits the terminal with its keys; `?` prints the whole call. Printed once, its keys
+        // are drawn lit: the message box says when they answer.
         for (index, open) in app.cards.iter().enumerate() {
-            let key = (open.card.version, open.details);
-            if self.printed_cards.get(&open.card.id) != Some(&key) {
-                self.printed_cards.insert(open.card.id.clone(), key);
-                lines.push(Line::default());
-                lines.extend(self.renderer.decision_box(open, width, index == 0 && live, false));
-                lines.extend(self.renderer.also_shown(open, width));
+            let printed = self.printed_cards.get(&open.card.id).copied();
+            if index == 0 {
+                let key = (open.card.version, open.details, true);
+                if printed != Some(key) {
+                    self.printed_cards.insert(open.card.id.clone(), key);
+                    let rows = (!open.details).then(|| self.box_rows());
+                    let fit = Fit { rows, scroll: 0, scrolls: false };
+                    let drawn = self.renderer.decision_box(open, width, true, false, fit);
+                    let view = BoxView {
+                        on_screen: true,
+                        body_len: drawn.body_len,
+                        body_shown: drawn.body_shown,
+                        scrolls: false,
+                    };
+                    self.focused = Some((open.card.id.clone(), view));
+                    lines.push(Line::default());
+                    lines.extend(drawn.lines);
+                    lines.extend(self.renderer.also_shown(open, width));
+                }
+            } else if printed.is_none_or(|(version, _, _)| version != open.card.version) {
+                self.printed_cards.insert(open.card.id.clone(), (open.card.version, false, false));
+                lines.extend(self.renderer.waiting_line(open, width));
             }
         }
         let fresh = app.notice_count.saturating_sub(self.printed_notices);
@@ -136,7 +180,7 @@ impl<W: Write> Printer<W> {
         self.printed_notices = app.notice_count;
         for text in &app.queued {
             if !self.printed_queued.contains(text) {
-                lines.extend(self.renderer.queued(std::slice::from_ref(text), width));
+                lines.extend(self.renderer.queued(std::slice::from_ref(text), width, false));
             }
         }
         self.printed_queued.clone_from(&app.queued);
@@ -159,7 +203,7 @@ impl<W: Write> Printer<W> {
                 app.composer.cursor
             );
             if lines.is_empty() && self.prompt.as_deref() == Some(drawn.as_str()) {
-                return Ok(());
+                return Ok(self.focused_view(app));
             }
             self.prompt = Some(drawn);
             queue!(self.out, cursor::MoveToColumn(0), Clear(ClearType::CurrentLine))?;
@@ -171,7 +215,14 @@ impl<W: Write> Printer<W> {
         if self.raw {
             self.prompt(app, now, width)?;
         }
-        self.out.flush()
+        self.out.flush()?;
+        Ok(self.focused_view(app))
+    }
+
+    /// What was printed of the box the keys answer now.
+    fn focused_view(&self, app: &App) -> Option<BoxView> {
+        let open = app.focused()?;
+        self.focused.as_ref().filter(|(id, _)| *id == open.card.id).map(|(_, view)| view.clone())
     }
 
     /// What prints the status line again: the mode, or a stop. Counts and spend change too
@@ -267,6 +318,9 @@ async fn inline(surface: TerminalSurface) -> io::Result<i32> {
     let dumb = std::env::var("TERM").is_ok_and(|term| term == "dumb");
     let interactive = !dumb && io::stdin().is_terminal() && io::stdout().is_terminal();
     let color = !dumb && io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    // Registered before anything changes the terminal, the background query's raw mode
+    // included, so a signal at any moment gives it back.
+    let mut signals = Signals::install(interactive && surface.signals);
     let theme = if interactive {
         Theme::detect(surface.theme)
     } else {
@@ -276,40 +330,29 @@ async fn inline(surface: TerminalSurface) -> io::Result<i32> {
         };
         Theme::new(appearance, true)
     };
-    let session = surface.initial_session().await;
-    let mut app = App::new(surface.engine.source().app_name(), session.clone());
-    app.model = surface.model.clone();
-    app.place = surface.place.clone();
-    for notice in &surface.notices {
-        app.notice(notice.clone(), Tone::Info);
-    }
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    let pump = Pump::start(
-        surface.engine.clone(),
-        surface.caller.clone(),
-        session,
-        surface.poll,
-        tx.clone(),
-    );
-
     if !interactive {
-        return piped(surface, app, rx, tx, pump, theme, color).await;
+        let input = tokio::io::BufReader::new(tokio::io::stdin());
+        return piped(surface, theme, color, input, io::stdout()).await;
     }
+    let session = surface.initial_session().await;
+    let (mut app, pump, tx, mut rx) = start(&surface, session.clone());
 
-    // Registered before the terminal changes, so a signal at any moment gives it back.
-    let mut signals = Signals::install(surface.signals);
     term::enter_inline(&mut io::stdout())?;
-    let _guard = Guard;
+    let guard = Guard;
     let mut printer = Printer::new(io::stdout(), theme, color, true);
     let mut events = EventStream::new();
     let mut tick = tokio::time::interval(TICK);
     let mut code = EXIT_DONE;
+    let mut commands = Commands::default();
+    let mut shown = vec![session];
     loop {
         let now = Instant::now();
         while let Ok(update) = rx.try_recv() {
             app.update(update, now);
         }
-        printer.sync(&app, now)?;
+        let view = printer.sync(&app, now)?;
+        app.set_box_view(view, now);
+        let held = app.held_until();
         let effects = tokio::select! {
             exit = signals.recv() => {
                 code = exit;
@@ -331,94 +374,161 @@ async fn inline(surface: TerminalSurface) -> io::Result<i32> {
                 }
                 Vec::new()
             }
+            () = super::full::sleep_until(held), if held.is_some() => app.release_held(Instant::now()),
             _ = tick.tick() => Vec::new(),
         };
         let mut quit = false;
         for effect in effects {
-            match effect {
-                Effect::Execute(command) => {
-                    Pump::execute(&surface.engine, &surface.caller, command, &tx);
-                }
-                Effect::Session(session) => pump.switch(session),
-                Effect::Briefing => pump.refresh_briefing(),
-                Effect::Quit => quit = true,
-            }
+            quit |= surface.apply(effect, &mut app, &pump, &mut commands, &tx, &mut shown).await;
         }
         if quit {
             break;
         }
     }
+    drop(pump);
     let mut out = printer.into_inner();
     queue!(out, cursor::MoveToColumn(0), Clear(ClearType::CurrentLine))?;
     out.flush()?;
+    drop(guard);
     term::restore(&mut out);
+    surface.leave(commands, &shown, &mut out).await;
     Ok(code)
 }
 
-/// Standard input piped: each line is a message; once input ends, waits for the turn to
-/// settle and returns its exit code.
-async fn piped(
+/// The terminal's state and the tasks reading the engine for `session`.
+fn start(
+    surface: &TerminalSurface,
+    session: String,
+) -> (App, Pump, mpsc::UnboundedSender<Update>, mpsc::UnboundedReceiver<Update>) {
+    let mut app = App::new(surface.engine.source().app_name(), session.clone());
+    app.model = surface.model.clone();
+    app.place = surface.place.clone();
+    // Without bracketed paste a paste arrives as keys: a decision key with more keys right
+    // behind it is typing (§7.4 rule 2).
+    app.burst_guard = cfg!(windows);
+    for notice in &surface.notices {
+        app.notice_until_key(notice.clone(), Tone::Info);
+    }
+    let (tx, rx) = mpsc::unbounded_channel();
+    let pump = Pump::start(
+        surface.engine.clone(),
+        surface.caller.clone(),
+        session,
+        surface.poll,
+        tx.clone(),
+    );
+    (app, pump, tx, rx)
+}
+
+/// Input piped: each line is a message, sent once the turn before it has finished, so two
+/// lines never run as two turns at once; once input ends and the last turn settles, returns
+/// its exit code. A turn that does not finish — it waits for a decision, fails, or reaches the
+/// daily spending limit — ends the run, and the lines after it are not sent.
+pub(crate) async fn piped<R, W>(
     surface: TerminalSurface,
-    mut app: App,
-    mut rx: mpsc::UnboundedReceiver<Update>,
-    tx: mpsc::UnboundedSender<Update>,
-    pump: Pump,
     theme: Theme,
     color: bool,
-) -> io::Result<i32> {
-    let mut printer = Printer::new(io::stdout(), theme, color, false);
-    let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-    let baseline =
-        surface.engine.thread(&surface.caller, &app.session).await.map_or(0, |t| t.len());
-    let mut settler = Settler::new(baseline as u64);
+    input: R,
+    out: W,
+) -> io::Result<i32>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: Write,
+{
+    // Lines read as messages go to a session of their own unless one is named: never into the
+    // thread of a decision this run did not cause.
+    let session = surface.session.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let (mut app, pump, _tx, mut rx) = start(&surface, session);
+    let engine = &surface.engine;
+    let caller = &surface.caller;
+    let mut printer = Printer::new(out, theme, color, false);
+    let mut stdin = input.lines();
+    let mut lines: VecDeque<String> = VecDeque::new();
     let mut input_open = true;
+    // The turn of the line last sent, until it settles.
+    let mut turn: Option<Settler> = None;
+    let mut last: Option<End> = None;
     let mut tick = tokio::time::interval(surface.poll);
-    loop {
+    let end = loop {
         let now = Instant::now();
         while let Ok(update) = rx.try_recv() {
-            if let Update::Frame { frame: crate::engine::FeedFrame::Entry { entry }, .. } = &update
-            {
-                settler.observe(entry);
-            }
+            observe(&mut turn, &update);
             app.update(update, now);
         }
         printer.sync(&app, now)?;
+        if turn.is_none()
+            && let Some(line) = lines.pop_front()
+        {
+            let baseline = engine.thread(caller, &app.session).await.map_or(0, |t| t.len());
+            let mut settler = Settler::new(baseline as u64);
+            settler.sent();
+            let command =
+                crate::engine::Command::Send { session_id: app.session.clone(), text: line };
+            match engine.execute(caller, command).await {
+                Ok(outcome) => app.update(Update::Outcome(Box::new(Ok(outcome))), Instant::now()),
+                Err(error) => break End::error(error.to_string()),
+            }
+            turn = Some(settler);
+            continue;
+        }
+        if turn.is_none() && lines.is_empty() && !input_open {
+            match last.take() {
+                Some(end) => break end,
+                // Nothing was sent: how the session stands.
+                None => {
+                    let mut settler = Settler::new(0);
+                    if let Some(end) = settler.check(engine, caller, &app.session).await {
+                        break end;
+                    }
+                }
+            }
+        }
         tokio::select! {
             line = stdin.next_line(), if input_open => match line? {
-                Some(line) if !line.trim().is_empty() => {
-                    settler.sent();
-                    let command = crate::engine::Command::Send {
-                        session_id: app.session.clone(),
-                        text: line,
-                    };
-                    Pump::execute(&surface.engine, &surface.caller, command, &tx);
-                }
+                Some(line) if !line.trim().is_empty() => lines.push_back(line),
                 Some(_) => {}
                 None => input_open = false,
             },
             update = rx.recv() => {
                 if let Some(update) = update {
-                    if let Update::Frame { frame: crate::engine::FeedFrame::Entry { entry }, .. } = &update {
-                        settler.observe(entry);
-                    }
+                    observe(&mut turn, &update);
                     app.update(update, Instant::now());
                 }
             }
-            _ = tick.tick(), if !input_open => {
-                if let Some(end) = settler.check(&surface.engine, &surface.caller, &app.session).await {
-                    let now = Instant::now();
-                    while let Ok(update) = rx.try_recv() {
-                        app.update(update, now);
+            _ = tick.tick(), if turn.is_some() => {
+                if let Some(settler) = &mut turn
+                    && let Some(end) = settler.check(engine, caller, &app.session).await
+                {
+                    turn = None;
+                    if end.outcome != "done" {
+                        break end;
                     }
-                    printer.sync(&app, now)?;
-                    drop(pump);
-                    let mut out = printer.into_inner();
-                    // The heading names the call's argument, and errors come from sources:
-                    // model, tool and file text never reaches the terminal raw (S-I9).
-                    writeln!(out, "{}", terminal_safe(&end.text))?;
-                    return Ok(end.code);
+                    last = Some(end);
                 }
             }
         }
+    };
+    let now = Instant::now();
+    while let Ok(update) = rx.try_recv() {
+        app.update(update, now);
+    }
+    printer.sync(&app, now)?;
+    drop(pump);
+    let mut out = printer.into_inner();
+    // The heading names the call's argument, and errors come from sources: model, tool and
+    // file text never reaches the terminal raw (S-I9).
+    writeln!(out, "{}", terminal_safe(&end.text))?;
+    if !lines.is_empty() || input_open {
+        writeln!(out, "Not sent: the input after it.")?;
+    }
+    Ok(end.code)
+}
+
+/// A feed entry of the session, for the turn being watched.
+fn observe(turn: &mut Option<Settler>, update: &Update) {
+    if let (Some(settler), Update::Frame { frame: crate::engine::FeedFrame::Entry { entry }, .. }) =
+        (turn, update)
+    {
+        settler.observe(entry);
     }
 }

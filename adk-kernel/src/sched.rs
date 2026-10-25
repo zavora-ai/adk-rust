@@ -137,11 +137,13 @@ impl<'de> Deserialize<'de> for QueueClass {
 /// (spec 3.2 §7.5, §7.9, K-I11); interactive and approval-woken runs always may.
 ///
 /// The window runs from `start` up to, not including, `end`. A `start` after `end` wraps
-/// midnight (`22:00`–`07:00`); equal times make an empty window. Times are local: at
-/// `utc_offset_minutes` east of UTC when set, else in the host's time zone. A process that
+/// midnight (`22:00`–`07:00`); equal times make an empty window. Times are local: in the
+/// IANA `time_zone` when set, following its daylight saving time; else at
+/// `utc_offset_minutes` east of UTC when set; else in the host's time zone. A process that
 /// would start inside the window gets `not_before` = [`release_at`](Self::release_at), so
 /// its worker sleeps until the window ends. Serializes as
-/// `{"start": "22:00", "end": "07:00", "utcOffsetMinutes": 180}`.
+/// `{"start": "22:00", "end": "07:00", "utcOffsetMinutes": 180}` or
+/// `{"start": "22:00", "end": "07:00", "timeZone": "Europe/London"}`.
 ///
 /// # Example
 ///
@@ -172,12 +174,17 @@ pub struct QuietHours {
     /// Minutes east of UTC the times are in; `None` is the host's time zone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utc_offset_minutes: Option<i32>,
+    /// The IANA time zone the times are in, such as `Europe/London`, ahead of
+    /// `utc_offset_minutes`: the window keeps its local times across daylight saving time,
+    /// where a fixed offset moves them by an hour (spec 3.3 §10 K3).
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "zone")]
+    pub time_zone: Option<chrono_tz::Tz>,
 }
 
 impl QuietHours {
     /// The window from `start` to `end`, in the host's time zone.
     pub fn new(start: NaiveTime, end: NaiveTime) -> Self {
-        Self { start, end, utc_offset_minutes: None }
+        Self { start, end, utc_offset_minutes: None, time_zone: None }
     }
 
     /// Reads the times at `minutes` east of UTC instead of the host's time zone.
@@ -187,11 +194,35 @@ impl QuietHours {
         self
     }
 
+    /// Reads the times in the IANA time zone `zone`, following its daylight saving time.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use chrono::{TimeZone, Utc};
+    /// use adk_kernel::QuietHours;
+    ///
+    /// let quiet: QuietHours = "22:00-07:00".parse().unwrap();
+    /// let quiet = quiet.with_time_zone(chrono_tz::Europe::London);
+    /// // 22:30 in London is 21:30 UTC in summer and 22:30 UTC in winter.
+    /// assert!(quiet.contains(Utc.with_ymd_and_hms(2026, 7, 1, 21, 30, 0).unwrap()));
+    /// assert!(quiet.contains(Utc.with_ymd_and_hms(2026, 12, 1, 22, 30, 0).unwrap()));
+    /// assert!(!quiet.contains(Utc.with_ymd_and_hms(2026, 12, 1, 21, 30, 0).unwrap()));
+    /// ```
+    #[must_use]
+    pub fn with_time_zone(mut self, zone: chrono_tz::Tz) -> Self {
+        self.time_zone = Some(zone);
+        self
+    }
+
     fn offset(&self) -> Option<FixedOffset> {
         self.utc_offset_minutes.and_then(|minutes| FixedOffset::east_opt(minutes * 60))
     }
 
     fn local_time(&self, at: DateTime<Utc>) -> NaiveTime {
+        if let Some(zone) = self.time_zone {
+            return at.with_timezone(&zone).time();
+        }
         match self.offset() {
             Some(offset) => at.with_timezone(&offset).time(),
             None => at.with_timezone(&Local).time(),
@@ -217,9 +248,10 @@ impl QuietHours {
         if !self.contains(at) {
             return at;
         }
-        let local_date = match self.offset() {
-            Some(offset) => at.with_timezone(&offset).date_naive(),
-            None => at.with_timezone(&Local).date_naive(),
+        let local_date = match (self.time_zone, self.offset()) {
+            (Some(zone), _) => at.with_timezone(&zone).date_naive(),
+            (None, Some(offset)) => at.with_timezone(&offset).date_naive(),
+            (None, None) => at.with_timezone(&Local).date_naive(),
         };
         // The end is today when it is still ahead of `at`, else tomorrow.
         for days in 0..=2 {
@@ -227,9 +259,12 @@ impl QuietHours {
                 break;
             };
             let naive = date.and_time(self.end);
-            let end = match self.offset() {
-                Some(offset) => offset.from_local_datetime(&naive).earliest().map(|t| t.to_utc()),
-                None => Local.from_local_datetime(&naive).earliest().map(|t| t.to_utc()),
+            let end = match (self.time_zone, self.offset()) {
+                (Some(zone), _) => zone.from_local_datetime(&naive).earliest().map(|t| t.to_utc()),
+                (None, Some(offset)) => {
+                    offset.from_local_datetime(&naive).earliest().map(|t| t.to_utc())
+                }
+                (None, None) => Local.from_local_datetime(&naive).earliest().map(|t| t.to_utc()),
             };
             if let Some(end) = end
                 && end > at
@@ -255,6 +290,33 @@ impl FromStr for QuietHours {
         let start = hh_mm::parse(start.trim()).ok_or_else(invalid)?;
         let end = hh_mm::parse(end.trim()).ok_or_else(invalid)?;
         Ok(Self::new(start, end))
+    }
+}
+
+/// An IANA time zone as its name, such as `Europe/London`.
+mod zone {
+    use chrono_tz::Tz;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(
+        zone: &Option<Tz>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match zone {
+            Some(zone) => serializer.serialize_str(zone.name()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Tz>, D::Error> {
+        let Some(name) = Option::<String>::deserialize(deserializer)? else { return Ok(None) };
+        name.parse::<Tz>().map(Some).map_err(|_| {
+            serde::de::Error::custom(format!(
+                "`{name}` is not an IANA time zone; name one such as `Europe/London`"
+            ))
+        })
     }
 }
 

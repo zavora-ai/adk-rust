@@ -1,16 +1,18 @@
 //! Projection: inbox entries, session events, process states and ledger rows become cards,
 //! thread items, agent rows, status and briefing lines, once, in Rust (spec 3.3 §6, §7.1, §8).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
-use adk_core::{ApprovalAction, ApprovalRequest, ApprovalState, Event, Part, RunState};
+use adk_core::{
+    ApprovalAction, ApprovalRequest, ApprovalState, Event, Part, RunState, ToolConfirmationRequest,
+};
 use adk_harness::HarnessMode;
 use adk_harness::take_over::TAKE_OVER_TOOL;
-use adk_kernel::QuietHours;
 use adk_kernel::control::api::{AwayKind, AwayLine};
 use adk_kernel::proc::{KERNEL_AGENT, LedgerEntry};
+use adk_kernel::{AGENDA_TOOL_NAME, AgendaItem, AgendaOrigin, QuietHours, Wake};
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use serde_json::Value;
 
@@ -21,7 +23,7 @@ use crate::model::{
     Speaker, SpendView, ThreadItem, TimelineStep,
 };
 use crate::origin::{Caller, SurfaceKind};
-use crate::rules::{self, DecisionFacts};
+use crate::rules::{self, Answer, DecisionFacts};
 use crate::source::{AgentState, SpendToday};
 use crate::words::{self, SaidWhat};
 
@@ -87,6 +89,9 @@ pub(crate) struct Projector {
     pub(crate) heading: Classify<String>,
     pub(crate) money: Classify<bool>,
     pub(crate) reversibility: Classify<Reversibility>,
+    /// The engine's cancel window for a spoken "allow once", in whole seconds, which a voice
+    /// card advertises.
+    pub(crate) voice_window_secs: u32,
 }
 
 impl fmt::Debug for Projector {
@@ -109,6 +114,7 @@ impl Projector {
             heading: Arc::new(heading),
             money: Arc::new(spends_money),
             reversibility: Arc::new(reversibility),
+            voice_window_secs: rules::VOICE_CANCEL_WINDOW_SECS,
         }
     }
 
@@ -220,7 +226,7 @@ impl Projector {
         let facts = self.facts(request, always_label);
         // A chat card leaves the machine through someone else's servers: it carries the
         // agent, the risk and a short summary, never the call's arguments (S-I5).
-        let (heading, call) = if rules::row(caller) == rules::Row::Chat {
+        let (heading, summary, call) = if rules::row(caller) == rules::Row::Chat {
             let full = call_view(request);
             let call = CallView {
                 tool: full.tool.clone(),
@@ -228,12 +234,27 @@ impl Projector {
                 text: full.tool,
                 truncated: full.truncated,
             };
-            (chat_heading(request), call)
+            (chat_heading(request), None, call)
         } else {
-            ((self.heading)(request), call_view(request))
+            ((self.heading)(request), self.kernel_summary(request, now), call_view(request))
         };
         let decided = self.decided(request, caller, answer);
         let mut allowed = rules::allowed_answers(caller, &facts);
+        // The window the engine waits, not the default, so a voice renderer counts down the
+        // time the answer can really still be cancelled.
+        if allowed.cancel_window_secs.is_some() {
+            allowed.cancel_window_secs = Some(self.voice_window_secs);
+        }
+        // A suggestion is done or left for now, a question confirmed or forgotten (§8.1).
+        if let Some((yes, no)) = kernel_answer_words(request) {
+            for option in &mut allowed.options {
+                match option.answer {
+                    Answer::AllowOnce if !option.needs_presence => option.label = yes.to_string(),
+                    Answer::Deny => option.label = no.to_string(),
+                    Answer::AllowOnce | Answer::AlwaysAllow | Answer::Edit => {}
+                }
+            }
+        }
         if decided.is_some() {
             allowed.options.clear();
             allowed.open_in_home = false;
@@ -277,6 +298,7 @@ impl Projector {
             status,
             status_text: status_text.to_string(),
             heading,
+            summary,
             call,
             timeline,
             allowed,
@@ -291,6 +313,135 @@ impl Projector {
             money: facts.money,
             also_shown: words::also_shown(&also),
             decided,
+        }
+    }
+
+    /// What a decision the kernel itself asks means for the person, beyond its heading: who
+    /// suggests an agenda item and when it runs once allowed, what a driver mount starts
+    /// (spec 3.3 §7.1, §8.1). `None` for every other call, whose heading says it all.
+    pub(crate) fn kernel_summary(
+        &self,
+        request: &ApprovalRequest,
+        now: DateTime<Utc>,
+    ) -> Option<String> {
+        let operation = request.tool_name.strip_prefix(KERNEL_TOOL_PREFIX)?;
+        if request.tool_name == AGENDA_TOOL_NAME {
+            let Some(item) = agenda_item(request) else {
+                return Some(words::AGENTS_SUGGEST.to_string());
+            };
+            if item.origin.is_question() {
+                return Some(words::NOTICED_SOMETHING.to_string());
+            }
+            let who = match &item.origin {
+                AgendaOrigin::User => words::YOU_SUGGESTED_THIS.to_string(),
+                AgendaOrigin::Agent { .. } => {
+                    words::suggested_by(Some(&self.agent(&agent_name(request)).display_name))
+                }
+                // Consolidation, and any origin a later kernel adds: the kernel's own work.
+                _ => words::suggested_by(None),
+            };
+            let when = match &item.when {
+                Some(wake) => self.wake_words(wake, now),
+                None => words::RIGHT_AWAY.to_string(),
+            };
+            let mut text = format!("{who} {}", words::once_you_say_yes(&when));
+            if let Some(steps) = item.plan.as_ref().map(|plan| plan.steps.len()).filter(|n| *n > 0)
+            {
+                text.push(' ');
+                text.push_str(&words::plan_of(steps));
+            }
+            if let Some(cap) = item.budget.as_ref().and_then(|budget| budget.max_cost_micro_usd) {
+                text.push(' ');
+                text.push_str(&words::may_spend(cap));
+            }
+            return Some(text);
+        }
+        if operation != DRIVER_MOUNT_OPERATION {
+            return None;
+        }
+        request.args_redacted.get("commandLine").and_then(Value::as_str).map(words::driver_starts)
+    }
+
+    /// When a wake fires, in words, after "it runs": "every 5 minutes", "at 07:30".
+    fn wake_words(&self, wake: &Wake, now: DateTime<Utc>) -> String {
+        match wake {
+            Wake::At(at) if *at <= now => words::RIGHT_AWAY.to_string(),
+            Wake::At(at) => {
+                let local = at.with_timezone(&self.offset);
+                let today = now.with_timezone(&self.offset).date_naive();
+                let time = local.format("%H:%M");
+                if local.date_naive() == today {
+                    format!("at {time}")
+                } else if today.succ_opt() == Some(local.date_naive()) {
+                    format!("tomorrow at {time}")
+                } else {
+                    format!("on {} at {time}", local.format("%a %-d %b"))
+                }
+            }
+            Wake::Cron { expr, .. } => self.cron_words(expr, now),
+            Wake::FileChange { root, glob, .. } => {
+                format!("when a file matching {glob} changes in {}", root.display())
+            }
+            Wake::Webhook { hook } => format!("when {hook} calls in"),
+            Wake::Queue { source } => format!("when a message arrives from {source}"),
+            Wake::Approval { .. } => "once a decision it waits on is answered".to_string(),
+            Wake::RunFinished { .. } => "after another of your agents' tasks finishes".to_string(),
+            Wake::BudgetReplenished { .. } => "once the day's budget allows it".to_string(),
+            Wake::Manual => "when you start it".to_string(),
+            // A wake a later kernel adds.
+            _ => "later".to_string(),
+        }
+    }
+
+    /// A cron schedule (UTC, five fields, or six or seven from the second) in words, in the
+    /// person's time zone: "every 5 minutes", "every weekday at 07:00"; any other schedule
+    /// as it is written.
+    fn cron_words(&self, expr: &str, now: DateTime<Utc>) -> String {
+        let written = || format!("on the schedule {expr}");
+        let all: Vec<&str> = expr.split_whitespace().collect();
+        let fields = match all.len() {
+            5 => &all[..],
+            6 | 7 if all[0] == "0" && all.get(6).is_none_or(|year| *year == "*") => &all[1..6],
+            _ => return written(),
+        };
+        let &[minute, hour, day, month, weekday] = fields else {
+            return written();
+        };
+        let every = |field: &str| match field {
+            "*" => Some(1),
+            _ => field.strip_prefix("*/").and_then(|step| step.parse::<u32>().ok()),
+        };
+        let number = |field: &str| field.parse::<u32>().ok();
+        if day != "*" || month != "*" {
+            return written();
+        }
+        match (every(minute), number(minute), every(hour), number(hour)) {
+            (Some(1), _, Some(1), _) if weekday == "*" => "every minute".to_string(),
+            (Some(step), _, Some(1), _) if weekday == "*" => format!("every {step} minutes"),
+            (_, Some(_), Some(1), _) if weekday == "*" => "every hour".to_string(),
+            (_, Some(_), Some(step), _) if weekday == "*" => format!("every {step} hours"),
+            (_, Some(minute), _, Some(hour)) => {
+                let Some(at) = now.date_naive().and_hms_opt(hour, minute, 0) else {
+                    return written();
+                };
+                let at = Utc.from_utc_datetime(&at);
+                let local = at.with_timezone(&self.offset);
+                let time = local.format("%H:%M");
+                let days = match weekday.to_ascii_uppercase().as_str() {
+                    "*" => "every day".to_string(),
+                    // Another day where the person lives: the days would read wrong.
+                    _ if local.date_naive() != at.date_naive() => return written(),
+                    "1-5" | "MON-FRI" => "every weekday".to_string(),
+                    other => match WEEKDAYS.iter().find(|(number, name, _)| {
+                        *number == other || name.eq_ignore_ascii_case(other)
+                    }) {
+                        Some((_, _, day)) => format!("every {day}"),
+                        None => return written(),
+                    },
+                };
+                format!("{days} at {time}")
+            }
+            _ => written(),
         }
     }
 
@@ -340,17 +491,29 @@ impl Projector {
         Some(QuietView { active, start, end, text })
     }
 
-    /// The event at `seq`, its held call linked to the decision [`links`] gives that `seq`.
-    pub(crate) fn entry(&self, seq: u64, event: &Event, links: &HashMap<u64, String>) -> FeedEntry {
+    /// The event at `seq`, its held call linked to the decision [`links`] gives that `seq`;
+    /// `answered` holds the calls the session's later events answer ([`answered_calls`]).
+    pub(crate) fn entry(
+        &self,
+        seq: u64,
+        event: &Event,
+        links: &HashMap<u64, Link>,
+        answered: &HashSet<String>,
+    ) -> FeedEntry {
         FeedEntry {
             seq,
             at: event.timestamp,
             at_text: self.hh_mm(event.timestamp),
-            items: self.items(event, links.get(&seq).cloned()),
+            items: self.items(event, links.get(&seq), answered),
         }
     }
 
-    fn items(&self, event: &Event, decision_id: Option<String>) -> Vec<ThreadItem> {
+    fn items(
+        &self,
+        event: &Event,
+        link: Option<&Link>,
+        answered: &HashSet<String>,
+    ) -> Vec<ThreadItem> {
         let mut items = Vec::new();
         let from_person = event.author == "user";
         if let Some(content) = &event.llm_response.content {
@@ -403,10 +566,20 @@ impl Projector {
             }
         }
         if let Some(held) = &event.actions.tool_confirmation {
+            // "Waiting for you" only while the caller's own decision is open (§8.1); a call
+            // routed to other approvers, or to no one, waits for an answer; one answered since
+            // is decided.
+            let ran = held.function_call_id.as_ref().is_some_and(|id| answered.contains(id));
+            let text = match link {
+                Some(link) if link.pending && !ran => words::WAITING_FOR_YOU,
+                Some(_) => words::DECIDED,
+                None if ran => words::DECIDED,
+                None => words::WAITING_FOR_AN_ANSWER,
+            };
             items.push(ThreadItem::Decision {
-                decision_id,
+                decision_id: link.map(|link| link.id.clone()),
                 tool: held.tool_name.clone(),
-                text: words::WAITING_FOR_YOU.to_string(),
+                text: text.to_string(),
             });
         }
         items
@@ -556,6 +729,40 @@ pub(crate) fn agent_name(request: &ApprovalRequest) -> String {
         .unwrap_or_else(|| request.scope.app_name.clone())
 }
 
+/// The decision a held call links to in a thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Link {
+    /// The request's id.
+    pub(crate) id: String,
+    /// The request is still open.
+    pub(crate) pending: bool,
+}
+
+/// How far apart a request's creation and the event that held its call may be and still be
+/// one moment: the inbox writes the request just before or after the session writes the event.
+const HOLD_SLACK_MS: i64 = 1_000;
+
+/// Calls held closer together than this were held in one model turn and link in event order.
+const ONE_TURN_MS: i64 = 500;
+
+/// The calls `events` answer: every function response that is not a held call's placeholder,
+/// by call ID.
+pub(crate) fn answered_calls(events: &[Event]) -> HashSet<String> {
+    events
+        .iter()
+        .filter_map(|event| event.llm_response.content.as_ref())
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::FunctionResponse { function_response, id, .. }
+                if !adk_core::is_confirmation_pending(&function_response.response) =>
+            {
+                id.clone()
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// The decision of each held call in a session's `events`, by the event's `seq` (its position
 /// from 1), out of the session's `requests` (spec 3.3 §7.1).
 ///
@@ -563,58 +770,100 @@ pub(crate) fn agent_name(request: &ApprovalRequest) -> String {
 /// served without one, as a kernel's approvals inbox serves them, decides a call of the same
 /// tool by the same acting agent. Calls link in two passes over the session: first each call
 /// to the request showing its exact arguments, then each call still unlinked to the earliest
-/// request still free, since a route may show approvers redacted arguments. No request
-/// decides two calls, so a call whose own request is missing (unrouted, or not the caller's
-/// to decide) links to none rather than to another call's. A call held again keeps its
-/// request unless that request was resolved before the call was held again.
-pub(crate) fn links(events: &[Event], requests: &[ApprovalRequest]) -> HashMap<u64, String> {
+/// request still free, since a route may show approvers redacted arguments — unless a later
+/// call, held in another turn by the time that request was written, is the one it belongs to.
+/// No request decides two calls, so a call whose own request is missing (unrouted, or not the
+/// caller's to decide) links to none rather than to another call's, whether that call's
+/// arguments are shown or redacted. A call held again keeps its request unless that request
+/// was resolved before the call was held again.
+pub(crate) fn links(events: &[Event], requests: &[ApprovalRequest]) -> HashMap<u64, Link> {
     let mut order: Vec<&ApprovalRequest> = requests.iter().collect();
     order.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+    let holds: Vec<(u64, &ToolConfirmationRequest, chrono::DateTime<Utc>, String)> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| {
+            let held = event.actions.tool_confirmation.as_ref()?;
+            Some((index as u64 + 1, held, event.timestamp, held.fingerprint()))
+        })
+        .collect();
+    let decides = |request: &ApprovalRequest,
+                   held: &ToolConfirmationRequest,
+                   fingerprint: &str,
+                   exact: bool| {
+        match request.fingerprint.is_empty() {
+            false => exact && request.fingerprint == fingerprint,
+            true => {
+                let agent = held.acting.as_deref().map(|acting| &acting.agent.id);
+                request.tool_name == held.tool_name
+                    && match (agent, &request.acting) {
+                        (Some(agent), Some(acting)) => *agent == acting.agent.id,
+                        _ => true,
+                    }
+                    && (!exact || request.args_redacted == held.args)
+            }
+        }
+    };
     let mut taken = vec![false; order.len()];
     let mut linked: HashMap<u64, usize> = HashMap::new();
     for exact in [true, false] {
-        let mut held_by: HashMap<String, usize> = HashMap::new();
-        for (index, event) in events.iter().enumerate() {
-            let Some(held) = &event.actions.tool_confirmation else { continue };
-            let seq = index as u64 + 1;
-            let fingerprint = held.fingerprint();
-            if let Some(&position) = linked.get(&seq) {
+        let mut held_by: HashMap<&str, usize> = HashMap::new();
+        for (hold, (seq, held, at, fingerprint)) in holds.iter().enumerate() {
+            if let Some(&position) = linked.get(seq) {
                 held_by.insert(fingerprint, position);
                 continue;
             }
-            let agent = held.acting.as_deref().map(|acting| &acting.agent.id);
-            let decides = |request: &ApprovalRequest| match request.fingerprint.is_empty() {
-                false => exact && request.fingerprint == fingerprint,
-                true => {
-                    request.tool_name == held.tool_name
-                        && match (agent, &request.acting) {
-                            (Some(agent), Some(acting)) => *agent == acting.agent.id,
-                            _ => true,
-                        }
-                        && (!exact || request.args_redacted == held.args)
-                }
+            // Whether `request` belongs to a later call of another turn: one still unlinked,
+            // not a call held again under its open request, held by the time the request was
+            // written.
+            let later_owner = |request: &ApprovalRequest| {
+                holds[hold + 1..].iter().enumerate().any(|(offset, (other, call, when, print))| {
+                    let inherits = holds[..hold + 1 + offset].iter().any(|(earlier, _, _, p)| {
+                        p == print
+                            && linked.get(earlier).is_some_and(|&position| {
+                                order[position].resolved_at.is_none_or(|at| at > *when)
+                            })
+                    });
+                    !linked.contains_key(other)
+                        && print != fingerprint
+                        && !inherits
+                        && *when > *at + chrono::Duration::milliseconds(ONE_TURN_MS)
+                        && *when
+                            <= request.created_at + chrono::Duration::milliseconds(HOLD_SLACK_MS)
+                        && decides(request, call, print, false)
+                })
             };
-            let kept = held_by.get(&fingerprint).copied();
+            let kept = held_by.get(fingerprint.as_str()).copied();
             let next = match kept {
                 // Held again while its request was still open, as the event's time shows,
                 // not the request's state now.
                 Some(position)
-                    if order[position].resolved_at.is_none_or(|at| at > event.timestamp) =>
+                    if order[position].resolved_at.is_none_or(|resolved| resolved > *at) =>
                 {
                     Some(position)
                 }
                 _ => (0..order.len())
-                    .find(|&position| !taken[position] && decides(order[position]))
+                    .find(|&position| {
+                        !taken[position]
+                            && decides(order[position], held, fingerprint, exact)
+                            && (exact || !later_owner(order[position]))
+                    })
                     .or(kept),
             };
             if let Some(position) = next {
                 taken[position] = true;
                 held_by.insert(fingerprint, position);
-                linked.insert(seq, position);
+                linked.insert(*seq, position);
             }
         }
     }
-    linked.into_iter().map(|(seq, position)| (seq, order[position].id.clone())).collect()
+    linked
+        .into_iter()
+        .map(|(seq, position)| {
+            let request = order[position];
+            (seq, Link { id: request.id.clone(), pending: request.state == ApprovalState::Pending })
+        })
+        .collect()
 }
 
 /// The exact call, cut short past [`CALL_TEXT_LIMIT`] characters.
@@ -657,19 +906,93 @@ fn call_text(tool: &str, args: &Value) -> String {
 }
 
 /// What will happen, in plain words, from the call: "Write file note.txt",
-/// "Send email to [client email]" (spec 3.3 §7.1, §8 "Name the outcome").
+/// "Send email to [client email]" (spec 3.3 §7.1, §8 "Name the outcome"). A decision the
+/// kernel itself asks is named by what it is about, never by the kernel's tool or its JSON:
+/// an agenda item by its title.
 pub(crate) fn heading(request: &ApprovalRequest) -> String {
     // A take over says what to type, in the words of the tool that asks (spec 3.3 §8.2).
     if request.tool_name == TAKE_OVER_TOOL && !request.summary.trim().is_empty() {
         return request.summary.clone();
     }
+    if let Some(operation) = request.tool_name.strip_prefix(KERNEL_TOOL_PREFIX) {
+        if request.tool_name == AGENDA_TOOL_NAME {
+            return match agenda_item(request) {
+                Some(item) if !item.title.trim().is_empty() => sentence(&item.title),
+                Some(item) if item.origin.is_question() => words::QUESTION.to_string(),
+                Some(_) | None => words::SUGGESTION.to_string(),
+            };
+        }
+        if operation == DRIVER_MOUNT_OPERATION
+            && let Some(id) = request.args_redacted.get("id").and_then(Value::as_str)
+        {
+            return words::start_driver(id);
+        }
+        return humanize(operation);
+    }
     describe_call(&request.tool_name, &request.args_redacted)
 }
 
 /// What a chat card says will happen: the tool in plain words, "Write file", "Send email" —
-/// never its arguments, since a chat card leaves the machine (spec 3.3 §7.1, S-I5).
+/// never its arguments, since a chat card leaves the machine (spec 3.3 §7.1, S-I5). The
+/// kernel's own decisions say what kind they are: "Suggestion", "Question".
 pub(crate) fn chat_heading(request: &ApprovalRequest) -> String {
-    humanize(&request.tool_name)
+    if request.tool_name == AGENDA_TOOL_NAME {
+        return match agenda_item(request) {
+            Some(item) if item.origin.is_question() => words::QUESTION.to_string(),
+            Some(_) | None => words::SUGGESTION.to_string(),
+        };
+    }
+    humanize(request.tool_name.strip_prefix(KERNEL_TOOL_PREFIX).unwrap_or(&request.tool_name))
+}
+
+/// The prefix of the inbox tools of decisions the kernel itself asks, not an agent's call:
+/// `kernel:agenda`, `kernel:driver.mount`.
+const KERNEL_TOOL_PREFIX: &str = "kernel:";
+
+/// The operation of a driver mount a hosted definition asks for
+/// (`adk_kernel::managed::DRIVER_MOUNT_TOOL_NAME`, behind the kernel's `managed` feature).
+const DRIVER_MOUNT_OPERATION: &str = "driver.mount";
+
+/// Cron weekdays: their number, their name, and their name in words.
+const WEEKDAYS: [(&str, &str, &str); 8] = [
+    ("0", "SUN", "Sunday"),
+    ("1", "MON", "Monday"),
+    ("2", "TUE", "Tuesday"),
+    ("3", "WED", "Wednesday"),
+    ("4", "THU", "Thursday"),
+    ("5", "FRI", "Friday"),
+    ("6", "SAT", "Saturday"),
+    ("7", "SUN", "Sunday"),
+];
+
+/// The agenda item an agenda proposal carries (`adk_kernel::AGENDA_TOOL_NAME`): the item is
+/// its arguments.
+fn agenda_item(request: &ApprovalRequest) -> Option<AgendaItem> {
+    (request.tool_name == AGENDA_TOOL_NAME)
+        .then(|| serde_json::from_value(request.args_redacted.clone()).ok())
+        .flatten()
+}
+
+/// The words of "allow once" and "deny" on a decision the kernel asks: a suggestion is done
+/// or left for now, a question is right or forgotten (spec 3.3 §8.1, §8.2).
+fn kernel_answer_words(request: &ApprovalRequest) -> Option<(&'static str, &'static str)> {
+    if request.tool_name != AGENDA_TOOL_NAME {
+        return None;
+    }
+    match agenda_item(request) {
+        Some(item) if item.origin.is_question() => Some((words::THATS_RIGHT, words::FORGET_IT)),
+        Some(_) | None => Some((words::DO_IT, words::NOT_NOW)),
+    }
+}
+
+/// `text` on one line, starting with a capital: a title in sentence case (spec 3.3 §8).
+fn sentence(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = line.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => line,
+    }
 }
 
 /// The argument a heading names, short enough for one line.
@@ -735,7 +1058,7 @@ pub(crate) fn humanize(name: &str) -> String {
     let mut current = String::new();
     let mut previous_lower = false;
     for c in name.chars() {
-        if c == '_' || c == '-' || c == ' ' || c == '.' {
+        if matches!(c, '_' | '-' | ' ' | '.' | ':' | '/') {
             if !current.is_empty() {
                 words.push(std::mem::take(&mut current));
             }
@@ -817,6 +1140,120 @@ mod tests {
             "Write file note.txt"
         );
         assert_eq!(humanize("chiefOfStaff"), "Chief of staff");
+    }
+
+    /// A proposal of the kernel's agenda, as `Agenda::submit` puts it to the inbox.
+    fn agenda(item: &AgendaItem) -> ApprovalRequest {
+        let args = serde_json::to_value(item).unwrap();
+        let request = request(AGENDA_TOOL_NAME, args.clone())
+            .with_redacted_args(args)
+            .with_summary(format!("Agenda follow-up: {}", item.title));
+        if item.origin.is_question() {
+            request.with_allowed_actions([ApprovalAction::Approve, ApprovalAction::Reject])
+        } else {
+            request.with_allowed_actions([
+                ApprovalAction::Approve,
+                ApprovalAction::Edit,
+                ApprovalAction::Reject,
+            ])
+        }
+    }
+
+    fn item(title: &str, origin: AgendaOrigin) -> AgendaItem {
+        AgendaItem::new(
+            "item-1",
+            adk_core::principal::SubjectRef::human("ana"),
+            title,
+            "worth doing",
+            origin,
+            Utc.with_ymd_and_hms(2026, 10, 25, 7, 3, 0).unwrap(),
+        )
+    }
+
+    /// The owner's 07:03 demo: a decision the kernel asks reads in plain words — who suggests
+    /// it, what it does, when it runs — and never as the kernel's tool or its JSON (spec 3.3
+    /// §7.1, §8).
+    #[test]
+    fn kernel_decisions_read_in_plain_words() {
+        let mut projector = Projector::new(FixedOffset::east_opt(3 * 3600).unwrap());
+        projector.names.insert("app".into(), "Finance".into());
+        let now = Utc.with_ymd_and_hms(2026, 10, 25, 4, 3, 0).unwrap();
+        let agent = AgendaOrigin::Agent { pid: "run-7".into(), confidence: 1.0 };
+        let cron =
+            |expr: &str| Wake::Cron { expr: expr.into(), missed: adk_core::MissedFirePolicy::Skip };
+        let cases = [
+            (
+                item("check the news every 5 minutes", agent.clone())
+                    .with_when(cron("*/5 * * * *")),
+                "Check the news every 5 minutes",
+                "Finance suggests this. Once you say yes, it runs every 5 minutes.",
+            ),
+            // 04:00 UTC is 07:00 for a person at UTC+3.
+            (
+                item("Read the overnight mail", agent.clone()).with_when(cron("0 0 4 * * MON-FRI")),
+                "Read the overnight mail",
+                "Finance suggests this. Once you say yes, it runs every weekday at 07:00.",
+            ),
+            (
+                item("Book the dentist", agent.clone())
+                    .with_when(Wake::At(Utc.with_ymd_and_hms(2026, 10, 26, 6, 30, 0).unwrap())),
+                "Book the dentist",
+                "Finance suggests this. Once you say yes, it runs tomorrow at 09:30.",
+            ),
+            (
+                item("Tidy the notes", AgendaOrigin::Consolidation),
+                "Tidy the notes",
+                "Your agents suggest this. Once you say yes, it runs right away.",
+            ),
+            (
+                item(
+                    "You prefer morning meetings",
+                    AgendaOrigin::Observation { id: "obs-1".into() },
+                ),
+                "You prefer morning meetings",
+                "Your agents noticed something. Is that right?",
+            ),
+            (
+                item("Archive", agent).with_when(cron("15 3 1 * *")),
+                "Archive",
+                "Finance suggests this. Once you say yes, it runs on the schedule 15 3 1 * *.",
+            ),
+        ];
+        let me = Caller::human("ana", SurfaceKind::Web, crate::origin::Origin::Pointer);
+        for (item, heading, summary) in cases {
+            let card = projector.card(&agenda(&item), &me, None, None, now);
+            assert_eq!((card.heading.as_str(), card.summary.as_deref()), (heading, Some(summary)));
+            for text in [card.heading.as_str(), summary] {
+                assert!(!text.contains("kernel") && !text.contains('{'), "{text}");
+            }
+            let labels: Vec<&str> = card.allowed.options.iter().map(|o| o.label.as_str()).collect();
+            let expected: &[&str] = if item.origin.is_question() {
+                &["That's right", "Forget it"]
+            } else {
+                &["Do it", "Edit", "Not now"]
+            };
+            assert_eq!(labels, expected, "{heading}");
+        }
+
+        // A driver mount names what it starts; any other kernel decision its operation.
+        let mount = request(
+            "kernel:driver.mount",
+            json!({ "id": "email", "commandLine": "mcp-email --inbox", "partitions": ["default"] }),
+        );
+        assert_eq!(heading(&mount), "Start email for your agents");
+        assert_eq!(
+            projector.kernel_summary(&mount, now).as_deref(),
+            Some("It runs mcp-email --inbox on the computer your agents run on.")
+        );
+        let other = request("kernel:quota.raise", json!({ "partition": "default" }));
+        assert_eq!(
+            (heading(&other), projector.kernel_summary(&other, now)),
+            ("Quota raise".to_string(), None)
+        );
+        // An agenda request whose item cannot be read still names no internals.
+        let unreadable = request(AGENDA_TOOL_NAME, json!({ "planHash": "sha256:00" }));
+        assert_eq!(heading(&unreadable), "Suggestion");
+        assert_eq!(chat_heading(&unreadable), "Suggestion");
     }
 
     #[test]

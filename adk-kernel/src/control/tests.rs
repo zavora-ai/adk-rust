@@ -971,6 +971,51 @@ async fn a_held_call_is_decided_over_the_local_transport() {
     plane.shutdown().await.unwrap();
 }
 
+/// The agenda lists newest first when asked and pages on from an item, so a surface reads
+/// the newest items however many older ones the store keeps (spec 3.3 §5.1).
+#[tokio::test]
+async fn the_agenda_lists_newest_first_and_pages_on_from_an_item() {
+    use crate::agenda::{AgendaItem, AgendaOrigin};
+    use crate::control::api::AgendaQuery;
+
+    let kernel = crate::Kernel::builder()
+        .config(
+            crate::KernelConfig::default()
+                .with_control(ControlPlaneConfig::default().without_socket()),
+        )
+        .run_store(Arc::new(InMemoryRunStore::new()))
+        .build()
+        .unwrap();
+    let start = chrono::Utc::now() - chrono::Duration::hours(1);
+    for index in 0..5 {
+        let item = AgendaItem::new(
+            format!("item-{index}"),
+            adk_core::principal::SubjectRef::human("phone"),
+            format!("Item {index}"),
+            "because",
+            AgendaOrigin::User,
+            start + chrono::Duration::minutes(index),
+        );
+        kernel.agenda().propose(item, crate::PartitionMode::Plan).await.unwrap();
+    }
+    let config = ControlPlaneConfig::default().with_http(loopback()).without_socket();
+    let home = tempfile::tempdir().unwrap();
+    let plane = ControlPlane::serve(Arc::new(kernel.clone()), &config, home.path()).await.unwrap();
+    let client = ControlClient::http(format!("http://{}", plane.http_addr().unwrap()));
+    let ids = |items: Vec<AgendaItem>| items.into_iter().map(|item| item.id).collect::<Vec<_>>();
+
+    let newest = AgendaQuery { newest_first: true, limit: Some(2), ..AgendaQuery::default() };
+    assert_eq!(ids(client.agenda(&newest).await.unwrap()), ["item-4", "item-3"]);
+    let next = AgendaQuery { after: Some("item-3".into()), ..newest.clone() };
+    assert_eq!(ids(client.agenda(&next).await.unwrap()), ["item-2", "item-1"]);
+    let oldest = AgendaQuery { after: Some("item-2".into()), ..AgendaQuery::default() };
+    assert_eq!(ids(client.agenda(&oldest).await.unwrap()), ["item-3", "item-4"]);
+    let unknown = AgendaQuery { after: Some("item-9".into()), ..AgendaQuery::default() };
+    let error = client.agenda(&unknown).await.unwrap_err();
+    assert_eq!(adk_core::AdkError::from(error).http_status_code(), 404);
+    plane.shutdown().await.unwrap();
+}
+
 /// The agenda routes on a kernel (spec 3.2 §7.11, K-I16): any authenticated caller lists
 /// the agenda; approving, rejecting and scheduling need the `operator` scope, act as the
 /// caller, and write a `kernel.control` record before they act.

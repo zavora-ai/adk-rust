@@ -83,6 +83,7 @@ async fn build(
                 .allow_self_approval(),
             ),
     );
+    let audit = InMemoryAuditRecorder::new();
     let agent = Arc::new(
         HarnessAgent::builder("finance")
             .model(model.clone())
@@ -96,11 +97,12 @@ async fn build(
             .without_default_members()
             .mode(HarnessMode::Ask)
             .approval_service(Arc::clone(&service))
+            // The harness's own records (standing rules, spec 3.1 §9.3) beside the surface's.
+            .audit_log(Arc::new(audit.clone()))
             .build()
             .unwrap(),
     );
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
-    let audit = InMemoryAuditRecorder::new();
     let runner = agent
         .configure_runner(
             Runner::builder()

@@ -1147,3 +1147,248 @@ fn a_dumb_terminal_gets_plain_lines() {
     assert_eq!(code, Some(0), "{output}");
     assert!(!output.contains('\x1b'), "an escape sequence on a dumb terminal: {output:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Wave 2 review: each test fails on `main` before its fix.
+// ---------------------------------------------------------------------------
+
+/// What a terminal of `rows` by `cols` shows after the binary's output so far.
+fn screen_sized(terminal: &Terminal, rows: u16, cols: u16) -> vt100::Parser {
+    let mut parser = vt100::Parser::new(rows, cols, 0);
+    parser.process(&terminal.bytes());
+    parser
+}
+
+/// Waits until a terminal of `rows` by `cols` shows every one of `needles`; returns it.
+fn expect_sized(terminal: &Terminal, rows: u16, cols: u16, needles: &[&str]) -> vt100::Parser {
+    let started = Instant::now();
+    loop {
+        let parser = screen_sized(terminal, rows, cols);
+        let shown = parser.screen().contents();
+        if needles.iter().all(|needle| shown.contains(needle)) {
+            return parser;
+        }
+        assert!(started.elapsed() < TIMEOUT, "timed out waiting for {needles:?}:\n{shown}");
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}
+
+/// The screen's rows, as text.
+fn rows_of(parser: &vt100::Parser) -> Vec<String> {
+    let (_, cols) = parser.screen().size();
+    parser.screen().rows(0, cols).collect()
+}
+
+/// A decision answered by key shows once in the thread, at the place it was asked, as the web
+/// home's decided card does — not pinned under the thread as the conversation goes on
+/// (spec 3.3 §8.1).
+#[test]
+fn an_answered_decision_shows_once_where_it_was_asked() {
+    for theme in ["light", "dark"] {
+        let home = tempfile::tempdir().unwrap();
+        let ws = workspace();
+        let dir = ws.path().display().to_string();
+        let args = [
+            "--ephemeral",
+            "--dir",
+            dir.as_str(),
+            "--model-script",
+            WRITE_THEN_REPLY,
+            "--mode",
+            "ask",
+            "--theme",
+            theme,
+        ];
+        let truecolor = [("COLORTERM", "truecolor")];
+        let mut terminal =
+            Terminal::spawn_sized_env(&args, home.path(), ws.path(), ROWS, COLS, &truecolor);
+        expect_screen(&terminal, "Type a message");
+        terminal.send("Write the October invoice\r");
+        expect_screen(&terminal, "Waiting for you · Write file invoice.txt");
+        std::thread::sleep(Duration::from_millis(900));
+        terminal.send("y");
+        expect_screen(&terminal, "The invoice is written.");
+        terminal.send("Also cc my accountant\r");
+        expect_screen(&terminal, "Copied your accountant.");
+        std::thread::sleep(Duration::from_millis(400));
+        let parser = screen(&terminal);
+        dump(&format!("decided-once-{theme}"), &parser);
+        let rows = rows_of(&parser);
+        let said: Vec<usize> = (0..rows.len())
+            .filter(|row| rows[*row].contains("You said yes in the terminal"))
+            .collect();
+        assert_eq!(said.len(), 1, "once:\n{}", rows.join("\n"));
+        let written = rows.iter().position(|row| row.contains("The invoice is written.")).unwrap();
+        assert!(said[0] < written, "at its place, above what followed:\n{}", rows.join("\n"));
+        terminal.send("\x03");
+        assert_eq!(wait_exit(terminal).0, Some(0));
+    }
+}
+
+/// A call too tall for the screen (live demo, 2026-10-25): the box fits with its keys on
+/// screen and shows the call a window at a time; a decision key never becomes a message while
+/// it cannot answer; a queued message comes back with ↑; once the call has been read, `y`
+/// allows it.
+#[test]
+fn a_tall_decision_fits_the_screen_and_its_keys_never_become_messages() {
+    let (rows, cols) = (24, 80);
+    // Taller than the pane, yet short enough that the box does not cut it short: the call is
+    // read a window at a time, without `?`.
+    let content: String = (1..=25).map(|n| format!("line {n}\n")).collect();
+    let script = serde_json::json!([
+        { "call": { "name": "write_file", "args": { "path": "notes.txt", "content": content } } },
+        { "text": "Written." }
+    ])
+    .to_string();
+    for theme in ["light", "dark"] {
+        let home = tempfile::tempdir().unwrap();
+        let ws = workspace();
+        let dir = ws.path().display().to_string();
+        let args = [
+            "--ephemeral",
+            "--dir",
+            dir.as_str(),
+            "--model-script",
+            script.as_str(),
+            "--mode",
+            "ask",
+            "--theme",
+            theme,
+        ];
+        let truecolor = [("COLORTERM", "truecolor")];
+        let mut terminal =
+            Terminal::spawn_sized_env(&args, home.path(), ws.path(), rows, cols, &truecolor);
+        expect_sized(&terminal, rows, cols, &["Type a message"]);
+        terminal.send("Write my notes\r");
+        let parser = expect_sized(
+            &terminal,
+            rows,
+            cols,
+            &["Write file notes.txt", " y  Allow once", "PageDown to read on"],
+        );
+        dump(&format!("tall-decision-{theme}"), &parser);
+
+        // The keys are lit, but the call has not all been on screen: `y` says so, and
+        // neither it nor Enter becomes a message.
+        std::thread::sleep(Duration::from_millis(900));
+        terminal.send("y");
+        expect_sized(&terminal, rows, cols, &["PageDown to read the whole call"]);
+        terminal.send("\r");
+        terminal.send("y");
+        terminal.send("\r");
+        std::thread::sleep(Duration::from_millis(600));
+        let shown = screen_sized(&terminal, rows, cols).screen().contents();
+        assert!(!shown.contains("Queued › y"), "a decision key became a message:\n{shown}");
+        assert!(!ws.path().join("notes.txt").exists());
+
+        // A message typed while it waits is queued, and ↑ takes it back.
+        terminal.send("hold on\r");
+        expect_sized(&terminal, rows, cols, &["Queued › hold on"]);
+        terminal.send("\x1b[A");
+        let started = Instant::now();
+        loop {
+            let shown = screen_sized(&terminal, rows, cols).screen().contents();
+            if !shown.contains("Queued › hold on") && shown.contains("› hold on") {
+                break;
+            }
+            assert!(started.elapsed() < TIMEOUT, "↑ did not take it back:\n{shown}");
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        terminal.send("\x15");
+
+        // PageDown reads the call to its end, the keys staying on screen; then `y` allows.
+        let started = Instant::now();
+        loop {
+            terminal.send("\x1b[6~");
+            std::thread::sleep(Duration::from_millis(150));
+            let parser = screen_sized(&terminal, rows, cols);
+            let shown = parser.screen().contents();
+            assert!(shown.contains(" y  Allow once"), "the keys left the screen:\n{shown}");
+            if shown.contains("above · PageUp") && !shown.contains("more") {
+                dump(&format!("tall-decision-read-{theme}"), &parser);
+                break;
+            }
+            assert!(started.elapsed() < TIMEOUT, "the call never ended:\n{shown}");
+        }
+        std::thread::sleep(Duration::from_millis(900));
+        terminal.send("y");
+        expect_sized(&terminal, rows, cols, &["You said yes", "Written."]);
+        assert!(ws.path().join("notes.txt").exists(), "the allowed write ran");
+        let shown = screen_sized(&terminal, rows, cols).screen().contents();
+        assert!(!shown.contains("Queued ›"), "nothing was queued:\n{shown}");
+        terminal.send("\x03");
+        assert_eq!(wait_exit(terminal).0, Some(0));
+    }
+}
+
+/// What a tool server writes to standard error never reaches the terminal in the inline UI
+/// either: it goes to `terminal.log` (S-I9).
+#[test]
+fn a_tool_servers_stderr_never_reaches_the_inline_terminal() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let dir = ws.path().display().to_string();
+    std::fs::write(
+        ws.path().join(".mcp.json"),
+        r#"{"mcpServers": {"noisy": {"command": "sh", "args": ["-c", "echo NOISY-SERVER-STDERR >&2; sleep 2"]}}}"#,
+    )
+    .unwrap();
+    std::fs::write(ws.path().join("AGENTS.md"), "Answer briefly.\n").unwrap();
+    run(
+        &[
+            "code",
+            "hi",
+            "--trust",
+            "--dir",
+            &dir,
+            "--model-script",
+            r#"[{"text": "Hi."}, {"text": "{\"facts\": []}"}]"#,
+        ],
+        home.path(),
+        ws.path(),
+    );
+    let mut terminal = surface(
+        home.path(),
+        ws.path(),
+        r#"[{"text": "Hello back."}]"#,
+        &["--ui", "inline", "--theme", "light"],
+    );
+    expect_screen(&terminal, "Type a message");
+    terminal.send("hello\r");
+    expect_screen(&terminal, "Hello back.");
+    let started = Instant::now();
+    let log = loop {
+        let log = find_file(home.path(), "terminal.log")
+            .map(|path| std::fs::read_to_string(path).unwrap())
+            .unwrap_or_default();
+        if log.contains("NOISY-SERVER-STDERR") || started.elapsed() > Duration::from_secs(10) {
+            break log;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let shown = String::from_utf8_lossy(&terminal.bytes()).into_owned();
+    terminal.send("\x03");
+    let _ = wait_exit(terminal);
+    assert!(!shown.contains("NOISY-SERVER-STDERR"), "a server wrote to the inline terminal");
+    assert!(log.contains("NOISY-SERVER-STDERR"), "the server started and wrote:\n{log}");
+}
+
+/// A signal while the terminal asks for its background (`--theme auto`) still gives the
+/// terminal back: the handlers are registered before the query's raw mode.
+#[test]
+fn a_signal_while_the_background_is_asked_for_restores_the_terminal() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let terminal = surface(home.path(), ws.path(), WRITE_THEN_REPLY, &[]);
+    let started = Instant::now();
+    while !terminal.bytes().windows(5).any(|bytes| bytes == b"\x1b]11;") {
+        assert!(started.elapsed() < TIMEOUT, "the background was never asked for");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    signal(&terminal, libc::SIGTERM);
+    let restored = cooked(&terminal);
+    let (code, output) = wait_exit(terminal);
+    assert_eq!(code, Some(143), "{output}");
+    assert_ne!(restored.c_lflag & libc::ICANON, 0, "cooked mode again");
+    assert_ne!(restored.c_lflag & libc::ECHO, 0, "echo again");
+}

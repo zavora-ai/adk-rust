@@ -40,6 +40,12 @@ use crate::error::{KernelError, Result};
 ///     .with_agent("finance")
 ///     .with_how("chat", Some("telegram"));
 /// assert_eq!(serde_json::to_value(&line).unwrap()["channel"], "telegram");
+///
+/// let device = RecordLine::new(1285, chrono::Utc::now(), "kernel.control")
+///     .with_kernel_action("approvals.decide")
+///     .with_decision("approved")
+///     .with_channel("Ana's phone");
+/// assert_eq!(serde_json::to_value(&device).unwrap()["kernelAction"], "approvals.decide");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +57,10 @@ pub struct RecordLine {
     pub at: DateTime<Utc>,
     /// The record's action, such as `approval` or `kernel.control`.
     pub action: String,
+    /// What a kernel record (`kernel.control`, `kernel.channel`) did: `approvals.decide`,
+    /// `pairing.issue`, `freeze`, `settings.quiet_time`, a chat answer's `decide`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kernel_action: Option<String>,
     /// The person or service that acted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
@@ -84,6 +94,7 @@ impl RecordLine {
             seq,
             at,
             action: action.into(),
+            kernel_action: None,
             subject: None,
             agent: None,
             tool: None,
@@ -135,6 +146,20 @@ impl RecordLine {
     pub fn with_how(mut self, how: impl Into<String>, channel: Option<&str>) -> Self {
         self.how = Some(how.into());
         self.channel = channel.map(str::to_string);
+        self
+    }
+
+    /// Sets the chat channel or device it was given from, when how is not known.
+    #[must_use]
+    pub fn with_channel(mut self, channel: impl Into<String>) -> Self {
+        self.channel = Some(channel.into());
+        self
+    }
+
+    /// Sets what a kernel record did.
+    #[must_use]
+    pub fn with_kernel_action(mut self, action: impl Into<String>) -> Self {
+        self.kernel_action = Some(action.into());
         self
     }
 
