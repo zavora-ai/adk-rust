@@ -309,6 +309,12 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     let wire = |value: Value| value.as_str().map(str::to_string);
     let mut line =
         adk_kernel::control::RecordLine::new(record.seq, record.ts, record.action.clone());
+    // A kernel record names what it did in its `action` field.
+    if record.action.starts_with("kernel.")
+        && let Some(action) = text(record.ext.get("action"))
+    {
+        line = line.with_kernel_action(action);
+    }
     let subject = record
         .actor
         .on_behalf_of
@@ -328,8 +334,17 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     if let Some(tool) = tool {
         line = line.with_tool(tool);
     }
+    // A kernel record of an answer carries it as `answer`: a device's action, or a chat
+    // thread's `allowOnce` or `deny`.
+    let answered = text(record.ext.get("answer")).and_then(|answer| match answer.as_str() {
+        "approve" | "allowOnce" => Some("approved".to_string()),
+        "reject" | "deny" => Some("rejected".to_string()),
+        "edit" => Some("edited".to_string()),
+        "respond" => Some("responded".to_string()),
+        _ => None,
+    });
     if let Some(decision) =
-        record.decision.and_then(|d| serde_json::to_value(d).ok()).and_then(wire)
+        record.decision.and_then(|d| serde_json::to_value(d).ok()).and_then(wire).or(answered)
     {
         line = line.with_decision(decision);
     }
@@ -341,11 +356,18 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     if let Some(outcome) = outcome {
         line = line.with_outcome(outcome);
     }
-    if let Some(origin) = record.ext.get("origin")
-        && let Some(how) = text(origin.get("kind"))
-    {
-        let channel = text(origin.get("channel")).or_else(|| text(record.ext.get("device")));
-        line = line.with_how(how, channel.as_deref());
+    // The device's name, else its id, for an answer a paired device gave.
+    let device = text(record.ext.get("deviceName")).or_else(|| text(record.ext.get("device")));
+    match record.ext.get("origin").and_then(|origin| Some((origin, text(origin.get("kind"))?))) {
+        Some((origin, how)) => {
+            let channel = text(origin.get("channel")).or(device);
+            line = line.with_how(how, channel.as_deref());
+        }
+        None => {
+            if let Some(device) = device {
+                line = line.with_channel(device);
+            }
+        }
     }
     let target = text(record.ext.get("target")).or_else(|| text(record.ext.get("approvalId")));
     if let Some(target) = target {
@@ -635,6 +657,42 @@ mod tests {
         assert!(restarted.unwrap().is_none(), "`up --mode read-only` takes over");
         let refused = modes(HarnessMode::Ask, true).get(APP_NAME, "ana", "s1").await;
         assert!(refused.unwrap().is_none(), "Go ahead beyond loopback without a sandbox");
+    }
+
+    /// A device's answer reads as what it did, the answer and the device it came from, and a
+    /// kernel record names its own action (spec 3.3 §11).
+    #[cfg(feature = "audit")]
+    #[tokio::test]
+    async fn a_record_line_says_what_a_kernel_record_did_and_where_an_answer_came_from() {
+        use adk_auth::signed_audit::{AuditLog, AuditSigner as _, Ed25519Signer, NoteVerifier};
+        use adk_core::audit_log::{
+            AuditActor, AuditLogStore, AuditRecordDraft, AuditRecordKind, InMemoryAuditLogStore,
+        };
+        use adk_kernel::control::RecordBook;
+
+        let logs: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
+        let signer = Ed25519Signer::generate("kernel-test").unwrap();
+        let verifier: NoteVerifier = signer.verifier_key().parse().unwrap();
+        let log =
+            AuditLog::builder(logs.clone(), "kernel-test", Arc::new(signer)).open().await.unwrap();
+        log.append(
+            AuditRecordDraft::new(AuditRecordKind::Other("kernel".into()), "kernel.control")
+                .actor(AuditActor::subject(SubjectRef::human("ana")))
+                .ext("action", serde_json::json!("approvals.decide"))
+                .ext("target", serde_json::json!("apr_1"))
+                .ext("surface", serde_json::json!("device"))
+                .ext("device", serde_json::json!("e2a1"))
+                .ext("deviceName", serde_json::json!("Ana's phone"))
+                .ext("answer", serde_json::json!("approve")),
+        )
+        .await
+        .unwrap();
+        let book = SignedRecordBook::new(logs, "kernel-test".into(), verifier);
+        let line = book.recent(1).await.unwrap().remove(0);
+        assert_eq!(line.kernel_action.as_deref(), Some("approvals.decide"));
+        assert_eq!(line.decision.as_deref(), Some("approved"));
+        assert_eq!(line.channel.as_deref(), Some("Ana's phone"));
+        assert_eq!(line.target.as_deref(), Some("apr_1"));
     }
 
     /// The record book answers the check `adk-rust audit verify` gives an export of the same

@@ -835,7 +835,7 @@ fn ledger_of(backend: &dyn ControlBackend) -> Result<crate::proc::Ledger> {
 
 /// `GET /kernel/proc/ledger` (spec 3.2 §7.10): a page of rows as JSON, or as JSONL with the
 /// next cursor in `x-ledger-next`. Operator only, and recorded: the ledger leaves the host
-/// only through here.
+/// only through here; "While you were away" serves only the rows of its lines.
 #[cfg(feature = "proc")]
 async fn proc_ledger(
     State(backend): Backend,

@@ -59,7 +59,8 @@
 //! and the partition writes — and the `/proc` routes, which describe the user's activity,
 //! need the `operator` scope (`403` otherwise), which the socket, the pipe and a loopback
 //! bind grant. `attach` reads only the caller's own sessions. A ledger read is recorded as
-//! `kernel.control` with action `proc.ledger`: the ledger leaves the host only through it.
+//! `kernel.control` with action `proc.ledger`: the ledger leaves the host only through it, and
+//! "While you were away" (spec 3.3 §10 K4) serves only the rows of its lines.
 //!
 //! A paired device's token (spec 3.3 §10 K2, S-I7) admits it over HTTP as the person who
 //! paired it, only to the routes its scopes open (`read`, `decide`, `stop`; never

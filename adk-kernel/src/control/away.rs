@@ -5,7 +5,7 @@
 //! |---|---|---|
 //! | `GET /kernel/away` | operator, or a device with `read` | The rows after the viewer's cursor: counts, spend, whether quiet time was respected, one line per event ([`AwayResponse`], [`AwayQuery`]) |
 //! | `POST /kernel/away/seen` | operator, or a device with `read` | Moves the viewer's cursor to a row it was shown ([`SeenRequest`]) |
-//! | `GET /kernel/away/lines/{seq}` | operator, or a device with `read` | One line with its ledger row: the line's record ([`AwayLineResponse`]) |
+//! | `GET /kernel/away/lines/{seq}` | operator, or a device with `read` | One line with its ledger row: the line's record ([`AwayLineResponse`]); a row that makes no line is `404` |
 //!
 //! The viewer is the paired device a token admitted (`device:<id>`), else the name the
 //! surface gives (`viewer`, default `home`). Its cursor is a ledger sequence number kept in
@@ -27,7 +27,14 @@
 //!
 //! `spentMicroUsd` sums the `spend` rows of the page. Quiet time was respected when no
 //! suggestion's work started (`proposal` with effect `running`) inside a quiet window of its
-//! area, as admission keeps it (spec 3.2 §7.9) with the windows in force now.
+//! area, as admission keeps it (spec 3.2 §7.9), with the windows in force when it started: a
+//! quiet time changed since judges only what came after it.
+//!
+//! A line names its agent as the agent calls itself: `finance`, not
+//! `urn:adk:agent:adk-rust/finance`; the kernel's own rows say `kernel`.
+//!
+//! These routes serve the lines of the `/proc` ledger and the row of each line; the full
+//! ledger leaves the host only through the operator's recorded `GET /kernel/proc/ledger`.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -47,7 +54,6 @@ use crate::error::{KernelError, NOT_FOUND_CODE, Result};
 use crate::kernel::Kernel;
 use crate::partition::PartitionId;
 use crate::proc::{KERNEL_AGENT, Ledger, LedgerEntry, LedgerQuery};
-use crate::sched::QuietHours;
 
 /// The most rows one page covers.
 pub const MAX_PAGE_ROWS: usize = 2_000;
@@ -146,7 +152,7 @@ impl AwayLine {
             seq: entry.seq,
             at: entry.ts,
             partition: entry.partition.clone(),
-            agent: entry.agent.clone(),
+            agent: agent_name(&entry.agent).to_string(),
             kind,
             effect,
             record: format!(
@@ -155,6 +161,15 @@ impl AwayLine {
                 paths::AWAY_LINE.replace("{seq}", &entry.seq.to_string())
             ),
         })
+    }
+}
+
+/// The name an agent goes by: the last part of its `urn:adk:agent:<app>/<agent>` id, or the
+/// label the ledger keeps when it is no id (spec 3.3 §8 "No internal identifiers").
+fn agent_name(agent: &str) -> &str {
+    match agent.strip_prefix("urn:adk:agent:") {
+        Some(id) => id.rsplit('/').next().filter(|name| !name.is_empty()).unwrap_or(id),
+        None => agent,
     }
 }
 
@@ -290,7 +305,7 @@ pub struct SeenResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AwayLineResponse {
-    /// The line, when the row makes one.
+    /// The line the row makes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<AwayLine>,
     /// The ledger row: content-free, as `/proc` keeps it.
@@ -346,7 +361,7 @@ fn settled(
     after: Option<u64>,
     now: DateTime<Utc>,
 ) -> (Vec<LedgerEntry>, bool) {
-    let mut expected = after.map(|after| after + 1);
+    let mut expected = after.and_then(|after| after.checked_add(1));
     for (index, row) in rows.iter().enumerate() {
         if let Some(expected) = expected
             && row.seq != expected
@@ -355,7 +370,7 @@ fn settled(
             rows.truncate(index);
             return (rows, true);
         }
-        expected = Some(row.seq + 1);
+        expected = row.seq.checked_add(1);
     }
     (rows, false)
 }
@@ -399,7 +414,8 @@ async fn away(
     let mut counts = AwayCounts::default();
     let mut spent: u64 = 0;
     let mut breaches = Vec::new();
-    let mut windows: BTreeMap<PartitionId, Vec<QuietHours>> = BTreeMap::new();
+    let mut areas: BTreeMap<PartitionId, (super::settings::Start, Option<super::AreaSettings>)> =
+        BTreeMap::new();
     let mut lines = Vec::new();
     for row in &rows {
         if row.kind == "spend" {
@@ -407,12 +423,15 @@ async fn away(
             spent = spent.saturating_add(micro.unwrap_or_default());
         }
         if row.kind == "proposal" && row.effect.as_deref() == Some("running") {
-            if !windows.contains_key(&row.partition) {
-                let quiet = kernel.supervision().quiet_windows(&row.partition).await;
-                windows.insert(row.partition.clone(), quiet);
+            if !areas.contains_key(&row.partition) {
+                let start = super::settings::start_of(kernel, &row.partition).await?;
+                let changed = store.area_settings(&row.partition).await?;
+                areas.insert(row.partition.clone(), (start, changed));
             }
             let at = row.utc();
-            if windows[&row.partition].iter().any(|window| window.contains(at)) {
+            let (start, changed) = &areas[&row.partition];
+            let windows = super::settings::quiet_windows_at(start, changed.as_ref(), at);
+            if windows.iter().any(|window| window.contains(at)) {
                 breaches.push(row.seq);
             }
         }
@@ -473,15 +492,16 @@ async fn line(
     let (_, ledger) = ledger_of(backend.as_ref())?;
     let query = LedgerQuery::default().after(seq.saturating_sub(1)).limit(1);
     let entry = ledger.store().list(&query).await?.into_iter().find(|entry| entry.seq == seq);
-    let Some(entry) = entry else {
+    // Only a line's own row: the ledger itself leaves the host through the recorded export.
+    let Some((line, entry)) = entry.and_then(|entry| Some((AwayLine::of(&entry)?, entry))) else {
         return Err(KernelError::Core(adk_core::AdkError::new(
             adk_core::ErrorComponent::Server,
             adk_core::ErrorCategory::NotFound,
             NOT_FOUND_CODE,
-            format!("the ledger has no row {seq}"),
+            format!("no line of \"While you were away\" is row {seq} of the ledger"),
         )));
     };
-    Ok(Json(AwayLineResponse { line: AwayLine::of(&entry), entry }))
+    Ok(Json(AwayLineResponse { line: Some(line), entry }))
 }
 
 #[cfg(test)]
