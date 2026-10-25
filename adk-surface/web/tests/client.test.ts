@@ -57,6 +57,13 @@ describe("the HTTP client", () => {
     }
   });
 
+  it("reads the status line with the mode of the conversation shown", async () => {
+    const seen: Seen[] = [];
+    recordFetch(seen);
+    await new HttpClient().status("s 1");
+    expect(seen.map(({ url }) => url)).toEqual(["/api/surface/status?surface=web&session=s%201"]);
+  });
+
   it("treats a route the server does not mount as absent, not as an error", async () => {
     vi.stubGlobal(
       "fetch",

@@ -88,7 +88,8 @@ export type FeedMessage =
 
 /** What the screens read and do. Tests and previews give their own. */
 export interface HomeClient {
-  status(): Promise<StatusLine>;
+  /** The status line, with the mode `session` runs in when given, else the agents' default. */
+  status(session?: string): Promise<StatusLine>;
   agents(): Promise<AgentRow[]>;
   decisions(): Promise<DecisionCard[]>;
   decision(id: string): Promise<DecisionCard>;
@@ -189,8 +190,9 @@ export class HttpClient implements HomeClient {
     return this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
   }
 
-  status() {
-    return this.request<StatusLine>("/surface/status?surface=web");
+  status(session?: string) {
+    const query = session ? `&session=${encodeURIComponent(session)}` : "";
+    return this.request<StatusLine>(`/surface/status?surface=web${query}`);
   }
 
   async agents() {

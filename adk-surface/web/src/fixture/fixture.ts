@@ -327,8 +327,12 @@ export class FixtureClient implements HomeClient {
     return rows.map((row) => (row.agent.name in this.sessionOf ? { ...row, sessionId: this.sessionOf[row.agent.name] } : row));
   }
 
-  async status() {
-    return { ...status(this.stopped), decisions: (await this.decisions()).length };
+  /** The mode of each session the person changed, by session; others run in the default. */
+  readonly modes: Record<string, StatusLine["mode"]> = {};
+
+  async status(session?: string) {
+    const line = { ...status(this.stopped), decisions: (await this.decisions()).length };
+    return session && this.modes[session] ? { ...line, mode: this.modes[session] } : line;
   }
 
   async agents() {
