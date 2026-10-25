@@ -7,6 +7,11 @@ import { expect, test } from "@playwright/test";
 const workspace = process.env.HOME_E2E_WORKSPACE ?? "";
 
 test("a held call, allowed once from the home, runs once", async ({ page, request }) => {
+  // A deep link to a decision that does not exist says so, on the home.
+  await page.goto("/ui/decisions/missing.v1");
+  await expect(page.getByRole("alert")).toContainText("missing.v1");
+  await expect(page).toHaveURL(/\/ui\/$/);
+
   await page.goto("/ui/");
   await expect(page.getByRole("button", { name: "Stop all" })).toBeVisible();
   await expect(page.getByText("No agent has worked yet.")).toBeVisible();
@@ -23,6 +28,12 @@ test("a held call, allowed once from the home, runs once", async ({ page, reques
   await expect(page.getByRole("heading", { name: /^Decisions/ }).locator(".badge")).toHaveText("1");
   await expect(page.getByRole("navigation", { name: "Agents" }).getByText("Waiting for you")).toBeVisible();
   expect(existsSync(join(workspace, "invoice.txt"))).toBe(false);
+
+  // The decision's deep link (§7.2) opens the home at it, and the address becomes the thread's.
+  const open = await (await request.get("/api/surface/decisions?surface=web")).json();
+  await page.goto(`/ui/decisions/${encodeURIComponent(open.decisions[0].id)}`);
+  await expect(card).toBeVisible({ timeout: 20_000 });
+  await expect(page).toHaveURL(/\/ui\/$/);
 
   // Enter on the focused answer never decides (§7.4).
   await card.getByRole("button", { name: "Allow once" }).focus();

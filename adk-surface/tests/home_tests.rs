@@ -81,6 +81,20 @@ async fn every_asset_the_page_names_is_served_immutable() {
     assert!(headers[header::CONTENT_TYPE].to_str().unwrap().contains("javascript"));
 }
 
+/// A decision's deep link (spec 3.3 §7.2) is the page whatever its id holds, dots included:
+/// the tray, the phone and voice open the home there.
+#[tokio::test]
+async fn every_decision_deep_link_is_the_page() {
+    for uri in
+        ["/ui/decisions/apr_1", "/ui/decisions/urn:adk:approval.v1.json", "/ui/decisions/a%2Fb.c"]
+    {
+        let (status, headers, body) = get(uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        assert!(headers[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"), "{uri}");
+        assert!(body.contains(r#"<div id="root">"#), "{uri}");
+    }
+}
+
 #[tokio::test]
 async fn a_file_the_home_does_not_ship_is_not_found() {
     for uri in ["/ui/assets/missing.js", "/ui/fixture.html", "/ui/today/missing.png"] {

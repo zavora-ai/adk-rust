@@ -9,7 +9,7 @@ import { labels } from "./labels";
 import { planned as plan, today as todays } from "./plan";
 import { usePoll } from "./poll";
 import type { Section } from "./route";
-import { pathOf, sectionOf } from "./route";
+import { decisionOf, pathOf, sectionOf } from "./route";
 import { MemoryRules } from "./screens/MemoryRules";
 import { Threads } from "./screens/Threads";
 import { Today } from "./screens/Today";
@@ -128,6 +128,37 @@ export function App({
     },
     [followed, navigate],
   );
+
+  // A deep link to one decision (`/ui/decisions/<id>`, spec 3.3 §7.2): the tray, the phone and
+  // voice send the person here for the answers only the home gives. It opens in its thread once,
+  // and the address becomes the thread's; a decided one says who answered, a missing one says
+  // what went wrong. Without the server's token it waits for the sign-in.
+  const linked = useRef(decisionOf(window.location.pathname));
+  useEffect(() => {
+    const id = linked.current;
+    if (id === undefined) return;
+    let live = true;
+    client
+      .decision(id)
+      .then((card) => {
+        if (!live || linked.current === undefined) return;
+        linked.current = undefined;
+        window.history.replaceState(null, "", pathOf("threads"));
+        openDecision(card);
+        if (card.status === "decided") setProblem(card.decided?.text ?? card.statusText);
+      })
+      .catch((error: unknown) => {
+        if (!live || linked.current === undefined) return;
+        if (error instanceof ApiError && error.status === 401) return;
+        linked.current = undefined;
+        window.history.replaceState(null, "", pathOf("threads"));
+        setProblem(problemText(error));
+      });
+    return () => {
+      live = false;
+    };
+    // Read on load, and again after a sign-in; never again once the link is opened.
+  }, [client, signIns]);
 
   async function act(command: Command, origin: Origin) {
     setProblem("");

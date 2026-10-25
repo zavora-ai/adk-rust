@@ -21,9 +21,10 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; connect-src 'self'; \
 struct Assets;
 
 /// The web home's page as root routes (spec 3.3 §5.1, §10 S1): `/` redirects to `/ui/`,
-/// which serves the app; its sections (`/ui/today`, `/ui/memory`, `/ui/developer`) serve
-/// the same page. Mount it with `ServerBuilder::add_root_routes`, beside [`router`](super::router)
-/// under `/api`, which is what the page reads and acts through.
+/// which serves the app; its sections (`/ui/today`, `/ui/memory`, `/ui/developer`) and every
+/// decision's deep link (`/ui/decisions/<id>`, §7.2) serve the same page. Mount it with
+/// `ServerBuilder::add_root_routes`, beside [`router`](super::router) under `/api`, which is
+/// what the page reads and acts through.
 ///
 /// The page itself is public, like any static asset; every route it calls needs the caller
 /// the server's auth middleware admits (S-I8). `index.html` carries a strict content
@@ -60,8 +61,11 @@ async fn asset(uri: Uri) -> Response {
     if Assets::get(path).is_some() {
         return embedded(path);
     }
-    // A section of the app (`/ui/today`) is the page; a missing file is not.
-    if path.rsplit('/').next().is_some_and(|name| name.contains('.')) {
+    // A section of the app (`/ui/today`) is the page; a missing file is not. A decision's deep
+    // link (spec 3.3 §7.2) is always the page: its id may contain a dot.
+    if !path.starts_with("decisions/")
+        && path.rsplit('/').next().is_some_and(|name| name.contains('.'))
+    {
         return StatusCode::NOT_FOUND.into_response();
     }
     embedded("index.html")

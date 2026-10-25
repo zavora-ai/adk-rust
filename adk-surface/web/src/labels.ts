@@ -2,6 +2,12 @@
  * The page's own words (spec 3.3 §8): plain, sentence case, "your agents". Every word the
  * engine also uses comes from `generated/words.ts`, generated from the engine's `words`
  * module, so the web home says what every other surface says.
+ *
+ * Each other surface built from this app — the tray, the phone, voice — keeps its own labels,
+ * CSS and fixture data in its own directory (`src/tray/labels.ts`, `src/tray/tray.css`,
+ * `src/fixture/tray.ts`), imports `styles/tokens.css` for the §9 tokens, and adds one line to
+ * the fixture's screen switch (`src/fixture/main.tsx`). This file and `styles/app.css` stay the
+ * web home's.
  */
 import * as words from "./generated/words";
 

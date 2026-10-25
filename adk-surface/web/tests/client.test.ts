@@ -57,6 +57,41 @@ describe("the HTTP client", () => {
     }
   });
 
+  it("reads and acts for the surface it is built for, and is the web home by default", async () => {
+    const seen: Seen[] = [];
+    recordFetch(seen);
+    expect(new HttpClient().surface).toBe("web");
+    const client = new HttpClient("/api", "tray");
+    await client.status("s1");
+    await client.agents();
+    await client.decisions();
+    await client.decision("apr 1");
+    await client.briefing();
+    await client.queued("s1");
+    await client.command({ type: "stopAll" }, { kind: "pointer" });
+    const card = { id: "apr 1", version: 3 } as unknown as Parameters<ReturnType<HttpClient["takeOver"]>["provide"]>[0];
+    await client.takeOver().provide(card, "731905", { kind: "pointer" });
+    for await (const message of client.feed("s1", undefined, new AbortController().signal)) void message;
+
+    expect(seen.map(({ url }) => url)).toEqual([
+      "/api/surface/status?surface=tray&session=s1",
+      "/api/surface/agents?surface=tray",
+      "/api/surface/decisions?surface=tray",
+      "/api/surface/decisions/apr%201?surface=tray",
+      "/api/surface/briefing?surface=tray",
+      "/api/surface/sessions/s1/queued?surface=tray",
+      "/api/surface/commands",
+      "/api/surface/decisions/apr%201/take-over",
+      "/api/surface/sessions/s1/feed?surface=tray",
+    ]);
+    expect(JSON.parse(String(seen[6].init?.body))).toEqual({
+      surface: "tray",
+      origin: { kind: "pointer" },
+      command: { type: "stopAll" },
+    });
+    expect(JSON.parse(String(seen[7].init?.body))).toEqual({ surface: "tray", version: 3, secret: "731905" });
+  });
+
   it("reads the status line with the mode of the conversation shown", async () => {
     const seen: Seen[] = [];
     recordFetch(seen);

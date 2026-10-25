@@ -1,7 +1,8 @@
 /**
  * The web home's client: the engine's routes under `/api/surface` (spec 3.3 §6), and the
- * kernel and harness routes beside them. Every read is for the web home (`surface=web`);
- * every command carries the surface and how the input was given (§11).
+ * kernel and harness routes beside them. Every read is for one surface (`surface=web` unless
+ * another shell names its own); every command carries the surface and how the input was given
+ * (§11).
  */
 import type {
   AgentRow,
@@ -15,6 +16,7 @@ import type {
   Origin,
   QueuedResponse,
   StatusLine,
+  SurfaceKind,
   TakeOverRequest,
 } from "./generated/api";
 import type { TakeOverSeam } from "./components/DecisionCard";
@@ -141,11 +143,17 @@ async function problem(response: Response): Promise<ApiError> {
  * The client over HTTP, relative to the page's own server. A server started with a token
  * (`adk-rust serve --auth-token`) needs it on every request: `signIn` keeps it for this
  * tab and sends it as `Authorization: Bearer`.
+ *
+ * `surface` is the surface the engine computes answers for and stamps on every command
+ * (spec 3.3 §7.2, §11): the web home by default; the tray and the phone shells name their own.
  */
 export class HttpClient implements HomeClient {
   private token: string | undefined = readStored<string | undefined>(TOKEN_KEY, undefined);
 
-  constructor(private readonly base = "/api") {}
+  constructor(
+    private readonly base = "/api",
+    readonly surface: SurfaceKind = "web",
+  ) {}
 
   /** Sends `token` with every request from now on, and keeps it for this tab. */
   signIn(token: string) {
@@ -192,30 +200,30 @@ export class HttpClient implements HomeClient {
 
   status(session?: string) {
     const query = session ? `&session=${encodeURIComponent(session)}` : "";
-    return this.request<StatusLine>(`/surface/status?surface=web${query}`);
+    return this.request<StatusLine>(`/surface/status?surface=${this.surface}${query}`);
   }
 
   async agents() {
-    return (await this.request<AgentsResponse>("/surface/agents?surface=web")).agents;
+    return (await this.request<AgentsResponse>(`/surface/agents?surface=${this.surface}`)).agents;
   }
 
   async decisions() {
-    return (await this.request<DecisionsResponse>("/surface/decisions?surface=web")).decisions;
+    return (await this.request<DecisionsResponse>(`/surface/decisions?surface=${this.surface}`)).decisions;
   }
 
   decision(id: string) {
-    return this.request<DecisionCard>(`/surface/decisions/${encodeURIComponent(id)}?surface=web`);
+    return this.request<DecisionCard>(`/surface/decisions/${encodeURIComponent(id)}?surface=${this.surface}`);
   }
 
   briefing(since?: string) {
     const query = since ? `&since=${encodeURIComponent(since)}` : "";
-    return this.request<Briefing>(`/surface/briefing?surface=web${query}`);
+    return this.request<Briefing>(`/surface/briefing?surface=${this.surface}${query}`);
   }
 
   command(command: Command, origin: Origin) {
     return this.request<CommandOutcome>("/surface/commands", {
       method: "POST",
-      body: JSON.stringify({ surface: "web", origin, command }),
+      body: JSON.stringify({ surface: this.surface, origin, command }),
     });
   }
 
@@ -223,7 +231,7 @@ export class HttpClient implements HomeClient {
     const headers = this.headers({ accept: "text/event-stream" });
     if (after !== undefined) headers["last-event-id"] = String(after);
     const response = await fetch(
-      `${this.base}/surface/sessions/${encodeURIComponent(session)}/feed?surface=web`,
+      `${this.base}/surface/sessions/${encodeURIComponent(session)}/feed?surface=${this.surface}`,
       { headers, signal, credentials: "same-origin" },
     );
     if (!response.ok) throw await problem(response);
@@ -253,7 +261,7 @@ export class HttpClient implements HomeClient {
 
   async queued(session: string) {
     const page = await this.request<QueuedResponse>(
-      `/surface/sessions/${encodeURIComponent(session)}/queued?surface=web`,
+      `/surface/sessions/${encodeURIComponent(session)}/queued?surface=${this.surface}`,
     );
     return page.queued;
   }
@@ -267,7 +275,7 @@ export class HttpClient implements HomeClient {
       provide: (card, secret) =>
         this.request<CommandOutcome>(`/surface/decisions/${encodeURIComponent(card.id)}/take-over`, {
           method: "POST",
-          body: JSON.stringify({ surface: "web", version: card.version, secret } satisfies TakeOverRequest),
+          body: JSON.stringify({ surface: this.surface, version: card.version, secret } satisfies TakeOverRequest),
         }),
     };
   }
