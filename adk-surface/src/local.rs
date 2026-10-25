@@ -579,6 +579,15 @@ impl Source for LocalSource {
         }])
     }
 
+    /// The kernel target new messages run on, else the harness's agent (spec 3.3 §5.5).
+    fn primary_agent(&self) -> Option<String> {
+        match (&self.kernel, &self.harness) {
+            (Some((_, target)), _) => Some(target.clone()),
+            (None, Some(harness)) => Some(harness.agent().info().name.clone()),
+            (None, None) => None,
+        }
+    }
+
     async fn busy(&self, user: &str, session: &str) -> Result<bool> {
         if self.kernel.is_some() {
             return Ok(self.processes(user).await?.iter().any(|process| {
