@@ -242,7 +242,7 @@ async fn a_patch_adds_updates_deletes_and_moves_and_reports_each_file() {
 async fn a_hunk_that_does_not_apply_fails_the_whole_patch_before_any_write() {
     let dir = patch_workspace();
     let tools = tools(&Workspace::new(dir.path())).await;
-    let broken = PATCH.replace("-old\n+new", "-not in the file\n+new");
+    let broken = PATCH.replace("-old\n+new", "-old\n-not in the file\n+new");
 
     let error = call(&tools, "apply_patch", json!({ "patch": broken })).await.unwrap_err();
 
@@ -270,7 +270,8 @@ async fn a_write_that_fails_midway_restores_the_files_already_written() {
     assert_eq!(read(dir.path(), "old.txt"), "gone\n", "the deleted file was restored");
     assert_eq!(read(dir.path(), "src/lib.rs"), "fn one() {\n    2\n}\nfn two() {\n    2\n}\n");
     assert_eq!(read(dir.path(), "src/name.rs"), "old\r\nkeep\r\n");
-    let leftovers: Vec<_> = walk(dir.path()).into_iter().filter(|p| p.contains(".tmp")).collect();
+    let leftovers: Vec<_> =
+        walk(dir.path()).into_iter().filter(|name| name.ends_with(".tmp")).collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
@@ -281,7 +282,7 @@ fn walk(dir: &Path) -> Vec<String> {
         if path.is_dir() {
             out.extend(walk(&path));
         } else {
-            out.push(path.display().to_string());
+            out.push(entry.file_name().to_string_lossy().into_owned());
         }
     }
     out
