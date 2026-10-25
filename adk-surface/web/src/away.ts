@@ -6,7 +6,8 @@
  */
 import type { AgentRow, StatusLine } from "./generated/api";
 import type { PillKind } from "./components/Pill";
-import type { AreaSettings, AwayLine, AwayPage, QuietWindow } from "./kernel";
+import type { AgendaItem, AreaSettings, AwayLine, AwayPage, QuietWindow } from "./kernel";
+import { agendaState, isQuestion } from "./kernel";
 import { labels, words } from "./labels";
 
 /** The ledger's label for the kernel's own work, which names no agent. */
@@ -121,6 +122,41 @@ export function lineWords(line: AwayLine, agents: AgentRow[]): LineWords {
     default:
       return { text: `${who} did something.` };
   }
+}
+
+/**
+ * A suggestion's or question's sentence from its agenda item (spec 3.3 §5.1, §8 "Name the
+ * outcome"): what it is about, then what happens now — nothing until the person says so while
+ * it is open, else what became of it.
+ */
+export function itemSentence(item: AgendaItem): string {
+  const question = isQuestion(item);
+  const state = agendaState(item);
+  let outcome: string;
+  switch (state) {
+    case "proposed":
+      outcome = question ? words.IS_THAT_RIGHT : labels.nothingHappensUntilYouSay;
+      break;
+    case "approved":
+    case "scheduled":
+      outcome = question ? labels.answeredYes : labels.willBeDone;
+      break;
+    case "running":
+      outcome = question ? labels.answeredYes : labels.workingOnIt;
+      break;
+    case "done":
+      outcome = question ? labels.answeredYes : labels.itIsDone;
+      break;
+    case "rejected":
+      outcome = question ? labels.answeredNo : labels.wontBeDone;
+      break;
+    case "expired":
+      outcome = labels.endedWithoutAnswer;
+      break;
+    default:
+      return item.title;
+  }
+  return `${item.title} ${outcome}`;
 }
 
 /**

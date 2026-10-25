@@ -18,6 +18,7 @@ import type {
 import type { FeedMessage, HomeClient } from "../client";
 import { ApiError } from "../client";
 import type { AgendaItem, AreaSettings, AwayLine, AwayPage, KernelProcess, StandingRule, WakeSet } from "../kernel";
+import { agendaState } from "../kernel";
 import type { Seams } from "../seams";
 
 const ref = (name: string, displayName: string, monogram: string, color: string): AgentRef => ({
@@ -427,12 +428,15 @@ export class FixtureClient implements HomeClient {
     return processes;
   }
 
+  /** As `HttpClient` reads the kernel's agenda: the items open or under way, never the finished. */
   async agenda() {
-    return this.agendaList;
+    return this.agendaList.filter((item) => !["done", "rejected", "expired"].includes(agendaState(item)));
   }
 
-  async answerAgenda(id: string) {
-    this.agendaList = this.agendaList.filter((item) => item.id !== id);
+  /** As the kernel answers: the item is approved or rejected, and kept. */
+  async answerAgenda(id: string, yes: boolean) {
+    this.agendaList = this.agendaList.map((item) => (item.id === id ? { ...item, state: yes ? "approved" : "rejected" } : item));
+    return this.agendaList.find((item) => item.id === id);
   }
 
   async addRoutine(target: string, text: string, wake: WakeSet) {

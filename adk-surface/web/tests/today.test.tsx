@@ -76,6 +76,74 @@ describe("Today", () => {
     ]);
   });
 
+  // §8 "Name the outcome": once answered, a line no longer says nothing happens until the person
+  // says so, or asks again.
+  it("answers a suggestion and a question here, then says what became of each", async () => {
+    render(<App client={new FixtureClient()} seams={fixtureSeams()} initialSection="today" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Do it" }));
+    await screen.findByText("Finance suggests paying the [SUPPLIER] invoice due Monday. It will be done.");
+    await userEvent.click(screen.getByRole("button", { name: "No" }));
+    await screen.findByText("You seem to start work at 08:30 on Fridays now. Answered no.");
+    for (const name of ["Do it", "Not now", "Yes, remember it", "No"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    expect(lines().join(" ")).not.toMatch(/Nothing happens until you say so|Is that right/);
+  });
+
+  // An agenda keeps every finished item, oldest first: the home reads the items still open or
+  // under way, so a new question past the oldest 200 is still answered here (spec 3.3 §5.1).
+  it("answers a question that is newer than two hundred finished items", async () => {
+    const old = Array.from({ length: 210 }, (_, index) => ({
+      id: `ag_old_${index}`,
+      title: `Old suggestion ${index}.`,
+      origin: "user",
+      state: "done",
+      createdAt: new Date(Date.UTC(2026, 8, 1, 0, index)).toISOString(),
+    }));
+    const question = {
+      id: "ag_new",
+      title: "You seem to start work at 08:30 on Fridays now.",
+      origin: { observation: { id: "obs-9" } },
+      state: "proposed",
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+    const page: AwayPage = {
+      ...awayPage(),
+      counts: { done: 0, failed: 0, stopped: 0, suggestions: 0, questions: 1, decided: 0 },
+      lines: [{ seq: 300, at: question.createdAt, partition: "default", agent: "kernel", kind: "question", record: "/api/kernel/away/lines/300" }],
+    };
+    const answered: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const state = new URL(url, "http://home").searchParams.get("state");
+        const limit = Number(new URL(url, "http://home").searchParams.get("limit") ?? Infinity);
+        const body = url.startsWith("/api/kernel/agenda/")
+          ? (answered.push(url), (question.state = "approved"), { item: question })
+          : url.startsWith("/api/kernel/agenda")
+            ? { items: [...old, question].filter((item) => !state || item.state === state).slice(0, limit) }
+            : url.startsWith("/api/kernel/away")
+              ? page
+              : url.startsWith("/api/surface/agents")
+                ? { agents: [] }
+                : url.startsWith("/api/surface/decisions")
+                  ? { decisions: [] }
+                  : url.startsWith("/api/surface/status")
+                    ? { decisions: 0, stopped: false }
+                    : undefined;
+        return body === undefined
+          ? new Response("", { status: 404 })
+          : new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+    const client = new HttpClient();
+    render(<App client={client} seams={{ whileAway: client.whileAway() }} initialSection="today" />);
+    await screen.findByText("You seem to start work at 08:30 on Fridays now. Is that right?");
+    await userEvent.click(screen.getByRole("button", { name: "Yes, remember it" }));
+    expect(answered).toEqual(["/api/kernel/agenda/ag_new/approve"]);
+    await screen.findByText("You seem to start work at 08:30 on Fridays now. Answered yes.");
+  });
+
   it("names each agent as the roster does, and keeps the kernel's own work out of the list", async () => {
     const agents: AgentRow[] = [
       {

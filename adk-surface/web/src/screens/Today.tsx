@@ -2,7 +2,7 @@ import { useEffect, useId, useState } from "react";
 import type { AgentRow, Briefing, BriefingLine, Pill as PillKindApi, StatusLine } from "../generated/api";
 import type { HomeClient } from "../client";
 import { problemText } from "../client";
-import { endToday, inOrder, lineWords, quietWindows } from "../away";
+import { agentOf as agentName, endToday, inOrder, itemSentence, lineWords, quietWindows } from "../away";
 import type { LineWords } from "../away";
 import { Pill } from "../components/Pill";
 import type { PillKind } from "../components/Pill";
@@ -11,6 +11,7 @@ import type { AgendaItem, AreaSettings, AwayLine, AwayPage, AwayRecord } from ".
 import { agendaState, dailyCron, isQuestion } from "../kernel";
 import { labels, words } from "../labels";
 import type { Planned } from "../plan";
+import { visible } from "../safe";
 import type { Seams, WhileAwaySeam } from "../seams";
 
 const pillKind: Record<PillKindApi, PillKind> = {
@@ -78,6 +79,9 @@ export function Today({
   const [adding, setAdding] = useState(false);
   const [marked, setMarked] = useState(false);
   const [opened, setOpened] = useState<number[]>([]);
+  // Items answered here, as the kernel answered: a finished one is no longer read, and its
+  // line still says what became of it.
+  const [answered, setAnswered] = useState<AgendaItem[]>([]);
   const kernel = away !== undefined;
 
   // Without the kernel's page, the engine's briefing of the last day (spec 3.3 §6).
@@ -101,12 +105,14 @@ export function Today({
     };
   }, [client, kernel]);
 
-  const rows = kernel ? kernelRows(away, agenda, agents) : engineRows(briefing, agenda);
+  const known = agenda && [...agenda, ...answered.filter((item) => !agenda.some((read) => read.id === item.id))];
+  const rows = kernel ? kernelRows(away, known, agents) : engineRows(briefing, agenda);
 
   async function answer(item: AgendaItem, yes: boolean) {
     setProblem("");
     try {
-      await client.answerAgenda(item.id, yes);
+      const after = await client.answerAgenda(item.id, yes);
+      if (after) setAnswered((all) => [...all.filter((each) => each.id !== after.id), after]);
       onChanged();
     } catch (error) {
       setProblem(problemText(error));
@@ -234,11 +240,7 @@ export function Today({
                   {time}
                   <div className="briefing-body">
                     {row.said.pill && <Pill kind={row.said.pill}>{row.said.pillText}</Pill>}
-                    <p className="briefing-text">
-                      {item
-                        ? `${item.title} ${question ? words.IS_THAT_RIGHT : labels.nothingHappensUntilYouSay}`
-                        : row.said.text}
-                    </p>
+                    <p className="briefing-text">{item ? visible(itemSentence(item)) : row.said.text}</p>
                     <p className="briefing-actions">
                       {ask && (
                         <>
@@ -293,9 +295,7 @@ export function Today({
                 {time}
                 <div className="briefing-body">
                   {question ? <Pill kind="question">{words.QUESTION}</Pill> : <Pill kind="suggestion">{words.SUGGESTION}</Pill>}
-                  <p className="briefing-text">
-                    {question ? `${row.item.title} ${words.IS_THAT_RIGHT}` : `${row.item.title} ${labels.nothingHappensUntilYouSay}`}
-                  </p>
+                  <p className="briefing-text">{visible(itemSentence(row.item))}</p>
                   <p className="briefing-actions">
                     <button type="button" className="link link-accent" onClick={() => void answer(row.item, true)}>
                       {question ? labels.yesRememberIt : labels.doIt}
@@ -349,7 +349,8 @@ export function Today({
 /**
  * The kernel's lines, each with its words; a suggestion or question with the agenda item it
  * made, which says what it is about and is answered here (spec 3.3 §5.1); and the open ones
- * from before the person last looked, which still wait for an answer.
+ * from before the person last looked, which still wait for an answer. The agenda holds every
+ * item still open or under way, so a suggestion or question with none of them is finished.
  */
 function kernelRows(away: AwayPage, agenda: AgendaItem[] | undefined, agents: AgentRow[]): Row[] {
   const used = new Set<string>();
@@ -365,7 +366,13 @@ function kernelRows(away: AwayPage, agenda: AgendaItem[] | undefined, agents: Ag
       );
       if (item) used.add(item.id);
     }
-    const said = lineWords(line, agents);
+    let said = lineWords(line, agents);
+    if (agenda && !item && (line.kind === "suggestion" || line.kind === "question")) {
+      said = {
+        ...said,
+        text: line.kind === "question" ? labels.noticedSomething : labels.suggestedSomething(agentName(line.agent, agents) ?? words.YOUR_AGENTS),
+      };
+    }
     return { kind: "away", key: `k${line.seq}`, at, failed: line.kind === "failed", line, said, item };
   });
   for (const item of agenda ?? []) {

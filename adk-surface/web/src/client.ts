@@ -51,6 +51,16 @@ export const VIEWER = "home";
 /** At most this many pages of "While you were away" are read at once, 2,000 rows each. */
 const AWAY_PAGES = 10;
 
+/**
+ * The agenda states the home reads: an item open for an answer, or on its way to being done.
+ * Every store lists the oldest items first and keeps finished ones, so one read of every state
+ * would end at the oldest items and miss the new ones (spec 3.3 §5.1).
+ */
+const LIVE_AGENDA = ["proposed", "approved", "scheduled", "running"] as const;
+
+/** At most this many agenda items of one state are read at once. */
+const AGENDA_LIMIT = 200;
+
 /** A problem document from the server, with its `surface.*`, `approval.*` or other code. */
 export class ApiError extends Error {
   constructor(
@@ -90,9 +100,10 @@ export interface HomeClient {
   queued(session: string): Promise<string[]>;
   /** The kernel's process table; `undefined` without a kernel. */
   processes(): Promise<KernelProcess[] | undefined>;
-  /** The kernel's agenda; `undefined` without one. */
+  /** The kernel's agenda items open for an answer or on their way to being done; `undefined` without one. */
   agenda(): Promise<AgendaItem[] | undefined>;
-  answerAgenda(id: string, yes: boolean): Promise<void>;
+  /** Approves or rejects an agenda item; resolves to the item after the answer. */
+  answerAgenda(id: string, yes: boolean): Promise<AgendaItem | undefined>;
   /** Starts a sleeper of `target` that wakes on `wake` and runs `text`. */
   addRoutine(target: string, text: string, wake: WakeSet): Promise<void>;
   /** The caller's standing rules; `undefined` without a harness. */
@@ -107,11 +118,18 @@ export interface HomeClient {
 async function problem(response: Response): Promise<ApiError> {
   const text = await response.text();
   try {
-    const value = JSON.parse(text) as { detail?: string; title?: string; message?: string; code?: string };
+    const value = JSON.parse(text) as {
+      detail?: string;
+      title?: string;
+      message?: string;
+      code?: string;
+      // The server's problem document (`AdkError::to_problem_json`).
+      error?: { message?: string; code?: string };
+    };
     return new ApiError(
       response.status,
-      value.detail ?? value.message ?? value.title ?? `${response.status} ${response.statusText}`,
-      value.code,
+      value.error?.message ?? value.detail ?? value.message ?? value.title ?? `${response.status} ${response.statusText}`,
+      value.error?.code ?? value.code,
     );
   } catch {
     return new ApiError(response.status, text || `${response.status} ${response.statusText}`);
@@ -258,15 +276,21 @@ export class HttpClient implements HomeClient {
   }
 
   async agenda() {
-    const page = await this.optional<{ items: AgendaItem[] }>("/kernel/agenda?limit=200");
-    return page?.items;
+    const pages = await Promise.all(
+      LIVE_AGENDA.map((state) =>
+        this.optional<{ items: AgendaItem[] }>(`/kernel/agenda?state=${state}&limit=${AGENDA_LIMIT}`),
+      ),
+    );
+    if (pages.every((page) => page === undefined)) return undefined;
+    return pages.flatMap((page) => page?.items ?? []);
   }
 
   async answerAgenda(id: string, yes: boolean) {
-    await this.request(`/kernel/agenda/${encodeURIComponent(id)}/${yes ? "approve" : "reject"}`, {
-      method: "POST",
-      body: "{}",
-    });
+    const answer = await this.request<{ item?: AgendaItem } | undefined>(
+      `/kernel/agenda/${encodeURIComponent(id)}/${yes ? "approve" : "reject"}`,
+      { method: "POST", body: "{}" },
+    );
+    return answer?.item;
   }
 
   async addRoutine(target: string, text: string, wake: WakeSet) {
