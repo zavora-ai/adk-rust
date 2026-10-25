@@ -103,6 +103,8 @@
 # The AWP 2.0 agent edge (spec 3.5 §7.9): tiers, the governed path over HTTP, A2A and MCP,
 # held calls and the public partition.
 2 adk-server awp
+# The edge's SQLite stores and their conformance suite; PostgreSQL and Redis run in the postgres job.
+2 adk-server awp-sqlite
 2 adk-cli vertex-agent-registry
 2 adk-cli vertex-skill-registry
 # The `deploy agent-engine` subcommand: arg-parse and mock create-contract tests.
