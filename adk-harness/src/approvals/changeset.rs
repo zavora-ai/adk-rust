@@ -477,7 +477,7 @@ pub(crate) fn unified_diff(old: &str, new: &str) -> String {
                 i += 1;
                 j += 1;
             } else if j < b.len()
-                && (i == a.len() || table[i * width + j + 1] >= table[(i + 1) * width + j])
+                && (i == a.len() || table[i * width + j + 1] > table[(i + 1) * width + j])
             {
                 ops.push(Op::Insert);
                 j += 1;
