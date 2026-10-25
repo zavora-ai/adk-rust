@@ -6,16 +6,17 @@
 
 use std::collections::HashMap;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use adk_cli::harness::{HarnessArgs, KernelSettings, OPERATOR_SCOPE};
+use adk_cli::harness::{HarnessArgs, OPERATOR_SCOPE};
 use adk_core::{ApprovalPolicy, ApprovalService, ApproverSelector, StoreApprovalService, UserId};
 use adk_harness::{
     ApprovalPrompt, ApprovalPrompter, Harness, HarnessMode, PromptAnswer, ToolKind, TrustDecision,
 };
 use adk_kernel::control::ControlClient;
-use adk_session::{CreateRequest, GetRequest};
+use adk_kernel::control::api::AreaView;
+use adk_session::{CreateRequest, GetRequest, SessionService};
 use adk_surface::tui::{OutputFormat, TerminalSurface, UiMode, terminal_safe};
 use adk_surface::{Caller, ControlSource, LocalSource, Origin, SurfaceEngine, SurfaceKind};
 use anyhow::{Context, Result};
@@ -26,9 +27,9 @@ use crate::cli::SurfaceArgs;
 
 /// Where the terminal's agents run.
 pub enum Reach {
-    /// A kernel: on its own machine over its socket (`paired_local`, with its `home`), or
-    /// over HTTP with a bearer token, an operator's or a paired device's.
-    Kernel { client: ControlClient, token: Option<String>, local: bool, home: Option<PathBuf> },
+    /// A kernel: on its own machine over its socket (`paired_local`), or over HTTP with a
+    /// bearer token, an operator's or a paired device's.
+    Kernel { client: ControlClient, token: Option<String>, local: bool },
     /// No kernel runs: the harness, in this process.
     InProcess,
 }
@@ -54,7 +55,7 @@ pub async fn reach(surface: &SurfaceArgs, harness: &HarnessArgs) -> Result<Reach
         if let Some(token) = &token {
             client = client.with_bearer_token(token.clone());
         }
-        return Ok(Reach::Kernel { client, token, local: false, home: None });
+        return Ok(Reach::Kernel { client, token, local: false });
     }
     if harness.ephemeral || harness.continue_session {
         return Ok(Reach::InProcess);
@@ -66,7 +67,7 @@ pub async fn reach(surface: &SurfaceArgs, harness: &HarnessArgs) -> Result<Reach
     if let Some(home) = home
         && let Some(client) = ControlClient::connect_local(&home).await?
     {
-        return Ok(Reach::Kernel { client, token: None, local: true, home: Some(home) });
+        return Ok(Reach::Kernel { client, token: None, local: true });
     }
     Ok(Reach::InProcess)
 }
@@ -150,38 +151,37 @@ pub async fn run(
         }
         (OutputFormat::Text, None) => Some(UiMode::Inline),
     };
-    let mut log = None;
-    if ui == Some(UiMode::FullScreen) {
-        if !TerminalSurface::capable_terminal() {
-            anyhow::bail!(
-                "--ui full needs a terminal of at least 60 by 16 on standard input and output; \
-                 use --ui inline or --output json"
-            );
-        }
-        // Logs would draw over the full screen: they go to a file beside harness.db.
-        log = log_to_file();
+    if ui == Some(UiMode::FullScreen) && !TerminalSurface::capable_terminal() {
+        anyhow::bail!(
+            "--ui full needs a terminal of at least 60 by 16 on standard input and output; use \
+             --ui inline or --output json"
+        );
     }
+    // The inline UI on a terminal holds raw mode and the prompt line, as the full screen
+    // holds the screen; piped, standard error is the caller's to keep.
+    let interactive_inline = ui == Some(UiMode::Inline)
+        && std::io::IsTerminal::is_terminal(&std::io::stdin())
+        && std::io::IsTerminal::is_terminal(&std::io::stdout())
+        && std::env::var("TERM").map_or(true, |term| term != "dumb");
+    let drawn = ui == Some(UiMode::FullScreen) || interactive_inline;
+    // Logs would draw over the terminal: they go to a file beside harness.db.
+    let log = if drawn { log_to_file() } else { None };
     let text_ui = surface.output == OutputFormat::Text;
-    let (engine, place, model_id, local, session, notices) = match reach {
-        Reach::Kernel { client, token, local, home } => {
+    let (engine, place, model_id, local, session, notices, binding) = match reach {
+        Reach::Kernel { client, token, local } => {
             let place = if local { "kernel".to_string() } else { client.endpoint().to_string() };
             // How each answer was given comes from the kernel's record, so a decision answered
             // in Telegram reads "You said yes in Telegram" here too (spec 3.3 §12 phase 1).
             let answers = Arc::new(adk_surface::RecordAnswerLog::new(client.clone()));
+            let source_client = client.clone();
             let mut source = ControlSource::new(client, APP_NAME, APP_NAME);
             if let Some(token) = token {
                 source = source.with_bearer_token(token);
             }
-            // The control plane does not report the daily spending limit; on the kernel's
-            // own machine it is the one `adk-rust up` read from the same files (spec 3.3 §13
-            // Q7), so `--output json` can end with 4.
-            let workspace = match &harness.dir {
-                Some(dir) => dir.clone(),
-                None => std::env::current_dir()?,
-            };
-            if let Some(home) = &home
-                && let Some(limit) =
-                    kernel_daily_limit(super::user_config().as_deref(), home, &workspace)
+            // The daily spending limit in force, as the kernel reports it, so `--output json`
+            // can end with 4 (spec 3.3 §10 K3, §13 Q7).
+            if let Ok(areas) = source_client.settings().await
+                && let Some(limit) = area_limit(&areas)
             {
                 source = source.with_daily_limit(limit);
             }
@@ -189,7 +189,7 @@ pub async fn run(
                 .agent_name(APP_NAME, APP_NAME)
                 .answers(answers)
                 .build();
-            (engine, place, None, local, session, Vec::new())
+            (engine, place, None, local, session, Vec::new(), None)
         }
         Reach::InProcess => {
             let model = model.context("the harness in this process needs a model")?;
@@ -201,6 +201,7 @@ pub async fn run(
                 true,
                 Some(here.session),
                 here.notices,
+                Some(here.binding),
             )
         }
     };
@@ -214,6 +215,16 @@ pub async fn run(
     }
     for notice in notices {
         terminal = terminal.notice(notice);
+    }
+    // `/session` binds a session to the workspace as the start does: a new one records it,
+    // and one recorded for another workspace is refused (spec 3.1 §8.1).
+    if let Some(binding) = binding {
+        terminal = terminal.open_sessions_with(move |requested| {
+            let binding = binding.clone();
+            Box::pin(
+                async move { binding.open(requested).await.map_err(|error| error.to_string()) },
+            )
+        });
     }
     if surface.output == OutputFormat::Json {
         let message = match surface.message {
@@ -230,8 +241,8 @@ pub async fn run(
     #[cfg(not(unix))]
     drop(log);
     #[cfg(unix)]
-    let stderr = match (&log, ui) {
-        (Some(log), Some(UiMode::FullScreen)) => StderrToLog::redirect(log),
+    let stderr = match &log {
+        Some(log) if drawn => StderrToLog::redirect(log),
         _ => None,
     };
     let code = terminal.run(ui.unwrap_or_default()).await;
@@ -249,21 +260,23 @@ fn terminal_caller(user: String, local: bool) -> Caller {
     if local { caller.with_paired_local() } else { caller }
 }
 
-/// The daily spending limit of the kernel at `home`, as `adk-rust up` set it: the user
-/// config's `[kernel.quotas] daily_spend_cap_usd`, else the personal preset's answer kept in
-/// the home (spec 3.3 §13 Q7).
-fn kernel_daily_limit(user_config: Option<&Path>, home: &Path, workspace: &Path) -> Option<u64> {
-    let settings = KernelSettings::resolve(user_config, workspace).ok()?;
-    settings.quotas.daily_spend_cap.or_else(|| {
-        adk_harness::personal::PersonalSettings::load(home)
-            .ok()
-            .flatten()?
-            .daily_spending_limit_micro_usd()
-    })
+/// The daily spending limit in force for the terminal's turns: the default area's, or the
+/// only area's; none when the kernel has several and none is the default.
+fn area_limit(areas: &[AreaView]) -> Option<u64> {
+    let only = match areas {
+        [only] => Some(only),
+        _ => None,
+    };
+    areas
+        .iter()
+        .find(|area| area.partition.as_str() == adk_kernel::PartitionId::DEFAULT)
+        .or(only)?
+        .daily_spending_limit
 }
 
-/// Standard error goes to `terminal.log` while the full screen is up, so what a tool server
-/// or a library writes there never draws over it, nor reaches the terminal unescaped (S-I9).
+/// Standard error goes to `terminal.log` while the full screen or the inline UI is up, so
+/// what a tool server or a library writes there never draws over it, nor reaches the terminal
+/// unescaped (S-I9).
 #[cfg(unix)]
 struct StderrToLog {
     saved: std::os::fd::OwnedFd,
@@ -300,8 +313,8 @@ impl Drop for StderrToLog {
     }
 }
 
-/// Sends logs to `<config dir>/adk-rust/terminal.log` while the full screen is up; returns the
-/// file, for standard error too.
+/// Sends logs to `<config dir>/adk-rust/terminal.log` while the full screen or the inline UI
+/// is up; returns the file, for standard error too.
 fn log_to_file() -> Option<std::fs::File> {
     use tracing_subscriber::EnvFilter;
     let dir = dirs::config_dir().map(|dir| dir.join("adk-rust"))?;
@@ -329,6 +342,8 @@ struct InProcess {
     session: String,
     /// What the terminal says when it starts: a workspace not trusted, memory turned on.
     notices: Vec<String>,
+    /// How a session is bound to the workspace, for `/session` too.
+    binding: Binding,
 }
 
 /// The harness in this process, held calls going to its approvals inbox, and the engine over
@@ -382,7 +397,21 @@ async fn in_process(
         .build()?;
     let decisions = agent.runtime().approval_service().cloned().unwrap_or(service);
     let harness = Arc::new(Harness::with_runner(agent, runner)?.with_run_store(run_store));
-    let session = open_session(&setup).await?;
+    let binding = Binding {
+        sessions: setup.sessions(),
+        user: setup.user.clone(),
+        workspace: setup.resolved.workspace.display().to_string(),
+    };
+    let requested = match &setup.args.session {
+        Some(session) => Some(session.clone()),
+        None if setup.args.continue_session => {
+            let workspace = &setup.resolved.workspace;
+            super::latest_in_workspace(setup.sessions().as_ref(), &setup.user, workspace, |_| true)
+                .await?
+        }
+        None => None,
+    };
+    let session = binding.open(requested).await?;
     let mut notices = Vec::new();
     // Instruction files and hooks load only in a trusted workspace (spec 3.1 §7.7, §7.22).
     let runtime = harness.agent().runtime();
@@ -400,7 +429,7 @@ async fn in_process(
     }
     let source = LocalSource::builder(APP_NAME).approvals(decisions).harness(harness).build()?;
     let engine = SurfaceEngine::builder(Arc::new(source)).agent_name(APP_NAME, APP_NAME).build();
-    Ok(InProcess { engine, model_id: setup.model_id.clone(), session, notices })
+    Ok(InProcess { engine, model_id: setup.model_id.clone(), session, notices, binding })
 }
 
 /// Where the terminal's memory notice points: the commands, as the terminal has no `/memory`.
@@ -410,58 +439,61 @@ const MEMORY_COMMANDS: &str =
 /// The state key a session's workspace is recorded under (spec 3.1 §8.1).
 const WORKSPACE: &str = "harness:workspace";
 
-/// The session the terminal opens in process: `--session`, else with `--continue` the latest
-/// in this workspace, else a new one. A session is bound to its workspace as in the REPL: a new
-/// one records it, and one recorded for another workspace is refused (spec 3.1 §8.1).
-async fn open_session(setup: &Setup) -> Result<String> {
-    let sessions = setup.sessions();
-    let workspace = &setup.resolved.workspace;
-    let requested = match &setup.args.session {
-        Some(session) => Some(session.clone()),
-        None if setup.args.continue_session => {
-            super::latest_in_workspace(sessions.as_ref(), &setup.user, workspace, |_| true).await?
-        }
-        None => None,
-    };
-    let recorded = workspace.display().to_string();
-    if let Some(session_id) = &requested {
-        let existing = sessions
-            .get(GetRequest {
-                app_name: APP_NAME.to_string(),
-                user_id: setup.user.clone(),
-                session_id: session_id.clone(),
-                num_recent_events: Some(1),
-                after: None,
-            })
-            .await;
-        match existing {
-            Ok(session) => {
-                if let Some(other) = session
-                    .state()
-                    .get(WORKSPACE)
-                    .and_then(|value| value.as_str().map(str::to_string))
-                    && other != recorded
-                {
-                    anyhow::bail!(
-                        "session {session_id} works in {other}, not {recorded}; continue it with \
-                         --dir {other}, or start a new session here"
-                    );
+/// How the terminal in process binds a session to its workspace, as the REPL does: a new
+/// session records the workspace, and one recorded for another workspace is refused (spec
+/// 3.1 §8.1). The start and `/session` both open sessions through it.
+#[derive(Clone)]
+struct Binding {
+    sessions: Arc<dyn SessionService>,
+    user: String,
+    workspace: String,
+}
+
+impl Binding {
+    /// Opens `requested`, or a new session for `None`; returns its id.
+    async fn open(&self, requested: Option<String>) -> Result<String> {
+        if let Some(session_id) = &requested {
+            let existing = self
+                .sessions
+                .get(GetRequest {
+                    app_name: APP_NAME.to_string(),
+                    user_id: self.user.clone(),
+                    session_id: session_id.clone(),
+                    num_recent_events: Some(1),
+                    after: None,
+                })
+                .await;
+            match existing {
+                Ok(session) => {
+                    if let Some(other) = session
+                        .state()
+                        .get(WORKSPACE)
+                        .and_then(|value| value.as_str().map(str::to_string))
+                        && other != self.workspace
+                    {
+                        anyhow::bail!(
+                            "session {session_id} works in {other}, not {}; continue it with \
+                             --dir {other}, or start a new session here",
+                            self.workspace
+                        );
+                    }
+                    return Ok(session.id().to_string());
                 }
-                return Ok(session.id().to_string());
+                Err(error) if error.is_not_found() => {}
+                Err(error) => return Err(error.into()),
             }
-            Err(error) if error.is_not_found() => {}
-            Err(error) => return Err(error.into()),
         }
+        let created = self
+            .sessions
+            .create(CreateRequest {
+                app_name: APP_NAME.to_string(),
+                user_id: self.user.clone(),
+                session_id: requested,
+                state: HashMap::from([(WORKSPACE.to_string(), serde_json::json!(self.workspace))]),
+            })
+            .await?;
+        Ok(created.id().to_string())
     }
-    let created = sessions
-        .create(CreateRequest {
-            app_name: APP_NAME.to_string(),
-            user_id: setup.user.clone(),
-            session_id: requested,
-            state: HashMap::from([(WORKSPACE.to_string(), serde_json::json!(recorded))]),
-        })
-        .await?;
-    Ok(created.id().to_string())
 }
 
 /// `--yes` in the terminal: every held call is allowed once, as in the REPL, except a retry
@@ -515,17 +547,52 @@ mod tests {
         assert!(terminal_caller("ana".into(), true).paired_local);
     }
 
-    /// `--output json` can end with 4 on a kernel on this machine: its daily spending limit is
-    /// read from the files `adk-rust up` read (spec 3.3 §13 Q7).
+    /// `--output json` ends with 4 against the daily spending limit in force, as the kernel
+    /// reports it (spec 3.3 §10 K3): the default area's, or the only area's.
     #[test]
-    fn a_local_kernels_daily_limit_comes_from_the_files_up_reads() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("config.toml");
-        std::fs::write(&config, "[kernel.quotas]\ndaily_spend_cap_usd = 2.5\n").unwrap();
+    fn the_daily_limit_is_the_one_the_kernel_reports() {
+        let area = |name: &str, limit: Option<u64>| -> AreaView {
+            serde_json::from_value(serde_json::json!({
+                "partition": name,
+                "dailySpendingLimit": limit,
+                "spentToday": 0,
+            }))
+            .unwrap()
+        };
+        assert_eq!(area_limit(&[area("default", Some(10_000_000))]), Some(10_000_000));
         assert_eq!(
-            kernel_daily_limit(Some(config.as_path()), dir.path(), dir.path()),
+            area_limit(&[area("billing", Some(1)), area("default", Some(2_500_000))]),
             Some(2_500_000)
         );
-        assert_eq!(kernel_daily_limit(None, dir.path(), dir.path()), None);
+        assert_eq!(area_limit(&[area("billing", Some(1))]), Some(1));
+        assert_eq!(area_limit(&[area("billing", Some(1)), area("home", Some(2))]), None);
+        assert_eq!(area_limit(&[area("default", None)]), None);
+        assert_eq!(area_limit(&[]), None);
+    }
+
+    /// `/session` binds a session to the workspace as the start does: a session recorded for
+    /// another workspace is refused, and a new one records this workspace (spec 3.1 §8.1).
+    #[tokio::test]
+    async fn slash_session_binds_sessions_to_the_workspace() {
+        let sessions: Arc<dyn SessionService> =
+            Arc::new(adk_session::InMemorySessionService::new());
+        let ws =
+            Binding { sessions: sessions.clone(), user: "ana".into(), workspace: "/ws".into() };
+        assert_eq!(ws.open(Some("pinned".into())).await.unwrap(), "pinned");
+        let other = Binding { workspace: "/other".into(), ..ws.clone() };
+        let refused = other.open(Some("pinned".into())).await.unwrap_err().to_string();
+        assert!(refused.contains("session pinned works in /ws, not /other"), "{refused}");
+        let fresh = other.open(None).await.unwrap();
+        let created = sessions
+            .get(GetRequest {
+                app_name: APP_NAME.to_string(),
+                user_id: "ana".into(),
+                session_id: fresh,
+                num_recent_events: Some(1),
+                after: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(created.state().get(WORKSPACE), Some(serde_json::json!("/other")));
     }
 }
