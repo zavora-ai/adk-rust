@@ -123,10 +123,13 @@ showed, a conflict renders as "already decided", Enter and Esc never decide, and
 a decision is open is queued (§7.4). **Today** and the **morning briefing** read the kernel's
 "While you were away" (`GET /api/kernel/away`, §10 K4): one line per event with its record,
 moved on only by **Mark as seen**. **What your agents can do** reads and changes each area's
-quiet time, daily spending limit and mode (`/api/kernel/settings`, §10 K3), and **Where you
-can say yes from** pairs a chat account from its code (§10 K1). Controls whose kernel routes
-the page does not read yet (memory; the record check) render read-only through typed seams in
-`web/src/seams.ts`.
+quiet time, daily spending limit and mode (`/api/kernel/settings`, §10 K3), each area's agents
+with what each spent today, and the rules allowed without asking with **Extend** and **Stop
+allowing**; **Where you can say yes from** pairs a chat account from its code (§10 K1). **What
+your agents remember** reads and corrects the memory, and **What your agents did** shows the
+record's check and its latest actions (`/api/kernel/memory`, `/api/kernel/record`, §10 K5).
+The page reads each kernel route through a typed seam (`web/src/seams.ts`) and shows what
+exists where the server serves less.
 
 ```bash
 cd adk-surface/web

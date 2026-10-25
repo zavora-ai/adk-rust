@@ -47,6 +47,7 @@ The crate combines:
 | `ap2` | Alpha baseline | AP2 `v0.1-alpha` mandates, payment execution, receipts, interventions |
 | `ap2-a2a` | Additive | AP2 A2A-oriented helpers and AgentCard metadata |
 | `ap2-mcp` | Additive | AP2 MCP-safe continuation, intervention, and receipt views |
+| `wallet` | Experimental | An owner-funded site wallet: category mandates, caps checked before execution, holds, use-based, provider-billing and (with `ap2`) AP2 rails, anomaly pauses, reconciliation, KPI source (spec 3.5 §7.14) |
 
 No feature is enabled by default; `acp-experimental` implies `acp`, and `ap2-a2a` and `ap2-mcp`
 imply `ap2`. ACP stable is the conservative production baseline. AP2 support tracks the
@@ -361,6 +362,24 @@ tool confirmation flow, and reserves against `RunConfig::spend_ledger` when the 
 has no ledger. With `ap2-mcp`, its response includes the `Ap2McpPaymentContinuation`
 view for MCP clients.
 
+## Site Wallet
+
+With the `wallet` feature, a site pays its own costs — model tokens, hosting, domains,
+advertising — from an owner-funded wallet under the owner's mandates (spec 3.5 §7.14):
+
+| Step | What happens |
+|------|--------------|
+| Policy | `WalletPolicy` gives each `SpendCategory` a `Mandate`: cap per period, limit per payment, payees, rail |
+| Pay | `Wallet::pay` refuses a payee or rail outside the mandate, holds a payment over the limit or the category cap for the owner, and reserves in the spend ledger before the rail pays |
+| Hold | A held payment is paid only on a person's `ApprovalDecision`; through `wallet_pay` it is held as the tool call and resumes once the owner decides |
+| Anomaly | Spend today reaching the anomaly rule's multiple of the trailing daily average pauses the category and raises a P1 alarm |
+| Reconcile | `Wallet::reconcile_due` checks the last period against the provider's statement and each billing provider's invoice |
+| Report | `WalletKpiSource` reports spend, revenue, profit, cost per lead and cost per sale |
+
+The site never opens accounts, adds payment methods, changes payees or raises a cap: no
+wallet type has a method that would. See
+[`docs/official_docs/security/wallet.md`](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/wallet.md).
+
 ## Primary Journeys
 
 The crate is currently shaped around five first-class journeys:
@@ -392,6 +411,7 @@ cargo test -p adk-payments --features ap2,ap2-a2a,ap2-mcp --test ap2_integration
 cargo test -p adk-payments --features ap2,ap2-a2a,ap2-mcp --test ap2_governance_tests
 cargo test -p adk-payments --test cross_protocol_correlation_tests
 cargo test -p adk-payments --features acp-experimental --test acp_experimental_integration_tests
+cargo test -p adk-payments --features wallet,ap2 --test wallet_tests --test wallet_s12_scenario_tests --test wallet_s9_ap2_tests
 ```
 
 Use these as the starting point for real implementations:
@@ -412,6 +432,7 @@ Use these as the starting point for real implementations:
 - `protocol::ap2` - AP2 adapter, verification, A2A, and MCP surfaces
 - `tools` - agent-facing checkout, status, and intervention tools
 - `server` - ACP router re-exports and AP2 integration notes
+- `wallet` (`wallet`) - the owner-funded site wallet, its rails, alarms, reconciliation and tools
 
 ## License
 

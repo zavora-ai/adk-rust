@@ -1,0 +1,30 @@
+{
+  "path": "/sw/tags/solar/",
+  "releaseSeq": 1,
+  "kind": "collection",
+  "language": "sw",
+  "title": "Tag: solar",
+  "resource": {
+    "items": [
+      {
+        "date": "2026-10-01",
+        "summary": null,
+        "title": "Habari, jua",
+        "url": "/sw/posts/hello/"
+      }
+    ],
+    "page": 1,
+    "pages": 1
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    "inLanguage": "sw",
+    "name": "Tag: solar",
+    "url": "https://example.com/sw/tags/solar/"
+  },
+  "markdown": "https://example.com/sw/tags/solar/index.md"
+}

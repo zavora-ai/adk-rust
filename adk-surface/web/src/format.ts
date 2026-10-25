@@ -46,3 +46,15 @@ export function sameDay(a: Date, b: Date): boolean {
 export function dayAndTime(at: Date, now: Date = new Date()): string {
   return now.getTime() - at.getTime() < 24 * 3_600_000 ? hhmm(at) : `${dayMonth(at)}, ${hhmm(at)}`;
 }
+
+/**
+ * When something planned happens, as Coming up reads it: "09:00" today, "Mon 09:00" within the
+ * week ahead, so a weekday routine seen on a Saturday says Monday; "2 November, 09:00" later.
+ */
+export function whenAhead(at: Date, now: Date = new Date()): string {
+  if (sameDay(at, now)) return hhmm(at);
+  if (at.getTime() - now.getTime() < 6 * 24 * 3_600_000) {
+    return `${at.toLocaleDateString("en-GB", { weekday: "short" })} ${hhmm(at)}`;
+  }
+  return `${dayMonth(at)}, ${hhmm(at)}`;
+}

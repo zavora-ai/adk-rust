@@ -48,6 +48,7 @@ dependencies = [
  "hex",
  "hmac",
  "http",
+ "jsonschema",
  "serde",
  "serde_json",
  "sha2",

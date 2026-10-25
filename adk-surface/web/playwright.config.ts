@@ -15,8 +15,10 @@ interface Surface {
   name: string;
   /** The prefix of its environment variables. */
   prefix: string;
-  /** The adk-surface example it runs against. */
-  example: string;
+  /** The adk-surface example it runs against, unless `command` serves it. */
+  example?: string;
+  /** The command that serves it instead of an example, given the port and the workspace. */
+  command?: string;
   /** Its default port. */
   port: number;
   /** Its tests under `e2e/`. */
@@ -32,6 +34,17 @@ const surfaces: Surface[] = [
     example: "scripted_home",
     port: 8791,
     testMatch: ["held-call.spec.ts", "today.spec.ts"],
+    ready: "/ui/",
+  },
+  {
+    // Memory and rules over `adk-rust up` with a scripted model (`e2e/memory-kernel.sh`), whose
+    // harness keeps the facts, the standing rules and the signed record the page reads.
+    name: "memory",
+    prefix: "MEMORY",
+    command: "bash adk-surface/web/e2e/memory-kernel.sh",
+    // 8792 is taken by the tray and the voice view.
+    port: 8796,
+    testMatch: ["memory.spec.ts"],
     ready: "/ui/",
   },
 ];
@@ -50,7 +63,8 @@ const servers = surfaces.map((surface) => {
   const workspace = env(surface, "WORKSPACE") ?? mkdtempSync(join(tmpdir(), `adk-${surface.name}-e2e-`));
   process.env[`${surface.prefix}_E2E_WORKSPACE`] = workspace;
   const port = Number(env(surface, "PORT") ?? surface.port);
-  const command = env(surface, "BIN") ?? `cargo run -p adk-surface --features web --example ${surface.example} --`;
+  const command =
+    env(surface, "BIN") ?? surface.command ?? `cargo run -p adk-surface --features web --example ${surface.example} --`;
   return { surface, url: url ?? `http://127.0.0.1:${port}`, external: url !== undefined, port, workspace, command };
 });
 

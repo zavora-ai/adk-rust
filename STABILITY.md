@@ -64,6 +64,7 @@ The table below assigns one stability tier to every public `adk-*` crate in the 
 | `adk-enterprise` | **Experimental** | Enterprise client SDK for ADK-Rust Managed Agent Service |
 | `adk-managed` | **Experimental** | Managed agent runtime engine |
 | `adk-codeact-monty` | **Experimental** | Python CodeRuntime for the CodeActAgent via the Monty interpreter |
+| `adk-site` | **Experimental** | Site pipeline for AWP 2.0 websites: content, generator, launch gate, signed releases, site log, hosts (spec 3.5) |
 
 ### Beta Crate Rationale
 

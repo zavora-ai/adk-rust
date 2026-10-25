@@ -90,6 +90,7 @@ The always-on form of the harness (`adk-kernel`, spec 3.2): durable processes th
 - [Running the Kernel as a Service](kernel/service.md) - `adk-rust up --install`, `--uninstall` and `--print`: a launchd agent, a systemd user unit or a Windows service that runs as you
 - [The Managed Form](kernel/managed.md) - One kernel per tenant on the managed runtime: `KernelDef` beside `adk.harness`, wake sets, the tenant's proactivity policy, the managed approval path, voice decisions on parked processes
 - [Self-observation: `/proc`](kernel/proc.md) - The content-free activity ledger, daily baselines and observations offered as questions, `adk-rust proc`, exporting for `cargo adk eval --ledger`
+- [Charter, KPIs, Signals and Earned Autonomy](kernel/charter.md) - A website's charter store, KPI tracker, guardrail pauses, the autonomy ladder, typed signals from the public partition and the site process kinds (feature `charter`, spec 3.5)
 - [Kernel Store Backends](kernel/backends.md) - The process, agenda, driver, ledger, partition and cron watermark stores on in-memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore and Neo4j
 - [Partitions](kernel/partitions.md) - One harness per partition, class and tenant identity, memory scoping, crossings by the coordinator under a non-waivable approval, `kernel.partition.*` audit records
 
@@ -218,6 +219,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Memory](security/memory.md) - Long-term semantic memory for agents
 - [Payments and Commerce](security/payments.md) - Agentic commerce journeys, protocol support, and validation paths
 - [Spend Ledger](security/spend-ledger.md) - One budget for model calls and payments, with daily, monthly, and lifetime caps
+- [Wallet](security/wallet.md) - An owner-funded wallet: category mandates, caps checked before execution, holds, rails, anomaly pauses, reconciliation
 - [Approval Service](security/approval-service.md) - Approval inbox with quorum, delegation, escalation, expiry, webhooks, and server endpoints
 - [Agent Identity](security/agent-identity.md) - Stable agent ids on every policy decision, approval, spend record, and audit event; resource-scoped credential brokers
 - [Durable Stores](security/durable-stores.md) - Spend ledger, action ledger, and approval store backends, their conformance suite, and the no-duplicate guarantee

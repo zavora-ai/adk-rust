@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="sw">
+<title>Example Solar</title>
+<id>https://example.com/sw/</id>
+<link rel="self" href="https://example.com/sw/feed.xml"/>
+<link href="https://example.com/sw/"/>
+<updated>2026-10-01T09:00:00Z</updated>
+<entry><title>Habari, jua</title><link href="https://example.com/sw/posts/hello/"/><id>https://example.com/sw/posts/hello/</id><updated>2026-10-01T09:00:00Z</updated></entry>
+</feed>

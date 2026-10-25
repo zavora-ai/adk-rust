@@ -1,0 +1,24 @@
+{
+  "path": "/consent/",
+  "releaseSeq": 1,
+  "kind": "page",
+  "language": "en",
+  "title": "Consent and cookies",
+  "resource": {
+    "id": "pages/consent/en",
+    "legal": "consent",
+    "title": "Consent and cookies",
+    "url": "https://example.com/consent/"
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "inLanguage": "en",
+    "name": "Consent and cookies",
+    "url": "https://example.com/consent/"
+  },
+  "markdown": "https://example.com/consent/index.md"
+}
