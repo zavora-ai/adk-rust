@@ -62,6 +62,16 @@
 //! [`request_cancel`](DurableRunStore::request_cancel) still finishes a parked run
 //! `Cancelled`.
 //!
+//! The park appends the system notice [`FREEZE_PAUSED_NOTICE`] to the session
+//! ([`system_notice_event`](adk_core::history::system_notice_event), authored `system`). The
+//! claim that resumes the run, on any worker, finds it as the parked invocation's latest
+//! notice, writes a [`FREEZE_RESUMED_ACTION`] audit record, and appends
+//! [`FREEZE_RESUMED_NOTICE`], so the model's next request says that the freeze is over and that
+//! the calls it refused did not run, instead of ending the task at a `not run` answer. A run
+//! no freeze parked — suspended, woken by an approval, or recovered after a crash — resumes
+//! without one. A notice authorizes nothing: a refused call made again goes through the
+//! governed path.
+//!
 //! Only a worker with a governance control parks this way, since its own control is what
 //! tells it the freeze is over. The list of parked runs lives in the worker's memory: a
 //! worker restarted while frozen does not wake the runs parked before the restart, so a
@@ -159,6 +169,7 @@ use std::time::Duration;
 use adk_core::audit_log::{
     AuditActor, AuditDecision, AuditRecordDraft, AuditRecordKind, AuditRecordOutcome, AuditTrail,
 };
+use adk_core::history::SYSTEM_NOTICE_PREFIX;
 use adk_core::{
     ActingConfig, AdkError, AgentId, AgentPrincipal, BeforeModelResult, CallbackContext,
     ClaimedRun, Content, DurableRunStore, ErrorCategory, ErrorComponent, GOVERNANCE_FROZEN_CODE,
@@ -357,9 +368,35 @@ pub enum ParkReason {
     /// The governance control refused the run after it made a model or tool call and the
     /// worker parked it at its next model-call boundary, on a `RunCheckpointRef::Session`
     /// checkpoint, under [`GovernanceRefusal::Park`] (spec 3.2 §10 S3); the worker wakes
-    /// it when the control allows work again.
+    /// it when the control allows work again, and the resumed turn carries
+    /// [`FREEZE_RESUMED_NOTICE`].
     Frozen,
 }
+
+/// The system notice a run parked by a freeze leaves in its session, after the answers to its
+/// last tool calls. See [Freeze parks](self#freeze-parks).
+pub const FREEZE_PAUSED_NOTICE: &str = "Execution paused by an operator freeze.";
+
+/// The system notice the claim that resumes a freeze-parked run adds to its session, so the
+/// model's next request says the freeze is over rather than ending at a `not run` answer. See
+/// [Freeze parks](self#freeze-parks).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::history::system_notice;
+/// use adk_server::background::FREEZE_RESUMED_NOTICE;
+///
+/// let notice = system_notice(FREEZE_RESUMED_NOTICE);
+/// assert!(notice.parts[0].text().unwrap().starts_with("[System notice] Execution was paused"));
+/// ```
+pub const FREEZE_RESUMED_NOTICE: &str = "Execution was paused by an operator freeze and has now \
+    resumed. The tool calls refused during the freeze did not run. Continue the task, and call \
+    again any refused call you still need.";
+
+/// The action of the audit record a freeze-parked run writes when it resumes with
+/// [`FREEZE_RESUMED_NOTICE`].
+pub const FREEZE_RESUMED_ACTION: &str = "governance.run_resumed";
 
 /// Lifecycle hooks a [`DurableWorker`] calls as it moves a run between states (spec 3.2
 /// §10 S1).
@@ -1250,12 +1287,52 @@ impl DurableWorker {
             let turn_persisted = events
                 .iter()
                 .any(|event| event.invocation_id == invocation_id && event.author == "user");
+            // The invocation's latest notice is the freeze park's until a claim adds the resume
+            // notice, so only a freeze-parked run gets one, and only once.
+            let paused = format!("{SYSTEM_NOTICE_PREFIX}{FREEZE_PAUSED_NOTICE}");
+            let unfrozen = turn_persisted
+                && matches!(record.checkpoint, Some(RunCheckpointRef::Session { .. }))
+                && events
+                    .iter()
+                    .rev()
+                    .find(|event| {
+                        event.invocation_id == invocation_id
+                            && adk_core::history::is_system_notice_event(event)
+                    })
+                    .and_then(|event| event.llm_response.content.as_ref())
+                    .and_then(|content| content.parts.first())
+                    .and_then(Part::text)
+                    == Some(paused.as_str());
+            if unfrozen {
+                // Recorded first, so a trail that refuses unrecorded actions leaves no notice.
+                if let Some(trail) = self.audit.as_ref().or(runner.audit_trail()) {
+                    let actor = record
+                        .principal
+                        .as_ref()
+                        .map(|principal| AuditActor::new(principal, invocation_id.as_str()))
+                        .unwrap_or_default();
+                    let draft =
+                        AuditRecordDraft::new(AuditRecordKind::Governance, FREEZE_RESUMED_ACTION)
+                            .actor(actor)
+                            .outcome(AuditRecordOutcome::Succeeded)
+                            .ext("runId", Value::String(record.run_id.clone()))
+                            .ext("userId", Value::String(record.user_id.clone()))
+                            .ext("sessionId", Value::String(session_id.clone()))
+                            .ext("invocationId", Value::String(invocation_id.clone()))
+                            .ext("workerId", Value::String(self.config.worker_id.clone()))
+                            .ext("notice", Value::String(FREEZE_RESUMED_NOTICE.to_string()));
+                    trail.record(draft).await?;
+                }
+                append_notice(runner, user_id, &session_id, &invocation_id, FREEZE_RESUMED_NOTICE)
+                    .await?;
+            }
             tracing::info!(
                 run.id = %record.run_id,
                 session.id = %session_id,
                 resumed.from = %invocation_id,
                 calls.answered = answered,
                 user_turn.persisted = turn_persisted,
+                resumed.after_freeze = unfrozen,
                 "resuming agent run"
             );
             Ok(if turn_persisted { Prepared::Continue } else { Prepared::Start })
@@ -1384,19 +1461,30 @@ impl DurableWorker {
             {
                 return Ok(Ok(Attempt::Refused(error)));
             }
+            // A run asked to suspend stays a suspension whatever stopped it, so an
+            // unfreeze never wakes it.
+            let suspended = lease.suspend_requested.load(Ordering::SeqCst);
             self.checkpoint(
                 &record.run_id,
                 epoch,
-                RunCheckpointRef::Session { session_id, invocation_id: Some(invocation_id) },
+                RunCheckpointRef::Session {
+                    session_id: session_id.clone(),
+                    invocation_id: Some(invocation_id.clone()),
+                },
             )
             .await?;
-            // A run asked to suspend stays a suspension whatever stopped it, so an
-            // unfreeze never wakes it.
-            return Ok(Ok(if lease.suspend_requested.load(Ordering::SeqCst) {
-                Attempt::Suspended
-            } else {
-                Attempt::Frozen
-            }));
+            if suspended {
+                return Ok(Ok(Attempt::Suspended));
+            }
+            // The session, not this worker, remembers the park, so the claim that resumes the
+            // run on any worker adds the resume notice.
+            if let Err(error) =
+                append_notice(runner, user_id, &session_id, &invocation_id, FREEZE_PAUSED_NOTICE)
+                    .await
+            {
+                tracing::warn!(run.id = %record.run_id, error = %error, "could not record the freeze park in the session; the resumed run gets no resume notice");
+            }
+            return Ok(Ok(Attempt::Frozen));
         }
 
         let held = match held_by_invocation(runner, user_id, &session_id, &invocation_id).await {
@@ -1859,6 +1947,28 @@ async fn ensure_session(
     }
 }
 
+/// Appends the system notice `text` for `invocation_id` to the run's session.
+async fn append_notice(
+    runner: &Runner,
+    user_id: &str,
+    session_id: &str,
+    invocation_id: &str,
+    text: &str,
+) -> adk_core::Result<()> {
+    let identity = adk_core::AdkIdentity::new(
+        adk_core::AppName::try_from(runner.app_name())?,
+        UserId::try_from(user_id)?,
+        SessionId::try_from(session_id)?,
+    );
+    runner
+        .session_service()
+        .append_event_for_identity(adk_session::AppendEventRequest {
+            identity,
+            event: adk_core::history::system_notice_event(invocation_id, text),
+        })
+        .await
+}
+
 /// The final answer of `invocation_id`, when it is the last thing in the session.
 fn completed_answer(events: &[adk_core::Event], invocation_id: &str) -> Option<String> {
     // An invocation that held tool calls ended on a notice, not an answer.
@@ -1867,7 +1977,10 @@ fn completed_answer(events: &[adk_core::Event], invocation_id: &str) -> Option<S
     }) {
         return None;
     }
-    let last = events.iter().rev().find(|event| !event.llm_response.partial)?;
+    // A system notice is the runtime's, never the run's answer.
+    let last = events.iter().rev().find(|event| {
+        !event.llm_response.partial && !adk_core::history::is_system_notice_event(event)
+    })?;
     if last.invocation_id != invocation_id || last.author == "user" || !last.is_final_response() {
         return None;
     }

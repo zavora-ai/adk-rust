@@ -76,10 +76,21 @@ their running processes `Waiting` at the next model-call boundary, and nothing s
 `unfreeze`. A call refused mid-turn is answered `not run` and the action ledger keeps completed
 calls from running twice. `unfreeze` wakes exactly the processes the freeze parked.
 
-> **Note:** A process `unfreeze` wakes continues its session with an empty user turn, so its
-> model sees the refused call's `not run` answer and nothing about the unfreeze. A live model
-> can end the task at that answer; an agent that must finish its work after a freeze needs an
-> instruction to call a refused step again when it resumes.
+A process the unfreeze wakes resumes with a system notice at the end of its model's next
+request, authored `system` and kept in its session:
+
+```text
+[System notice] Execution was paused by an operator freeze and has now resumed. The tool calls
+refused during the freeze did not run. Continue the task, and call again any refused call you
+still need.
+```
+
+The model continues the task rather than ending it at the refused call's `not run` answer, and
+a call it makes again goes through the governed path. Each resume writes a
+`governance.run_resumed` record to the kernel's audit trail. A manual or preempted suspension,
+and an approval that wakes held calls, resume without a notice. **Freeze parks** in the
+[durable runtime guide](../core/durable-runtime.md#worker) describes both notices the park and
+the resume leave.
 
 ## Using the kernel from code
 

@@ -463,7 +463,9 @@ impl PromptConfig {
             .all(|part| matches!(part, Part::Text { text } if text.trim().is_empty()));
         if !empty_turn {
             match session_history.iter().rposition(|content| {
-                content.role == "user" && !adk_core::history::is_other_agent_context(content)
+                content.role == "user"
+                    && !adk_core::history::is_other_agent_context(content)
+                    && !adk_core::history::is_system_notice(content)
             }) {
                 Some(index) => session_history[index] = current_user_content.clone(),
                 None => session_history.push(current_user_content.clone()),
@@ -501,6 +503,7 @@ impl PromptConfig {
                     content.role == "user"
                         && content.carries_user_input()
                         && !adk_core::history::is_other_agent_context(content)
+                        && !adk_core::history::is_system_notice(content)
                 };
                 match earliest_held {
                     Some(call) => {

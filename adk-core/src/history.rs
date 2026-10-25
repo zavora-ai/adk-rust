@@ -3,7 +3,9 @@
 //! An agent's model request carries the conversation as the agent sees it. Its own turns go
 //! back as model turns; what another agent said, called and got back is context, so it goes
 //! back as user-role text the agent reads, never as turns the agent appears to have taken
-//! ([`other_agent_context`](crate::history::other_agent_context)). Events a tool publishes on
+//! ([`other_agent_context`](crate::history::other_agent_context)). A system notice
+//! ([`system_notice_event`](crate::history::system_notice_event)) is the runtime's word to
+//! every agent and goes back as a user-role turn. Events a tool publishes on
 //! its own branch ([`tool_branch`](crate::history::tool_branch)) are progress for observers,
 //! not context. A history cut — a window of recent events, or a compaction — keeps every
 //! function response with its call ([`balanced_cut`](crate::history::balanced_cut)).
@@ -145,6 +147,68 @@ pub fn other_agent_context(author: &str, content: &Content) -> Option<Content> {
 pub fn is_other_agent_context(content: &Content) -> bool {
     content.role == "user"
         && matches!(content.parts.first(), Some(Part::Text { text }) if text == OTHER_AGENT_CONTEXT_PREAMBLE)
+}
+
+/// The author of every event [`system_notice_event`] builds.
+pub const SYSTEM_NOTICE_AUTHOR: &str = "system";
+
+/// The start of every notice [`system_notice`] builds.
+pub const SYSTEM_NOTICE_PREFIX: &str = "[System notice] ";
+
+/// Builds a system notice: a user-role turn in which the runtime, not the person, tells the
+/// model what happened to its run.
+///
+/// The text starts with [`SYSTEM_NOTICE_PREFIX`]. Recorded as a [`system_notice_event`], the
+/// notice reaches every agent that reads the session as a user-role turn, never as another
+/// agent's quoted context. A notice states what happened; it authorizes nothing.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::Content;
+/// use adk_core::history::{is_system_notice, system_notice};
+///
+/// let notice = system_notice("Execution resumed.");
+/// assert_eq!(notice.role, "user");
+/// assert_eq!(notice.parts[0].text(), Some("[System notice] Execution resumed."));
+/// assert!(is_system_notice(&notice));
+/// assert!(!is_system_notice(&Content::new("user").with_text("Execution resumed.")));
+/// ```
+pub fn system_notice(text: &str) -> Content {
+    Content::new("user").with_text(format!("{SYSTEM_NOTICE_PREFIX}{text}"))
+}
+
+/// Whether `content` is a notice [`system_notice`] built.
+pub fn is_system_notice(content: &Content) -> bool {
+    content.role == "user"
+        && matches!(content.parts.first(), Some(Part::Text { text }) if text.starts_with(SYSTEM_NOTICE_PREFIX))
+}
+
+/// The session event that records the system notice `text` for `invocation_id`, authored by
+/// [`SYSTEM_NOTICE_AUTHOR`].
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::history::{SYSTEM_NOTICE_AUTHOR, is_system_notice_event, system_notice_event};
+///
+/// let event = system_notice_event("inv-1", "Execution resumed.");
+/// assert_eq!(event.author, SYSTEM_NOTICE_AUTHOR);
+/// assert!(is_system_notice_event(&event));
+/// ```
+pub fn system_notice_event(invocation_id: impl Into<String>, text: &str) -> Event {
+    let mut event = Event::new(invocation_id);
+    event.author = SYSTEM_NOTICE_AUTHOR.to_string();
+    event.set_content(system_notice(text));
+    event
+}
+
+/// Whether `event` records a system notice: authored by [`SYSTEM_NOTICE_AUTHOR`], with
+/// content [`system_notice`] built. An agent's own turn never is one, whatever the agent is
+/// named, since an agent's text is model-role.
+pub fn is_system_notice_event(event: &Event) -> bool {
+    event.author == SYSTEM_NOTICE_AUTHOR
+        && event.llm_response.content.as_ref().is_some_and(is_system_notice)
 }
 
 /// The branch a tool publishes its own events on: `{tool_name}@{function_call_id}` below

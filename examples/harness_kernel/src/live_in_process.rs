@@ -881,15 +881,11 @@ async fn k9(model: Arc<dyn Llm>) -> Result<Checks> {
 
     let mut pids = Vec::new();
     for i in 0..K9_PROCESSES {
-        // A freeze-parked run resumes with an empty user turn after the refused call's `not
-        // run` answer, which says nothing of the unfreeze; told nothing about it, a live model
-        // ends the task at that answer.
+        // Nothing about freezes: the resume notice tells the model to call a refused step again.
         let text = format!(
             "Process {i}: work through the numbered steps with the step tool. Call step with \
              n = 1. Each result names the next n: call step again with exactly that n, one call \
-             per turn. An operator may freeze execution while you work; a step refused because \
-             execution is frozen did not run, and when you are resumed, call that same step \
-             again. Keep going until a result says finished, then reply with the single word: \
+             per turn. Keep going until a result says finished, then reply with the single word: \
              done."
         );
         let process = replicas[i % 2]

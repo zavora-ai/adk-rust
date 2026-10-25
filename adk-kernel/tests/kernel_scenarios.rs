@@ -12,17 +12,18 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use adk_agent::LlmAgentBuilder;
-use adk_core::audit_log::AuditActor;
+use adk_core::audit_log::{AuditActor, AuditTrail, InMemoryAuditRecorder};
 use adk_core::schedule::MissedFirePolicy;
 use adk_core::{
-    ActionLedger, Clock, DurableRunStore, GovernanceControl, Llm, ManualClock, NewRun, Part,
-    RunCheckpointRef, RunFilter, RunRecord, RunState, Schedule, ScheduleSpec, ScheduleStore,
-    SubjectRef, SystemClock, Tool, ToolContext, ToolEffect,
+    ActionLedger, Clock, Content, DurableRunStore, FinishReason, GovernanceControl, Llm,
+    LlmRequest, LlmResponse, LlmResponseStream, ManualClock, NewRun, Part, RunCheckpointRef,
+    RunFilter, RunRecord, RunState, Schedule, ScheduleSpec, ScheduleStore, SubjectRef, SystemClock,
+    Tool, ToolContext, ToolEffect, is_not_run,
 };
 use adk_kernel::control::ControlPlaneConfig;
 use adk_kernel::{
@@ -32,12 +33,13 @@ use adk_kernel::{
 };
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_runner::Runner;
-use adk_server::background::DurableWorkerConfig;
+use adk_server::background::{DurableWorkerConfig, FREEZE_RESUMED_ACTION, FREEZE_RESUMED_NOTICE};
 use adk_session::{
     GetRequest, SessionService, SqliteActionLedger, SqliteGovernanceStateStore, SqliteRunStore,
     SqliteScheduleStore, SqliteSessionService,
 };
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 
@@ -865,6 +867,243 @@ async fn k9_a_run_that_meets_the_freeze_itself_parks_on_the_second_replica() {
     assert_eq!(parked, 2, "replica B parked both under the freeze");
     replica_b.stop().await.unwrap();
     freezer.stop().await.unwrap();
+}
+
+/// A model that does `steps` numbered steps, one call a turn, and ends the task at a refused
+/// step, as the live models of K9 did: a request that ends on a `not run` answer gets a final
+/// answer. Its call for step `held` returns only once `release` is set, as a model call in
+/// flight when the freeze lands.
+struct StopsAtRefusal {
+    steps: u64,
+    held: u64,
+    holding: AtomicBool,
+    release: Arc<AtomicBool>,
+    requests: Mutex<Vec<LlmRequest>>,
+}
+
+impl StopsAtRefusal {
+    fn new(steps: u64, held: u64, release: &Arc<AtomicBool>) -> Self {
+        Self {
+            steps,
+            held,
+            holding: AtomicBool::new(false),
+            release: Arc::clone(release),
+            requests: Mutex::default(),
+        }
+    }
+
+    fn requests(&self) -> Vec<LlmRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl Llm for StopsAtRefusal {
+    fn name(&self) -> &str {
+        "stops-at-refusal"
+    }
+
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        _stream: bool,
+    ) -> adk_core::Result<LlmResponseStream> {
+        let answers = |content: &Content| {
+            content
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    Part::FunctionResponse { function_response, .. } => {
+                        Some(function_response.response.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let done = request
+            .contents
+            .iter()
+            .flat_map(&answers)
+            .filter(|answer| answer["status"] == "done")
+            .count() as u64;
+        let refused = request.contents.last().is_some_and(|last| {
+            answers(last).iter().any(|answer| answer["error"].as_str().is_some_and(is_not_run))
+        });
+        let call = {
+            let mut requests = self.requests.lock().unwrap();
+            requests.push(request);
+            requests.len()
+        };
+        let parts = if refused {
+            vec![Part::Text {
+                text: format!(
+                    "I stopped at step {}: execution is frozen. Once an operator lifts the \
+                     freeze, I can continue.",
+                    done + 1
+                ),
+            }]
+        } else if done == self.steps {
+            vec![Part::Text { text: "All steps done.".into() }]
+        } else {
+            if done + 1 == self.held {
+                self.holding.store(true, Ordering::SeqCst);
+                let started = tokio::time::Instant::now();
+                while !self.release.load(Ordering::SeqCst) {
+                    if started.elapsed() > Duration::from_secs(10) {
+                        return Err(adk_core::AdkError::model("the held call was never released"));
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }
+            vec![Part::FunctionCall {
+                name: "step".into(),
+                args: json!({ "n": done + 1 }),
+                id: Some(format!("call-{call}")),
+                thought_signature: None,
+            }]
+        };
+        let mut response = LlmResponse::new(Content { role: "model".into(), parts });
+        response.finish_reason = Some(FinishReason::Stop);
+        response.turn_complete = true;
+        Ok(Box::pin(futures::stream::iter([Ok(response)])))
+    }
+}
+
+/// K9 with a model that ends its task at a refused step. Two replicas run one process each;
+/// replica A freezes while both processes' model calls for step 3 are in flight, so each call
+/// comes back to the kill switch, is answered `not run`, and the process parks. On the bare
+/// resume such a model would answer and the process would complete after two of five steps.
+/// The claim after the unfreeze adds `FREEZE_RESUMED_NOTICE`, so the model calls step 3 again
+/// and both processes finish all five steps, each once, with one `governance.run_resumed`
+/// record each in the kernel's audit trail.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn k9_a_process_the_unfreeze_wakes_continues_its_work() {
+    const STEPS: u64 = 5;
+    const HELD: u64 = 3;
+    let db = tempfile::tempdir().unwrap();
+    let path = db.path().join("kernel.db");
+    let replicas =
+        [open(&path, Arc::new(SystemClock)).await, open(&path, Arc::new(SystemClock)).await];
+    let controls = replicas
+        .each_ref()
+        .map(|stores| KernelConfig::mirrored_governance(Arc::clone(&stores.governance) as _));
+    let executions = Arc::new(Mutex::new(BTreeMap::new()));
+    let release = Arc::new(AtomicBool::new(false));
+    let models: Vec<Arc<StopsAtRefusal>> =
+        (0..2).map(|_| Arc::new(StopsAtRefusal::new(STEPS, HELD, &release))).collect();
+    let recorder = InMemoryAuditRecorder::new();
+    let mut kernels = Vec::new();
+    for ((name, stores), control) in
+        ["replica-a", "replica-b"].into_iter().zip(&replicas).zip(&controls)
+    {
+        let worker =
+            DurableWorkerConfig::default().with_worker_id(name).with_max_concurrent_runs(1);
+        let mut builder = kernel(name, stores, control, Arc::new(SystemClock), 1)
+            .config(config(name, control, Arc::new(SystemClock), 1).with_worker(worker))
+            .audit(AuditTrail::new(Arc::new(recorder.clone())));
+        for (i, model) in models.iter().enumerate() {
+            let agent = LlmAgentBuilder::new("agent")
+                .model(Arc::clone(model) as Arc<dyn Llm>)
+                .tool(Arc::new(Step { process: i, executions: Arc::clone(&executions) }));
+            builder = builder.agent(format!("process-{i}"), runner(stores, control, agent));
+        }
+        kernels.push(builder.build().unwrap());
+    }
+    for kernel in &kernels {
+        kernel.start().await.unwrap();
+    }
+
+    let mut pids = Vec::new();
+    for (i, kernel) in kernels.iter().enumerate() {
+        let target = format!("process-{i}");
+        let run = run_on(QueueClass::Background, &target, "work through the five steps")
+            .with_session_id(target.clone());
+        let process =
+            kernel.processes().spawn(run, ProcessSpec::new(ProcessKind::Goal)).await.unwrap();
+        pids.push(process.meta.pid);
+    }
+    let runs = &replicas[0].runs;
+    // One slot per replica, so each runs one of the two.
+    eventually("both model calls for step 3 in flight", Duration::from_secs(10), || async {
+        models.iter().all(|model| model.holding.load(Ordering::SeqCst)).then_some(())
+    })
+    .await;
+    let mut owners = Vec::new();
+    for pid in &pids {
+        owners.push(runs.get(pid).await.unwrap().unwrap().lease_owner.unwrap());
+    }
+    owners.sort();
+    owners.dedup();
+    assert_eq!(owners.len(), 2, "one process on each replica: {owners:?}");
+
+    kernels[0].freeze("incident 9", operator()).await.unwrap();
+    eventually("replica B to see the freeze", Duration::from_secs(5), || async {
+        controls.iter().all(GovernanceControl::is_frozen).then_some(())
+    })
+    .await;
+    release.store(true, Ordering::SeqCst);
+    eventually("both processes freeze-parked", Duration::from_secs(5), || async {
+        for pid in &pids {
+            let run = runs.get(pid).await.ok().flatten()?;
+            assert_ne!(run.state, RunState::Completed, "{pid} completed while frozen");
+            (run.state == RunState::Waiting && run.lease_owner.is_none()).then_some(())?;
+            let meta = replicas[1].processes.get(pid).await.ok().flatten()?;
+            (meta.suspended_by == Some(Suspension::Freeze)).then_some(())?;
+        }
+        Some(())
+    })
+    .await;
+    let before: BTreeMap<(usize, u64), usize> =
+        (0..2).flat_map(|i| (1..HELD).map(move |n| ((i, n), 1))).collect();
+    assert_eq!(executions.lock().unwrap().clone(), before, "step 3 was answered `not run`");
+
+    kernels[0].unfreeze(operator()).await.unwrap();
+    for pid in &pids {
+        let run = in_state(runs, pid, RunState::Completed).await;
+        let text = run.result.as_ref().and_then(|result| result["text"].as_str());
+        assert_eq!(text, Some("All steps done."), "{pid}");
+    }
+    let every: BTreeMap<(usize, u64), usize> =
+        (0..2).flat_map(|i| (1..=STEPS).map(move |n| ((i, n), 1))).collect();
+    assert_eq!(executions.lock().unwrap().clone(), every, "every step once");
+
+    let resumed = adk_core::history::system_notice(FREEZE_RESUMED_NOTICE);
+    for model in &models {
+        let requests = model.requests();
+        let after = requests
+            .iter()
+            .find(|request| {
+                request.contents.last().is_some_and(adk_core::history::is_system_notice)
+            })
+            .cloned()
+            .expect("a request after the unfreeze ends on a system notice");
+        assert_eq!(
+            after.contents.last().and_then(|last| last.parts[0].text()),
+            resumed.parts[0].text()
+        );
+        // The same request without the notices is the bare resume: the model ends there.
+        let mut bare = after;
+        bare.contents.retain(|content| !adk_core::history::is_system_notice(content));
+        let answer = model.generate_content(bare, false).await.unwrap().next().await;
+        let text = answer.unwrap().unwrap().content.unwrap().parts[0].text().map(str::to_string);
+        assert!(
+            text.as_deref().is_some_and(|text| text.starts_with("I stopped at step 3")),
+            "{text:?}"
+        );
+    }
+    let mut resumed_runs: Vec<String> = recorder
+        .records()
+        .into_iter()
+        .filter(|record| record.action == FREEZE_RESUMED_ACTION)
+        .filter_map(|record| record.ext.get("runId").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    resumed_runs.sort();
+    let mut expected = pids.clone();
+    expected.sort();
+    assert_eq!(resumed_runs, expected, "one resume record per process");
+    for kernel in &kernels {
+        kernel.stop().await.unwrap();
+    }
 }
 
 const CHAOS_DIR: &str = "ADK_KERNEL_CHAOS_DIR";

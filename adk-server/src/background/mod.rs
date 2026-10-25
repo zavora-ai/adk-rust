@@ -93,7 +93,8 @@ pub use cron::{
 };
 pub use scheduler::{DurableScheduler, SchedulerTick};
 pub use worker::{
-    DurableWorker, DurableWorkerConfig, GovernanceRefusal, ParkReason, WorkerHandle, WorkerHooks,
+    DurableWorker, DurableWorkerConfig, FREEZE_PAUSED_NOTICE, FREEZE_RESUMED_ACTION,
+    FREEZE_RESUMED_NOTICE, GovernanceRefusal, ParkReason, WorkerHandle, WorkerHooks,
 };
 
 // ---------------------------------------------------------------------------
