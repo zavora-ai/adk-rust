@@ -1576,6 +1576,10 @@ impl HarnessPolicy {
         &self.inner.prompts
     }
 
+    pub(crate) fn workspace(&self) -> &Workspace {
+        &self.inner.workspace
+    }
+
     pub(crate) fn isolation_status(&self) -> &IsolationStatus {
         &self.inner.shell.status
     }

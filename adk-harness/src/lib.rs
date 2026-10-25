@@ -147,6 +147,10 @@ pub use approvals::{
     RuleSuggestion, SHELL_PREFIX_SUGGESTION_DENYLIST, StandingDecision, StandingRule,
     StandingRuleStore, SuggestedScope, escape_control,
 };
+pub use approvals::{
+    CHANGE_SET_MAX_BYTES, ChangeSet, ChangeSetAnswer, ChangeSetCall, ChangeSetFile,
+    ChangeSetPrompt, RenderedChangeSet,
+};
 #[cfg(feature = "observe")]
 pub use builder::LoopGuard;
 pub use builder::{HarnessAgentBuilder, Pack};
