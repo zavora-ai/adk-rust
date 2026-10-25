@@ -52,7 +52,7 @@ impl DriverIsolation {
 }
 
 /// What holds a driver's process tree when it starts, so that ending the driver ends every
-/// process it started (spec 3.2 §10 W1).
+/// process it started (spec 3.2 §7.7, §10 W1, K-I5).
 ///
 /// # Example
 ///
@@ -60,6 +60,7 @@ impl DriverIsolation {
 /// use adk_kernel::drivers::DriverProcessTree;
 ///
 /// assert_eq!(serde_json::to_value(DriverProcessTree::JobObject).unwrap(), "jobObject");
+/// assert_eq!(serde_json::to_value(DriverProcessTree::ProcessGroup).unwrap(), "processGroup");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,13 +69,25 @@ pub enum DriverProcessTree {
     /// A Windows Job Object that closes with the driver's connection: a stop, a restart, a
     /// crash, or the kernel's own exit ends every process the driver started.
     JobObject,
+    /// A Unix session and process group that the driver leads and that closes with its
+    /// connection (spec 3.2 §7.7, K-I5): a stop, a restart, a crash's cleanup, or the
+    /// kernel's shutdown ends every process of the group and returns once each has exited.
+    /// A process that leaves the group (`setsid`, `setpgid`) is not ended with it.
+    ProcessGroup,
 }
 
 impl DriverProcessTree {
-    /// What holds a driver's process tree on this platform: a Job Object on Windows; `None`
-    /// elsewhere, where ending a driver ends its own process only.
+    /// What holds a driver's process tree on this platform: a Job Object on Windows, a
+    /// process group on Unix; `None` elsewhere, where ending a driver ends its own process
+    /// only.
     pub(crate) fn platform() -> Option<Self> {
-        cfg!(windows).then_some(Self::JobObject)
+        if cfg!(windows) {
+            Some(Self::JobObject)
+        } else if cfg!(unix) {
+            Some(Self::ProcessGroup)
+        } else {
+            None
+        }
     }
 }
 
@@ -107,7 +120,7 @@ pub struct DriverRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<DriverIsolation>,
     /// What held the process tree when it last started: a Job Object on Windows (spec 3.2
-    /// §10 W1); `None` elsewhere, or before the first start.
+    /// §10 W1), a process group on Unix (§7.7, K-I5); `None` before the first start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_tree: Option<DriverProcessTree>,
     /// Tools whose declaration differs from the pin, with the digest observed.

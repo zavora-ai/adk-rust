@@ -150,8 +150,30 @@ W1): it starts suspended and runs only once it is in the job, so every process i
 belongs to the job too. Stopping, restarting or unmounting the driver, a crash, and the
 kernel's own exit end the whole tree. The kernel records it on the driver as
 `processTree: "jobObject"` (`DriverRecord::process_tree`), in its `kernel.driver.started`
-record, and `drivers list` adds `in a job object` to the driver's isolation. On macOS and
-Linux `processTree` is absent and ending a driver ends its own process only.
+record, and `drivers list` adds `in a job object` to the driver's isolation.
+
+On macOS and Linux every driver, sandboxed or not, leads a session and process group of its
+own (spec 3.2 §7.7, K-I5), and every process it starts belongs to the group. Stopping,
+restarting or unmounting the driver, a crash's cleanup, and the kernel's shutdown end the
+whole group and return once each of its processes has exited:
+
+| Step | What happens |
+|---|---|
+| 1 | The driver's standard input closes, and it has 3 seconds to exit |
+| 2 | The group is sent `SIGTERM` |
+| 3 | The group is sent `SIGKILL` once the driver has exited, or after 1 second |
+| 4 | The call returns once no process of the group is left, for at most 2 seconds after step 2 |
+
+The kernel records it as `processTree: "processGroup"`, and `drivers list` adds `in a process
+group`. A process group is not a boundary the way a Job Object is:
+
+- **A process that leaves the group** — one that calls `setsid` or `setpgid`, as a daemon
+  does — is not ended with the driver.
+- **Under bubblewrap** the server runs in the sandbox's own session and PID namespace, which
+  `--die-with-parent` kills as the group ends, so its processes may finish exiting just after
+  the call returns. Under Seatbelt they stay in the group.
+- **When the kernel is killed outright** (`SIGKILL`), it runs no cleanup: each driver sees its
+  standard input close, and the processes it started keep running.
 
 ## Secrets
 
