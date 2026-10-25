@@ -332,6 +332,7 @@ function CanDo({
             editor={(close) => (
               <QuietEditor
                 window={area.quietTime[0] && onThisDevice(area.quietTime[0], host)}
+                others={area.quietTime.length > 1 ? area.quietTime.map(here).join(", ") : undefined}
                 onCancel={close}
                 onSave={async (window) => {
                   const value = (read: AreaSettings) => quietValue(read, host);
@@ -447,10 +448,13 @@ function SettingRow({
  */
 function QuietEditor({
   window,
+  others,
   onSave,
   onCancel,
 }: {
   window?: QuietWindow;
+  /** Every window in force, when there are several: the kernel keeps one in their place. */
+  others?: string;
   onSave: (window: QuietWindow | null) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -469,6 +473,7 @@ function QuietEditor({
         if (event.key === "Escape") onCancel();
       }}
     >
+      {others && <p className="setting-sub">{labels.replacesWindows(others)}</p>}
       <div className="setting-fields">
         <label htmlFor={ids.start}>{labels.from}</label>
         <input id={ids.start} type="time" value={start} onChange={(event) => setStart(event.target.value)} autoFocus />

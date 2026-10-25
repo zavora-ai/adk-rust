@@ -148,6 +148,8 @@ export const labels = {
   changedAt: (when: string) => `Changed ${when}`,
   workspaceAlsoQuiet: (windows: string) => `Your workspace also keeps ${windows} quiet.`,
   off: "Off",
+  replacesWindows: (windows: string) =>
+    `Your agents are quiet ${windows} now. Saving keeps one window in their place; Turn off ends them all.`,
   notAMoney: "Type an amount in dollars, such as 5 or 5.50.",
   everyActionOnRecord: words.EVERY_ACTION_ON_RECORD,
   checkAgain: "Check again",

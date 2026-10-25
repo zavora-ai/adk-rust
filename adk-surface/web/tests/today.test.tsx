@@ -343,6 +343,29 @@ describe("What your agents can do", () => {
     expect(saved).toEqual([{ start: "22:00", end: "07:00", utcOffsetMinutes: deviceOffset() }]);
   });
 
+  // The kernel keeps one window in place of all an area had: the editor says so before it saves.
+  it("says that saving quiet time replaces every window the area has", async () => {
+    const seams: Seams = fixtureSeams();
+    const areas = seams.limits!.areas;
+    seams.limits!.areas = async () =>
+      (await areas())?.map((area) => ({
+        ...area,
+        quietTime: [
+          { start: "22:00", end: "07:00", utcOffsetMinutes: deviceOffset() },
+          { start: "19:00", end: "08:00", utcOffsetMinutes: deviceOffset() },
+        ],
+      }));
+    render(<App client={new FixtureClient()} seams={seams} initialSection="memory" />);
+    const card = (await screen.findByRole("heading", { name: "What your agents can do" })).closest("section")!;
+    await within(card).findByText("22:00–07:00, 19:00–08:00");
+    await userEvent.click(within(card).getAllByRole("button", { name: "Change" })[0]);
+    expect(
+      within(card).getByText(
+        "Your agents are quiet 22:00–07:00, 19:00–08:00 now. Saving keeps one window in their place; Turn off ends them all.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("shows why the kernel refused a change, such as from a paired device", async () => {
     const seams: Seams = fixtureSeams();
     seams.limits!.setQuietTime = async () => {
