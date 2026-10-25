@@ -18,6 +18,17 @@
 //! a workspace sets (`[kernel] quiet_hours` of its `.adk/harness.toml`) still holds beside
 //! the person's and is listed as `alsoQuiet`.
 //!
+//! A change holds while the area still starts with the value it replaced
+//! ([`AreaStart`](super::AreaStart)): a different start value — a later `adk-rust up --mode`,
+//! `adk-rust partitions set-mode` followed by a restart, or quiet hours and a cap set at
+//! start — is newer and takes over, and the change is dropped at the area's next change.
+//!
+//! | Mode change | When it applies |
+//! |---|---|
+//! | Stricter than the area's mode | At every agent's next step; it also holds the overnight tidy-up and the kernel's questions back |
+//! | Looser | Refused while an agent of the area is working, so no turn changes its rules midway (spec 3.1 I14); a session whose mode was set on its own, or tightened by the harness, keeps its mode |
+//! | To a mode the kernel refuses | Refused, saying why: `adk-rust up` refuses Go ahead beyond loopback without `--sandbox` |
+//!
 //! The changing routes need the `operator` scope and refuse a paired device's token: they
 //! are for the person at the kernel's own terminal or socket, or signed in to the home, never
 //! a phone's token alone or a chat channel, which reaches no kernel route.
@@ -35,7 +46,7 @@ use serde_json::json;
 use super::api::PartitionModeRequest;
 use super::paths;
 use super::routes::{Caller, ControlBackend, record};
-use super::store::{AreaSettings, Change, ControlStore};
+use super::store::{AreaSettings, AreaStart, Change, ControlStore};
 use crate::error::{KernelError, NOT_FOUND_CODE, Result};
 use crate::kernel::Kernel;
 use crate::partition::{Partition, PartitionId, PartitionMode};
@@ -153,32 +164,107 @@ pub(crate) struct Start {
     pub(crate) beside: Vec<QuietHours>,
     /// The lower of the kernel's daily spend cap and the partition record's.
     pub(crate) cap: Option<u64>,
-    /// The partition record's mode, else the one the area's agents started in.
+    /// The mode the area's agents started in, else the partition record's.
     pub(crate) mode: Option<PartitionMode>,
 }
 
+impl Start {
+    /// The start values a change records it replaced.
+    pub(crate) fn area(&self) -> AreaStart {
+        AreaStart::new(self.quiet.clone(), self.cap, self.mode)
+    }
+}
+
+/// How strict `mode` is: 0 for Go ahead, up to 3 for Just look.
+fn strictness(mode: PartitionMode) -> u8 {
+    match mode {
+        PartitionMode::Auto => 0,
+        PartitionMode::Ask => 1,
+        PartitionMode::Plan => 2,
+        PartitionMode::ReadOnly => 3,
+    }
+}
+
+/// The stricter of `a` and `b`.
+pub(crate) fn stricter(a: PartitionMode, b: PartitionMode) -> PartitionMode {
+    if strictness(b) > strictness(a) { b } else { a }
+}
+
 /// The quiet windows in force in an area: the changed window in place of `kernel` and the
-/// partition record's, then the workspace's `beside` (spec 3.3 §10 K3).
+/// partition record's, while the area still starts with those, then the workspace's
+/// `beside` (spec 3.3 §10 K3).
 pub(crate) fn quiet_windows(
     kernel: Option<QuietHours>,
     beside: Option<QuietHours>,
     record: Option<&Partition>,
     changed: Option<&AreaSettings>,
 ) -> Vec<QuietHours> {
-    let own: Vec<QuietHours> = match changed.and_then(|settings| settings.quiet_time.as_ref()) {
+    let start: Vec<QuietHours> =
+        kernel.into_iter().chain(record.and_then(|record| record.quiet_hours)).collect();
+    let own = match changed.and_then(|settings| settings.quiet_time_over(&start)) {
         Some(change) => change.value.into_iter().collect(),
-        None => kernel.into_iter().chain(record.and_then(|record| record.quiet_hours)).collect(),
+        None => start,
     };
     own.into_iter().chain(beside).collect()
 }
 
+/// The quiet windows that were in force in an area at `at`, as its changes record them
+/// (spec 3.3 §5.1): the person's quiet time set at or before `at`, else the start windows,
+/// then the workspace's.
+#[cfg(feature = "proc")]
+pub(crate) fn quiet_windows_at(
+    start: &Start,
+    changed: Option<&AreaSettings>,
+    at: chrono::DateTime<chrono::Utc>,
+) -> Vec<QuietHours> {
+    let current = changed.and_then(|settings| settings.quiet_time.as_ref());
+    let stale = changed.is_some_and(|settings| {
+        settings.quiet_time.is_some() && settings.quiet_time_over(&start.quiet).is_none()
+    });
+    let own = match changed.and_then(|settings| settings.quiet_time_at(at)) {
+        // A change the area's start has replaced since held until a restart the record does
+        // not date: the start windows judge what came after it.
+        Some(change) if stale && Some(change) == current => start.quiet.clone(),
+        Some(change) => change.value.into_iter().collect(),
+        None => start.quiet.clone(),
+    };
+    own.into_iter().chain(start.beside.iter().copied()).collect()
+}
+
 /// The daily spend cap in force in an area: the changed limit in place of `start`, the
-/// lower of the kernel's and the partition record's (spec 3.3 §10 K3).
+/// lower of the kernel's and the partition record's, while the area still starts with it
+/// (spec 3.3 §10 K3).
 pub(crate) fn spend_cap(start: Option<u64>, changed: Option<&AreaSettings>) -> Option<u64> {
-    match changed.and_then(|settings| settings.daily_spending_limit.as_ref()) {
+    match changed.and_then(|settings| settings.daily_spending_limit_over(start)) {
         Some(change) => change.value,
         None => start,
     }
+}
+
+/// The mode the person changed for an area, while its agents still start in the mode it
+/// replaced and the kernel does not refuse it (spec 3.3 §10 K3).
+pub(crate) fn changed_mode(
+    start: Option<PartitionMode>,
+    changed: Option<&AreaSettings>,
+    control: &super::ControlPlaneConfig,
+) -> Option<PartitionMode> {
+    changed
+        .and_then(|settings| settings.mode_over(start))
+        .map(|change| change.value)
+        .filter(|mode| control.refused_mode(*mode).is_none())
+}
+
+/// The changes of `settings` the area still starts with the values of, as the person sees
+/// them: `None` when none is left.
+fn in_force(settings: AreaSettings, start: &AreaStart) -> Option<AreaSettings> {
+    let mut shown = AreaSettings::new(settings.partition.clone());
+    shown.quiet_time = settings.quiet_time_over(&start.quiet_time).cloned();
+    shown.daily_spending_limit =
+        settings.daily_spending_limit_over(start.daily_spending_limit).cloned();
+    shown.mode = settings.mode_over(start.mode).cloned();
+    let any =
+        shown.quiet_time.is_some() || shown.daily_spending_limit.is_some() || shown.mode.is_some();
+    any.then_some(shown)
 }
 
 /// The routes, relative to `/api`, over the backend in their state.
@@ -254,10 +340,14 @@ pub(crate) async fn start_of(kernel: &Kernel, partition: &PartitionId) -> Result
         Some(record) => config.quotas.stricter(&record.quotas).daily_spend_cap,
         None => config.quotas.daily_spend_cap,
     };
-    let mode = record
-        .as_ref()
-        .map(|record| record.default_mode)
-        .or_else(|| config.control.start_modes.get(partition).copied());
+    // The mode the area's harness started in governs it until the next start, whatever the
+    // partition record says now.
+    let mode = config
+        .control
+        .start_modes
+        .get(partition)
+        .copied()
+        .or_else(|| record.as_ref().map(|record| record.default_mode));
     Ok(Start { quiet, beside: config.proactivity.quiet_hours.into_iter().collect(), cap, mode })
 }
 
@@ -285,13 +375,16 @@ async fn readmit(kernel: &Kernel, partition: &PartitionId, reason: &str) {
         if run.state != adk_core::RunState::Waiting {
             continue;
         }
+        let held = meta.clone();
         meta.wake = None;
         meta.labels.remove(crate::supervise::ADMISSION_LABEL);
         sup.put_meta(meta).await;
         match sup.runs.wake(&run.run_id).await {
             Ok(()) => woken += 1,
             Err(error) => {
-                tracing::warn!(process.pid = %run.run_id, error = %error, "could not wake a process a changed setting releases")
+                tracing::warn!(process.pid = %run.run_id, error = %error, "could not wake a process a changed setting releases");
+                // Its wake set and label stay, so its wake time or the next change wakes it.
+                sup.put_meta(held).await;
             }
         }
     }
@@ -308,12 +401,14 @@ pub(crate) async fn view(
 ) -> Result<AreaView> {
     let start = start_of(kernel, partition).await?;
     let changed = store.area_settings(partition).await?;
-    let quiet_time = match changed.as_ref().and_then(|settings| settings.quiet_time.as_ref()) {
-        Some(change) => change.value.into_iter().collect(),
-        None => start.quiet.clone(),
-    };
+    let quiet_time =
+        match changed.as_ref().and_then(|settings| settings.quiet_time_over(&start.quiet)) {
+            Some(change) => change.value.into_iter().collect(),
+            None => start.quiet.clone(),
+        };
     let daily_spending_limit = spend_cap(start.cap, changed.as_ref());
-    let mode = changed.as_ref().and_then(|settings| settings.mode.as_ref()).map(|c| c.value);
+    let mode = changed_mode(start.mode, changed.as_ref(), &kernel.config().control);
+    let changed = changed.and_then(|settings| in_force(settings, &start.area()));
     let sup = kernel.supervision();
     let today = sup.clock.now().date_naive();
     let scope = crate::stores::SpendScope::Partition(partition.clone());
@@ -351,48 +446,106 @@ async fn one(
     Ok(Json(AreaResponse { area: view(kernel, store.as_ref(), &partition).await? }))
 }
 
-/// What a change of one setting does to an area's record: given the record, the area
-/// before, who changes it and when, it sets the change and answers what the setting was and
-/// what it becomes, for the record of the change.
-type Apply = Box<
-    dyn FnOnce(
-            &mut AreaSettings,
-            &AreaView,
-            String,
-            chrono::DateTime<chrono::Utc>,
-        ) -> (serde_json::Value, serde_json::Value)
-        + Send,
->;
+/// What a change of one setting does to an area's record: it sets the change, made by
+/// `by` at `at`.
+type Set = Box<dyn Fn(&mut AreaSettings, &str, chrono::DateTime<chrono::Utc>) + Send + Sync>;
 
-/// Records `action` with the setting's value before and after, stores the change `apply`
-/// makes to the area's record, wakes the processes admission held for `readmit` so they
-/// meet the change at their next step, and answers with the area after it.
+/// A change of one setting.
+struct Setting {
+    /// The record's action, such as `settings.quiet_time`.
+    action: &'static str,
+    /// The admission label of the processes it releases, which meet it at their next step.
+    readmit: Option<&'static str>,
+    /// The setting's value in the area before.
+    from: fn(&AreaView) -> serde_json::Value,
+    /// Its value after.
+    to: serde_json::Value,
+    /// The mode it sets, which [`check_mode`] admits first.
+    mode: Option<PartitionMode>,
+    /// What it does to the area's record.
+    set: Set,
+}
+
+/// Whether an agent of `partition` is working now: a process of the area, not one of the
+/// kernel's own, is running.
+async fn working(kernel: &Kernel, partition: &PartitionId) -> Result<bool> {
+    let sup = kernel.supervision();
+    let filter = adk_core::RunFilter::default()
+        .app_name(kernel.config().app_name.clone())
+        .states([adk_core::RunState::Running]);
+    let running = sup.runs.list(filter).await?;
+    for run in running.iter().filter(|run| !run.target.starts_with("kernel.")) {
+        let area = sup.processes.get(&run.run_id).await?.map(|meta| meta.partition);
+        if area.unwrap_or_default() == *partition {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Refuses a mode the kernel refuses, and a looser mode than `before`, the area's, while an
+/// agent of the area is working: a loosening applies from an agent's next turn, never midway
+/// through one (spec 3.1 I14, spec 3.3 §10 K3).
+async fn check_mode(
+    kernel: &Kernel,
+    partition: &PartitionId,
+    before: Option<PartitionMode>,
+    mode: PartitionMode,
+) -> Result<()> {
+    if let Some(reason) = kernel.config().control.refused_mode(mode) {
+        return Err(KernelError::Config { reason: reason.to_string() });
+    }
+    let loosens = match before {
+        Some(before) => strictness(mode) < strictness(before),
+        None => mode != PartitionMode::ReadOnly,
+    };
+    if loosens && working(kernel, partition).await? {
+        return Err(KernelError::Core(adk_core::AdkError::new(
+            adk_core::ErrorComponent::Server,
+            adk_core::ErrorCategory::Conflict,
+            crate::error::INVALID_STATE_CODE,
+            format!(
+                "an agent in area `{partition}` is working: let its agents do more once it \
+                 finishes, so no turn changes its rules midway"
+            ),
+        )));
+    }
+    Ok(())
+}
+
+/// Records the change with the setting's value before and after, stores it in the area's
+/// record, after dropping the changes the area's start values have replaced, wakes the
+/// processes admission held for it so they meet it at their next step, and answers with the
+/// area after it.
 async fn change(
     backend: &dyn ControlBackend,
     caller: &Caller,
     partition: String,
-    action: &str,
-    readmit_held: Option<&str>,
-    apply: Apply,
+    setting: Setting,
 ) -> Result<Json<AreaResponse>> {
     require_owner(
         caller,
-        &format!("change {}", action.trim_start_matches("settings.").replace('_', " ")),
+        &format!("change {}", setting.action.trim_start_matches("settings.").replace('_', " ")),
     )?;
     let kernel = kernel_of(backend)?;
     let store = kernel.config().control.control_store.clone();
     let partition = known_area(kernel, store.as_ref(), partition).await?;
     let before = view(kernel, store.as_ref(), &partition).await?;
-    let mut settings = store
-        .area_settings(&partition)
-        .await?
-        .unwrap_or_else(|| AreaSettings::new(partition.clone()));
-    let (from, to) =
-        apply(&mut settings, &before, caller.context.user_id.clone(), kernel.config().clock.now());
-    record(backend, caller, action, Some(partition.as_str()), &[("from", from), ("to", to)])
+    if let Some(mode) = setting.mode {
+        check_mode(kernel, &partition, before.mode, mode).await?;
+    }
+    let extra = [("from", (setting.from)(&before)), ("to", setting.to.clone())];
+    record(backend, caller, setting.action, Some(partition.as_str()), &extra).await?;
+    let start = start_of(kernel, &partition).await?.area();
+    let (by, at) = (caller.context.user_id.as_str(), kernel.config().clock.now());
+    let set = &setting.set;
+    store
+        .update_area_settings(&partition, &|settings: &mut AreaSettings| {
+            settings.settle(&start);
+            set(settings, by, at);
+        })
         .await?;
-    store.put_area_settings(settings).await?;
-    if let Some(reason) = readmit_held {
+    if let Some(reason) = setting.readmit {
         readmit(kernel, &partition, reason).await;
     }
     Ok(Json(AreaResponse { area: view(kernel, store.as_ref(), &partition).await? }))
@@ -404,7 +557,8 @@ async fn set_quiet_time(
     UrlPath(partition): UrlPath<String>,
     Json(request): Json<QuietTimeRequest>,
 ) -> Result<Json<AreaResponse>> {
-    if let Some(window) = request.window
+    let window = request.window;
+    if let Some(window) = window
         && window.start == window.end
     {
         return Err(KernelError::Config {
@@ -412,12 +566,17 @@ async fn set_quiet_time(
                 .into(),
         });
     }
-    let apply: Apply = Box::new(move |settings, before, by, at| {
-        settings.quiet_time = Some(Change::new(request.window, by, at));
-        (json!(before.quiet_time), json!(request.window))
-    });
-    change(backend.as_ref(), &caller, partition, "settings.quiet_time", Some("quiet_hours"), apply)
-        .await
+    let setting = Setting {
+        action: "settings.quiet_time",
+        readmit: Some("quiet_hours"),
+        from: |before| json!(before.quiet_time),
+        to: json!(window),
+        mode: None,
+        set: Box::new(move |settings, by, at| {
+            settings.change_quiet_time(Change::new(window, by, at));
+        }),
+    };
+    change(backend.as_ref(), &caller, partition, setting).await
 }
 
 async fn set_spending_limit(
@@ -426,12 +585,18 @@ async fn set_spending_limit(
     UrlPath(partition): UrlPath<String>,
     Json(request): Json<SpendingLimitRequest>,
 ) -> Result<Json<AreaResponse>> {
-    let apply: Apply = Box::new(move |settings, before, by, at| {
-        settings.daily_spending_limit = Some(Change::new(request.micro_usd, by, at));
-        (json!(before.daily_spending_limit), json!(request.micro_usd))
-    });
-    change(backend.as_ref(), &caller, partition, "settings.spending_limit", Some("budget"), apply)
-        .await
+    let limit = request.micro_usd;
+    let setting = Setting {
+        action: "settings.spending_limit",
+        readmit: Some("budget"),
+        from: |before| json!(before.daily_spending_limit),
+        to: json!(limit),
+        mode: None,
+        set: Box::new(move |settings, by, at| {
+            settings.daily_spending_limit = Some(Change::new(limit, by, at));
+        }),
+    };
+    change(backend.as_ref(), &caller, partition, setting).await
 }
 
 async fn set_mode(
@@ -440,11 +605,16 @@ async fn set_mode(
     UrlPath(partition): UrlPath<String>,
     Json(request): Json<PartitionModeRequest>,
 ) -> Result<Json<AreaResponse>> {
-    let apply: Apply = Box::new(move |settings, before, by, at| {
-        settings.mode = Some(Change::new(request.mode, by, at));
-        (json!(before.mode), json!(request.mode))
-    });
-    change(backend.as_ref(), &caller, partition, "settings.mode", None, apply).await
+    let mode = request.mode;
+    let setting = Setting {
+        action: "settings.mode",
+        readmit: None,
+        from: |before| json!(before.mode),
+        to: json!(mode),
+        mode: Some(mode),
+        set: Box::new(move |settings, by, at| settings.mode = Some(Change::new(mode, by, at))),
+    };
+    change(backend.as_ref(), &caller, partition, setting).await
 }
 
 #[cfg(test)]

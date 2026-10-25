@@ -133,13 +133,14 @@ pub use client::ControlClient;
 pub use memory::{FactOrigin, MemoryBook, RememberedFact, TidyUp, TidyUpUndo};
 pub use record::{RecordBook, RecordCheck, RecordLine};
 pub use server::ControlPlane;
+pub(crate) use store::LastRead;
 #[cfg(feature = "postgres")]
 pub use store::PostgresControlStore;
 #[cfg(feature = "redis")]
 pub use store::RedisControlStore;
 #[cfg(feature = "sqlite")]
 pub use store::SqliteControlStore;
-pub use store::{AreaSettings, AwayCursor, Change, ControlStore, InMemoryControlStore};
+pub use store::{AreaSettings, AreaStart, AwayCursor, Change, ControlStore, InMemoryControlStore};
 
 /// The control plane's route paths, relative to the `/api` prefix they are served under
 /// (spec 3.2 §7.11).
@@ -291,6 +292,10 @@ pub struct ControlPlaneConfig {
     /// The mode each area's agents started in, which the settings routes report until the
     /// person changes it (spec 3.3 §10 K3). A partition's record gives its own.
     pub start_modes: BTreeMap<crate::partition::PartitionId, crate::partition::PartitionMode>,
+    /// The modes the settings routes refuse to set, each with why, such as Auto on a kernel
+    /// served beyond loopback without a sandbox (spec 3.3 §10 K3); a change to one made
+    /// before is not applied.
+    pub refused_modes: Vec<(crate::partition::PartitionMode, String)>,
 }
 
 impl ControlPlaneConfig {
@@ -366,6 +371,37 @@ impl ControlPlaneConfig {
         self
     }
 
+    /// Refuses to set `mode` through the settings routes, saying `reason` (spec 3.3 §10 K3):
+    /// the start checks of `adk-rust up` hold for a mode changed while it runs.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_kernel::PartitionMode;
+    /// use adk_kernel::control::ControlPlaneConfig;
+    ///
+    /// let config = ControlPlaneConfig::default()
+    ///     .with_refused_mode(PartitionMode::Auto, "Go ahead needs --sandbox beyond loopback");
+    /// assert_eq!(config.refused_modes.len(), 1);
+    /// ```
+    #[must_use]
+    pub fn with_refused_mode(
+        mut self,
+        mode: crate::partition::PartitionMode,
+        reason: impl Into<String>,
+    ) -> Self {
+        self.refused_modes.push((mode, reason.into()));
+        self
+    }
+
+    /// Why the settings routes refuse to set `mode`, or `None`.
+    pub fn refused_mode(&self, mode: crate::partition::PartitionMode) -> Option<&str> {
+        self.refused_modes
+            .iter()
+            .find(|(refused, _)| *refused == mode)
+            .map(|(_, reason)| reason.as_str())
+    }
+
     /// The socket's path under `home`, or `None` when no socket is served.
     pub fn socket_path(&self, home: &Path) -> Option<PathBuf> {
         self.socket.as_ref().map(|socket| home.join(socket))
@@ -424,6 +460,7 @@ impl Default for ControlPlaneConfig {
             memory: None,
             record: None,
             start_modes: BTreeMap::new(),
+            refused_modes: Vec::new(),
         }
     }
 }
@@ -438,6 +475,7 @@ impl fmt::Debug for ControlPlaneConfig {
             .field("memory", &self.memory.is_some())
             .field("record", &self.record.is_some())
             .field("start_modes", &self.start_modes)
+            .field("refused_modes", &self.refused_modes)
             .finish()
     }
 }
