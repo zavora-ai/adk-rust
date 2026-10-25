@@ -53,13 +53,16 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
     let mut renderer = Renderer::new(theme);
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let pump = Pump::start(
+    let mut pump = Pump::start(
         surface.engine.clone(),
         surface.caller.clone(),
         session.clone(),
         surface.poll,
         tx.clone(),
     );
+    if let Some(notices) = surface.late.take() {
+        pump.forward_notices(notices, tx.clone());
+    }
     let mut commands = Commands::default();
     let mut shown = vec![session];
     // A voice conversation shows its own session (spec 3.3 §5.6).

@@ -339,7 +339,8 @@ pub(crate) fn card(
         .iter()
         .map(|answer| {
             callback_data(*answer, &card.decision, card.version)
-                .map(|data| json!({ "text": answer.label(), "callback_data": data }))
+                // The card's own words: "Don't add" on a suggested agent (spec 3.3 §7.2).
+                .map(|data| json!({ "text": card.label(*answer), "callback_data": data }))
         })
         .collect();
     let buttons = buttons.unwrap_or_default();
@@ -713,6 +714,33 @@ mod tests {
         for argument in ["client@example.com", "secret-body-91c2", "4200"] {
             assert!(!wire.contains(argument), "{argument} left the machine: {wire}");
         }
+    }
+
+    /// A suggested agent offers only **Don't add** in chat (spec 3.3 §5.7, §7.2, S-I11).
+    #[test]
+    fn a_suggested_agent_offers_only_dont_add() {
+        let call = adk_core::ToolConfirmationRequest::new(
+            adk_kernel::agents::AGENT_CREATE_TOOL_NAME,
+            json!({ "displayName": "Finance" }),
+        );
+        let request = adk_core::ApprovalRequest::new(
+            "agent-finance-0123456789ab",
+            adk_core::ApprovalScope::new("adk-rust", "ana", "s1"),
+            &call,
+            adk_core::ApprovalPolicy::new([adk_core::ApproverSelector::group("operator")]),
+        )
+        .with_allowed_actions([
+            adk_core::ApprovalAction::Approve,
+            adk_core::ApprovalAction::Reject,
+        ]);
+        let card = DecisionCard::from_request(&request, Some("https://home.example/ui/"));
+        let keyboard = drawn(&card).keyboard.unwrap();
+        assert_eq!(
+            keyboard,
+            json!({ "inline_keyboard": [[
+                { "text": "Don't add", "callback_data": format!("n:{}:{}", card.version, card.decision) },
+            ]] })
+        );
     }
 
     /// With its decision at hand, a card is headed by the tool in plain words, as the

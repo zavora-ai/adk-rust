@@ -128,12 +128,57 @@ impl Projector {
         AgentRef { name: name.to_string(), avatar: avatar(&display_name), display_name }
     }
 
+    /// The agent a suggestion would add, as its card shows it (spec 3.3 §5.7): `None` for
+    /// every other request.
+    pub(crate) fn adds_agent(
+        &self,
+        request: &ApprovalRequest,
+    ) -> Option<crate::agents::AgentCardView> {
+        if request.tool_name != adk_kernel::agents::AGENT_CREATE_TOOL_NAME {
+            return None;
+        }
+        let suggester = self.agent(&agent_name(request)).display_name;
+        let area = request.args_redacted.get("area").and_then(Value::as_str).unwrap_or_default();
+        crate::agents::AgentCardView::of_request(
+            request,
+            &suggester,
+            &crate::agents::area_name(area),
+        )
+    }
+
     /// The facts the §7.2 rules read.
     pub(crate) fn facts(
         &self,
         request: &ApprovalRequest,
         always_label: Option<String>,
     ) -> DecisionFacts {
+        // A suggested agent is added or not, never always or edited (spec 3.3 §7.2); long
+        // instructions are expanded before it is added, as a long call is (S-I13).
+        if let Some(agent) = self.adds_agent(request) {
+            let assessed = adk_kernel::agents::AgentRecord::new(
+                String::new(),
+                agent.draft.clone().into_definition(),
+                adk_kernel::agents::AgentRecordState::Proposed,
+                adk_kernel::agents::AgentOrigin::ByHand,
+                adk_core::principal::SubjectRef::human(&request.scope.user_id),
+                request.created_at,
+            );
+            return DecisionFacts {
+                risk: request.risk.into(),
+                money: adk_harness::assess_agent(&assessed).money,
+                truncated: agent.instructions_truncated,
+                allows: request
+                    .allowed_actions
+                    .iter()
+                    .copied()
+                    .filter(|action| {
+                        matches!(action, ApprovalAction::Approve | ApprovalAction::Reject)
+                    })
+                    .collect(),
+                always_label: None,
+                adds_agent: true,
+            };
+        }
         // Edit replaces the call's arguments with what the surface sends back, so it is
         // offered only where the card shows those arguments (spec 3.3 §7.2): never over a
         // redacted view or an elicitation's form, which would be submitted as written. A take
@@ -155,6 +200,7 @@ impl Projector {
                 })
                 .collect(),
             always_label: always_label.filter(|_| !take_over),
+            adds_agent: false,
         }
     }
 
@@ -277,7 +323,11 @@ impl Projector {
             .enumerate()
             .map(|(index, text)| TimelineStep { text, current: index == last })
             .collect();
-        let reversibility = (self.reversibility)(request);
+        let adds_agent = self.adds_agent(request);
+        let reversibility = match adds_agent {
+            Some(_) => Reversibility::CanBeRemoved,
+            None => (self.reversibility)(request),
+        };
         let also: Vec<String> = self
             .places
             .iter()
@@ -308,11 +358,13 @@ impl Projector {
             reversibility_text: match reversibility {
                 Reversibility::CantBeUnsent => words::CANT_BE_UNSENT,
                 Reversibility::CantBeUndone => words::CANT_BE_UNDONE,
+                Reversibility::CanBeRemoved => crate::agents::words::YOU_CAN_REMOVE_IT_LATER,
             }
             .to_string(),
             money: facts.money,
             also_shown: words::also_shown(&also),
             decided,
+            adds_agent,
         }
     }
 
@@ -610,6 +662,10 @@ impl Projector {
             status_text,
             wake_at: state.wake_at.filter(|_| status == AgentStatus::Asleep && !state.suspended),
             session_id: state.session_id.clone(),
+            area: None,
+            mode: None,
+            added: false,
+            can_change: false,
         }
     }
 
@@ -915,6 +971,15 @@ pub(crate) fn heading(request: &ApprovalRequest) -> String {
         return request.summary.clone();
     }
     if let Some(operation) = request.tool_name.strip_prefix(KERNEL_TOOL_PREFIX) {
+        // The kernel's heading of a suggested agent, never the model's (spec 3.3 S-I13).
+        if request.tool_name == adk_kernel::agents::AGENT_CREATE_TOOL_NAME {
+            let name = request
+                .args_redacted
+                .get("displayName")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return crate::agents::words::add_an_agent_called(name);
+        }
         if request.tool_name == AGENDA_TOOL_NAME {
             return match agenda_item(request) {
                 Some(item) if !item.title.trim().is_empty() => sentence(&item.title),

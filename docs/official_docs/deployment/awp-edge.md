@@ -126,6 +126,10 @@ mounted, `with_a2a` keeps its JSON-RPC routes but the edge serves
 | `POST /awp/v2/capabilities/{name}` | A call: `200` output, `202` held call, or an error envelope; the body is JSON or form-encoded |
 | `GET /awp/v2/calls/{id}` | A held call; from `known` up only to the requester that made it |
 | `GET /awp/v2/chat` | The on-site assistant over a WebSocket, when a public agent is hosted |
+| `POST /awp/v2/events`; `GET`, `PATCH`, `DELETE /awp/v2/events/{id}`; `POST /awp/v2/events/replay` | Event subscriptions |
+| `GET /awp/v2/events/changes/{seq}/{page}` | Further item ids of a release's `catalog.changed`, from page 2 |
+| `POST /awp/v2/consent`, `POST /awp/v2/consent/revoke`, `GET /awp/v2/consent/export`, `POST /awp/v2/consent/erase` | Consent receipts, authenticated to the subject |
+| `POST /awp/v2/beacon` | Cookieless measurement |
 
 ## Trust tiers
 
@@ -215,6 +219,67 @@ async fn contain(edge: &AwpEdge) -> Result<(), StatusError> {
     Ok(())
 }
 ```
+
+## Events
+
+Subscriptions need tier `known` or above through Web Bot Auth or OAuth, and belong to the
+requester that created them. `POST /awp/v2/events` with `{"types": [...], "url": "https://…"}`
+answers `201` with the subscription and its Standard Webhooks secret, shown once. A URL that is
+not `https`, or that names or resolves to a loopback, private or link-local address, is refused.
+
+| Event | Published by |
+|-------|--------------|
+| `site.status.changed` | The edge, on every status transition |
+| `consent.revoked` | The edge, to the requesters whose calls referenced the receipt |
+| `site.release.published`, `catalog.changed` | The site's release pipeline, through `AwpEdge::events()` |
+| `order.updated` | The site's commerce capabilities, to the requester that placed the order |
+| `subscription.suspended` | The edge, once, to a subscription it suspends |
+
+Each delivery carries `webhook-id` (the event id), `webhook-timestamp`, `webhook-signature` and
+`AWP-Version: 2.0`. A failed delivery is retried after 1 s, 5 s, 30 s, 5 min, 30 min and 2 h with
+jitter; six consecutive failures suspend the subscription, and `PATCH` with
+`{"state": "active"}` reactivates it. Events are retained 72 hours; `POST /awp/v2/events/replay`
+redelivers them under their original ids. `EdgeEvents::announce_catalog` publishes the
+`catalog.changed` of an `adk-site` announcement and serves its further pages; give the
+pipeline's `changes_url` the edge's `/awp/v2/events/changes` base.
+
+## Consent
+
+`ConsentConfig` names the scopes the site asks for, the policy versions with their digests, and
+the key subject sessions are authenticated with. `POST /awp/v2/consent` answers `201` with a
+receipt signed by the edge's `receipt` key and the subject's session token in `AWP-Subject`;
+the subject is a pseudonymous `subj_…` reference. The other consent routes authenticate the
+subject by that token, in `AWP-Subject` or a signed link's `subject` parameter, never by the
+requester's tier.
+
+A revocation takes effect at once: pending held calls that rely on the receipt end `rejected`
+with `consent_required`, later calls cannot use it, and `consent.revoked` reaches the
+requesters that referenced it. `GET /awp/v2/consent/export` returns the receipts and what the
+`SubjectData` holds; `POST /awp/v2/consent/erase` revokes, erases the subject's data through
+`SubjectData` and erases the receipts. The default `LeadsData` exports the leads that reference
+the subject's receipts and erases none, since a `LeadStore` cannot delete.
+
+## The beacon
+
+`POST /awp/v2/beacon` with `{"kind": "pageview", "path": "/pricing"}` or `{"kind": "event",
+"name": "signup"}` counts per day and answers `204`. It sets no cookie, stores no address, cuts
+query strings and fragments from paths, counts nothing for a request with `Sec-GPC: 1`, and
+counts a visitor only under a live `persistent_profile` receipt the beacon names.
+`AwpEdge::beacon()` reads the counts — `pageviews`, `pageviews:{path}`, `events:{name}`,
+`visitors` — in the shape of the kernel's `KpiSource::read`. The content origin posts to the
+edge origin, so list it in the server's allowed origins.
+
+## Durable stores
+
+| Backend | Feature | Type |
+|---------|---------|------|
+| SQLite | `awp-sqlite` | `adk_server::awp::stores::SqliteEdgeStores` |
+| PostgreSQL | `awp-postgres` | `adk_server::awp::stores::PostgresEdgeStores` |
+| Redis | `awp-redis` | `adk_server::awp::stores::RedisEdgeStores` |
+
+Each implements the six edge store traits, passes `adk_awp::edge_store_conformance_tests!`, and
+keeps one site's records under its `with_site` namespace. Call `migrate` once, then pass
+`edge_stores()` to `AwpEdgeBuilder::stores`.
 
 ## Related
 

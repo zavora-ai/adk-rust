@@ -134,6 +134,15 @@ pub struct HarnessAgentBuilder {
     kernel_ledger: adk_kernel::proc::LateLedgerSink,
     #[cfg(feature = "kernel")]
     partition: crate::partition::PartitionOptions,
+    /// The agent a person added that this harness is built for (spec 3.3 §5.7, H3).
+    #[cfg(feature = "kernel")]
+    added: Option<crate::agents::AddedAgent>,
+    /// Where `propose_agent` suggests agents: set on the primary agent only (spec 3.3 §5.7).
+    #[cfg(all(feature = "kernel", feature = "web"))]
+    agent_proposer: Option<Arc<dyn crate::agents::SuggestAgent>>,
+    /// The kernel target this harness stamps its sessions with (spec 3.3 §5.7 "Threads").
+    #[cfg(feature = "kernel")]
+    session_stamp: Option<String>,
     action_ledger: Option<Arc<dyn ActionLedger>>,
     confirmation_timeout: Duration,
     shell: ShellConfig,
@@ -249,6 +258,12 @@ impl HarnessAgentBuilder {
             kernel_ledger: adk_kernel::proc::LateLedgerSink::new(),
             #[cfg(feature = "kernel")]
             partition: crate::partition::PartitionOptions::default(),
+            #[cfg(feature = "kernel")]
+            added: None,
+            #[cfg(all(feature = "kernel", feature = "web"))]
+            agent_proposer: None,
+            #[cfg(feature = "kernel")]
+            session_stamp: None,
             action_ledger: None,
             confirmation_timeout: Duration::from_secs(300),
             shell: ShellConfig::default(),
@@ -582,6 +597,102 @@ impl HarnessAgentBuilder {
             Some(drivers) => self.partition_drivers(&drivers),
             None => self,
         }
+    }
+
+    /// Stamps every session this harness runs with `target`, its kernel target, on its first
+    /// run, and refuses a session another agent stamped (spec 3.3 §5.7 "Threads"):
+    /// [`AGENT_STATE_KEY`](crate::AGENT_STATE_KEY). `adk-rust up` stamps the primary agent's
+    /// sessions `adk-rust`; an added agent stamps its own id.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let builder = adk_harness::HarnessAgent::builder("adk-rust").session_stamp("adk-rust");
+    /// # let _ = builder;
+    /// ```
+    #[cfg(feature = "kernel")]
+    pub fn session_stamp(mut self, target: impl Into<String>) -> Self {
+        self.session_stamp = Some(target.into());
+        self
+    }
+
+    /// Gives this harness `propose_agent`, suggesting agents to the agent table of the kernel
+    /// `handle` is bound to (spec 3.3 §5.7, §10 H3). `adk-rust up` binds it on the primary
+    /// agent only; an added agent never has the tool. Needs feature `web`, whose screening the
+    /// suggestion's instructions pass.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let handle = adk_kernel::agents::AgentsHandle::new();
+    /// let builder = adk_harness::HarnessAgent::builder("adk-rust").agents_handle(handle);
+    /// # let _ = builder;
+    /// ```
+    #[cfg(all(feature = "kernel", feature = "web"))]
+    pub fn agents_handle(mut self, handle: adk_kernel::agents::AgentsHandle) -> Self {
+        self.agent_proposer = Some(Arc::new(handle));
+        self
+    }
+
+    /// The harness of the agent a person added (spec 3.3 §5.7, H3): see
+    /// [`added_agent`](Self::added_agent).
+    #[cfg(feature = "kernel")]
+    pub(crate) fn lower_added(mut self, added: crate::agents::AddedAgent) -> Self {
+        self.name = added.id.clone();
+        self.session_stamp = Some(added.id.clone());
+        if !added.description.is_empty() {
+            self.description = Some(added.description.clone());
+        }
+        if !added.instructions.is_empty() {
+            self.instruction = Some(added.instructions.clone());
+        }
+        self.mode = added.mode_in(self.mode);
+        #[cfg(feature = "team")]
+        self.members.clear();
+        self.default_members = false;
+        self.partition.coordinator = false;
+        self.goal_store = None;
+        #[cfg(feature = "graph")]
+        {
+            self.goal_engine = None;
+        }
+        #[cfg(feature = "web")]
+        {
+            self.agent_proposer = None;
+        }
+        let read_only = added.uses.files != adk_kernel::agents::FileAccess::ReadWrite;
+        if let Some(workspace) = self.workspace.take() {
+            let root = match &added.uses.folder {
+                Some(folder) => workspace.root().join(folder),
+                None => workspace.root().to_path_buf(),
+            };
+            self.workspace = Some(
+                Workspace::new(root)
+                    .writable(workspace.is_writable() && !read_only)
+                    .allow_bash(workspace.bash_allowed())
+                    .bash_timeout(workspace.bash_timeout_value())
+                    .max_output_bytes(workspace.max_output())
+                    .inherit_env(workspace.inherits_env()),
+            );
+        }
+        match &added.uses.web {
+            adk_kernel::agents::WebAccess::None => {
+                self.web = None;
+                self.search_provider = None;
+                self.provider_web_tools = Some(crate::web::ProviderWebTools::default());
+            }
+            adk_kernel::agents::WebAccess::Listed { hosts } => {
+                let web = self.web.take().unwrap_or_default();
+                self.web = Some(crate::web::WebConfig { allowed_domains: hosts.clone(), ..web });
+                self.provider_web_tools = Some(crate::web::ProviderWebTools::default());
+            }
+            adk_kernel::agents::WebAccess::Any => {}
+        }
+        if added.uses.shell == adk_kernel::agents::ShellAccess::Sandboxed {
+            self.isolated_shell_only = true;
+        }
+        self.added = Some(added);
+        self
     }
 
     /// Makes this partition's harness the coordinator, the one agent that may reach
@@ -1655,6 +1766,12 @@ impl HarnessAgentBuilder {
         let mode_store = self.mode_store.unwrap_or_else(|| Arc::new(InMemoryModeStore::new()));
         let rules =
             self.standing_rules.unwrap_or_else(|| Arc::new(InMemoryStandingRuleStore::new()));
+        // An added agent applies only the rules pinned to its own id (spec 3.3 S-I19).
+        #[cfg(feature = "kernel")]
+        let rules: Arc<dyn StandingRuleStore> = match &self.added {
+            Some(added) => Arc::new(crate::agents::PinnedOnlyRules::new(rules, added.id.clone())),
+            None => rules,
+        };
         let ledger = self.shell_ledger.unwrap_or_else(|| Arc::new(InMemoryShellLedger::new()));
         let approval_store = self
             .approval_store
@@ -1777,6 +1894,22 @@ impl HarnessAgentBuilder {
             self.mode,
             partition.as_ref().map(|wired| wired.wiring.partition.id.clone()),
         )));
+        // Agents are suggested only by the primary agent, never by an added one (spec 3.3 §5.7).
+        #[cfg(all(feature = "kernel", feature = "web"))]
+        let agent_limits = Arc::new(OnceLock::new());
+        #[cfg(all(feature = "kernel", feature = "web"))]
+        if let Some(proposer) = self.agent_proposer.clone().filter(|_| self.added.is_none()) {
+            tools.push(Arc::new(crate::agents::ProposeAgentTool::new(
+                proposer,
+                mode_store.clone(),
+                self.mode,
+                agent_limits.clone(),
+                partition
+                    .as_ref()
+                    .map(|wired| wired.wiring.partition.id.clone())
+                    .unwrap_or_default(),
+            )));
+        }
         #[cfg(feature = "memory")]
         let memory_resolver = self.memory.clone().map(|config| {
             // A partition keeps working notes of its own (spec 3.2 K-I15).
@@ -2476,6 +2609,20 @@ impl HarnessAgentBuilder {
             IsolationStatus::Degraded { reason, .. } => Some(reason.clone()),
             _ => None,
         };
+        #[cfg(all(feature = "kernel", feature = "web"))]
+        let _ = agent_limits.set(
+            crate::agents::suggester_ceiling(
+                tool_names.iter().map(String::as_str),
+                &packs,
+                tool_names.iter().any(|tool| tool == "bash").then_some(&status),
+                self.mode,
+                &partition
+                    .as_ref()
+                    .map(|wired| wired.wiring.partition.drivers.clone())
+                    .unwrap_or_default(),
+            )
+            .uses,
+        );
         let info = HarnessInfo {
             name: self.name,
             default_mode: self.mode,
@@ -2549,6 +2696,8 @@ impl HarnessAgentBuilder {
                 kernel_ledger: self.kernel_ledger,
                 #[cfg(feature = "kernel")]
                 partition: partition.map(|wired| wired.wiring),
+                #[cfg(feature = "kernel")]
+                session_stamp: self.session_stamp,
                 #[cfg(feature = "web")]
                 provider_web,
                 #[cfg(feature = "mcp")]

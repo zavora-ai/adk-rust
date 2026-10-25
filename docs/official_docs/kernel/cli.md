@@ -136,6 +136,7 @@ max_tokens_per_tick = 50000
 | `consolidation.max_tokens_per_tick` | The tick's token cap | Applies only when lower |
 | `[[kernel.partitions]]`, `coordinator` | The partitions `up` runs, and the one whose harness is the coordinator | Ignored, with a note |
 | `drivers` | The driver manifests `up` mounts once you approve each ([below](#drivers)) | Ignored, with a note; its `.adk/drivers/<id>.toml` restricts the listed driver of that id |
+| `[[kernel.webhooks]]` | The signed webhooks `up` serves at `/hooks/{name}` ([below](#webhooks)) | Ignored, with a note |
 
 See [Proactivity](proactivity.md), [Scheduling](scheduling.md), [Partitions](partitions.md) and [Drivers](drivers.md) for what each does.
 
@@ -241,6 +242,32 @@ Mounting records `kernel.driver.mounted` with you as the actor, as `adk-rust dri
 does. A workspace's `.adk/drivers/<id>.toml` restricts the listed driver of the same id. Taking
 a driver out of the list does not unmount it: `adk-rust drivers unmount ID` does.
 
+### Webhooks
+
+`adk-rust up` serves the hooks the user config lists at `POST /hooks/{name}` (spec 3.5 §10
+X11). Each delivery is checked against its Standard Webhooks secret and the kill switch, and
+becomes a `kernel.wake` run keyed `hook:<name>:<webhook-id>`, so it wakes the processes asleep on
+that hook — `adk-rust wake --webhook <name>` and the partitions' triggers — and a redelivery
+wakes nothing twice.
+
+```toml
+[[kernel.webhooks]]
+name = "github"
+secret = "env:GITHUB_WEBHOOK_SECRET"       # or "file:github.whsec", relative to this file
+```
+
+| Answer | When |
+|---|---|
+| `202 Accepted` with `{"runId", "state", "duplicate": false}` | A new delivery |
+| `200 OK` with `"duplicate": true` | A redelivery of a `webhook-id` that already has a run |
+| `401` | A missing, expired or wrong signature |
+| `503` | The kernel is frozen |
+
+The secret is a `whsec_` base64 secret read from the environment or a file, never written in
+`harness.toml` itself. Banner line: `hooks /hooks/github (signed webhooks wake the kernel's
+sleepers)`. The hooks keep the server's host and origin checks, so a sender reaching the kernel
+through a proxy needs that proxy's host allowed.
+
 ## `adk-rust attach` and the REPL on a kernel
 
 ```text
@@ -342,7 +369,7 @@ $ adk-rust wake --cron "0 0 8 * * Mon-Fri" -- "summarize CI"
 |---|---|
 | `--file GLOB` | A file matching the pattern changes, relative to the current directory; the kernel watches the directory |
 | `--cron EXPR` | The expression (UTC) fires; after each run the kernel puts a successor to sleep on the same wake, so it runs at every occurrence until you kill the sleeper |
-| `--webhook NAME` | The hook delivers to an ingress on the kernel's store (`webhook_wake_hook`); `adk-rust up` serves no hooks itself |
+| `--webhook NAME` | A signed delivery reaches `POST /hooks/NAME` on `adk-rust up`, which serves the hooks `[[kernel.webhooks]]` lists ([below](#webhooks)) |
 
 The process runs on the `background` queue, in a new session unless `--session ID`;
 `adk-rust ps` shows it `waiting`, asleep on its wake set. A file or webhook sleeper wakes once.

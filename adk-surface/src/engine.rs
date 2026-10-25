@@ -145,6 +145,71 @@ pub enum Command {
         /// The mode.
         mode: Mode,
     },
+    /// Starts a thread with `agent`: the session's first message goes to it, and its
+    /// harness stamps the session as its own (spec 3.3 §5.7 "Threads").
+    #[serde(rename_all = "camelCase")]
+    NewThread {
+        /// The agent: a roster row's name.
+        agent: String,
+        /// The new session.
+        session_id: String,
+        /// The first message.
+        text: String,
+    },
+    /// Adds an agent by hand, previewed with `digest` (spec 3.3 §5.7).
+    #[serde(rename_all = "camelCase")]
+    AddAgent {
+        /// The definition.
+        draft: Box<crate::agents::AgentDraft>,
+        /// The digest of the preview the person confirmed.
+        digest: String,
+        /// The suggestion **Change it first** replaces, by the agent id it would get.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replaces: Option<String>,
+    },
+    /// Changes an agent at the version seen, previewed with `digest` (spec 3.3 §5.7).
+    #[serde(rename_all = "camelCase")]
+    ChangeAgent {
+        /// The agent.
+        agent: String,
+        /// The version seen.
+        version: u64,
+        /// The definition after the change.
+        draft: Box<crate::agents::AgentDraft>,
+        /// The digest of the preview the person confirmed.
+        digest: String,
+    },
+    /// Pauses an agent (spec 3.3 §5.7).
+    #[serde(rename_all = "camelCase")]
+    PauseAgent {
+        /// The agent.
+        agent: String,
+    },
+    /// Resumes an agent paused by hand: the web home or a paired local terminal (S-I10).
+    #[serde(rename_all = "camelCase")]
+    ResumeAgent {
+        /// The agent.
+        agent: String,
+    },
+    /// Removes an agent at the version seen, previewed with `digest` (spec 3.3 §5.7).
+    #[serde(rename_all = "camelCase")]
+    RemoveAgent {
+        /// The agent.
+        agent: String,
+        /// The version seen.
+        version: u64,
+        /// The digest of the preview that named what ends.
+        digest: String,
+    },
+    /// Copies one of the person's standing rules to an agent, pinned to it (spec 3.3 §5.7
+    /// "Copy one of your rules", S-I19).
+    #[serde(rename_all = "camelCase")]
+    CopyRuleToAgent {
+        /// The agent.
+        agent: String,
+        /// The rule.
+        rule_id: String,
+    },
 }
 
 /// What a command did (spec 3.3 §6).
@@ -217,6 +282,52 @@ pub enum CommandOutcome {
     ModeSet {
         /// The mode now.
         mode: ModeView,
+    },
+    /// The agent was added (spec 3.3 §5.7).
+    #[serde(rename_all = "camelCase")]
+    AgentAdded {
+        /// The agent now.
+        agent: crate::agents::AgentDetail,
+    },
+    /// The agent was changed.
+    #[serde(rename_all = "camelCase")]
+    AgentChanged {
+        /// The agent now.
+        agent: crate::agents::AgentDetail,
+    },
+    /// The agent was paused.
+    #[serde(rename_all = "camelCase")]
+    AgentPaused {
+        /// The agent now.
+        agent: crate::agents::AgentDetail,
+    },
+    /// The agent runs again.
+    #[serde(rename_all = "camelCase")]
+    AgentResumed {
+        /// The agent now.
+        agent: crate::agents::AgentDetail,
+    },
+    /// The agent was removed; its threads stay.
+    #[serde(rename_all = "camelCase")]
+    AgentRemoved {
+        /// What ended.
+        ended: crate::agents::EndedWork,
+    },
+    /// The agent changed since the version the surface showed: show it again (spec 3.3 §5.7).
+    #[serde(rename_all = "camelCase")]
+    AgentOutOfDate {
+        /// The agent now.
+        agent: crate::agents::AgentDetail,
+        /// "Finance was changed elsewhere at 10:01".
+        text: String,
+    },
+    /// A rule was copied to the agent (spec 3.3 S-I19).
+    #[serde(rename_all = "camelCase")]
+    RuleCopied {
+        /// The agent.
+        agent: String,
+        /// The rule's words.
+        label: String,
     },
 }
 
@@ -614,6 +725,29 @@ impl SurfaceEngine {
                 Answer::Edit | Answer::Deny => None,
             };
         }
+        // An added agent is drawn with its own name and colour (spec 3.3 §5.7).
+        if let Some(detail) = self.inner.source.agent(caller.user_id(), &card.agent.name).await? {
+            card.agent = detail.agent;
+        }
+        // "How it got here" for a suggested agent: the suggesting turn, naming what it read.
+        if card.adds_agent.is_some()
+            && let Ok(Some(events)) =
+                self.inner.source.transcript(caller.user_id(), &request.scope.session_id).await
+        {
+            let projector = &self.inner.projector;
+            let steps = crate::agents::suggestion_steps(
+                &events,
+                &card.agent.display_name,
+                request.created_at,
+                |at| projector.hh_mm(at),
+            );
+            let mut timeline: Vec<crate::model::TimelineStep> = steps
+                .into_iter()
+                .map(|text| crate::model::TimelineStep { text, current: false })
+                .collect();
+            timeline.extend(card.timeline.into_iter().skip(1));
+            card.timeline = timeline;
+        }
         Ok(card)
     }
 
@@ -855,14 +989,20 @@ impl SurfaceEngine {
     ///
     /// Returns the source's error.
     pub async fn agents(&self, caller: &Caller) -> Result<Vec<AgentRow>> {
-        Ok(self
+        let rows: Vec<AgentRow> = self
             .inner
             .source
             .agents(caller.user_id())
             .await?
             .iter()
             .map(|state| self.inner.projector.agent_row(state))
-            .collect())
+            .collect();
+        // The person's own agents join the roster from their definitions, so one that has
+        // never run is listed as Ready (spec 3.3 §5.7 "The roster").
+        let definitions = self.inner.source.agent_definitions(caller.user_id()).await?;
+        let can_change =
+            !matches!(caller.origin, Origin::Agent { .. }) && rules::may_change_agents(caller);
+        Ok(crate::agents::roster(rows, &definitions, can_change))
     }
 
     /// The agent a message goes to when the person names none (spec 3.3 §5.5): the tray's
@@ -974,6 +1114,15 @@ impl SurfaceEngine {
                 self.resume_all(caller).await
             }
             Command::SetMode { session_id, mode } => self.set_mode(caller, &session_id, mode).await,
+            Command::NewThread { agent, session_id, text } => {
+                self.new_thread(caller, &agent, session_id, text).await
+            }
+            command @ (Command::AddAgent { .. }
+            | Command::ChangeAgent { .. }
+            | Command::PauseAgent { .. }
+            | Command::ResumeAgent { .. }
+            | Command::RemoveAgent { .. }
+            | Command::CopyRuleToAgent { .. }) => self.agent_command(caller, command).await,
         }
     }
 
@@ -1587,6 +1736,16 @@ impl SurfaceEngine {
                     .into(),
             ));
         }
+        // In an added agent's own thread the mode can only make it ask more (spec 3.3 §5.7).
+        if let Some(agent) = self.inner.source.agent_of_session(caller.user_id(), session).await?
+            && let Some(detail) = self.inner.source.agent(caller.user_id(), &agent).await?
+            && project::harness_mode(detail.mode.mode).is_stricter_than(target)
+        {
+            return Err(SurfaceError::NotHere(crate::agents::words::asks_at_most(
+                &detail.draft.display_name,
+                &detail.mode.label,
+            )));
+        }
         self.transcript(caller, session).await?;
         self.audit_command(
             caller,
@@ -1596,6 +1755,159 @@ impl SurfaceEngine {
         .await?;
         self.inner.source.set_mode(caller, session, target).await?;
         Ok(CommandOutcome::ModeSet { mode: project::mode_view(target) })
+    }
+
+    // -----------------------------------------------------------------------
+    // Agents a person adds (spec 3.3 §5.7)
+    // -----------------------------------------------------------------------
+
+    /// Whether the roster ends with **New agent** for `caller` (spec 3.3 §5.7).
+    pub fn can_add_agents(&self, caller: &Caller) -> bool {
+        self.inner.source.keeps_agents()
+            && !matches!(caller.origin, Origin::Agent { .. })
+            && rules::may_change_agents(caller)
+    }
+
+    /// One agent `caller` added (spec 3.3 §5.7 "Agent settings").
+    ///
+    /// # Errors
+    ///
+    /// `surface.not_found` when the caller has no such agent, or the source's error.
+    pub async fn agent(&self, caller: &Caller, id: &str) -> Result<crate::agents::AgentDetail> {
+        self.inner
+            .source
+            .agent(caller.user_id(), id)
+            .await?
+            .ok_or_else(|| SurfaceError::not_found(format!("agent '{id}'")))
+    }
+
+    /// What `caller` may choose for an agent.
+    ///
+    /// # Errors
+    ///
+    /// `surface.not_here` where agents are not changed, or the source's error.
+    pub async fn agent_choices(&self, caller: &Caller) -> Result<crate::agents::AgentChoices> {
+        Self::may_change_agents(caller)?;
+        self.inner.source.agent_choices().await
+    }
+
+    /// **Here is what Finance can do**: the preview of `request` (spec 3.3 §5.7).
+    ///
+    /// # Errors
+    ///
+    /// `surface.not_here` where agents are not changed, or the kernel's refusal.
+    pub async fn preview_agent(
+        &self,
+        caller: &Caller,
+        request: crate::agents::AgentPreviewRequest,
+    ) -> Result<crate::agents::AgentPreview> {
+        Self::may_change_agents(caller)?;
+        self.inner.source.preview_agent(caller, request).await
+    }
+
+    /// Refuses a caller who may not change agents here: an agent, or a surface other than the
+    /// web home and the terminal (spec 3.3 §5.7, §7.2).
+    fn may_change_agents(caller: &Caller) -> Result<()> {
+        if let Origin::Agent { agent } = &caller.origin {
+            return Err(SurfaceError::NotHere(format!(
+                "an agent ({agent}) never adds, changes, pauses or removes an agent; a person \
+                 does (spec 3.3 §5.7)"
+            )));
+        }
+        if !rules::may_change_agents(caller) {
+            return Err(SurfaceError::NotHere(
+                "agents are set up and changed in the home app or the terminal (spec 3.3 §7.2)"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn new_thread(
+        &self,
+        caller: &Caller,
+        agent: &str,
+        session: String,
+        text: String,
+    ) -> Result<CommandOutcome> {
+        if text.trim().is_empty() {
+            return Err(SurfaceError::Invalid("the message is empty".into()));
+        }
+        if let Origin::Agent { agent } = &caller.origin {
+            return Err(SurfaceError::NotHere(format!(
+                "an agent ({agent}) never starts a thread for a person (spec 3.3 §7.4)"
+            )));
+        }
+        self.audit_command(
+            caller,
+            SURFACE_AUDIT_SEND,
+            json!({ "sessionId": session, "queued": false, "agent": agent }),
+        )
+        .await?;
+        self.inner.source.start_turn_with(caller, agent, &session, &text).await?;
+        Ok(CommandOutcome::Sent { session_id: session })
+    }
+
+    async fn agent_command(&self, caller: &Caller, command: Command) -> Result<CommandOutcome> {
+        Self::may_change_agents(caller)?;
+        let source = &self.inner.source;
+        let agent_of = |command: &Command| match command {
+            Command::ChangeAgent { agent, .. }
+            | Command::PauseAgent { agent }
+            | Command::ResumeAgent { agent }
+            | Command::RemoveAgent { agent, .. }
+            | Command::CopyRuleToAgent { agent, .. } => Some(agent.clone()),
+            _ => None,
+        };
+        let agent = agent_of(&command);
+        let result = match command {
+            Command::AddAgent { draft, digest, replaces } => source
+                .add_agent(caller, *draft, &digest, replaces)
+                .await
+                .map(|agent| CommandOutcome::AgentAdded { agent }),
+            Command::ChangeAgent { agent, version, draft, digest } => source
+                .change_agent(caller, &agent, version, *draft, &digest)
+                .await
+                .map(|agent| CommandOutcome::AgentChanged { agent }),
+            Command::PauseAgent { agent } => source
+                .pause_agent(caller, &agent)
+                .await
+                .map(|agent| CommandOutcome::AgentPaused { agent }),
+            Command::ResumeAgent { agent } => {
+                // Resuming is the person at the home or a paired local terminal (S-I10).
+                if !rules::may_resume_agent(caller) {
+                    return Err(SurfaceError::NotHere(
+                        words::ALL_AGENTS_STOPPED_RESUME_IN_HOME.to_string(),
+                    ));
+                }
+                source
+                    .resume_agent(caller, &agent)
+                    .await
+                    .map(|agent| CommandOutcome::AgentResumed { agent })
+            }
+            Command::RemoveAgent { agent, version, digest } => source
+                .remove_agent(caller, &agent, version, &digest)
+                .await
+                .map(|ended| CommandOutcome::AgentRemoved { ended }),
+            Command::CopyRuleToAgent { agent, rule_id } => source
+                .copy_rule_to_agent(caller, &agent, &rule_id)
+                .await
+                .map(|label| CommandOutcome::RuleCopied { agent, label }),
+            _ => return Err(SurfaceError::Invalid("not a command about an agent".into())),
+        };
+        match (result, agent) {
+            // Someone changed it since: shown again with what it is now, never overwritten.
+            (Err(error), Some(agent)) if crate::agents::local::out_of_date(&error) => {
+                let detail = self.agent(caller, &agent).await?;
+                let text = crate::agents::words::changed_in(
+                    &detail.draft.display_name,
+                    "elsewhere",
+                    &self.inner.projector.hh_mm(detail.changed_at),
+                );
+                Ok(CommandOutcome::AgentOutOfDate { agent: detail, text })
+            }
+            (result, _) => result,
+        }
     }
 
     // -----------------------------------------------------------------------

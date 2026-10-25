@@ -65,6 +65,8 @@
 #[cfg(feature = "acp-server")]
 mod acp;
 mod agent;
+#[cfg(feature = "kernel")]
+mod agents;
 mod audit;
 mod builder;
 #[cfg(feature = "graph")]
@@ -124,6 +126,11 @@ pub mod personal;
 mod preset;
 
 pub use agent::{HARNESS_UNGOVERNED_CODE, HarnessAgent, HarnessInfo, HarnessLayer, HarnessRuntime};
+#[cfg(feature = "kernel")]
+pub use agents::{
+    AGENT_SESSION_CODE, AGENT_STATE_KEY, AddedAgent, PRIMARY_AGENT_STAMP, PROPOSE_AGENT,
+    PinnedOnlyRules, assess_agent, copy_rule_to, suggester_ceiling,
+};
 #[cfg(feature = "postgres")]
 pub use approvals::PostgresStandingRuleStore;
 #[cfg(feature = "redis")]

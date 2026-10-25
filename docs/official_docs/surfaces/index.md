@@ -245,5 +245,6 @@ generated from the Rust types. `bash scripts/check-surface-api.sh` fails when th
 - [The Phone](phone.md) — the `mobile` feature: wake-ups from your own kernel, device answers and "Confirm it's you"
 - [The Desktop Tray](desktop.md) — Experimental, a separate app: the home in a desktop window and the tray panel at `/ui/tray`
 - [Voice and Video](voice.md) — the `voice` feature: spoken answers through the engine with a cancel window, the camera and the screen while their switches are on
+- [Your Agents](agents.md) — agents a person adds by asking or by hand: the roster, New agent, settings, `/agent` and the decision that adds one
 - [The Control Plane](../kernel/control-plane.md) — the kernel routes the web API sits beside
 - [Harness Modes and Approvals](../harness/modes-and-approvals.md) — held calls, standing rules, modes

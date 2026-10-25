@@ -99,6 +99,12 @@ pub mod paths {
     pub const TAKE_OVER: &str = "/surface/decisions/{id}/take-over";
     /// `GET`: the roster.
     pub const AGENTS: &str = "/surface/agents";
+    /// `GET`: one agent a person added (spec 3.3 §5.7).
+    pub const AGENT: &str = "/surface/agents/{id}";
+    /// `GET`: what a person may choose for an agent (spec 3.3 §5.7).
+    pub const AGENT_CHOICES: &str = "/surface/agents/choices";
+    /// `POST`: **Here is what Finance can do** — the preview of a change (spec 3.3 §5.7).
+    pub const AGENT_PREVIEW: &str = "/surface/agents/preview";
     /// `GET`: the status line.
     pub const STATUS: &str = "/surface/status";
     /// `GET`: "While you were away".
@@ -169,6 +175,9 @@ pub fn router(engine: SurfaceEngine) -> Router {
         .route(paths::FEED, get(feed))
         .route(paths::QUEUED, get(queued))
         .route(paths::AGENTS, get(agents))
+        .route(paths::AGENT_CHOICES, get(agent_choices))
+        .route(paths::AGENT_PREVIEW, post(agent_preview))
+        .route(paths::AGENT, get(agent))
         .route(paths::STATUS, get(status))
         .route(paths::BRIEFING, get(briefing))
         .route(paths::COMMANDS, post(command))
@@ -215,6 +224,10 @@ pub struct AgentsResponse {
     /// (spec 3.3 §5.5). Absent when the source has no single primary agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary: Option<AgentRef>,
+    /// The roster ends with **New agent**: the source keeps agents a person adds and the
+    /// caller may add one here (spec 3.3 §5.7). Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub can_add: bool,
 }
 
 /// `POST /surface/commands` body: the command, the surface it was given on and how.
@@ -476,9 +489,50 @@ async fn agents(
 ) -> Response {
     let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
     match engine.agents(&caller).await {
-        Ok(agents) => {
-            Json(AgentsResponse { agents, primary: engine.primary_agent() }).into_response()
-        }
+        Ok(agents) => Json(AgentsResponse {
+            agents,
+            primary: engine.primary_agent(),
+            can_add: engine.can_add_agents(&caller),
+        })
+        .into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+async fn agent(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Path(id): Path<String>,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.agent(&caller, &id).await {
+        Ok(detail) => Json::<crate::agents::AgentDetail>(detail).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+async fn agent_choices(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Query(query): Query<SurfaceQuery>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.agent_choices(&caller).await {
+        Ok(choices) => Json::<crate::agents::AgentChoices>(choices).into_response(),
+        Err(error) => failed(error),
+    }
+}
+
+async fn agent_preview(
+    State(engine): State<SurfaceEngine>,
+    context: Context,
+    Query(query): Query<SurfaceQuery>,
+    Json(request): Json<crate::agents::AgentPreviewRequest>,
+) -> Response {
+    let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
+    match engine.preview_agent(&caller, request).await {
+        Ok(preview) => Json::<crate::agents::AgentPreview>(preview).into_response(),
         Err(error) => failed(error),
     }
 }

@@ -51,8 +51,9 @@ adk-session.workspace = true
 adk-runner.workspace = true
 # The control-plane client, the process table, freezing and the `/proc` ledger.
 adk-kernel.workspace = true
-# Modes, `Harness::set_mode` and standing rules for "Always allow".
-adk-harness.workspace = true
+# Modes, `Harness::set_mode` and standing rules for "Always allow"; `kernel` for the
+# assessment of agents a person adds (spec 3.3 §5.7).
+adk-harness = { workspace = true, features = ["kernel"] }
 # The realtime session a voice conversation runs on (`voice`).
 adk-realtime = { workspace = true, optional = true }
 async-trait.workspace = true

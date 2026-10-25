@@ -727,6 +727,153 @@ pub fn voice_cant_approve(heading: &str, money: bool) -> String {
     format!("\"{heading}\" {why}, so voice can't approve it.")
 }
 
+// ---------------------------------------------------------------------------
+// §5.7 Your agents, §8.1–§8.2 rows
+// ---------------------------------------------------------------------------
+
+/// Starts adding an agent.
+pub const NEW_AGENT: &str = "New agent";
+/// Ask an agent to suggest one.
+pub const DESCRIBE_IT: &str = "Describe it";
+/// Fill in the definition.
+pub const SET_IT_UP_YOURSELF: &str = "Set it up yourself";
+/// Starts a thread with the primary agent holding the request.
+pub const ASK_TO_SUGGEST_ONE: &str = "Ask ADK-Rust to suggest one";
+/// Approves a suggested agent.
+pub const ADD_THIS_AGENT: &str = "Add this agent";
+/// Approves a high-risk suggested agent after confirming presence.
+pub const CONFIRM_ITS_YOU_AND_ADD: &str = "Confirm it's you and add";
+/// Opens the form with the suggestion.
+pub const CHANGE_IT_FIRST: &str = "Change it first";
+/// Refuses a suggested agent.
+pub const DONT_ADD: &str = "Don't add";
+/// Saves an agent's settings.
+pub const SAVE_CHANGES: &str = "Save changes";
+/// Gives an agent one of the person's rules.
+pub const COPY_ONE_OF_YOUR_RULES: &str = "Copy one of your rules";
+/// Pauses one agent.
+pub const PAUSE: &str = "Pause";
+/// Resumes one agent.
+pub const RESUME: &str = "Resume";
+/// Removes one agent, and confirms the removal.
+pub const REMOVE: &str = "Remove";
+/// Keeps the agent instead of removing it.
+pub const KEEP: &str = "Keep";
+/// An agent the person added that has not run yet.
+pub const READY: &str = "Ready";
+/// An agent paused by hand.
+pub const PAUSED: &str = "Paused";
+/// An agent the kernel cannot build.
+pub const CANT_START: &str = "Can't start";
+/// The reversibility of adding an agent.
+pub const YOU_CAN_REMOVE_IT_LATER: &str = "You can remove it later";
+/// What a new agent may do without asking.
+pub const NOTHING_YET: &str = "Nothing yet";
+/// The roster with no agent of the person's own.
+pub const NO_AGENTS_OF_YOUR_OWN: &str =
+    "No agents of your own yet. Add one, or ask ADK-Rust to suggest one.";
+/// The box of **Describe it**.
+pub const WHAT_SHOULD_IT_DO: &str = "What should it do?";
+/// What **Describe it** puts before the person's words in the message to the primary agent.
+pub const SUGGEST_A_NEW_AGENT_FOR: &str = "Suggest a new agent for this: ";
+
+/// The heading of the decision that adds an agent: "Add an agent called Finance".
+pub fn add_an_agent_called(name: &str) -> String {
+    format!("Add an agent called {name}")
+}
+
+/// "Here is what Finance can do".
+pub fn here_is_what_can_do(name: &str) -> String {
+    format!("Here is what {name} can do")
+}
+
+/// The button that adds an agent set up by hand: "Add Finance".
+pub fn add_named(name: &str) -> String {
+    format!("Add {name}")
+}
+
+/// How an agent came to be added: "Suggested by ADK-Rust" (spec 3.3 §8.1).
+pub fn suggested_agent_by(agent: &str) -> String {
+    format!("Suggested by {agent}")
+}
+
+/// The reason a decision ended when its agent was removed: "You removed Finance at 10:02".
+pub fn removed_at(name: &str, hh_mm: &str) -> String {
+    format!("You removed {name} at {hh_mm}")
+}
+
+/// What a message to a paused agent gets: "Finance is paused".
+pub fn is_paused(name: &str) -> String {
+    format!("{name} is paused")
+}
+
+/// The mode cap in an added agent's own thread: "Finance asks first at most. Change it in
+/// Finance's settings."
+pub fn asks_at_most(name: &str, mode: &str) -> String {
+    format!("{name} {} at most. Change it in {name}'s settings.", mode_status(mode).to_lowercase())
+}
+
+fn plural(count: u32, one: &str, many: &str) -> String {
+    if count == 1 { format!("1 {one}") } else { format!("{count} {many}") }
+}
+
+/// What removing an agent ends: "Removing Finance stops 1 piece of work, ends 2 decisions
+/// waiting for you and 1 routine. Its threads stay."
+pub fn removing_ends(name: &str, ended: &crate::agents::EndedWork) -> String {
+    let mut ends = Vec::new();
+    if ended.decisions > 0 {
+        ends.push(format!("{} waiting for you", plural(ended.decisions, "decision", "decisions")));
+    }
+    if ended.routines > 0 {
+        ends.push(plural(ended.routines, "routine", "routines"));
+    }
+    if ended.follow_ups > 0 {
+        ends.push(plural(ended.follow_ups, "follow-up", "follow-ups"));
+    }
+    let ends = match ends.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    let body = match (ended.work, ends.is_empty()) {
+        (0, true) => format!("Removing {name} ends nothing that is running"),
+        (0, false) => format!("Removing {name} ends {ends}"),
+        (work, true) => {
+            format!("Removing {name} stops {}", plural(work, "piece of work", "pieces of work"))
+        }
+        (work, false) => format!(
+            "Removing {name} stops {}, ends {ends}",
+            plural(work, "piece of work", "pieces of work")
+        ),
+    };
+    format!("{body}. Its threads stay.")
+}
+
+/// A suggestion the kernel refused when it was approved: "Finance wasn't added: ADK-Rust can
+/// no longer use the web, so Finance can't either."
+pub fn was_not_added(name: &str, reason: &str) -> String {
+    format!("{name} wasn't added: {reason}")
+}
+
+/// A change refused because someone changed the agent first: "Finance was changed in the
+/// terminal at 10:01".
+pub fn changed_in(name: &str, place: &str, hh_mm: &str) -> String {
+    format!("{name} was changed {place} at {hh_mm}")
+}
+
+/// The record's sentence of a change: "You added Finance in the home app".
+pub fn agent_change(kind: &str, name: &str, place: &str) -> String {
+    match kind {
+        "proposed" => format!("{name} was suggested {place}"),
+        "created" => format!("You added {name} {place}"),
+        "paused" => format!("You paused {name} {place}"),
+        "resumed" => format!("You resumed {name} {place}"),
+        "removing" | "removed" => format!("You removed {name} {place}"),
+        "refused" => format!("{name} wasn't added"),
+        _ => format!("You changed {name} {place}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

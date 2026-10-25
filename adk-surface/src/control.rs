@@ -426,7 +426,56 @@ impl Source for ControlSource {
                 },
             );
         }
+        // A removed agent leaves the roster; the kernel's own targets are never in its table.
+        let mut gone = Vec::new();
+        for name in latest.keys() {
+            if let Ok(view) = self.client.agent(name).await
+                && matches!(
+                    view.agent.state,
+                    adk_kernel::agents::AgentRecordState::Removing
+                        | adk_kernel::agents::AgentRecordState::Removed
+                )
+            {
+                gone.push(name.clone());
+            }
+        }
+        latest.retain(|name, _| !gone.contains(name));
         Ok(latest.into_values().collect())
+    }
+
+    // The terminal changes agents through `/agent` on the kernel; this source reads them for
+    // the roster (spec 3.3 §5.7, §10 L1).
+    async fn agent_definitions(&self, user: &str) -> Result<Vec<crate::agents::AgentDetail>> {
+        let views = match self.client.agents().await {
+            Ok(views) => views,
+            // A kernel without agents of a person's own lists none.
+            Err(error)
+                if matches!(
+                    error.category(),
+                    adk_core::ErrorCategory::NotFound | adk_core::ErrorCategory::Unsupported
+                ) =>
+            {
+                return Ok(Vec::new());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let offset = *chrono::Local::now().offset();
+        Ok(views
+            .into_iter()
+            .map(|view| {
+                crate::agents::AgentDetail::of(
+                    &view.agent,
+                    view.cant_start,
+                    user,
+                    "ADK-Rust",
+                    offset,
+                )
+            })
+            .collect())
+    }
+
+    async fn agent(&self, user: &str, id: &str) -> Result<Option<crate::agents::AgentDetail>> {
+        Ok(self.agent_definitions(user).await?.into_iter().find(|detail| detail.id == id))
     }
 
     async fn busy(&self, user: &str, session: &str) -> Result<bool> {

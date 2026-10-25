@@ -113,6 +113,7 @@ A chat card carries the agent, the risk and a short summary, never the call's ar
 | `GET /surface/openapi.json` | The OpenAPI 3.1 document |
 | `POST /surface/decisions/{id}/take-over` | The secret a person typed, for a take-over card (`web::take_over_router`, beside a harness that takes over) |
 | `POST /surface/decisions/{id}/answer`, `POST /surface/stop` | A paired device's answer by touch and its Stop all (`web::devices_router`) |
+| `GET /surface/agents/{id}`, `GET /surface/agents/choices`, `POST /surface/agents/preview` | Agents a person adds: one agent's definition, what may be chosen, and **Here is what Finance can do** with the digest a change applies with; changes are commands (spec 3.3 §5.7, [Your Agents](../docs/official_docs/surfaces/agents.md)) |
 | `/surface/phone/**`, `POST /surface/decisions/{id}/confirm[/options]` | The phone's push subscription, passkeys, pairing QR code and device list, and "Confirm it's you" (`mobile::router`, feature `mobile`) |
 
 Every route checks the caller against the session owner (S-I8). The OpenAPI document and the

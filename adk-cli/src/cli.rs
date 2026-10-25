@@ -690,6 +690,24 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
+    /// Your own agents on the running kernel: list, show, new, edit, pause, resume, remove
+    /// (spec 3.3 §5.7). Put --home, --server or --token before the verb; every change shows
+    /// what it does and asks before it applies
+    #[cfg(feature = "harness")]
+    Agents {
+        /// Print JSON, for scripts
+        #[arg(long, value_name = "FORMAT", value_parser = ["text", "json"], default_value = "text")]
+        output: String,
+        /// Apply a change without asking; refused at high risk
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        kernel: KernelTarget,
+        /// The verb and its fields, as `/agent` takes them: new --name Finance --does "..."
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "VERB")]
+        args: Vec<String>,
+    },
+
     /// The running kernel's partitions: list them, add one, or set one's mode
     #[cfg(feature = "harness")]
     Partitions {
@@ -782,6 +800,24 @@ pub enum Commands {
     Audit {
         #[command(subcommand)]
         command: AuditCommands,
+    },
+
+    /// An AWP 2.0 site's releases, content and migration: build, publish, roll back, draft,
+    /// schedule, correct, withdraw, revert, migrate and freeze (spec 3.5 §8.1)
+    #[cfg(feature = "website")]
+    Site {
+        #[command(subcommand)]
+        command: crate::site_cli::SiteCommands,
+        #[command(flatten)]
+        target: crate::site_cli::SiteTarget,
+    },
+
+    /// AWP 2.0: verify a domain, run the conformance kit, manage the root and delegated keys,
+    /// migrate a 1.x business.toml (spec 3.5 §8.1)
+    #[cfg(feature = "website")]
+    Awp {
+        #[command(subcommand)]
+        command: crate::awp_cli::AwpCommands,
     },
 }
 

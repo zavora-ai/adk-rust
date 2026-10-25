@@ -175,6 +175,9 @@ pub struct HarnessRuntime {
     /// The partition the harness was built for and its policy (spec 3.2 §7.8).
     #[cfg(feature = "kernel")]
     pub(crate) partition: Option<crate::partition::PartitionWiring>,
+    /// The kernel target the harness stamps its sessions with (spec 3.3 §5.7 "Threads").
+    #[cfg(feature = "kernel")]
+    pub(crate) session_stamp: Option<String>,
     /// Provider-executed search and URL tools, when the operator enabled any (spec 3.1 §7.20).
     #[cfg(feature = "web")]
     pub(crate) provider_web: Option<Arc<crate::web::provider::ProviderWebToolset>>,
@@ -832,6 +835,13 @@ impl Agent for HarnessAgent {
             Some(wiring) => wiring.session_mark(ctx.as_ref(), self.name())?,
             None => None,
         };
+        // A thread belongs to one agent: the agent's harness stamps it on its first run and
+        // every other agent refuses it (spec 3.3 §5.7 "Threads").
+        #[cfg(feature = "kernel")]
+        let stamp = match &self.runtime.session_stamp {
+            Some(stamp) => crate::agents::stamp_event(ctx.as_ref(), stamp, self.name())?,
+            None => None,
+        };
         // A run that starts in Ask or Auto with a provider-executed web tool declared
         // records that an ungoverned fetch path was live (spec 3.1 §7.20, I49).
         #[cfg(feature = "web")]
@@ -858,6 +868,14 @@ impl Agent for HarnessAgent {
             Some(mark) => {
                 use futures::StreamExt as _;
                 Box::pin(futures::stream::iter([Ok(mark)]).chain(events)) as EventStream
+            }
+            None => events,
+        };
+        #[cfg(feature = "kernel")]
+        let events = match stamp {
+            Some(stamp) => {
+                use futures::StreamExt as _;
+                Box::pin(futures::stream::iter([Ok(stamp)]).chain(events)) as EventStream
             }
             None => events,
         };

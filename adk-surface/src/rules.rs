@@ -151,6 +151,10 @@ pub struct DecisionFacts {
     /// The label of "Always allow" when the source can create the standing rule, such as
     /// "Always allow for this person"; `None` when it cannot.
     pub always_label: Option<String>,
+    /// The decision adds an agent a person was suggested (`kernel:agent.create`): it follows
+    /// the "Always allow" column, with **Add this agent** and **Don't add** (spec 3.3 §5.7,
+    /// §7.2).
+    pub adds_agent: bool,
 }
 
 /// One answer a surface may offer, with its label (spec 3.3 §8.2).
@@ -205,6 +209,7 @@ impl Allowed {
 ///     truncated: false,
 ///     allows: ApprovalAction::ALL.to_vec(),
 ///     always_label: Some("Always allow for this person".into()),
+///     adds_agent: false,
 /// };
 /// let chat = Caller::human("ana", SurfaceKind::Chat, Origin::Chat { channel: "Telegram".into() });
 /// let answers: Vec<Answer> = allowed_answers(&chat, &facts).options.iter().map(|o| o.answer).collect();
@@ -215,6 +220,9 @@ impl Allowed {
 /// ```
 pub fn allowed_answers(caller: &Caller, facts: &DecisionFacts) -> Allowed {
     let row = row(caller);
+    if facts.adds_agent {
+        return agent_answers(row, caller, facts);
+    }
     let consequential = facts.risk == Risk::High || facts.money;
     let can = |action: ApprovalAction| facts.allows.contains(&action);
     let mut allowed =
@@ -296,6 +304,60 @@ pub fn allowed_answers(caller: &Caller, facts: &DecisionFacts) -> Allowed {
     allowed
 }
 
+/// The answers to a suggested agent (spec 3.3 §5.7, §7.2 "Add an agent, or let one do
+/// more"): adding is a standing change, so it follows "Always allow" — the web home, the phone
+/// and the terminal, at high risk after confirming it is you or on a paired local terminal —
+/// with no Always allow and no Edit; **Don't add** is the Deny column, on every surface.
+fn agent_answers(row: Row, caller: &Caller, facts: &DecisionFacts) -> Allowed {
+    use crate::agents::words as agent_words;
+    let consequential = facts.risk == Risk::High || facts.money;
+    let can = |action: ApprovalAction| facts.allows.contains(&action);
+    let mut allowed =
+        Allowed { options: Vec::new(), open_in_home: false, cancel_window_secs: None, note: None };
+    let option = |answer: Answer, label: &str, needs_presence: bool| AnswerOption {
+        answer,
+        label: label.to_string(),
+        needs_presence,
+        needs_expanded: facts.truncated && answer != Answer::Deny,
+    };
+    match row {
+        Row::Agent => allowed.note = Some(words::NEEDS_A_SCREEN.to_string()),
+        Row::Web | Row::Phone | Row::Terminal => {
+            let high_ok = !consequential || row != Row::Terminal || caller.paired_local;
+            let needs_presence = consequential && row != Row::Terminal;
+            if high_ok && can(ApprovalAction::Approve) {
+                let label = if needs_presence {
+                    agent_words::CONFIRM_ITS_YOU_AND_ADD
+                } else {
+                    agent_words::ADD_THIS_AGENT
+                };
+                allowed.options.push(option(Answer::AllowOnce, label, needs_presence));
+            }
+            if can(ApprovalAction::Reject) {
+                allowed.options.push(option(Answer::Deny, agent_words::DONT_ADD, false));
+            }
+            if !high_ok {
+                allowed.open_in_home = true;
+                allowed.note = Some(words::APPROVE_IN_THE_HOME.to_string());
+            }
+        }
+        Row::Tray | Row::Chat | Row::Voice => {
+            if can(ApprovalAction::Reject) {
+                allowed.options.push(option(Answer::Deny, agent_words::DONT_ADD, false));
+            }
+            allowed.open_in_home = row != Row::Voice;
+            allowed.note = Some(
+                match row {
+                    Row::Voice => words::NEEDS_A_SCREEN,
+                    _ => words::APPROVE_IN_THE_HOME,
+                }
+                .to_string(),
+            );
+        }
+    }
+    allowed
+}
+
 /// Why the engine refused an answer (spec 3.3 §7.2, §7.4).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RuleViolation {
@@ -343,6 +405,7 @@ impl RuleViolation {
 ///     truncated: false,
 ///     allows: ApprovalAction::ALL.to_vec(),
 ///     always_label: None,
+///     adds_agent: false,
 /// };
 /// let web = Caller::human("ana", SurfaceKind::Web, Origin::Pointer);
 /// assert_eq!(check(&web, &facts, Answer::AllowOnce, true), Err(RuleViolation::PresenceRequired));
@@ -403,6 +466,39 @@ pub fn may_loosen_mode(caller: &Caller) -> bool {
     matches!(row(caller), Row::Web | Row::Phone | Row::Terminal)
 }
 
+/// Whether `caller` may add, change, pause or remove an agent here (spec 3.3 §5.7, §7.2): a
+/// person at the web home or the terminal. The phone answers suggestions only (decision 16).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::{Caller, Origin, SurfaceKind};
+/// use adk_surface::rules::may_change_agents;
+///
+/// assert!(may_change_agents(&Caller::human("ana", SurfaceKind::Web, Origin::Pointer)));
+/// assert!(may_change_agents(&Caller::human("ana", SurfaceKind::Terminal, Origin::Keyboard)));
+/// assert!(!may_change_agents(&Caller::human("ana", SurfaceKind::Phone, Origin::Touch)));
+/// ```
+pub fn may_change_agents(caller: &Caller) -> bool {
+    matches!(row(caller), Row::Web | Row::Terminal) && caller.device.is_none()
+}
+
+/// Whether `caller` may resume one agent paused by hand: where Resume all may be given (spec
+/// 3.3 §5.7, S-I10).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::{Caller, Origin, SurfaceKind};
+/// use adk_surface::rules::may_resume_agent;
+///
+/// assert!(may_resume_agent(&Caller::human("ana", SurfaceKind::Web, Origin::Pointer)));
+/// assert!(!may_resume_agent(&Caller::human("ana", SurfaceKind::Terminal, Origin::Keyboard)));
+/// ```
+pub fn may_resume_agent(caller: &Caller) -> bool {
+    may_resume(caller)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,6 +510,7 @@ mod tests {
             truncated: false,
             allows: ApprovalAction::ALL.to_vec(),
             always_label: Some(words::ALWAYS_ALLOW_FOR_THIS_PERSON.into()),
+            adds_agent: false,
         }
     }
 
@@ -524,5 +621,54 @@ mod tests {
         ] {
             assert!(!may_resume(&other), "{other:?}");
         }
+    }
+
+    /// The §7.2 column "Add an agent, or let one do more" over every row (spec 3.3 §5.7).
+    #[test]
+    fn a_suggested_agent_follows_the_always_allow_column() {
+        use crate::agents::words::{ADD_THIS_AGENT, CONFIRM_ITS_YOU_AND_ADD, DONT_ADD};
+        let agent_facts =
+            |risk| DecisionFacts { adds_agent: true, always_label: None, ..facts(risk) };
+        let labels = |caller: &Caller, facts: &DecisionFacts| -> Vec<(Answer, String, bool)> {
+            allowed_answers(caller, facts)
+                .options
+                .into_iter()
+                .map(|option| (option.answer, option.label, option.needs_presence))
+                .collect()
+        };
+        let web = Caller::human("ana", SurfaceKind::Web, Origin::Pointer);
+        let phone = Caller::human("ana", SurfaceKind::Phone, Origin::Touch);
+        let terminal = Caller::human("ana", SurfaceKind::Terminal, Origin::Keyboard);
+        let local = terminal.clone().with_paired_local();
+        let tray = Caller::human("ana", SurfaceKind::Tray, Origin::Pointer);
+        let chat =
+            Caller::human("ana", SurfaceKind::Chat, Origin::Chat { channel: "Telegram".into() });
+        let voice = Caller::human("ana", SurfaceKind::Web, Origin::Voice);
+        let agent =
+            Caller::human("ana", SurfaceKind::Web, Origin::Agent { agent: "finance".into() });
+        let add = (Answer::AllowOnce, ADD_THIS_AGENT.to_string(), false);
+        let confirm = (Answer::AllowOnce, CONFIRM_ITS_YOU_AND_ADD.to_string(), true);
+        let dont = (Answer::Deny, DONT_ADD.to_string(), false);
+        let medium = agent_facts(Risk::Medium);
+        let high = agent_facts(Risk::High);
+        // No Always allow and no Edit anywhere.
+        for caller in [&web, &phone, &terminal] {
+            assert_eq!(labels(caller, &medium), [add.clone(), dont.clone()], "{caller:?}");
+        }
+        assert_eq!(labels(&web, &high), [confirm.clone(), dont.clone()]);
+        assert_eq!(labels(&phone, &high), [confirm, dont.clone()]);
+        assert_eq!(labels(&terminal, &high), std::slice::from_ref(&dont));
+        assert!(allowed_answers(&terminal, &high).open_in_home);
+        assert_eq!(labels(&local, &high), [add, dont.clone()]);
+        for caller in [&tray, &chat, &voice] {
+            for facts in [&medium, &high] {
+                assert_eq!(labels(caller, facts), std::slice::from_ref(&dont), "{caller:?}");
+            }
+        }
+        assert!(allowed_answers(&chat, &medium).open_in_home);
+        assert!(labels(&agent, &medium).is_empty());
+        // Money is high risk too.
+        let money = DecisionFacts { money: true, ..agent_facts(Risk::Low) };
+        assert_eq!(labels(&terminal, &money), [dont]);
     }
 }

@@ -35,6 +35,7 @@ enum Kind {
     Mcp,
     Effort,
     Hooks,
+    Agent,
 }
 
 const COMMANDS: &[(Kind, &str, &str)] = &[
@@ -53,6 +54,7 @@ const COMMANDS: &[(Kind, &str, &str)] = &[
     (Kind::Mcp, "mcp", "MCP servers; /mcp resources SERVER lists what a server publishes"),
     (Kind::Effort, "effort", "Reasoning effort; /effort low|medium|high sets every mode"),
     (Kind::Hooks, "hooks", "Hooks on tool events: source, isolation and whether each runs"),
+    (Kind::Agent, "agent", super::agents::DESCRIPTION),
 ];
 
 /// The REPL's built-in commands, which take precedence over a registered one of the same
@@ -124,6 +126,9 @@ impl Kind {
             | Self::Skills
             | Self::Mcp
             | Self::Hooks => false,
+            // Pausing and removing make agents do less; adding and changing start nothing
+            // until Resume all: each works while everything is stopped (spec 3.3 §5.7).
+            Self::Agent => false,
         }
     }
 }
@@ -281,6 +286,15 @@ async fn execute(kind: Kind, shared: &Shared, args: &str) -> Result<String> {
         Kind::Mcp => mcp(shared, args).await,
         Kind::Effort => effort(shared, args).await,
         Kind::Hooks => Ok(hooks(shared)),
+        Kind::Agent => {
+            super::agents::run(
+                shared.agents.as_ref(),
+                shared.user.as_ref(),
+                shared.reach.as_ref(),
+                args,
+            )
+            .await
+        }
     }
 }
 

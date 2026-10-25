@@ -108,6 +108,7 @@ as a refused key, stays until the next key.
 | `Tab` | The next agent's thread |
 | `Ctrl-T` | Today: "While you were away" |
 | `Ctrl-R` | Permissions: the mode (Just look · Suggest · Ask first · Go ahead), the daily spending limit, quiet time, Stop all. Its keys (`1`–`4`, and `r` for Resume all after a stop) act when pressed twice, so a message typed there changes nothing |
+| `Ctrl-G` | Your agents: add, change, pause and remove the agents you add, over `/agent`; see [Your Agents](agents.md#in-the-terminal) |
 | `Ctrl-K` | Stop all |
 | `PgUp` `PgDn` | Scroll the thread, or the call in a decision box |
 | `↑` | Take back the newest queued message, before it is sent |

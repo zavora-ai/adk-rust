@@ -53,6 +53,7 @@ export function Threads({
   onBack,
   focusDecision,
   onOpenDecision,
+  canAddAgents = false,
 }: {
   client: HomeClient;
   agents: AgentRow[];
@@ -81,6 +82,8 @@ export function Threads({
   /** The decision to bring into view. */
   focusDecision?: string;
   onOpenDecision: (card: DecisionCard) => void;
+  /** The roster ends with New agent (spec 3.3 §5.7). */
+  canAddAgents?: boolean;
 }) {
   const [fresh] = useState(newSession);
   const [queued, setQueued] = useState<{ session: string; items: string[] }>({ session: "", items: [] });
@@ -103,7 +106,8 @@ export function Threads({
   const pinned = followed[key];
   // The person's conversation with the agent, and the session shown: another one only while
   // a decision of it is being looked at.
-  const own = pinned ?? current?.sessionId ?? fresh;
+  // An agent without a thread yet starts one of its own (spec 3.3 §5.7 "Threads").
+  const own = pinned ?? current?.sessionId ?? (current?.added ? `${fresh}-${key}` : fresh);
   const away = visiting && visiting.agent === key && visiting.session !== own ? visiting.session : undefined;
   const session = away ?? own;
   useEffect(() => {
@@ -136,7 +140,12 @@ export function Threads({
   async function message(text: string, origin: Origin) {
     setProblem("");
     try {
-      await client.command({ type: "send", sessionId: own, text }, origin);
+      // The first message of an added agent's thread goes to that agent (spec 3.3 §5.7).
+      const starts = current?.added === true && thread.entries.length === 0;
+      await client.command(
+        starts ? { type: "newThread", agent: key, sessionId: own, text } : { type: "send", sessionId: own, text },
+        origin,
+      );
       if (!pinned) onFollow(key, own);
       setSent((count) => count + 1);
       // A new session's first message shows now, not at the next look.
@@ -152,7 +161,7 @@ export function Threads({
   return (
     <div className="threads">
       <aside className="rail">
-        <Roster agents={agents} selected={current?.agent.name} onSelect={onSelect} />
+        <Roster agents={agents} selected={current?.agent.name} onSelect={onSelect} canAdd={canAddAgents} />
         <a
           className="rail-link"
           href="/ui/developer"

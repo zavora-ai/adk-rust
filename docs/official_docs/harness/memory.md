@@ -184,6 +184,7 @@ demand.
 |---|---|---|
 | `memory_remember { text, kind, supersedes? }` | `assumed`, source `agent_inferred`, confidence 0.5 | Class `MemoryPropose`: denied in ReadOnly and Plan, allowed without asking in Ask and Auto, because it writes only labelled assumptions |
 | Session distillation | `known` when the quote verifies, `assumed` otherwise | A governed run on the distiller model with no tools and structured output, bounded by the harness's `RunBudget` (two model calls when none is set), when a session has been idle for `distill_idle`, every `distill_every` turns, and on `Harness::close`; never for a session in ReadOnly or Plan |
+| Catch-up at start (`adk_cli::harness::distill_unsaved_sessions`) | `assumed` | The `adk-rust` REPL and terminal in process, as they start: the five most recent of the user's sessions in the workspace whose cursor (`Harness::distilled_sessions`) stops short of their last event, through `Harness::distill_sessions` with each session's own distillation budget; a session active within `distill_idle` waits for a later start ([The adk-rust CLI](cli.md#long-term-memory)) |
 | A person | `known`, source `user_confirmed` | `Harness::accept_fact`, `Harness::correct_fact` |
 
 Before storage, every fact passes `adk_guardrail::PiiRedactor` and the harness's secret
@@ -383,7 +384,7 @@ store; `Harness::consolidations` lists the records, and `Harness::undo_consolida
 `adk_harness::undo_consolidation` over a store) reverts a tick: the facts it superseded or
 forgot are `assumed` again, the facts it wrote are forgotten, and a fact a person changed
 since is left as it is. Only a finished tick (`finished_at` set) is undone; one still running
-is refused with `harness.memory.tick_unfinished`. `Harness::distill_sessions` runs the distillation step alone. A
+is refused with `harness.memory.tick_unfinished`. `Harness::distill_sessions` runs the distillation step alone, and `Harness::distilled_sessions` lists how far distillation read each session. A
 fact store keeps records through `put_consolidation`, `consolidations` and
 `restore_assumed`; `InMemoryFactStore`, `FileFactStore` and `SqliteFactStore` implement
 them, and a store that does not refuses a tick before it changes anything.
@@ -451,5 +452,5 @@ Records carry fact ids and digests, never the text (I45).
 | `harness.memory.fact.stored` | `factId`, `kind`, `status`, `source`, `project`, `digest`, `sessionId` | Before a fact is stored |
 | `harness.memory.fact.promoted`, `.superseded`, `.forgotten` | `factId`, `from`, `to`, `by`, `supersededBy`; in a consolidation, `tickId` and `reason` (`duplicate`, `expired`, `merged`, `superseded`, `evicted`) | Before a status changes |
 | `harness.memory.recalled` | `factIds`, `queryDigest`, `tokens` | Each recall or `memory_search` that found facts |
-| `harness.memory.distilled` | `sessionId`, `candidates`, `stored`, `rejected` (digest and reason), `modelCalls`, `cost` | After a distillation |
+| `harness.memory.distilled` | `sessionId`, `candidates`, `stored`, `rejected` (digest and reason), `modelCalls`, `cost`, `catchUp` (`true` for a session the per-session distiller never reached, distilled by `Harness::distill_sessions`: a start's catch-up or a consolidation tick) | After a distillation |
 | `harness.memory.consolidated` | `tickId`, `partition`, `scope`, `superseded`, `forgotten`, `merged`, `distilled`, `besideKnown`, `sessions`, `counts`, `refused`, `modelCalls`, `tokens`, `cost` | Once per consolidation tick |
