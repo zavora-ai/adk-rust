@@ -117,6 +117,9 @@
 2 adk-cli scripted-model
 # `adk-rust --voice` (spec 3.1 §7.17) end to end on a scripted realtime provider.
 2 adk-cli voice,scripted-model
+# `adk-rust site …` and `awp …` (spec 3.5 §8.1) on adk-site and adk-awp's verifier, with the
+# freeze test's DNS fixture.
+2 adk-cli website,scripted-model
 # adk-cli without the harness: the chat agent and the legacy `code`, `goal` and `ultracode`.
 2 adk-cli gemini no-default
 # adk-cli with no provider at all: every `--provider` reports that it is not compiled.

@@ -145,6 +145,10 @@ adk-awp = { version = "3.0.0", features = ["verify"] }
 | `page.digest` | A served file does not match its release digest |
 | `charter.digest` | The public terms do not match the contract's digest |
 
+`adk-rust awp verify <domain>`, `awp conformance <url>`, `awp keys rotate|delegate` and
+`awp migrate-config business.toml` run these from the command line
+([Sites and AWP from the command line](site-cli.md#adk-rust-awp)).
+
 `Charter::validate()` refuses a KPI target without a baseline, a charter without an owner, an agent holding a role, and an approval chain that distinct principals cannot satisfy. The `json-schema` feature derives JSON Schema (2020-12) for every 2.0 type; the generated schemas are committed in `awp-types/schemas/2.0/`.
 
 ```toml

@@ -13,6 +13,9 @@ archives the legacy export encrypted.
 adk-site = { version = "3.0.0", features = ["migrate"] }
 ```
 
+`adk-rust site migrate` and `adk-rust site freeze` run these stages on a site project from the
+command line ([Sites and AWP from the command line](site-cli.md#migration-and-freeze)).
+
 ## Stages
 
 | Stage | Type | Behaviour |

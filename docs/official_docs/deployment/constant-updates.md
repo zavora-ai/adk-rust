@@ -165,6 +165,9 @@ The story must already be published, and the field must be one its kind declares
 | `UpdateEngine::decide_delivery`, `decide_item` | — | The owner's decision on a held delivery or a held item |
 | `UpdateEngine::review` | — | For the weekly review: updates, the share that needed a model, cost per thousand updates |
 
+The CLI acts on a site project ([Sites and AWP from the command line](site-cli.md)); `site
+batches` reads the batches its engine journals in `data/updates/`.
+
 ## Hosts at speed
 
 `SiteHost::limits` declares a host's publication limits. `check_host` compares them with the
