@@ -102,6 +102,11 @@ sha2 = { workspace = true, optional = true }
 [target.'cfg(windows)'.dependencies]
 adk-sandbox = { workspace = true, features = ["process-tree"] }
 
+# The session and process group that holds each managed stdio server's process tree on
+# Unix (spec 3.2 §7.7, K-I5).
+[target.'cfg(unix)'.dependencies]
+adk-sandbox = { workspace = true, features = ["process-tree"] }
+
 # The Job Object tests wait for and end the processes a server started.
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }

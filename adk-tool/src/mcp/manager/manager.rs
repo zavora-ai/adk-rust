@@ -40,7 +40,10 @@ type StdioLauncher =
 ///
 /// On Windows each server starts suspended and runs only once it is in a Job Object of its
 /// own, which closes with its connection: stopping, restarting or dropping a server, or the
-/// manager's process exiting, ends every process the server started (spec 3.2 §10 W1).
+/// manager's process exiting, ends every process the server started (spec 3.2 §10 W1). On
+/// Unix each server leads a session and process group of its own, which closes with its
+/// connection: stopping, restarting or dropping a server sends the group `SIGTERM`, then
+/// `SIGKILL`, and returns once every process in it has exited (spec 3.2 §7.7, K-I5).
 ///
 /// # Construction
 ///
@@ -235,8 +238,7 @@ impl Launcher {
         id: &str,
         config: &McpServerConfig,
     ) -> adk_core::Result<McpToolset<AdkClientHandler>> {
-        #[cfg_attr(not(windows), allow(unused_mut))]
-        let mut cmd = match &self.stdio_launcher {
+        let cmd = match &self.stdio_launcher {
             Some(launch) => launch(config)?,
             None => {
                 let mut cmd = tokio::process::Command::new(&config.command);
@@ -245,26 +247,9 @@ impl Launcher {
                 cmd
             }
         };
-        // The server runs only once it is in a Job Object, so nothing it starts is outside
-        // it (spec 3.2 §10 W1).
-        #[cfg(windows)]
-        cmd.creation_flags(adk_sandbox::process_tree::CREATE_SUSPENDED);
-        let program = cmd.as_std().get_program().to_string_lossy().into_owned();
-
-        // TokioChildProcess::new spawns the child; dropping the transport ends it.
-        let transport = rmcp::transport::TokioChildProcess::new(cmd).map_err(|e| {
-            AdkError::tool(format!(
-                "failed to spawn server '{id}': command '{program}' not found. Verify it is installed and on PATH: {e}"
-            ))
-        })?;
-        // On Windows the job closes with the transport, ending the server's whole tree.
-        #[cfg(windows)]
-        let transport = super::process_tree::JobTransport::contain(transport).map_err(|error| {
-            AdkError::tool(format!(
-                "MCP server '{id}' could not be placed in a Job Object, which stops the \
-                 processes it starts, so it was not started: {error}"
-            ))
-        })?;
+        // What holds the server's process tree — a Job Object on Windows, a process group on
+        // Unix — closes with the transport, ending the whole tree (spec 3.2 §10 W1, K-I5).
+        let transport = super::process_tree::spawn(id, cmd)?;
 
         // Build one handler for both lifecycle negotiation and later MRTR/task input.
         // A handler set for this server wins over the shared one (spec 3.1 §10 T2).
