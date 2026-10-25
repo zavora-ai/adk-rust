@@ -308,6 +308,10 @@
 6 adk-site host-gcs
 6 adk-site host-netlify
 6 adk-site host-github-pages,host-rsync
+# External generators (spec 3.5 §7.8): export, starter projects and assembly from recorded
+# generator output under the launch gate, with the doctests; then one generator alone.
+6 adk-site gen-zola,gen-hugo,gen-astro,gen-build-awesome doc
+6 adk-site gen-astro
 
 # Shard 7 — adk-rag's SurrealDB backend on its own: it and lancedb each compile for about
 # fifteen minutes, and together they made shard 0 the longest job in the tier.

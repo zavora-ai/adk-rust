@@ -1330,6 +1330,7 @@ dependencies = [
  "adk-awp",
  "adk-core",
  "adk-guardrail",
+ "adk-sandbox",
  "async-trait",
  "awp-types",
  "aws-lc-rs",

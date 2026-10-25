@@ -208,6 +208,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Site Migration](deployment/site-migration.md) - Moving an existing site onto a signed static AWP site
 - [Constantly Updated Sites](deployment/constant-updates.md) - Lanes, batching, feed bounds and delta releases for sites that change every minute
 - [Site Hosts](deployment/site-hosts.md) - Publishing signed releases to S3, GCS, Azure, Cloudflare, Netlify, GitHub Pages or any server over SSH
+- [Site Generators](deployment/site-generators.md) - Building a site with Zola, Hugo, Astro or Build Awesome in a sandbox with no network
 - [The AWP Website Product](deployment/adk-website.md) - `adk-website`: site kinds, the team of eight agents, onboarding from nothing, a presence or an existing site, incidents, alarms and the weekly review
 - [Agent Engine](deployment/agent-engine.md) - Deploying on the Gemini Enterprise Agent Platform
 - [Agent Registry](deployment/agent-registry.md) - Discovery, registration, and remote invocation on the Agent Platform

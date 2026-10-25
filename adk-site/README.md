@@ -181,6 +181,32 @@ adk-site = { version = "3.0.0", features = ["host-s3"] }
 
 See [Site hosts](../docs/official_docs/deployment/site-hosts.md).
 
+## External generators (features `gen-*`)
+
+`ExternalGenerator` builds a site with Zola, Hugo, Astro or Build Awesome (Eleventy) and
+publishes the same twins, site files and redirects the built-in renderer does. The generator
+runs under `adk-sandbox`'s OS enforcer — Seatbelt on macOS, bubblewrap on Linux — with no
+network; without an enforcer the build fails.
+
+| Feature | Constructor | Needs |
+|---------|-------------|-------|
+| `gen-zola` | `ExternalGenerator::zola(binary)` | The `zola` binary |
+| `gen-hugo` | `ExternalGenerator::hugo(binary)` | The `hugo` binary |
+| `gen-astro` | `ExternalGenerator::astro(node, node_modules)` | Node.js and a `node_modules` holding `astro` |
+| `gen-build-awesome` | `ExternalGenerator::build_awesome(node, node_modules)` | Node.js and a `node_modules` holding `@11ty/eleventy` |
+
+The built-in renderer exports each page's template context — the data the built-in templates
+read — into the generator's own layout; the generator renders the page HTML from a starter
+template or your project (`with_project`); every other file is the built-in build's, byte for
+byte. Nothing is installed during a build.
+
+```toml
+[dependencies]
+adk-site = { version = "3.0.0", features = ["gen-zola"] }
+```
+
+See [Site generators](../docs/official_docs/deployment/site-generators.md).
+
 ## Writing a host
 
 Implement `SiteHost` and run `adk_site::host::conformance::run_all` in its tests: it checks

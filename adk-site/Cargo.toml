@@ -49,6 +49,12 @@ host-cloudflare = ["host-s3"]
 host-netlify = ["dep:futures", "dep:reqwest", "dep:sha1"]
 host-github-pages = ["dep:sha1", "tokio/io-util", "tokio/process"]
 host-rsync = ["tokio/io-util", "tokio/process"]
+# Spec 3.5 §7.8 "Generator": external generators run as processes in adk-sandbox with no
+# network, from a project the content model exports to each generator's layout.
+gen-zola = ["dep:adk-sandbox", "minijinja/json", "tokio/process"]
+gen-hugo = ["dep:adk-sandbox", "minijinja/json", "tokio/process"]
+gen-astro = ["dep:adk-sandbox", "minijinja/json", "tokio/process"]
+gen-build-awesome = ["dep:adk-sandbox", "minijinja/json", "tokio/process"]
 
 [dependencies]
 adk-core.workspace = true
@@ -89,6 +95,8 @@ similar = { version = "3", optional = true }
 tempfile = { version = "3", optional = true }
 url = { version = "2.5", optional = true }
 x509-parser = { version = "0.18", optional = true }
+# External generators (features `gen-*`): Seatbelt on macOS, bubblewrap on Linux.
+adk-sandbox = { workspace = true, optional = true, features = ["sandbox-macos", "sandbox-linux"] }
 # Host adapters (features `host-*`).
 futures = { workspace = true, optional = true }
 hmac = { version = "0.12", optional = true }

@@ -11,7 +11,7 @@
 //! | [`content`] | `site.toml`, items as Markdown with front matter, [`content::ContentStore`] and [`content::ContentHistory`] with conformance suites | §7.8.2 |
 //! | [`stream`] | [`stream::StreamLane`]: entries signed by the edge key, served at once, folded into releases | §7.8.3, A-I26 |
 //! | [`theme`] | Templates and design tokens, WCAG contrast | §7.8, §7.16 |
-//! | [`generator`] | [`generator::SiteGenerator`] and the built-in renderer: pages per language, Markdown and structured twins, `llms.txt`, `robots.txt`, `security.txt`, sitemaps, feeds, JSON-LD, redirects, incremental builds | §7.4, §7.8 |
+//! | [`generator`] | [`generator::SiteGenerator`] and the built-in renderer: pages per language, Markdown and structured twins, `llms.txt`, `robots.txt`, `security.txt`, sitemaps, feeds, JSON-LD, redirects, incremental builds; Zola, Hugo, Astro and Build Awesome as sandboxed external generators (features `gen-*`) | §7.4, §7.8 |
 //! | [`feed`] | [`feed::ContentSource`], model-free [`feed::FeedMapping`]s, feed bounds | §7.8.2, §7.8.3, A-I27 |
 //! | [`gate`] | [`gate::LaunchGate`] in fast and full tiers | §7.8.1, §7.8.3 |
 //! | [`scan`] | Server-code refusal | A-I1 |
