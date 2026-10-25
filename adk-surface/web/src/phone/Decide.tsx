@@ -221,15 +221,17 @@ export function Decide({
       <figcaption>
         <i aria-hidden="true" className="phone-lights" /> {phoneLabels.theExactCommand}
       </figcaption>
-      <p>
-        <code>{visible(ask.tool)}</code> {phoneLabels.asksFor(what)}
-      </p>
-      {ask.resource && (
+      <div className="phone-ask">
         <p>
-          {phoneLabels.forResource} <code>{visible(ask.resource)}</code>
+          <code>{visible(ask.tool)}</code> {phoneLabels.asksFor(what)}
         </p>
-      )}
-      <p className="phone-footnote">{phoneLabels.secretGoesToTheCall}</p>
+        {ask.resource && (
+          <p>
+            {phoneLabels.forResource} <code>{visible(ask.resource)}</code>
+          </p>
+        )}
+        <p className="phone-footnote">{phoneLabels.secretGoesToTheCall}</p>
+      </div>
     </figure>
   ) : (
     <figure className="phone-command">
