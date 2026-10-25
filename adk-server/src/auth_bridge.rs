@@ -34,37 +34,10 @@
 //! ```
 
 pub use adk_core::RequestContext;
-use async_trait::async_trait;
+pub use adk_core::request_context::{RequestContextError, RequestContextExtractor};
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use std::convert::Infallible;
-
-/// Extracts authenticated identity from HTTP request headers.
-///
-/// Implementations typically parse a Bearer token from the `Authorization`
-/// header, validate it, and map claims to a [`RequestContext`].
-#[async_trait]
-pub trait RequestContextExtractor: Send + Sync {
-    /// Extract identity from the request parts (headers, URI, etc.).
-    async fn extract(
-        &self,
-        parts: &axum::http::request::Parts,
-    ) -> Result<RequestContext, RequestContextError>;
-}
-
-/// Errors that can occur during request context extraction.
-#[derive(Debug, thiserror::Error)]
-pub enum RequestContextError {
-    /// The `Authorization` header is missing from the request.
-    #[error("missing authorization header")]
-    MissingAuth,
-    /// The token was present but failed validation.
-    #[error("invalid token: {0}")]
-    InvalidToken(String),
-    /// An internal error occurred during extraction.
-    #[error("extraction failed: {0}")]
-    ExtractionFailed(String),
-}
 
 /// The authenticated principal of a request, read from the request extensions.
 ///

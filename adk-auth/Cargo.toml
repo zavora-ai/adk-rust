@@ -19,7 +19,10 @@ all-features = true
 [features]
 default = []
 sso = ["jsonwebtoken", "reqwest", "dashmap", "base64"]
-auth-bridge = ["sso", "adk-server", "axum"]
+auth-bridge = ["sso", "adk-core/auth-bridge", "axum"]
+# Kept so manifests that name it still resolve; `auth-bridge` no longer needs `adk-server`,
+# which lets `adk-server` depend on this crate (spec 3.5 §7.3).
+adk-server = []
 # Cloud secret manager providers
 aws-secrets = ["dep:aws-sdk-secretsmanager", "dep:aws-config"]
 azure-keyvault = ["dep:azure_security_keyvault_secrets", "dep:azure_identity", "dep:azure_core"]
@@ -36,7 +39,6 @@ web-bot-auth = ["dep:aws-lc-rs", "base64", "reqwest", "dep:http", "dep:httpdate"
 
 [dependencies]
 adk-core.workspace = true
-adk-server = { workspace = true, optional = true }
 async-trait.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 zeroize = "1.8.2"
