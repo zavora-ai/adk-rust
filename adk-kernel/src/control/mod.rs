@@ -131,6 +131,8 @@ mod tests;
 
 pub use client::ControlClient;
 pub use memory::{FactOrigin, MemoryBook, RememberedFact, TidyUp, TidyUpUndo};
+#[cfg(feature = "channels")]
+pub(crate) use pairing::rated_high;
 pub use record::{RecordBook, RecordCheck, RecordLine};
 pub use server::ControlPlane;
 pub(crate) use store::LastRead;

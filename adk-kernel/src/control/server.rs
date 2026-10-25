@@ -385,12 +385,19 @@ async fn serve_http(
                 && let Some(token) = crate::pairing::device_token(&parts.headers)
             {
                 let (token, path) = (token.to_string(), parts.uri.path().to_string());
+                let (request, answer) =
+                    match super::pairing::read_answer(Request::from_parts(parts, body)).await {
+                        Ok(read) => read,
+                        Err(response) => return response,
+                    };
+                let (parts, body) = request.into_parts();
                 return match super::pairing::admit_device(
                     backend.as_ref(),
                     &pairing,
                     &token,
                     &parts.method,
                     &path,
+                    answer.as_deref(),
                 )
                 .await
                 {

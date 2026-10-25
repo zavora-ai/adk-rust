@@ -10,8 +10,8 @@
 //! | `POST /kernel/devices/{id}/revoke` | operator | Removes a device ([`DeviceResponse`]) |
 //! | `POST /kernel/channels/pair` (feature `channels`) | operator | Accepts the code a chat account was sent ([`AcceptChannelRequest`] → [`ChannelAccountResponse`]) |
 //! | `GET /kernel/channels` (feature `channels`) | operator | Paired chat accounts and the ones waiting ([`ChannelAccountsResponse`]) |
-//! | `POST /kernel/channels/{id}/revoke` (feature `channels`) | operator | Removes a chat account ([`ChannelAccountResponse`]) |
-//! | `POST /kernel/channels/waiting/{id}/dismiss` (feature `channels`) | operator | Dismisses a chat account waiting to be paired: its code stops working ([`ChannelPairingResponse`]) |
+//! | `POST /kernel/channels/{id}/revoke` (feature `channels`) | operator | Removes a chat account and stops its turns that have not finished ([`ChannelAccountResponse`]) |
+//! | `POST /kernel/channels/waiting/{id}/dismiss` (feature `channels`) | operator | Dismisses a chat account waiting to be paired: its code stops working and it gets no new one for a day ([`ChannelPairingResponse`]) |
 //!
 //! The operator routes are mounted on every kernel: one that pairs no devices, or has no
 //! chat channels, answers `400` naming what it lacks, and lists no chat accounts.
@@ -22,13 +22,14 @@
 //! `channels.revoke` and `channels.dismiss`. A claim or an acceptance takes its code first
 //! and puts it back when the record cannot be written, so nothing is paired unrecorded and
 //! the code still works. A device's own actions carry `device` in their record, and a
-//! decision a device answers is recorded as `approvals.decide` before it reaches the inbox.
+//! decision a device answers is recorded as `approvals.decide`, with the device's name and
+//! its answer, before it reaches the inbox.
 
 use std::sync::Arc;
 
 use adk_core::audit_log::{AuditActor, AuditRecordDraft, AuditRecordKind};
 use adk_core::principal::SubjectRef;
-use adk_core::{ApprovalRisk, RequestContext};
+use adk_core::{ApprovalRequest, ApprovalRisk, RequestContext};
 use axum::body::Body;
 use axum::extract::{Path as UrlPath, State};
 use axum::http::{Method, Request};
@@ -241,8 +242,9 @@ async fn issue(
         code = code.with_device_ttl(std::time::Duration::from_secs(u64::from(days) * 86_400));
     }
     // The record names what the code grants: every scope when none was named, and the
-    // name as it is stored.
+    // name as it is stored; a request the pairing refuses records nothing.
     let code = code.normalized();
+    pairing.check(&code)?;
     let extra = [
         ("scopes", json!(code.scopes)),
         ("name", json!(code.name)),
@@ -335,15 +337,40 @@ pub(super) async fn record_as(
     trail.record(draft).await.map_err(KernelError::from)
 }
 
+/// The largest decision a device sends: a decision's edited arguments included.
+const MAX_DECIDE_BODY: usize = 2 * 1024 * 1024;
+
+/// Whether `kernel` rates `request`'s call high risk whatever the request says: a tool a
+/// mounted driver declares of a class nothing may allow without a person, `publish_public`
+/// or `financial` (spec 3.2 K-I9). Chat and paired devices, which decide no high-risk call,
+/// send it to the home (spec 3.3 §7.2, S-I6).
+pub(crate) fn rated_high(
+    kernel: Option<&crate::kernel::Kernel>,
+    request: &ApprovalRequest,
+) -> bool {
+    #[cfg(feature = "drivers")]
+    if let Some(drivers) = kernel.and_then(crate::kernel::Kernel::drivers) {
+        return drivers
+            .mounted()
+            .iter()
+            .filter_map(|id| drivers.record(id))
+            .any(|record| record.manifest.class_of(&request.tool_name).is_never_auto_allowed());
+    }
+    let _ = (kernel, request);
+    false
+}
+
 /// Admits a request carrying device `token` (spec 3.3 §10 K2): the device's context when
-/// its scopes open the route, a decision it answers recorded and limited to low and medium
-/// risk, or the refusal as a response.
+/// its scopes open the route, a decision it answers (`answer`, the body's `action`)
+/// recorded and limited to low and medium risk, never a yes to a take-over, or the refusal
+/// as a response.
 pub(super) async fn admit_device(
     backend: &dyn ControlBackend,
     pairing: &Pairing,
     token: &str,
     method: &Method,
     path: &str,
+    answer: Option<&str>,
 ) -> std::result::Result<RequestContext, Response> {
     let context =
         pairing.authorize(token, method, path).await.map_err(IntoResponse::into_response)?;
@@ -361,9 +388,20 @@ pub(super) async fn admit_device(
         .into_response());
     };
     match approvals.get(&id).await {
-        Ok(Some(request)) if request.risk >= ApprovalRisk::High => {
+        Ok(Some(request))
+            if request.risk >= ApprovalRisk::High || rated_high(backend.kernel(), &request) =>
+        {
             return Err(crate::pairing::forbidden(
                 "this decision is high risk: confirm it's you and approve it in the home".into(),
+            )
+            .into_response());
+        }
+        // A take-over is done by typing the secret; a yes delivers nothing (spec 3.3 §8.2).
+        Ok(Some(request))
+            if request.tool_name == crate::pairing::TAKE_OVER_TOOL && answer != Some("reject") =>
+        {
+            return Err(crate::pairing::forbidden(
+                "this decision asks you to type a secret: take over in the home".into(),
             )
             .into_response());
         }
@@ -372,7 +410,12 @@ pub(super) async fn admit_device(
     }
     let device = context.metadata.get(DEVICE_ID_METADATA).cloned();
     let name = context.metadata.get(DEVICE_NAME_METADATA).cloned();
-    let extra = [("device", json!(device)), ("deviceName", json!(name))];
+    let extra = [
+        ("surface", json!("device")),
+        ("device", json!(device)),
+        ("deviceName", json!(name)),
+        ("answer", json!(answer)),
+    ];
     record_as(
         backend,
         SubjectRef::human(context.user_id.clone()),
@@ -384,6 +427,24 @@ pub(super) async fn admit_device(
     .await
     .map_err(IntoResponse::into_response)?;
     Ok(context)
+}
+
+/// `request` with its body read when it is a device's decision, and the `action` the body
+/// carries: the decision's record says what the device answered.
+pub(super) async fn read_answer(
+    request: Request<Body>,
+) -> std::result::Result<(Request<Body>, Option<String>), Response> {
+    if device_scope_for(request.method(), request.uri().path()) != Some(DeviceScope::Decide) {
+        return Ok((request, None));
+    }
+    let (parts, body) = request.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, MAX_DECIDE_BODY).await else {
+        return Err(axum::http::StatusCode::PAYLOAD_TOO_LARGE.into_response());
+    };
+    let answer = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|body| body.get("action")?.as_str().map(str::to_string));
+    Ok((Request::from_parts(parts, Body::from(bytes)), answer))
 }
 
 /// `segment` with its `%XX` escapes decoded, as the router decodes a path parameter.
@@ -433,7 +494,20 @@ pub(super) fn guard(backend: Arc<dyn ControlBackend>, router: Router) -> Router 
             if is_claim(&method, &path) {
                 return next.run(request).await;
             }
-            match admit_device(backend.as_ref(), &pairing, &token, &method, &path).await {
+            let (request, answer) = match read_answer(request).await {
+                Ok(read) => read,
+                Err(response) => return response,
+            };
+            match admit_device(
+                backend.as_ref(),
+                &pairing,
+                &token,
+                &method,
+                &path,
+                answer.as_deref(),
+            )
+            .await
+            {
                 Ok(context) => {
                     // The extractor behind the guard admits only the decisions it checked.
                     let mut request = request;
@@ -495,7 +569,7 @@ mod channels {
                 .list_requests()
                 .await?
                 .iter()
-                .filter(|request| request.expires_at > now)
+                .filter(|request| !request.dismissed && request.expires_at > now)
                 .map(|request| request.view())
                 .collect();
             return Ok(Json(ChannelAccountsResponse { accounts, waiting }));
@@ -575,14 +649,19 @@ mod channels {
             super::record(backend.as_ref(), &caller, "channels.revoke", Some(&id), &[]).await?;
             let binding =
                 crate::channels::revoke_binding(store.as_ref(), &id, pairing.now()).await?;
+            // Its turns that have not finished stop too: they would run as the person.
+            if let Some(kernel) = backend.kernel() {
+                crate::channels::stop_account_turns(kernel, &binding.channel, &binding.account)
+                    .await;
+            }
             return Ok(Json(ChannelAccountResponse { account: binding.view() }));
         }
         let _ = backend;
         Err(no_account(&id))
     }
 
-    /// Dismisses the waiting chat account `id`: its code stops working and its place in the
-    /// queue is freed.
+    /// Dismisses the waiting chat account `id`: its code stops working, its place in the
+    /// queue is freed, and it gets no new code for a day.
     pub(super) async fn dismiss(
         State(backend): Backend,
         caller: Caller,
@@ -590,11 +669,11 @@ mod channels {
     ) -> Result<Json<ChannelPairingResponse>> {
         caller.require_operator("dismiss a chat account waiting to be paired")?;
         #[cfg(feature = "channels")]
-        if let Some((_, store)) = bindings(backend.as_ref())
+        if let Some((pairing, store)) = bindings(backend.as_ref())
             && let Some(waiting) = crate::channels::waiting_request(store.as_ref(), &id).await?
         {
             super::record(backend.as_ref(), &caller, "channels.dismiss", Some(&id), &[]).await?;
-            store.take_request(&waiting.code_hash).await?;
+            crate::channels::dismiss_request(store.as_ref(), &waiting, pairing.now()).await?;
             return Ok(Json(ChannelPairingResponse { waiting: waiting.view() }));
         }
         let _ = backend;
