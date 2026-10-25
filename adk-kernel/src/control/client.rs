@@ -984,7 +984,7 @@ impl ControlClient {
     }
 
     /// Sends a JSON call and decodes the JSON answer, or the error the kernel answered.
-    async fn call<T: DeserializeOwned>(
+    pub(super) async fn call<T: DeserializeOwned>(
         &self,
         method: Method,
         path: String,
@@ -1225,7 +1225,7 @@ fn known_code(code: &str) -> &'static str {
 }
 
 /// Percent-encodes `text` for a path segment or a query value.
-fn encode(text: &str) -> String {
+pub(super) fn encode(text: &str) -> String {
     let mut encoded = String::with_capacity(text.len());
     for byte in text.bytes() {
         match byte {

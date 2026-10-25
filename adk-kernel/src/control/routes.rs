@@ -263,7 +263,9 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         // K3–K5).
         .merge(super::settings::routes())
         .merge(super::memory::routes())
-        .merge(super::record::routes());
+        .merge(super::record::routes())
+        // The REPL's commands and "Always allow" for a terminal on the kernel (spec 3.3 §5.2).
+        .merge(super::commands::routes());
     #[cfg(feature = "proc")]
     let router = router.merge(super::away::routes());
     #[cfg(feature = "drivers")]
@@ -288,7 +290,7 @@ type Backend = State<Arc<dyn ControlBackend>>;
 /// The authenticated caller of a route (K-I16).
 pub(crate) struct Caller {
     pub(super) context: RequestContext,
-    transport: ControlTransport,
+    pub(super) transport: ControlTransport,
 }
 
 impl Caller {

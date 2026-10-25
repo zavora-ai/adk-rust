@@ -33,6 +33,7 @@
 //! | `GET /kernel/away`, `POST /kernel/away/seen`, `GET /kernel/away/lines/{seq}` (feature `proc`) | "While you were away" over the `/proc` ledger with a cursor per device (spec 3.3 §10 K4) |
 //! | `GET /kernel/memory`, `POST /kernel/memory/facts/{id}/{confirm,fix,forget}`, `POST /kernel/memory/undo` | what the agents remember, with provenance, and its corrections (spec 3.3 §10 K5) |
 //! | `GET /kernel/record`, `GET /kernel/record/check` | the latest actions on record, and the check that the record is complete (spec 3.3 §10 K5) |
+//! | `GET /kernel/commands`, `POST /kernel/commands/run`, `GET /kernel/rules/always-allow/{id}`, `POST /kernel/rules/always-allow/{id}/{prepare,grant}` | the REPL's slash commands and "Always allow", when [`ControlPlaneConfig::with_commands`] sets a host (spec 3.3 §5.2); see [`CommandHost`] |
 //!
 //! The approvals inbox, `/api/runs`, `/api/cron`, `/api/admin/freeze` and `/hooks/{name}`
 //! are the existing server routes, unchanged; `POST /api/admin/freeze` delegates to
@@ -118,6 +119,7 @@ pub mod api;
 #[cfg(feature = "proc")]
 mod away;
 mod client;
+mod commands;
 mod memory;
 mod pairing;
 #[cfg(windows)]
@@ -131,6 +133,10 @@ mod store;
 mod tests;
 
 pub use client::ControlClient;
+pub use commands::{
+    AlwaysAllowResponse, CommandCall, CommandHost, CommandInfo, CommandReach, CommandsResponse,
+    RunCommandRequest, RunCommandResponse,
+};
 pub use memory::{FactOrigin, MemoryBook, RememberedFact, TidyUp, TidyUpUndo};
 #[cfg(feature = "channels")]
 pub(crate) use pairing::rated_high;
@@ -246,6 +252,16 @@ pub mod paths {
     /// `GET`: check that every action is on record and nothing was changed or deleted (spec
     /// 3.3 §10 K5).
     pub const RECORD_CHECK: &str = "/kernel/record/check";
+    /// `GET`: the REPL's slash commands the kernel offers (spec 3.3 §5.2).
+    pub const COMMANDS: &str = "/kernel/commands";
+    /// `POST`: run one of them in the caller's session (spec 3.3 §5.2).
+    pub const COMMAND_RUN: &str = "/kernel/commands/run";
+    /// `GET`: what "Always allow" creates for a waiting decision (spec 3.3 §8.2).
+    pub const ALWAYS_ALLOW: &str = "/kernel/rules/always-allow/{id}";
+    /// `POST`: make that standing rule, before the decision is answered (spec 3.3 §8.2).
+    pub const ALWAYS_ALLOW_PREPARE: &str = "/kernel/rules/always-allow/{id}/prepare";
+    /// `POST`: grant it, once the decision was allowed (spec 3.3 §8.2).
+    pub const ALWAYS_ALLOW_GRANT: &str = "/kernel/rules/always-allow/{id}/grant";
 }
 
 /// Where the control plane listens and how it authenticates HTTP callers (spec 3.2 §7.11).
@@ -292,6 +308,9 @@ pub struct ControlPlaneConfig {
     /// The record of actions and its check, for the record routes (spec 3.3 §10 K5); `None`
     /// serves none.
     pub record: Option<Arc<dyn RecordBook>>,
+    /// The REPL's slash commands and "Always allow", for the command routes (spec 3.3 §5.2);
+    /// `None` serves none.
+    pub commands: Option<Arc<dyn CommandHost>>,
     /// The mode each area's agents started in, which the settings routes report until the
     /// person changes it (spec 3.3 §10 K3). A partition's record gives its own.
     pub start_modes: BTreeMap<crate::partition::PartitionId, crate::partition::PartitionMode>,
@@ -360,6 +379,14 @@ impl ControlPlaneConfig {
     #[must_use]
     pub fn with_record(mut self, book: Arc<dyn RecordBook>) -> Self {
         self.record = Some(book);
+        self
+    }
+
+    /// Serves the REPL's slash commands and "Always allow" over `host` (spec 3.3 §5.2), so a
+    /// terminal attached to the kernel has the commands the REPL has.
+    #[must_use]
+    pub fn with_commands(mut self, host: Arc<dyn CommandHost>) -> Self {
+        self.commands = Some(host);
         self
     }
 
@@ -462,6 +489,7 @@ impl Default for ControlPlaneConfig {
             control_store: Arc::new(InMemoryControlStore::new()),
             memory: None,
             record: None,
+            commands: None,
             start_modes: BTreeMap::new(),
             refused_modes: Vec::new(),
         }
@@ -477,6 +505,7 @@ impl fmt::Debug for ControlPlaneConfig {
             .field("pairing", &self.pairing)
             .field("memory", &self.memory.is_some())
             .field("record", &self.record.is_some())
+            .field("commands", &self.commands.is_some())
             .field("start_modes", &self.start_modes)
             .field("refused_modes", &self.refused_modes)
             .finish()

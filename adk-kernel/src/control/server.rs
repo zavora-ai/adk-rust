@@ -226,10 +226,15 @@ pub(super) async fn admit(
     next.run(request).await
 }
 
-/// The uid of a socket peer, from its credentials.
+/// The uid of a socket peer, and its process when the OS says, from its credentials.
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy)]
-struct PeerUid(Option<u32>);
+struct PeerUid(Option<u32>, Option<u32>);
+
+/// The process that sent a request on the socket, when the OS says (spec 3.3 §5.2): the
+/// command routes record it.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PeerProcess(pub(super) u32);
 
 #[cfg(unix)]
 impl
@@ -238,7 +243,12 @@ impl
     > for PeerUid
 {
     fn connect_info(stream: axum::serve::IncomingStream<'_, tokio::net::UnixListener>) -> Self {
-        Self(stream.io().peer_cred().ok().map(|credentials| credentials.uid()))
+        let credentials = stream.io().peer_cred().ok();
+        let pid = credentials.and_then(|credentials| credentials.pid());
+        Self(
+            credentials.map(|credentials| credentials.uid()),
+            pid.and_then(|pid| u32::try_from(pid).ok()),
+        )
     }
 }
 
@@ -273,13 +283,16 @@ async fn serve_socket(path: &Path, api: Router, stop: CancellationToken) -> Resu
     // The kernel created the socket, so its owner is the uid the kernel runs as.
     let owner = std::fs::metadata(path)?.uid();
     let user = os_user();
-    let app = api.layer(middleware::from_fn(move |request: Request<Body>, next: Next| {
+    let app = api.layer(middleware::from_fn(move |mut request: Request<Body>, next: Next| {
         let user = user.clone();
         async move {
-            let peer = request
+            let (peer, pid) = request
                 .extensions()
                 .get::<ConnectInfo<PeerUid>>()
-                .and_then(|ConnectInfo(PeerUid(uid))| *uid);
+                .map_or((None, None), |ConnectInfo(PeerUid(uid, pid))| (*uid, *pid));
+            if let Some(pid) = pid {
+                request.extensions_mut().insert(PeerProcess(pid));
+            }
             match socket_subject(peer, owner, &user) {
                 Ok(context) => admit(request, next, context, ControlTransport::Socket).await,
                 Err(error) => error.into_response(),
