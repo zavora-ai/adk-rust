@@ -5,7 +5,7 @@
 //! job.
 #![cfg(all(windows, feature = "process-tree"))]
 
-use std::os::windows::io::{AsHandle as _, AsRawHandle as _};
+use std::os::windows::io::{AsHandle as _, AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 use std::time::{Duration, Instant};
 
 use adk_sandbox::process_tree::{CREATE_SUSPENDED, JobObject};
@@ -150,8 +150,9 @@ async fn a_released_job_leaves_its_processes_running() {
     ids.iter().copied().for_each(terminate);
 }
 
-/// Terminating the job and waiting returns only once every process in it has exited, so a
-/// write the background process had in flight lands before the call returns, not after.
+/// Terminating the job and waiting returns only once every process in it has exited, not
+/// only left the job's count, so a write the background process had in flight lands before
+/// the call returns, not after.
 #[tokio::test]
 async fn terminate_and_wait_returns_once_no_process_is_left() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -179,10 +180,29 @@ async fn terminate_and_wait_returns_once_no_process_is_left() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(job.active_processes().expect("the job is queried") >= 2);
+    // The shell and the writer, held open so each handle shows whether its process has exited.
+    let held: Vec<OwnedHandle> = processes(&job, 2)
+        .into_iter()
+        .filter_map(|pid| {
+            // SAFETY: plain arguments; the result is checked.
+            let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+            // SAFETY: an open handle is owned here alone.
+            (!process.is_null()).then(|| unsafe { OwnedHandle::from_raw_handle(process) })
+        })
+        .collect();
+    assert!(held.len() >= 2, "{} of the job's processes could be opened", held.len());
 
     assert!(job.terminate_and_wait(JobObject::TERMINATION_WAIT).expect("the job is queried"));
 
     assert_eq!(job.active_processes().expect("the job is queried"), 0);
+    let running = held
+        .iter()
+        // SAFETY: each handle is open while `held` lives.
+        .filter(
+            |process| unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } != WAIT_OBJECT_0,
+        )
+        .count();
+    assert_eq!(running, 0, "a process had not finished exiting when the wait returned");
     let size = std::fs::metadata(&tick).unwrap().len();
     std::thread::sleep(Duration::from_secs(1));
     assert_eq!(std::fs::metadata(&tick).unwrap().len(), size, "a write landed after the wait");
