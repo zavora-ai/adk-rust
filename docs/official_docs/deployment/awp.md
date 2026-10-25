@@ -71,10 +71,57 @@ sequenceDiagram
 
 | Crate | Purpose | Dependencies |
 |-------|---------|-------------|
-| `awp-types` | Protocol types (enums, structs, errors) | Zero `adk-*` deps — `serde`, `uuid`, `chrono`, `thiserror` only |
+| `awp-types` | Protocol types (enums, structs, errors), AWP 1.0 and 2.0 | Zero `adk-*` deps — `serde`, `uuid`, `chrono`, `thiserror`; `schemars` behind `json-schema` |
 | `adk-awp` | Routes, middleware, service interfaces, and in-memory implementations | `awp-types`, `adk-core` (`webhook-delivery`), `axum` 0.8, `tokio`, `dashmap` |
 
 The split means any Rust project can depend on `awp-types` without pulling in the ADK tree.
+
+## AWP 2.0 wire types
+
+`awp-types` also carries the AWP 2.0 wire types (spec 3.5 §7.2–§7.8.3, §7.10) in `awp_types::v2`, re-exported at the crate root beside the 1.0 types. They are plain data with pure validation helpers; signing, canonicalisation and the 2.0 routes arrive in `adk-awp` separately.
+
+| Document | Type | Served at |
+|----------|------|-----------|
+| Site contract | `SiteContract` | `/.well-known/awp.json` (`application/awp+json`) |
+| Keys, delegations and revocations | `KeySet` | `/.well-known/awp/keys.json` |
+| Trust rules | `TrustRules` | The contract's `identity.trustRules` |
+| Capability manifest | `CapabilityManifestV2` of `CapabilityV2` | `GET /awp/v2/manifest` |
+| Machine view of a page | `MachineView` | `<path>/index.awp.json` |
+| Held call | `HeldCall` | `GET /awp/v2/calls/{id}` |
+| Site status | `SiteStatus` | `GET /awp/v2/status` |
+| Event | `EventEnvelope` | Standard Webhooks delivery |
+| Event subscription | `EventSubscription` | `POST /awp/v2/events`, `GET /awp/v2/events/{id}` |
+| Consent receipt, receipt, quote | `ConsentReceipt`, `Receipt`, `QuoteDocument` | Capability results |
+| Error | `ErrorEnvelope` | Every 2.0 error response; `read_only` carries the status document |
+| Release manifest | `ReleaseManifest` | `/.well-known/awp/releases/{seq}.json` |
+| Site log entry | `LogEntry` | Leaf `seq − 1` of the log under `/.well-known/awp/log/` |
+| Stream entry | `StreamEntry` | The edge's stream feed for a live page |
+| Charter public terms | `PublicTerms` (part of `Charter`) | `/.well-known/awp/charter.json` |
+
+`Charter::validate()` refuses a KPI target without a baseline, a charter without an owner, an agent holding a role, and an approval chain that distinct principals cannot satisfy. The `json-schema` feature derives JSON Schema (2020-12) for every 2.0 type; the generated schemas are committed in `awp-types/schemas/2.0/`.
+
+```toml
+[dependencies]
+awp-types = { version = "3.0.0", features = ["json-schema"] }
+```
+
+```rust
+use awp_types::{Charter, CharterViolation, TrustTier, CapabilityEffect, CapabilityManifestV2, CapabilityV2};
+
+fn check(mut charter: Charter) {
+    charter.kpis[0].baseline = None; // a target with no baseline
+    let error = charter.validate().unwrap_err();
+    assert!(matches!(error.violations[0], CharterViolation::TargetWithoutBaseline { .. }));
+
+    let manifest = CapabilityManifestV2::new(vec![
+        CapabilityV2::new("search_site", "Search the site", CapabilityEffect::ReadOnly),
+        CapabilityV2::new("place_order", "Place an order", CapabilityEffect::NonIdempotent)
+            .with_min_trust(TrustTier::Known),
+    ]);
+    // An unverified requester sees only what `public` may call.
+    assert_eq!(manifest.visible_to(TrustTier::Public).capabilities.len(), 1);
+}
+```
 
 ## Quick Start
 

@@ -1,0 +1,45 @@
+{
+  "$defs": {
+    "EventType": {
+      "examples": [
+        "site.release.published",
+        "site.status.changed",
+        "catalog.changed",
+        "order.updated",
+        "consent.revoked",
+        "subscription.suspended"
+      ],
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/event-envelope.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A Standard Webhooks-compatible event (spec 3.5 §7.5).\n\n`id` is the event id subscribers de-duplicate on; it is also sent as `webhook-id`.",
+  "properties": {
+    "data": {
+      "description": "Event data; its shape depends on `type`."
+    },
+    "id": {
+      "description": "Event id, unique per site.",
+      "type": "string"
+    },
+    "timestamp": {
+      "description": "When the event happened.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "type": {
+      "$ref": "#/$defs/EventType",
+      "description": "Event type."
+    }
+  },
+  "required": [
+    "data",
+    "id",
+    "timestamp",
+    "type"
+  ],
+  "title": "EventEnvelope",
+  "type": "object"
+}

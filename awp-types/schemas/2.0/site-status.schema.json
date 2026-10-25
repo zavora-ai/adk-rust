@@ -1,0 +1,106 @@
+{
+  "$defs": {
+    "Proof": {
+      "description": "A detached JWS (spec 3.5 §7.2).\n\n`jws` is the compact serialization with an empty payload; the signed payload is the JCS\nform of the enclosing document without its `proof`.",
+      "properties": {
+        "alg": {
+          "description": "JWS algorithm, `EdDSA` in AWP 2.0.",
+          "type": "string"
+        },
+        "jws": {
+          "description": "Detached compact JWS.",
+          "type": "string"
+        },
+        "kid": {
+          "description": "Key id of the signing key in `keys.json`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alg",
+        "jws",
+        "kid"
+      ],
+      "type": "object"
+    },
+    "ReasonCode": {
+      "description": "A snake_case reason code (spec 3.5 §7.5, §7.10).",
+      "type": "string"
+    },
+    "SiteState": {
+      "description": "A site's state (spec 3.5 §7.5).",
+      "oneOf": [
+        {
+          "const": "operational",
+          "description": "Everything works.",
+          "type": "string"
+        },
+        {
+          "const": "degraded",
+          "description": "Working with reduced function.",
+          "type": "string"
+        },
+        {
+          "const": "read_only",
+          "description": "Only `ReadOnly` capabilities answer; the rest answer 503 with the status document.",
+          "type": "string"
+        },
+        {
+          "const": "maintenance",
+          "description": "Planned maintenance.",
+          "type": "string"
+        },
+        {
+          "const": "incident",
+          "description": "An incident is in progress.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/site-status.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The signed status document served at `GET /awp/v2/status` (spec 3.5 §7.5).\n\nThe edge signs it with a delegated `receipt` key and emits `site.status.changed` on every\ntransition.",
+  "properties": {
+    "proof": {
+      "$ref": "#/$defs/Proof",
+      "description": "The edge's detached JWS over the JCS form of the status without `proof`."
+    },
+    "reasonCode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReasonCode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Why, as a snake_case code."
+    },
+    "releaseSeq": {
+      "description": "Sequence number of the release being served.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "since": {
+      "description": "When the site entered the state.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/SiteState",
+      "description": "The current state."
+    }
+  },
+  "required": [
+    "proof",
+    "since",
+    "state"
+  ],
+  "title": "SiteStatus",
+  "type": "object"
+}

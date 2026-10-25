@@ -1,0 +1,249 @@
+{
+  "$defs": {
+    "Delegation": {
+      "description": "A root-signed delegation to a short-lived key (spec 3.5 §7.2).",
+      "properties": {
+        "kid": {
+          "description": "Key id of the delegated key.",
+          "type": "string"
+        },
+        "notAfter": {
+          "description": "End of the validity window.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "notBefore": {
+          "description": "Start of the validity window.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "proof": {
+          "$ref": "#/$defs/Proof",
+          "description": "The root key's detached JWS over the JCS form of the delegation without `proof`."
+        },
+        "publicKey": {
+          "$ref": "#/$defs/PublicKeyJwk",
+          "description": "The delegated public key."
+        },
+        "scopes": {
+          "description": "What the delegated key may sign.",
+          "items": {
+            "$ref": "#/$defs/KeyScope"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kid",
+        "notAfter",
+        "notBefore",
+        "proof",
+        "publicKey",
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "KeyScope": {
+      "description": "What a delegated key may sign (spec 3.5 §7.2).",
+      "oneOf": [
+        {
+          "const": "release",
+          "description": "Site log checkpoints, and through them release manifests.",
+          "type": "string"
+        },
+        {
+          "const": "card",
+          "description": "A2A Agent Cards.",
+          "type": "string"
+        },
+        {
+          "const": "receipt",
+          "description": "Documents the edge issues: commerce receipts, consent receipts, site status, stream\nentries and quotes.",
+          "type": "string"
+        },
+        {
+          "const": "payments",
+          "description": "Quotes and payment mandates presented to a rail.",
+          "type": "string"
+        }
+      ]
+    },
+    "Proof": {
+      "description": "A detached JWS (spec 3.5 §7.2).\n\n`jws` is the compact serialization with an empty payload; the signed payload is the JCS\nform of the enclosing document without its `proof`.",
+      "properties": {
+        "alg": {
+          "description": "JWS algorithm, `EdDSA` in AWP 2.0.",
+          "type": "string"
+        },
+        "jws": {
+          "description": "Detached compact JWS.",
+          "type": "string"
+        },
+        "kid": {
+          "description": "Key id of the signing key in `keys.json`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alg",
+        "jws",
+        "kid"
+      ],
+      "type": "object"
+    },
+    "PublicKeyJwk": {
+      "description": "An Ed25519 public key as a JWK (RFC 8037) (spec 3.5 §7.2).",
+      "properties": {
+        "crv": {
+          "description": "Curve, `Ed25519`.",
+          "type": "string"
+        },
+        "kty": {
+          "description": "Key type, `OKP`.",
+          "type": "string"
+        },
+        "x": {
+          "description": "The public key, base64url without padding.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "crv",
+        "kty",
+        "x"
+      ],
+      "type": "object"
+    },
+    "RetiredRoot": {
+      "description": "An earlier root key, kept after a rotation (spec 3.5 §7.2).",
+      "properties": {
+        "kid": {
+          "description": "Key id.",
+          "type": "string"
+        },
+        "publicKey": {
+          "$ref": "#/$defs/PublicKeyJwk",
+          "description": "The public key."
+        },
+        "retiredAt": {
+          "description": "When it stopped being the root.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kid",
+        "publicKey",
+        "retiredAt"
+      ],
+      "type": "object"
+    },
+    "Revocation": {
+      "description": "A root-signed withdrawal of a delegated key (spec 3.5 §7.2).\n\nA signature by the key on a document dated at or after `revokedAt`, or on any live\ndocument, is rejected.",
+      "properties": {
+        "kid": {
+          "description": "Key id of the revoked key.",
+          "type": "string"
+        },
+        "proof": {
+          "$ref": "#/$defs/Proof",
+          "description": "The root key's detached JWS over the JCS form of the revocation without `proof`."
+        },
+        "revokedAt": {
+          "description": "When the revocation takes effect.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kid",
+        "proof",
+        "revokedAt"
+      ],
+      "type": "object"
+    },
+    "RootEndorsement": {
+      "description": "A previous root key's signature over its successor (spec 3.5 §7.2).",
+      "properties": {
+        "previous": {
+          "$ref": "#/$defs/PublicKeyJwk",
+          "description": "The previous root's public key."
+        },
+        "proof": {
+          "$ref": "#/$defs/Proof",
+          "description": "Detached JWS by the previous root over the JCS form of the new root without its\nendorsement; its `kid` names the previous root."
+        }
+      },
+      "required": [
+        "previous",
+        "proof"
+      ],
+      "type": "object"
+    },
+    "RootKey": {
+      "description": "The site root key (spec 3.5 §7.2).",
+      "properties": {
+        "endorsement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RootEndorsement"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The previous root's signature over this root, after a rotation."
+        },
+        "kid": {
+          "description": "Key id.",
+          "type": "string"
+        },
+        "publicKey": {
+          "$ref": "#/$defs/PublicKeyJwk",
+          "description": "The public key."
+        }
+      },
+      "required": [
+        "kid",
+        "publicKey"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/key-set.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`keys.json`: the site root key and its delegations (spec 3.5 §7.2).\n\nVerification walks root → delegation → signature. A new root carries an endorsement by\nthe previous root, which moves to `retiredRoots`; recovery publishes a root through the\n`_awp-root.<domain>` DNS TXT record, which a person changes. A compromised delegated key is\nwithdrawn by a root-signed revocation.",
+  "properties": {
+    "delegations": {
+      "default": [],
+      "description": "Root-signed delegations to release, card, receipt and payment keys.",
+      "items": {
+        "$ref": "#/$defs/Delegation"
+      },
+      "type": "array"
+    },
+    "retiredRoots": {
+      "description": "Earlier roots, kept so the delegations they signed still verify.",
+      "items": {
+        "$ref": "#/$defs/RetiredRoot"
+      },
+      "type": "array"
+    },
+    "revocations": {
+      "description": "Root-signed revocations of delegated keys.",
+      "items": {
+        "$ref": "#/$defs/Revocation"
+      },
+      "type": "array"
+    },
+    "root": {
+      "$ref": "#/$defs/RootKey",
+      "description": "The site root key, which signs the contract and delegations."
+    }
+  },
+  "required": [
+    "root"
+  ],
+  "title": "KeySet",
+  "type": "object"
+}

@@ -1,0 +1,131 @@
+{
+  "$defs": {
+    "ContentKind": {
+      "description": "A content kind (spec 3.5 §7.8.2).",
+      "oneOf": [
+        {
+          "const": "page",
+          "description": "A standing page.",
+          "type": "string"
+        },
+        {
+          "const": "post",
+          "description": "A blog post.",
+          "type": "string"
+        },
+        {
+          "const": "article",
+          "description": "A news article.",
+          "type": "string"
+        },
+        {
+          "const": "product",
+          "description": "A product.",
+          "type": "string"
+        },
+        {
+          "const": "event",
+          "description": "An event.",
+          "type": "string"
+        },
+        {
+          "const": "notice",
+          "description": "A notice, such as an official notice.",
+          "type": "string"
+        },
+        {
+          "const": "service",
+          "description": "A service.",
+          "type": "string"
+        },
+        {
+          "const": "person",
+          "description": "A person.",
+          "type": "string"
+        },
+        {
+          "const": "collection",
+          "description": "A collection of other items.",
+          "type": "string"
+        }
+      ]
+    },
+    "LanguageTag": {
+      "description": "A BCP 47 language tag.",
+      "pattern": "^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$",
+      "type": "string"
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/machine-view.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A page's structured twin, `<path>/index.awp.json` (spec 3.5 §7.4).\n\nIt carries the page's resource data, the capabilities that apply to it and its schema.org\nJSON-LD; the HTML links it with `<link rel=\"alternate\">`.",
+  "properties": {
+    "capabilities": {
+      "description": "Names of the capabilities that apply to the page.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "jsonLd": {
+      "description": "schema.org JSON-LD."
+    },
+    "kind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContentKind"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The page's content kind."
+    },
+    "language": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The page's language."
+    },
+    "markdown": {
+      "description": "URL of the Markdown twin, `<path>/index.md`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "path": {
+      "description": "The page's path.",
+      "type": "string"
+    },
+    "releaseSeq": {
+      "description": "The release in which this view last changed, so an unchanged view stays\nbyte-identical across releases.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "resource": {
+      "additionalProperties": true,
+      "description": "Resource data: the released fields of the page's content item.",
+      "type": "object"
+    },
+    "title": {
+      "description": "The page's title.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "path",
+    "releaseSeq"
+  ],
+  "title": "MachineView",
+  "type": "object"
+}

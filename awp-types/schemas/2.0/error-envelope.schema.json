@@ -1,0 +1,199 @@
+{
+  "$defs": {
+    "ErrorBody": {
+      "description": "The body of an `ErrorEnvelope` (spec 3.5 §7.5).",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode",
+          "description": "Error code."
+        },
+        "message": {
+          "description": "Human-readable message with no internal detail.",
+          "type": "string"
+        },
+        "retryAfter": {
+          "description": "Seconds to wait before retrying.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "retryable": {
+          "description": "Whether the same request can succeed if retried.",
+          "type": "boolean"
+        },
+        "traceId": {
+          "description": "Trace id for support.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "type": "object"
+    },
+    "ErrorCode": {
+      "examples": [
+        "invalid_request",
+        "schema_validation_failed",
+        "idempotency_key_required",
+        "unauthorized",
+        "payment_policy_rejected",
+        "forbidden",
+        "capability_not_found",
+        "resource_not_found",
+        "version_not_supported",
+        "idempotency_conflict",
+        "inventory_unavailable",
+        "quote_expired",
+        "subscription_suspended",
+        "rate_limit_exceeded",
+        "consent_required",
+        "internal_error",
+        "payment_failed",
+        "service_degraded",
+        "read_only"
+      ],
+      "minLength": 1,
+      "type": "string"
+    },
+    "Proof": {
+      "description": "A detached JWS (spec 3.5 §7.2).\n\n`jws` is the compact serialization with an empty payload; the signed payload is the JCS\nform of the enclosing document without its `proof`.",
+      "properties": {
+        "alg": {
+          "description": "JWS algorithm, `EdDSA` in AWP 2.0.",
+          "type": "string"
+        },
+        "jws": {
+          "description": "Detached compact JWS.",
+          "type": "string"
+        },
+        "kid": {
+          "description": "Key id of the signing key in `keys.json`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alg",
+        "jws",
+        "kid"
+      ],
+      "type": "object"
+    },
+    "ReasonCode": {
+      "description": "A snake_case reason code (spec 3.5 §7.5, §7.10).",
+      "type": "string"
+    },
+    "SiteState": {
+      "description": "A site's state (spec 3.5 §7.5).",
+      "oneOf": [
+        {
+          "const": "operational",
+          "description": "Everything works.",
+          "type": "string"
+        },
+        {
+          "const": "degraded",
+          "description": "Working with reduced function.",
+          "type": "string"
+        },
+        {
+          "const": "read_only",
+          "description": "Only `ReadOnly` capabilities answer; the rest answer 503 with the status document.",
+          "type": "string"
+        },
+        {
+          "const": "maintenance",
+          "description": "Planned maintenance.",
+          "type": "string"
+        },
+        {
+          "const": "incident",
+          "description": "An incident is in progress.",
+          "type": "string"
+        }
+      ]
+    },
+    "SiteStatus": {
+      "description": "The signed status document served at `GET /awp/v2/status` (spec 3.5 §7.5).\n\nThe edge signs it with a delegated `receipt` key and emits `site.status.changed` on every\ntransition.",
+      "properties": {
+        "proof": {
+          "$ref": "#/$defs/Proof",
+          "description": "The edge's detached JWS over the JCS form of the status without `proof`."
+        },
+        "reasonCode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasonCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why, as a snake_case code."
+        },
+        "releaseSeq": {
+          "description": "Sequence number of the release being served.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "since": {
+          "description": "When the site entered the state.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SiteState",
+          "description": "The current state."
+        }
+      },
+      "required": [
+        "proof",
+        "since",
+        "state"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/error-envelope.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The error envelope `{awp, error: {code, message, retryable, retryAfter, traceId}}`\n(spec 3.5 §7.5); a `read_only` error also carries the signed status document.",
+  "properties": {
+    "awp": {
+      "description": "Protocol version, `\"2.0\"`.",
+      "type": "string"
+    },
+    "error": {
+      "$ref": "#/$defs/ErrorBody",
+      "description": "The error."
+    },
+    "status": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SiteStatus"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "With `read_only`: the signed status document (spec 3.5 §7.9)."
+    }
+  },
+  "required": [
+    "awp",
+    "error"
+  ],
+  "title": "ErrorEnvelope",
+  "type": "object"
+}

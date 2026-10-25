@@ -1,0 +1,81 @@
+{
+  "$defs": {
+    "ContentId": {
+      "description": "A content item's id in the site's content repository (spec 3.5 §7.8.2).",
+      "type": "string"
+    },
+    "Markdown": {
+      "description": "Markdown text (spec 3.5 §7.8.2).",
+      "type": "string"
+    },
+    "Proof": {
+      "description": "A detached JWS (spec 3.5 §7.2).\n\n`jws` is the compact serialization with an empty payload; the signed payload is the JCS\nform of the enclosing document without its `proof`.",
+      "properties": {
+        "alg": {
+          "description": "JWS algorithm, `EdDSA` in AWP 2.0.",
+          "type": "string"
+        },
+        "jws": {
+          "description": "Detached compact JWS.",
+          "type": "string"
+        },
+        "kid": {
+          "description": "Key id of the signing key in `keys.json`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alg",
+        "jws",
+        "kid"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/stream-entry.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One entry of a stream — a live blog, a ticker, an emergency update — signed by the edge\nwith a delegated `receipt` key and folded into a signed release (spec 3.5 §7.8.3).",
+  "properties": {
+    "corrects": {
+      "description": "The number of an entry it corrects.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "markdown": {
+      "$ref": "#/$defs/Markdown",
+      "description": "The entry's text."
+    },
+    "n": {
+      "description": "The entry's number in the stream, from 1 without gaps.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "proof": {
+      "$ref": "#/$defs/Proof",
+      "description": "The edge's detached JWS over the JCS form of the entry without `proof`."
+    },
+    "publishedAt": {
+      "description": "When the edge published it.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "stream": {
+      "$ref": "#/$defs/ContentId",
+      "description": "The content item the stream belongs to."
+    }
+  },
+  "required": [
+    "markdown",
+    "n",
+    "proof",
+    "publishedAt",
+    "stream"
+  ],
+  "title": "StreamEntry",
+  "type": "object"
+}

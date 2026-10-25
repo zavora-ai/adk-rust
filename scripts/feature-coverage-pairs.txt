@@ -175,6 +175,8 @@
 # `mcp-sampling` gates three rmcp model types nothing in the workspace enables; an rmcp
 # rename broke the sampling handler while workspace clippy stayed at zero.
 4 adk-tool mcp-sampling
+# The MCP server (spec 3.5 §7.9); its round-trip tests also need the HTTP client.
+4 adk-tool mcp-server,http-transport doc
 4 adk-agent codeact
 # Guardrails are not in adk-agent's default features, so `tool_guardrail_tests` ran in no
 # required check.
@@ -231,6 +233,8 @@
 # compile either.
 6 adk-auth postgres-audit
 6 adk-auth token-exchange
+# Web Bot Auth (spec 3.5 §7.3): RFC 9421 and draft test vectors, directory fetch and cache.
+6 adk-auth web-bot-auth doc
 # The GCS artifact backend must keep blob-name parity with adk-python.
 6 adk-artifact gcs
 6 adk-telemetry gcp
@@ -246,6 +250,8 @@
 # `DockerClient` and its host-config and bind-mount tests: no workspace member enables
 # `workspace-docker`; the tests that need a Docker daemon are ignored.
 6 adk-sandbox workspace-docker
+# AWP 2.0 JSON Schemas (spec 3.5 §7.2): the drift test against awp-types/schemas/2.0/ runs only here.
+6 awp-types json-schema
 
 # Shard 7 — adk-rag's SurrealDB backend on its own: it and lancedb each compile for about
 # fifteen minutes, and together they made shard 0 the longest job in the tier.

@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "siteId": "018f2c7e-5d1a-7c3b-9e4f-0a1b2c3d4e5f",
+  "kind": "business",
+  "governance": {
+    "roles": [
+      { "principal": "user:amina", "roles": ["owner", "editor"] },
+      { "principal": "user:baraka", "roles": ["publisher"] }
+    ],
+    "approvalChains": [
+      { "action": "publish", "roles": ["editor", "publisher"] },
+      { "action": "charter_change", "roles": ["owner"] }
+    ]
+  },
+  "mission": "Bring reliable solar power to homes and small businesses in Nairobi.",
+  "strategy": [
+    { "name": "Be found by people and agents", "description": "Answer the questions buyers ask before they call." }
+  ],
+  "goals": [
+    { "id": "enquiries", "name": "More qualified installation enquiries", "kpis": ["leads-qualified"] }
+  ],
+  "kpis": [
+    {
+      "id": "leads-qualified",
+      "name": "Qualified leads per week",
+      "metric": "leads.qualified",
+      "source": "commerce",
+      "direction": "up",
+      "baseline": { "value": 4.0, "window": 604800, "measuredAt": "2026-10-20T00:00:00Z" },
+      "target": { "value": 8.0, "horizon": "2027-01-31T00:00:00Z" },
+      "cadence": "weekly"
+    },
+    {
+      "id": "answer-citations",
+      "name": "Answer-engine citations",
+      "metric": "pages.answer_citations",
+      "source": "analytics:search_console",
+      "direction": "up",
+      "cadence": "weekly"
+    }
+  ],
+  "guardrails": [
+    {
+      "id": "unsubscribes",
+      "metric": "email.unsubscribe_rate",
+      "threshold": 0.02,
+      "breach": "above",
+      "window": 604800,
+      "action": "pause_job",
+      "jobs": ["nurture"]
+    }
+  ],
+  "authority": [
+    { "job": "freshness", "level": "act_within_budget", "limits": { "spendCap": 5000, "actionsPerDay": 20 } },
+    { "job": "nurture", "level": "propose" }
+  ],
+  "budget": { "period": "monthly", "currency": "KES", "caps": { "hosting": 150000, "models": 300000 } },
+  "voice": { "tone": "Warm, plain and practical", "languages": ["en", "sw"], "disclosure": "Written by Example Solar's assistant, an AI agent." },
+  "redLines": [
+    { "kind": "claim", "text": "No savings figures without an owner-confirmed source." }
+  ],
+  "reporting": {
+    "review": "weekly",
+    "routes": [
+      { "urgency": "p1", "channels": ["sms", "whatsapp"] },
+      { "urgency": "p2", "channels": ["whatsapp"] }
+    ],
+    "quietHours": { "start": "21:00:00", "end": "07:00:00", "timezone": "Africa/Nairobi" }
+  },
+  "public": {
+    "usage": "train-ai=n, search=y",
+    "policies": [
+      { "name": "privacy", "url": "https://example.com/privacy", "version": "2026-10" }
+    ],
+    "consentScopes": ["newsletter", "proactive_outreach", "contact"],
+    "contact": { "security": "https://example.com/.well-known/security.txt", "email": "hello@example.com" }
+  },
+  "priceRule": { "autoWithinPct": 10.0 },
+  "signed": {
+    "decision": "dec-0001",
+    "principal": "user:amina",
+    "note": "example.com/awp-charter\n1\nc2lnbmVk\n",
+    "signedAt": "2026-10-21T09:30:00Z"
+  }
+}

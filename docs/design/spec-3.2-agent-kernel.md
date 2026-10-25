@@ -225,8 +225,7 @@ Each row is a place where `main` differs from the text below, or settles a choic
 | Owner-only WAL files | [§10](#10-changes-outside-the-new-crate) W4 | On Windows `harness.db-wal` and `harness.db-shm` inherit their directory's ACL (#1036) |
 | A driver's process tree on macOS and Linux | [§7.7](#77-drivers), K-I5 | Stopping a driver ends its own process only; `rmcp` puts it in no process group (#1022) |
 | Live scenarios | [§11](#11-testing-and-live-verification) | K1 has not run live. No live run on OpenAI (`gpt-5.6-terra`; the account used for live runs has no credits, #1010, #1035, #1073), so `examples/harness_openai --kernel` runs scripted only. Live K9 has not run on `gemini-3.5-flash-lite` since #1076 took the instruction to call a refused step again out of its prompt; the key's free-tier quota was exhausted (#1076) |
-| Scenarios in CI | [§11](#11-testing-and-live-verification) | The scripted scenarios of `examples/harness_kernel`, K1 and K5 among them, run in the PR tier's `kernel-scenarios` job on Linux only (#1073), while §11 names macOS and Linux; Windows runs the crate-level scenarios in the merge tier's `nextest --workspace`, not in the PR tier's `windows` job |
-| Clippy on `examples/harness_kernel` | [§11](#11-testing-and-live-verification) | `cargo clippy --manifest-path examples/harness_kernel/Cargo.toml -- -D warnings` fails with `useless_conversion` at `src/live.rs:600` on `main` @ `62e931a5`, line 599 when #1073 reported it |
+| Scenarios in CI | [§11](#11-testing-and-live-verification) | K1 and K5 run scripted only in `examples/harness_kernel`, which runs in the PR tier's `kernel-scenarios` job on Linux and the merge tier's `kernel-scenarios-macos` job on macOS, so Windows does not run them; the PR tier's `windows` job runs the crate-level K2–K4, K6, K8 and K9 |
 
 ## 1. Summary
 

@@ -37,9 +37,9 @@ flowchart LR
 
 `McpToolset` adapts one initialized MCP client connection to ADK-Rust.
 `McpServerManager` owns a changing registry of local stdio child processes and
-aggregates their tools. Applications that publish capabilities can build MCP
-servers with `adk_tool::mcp::rmcp`, which is the exact SDK version used by the
-framework.
+aggregates their tools. `McpServer` (feature `mcp-server`) publishes ADK-Rust tools
+as a Streamable HTTP server with an MCP Server Card; hand-written servers use
+`adk_tool::mcp::rmcp`, which is the exact SDK version used by the framework.
 
 ## Choose the right surface
 
@@ -48,7 +48,8 @@ framework.
 | Connect one known local server | `McpToolset` + `TokioChildProcess` | The application starts the child process |
 | Connect one remote MCP service | `McpHttpClientBuilder` | The remote deployment owns availability |
 | Change local server definitions at runtime | `McpServerManager` | The application owns a local registry and child processes |
-| Publish an MCP server | `adk_tool::mcp::rmcp` | Your service owns schemas, authorization, and side effects |
+| Publish ADK-Rust tools as an MCP server | `McpServer` + `McpRouterBuilder` (`mcp-server`) | Your executor owns authorization and side effects |
+| Publish a hand-written MCP server | `adk_tool::mcp::rmcp` | Your service owns schemas, authorization, and side effects |
 | Keep a deprecated sampling integration working | `mcp-sampling` feature | Compatibility only under SEP-2577 |
 
 ## Implemented capability map
@@ -66,6 +67,7 @@ framework.
 | Streamable HTTP | `McpHttpClientBuilder` | Timeouts, headers, auth injection, expired-session recovery |
 | Dynamic local registry | `McpServerManager` | Add, update, enable, disable, remove, save, monitor, and restart |
 | Shutdown | `Toolset::close` (from `Runner::close`), `McpServerManager::shutdown` | Ends the session and waits for a stdio server to exit |
+| Publishing tools | `McpServer`, `McpRouterBuilder`, `McpCallExecutor` | Streamable HTTP server, Server Card (SEP-2127), AI Catalog entry |
 | Advanced SDK work | `adk_tool::mcp::rmcp` | Server handlers, transports, notifications, and extension types |
 
 ## Documentation path

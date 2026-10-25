@@ -25,6 +25,7 @@
 //! - `otlp-audit` - OpenTelemetry audit sink
 //! - `signed-audit` - Signed, Merkle-hashed audit log (`signed_audit`)
 //! - `token-exchange` - RFC 8693 token exchange broker (`TokenExchangeBroker`)
+//! - `web-bot-auth` - Web Bot Auth request signatures, signer and verifier (`web_bot_auth`)
 //!
 //! ## Quick Start
 //!
@@ -84,6 +85,8 @@ pub mod audit_otlp;
 pub mod audit_postgres;
 #[cfg(feature = "signed-audit")]
 pub mod signed_audit;
+#[cfg(feature = "web-bot-auth")]
+pub mod web_bot_auth;
 
 pub use access_control::{AccessControl, AccessControlBuilder};
 pub use audit::{

@@ -1,0 +1,489 @@
+{
+  "$defs": {
+    "CharterLink": {
+      "description": "The contract's link to the charter's public terms (spec 3.5 §7.2, §7.6).",
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest",
+          "description": "Digest of the published public terms."
+        },
+        "public": {
+          "description": "URL of the published `PublicTerms`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "digest",
+        "public"
+      ],
+      "type": "object"
+    },
+    "ContactLinks": {
+      "description": "Contact links published in the contract and the charter's public terms (spec 3.5 §7.2,\n§7.6).",
+      "properties": {
+        "email": {
+          "description": "Public contact email address.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page": {
+          "description": "URL of the contact page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "security": {
+          "description": "URL of `security.txt` (RFC 9116).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ContractRelease": {
+      "description": "The contract's link to the current release and the site log (spec 3.5 §7.2, §7.7).",
+      "properties": {
+        "checkpoint": {
+          "description": "URL of the site log's latest signed-note checkpoint.",
+          "type": "string"
+        },
+        "manifest": {
+          "description": "URL of the current release's manifest.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "Sequence number of the current release.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "checkpoint",
+        "manifest",
+        "seq"
+      ],
+      "type": "object"
+    },
+    "ContractStatus": {
+      "description": "The contract's link to the site status (spec 3.5 §7.2, §7.5).",
+      "properties": {
+        "lastKnown": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SiteState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The state when the contract was signed."
+        },
+        "url": {
+          "description": "URL of the signed status document.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` and 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "EventCatalog": {
+      "description": "The event types a site emits, listed in the contract (spec 3.5 §7.2, §7.5).",
+      "items": {
+        "$ref": "#/$defs/EventType"
+      },
+      "type": "array"
+    },
+    "EventType": {
+      "examples": [
+        "site.release.published",
+        "site.status.changed",
+        "catalog.changed",
+        "order.updated",
+        "consent.revoked",
+        "subscription.suspended"
+      ],
+      "minLength": 1,
+      "type": "string"
+    },
+    "EventsLink": {
+      "description": "The contract's link to event subscriptions (spec 3.5 §7.2, §7.5).",
+      "properties": {
+        "catalog": {
+          "$ref": "#/$defs/EventCatalog",
+          "default": [],
+          "description": "Event types the site emits."
+        },
+        "subscribe": {
+          "description": "URL that accepts subscriptions.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscribe"
+      ],
+      "type": "object"
+    },
+    "IdentityMethod": {
+      "description": "A way a requester proves its identity (spec 3.5 §7.3).",
+      "oneOf": [
+        {
+          "const": "web-bot-auth",
+          "description": "Web Bot Auth over HTTP Message Signatures (RFC 9421).",
+          "type": "string"
+        },
+        {
+          "const": "oauth2-client-credentials",
+          "description": "An OAuth 2.0 client-credentials token.",
+          "type": "string"
+        },
+        {
+          "const": "mtls",
+          "description": "Mutual TLS.",
+          "type": "string"
+        },
+        {
+          "const": "did",
+          "description": "A decentralized identifier.",
+          "type": "string"
+        },
+        {
+          "const": "api-key",
+          "description": "An API key the owner issued.",
+          "type": "string"
+        }
+      ]
+    },
+    "IdentityPolicy": {
+      "description": "The identities a site accepts and where its trust rules are published (spec 3.5 §7.3).",
+      "properties": {
+        "accepts": {
+          "default": [],
+          "description": "Accepted requester identity methods.",
+          "items": {
+            "$ref": "#/$defs/IdentityMethod"
+          },
+          "type": "array"
+        },
+        "trustRules": {
+          "description": "URL of the published trust rules.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "LanguageTag": {
+      "description": "A BCP 47 language tag.",
+      "pattern": "^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$",
+      "type": "string"
+    },
+    "PaymentsLink": {
+      "description": "The contract's payment section (spec 3.5 §7.2, §7.5).",
+      "properties": {
+        "rails": {
+          "default": [],
+          "description": "Accepted payment rails, such as `ap2`, `acp` or `ucp`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Profile": {
+      "description": "Deployment profile of a site (spec 3.5 §7.2).",
+      "oneOf": [
+        {
+          "const": "static",
+          "description": "Contract, keys, log, cards and machine views as files; no edge.",
+          "type": "string"
+        },
+        {
+          "const": "static+edge",
+          "description": "Static content with an agent edge; `adk-website`'s default.",
+          "type": "string"
+        },
+        {
+          "const": "dynamic",
+          "description": "An application serving AWP itself.",
+          "type": "string"
+        }
+      ]
+    },
+    "Proof": {
+      "description": "A detached JWS (spec 3.5 §7.2).\n\n`jws` is the compact serialization with an empty payload; the signed payload is the JCS\nform of the enclosing document without its `proof`.",
+      "properties": {
+        "alg": {
+          "description": "JWS algorithm, `EdDSA` in AWP 2.0.",
+          "type": "string"
+        },
+        "jws": {
+          "description": "Detached compact JWS.",
+          "type": "string"
+        },
+        "kid": {
+          "description": "Key id of the signing key in `keys.json`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alg",
+        "jws",
+        "kid"
+      ],
+      "type": "object"
+    },
+    "SiteRef": {
+      "description": "The site a contract describes (spec 3.5 §7.2).",
+      "properties": {
+        "domain": {
+          "description": "The domain the contract is served from.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable site identifier; the charter's `siteId`.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "languages": {
+          "description": "Languages the site publishes, as BCP 47 tags.",
+          "items": {
+            "$ref": "#/$defs/LanguageTag"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "Display name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "domain",
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "SiteState": {
+      "description": "A site's state (spec 3.5 §7.5).",
+      "oneOf": [
+        {
+          "const": "operational",
+          "description": "Everything works.",
+          "type": "string"
+        },
+        {
+          "const": "degraded",
+          "description": "Working with reduced function.",
+          "type": "string"
+        },
+        {
+          "const": "read_only",
+          "description": "Only `ReadOnly` capabilities answer; the rest answer 503 with the status document.",
+          "type": "string"
+        },
+        {
+          "const": "maintenance",
+          "description": "Planned maintenance.",
+          "type": "string"
+        },
+        {
+          "const": "incident",
+          "description": "An incident is in progress.",
+          "type": "string"
+        }
+      ]
+    },
+    "SurfaceLinks": {
+      "description": "Links to a site's agent surfaces (spec 3.5 §7.2).",
+      "properties": {
+        "a2aCard": {
+          "description": "URL of the signed A2A Agent Card.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "llmsTxt": {
+          "description": "URL of `llms.txt`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "machineViews": {
+          "default": false,
+          "description": "Whether every page has a machine view (`<path>/index.awp.json`) and a Markdown twin.",
+          "type": "boolean"
+        },
+        "manifest": {
+          "description": "URL of the AWP capability manifest.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mcpServerCard": {
+          "description": "URL of the MCP Server Card.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/site-contract.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The site contract served at `/.well-known/awp.json` as `application/awp+json` and signed\nby the site root key (spec 3.5 §7.2).\n\nEvery field beyond `awp` and `site` is optional, so a read-only static site publishes a\nminimal contract and a client that speaks only A2A or MCP follows the links and ignores\nthe rest. The `proof` is a detached JWS over the JCS form of the contract without\n`proof`.",
+  "properties": {
+    "awp": {
+      "description": "Protocol version, `\"2.0\"`.",
+      "type": "string"
+    },
+    "charter": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CharterLink"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The charter's published public terms and their digest."
+    },
+    "contact": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContactLinks"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Contact links."
+    },
+    "events": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EventsLink"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Event subscriptions and the event catalogue."
+    },
+    "identity": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IdentityPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The identities the site accepts and where its trust rules are published."
+    },
+    "keys": {
+      "description": "URL of `keys.json`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "payments": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PaymentsLink"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Accepted payment rails."
+    },
+    "profile": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Profile"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Deployment profile."
+    },
+    "proof": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Proof"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Detached JWS by the site root key over the JCS form of the contract without `proof`."
+    },
+    "release": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContractRelease"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The current release and the site log."
+    },
+    "site": {
+      "$ref": "#/$defs/SiteRef",
+      "description": "The site this contract describes."
+    },
+    "status": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContractStatus"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Where the site status is served and its last known state."
+    },
+    "surfaces": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SurfaceLinks"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Links to every agent surface."
+    }
+  },
+  "required": [
+    "awp",
+    "site"
+  ],
+  "title": "SiteContract",
+  "type": "object"
+}
