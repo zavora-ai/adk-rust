@@ -4,11 +4,13 @@
 //! workers, the scheduler, SQLite stores, drivers and the control plane on a socket and
 //! loopback HTTP.
 //! Live (`--live`): K3, K4, K5, K6, K7, a parked driver question answered after a restart, and
-//! K10, through the `adk-rust up` binary on a real model.
+//! K10, through the `adk-rust up` binary on a real model; K2, K8 and K9 on a real model with
+//! the kernel in process, under a manual clock, held model calls and two replicas.
 //! The managed form (spec 3.2 §7.13) and voice decisions on parked processes (§7.11) run in
 //! process, scripted and live.
 
 mod live;
+mod live_in_process;
 mod managed;
 mod notes_driver;
 mod scripted;
@@ -37,6 +39,12 @@ impl Checks {
 
     fn failures(&self) -> Vec<String> {
         self.results.iter().filter(|(_, passed)| !passed).map(|(name, _)| name.clone()).collect()
+    }
+
+    /// `passed/total checks`.
+    fn tally(&self) -> String {
+        let passed = self.results.iter().filter(|(_, passed)| *passed).count();
+        format!("{passed}/{} checks", self.results.len())
     }
 }
 
@@ -71,6 +79,7 @@ const SCRIPTED: &[(&str, &str)] = &[
 /// The live scenarios.
 const LIVE: &[&str] = &[
     "live_k5_approve_from_another_process",
+    "live_k2_sleep_is_free_for_an_hour",
     "live_k3_file_change_wakes",
     "live_k4_a_proposal_waits_for_approval",
     "live_k6_supervised_driver",
@@ -78,13 +87,15 @@ const LIVE: &[&str] = &[
     "live_managed_tenant_approval",
     "live_voice_parked_process",
     "live_k10_proc",
+    "live_k8_a_message_preempts_background_work",
+    "live_k9_one_switch_stops_everything",
     "live_k7_partitions",
 ];
 
 fn verdict(result: &Result<Checks>) -> String {
     match result {
-        Ok(checks) if checks.passed() => "PASS".to_string(),
-        Ok(checks) => format!("FAIL ({})", checks.failures().join("; ")),
+        Ok(checks) if checks.passed() => format!("PASS ({})", checks.tally()),
+        Ok(checks) => format!("FAIL ({}: {})", checks.tally(), checks.failures().join("; ")),
         Err(error) => format!("ERROR ({error})"),
     }
 }
@@ -119,7 +130,11 @@ async fn main() -> Result<()> {
     println!("adk-kernel scenarios (spec 3.2 §5, §11)\n");
     let mut failed = false;
     if live {
-        let in_process = |name: &str| managed::LIVE.contains(&name) || voice::LIVE.contains(&name);
+        let in_process = |name: &str| {
+            managed::LIVE.contains(&name)
+                || voice::LIVE.contains(&name)
+                || live_in_process::LIVE.contains(&name)
+        };
         let needs_bin = LIVE
             .iter()
             .copied()
@@ -150,9 +165,12 @@ async fn main() -> Result<()> {
                 let result = match (
                     managed::run_live(scenario, provider, model).await,
                     voice::run_live(scenario, provider, model).await,
+                    live_in_process::run_live(scenario, provider, model).await,
                 ) {
-                    (Some(result), _) | (None, Some(result)) => result,
-                    (None, None) => live::run(scenario, &bin, provider, model).await,
+                    (Some(result), _, _) | (None, Some(result), _) | (None, None, Some(result)) => {
+                        result
+                    }
+                    (None, None, None) => live::run(scenario, &bin, provider, model).await,
                 };
                 let shown = verdict(&result);
                 failed |= !shown.starts_with("PASS");

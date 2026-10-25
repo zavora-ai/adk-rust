@@ -76,6 +76,11 @@ their running processes `Waiting` at the next model-call boundary, and nothing s
 `unfreeze`. A call refused mid-turn is answered `not run` and the action ledger keeps completed
 calls from running twice. `unfreeze` wakes exactly the processes the freeze parked.
 
+> **Note:** A process `unfreeze` wakes continues its session with an empty user turn, so its
+> model sees the refused call's `not run` answer and nothing about the unfreeze. A live model
+> can end the task at that answer; an agent that must finish its work after a freeze needs an
+> instruction to call a refused step again when it resumes.
+
 ## Using the kernel from code
 
 `adk-kernel` hosts any `Arc<Runner>` and depends on no harness type. The harness's `kernel`

@@ -6,8 +6,11 @@
 //! cargo run -- --live                # every scenario on the provider's model
 //! cargo run -- --live approvals      # one scenario
 //! cargo run -- --live --model <id>   # another model of the provider
+//! cargo run -- --kernel              # K2, K4 and K5 under an in-process kernel, scripted
+//! cargo run -- --kernel --live       # the same on the provider's model
 //! ```
 
+mod kernel;
 mod scenarios;
 mod support;
 
@@ -45,7 +48,8 @@ fn load_env() {
     }
 }
 
-/// Runs the walkthrough on `provider`: scripted by default, live with `--live`.
+/// Runs the walkthrough on `provider`: scripted by default, live with `--live`; with
+/// `--kernel`, the agent kernel's scenarios instead of spec 3.1's.
 pub async fn main(provider: Provider) -> Result<()> {
     load_env();
     tracing_subscriber::fmt()
@@ -53,6 +57,9 @@ pub async fn main(provider: Provider) -> Result<()> {
         .init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let live = args.iter().any(|arg| arg == "--live");
+    let under_kernel = args.iter().any(|arg| arg == "--kernel");
+    let (catalog, spec) =
+        if under_kernel { (kernel::SCENARIOS, "Spec 3.2") } else { (SCENARIOS, "Spec 3.1") };
     let model_flag =
         args.iter().position(|arg| arg == "--model").and_then(|at| args.get(at + 1)).cloned();
     let selected: Vec<&str> = args
@@ -60,11 +67,10 @@ pub async fn main(provider: Provider) -> Result<()> {
         .filter(|arg| !arg.starts_with("--") && Some(*arg) != model_flag.as_ref())
         .map(String::as_str)
         .collect();
-    if let Some(unknown) = selected.iter().find(|name| !SCENARIOS.iter().any(|s| s.name == **name))
-    {
+    if let Some(unknown) = selected.iter().find(|name| !catalog.iter().any(|s| s.name == **name)) {
         bail!(
             "unknown scenario {unknown}; one of: {}",
-            SCENARIOS.iter().map(|s| s.name).collect::<Vec<_>>().join(", ")
+            catalog.iter().map(|s| s.name).collect::<Vec<_>>().join(", ")
         );
     }
 
@@ -87,15 +93,27 @@ pub async fn main(provider: Provider) -> Result<()> {
         Models::Scripted
     };
 
-    println!("adk-harness walkthrough on {} ({})\n", provider.name, models.label());
+    if under_kernel {
+        println!(
+            "adk-harness walkthrough on {} ({}), under an in-process kernel\n",
+            provider.name,
+            models.label()
+        );
+    } else {
+        println!("adk-harness walkthrough on {} ({})\n", provider.name, models.label());
+    }
     let mut rows = Vec::new();
     let mut failed = false;
-    for scenario in SCENARIOS {
+    for scenario in catalog {
         if !selected.is_empty() && !selected.contains(&scenario.name) {
             continue;
         }
         println!("== {} ({}): {}", scenario.name, scenario.spec, scenario.title);
-        let result = scenarios::run(scenario.name, &models).await;
+        let result = if under_kernel {
+            kernel::run(scenario.name, &models).await
+        } else {
+            scenarios::run(scenario.name, &models).await
+        };
         let verdict = match &result {
             Ok(checks) => match checks.skip_reason() {
                 Some(reason) => format!("SKIPPED: {reason}"),
@@ -116,7 +134,7 @@ pub async fn main(provider: Provider) -> Result<()> {
             models.label()
         ));
     }
-    println!("| Scenario | Spec 3.1 | Model | Result |\n|---|---|---|---|");
+    println!("| Scenario | {spec} | Model | Result |\n|---|---|---|---|");
     for row in rows {
         println!("{row}");
     }

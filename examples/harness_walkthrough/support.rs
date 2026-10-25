@@ -200,7 +200,7 @@ fn summary(response: &Value) -> String {
 }
 
 /// Prints one event of a turn: the model's text, its tool calls and the tools' responses.
-fn show(event: &Event) {
+pub fn show(event: &Event) {
     if event.llm_response.partial {
         return;
     }

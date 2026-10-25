@@ -55,6 +55,33 @@ macOS with Seatbelt, `adk-harness` at `5846e20c`:
 | `sandbox` | PASS (7/7 checks) | PASS (7/7 checks) |
 | `long_term_memory` | SKIPPED: adk-harness on this checkout does not export FactStore (spec 3.1 §7.15.2 long-term facts are not merged) | SKIPPED: adk-harness on this checkout does not export FactStore (spec 3.1 §7.15.2 long-term facts are not merged) |
 
+## Under the agent kernel (`--kernel`)
+
+`--kernel` runs the harness as a process of an in-process agent kernel (`adk-kernel`, spec 3.2
+§5, §11), built as `adk-rust up` builds it: `Harness::kernel()` over the harness, a durable
+worker per queue, the scheduler, SQLite stores in `harness.db`, and the control plane on a socket
+and loopback HTTP. The default mode is unchanged.
+
+```bash
+cargo run -- --kernel                    # K2, K4 and K5, scripted: no key
+cargo run -- --kernel --live             # the same on claude-sonnet-5-5 (ANTHROPIC_API_KEY)
+cargo run -- --kernel --live k5_one_job_many_windows
+```
+
+| Scenario | Spec 3.2 | What runs | What is checked |
+|---|---|---|---|
+| `k2_sleep_is_free` | §5 K2, §7.4 | Ten processes asleep on ten kinds of wake set (webhook, queue, file change, cron, approval, finished run, budget, manual, time, and a webhook with an expiry); an hour on a `ManualClock` the run store and the kernel share, in one-minute steps; then past the time wake and the expiry | No model call in the hour; no lease at any ten-minute mark; only the ten sleepers exist, all `Waiting`; `ps` lists all ten with their wake sets, no spend and no model calls, each asleep for the hour; past it, the time wake and the expiry run their sleepers to completion on the model, and the other eight still sleep without a lease |
+| `k4_it_proposes_its_own_work` | §5 K4, §7.5 | Ask mode: a turn spawned over the socket calls `propose_followup`; a phone on loopback HTTP approves the item from the inbox; a call the follow-up holds is rejected, as the inbox's operator would | The proposal is on the agenda and stays `proposed` with no process before a decision; the inbox offers approve, edit and reject; once approved the item is done, run as a `Proposed` process whose parent is the proposing turn, completed; `kernel.agenda.proposed` and `kernel.agenda.approved` are audited |
+| `k5_one_job_many_windows` | §5 K5, §7.11 | Ask mode: a turn spawned from a terminal on the socket holds its `bash` call; the terminal goes away; a phone on loopback HTTP approves the call from the inbox; a new shell attaches | Nothing runs before the decision; the run resumes and completes with no terminal attached; `marker.txt` holds one line; the new shell sees the `bash` answer in the transcript, nothing held, and the same process completed; the spawn and the attach are `kernel.control` records with transport `socket` |
+
+macOS, `adk-harness` and `adk-kernel` at `39b0ba64`, two live runs:
+
+| Scenario | Scripted (`ScriptedLlm`) | Live (`claude-sonnet-5-5`) |
+|---|---|---|
+| `k2_sleep_is_free` | PASS (10/10 checks) | PASS (10/10 checks) |
+| `k4_it_proposes_its_own_work` | PASS (6/6 checks) | PASS (6/6 checks) |
+| `k5_one_job_many_windows` | PASS (9/9 checks) | PASS (9/9 checks) |
+
 ## Output
 
 An excerpt of the live run (`cargo run -- --live durable_goal team`), temporary paths shortened

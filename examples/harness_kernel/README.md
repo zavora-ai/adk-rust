@@ -27,14 +27,18 @@ cargo run -- k5_one_job_many_windows
 
 ## Live scenarios
 
-The live scenarios run the `adk-rust up` binary in a private home and reach it over its
-control plane, as any surface does.
+Most live scenarios run the `adk-rust up` binary in a private home and reach it over its
+control plane, as any surface does. K2, K8 and K9 need controls the binary does not expose —
+a manual clock, model calls held until the scenario releases them, two replicas over one
+store — so they run the kernel in this process, built with `Harness::kernel` as `up` builds
+it, and need no binary.
 
 ```bash
 cargo build -p adk-cli --bin adk-rust          # from the workspace root
 cp .env.example .env                           # add the keys you have
 ADK_RUST_BIN=../../target/debug/adk-rust cargo run -- --live
 cargo run -- --live --provider anthropic --bin ../../target/debug/adk-rust
+cargo run -- --live live_k2_sleep_is_free_for_an_hour live_k8_a_message_preempts_background_work live_k9_one_switch_stops_everything
 ```
 
 `HARNESS_ENV_FILE=/path/to/.env` loads keys from another file. The providers are
@@ -43,6 +47,9 @@ is skipped.
 
 | Scenario | What passes |
 |---|---|
+| `live_k2_sleep_is_free_for_an_hour` | In process, Ask, on a `ManualClock` the run store and the kernel share: ten processes asleep on ten kinds of wake set pass an hour in one-minute steps with no model call, no lease at any ten-minute mark and nothing but the sleepers in the run store; `ps` lists all ten `Waiting` with their wake sets, no spend and no model calls, each asleep the hour. Past it, the time wake and the expiry run their sleepers and a schedule due at 90 minutes fires once, each answering on the live model; `ps` counts the woken turns' model calls and meters their spend; the other eight still sleep with no lease |
+| `live_k8_a_message_preempts_background_work` | In process, Ask, a partition quota of three: three background jobs that read `README.md` hold their first model call; a typed question reaches the model within one scheduler tick and completes on the live model while they wait; the youngest job is preempted by it, parks at its checkpoint and is requeued (`kernel.process.suspended`, `.requeued`); every job completes, the preempted one reading its file once; sampling shows at most three admitted processes |
+| `live_k9_one_switch_stops_everything` | In process, Auto: two kernel replicas over one SQLite file with a mirrored kill switch run six processes, three each, through ten numbered non-idempotent `step` calls, each told to call a step the freeze refused again when it resumes. Replica A freezes once every process passed its second step: replica B sees it within a second, no model or tool call starts on either replica more than a second after it, and all six park `Waiting` under the freeze with no lease, each replica parking its own three. The unfreeze resumes all six to completion; no call executed twice, every step ran exactly once, and the action ledger began each executed call once and recorded its outcome |
 | `live_k5_approve_from_another_process` | `up --mode ask`: the model's `bash` call is held; the client that started the turn disconnects; `adk-rust approvals --server … approve` in another process approves it over HTTP; the turn completes, the command ran exactly once, and a new client attaching sees the call in the transcript |
 | `live_k4_a_proposal_waits_for_approval` | `up --mode ask`: the model calls `propose_followup`; the item waits `proposed` and nothing runs; `adk-rust agenda approve <prefix>` in another process approves it; the follow-up runs as a `Proposed` process whose parent is the proposing turn and completes, any call it holds in Ask rejected by the scenario as an operator would; it answers in its own session |
 | `live_k3_file_change_wakes` | `up --mode ask`: a process spawned asleep on a `notes.md` file wake makes no model call; saving the file wakes it within two seconds; the turn reads the file with `read_file` and answers with its codeword |

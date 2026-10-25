@@ -372,7 +372,7 @@ expensive axes just move to a later tier.
 
 | Tier | Trigger | Checks | Blocks merge? |
 |------|---------|--------|---------------|
-| **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), `postgres` (the `#[ignore]`d PostgreSQL suites against a pgvector server, including TLS), docs and doctests, standalone examples (4 shards), `templates`, a compile-only macOS build, a Windows workspace build with a targeted sandbox portability smoke, and `semver` (stable strict against `SEMVER_RELEASE_TYPE` in `semver.yml`: `minor` fails breakage, `major` during a major release candidate accepts it, and `breaking` changelog fragments record it; beta warn-only) | Yes — aggregated by `pr-gate`, plus `semver` |
+| **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), `postgres` (the `#[ignore]`d PostgreSQL suites against a pgvector server, including TLS), docs and doctests, standalone examples (4 shards), the scripted scenarios of `examples/harness_kernel`, `templates`, a compile-only macOS build, a Windows workspace build with a targeted sandbox portability smoke, and `semver` (stable strict against `SEMVER_RELEASE_TYPE` in `semver.yml`: `minor` fails breakage, `major` during a major release candidate accepts it, and `breaking` changelog fragments record it; beta warn-only) | Yes — aggregated by `pr-gate`, plus `semver` |
 | **Merge** | `push: main` (`ci-merge.yml`, `sandbox-linux.yml`), and on demand (`gh workflow run ci-merge.yml --ref <branch>`) | cross-platform `nextest --workspace` on macOS/Windows, doc-example compilation; bubblewrap enforcement proven on `ubuntu-24.04` (`sandbox-linux.yml`, also on a pull request that touches the sandbox or the harness shell, and on demand) | No — runs post-merge |
 | **Nightly** | `schedule` (`ci-nightly.yml`) | feature-combination matrix, `cargo-audit`/`cargo-deny` supply-chain, `#[ignore]` integration tests gated on secrets | No — runs on a schedule |
 
@@ -435,7 +435,7 @@ Require exactly these stable contexts in the `main` ruleset:
 `pr-gate` covers `fmt`, `web`, `clippy`, Linux workspace tests, the eight
 `feature-coverage` shards driven by `scripts/feature-coverage-pairs.txt`, the
 `postgres` job driven by `scripts/test-postgres.sh`, docs and doctests, the four
-standalone-example shards, `templates`, the macOS build, and the Windows build plus
+standalone-example shards, `kernel-scenarios`, `templates`, the macOS build, and the Windows build plus
 sandbox portability smokes. `semver` stays separate because its
 workflow has an independent trigger and keeps stable crates strict while
 beta/experimental crates remain advisory.

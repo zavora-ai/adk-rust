@@ -47,19 +47,19 @@ pub async fn run(name: &str) -> Result<Checks> {
 }
 
 /// The stores of one kernel home, in `harness.db` as `adk-rust up` keeps them.
-struct Stores {
-    sessions: Arc<SqliteSessionService>,
-    runs: Arc<SqliteRunStore>,
-    approvals: Arc<SqliteApprovalStore>,
-    schedules: Arc<SqliteScheduleStore>,
-    processes: Arc<adk_kernel::SqliteProcessStore>,
-    agenda: Arc<adk_kernel::SqliteAgendaStore>,
+pub(crate) struct Stores {
+    pub(crate) sessions: Arc<SqliteSessionService>,
+    pub(crate) runs: Arc<SqliteRunStore>,
+    pub(crate) approvals: Arc<SqliteApprovalStore>,
+    pub(crate) schedules: Arc<SqliteScheduleStore>,
+    pub(crate) processes: Arc<adk_kernel::SqliteProcessStore>,
+    pub(crate) agenda: Arc<adk_kernel::SqliteAgendaStore>,
     logs: Arc<SqliteAuditLogStore>,
 }
 
 /// The stores of `home`, the run store on `clock`, the clock the kernel reads too: the run
 /// store decides leases and `not_before`, the kernel wake times and due schedules.
-async fn stores(home: &Path, clock: Arc<dyn Clock>) -> Result<Stores> {
+pub(crate) async fn stores(home: &Path, clock: Arc<dyn Clock>) -> Result<Stores> {
     std::fs::create_dir_all(home)?;
     let url = format!("sqlite://{}?mode=rwc", home.join("harness.db").display());
     let sessions = SqliteSessionService::new(&url).await?;
@@ -93,44 +93,45 @@ fn scripted(replies: Vec<ScriptedResponse>) -> Arc<ScriptedLlm> {
 }
 
 /// How one boot of the kernel runs.
-struct Boot {
-    model: Arc<dyn adk_core::Llm>,
-    mode: HarnessMode,
-    control: ControlPlaneConfig,
-    audit: Arc<dyn AuditRecorder>,
-    clock: Arc<dyn Clock>,
+pub(crate) struct Boot {
+    pub(crate) model: Arc<dyn adk_core::Llm>,
+    pub(crate) mode: HarnessMode,
+    pub(crate) control: ControlPlaneConfig,
+    pub(crate) audit: Arc<dyn AuditRecorder>,
+    pub(crate) clock: Arc<dyn Clock>,
     /// The kernel's proactivity policy (spec 3.2 §7.5); `None` keeps the default.
-    proactivity: Option<adk_kernel::ProactivityPolicy>,
+    pub(crate) proactivity: Option<adk_kernel::ProactivityPolicy>,
     /// Every partition's quotas (spec 3.2 §7.9); `None` sets none.
-    quotas: Option<adk_kernel::Quotas>,
+    pub(crate) quotas: Option<adk_kernel::Quotas>,
     /// The kernel's drivers, served to the default partition (K6).
-    drivers: Option<DriverSupervisor>,
+    pub(crate) drivers: Option<DriverSupervisor>,
 }
 
 /// One boot of the kernel over `stores`: the harness, held calls routed to the `operator`
 /// group, built with `Harness::kernel` (spec 3.2 §10 HK1) as `adk-rust up` builds it.
-fn boot(stores: &Stores, home: &Path, workspace: &Path, boot: Boot) -> Result<Kernel> {
+pub(crate) fn boot(stores: &Stores, home: &Path, workspace: &Path, boot: Boot) -> Result<Kernel> {
     let routing = ApprovalPolicy::new([ApproverSelector::group("operator")]).allow_self_approval();
     let service: Arc<dyn ApprovalService> = Arc::new(
         StoreApprovalService::new(stores.approvals.clone())
             .with_router(routing)
             .with_run_store(stores.runs.clone()),
     );
-    let agent =
-        HarnessAgent::builder(APP)
-            .model(boot.model)
-            .workspace(adk_devtools::Workspace::new(workspace).allow_bash(true))
-            .project_instructions(InstructionsConfig {
-                user_file: None,
-                ..InstructionsConfig::default()
-            })
-            .without_default_members()
-            .mode(boot.mode)
-            .approval_store(stores.approvals.clone())
-            .approval_service(service)
-            .audit_log(boot.audit);
+    let agent = HarnessAgent::builder(APP)
+        .model(boot.model)
+        .workspace(adk_devtools::Workspace::new(workspace).allow_bash(true))
+        .project_instructions(InstructionsConfig {
+            user_file: None,
+            ..InstructionsConfig::default()
+        })
+        .without_default_members()
+        .mode(boot.mode)
+        .approval_store(stores.approvals.clone())
+        .approval_service(service)
+        .audit_log(boot.audit);
     let agent = match &boot.drivers {
-        Some(drivers) => agent.kernel_drivers(drivers, &PartitionId::default(), &["notes".to_string()]),
+        Some(drivers) => {
+            agent.kernel_drivers(drivers, &PartitionId::default(), &["notes".to_string()])
+        }
         None => agent,
     };
     let agent = Arc::new(agent.build()?);
@@ -167,7 +168,7 @@ fn boot(stores: &Stores, home: &Path, workspace: &Path, boot: Boot) -> Result<Ke
 }
 
 /// Waits until `check` holds, polling every 100 ms, for at most `limit`.
-async fn until<F, Fut>(limit: Duration, mut check: F) -> Result<bool>
+pub(crate) async fn until<F, Fut>(limit: Duration, mut check: F) -> Result<bool>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<bool>>,
@@ -893,8 +894,9 @@ async fn read_note_answers(stores: &Stores, session: &str) -> Result<Vec<String>
 
 /// One turn of the scripted agent in session `session`, run as a process.
 async fn turn(kernel: &Kernel, session: &str) -> Result<String> {
-    let run = NewRun::new(QueueClass::INTERACTIVE, APP, "ana", APP, json!({ "text": "read the note" }))
-        .with_session_id(session);
+    let run =
+        NewRun::new(QueueClass::INTERACTIVE, APP, "ana", APP, json!({ "text": "read the note" }))
+            .with_session_id(session);
     Ok(kernel
         .processes()
         .spawn(run, adk_kernel::ProcessSpec::new(adk_kernel::ProcessKind::Interactive))
@@ -957,26 +959,44 @@ async fn k6_drivers_you_can_trust() -> Result<Checks> {
     let manifest = crate::notes_driver::manifest(&std::env::current_exe()?, &notes, &instance);
     drivers.mount(DriverManifest::from_toml(&manifest)?, "ana").await?;
     let first = turn(&kernel, "k6-first").await?;
-    checks.check("a `read` driver tool runs without approval", run_state(&stores, &first, RunState::Completed).await?);
+    checks.check(
+        "a `read` driver tool runs without approval",
+        run_state(&stores, &first, RunState::Completed).await?,
+    );
     checks.check(
         "the agent got the driver's answer",
-        read_note_answers(&stores, "k6-first").await?.iter().any(|answer| answer.contains(crate::notes_driver::CODEWORD)),
+        read_note_answers(&stores, "k6-first")
+            .await?
+            .iter()
+            .any(|answer| answer.contains(crate::notes_driver::CODEWORD)),
     );
-    let pinned = drivers.record("notes").map(|record| record.manifest.declaration_digests.len()).unwrap_or(0);
+    let pinned = drivers
+        .record("notes")
+        .map(|record| record.manifest.declaration_digests.len())
+        .unwrap_or(0);
     checks.check("its tools' declarations are pinned", pinned == 2);
 
     // Kill: the driver restarts with backoff.
     crate::notes_driver::kill(&instance)?;
     checks.check("the crash is reported", driver_event(&mut events, DriverState::Crashed).await);
-    checks.check("it restarts with backoff", driver_event(&mut events, DriverState::Restarting).await);
+    checks.check(
+        "it restarts with backoff",
+        driver_event(&mut events, DriverState::Restarting).await,
+    );
     checks.check("and runs again", driver_event(&mut events, DriverState::Running).await);
 
     // Redeclare: the changed tool is stale, and a call of it is held for a person.
     std::fs::write(notes.join("declaration.txt"), "it now also forwards the note")?;
     drivers.restart("notes").await?;
-    checks.check("the redeclared tool needs re-approval", driver_event(&mut events, DriverState::NeedsReapproval).await);
+    checks.check(
+        "the redeclared tool needs re-approval",
+        driver_event(&mut events, DriverState::NeedsReapproval).await,
+    );
     let second = turn(&kernel, "k6-second").await?;
-    checks.check("a call of the stale tool is held", run_state(&stores, &second, RunState::Waiting).await?);
+    checks.check(
+        "a call of the stale tool is held",
+        run_state(&stores, &second, RunState::Waiting).await?,
+    );
     let service = StoreApprovalService::new(stores.approvals.clone());
     let held = service.inbox(adk_core::InboxQuery::default()).await?;
     let item = held.items.iter().find(|item| item.tool_name == "read_note").cloned();
@@ -987,13 +1007,19 @@ async fn k6_drivers_you_can_trust() -> Result<Checks> {
     drivers.reapprove("notes", "ana").await?;
     checks.check("re-approval restores it", drivers.state("notes") == Some(DriverState::Running));
     if let Some(item) = item {
-        let decision = adk_core::ApprovalDecision::approve(adk_core::SubjectRef::human("ana")).with_groups(["operator"]);
-        let routed = StoreApprovalService::new(stores.approvals.clone()).with_run_store(stores.runs.clone());
+        let decision = adk_core::ApprovalDecision::approve(adk_core::SubjectRef::human("ana"))
+            .with_groups(["operator"]);
+        let routed =
+            StoreApprovalService::new(stores.approvals.clone()).with_run_store(stores.runs.clone());
         routed.decide(&item.id, item.version, decision).await?;
     }
-    checks.check("the held call completes", run_state(&stores, &second, RunState::Completed).await?);
+    checks
+        .check("the held call completes", run_state(&stores, &second, RunState::Completed).await?);
     let third = turn(&kernel, "k6-third").await?;
-    checks.check("the next call runs without asking", run_state(&stores, &third, RunState::Completed).await?);
+    checks.check(
+        "the next call runs without asking",
+        run_state(&stores, &third, RunState::Completed).await?,
+    );
     let actions: Vec<String> = recorder.records().into_iter().map(|record| record.action).collect();
     checks.check(
         "mount, start, crash, restart, stale and re-approval are audited",

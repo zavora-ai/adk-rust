@@ -6,6 +6,8 @@
 //! cargo run                         # every scenario, scripted, no key
 //! cargo run -- --live               # every scenario on claude-sonnet-5-5 (ANTHROPIC_API_KEY)
 //! cargo run -- --live approvals     # one scenario
+//! cargo run -- --kernel             # K2, K4 and K5 under an in-process kernel (spec 3.2)
+//! cargo run -- --kernel --live      # the same on claude-sonnet-5-5
 //! ```
 
 use std::sync::Arc;
