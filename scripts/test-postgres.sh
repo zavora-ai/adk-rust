@@ -92,6 +92,9 @@ suite "adk-managed" -p adk-managed --test durable_round_trip_tests -E 'test(/_on
 
 # The feature set matches the wallet's Redis step of CI's postgres job, so both reuse one build.
 suite "adk-payments" -p adk-payments --features sqlite,postgres,redis --test wallet_store_postgres
+# "Hire a helper" (spec 3.3 §12 phase 4) with every store of `adk-rust up` on PostgreSQL.
+suite "adk-cli" -p adk-cli --features scripted-model,audit-sql,postgres --test hire_a_helper \
+    -E 'test(/_on_postgres$/)'
 
 # The feature set matches the edge stores' Redis step of CI's postgres job, so both reuse one build.
 suite "adk-server" -p adk-server --features awp-sqlite,awp-postgres,awp-redis --test awp_store_postgres
