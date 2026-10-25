@@ -196,6 +196,16 @@ Every change becomes a small signed release through one pipeline: draft, check, 
 
 Stock and availability are served live by the edge rather than rebuilt with every sale. Content can be authored only from the owner's paired devices, people with a role in the web editor, the content repository and configured feeds — never from the public inbox.
 
+**Constantly updated sites** — a shop syncing 50,000 products, a newsroom on election night, a public body in an emergency — stay static and signed. Every update goes into one of three lanes:
+
+| Lane | Carries | How it reaches visitors |
+|---|---|---|
+| **Release** | Anything an agent may act on: articles, product pages, prices, notices, final results | Signed releases, batched every 10–60 seconds |
+| **Live** | State: stock, availability, live scores | Read-only answers from the edge, refreshed in seconds; no rebuilds |
+| **Stream** | Live blogs, tickers, emergency updates | An edge feed that appears in seconds and is folded into a signed release every few minutes |
+
+Feed updates run without a model, so a busy site does not spend tokens on stock counts. A broken or compromised feed that tries to change too much at once is held whole until the owner decides. A bad edit is undone for that item alone, without losing every other change.
+
 ### 5.6 For developers and agencies
 
 | WordPress today | `adk-website` |

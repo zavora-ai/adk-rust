@@ -644,9 +644,19 @@ async fn k9_one_switch_stops_everything_on_both_replicas() {
             .fetch_all(&replicas[0].pool)
             .await
             .unwrap();
-    assert_eq!(rows.len(), executions.len(), "one ledger record per execution");
+    // A call the freeze refused after its ledger write never ran, and its record says so.
+    let ran: Vec<_> = rows
+        .iter()
+        .filter(|(_, _, outcome)| {
+            !matches!(
+                outcome.as_deref().map(serde_json::from_str::<adk_core::ActionOutcome>),
+                Some(Ok(adk_core::ActionOutcome::Failed { error })) if adk_core::is_not_run(&error)
+            )
+        })
+        .collect();
+    assert_eq!(ran.len(), executions.len(), "one ledger record per execution");
     let mut per_call = BTreeMap::<(String, String), usize>::new();
-    for (key, digest, outcome) in &rows {
+    for (key, digest, outcome) in ran {
         assert!(outcome.is_some(), "{key} recorded its outcome");
         let session = key.split('/').nth(2).unwrap_or_default().to_string();
         *per_call.entry((session, digest.clone())).or_default() += 1;

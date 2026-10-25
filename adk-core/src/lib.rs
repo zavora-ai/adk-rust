@@ -207,8 +207,9 @@ pub use acting::{
     SubjectDelegationPolicy, SubjectDelegationRequest, subject_mismatch_error,
 };
 pub use action_ledger::{
-    ActionLedger, ActionOutcome, ActionRecord, InMemoryActionLedger, OUTCOME_UNKNOWN_STATUS,
-    is_outcome_unknown, json_digest, outcome_unknown_response,
+    ActionLedger, ActionOutcome, ActionRecord, InMemoryActionLedger, NOT_RUN_PREFIX,
+    OUTCOME_UNKNOWN_STATUS, is_not_run, is_outcome_unknown, json_digest, not_run_text,
+    outcome_unknown_response,
 };
 pub use agent::{
     Agent, AgentCapabilities, AgentInteractionMode, AgentRelationshipKind, AgentTopology,

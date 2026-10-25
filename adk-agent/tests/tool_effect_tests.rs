@@ -621,3 +621,135 @@ async fn an_ordinary_tool_is_still_cut_at_the_tool_timeout() {
     assert!(started.elapsed() < Duration::from_secs(20 * 60));
     assert!(responses(&events)[0]["error"].as_str().is_some_and(|e| e.contains("timed out")));
 }
+
+// ----- the kill switch between the ledger write and the execution ----------------
+
+/// A ledger whose write takes long enough for a freeze to arrive: `control` is frozen while
+/// the call is being recorded.
+#[derive(Debug)]
+struct FreezingLedger {
+    inner: InMemoryActionLedger,
+    control: adk_core::GovernanceControl,
+}
+
+#[async_trait]
+impl ActionLedger for FreezingLedger {
+    async fn begin(&self, record: &ActionRecord) -> Result<()> {
+        self.inner.begin(record).await?;
+        self.control.freeze("incident 7");
+        Ok(())
+    }
+    async fn complete(&self, key: &str, outcome: ActionOutcome) -> Result<()> {
+        self.inner.complete(key, outcome).await
+    }
+    async fn get(&self, key: &str) -> Result<Option<ActionRecord>> {
+        self.inner.get(key).await
+    }
+}
+
+/// The events of a run that may end with an error, and that error.
+async fn run_until_error(
+    agent: &dyn Agent,
+    ctx: Arc<dyn InvocationContext>,
+) -> (Vec<Event>, Option<AdkError>) {
+    let mut stream = agent.run(ctx).await.expect("agent starts");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        match event {
+            Ok(event) => events.push(event),
+            Err(error) => return (events, Some(error)),
+        }
+    }
+    (events, None)
+}
+
+#[tokio::test]
+async fn a_freeze_during_the_ledger_write_keeps_the_call_from_starting() {
+    let key = "shop/alice/session-1/inv-1/pay-1";
+    let control = adk_core::GovernanceControl::new();
+    let ledger =
+        Arc::new(FreezingLedger { inner: InMemoryActionLedger::new(), control: control.clone() });
+    let pay = CountingTool::new("pay", ToolEffect::NonIdempotent);
+    let calls = pay.calls.clone();
+    let pay = Arc::new(pay);
+    let agent = LlmAgentBuilder::new("shopper")
+        .model(ScriptedModel::replaying(vec![call("pay", Some("pay-1"))]))
+        .tool(pay.clone())
+        .build()
+        .unwrap();
+    let config =
+        RunConfig::builder().action_ledger(ledger.clone()).governance(control.clone()).build();
+
+    let (events, error) = run_until_error(&agent, Invocation::with_config(config)).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "the tool never started");
+    let response = &responses(&events)[0];
+    let not_run = response["error"].as_str().expect("an error answer").to_string();
+    assert!(adk_core::is_not_run(&not_run), "{response}");
+    assert_eq!(
+        ledger.get(key).await.unwrap().unwrap().outcome,
+        Some(ActionOutcome::Failed { error: not_run.clone() }),
+        "the begun record is closed, not left to read as an unknown outcome"
+    );
+    let error = error.expect("the next model call meets the freeze");
+    assert_eq!(error.code, adk_core::GOVERNANCE_FROZEN_CODE);
+
+    // After the unfreeze, a replay of the call is answered from its record and does not run.
+    control.unfreeze();
+    let agent = LlmAgentBuilder::new("shopper")
+        .model(ScriptedModel::replaying(vec![call("pay", Some("pay-1"))]))
+        .tool(pay)
+        .build()
+        .unwrap();
+    let config = RunConfig::builder().action_ledger(ledger).governance(control).build();
+    let events = run(&agent, Invocation::with_config(config)).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "the replay did not run it");
+    let response = &responses(&events)[0];
+    assert_eq!(response["status"], "already_failed");
+    assert_eq!(response["error"], json!(not_run));
+}
+
+/// Fails its first call with a retryable error, freezing `control` as it does.
+struct FreezesOnFirstCall {
+    control: adk_core::GovernanceControl,
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Tool for FreezesOnFirstCall {
+    fn name(&self) -> &str {
+        "lookup"
+    }
+    fn description(&self) -> &str {
+        "looks something up"
+    }
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::ReadOnly
+    }
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.control.freeze("incident 8");
+            return Err(unavailable());
+        }
+        Ok(json!({ "found": true }))
+    }
+}
+
+#[tokio::test]
+async fn no_retry_starts_after_a_freeze() {
+    let control = adk_core::GovernanceControl::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let agent = LlmAgentBuilder::new("shopper")
+        .model(ScriptedModel::replaying(vec![call("lookup", Some("lookup-1"))]))
+        .tool(Arc::new(FreezesOnFirstCall { control: control.clone(), calls: calls.clone() }))
+        .default_retry_budget(RetryBudget::new(3, Duration::ZERO))
+        .build()
+        .unwrap();
+    let config = RunConfig::builder().governance(control).build();
+
+    let (events, _) = run_until_error(&agent, Invocation::with_config(config)).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the retry after the freeze did not start");
+    assert!(responses(&events)[0].get("error").is_some(), "the first attempt's failure stands");
+}

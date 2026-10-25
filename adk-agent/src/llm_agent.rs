@@ -2895,7 +2895,7 @@ impl ToolExecutor<'_> {
                         error = %error.diagnostics(),
                         "tool call not run: the governance control refuses work"
                     );
-                    response_content = Some(error_response(format!("not run: {}", error.message)));
+                    response_content = Some(error_response(adk_core::not_run_text(&error)));
                     run_after_tool_callbacks = false;
                 }
                 Err(error) => {
@@ -2981,6 +2981,41 @@ impl ToolExecutor<'_> {
                     }
                 };
 
+                // The kill switch again, after the ledger write, which can take long enough
+                // for a freeze to arrive: a call it refuses now never starts (spec 3.1 I20).
+                // It is answered as at authorization, and its begun record is completed
+                // with that answer, so a replay is answered the same way.
+                if let Err(refusal) = self.ctx.run_config().check_governance() {
+                    let text = adk_core::not_run_text(&refusal);
+                    tracing::info!(
+                        tool.name = %name,
+                        error = %refusal.diagnostics(),
+                        "tool call not run: the governance control refused it before it started"
+                    );
+                    if let Some(trail) = &self.ctx.run_config().audit {
+                        let draft = AuditRecordDraft::new(AuditRecordKind::ToolCall, &name)
+                            .actor(AuditActor::for_context(self.ctx.as_ref()))
+                            .args_digest(trail.digest(&final_args))
+                            .outcome(AuditRecordOutcome::NotRun)
+                            .ext("reason", serde_json::Value::String(text.clone()))
+                            .ext(
+                                "sessionId",
+                                serde_json::Value::String(self.ctx.session_id().to_string()),
+                            );
+                        trail.record(draft).await?;
+                    }
+                    if let Some(ledgered) = ledgered {
+                        ledgered.complete(&name, None, &text).await;
+                    }
+                    return Ok(ToolExecutionResult {
+                        index,
+                        content: error_response(text),
+                        actions: tool_actions,
+                        escalate_or_skip: false,
+                        pending: None,
+                    });
+                }
+
                 let span_name = format!("execute_tool {name}");
                 let tool_span = tracing::info_span!(
                     "",
@@ -3023,13 +3058,18 @@ impl ToolExecutor<'_> {
                 let mut retry_result: Option<serde_json::Value> = None;
 
                 for attempt in 0..max_attempts {
-                    final_attempt = attempt;
                     if attempt > 0 {
                         if let Some(budget) = budget {
                             tokio::time::sleep(budget.backoff_delay(attempt)).await;
                         }
+                        // A retry is a new start, and none begins once a freeze is observed;
+                        // the last attempt's failure stands.
+                        if self.ctx.run_config().check_governance().is_err() {
+                            break;
+                        }
                         tool_ctx = attempt_context();
                     }
+                    final_attempt = attempt;
                     let attempt_result = async {
                         let args_payload = trace_json_payload(
                             &final_args,
