@@ -43,6 +43,10 @@
 1 adk-harness hooks
 # The payments pack (spec 3.1 §7.16) links adk-payments, which no other harness feature does.
 1 adk-harness payments
+# The site wallet (spec 3.5 §7.14) on its own, and with the AP2 rail beside every protocol
+# feature (the AP2 test files import ACP and A2A helpers, so `ap2` alone leaves them unused).
+1 adk-payments wallet doc
+1 adk-payments acp,acp-experimental,ap2,ap2-a2a,ap2-mcp,wallet
 # The voice surface (spec 3.1 §7.17): the harness over adk-realtime's integrated runner.
 1 adk-harness voice
 # The harness's ACP standing permissions (spec 3.3 §10 A1): adk-acp's server enters only here.

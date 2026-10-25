@@ -230,3 +230,5 @@ Reference files:
 The example crate under `examples/payments/` is the scenario index for the
 supported journeys, while the integration tests are the executable ground
 truth for protocol, journal, and evidence behavior.
+
+The owner-funded wallet a site pays its own costs from is described in [Wallet](wallet.md).
