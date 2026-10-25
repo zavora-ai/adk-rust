@@ -1,0 +1,17 @@
+{
+  "id": "6f1d2c3b-4a59-4e8f-9b7a-0c1d2e3f4a5b",
+  "subjectRef": "subj_9f2c41e8a7d3",
+  "scope": "newsletter",
+  "policyVersion": "2026-10",
+  "policyDigest": "sha256:8408c267798d7bc1e3e265d07791800a00b3d1f79dca52d2886a913f58092c8a",
+  "legalBasis": "explicit_consent",
+  "jurisdiction": "KE",
+  "grantedAt": "2026-10-22T14:03:11Z",
+  "expiresAt": "2027-10-22T14:03:11Z",
+  "channel": "web",
+  "proof": {
+    "alg": "EdDSA",
+    "kid": "edge-2026-10",
+    "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImVkZ2UtMjAyNi0xMCJ9..zEOkSaK-VQyJBVYrtzAQHCIqLE79sG1f9Vc5Eti6aq5O0tczWZv37WWTQzkBI1oJWK-XJEaOWgoIsSwyuEENBQ"
+  }
+}

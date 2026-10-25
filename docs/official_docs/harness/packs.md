@@ -78,7 +78,7 @@ a page have no governed form.
 | Record | Fields (`ext`) | When |
 |---|---|---|
 | `harness.browser.navigated` | `functionCallId`, `tool`, `phase` (`request`, `response`, `refused`), `host`, `finalHost`, `allowlisted`, `urlDigest`, `refusal`, `code`, `outcome` | Write-ahead before the browser moves, and after the page loaded; a refusal carries the digest only |
-| `harness.browser.acted` | `functionCallId`, `tool`, `outcome` (`executed`, `failed`, `refused`), `refusal`, `inputDigest`, `screened` | After each action, or at its refusal |
+| `harness.browser.acted` | `functionCallId`, `tool`, `outcome` (`executed`, `failed`, `refused`), `refusal`, `inputDigest`, `screening` | After each action, or at its refusal |
 | `harness.web.screened` | `tool`, `url`, `contentSha256`, `patterns`, `lines`, `redactions`, `action` | When a result's text matched an injection or secret pattern |
 
 ### In the CLI

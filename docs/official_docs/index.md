@@ -87,6 +87,7 @@ The always-on form of the harness (`adk-kernel`, spec 3.2): durable processes th
 - [The Event Bus and Outbound Webhooks](kernel/events.md) - Event types, subscribers and sinks, `WebhookSink`: Standard Webhooks signatures, event filters, bounded retry, dead letters, back-pressure that never blocks a process
 - [Pairing Devices and Chat Channels](kernel/pairing.md) - `adk-rust pair`, scoped and revocable device tokens stored hashed, the chat channel gateway and its adapter contract suite
 - [Drivers](kernel/drivers.md) - MCP servers the kernel supervises under approved manifests: effect classes, the OS sandbox, brokered secrets, re-approval of changed tools, parked calls across a restart
+- [Driver classes](kernel/driver-classes.md) - DNS and registrar, email, analytics and search console, social and advertising drivers: their tools, manifests for any MCP server, autonomy caps, outbound rules and reference adapters
 - [Running the Kernel as a Service](kernel/service.md) - `adk-rust up --install`, `--uninstall` and `--print`: a launchd agent, a systemd user unit or a Windows service that runs as you
 - [The Managed Form](kernel/managed.md) - One kernel per tenant on the managed runtime: `KernelDef` beside `adk.harness`, wake sets, the tenant's proactivity policy, the managed approval path, voice decisions on parked processes
 - [Self-observation: `/proc`](kernel/proc.md) - The content-free activity ledger, daily baselines and observations offered as questions, `adk-rust proc`, exporting for `cargo adk eval --ledger`
@@ -102,6 +103,8 @@ The interface to an always-on agent (`adk-surface`, spec 3.3): every surface is 
 - [The Web Home](surfaces/web-home.md) - Threads, Today and Memory & rules at `/ui/`, in light and dark: decisions with the version seen, what stays read-only until the kernel serves it, mounting it on your own server, the developer panel, and moving from `adk-server`'s bundled runtime UI
 - [The Terminal](surfaces/terminal.md) - Full screen, inline and JSON lines from the keyboard: decisions answered by key, Esc never decides, typing queued, device pairing for a kernel on another machine, exit codes for CI
 - [Chat](surfaces/chat.md) - The Telegram adapter over the kernel's channel contract: cards with Allow once and Deny and never the call's arguments, pairing by code, "stop all", long polling
+- [The Phone](surfaces/phone.md) - The web home installed on a phone: wake-ups from your own kernel that say nothing, answers by touch, "Confirm it's you" with a passkey on the phone or the computer, pairing by QR code, `adk-rust up --home-url` behind Tailscale Serve
+- [The Desktop Tray](surfaces/desktop.md) - Experimental: the web home in a desktop window and a tray icon with the decisions badge; its panel says yes once or no to everyday calls, opens the home for the rest, and stops everything; loopback only
 - [Scenarios](surfaces/scenarios.md) - The phase scenarios as programs you can run: "Approve it tomorrow" (a decision that waits through quiet time and a `kill -9`, answered in Telegram) and "The morning after" (one exact briefing across a restart), on SQLite and PostgreSQL
 
 ## Realtime & Multimodal

@@ -1,0 +1,30 @@
+# The desktop tray (spec 3.3 §5.5): a Tauri 2 shell over the web home, with a tray icon whose
+# panel is the home's `/ui/tray` view. Experimental and unpublished: its own workspace and
+# `Cargo.lock`, excluded from the root workspace, so Tauri never enters the library crates' lock
+# file (a §6.1 deviation recorded in STABILITY.md).
+[workspace]
+resolver = "3"
+members = ["core", "app"]
+
+[workspace.package]
+version = "3.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/zavora-ai/adk-rust"
+publish = false
+
+[workspace.dependencies]
+adk-desktop-core = { path = "core" }
+dirs = "7"
+futures-util = { version = "0.3", default-features = false }
+proptest = "1.5"
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.40", default-features = false }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2.5"

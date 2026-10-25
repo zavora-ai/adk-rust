@@ -211,7 +211,7 @@ impl Projector {
             }
             None => words::ENDED_WITHOUT_AN_ANSWER.to_string(),
         };
-        Some(Decided { by, by_you, via, at, at_text, answer: answer_kind, text })
+        Some(Decided { by, by_you, via, at, at_text, answer: answer_kind, text, scope_text: None })
     }
 
     /// The card of `request` as `caller` sees it (spec 3.3 §7.1).

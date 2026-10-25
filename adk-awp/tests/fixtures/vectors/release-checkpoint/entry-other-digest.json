@@ -1,0 +1,183 @@
+{
+  "checkpoint": "example.com/.well-known/awp/log\n2\nnbQE7vUFpEUi3aAJ5OiwiIuIZfZr2T6MnjFUx1Ab37g=\n\n— example.com/.well-known/awp/log Z/DpC9KxoClXtichwwUcSRIL4gQOQ5vJeQMGeOsaNdnSEv9ak3aaCpoEp/INxw9A1VcDdJKWKxZtrYYvqpRdEpF6aQI=\n",
+  "consistencyProof": {
+    "hashes": [
+      "LligdqA0k-scOxdx6PUieebTNHKAmCPCcsKZuwqa8Fc"
+    ],
+    "newSize": 2,
+    "oldSize": 1
+  },
+  "description": "A log whose entry for release 2 names another manifest digest; the checkpoint over it extends the previous one.",
+  "domain": "example.com",
+  "entries": [
+    {
+      "manifest": "sha256:406f2ec65cf45f87ef96e635a62aa07797ad4d04866813e880b6fd9777027074",
+      "seq": 1
+    },
+    {
+      "manifest": "sha256:abababababababababababababababababababababababababababababababab",
+      "seq": 2
+    }
+  ],
+  "entryJcs": [
+    "eyJtYW5pZmVzdCI6InNoYTI1Njo0MDZmMmVjNjVjZjQ1Zjg3ZWY5NmU2MzVhNjJhYTA3Nzk3YWQ0ZDA0ODY2ODEzZTg4MGI2ZmQ5Nzc3MDI3MDc0Iiwic2VxIjoxfQ",
+    "eyJtYW5pZmVzdCI6InNoYTI1Njo0ZGI2ZWJjNmY3MGY3NWIwNGFiZmM0MDllYmFlMDZkMmMyZDc4MDYxNzg2YWJhMjg1MTUzOTExNDQzNThjMDNkIiwic2VxIjoyfQ"
+  ],
+  "expected": {
+    "failure": "release.inclusion",
+    "valid": false
+  },
+  "inclusionProof": {
+    "hashes": [
+      "LligdqA0k-scOxdx6PUieebTNHKAmCPCcsKZuwqa8Fc"
+    ],
+    "index": 0,
+    "size": 2
+  },
+  "leafHashes": [
+    "X9k1RavwzWW9f4LsH8Uuv5MvyvO63ubKKV10spHu7Tk",
+    "LligdqA0k-scOxdx6PUieebTNHKAmCPCcsKZuwqa8Fc"
+  ],
+  "manifests": [
+    {
+      "charterVersion": 1,
+      "createdAt": "2026-10-25T09:00:00Z",
+      "files": {
+        "/.well-known/agent-card.json": {
+          "contentType": "application/json",
+          "sha256": "sha256:f1f8df55d4855389748115a1ea699632987f6a69521a58afd48534a6aa8915a8",
+          "size": 682
+        },
+        "/.well-known/awp.json": {
+          "contentType": "application/awp+json",
+          "sha256": "sha256:ca960c93deda47bc63895b88128f90e9a6ee8a2551d16b3e818d054caf05efa3",
+          "size": 1074
+        },
+        "/.well-known/awp/charter.json": {
+          "contentType": "application/awp+json",
+          "sha256": "sha256:6a32a65573f890aeae8a541d521b8f48251945e347975958e2d92aaeaa676a46",
+          "size": 294
+        },
+        "/.well-known/awp/keys.json": {
+          "contentType": "application/awp+json",
+          "sha256": "sha256:1edcb69810151a2195e00ec94a38f08f5a8d75b67ce12afb1a447c0c97ada70c",
+          "size": 1313
+        },
+        "/.well-known/security.txt": {
+          "contentType": "text/plain; charset=utf-8",
+          "sha256": "sha256:3b0595cdb30ca3a9db5026f7edbf60d208a0765d3a652b426ea6786fcb872e16",
+          "size": 67
+        },
+        "/about/index.awp.json": {
+          "contentType": "application/awp+json",
+          "sha256": "sha256:efeee3df413c3350437f15785b8861ae45e587a58c1b00d396cd7461da6e88dd",
+          "size": 190
+        },
+        "/about/index.html": {
+          "contentType": "text/html; charset=utf-8",
+          "sha256": "sha256:dca8dea4100d1346428fe05142fd3cbfcd5fb624e977a450ff4f6b39edba02a0",
+          "size": 296
+        },
+        "/about/index.md": {
+          "contentType": "text/markdown; charset=utf-8",
+          "sha256": "sha256:fe307c6dace70927a70b62b2e8990e71cd23503513516984bb102e942700778d",
+          "size": 31
+        },
+        "/index.awp.json": {
+          "contentType": "application/awp+json",
+          "sha256": "sha256:4f9736db1992b11080768fbadbac2d600ef990e8bed879b7e0d3c77f7987e595",
+          "size": 198
+        },
+        "/index.html": {
+          "contentType": "text/html; charset=utf-8",
+          "sha256": "sha256:3be3c4e8ccb2d6022a52835be3f90dc663d015e700b92675301b10c90cc5118a",
+          "size": 321
+        },
+        "/index.md": {
+          "contentType": "text/markdown; charset=utf-8",
+          "sha256": "sha256:40d285b1ad14c95e61a0bd7a4eeab1c22d5ba3558ddc73a2f0023c54a844b42b",
+          "size": 51
+        },
+        "/llms.txt": {
+          "contentType": "text/plain; charset=utf-8",
+          "sha256": "sha256:df65625ea17d6a627213391ee197258b97d3c869aceaa50313ad59b27f7d0eea",
+          "size": 56
+        },
+        "/robots.txt": {
+          "contentType": "text/plain; charset=utf-8",
+          "sha256": "sha256:424c27d220ee9267adbff7fea8a02d381f729df75317da8d9d21d5fea389b4fb",
+          "size": 59
+        }
+      },
+      "generator": {
+        "name": "adk-awp-fixture",
+        "version": "1"
+      },
+      "redirects": [
+        {
+          "from": "/old/",
+          "status": 301,
+          "to": "/about/"
+        }
+      ],
+      "seq": 1,
+      "source": {
+        "kind": "onboarding"
+      }
+    },
+    {
+      "base": 1,
+      "charterVersion": 1,
+      "createdAt": "2026-10-25T10:00:00Z",
+      "files": {
+        "/about/index.awp.json": {
+          "contentType": "application/awp+json",
+          "sha256": "sha256:d1455b11d25fffcd68437b1111c9836497a5abe1ad97be8e692817ac8577641a",
+          "size": 203
+        },
+        "/about/index.html": {
+          "contentType": "text/html; charset=utf-8",
+          "sha256": "sha256:caa9fd19acbf372960c3a04a56c0764236fef829920cbe17801610700f02453a",
+          "size": 309
+        },
+        "/about/index.md": {
+          "contentType": "text/markdown; charset=utf-8",
+          "sha256": "sha256:1e5406471833aef2020fc970a950ed9dd8f0504cfedbed0f2d8e24694c56a04e",
+          "size": 44
+        }
+      },
+      "generator": {
+        "name": "adk-awp-fixture",
+        "version": "1"
+      },
+      "previous": "sha256:406f2ec65cf45f87ef96e635a62aa07797ad4d04866813e880b6fd9777027074",
+      "redirects": [
+        {
+          "from": "/old/",
+          "status": 301,
+          "to": "/about/"
+        }
+      ],
+      "seq": 2,
+      "source": {
+        "job": "freshness",
+        "kind": "edit"
+      }
+    }
+  ],
+  "origin": "example.com/.well-known/awp/log",
+  "previousCheckpoint": "example.com/.well-known/awp/log\n1\nX9k1RavwzWW9f4LsH8Uuv5MvyvO63ubKKV10spHu7Tk=\n\n— example.com/.well-known/awp/log Z/DpC6tuXNls64e72qQkTyVu2B8dRDmEorZZV/os20RygmAL0dJIeeS6YGbnayLEYNIcN9yx7OQYibURPQ7LKPqrGwo=\n",
+  "previousRootHash": "X9k1RavwzWW9f4LsH8Uuv5MvyvO63ubKKV10spHu7Tk=",
+  "releaseKid": "release-2026-10",
+  "releasePublicKey": {
+    "crv": "Ed25519",
+    "kty": "OKP",
+    "x": "oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA"
+  },
+  "releaseSeed": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI",
+  "rootHash": "Ytou4+OOkmRNOKwTiI7GnGg13VPaqEc+lEgZKL2qcQ0=",
+  "tiles": {
+    "/.well-known/awp/log/tile/0/000.p/2": "X9k1RavwzWW9f4LsH8Uuv5MvyvO63ubKKV10spHu7TkuWKB2oDST6xw7F3Ho9SJ55tM0coCYI8Jywpm7CprwVw",
+    "/.well-known/awp/log/tile/entries/000.p/2": "AF57Im1hbmlmZXN0Ijoic2hhMjU2OjQwNmYyZWM2NWNmNDVmODdlZjk2ZTYzNWE2MmFhMDc3OTdhZDRkMDQ4NjY4MTNlODgwYjZmZDk3NzcwMjcwNzQiLCJzZXEiOjF9AF57Im1hbmlmZXN0Ijoic2hhMjU2OjRkYjZlYmM2ZjcwZjc1YjA0YWJmYzQwOWViYWUwNmQyYzJkNzgwNjE3ODZhYmEyODUxNTM5MTE0NDM1OGMwM2QiLCJzZXEiOjJ9"
+  }
+}

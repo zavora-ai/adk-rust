@@ -16,7 +16,7 @@
 //!
 //! | Route (under `/api`) | Answer |
 //! |---|---|
-//! | `GET /surface/decisions` | [`DecisionsResponse`]: the caller's open decisions as cards; `?session=` for one session's |
+//! | `GET /surface/decisions` | [`DecisionsResponse`]: the caller's open decisions as cards; `?session=` for one session's; `?decidedSince=` adds those answered since, newest first |
 //! | `GET /surface/decisions/{id}` | [`DecisionCard`]: waiting, or decided with who, where and when |
 //! | `GET /surface/sessions/{session}/thread` | [`ThreadResponse`]: the session's entries, numbered by store position |
 //! | `GET /surface/sessions/{session}/feed` | Server-sent events: `entry` (with `id` = `seq`), `decisions`, `reset`; resumes after `Last-Event-ID` or `?after=` |
@@ -43,8 +43,10 @@
 //! `400 surface.invalid`, because a spoken answer reaches the engine through the voice
 //! surface; `cancelAnswer` stays open (§5.6, §7.2).
 
+mod devices;
 mod home;
 mod openapi;
+pub(crate) mod phone;
 mod take_over;
 mod vocabulary;
 
@@ -58,18 +60,25 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
+use futures::{FutureExt as _, StreamExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+pub use devices::{device_scope_for, devices_router, router_with_devices};
 pub use home::{HOME_PATH, home};
 pub use openapi::{openapi, typescript};
+pub use phone::{
+    AnswerRequest, ComputerPasskey, ConfirmOptions, ConfirmOptionsRequest, ConfirmRequest,
+    DeliveriesResponse, Delivery, PasskeyOptions, PasskeyRegistration, PhoneDevice,
+    PhoneDevicesResponse, PhoneInfo, PushKeys, PushReceivedRequest, PushSubscriptionRequest,
+    QrRequest, StopRequest,
+};
 pub use take_over::{TakeOverRequest, take_over_router};
 pub use vocabulary::words_typescript;
 
 use crate::engine::{Command, CommandOutcome, FeedFrame, SurfaceEngine};
 use crate::error::SurfaceError;
-use crate::model::{AgentRow, Briefing, DecisionCard, FeedEntry, StatusLine};
+use crate::model::{AgentRef, AgentRow, Briefing, DecisionCard, FeedEntry, StatusLine};
 use crate::origin::{Caller, Origin, SurfaceKind};
 
 /// The route paths, relative to the `/api` prefix (spec 3.3 §6).
@@ -98,6 +107,32 @@ pub mod paths {
     pub const COMMANDS: &str = "/surface/commands";
     /// `GET`: the OpenAPI document.
     pub const OPENAPI: &str = "/surface/openapi.json";
+    /// `POST`: a paired device's answer (spec 3.3 §10 K2).
+    pub const ANSWER: &str = "/surface/decisions/{id}/answer";
+    /// `POST`: a paired device's Stop all (spec 3.3 §11 S-I10).
+    pub const STOP: &str = "/surface/stop";
+    /// `POST`: starts "Confirm it's you" for one answer (spec 3.3 §8.2).
+    pub const CONFIRM_OPTIONS: &str = "/surface/decisions/{id}/confirm/options";
+    /// `POST`: the passkey's assertion for the bound answer (spec 3.3 §8.2).
+    pub const CONFIRM: &str = "/surface/decisions/{id}/confirm";
+    /// `GET`: what the phone needs to subscribe and to confirm it is you (spec 3.3 §5.4).
+    pub const PHONE: &str = "/surface/phone";
+    /// `PUT`, `DELETE`: the phone's push subscription.
+    pub const PHONE_PUSH: &str = "/surface/phone/push";
+    /// `POST`: the phone received a wake-up.
+    pub const PHONE_PUSH_RECEIVED: &str = "/surface/phone/push/received";
+    /// `GET`: the latest acknowledged wake-ups, for the operator.
+    pub const PHONE_PUSH_DELIVERIES: &str = "/surface/phone/push/deliveries";
+    /// `POST`: starts setting up a passkey.
+    pub const PHONE_PASSKEY_OPTIONS: &str = "/surface/phone/passkey/options";
+    /// `POST`: finishes setting up a passkey.
+    pub const PHONE_PASSKEY: &str = "/surface/phone/passkey";
+    /// `DELETE`: removes a computer passkey of the caller.
+    pub const PHONE_PASSKEY_ONE: &str = "/surface/phone/passkey/{id}";
+    /// `POST`: a pairing link as a QR code, for the operator.
+    pub const PHONE_QR: &str = "/surface/phone/qr";
+    /// `GET`: the paired devices' passkeys and push, for the operator.
+    pub const PHONE_DEVICES: &str = "/surface/phone/devices";
 }
 
 /// `RequestContext` metadata key the server's extractor sets to `confirmed` when the person
@@ -176,6 +211,10 @@ pub struct QueuedResponse {
 pub struct AgentsResponse {
     /// The caller's agents.
     pub agents: Vec<AgentRow>,
+    /// The agent a message goes to when the person names none: the tray's "Ask Finance"
+    /// (spec 3.3 §5.5). Absent when the source has no single primary agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary: Option<AgentRef>,
 }
 
 /// `POST /surface/commands` body: the command, the surface it was given on and how.
@@ -226,14 +265,18 @@ pub struct SurfaceQuery {
     /// `GET .../feed`: resume after this `seq` when no `Last-Event-ID` is sent.
     #[serde(default)]
     pub after: Option<u64>,
+    /// `GET /surface/decisions`: also the decisions answered or ended since then, newest
+    /// first, after the open ones (spec 3.3 §5.4).
+    #[serde(default)]
+    pub decided_since: Option<DateTime<Utc>>,
 }
 
-type Context = Option<Extension<Option<RequestContext>>>;
+pub(crate) type Context = Option<Extension<Option<RequestContext>>>;
 
 /// No authenticated caller: the route answers `401`.
-struct Unauthenticated;
+pub(crate) struct Unauthenticated;
 
-fn unauthenticated() -> Response {
+pub(crate) fn unauthenticated() -> Response {
     problem(&AdkError::new(
         adk_core::ErrorComponent::Server,
         adk_core::ErrorCategory::Unauthorized,
@@ -245,17 +288,25 @@ fn unauthenticated() -> Response {
 
 /// The paired device a context authenticated as, when it carries a device token's metadata
 /// (spec 3.3 §10 K2).
-fn device_of(context: &RequestContext) -> Option<&String> {
+pub(crate) fn device_of(context: &RequestContext) -> Option<&String> {
     context.metadata.get(adk_kernel::pairing::DEVICE_ID_METADATA)
+}
+
+/// The kind of a paired device's context — `phone`, `terminal` or `tray` — which the issuer
+/// of its pairing code set; `None` for a device paired without one, a remote terminal.
+pub(crate) fn device_kind(context: &RequestContext) -> Option<&str> {
+    context.metadata.get(adk_kernel::pairing::DEVICE_KIND_METADATA).map(String::as_str)
 }
 
 /// The caller from the server's authentication; the client chooses only the surface and the
 /// origin, which can narrow what it may decide and never widen it.
 ///
 /// A device token's context is never the web home and never a paired local terminal, whatever
-/// the query or body declares: it is the terminal row, typed, with its device (spec 3.3 §7.2,
-/// §11 S-I10). Its presence comes only from a route that checked it, never from metadata.
-fn caller(
+/// the query or body declares: its kind, which the issuer of its pairing code set, picks the
+/// row — a phone by touch, a tray by pointer, anything else a terminal by keyboard — and the
+/// caller carries its device (spec 3.3 §7.2, §11 S-I10). Its presence comes only from a route
+/// that checked it, never from metadata.
+pub(crate) fn caller(
     context: Context,
     surface: SurfaceKind,
     origin: Option<Origin>,
@@ -264,7 +315,12 @@ fn caller(
         return Err(Unauthenticated);
     };
     if let Some(device) = device_of(&context) {
-        return Ok(Caller::human(context.user_id.clone(), SurfaceKind::Terminal, Origin::Keyboard)
+        let (surface, origin) = match device_kind(&context) {
+            Some("phone") => (SurfaceKind::Phone, Origin::Touch),
+            Some("tray") => (SurfaceKind::Tray, Origin::Pointer),
+            _ => (SurfaceKind::Terminal, Origin::Keyboard),
+        };
+        return Ok(Caller::human(context.user_id.clone(), surface, origin)
             .with_groups(context.scopes.clone())
             .with_device(device.clone()));
     }
@@ -286,13 +342,13 @@ fn caller(
     Ok(caller)
 }
 
-fn problem(error: &AdkError) -> Response {
+pub(crate) fn problem(error: &AdkError) -> Response {
     let status =
         StatusCode::from_u16(error.http_status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, Json(error.to_problem_json())).into_response()
 }
 
-fn failed(error: SurfaceError) -> Response {
+pub(crate) fn failed(error: SurfaceError) -> Response {
     problem(&AdkError::from(error))
 }
 
@@ -314,6 +370,13 @@ async fn decisions(
     let decisions = match &query.session {
         Some(session) => engine.session_decisions(&caller, session).await,
         None => engine.decisions(&caller).await,
+    };
+    let decisions = match (decisions, query.decided_since) {
+        (Ok(mut open), Some(since)) => engine.decided_since(&caller, since).await.map(|decided| {
+            open.extend(decided);
+            open
+        }),
+        (decisions, _) => decisions,
     };
     match decisions {
         Ok(decisions) => Json(DecisionsResponse { decisions }).into_response(),
@@ -350,6 +413,7 @@ async fn thread(
 async fn feed(
     State(engine): State<SurfaceEngine>,
     context: Context,
+    ends: Option<Extension<devices::DeviceEnds>>,
     headers: HeaderMap,
     Path(session): Path<String>,
     Query(query): Query<SurfaceQuery>,
@@ -364,7 +428,14 @@ async fn feed(
     if let Err(error) = engine.thread(&caller, &session).await {
         return failed(error);
     }
-    let frames = engine.feed(caller, session, after).map(|frame| {
+    // A paired device's feed ends with the device: removed, or its pairing over (S-I7).
+    let device_ends = match (ends, caller.device.clone()) {
+        (Some(Extension(devices::DeviceEnds(pairing))), Some(device)) => {
+            pairing.until_device_ends(device).boxed()
+        }
+        _ => futures::future::pending().boxed(),
+    };
+    let frames = engine.feed(caller, session, after).take_until(device_ends).map(|frame| {
         let event = match frame {
             Ok(FeedFrame::Entry { entry }) => {
                 SseEvent::default().id(entry.seq.to_string()).event("entry").json_data(&entry)
@@ -405,7 +476,9 @@ async fn agents(
 ) -> Response {
     let caller = try_or_respond!(caller(context, query.surface.unwrap_or(SurfaceKind::Web), None));
     match engine.agents(&caller).await {
-        Ok(agents) => Json(AgentsResponse { agents }).into_response(),
+        Ok(agents) => {
+            Json(AgentsResponse { agents, primary: engine.primary_agent() }).into_response()
+        }
         Err(error) => failed(error),
     }
 }

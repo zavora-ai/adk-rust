@@ -3,8 +3,10 @@ import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { HttpClient } from "./client";
+import { phoneShell } from "./phone/shell";
 import type { Shell } from "./route";
 import { shellOf } from "./route";
+import { TrayPanel } from "./tray/TrayPanel";
 import "./styles/fonts.css";
 import "./styles/tokens.css";
 import "./styles/app.css";
@@ -25,10 +27,14 @@ function shell(kind: Shell): ReactNode {
       };
       return <App client={client} seams={seams} takeOver={client.takeOver()} />;
     }
+    case "tray":
+      return <TrayPanel client={new HttpClient("/api", "tray")} />;
   }
 }
 
 const root = document.getElementById("root");
 if (root) {
-  createRoot(root).render(<StrictMode>{shell(shellOf(window.location))}</StrictMode>);
+  void phoneShell(window.location).then((phone) =>
+    createRoot(root).render(<StrictMode>{phone ?? shell(shellOf(window.location))}</StrictMode>),
+  );
 }

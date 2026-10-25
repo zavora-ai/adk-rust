@@ -1,0 +1,36 @@
+{
+  "awp": "2.0",
+  "site": {
+    "id": "018f2c7e-6a4b-7c8d-9e0f-1a2b3c4d5e6f",
+    "name": "Example Solar",
+    "domain": "example.com",
+    "languages": [
+      "en",
+      "sw"
+    ]
+  },
+  "profile": "static",
+  "surfaces": {
+    "llmsTxt": "https://example.com/llms.txt",
+    "machineViews": true
+  },
+  "release": {
+    "seq": 1,
+    "manifest": "https://example.com/.well-known/awp/releases/1.json",
+    "checkpoint": "https://example.com/.well-known/awp/log/checkpoint"
+  },
+  "charter": {
+    "public": "https://example.com/.well-known/awp/charter.json",
+    "digest": "sha256:52772bd5d771e927522bebfa70e65dbc940993db8ece34468816e15cab54036b"
+  },
+  "contact": {
+    "security": "https://example.com/.well-known/security.txt",
+    "email": "hello@example.com"
+  },
+  "keys": "https://example.com/.well-known/awp/keys.json",
+  "proof": {
+    "alg": "EdDSA",
+    "kid": "site-root-2026",
+    "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6InNpdGUtcm9vdC0yMDI2In0..h_vLEFGf-8xcWJjzOXOViQbiAsQYITQ8ReKcxqeJQnW48Jc2_bPrNEasBIxbfpvznqPQohtc20mLXgyucJ8rAA"
+  }
+}

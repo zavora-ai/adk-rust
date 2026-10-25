@@ -1,0 +1,30 @@
+[
+  {
+    "request": {"op": "launch_campaign", "args": {"name": "Sourdough week", "adText": "Fresh sourdough every morning", "landingPage": "https://bakery.example/sourdough", "dailyBudgetMinor": 2000, "bidMinor": 60, "currency": "USD"}},
+    "response": {"ok": {"id": "cmp-73120044", "name": "Sourdough week", "state": "active", "dailyBudgetMinor": 2000, "bidMinor": 60, "currency": "USD"}}
+  },
+  {
+    "request": {"op": "set_bid", "args": {"campaign": "cmp-73120044", "bidMinor": 61, "currency": "USD"}},
+    "response": {"ok": {"id": "cmp-73120044", "name": "Sourdough week", "state": "active", "dailyBudgetMinor": 2000, "bidMinor": 61, "currency": "USD"}}
+  },
+  {
+    "request": {"op": "set_bid", "args": {"campaign": "cmp-73120044", "bidMinor": 2001, "currency": "USD"}},
+    "response": {"error": {"code": "drivers.invalid", "message": "BID_EXCEEDS_DAILY_BUDGET: the bid is above the campaign's daily budget"}}
+  },
+  {
+    "request": {"op": "set_bid", "args": {"campaign": "cmp-73120044", "bidMinor": 61, "currency": "EUR"}},
+    "response": {"error": {"code": "drivers.invalid", "message": "CURRENCY_MISMATCH: the account bills in USD"}}
+  },
+  {
+    "request": {"op": "pause_campaign", "args": {"campaign": "cmp-73120044"}},
+    "response": {"ok": {"id": "cmp-73120044", "name": "Sourdough week", "state": "paused", "dailyBudgetMinor": 2000, "bidMinor": 61, "currency": "USD"}}
+  },
+  {
+    "request": {"op": "pause_campaign", "args": {"campaign": "cmp-no-such-campaign"}},
+    "response": {"error": {"code": "drivers.not_found", "message": "CAMPAIGN_NOT_FOUND: cmp-no-such-campaign"}}
+  },
+  {
+    "request": {"op": "performance", "args": {"from": "2026-10-01T00:00:00+00:00", "to": "2026-10-08T00:00:00+00:00"}},
+    "response": {"ok": [{"campaign": "cmp-73120044", "spendMinor": 1840, "currency": "USD", "impressions": 5120, "clicks": 31, "conversions": 4}]}
+  }
+]

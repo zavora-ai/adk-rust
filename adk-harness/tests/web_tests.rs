@@ -158,8 +158,11 @@ async fn allowlisted_fetch_runs_without_a_prompt_and_another_host_is_held() {
     assert_eq!(response["content_type"], "text/plain");
     assert!(content_of(&response).contains("<untrusted-content source=\"web\""), "{response}");
     assert!(content_of(&response).contains("plain text"));
+    assert_eq!(response["screening"], "clean", "screened, and nothing was found: {response}");
     assert_eq!(prompter.count(), 0, "an allowlisted host never prompts");
-    assert_eq!(f.records("harness.web.fetched").len(), 2, "write-ahead and response records");
+    let fetched = f.records("harness.web.fetched");
+    assert_eq!(fetched.len(), 2, "write-ahead and response records");
+    assert_eq!(fetched[1].ext["screening"], "clean");
 
     prompter.deny();
     let events = f.send("now the other one").await;
@@ -193,7 +196,7 @@ async fn an_injection_page_is_labelled_redacted_and_produces_no_call_outside_the
     let injected = content.lines().find(|line| line.contains("rm -rf")).unwrap();
     assert!(injected.starts_with(INJECTION_LABEL), "the injection line is labelled: {injected}");
     assert!(content.contains(SECRET_REDACTION) && !content.contains("AKIA"), "{content}");
-    assert_eq!(fetched["screened"], true);
+    assert_eq!(fetched["screening"], "labelled, redacted");
     let screened = f.records("harness.web.screened");
     assert_eq!(screened.len(), 1);
     assert!(screened[0].ext["patterns"].as_array().is_some_and(|p| !p.is_empty()));
@@ -392,6 +395,7 @@ async fn pdf_is_a_stub_and_other_types_are_refused_with_their_mime() {
     let responses = common::responses(&events);
     assert_eq!(responses[0].1["content_type"], "application/pdf");
     assert!(content_of(&responses[0].1).contains("[pdf:"));
+    assert_eq!(responses[0].1["screening"], "not_screened", "a PDF's text is not screened");
     let error = responses[1].1["error"].as_str().unwrap();
     assert!(error.contains("harness.web.unsupported_type"), "{error}");
 }
@@ -489,6 +493,7 @@ async fn web_search_is_screened_delimited_and_audited_by_digest() {
     assert!(content.starts_with("<untrusted-content source=\"web-search\""));
     assert!(content.contains(INJECTION_LABEL), "{content}");
     assert!(content.contains(SECRET_REDACTION) && !content.contains("AKIA"), "{content}");
+    assert_eq!(response["screening"], "labelled, redacted");
     let searched = f.records("harness.web.searched");
     assert_eq!(searched.len(), 1);
     assert_eq!(searched[0].ext["provider"], "fixed");

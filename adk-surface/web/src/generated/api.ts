@@ -32,6 +32,11 @@ export type AgentStatus = "working" | "waitingForYou" | "asleep" | "done" | "fai
 export interface AgentsResponse {
   /** The caller's agents. */
   agents: AgentRow[];
+  /**
+   * The agent a message goes to when the person names none: the tray's "Ask Finance"
+   * (spec 3.3 §5.5). Absent when the source has no single primary agent.
+   */
+  primary?: AgentRef | null;
 }
 
 /** The answers a surface may give one decision (spec 3.3 §7.2). */
@@ -59,6 +64,23 @@ export interface AnswerOption {
   needsExpanded: boolean;
   /** The person must confirm it is them first (high risk on the web home and the phone). */
   needsPresence: boolean;
+}
+
+/**
+ * `POST /surface/decisions/{id}/answer` body: an answer from a paired device, at the version
+ * it saw (spec 3.3 §7.2, S-I2).
+ */
+export interface AnswerRequest {
+  /** The answer. */
+  answer: Answer;
+  /** The changed arguments of an `edit`. */
+  editedArgs?: unknown;
+  /** The device showed the call in full (§7.1). */
+  expanded?: boolean;
+  /** Why, for a `deny`; reported to the agent. */
+  reason?: string | null;
+  /** The card's `version`. */
+  version: number;
 }
 
 /** An agent's avatar: a rounded monogram in the agent's own colour (spec 3.3 §9). */
@@ -237,6 +259,53 @@ export interface CommandRequest {
   surface?: SurfaceKind;
 }
 
+/** A passkey the person set up on a computer for the web home. */
+export interface ComputerPasskey {
+  /** When it was set up. */
+  createdAt: string;
+  /** Its id, which **Remove** names. */
+  id: string;
+}
+
+/**
+ * `POST /surface/decisions/{id}/confirm/options` answer: the options for
+ * `navigator.credentials.get`, single use, for two minutes.
+ */
+export interface ConfirmOptions {
+  /** What the confirmation answers, with the assertion. */
+  challengeId: string;
+  /** `PublicKeyCredentialRequestOptionsJSON`: user verification required. */
+  publicKey: unknown;
+}
+
+/**
+ * `POST /surface/decisions/{id}/confirm/options` body: the answer the person is about to
+ * confirm, bound on the server to this decision, its version and these arguments (spec 3.3
+ * §8.2).
+ */
+export interface ConfirmOptionsRequest {
+  /** `allowOnce` or `edit`. */
+  answer: Answer;
+  /** The changed arguments of an `edit`. */
+  editedArgs?: unknown;
+  /** The surface showed the call in full (§7.1). */
+  expanded?: boolean;
+  /** The card's `version`. */
+  version: number;
+}
+
+/** `POST /surface/decisions/{id}/confirm` body: the passkey's assertion for the bound answer. */
+export interface ConfirmRequest {
+  /** The answer, when the page sends it again: it must be the bound one. */
+  answer?: Answer | null;
+  /** The options' `challengeId`. */
+  challengeId: string;
+  /** The `PublicKeyCredential` as JSON (`credential.toJSON()`). */
+  credential: unknown;
+  /** The changed arguments, when the page sends them again: they must be the bound ones. */
+  editedArgs?: unknown;
+}
+
 /**
  * A decision answered, here or elsewhere (spec 3.3 §8.1 "Decided", §11 S-I2): who answered,
  * where and how, and when.
@@ -252,6 +321,12 @@ export interface Decided {
   by: string;
   /** The caller answered. */
   byYou: boolean;
+  /**
+   * How far the answer reaches, shown after the text: "done once" for allow once, the
+   * standing rule's label for always allow (spec 3.3 §5.4); `None` when no surface
+   * recorded the answer.
+   */
+  scopeText?: string | null;
   /** "You said yes in Telegram at 07:31". */
   text: string;
   /** Where and how, when the answer came through a surface. */
@@ -319,6 +394,24 @@ export interface DecisionsResponse {
   decisions: DecisionCard[];
 }
 
+/** `GET /surface/phone/push/deliveries` answer, for the operator. */
+export interface DeliveriesResponse {
+  /** The latest acknowledged wake-ups, oldest first. */
+  deliveries: Delivery[];
+}
+
+/** One wake-up a phone acknowledged, for "Push delivery" (spec 3.3 §5.4). */
+export interface Delivery {
+  /** The phone. */
+  deviceId: string;
+  /** The time between, in milliseconds. */
+  latencyMs: number;
+  /** When the phone acknowledged it. */
+  receivedAt: string;
+  /** When the kernel sent it. */
+  sentAt: string;
+}
+
 /** One event of a session's store, numbered by its position there (spec 3.3 §6). */
 export interface FeedEntry {
   /** When. */
@@ -384,8 +477,99 @@ export type Origin = {
   kind: "agent";
 };
 
+/**
+ * `POST /surface/phone/passkey/options` answer: the options for
+ * `navigator.credentials.create`, as WebAuthn's JSON form gives them (spec 3.3 §8.2).
+ */
+export interface PasskeyOptions {
+  /**
+   * `PublicKeyCredentialCreationOptionsJSON`: a platform authenticator, user verification
+   * required, attestation none.
+   */
+  publicKey: unknown;
+  /** What the registration answers, with the credential. */
+  registrationId: string;
+}
+
+/** `POST /surface/phone/passkey` body: the new passkey. */
+export interface PasskeyRegistration {
+  /** The `PublicKeyCredential` as JSON (`credential.toJSON()`). */
+  credential: unknown;
+  /** The options' `registrationId`. */
+  registrationId: string;
+}
+
+/** A paired device's phone attachments, as "Where you can say yes from" lists them. */
+export interface PhoneDevice {
+  /** The device. */
+  deviceId: string;
+  /** It asks for the person's face or fingerprint. */
+  passkey: boolean;
+  /** It is woken by push. */
+  push: boolean;
+}
+
+/** `GET /surface/phone/devices` answer, for the operator. */
+export interface PhoneDevicesResponse {
+  /** The caller's computer passkeys. */
+  computerPasskeys: ComputerPasskey[];
+  /** Every paired device with a passkey or a push subscription. */
+  devices: PhoneDevice[];
+}
+
+/**
+ * `GET /surface/phone` answer: what the phone needs to subscribe and to confirm it is you
+ * (spec 3.3 §5.4, §8.2).
+ */
+export interface PhoneInfo {
+  /**
+   * The caller may set up a passkey now: a phone within 10 minutes of pairing without one,
+   * or the person at the web home.
+   */
+  canAddPasskey: boolean;
+  /** The caller has a passkey here: this phone's, or for the web home, the person's. */
+  passkey: boolean;
+  /** This phone is subscribed to wake-ups. */
+  push: boolean;
+  /** The kernel's push key, which the phone subscribes with (`applicationServerKey`). */
+  pushKey: string;
+  /** The passkeys' relying party: the home's host. */
+  rpId: string;
+}
+
 /** A pill on a briefing line (spec 3.3 §5.1 Today). */
 export type Pill = "done" | "failed" | "waitingForYou" | "youDecided" | "suggestion" | "question";
+
+/** The keys a browser gives with its push subscription. */
+export interface PushKeys {
+  /** The subscription's authentication secret, base64url. */
+  auth: string;
+  /** The subscription's P-256 public key, base64url. */
+  p256dh: string;
+}
+
+/** `POST /surface/phone/push/received` body: the phone's acknowledgement of a wake-up. */
+export interface PushReceivedRequest {
+  /** The wake-up's `id`. */
+  id: string;
+}
+
+/**
+ * `PUT /surface/phone/push` body: the phone's push subscription, as `PushSubscription.toJSON()`
+ * gives it (spec 3.3 §5.4).
+ */
+export interface PushSubscriptionRequest {
+  /** The push service URL: https, on Apple's, Google's, Mozilla's or Microsoft's service. */
+  endpoint: string;
+  /** The browser's keys. */
+  keys: PushKeys;
+}
+
+/** `POST /surface/phone/qr` body: the pairing link to draw, for the operator. */
+export interface QrRequest {
+  /** The link: it starts with the home's URL. */
+  url: string;
+}
 
 /** `GET /surface/sessions/{session}/queued` answer (spec 3.3 §7.4 rule 2, S-I4). */
 export interface QueuedResponse {
@@ -454,6 +638,12 @@ export interface StatusLine {
   stoppedText?: string | null;
 }
 
+/** `POST /surface/stop` body: **Stop all** from a paired device (spec 3.3 §11 S-I10). */
+export interface StopRequest {
+  /** Why. */
+  reason?: string | null;
+}
+
 /**
  * The surface a person uses (spec 3.3 §5, §7.2).
  * 
@@ -467,6 +657,11 @@ export type SurfaceKind = "web" | "terminal" | "phone" | "tray" | "chat" | "voic
 export interface SurfaceQuery {
   /** `GET .../feed`: resume after this `seq` when no `Last-Event-ID` is sent. */
   after?: number | null;
+  /**
+   * `GET /surface/decisions`: also the decisions answered or ended since then, newest
+   * first, after the open ones (spec 3.3 §5.4).
+   */
+  decidedSince?: string | null;
   /**
    * `GET /surface/status`: the session whose mode to show; `GET /surface/decisions`: only
    * that session's decisions.

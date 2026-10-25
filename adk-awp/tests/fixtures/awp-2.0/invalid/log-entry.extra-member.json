@@ -1,0 +1,5 @@
+{
+  "seq": 101,
+  "manifest": "sha256:7a83485ad13ecd39c73dc968d6c2be968eea0a17fefa56251d87e0bdbd5646b4",
+  "note": "entries carry exactly seq and manifest"
+}

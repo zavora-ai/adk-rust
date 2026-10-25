@@ -1,0 +1,42 @@
+{
+  "recorded": "Chrome virtual authenticator: CTAP2, internal transport, user verification",
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36",
+  "origin": "http://localhost:49457",
+  "rpId": "localhost",
+  "registration": {
+    "challenge": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+    "credential": {
+      "authenticatorAttachment": "platform",
+      "clientExtensionResults": {},
+      "id": "PbnLFCvPAoqDSJQUdKtJdhUxSrE85Z2ifL3QHE6JoFs",
+      "rawId": "PbnLFCvPAoqDSJQUdKtJdhUxSrE85Z2ifL3QHE6JoFs",
+      "response": {
+        "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikSZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2NFAAAAAQECAwQFBgcIAQIDBAUGBwgAID25yxQrzwKKg0iUFHSrSXYVMUqxPOWdony90BxOiaBbpQECAyYgASFYIIVCPBr_-zhD_LDOYFEyaRjfWPvAsQm7frADZCFVkOyqIlggfXNF3LqmoeLTKBVnh-eaQ7Z7y650CPRk1SJAyNSoBPA",
+        "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2NFAAAAAQECAwQFBgcIAQIDBAUGBwgAID25yxQrzwKKg0iUFHSrSXYVMUqxPOWdony90BxOiaBbpQECAyYgASFYIIVCPBr_-zhD_LDOYFEyaRjfWPvAsQm7frADZCFVkOyqIlggfXNF3LqmoeLTKBVnh-eaQ7Z7y650CPRk1SJAyNSoBPA",
+        "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRSIsIm9yaWdpbiI6Imh0dHA6Ly9sb2NhbGhvc3Q6NDk0NTciLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEhUI8Gv_7OEP8sM5gUTJpGN9Y-8CxCbt-sANkIVWQ7Kp9c0Xcuqah4tMoFWeH55pDtnvLrnQI9GTVIkDI1KgE8A",
+        "publicKeyAlgorithm": -7,
+        "transports": [
+          "internal"
+        ]
+      },
+      "type": "public-key"
+    }
+  },
+  "assertion": {
+    "challenge": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+    "credential": {
+      "authenticatorAttachment": "platform",
+      "clientExtensionResults": {},
+      "id": "PbnLFCvPAoqDSJQUdKtJdhUxSrE85Z2ifL3QHE6JoFs",
+      "rawId": "PbnLFCvPAoqDSJQUdKtJdhUxSrE85Z2ifL3QHE6JoFs",
+      "response": {
+        "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MFAAAAAg",
+        "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSSIsIm9yaWdpbiI6Imh0dHA6Ly9sb2NhbGhvc3Q6NDk0NTciLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "signature": "MEUCIQDijv0KEJ2-3HXvknT8CP2nmN6fts9lPXTkZDfDG8Wd5QIgG_8XkOlTO2FzvOws25ePkYqXoSTVjnzfSD94eKZlJ7M",
+        "userHandle": "BwcHBwcHBwcHBwcHBwcHBw"
+      },
+      "type": "public-key"
+    }
+  }
+}

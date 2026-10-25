@@ -24,7 +24,7 @@
 //! `AWP-Version` negotiation, trust tiers from verified credentials, capabilities as
 //! `adk_core::Tool`s with one governed path for every binding, held and exactly-once calls,
 //! edge stores with a conformance suite, and `business.toml` migration. The 1.x routes and
-//! [`AwpState`] sit behind the default `awp-v1` feature for one release line.
+//! `AwpState` sit behind the default `awp-v1` feature for one release line.
 //!
 //! ## Quick Start
 //!
@@ -44,6 +44,8 @@
 #[cfg(feature = "awp-v1")]
 pub mod a2a;
 pub mod config;
+#[cfg(feature = "verify")]
+pub mod conformance;
 pub mod consent;
 pub mod detect;
 pub mod discovery;
@@ -58,10 +60,14 @@ pub mod middleware;
 pub mod rate_limit;
 #[cfg(feature = "awp-v1")]
 pub mod router;
+#[cfg(feature = "signing")]
+pub mod signing;
 #[cfg(feature = "awp-v1")]
 pub mod state;
 pub mod trust;
 pub mod v2;
+#[cfg(feature = "verify")]
+pub mod verify;
 
 #[cfg(feature = "awp-v1")]
 pub use a2a::AwpA2aHandler;

@@ -177,6 +177,10 @@ tui = ["harness", "surface", "adk-surface/tui", "dep:libc"]
 # Chat (spec 3.3 §5.3): `adk-rust up` starts the Telegram adapter when TELEGRAM_BOT_TOKEN is
 # set, and pairs its accounts beside the kernel's devices. No dependency beyond `surface`.
 channels = ["harness", "surface", "adk-surface/channels", "adk-kernel?/channels"]
+# The phone (spec 3.3 §5.4): `adk-rust up --home-url https://… --auth-token …` serves the
+# home as an installable app with Web Push from the kernel and "Confirm it's you". Opt-in:
+# its passkey checks link the system's OpenSSL (webauthn-rs).
+mobile = ["surface", "harness", "adk-surface/mobile"]
 
 # Standard error to terminal.log while the full screen is up (spec 3.3 §5.2, S-I9)
 [target.'cfg(unix)'.dependencies]

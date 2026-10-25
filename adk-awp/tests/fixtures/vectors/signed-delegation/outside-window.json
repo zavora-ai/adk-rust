@@ -1,0 +1,39 @@
+{
+  "at": "2027-01-15T00:00:00Z",
+  "delegatedSeed": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI",
+  "description": "A document dated after the delegation's notAfter.",
+  "document": {
+    "kid": "release-2026-10",
+    "notAfter": "2026-12-29T00:00:00Z",
+    "notBefore": "2026-10-01T00:00:00Z",
+    "proof": {
+      "alg": "EdDSA",
+      "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6InNpdGUtcm9vdC0yMDI2In0..zC5gWUPbAUFnixfX273Njj5g1wqwaZYAuNu0fyhFb73FnG3DJ4wXesKAVWbcyFtGRP3qx_3kDKZvQbPVEYf_Dw",
+      "kid": "site-root-2026"
+    },
+    "publicKey": {
+      "crv": "Ed25519",
+      "kty": "OKP",
+      "x": "oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA"
+    },
+    "scopes": [
+      "release"
+    ]
+  },
+  "expected": {
+    "failure": "key.window",
+    "valid": false
+  },
+  "jcs": "eyJraWQiOiJyZWxlYXNlLTIwMjYtMTAiLCJub3RBZnRlciI6IjIwMjYtMTItMjlUMDA6MDA6MDBaIiwibm90QmVmb3JlIjoiMjAyNi0xMC0wMVQwMDowMDowMFoiLCJwdWJsaWNLZXkiOnsiY3J2IjoiRWQyNTUxOSIsImt0eSI6Ik9LUCIsIngiOiJvSnFsOUhwbldZQXYtVlg0M0MwcUZLWEpuU08tbF9oa0VuXzVPRFJWcFBBIn0sInNjb3BlcyI6WyJyZWxlYXNlIl19",
+  "protectedHeader": "{\"alg\":\"EdDSA\",\"kid\":\"site-root-2026\"}",
+  "revocations": [],
+  "rootKid": "site-root-2026",
+  "rootPublicKey": {
+    "crv": "Ed25519",
+    "kty": "OKP",
+    "x": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc"
+  },
+  "scope": "release",
+  "signature": "zC5gWUPbAUFnixfX273Njj5g1wqwaZYAuNu0fyhFb73FnG3DJ4wXesKAVWbcyFtGRP3qx_3kDKZvQbPVEYf_Dw",
+  "signingInput": "eyJhbGciOiJFZERTQSIsImtpZCI6InNpdGUtcm9vdC0yMDI2In0.eyJraWQiOiJyZWxlYXNlLTIwMjYtMTAiLCJub3RBZnRlciI6IjIwMjYtMTItMjlUMDA6MDA6MDBaIiwibm90QmVmb3JlIjoiMjAyNi0xMC0wMVQwMDowMDowMFoiLCJwdWJsaWNLZXkiOnsiY3J2IjoiRWQyNTUxOSIsImt0eSI6Ik9LUCIsIngiOiJvSnFsOUhwbldZQXYtVlg0M0MwcUZLWEpuU08tbF9oa0VuXzVPRFJWcFBBIn0sInNjb3BlcyI6WyJyZWxlYXNlIl19"
+}

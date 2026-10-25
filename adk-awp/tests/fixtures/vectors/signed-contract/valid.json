@@ -1,0 +1,58 @@
+{
+  "description": "The site contract signed by the root key: a detached JWS (EdDSA) over the JCS form of the contract without `proof` (AWP 2.0 §5.4).",
+  "dnsRecord": {
+    "name": "_awp-root.example.com",
+    "value": "v=awp2; kid=site-root-2026; jkt=vaJPtef-vPnGAIWE19qlMPDYWGaER3zeeJM_3r1WO7E"
+  },
+  "document": {
+    "awp": "2.0",
+    "charter": {
+      "digest": "sha256:1b1978c31b387abe68fc2b986aff8f444f37fde5fce709fa4e29e003faefecf1",
+      "public": "https://example.com/.well-known/awp/charter.json"
+    },
+    "contact": {
+      "security": "https://example.com/.well-known/security.txt"
+    },
+    "keys": "https://example.com/.well-known/awp/keys.json",
+    "profile": "static",
+    "proof": {
+      "alg": "EdDSA",
+      "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6InNpdGUtcm9vdC0yMDI2In0..D37E40ypt7noG8M5N6diSAOrHOS2qBMF2xQ40E_1Ioj6varGCdV__6jldLuLOH6u8onK0J5WdQiDWvbvJTskBQ",
+      "kid": "site-root-2026"
+    },
+    "release": {
+      "checkpoint": "https://example.com/.well-known/awp/log/checkpoint",
+      "manifest": "https://example.com/.well-known/awp/releases/1.json",
+      "seq": 1
+    },
+    "site": {
+      "domain": "example.com",
+      "id": "018f2c7e-6a4b-7c8d-9e0f-1a2b3c4d5e6f",
+      "languages": [
+        "en"
+      ],
+      "name": "Example Solar"
+    },
+    "surfaces": {
+      "a2aCard": "https://example.com/.well-known/agent-card.json",
+      "llmsTxt": "https://example.com/llms.txt",
+      "machineViews": true
+    }
+  },
+  "domain": "example.com",
+  "expected": {
+    "valid": true
+  },
+  "jcs": "eyJhd3AiOiIyLjAiLCJjaGFydGVyIjp7ImRpZ2VzdCI6InNoYTI1NjoxYjE5NzhjMzFiMzg3YWJlNjhmYzJiOTg2YWZmOGY0NDRmMzdmZGU1ZmNlNzA5ZmE0ZTI5ZTAwM2ZhZWZlY2YxIiwicHVibGljIjoiaHR0cHM6Ly9leGFtcGxlLmNvbS8ud2VsbC1rbm93bi9hd3AvY2hhcnRlci5qc29uIn0sImNvbnRhY3QiOnsic2VjdXJpdHkiOiJodHRwczovL2V4YW1wbGUuY29tLy53ZWxsLWtub3duL3NlY3VyaXR5LnR4dCJ9LCJrZXlzIjoiaHR0cHM6Ly9leGFtcGxlLmNvbS8ud2VsbC1rbm93bi9hd3Ava2V5cy5qc29uIiwicHJvZmlsZSI6InN0YXRpYyIsInJlbGVhc2UiOnsiY2hlY2twb2ludCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vLndlbGwta25vd24vYXdwL2xvZy9jaGVja3BvaW50IiwibWFuaWZlc3QiOiJodHRwczovL2V4YW1wbGUuY29tLy53ZWxsLWtub3duL2F3cC9yZWxlYXNlcy8xLmpzb24iLCJzZXEiOjF9LCJzaXRlIjp7ImRvbWFpbiI6ImV4YW1wbGUuY29tIiwiaWQiOiIwMThmMmM3ZS02YTRiLTdjOGQtOWUwZi0xYTJiM2M0ZDVlNmYiLCJsYW5ndWFnZXMiOlsiZW4iXSwibmFtZSI6IkV4YW1wbGUgU29sYXIifSwic3VyZmFjZXMiOnsiYTJhQ2FyZCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vLndlbGwta25vd24vYWdlbnQtY2FyZC5qc29uIiwibGxtc1R4dCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vbGxtcy50eHQiLCJtYWNoaW5lVmlld3MiOnRydWV9fQ",
+  "protectedHeader": "{\"alg\":\"EdDSA\",\"kid\":\"site-root-2026\"}",
+  "rootKid": "site-root-2026",
+  "rootPublicKey": {
+    "crv": "Ed25519",
+    "kty": "OKP",
+    "x": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc"
+  },
+  "rootSeed": "ERERERERERERERERERERERERERERERERERERERERERE",
+  "rootThumbprint": "vaJPtef-vPnGAIWE19qlMPDYWGaER3zeeJM_3r1WO7E",
+  "signature": "D37E40ypt7noG8M5N6diSAOrHOS2qBMF2xQ40E_1Ioj6varGCdV__6jldLuLOH6u8onK0J5WdQiDWvbvJTskBQ",
+  "signingInput": "eyJhbGciOiJFZERTQSIsImtpZCI6InNpdGUtcm9vdC0yMDI2In0.eyJhd3AiOiIyLjAiLCJjaGFydGVyIjp7ImRpZ2VzdCI6InNoYTI1NjoxYjE5NzhjMzFiMzg3YWJlNjhmYzJiOTg2YWZmOGY0NDRmMzdmZGU1ZmNlNzA5ZmE0ZTI5ZTAwM2ZhZWZlY2YxIiwicHVibGljIjoiaHR0cHM6Ly9leGFtcGxlLmNvbS8ud2VsbC1rbm93bi9hd3AvY2hhcnRlci5qc29uIn0sImNvbnRhY3QiOnsic2VjdXJpdHkiOiJodHRwczovL2V4YW1wbGUuY29tLy53ZWxsLWtub3duL3NlY3VyaXR5LnR4dCJ9LCJrZXlzIjoiaHR0cHM6Ly9leGFtcGxlLmNvbS8ud2VsbC1rbm93bi9hd3Ava2V5cy5qc29uIiwicHJvZmlsZSI6InN0YXRpYyIsInJlbGVhc2UiOnsiY2hlY2twb2ludCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vLndlbGwta25vd24vYXdwL2xvZy9jaGVja3BvaW50IiwibWFuaWZlc3QiOiJodHRwczovL2V4YW1wbGUuY29tLy53ZWxsLWtub3duL2F3cC9yZWxlYXNlcy8xLmpzb24iLCJzZXEiOjF9LCJzaXRlIjp7ImRvbWFpbiI6ImV4YW1wbGUuY29tIiwiaWQiOiIwMThmMmM3ZS02YTRiLTdjOGQtOWUwZi0xYTJiM2M0ZDVlNmYiLCJsYW5ndWFnZXMiOlsiZW4iXSwibmFtZSI6IkV4YW1wbGUgU29sYXIifSwic3VyZmFjZXMiOnsiYTJhQ2FyZCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vLndlbGwta25vd24vYWdlbnQtY2FyZC5qc29uIiwibGxtc1R4dCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vbGxtcy50eHQiLCJtYWNoaW5lVmlld3MiOnRydWV9fQ"
+}

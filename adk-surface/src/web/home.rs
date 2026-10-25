@@ -87,10 +87,14 @@ fn embedded(path: &str) -> Response {
     if let Ok(value) = header::HeaderValue::from_str(mime.as_ref()) {
         headers.insert(header::CONTENT_TYPE, value);
     }
-    // Built assets carry a content hash in their names; the page that names them does not.
+    // Built assets carry a content hash in their names; the page that names them does not,
+    // nor do the phone's service worker, manifest and icons, whose names browsers fix
+    // (spec 3.3 §5.4).
+    let fixed_name =
+        path == "sw.js" || path == "manifest.webmanifest" || path.starts_with("icons/");
     headers.insert(
         header::CACHE_CONTROL,
-        header::HeaderValue::from_static(if page {
+        header::HeaderValue::from_static(if page || fixed_name {
             "no-cache"
         } else {
             "public, max-age=31536000, immutable"

@@ -204,6 +204,13 @@ No model-callable tool creates one. A rule never applies to a non-waivable call:
 that runs arbitrary code (`sh`, `bash`, `env`, `sudo` and similar), and the harness re-reads
 the store on every call, so a revoked rule stops applying at once.
 
+A suggestion's label states what the rule matches (`edit_file: within src/`); every surface
+shows its scope from `RuleSuggestion::scope`, once. A call a rule allows where the mode would
+ask is announced, not run silently: the policy and the handler's re-check call
+`ApprovalPrompter::rule_applied` with a `RuleHit`, and the console prints
+`[allowed by rule 3] bash: cargo test …` before the call runs, numbered as `/rules` lists
+the rule — also for a call a rule granted earlier in the same batch covers.
+
 Code that authenticates the person itself creates and revokes rules through the harness,
 which records `harness.rule.created` and `harness.rule.revoked` with the surface before the
 store write — `rest` for the REST routes, `cli` for `adk-rust rules add` and `rules rm`:

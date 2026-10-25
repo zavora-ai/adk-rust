@@ -1,0 +1,26 @@
+{
+  "usage": "train-ai=n, search=y",
+  "policies": [
+    {
+      "name": "privacy",
+      "url": "https://example.com/privacy/",
+      "version": "2026-10",
+      "digest": "sha256:8408c267798d7bc1e3e265d07791800a00b3d1f79dca52d2886a913f58092c8a"
+    },
+    {
+      "name": "terms",
+      "url": "https://example.com/terms/",
+      "version": "2026-10"
+    }
+  ],
+  "consentScopes": [
+    "contact",
+    "newsletter",
+    "proactive_outreach"
+  ],
+  "contact": {
+    "security": "https://example.com/.well-known/security.txt",
+    "email": "hello@example.com",
+    "page": "https://example.com/contact/"
+  }
+}

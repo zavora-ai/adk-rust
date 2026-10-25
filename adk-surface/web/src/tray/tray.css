@@ -1,0 +1,316 @@
+/*
+ * The tray panel (spec 3.3 §5.5, §9), 420×700 in the desktop shell. Its own classes over the
+ * shared tokens and buttons; decisions sit on their own background (§7.1).
+ */
+/* The header and the footer stay put; decisions and what comes next scroll between them. */
+.tray {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background: var(--card);
+  color: var(--text);
+}
+
+.tray-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.tray-head {
+  padding: 22px 20px 0;
+}
+
+.tray-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tray-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.tray-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--brand);
+}
+
+.tray-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: var(--pill-decided-bg);
+  color: var(--pill-decided);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tray-state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.tray-state-stopped {
+  background: var(--pill-neutral-bg);
+  color: var(--pill-neutral);
+}
+
+.tray-limits {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.tray-bar {
+  height: 4px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--raised);
+}
+
+.tray-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand);
+}
+
+.tray-banner {
+  margin: 14px 20px 0;
+  padding: 9px 12px;
+  border: 1px solid var(--decision-border);
+  border-radius: 8px;
+  background: var(--decision);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.tray-decisions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px 20px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tray-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+/* White digits on #C03A00 in both themes: AA contrast (§7.1, §9). */
+.tray-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #c03a00;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.tray-empty {
+  color: var(--label);
+  font-size: 14px;
+}
+
+.tray-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--decision-border);
+  border-radius: 12px;
+  background: var(--decision);
+}
+
+.tray-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.tray-card-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.tray-card-heading {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.tray-card-heading a {
+  text-decoration: none;
+}
+
+.tray-card-heading a:hover {
+  text-decoration: underline;
+}
+
+.tray-card-meta {
+  margin-top: 2px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.tray-card-open {
+  color: var(--accent);
+}
+
+.tray-card-chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-top: 4px;
+  border-radius: 6px;
+  color: var(--label);
+}
+
+.tray-card-chevron svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tray-call {
+  display: block;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--code-bg);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tray-card-details,
+.tray-card-note {
+  color: var(--label);
+  font-size: 13px;
+}
+
+.tray-card-decided-text {
+  color: var(--pill-decided);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tray-card-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.tray-card .button-secondary {
+  border-color: var(--decision-border);
+  background: var(--decision-button);
+}
+
+.tray-problem {
+  color: var(--failed);
+  font-size: 13px;
+}
+
+.tray-now {
+  padding: 18px 20px;
+}
+
+.tray-subheading {
+  color: var(--label);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tray-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 15px;
+}
+
+.tray-plan li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tray-plan time {
+  color: var(--text-2);
+}
+
+.tray-working {
+  color: var(--working);
+}
+
+.tray-ask {
+  margin-top: 18px;
+}
+
+.tray-ask-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.tray-ask-input::placeholder {
+  color: var(--label);
+}
+
+.tray-ask-note {
+  margin-top: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.tray-foot {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.tray-open-home {
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.tray-stop {
+  min-height: 44px;
+}

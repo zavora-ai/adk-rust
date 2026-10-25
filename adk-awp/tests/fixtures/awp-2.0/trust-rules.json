@@ -1,0 +1,29 @@
+{
+  "accepts": [
+    "web-bot-auth",
+    "oauth2-client-credentials"
+  ],
+  "rules": [
+    {
+      "subject": "wba:https://agents.buyer.example#*",
+      "tier": "verified",
+      "rateClass": "standard",
+      "note": "Buyer agents whose directory the owner verified"
+    },
+    {
+      "subject": "oauth:https://auth.installer.example#installer-portal",
+      "tier": "partner",
+      "rateClass": "partner"
+    }
+  ],
+  "rateClasses": {
+    "standard": {
+      "requestsPerMinute": 300,
+      "callsPerDay": 1000
+    },
+    "partner": {
+      "requestsPerMinute": 1000,
+      "callsPerDay": 10000
+    }
+  }
+}

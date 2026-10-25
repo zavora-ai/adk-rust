@@ -2035,9 +2035,13 @@ impl HarnessAgentBuilder {
             identity: identity_gate.clone(),
             #[cfg(feature = "observe")]
             root_agent: self.name.clone(),
+            rule_observer: std::sync::OnceLock::new(),
         });
         let prompting = match (&self.confirmation_handler, self.prompter) {
             (None, Some(prompter)) => {
+                // The person is told about each call a standing rule allows (spec 3.1 §7.33
+                // fix 3).
+                policy.observe_rules(prompter.clone());
                 let handler =
                     PromptingConfirmationHandler::new(prompter, rules.clone(), policy.clone());
                 // A crossing is put to the person with its three answers (spec 3.2 §7.8).

@@ -1,0 +1,14 @@
+{
+  "id": "evt_01JB7M3Q9X4K2N8R5T6V0W1Y2Z",
+  "type": "catalog.changed",
+  "timestamp": "2026-10-24T09:00:30Z",
+  "data": {
+    "releaseSeq": 101,
+    "items": [
+      "PANEL-400",
+      "PANEL-550",
+      "INVERTER-5K"
+    ],
+    "total": 3
+  }
+}

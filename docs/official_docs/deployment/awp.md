@@ -116,6 +116,31 @@ error envelope.
 route answers it in 2.0; a request naming no common major gets `406`. The 1.x routes sit
 behind the default `awp-v1` feature.
 
+### Signing, verification and conformance
+
+The `signing` feature signs AWP 2.0 documents: a detached JWS (EdDSA) over the JCS form of a
+document without its `proof`, root-signed delegations with scopes and validity windows,
+revocations, root rotation, the `_awp-root.{domain}` DNS record, signed A2A Agent Cards, the site
+log's tiles and checkpoint, and `StaticBundle` for the contract, `keys.json` and public terms. The
+`verify` feature adds `Verifier`, which runs the protocol's verification procedure with `GET`
+requests only and names the step that fails, the conformance kit (`adk_awp::conformance::run`)
+and the test-vector generator.
+
+```toml
+[dependencies]
+adk-awp = { version = "3.0.0", features = ["verify"] }
+```
+
+| Failure | Meaning |
+|---------|---------|
+| `contract.signature` | The contract's proof does not verify with the root key |
+| `root.unanchored` | No `_awp-root` DNS record names the key set's root |
+| `card.signature` | The A2A Agent Card is not signed by a valid `card` key |
+| `log.consistency` | The log's tiles do not hash to the checkpoint, or it does not extend the pinned one |
+| `release.inclusion`, `release.manifest` | A release manifest is not the log's entry, or the delta chain breaks |
+| `page.digest` | A served file does not match its release digest |
+| `charter.digest` | The public terms do not match the contract's digest |
+
 `Charter::validate()` refuses a KPI target without a baseline, a charter without an owner, an agent holding a role, and an approval chain that distinct principals cannot satisfy. The `json-schema` feature derives JSON Schema (2020-12) for every 2.0 type; the generated schemas are committed in `awp-types/schemas/2.0/`.
 
 ```toml

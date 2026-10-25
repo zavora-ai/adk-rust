@@ -181,7 +181,7 @@ impl Tool for WebFetchTool {
             }
         };
         let final_url = fetched.final_url.as_string();
-        let (content, screened, screened_record) = match &fetched.body {
+        let (content, screening, screened_record) = match &fetched.body {
             FetchBody::Redirect { to, allowlisted } => {
                 if let Some(audit) = &audit {
                     audit
@@ -220,12 +220,13 @@ impl Tool for WebFetchTool {
                      an HTML or text rendering of the document instead]",
                     fetched.bytes, fetched.sha256
                 ),
-                false,
+                crate::web::NOT_SCREENED,
                 None,
             ),
             FetchBody::Text(text) => {
                 let screened = screen(text).await;
                 let flagged = screened.flagged();
+                let screening = screened.screening();
                 let record = flagged.then(|| {
                     json!({
                         "url": final_url,
@@ -236,7 +237,7 @@ impl Tool for WebFetchTool {
                         "action": screened.action(),
                     })
                 });
-                (screened.text, flagged, record)
+                (screened.text, screening, record)
             }
         };
         if let (Some(audit), Some(record)) = (&audit, screened_record) {
@@ -258,7 +259,7 @@ impl Tool for WebFetchTool {
                         "contentSha256": fetched.sha256,
                         "redirects": fetched.redirects,
                         "truncated": fetched.truncated,
-                        "screened": screened,
+                        "screening": screening,
                     }),
                 )
                 .await?;
@@ -271,7 +272,7 @@ impl Tool for WebFetchTool {
             "sha256": fetched.sha256,
             "bytes": fetched.bytes,
             "truncated": fetched.truncated,
-            "screened": screened,
+            "screening": screening,
             "content": untrusted_block(
                 "web",
                 &[("url", final_url.as_str()), ("sha256", fetched.sha256.as_str())],
@@ -495,7 +496,7 @@ impl Tool for WebSearchTool {
             "provider": self.provider.name(),
             "results": results.len(),
             "hosts": hosts,
-            "screened": labelled > 0 || redactions > 0,
+            "screening": crate::web::screening_label(labelled > 0, redactions > 0),
             "content": untrusted_block(
                 "web-search",
                 &[("provider", self.provider.name()), ("site", site_host.as_deref().unwrap_or("any"))],

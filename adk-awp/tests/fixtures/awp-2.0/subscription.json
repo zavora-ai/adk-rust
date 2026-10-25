@@ -1,0 +1,12 @@
+{
+  "id": "sub_01JB6Z8Y7X6W5V4U3T2S1R0Q9P",
+  "types": [
+    "catalog.changed",
+    "order.updated"
+  ],
+  "url": "https://agents.buyer.example/hooks/awp",
+  "state": "active",
+  "createdAt": "2026-10-20T08:00:00Z",
+  "failures": 0,
+  "secret": "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+}
