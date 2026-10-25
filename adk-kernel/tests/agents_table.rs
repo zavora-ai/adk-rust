@@ -529,3 +529,115 @@ async fn the_target_filter_lists_one_agents_processes() {
         .collect();
     assert_eq!(listed, [mine]);
 }
+
+/// Wave 3 findings 17–19: an agent paused by hand is resumed in the web home or on the
+/// kernel's own terminal (S-I10), never from a terminal over HTTP or the phone.
+#[tokio::test]
+async fn a_paused_agent_resumes_only_in_the_home_or_on_the_local_terminal() {
+    let world = World::new();
+    let kernel = world.kernel("k1");
+    add(&kernel, finance()).await;
+    kernel.agents().pause(&local(), "finance").await.unwrap();
+    let remote = AgentCaller::new(SubjectRef::human(PERSON), "terminal", "keyboard")
+        .with_transport(adk_kernel::control::ControlTransport::Http);
+    let phone = AgentCaller::new(SubjectRef::human(PERSON), "phone", "touch");
+    for caller in [&remote, &phone] {
+        let error = kernel.agents().resume(caller, "finance").await.unwrap_err();
+        assert_eq!(code(error), "kernel.agent.refused", "{caller:?}");
+    }
+    kernel.agents().resume(&web(), "finance").await.unwrap();
+    kernel.agents().pause(&web(), "finance").await.unwrap();
+    kernel.agents().resume(&local(), "finance").await.unwrap();
+}
+
+/// Wave 3 finding 26: no agent gets the id `new`, which the web home's New agent screen
+/// uses.
+#[tokio::test]
+async fn an_agent_named_new_never_gets_the_new_agent_screens_id() {
+    let world = World::new();
+    let kernel = world.kernel("k1");
+    let mut definition = finance();
+    definition.display_name = "New".into();
+    assert_eq!(add(&kernel, definition).await.id, "new-2");
+}
+
+/// Wave 3 finding 31: a kernel without areas checks an agent against the mode its primary
+/// agent started in, not "Go ahead".
+#[tokio::test]
+async fn the_default_area_is_checked_at_the_mode_the_kernel_started_in() {
+    let world = World::new();
+    let control = adk_kernel::control::ControlPlaneConfig::default()
+        .without_socket()
+        .with_start_mode(adk_kernel::PartitionId::default(), PartitionMode::Plan);
+    let kernel = world.kernel_with_control("k1", control, |builder| builder);
+    let area = kernel.agents().area(&adk_kernel::PartitionId::default()).await.unwrap();
+    assert_eq!(area.default_mode, PartitionMode::Plan);
+    let asks = AgentAction::Create { definition: finance(), replaces: None };
+    let error = kernel.agents().preview(&local(), &asks).await.unwrap_err();
+    assert_eq!(code(error), "kernel.agent.refused");
+    let suggests = AgentAction::Create {
+        definition: finance().with_mode(PartitionMode::Plan),
+        replaces: None,
+    };
+    assert!(kernel.agents().preview(&local(), &suggests).await.is_ok());
+}
+
+/// Wave 3 finding 33: a change that lets an agent do more but loses its write to another
+/// change ends none of the agent's waiting decisions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_widening_change_that_loses_its_write_ends_no_decision() {
+    let racing = Arc::new(agents_support::RacingStore {
+        inner: Arc::new(adk_kernel::stores::InMemoryAgentStore::new()),
+        lose_next_write: std::sync::atomic::AtomicBool::new(false),
+    });
+    let world = World { store: racing.clone(), ..World::new() };
+    let kernel = world.kernel("k1");
+    let added = add(&kernel, finance().with_mode(PartitionMode::Plan)).await;
+    let pid = sleeper(&kernel, "finance", ProcessKind::Interactive).await;
+    let waiting = decision(&world, &kernel, "finance", &pid).await;
+    let wider = AgentAction::Change {
+        id: "finance".into(),
+        expected_version: added.version,
+        definition: added.definition().with_mode(PartitionMode::Ask),
+    };
+    let preview = kernel.agents().preview(&web(), &wider).await.unwrap();
+    assert!(preview.widens);
+    racing.lose_next_write.store(true, std::sync::atomic::Ordering::SeqCst);
+    let error = kernel.agents().apply(&web(), wider, &preview.digest).await.unwrap_err();
+    assert_eq!(code(error), "kernel.agent.out_of_date");
+    assert_eq!(
+        world.approvals.get(&waiting).await.unwrap().unwrap().state,
+        ApprovalState::Pending,
+        "the change never happened, so its decisions keep waiting"
+    );
+}
+
+/// Wave 3 findings 8 and 32: instructions set up by hand are kept as the host screens them,
+/// and every change notes the surface it was made on, which an out-of-date refusal names
+/// (finding 37).
+#[tokio::test]
+async fn instructions_by_hand_are_screened_and_changes_note_their_surface() {
+    let world = World::new();
+    let kernel = world.kernel("k1");
+    let secret = finance()
+        .with_instructions(format!("Use key {} for the bank.", agents_support::TEST_SECRET));
+    let added = add(&kernel, secret).await;
+    assert_eq!(added.instructions, "Use key [REDACTED] for the bank.");
+    assert_eq!(added.changed_on.as_deref(), Some("terminal"));
+    let stored = world.store.get("finance").await.unwrap().unwrap();
+    assert!(!stored.instructions.contains(agents_support::TEST_SECRET));
+    let rename = AgentAction::Change {
+        id: "finance".into(),
+        expected_version: added.version,
+        definition: {
+            let mut bills = added.definition();
+            bills.display_name = "Bills".into();
+            bills
+        },
+    };
+    let Ok(AgentOutcome::Changed { agent }) = apply(&kernel, &web(), rename).await else {
+        panic!("not changed");
+    };
+    assert_eq!(agent.changed_on.as_deref(), Some("web"));
+    assert_eq!(world.agent_records()[1].ext["fields"], json!(["displayName"]));
+}

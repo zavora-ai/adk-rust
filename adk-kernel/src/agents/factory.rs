@@ -7,9 +7,9 @@ use adk_runner::Runner;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::record::{AgentRecord, AgentUses, ModelChoice};
+use crate::agents::record::{AgentDefinition, AgentRecord, AgentUses, ModelChoice};
 use crate::error::Result;
-use crate::partition::PartitionMode;
+use crate::partition::{PartitionId, PartitionMode};
 use crate::process::ProgressSource;
 
 /// What an agent definition lets it do, as a factory or the kernel assesses it (spec 3.3
@@ -155,6 +155,29 @@ impl AgentChoices {
     }
 }
 
+/// What a hosted agent holds beyond its runner, closed once the kernel stops serving that
+/// build of the agent: when a change replaced it, the agent was removed, or the kernel stops
+/// (spec 3.3 §5.7). A harness closes its toolsets, its container shell's sessions and
+/// distils its sessions' turns into long-term memory.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::agents::HostedClose;
+///
+/// struct Quiet;
+///
+/// #[async_trait::async_trait]
+/// impl HostedClose for Quiet {
+///     async fn close(&self) {}
+/// }
+/// ```
+#[async_trait]
+pub trait HostedClose: Send + Sync {
+    /// Closes it. Called once, after the runs that started on it have finished.
+    async fn close(&self);
+}
+
 /// An agent a factory built: its runner, and the progress source its harness reports usage,
 /// goal progress and loop-guard verdicts through (spec 3.3 §5.7). The kernel attaches the
 /// source when it hosts the agent, so the agent's spending reaches its own processes.
@@ -165,18 +188,29 @@ pub struct HostedAgent {
     pub runner: Arc<Runner>,
     /// The agent's progress source, when its harness keeps one.
     pub progress: Option<Arc<dyn ProgressSource>>,
+    /// What closes it once the kernel stops serving it; without one the kernel closes the
+    /// runner.
+    pub close: Option<Arc<dyn HostedClose>>,
 }
 
 impl HostedAgent {
     /// An agent built as `runner`, with no progress source.
     pub fn new(runner: Arc<Runner>) -> Self {
-        Self { runner, progress: None }
+        Self { runner, progress: None, close: None }
     }
 
     /// Sets the progress source.
     #[must_use]
     pub fn with_progress(mut self, progress: Arc<dyn ProgressSource>) -> Self {
         self.progress = Some(progress);
+        self
+    }
+
+    /// Sets what closes the agent once the kernel stops serving it, in place of closing its
+    /// runner.
+    #[must_use]
+    pub fn with_close(mut self, close: Arc<dyn HostedClose>) -> Self {
+        self.close = Some(close);
         self
     }
 }
@@ -186,6 +220,7 @@ impl std::fmt::Debug for HostedAgent {
         f.debug_struct("HostedAgent")
             .field("root", &self.runner.root_agent_name())
             .field("progress", &self.progress.is_some())
+            .field("close", &self.close.is_some())
             .finish()
     }
 }
@@ -241,6 +276,31 @@ pub trait AgentFactory: Send + Sync {
     ///
     /// Returns the host's error; the kernel then refuses the suggestion.
     async fn ceiling(&self, agent: &AgentId, session: &str) -> Result<Option<AgentCeiling>>;
+
+    /// The suggesting agent `agent`'s limits now in `session`, as the agent of `area`, the
+    /// area it suggests in: a host that runs one agent per area answers with that area's
+    /// limits, its drivers included (spec 3.3 S-I12). By default [`ceiling`](Self::ceiling).
+    ///
+    /// # Errors
+    ///
+    /// Returns the host's error; the kernel then refuses the suggestion.
+    async fn ceiling_in(
+        &self,
+        agent: &AgentId,
+        session: &str,
+        area: &PartitionId,
+    ) -> Result<Option<AgentCeiling>> {
+        let _ = area;
+        self.ceiling(agent, session).await
+    }
+
+    /// `definition` as the kernel keeps an agent a person sets up by hand: its instructions
+    /// with secrets redacted and injection patterns labelled, as fetched text is, and its
+    /// line with secrets redacted (spec 3.3 §5.7, spec 3.1 I47). Screening twice changes
+    /// nothing. By default as it is.
+    async fn screen(&self, definition: AgentDefinition) -> AgentDefinition {
+        definition
+    }
 
     /// What a person may choose for an agent: the models whose key the host has, and the
     /// packs.

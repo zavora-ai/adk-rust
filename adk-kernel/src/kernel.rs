@@ -818,6 +818,8 @@ impl Kernel {
         if let Some(drivers) = &self.inner.drivers {
             drivers.shutdown().await;
         }
+        // The agents a person added close with the kernel (spec 3.3 §5.7).
+        self.inner.agent_table.close_hosted().await;
         drop(runtime);
         let was = self.state();
         self.set_state(KernelState::Stopped);
@@ -2105,6 +2107,7 @@ impl KernelBuilder {
             factory: self.agent_factory,
             approvals: self.approvals.clone(),
             statics: self.agents.keys().cloned().collect(),
+            start_modes: config.control.start_modes.clone(),
             workflows: self.workflows.clone(),
             #[cfg(feature = "drivers")]
             drivers: self.drivers.clone(),

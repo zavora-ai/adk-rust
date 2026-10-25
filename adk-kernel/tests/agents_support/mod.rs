@@ -17,7 +17,8 @@ use adk_core::{
 };
 use adk_kernel::agents::{
     AgentAction, AgentAssessment, AgentCaller, AgentCeiling, AgentChoices, AgentDefinition,
-    AgentFactory, AgentRecord, AgentStore, AgentUses, HostedAgent, ModelChoice, Presence,
+    AgentFactory, AgentRecord, AgentStore, AgentUses, HostedAgent, HostedClose, ModelChoice,
+    Presence,
 };
 use adk_kernel::stores::InMemoryAgentStore;
 use adk_kernel::{
@@ -76,7 +77,25 @@ pub struct TestFactory {
     /// Ids retired, in order.
     pub retired: Mutex<Vec<String>>,
     pub builds: AtomicUsize,
+    /// The ids of the builds closed, in order, one entry per build.
+    pub closed: Arc<Mutex<Vec<String>>>,
 }
+
+/// Closes a build by noting its agent's id.
+struct NoteClose {
+    id: String,
+    closed: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl HostedClose for NoteClose {
+    async fn close(&self) {
+        self.closed.lock().unwrap().push(self.id.clone());
+    }
+}
+
+/// What the test factory screens out of instructions set up by hand.
+pub const TEST_SECRET: &str = "sk-test-0123456789";
 
 impl TestFactory {
     pub fn new(control: &GovernanceControl, sessions: &Arc<InMemorySessionService>) -> Self {
@@ -93,6 +112,7 @@ impl TestFactory {
             ))),
             retired: Mutex::default(),
             builds: AtomicUsize::new(0),
+            closed: Arc::default(),
         }
     }
 }
@@ -127,7 +147,13 @@ impl AgentFactory for TestFactory {
             self.control.clone()
         };
         Ok(HostedAgent::new(runner(&record.id, &self.sessions, &control))
-            .with_progress(Arc::new(NamedProgress(record.id.clone()))))
+            .with_progress(Arc::new(NamedProgress(record.id.clone())))
+            .with_close(Arc::new(NoteClose { id: record.id.clone(), closed: self.closed.clone() })))
+    }
+
+    async fn screen(&self, mut definition: AgentDefinition) -> AgentDefinition {
+        definition.instructions = definition.instructions.replace(TEST_SECRET, "[REDACTED]");
+        definition
     }
 
     async fn retired(&self, record: &AgentRecord) -> adk_kernel::Result<u64> {
@@ -293,5 +319,113 @@ pub async fn in_state(runs: &Arc<dyn DurableRunStore>, pid: &str, state: RunStat
             run.error
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// An inbox whose next `submit` fails, as a store that is briefly down does.
+#[derive(Debug)]
+pub struct FlakyInbox {
+    pub inner: Arc<dyn ApprovalService>,
+    pub fail_next_submit: AtomicBool,
+}
+
+impl FlakyInbox {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: Arc::new(StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))),
+            fail_next_submit: AtomicBool::new(false),
+        })
+    }
+}
+
+#[async_trait]
+impl ApprovalService for FlakyInbox {
+    async fn submit(
+        &self,
+        request: adk_core::ApprovalRequest,
+    ) -> adk_core::Result<adk_core::ApprovalRequest> {
+        if self.fail_next_submit.swap(false, Ordering::SeqCst) {
+            return Err(adk_core::AdkError::new(
+                adk_core::ErrorComponent::Server,
+                adk_core::ErrorCategory::Unavailable,
+                "approvals.down",
+                "database is locked",
+            ));
+        }
+        self.inner.submit(request).await
+    }
+    async fn submit_call(
+        &self,
+        call: adk_core::ApprovalCall,
+    ) -> adk_core::Result<Option<adk_core::ApprovalRequest>> {
+        self.inner.submit_call(call).await
+    }
+    async fn get(&self, id: &str) -> adk_core::Result<Option<adk_core::ApprovalRequest>> {
+        self.inner.get(id).await
+    }
+    async fn inbox(&self, query: adk_core::InboxQuery) -> adk_core::Result<adk_core::InboxPage> {
+        self.inner.inbox(query).await
+    }
+    async fn decide(
+        &self,
+        id: &str,
+        expected_version: u64,
+        decision: adk_core::ApprovalDecision,
+    ) -> adk_core::Result<adk_core::ApprovalRequest> {
+        self.inner.decide(id, expected_version, decision).await
+    }
+    async fn delegate(
+        &self,
+        delegation: adk_core::ApprovalDelegation,
+    ) -> adk_core::Result<adk_core::ApprovalDelegation> {
+        self.inner.delegate(delegation).await
+    }
+    async fn revoke_delegation(&self, id: &str) -> adk_core::Result<bool> {
+        self.inner.revoke_delegation(id).await
+    }
+    async fn delegations_to(
+        &self,
+        to: &SubjectRef,
+    ) -> adk_core::Result<Vec<adk_core::ApprovalDelegation>> {
+        self.inner.delegations_to(to).await
+    }
+    async fn cancel(
+        &self,
+        id: &str,
+        reason: Option<String>,
+    ) -> adk_core::Result<adk_core::ApprovalRequest> {
+        self.inner.cancel(id, reason).await
+    }
+    async fn tick(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> adk_core::Result<adk_core::ApprovalTick> {
+        self.inner.tick(now).await
+    }
+}
+
+/// An agent store whose next compare-and-set loses, as when another surface changed the
+/// agent a moment before.
+pub struct RacingStore {
+    pub inner: Arc<dyn AgentStore>,
+    pub lose_next_write: AtomicBool,
+}
+
+#[async_trait]
+impl AgentStore for RacingStore {
+    async fn put_if_version(&self, record: AgentRecord, expected: u64) -> adk_kernel::Result<bool> {
+        if self.lose_next_write.swap(false, Ordering::SeqCst) {
+            return Ok(false);
+        }
+        self.inner.put_if_version(record, expected).await
+    }
+    async fn get(&self, id: &str) -> adk_kernel::Result<Option<AgentRecord>> {
+        self.inner.get(id).await
+    }
+    async fn list(&self) -> adk_kernel::Result<Vec<AgentRecord>> {
+        self.inner.list().await
+    }
+    async fn delete(&self, id: &str) -> adk_kernel::Result<bool> {
+        self.inner.delete(id).await
     }
 }

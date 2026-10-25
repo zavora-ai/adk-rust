@@ -73,5 +73,24 @@ async fn the_agents_are_read_by_the_operator_and_a_reading_device_only() {
     );
     assert_eq!(device_scope_for(&Method::POST, "/api/kernel/agents"), None);
     assert_eq!(kernel.agents().list().await.unwrap().len(), 1);
+
+    // Wave 3 findings 28–30: the listing carries a removed agent with its state, so a surface
+    // never looks agents up one by one.
+    let finance = kernel.agents().get("finance").await.unwrap().unwrap().agent;
+    agents_support::apply(
+        &kernel,
+        &agents_support::local(),
+        adk_kernel::agents::AgentAction::Remove {
+            id: finance.id.clone(),
+            expected_version: finance.version,
+        },
+    )
+    .await
+    .unwrap();
+    let listed = operator.agents().await.unwrap();
+    assert_eq!(
+        listed.iter().map(|view| (view.agent.id.as_str(), view.agent.state)).collect::<Vec<_>>(),
+        [("finance", AgentRecordState::Removed)]
+    );
     plane.shutdown().await.unwrap();
 }

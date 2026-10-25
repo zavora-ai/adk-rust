@@ -26,6 +26,29 @@ pub const RESERVED_AGENT_IDS: [&str; 2] = ["adk-rust", "self-improver"];
 /// The name no added agent may take beside the primary agent's (spec 3.3 §5.7).
 pub const RESERVED_AGENT_NAME: &str = "You";
 
+/// Whether `c` is a format character that draws nothing (Unicode category Cf): the soft
+/// hyphen, zero-width spaces and joiners, direction marks and isolates, the word joiner, the
+/// byte order mark and tag characters.
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{ad}'
+            | '\u{600}'..='\u{605}'
+            | '\u{61c}'
+            | '\u{6dd}'
+            | '\u{70f}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+            | '\u{e0001}'
+            | '\u{e0020}'..='\u{e007f}'
+    )
+}
+
 fn invalid(reason: impl Into<String>) -> KernelError {
     KernelError::Core(AdkError::new(
         ErrorComponent::Server,
@@ -782,12 +805,20 @@ impl AgentDefinition {
                 "an agent's name is 1 to {MAX_AGENT_NAME_LEN} characters on one line"
             )));
         }
+        // An invisible character would let a name read as the primary agent's or another
+        // agent's while comparing unequal (spec 3.3 §5.7, S-I14).
+        if name.chars().any(invisible) {
+            return Err(invalid(
+                "an agent's name may not hold invisible characters, such as zero-width spaces \
+                 or direction marks",
+            ));
+        }
         if name.eq_ignore_ascii_case(RESERVED_AGENT_NAME) {
             return Err(invalid(format!("\"{name}\" is reserved; choose another name")));
         }
         let description = self.description.trim();
         if description.chars().count() > MAX_AGENT_DESCRIPTION_LEN
-            || description.chars().any(char::is_control)
+            || description.chars().any(|c| c.is_control() || invisible(c))
         {
             return Err(invalid(format!(
                 "\"What it does\" is one line of at most {MAX_AGENT_DESCRIPTION_LEN} characters"
@@ -899,6 +930,11 @@ pub struct AgentRecord {
     pub version: u64,
     /// The digest of its definition ([`AgentDefinition::digest`]).
     pub digest: String,
+    /// The surface its last change was made on — `web`, `terminal`, `phone` — or `inbox`
+    /// for a suggestion approved where the kernel cannot tell; a change refused as out of
+    /// date names it (spec 3.3 §5.7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_on: Option<String>,
 }
 
 impl AgentRecord {
@@ -931,6 +967,7 @@ impl AgentRecord {
             created_at: at,
             updated_at: at,
             version: 1,
+            changed_on: None,
         }
     }
 
@@ -978,6 +1015,13 @@ impl AgentRecord {
     #[must_use]
     pub fn with_approved_by(mut self, by: SubjectRef) -> Self {
         self.approved_by = Some(by);
+        self
+    }
+
+    /// Sets the surface its last change was made on.
+    #[must_use]
+    pub fn with_changed_on(mut self, surface: impl Into<String>) -> Self {
+        self.changed_on = Some(surface.into());
         self
     }
 
@@ -1199,6 +1243,23 @@ mod tests {
             .clone()
             .with_uses(AgentUses::default().with_web(WebAccess::listed(["https://x.io/a"])));
         assert!(hosts.validate().is_err());
+    }
+
+    /// Wave 3 finding 27: a name that draws like "ADK-Rust" but holds an invisible character
+    /// is refused, as is a line holding one.
+    #[test]
+    fn invisible_characters_are_refused_in_names_and_lines() {
+        let base = AgentDefinition::new("Finance", "default");
+        for bad in ["ADK-Rust\u{200b}", "Fin\u{200d}ance", "\u{202e}ecnaniF", "You\u{feff}"] {
+            let mut definition = base.clone();
+            definition.display_name = bad.to_string();
+            assert!(definition.validate().is_err(), "{bad:?}");
+        }
+        let line = base.clone().with_description("Reads\u{2066} invoices");
+        assert!(line.validate().is_err());
+        let mut accented = base;
+        accented.display_name = "Facturación".into();
+        assert!(accented.validate().is_ok());
     }
 
     #[test]

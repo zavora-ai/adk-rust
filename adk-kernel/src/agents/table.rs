@@ -20,7 +20,7 @@ use crate::agents::AGENT_CREATE_TOOL_NAME;
 use crate::agents::caller::AgentCaller;
 use crate::agents::change::{AgentAction, AgentChange, AgentPreview, AgentView, EndedWork};
 use crate::agents::check::{area_limits, changed_fields, kernel_assessment, over_ceiling, widened};
-use crate::agents::factory::{AgentAssessment, AgentChoices, AgentFactory};
+use crate::agents::factory::{AgentAssessment, AgentCeiling, AgentChoices, AgentFactory};
 use crate::agents::record::{
     AgentDefinition, AgentOrigin, AgentRecord, AgentRecordState, RESERVED_AGENT_NAME, agent_id_for,
 };
@@ -44,6 +44,17 @@ const OPERATOR_GROUP: &str = "operator";
 
 /// The most suggestions one agent may have waiting at once (spec 3.3 §5.7).
 pub const MAX_OPEN_SUGGESTIONS: usize = 3;
+
+/// The surface name of the web home, where an agent paused by hand may be resumed.
+const WEB_SURFACE: &str = "web";
+
+/// Ids no agent gets because the web home's addresses use them: `/ui/agents/new` is the
+/// New agent screen (spec 3.3 §5.7).
+const ROUTE_IDS: [&str; 1] = ["new"];
+
+/// How old a suggestion whose decision was never written must be before the tick ends it:
+/// long enough that no suggestion is still being written.
+const SUGGESTION_GRACE: chrono::Duration = chrono::Duration::minutes(5);
 
 fn agent_error(
     category: ErrorCategory,
@@ -69,9 +80,31 @@ fn not_found(id: &str) -> KernelError {
     )
 }
 
-/// The inbox request id of the suggestion `record`: `agent-<id>-<digest[..12]>`.
+/// The inbox request id of the suggestion `record`: `agent-<id>-<12 hex>`, the hex from its
+/// definition's digest and the instant it was suggested, so a suggestion made again after a
+/// refusal freed its id gets a request of its own (spec 3.3 §5.7).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::principal::SubjectRef;
+/// use adk_kernel::agents::{AgentDefinition, AgentOrigin, AgentRecord, AgentRecordState, suggestion_request_id};
+///
+/// let at = chrono::Utc::now();
+/// let record = |at| AgentRecord::new("finance", AgentDefinition::new("Finance", "default"),
+///     AgentRecordState::Proposed, AgentOrigin::ByHand, SubjectRef::human("alice"), at);
+/// let first = suggestion_request_id(&record(at));
+/// assert!(first.starts_with("agent-finance-") && first.len() == "agent-finance-".len() + 12);
+/// assert_ne!(first, suggestion_request_id(&record(at + chrono::Duration::milliseconds(1))));
+/// ```
 pub fn suggestion_request_id(record: &AgentRecord) -> String {
-    format!("agent-{}-{}", record.id, &record.digest[..record.digest.len().min(12)])
+    use sha2::Digest as _;
+
+    let mut hash = sha2::Sha256::new();
+    hash.update(record.digest.as_bytes());
+    hash.update(record.created_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true).as_bytes());
+    let hex: String = hash.finalize().iter().take(6).map(|byte| format!("{byte:02x}")).collect();
+    format!("agent-{}-{hex}", record.id)
 }
 
 /// The agent that suggests an agent, and where (spec 3.3 §5.7): `propose_agent`'s caller.
@@ -99,18 +132,30 @@ pub struct AgentProposer {
     /// The durable run it suggests from, when it runs as a kernel process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
+    /// The suggesting agent's own limits in the turn it suggests in, such as the mode its
+    /// run holds; the kernel checks the suggestion against these as well as the host's
+    /// ceiling, so they only ever tighten it (spec 3.3 S-I12).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling: Option<AgentCeiling>,
 }
 
 impl AgentProposer {
     /// `agent` suggesting in `user`'s session `session`.
     pub fn new(agent: AgentId, user: impl Into<String>, session: impl Into<String>) -> Self {
-        Self { agent, user: user.into(), session: session.into(), run: None }
+        Self { agent, user: user.into(), session: session.into(), run: None, ceiling: None }
     }
 
     /// Sets the durable run.
     #[must_use]
     pub fn with_run(mut self, run: impl Into<String>) -> Self {
         self.run = Some(run.into());
+        self
+    }
+
+    /// Sets the suggesting agent's own limits in this turn.
+    #[must_use]
+    pub fn with_ceiling(mut self, ceiling: AgentCeiling) -> Self {
+        self.ceiling = Some(ceiling);
         self
     }
 }
@@ -171,6 +216,8 @@ struct Local {
     cant_start: BTreeMap<String, (u64, String)>,
     /// Suggestions whose approval by someone other than a person was already logged.
     ignored: BTreeSet<String>,
+    /// Suggestions being settled now, by the tick or by an answer, so one is applied once.
+    settling: BTreeSet<String>,
 }
 
 /// What the kernel gives its agent table when it builds it.
@@ -184,6 +231,8 @@ pub(crate) struct AgentsParts {
     pub(crate) approvals: Option<Arc<dyn ApprovalService>>,
     /// The agent targets the host registered at build.
     pub(crate) statics: BTreeSet<String>,
+    /// The mode each area's agent started in, as the host told the control plane.
+    pub(crate) start_modes: BTreeMap<PartitionId, PartitionMode>,
     pub(crate) workflows: Option<Arc<dyn WorkflowExecutor>>,
     #[cfg(feature = "drivers")]
     pub(crate) drivers: Option<crate::drivers::DriverSupervisor>,
@@ -200,6 +249,7 @@ pub(crate) struct AgentsInner {
     pub(crate) factory: Option<Arc<dyn AgentFactory>>,
     pub(crate) approvals: Option<Arc<dyn ApprovalService>>,
     pub(crate) statics: BTreeSet<String>,
+    pub(crate) start_modes: BTreeMap<PartitionId, PartitionMode>,
     pub(crate) workflows: Option<Arc<dyn WorkflowExecutor>>,
     #[cfg(feature = "drivers")]
     pub(crate) drivers: Option<crate::drivers::DriverSupervisor>,
@@ -316,6 +366,7 @@ impl Agents {
                 factory: parts.factory,
                 approvals: parts.approvals,
                 statics: parts.statics,
+                start_modes: parts.start_modes,
                 workflows: parts.workflows,
                 #[cfg(feature = "drivers")]
                 drivers: parts.drivers,
@@ -331,8 +382,10 @@ impl Agents {
         &self.inner.store
     }
 
-    /// Every agent but tombstones and refused suggestions, ordered by id, each with why
-    /// this kernel cannot build it when it cannot ("Can't start").
+    /// Every agent with its state — suggested, active, paused, being removed and removed —
+    /// ordered by id, each with why this kernel cannot build it when it cannot ("Can't
+    /// start"). Refused suggestions, which never were agents, are left out. A surface reads a
+    /// removed agent's state here, so it never looks agents up one by one (spec 3.3 §5.7).
     ///
     /// # Errors
     ///
@@ -341,9 +394,7 @@ impl Agents {
         let records = self.inner.store.list().await?;
         Ok(records
             .into_iter()
-            .filter(|record| {
-                !matches!(record.state, AgentRecordState::Removed | AgentRecordState::Refused)
-            })
+            .filter(|record| record.state != AgentRecordState::Refused)
             .map(|record| self.view(record))
             .collect())
     }
@@ -445,7 +496,17 @@ impl Agents {
         }
         if plan.preview.needs_presence() && !caller.presence.is_present() {
             let reason = "this change is high risk: confirm it's you, or make it on the \
-                          kernel's own terminal (spec 3.3 §7.2)";
+                          kernel's own terminal";
+            self.record_refused(Some(caller), Some(&plan.preview.id), None, reason).await;
+            return Err(refused(reason));
+        }
+        // An agent paused by hand is resumed in the web home or on a paired local terminal,
+        // where Resume all is (spec 3.3 §5.7, S-I10).
+        if matches!(action, AgentAction::Resume { .. })
+            && caller.surface != WEB_SURFACE
+            && !caller.presence.is_present()
+        {
+            let reason = "resume it in the web home or on the kernel's own terminal";
             self.record_refused(Some(caller), Some(&plan.preview.id), None, reason).await;
             return Err(refused(reason));
         }
@@ -591,9 +652,9 @@ impl Agents {
         let Some(approvals) = inner.approvals.clone() else {
             return Err(refused("this kernel has no inbox, so no agent can be suggested"));
         };
-        let Some(factory) = inner.factory.clone() else {
+        if inner.factory.is_none() {
             return Err(refused("this kernel builds no agents of a person's own"));
-        };
+        }
         definition.validate()?;
         let records = inner.store.list().await?;
         let digest = definition.digest();
@@ -605,7 +666,14 @@ impl Agents {
             let request_id = suggestion_request_id(waiting);
             let risk = match approvals.get(&request_id).await? {
                 Some(request) => request.risk,
-                None => self.assess(waiting).await.risk,
+                // Its request was never written: write it now, so the suggestion reaches
+                // Decisions (spec 3.3 §5.7).
+                None => {
+                    let risk = self.assess(waiting).await.risk;
+                    let request = self.suggestion_request(waiting, proposer, risk)?;
+                    approvals.submit(request).await?;
+                    risk
+                }
             };
             return Ok(AgentProposal { agent: waiting.clone(), request_id, risk, merged: true });
         }
@@ -630,14 +698,28 @@ impl Agents {
         if !over_area.is_empty() {
             return Err(refused(format!("it would exceed its area: {}", over_area.join("; "))));
         }
-        let Some(ceiling) = factory.ceiling(&proposer.agent, &proposer.session).await? else {
+        let Some(over) =
+            self.over_suggester(&definition, &proposer.agent, &proposer.session).await?
+        else {
             return Err(refused(format!("{} may not suggest agents", proposer.agent)));
         };
-        let over = over_ceiling(&definition, &ceiling);
+        // The suggester's own limits in the turn it suggests in, such as a mode its run still
+        // holds, only ever tighten the host's (spec 3.3 S-I12).
+        let over = match &proposer.ceiling {
+            Some(own) => {
+                let mut over = over;
+                for item in over_ceiling(&definition, own) {
+                    if !over.contains(&item) {
+                        over.push(item);
+                    }
+                }
+                over
+            }
+            None => over,
+        };
         if !over.is_empty() {
             return Err(refused(format!(
-                "{} can't give {} {}: a suggested agent never does more than its suggester \
-                 (spec 3.3 S-I12)",
+                "{} can't give {} {}: a suggested agent never does more than its suggester",
                 proposer.agent,
                 definition.display_name,
                 over.join(", ")
@@ -661,6 +743,16 @@ impl Agents {
         );
         let assessment = self.assess(&record).await;
         let request_id = suggestion_request_id(&record);
+        // A request of an earlier suggestion with this id, made at this very instant, would
+        // answer this one; it is suggested again instead.
+        if approvals.get(&request_id).await?.is_some() {
+            return Err(agent_error(
+                ErrorCategory::Conflict,
+                AGENT_OUT_OF_DATE_CODE,
+                "an earlier suggestion of this agent was answered at this very moment; suggest \
+                 it again",
+            ));
+        }
         self.record(
             audit::AGENT_PROPOSED,
             None,
@@ -685,10 +777,35 @@ impl Agents {
                 format!("the id `{}` was taken meanwhile; suggest it again", record.id),
             ));
         }
-        let args = serde_json::to_value(&definition)?;
+        let request = self.suggestion_request(&record, proposer, assessment.risk)?;
+        if let Err(error) = approvals.submit(request).await {
+            // Without its decision the suggestion would hold its name and a slot for ever:
+            // it is taken back, and the refusal recorded (spec 3.3 §5.7).
+            if let Err(delete) = inner.store.delete(&record.id).await {
+                tracing::warn!(agent.id = %record.id, error = %delete, "could not take back a suggestion whose decision was not written; the tick ends it");
+            }
+            return Err(error.into());
+        }
+        inner.sup.publish(KernelEvent::Agent {
+            id: record.id.clone(),
+            change: AgentChange::Proposed,
+            reason: None,
+        });
+        Ok(AgentProposal { agent: record, request_id, risk: assessment.risk, merged: false })
+    }
+
+    /// The inbox request of the suggestion `record` made by `proposer`: one decision whose
+    /// arguments are the definition, Approve and Reject its only actions, no expiry.
+    fn suggestion_request(
+        &self,
+        record: &AgentRecord,
+        proposer: &AgentProposer,
+        risk: ApprovalRisk,
+    ) -> Result<ApprovalRequest> {
+        let args = serde_json::to_value(record.definition())?;
         let call = ToolConfirmationRequest::new(AGENT_CREATE_TOOL_NAME, args.clone());
         let scope = ApprovalScope::new(
-            inner.sup.app_name.clone(),
+            self.inner.sup.app_name.clone(),
             proposer.user.clone(),
             proposer.session.clone(),
         );
@@ -698,22 +815,31 @@ impl Agents {
             ApproverSelector::human(proposer.user.clone()),
             ApproverSelector::group(OPERATOR_GROUP),
         ]);
-        let mut request = ApprovalRequest::new(request_id.clone(), scope, &call, policy)
+        let mut request = ApprovalRequest::new(suggestion_request_id(record), scope, &call, policy)
             .with_redacted_args(args)
             .with_requester(SubjectRef::agent(&proposer.agent))
             .with_summary(format!("Add an agent called {}", record.display_name))
-            .with_risk(assessment.risk)
+            .with_risk(risk)
             .with_allowed_actions([ApprovalAction::Approve, ApprovalAction::Reject]);
         if let Some(run) = &proposer.run {
             request = request.with_run_id(run.clone());
         }
-        approvals.submit(request).await?;
-        inner.sup.publish(KernelEvent::Agent {
-            id: record.id.clone(),
-            change: AgentChange::Proposed,
-            reason: None,
-        });
-        Ok(AgentProposal { agent: record, request_id, risk: assessment.risk, merged: false })
+        Ok(request)
+    }
+
+    /// What `definition` has beyond what the suggesting `agent` may give in `session`, in the
+    /// definition's area; `None` when the agent may suggest none.
+    async fn over_suggester(
+        &self,
+        definition: &AgentDefinition,
+        agent: &AgentId,
+        session: &str,
+    ) -> Result<Option<Vec<String>>> {
+        let ceiling = match &self.inner.factory {
+            Some(factory) => factory.ceiling_in(agent, session, &definition.area).await?,
+            None => None,
+        };
+        Ok(ceiling.map(|ceiling| over_ceiling(definition, &ceiling)))
     }
 
     /// Whether the suggesting run is work the person did not start at a screen: a process
@@ -734,17 +860,38 @@ impl Agents {
         Ok((chat || meta.kind != ProcessKind::Interactive, Some(meta.partition)))
     }
 
-    /// The partition `id`; the default area exists even when the table holds no record of
-    /// it, without limits of its own.
-    async fn area(&self, id: &PartitionId) -> Result<Partition> {
-        match self.inner.sup.partitions.get(id).await? {
-            Some(partition) => Ok(partition),
+    /// The area `id` as the table checks a definition against it (spec 3.3 §5.7): its mode —
+    /// the mode its agent started in, else its record's, tightened by a mode the person set
+    /// while the kernel runs — and its quotas — the kernel's, lowered by its own and by a
+    /// daily limit the person set. The default area exists even when no record of it does.
+    ///
+    /// # Errors
+    ///
+    /// `kernel.agent.invalid` for an area the kernel does not have, or the store's error.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # async fn example(kernel: adk_kernel::Kernel) -> adk_kernel::Result<()> {
+    /// let home = kernel.agents().area(&adk_kernel::PartitionId::default()).await?;
+    /// println!("agents in Home ask at most as {:?}", home.default_mode);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn area(&self, id: &PartitionId) -> Result<Partition> {
+        let sup = &self.inner.sup;
+        let mut partition = match sup.partitions.get(id).await? {
+            Some(partition) => partition,
             None if id.as_str() == PartitionId::DEFAULT => {
-                Ok(Partition::new(PartitionId::DEFAULT, PartitionId::DEFAULT)
-                    .with_mode(PartitionMode::Auto))
+                Partition::new(PartitionId::DEFAULT, PartitionId::DEFAULT)
+                    .with_mode(PartitionMode::Auto)
             }
-            None => Err(invalid(format!("there is no area named `{id}`"))),
-        }
+            None => return Err(invalid(format!("there is no area named `{id}`"))),
+        };
+        let start = self.inner.start_modes.get(id).copied().unwrap_or(partition.default_mode);
+        partition.default_mode = sup.area_mode(id, start).await;
+        partition.quotas = sup.quotas_of(id).await;
+        Ok(partition)
     }
 
     /// Refuses a name another agent holds, a reserved one, or the primary agent's.
@@ -801,6 +948,7 @@ impl Agents {
             .unwrap_or_default();
         agent_id_for(name, |id| {
             ever.contains(id)
+                || ROUTE_IDS.contains(&id)
                 || reserved.contains(id)
                 || inner.statics.contains(id)
                 || id == inner.sup.app_name
@@ -836,6 +984,16 @@ impl Agents {
         }
     }
 
+    /// `definition` as the kernel keeps one a person set up by hand: normalized, its
+    /// instructions screened and its line redacted by the host (spec 3.3 §5.7, spec 3.1 I47).
+    async fn screened(&self, definition: AgentDefinition) -> AgentDefinition {
+        let definition = definition.normalized();
+        match &self.inner.factory {
+            Some(factory) => factory.screen(definition).await.normalized(),
+            None => definition,
+        }
+    }
+
     async fn plan(&self, action: &AgentAction) -> Result<Plan> {
         let inner = &self.inner;
         let now = inner.sup.clock.now();
@@ -848,7 +1006,7 @@ impl Agents {
                          agent factory",
                     ));
                 }
-                let definition = definition.clone().normalized();
+                let definition = self.screened(definition.clone()).await;
                 definition.validate()?;
                 let records = inner.store.list().await?;
                 let replaced = match replaces {
@@ -895,7 +1053,7 @@ impl Agents {
                         current.display_name, current.state
                     )));
                 }
-                let definition = definition.clone().normalized();
+                let definition = self.screened(definition.clone()).await;
                 if definition.area != current.area {
                     return Err(invalid(format!(
                         "an agent's area is fixed; add a new agent in `{}` instead",
@@ -985,7 +1143,8 @@ impl Agents {
 
     async fn create_planned(&self, caller: &AgentCaller, plan: Plan) -> Result<AgentOutcome> {
         let inner = &self.inner;
-        let mut record = plan.next.expect("a create plans its record");
+        let mut record =
+            plan.next.expect("a create plans its record").with_changed_on(caller.surface.clone());
         record.created_by = caller.by.clone();
         record.approved_by = Some(caller.by.clone());
         self.record(
@@ -1036,7 +1195,8 @@ impl Agents {
     async fn change_planned(&self, caller: &AgentCaller, plan: Plan) -> Result<AgentOutcome> {
         let inner = &self.inner;
         let current = plan.current.expect("a change plans from the stored record");
-        let next = plan.next.expect("a change plans its record");
+        let next =
+            plan.next.expect("a change plans its record").with_changed_on(caller.surface.clone());
         self.record(
             audit::AGENT_CHANGED,
             Some(caller),
@@ -1052,16 +1212,20 @@ impl Agents {
             }),
         )
         .await?;
-        // A change that lets the agent do more ends its waiting decisions first, as loosening
-        // a mode does (spec 3.3 §5.7).
-        if plan.preview.widens {
-            let ended = self.ended_work(&current).await?;
-            let note = format!("{} was changed to do more", current.display_name);
-            self.cancel_decisions(&ended.decisions, &note).await;
-        }
+        // A change that lets the agent do more ends its waiting decisions, as loosening a mode
+        // does (spec 3.3 §5.7): those waiting when it was made, ended only once it is written,
+        // so a change that loses to another ends nothing.
+        let waiting = match plan.preview.widens {
+            true => self.ended_work(&current).await?.decisions,
+            false => Vec::new(),
+        };
         if !inner.store.put_if_version(next.clone(), current.version).await? {
             let now = inner.store.get(&current.id).await?.ok_or_else(|| not_found(&current.id))?;
             return Err(out_of_date(&now, current.version));
+        }
+        if !waiting.is_empty() {
+            let note = format!("{} was changed to do more", current.display_name);
+            self.cancel_decisions(&waiting, &note).await;
         }
         inner.sup.publish(KernelEvent::Agent {
             id: next.id.clone(),
@@ -1075,13 +1239,15 @@ impl Agents {
     async fn pause_planned(&self, caller: &AgentCaller, plan: Plan) -> Result<AgentOutcome> {
         let inner = &self.inner;
         let current = plan.current.expect("a pause plans from the stored record");
-        let next = plan.next.expect("a pause plans its record");
+        let next =
+            plan.next.expect("a pause plans its record").with_changed_on(caller.surface.clone());
         self.record(audit::AGENT_PAUSED, Some(caller), None, json!({ "id": next.id })).await?;
         if !inner.store.put_if_version(next.clone(), current.version).await? {
             let now = inner.store.get(&current.id).await?.ok_or_else(|| not_found(&current.id))?;
             return Err(out_of_date(&now, current.version));
         }
         inner.targets.set_paused(&next.id, true);
+        inner.targets.revise(&next.id, &next.digest, next.version);
         self.suspend_work(&next).await;
         inner.sup.publish(KernelEvent::Agent {
             id: next.id.clone(),
@@ -1094,13 +1260,15 @@ impl Agents {
     async fn resume_planned(&self, caller: &AgentCaller, plan: Plan) -> Result<AgentOutcome> {
         let inner = &self.inner;
         let current = plan.current.expect("a resume plans from the stored record");
-        let next = plan.next.expect("a resume plans its record");
+        let next =
+            plan.next.expect("a resume plans its record").with_changed_on(caller.surface.clone());
         self.record(audit::AGENT_RESUMED, Some(caller), None, json!({ "id": next.id })).await?;
         if !inner.store.put_if_version(next.clone(), current.version).await? {
             let now = inner.store.get(&current.id).await?.ok_or_else(|| not_found(&current.id))?;
             return Err(out_of_date(&now, current.version));
         }
         inner.targets.set_paused(&next.id, false);
+        inner.targets.revise(&next.id, &next.digest, next.version);
         let paused = Suspension::Paused { agent: next.id.clone() };
         // A queued process the pause caught before its claim runs at its claim again; a
         // parked one is woken, and a sleeper among them sleeps on its own wake set again.
@@ -1187,7 +1355,9 @@ impl Agents {
         if let Some(factory) = &inner.factory {
             ended.rules = factory.retired(record).await?;
         }
-        inner.targets.retire(&record.id);
+        if let Some(retired) = inner.targets.retire(&record.id) {
+            retired.close_when_idle();
+        }
         inner.local.lock().unwrap_or_else(|e| e.into_inner()).cant_start.remove(&record.id);
         let mut tombstone = record.clone().with_state(AgentRecordState::Removed);
         tombstone.version = record.version + 1;
@@ -1329,9 +1499,21 @@ impl Agents {
             return;
         }
         inner.targets.expect(&record.id);
-        inner.targets.set_paused(&record.id, record.state == AgentRecordState::Paused);
-        if inner.targets.hosted(&record.id).is_some_and(|hosted| hosted.version == record.version) {
+        let hosted = inner.targets.hosted(&record.id);
+        // A read older than what is hosted — a tick's list taken before a change or a pause
+        // — never puts the older definition or state back.
+        if hosted.as_ref().is_some_and(|hosted| hosted.version > record.version) {
             return;
+        }
+        inner.targets.set_paused(&record.id, record.state == AgentRecordState::Paused);
+        if let Some(hosted) = &hosted {
+            // Pausing and resuming change the record's state, not what the agent is: the
+            // build stays.
+            if hosted.version == record.version
+                || inner.targets.revise(&record.id, &record.digest, record.version)
+            {
+                return;
+            }
         }
         let failed = inner
             .local
@@ -1399,17 +1581,28 @@ impl Agents {
                 progress.attach_ledger(Arc::new(ledger.clone()));
             }
         }
-        inner.targets.host(
-            &record.id,
-            hosted.runner,
-            Added {
-                area: record.area.clone(),
-                progress: hosted.progress,
-                version: record.version,
-                daily_limit: record.daily_limit_micro_usd,
-            },
-        );
+        let added = Added {
+            area: record.area.clone(),
+            progress: hosted.progress,
+            version: record.version,
+            digest: record.digest.clone(),
+            daily_limit: record.daily_limit_micro_usd,
+            runner: hosted.runner,
+            close: hosted.close,
+        };
+        // What the new build replaced — or the new build itself, when a later version was
+        // hosted meanwhile — is closed once its runs finish.
+        if let Some(unserved) = inner.targets.host(&record.id, added) {
+            unserved.close_when_idle();
+        }
         Ok(())
+    }
+
+    /// Closes every agent this replica hosts: the kernel is stopping (spec 3.3 §5.7).
+    pub(crate) async fn close_hosted(&self) {
+        for added in self.inner.targets.drain() {
+            added.close().await;
+        }
     }
 
     /// Reconciles this replica's hosted agents with the store (spec 3.3 §5.7): builds and
@@ -1430,7 +1623,7 @@ impl Agents {
                         tracing::warn!(agent.id = %record.id, error = %error, "could not finish removing an agent; the next tick retries");
                     }
                 }
-                AgentRecordState::Proposed => self.settle(record).await,
+                AgentRecordState::Proposed => self.settle(record, None).await,
                 AgentRecordState::Removed | AgentRecordState::Refused => {}
             }
         }
@@ -1444,8 +1637,10 @@ impl Agents {
             .map(|record| record.id)
             .collect();
         for id in inner.targets.hosted_ids() {
-            if !live.contains(&id) {
-                inner.targets.retire(&id);
+            if !live.contains(&id)
+                && let Some(retired) = inner.targets.retire(&id)
+            {
+                retired.close_when_idle();
             }
         }
         Ok(())
@@ -1459,17 +1654,87 @@ impl Agents {
         }
     }
 
+    /// Applies a person's answer to the suggestion whose inbox request is `request_id` now,
+    /// as `caller` gave it, rather than on the next tick, so the agent's
+    /// `kernel.agent.created` names the surface, device and presence it was approved with
+    /// (spec 3.3 §11). Does nothing for a request that is not a waiting suggestion's.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_core::principal::SubjectRef;
+    /// use adk_kernel::agents::AgentCaller;
+    ///
+    /// # async fn example(kernel: adk_kernel::Kernel) {
+    /// let phone = AgentCaller::new(SubjectRef::human("alice"), "phone", "touch");
+    /// kernel.agents().answered("agent-finance-0123456789ab", &phone).await;
+    /// # }
+    /// ```
+    pub async fn answered(&self, request_id: &str, caller: &AgentCaller) {
+        let Some(id) = request_id
+            .strip_prefix("agent-")
+            .and_then(|rest| rest.rsplit_once('-'))
+            .map(|(id, _)| id)
+        else {
+            return;
+        };
+        match self.inner.store.get(id).await {
+            Ok(Some(record))
+                if record.state == AgentRecordState::Proposed
+                    && suggestion_request_id(&record) == request_id =>
+            {
+                self.settle(&record, Some(caller)).await;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::debug!(agent.id = %id, error = %error, "could not read an answered suggestion; the tick applies it");
+            }
+        }
+    }
+
     /// Applies the inbox's answer to the suggestion `record`: a person's approval of the
-    /// same definition, still within the suggester's and the area's limits, adds the agent;
-    /// any other approval is logged and ignored; a rejection deletes the suggestion, whose
-    /// id was never used.
-    async fn settle(&self, record: &AgentRecord) {
+    /// same definition, still within the suggester's and the area's limits, adds the agent,
+    /// as `caller` when the answer came through a surface; any other approval is logged and
+    /// ignored; a rejection deletes the suggestion, whose id was never used. A suggestion
+    /// whose request was never written ends refused once it is old enough.
+    async fn settle(&self, record: &AgentRecord, caller: Option<&AgentCaller>) {
+        let inner = &self.inner;
+        if !inner.local.lock().unwrap_or_else(|e| e.into_inner()).settling.insert(record.id.clone())
+        {
+            return;
+        }
+        self.settle_once(record, caller).await;
+        inner.local.lock().unwrap_or_else(|e| e.into_inner()).settling.remove(&record.id);
+    }
+
+    async fn settle_once(&self, record: &AgentRecord, caller: Option<&AgentCaller>) {
         let inner = &self.inner;
         let Some(approvals) = &inner.approvals else { return };
+        // The tick's list may be older than an answer applied since.
+        match inner.store.get(&record.id).await {
+            Ok(Some(now))
+                if now.state == AgentRecordState::Proposed && now.version == record.version => {}
+            _ => return,
+        }
         let request_id = suggestion_request_id(record);
         let request = match approvals.get(&request_id).await {
             Ok(Some(request)) => request,
-            Ok(None) => return,
+            Ok(None) => {
+                if inner.sup.clock.now() - record.created_at > SUGGESTION_GRACE {
+                    let reason = "its decision was never written".to_string();
+                    let fields = json!({ "id": record.id, "reason": reason });
+                    if self.record(audit::AGENT_REFUSED, None, None, fields).await.is_ok()
+                        && matches!(inner.store.delete(&record.id).await, Ok(true))
+                    {
+                        inner.sup.publish(KernelEvent::Agent {
+                            id: record.id.clone(),
+                            change: AgentChange::Refused,
+                            reason: Some(reason),
+                        });
+                    }
+                }
+                return;
+            }
             Err(error) => {
                 tracing::debug!(approval.id = %request_id, error = %error, "could not read a suggestion's request");
                 return;
@@ -1481,7 +1746,7 @@ impl Agents {
                 let approver = request.decisions.last().map(|decision| decision.approver.clone());
                 match approver {
                     Some(approver) if approver.kind == SubjectKind::Human => {
-                        if let Err(error) = self.approve(record, &request, approver).await {
+                        if let Err(error) = self.approve(record, &request, approver, caller).await {
                             tracing::warn!(agent.id = %record.id, error = %error, "could not add an approved agent; the next tick retries");
                         }
                     }
@@ -1527,12 +1792,14 @@ impl Agents {
         }
     }
 
-    /// Adds the approved suggestion `record`, or ends it refused.
+    /// Adds the approved suggestion `record`, or ends it refused; `caller` is how the
+    /// approver answered, when the answer came through a surface.
     async fn approve(
         &self,
         record: &AgentRecord,
         request: &ApprovalRequest,
         approver: SubjectRef,
+        caller: Option<&AgentCaller>,
     ) -> Result<()> {
         let inner = &self.inner;
         let approved: Option<AgentDefinition> =
@@ -1545,21 +1812,11 @@ impl Agents {
             && let AgentOrigin::Suggested { agent, session, .. } = &record.origin
         {
             let definition = record.definition();
-            let ceiling = match &inner.factory {
-                Some(factory) => factory.ceiling(agent, session).await?,
-                None => None,
-            };
-            refusal = match ceiling {
+            refusal = match self.over_suggester(&definition, agent, session).await? {
                 None => Some(format!("{agent} may no longer suggest agents")),
-                Some(ceiling) => {
-                    let over = over_ceiling(&definition, &ceiling);
-                    (!over.is_empty()).then(|| {
-                        format!(
-                            "the agent that suggested it can no longer give it {}",
-                            over.join(", ")
-                        )
-                    })
-                }
+                Some(over) => (!over.is_empty()).then(|| {
+                    format!("the agent that suggested it can no longer give it {}", over.join(", "))
+                }),
             };
             if refusal.is_none() {
                 let over = area_limits(&definition, &self.area(&record.area).await?);
@@ -1592,11 +1849,19 @@ impl Agents {
             return Ok(());
         }
         let assessment = self.assess(record).await;
-        let mut active =
-            record.clone().with_state(AgentRecordState::Active).with_approved_by(approver.clone());
+        // Where the person approved it, when the answer came through a surface; the inbox
+        // when the tick found the answer.
+        let actor = match caller {
+            Some(caller) if caller.by == approver => caller.clone(),
+            _ => AgentCaller::new(approver.clone(), "inbox", "approval"),
+        };
+        let mut active = record
+            .clone()
+            .with_state(AgentRecordState::Active)
+            .with_approved_by(approver)
+            .with_changed_on(actor.surface.clone());
         active.version = record.version + 1;
         active.updated_at = now;
-        let actor = AgentCaller::new(approver, "inbox", "approval");
         self.record(
             audit::AGENT_CREATED,
             Some(&actor),

@@ -8,6 +8,7 @@ use adk_core::{AdkError, ErrorCategory, ErrorComponent};
 use adk_runner::Runner;
 use adk_server::background::AgentTable;
 
+use crate::agents::factory::HostedClose;
 use crate::agents::record::{AgentRecord, AgentRecordState, check_agent_id};
 use crate::agents::store::AgentStore;
 use crate::error::{AGENT_REFUSED_CODE, KernelError, Result};
@@ -21,11 +22,45 @@ pub(crate) struct Added {
     pub(crate) area: PartitionId,
     /// Its harness's progress source, attached when it was hosted.
     pub(crate) progress: Option<Arc<dyn ProgressSource>>,
-    /// The version of the record it was built from.
+    /// The version of the record it serves: the one it was built from, or a later one that
+    /// changed only its state.
     pub(crate) version: u64,
+    /// The digest of the definition it was built from.
+    pub(crate) digest: String,
     /// Its own daily spending limit in micro-USD.
     pub(crate) daily_limit: Option<u64>,
+    /// The runner it was built as.
+    pub(crate) runner: Arc<Runner>,
+    /// What closes it once it is no longer served.
+    pub(crate) close: Option<Arc<dyn HostedClose>>,
 }
+
+impl Added {
+    /// Closes the build once the runs that started on it have finished (spec 3.3 §5.7: a
+    /// turn in progress finishes on the agent it started on), on its own task.
+    pub(crate) fn close_when_idle(self) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else { return };
+        handle.spawn(async move {
+            let started = tokio::time::Instant::now();
+            while !self.runner.active_runs().is_empty() && started.elapsed() < IDLE_WAIT {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            self.close().await;
+        });
+    }
+
+    /// Closes the build now.
+    pub(crate) async fn close(self) {
+        match &self.close {
+            Some(close) => close.close().await,
+            None => self.runner.close().await,
+        }
+    }
+}
+
+/// How long a replaced build may keep serving the runs that started on it before it is
+/// closed anyway.
+const IDLE_WAIT: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// Every target the kernel serves: the partition agents the host bound at build, and the
 /// added agents, whose runners live in the S4 [`AgentTable`] every worker reads.
@@ -101,12 +136,42 @@ impl Targets {
         self.read_added().keys().cloned().collect()
     }
 
-    /// Hosts `runner` as the added agent `id`, replacing what it had; a claim already
-    /// running finishes on the runner it started on.
-    pub(crate) fn host(&self, id: &str, runner: Arc<Runner>, added: Added) {
+    /// Hosts `added` as the added agent `id`, replacing what it had, and answers what it
+    /// replaced; a claim already running finishes on the runner it started on. A build of an
+    /// older version than the one hosted is never swapped in: it is answered back, so a slow
+    /// build from a stale read never undoes a later change (spec 3.3 §5.7).
+    pub(crate) fn host(&self, id: &str, added: Added) -> Option<Added> {
+        let mut hosted = self.added.write().unwrap_or_else(|e| e.into_inner());
+        if hosted.get(id).is_some_and(|current| current.version > added.version) {
+            return Some(added);
+        }
         self.table.expect(id);
-        self.table.insert(id, runner);
-        self.added.write().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), added);
+        self.table.insert(id, added.runner.clone());
+        hosted.insert(id.to_string(), added)
+    }
+
+    /// Marks the build hosted as `id` as serving `version`, a later version of its record
+    /// that changed only its state, such as a pause; `false` when nothing is hosted as `id`
+    /// at `digest`.
+    pub(crate) fn revise(&self, id: &str, digest: &str, version: u64) -> bool {
+        let mut hosted = self.added.write().unwrap_or_else(|e| e.into_inner());
+        match hosted.get_mut(id) {
+            Some(added) if added.digest == digest => {
+                added.version = added.version.max(version);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Every build hosted here, taken out of the table: the kernel is stopping.
+    pub(crate) fn drain(&self) -> Vec<Added> {
+        let mut hosted = self.added.write().unwrap_or_else(|e| e.into_inner());
+        let ids: Vec<String> = hosted.keys().cloned().collect();
+        for id in &ids {
+            self.table.remove(id);
+        }
+        std::mem::take(&mut *hosted).into_values().collect()
     }
 
     /// Marks `id` as a target the kernel serves before it is built, so a claim of it is
@@ -115,12 +180,13 @@ impl Targets {
         self.table.expect(id);
     }
 
-    /// Stops serving the added agent `id`: a claim of it fails from now on.
-    pub(crate) fn retire(&self, id: &str) {
+    /// Stops serving the added agent `id`: a claim of it fails from now on. Answers the
+    /// build it hosted, if any.
+    pub(crate) fn retire(&self, id: &str) -> Option<Added> {
         self.table.remove(id);
         self.table.forget(id);
-        self.added.write().unwrap_or_else(|e| e.into_inner()).remove(id);
         self.paused.write().unwrap_or_else(|e| e.into_inner()).remove(id);
+        self.added.write().unwrap_or_else(|e| e.into_inner()).remove(id)
     }
 
     /// Marks the added agent `id` paused or not on this replica.
@@ -183,5 +249,54 @@ impl Targets {
 
     fn read_added(&self) -> std::sync::RwLockReadGuard<'_, BTreeMap<String, Added>> {
         self.added.read().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use adk_core::Llm;
+    use adk_model::{ScriptedLlm, ScriptedResponse};
+
+    use super::*;
+
+    fn added(version: u64, digest: &str) -> Added {
+        let model = Arc::new(ScriptedLlm::new("m", Vec::<ScriptedResponse>::new()));
+        let agent = adk_agent::LlmAgentBuilder::new("finance")
+            .model(model as Arc<dyn Llm>)
+            .build()
+            .unwrap();
+        let runner = Runner::builder()
+            .app_name("adk-rust")
+            .agent(Arc::new(agent))
+            .session_service(Arc::new(adk_session::InMemorySessionService::new()))
+            .build()
+            .unwrap();
+        Added {
+            area: PartitionId::default(),
+            progress: None,
+            version,
+            digest: digest.to_string(),
+            daily_limit: None,
+            runner: Arc::new(runner),
+            close: None,
+        }
+    }
+
+    /// Wave 3 finding 34: a build from a read older than what is hosted is never swapped in,
+    /// and a state-only change moves the hosted version without a rebuild.
+    #[test]
+    fn an_older_build_never_replaces_a_newer_one() {
+        let targets = Targets::new(BTreeMap::new(), None);
+        assert!(targets.host("finance", added(2, "narrow")).is_none());
+        let refused = targets.host("finance", added(1, "wide")).expect("answered back");
+        assert_eq!((refused.version, refused.digest.as_str()), (1, "wide"));
+        assert_eq!(targets.hosted("finance").unwrap().digest, "narrow");
+        assert!(targets.revise("finance", "narrow", 3));
+        assert!(!targets.revise("finance", "wide", 4), "another definition is a rebuild");
+        assert_eq!(targets.hosted("finance").unwrap().version, 3);
+        let replaced = targets.host("finance", added(4, "wider")).expect("the old build");
+        assert_eq!(replaced.version, 3);
+        assert_eq!(targets.retire("finance").unwrap().digest, "wider");
+        assert!(targets.drain().is_empty());
     }
 }

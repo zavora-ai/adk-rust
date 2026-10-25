@@ -6,7 +6,7 @@
 //! |---|---|
 //! | [`AgentRecord`], [`AgentDefinition`], [`AgentRecordState`], [`AgentOrigin`], [`AvatarColor`], [`ModelChoice`], [`AgentUses`], [`FileAccess`], [`ShellAccess`], [`WebAccess`], [`agent_id_for`], [`check_agent_id`] | §5.7 "The definition", "Its identity" |
 //! | [`AgentStore`], [`InMemoryAgentStore`](crate::stores::InMemoryAgentStore), `SqliteAgentStore`, `PostgresAgentStore`, `RedisAgentStore`, `MongoAgentStore`, `FirestoreAgentStore`, `Neo4jAgentStore` | §5.7 "Where it lives", K7 |
-//! | [`AgentFactory`], [`AgentAssessment`], [`AgentCeiling`], [`AgentChoices`], [`HostedAgent`] | §5.7 "How an added agent runs", K7 |
+//! | [`AgentFactory`], [`AgentAssessment`], [`AgentCeiling`], [`AgentChoices`], [`HostedAgent`], [`HostedClose`] | §5.7 "How an added agent runs", K7 |
 //! | [`AgentCaller`], [`Presence`] | §5.7, §7.2, S-I18 |
 //! | [`AGENT_CREATE_TOOL_NAME`] | §5.7 "The decision that adds an agent" |
 //! | [`AgentAction`], [`AgentPreview`], [`EndedWork`], [`AgentChange`], [`AgentView`] | §5.7 "Changing an agent", "Pausing and removing" |
@@ -31,7 +31,9 @@ pub use change::{AgentAction, AgentChange, AgentPreview, AgentView, EndedWork};
 pub use check::{
     MONEY_PACKS, area_limits, changed_fields, kernel_assessment, over_ceiling, widened,
 };
-pub use factory::{AgentAssessment, AgentCeiling, AgentChoices, AgentFactory, HostedAgent};
+pub use factory::{
+    AgentAssessment, AgentCeiling, AgentChoices, AgentFactory, HostedAgent, HostedClose,
+};
 pub use record::{
     AgentDefinition, AgentOrigin, AgentRecord, AgentRecordState, AgentUses, AvatarColor,
     FALLBACK_AGENT_ID, FileAccess, MAX_AGENT_DESCRIPTION_LEN, MAX_AGENT_ID_LEN,

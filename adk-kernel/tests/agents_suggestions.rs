@@ -64,7 +64,8 @@ async fn a_suggestion_waits_until_a_person_approves_it() {
     assert!(!proposal.merged);
     assert_eq!(proposal.agent.state, AgentRecordState::Proposed);
     assert_eq!(proposal.risk, ApprovalRisk::Medium);
-    assert_eq!(proposal.request_id, format!("agent-finance-{}", &proposal.agent.digest[..12]));
+    assert_eq!(proposal.request_id, adk_kernel::agents::suggestion_request_id(&proposal.agent));
+    assert!(proposal.request_id.starts_with("agent-finance-"));
     let request = world.approvals.get(&proposal.request_id).await.unwrap().unwrap();
     assert_eq!(request.tool_name, AGENT_CREATE_TOOL_NAME);
     assert_eq!(request.summary, "Add an agent called Finance");
@@ -145,7 +146,94 @@ async fn a_rejection_deletes_the_suggestion_and_frees_its_id() {
     .await;
     let again = kernel.agents().propose(finance(), &proposer()).await.unwrap();
     assert_eq!(again.agent.id, "finance");
+    // Wave 3 findings 5 and 7: suggested again, it has a decision of its own, which the old
+    // refusal never answers.
+    assert!(!again.merged);
+    assert_ne!(again.request_id, proposal.request_id);
+    let waiting = world.approvals.get(&again.request_id).await.unwrap().unwrap();
+    assert_eq!(waiting.state, ApprovalState::Pending);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        world.store.get("finance").await.unwrap().unwrap().state,
+        AgentRecordState::Proposed,
+        "the earlier refusal does not end the new suggestion"
+    );
+    assert_eq!(
+        approve(&world, &again.request_id, SubjectRef::human(PERSON)).await,
+        ApprovalState::Approved
+    );
+    eventually("Finance to be added", || async {
+        world
+            .store
+            .get("finance")
+            .await
+            .ok()
+            .flatten()
+            .filter(|record| record.state == AgentRecordState::Active)
+    })
+    .await;
     kernel.stop().await.unwrap();
+}
+
+/// Wave 3 finding 6: a suggestion whose decision cannot be written is taken back, so it
+/// never holds its name or a slot; suggested again, it waits with a decision.
+#[tokio::test]
+async fn a_suggestion_whose_decision_cannot_be_written_is_taken_back() {
+    let inbox = agents_support::FlakyInbox::new();
+    let world = World { approvals: inbox.clone(), ..World::new() };
+    let kernel = world.kernel("k1");
+    inbox.fail_next_submit.store(true, std::sync::atomic::Ordering::SeqCst);
+    let error = kernel.agents().propose(finance(), &proposer()).await.unwrap_err();
+    assert!(error.to_string().contains("database is locked"), "{error}");
+    assert!(world.store.get("finance").await.unwrap().is_none(), "nothing holds its name");
+    assert_eq!(world.actions_about("finance"), [adk_kernel::audit::AGENT_PROPOSED]);
+    let again = kernel.agents().propose(finance(), &proposer()).await.unwrap();
+    assert!(!again.merged);
+    let request = world.approvals.get(&again.request_id).await.unwrap().unwrap();
+    assert_eq!(request.state, ApprovalState::Pending);
+}
+
+/// Wave 3 finding 21: the suggester's own limits in the turn it suggests in — such as the
+/// Suggest mode a run still holds after the person approved its plan — tighten the host's
+/// ceiling.
+#[tokio::test]
+async fn the_suggesters_own_limits_in_its_turn_tighten_the_ceiling() {
+    let world = World::new();
+    let kernel = world.kernel("k1");
+    let held = proposer().with_ceiling(AgentCeiling::new(
+        PartitionMode::Plan,
+        AgentUses::default().with_web(WebAccess::Any),
+    ));
+    let error = kernel.agents().propose(finance(), &held).await.unwrap_err();
+    assert_eq!(code(error), "kernel.agent.refused");
+    let suggests = finance().with_mode(PartitionMode::Plan);
+    assert!(kernel.agents().propose(suggests, &held).await.is_ok());
+}
+
+/// Wave 3 finding 35: an answer given through a surface adds the agent as that surface, so
+/// `kernel.agent.created` names where the person approved it.
+#[tokio::test]
+async fn an_answer_through_a_surface_adds_the_agent_as_that_surface() {
+    let world = World::new();
+    let kernel = world.kernel("k1");
+    let proposal = kernel.agents().propose(finance(), &proposer()).await.unwrap();
+    approve(&world, &proposal.request_id, SubjectRef::human(PERSON)).await;
+    let phone = adk_kernel::agents::AgentCaller::new(SubjectRef::human(PERSON), "phone", "touch")
+        .with_device("phone-1")
+        .with_presence(adk_kernel::agents::Presence::Confirmed);
+    kernel.agents().answered(&proposal.request_id, &phone).await;
+    let added = world.store.get("finance").await.unwrap().unwrap();
+    assert_eq!(added.state, AgentRecordState::Active);
+    assert_eq!(added.changed_on.as_deref(), Some("phone"));
+    let created = world
+        .agent_records()
+        .into_iter()
+        .find(|record| record.action == adk_kernel::audit::AGENT_CREATED)
+        .unwrap();
+    assert_eq!(
+        (&created.ext["surface"], &created.ext["device"], &created.ext["presence"]),
+        (&json!("phone"), &json!("phone-1"), &json!("confirmed"))
+    );
 }
 
 /// A suggestion over its suggester's limits is refused when made (S-I12), and one whose

@@ -258,3 +258,55 @@ async fn a_follow_up_without_a_proposer_never_goes_to_an_added_agent() {
         .expect("the follow-up's process");
     assert_eq!(process.run.target, "adk-rust@home");
 }
+
+/// Wave 3 finding 9: pausing and resuming keep the build; a change swaps in a new build and
+/// closes the old one once idle; a removal closes its build; stopping the kernel closes the
+/// rest.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn replaced_and_retired_builds_are_closed_and_a_pause_keeps_the_build() {
+    let world = World::new();
+    let kernel = world.kernel("k1");
+    kernel.start().await.unwrap();
+    let finance = add(&kernel, finance()).await;
+    add(&kernel, AgentDefinition::new("Travel", "default").with_mode(PartitionMode::Ask)).await;
+    let builds = || world.factory.builds.load(Ordering::SeqCst);
+    let closed = || world.factory.closed.lock().unwrap().clone();
+    assert_eq!(builds(), 2);
+
+    let local = agents_support::local();
+    let web = agents_support::web();
+    kernel.agents().pause(&local, "finance").await.unwrap();
+    kernel.agents().resume(&web, "finance").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(builds(), 2, "a pause and a resume never rebuild the agent");
+    assert!(closed().is_empty());
+
+    let now = kernel.agents().get("finance").await.unwrap().unwrap().agent;
+    let renamed = adk_kernel::agents::AgentAction::Change {
+        id: "finance".into(),
+        expected_version: now.version,
+        definition: {
+            let mut bills = finance.definition();
+            bills.display_name = "Bills".into();
+            bills
+        },
+    };
+    agents_support::apply(&kernel, &local, renamed).await.unwrap();
+    assert_eq!(builds(), 3);
+    eventually("the replaced build to close", || async { (closed() == ["finance"]).then_some(()) })
+        .await;
+
+    let bills = kernel.agents().get("finance").await.unwrap().unwrap().agent;
+    let remove = adk_kernel::agents::AgentAction::Remove {
+        id: "finance".into(),
+        expected_version: bills.version,
+    };
+    agents_support::apply(&kernel, &local, remove).await.unwrap();
+    eventually("the removed agent's build to close", || async {
+        (closed() == ["finance", "finance"]).then_some(())
+    })
+    .await;
+
+    kernel.stop().await.unwrap();
+    assert_eq!(closed(), ["finance", "finance", "travel"]);
+}

@@ -166,19 +166,25 @@ pub fn area_limits(definition: &AgentDefinition, area: &Partition) -> Vec<String
     if let Some(cap) = area.quotas.daily_spend_cap {
         match definition.daily_limit_micro_usd {
             Some(limit) if limit <= cap => {}
-            Some(limit) => {
-                over.push(format!("its daily limit of {limit} micro-USD is above its area's {cap}"))
-            }
+            Some(limit) => over.push(format!(
+                "its daily limit of {} is above its area's {}",
+                dollars(limit),
+                dollars(cap)
+            )),
             None => {}
         }
     }
+    // Mounting a driver is its own approval (K-I13), never part of adding an agent.
     for driver in definition.uses.drivers.iter().filter(|driver| !area.drivers.contains(driver)) {
-        over.push(format!(
-            "the {driver} driver is not mounted for its area; mounting a driver is its own \
-             approval (K-I13)"
-        ));
+        over.push(format!("the {driver} driver is not mounted for its area; mount it there first"));
     }
     over
+}
+
+/// Micro-USD as the person reads money: `$2.50`.
+fn dollars(micro_usd: u64) -> String {
+    let cents = micro_usd.saturating_add(5_000) / 10_000;
+    format!("${}.{:02}", cents / 100, cents % 100)
 }
 
 /// Why a suggested `definition` exceeds its suggester (spec 3.3 S-I12): what is over the
@@ -297,6 +303,26 @@ mod tests {
     fn risk(mode: PartitionMode, uses: AgentUses) -> (ApprovalRisk, bool) {
         let assessment = kernel_assessment(&definition(mode, uses), &AgentOrigin::ByHand, &[]);
         (assessment.risk, assessment.money)
+    }
+
+    /// Wave 3 finding 25: what an area refuses reads as plain words, in dollars, with no
+    /// internal identifier.
+    #[test]
+    fn area_refusals_are_plain_words_in_dollars() {
+        let mut area = Partition::new("home", "home").with_mode(PartitionMode::Ask);
+        area.quotas.daily_spend_cap = Some(2_000_000);
+        let definition = definition(PartitionMode::Ask, AgentUses::default().with_driver("mail"))
+            .with_daily_limit(5_000_000);
+        let over = area_limits(&definition, &area);
+        assert_eq!(
+            over,
+            [
+                "its daily limit of $5.00 is above its area's $2.00",
+                "the mail driver is not mounted for its area; mount it there first"
+            ]
+        );
+        assert_eq!(dollars(2_499_999), "$2.50");
+        assert_eq!(dollars(999_999), "$1.00");
     }
 
     #[test]

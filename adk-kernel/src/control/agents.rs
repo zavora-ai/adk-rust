@@ -2,7 +2,7 @@
 //!
 //! | Route (under `/api`) | Caller | Does |
 //! |---|---|---|
-//! | `GET /kernel/agents` | operator, or a device with `read` | Every agent but tombstones and refused suggestions, with why this kernel cannot start one ([`AgentsResponse`]) |
+//! | `GET /kernel/agents` | operator, or a device with `read` | Every agent with its state — suggested, active, paused, being removed, removed — but refused suggestions, with why this kernel cannot start one ([`AgentsResponse`]) |
 //! | `GET /kernel/agents/{id}` | operator, or a device with `read` | One agent, tombstones included ([`AgentView`]); `404` for an unknown id |
 //!
 //! No route creates, changes, pauses or removes an agent: changes go through the kernel's
@@ -37,7 +37,7 @@ use crate::error::{AGENT_NOT_FOUND_CODE, KernelError, Result};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentsResponse {
-    /// The agents, ordered by id.
+    /// The agents with their states, removed ones included, ordered by id.
     pub agents: Vec<AgentView>,
 }
 
