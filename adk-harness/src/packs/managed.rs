@@ -554,6 +554,7 @@ impl HarnessResolver {
             root: harness.root.clone(),
             runtime: harness.runtime.clone(),
             info: harness.info.clone(),
+            manifest: harness.manifest.clone(),
         };
         self.harnesses.insert(harness.info().name.clone(), Arc::new(ManagedHarness::new(same)));
         self

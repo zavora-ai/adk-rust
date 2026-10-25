@@ -52,6 +52,7 @@ adk-rust memory accept <id>
 | Part | What it does |
 |---|---|
 | Modes | `read-only` looks only; `plan` looks and plans, and acts only on an approved plan; `ask` (default) reads freely and asks before edits and commands; `auto` edits on its own, while commands on your machine and changes to protected files still ask |
+| Self-knowledge | The agent knows what it can do in this harness: which calls will ask in each mode, the commands you can type, its packs, and what it can and cannot undo; it names the right command when you mistype one, and `harness_help` explains the rest |
 | Approvals | Allow once, always allow (a rule tied to you and to that exact tool), deny with a reason, or edit the arguments before it runs. A changed tool asks again |
 | Protected files | `AGENTS.md`, `.git`, CI files, toolchain and lockfiles and the like always need a person, so a cloned repository cannot approve its own commands |
 | Shell | Commands run on your machine behind approval, or in the OS sandbox (Seatbelt on macOS, bubblewrap on Linux, a restricted token on Windows) or a container per session |
@@ -78,6 +79,7 @@ agent tool — and the harness refuses to run without it.
 
 | Capability | Mechanism |
 |---|---|
+| Self-knowledge | `HarnessManifest`, generated at build from the class registry and the mode table under the build's switches, the surface's commands (`HarnessAgentBuilder::surface`), packs, memory and what each safety mechanism covers; rendered as the `<harness>` block after `<environment>` (at most 6 KiB, byte-stable); the standing-rules digest in each request's reminder; `harness_help` for the detail |
 | Modes | `ReadOnly`, `Plan`, `Ask` (default), `Auto` in a harness-owned `ModeStore` (in-memory, file, SQLite). Tightening applies at the next call; loosening only through `Harness::set_mode`, which cancels held calls first, or an approved `exit_plan_mode` |
 | Tool classes | A call's class comes from its origin and name in the harness registry, never from an MCP `readOnlyHint` alone |
 | Standing approvals | "Always allow `cargo test`" as a `StandingRule` bound to the subject and to the tool's declaration digest; `ShellPrefix` matches plain words only; a redeclared tool records `harness.rule.stale` and asks again |

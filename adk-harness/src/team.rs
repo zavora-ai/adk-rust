@@ -485,6 +485,35 @@ fn block_on<T: Send>(future: impl std::future::Future<Output = T> + Send) -> Res
 }
 
 impl TeamPlan {
+    /// The members as the manifest lists them (spec 3.1 §7.25), sorted by name.
+    pub(crate) fn member_entries(&self) -> Vec<crate::manifest::MemberEntry> {
+        let mut entries: Vec<crate::manifest::MemberEntry> = self
+            .members
+            .iter()
+            .map(|member| {
+                let kind = match &member.kind {
+                    MemberKind::Local { .. } => "local",
+                    #[cfg(feature = "team-acp")]
+                    MemberKind::Acp(_) => "acp",
+                    #[cfg(feature = "team-a2a")]
+                    MemberKind::Remote(_) => "a2a",
+                    MemberKind::Agent(_) => "agent",
+                };
+                let tools = match &member.tools {
+                    MemberTools::ReadOnly => "read-only",
+                    MemberTools::Full => "full",
+                    MemberTools::Custom(_) => "custom",
+                };
+                crate::manifest::MemberEntry::new(member.name.clone(), kind, tools)
+            })
+            .chain(self.discovered.iter().map(|agent| {
+                crate::manifest::MemberEntry::new(agent.name.clone(), "a2a", "its own")
+            }))
+            .collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        entries
+    }
+
     /// Resolves the member list: the defaults (`explore`, `general`) unless left out or
     /// replaced by a member of the same name, the members given, and the candidates of
     /// `registry` that no other member names.

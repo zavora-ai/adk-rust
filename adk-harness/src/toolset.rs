@@ -3,11 +3,120 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use adk_core::{Content, LlmRequest, ReadonlyContext, Result, Tool, Toolset};
+use adk_core::{Content, LlmRequest, ReadonlyContext, Result, Tool, ToolOrigin, Toolset};
 use async_trait::async_trait;
 
+use crate::approvals::matcher::glob_matches;
+use crate::approvals::{StandingDecision, StandingRule, StandingRuleStore};
 use crate::mode::{HarnessMode, ModeStore};
 use crate::tools::TodoList;
+
+/// The most rules the reminder's digest lists (spec 3.1 §7.25).
+const DIGEST_MAX_RULES: usize = 20;
+/// The most bytes of the digest's rule lines (spec 3.1 §7.25).
+const DIGEST_MAX_BYTES: usize = 1024;
+/// The most characters of a deny reason the digest quotes.
+const DIGEST_REASON_CHARS: usize = 80;
+
+/// The standing rules that apply to a session, for the per-request reminder
+/// (spec 3.1 §7.25): rules a call of this harness's declared tools can match.
+struct RulesDigest {
+    store: Arc<dyn StandingRuleStore>,
+    /// Every declared tool with its origin, so a rule pinned to another declaration is left
+    /// out.
+    origins: Vec<(String, ToolOrigin)>,
+}
+
+impl RulesDigest {
+    /// The digest for (`app`, `user`, `session`), or `None` when no rule applies. Rules
+    /// are numbered as `/rules` numbers them: every rule of the user, oldest first.
+    async fn render(&self, app: &str, user: &str, session: &str) -> Option<String> {
+        let mut rules = self.store.list(app, user).await.ok()?;
+        rules.sort_by_key(|rule| rule.created_at);
+        let now = chrono::Utc::now();
+        let mut applicable: Vec<(usize, &StandingRule)> = rules
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| (index + 1, rule))
+            .filter(|(_, rule)| {
+                !rule.is_expired(now)
+                    && rule.scope.session_id().is_none_or(|id| id == session)
+                    && self.origins.iter().any(|(name, origin)| {
+                        glob_matches(&rule.tool, name) && rule.origin.admits(origin)
+                    })
+            })
+            .collect();
+        if applicable.is_empty() {
+            return None;
+        }
+        // Deny before allow, then by number.
+        applicable.sort_by_key(|(number, rule)| {
+            (!matches!(rule.decision, StandingDecision::Deny { .. }), *number)
+        });
+        let mut lines = vec![
+            "Standing rules for you here; a call one matches runs or is refused without asking:"
+                .to_string(),
+        ];
+        let mut used = 0;
+        let mut shown = 0;
+        for (number, rule) in &applicable {
+            let line = digest_line(*number, rule);
+            if shown == DIGEST_MAX_RULES || used + line.len() > DIGEST_MAX_BYTES {
+                break;
+            }
+            used += line.len();
+            shown += 1;
+            lines.push(line);
+        }
+        if shown < applicable.len() {
+            lines.push(format!("(+{} more; /rules lists them)", applicable.len() - shown));
+        }
+        Some(lines.join("\n"))
+    }
+}
+
+/// One rule of the digest: number, decision, tool, what it matches and its scope; the
+/// label passes the secret redaction and a deny reason is quoted and cut.
+fn digest_line(number: usize, rule: &StandingRule) -> String {
+    let scope = match rule.scope.session_id() {
+        Some(_) => "this session",
+        None => "every session",
+    };
+    let label = redact(&rule.label);
+    match &rule.decision {
+        StandingDecision::Allow => format!("- [{number}] allow {label} ({scope})"),
+        StandingDecision::Deny { reason } => {
+            let mut reason: String = redact(reason).chars().take(DIGEST_REASON_CHARS).collect();
+            if reason.chars().count() == DIGEST_REASON_CHARS {
+                reason.push('…');
+            }
+            format!("- [{number}] deny {label} ({scope}): \"{reason}\"")
+        }
+    }
+}
+
+/// `text` with secrets replaced: the web screen's patterns where compiled, and any
+/// whitespace-free token of 24 or more letters and digits otherwise.
+fn redact(text: &str) -> String {
+    #[cfg(feature = "web")]
+    let text = crate::web::redact_secrets(text).0;
+    #[cfg(not(feature = "web"))]
+    let text = text.to_string();
+    text.split(' ')
+        .map(|word| {
+            let alnum = word.chars().filter(char::is_ascii_alphanumeric).count();
+            if alnum >= 24
+                && word.chars().any(|c| c.is_ascii_digit())
+                && word.chars().any(|c| c.is_ascii_alphabetic())
+            {
+                "[redacted]".to_string()
+            } else {
+                word.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
 /// Harness work that runs before each model request, ahead of the reminders: identity
 /// observation (spec 3.1 §9.2 I6) and the loop guard (§7.13).
@@ -45,6 +154,8 @@ pub struct HarnessToolset {
     default_mode: HarnessMode,
     reminded: Mutex<HashMap<String, u64>>,
     observers: Vec<Arc<dyn RequestObserver>>,
+    /// The standing-rules digest of the reminder (spec 3.1 §7.25).
+    rules: Option<RulesDigest>,
     /// The effort each request carries (spec 3.1 §7.23); `None` leaves requests as they are.
     effort: Option<crate::posture::EffortPolicy>,
     /// A team member's toolset, whose requests run at `members` rather than the mode's level.
@@ -69,6 +180,7 @@ impl HarnessToolset {
             default_mode,
             reminded: Mutex::new(HashMap::new()),
             observers: Vec::new(),
+            rules: None,
             effort: None,
             member: false,
             #[cfg(feature = "memory")]
@@ -96,6 +208,18 @@ impl HarnessToolset {
     #[cfg(feature = "memory")]
     pub(crate) fn facts(&self) -> Option<&Arc<crate::facts::runtime::FactsRuntime>> {
         self.facts.as_ref()
+    }
+
+    /// Lists the standing rules that apply to the session in every request's reminder
+    /// (spec 3.1 §7.25): rules of `store` that a call of this toolset's tools can match.
+    pub(crate) fn with_rules_digest(mut self, store: Arc<dyn StandingRuleStore>) -> Self {
+        let origins = self
+            .tools
+            .iter()
+            .map(|tool| (tool.name().to_string(), ToolOrigin::of(tool.as_ref())))
+            .collect();
+        self.rules = Some(RulesDigest { store, origins });
+        self
     }
 
     /// Sets each request's effort from `policy` (spec 3.1 §7.23): the level of the mode the
@@ -171,22 +295,21 @@ impl HarnessToolset {
 /// The one-line banner describing what `mode` allows.
 pub(crate) fn mode_banner(mode: HarnessMode) -> String {
     let rule = match mode {
-        HarnessMode::ReadOnly => "read-only: you may read and keep todos; nothing else runs",
+        HarnessMode::ReadOnly => "read-only: read and keep todos",
         HarnessMode::Plan => {
-            "plan: investigate with read-only tools, then present a plan with exit_plan_mode; \
-             edits and commands are refused until the user approves the plan"
+            "plan: investigate, then present a plan with exit_plan_mode and end your turn"
         }
         HarnessMode::Ask => {
-            "ask: call the edit and command tools you need directly; the harness asks the user \
-             to approve each call before it runs, so do not ask for permission in your reply \
-             or wait for a go-ahead, and do not call exit_plan_mode"
+            "ask: call the tools you need directly; when a call needs approval the harness asks \
+             the user, so do not ask for permission in your reply or wait for a go-ahead, and \
+             do not call exit_plan_mode"
         }
-        HarnessMode::Auto => {
-            "auto: call tools directly; edits run without asking and the harness asks the \
-             user before host commands"
-        }
+        HarnessMode::Auto => "auto: call the tools you need directly",
     };
-    format!("Harness mode is {rule}.")
+    format!(
+        "Harness mode is {rule}. The <harness> block's class lines say which calls run, ask or \
+         are refused in this mode."
+    )
 }
 
 fn todo_reminder(list: &TodoList) -> String {
@@ -255,6 +378,13 @@ impl Toolset for HarnessToolset {
             request.config.get_or_insert_with(Default::default).effort = Some(level);
         }
         let mut lines = vec![mode_banner(mode)];
+        // Rules change mid-session: the digest is rebuilt for every request and never
+        // saved, so it stays out of the cached prefix (spec 3.1 §7.25, I56).
+        if let Some(digest) = &self.rules
+            && let Some(text) = digest.render(ctx.app_name(), ctx.user_id(), ctx.session_id()).await
+        {
+            lines.push(text);
+        }
         if let Some(list) = ctx.state().map(TodoList::from_state)
             && list.revision > 0
         {

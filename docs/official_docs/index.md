@@ -60,6 +60,7 @@ The governed, durable harness agent (`adk-harness`, spec 3.1): modes, approvals,
 
 - [Overview](harness/index.md) - Start here: what the harness is, how to use it, and a quick start
 - [Modes and Approvals](harness/modes-and-approvals.md) - The mode table, prompts, held calls and decisions, standing rules
+- [What the Harness Knows About Itself](harness/self-knowledge.md) - The `<harness>` block, the standing-rules digest and `harness_help`, generated from the running harness
 - [Configuration](harness/configuration.md) - Builder options and defaults, `.adk/harness.toml`, features, the `harness` template
 - [The Harness in Your Terminal](harness/cli.md) - `adk-rust`, `code`, `goal`, `ultracode`, slash commands, `harness.db`
 - [Serving the Harness](harness/serving.md) - `adk-rust serve`, request identity, the approval inbox, background runs

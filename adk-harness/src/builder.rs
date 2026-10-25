@@ -1,8 +1,8 @@
 //! `HarnessAgentBuilder` (spec 3.1 §7.2).
 
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use adk_agent::{LlmAgentBuilder, LlmEventSummarizer};
@@ -156,6 +156,10 @@ pub struct HarnessAgentBuilder {
     default_members: bool,
     member_model: Option<Arc<dyn Llm>>,
     plan_graph: bool,
+    /// The surface the person uses, for the manifest (spec 3.1 §7.25).
+    surface: Option<crate::manifest::SurfaceManifest>,
+    /// Pages `harness_help` returns by name (spec 3.1 §7.25).
+    help_pages: BTreeMap<String, String>,
     #[cfg(feature = "memory")]
     memory: Option<crate::memory::MemoryConfig>,
     #[cfg(feature = "graph")]
@@ -259,6 +263,8 @@ impl HarnessAgentBuilder {
             default_members: true,
             member_model: None,
             plan_graph: cfg!(feature = "graph"),
+            surface: None,
+            help_pages: BTreeMap::new(),
             #[cfg(feature = "memory")]
             memory: None,
             #[cfg(feature = "graph")]
@@ -430,6 +436,41 @@ impl HarnessAgentBuilder {
     /// template-expanded.
     pub fn instruction(mut self, text: impl Into<String>) -> Self {
         self.instruction = Some(text.into());
+        self
+    }
+
+    /// The surface the person uses: its commands, the kernel and how each pack turns on,
+    /// for the harness's manifest (spec 3.1 §7.25). Without it the manifest reports
+    /// [`SurfaceManifest::library`](crate::SurfaceManifest::library).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::{CommandEntry, HarnessAgent, InstructionsConfig, SurfaceManifest};
+    /// use adk_model::{ScriptedLlm, ScriptedResponse};
+    /// use std::sync::Arc;
+    ///
+    /// let dir = tempfile::tempdir().unwrap();
+    /// let surface = SurfaceManifest::new("my-app", "1.0.0")
+    ///     .command(CommandEntry::slash("approvals", "Calls waiting for a decision"));
+    /// let harness = HarnessAgent::builder("assistant")
+    ///     .model(Arc::new(ScriptedLlm::new("scripted", vec![ScriptedResponse::text("ok")])))
+    ///     .workspace(adk_devtools::Workspace::new(dir.path()))
+    ///     .project_instructions(InstructionsConfig { user_file: None, ..InstructionsConfig::default() })
+    ///     .surface(surface)
+    ///     .build()?;
+    /// assert!(harness.manifest().render().contains("/approvals"));
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn surface(mut self, surface: crate::manifest::SurfaceManifest) -> Self {
+        self.surface = Some(surface);
+        self
+    }
+
+    /// A page `harness_help` returns for topic `name` (spec 3.1 §7.25), such as a page of
+    /// the harness documentation a surface ships.
+    pub fn help_page(mut self, name: impl Into<String>, text: impl Into<String>) -> Self {
+        self.help_pages.insert(name.into(), text.into());
         self
     }
 
@@ -1341,7 +1382,7 @@ impl HarnessAgentBuilder {
     /// extra tool collides with a harness tool or is a provider shell built-in, when a
     /// feature not yet implemented is requested, and `harness.sandbox_unavailable` when
     /// the requested sandbox is unavailable under `fail_if_unavailable`.
-    pub fn build(self) -> Result<HarnessAgent> {
+    pub fn build(mut self) -> Result<HarnessAgent> {
         let model = self.model.ok_or_else(|| AdkError::config("HarnessAgent requires a model"))?;
         let workspace =
             self.workspace.ok_or_else(|| AdkError::config("HarnessAgent requires a workspace"))?;
@@ -1590,10 +1631,17 @@ impl HarnessAgentBuilder {
             .or_else(|| self.approval_service.as_ref().and_then(|service| service.approval_store()))
             .unwrap_or_else(|| Arc::new(InMemoryApprovalStore::new()));
 
+        // Filled once the harness is built, from the tools, classes and switches below
+        // (spec 3.1 §7.25).
+        let manifest_cell: Arc<OnceLock<crate::manifest::HarnessManifest>> = Arc::default();
         let mut tools: Vec<Arc<dyn Tool>> = vec![
             Arc::new(ReadFileTool::new(workspace.clone())),
             Arc::new(GlobTool::new(workspace.clone())),
             Arc::new(GrepTool::new(workspace.clone())),
+            Arc::new(crate::tools::HarnessHelpTool::new(
+                manifest_cell.clone(),
+                std::mem::take(&mut self.help_pages),
+            )),
         ];
         if workspace.is_writable() {
             tools.push(Arc::new(WriteFileTool::new(workspace.clone())));
@@ -1890,7 +1938,8 @@ impl HarnessAgentBuilder {
         #[cfg_attr(not(feature = "memory"), allow(unused_mut))]
         let mut toolset = HarnessToolset::new(tools, mode_store.clone(), self.mode)
             .with_observers(&observers)
-            .with_effort(self.effort);
+            .with_effort(self.effort)
+            .with_rules_digest(rules.clone());
         // Under a kernel, each run's tool calls write their ledger rows (spec 3.2 §7.10).
         #[cfg(all(feature = "kernel", feature = "observe"))]
         run_trails.attach_ledger(self.kernel_ledger.clone(), &toolset.all_tools());
@@ -2041,6 +2090,75 @@ impl HarnessAgentBuilder {
         if self.voice_requested {
             packs.push("voice".to_string());
         }
+        // What the harness can do, generated from what was just built (spec 3.1 §7.25).
+        let manifest = {
+            let isolation = status.isolation();
+            let rows = toolset
+                .all_tools()
+                .iter()
+                .map(|tool| {
+                    let origin = adk_core::ToolOrigin::of(tool.as_ref());
+                    let kind = policy.registry().classify(
+                        &self.name,
+                        tool.name(),
+                        Some(&origin),
+                        &serde_json::json!({}),
+                        tool.effect(),
+                        isolation,
+                        self.trust_mcp_read_only_hints,
+                    );
+                    (tool.name().to_string(), crate::policy::TableRow::of(&kind, false))
+                })
+                .collect();
+            let has_bash = tool_names.iter().any(|name| name == "bash");
+            #[cfg(feature = "team")]
+            let members =
+                team_plan.as_ref().map(crate::team::TeamPlan::member_entries).unwrap_or_default();
+            #[cfg(not(feature = "team"))]
+            let members = Vec::new();
+            #[cfg(feature = "memory")]
+            let memory = crate::manifest::MemoryEntry {
+                working_notes: memory_resolver.is_some(),
+                long_term_facts: toolset.facts().is_some(),
+                embedder: toolset.facts().map(|_| {
+                    if self.long_term.embedder.is_some() {
+                        "embeddings".to_string()
+                    } else if self.long_term.index.is_some() {
+                        "a custom index".to_string()
+                    } else {
+                        "lexical".to_string()
+                    }
+                }),
+            };
+            #[cfg(not(feature = "memory"))]
+            let memory = crate::manifest::MemoryEntry::default();
+            #[cfg(feature = "graph")]
+            let plan_rewind = plan_graphs.is_some();
+            #[cfg(not(feature = "graph"))]
+            let plan_rewind = false;
+            crate::manifest::HarnessManifest::generate(crate::manifest::ManifestInputs {
+                surface: self
+                    .surface
+                    .take()
+                    .unwrap_or_else(crate::manifest::SurfaceManifest::library),
+                default_mode: self.mode,
+                rows,
+                switches,
+                web_allowlist: policy.registry().web_allowlist(),
+                shell: has_bash.then_some(&status),
+                unsandboxed_retry: has_bash
+                    && allow_unsandboxed_retry
+                    && matches!(status, IsolationStatus::OsSandbox { .. }),
+                members,
+                active_packs: &packs,
+                web: web_search_path.clone(),
+                memory,
+                ledger_durable: self.action_ledger.is_some(),
+                plan_rewind,
+            })
+        };
+        let harness_block = manifest.render();
+        let _ = manifest_cell.set(manifest.clone());
         let environment = Environment {
             root: workspace.root().display().to_string(),
             branch: instruction_state.instructions.git_branch().map(str::to_string),
@@ -2056,6 +2174,7 @@ impl HarnessAgentBuilder {
             base: self.base_prompt,
             operator: self.instruction,
             environment,
+            harness: harness_block,
             state: instruction_state.clone(),
         });
         #[cfg(feature = "memory")]
@@ -2409,6 +2528,7 @@ impl HarnessAgentBuilder {
                 take_over: self.take_over,
             },
             info,
+            manifest,
         })
     }
 }
@@ -2427,6 +2547,8 @@ struct PromptParts {
     base: Cow<'static, str>,
     operator: Option<String>,
     environment: Environment,
+    /// The `<harness>` block (spec 3.1 §7.25), after `<environment>` in the cached prefix.
+    harness: String,
     state: Arc<InstructionState>,
 }
 
@@ -2451,6 +2573,8 @@ impl PromptParts {
             env.default_mode,
             if env.packs.is_empty() { "none".to_string() } else { env.packs.join(", ") },
         ));
+        out.push_str(&self.harness);
+        out.push_str("\n\n");
         out.push_str(&self.state.instructions.render(self.state.trusted()));
         out.trim_end().to_string()
     }

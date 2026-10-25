@@ -591,6 +591,7 @@ pub struct HarnessAgent {
     pub(crate) root: Arc<dyn Agent>,
     pub(crate) runtime: HarnessRuntime,
     pub(crate) info: HarnessInfo,
+    pub(crate) manifest: crate::manifest::HarnessManifest,
 }
 
 impl std::fmt::Debug for HarnessAgent {
@@ -619,6 +620,7 @@ impl HarnessAgent {
             root: self.root.clone(),
             runtime: self.runtime.clone(),
             info: self.info.clone(),
+            manifest: self.manifest.clone(),
         })
     }
 
@@ -630,6 +632,31 @@ impl HarnessAgent {
     /// What the harness is.
     pub fn info(&self) -> &HarnessInfo {
         &self.info
+    }
+
+    /// What the harness can do, as the model is told it (spec 3.1 §7.25): generated when
+    /// the harness was built from its classes in each mode, its tools, packs, memory, the
+    /// surface's commands and what its safety mechanisms cover.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::{HarnessAgent, InstructionsConfig, ModeDecision};
+    /// use adk_model::{ScriptedLlm, ScriptedResponse};
+    /// use std::sync::Arc;
+    ///
+    /// let dir = tempfile::tempdir().unwrap();
+    /// let harness = HarnessAgent::builder("assistant")
+    ///     .model(Arc::new(ScriptedLlm::new("scripted", vec![ScriptedResponse::text("ok")])))
+    ///     .workspace(adk_devtools::Workspace::new(dir.path()))
+    ///     .project_instructions(InstructionsConfig { user_file: None, ..InstructionsConfig::default() })
+    ///     .build()?;
+    /// let edit = harness.manifest().classes.iter().find(|class| class.class == "edit").unwrap();
+    /// assert_eq!(edit.decisions[2], ModeDecision::Ask, "ask mode asks before an edit");
+    /// # Ok::<(), adk_core::AdkError>(())
+    /// ```
+    pub fn manifest(&self) -> &crate::manifest::HarnessManifest {
+        &self.manifest
     }
 
     /// The partition the harness was built for (spec 3.2 §7.8,

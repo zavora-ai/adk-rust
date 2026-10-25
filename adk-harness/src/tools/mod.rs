@@ -2,6 +2,7 @@
 
 #[cfg(feature = "memory")]
 pub(crate) mod facts;
+mod help;
 #[cfg(feature = "mcp")]
 mod mcp;
 #[cfg(feature = "memory")]
@@ -14,6 +15,7 @@ mod web;
 
 #[cfg(feature = "memory")]
 pub use facts::{MemoryRememberTool, MemorySearchTool};
+pub use help::{HARNESS_HELP, HarnessHelpTool};
 #[cfg(feature = "mcp")]
 pub use mcp::{McpListResourcesTool, McpReadResourceTool};
 #[cfg(feature = "memory")]

@@ -83,6 +83,7 @@ mod instructions;
 #[cfg(feature = "kernel")]
 mod kernel;
 mod ledger;
+mod manifest;
 pub mod mcp;
 #[cfg(feature = "memory")]
 mod memory;
@@ -180,6 +181,11 @@ pub use instructions::{
 };
 #[cfg(feature = "kernel")]
 pub use kernel::{DriverClasses, HarnessRulePins, driver_tool_kind};
+pub use manifest::{
+    ClassEntry, CommandEntry, CommandKind, HARNESS_BLOCK_MAX_BYTES, HARNESS_HELP_MAX_BYTES,
+    HarnessManifest, KernelEntry, LanguageEntry, MemberEntry, MemoryEntry, ModeDecision, PackEntry,
+    PackState, SafetyEntry, SurfaceManifest,
+};
 pub use mcp::McpInteractionConfig;
 #[cfg(feature = "mcp")]
 pub use mcp::{
@@ -262,9 +268,9 @@ pub use team::{
     MemberSpec, MemberTools, harness_team_policy,
 };
 pub use tools::{
-    ExitPlanModeTool, GOVERNANCE_POLL_INTERVAL, HarnessBashTool, MAX_TODO_CHARS, MAX_TODO_ITEMS,
-    PLAN_STATE_KEY, PlanGate, PlanStep, TODOS_STATE_KEY, TodoItem, TodoList, TodoStatus,
-    UpdateTodoTool, WriteTodosTool,
+    ExitPlanModeTool, GOVERNANCE_POLL_INTERVAL, HARNESS_HELP, HarnessBashTool, HarnessHelpTool,
+    MAX_TODO_CHARS, MAX_TODO_ITEMS, PLAN_STATE_KEY, PlanGate, PlanStep, TODOS_STATE_KEY, TodoItem,
+    TodoList, TodoStatus, UpdateTodoTool, WriteTodosTool,
 };
 #[cfg(feature = "mcp")]
 pub use tools::{McpListResourcesTool, McpReadResourceTool};

@@ -42,6 +42,7 @@ pub(crate) const HARNESS_TOOL_NAMES: &[&str] = &[
     "read_file",
     "glob",
     "grep",
+    "harness_help",
     "write_file",
     "edit_file",
     "bash",
@@ -160,7 +161,7 @@ pub enum Isolation {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ToolKind {
-    /// `read_file`, `glob`, `grep`, `list_skills`, `load_skill`, `load_skill_resource`,
+    /// `read_file`, `glob`, `grep`, `harness_help`, `list_skills`, `load_skill`, `load_skill_resource`,
     /// `search_skills`, `memory_read`, `memory_search`, `mcp_list_resources`,
     /// `mcp_read_resource` (spec 3.1 §7.21).
     Read,
@@ -292,6 +293,7 @@ impl ToolClassRegistry {
             "read_file",
             "glob",
             "grep",
+            "harness_help",
             "list_skills",
             "load_skill",
             "load_skill_resource",
