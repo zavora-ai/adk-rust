@@ -64,7 +64,7 @@ routes its scopes open and on no other route:
 
 | Scope | Routes (under `/api`) |
 |---|---|
-| `read` | `GET /kernel/health`, `GET /kernel/processes`, `GET /kernel/events`, `POST /kernel/attach/{session}`, `GET /kernel/agenda`, `GET /approvals`, `GET /approvals/{id}` |
+| `read` | `GET /kernel/health`, `GET /kernel/processes`, `GET /kernel/events`, `POST /kernel/attach/{session}`, `GET /kernel/agenda`, `GET /approvals`, `GET /approvals/{id}`; what Today and "Agent Memory and Rules" read ([settings, away, memory and record](today-and-memory.md)): `GET /kernel/settings[/{partition}]`, `GET /kernel/away`, `POST /kernel/away/seen` (the device's own cursor), `GET /kernel/away/lines/{seq}`, `GET /kernel/memory`, `GET /kernel/record`, `GET /kernel/record/check`. No device changes a setting or a memory |
 | `decide` | `POST /approvals/{id}/decide` at low and medium risk; a high-risk decision, or one whose risk the kernel cannot read, answers `403` and waits for the person to confirm it is them in the home (spec 3.3 §7.2). The device guard checks the risk and records the decision; `DeviceTokenExtractor` refuses a device's decision the guard did not admit |
 | `stop` | `POST /kernel/freeze` |
 
