@@ -43,6 +43,7 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
     let mut app = App::new(surface.engine.source().app_name(), session.clone());
     app.model = surface.model.clone();
     app.place = surface.place.clone();
+    app.commands = surface.commands.clone();
     // Without bracketed paste a paste arrives as keys: a decision key with more keys right
     // behind it is typing (§7.4 rule 2).
     app.burst_guard = cfg!(windows);
@@ -78,6 +79,7 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
         let mut box_view = None;
         terminal.draw(|frame| box_view = renderer.draw(frame, &app, now))?;
         app.set_box_view(box_view, now);
+        app.view_scroll = app.view_scroll.min(renderer.view_max_scroll);
         let held = app.held_until();
         let effects = tokio::select! {
             exit = signals.recv() => {

@@ -46,6 +46,7 @@
 //! ```
 
 mod app;
+mod commands;
 mod full;
 mod inline;
 mod json;
@@ -65,6 +66,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 
+pub use commands::{CommandContext, TerminalCommand};
 pub use safe::terminal_safe;
 pub use theme::{Appearance, Theme, ThemeChoice};
 
@@ -194,6 +196,7 @@ pub struct TerminalSurface {
     notices: Vec<String>,
     signals: bool,
     gate: SessionGate,
+    commands: commands::Commands,
 }
 
 impl TerminalSurface {
@@ -210,6 +213,7 @@ impl TerminalSurface {
             notices: Vec::new(),
             signals: true,
             gate: SessionGate::default(),
+            commands: commands::Commands::default(),
         }
     }
 
@@ -300,6 +304,27 @@ impl TerminalSurface {
         F: Fn(Option<String>) -> BoxFuture<'static, Result<String, String>> + Send + Sync + 'static,
     {
         self.gate = SessionGate(Some(Arc::new(open)));
+        self
+    }
+
+    /// Adds a slash command: `/name args` in the message box runs it and shows what it
+    /// returns, and Tab completes its name (spec 3.3 §5.2). The terminal's own commands win
+    /// over one of the same name, and so does the first one added.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use std::sync::Arc;
+    /// # use adk_surface::tui::{TerminalCommand, TerminalSurface};
+    /// # use adk_surface::{Caller, Origin, SurfaceEngine, SurfaceKind};
+    /// # fn example(engine: SurfaceEngine, todos: Arc<dyn TerminalCommand>) {
+    /// let me = Caller::human("ana", SurfaceKind::Terminal, Origin::Keyboard);
+    /// let terminal = TerminalSurface::new(engine, me).command(todos);
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn command(mut self, command: Arc<dyn TerminalCommand>) -> Self {
+        self.commands.add(command);
         self
     }
 
@@ -400,6 +425,7 @@ impl TerminalSurface {
         let mut app = app::App::new(engine.source().app_name(), session.clone());
         app.model = self.model.clone();
         app.place = self.place.clone();
+        app.commands = self.commands.clone();
         let now = std::time::Instant::now();
         let armed = now.checked_sub(app::ARM_DELAY * 2).unwrap_or(now);
         let status = match engine.status(caller, Some(&session)).await {
@@ -496,6 +522,22 @@ impl TerminalSurface {
                 app.took_back(self.engine.unqueue_last(&self.caller, &session));
             }
             app::Effect::Briefing => pump.refresh_briefing(),
+            app::Effect::RunCommand { serial, name, args } => {
+                let found = self.commands.find(&name).or_else(|| self.commands.shadowed(&name));
+                match found {
+                    Some(command) => {
+                        let context = CommandContext::new(app.session.clone());
+                        commands.run_added(command, args, context, serial, tx);
+                    }
+                    None => app.update(
+                        app::Update::CommandDone {
+                            serial,
+                            result: Err(format!("No command /{name}. /help lists them.")),
+                        },
+                        std::time::Instant::now(),
+                    ),
+                }
+            }
             app::Effect::Quit => return true,
         }
         false

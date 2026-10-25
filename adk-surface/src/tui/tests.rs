@@ -1124,7 +1124,7 @@ fn a_key_just_after_a_close_elsewhere_never_becomes_a_message() {
     effects.extend(app.key(key(KeyCode::Enter), armed + ms(150)));
     assert!(effects.is_empty(), "{effects:?}");
     assert!(app.composer.is_empty(), "{:?}", app.composer.text);
-    assert!(notices(&app).contains("answered somewhere else"), "{}", notices(&app));
+    assert!(notices(&app).contains("Already answered somewhere else."), "{}", notices(&app));
 
     let mut app = app_with(vec![invoice()], shown);
     app.update(frame(FeedFrame::Decisions { cards: vec![] }), armed);
@@ -1810,4 +1810,321 @@ fn inline_fits_the_box_and_prints_the_whole_call_with_details() {
     let printed = String::from_utf8(printer.into_inner()).unwrap();
     assert!(printed.contains("32 more lines: press ? to see the whole call"), "{printed}");
     assert!(printed.contains("\"path\": \"a.txt\""), "the details printed it all:\n{printed}");
+}
+
+// ---------------------------------------------------------------------------
+// E2: the REPL's commands in the full screen (spec 3.3 §5.2).
+// ---------------------------------------------------------------------------
+
+/// A command an embedder adds: it answers with its name, its arguments and the session the
+/// terminal shows.
+struct Echo(&'static str, &'static str);
+
+#[async_trait::async_trait]
+impl super::TerminalCommand for Echo {
+    fn name(&self) -> &str {
+        self.0
+    }
+
+    fn description(&self) -> &str {
+        self.1
+    }
+
+    async fn run(&self, args: &str, context: &super::CommandContext) -> adk_core::Result<String> {
+        if args == "fail" {
+            return Err(adk_core::AdkError::agent("the rule store is unavailable"));
+        }
+        Ok(format!(
+            "  {} {args} in {}\nsession   {}",
+            self.0, context.session_id, context.session_id
+        ))
+    }
+}
+
+/// The REPL's commands as `adk-rust` adds them: two of the terminal's own names among them.
+fn repl_commands() -> super::commands::Commands {
+    let mut commands = super::commands::Commands::default();
+    for (name, description) in [
+        ("mode", "Show or set the mode: /mode read-only|plan|ask|auto"),
+        ("todos", "Show the session's todo list"),
+        ("rules", "List your standing rules; /rules rm N revokes one"),
+        ("memory", "Working notes and long-term facts; /memory forget|accept ID"),
+        ("mcp", "MCP servers; /mcp resources SERVER lists what a server publishes"),
+        ("session", "This session: id, user, workspace, events"),
+    ] {
+        commands.add(std::sync::Arc::new(Echo(name, description)));
+    }
+    commands
+}
+
+fn app_with_commands() -> App {
+    let mut app = App::new("adk-rust", SESSION.into());
+    app.commands = repl_commands();
+    app
+}
+
+/// `/` and the start of a name: Tab completes it, the arrows choose among the commands it may
+/// be, Enter runs the one chosen, and Esc clears it; Tab never switches threads meanwhile.
+#[test]
+fn tab_and_the_arrows_complete_a_command() {
+    let now = Instant::now();
+    let mut app = app_with_commands();
+    let rows = ["s1", "s2"].map(|session| AgentRow {
+        agent: agent(session),
+        status: AgentStatus::Working,
+        status_text: "Working".into(),
+        wake_at: None,
+        session_id: Some(session.into()),
+    });
+    app.update(Update::Agents(rows.to_vec()), now);
+    // `/today` and `/todos` share "tod"; Tab takes that, then the chosen name.
+    type_text(&mut app, "/to", now);
+    assert!(app.key(key(KeyCode::Tab), now).is_empty());
+    assert_eq!(app.composer.text, "/tod");
+    app.key(key(KeyCode::Down), now);
+    app.key(key(KeyCode::Tab), now);
+    assert_eq!(app.composer.text, "/todos ", "ready for its arguments");
+    app.key(ctrl('u'), now);
+    type_text(&mut app, "/zz", now);
+    assert!(app.completion().unwrap().candidates.is_empty());
+    assert!(app.key(key(KeyCode::Tab), now).is_empty());
+    assert_eq!(app.session, SESSION, "Tab never switches threads while a command is typed");
+    app.key(ctrl('u'), now);
+
+    type_text(&mut app, "/m", now);
+    let names: Vec<String> =
+        app.completion().unwrap().candidates.into_iter().map(|(name, _)| name).collect();
+    assert_eq!(names, ["mode", "memory", "mcp"], "the terminal's own first");
+    app.key(key(KeyCode::Down), now);
+    app.key(key(KeyCode::Down), now);
+    assert_eq!(app.completion().unwrap().chosen(), Some("mcp"));
+    app.key(key(KeyCode::Up), now);
+    assert_eq!(app.completion().unwrap().chosen(), Some("memory"));
+    assert_eq!(
+        app.key(key(KeyCode::Enter), now),
+        vec![Effect::RunCommand { serial: 1, name: "memory".into(), args: String::new() }]
+    );
+    assert!(app.composer.is_empty());
+
+    type_text(&mut app, "/ru", now);
+    assert!(app.key(key(KeyCode::Esc), now).is_empty());
+    assert!(app.composer.is_empty(), "Esc clears the command being typed");
+    assert_eq!(app.view, View::Output, "and decides nothing");
+}
+
+/// A command the embedder added runs from the message box with its arguments, in the shown
+/// session, and its output is a view of its own; Esc goes back to the thread.
+#[test]
+fn an_added_command_runs_and_shows_its_output() {
+    let now = Instant::now();
+    let mut app = app_with_commands();
+    type_text(&mut app, "/rules rm 2", now);
+    assert_eq!(
+        app.key(key(KeyCode::Enter), now),
+        vec![Effect::RunCommand { serial: 1, name: "rules".into(), args: "rm 2".into() }]
+    );
+    assert_eq!(app.view, View::Output);
+    let running = draw(&mut app, 100, 24, now).join("\n");
+    assert!(running.contains("Running /rules rm 2…"), "{running}");
+    // An answer for another run is not this one's.
+    app.update(Update::CommandDone { serial: 7, result: Ok("stale".into()) }, now);
+    app.update(
+        Update::CommandDone {
+            serial: 1,
+            result: Ok("  revoked: bash: cargo test\u{1b}[2J".into()),
+        },
+        now,
+    );
+    let shown = draw(&mut app, 100, 24, now).join("\n");
+    assert!(shown.contains("/rules rm 2"), "{shown}");
+    assert!(shown.contains("  revoked: bash: cargo test\\u{1b}[2J"), "escaped (S-I9):\n{shown}");
+    assert!(!shown.contains("stale"), "{shown}");
+    app.key(key(KeyCode::Esc), now);
+    assert_eq!(app.view, View::Thread);
+
+    // A failure shows in place of the output.
+    type_text(&mut app, "/todos fail", now);
+    app.key(key(KeyCode::Enter), now);
+    app.update(Update::CommandDone { serial: 2, result: Err("the store is down".into()) }, now);
+    let failed = draw(&mut app, 100, 24, now).join("\n");
+    assert!(failed.contains("! the store is down"), "{failed}");
+
+    // A command nobody added says so, and /help lists them.
+    type_text(&mut app, "/plan", now);
+    assert!(app.key(key(KeyCode::Enter), now).is_empty());
+    assert!(notices(&app).contains("No command /plan. /help lists them."), "{}", notices(&app));
+}
+
+/// `/help` lists the keys, the terminal's own commands and every command the embedder added,
+/// a page at a time.
+#[test]
+fn help_lists_every_command() {
+    let now = Instant::now();
+    let mut app = app_with_commands();
+    type_text(&mut app, "/help", now);
+    app.key(key(KeyCode::Enter), now);
+    let renderer = Renderer::new(Theme::new(Appearance::Dark, true));
+    let all: Vec<String> = renderer
+        .help(&app, 100)
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect())
+        .collect();
+    let all = all.join("\n");
+    for command in ["/today", "/session", "/quit", "/todos", "/rules", "/memory", "/mcp"] {
+        assert!(all.contains(command), "{command} missing:\n{all}");
+    }
+    assert!(all.contains("Working notes and long-term facts"), "{all}");
+    // The REPL's own `/mode` and `/session` answer the bare forms, so they are not listed twice.
+    assert_eq!(all.matches("/mode").count(), 1, "{all}");
+    // Taller than an 80 by 24 screen: PageDown reads on.
+    let first = draw(&mut app, 80, 24, now).join("\n");
+    assert!(first.contains("more lines · PageDown"), "{first}");
+    assert!(!first.contains("/mcp"), "{first}");
+    app.key(key(KeyCode::PageDown), now);
+    app.key(key(KeyCode::PageDown), now);
+    let next = draw(&mut app, 80, 24, now).join("\n");
+    assert!(next.contains("/mcp"), "{next}");
+}
+
+/// The bare `/mode` and `/session` show what the REPL's commands show; `/mode` takes the
+/// harness's words as well as the §8.1 words, and sets the mode through the engine.
+#[test]
+fn bare_mode_and_session_show_and_mode_sets_through_the_engine() {
+    let now = Instant::now();
+    let mut app = app_with_commands();
+    type_text(&mut app, "/mode", now);
+    assert_eq!(
+        app.key(key(KeyCode::Enter), now),
+        vec![Effect::RunCommand { serial: 1, name: "mode".into(), args: String::new() }]
+    );
+    type_text(&mut app, "/session", now);
+    assert_eq!(
+        app.key(key(KeyCode::Enter), now),
+        vec![Effect::RunCommand { serial: 2, name: "session".into(), args: String::new() }]
+    );
+    use crate::model::Mode;
+    for (typed, mode) in [("/mode ask", Mode::AskFirst), ("/mode Go ahead", Mode::GoAhead)] {
+        type_text(&mut app, typed, now);
+        assert_eq!(
+            app.key(key(KeyCode::Enter), now),
+            vec![Effect::Execute(Command::SetMode { session_id: SESSION.into(), mode })]
+        );
+    }
+
+    // Without the REPL's commands, the bare `/session` names the session.
+    let mut plain = App::new("adk-rust", SESSION.into());
+    type_text(&mut plain, "/session", now);
+    assert!(plain.key(key(KeyCode::Enter), now).is_empty());
+    assert!(notices(&plain).contains("This session is s1."), "{}", notices(&plain));
+}
+
+/// The commands a `/` may be are drawn between the thread and the message box, the chosen
+/// one marked, in the §9 tokens.
+#[test]
+fn the_completion_is_drawn_above_the_message_box() {
+    let now = Instant::now();
+    let mut app = app_with_commands();
+    type_text(&mut app, "/m", now);
+    app.key(key(KeyCode::Down), now);
+    let rows = draw(&mut app, 100, 24, now);
+    let chosen = row_of(&rows, "› /memory").expect("the chosen command is marked");
+    let mode = row_of(&rows, "/mode").unwrap();
+    let message = row_of(&rows, "│› /m").unwrap();
+    assert!(mode < chosen && chosen < message, "{rows:#?}");
+    assert!(rows[chosen].contains("Working notes"), "{}", rows[chosen]);
+    assert!(row_of(&rows, "Tab completes · Enter runs").is_some(), "{rows:#?}");
+    app.key(ctrl('u'), now);
+    type_text(&mut app, "/zz", now);
+    let rows = draw(&mut app, 100, 24, now);
+    assert!(row_of(&rows, "No command starts with /zz").is_some(), "{rows:#?}");
+}
+
+/// A command's output is a view: while it shows, a decision key answers nothing, and the box
+/// arms again once the thread is back (§7.4 rule 2, S-I4).
+#[test]
+fn a_decision_key_never_answers_while_a_commands_output_shows() {
+    let shown = Instant::now();
+    let armed = shown + ARM_DELAY * 2;
+    let mut app = app_with(vec![invoice()], shown);
+    app.commands = repl_commands();
+    type_text(&mut app, "/todos", armed);
+    app.key(key(KeyCode::Enter), armed);
+    assert_eq!(app.view, View::Output);
+    let later = armed + ARM_DELAY * 2;
+    let effects = app.key(key(KeyCode::Char('y')), later);
+    assert!(decide_of(&effects).is_none(), "{effects:?}");
+    app.key(ctrl('u'), later);
+    app.key(key(KeyCode::Esc), later);
+    assert_eq!(app.view, View::Thread);
+    draw(&mut app, 150, 40, later + ARM_DELAY);
+    assert!(decide_of(&app.key(key(KeyCode::Char('y')), later + ARM_DELAY * 2)).is_some());
+}
+
+/// Inline prints a command's output once it returns, and the commands a `/` may be after the
+/// cursor on the message line.
+#[test]
+fn inline_prints_the_output_once_and_the_completion_on_the_message_line() {
+    let now = Instant::now();
+    let mut app = app_with_commands();
+    let mut printer = Printer::new(Vec::new(), Theme::new(Appearance::Light, false), false, true)
+        .with_width(100)
+        .with_height(24);
+    type_text(&mut app, "/m", now);
+    app.key(key(KeyCode::Down), now);
+    printer.sync(&app, now).unwrap();
+    app.key(key(KeyCode::Enter), now);
+    printer.sync(&app, now).unwrap();
+    app.update(
+        Update::CommandDone { serial: 1, result: Ok("Working notes:\n  (none)".into()) },
+        now,
+    );
+    printer.sync(&app, now).unwrap();
+    printer.sync(&app, now).unwrap();
+    let printed = String::from_utf8(printer.into_inner()).unwrap();
+    assert!(printed.contains("/mode · /memory · /mcp"), "{printed}");
+    assert_eq!(printed.matches("Working notes:").count(), 1, "{printed}");
+    assert!(printed.contains("  (none)"), "{printed}");
+}
+
+/// A key pressed just after its box was answered elsewhere says where (wave 2 live run).
+#[test]
+fn a_key_after_a_close_elsewhere_says_where_it_was_answered() {
+    let shown = Instant::now();
+    let armed = shown + ARM_DELAY * 2;
+    let mut app = app_with(vec![invoice()], shown);
+    app.update(frame(FeedFrame::Decisions { cards: vec![] }), armed);
+    let mut decided = invoice();
+    decided.decided = Some(crate::model::Decided {
+        by_you: true,
+        via: Some(crate::Via {
+            surface: crate::SurfaceKind::Chat,
+            origin: crate::Origin::Chat { channel: "Telegram".into() },
+        }),
+        text: "You said yes in Telegram at 07:31".into(),
+        ..decided_by_you()
+    });
+    decided.status = CardStatus::Decided;
+    app.update(Update::Decided { generation: 0, card: Box::new(decided) }, armed + ms(10));
+    let effects = app.key(key(KeyCode::Char('y')), armed + ms(100));
+    assert!(effects.is_empty(), "{effects:?}");
+    assert!(app.composer.is_empty());
+    assert!(notices(&app).contains("Already answered in Telegram."), "{}", notices(&app));
+}
+
+/// The surface runs an added command in the shown session and leaving waits for one on its
+/// way, naming it.
+#[tokio::test]
+async fn an_added_command_runs_in_the_shown_session() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut commands = super::pump::Commands::default();
+    let todos: std::sync::Arc<dyn super::TerminalCommand> =
+        std::sync::Arc::new(Echo("todos", "Show the session's todo list"));
+    commands.run_added(todos, String::new(), super::CommandContext::new("s9"), 4, &tx);
+    match rx.recv().await {
+        Some(Update::CommandDone { serial: 4, result: Ok(text) }) => {
+            assert!(text.contains("todos  in s9"), "{text}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(commands.finish(ms(100)).await.is_empty());
 }

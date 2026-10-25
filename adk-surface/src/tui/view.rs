@@ -16,6 +16,7 @@ use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
 use super::app::{App, BoxView, DecidedLine, Input, OpenCard, Tone, View, named_decisions};
+use super::commands::{BUILT_IN, Completion};
 use super::markdown::{markdown, wrap, wrap_spans};
 use super::safe::{safe_line, safe_lines};
 use super::theme::Theme;
@@ -45,6 +46,12 @@ const MARKDOWN_CACHE: usize = 512;
 /// value never reads as one line (§7.1 "the exact call").
 const NEWLINE_MARK: &str = "⏎";
 
+/// The most commands the completion shows at once.
+const COMPLETION_ROWS: usize = 6;
+
+/// How wide the name column of `/help` is.
+const HELP_KEYS: usize = 16;
+
 /// Whether a decision's call is too long for the box: it must be shown in full with `?`
 /// before it can be approved (spec 3.3 §7.1).
 pub(crate) fn needs_details(open: &OpenCard) -> bool {
@@ -71,6 +78,8 @@ pub(crate) struct Renderer {
     /// from: an entry number is a place in one session's store, so another session's entry,
     /// or a rewound one, under the same number is rendered again.
     markdown: HashMap<(u64, usize, usize), (String, Vec<Line<'static>>)>,
+    /// How far the view other than the thread drawn last can scroll.
+    pub view_max_scroll: usize,
 }
 
 /// One row of a decision box: its spans and its background.
@@ -106,7 +115,7 @@ pub(crate) struct FocusedBox {
 
 impl Renderer {
     pub(crate) fn new(theme: Theme) -> Self {
-        Self { theme, markdown: HashMap::new() }
+        Self { theme, markdown: HashMap::new(), view_max_scroll: 0 }
     }
 
     // -----------------------------------------------------------------------
@@ -943,9 +952,11 @@ impl Renderer {
         lines
     }
 
-    pub(crate) fn help(&self) -> Vec<Line<'static>> {
+    /// Keys, then every command: the terminal's own and those its embedder added (spec 3.3
+    /// §5.2).
+    pub(crate) fn help(&self, app: &App, width: usize) -> Vec<Line<'static>> {
         let t = &self.theme;
-        let rows = [
+        let keys = [
             ("y", "Allow once"),
             ("a", "Always allow (the scope the decision names)"),
             ("e", "Edit the call's arguments, then allow"),
@@ -959,20 +970,120 @@ impl Renderer {
             ("pgup pgdn", "Scroll the thread, or the call in a decision box"),
             ("↑", "Take back the newest queued message, into the empty message box"),
             ("ctrl-c", "Leave; a kernel's agents carry on"),
-            ("/mode", "/mode just look | suggest | ask first | go ahead"),
-            ("/stop /resume", "Stop all, Resume all"),
-            ("/session", "/session new, or /session ID"),
-            ("/quit", "Leave"),
         ];
+        let row = |key: String, what: String| {
+            wrap_spans(
+                vec![
+                    Span::styled(
+                        format!("{key:<HELP_KEYS$}"),
+                        t.text().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(what, t.secondary()),
+                ],
+                width,
+                HELP_KEYS,
+            )
+        };
+        let mut lines = vec![Line::default(), Line::from(Span::styled("Keys", t.heading()))];
+        for (key, what) in keys {
+            lines.extend(row(key.to_string(), what.to_string()));
+        }
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled("Commands", t.heading())));
+        let own = BUILT_IN.iter().map(|(name, what)| ((*name).to_string(), (*what).to_string()));
+        for (name, what) in own.chain(app.commands.added()) {
+            lines.extend(row(format!("/{}", safe_line(&name)), safe_line(&what)));
+        }
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "/ and Tab complete a command · esc to go back",
+            t.label(),
+        )));
+        lines
+    }
+
+    /// A slash command run from the message box: what was typed, then what it returned, as
+    /// it returned it (spec 3.3 §5.2). The text is the embedder's, escaped (S-I9).
+    pub(crate) fn output(&self, app: &App, width: usize) -> Vec<Line<'static>> {
+        let t = &self.theme;
         let mut lines = vec![Line::default()];
-        for (key, what) in rows {
-            lines.push(Line::from(vec![
-                Span::styled(format!("{key:<16}"), t.text().add_modifier(Modifier::BOLD)),
-                Span::styled(what, t.secondary()),
-            ]));
+        let Some(output) = &app.output else {
+            return lines;
+        };
+        let line = safe_line(&output.line);
+        lines.push(Line::from(Span::styled(line.clone(), t.text().add_modifier(Modifier::BOLD))));
+        lines.push(Line::default());
+        match &output.result {
+            None => lines.push(Line::from(Span::styled(format!("Running {line}…"), t.label()))),
+            Some(Ok(text)) if text.trim().is_empty() => {
+                lines.push(Line::from(Span::styled("Done; it has nothing to show.", t.label())));
+            }
+            Some(Ok(text)) => {
+                for row in safe_lines(text.trim_end()) {
+                    for part in hard_wrap(&row, width) {
+                        lines.push(Line::from(Span::styled(part, t.text())));
+                    }
+                }
+            }
+            Some(Err(error)) => lines.extend(self.notice(error, Tone::Problem, width)),
         }
         lines.push(Line::default());
         lines.push(Line::from(Span::styled("esc to go back", t.label())));
+        lines
+    }
+
+    /// The commands a `/` and the start of a name may be, the one the arrows chose marked, at
+    /// most `rows` lines (spec 3.3 §5.2).
+    pub(crate) fn completion(
+        &self,
+        completion: &Completion,
+        width: usize,
+        rows: usize,
+    ) -> Vec<Line<'static>> {
+        let t = &self.theme;
+        let count = completion.candidates.len();
+        if count == 0 {
+            let text = format!(
+                "No command starts with /{} · /help lists them",
+                safe_line(&completion.typed)
+            );
+            return vec![Line::from(Span::styled(fit(&text, width), t.label()))];
+        }
+        let hint = "↑↓ choose · Tab completes · Enter runs";
+        let shown = rows.saturating_sub(1).clamp(1, COMPLETION_ROWS).min(count);
+        let first = completion.selected.saturating_sub(shown - 1).min(count - shown);
+        let names = completion
+            .candidates
+            .iter()
+            .map(|(name, _)| safe_line(name).width() + 1)
+            .max()
+            .unwrap_or(0)
+            .min(HELP_KEYS);
+        let raised = Style::new().bg(t.color(t.palette().raised));
+        let mut lines = Vec::with_capacity(shown + 1);
+        for (index, (name, what)) in
+            completion.candidates.iter().enumerate().skip(first).take(shown)
+        {
+            let chosen = index == completion.selected;
+            let name = fit(&format!("/{}", safe_line(name)), names + 1);
+            let pad = (names + 1).saturating_sub(name.width());
+            let what = fit(&safe_line(what), width.saturating_sub(names + 5));
+            let (mark, name_style, background) = if chosen {
+                ("› ", t.accent().add_modifier(Modifier::BOLD), raised)
+            } else {
+                ("  ", t.text(), Style::new())
+            };
+            let used = 2 + name.width() + pad + 2 + what.width();
+            lines.push(Line::from(vec![
+                Span::styled(mark, t.accent().patch(background)),
+                Span::styled(name, name_style.patch(background)),
+                Span::styled(" ".repeat(pad + 2), background),
+                Span::styled(what, t.secondary().patch(background)),
+                Span::styled(" ".repeat(width.saturating_sub(used)), background),
+            ]));
+        }
+        let more = if count > shown { format!("{count} commands · ") } else { String::new() };
+        lines.push(Line::from(Span::styled(fit(&format!("{more}{hint}"), width), t.label())));
         lines
     }
 
@@ -1101,8 +1212,17 @@ impl Renderer {
         let take_back = app.composer.is_empty() && app.input == Input::Message;
         let queued = self.queued(&app.queued, width, take_back);
         let queued_height = u16::try_from(queued.len().min(3)).unwrap_or(3);
-        let [main, queued_area, input] = Layout::vertical([
+        // The commands a `/` may be, between the thread and the message box, in at most half of
+        // what is left of the pane.
+        let room = usize::from(right.height).saturating_sub(usize::from(queued_height) + 3) / 2;
+        let completion = match app.completion() {
+            Some(completion) if room > 0 => self.completion(&completion, width, room),
+            _ => Vec::new(),
+        };
+        let completion_height = u16::try_from(completion.len()).unwrap_or(0);
+        let [main, completion_area, queued_area, input] = Layout::vertical([
             Constraint::Min(1),
+            Constraint::Length(completion_height),
             Constraint::Length(queued_height),
             Constraint::Length(3),
         ])
@@ -1113,7 +1233,8 @@ impl Renderer {
             View::Thread => self.thread(app, width, height, now),
             View::Today => (self.today(app, width), None),
             View::Permissions => (self.permissions(app, width), None),
-            View::Help => (self.help(), None),
+            View::Help => (self.help(app, width), None),
+            View::Output => (self.output(app, width), None),
         };
         let scroll = if app.view == View::Thread {
             app.scroll.min(lines.len().saturating_sub(height))
@@ -1142,11 +1263,30 @@ impl Renderer {
                     scrolls: true,
                 }
             });
+            self.view_max_scroll = 0;
             lines[start..end].to_vec()
         } else {
-            lines.into_iter().take(height).collect()
+            // Help, Today and a command's output scroll a page at a time; the last row says
+            // how much more there is.
+            let max = lines.len().saturating_sub(height);
+            self.view_max_scroll = max;
+            let from = app.view_scroll.min(max);
+            let below = lines.len().saturating_sub(from + height);
+            let mut shown: Vec<Line<'static>> = lines.into_iter().skip(from).take(height).collect();
+            if below > 0
+                && let Some(last) = shown.last_mut()
+            {
+                let more = below + 1;
+                let noun = if more == 1 { "line" } else { "lines" };
+                *last = Line::from(Span::styled(
+                    format!("↓ {more} more {noun} · PageDown"),
+                    t.accent(),
+                ));
+            }
+            shown
         };
         frame.render_widget(Paragraph::new(visible).style(t.base()), main);
+        frame.render_widget(Paragraph::new(completion).style(t.base()), completion_area);
         let tail = queued.len().saturating_sub(usize::from(queued_height));
         frame.render_widget(Paragraph::new(queued[tail..].to_vec()).style(t.base()), queued_area);
 
@@ -1196,6 +1336,26 @@ pub(crate) fn fit(text: &str, width: usize) -> String {
     }
     out.push('…');
     out
+}
+
+/// One line of preformatted text cut into rows of `width` cells, spaces kept: what a command
+/// returns is aligned in columns, which wrapping at words would break.
+fn hard_wrap(line: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows = vec![String::new()];
+    let mut used = 0;
+    for c in line.chars() {
+        let w = UnicodeWidthStr::width(c.encode_utf8(&mut [0; 4]) as &str);
+        if used + w > width && used > 0 {
+            rows.push(String::new());
+            used = 0;
+        }
+        used += w;
+        if let Some(row) = rows.last_mut() {
+            row.push(c);
+        }
+    }
+    rows
 }
 
 /// `text` without its first `width` cells.

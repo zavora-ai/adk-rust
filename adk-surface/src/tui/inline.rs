@@ -57,6 +57,8 @@ pub(crate) struct Printer<W: Write> {
     prompt: Option<String>,
     /// What was printed of the box the keys answer, by decision.
     focused: Option<(String, BoxView)>,
+    /// The slash command whose output was printed last.
+    printed_output: Option<u64>,
 }
 
 impl<W: Write> Printer<W> {
@@ -77,6 +79,7 @@ impl<W: Write> Printer<W> {
             height: None,
             prompt: None,
             focused: None,
+            printed_output: None,
         }
     }
 
@@ -190,17 +193,28 @@ impl<W: Write> Printer<W> {
                 View::Thread => {}
                 View::Today => lines.extend(self.renderer.today(app, width)),
                 View::Permissions => lines.extend(self.renderer.permissions(app, width)),
-                View::Help => lines.extend(self.renderer.help()),
+                View::Help => lines.extend(self.renderer.help(app, width)),
+                // Printed once it has returned, below.
+                View::Output => {}
             }
+        }
+        // A slash command's output, once, when it returns (spec 3.3 §5.2).
+        if let Some(output) = &app.output
+            && output.result.is_some()
+            && self.printed_output != Some(output.serial)
+        {
+            self.printed_output = Some(output.serial);
+            lines.extend(self.renderer.output(app, width));
         }
 
         if self.raw {
             let (prompt, text) = self.renderer.prompt(app);
             let drawn = format!(
-                "{}{text}{:?}{}",
+                "{}{text}{:?}{}{:?}",
                 prompt.content,
                 self.renderer.placeholder(app, now),
-                app.composer.cursor
+                app.composer.cursor,
+                app.completion().map(|completion| completion.selected)
             );
             if lines.is_empty() && self.prompt.as_deref() == Some(drawn.as_str()) {
                 return Ok(self.focused_view(app));
@@ -257,7 +271,42 @@ impl<W: Write> Printer<W> {
             Some(placeholder) => {
                 spans.push(ratatui::text::Span::styled(placeholder, theme.label()))
             }
-            None => spans.push(ratatui::text::Span::styled(shown, theme.text())),
+            None => spans.push(ratatui::text::Span::styled(shown.clone(), theme.text())),
+        }
+        // The commands a `/` and the start of a name may be, after the cursor, on the same
+        // line: the chosen one marked (spec 3.3 §5.2).
+        if let Some(completion) = app.completion() {
+            let used = prompt_width + shown.width();
+            let room = width.saturating_sub(used + 3);
+            let mut hint: Vec<ratatui::text::Span<'static>> = Vec::new();
+            let mut left = room;
+            if completion.candidates.is_empty() {
+                let text = super::view::fit("no command starts with that · /help lists them", left);
+                hint.push(ratatui::text::Span::styled(text, theme.label()));
+            }
+            for (index, (name, _)) in completion.candidates.iter().enumerate() {
+                let word = format!("/{}", super::safe::safe_line(name));
+                let cost = word.width() + 3;
+                if cost > left {
+                    hint.push(ratatui::text::Span::styled("…", theme.label()));
+                    break;
+                }
+                left -= cost;
+                let style = if index == completion.selected {
+                    theme.accent().add_modifier(Modifier::BOLD)
+                } else {
+                    theme.label()
+                };
+                hint.push(ratatui::text::Span::styled(word, style));
+                hint.push(ratatui::text::Span::styled(" · ", theme.label()));
+            }
+            if hint.last().is_some_and(|span| span.content == " · ") {
+                hint.pop();
+            }
+            if !hint.is_empty() {
+                spans.push(ratatui::text::Span::raw("   "));
+                spans.extend(hint);
+            }
         }
         self.write_line(&Line::from(spans))?;
         let column = u16::try_from(prompt_width + before.width() - skipped).unwrap_or(0);
@@ -403,6 +452,7 @@ fn start(
     let mut app = App::new(surface.engine.source().app_name(), session.clone());
     app.model = surface.model.clone();
     app.place = surface.place.clone();
+    app.commands = surface.commands.clone();
     // Without bracketed paste a paste arrives as keys: a decision key with more keys right
     // behind it is typing (§7.4 rule 2).
     app.burst_guard = cfg!(windows);

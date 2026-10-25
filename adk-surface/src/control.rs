@@ -23,7 +23,7 @@ use tokio::sync::watch;
 use crate::error::{Result, SurfaceError};
 use crate::inbox::Inbox;
 use crate::origin::Caller;
-use crate::source::{AgentState, Source, SpendToday};
+use crate::source::{AgentState, AlwaysAllowOffer, RuleCommit, Source, SpendToday};
 
 /// How long the feed waits for a bus event before it reads the session again anyway, while a
 /// process runs (its turn writes the session between bus events) or the bus is unreachable.
@@ -65,6 +65,12 @@ struct Bus {
 /// pending items, which carry none of these: every decision counts as high risk, "Edit" is
 /// not offered, and a decision answered elsewhere is no longer found.
 ///
+/// "Always allow" is offered where the kernel's command host makes a standing rule of the
+/// call (`GET /api/kernel/rules/always-allow/{id}`, spec 3.3 §5.2): the rule is prepared
+/// while the decision waits and granted once the yes is recorded, as in process. A paired
+/// device's token reaches none of those routes, so a remote terminal offers Allow once, Edit
+/// and Deny.
+///
 /// # Example
 ///
 /// ```rust,no_run
@@ -86,7 +92,12 @@ pub struct ControlSource {
     daily_limit: Option<u64>,
     changes: Arc<std::sync::OnceLock<watch::Receiver<Bus>>>,
     inbox: Option<Inbox>,
+    /// "Always allow" as the kernel offers it: the engine asks every time it draws a card.
+    offers: Arc<std::sync::Mutex<Offers>>,
 }
+
+/// "Always allow" as a kernel offers it, by decision: the version asked at, and the words.
+type Offers = BTreeMap<String, (u64, Option<String>)>;
 
 impl fmt::Debug for ControlSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -115,6 +126,7 @@ impl ControlSource {
             daily_limit: None,
             changes: Arc::new(std::sync::OnceLock::new()),
             inbox,
+            offers: Arc::default(),
         }
     }
 
@@ -223,6 +235,22 @@ impl ControlSource {
 /// Whether a process in `state` is running or about to.
 fn runs(state: RunState) -> bool {
     matches!(state, RunState::Running | RunState::Queued)
+}
+
+/// How many decisions' "Always allow" offers a source keeps.
+const OFFERS: usize = 256;
+
+/// The standing rule the kernel prepared for a decision, granted once its yes is recorded.
+struct KernelRule {
+    client: ControlClient,
+    decision: String,
+}
+
+#[async_trait]
+impl RuleCommit for KernelRule {
+    async fn commit(self: Box<Self>) -> Result<()> {
+        Ok(self.client.grant_always_allow(&self.decision).await?)
+    }
 }
 
 /// An inbox item, over a named pipe, as a request: risk high, as the item does not say.
@@ -344,6 +372,35 @@ impl Source for ControlSource {
         // so the card says who answered.
         request.decisions.push(decision);
         Ok(request)
+    }
+
+    async fn always_allow_offer(&self, request: &ApprovalRequest) -> Option<AlwaysAllowOffer> {
+        let known = |offers: &Offers| {
+            offers
+                .get(&request.id)
+                .filter(|(version, _)| *version == request.version)
+                .map(|(_, label)| label.clone())
+        };
+        if let Some(label) = known(&self.offers.lock().unwrap_or_else(|e| e.into_inner())) {
+            return label.map(|label| AlwaysAllowOffer { label });
+        }
+        // A kernel without the route, or a device's token, offers none.
+        let label = self.client.always_allow_offer(&request.id).await.ok().flatten();
+        let mut offers = self.offers.lock().unwrap_or_else(|e| e.into_inner());
+        if offers.len() >= OFFERS {
+            offers.clear();
+        }
+        offers.insert(request.id.clone(), (request.version, label.clone()));
+        label.map(|label| AlwaysAllowOffer { label })
+    }
+
+    async fn prepare_always_allow(
+        &self,
+        _caller: &Caller,
+        request: &ApprovalRequest,
+    ) -> Result<Box<dyn RuleCommit>> {
+        self.client.prepare_always_allow(&request.id).await?;
+        Ok(Box::new(KernelRule { client: self.client.clone(), decision: request.id.clone() }))
     }
 
     async fn agents(&self, user: &str) -> Result<Vec<AgentState>> {

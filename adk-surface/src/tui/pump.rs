@@ -12,6 +12,7 @@ use tokio::sync::{Notify, mpsc, watch};
 use tokio::task::{JoinHandle, JoinSet};
 
 use super::app::{Failure, Update};
+use super::commands::{CommandContext, TerminalCommand};
 use crate::engine::Command;
 use crate::engine::{FeedFrame, SurfaceEngine};
 use crate::error::SurfaceError;
@@ -113,7 +114,7 @@ async fn run_command(
 #[derive(Default)]
 pub(crate) struct Commands {
     running: JoinSet<()>,
-    what: Arc<Mutex<HashMap<tokio::task::Id, &'static str>>>,
+    what: Arc<Mutex<HashMap<tokio::task::Id, String>>>,
 }
 
 impl Commands {
@@ -135,7 +136,35 @@ impl Commands {
         };
         let handle =
             self.running.spawn(run_command(engine.clone(), caller.clone(), command, tx.clone()));
-        self.what.lock().unwrap_or_else(|e| e.into_inner()).insert(handle.id(), what);
+        self.track(handle.id(), what.to_string());
+    }
+
+    /// Runs `command`, a slash command the embedder added, with `args` in `context`'s session;
+    /// what it returns comes back as the `serial`-th command's output (spec 3.3 §5.2).
+    pub(crate) fn run_added(
+        &mut self,
+        command: Arc<dyn TerminalCommand>,
+        args: String,
+        context: CommandContext,
+        serial: u64,
+        tx: &mpsc::UnboundedSender<Update>,
+    ) {
+        let what = if args.is_empty() {
+            format!("/{}", command.name())
+        } else {
+            format!("/{} {args}", command.name())
+        };
+        let tx = tx.clone();
+        let handle = self.running.spawn(async move {
+            let result = command.run(&args, &context).await.map_err(|error| error.message);
+            let _ = tx.send(Update::CommandDone { serial, result });
+        });
+        self.track(handle.id(), what);
+    }
+
+    /// Notes what the task `id` carries out, and reaps those finished.
+    fn track(&mut self, id: tokio::task::Id, what: String) {
+        self.what.lock().unwrap_or_else(|e| e.into_inner()).insert(id, what);
         // Finished commands are reaped as new ones go, so the set holds only those running.
         while let Some(done) = self.running.try_join_next_with_id() {
             let id = match done {
@@ -153,7 +182,7 @@ impl Commands {
 
     /// Waits up to `wait` for the commands still on their way; returns what did not finish
     /// in that time, which is then abandoned.
-    pub(crate) async fn finish(mut self, wait: Duration) -> Vec<&'static str> {
+    pub(crate) async fn finish(mut self, wait: Duration) -> Vec<String> {
         let what = Arc::clone(&self.what);
         let drained = tokio::time::timeout(wait, async {
             while let Some(done) = self.running.join_next_with_id().await {
@@ -168,7 +197,7 @@ impl Commands {
         if drained.is_ok() {
             return Vec::new();
         }
-        let left = what.lock().unwrap_or_else(|e| e.into_inner()).values().copied().collect();
+        let left = what.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect();
         self.running.abort_all();
         left
     }

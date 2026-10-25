@@ -7,11 +7,13 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use serde_json::Value;
 
+use super::commands::{Commands, Completion};
 use super::view::needs_details;
 use crate::engine::{Command, CommandOutcome, FeedFrame};
 use crate::model::{
     AgentRow, Briefing, DecidedAnswer, DecisionCard, FeedEntry, Mode, StatusLine, ThreadItem,
 };
+use crate::origin::Via;
 use crate::rules::Answer;
 use crate::words;
 
@@ -77,6 +79,11 @@ pub(crate) enum Update {
     },
     /// Boxed: a command's outcome may carry a whole decision card.
     Outcome(Box<Result<CommandOutcome, Failure>>),
+    /// What the `serial`-th slash command an embedder added returned, or why it failed.
+    CommandDone {
+        serial: u64,
+        result: Result<String, String>,
+    },
     Error(String),
 }
 
@@ -91,6 +98,13 @@ pub(crate) enum Effect {
     Unqueue(String),
     /// Read "While you were away" again now: Today was opened.
     Briefing,
+    /// Run the slash command `name` an embedder added, with `args`; its output is the
+    /// `serial`-th the terminal shows (spec 3.3 §5.2).
+    RunCommand {
+        serial: u64,
+        name: String,
+        args: String,
+    },
     Quit,
 }
 
@@ -101,6 +115,19 @@ pub(crate) enum View {
     Today,
     Permissions,
     Help,
+    /// What a slash command an embedder added returned (spec 3.3 §5.2).
+    Output,
+}
+
+/// A slash command run from the message box, as the Output view shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CommandOutput {
+    /// Which run it is: an answer of an earlier run is never shown for a later one.
+    pub serial: u64,
+    /// What was typed, as `/rules rm 2`.
+    pub line: String,
+    /// What it returned, or why it failed; `None` while it runs.
+    pub result: Option<Result<String, String>>,
 }
 
 /// What the message box holds.
@@ -253,6 +280,8 @@ pub(crate) struct DecidedLine {
     pub text: String,
     /// How it was answered, for its mark.
     pub answer: DecidedAnswer,
+    /// Where it was answered, as "in Telegram", when the record says.
+    pub place: Option<String>,
     /// The thread's last entry when it was decided: where it goes when no line names it.
     pub after_seq: u64,
 }
@@ -343,6 +372,16 @@ pub(crate) struct App {
     /// How many rows of the call the box shows at once, and whether PageDown moves them.
     box_window: usize,
     box_scrolls: bool,
+    /// The commands the terminal offers, its own and its embedder's (spec 3.3 §5.2).
+    pub commands: Commands,
+    /// The completion candidate the arrows chose.
+    completion_selected: usize,
+    /// The last slash command run from the message box, and what it returned.
+    pub output: Option<CommandOutput>,
+    /// How many slash commands were run.
+    runs: u64,
+    /// Rows scrolled down in a view other than the thread.
+    pub view_scroll: usize,
     pub quit: bool,
 }
 
@@ -387,8 +426,25 @@ impl App {
             box_unread: false,
             box_window: 0,
             box_scrolls: false,
+            commands: Commands::default(),
+            completion_selected: 0,
+            output: None,
+            runs: 0,
+            view_scroll: 0,
             quit: false,
         }
+    }
+
+    /// The completion of a command being typed: while the message box holds `/` and the start
+    /// of a name, and it holds a message (spec 3.3 §5.2).
+    pub(crate) fn completion(&self) -> Option<Completion> {
+        if self.input != Input::Message {
+            return None;
+        }
+        let mut completion = Completion::of(&self.composer.text, &self.commands)?;
+        completion.selected =
+            self.completion_selected.min(completion.candidates.len().saturating_sub(1));
+        Some(completion)
     }
 
     /// Adds a notice: a problem stays until the next key, anything else for a moment.
@@ -581,12 +637,16 @@ impl App {
             card.status_text.clone()
         };
         let answer = card.decided.as_ref().map_or(DecidedAnswer::Unknown, |decided| decided.answer);
+        let place = card.decided.as_ref().and_then(|decided| decided.via.as_ref()).map(Via::phrase);
         let after_seq = self.entries.last().map_or(0, |entry| entry.seq);
         match self.decided.iter_mut().find(|line| line.id == card.id) {
             Some(line) => {
                 text.clone_into(&mut line.text);
                 if answer != DecidedAnswer::Unknown {
                     line.answer = answer;
+                }
+                if place.is_some() {
+                    line.place = place;
                 }
             }
             None => self.decided.push(DecidedLine {
@@ -595,6 +655,7 @@ impl App {
                 status,
                 text: text.to_string(),
                 answer,
+                place,
                 after_seq,
             }),
         }
@@ -666,6 +727,13 @@ impl App {
                         }
                     }
                     Err(Failure { text, gone: None }) => self.notice(text, Tone::Problem),
+                }
+            }
+            Update::CommandDone { serial, result } => {
+                if let Some(output) = &mut self.output
+                    && output.serial == serial
+                {
+                    output.result = Some(result);
                 }
             }
             Update::Error(error) => self.notice(error, Tone::Problem),
@@ -777,6 +845,7 @@ impl App {
         self.type_held();
         self.composer.insert_str(text);
         self.last_typed = Some(now);
+        self.completion_selected = 0;
     }
 
     /// When a held decision key answers, if no other key comes first.
@@ -818,6 +887,7 @@ impl App {
         // Any change to the message box disarms the decision keys for a moment (S-I4).
         if (self.composer.edits, &self.input) != (before.0, &before.1) {
             self.last_typed = Some(now);
+            self.completion_selected = 0;
         }
         effects
     }
@@ -836,6 +906,29 @@ impl App {
             self.pending = None;
             self.composer.insert(c);
             return Vec::new();
+        }
+        // While a command's name is typed, Tab completes it, the arrows choose among the
+        // commands it may be, and Esc clears it (spec 3.3 §5.2).
+        if !ctrl && let Some(completion) = self.completion() {
+            match key.code {
+                KeyCode::Tab => {
+                    if let Some(text) = completion.accept() {
+                        self.composer.set(text);
+                    }
+                    return Vec::new();
+                }
+                KeyCode::BackTab | KeyCode::Up | KeyCode::Down => {
+                    let mut moved = completion;
+                    moved.step(if key.code == KeyCode::Down { 1 } else { -1 });
+                    self.completion_selected = moved.selected;
+                    return Vec::new();
+                }
+                KeyCode::Esc => {
+                    self.composer.take();
+                    return Vec::new();
+                }
+                _ => {}
+            }
         }
         match (key.code, ctrl) {
             (KeyCode::Char('c'), true) => {
@@ -879,6 +972,15 @@ impl App {
             (KeyCode::Tab | KeyCode::BackTab, _) if self.input != Input::Message => Vec::new(),
             (KeyCode::Tab, _) => self.next_agent(1),
             (KeyCode::BackTab, _) => self.next_agent(-1),
+            // Help, Today and a command's output scroll by a page.
+            (KeyCode::PageUp, _) if self.view != View::Thread => {
+                self.view_scroll = self.view_scroll.saturating_sub(PAGE);
+                Vec::new()
+            }
+            (KeyCode::PageDown, _) if self.view != View::Thread => {
+                self.view_scroll = self.view_scroll.saturating_add(PAGE);
+                Vec::new()
+            }
             // Within a box whose call shows a window at a time, the keys move the window by
             // its own height, so no row of the call is ever skipped (§7.1).
             (KeyCode::PageUp, _) => {
@@ -945,6 +1047,9 @@ impl App {
     fn set_view(&mut self, view: View, now: Instant) {
         if view == View::Thread && self.view != View::Thread {
             self.rearm(now);
+        }
+        if view != self.view {
+            self.view_scroll = 0;
         }
         self.view = view;
         self.pending = None;
@@ -1113,16 +1218,19 @@ impl App {
         {
             return None;
         }
+        if !self.closed_said {
+            let place = self
+                .decided
+                .iter()
+                .find(|line| line.id == id)
+                .and_then(|line| line.place.clone())
+                .unwrap_or_else(|| "somewhere else".to_string());
+            self.notice(format!("Already answered {place}."), Tone::Decided);
+        }
         // `n` opens a reason as it would have, so the reason typed next goes nowhere instead
         // of into a message; Enter then says it was not sent.
         if c == 'n' {
             self.input = Input::DenyReason { id, version };
-        }
-        if !self.closed_said {
-            self.notice(
-                format!("{} — answered somewhere else, so your key did nothing.", words::DECIDED),
-                Tone::Decided,
-            );
         }
         self.closed_said = true;
         Some(Vec::new())
@@ -1260,6 +1368,15 @@ impl App {
                 vec![Effect::Execute(command)]
             }
             Input::Message => {
+                // Enter on the start of a name runs the command the completion chose.
+                if let Some(completion) = self.completion()
+                    && !completion.whole()
+                    && let Some(chosen) = completion.chosen()
+                {
+                    let chosen = chosen.to_string();
+                    self.composer.take();
+                    return self.slash(&chosen, now);
+                }
                 let text = self.composer.take();
                 let text = text.trim();
                 if text.is_empty() {
@@ -1279,7 +1396,7 @@ impl App {
         }
     }
 
-    /// `/` commands.
+    /// `/` commands: the terminal's own, then those its embedder added (spec 3.3 §5.2).
     fn slash(&mut self, line: &str, now: Instant) -> Vec<Effect> {
         let (name, rest) = line.split_once(' ').unwrap_or((line, ""));
         let rest = rest.trim();
@@ -1302,6 +1419,11 @@ impl App {
                 self.set_view(View::Help, now);
                 Vec::new()
             }
+            // The bare `/mode` and `/session` show what the embedder's command of that name
+            // shows, as the REPL's do.
+            "mode" | "session" if rest.is_empty() && self.commands.shadowed(name).is_some() => {
+                self.run_command(name, rest, now)
+            }
             "mode" => match parse_mode(rest) {
                 Some(mode) => vec![Effect::Execute(Command::SetMode {
                     session_id: self.session.clone(),
@@ -1321,19 +1443,45 @@ impl App {
                     Vec::new()
                 }
             },
+            "session" if rest.is_empty() => {
+                self.notice(
+                    format!(
+                        "This session is {}. /session new opens another; /session ID opens one.",
+                        self.session
+                    ),
+                    Tone::Info,
+                );
+                Vec::new()
+            }
             "session" => {
-                let session = (!rest.is_empty() && rest != "new").then(|| rest.to_string());
+                let session = (rest != "new").then(|| rest.to_string());
                 vec![Effect::OpenSession(session)]
             }
+            other if self.commands.find(other).is_some() => self.run_command(other, rest, now),
             other => {
                 self.notice(format!("No command /{other}. /help lists them."), Tone::Problem);
                 Vec::new()
             }
         }
     }
+
+    /// Runs the embedder's command `name` with `args`; the Output view shows it running, then
+    /// what it returned.
+    fn run_command(&mut self, name: &str, args: &str, now: Instant) -> Vec<Effect> {
+        self.runs += 1;
+        let line = if args.is_empty() { format!("/{name}") } else { format!("/{name} {args}") };
+        self.output = Some(CommandOutput { serial: self.runs, line, result: None });
+        self.set_view(View::Output, now);
+        vec![Effect::RunCommand {
+            serial: self.runs,
+            name: name.to_string(),
+            args: args.to_string(),
+        }]
+    }
 }
 
-/// A mode from its §8.1 words, in any case.
+/// A mode from its §8.1 words, or the harness's own (`read-only`, `plan`, `ask`, `auto`), in
+/// any case.
 fn parse_mode(text: &str) -> Option<Mode> {
     let text = text.to_lowercase();
     [
@@ -1341,6 +1489,10 @@ fn parse_mode(text: &str) -> Option<Mode> {
         (words::SUGGEST, Mode::Suggest),
         (words::ASK_FIRST, Mode::AskFirst),
         (words::GO_AHEAD, Mode::GoAhead),
+        ("read-only", Mode::JustLook),
+        ("plan", Mode::Suggest),
+        ("ask", Mode::AskFirst),
+        ("auto", Mode::GoAhead),
     ]
     .into_iter()
     .find(|(word, _)| word.to_lowercase() == text)
