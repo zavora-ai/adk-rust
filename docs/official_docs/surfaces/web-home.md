@@ -43,6 +43,12 @@ the page as root routes. Both go on `ServerBuilder`, behind the extractor that i
 caller: every route of the API checks its caller against the session owner (spec 3.3 §11 S-I8)
 and answers `401` without one.
 
+> **Important:** **Stop all** and **Resume all** are the exception to S-I8: they freeze and
+> unfreeze every run of the source, whoever started it, and with a shared `GovernanceControl`
+> every run of the server. Build the engine with `.stops_need("operator")`, and give that scope
+> to the operator only in your extractor; any other caller gets `403 surface.operator_only`
+> (§11 S-I10). Without `stops_need`, every caller the server admits may stop and resume.
+
 ```rust
 use std::sync::Arc;
 
@@ -53,7 +59,8 @@ use adk_session::SessionService;
 use adk_surface::{LocalSource, SurfaceEngine};
 use async_trait::async_trait;
 
-/// Admits every request as `ana`; a deployment uses its own authentication.
+/// Admits every request as `ana`, who runs this server; a deployment uses its own
+/// authentication and gives the `operator` scope to its operator only.
 struct Owner;
 
 #[async_trait]
@@ -64,7 +71,7 @@ impl RequestContextExtractor for Owner {
     ) -> Result<RequestContext, RequestContextError> {
         Ok(RequestContext {
             user_id: "ana".into(),
-            scopes: vec!["owner".into()],
+            scopes: vec!["operator".into()],
             metadata: Default::default(),
         })
     }
@@ -91,7 +98,8 @@ fn app(
         .approvals(approvals)
         .runner(Arc::new(runner))
         .build()?;
-    let engine = SurfaceEngine::builder(Arc::new(source)).build();
+    // Stop all and Resume all reach every run of the server: the operator's only.
+    let engine = SurfaceEngine::builder(Arc::new(source)).stops_need("operator").build();
     let config = ServerConfig::new(loader, sessions)
         .with_request_context(Arc::new(Owner))
         .with_governance(control);

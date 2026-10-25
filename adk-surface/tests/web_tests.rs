@@ -324,3 +324,54 @@ async fn only_a_take_over_card_takes_a_secret() {
     let entry = service.get("apr-1").await.unwrap().unwrap();
     assert_eq!(entry.decisions, vec![], "nothing was decided");
 }
+
+/// The router mounted with one person's scope.
+fn api_as(engine: SurfaceEngine, user: &str, scope: &str) -> axum::Router {
+    axum::Router::new().nest("/api", adk_surface::web::router(engine)).layer(axum::Extension(Some(
+        RequestContext {
+            user_id: user.into(),
+            scopes: vec![scope.into()],
+            metadata: Default::default(),
+        },
+    )))
+}
+
+/// Stop all and Resume all freeze and unfreeze every run of the source, whoever started it, so
+/// an engine built with `stops_need` gives them to that group only (spec 3.3 §11 S-I10): any
+/// other caller the server admits gets `403 surface.operator_only`, and nothing changes.
+#[tokio::test]
+async fn only_the_operator_stops_or_resumes_every_run_of_a_mounted_home() {
+    let control = adk_core::GovernanceControl::new();
+    let source = LocalSource::builder(APP)
+        .sessions(sessions().await)
+        .approvals(service())
+        .governance(control.clone())
+        .build()
+        .unwrap();
+    let engine = SurfaceEngine::builder(Arc::new(source)).stops_need("operator").build();
+    let viewer = api_as(engine.clone(), "bo", "viewer");
+    let operator = api_as(engine, OWNER, "operator");
+    let command = |kind: &str| json!({ "surface": "web", "origin": { "kind": "pointer" }, "command": { "type": kind } });
+
+    let (status, problem) =
+        call(&viewer, "POST", "/api/surface/commands", Some(command("stopAll"))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["error"]["code"], "surface.operator_only", "{problem}");
+    assert!(!control.is_frozen(), "another user froze nothing");
+
+    let (status, outcome) =
+        call(&operator, "POST", "/api/surface/commands", Some(command("stopAll"))).await;
+    assert_eq!((status, outcome["type"].clone()), (StatusCode::OK, json!("stopped")), "{outcome}");
+    assert!(control.is_frozen());
+
+    let (status, problem) =
+        call(&viewer, "POST", "/api/surface/commands", Some(command("resumeAll"))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["error"]["code"], "surface.operator_only", "{problem}");
+    assert!(control.is_frozen(), "another user lifted no freeze");
+
+    let (status, outcome) =
+        call(&operator, "POST", "/api/surface/commands", Some(command("resumeAll"))).await;
+    assert_eq!((status, outcome["type"].clone()), (StatusCode::OK, json!("resumed")), "{outcome}");
+    assert!(!control.is_frozen());
+}

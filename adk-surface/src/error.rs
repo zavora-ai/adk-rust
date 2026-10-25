@@ -27,6 +27,16 @@ pub enum SurfaceError {
     /// The caller may not do this from here (spec 3.3 §7.4, §11 S-I10).
     #[error("{0}")]
     NotHere(String),
+    /// Stop all or Resume all from a caller outside the group the engine keeps them for
+    /// (spec 3.3 §11 S-I10).
+    #[error(
+        "stopping and resuming every agent needs the `{group}` group: they freeze and unfreeze \
+         every run this server makes"
+    )]
+    OperatorOnly {
+        /// The group they need.
+        group: String,
+    },
     /// The source cannot do this.
     #[error(
         "{what} is not available from this source; run the surface on a kernel or harness that provides it"
@@ -55,12 +65,14 @@ impl SurfaceError {
     }
 
     /// The error code: `surface.not_found`, a rule's code, `surface.not_here`,
-    /// `surface.unsupported`, `surface.invalid`, or the source's own code.
+    /// `surface.operator_only`, `surface.unsupported`, `surface.invalid`, or the source's own
+    /// code.
     pub fn code(&self) -> String {
         match self {
             Self::NotFound { .. } => "surface.not_found".to_string(),
             Self::Rule(rule) => rule.code().to_string(),
             Self::NotHere(_) => "surface.not_here".to_string(),
+            Self::OperatorOnly { .. } => "surface.operator_only".to_string(),
             Self::Unsupported { .. } => "surface.unsupported".to_string(),
             Self::Invalid(_) => "surface.invalid".to_string(),
             Self::Source(error) => error.code.to_string(),
@@ -84,6 +96,9 @@ impl From<SurfaceError> for AdkError {
             SurfaceError::NotFound { .. } => (ErrorCategory::NotFound, "surface.not_found"),
             SurfaceError::Rule(rule) => (ErrorCategory::Forbidden, rule.code()),
             SurfaceError::NotHere(_) => (ErrorCategory::Forbidden, "surface.not_here"),
+            SurfaceError::OperatorOnly { .. } => {
+                (ErrorCategory::Forbidden, "surface.operator_only")
+            }
             SurfaceError::Unsupported { .. } => (ErrorCategory::Unsupported, "surface.unsupported"),
             SurfaceError::Invalid(_) => (ErrorCategory::InvalidInput, "surface.invalid"),
             SurfaceError::Source(_) => (ErrorCategory::Internal, "surface.source"),

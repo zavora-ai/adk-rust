@@ -7,7 +7,12 @@
 //! with `ServerBuilder::add_api_routes`, beside the kernel's control-plane routes, so the
 //! server's auth middleware puts the caller's `RequestContext` in every request. Every route
 //! needs that caller (`401` without one) and reads or acts only on the caller's own sessions
-//! and decisions (spec 3.3 §11 S-I8): anything else answers `404`.
+//! and decisions (spec 3.3 §11 S-I8): anything else answers `404`. **Stop all** and **Resume
+//! all** are the exception: they freeze and unfreeze every run of the source, so a server
+//! that admits more than one person builds its engine with
+//! [`SurfaceEngineBuilder::stops_need`](crate::SurfaceEngineBuilder::stops_need), and a caller
+//! without that group (the `RequestContext`'s scopes) gets `403 surface.operator_only`
+//! (§11 S-I10).
 //!
 //! | Route (under `/api`) | Answer |
 //! |---|---|
@@ -98,6 +103,10 @@ pub const PAIRED_LOCAL_METADATA_KEY: &str = "surface.pairedLocal";
 
 /// The engine's routes, relative to `/api` (spec 3.3 §6).
 ///
+/// **Stop all** and **Resume all** act on every run of the engine's source: build the engine
+/// with [`stops_need`](crate::SurfaceEngineBuilder::stops_need) so only the operator gives them
+/// (spec 3.3 §11 S-I10).
+///
 /// # Example
 ///
 /// ```rust,no_run
@@ -105,7 +114,7 @@ pub const PAIRED_LOCAL_METADATA_KEY: &str = "surface.pairedLocal";
 /// use adk_surface::{LocalSource, SurfaceEngine};
 ///
 /// # fn example(source: LocalSource, builder: adk_server::ServerBuilder) {
-/// let engine = SurfaceEngine::builder(Arc::new(source)).build();
+/// let engine = SurfaceEngine::builder(Arc::new(source)).stops_need("operator").build();
 /// let builder = builder.add_api_routes(adk_surface::web::router(engine));
 /// # let _ = builder;
 /// # }

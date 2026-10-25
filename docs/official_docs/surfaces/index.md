@@ -194,7 +194,7 @@ call's own arguments.
 | Answer | When |
 |---|---|
 | `401` | No authenticated caller |
-| `403` | A rule of §7.2 or §7.4 refuses the command |
+| `403` | A rule of §7.2 or §7.4 refuses the command; `surface.operator_only` for **Stop all** or **Resume all** from a caller outside the group `SurfaceEngineBuilder::stops_need` names (§11 S-I10) |
 | `404` | Not the caller's session or decision |
 | `400` | A malformed command, or a chat or agent origin, which reach the engine in process from their adapters |
 

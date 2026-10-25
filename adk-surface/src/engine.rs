@@ -233,6 +233,7 @@ pub struct SurfaceEngineBuilder {
     poll: Duration,
     clock: Arc<dyn Clock>,
     voice_window: Duration,
+    stops_need: Option<String>,
 }
 
 impl fmt::Debug for SurfaceEngineBuilder {
@@ -341,6 +342,28 @@ impl SurfaceEngineBuilder {
         self
     }
 
+    /// Lets only callers in `group` give **Stop all** and **Resume all** (spec 3.3 §11
+    /// S-I10). Both act on every run the source makes, whoever started it, so a server that
+    /// admits more than one person keeps them for its operator; any other caller gets
+    /// `surface.operator_only`. Without it, every caller may.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use adk_surface::{LocalSource, SurfaceEngine};
+    ///
+    /// # fn example(source: LocalSource) {
+    /// let engine = SurfaceEngine::builder(Arc::new(source)).stops_need("operator").build();
+    /// # let _ = engine;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn stops_need(mut self, group: impl Into<String>) -> Self {
+        self.stops_need = Some(group.into());
+        self
+    }
+
     /// The engine.
     pub fn build(mut self) -> SurfaceEngine {
         if !self.quiet_set {
@@ -355,6 +378,7 @@ impl SurfaceEngineBuilder {
                 poll: self.poll,
                 clock: self.clock,
                 voice_window: self.voice_window,
+                stops_need: self.stops_need,
                 queues: Mutex::new(HashMap::new()),
                 draining: Mutex::new(HashSet::new()),
                 spoken: Mutex::new(HashMap::new()),
@@ -400,6 +424,8 @@ struct Inner {
     poll: Duration,
     clock: Arc<dyn Clock>,
     voice_window: Duration,
+    /// The group Stop all and Resume all need, when only some callers may give them.
+    stops_need: Option<String>,
     /// Input queued behind an open decision, per (user, session), oldest first.
     queues: Mutex<HashMap<(String, String), VecDeque<String>>>,
     /// Sessions with a delivery loop running.
@@ -430,6 +456,7 @@ impl SurfaceEngine {
             poll: DEFAULT_POLL_INTERVAL,
             clock: Arc::new(SystemClock),
             voice_window: Duration::from_secs(u64::from(rules::VOICE_CANCEL_WINDOW_SECS)),
+            stops_need: None,
         }
     }
 
@@ -746,6 +773,7 @@ impl SurfaceEngine {
     /// | `surface.confirm_presence` | A high-risk approval without confirming it is you |
     /// | `surface.call_not_expanded` | A truncated call approved before it was expanded |
     /// | `surface.not_here` | An agent answering, resuming outside the home, loosening the mode from chat or voice |
+    /// | `surface.operator_only` | Stop all or Resume all from a caller outside the group [`stops_need`](SurfaceEngineBuilder::stops_need) names |
     /// | `surface.unsupported` | The source cannot do it |
     /// | the source's code | The source failed |
     pub async fn execute(&self, caller: &Caller, command: Command) -> Result<CommandOutcome> {
@@ -757,8 +785,14 @@ impl SurfaceEngine {
             Command::CancelAnswer { decision_id } => self.cancel_answer(caller, &decision_id).await,
             Command::Send { session_id, text } => self.send(caller, session_id, text, false).await,
             Command::Queue { session_id, text } => self.send(caller, session_id, text, true).await,
-            Command::StopAll { reason } => self.stop_all(caller, reason).await,
-            Command::ResumeAll => self.resume_all(caller).await,
+            Command::StopAll { reason } => {
+                self.may_stop(caller)?;
+                self.stop_all(caller, reason).await
+            }
+            Command::ResumeAll => {
+                self.may_stop(caller)?;
+                self.resume_all(caller).await
+            }
             Command::SetMode { session_id, mode } => self.set_mode(caller, &session_id, mode).await,
         }
     }
@@ -1081,6 +1115,17 @@ impl SurfaceEngine {
     /// recorded outside [`execute`](Self::execute), such as a take over (spec 3.3 §7.4 rule 2).
     pub fn deliver_queued(&self, caller: &Caller, session: &str) {
         self.spawn_drain(caller.clone(), session.to_string());
+    }
+
+    /// Stop all and Resume all reach every run, so they need the group set with
+    /// [`SurfaceEngineBuilder::stops_need`] (spec 3.3 §11 S-I10).
+    fn may_stop(&self, caller: &Caller) -> Result<()> {
+        match &self.inner.stops_need {
+            Some(group) if !caller.groups.iter().any(|held| held == group) => {
+                Err(SurfaceError::OperatorOnly { group: group.clone() })
+            }
+            _ => Ok(()),
+        }
     }
 
     async fn stop_all(&self, caller: &Caller, reason: Option<String>) -> Result<CommandOutcome> {
