@@ -65,6 +65,7 @@
 
 pub mod cron;
 pub mod scheduler;
+pub mod table;
 pub mod worker;
 
 use std::collections::{BTreeMap, HashMap};
@@ -92,6 +93,7 @@ pub use cron::{
     cron_jobs_router, cron_jobs_router_with_state, start_cron_scheduler, validate_cron_expression,
 };
 pub use scheduler::{DurableScheduler, SchedulerTick};
+pub use table::AgentTable;
 pub use worker::{
     DurableWorker, DurableWorkerConfig, FREEZE_PAUSED_NOTICE, FREEZE_RESUMED_ACTION,
     FREEZE_RESUMED_NOTICE, GovernanceRefusal, ParkReason, WorkerHandle, WorkerHooks,

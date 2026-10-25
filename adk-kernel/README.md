@@ -65,6 +65,7 @@ adk-rust memory undo <tick-id>
 | Service | `adk-rust up --install` makes the kernel a service under your account that the system starts and restarts on failure: a launchd agent on macOS, a systemd user unit on Linux, a Windows service; `--uninstall` removes it |
 | Self-observation (`/proc`) | A content-free ledger of what your agents did — kinds, durations and hashed subjects, never what they read or wrote. Once a day the kernel compares your routine with its last four weeks and, when it changes for long enough, asks you about it in plain words (`adk-rust proc`) |
 | Partitions | Separate compartments, such as work and home, each run by an agent of its own with its own memory, drivers and mode. Nothing crosses between them except through the coordinator, and only with your approval |
+| Your agents | Agents you add beside the primary one, by asking it or by hand: kept by the kernel across restarts, hosted while it runs, paused or removed whenever you choose. An agent may suggest one; only you add it |
 | Stores | Processes, schedules, the agenda and the ledger live in SQLite (`harness.db`) or a shared PostgreSQL or Redis backend, so a crash or restart resumes work instead of losing it |
 
 Every tool call a kernel process makes still goes through the harness's modes, standing rules
@@ -91,6 +92,7 @@ builds a kernel from a harness (`Harness::kernel`).
 | Agenda | `Kernel::agenda`: proposals (`propose`, `approve`, `reject`, `schedule`) under a `ProactivityPolicy` — held, put to the approvals inbox, or scheduled by the partition's mode, bounded by open items, a daily budget and quiet hours; the harness's `propose_followup` lands here |
 | Admission | Before a claimed process's first model call: per-partition `Quotas`, `QuietHours`, the day's spend, and preemption of the youngest background process by a human turn at quota |
 | Consolidation tick | With `ProactivityPolicy::consolidation` and a `Consolidator` per partition (`KernelBuilder::consolidator`), a `Maintenance` process (`kernel.consolidation`) on the `maintenance` queue once `admit_tick` holds: new material, `min_interval`, `debounce` idle, outside quiet hours, within `budget_share` of the daily proactive budget and `max_tokens_per_tick`; its proposals are `Consolidation` agenda items a person approves in every mode |
+| Agents | `Kernel::agents`: the audited table of the agents a person adds (spec 3.3 §5.7): `preview` then `apply` with the preview's digest, `propose` for a suggesting agent, `pause`, `resume`, `remove`; `AgentStore` on every backend; an `AgentFactory` builds each into a live target table every worker reads |
 | Drivers | `drivers::DriverSupervisor`: MCP servers run as supervised child processes under the manifests the user approved, in the OS sandbox, with brokered secrets; a changed tool declaration needs re-approval, and a call parked on its server's question survives a restart by re-issue |
 
 ## Installation

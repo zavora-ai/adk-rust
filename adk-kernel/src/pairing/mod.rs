@@ -26,7 +26,7 @@
 //!
 //! | Scope | Routes (under `/api`) |
 //! |---|---|
-//! | [`DeviceScope::Read`] | `GET /kernel/health`, `GET /kernel/processes`, `GET /kernel/events`, `POST /kernel/attach/{session}`, `GET /kernel/agenda`, `GET /approvals`, `GET /approvals/{id}`; `GET /kernel/settings[/{partition}]`, `GET /kernel/away`, `POST /kernel/away/seen`, `GET /kernel/away/lines/{seq}`, `GET /kernel/memory`, `GET /kernel/record`, `GET /kernel/record/check` (spec 3.3 §10 K3–K5) |
+//! | [`DeviceScope::Read`] | `GET /kernel/health`, `GET /kernel/processes`, `GET /kernel/events`, `POST /kernel/attach/{session}`, `GET /kernel/agenda`, `GET /approvals`, `GET /approvals/{id}`; `GET /kernel/settings[/{partition}]`, `GET /kernel/away`, `POST /kernel/away/seen`, `GET /kernel/away/lines/{seq}`, `GET /kernel/memory`, `GET /kernel/record`, `GET /kernel/record/check` (spec 3.3 §10 K3–K5); `GET /kernel/agents[/{id}]` (spec 3.3 §10 K7) |
 //! | [`DeviceScope::Decide`] | `POST /approvals/{id}/decide`, low and medium risk; high risk waits for confirming it is the person (spec 3.3 §7.2) |
 //! | [`DeviceScope::Stop`] | `POST /kernel/freeze` |
 //!
@@ -1222,8 +1222,8 @@ pub fn device_scope_for(method: &Method, path: &str) -> Option<DeviceScope> {
         // closed to devices.
         | (
             "GET",
-            ["kernel", "settings" | "away" | "memory" | "record"]
-            | ["kernel", "settings", _]
+            ["kernel", "settings" | "away" | "memory" | "record" | "agents"]
+            | ["kernel", "settings" | "agents", _]
             | ["kernel", "away", "lines", _]
             | ["kernel", "record", "check"],
         )

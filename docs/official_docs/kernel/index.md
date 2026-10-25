@@ -154,3 +154,5 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
   and Redis, and on MongoDB, Firestore and Neo4j
 - [Partitions](partitions.md): one harness per partition, memory scoping, and crossings by the
   coordinator under approval
+- [Agents you create](agents.md): the agent table, suggestions a person approves, hosting,
+  pausing and removing, and the agent store on every backend

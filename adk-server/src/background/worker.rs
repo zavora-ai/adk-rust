@@ -104,6 +104,23 @@
 //!
 //! The allowlist is empty by default.
 //!
+//! A target served from a shared [`AgentTable`] is admitted by the same rules: its derived
+//! id is `urn:adk:agent:{app}/{target}`, so an agent hosted after the worker started acts
+//! as itself with no allowlist entry (spec 3.3 §10 S4).
+//!
+//! # Live targets
+//!
+//! A worker reads its targets on every claim (spec 3.3 §10 S4): first those registered with
+//! [`with_agent`](DurableWorker::with_agent), then a shared [`AgentTable`] set with
+//! [`with_agent_table`](DurableWorker::with_agent_table), then its workflows.
+//!
+//! | Claimed target | Worker |
+//! |----------------|--------|
+//! | Registered with `with_agent`, or hosted in the table | Runs it; a runner swapped in the table serves the next claim, and a claim already running finishes on the runner it started on |
+//! | Expected by the table, not built yet | Hands the run back unstarted, claimable again one `poll_interval` later; [`on_park`](WorkerHooks::on_park) with [`ParkReason::HandedBack`] |
+//! | A workflow the executor knows | Runs the workflow |
+//! | Anything else | Fails the run without retry |
+//!
 //! # Crash resume
 //!
 //! A run recovered after its lease expired resumes rather than restarting:
@@ -186,6 +203,7 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use super::table::AgentTable;
 use super::{WorkflowExecutor, WorkflowRunContext, WorkflowState};
 
 /// The shortest idle wait, so a deadline the wall clock has passed but the store has not
@@ -470,6 +488,9 @@ pub trait WorkerHooks: Send + Sync {
 pub struct DurableWorker {
     runs: Arc<dyn DurableRunStore>,
     agents: BTreeMap<String, Arc<Runner>>,
+    /// The live targets shared with the host and other workers (spec 3.3 §10 S4), read
+    /// after `agents` on every claim.
+    table: Option<AgentTable>,
     workflows: Option<Arc<dyn WorkflowExecutor>>,
     governance: Option<GovernanceControl>,
     audit: Option<AuditTrail>,
@@ -490,6 +511,7 @@ impl std::fmt::Debug for DurableWorker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DurableWorker")
             .field("agents", &self.agents.keys().collect::<Vec<_>>())
+            .field("table", &self.table)
             .field("workflows", &self.workflows.is_some())
             .field("config", &self.config)
             .field("hooks", &self.hooks.len())
@@ -538,6 +560,7 @@ impl DurableWorker {
         Self {
             runs,
             agents: BTreeMap::new(),
+            table: None,
             workflows: None,
             governance: None,
             audit: None,
@@ -553,6 +576,39 @@ impl DurableWorker {
     pub fn with_agent(mut self, target: impl Into<String>, runner: Arc<Runner>) -> Self {
         self.agents.insert(target.into(), runner);
         self
+    }
+
+    /// Reads agent targets from `table` on every claim, after those registered with
+    /// [`with_agent`](Self::with_agent) (spec 3.3 §10 S4): a target the host inserts while
+    /// the worker runs serves the next claim, one it removes is refused, and a claim of a
+    /// target the table [expects](AgentTable::expect) but has not built is handed back for
+    /// a later claim. See [Live targets](self#live-targets).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_core::InMemoryRunStore;
+    /// use adk_server::background::{AgentTable, DurableWorker};
+    ///
+    /// let table = AgentTable::new();
+    /// let worker = DurableWorker::new(Arc::new(InMemoryRunStore::new())).with_agent_table(table.clone());
+    /// assert!(!worker.has_target("finance"));
+    /// table.expect("finance");
+    /// assert!(worker.has_target("finance"), "an expected target is served once built");
+    /// ```
+    pub fn with_agent_table(mut self, table: AgentTable) -> Self {
+        self.table = Some(table);
+        self
+    }
+
+    /// The runner of agent target `target`: one registered with `with_agent`, else the
+    /// table's.
+    fn runner_for(&self, target: &str) -> Option<Arc<Runner>> {
+        self.agents
+            .get(target)
+            .cloned()
+            .or_else(|| self.table.as_ref().and_then(|table| table.get(target)))
     }
 
     /// Runs whose target is not an agent execute through `workflows`.
@@ -653,9 +709,14 @@ impl DurableWorker {
         &self.runs
     }
 
-    /// Whether `target` names a registered agent or a workflow the executor knows.
+    /// Whether `target` names a registered agent, an agent the shared table hosts or
+    /// expects, or a workflow the executor knows.
     pub fn has_target(&self, target: &str) -> bool {
         self.agents.contains_key(target)
+            || self
+                .table
+                .as_ref()
+                .is_some_and(|table| table.contains(target) || table.is_expected(target))
             || self.workflows.as_ref().is_some_and(|workflows| workflows.has_workflow(target))
     }
 
@@ -847,17 +908,21 @@ impl DurableWorker {
         if let Some(error) = self.refusal() {
             return self.hand_back(&record, epoch, &error, &span).await;
         }
+        // Read once per claim, so a runner swapped in the table mid-attempt serves the next
+        // claim and this one finishes on the runner it started on.
+        let runner = self.runner_for(&record.target);
+        if runner.is_none() && self.awaits_build(&record.target) {
+            return self.hand_back_unbuilt(&record, epoch, &span).await;
+        }
         // Registered before `on_claim`, so a suspend asked from that hook reaches the attempt.
-        let _suspendable = self
-            .agents
-            .contains_key(&record.target)
-            .then(|| Suspensions::register(&self.suspensions, &run_id, &lease));
+        let _suspendable =
+            runner.is_some().then(|| Suspensions::register(&self.suspensions, &run_id, &lease));
 
         let work = async {
             for hooks in &self.hooks {
                 hooks.on_claim(&record).await;
             }
-            let attempt = self.run_target(&record, epoch, &lease, &cancel);
+            let attempt = self.run_target(runner.as_ref(), &record, epoch, &lease, &cancel);
             match self.config.run_timeout {
                 Some(timeout) => match tokio::time::timeout(timeout, attempt).await {
                     Ok(result) => result,
@@ -981,6 +1046,36 @@ impl DurableWorker {
         None
     }
 
+    /// Whether `target` is expected by the shared table but neither built there nor a
+    /// workflow, so a claim of it waits for the host to build it (spec 3.3 §10 S4).
+    fn awaits_build(&self, target: &str) -> bool {
+        self.table.as_ref().is_some_and(|table| table.is_expected(target))
+            && !self.workflows.as_ref().is_some_and(|workflows| workflows.has_workflow(target))
+    }
+
+    /// Gives a claimed run of an expected target that is not built yet back to its queue,
+    /// claimable one poll interval later, by this worker or a replica that built it.
+    async fn hand_back_unbuilt(
+        &self,
+        record: &RunRecord,
+        epoch: u64,
+        span: &tracing::Span,
+    ) -> Option<RunRecord> {
+        let poll = chrono::Duration::from_std(self.config.poll_interval)
+            .unwrap_or_else(|_| chrono::Duration::milliseconds(500));
+        let until = chrono::Utc::now() + poll;
+        match self.runs.wait(&record.run_id, epoch, Some(until)).await {
+            Ok(()) => {
+                tracing::info!(parent: span, wait.until = %until, "target expected but not built yet; the run was handed back unstarted");
+                self.parked(record, ParkReason::HandedBack).await;
+            }
+            Err(error) => {
+                tracing::warn!(parent: span, error = %error, "could not hand the run back; it is recovered once its lease expires");
+            }
+        }
+        None
+    }
+
     /// Reads back a run this worker just parked, reports it to the `on_park` hooks, and
     /// returns it as read.
     ///
@@ -1050,12 +1145,13 @@ impl DurableWorker {
 
     async fn run_target(
         &self,
+        runner: Option<&Arc<Runner>>,
         record: &RunRecord,
         epoch: u64,
         lease: &Arc<LeaseState>,
         cancel: &CancellationToken,
     ) -> Result<Result<Attempt, Failure>, Stop> {
-        if let Some(runner) = self.agents.get(&record.target) {
+        if let Some(runner) = runner {
             let root = runner.root_agent_name();
             let own = match runner.default_principal(root).await {
                 Ok(principal) => principal,

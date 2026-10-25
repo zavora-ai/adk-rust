@@ -120,6 +120,9 @@ pub fn activity_for_event(event: &KernelEvent) -> Option<Activity> {
         KernelEvent::Observation { id, partition } => kernel(LedgerKind::Observation)
             .with_partition(partition.clone())
             .with_subject(id.clone()),
+        KernelEvent::Agent { id, change, .. } => kernel(LedgerKind::Audit)
+            .with_effect(format!("agent.{change}"))
+            .with_subject(id.clone()),
         KernelEvent::Governance { frozen, .. } => {
             kernel(LedgerKind::Governance).with_effect(if *frozen { "frozen" } else { "unfrozen" })
         }
@@ -141,6 +144,7 @@ fn event_pid(event: &KernelEvent) -> Option<&str> {
         | KernelEvent::Review(_)
         | KernelEvent::Driver { .. }
         | KernelEvent::Observation { .. }
+        | KernelEvent::Agent { .. }
         | KernelEvent::Governance { .. }
         | KernelEvent::Health(_) => None,
     }

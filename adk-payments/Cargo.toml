@@ -22,6 +22,11 @@ ap2-a2a = ["ap2"]
 ap2-mcp = ["ap2"]
 # The owner-funded wallet, its rails, anomaly alarms and reconciliation (spec 3.5 §7.14).
 wallet = ["dep:awp-types", "dep:tokio", "dep:uuid"]
+# Durable `WalletStore` backends (spec 3.5 §7.14). Each turns on `wallet` and the same backend of
+# adk-session, whose spend ledger caps the categories across instances.
+sqlite = ["wallet", "dep:sqlx", "sqlx/sqlite", "adk-session/sqlite", "serde_json/float_roundtrip"]
+postgres = ["wallet", "dep:sqlx", "sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs", "adk-session/postgres", "serde_json/float_roundtrip"]
+redis = ["wallet", "dep:fred", "adk-session/redis", "serde_json/float_roundtrip"]
 
 [dependencies]
 adk-core.workspace = true
@@ -44,6 +49,8 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["sync"], optional = true }
 uuid = { workspace = true, optional = true }
 axum = { version = "0.8", features = ["macros"], optional = true }
+fred = { version = "10", optional = true, features = ["i-scripts"] }
+sqlx = { workspace = true, optional = true, features = ["runtime-tokio"] }
 
 [dev-dependencies]
 # Internal dev-deps are path-only (no version) so cargo strips them from the
@@ -58,6 +65,7 @@ http-body-util = "0.1"
 jsonschema = { workspace = true }
 proptest = "1.5"
 serde_yaml = "0.9"
+tempfile = "3"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
 tower = { version = "0.5", features = ["util"] }
 trybuild = "1"

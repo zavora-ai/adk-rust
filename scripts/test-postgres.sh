@@ -81,6 +81,7 @@ suite "adk-kernel" -p adk-kernel --features postgres,redis,channels,charter --te
     --test channel_store_postgres \
     --test partition_store_postgres \
     --test cron_watermark_store_postgres \
+    --test agents_store_postgres \
     --test charter_store_postgres
 
 suite "adk-auth" -p adk-auth --features postgres-audit --test audit_postgres_tests
@@ -88,6 +89,9 @@ suite "adk-auth" -p adk-auth --features postgres-audit --test audit_postgres_tes
 suite "adk-rag" -p adk-rag --features pgvector --test vector_store_contract_pgvector
 
 suite "adk-managed" -p adk-managed --test durable_round_trip_tests -E 'test(/_on_postgres$/)'
+
+# The feature set matches the wallet's Redis step of CI's postgres job, so both reuse one build.
+suite "adk-payments" -p adk-payments --features sqlite,postgres,redis --test wallet_store_postgres
 
 if [[ -n "${DATABASE_URL_TLS:-}" ]]; then
     suite "adk-session TLS" -p adk-session --features postgres --test postgres_tls_tests

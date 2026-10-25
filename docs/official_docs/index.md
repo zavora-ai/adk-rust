@@ -94,6 +94,7 @@ The always-on form of the harness (`adk-kernel`, spec 3.2): durable processes th
 - [Charter, KPIs, Signals and Earned Autonomy](kernel/charter.md) - A website's charter store, KPI tracker, guardrail pauses, the autonomy ladder, typed signals from the public partition and the site process kinds (feature `charter`, spec 3.5)
 - [Kernel Store Backends](kernel/backends.md) - The process, agenda, driver, ledger, partition and cron watermark stores on in-memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore and Neo4j
 - [Partitions](kernel/partitions.md) - One harness per partition, class and tenant identity, memory scoping, crossings by the coordinator under a non-waivable approval, `kernel.partition.*` audit records
+- [Agents You Create](kernel/agents.md) - The audited agent table, suggestions only a person adds, live hosting through the agent factory, pausing and removing, the agent store on every backend, `kernel.agent.*` audit records
 
 ## Agent Surfaces
 

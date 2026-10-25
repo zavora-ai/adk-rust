@@ -47,6 +47,12 @@
 # feature (the AP2 test files import ACP and A2A helpers, so `ap2` alone leaves them unused).
 1 adk-payments wallet doc
 1 adk-payments acp,acp-experimental,ap2,ap2-a2a,ap2-mcp,wallet
+# The durable wallet stores (spec 3.5 §7.14): the SQLite suites and every backend's doctests,
+# with the PostgreSQL and Redis suites built for CI's postgres job; then each backend alone.
+1 adk-payments sqlite,postgres,redis doc
+1 adk-payments sqlite lib
+1 adk-payments postgres lib
+1 adk-payments redis lib
 # The voice surface (spec 3.1 §7.17): the harness over adk-realtime's integrated runner.
 1 adk-harness voice
 # The harness's ACP standing permissions (spec 3.3 §10 A1): adk-acp's server enters only here.

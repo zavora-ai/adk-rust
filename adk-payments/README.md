@@ -48,6 +48,7 @@ The crate combines:
 | `ap2-a2a` | Additive | AP2 A2A-oriented helpers and AgentCard metadata |
 | `ap2-mcp` | Additive | AP2 MCP-safe continuation, intervention, and receipt views |
 | `wallet` | Experimental | An owner-funded site wallet: category mandates, caps checked before execution, holds, use-based, provider-billing and (with `ap2`) AP2 rails, anomaly pauses, reconciliation, KPI source (spec 3.5 §7.14) |
+| `sqlite`, `postgres`, `redis` | Experimental | Durable wallet stores: `SqliteWalletStore`, `PostgresWalletStore`, `RedisWalletStore`; each implies `wallet` and the same adk-session backend (spec 3.5 §7.14) |
 
 No feature is enabled by default; `acp-experimental` implies `acp`, and `ap2-a2a` and `ap2-mcp`
 imply `ap2`. ACP stable is the conservative production baseline. AP2 support tracks the
@@ -376,6 +377,10 @@ advertising — from an owner-funded wallet under the owner's mandates (spec 3.5
 | Reconcile | `Wallet::reconcile_due` checks the last period against the provider's statement and each billing provider's invoice |
 | Report | `WalletKpiSource` reports spend, revenue, profit, cost per lead and cost per sale |
 
+With `sqlite`, `postgres` or `redis`, the journal, held payments and paused categories
+survive a restart and are shared by every instance of the site; with a durable spend ledger
+over the same database, instances share each category's cap.
+
 The site never opens accounts, adds payment methods, changes payees or raises a cap: no
 wallet type has a method that would. See
 [`docs/official_docs/security/wallet.md`](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/security/wallet.md).
@@ -412,6 +417,7 @@ cargo test -p adk-payments --features ap2,ap2-a2a,ap2-mcp --test ap2_governance_
 cargo test -p adk-payments --test cross_protocol_correlation_tests
 cargo test -p adk-payments --features acp-experimental --test acp_experimental_integration_tests
 cargo test -p adk-payments --features wallet,ap2 --test wallet_tests --test wallet_s12_scenario_tests --test wallet_s9_ap2_tests
+cargo test -p adk-payments --features sqlite --test wallet_store_sqlite
 ```
 
 Use these as the starting point for real implementations:

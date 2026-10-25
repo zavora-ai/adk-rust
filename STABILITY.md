@@ -159,6 +159,7 @@ A dependency whose types appear in a public signature is part of the crate's API
    | `adk-graph` | `sqlite`, `postgres` | `SqliteCheckpointer::from_pool`, `PostgresCheckpointer::from_pool` |
    | `adk-auth` | `postgres-audit` | `PostgresAuditSink::from_pool`, `PostgresAuditSink::pool` |
    | `adk-rag` | `pgvector` | `PgVectorStore::from_pool` |
+   | `adk-payments` | `sqlite`, `postgres` | `SqliteWalletStore::new` and `pool`, `PostgresWalletStore::new` and `pool` |
 
 2. **Breaking SQLx upgrades are breaking releases.** Moving these crates to a semver-incompatible SQLx release (0.8 → 0.9, 0.9 → 0.10) is a breaking change and ships only in a major ADK-Rust release, with a migration guide. A semver-compatible SQLx update is not breaking.
 

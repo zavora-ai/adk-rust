@@ -15,6 +15,7 @@ pub use super::pairing::{
     DeviceResponse, DevicesResponse, IssueRequest,
 };
 // The routes the surfaces need (spec 3.3 §10 K3–K5).
+pub use super::agents::AgentsResponse;
 #[cfg(feature = "proc")]
 pub use super::away::{
     AwayCounts, AwayKind, AwayLine, AwayLineResponse, AwayQuery, AwayResponse, DEFAULT_VIEWER,

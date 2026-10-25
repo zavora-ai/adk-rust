@@ -172,6 +172,81 @@ raises a cap (spec 3.5 A-I16):
   beyond its schema.
 - Approving beyond a mandate and resuming a paused category take a person's decision.
 
+## Durable stores
+
+`InMemoryWalletStore` keeps the journal in the process. A durable store keeps payments,
+held payments and paused categories through a restart and shares them between every
+instance of a site (spec 3.5 §7.14):
+
+| Store | Feature | Built from | Atomic steps |
+|-------|---------|------------|--------------|
+| `SqliteWalletStore` | `sqlite` | A `sqlx::SqlitePool` | `INSERT … ON CONFLICT DO NOTHING` on the wallet and idempotency key; `DELETE … RETURNING` to lift a pause |
+| `PostgresWalletStore` | `postgres` | A `sqlx::PgPool`, or `connect(url)` | The same statements, shared by every replica |
+| `RedisWalletStore` | `redis` | A `fred` client, or `connect(url)` | One Lua script per insert, update, listing and resume |
+
+Each feature turns on `wallet` and the same backend of `adk-session`, whose spend ledger
+the wallet reserves in. Every store passes `wallet::conformance::wallet_store_conformance`.
+
+| Backend | Layout | Setup |
+|---------|--------|-------|
+| SQLite, PostgreSQL | Tables `adk_wallet_payments` and `adk_wallet_pauses`, each payment and pause as JSON beside the columns a query selects on | `migrate()` once before use; steps are additive, recorded in `_adk_wallet_migrations`, and PostgreSQL runs them under an advisory lock so instances starting together migrate one at a time |
+| Redis | Keys under the namespace `adk:wallet` (`with_namespace` sets another), one hash tag per wallet, so each script touches one Redis Cluster slot | `migrate()` records the layout version and refuses keys a newer release wrote |
+
+A store refuses to start on a schema or layout a newer release wrote. Its errors are
+`wallet.store_unavailable` (retryable) and `wallet.store_corrupt`.
+
+The store keeps the journal; the cap is the spend ledger's. Two instances share a cap when
+they share a store and a durable spend ledger built with the policy's `spend_limits`, on
+the same database:
+
+```toml
+[dependencies]
+adk-core = "3.0.0"
+adk-payments = { version = "3.0.0", features = ["postgres"] }
+adk-session = { version = "3.0.0", features = ["postgres"] }
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+```rust
+use std::sync::Arc;
+
+use adk_payments::wallet::{
+    InMemoryUseBasedScheme, InMemoryWalletProvider, Mandate, PayeeRule, PostgresWalletStore,
+    RailRef, SpendCategory, UseBasedRail, Wallet, WalletPolicy,
+};
+use adk_session::PostgresSpendLedger;
+
+#[tokio::main]
+async fn main() -> adk_core::Result<()> {
+    let policy = WalletPolicy::new("USD").with_mandate(
+        SpendCategory::Models,
+        Mandate::new(30_000, 500, RailRef::use_based())
+            .with_payee(PayeeRule::Domain("models.example".into())),
+    );
+    let pool = sqlx::PgPool::connect("postgres://localhost/site")
+        .await
+        .expect("the database is reachable");
+    let store = PostgresWalletStore::new(pool.clone());
+    store.migrate().await?;
+    let ledger = PostgresSpendLedger::from_pool(pool).with_limits(policy.spend_limits("site-1")?);
+    ledger.migrate().await?;
+
+    let provider = Arc::new(InMemoryWalletProvider::stored_value("treasury", "USD", 50_000));
+    let wallet = Wallet::builder("site-1", policy, provider)
+        .rail(Arc::new(UseBasedRail::new(Arc::new(InMemoryUseBasedScheme::new()))))
+        .spend_ledger(Arc::new(ledger))
+        .store(Arc::new(store))
+        .build()?;
+    println!("{} payments wait for the owner", wallet.held().await?.len());
+    Ok(())
+}
+```
+
+With these, a held payment and a paused category survive a restart and wait for the owner
+on whichever instance comes up, a key pays once across instances, and concurrent payments
+on two instances never settle past a category's cap.
+
 ## Validation
 
 ```bash
@@ -180,10 +255,16 @@ cargo test -p adk-payments --features wallet --test wallet_s12_scenario_tests
 cargo test -p adk-payments --features wallet --test wallet_property_tests
 cargo test -p adk-payments --features wallet,ap2 --test wallet_s9_ap2_tests
 cargo test -p adk-payments --features wallet --test wallet_live_tests -- --ignored
+cargo nextest run -p adk-payments --features sqlite --test wallet_store_sqlite
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres \
+  cargo nextest run -p adk-payments --features sqlite,postgres,redis --run-ignored only --test wallet_store_postgres
+REDIS_URL=redis://localhost:6379 \
+  cargo nextest run -p adk-payments --features sqlite,postgres,redis --run-ignored only --test wallet_store_redis
 ```
 
 ## Related
 
 - [Payments and Commerce](payments.md) - Protocol adapters and payment policies
 - [Spend Ledger](spend-ledger.md) - The ledger the wallet reserves in
+- [Durable Stores](durable-stores.md) - The spend ledger's SQLite, PostgreSQL and Redis backends
 - [Tool Effects](../tools/tool-effects.md) - Why `wallet_pay` is `NonIdempotent`

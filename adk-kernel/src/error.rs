@@ -63,6 +63,20 @@ pub const MEMORY_CROSSING_CODE: &str = "kernel.partition.memory_crossing";
 /// Error code of a delete by query on a partition's memory, which would reach every
 /// partition's scope.
 pub const MEMORY_DELETE_CODE: &str = "kernel.partition.memory_delete";
+/// Error code of an agent id the kernel does not keep (spec 3.3 §5.7).
+pub const AGENT_NOT_FOUND_CODE: &str = "kernel.agent.not_found";
+/// Error code of an agent definition that breaks a rule of spec 3.3 §5.7: its name, id,
+/// instructions, folder or uses.
+pub const AGENT_INVALID_CODE: &str = "kernel.agent.invalid";
+/// Error code of an agent change made against an older version (spec 3.3 §5.7).
+pub const AGENT_OUT_OF_DATE_CODE: &str = "kernel.agent.out_of_date";
+/// Error code of an agent change the agent table refuses: a caller who is not a person, a
+/// device, high risk without presence, more than an area or a suggesting agent allows
+/// (spec 3.3 §5.7, S-I11, S-I12).
+pub const AGENT_REFUSED_CODE: &str = "kernel.agent.refused";
+/// Error code of an agent change applied with a digest that is not its preview's (spec 3.3
+/// §5.7).
+pub const AGENT_UNCONFIRMED_CODE: &str = "kernel.agent.unconfirmed";
 
 /// Every code the kernel answers a control-plane call with: the codes a
 /// [`ControlClient`](crate::control::ControlClient) keeps, and reports any other code as
@@ -88,6 +102,11 @@ pub(crate) const CODES: &[&str] = &[
     CROSSING_DENIED_CODE,
     MEMORY_CROSSING_CODE,
     MEMORY_DELETE_CODE,
+    AGENT_NOT_FOUND_CODE,
+    AGENT_INVALID_CODE,
+    AGENT_OUT_OF_DATE_CODE,
+    AGENT_REFUSED_CODE,
+    AGENT_UNCONFIRMED_CODE,
 ];
 
 /// What went wrong in the kernel (spec 3.2 §7.1).

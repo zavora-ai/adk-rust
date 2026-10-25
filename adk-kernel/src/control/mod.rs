@@ -115,6 +115,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{KernelError, Result};
 use crate::kernel::Kernel;
 
+mod agents;
 pub mod api;
 #[cfg(feature = "proc")]
 mod away;
@@ -217,6 +218,10 @@ pub mod paths {
     pub const CHANNEL_REVOKE: &str = "/kernel/channels/{id}/revoke";
     /// `POST`: dismiss a chat account waiting to be paired (spec 3.3 §10 K1).
     pub const CHANNEL_DISMISS: &str = "/kernel/channels/waiting/{id}/dismiss";
+    /// `GET`: the agents a person added (spec 3.3 §10 K7); no route changes one.
+    pub const AGENTS: &str = "/kernel/agents";
+    /// `GET`: one agent a person added (spec 3.3 §10 K7).
+    pub const AGENT: &str = "/kernel/agents/{id}";
     /// `GET`: the partition table; `POST`: create or replace a partition (spec 3.2 §7.8).
     pub const PARTITIONS: &str = "/kernel/partitions";
     /// `POST`: set a partition's mode (spec 3.2 §7.8, §8.1 `partitions set-mode`).

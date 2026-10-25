@@ -194,3 +194,23 @@ async fn an_unreachable_server_is_a_store_error() {
     let error = store.get("run-1").await.expect_err("no server");
     assert!(matches!(&error, adk_kernel::KernelError::Store { backend: "mongodb", .. }), "{error}");
 }
+
+// The agent store (spec 3.3 §10 K7).
+#[async_trait::async_trait]
+impl adk_kernel::conformance::AgentStoreHarness for Database {
+    async fn open(&self) -> Arc<dyn adk_kernel::agents::AgentStore> {
+        let store =
+            adk_kernel::stores::MongoAgentStore::connect(&url(), &self.0).await.expect("connect");
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+}
+
+mod agents {
+    use super::*;
+
+    adk_kernel::agent_store_conformance_tests! {
+        #[ignore = "needs MONGODB_URL; CI's nightly durable-stores job runs it"]
+        harness = Database::new()
+    }
+}
