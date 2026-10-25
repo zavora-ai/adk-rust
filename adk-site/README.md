@@ -22,9 +22,11 @@ adk-site = "3.0.0"
 | Launch gate | `LaunchGate` | Server code (A-I1), claims from `Known` facts (A-I18), links, WCAG 2.2 AA rules and theme contrast, performance budget, legal pages, machine views, quarantine, required languages, red lines, structured data; fast and full tiers |
 | Releases | `ReleaseBuilder` | Hashes a build into a `ReleaseManifest`, snapshot or delta; refuses executables, server configuration files and server-side include directives, sniffed by content |
 | Site log | `SiteLog`, `ReleaseSigner` | `{seq, manifest}` entries in JCS at leaf `seq − 1`, C2SP tiles, a checkpoint signed by a delegated release key with origin `{domain}/.well-known/awp/log` |
-| Hosts | `SiteHost`, `DirectoryHost` | Files, manifest, tiles, checkpoint, then removals; atomic switch; exact rollback; a conformance suite every host runs |
+| Hosts | `SiteHost`, `DirectoryHost` | Files, manifest, tiles, checkpoint, then the pointer; a prefix per release with every file version stored once (`Atomicity::PrefixPointer`); exact rollback; a conformance suite every host runs |
 | Publishing | `PublishingPipeline` | Draft, check, preview, approve, release, publish, announce, measure; corrections, withdrawals (notice or 410), schedules, per-item revert, whole-site rollback |
 | Media | `MediaPipeline` | Type sniffing, executables and polyglots refused, location metadata stripped by re-encoding, resizing, alt text that a person confirms |
+| Lanes | `lanes`, `LiveStore` | Release, live and stream lanes per field, declared per kind in `site.toml`; claims stay in releases (A-I26) |
+| Constant updates | `UpdateEngine`, `Batcher`, `FeedMapping` | Model-free feed mappings, feed bounds that hold a delivery whole (A-I27), batch windows per kind, exceptions held alone, fast checks per item, one release and one `catalog.changed` per batch, scheduled full checks, per-item revert and replay |
 
 ## Content repository
 
@@ -90,6 +92,20 @@ async fn publish(repo: &std::path::Path, out: &std::path::Path, served: &std::pa
 `SiteLog` stores its tree in any `adk_core::audit_log::AuditLogStore`; the SQLite and
 PostgreSQL stores in `adk-session` keep it across restarts.
 
+## Constantly updated sites
+
+A shop syncing its supplier every minute or a newsroom on election night stays static and
+signed: `UpdateEngine` sorts each update into its lane, batches releases per kind (30 s by
+default, 10 s for articles, 60 s for products), holds a feed delivery that breaks its bounds
+whole with a P2 alarm, holds out-of-rule changes alone and publishes the rest without a model.
+`DirectoryHost::new(root).materialise(false).retain_releases(n)` publishes at the cost of
+what changed. See [Constantly updated sites](../docs/official_docs/deployment/constant-updates.md).
+
+```toml
+[lanes.product]
+volatile = ["stock"]
+```
+
 ## Verifying from published files
 
 A verifier reads only what the host serves: the checkpoint, the tiles a proof needs, and the
@@ -138,5 +154,6 @@ See [Site migration](../docs/official_docs/deployment/site-migration.md).
 ## Writing a host
 
 Implement `SiteHost` and run `adk_site::host::conformance::run_all` in its tests: it checks
-the publication order, atomicity under concurrent readers, exact rollback, the redirect round
-trip and delta publication.
+the publication order, atomicity under concurrent readers for snapshots and deltas, exact
+rollback, the redirect round trip and delta publication. Declare honest `limits()`:
+`batch::check_host` refuses a host without atomic publication for batch windows under a minute.

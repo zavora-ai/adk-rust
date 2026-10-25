@@ -205,6 +205,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Agentic Web Protocol](deployment/awp.md) - AWP protocol for agent-native web services
 - [The AWP Agent Edge](deployment/awp-edge.md) - A site's capabilities over A2A, MCP and HTTP: trust tiers, held and exactly-once calls, the public partition
 - [Site Migration](deployment/site-migration.md) - Moving an existing site onto a signed static AWP site
+- [Constantly Updated Sites](deployment/constant-updates.md) - Lanes, batching, feed bounds and delta releases for sites that change every minute
 - [Agent Engine](deployment/agent-engine.md) - Deploying on the Gemini Enterprise Agent Platform
 - [Agent Registry](deployment/agent-registry.md) - Discovery, registration, and remote invocation on the Agent Platform
 

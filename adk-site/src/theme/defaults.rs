@@ -49,6 +49,7 @@ pub(super) const ITEM: &str = r##"{% extends "base.html" %}{% block content %}<a
 {% endif %}{% if page.live %}<dl class="live">{% for field in page.live %}<dt>{{ field.label }}</dt><dd data-awp-live="{{ field.name }}">{% if field.value %}{{ field.value }} <small>({{ t.as_of }} <time datetime="{{ field.as_of }}">{{ field.as_of_date }}</time>)</small>{% else %}{{ t.check_availability }}{% endif %}</dd>{% endfor %}</dl>
 {% endif %}{% if page.body %}<div class="body">
 {{ page.body|safe }}</div>
+{% endif %}{% if page.stream %}<section class="stream" data-awp-stream="{{ page.stream.id }}" aria-label="{{ t.live_updates }}"><h2>{{ t.live_updates }}</h2><ol reversed>{% for entry in page.stream.entries %}<li id="entry-{{ entry.n }}"><time datetime="{{ entry.at }}">{{ entry.time }}</time>{% if entry.corrects %} <small>({{ t.corrects }} #{{ entry.corrects }})</small>{% endif %}{{ entry.html|safe }}</li>{% endfor %}</ol></section>
 {% endif %}{% if page.tags %}<p class="tags">{{ t.tags }}: {% for tag in page.tags %}<a href="{{ tag.url }}">{{ tag.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</p>
 {% endif %}{% for section in page.sections %}<section aria-labelledby="section-{{ loop.index }}">
 <h2 id="section-{{ loop.index }}">{{ section.title }}</h2>
@@ -109,6 +110,8 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("languages", "Languages"),
     ("check_availability", "Check availability"),
     ("as_of", "as of"),
+    ("live_updates", "Live updates"),
+    ("corrects", "corrects"),
     ("tags", "Tags"),
     ("tag", "Tag"),
     ("by", "By"),
