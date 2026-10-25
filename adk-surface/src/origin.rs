@@ -156,6 +156,10 @@ pub struct Caller {
     /// A terminal on the kernel's own machine, paired, which may approve high-risk calls and
     /// resume after a stop (spec 3.3 §7.2, §11 S-I10).
     pub paired_local: bool,
+    /// The paired device the caller acts from, when it authenticated with a device token
+    /// (spec 3.3 §10 K2, §11): it reaches every audit record, so "Where you can say yes
+    /// from" and the record name the device.
+    pub device: Option<String>,
 }
 
 impl Caller {
@@ -168,6 +172,7 @@ impl Caller {
             origin,
             presence_confirmed: false,
             paired_local: false,
+            device: None,
         }
     }
 
@@ -191,6 +196,23 @@ impl Caller {
     #[must_use]
     pub fn with_paired_local(mut self) -> Self {
         self.paired_local = true;
+        self
+    }
+
+    /// Sets the paired device the caller acts from (spec 3.3 §10 K2, §11). Set only from
+    /// server-side authentication: a device token's context.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_surface::{Caller, Origin, SurfaceKind};
+    ///
+    /// let caller = Caller::human("ana", SurfaceKind::Phone, Origin::Touch).with_device("dev_1");
+    /// assert_eq!(caller.device.as_deref(), Some("dev_1"));
+    /// ```
+    #[must_use]
+    pub fn with_device(mut self, id: impl Into<String>) -> Self {
+        self.device = Some(id.into());
         self
     }
 

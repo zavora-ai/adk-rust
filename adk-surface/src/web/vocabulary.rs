@@ -1,6 +1,10 @@
 //! The words of §8 for the web home, generated from [`words`](crate::words) so the page and
 //! the engine say the same thing (spec 3.3 §8). `scripts/check-surface-api.sh` writes them to
 //! `adk-surface/web/src/generated/words.ts` and CI fails when they drift.
+//!
+//! **Every word in every build.** Each constant of [`words`](crate::words) is unconditional,
+//! whichever surface says it, so `words.ts` is the same in every build (see
+//! [`openapi`](fn@super::openapi) for the same rule on wire types).
 
 use std::fmt::Write as _;
 
