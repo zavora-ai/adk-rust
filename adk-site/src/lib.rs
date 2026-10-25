@@ -18,7 +18,7 @@
 //! | [`signer`] | [`signer::ReleaseSigner`]: the delegated key that signs checkpoints | §7.7, A-I5 |
 //! | [`live`] | [`live::LiveStore`]: the live lane the edge serves | §7.8.3, A-I26 |
 //! | [`log`] | [`log::SiteLog`]: `{seq, manifest}` entries, C2SP tiles and checkpoints, proofs | §7.7; AWP 2.0 §14.5 |
-//! | [`host`] | [`host::SiteHost`], [`host::DirectoryHost`] and the host conformance suite | §7.8, §7.8.3 |
+//! | [`host`] | [`host::SiteHost`], [`host::DirectoryHost`] and the host conformance suite; S3, GCS, Azure, Cloudflare, Netlify, GitHub Pages and rsync adapters (features `host-*`) | §7.8, §7.8.3 |
 //! | [`lanes`] | Release, live and stream lanes per field; claims stay in releases | §7.8.3, A-I26 |
 //! | [`pipeline`] | Draft, check, preview, approve, release, publish, announce, measure; corrections, withdrawals, schedules, revert, rollback | §7.8.2 |
 //! | [`media`] | Uploads sniffed, executables and polyglots refused, location stripped, resized | §7.8.2 |

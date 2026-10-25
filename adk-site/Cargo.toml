@@ -40,6 +40,15 @@ migrate = [
     "tokio/net",
     "tokio/process",
 ]
+# Spec 3.5 §7.8 "Hosts": host adapters, each under the host conformance suite. The object
+# store hosts share `ObjectStoreHost` (prefix-and-pointer or in-place layouts).
+host-s3 = ["dep:futures", "dep:hmac", "dep:reqwest"]
+host-gcs = ["dep:futures", "dep:reqwest"]
+host-azure = ["dep:futures", "dep:hmac", "dep:reqwest"]
+host-cloudflare = ["host-s3"]
+host-netlify = ["dep:futures", "dep:reqwest", "dep:sha1"]
+host-github-pages = ["dep:sha1", "tokio/io-util", "tokio/process"]
+host-rsync = ["tokio/io-util", "tokio/process"]
 
 [dependencies]
 adk-core.workspace = true
@@ -80,6 +89,10 @@ similar = { version = "3", optional = true }
 tempfile = { version = "3", optional = true }
 url = { version = "2.5", optional = true }
 x509-parser = { version = "0.18", optional = true }
+# Host adapters (features `host-*`).
+futures = { workspace = true, optional = true }
+hmac = { version = "0.12", optional = true }
+sha1 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 axum = "0.8"

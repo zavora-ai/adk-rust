@@ -151,6 +151,34 @@ adk-site = { version = "3.0.0", features = ["migrate"] }
 
 See [Site migration](../docs/official_docs/deployment/site-migration.md).
 
+## Host adapters (features `host-*`)
+
+Every adapter implements `SiteHost`, declares honest `HostLimits` and passes the host
+conformance suite. Credentials come from a `HostCredential`: a `CredentialBroker` mints a
+token for the acting agent at the provider's resource on every request (A-I19).
+
+| Feature | Host | Atomicity | Publishes per hour |
+|---------|------|-----------|--------------------|
+| `host-s3` | `S3Store` (any S3-compatible store, SigV4) under `ObjectStoreHost`; `CloudFrontInvalidation` | `PrefixPointer`, or `None` in place | Unlimited |
+| `host-gcs` | `GcsStore` (JSON API) under `ObjectStoreHost` | `PrefixPointer`, or `None` in place | Unlimited |
+| `host-azure` | `AzureBlobStore` (Shared Key, bearer or SAS), `$web` static website | `None` in place, or `PrefixPointer` | Unlimited |
+| `host-cloudflare` | R2 (`r2_store`, `r2_host`) behind a pointer-following Worker; `CloudflarePurge` | `PrefixPointer` | Unlimited |
+| `host-netlify` | `NetlifyHost`: file-digest deploys, drafts for previews | `Deploy` | 4 (100 deploys a day) |
+| `host-github-pages` | `GitPagesHost`: one commit per release pushed to a pages branch with `git` | `Deploy` | 10 |
+| `host-rsync` | `RsyncHost`: release directories over SSH, hard-linked, switched by a symlink | `Deploy` | Unlimited |
+
+`ObjectStoreHost::prefix_pointer` keeps each release under `releases/<seq>/` and writes the
+`current.pointer` object last; an edge that follows the pointer serves it atomically.
+`ObjectStoreHost::in_place` writes a website endpoint in place and keeps every release in a
+private archive store for exact rollback. A `CachePurge` hook purges the CDN after the switch.
+
+```toml
+[dependencies]
+adk-site = { version = "3.0.0", features = ["host-s3"] }
+```
+
+See [Site hosts](../docs/official_docs/deployment/site-hosts.md).
+
 ## Writing a host
 
 Implement `SiteHost` and run `adk_site::host::conformance::run_all` in its tests: it checks

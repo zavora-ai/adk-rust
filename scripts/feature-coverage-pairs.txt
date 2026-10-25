@@ -299,6 +299,13 @@
 # Site migration (spec 3.5 §7.8): sources, sanitiser, detectors, freeze, parity, probes and the
 # archive, with the S3 and S4 scenario tests, compile and run only here.
 6 adk-site migrate doc
+# Site host adapters (spec 3.5 §7.8): every adapter under the host conformance suite against
+# provider fakes, a local git remote and local rsync, with the doctests; then the shared
+# object-store, HTTP and process code each without the others' features.
+6 adk-site host-s3,host-gcs,host-azure,host-cloudflare,host-netlify,host-github-pages,host-rsync doc
+6 adk-site host-gcs
+6 adk-site host-netlify
+6 adk-site host-github-pages,host-rsync
 
 # Shard 7 — adk-rag's SurrealDB backend on its own: it and lancedb each compile for about
 # fifteen minutes, and together they made shard 0 the longest job in the tier.
