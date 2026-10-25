@@ -272,13 +272,23 @@ pub struct DecisionCard {
     pub home: Option<String>,
     /// When it was asked.
     pub asked_at: DateTime<Utc>,
+    /// Whether it suggests an agent ([`AGENT_CREATE_TOOL_NAME`](crate::agents::AGENT_CREATE_TOOL_NAME)):
+    /// chat refuses it only, as "Don't add" (spec 3.3 §7.2, S-I11).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub adds_agent: bool,
 }
 
 impl DecisionCard {
     /// The card for `request`, linking to `home`.
     pub fn from_request(request: &ApprovalRequest, home: Option<&str>) -> Self {
         let mut answers = Vec::new();
-        if chat_may_decide(request.risk) {
+        let adds_agent = request.tool_name == crate::agents::AGENT_CREATE_TOOL_NAME;
+        if adds_agent {
+            // Only a person at a screen adds an agent; every surface may refuse one (S-I11).
+            if request.allowed_actions.contains(&adk_core::ApprovalAction::Reject) {
+                answers.push(ChannelAnswer::Deny);
+            }
+        } else if chat_may_decide(request.risk) {
             // A take-over is done by typing the secret in the home; a yes delivers nothing.
             if request.allowed_actions.contains(&adk_core::ApprovalAction::Approve)
                 && request.tool_name != TAKE_OVER_TOOL
@@ -298,6 +308,31 @@ impl DecisionCard {
             answers,
             home: home.map(str::to_string),
             asked_at: request.created_at,
+            adds_agent,
+        }
+    }
+
+    /// The words of `answer`'s button on this card (spec 3.3 §8.2): "Don't add" refuses a
+    /// suggested agent, otherwise [`ChannelAnswer::label`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{ApprovalAction, ApprovalPolicy, ApprovalRequest, ApprovalScope, ApproverSelector, ToolConfirmationRequest};
+    /// use adk_kernel::agents::AGENT_CREATE_TOOL_NAME;
+    /// use adk_kernel::channels::{ChannelAnswer, DecisionCard};
+    ///
+    /// let call = ToolConfirmationRequest::new(AGENT_CREATE_TOOL_NAME, serde_json::json!({"displayName": "Finance"}));
+    /// let request = ApprovalRequest::new("a1", ApprovalScope::new("adk-rust", "ana", "s1"), &call, ApprovalPolicy::new([ApproverSelector::group("operator")]))
+    ///     .with_allowed_actions([ApprovalAction::Approve, ApprovalAction::Reject]);
+    /// let card = DecisionCard::from_request(&request, None);
+    /// assert_eq!(card.answers, [ChannelAnswer::Deny]);
+    /// assert_eq!(card.label(ChannelAnswer::Deny), "Don't add");
+    /// ```
+    pub fn label(&self, answer: ChannelAnswer) -> &'static str {
+        match answer {
+            ChannelAnswer::Deny if self.adds_agent => "Don't add",
+            other => other.label(),
         }
     }
 
@@ -309,7 +344,12 @@ impl DecisionCard {
             self.summary,
             risk_words(self.risk)
         );
-        if !self.answers.contains(&ChannelAnswer::AllowOnce) {
+        if self.adds_agent {
+            match &self.home {
+                Some(home) => text.push_str(&format!("\nOpen in home: {home}")),
+                None => text.push_str("\nOpen in home"),
+            }
+        } else if !self.answers.contains(&ChannelAnswer::AllowOnce) {
             match &self.home {
                 Some(home) => text.push_str(&format!("\nDecide in the home: {home}")),
                 None => text.push_str("\nDecide in the home"),

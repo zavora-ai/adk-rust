@@ -8,6 +8,7 @@
 //! | [`AgentStore`], [`InMemoryAgentStore`](crate::stores::InMemoryAgentStore), `SqliteAgentStore`, `PostgresAgentStore`, `RedisAgentStore`, `MongoAgentStore`, `FirestoreAgentStore`, `Neo4jAgentStore` | §5.7 "Where it lives", K7 |
 //! | [`AgentFactory`], [`AgentAssessment`], [`AgentCeiling`], [`AgentChoices`], [`HostedAgent`] | §5.7 "How an added agent runs", K7 |
 //! | [`AgentCaller`], [`Presence`] | §5.7, §7.2, S-I18 |
+//! | [`AGENT_CREATE_TOOL_NAME`] | §5.7 "The decision that adds an agent" |
 //! | [`AgentAction`], [`AgentPreview`], [`EndedWork`], [`AgentChange`], [`AgentView`] | §5.7 "Changing an agent", "Pausing and removing" |
 //! | [`kernel_assessment`], [`area_limits`], [`over_ceiling`], [`changed_fields`], [`widened`] | §5.7 "Risk", S-I12 |
 //!
@@ -35,3 +36,14 @@ pub use record::{
     RESERVED_AGENT_NAME, ShellAccess, WebAccess, agent_id_for, check_agent_id,
 };
 pub use store::AgentStore;
+
+/// The tool name of the inbox request that suggests an agent (spec 3.3 §5.7): a person
+/// approves it as "Add this agent" or refuses it as "Don't add"; no standing rule, mode,
+/// routine, chat or voice answers it yes (S-I11).
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_kernel::agents::AGENT_CREATE_TOOL_NAME, "kernel:agent.create");
+/// ```
+pub const AGENT_CREATE_TOOL_NAME: &str = "kernel:agent.create";
