@@ -28,6 +28,11 @@ SHARD_TOTAL="${2:-1}"
 # moved to crates.io and adk-codeact-monty joined the workspace.
 SKIP_EXAMPLES=()
 
+# Examples held to `clippy -D warnings` instead of `cargo check`. Clippy lints only the
+# example's own crate and checks its dependencies as `cargo check` does, so the lint
+# costs one pass over that crate.
+LINTED_EXAMPLES=(examples/harness_kernel)
+
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target/examples-check}"
 
 # `mapfile` needs bash 4; stock macOS ships 3.2, so read the list in a loop.
@@ -67,10 +72,18 @@ for manifest in ${MANIFESTS[@]+"${MANIFESTS[@]}"}; do
     # Route through the pinned toolchain: hooks can run under a shadowing cargo
     # (e.g. nix) that ignores rust-toolchain.toml. Transparent in CI, where the
     # ambient cargo already matches the pin (falls back to plain cargo).
-    if bash "$ROOT/scripts/cargo-pinned.sh" check --manifest-path "$manifest" --locked --quiet 2>"$ERR_FILE"; then
-        printf 'ok       %s\n' "$dir"
+    gate=(check --manifest-path "$manifest" --locked --quiet)
+    label=""
+    for linted in ${LINTED_EXAMPLES[@]+"${LINTED_EXAMPLES[@]}"}; do
+        if [[ "$dir" == "$linted" ]]; then
+            gate=(clippy --manifest-path "$manifest" --locked --quiet -- -D warnings)
+            label=" (clippy)"
+        fi
+    done
+    if bash "$ROOT/scripts/cargo-pinned.sh" "${gate[@]}" 2>"$ERR_FILE"; then
+        printf 'ok       %s%s\n' "$dir" "$label"
     else
-        printf 'FAILED   %s\n' "$dir"
+        printf 'FAILED   %s%s\n' "$dir" "$label"
         sed 's/^/         /' "$ERR_FILE" | head -20
         failed+=("$dir")
     fi

@@ -440,7 +440,8 @@ jobs:
   # The standalone examples are separate workspaces, so the workspace build does
   # not catch public-API breakage or stale example lockfiles. Run the four
   # shards before merge; each shard shares one target directory across its
-  # examples to avoid rebuilding common ADK crates.
+  # examples to avoid rebuilding common ADK crates. The examples the script lists
+  # in LINTED_EXAMPLES run clippy with -D warnings instead of check.
   examples-compile:
     name: examples-compile (${{ matrix.shard }}/4)
     needs: [fmt, scope]
@@ -457,6 +458,7 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
+        components: clippy
         cache-key: pr-examples-compile-${{ matrix.shard }}
         cache-save: 'false'
 
@@ -479,8 +481,10 @@ jobs:
   # ── Agent kernel: the example's scripted scenarios run ─────────
   # examples/harness_kernel holds the scripted K1 and K4–K8 scenarios, the managed form and
   # the voice surface on `ScriptedLlm` (spec 3.2 §11: the scripted scenarios run on macOS and
-  # Linux CI). examples-compile only checks the crate, so nothing else runs them; K2, K3 and
-  # K9 run scripted in adk-kernel's own tests.
+  # Linux CI). examples-compile only checks the crate, so nothing else runs them on a pull
+  # request; macOS runs them in the merge tier (ci-merge.yml `kernel-scenarios-macos`), as
+  # this tier's macOS job is compile-only. K2, K3 and K9 run scripted in adk-kernel's own
+  # tests, on Windows in the windows job below.
   kernel-scenarios:
     needs: [fmt, scope]
     if: needs.scope.outputs.docs_only != 'true' && github.event_name != 'merge_group'
@@ -690,6 +694,14 @@ jobs:
         cargo test -p adk-cli --bin adk-rust -- harness_cli::service:: harness_cli::up::
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         cargo test -p adk-cli --test kernel_service_cli
+
+    # The kernel's crate-level scenarios on real durable workers over SQLite (spec 3.2 §11:
+    # Windows runs the scenarios on this job): K2, K3 and K9 with the chaos restart, the file
+    # and webhook wakes, K4 and K8, and K6 on a real stdio driver. K1 and K5 run only in
+    # examples/harness_kernel, on Linux and macOS.
+    - name: Run the kernel scenarios
+      timeout-minutes: 15
+      run: cargo test -p adk-kernel --no-fail-fast --test kernel_scenarios --test wake_scenarios --test proactivity_scenarios --test driver_scenarios
 
     - name: Build summary
       if: always()

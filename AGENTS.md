@@ -172,9 +172,10 @@ expensive axes move to a later tier.
   `#[ignore]`d PostgreSQL suites, pgvector and TLS included, against a
   `pgvector/pgvector:pg17` service, driven by `scripts/test-postgres.sh`),
   `docs` (`cargo doc --workspace --no-deps` plus doctests), standalone examples
-  (4 shards), `kernel-scenarios` (the scripted scenarios of `examples/harness_kernel`),
+  (4 shards), `kernel-scenarios` (the scripted scenarios of `examples/harness_kernel`, on Linux),
   `templates`, a compile-only macOS build, a Windows workspace build
-  with a targeted sandbox portability smoke, and `semver` (stable strict against
+  with targeted sandbox portability smokes and the kernel's crate-level scenarios
+  (`adk-kernel`'s K2–K4, K6, K8 and K9), and `semver` (stable strict against
   the release type in `semver.yml`'s `SEMVER_RELEASE_TYPE`: `minor` fails breakage,
   `major` during a major release candidate accepts it;
   everything else warn-only). A `scope` job skips the Rust jobs when a change
@@ -182,7 +183,9 @@ expensive axes move to a later tier.
   standalone examples, the kernel scenarios and the macOS/Windows builds the pull
   request already passed.
 - **Merge tier** (`ci-merge.yml`, on `push: main` and on demand) — cross-platform
-  `nextest --workspace` on macOS/Windows and doc-example compilation. Runs
+  `nextest --workspace` on macOS/Windows, the scripted scenarios of
+  `examples/harness_kernel` on macOS (`kernel-scenarios-macos`; the PR tier's macOS
+  build is compile-only), and doc-example compilation. Runs
   post-merge, or on a branch with `gh workflow run ci-merge.yml --ref <branch>`;
   not branch-protection-required. `sandbox-linux.yml` (on `push: main`,
   on a pull request touching the sandbox or the harness shell, and on demand) proves

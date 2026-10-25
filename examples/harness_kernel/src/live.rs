@@ -597,7 +597,9 @@ async fn k6(bin: &Path, provider: &str, model: &str) -> Result<Checks> {
     checks.check("its call is held for a person", held && items.iter().any(|item| item.tool_name == "read_note"));
     if let Some(item) = items.iter().find(|item| item.tool_name == "read_note") {
         let client = up.client().await?;
-        client.decide(&item.id, item.version, adk_core::ApprovalAction::Reject, Some("checked".into())).await?;
+        client
+            .decide(&item.id, item.version, adk_core::ApprovalAction::Reject, Some("checked"))
+            .await?;
     }
     let _ = pid;
     let (reapproved, _) = cli(bin, &up, &["drivers", "reapprove", "notes"])?;
