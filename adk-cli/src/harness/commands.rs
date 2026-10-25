@@ -36,6 +36,8 @@ enum Kind {
     Effort,
     Hooks,
     Agent,
+    Rewind,
+    Redo,
 }
 
 const COMMANDS: &[(Kind, &str, &str)] = &[
@@ -55,6 +57,12 @@ const COMMANDS: &[(Kind, &str, &str)] = &[
     (Kind::Effort, "effort", "Reasoning effort; /effort low|medium|high sets every mode"),
     (Kind::Hooks, "hooks", "Hooks on tool events: source, isolation and whether each runs"),
     (Kind::Agent, "agent", super::agents::DESCRIPTION),
+    (
+        Kind::Rewind,
+        "rewind",
+        "Turns to go back to; /rewind N restores files, transcript and plan from before turn N",
+    ),
+    (Kind::Redo, "redo", "Undo the last /rewind"),
 ];
 
 /// The REPL's built-in commands, which take precedence over a registered one of the same
@@ -115,6 +123,8 @@ impl Kind {
             Self::Mode | Self::Effort => first.is_some(),
             Self::Sandbox => matches!(first, Some("on" | "off")),
             Self::Rules => first == Some("rm"),
+            Self::Rewind => first.is_some(),
+            Self::Redo => true,
             Self::Memory => matches!(first, Some("forget" | "accept")),
             Self::Web => first == Some("allow"),
             Self::Todos
@@ -295,6 +305,8 @@ async fn execute(kind: Kind, shared: &Shared, args: &str) -> Result<String> {
             )
             .await
         }
+        Kind::Rewind => super::rewind::rewind(shared, args).await,
+        Kind::Redo => super::rewind::redo(shared).await,
     }
 }
 

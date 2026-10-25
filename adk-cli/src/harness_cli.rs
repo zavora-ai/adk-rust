@@ -455,6 +455,20 @@ impl Setup {
                 .standing_rules(shared.rules.clone())
                 .approval_store(shared.approvals.clone());
         }
+        // Snapshots before each turn (spec 3.1 §7.27, §13 Q11): records in harness.db and
+        // objects beside it, in memory with --ephemeral; a harness served from a shared store
+        // keeps none, since the replicas share no workspace.
+        if let Some(config) = &self.resolved.snapshots
+            && self.shared.is_none()
+        {
+            builder = builder.snapshots(config.clone());
+            #[cfg(feature = "persist")]
+            if let Some(db) = &self.db {
+                builder = builder
+                    .snapshot_store(db.snapshots.clone())
+                    .snapshot_objects(Arc::new(db.snapshot_objects(&self.resolved.workspace)));
+            }
+        }
         // An area's mode the person changes while the kernel runs governs the harness's
         // sessions from their next step (spec 3.3 §10 K3).
         if let Some((control, area, auto_refused)) = &extras.area_modes {
@@ -690,6 +704,7 @@ impl Setup {
             launcher = launcher.with_status_line("Store", store);
         }
         launcher = launcher.with_status_line("Plans", self.plans_note());
+        launcher = launcher.with_status_line("Snapshots", self.snapshots_note());
         if let Some(personal) = &self.personal {
             for (label, line) in personal.status_lines() {
                 launcher = launcher.with_status_line(label, line);
@@ -699,6 +714,29 @@ impl Setup {
             launcher = launcher.with_banner_note(note.clone());
         }
         launcher
+    }
+
+    /// Where snapshots go, for the banner (spec 3.1 §7.27).
+    fn snapshots_note(&self) -> String {
+        let Some(config) = &self.resolved.snapshots else {
+            return "off (--no-snapshots or [snapshots] enabled = false): /rewind restores no file"
+                .into();
+        };
+        if self.shared.is_some() {
+            return "off: a harness served from a shared store keeps none".into();
+        }
+        #[cfg(feature = "persist")]
+        let place = match &self.db {
+            Some(db) => format!("beside harness.db in {}", db.snapshots_dir().display()),
+            None => "in memory (--ephemeral)".into(),
+        };
+        #[cfg(not(feature = "persist"))]
+        let place = "in memory".to_string();
+        format!(
+            "before each turn, {place}; last {} turns, {} MiB; /rewind, /redo",
+            config.keep_turns,
+            config.max_bytes / (1024 * 1024)
+        )
     }
 
     /// The prompter of a one-shot command: `--yes`, the terminal, or none, which holds

@@ -1086,10 +1086,29 @@ pub enum SessionsCommands {
         /// Session id
         id: String,
     },
-    /// Delete a session
+    /// Delete a session and its snapshots
     Rm {
         /// Session id
         id: String,
+    },
+    /// Go back to before a turn: files, transcript and plan from its snapshot
+    ///
+    /// Without TURN, lists the session's turns with their changed-file counts. With TURN,
+    /// shows what the rewind restores, recreates and deletes, what it cannot undo, and asks
+    /// once (spec 3.1 §7.27).
+    Rewind {
+        /// Session id
+        id: String,
+        /// The turn to go back to before, as the list numbers them
+        #[arg(conflicts_with = "redo")]
+        turn: Option<u32>,
+        /// Undo the session's last rewind instead
+        #[arg(long)]
+        redo: bool,
+        /// Apply without asking, keeping files a command or you changed since the latest
+        /// snapshot
+        #[arg(long)]
+        yes: bool,
     },
 }
 

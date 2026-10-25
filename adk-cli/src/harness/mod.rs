@@ -11,6 +11,7 @@
 //! | `/api/rules` on a served harness | §7.5, §8.2 standing rules over authenticated REST |
 //! | [`ultracode`] | §7.10, §8.1 adaptive `ultracode`: the review router, the board, the limits |
 //! | [`distill_unsaved_sessions`] | §7.33 fix 9: at start, long-term memory catches up on the sessions that ended without saving |
+//! | `/rewind`, `/redo`, `adk-rust sessions rewind` | §7.27 snapshots and rewind |
 //!
 //! # Example
 //!
@@ -41,6 +42,7 @@ mod launcher;
 #[cfg(feature = "mobile")]
 mod phone;
 mod prompter;
+mod rewind;
 mod rules;
 mod serve;
 pub mod ultracode;
@@ -57,4 +59,5 @@ pub use launcher::{
 #[cfg(feature = "mobile")]
 pub use phone::PhoneSetup;
 pub use prompter::ConsolePrompter;
+pub use rewind::rewind_session;
 pub use serve::{BearerTokenExtractor, LoopbackOperatorExtractor, OPERATOR_SCOPE};

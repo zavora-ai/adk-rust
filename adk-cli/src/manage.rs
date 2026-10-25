@@ -97,7 +97,18 @@ pub async fn sessions(command: SessionsCommands) -> Result<()> {
             }
         }
         SessionsCommands::Rm { id } => {
-            get(store, &user, &id).await?;
+            let session = get(store, &user, &id).await?;
+            // A session's snapshots go with it (spec 3.1 §7.27).
+            if let Some(harness) = session_harness(&db, session.as_ref())? {
+                let session_id = adk_core::SessionId::new(id.clone())?;
+                if let Some(snapshots) = harness.snapshots() {
+                    let removed =
+                        snapshots.forget_session(APP_NAME, &user, session_id.as_ref()).await?;
+                    if removed > 0 {
+                        println!("deleted {removed} snapshots of session {}", safe(&id));
+                    }
+                }
+            }
             store
                 .delete(DeleteRequest {
                     app_name: APP_NAME.into(),
@@ -107,8 +118,57 @@ pub async fn sessions(command: SessionsCommands) -> Result<()> {
                 .await?;
             println!("deleted session {}", safe(&id));
         }
+        SessionsCommands::Rewind { id, turn, redo, yes } => {
+            let session = get(store, &user, &id).await?;
+            let harness = session_harness(&db, session.as_ref())?.with_context(|| {
+                format!(
+                    "session {} records no workspace, so it has no snapshots to rewind to",
+                    safe(&id)
+                )
+            })?;
+            let user_id = adk_core::UserId::new(user.clone())?;
+            let session_id = adk_core::SessionId::new(id.clone())?;
+            let text =
+                adk_cli::harness::rewind_session(&harness, &user_id, &session_id, turn, redo, yes)
+                    .await?;
+            println!("{text}");
+        }
     }
     Ok(())
+}
+
+/// A harness over the workspace `session` recorded, with its snapshots, plan checkpoints and
+/// stores in `harness.db`, for `sessions rewind` and `sessions rm` (spec 3.1 §7.27). No model
+/// is called; `None` when the session records no workspace.
+fn session_harness(
+    db: &crate::sessions::HarnessDb,
+    session: &dyn adk_session::Session,
+) -> Result<Option<adk_harness::Harness>> {
+    let Some(workspace) = session
+        .state()
+        .get("harness:workspace")
+        .and_then(|value| value.as_str().map(str::to_string))
+    else {
+        return Ok(None);
+    };
+    let root = std::path::PathBuf::from(&workspace)
+        .canonicalize()
+        .with_context(|| format!("the session's workspace {} is gone", safe(&workspace)))?;
+    let model =
+        Arc::new(adk_model::ScriptedLlm::new("rewind", Vec::<adk_model::ScriptedResponse>::new()));
+    let agent = HarnessAgent::builder(APP_NAME)
+        .model(model)
+        .workspace(adk_devtools::Workspace::new(&root))
+        .mode_store(db.modes.clone())
+        .standing_rules(db.rules.clone())
+        .shell_ledger(db.ledger.clone())
+        .approval_store(db.approvals.clone())
+        .plan_checkpointer(db.plans.clone())
+        .snapshots(adk_harness::SnapshotConfig::default())
+        .snapshot_store(db.snapshots.clone())
+        .snapshot_objects(Arc::new(db.snapshot_objects(&root)))
+        .build()?;
+    Ok(Some(agent.into_harness(APP_NAME, db.sessions.clone())?))
 }
 
 async fn get(

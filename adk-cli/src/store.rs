@@ -216,6 +216,10 @@ const PAYLOADS: &[(&str, &str)] = &[
         "plan checkpoints",
         "SELECT count(*), sum(CASE WHEN state LIKE '%adk-enc:v1:%' THEN 1 ELSE 0 END) FROM graph_checkpoints",
     ),
+    (
+        "snapshots",
+        "SELECT count(*), sum(CASE WHEN record LIKE 'adk-enc:v1:%' THEN 1 ELSE 0 END) FROM adk_harness_snapshots",
+    ),
 ];
 
 /// `adk-rust store status`: the key source, the key the database is sealed under, and per
@@ -346,6 +350,16 @@ async fn rotate_key(store_key: Option<String>, key: Option<String>) -> Result<()
         rotated.clone(),
     );
     stores.push(("plan-checkpoints".to_string(), plans.rewrap_sqlite(&pool).await?));
+    // Snapshot records and the objects beside harness.db (spec 3.1 §7.27, I68).
+    let snapshots =
+        adk_harness::snapshot::SqliteSnapshotStore::new(pool.clone()).with_keyring(rotated.clone());
+    snapshots.migrate().await?;
+    stores.push(("snapshots".to_string(), snapshots.rewrap().await?));
+    let objects = adk_harness::snapshot::rewrap_all(
+        &crate::sessions::default_dir()?.join("snapshots"),
+        &rotated,
+    )?;
+    stores.push(("snapshot-objects".to_string(), objects));
     marker.set_key_id(&rotated.key_id()).await?;
     adk_harness::encrypted::compact(&pool).await?;
 
