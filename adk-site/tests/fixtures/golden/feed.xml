@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+<title>Example Solar</title>
+<id>https://example.com/</id>
+<link rel="self" href="https://example.com/feed.xml"/>
+<link href="https://example.com/"/>
+<updated>2026-10-01T09:00:00Z</updated>
+<entry><title>Hello, sun</title><link href="https://example.com/posts/hello/"/><id>https://example.com/posts/hello/</id><updated>2026-10-01T09:00:00Z</updated><summary>Why we started.</summary></entry>
+</feed>

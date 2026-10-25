@@ -1,0 +1,4 @@
+Contact: mailto:security@example.com
+Expires: 2027-06-30T00:00:00Z
+Preferred-Languages: en, sw
+Canonical: https://example.com/.well-known/security.txt

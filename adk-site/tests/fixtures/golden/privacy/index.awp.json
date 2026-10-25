@@ -1,0 +1,24 @@
+{
+  "path": "/privacy/",
+  "releaseSeq": 1,
+  "kind": "page",
+  "language": "en",
+  "title": "Privacy policy",
+  "resource": {
+    "id": "pages/privacy/en",
+    "legal": "privacy",
+    "title": "Privacy policy",
+    "url": "https://example.com/privacy/"
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "inLanguage": "en",
+    "name": "Privacy policy",
+    "url": "https://example.com/privacy/"
+  },
+  "markdown": "https://example.com/privacy/index.md"
+}

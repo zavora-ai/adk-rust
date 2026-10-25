@@ -1,0 +1,30 @@
+{
+  "path": "/tags/news/",
+  "releaseSeq": 1,
+  "kind": "collection",
+  "language": "en",
+  "title": "Tag: news",
+  "resource": {
+    "items": [
+      {
+        "date": "2026-10-01",
+        "summary": "Why we started.",
+        "title": "Hello, sun",
+        "url": "/posts/hello/"
+      }
+    ],
+    "page": 1,
+    "pages": 1
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    "inLanguage": "en",
+    "name": "Tag: news",
+    "url": "https://example.com/tags/news/"
+  },
+  "markdown": "https://example.com/tags/news/index.md"
+}

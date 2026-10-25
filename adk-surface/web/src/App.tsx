@@ -274,7 +274,14 @@ export function App({
           />
         )}
         {section === "memory" && (
-          <MemoryRules client={client} status={status.value} areas={areas.value} seams={seams} onChanged={refresh} />
+          <MemoryRules
+            client={client}
+            status={status.value}
+            areas={areas.value}
+            agents={rows}
+            seams={seams}
+            onChanged={refresh}
+          />
         )}
         {section === "developer" && <Developer client={client} sessionId={session} />}
       </div>
