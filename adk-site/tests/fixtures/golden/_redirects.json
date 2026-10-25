@@ -1,0 +1,12 @@
+[
+  {
+    "from": "/2019/05/hello-world/",
+    "to": "/posts/hello/",
+    "status": 301
+  },
+  {
+    "from": "/articles/old-offer/",
+    "to": "/410.html",
+    "status": 410
+  }
+]

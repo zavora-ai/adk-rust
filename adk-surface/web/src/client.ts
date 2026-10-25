@@ -31,13 +31,18 @@ import type {
   ChannelWaiting,
   KernelDevice,
   KernelProcess,
+  KernelRecordCheck,
+  KernelRecordLine,
+  MemoryResponse,
   QuietWindow,
   StandingRule,
+  TidyUpUndo,
   WakeSet,
 } from "./kernel";
 import { accountName, channelName, devicePowers } from "./kernel";
 import { labels } from "./labels";
-import type { DevicesSeam, LimitsSeam, WhileAwaySeam } from "./seams";
+import { memoryOf, undoOutcome } from "./memory";
+import type { AgentSpend, DevicesSeam, LimitsSeam, MemorySeam, RecordSeam, RosterSeam, WhileAwaySeam } from "./seams";
 import { parseSse } from "./sse";
 import { readStored, writeStored } from "./stored";
 
@@ -112,6 +117,11 @@ export interface HomeClient {
   /** The caller's standing rules; `undefined` without a harness. */
   rules(): Promise<StandingRule[] | undefined>;
   revokeRule(id: string): Promise<void>;
+  /**
+   * "Extend" (spec 3.3 §8.1): moves the end of a rule with an end date to `until`, an ISO
+   * time later than its end; resolves to the rule after it.
+   */
+  extendRule?(id: string, until: string): Promise<StandingRule>;
   /** Any other JSON route, for the developer panel. */
   get<T>(path: string): Promise<T>;
   /** Sends the server's token from now on, for a server that asks for one. */
@@ -319,6 +329,13 @@ export class HttpClient implements HomeClient {
     await this.request(`/rules/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
+  async extendRule(id: string, until: string) {
+    const answer = await this.post<{ rule: StandingRule }>(`/rules/${encodeURIComponent(id)}/extend`, {
+      expiresAt: until,
+    });
+    return answer.rule;
+  }
+
   get<T>(path: string) {
     return this.request<T>(path);
   }
@@ -386,6 +403,90 @@ export class HttpClient implements HomeClient {
         await this.post("/kernel/away/seen", { viewer: VIEWER, through });
       },
       record: (seq: number) => this.request<AwayRecord>(`/kernel/away/lines/${seq}`),
+    };
+  }
+
+  /**
+   * A kernel route the server may serve without what backs it: `undefined` when it is not
+   * mounted, or when the kernel says it was set up without it (`kernel.config`, such as a
+   * kernel without long-term memory or without a signed record).
+   */
+  private async configured<T>(path: string): Promise<T | undefined> {
+    try {
+      return await this.optional<T>(path);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 400 && error.code === "kernel.config") return undefined;
+      throw error;
+    }
+  }
+
+  /**
+   * What your agents remember (spec 3.3 §10 K5): the caller's live facts and the latest
+   * overnight tidy-up, corrected through the kernel's memory routes, which take the person's
+   * answers only (never a paired device's).
+   */
+  memory(): MemorySeam {
+    const fact = (id: string, action: string) => `/kernel/memory/facts/${encodeURIComponent(id)}/${action}`;
+    return {
+      facts: async () => {
+        const read = await this.configured<MemoryResponse>("/kernel/memory");
+        return read && memoryOf(read);
+      },
+      confirm: async (id: string) => {
+        await this.post(fact(id, "confirm"), {});
+      },
+      fix: async (id: string, text: string) => {
+        await this.post(fact(id, "fix"), { text });
+      },
+      forget: async (id: string) => {
+        await this.post(fact(id, "forget"), {});
+      },
+      undo: async (tidyUp: string) => undoOutcome(await this.post<TidyUpUndo>("/kernel/memory/undo", { tidyUp })),
+    };
+  }
+
+  /**
+   * What your agents did (spec 3.3 §10 K5): the kernel's signed record and its check, the one
+   * `adk-rust audit verify` makes. `check` answers `undefined` where the kernel keeps no record.
+   */
+  record(): RecordSeam {
+    return {
+      check: async () => {
+        const check = await this.configured<KernelRecordCheck>("/kernel/record/check");
+        if (!check) return undefined;
+        const failures = check.report?.failures ?? [];
+        // Records the log has not signed yet fail the check as `unanchored`; nothing else did.
+        const unsigned =
+          !check.valid && failures.length > 0 && failures.every((failure) => failure.kind === "unanchored")
+            ? check.report?.unsignedTail
+            : undefined;
+        return { intact: check.valid, count: check.entries, checkedAt: check.checkedAt, problem: check.problem, unsigned };
+      },
+      lines: async (limit: number) =>
+        (await this.configured<{ lines: KernelRecordLine[] }>(`/kernel/record?limit=${limit}`))?.lines ?? [],
+    };
+  }
+
+  /**
+   * Each agent's spend today in each area (spec 3.3 §12 phase 4), summed over the kernel's
+   * processes from the same daily totals as the area's "spent today". Every process is read,
+   * as the kernel lists the oldest first and a limit would leave today's out.
+   */
+  roster(): RosterSeam {
+    return {
+      spending: async () => {
+        const page = await this.optional<{ processes: KernelProcess[] }>("/kernel/processes");
+        if (!page) return undefined;
+        const spent = new Map<string, AgentSpend>();
+        for (const process of page.processes) {
+          const area = process.meta.partition ?? "default";
+          const key = `${area}\u001f${process.run.target}`;
+          const entry = spent.get(key) ?? { agent: process.run.target, area, spentToday: 0 };
+          entry.spentToday += process.view?.spendToday ?? 0;
+          spent.set(key, entry);
+        }
+        return [...spent.values()];
+      },
     };
   }
 

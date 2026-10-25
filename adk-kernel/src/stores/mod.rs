@@ -75,6 +75,12 @@ mod agenda_neo4j;
 mod agenda_redis;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 pub(crate) mod agenda_sql;
+#[cfg(feature = "charter")]
+pub(crate) mod charter_memory;
+#[cfg(all(feature = "charter", feature = "redis"))]
+pub(crate) mod charter_redis;
+#[cfg(all(feature = "charter", any(feature = "sqlite", feature = "postgres")))]
+pub(crate) mod charter_sql;
 #[cfg(all(feature = "drivers", feature = "firestore"))]
 mod driver_firestore;
 #[cfg(feature = "drivers")]

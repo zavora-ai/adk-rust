@@ -638,6 +638,90 @@ async fn a_rule_from_a_held_calls_suggestion_covers_the_next_call() {
     assert!(created[0]["createdFromCallId"].is_string(), "{:?}", created[0]);
 }
 
+/// "Allowed without asking — Extend" (spec 3.3 §8.1): a rule with an end date is extended
+/// to a later one, recorded with its old and new end; a rule without one, an earlier end, a
+/// subject in the body, another person and a rule stopped meanwhile are refused, and an
+/// extension never brings a stopped rule back.
+#[tokio::test]
+async fn a_rule_is_extended_to_a_later_end_and_never_brought_back_once_stopped() {
+    let audit = Arc::new(EphemeralAuditLog::new().unwrap());
+    let served =
+        served_with(vec![], HarnessMode::Ask, Some(Arc::new(HeaderIdentity)), Some(audit.clone()))
+            .await;
+    let as_ana = |request| as_caller(request, "ana", OPERATOR_SCOPE);
+    let create = |body: Value| as_ana(request("POST", "/api/rules", Some(body), None));
+    let (status, created) =
+        call(&served.app, create(json!({ "tool": "bash", "prefix": "ls", "expiresInHours": 24 })))
+            .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["rule"]["id"].as_str().unwrap().to_string();
+    let end: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(created["rule"]["expiresAt"].clone()).unwrap();
+    let extend = |id: &str, body: Value| {
+        request("POST", &format!("/api/rules/{id}/extend"), Some(body), None)
+    };
+    let later = end + chrono::Duration::days(30);
+
+    let (status, extended) =
+        call(&served.app, as_ana(extend(&id, json!({ "expiresAt": later })))).await;
+    assert_eq!(status, StatusCode::OK, "{extended}");
+    assert_eq!(
+        serde_json::from_value::<chrono::DateTime<chrono::Utc>>(
+            extended["rule"]["expiresAt"].clone()
+        )
+        .unwrap(),
+        later
+    );
+    let (_, listed) = call(&served.app, as_ana(request("GET", "/api/rules", None, None))).await;
+    assert_eq!(listed["rules"][0], extended["rule"], "the rule is stored with its new end");
+
+    // An earlier end, a rule without one, or a body naming a subject is refused.
+    let (status, error) = call(&served.app, as_ana(extend(&id, json!({ "expiresAt": end })))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(error.to_string().contains("later end"), "{error}");
+    let (_, endless) = call(&served.app, create(json!({ "tool": "bash", "prefix": "pwd" }))).await;
+    let endless = endless["rule"]["id"].as_str().unwrap();
+    let (status, error) =
+        call(&served.app, as_ana(extend(endless, json!({ "expiresAt": later })))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(error.to_string().contains("no end date"), "{error}");
+    let (status, _) =
+        call(&served.app, as_ana(extend(&id, json!({ "expiresAt": later, "userId": "bo" })))).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Another person, or no operator scope, extends nothing.
+    let (status, _) = call(
+        &served.app,
+        as_caller(extend(&id, json!({ "expiresAt": later })), "bo", OPERATOR_SCOPE),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) =
+        call(&served.app, as_caller(extend(&id, json!({ "expiresAt": later })), "ana", "viewer"))
+            .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Stopped, the rule stays stopped.
+    let (status, _) =
+        call(&served.app, as_ana(request("DELETE", &format!("/api/rules/{id}"), None, None))).await;
+    assert_eq!(status, StatusCode::OK);
+    let much_later = later + chrono::Duration::days(1);
+    let (status, _) =
+        call(&served.app, as_ana(extend(&id, json!({ "expiresAt": much_later })))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, listed) = call(&served.app, as_ana(request("GET", "/api/rules", None, None))).await;
+    assert!(listed["rules"].as_array().unwrap().iter().all(|rule| rule["id"] != id.as_str()));
+
+    let records = audit.records().await.unwrap();
+    let extended = rule_records(&records, "harness.rule.extended");
+    assert_eq!(extended.len(), 1, "only the extension that took effect is recorded: {records:?}");
+    assert_eq!(extended[0]["ruleId"], id.as_str());
+    assert_eq!(extended[0]["surface"], "rest");
+    assert_eq!(extended[0]["by"], "ana");
+    assert_eq!(extended[0]["from"], json!(end));
+    assert_eq!(extended[0]["to"], json!(later));
+}
+
 #[tokio::test]
 async fn a_caller_lists_and_revokes_only_their_own_rules() {
     let served = served_with(vec![], HarnessMode::Ask, Some(Arc::new(HeaderIdentity)), None).await;

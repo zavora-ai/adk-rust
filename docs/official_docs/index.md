@@ -90,6 +90,7 @@ The always-on form of the harness (`adk-kernel`, spec 3.2): durable processes th
 - [Running the Kernel as a Service](kernel/service.md) - `adk-rust up --install`, `--uninstall` and `--print`: a launchd agent, a systemd user unit or a Windows service that runs as you
 - [The Managed Form](kernel/managed.md) - One kernel per tenant on the managed runtime: `KernelDef` beside `adk.harness`, wake sets, the tenant's proactivity policy, the managed approval path, voice decisions on parked processes
 - [Self-observation: `/proc`](kernel/proc.md) - The content-free activity ledger, daily baselines and observations offered as questions, `adk-rust proc`, exporting for `cargo adk eval --ledger`
+- [Charter, KPIs, Signals and Earned Autonomy](kernel/charter.md) - A website's charter store, KPI tracker, guardrail pauses, the autonomy ladder, typed signals from the public partition and the site process kinds (feature `charter`, spec 3.5)
 - [Kernel Store Backends](kernel/backends.md) - The process, agenda, driver, ledger, partition and cron watermark stores on in-memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore and Neo4j
 - [Partitions](kernel/partitions.md) - One harness per partition, class and tenant identity, memory scoping, crossings by the coordinator under a non-waivable approval, `kernel.partition.*` audit records
 

@@ -359,7 +359,7 @@ jobs:
       if: ${{ !cancelled() }}
       run: >-
         cargo nextest run --profile ci -p adk-kernel
-        --features postgres,redis,channels
+        --features postgres,redis,channels,charter
         --run-ignored only --no-fail-fast
         --test process_store_redis
         --test agenda_store_redis
@@ -370,6 +370,7 @@ jobs:
         --test channel_store_redis
         --test partition_store_redis
         --test cron_watermark_store_redis
+        --test charter_store_redis
 
   # ── Docs: documentation coverage for Stable-tier crates ──────
   docs:

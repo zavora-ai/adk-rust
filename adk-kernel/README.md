@@ -232,6 +232,23 @@ A `Partition` is a policy class, a memory scope and a driver set, run by its own
 | Managed form | `KernelDef::partitions` and `coordinator` run one agent per partition on a tenant's kernel through `TenantKernelBuilder::partition_resolver`, over the tenant's own partition table (`partition_store`); with `TenantKernelBuilder::drivers`, each driver a partition mounts is proposed in the tenant's inbox and mounted on the tenant's own supervisor when a person approves it |
 | Audit | `kernel.partition.created`, `kernel.partition.changed`, and `kernel.partition.crossing` for every crossing, with a digest of its fingerprint |
 
+## Charter, KPIs, signals and earned autonomy
+
+Feature `charter` (spec 3.5 §7.10, §7.11) keeps a website's AWP 2.0 charter and holds the site
+to it, in `adk_kernel::charter` ([the charter](../docs/official_docs/kernel/charter.md)):
+
+| Part | What it does |
+|---|---|
+| `CharterStore` | Every charter version with the decision that committed it; `commit` refuses a draft that fails `Charter::validate()` (A-I14) and a decision whose approval chain distinct people holding its roles did not satisfy (A-I23) |
+| `KpiStore`, `KpiTracker` | Measurements per KPI with daily and weekly aggregates; the tracker reads each KPI's `KpiSource` on its cadence, keeps the 14-day measure-only period, locks baselines and checks guardrails, running as the `kernel.kpi` maintenance process |
+| `JobControl`, `JobPauses` | A guardrail breach pauses the job before its next action: `JobPauses` is a `ToolPolicy` that denies the paused job's calls (A-I15) |
+| `AutonomyLadder` | Each job's level and history: promotion only by an owner's decision, demotion one level on a breach, two rejections in a row or an incident (A-I13); promotion offers after 20 unchanged approvals within 30 days |
+| `SignalSink` | Files typed signals in the back office's agenda as `AgendaOrigin::Signal { kind, count }` items, counts repeats of a kind and topic, rate-limits each source, wakes `Wake::Signal` sleepers and records `kernel.signal`; a signal is never a crossing, and `SignalSourceTool` puts a request for its raw text to the partition policy, which denies it |
+| `SiteProcessKind` | `site.probe`, `site.watch`, `site.content`, `site.reviews`, `site.outreach`, `site.support`, `site.digest` |
+
+The charter, KPI, autonomy and signal stores run in memory, on SQLite, PostgreSQL and Redis,
+each with a conformance suite.
+
 ## Lifecycle
 
 | Call | Effect | Audit record |
@@ -426,6 +443,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `service` | on | The `service` module; `windows-service` on Windows |
 | `managed` | off | `managed`: `KernelDef` under the `adk.kernel` metadata key of a managed definition, and `TenantKernel`, one kernel per tenant over its `ManagedStores` on `adk-managed`'s runtime (Experimental) |
 | `channels` | off | The chat channel contract (spec 3.3 §10 K1): `channels`, the binding store on every backend, and with `conformance` the adapter contract suite |
+| `charter` | off | `charter` (spec 3.5 §7.10, §7.11): the charter store, the KPI tracker, autonomy records, signals and the site process kinds over `awp-types` 2.0, on every backend of the process store |
 
 ## Tests
 
@@ -456,6 +474,10 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `tests/surface_routes.rs` | Spec 3.3 K3–K5 on loopback HTTP: settings start as configured, each change replaces its value, is recorded, survives a restart and holds or releases work at its next admission; "While you were away" counts, spends, says whether quiet time was respected, links each line to its record and moves on only once seen, each device on its own cursor, exactly across a restart; memory and record reach every reader; no device and no caller without `operator` changes a setting or a memory |
 | `tests/away_property_tests.rs` | Spec 3.3 K4: whatever rows are written, pages read and marked, and restarts made, the lines a viewer marks seen are every line of the ledger once, in order, with its spend |
 | `tests/control_store_*.rs` | The control store suite on every backend |
+| `tests/charter_store_*.rs` (feature `charter`) | The charter, KPI, autonomy and signal suites in memory and on SQLite; PostgreSQL and Redis in CI's `postgres` job |
+| `tests/charter_invariants.rs` (feature `charter`) | A-I13: no promotion without an owner's decision, demotion on rejections, incidents and lower charters. A-I14: measure-only for 14 days, no target before a baseline. A-I15: a breach pauses the job before its next call, ahead of everything else, and a restart restores the pause. A-I23: chains by distinct people, commits and refusals recorded |
+| `tests/charter_property_tests.rs` (feature `charter`) | KPI aggregates have no gap and no duplicate per period; signals of one kind and topic count on one item; the ladder never rises without an owner's decision; a chain's verdict ignores approval order |
+| `tests/charter_scenarios.rs` (feature `charter`) | A signal lands on the agenda and wakes the `site.content` process sleeping on its kind, a repeat counts on the item, nothing is a crossing; a source past its rate limit files nothing; a request for a signal's raw text is a denied crossing; the KPI tracker runs as a `kernel.kpi` maintenance process |
 
 ## License
 

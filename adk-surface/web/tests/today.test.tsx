@@ -382,7 +382,7 @@ describe("What your agents can do", () => {
     expect(within(header).getByText("$1.84 of $8.00 today")).toBeTruthy();
   });
 
-  it("saves quiet time with this device's offset, so the kernel keeps the hours the person typed", async () => {
+  it("saves quiet time with this device's zone and offset, so the kernel keeps the hours the person typed", async () => {
     const seams: Seams = fixtureSeams();
     const saved: unknown[] = [];
     const set = seams.limits!.setQuietTime;
@@ -395,7 +395,11 @@ describe("What your agents can do", () => {
     await userEvent.click((await within(card).findAllByRole("button", { name: "Change" }))[0]);
     await userEvent.click(within(card).getByRole("button", { name: "Save" }));
     await within(card).findByText(/^Was /);
-    expect(saved).toEqual([{ start: "22:00", end: "07:00", utcOffsetMinutes: deviceOffset() }]);
+    // The zone follows daylight saving time where the kernel reads zones; the offset is for one
+    // that reads offsets only.
+    expect(saved).toEqual([
+      { start: "22:00", end: "07:00", utcOffsetMinutes: deviceOffset(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+    ]);
   });
 
   // The kernel keeps one window in place of all an area had: the editor says so before it saves.

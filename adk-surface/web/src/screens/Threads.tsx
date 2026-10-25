@@ -11,7 +11,7 @@ import { Thread } from "../components/Thread";
 import { emptyThread, followFeed, wakeable } from "../feed";
 import type { ThreadState } from "../feed";
 import { briefingDue, briefingShown, quietWindows, rememberBriefing } from "../away";
-import { dayAndTime, dollars, hhmm } from "../format";
+import { dayAndTime, dollars, whenAhead } from "../format";
 import type { AreaSettings, AwayPage } from "../kernel";
 import { labels } from "../labels";
 import type { Planned } from "../plan";
@@ -228,7 +228,7 @@ export function Threads({
               <li key={item.key}>
                 <span>{item.agent ? `${item.agent} · ${item.title}` : item.title}</span>
                 <time className="mono" dateTime={item.at.toISOString()}>
-                  {hhmm(item.at)}
+                  {whenAhead(item.at)}
                 </time>
               </li>
             ))}

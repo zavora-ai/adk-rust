@@ -1,0 +1,44 @@
+:root {
+  --color-text: #1b1d21;
+  --color-background: #ffffff;
+  --color-muted: #555b65;
+  --color-link: #0b57d0;
+  --color-accent: #0b57d0;
+  --color-accent-text: #ffffff;
+  --color-border: #d0d4da;
+  --color-notice-background: #fff4d6;
+  --color-notice-text: #4a3500;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-heading: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --measure: 44rem;
+  --radius: 6px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { color: var(--color-text); background: var(--color-background); font-family: var(--font-body); line-height: 1.6; }
+body { margin: 0; }
+h1, h2, h3, h4 { font-family: var(--font-heading); line-height: 1.25; }
+a { color: var(--color-link); text-underline-offset: 0.15em; }
+a:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
+code, pre { font-family: var(--font-mono); }
+pre { overflow-x: auto; padding: 1rem; border: 1px solid var(--color-border); border-radius: var(--radius); }
+img { max-width: 100%; height: auto; }
+.skip-link { position: absolute; left: -9999px; }
+.skip-link:focus { position: static; display: inline-block; padding: 0.5rem 1rem; background: var(--color-accent); color: var(--color-accent-text); }
+.site-header, main, .site-footer { max-width: var(--measure); margin: 0 auto; padding: 1rem; }
+.site-header { display: flex; flex-wrap: wrap; gap: 1rem; align-items: baseline; justify-content: space-between; border-bottom: 1px solid var(--color-border); }
+.site-name { font-weight: 700; text-decoration: none; color: var(--color-text); }
+nav ul { list-style: none; display: flex; flex-wrap: wrap; gap: 1rem; margin: 0; padding: 0; }
+.site-footer { border-top: 1px solid var(--color-border); color: var(--color-muted); }
+.meta, time { color: var(--color-muted); }
+.notice { background: var(--color-notice-background); color: var(--color-notice-text); padding: 0.75rem 1rem; border-radius: var(--radius); margin: 1rem 0; }
+.items { list-style: none; padding: 0; }
+.items li { margin: 0 0 1.25rem; }
+.items h2 { font-size: 1.25rem; margin: 0; }
+dl.facts, dl.live { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+dt { font-weight: 600; }
+dd { margin: 0; }
+figure { margin: 1rem 0; }
+figcaption { color: var(--color-muted); font-size: 0.9rem; }
+table { border-collapse: collapse; }
+th, td { border: 1px solid var(--color-border); padding: 0.25rem 0.5rem; }

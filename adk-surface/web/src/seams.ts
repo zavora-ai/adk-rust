@@ -4,7 +4,16 @@
  * shows what exists read-only. The routes arrive with the kernel work packages named below;
  * wiring one is a client implementing the interface, with no change to the screens.
  */
-import type { AreaMode, AreaSettings, AwayPage, AwayRecord, ChannelAccount, ChannelWaiting, QuietWindow } from "./kernel";
+import type {
+  AreaMode,
+  AreaSettings,
+  AwayPage,
+  AwayRecord,
+  ChannelAccount,
+  ChannelWaiting,
+  KernelRecordLine,
+  QuietWindow,
+} from "./kernel";
 
 /**
  * K3: each area's quiet time, daily spending limit and mode, read and changed while the kernel
@@ -44,27 +53,40 @@ export interface MemoryFact {
   id: string;
   text: string;
   provenance: Provenance;
-  /** The agent that noticed a guess. */
+  /** What noticed a guess: an agent, or an area. */
   noticedBy?: string;
 }
 
-/** An overnight tidy-up that can be undone. */
+/** An overnight tidy-up that can be undone, in words: "Overnight, your agents merged two notes into one." */
 export interface TidyUp {
   id: string;
   text: string;
 }
 
-/** K5: what agents remember, confirm, fix, forget and undo. */
+/** What undoing a tidy-up did: how many notes came back, were forgotten, and were kept as changed since. */
+export interface UndoOutcome {
+  restored: number;
+  forgotten: number;
+  kept: number;
+}
+
+/**
+ * K5: what agents remember, confirm, fix, forget and undo (spec 3.3 §10 K5). Only the person
+ * changes it: the kernel refuses a paired device. `facts` answers `undefined` where the agents
+ * keep no long-term memory.
+ */
 export interface MemorySeam {
-  facts(): Promise<{ facts: MemoryFact[]; tidyUp?: TidyUp }>;
+  facts(): Promise<{ facts: MemoryFact[]; tidyUp?: TidyUp } | undefined>;
   confirm(id: string): Promise<void>;
   fix(id: string, text: string): Promise<void>;
   forget(id: string): Promise<void>;
-  undo(tidyUp: string): Promise<void>;
+  undo(tidyUp: string): Promise<UndoOutcome | void>;
 }
 
 /** One action on record, as a sentence. */
 export interface RecordLine {
+  /** Its place on the record. */
+  seq?: number;
   at: string;
   atText: string;
   text: string;
@@ -75,12 +97,42 @@ export interface RecordCheck {
   intact: boolean;
   count: number;
   checkedAt: string;
+  /** Why the check failed, in the verifier's words. */
+  problem?: string;
+  /**
+   * The latest records no signed checkpoint covers yet, when that is all the check found: they
+   * are on record, but the check can't vouch for them until the log signs its next checkpoint.
+   */
+  unsigned?: number;
 }
 
-/** K5: the record of what agents did, and its check. */
+/**
+ * K5: the record of what agents did, and its check (spec 3.3 §10 K5). `check` answers
+ * `undefined` where the kernel keeps no signed record.
+ */
 export interface RecordSeam {
-  check(): Promise<RecordCheck>;
-  recent(): Promise<RecordLine[]>;
+  check(): Promise<RecordCheck | undefined>;
+  /** The latest `limit` actions on record, newest first, as the kernel lists them. */
+  lines(limit: number): Promise<KernelRecordLine[]>;
+}
+
+/** What one agent of one area spent today, from the kernel's daily totals. */
+export interface AgentSpend {
+  /** The agent: the target its processes run, as the roster names it. */
+  agent: string;
+  /** Its area: a partition, `default` on a kernel without areas. */
+  area: string;
+  /** Micro-USD today (UTC), as the area's "spent today" counts it. */
+  spentToday: number;
+}
+
+/**
+ * The roster's spending (spec 3.3 §12 phase 4): each agent's spend today in each area, from the
+ * same daily totals as each area's "spent today", so the agents of an area add up to it.
+ * `undefined` without a kernel.
+ */
+export interface RosterSeam {
+  spending(): Promise<AgentSpend[] | undefined>;
 }
 
 /** A phone or app allowed to decide (K2 pairing). */
@@ -117,4 +169,5 @@ export interface Seams {
   memory?: MemorySeam;
   record?: RecordSeam;
   devices?: DevicesSeam;
+  roster?: RosterSeam;
 }

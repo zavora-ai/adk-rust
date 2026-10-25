@@ -1,0 +1,26 @@
+{
+  "path": "/notices/water/",
+  "releaseSeq": 1,
+  "kind": "notice",
+  "language": "en",
+  "title": "Water outage at the showroom",
+  "resource": {
+    "id": "notices/water/en",
+    "publishedAt": "2026-10-02T00:00:00Z",
+    "title": "Water outage at the showroom",
+    "url": "https://example.com/notices/water/"
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "SpecialAnnouncement",
+    "datePosted": "2026-10-02T00:00:00Z",
+    "expires": "2026-10-10T00:00:00Z",
+    "inLanguage": "en",
+    "name": "Water outage at the showroom",
+    "url": "https://example.com/notices/water/"
+  },
+  "markdown": "https://example.com/notices/water/index.md"
+}

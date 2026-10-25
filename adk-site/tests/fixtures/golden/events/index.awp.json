@@ -1,0 +1,30 @@
+{
+  "path": "/events/",
+  "releaseSeq": 1,
+  "kind": "collection",
+  "language": "en",
+  "title": "Events",
+  "resource": {
+    "items": [
+      {
+        "date": null,
+        "summary": null,
+        "title": "Open day",
+        "url": "/events/open-day/"
+      }
+    ],
+    "page": 1,
+    "pages": 1
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    "inLanguage": "en",
+    "name": "Events",
+    "url": "https://example.com/events/"
+  },
+  "markdown": "https://example.com/events/index.md"
+}
