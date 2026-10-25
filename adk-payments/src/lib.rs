@@ -52,3 +52,6 @@ pub mod kernel;
 pub mod protocol;
 pub mod server;
 pub mod tools;
+#[cfg(feature = "wallet")]
+#[cfg_attr(docsrs, doc(cfg(feature = "wallet")))]
+pub mod wallet;

@@ -199,15 +199,55 @@ export function deviceOffset(now: Date = new Date()): number {
   return -now.getTimezoneOffset();
 }
 
+/** This device's IANA time zone, such as `Africa/Nairobi`; `undefined` where the browser does not say. */
+export function deviceZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Minutes east of UTC of the IANA zone `timeZone` at `at`; `undefined` for a zone the browser does not know. */
+export function zoneOffset(timeZone: string, at: Date = new Date()): number | undefined {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+    }).formatToParts(at);
+    const part = (type: string) => Number(parts.find((entry) => entry.type === type)?.value);
+    const wall = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"));
+    const instant = Math.floor(at.getTime() / 60_000) * 60_000;
+    return Number.isNaN(wall) ? undefined : Math.round((wall - instant) / 60_000);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * A quiet window as this device's clock reads it (spec 3.3 §5.1). The kernel reads a window
- * without an offset of its own in the server's time zone (`host`, the status line's
- * `hostUtcOffsetMinutes`), so its times move from the offset it is kept at to this device's
+ * The quiet window the home saves from times typed on this device: its zone, so the kernel
+ * follows its daylight saving time, and its offset now for a kernel that reads offsets only.
+ */
+export function typedWindow(start: string, end: string, now: Date = new Date()): QuietWindow {
+  const zone = deviceZone();
+  return { start, end, utcOffsetMinutes: deviceOffset(now), ...(zone ? { timeZone: zone } : {}) };
+}
+
+/**
+ * A quiet window as this device's clock reads it (spec 3.3 §5.1). The kernel reads a window in
+ * its IANA zone when it names one, else at its offset, else in the server's time zone (`host`,
+ * the status line's `hostUtcOffsetMinutes`), so its times move from there to this device's
  * (`here`): 22:00–07:00 kept in UTC reads 01:00–10:00 in Nairobi. Without `host`, a window
- * without an offset is read here as it is.
+ * without a zone or an offset is read here as it is.
  */
 export function onThisDevice(window: QuietWindow, host: number | undefined, here: number = deviceOffset()): QuietWindow {
-  const offset = window.utcOffsetMinutes ?? host;
+  const zoned = window.timeZone ? zoneOffset(window.timeZone) : undefined;
+  const offset = zoned ?? window.utcOffsetMinutes ?? host;
   if (offset === undefined) return { start: window.start, end: window.end };
   const shift = here - offset;
   return {

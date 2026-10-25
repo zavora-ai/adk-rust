@@ -18,6 +18,14 @@
 //! - **Router**: Safe public routes and separately composable management routes
 //! - **A2A dispatch**: Application-provided handling with a fail-closed default
 //!
+//! ## AWP 2.0
+//!
+//! [`v2`] is the AWP 2.0 edge runtime (spec 3.5 §7.1–§7.4, §7.9): the `/awp/v2/` routes,
+//! `AWP-Version` negotiation, trust tiers from verified credentials, capabilities as
+//! `adk_core::Tool`s with one governed path for every binding, held and exactly-once calls,
+//! edge stores with a conformance suite, and `business.toml` migration. The 1.x routes and
+//! [`AwpState`] sit behind the default `awp-v1` feature for one release line.
+//!
 //! ## Quick Start
 //!
 //! ```rust,no_run
@@ -33,6 +41,7 @@
 //! # }
 //! ```
 
+#[cfg(feature = "awp-v1")]
 pub mod a2a;
 pub mod config;
 pub mod consent;
@@ -40,16 +49,21 @@ pub mod detect;
 pub mod discovery;
 pub mod error_response;
 pub mod events;
+#[cfg(feature = "awp-v1")]
 pub mod handlers;
 pub mod health;
 pub mod loader;
 pub mod manifest;
 pub mod middleware;
 pub mod rate_limit;
+#[cfg(feature = "awp-v1")]
 pub mod router;
+#[cfg(feature = "awp-v1")]
 pub mod state;
 pub mod trust;
+pub mod v2;
 
+#[cfg(feature = "awp-v1")]
 pub use a2a::AwpA2aHandler;
 pub use config::{AwpConfigError, business_context_to_toml};
 pub use consent::{ConsentService, FileConsentService, InMemoryConsentService};
@@ -65,6 +79,8 @@ pub use health::{HealthState, HealthStateMachine, HealthStateSnapshot};
 pub use loader::BusinessContextLoader;
 pub use manifest::build_manifest;
 pub use rate_limit::{InMemoryRateLimiter, RateLimitConfig, RateLimiter};
+#[cfg(feature = "awp-v1")]
 pub use router::{awp_management_routes, awp_public_routes, awp_routes};
+#[cfg(feature = "awp-v1")]
 pub use state::{AwpState, AwpStateBuilder};
 pub use trust::{DefaultTrustAssigner, TrustLevelAssigner};

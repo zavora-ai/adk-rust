@@ -98,6 +98,24 @@ The split means any Rust project can depend on `awp-types` without pulling in th
 | Stream entry | `StreamEntry` | The edge's stream feed for a live page |
 | Charter public terms | `PublicTerms` (part of `Charter`) | `/.well-known/awp/charter.json` |
 
+### The 2.0 edge runtime
+
+`adk_awp::v2` serves the AWP 2.0 edge. `awp_v2_routes` mounts `GET /awp/v2/manifest`,
+`GET /awp/v2/trust`, `GET /awp/v2/status`, `POST /awp/v2/capabilities/{name}` and
+`GET /awp/v2/calls/{id}`; every response names `AWP-Version: 2.0` and every failure is the 2.0
+error envelope.
+
+| Piece | Behaviour |
+|-------|-----------|
+| `TierAssigner` | Assigns `public`, `known`, `verified` or `partner` from a verified credential; the default makes every caller `public`, and self-declared headers never change a tier |
+| `CapabilityTool` | One capability as an `adk_core::Tool` with origin `awp:{domain}`; the same tool serves the HTTP, A2A and MCP bindings |
+| `DirectExecutor` | Refuses a capability above the caller's tier as `capability_not_found`, validates input, requires an idempotency key for `non_idempotent` capabilities, checks consent receipts, answers a repeated key from its record, and holds a call above its approval threshold with `202` |
+| Edge stores | Subscriptions, consent receipts, status, held calls, leads and idempotency records; backends run `edge_store_conformance_tests!` |
+
+`AWP-Version` takes a list, highest first. A 1.x route answers `2.0, 1.0` in 1.0 and a 2.0
+route answers it in 2.0; a request naming no common major gets `406`. The 1.x routes sit
+behind the default `awp-v1` feature.
+
 `Charter::validate()` refuses a KPI target without a baseline, a charter without an owner, an agent holding a role, and an approval chain that distinct principals cannot satisfy. The `json-schema` feature derives JSON Schema (2020-12) for every 2.0 type; the generated schemas are committed in `awp-types/schemas/2.0/`.
 
 ```toml

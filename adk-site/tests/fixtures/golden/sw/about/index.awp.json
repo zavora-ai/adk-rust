@@ -1,0 +1,23 @@
+{
+  "path": "/sw/about/",
+  "releaseSeq": 1,
+  "kind": "page",
+  "language": "sw",
+  "title": "Kuhusu sisi",
+  "resource": {
+    "id": "pages/about/sw",
+    "title": "Kuhusu sisi",
+    "url": "https://example.com/sw/about/"
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "inLanguage": "sw",
+    "name": "Kuhusu sisi",
+    "url": "https://example.com/sw/about/"
+  },
+  "markdown": "https://example.com/sw/about/index.md"
+}

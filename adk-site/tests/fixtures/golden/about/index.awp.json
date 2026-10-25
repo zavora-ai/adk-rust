@@ -1,0 +1,23 @@
+{
+  "path": "/about/",
+  "releaseSeq": 1,
+  "kind": "page",
+  "language": "en",
+  "title": "About us",
+  "resource": {
+    "id": "pages/about/en",
+    "title": "About us",
+    "url": "https://example.com/about/"
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "inLanguage": "en",
+    "name": "About us",
+    "url": "https://example.com/about/"
+  },
+  "markdown": "https://example.com/about/index.md"
+}

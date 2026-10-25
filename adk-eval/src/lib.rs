@@ -25,6 +25,7 @@
 //! | `statistics` | `AbComparator` |
 //! | `vertex-eval` | Vertex AI Gen AI Evaluation Service bridge |
 //! | `personas` | Simulated users for multi-turn evaluation |
+//! | `experiments` | `ExperimentAnalyzer`: sequential analysis of web experiments with guardrails |
 //!
 //! ## Quick start
 //!
@@ -85,6 +86,9 @@ pub mod ab_comparator;
 #[cfg(feature = "vertex-eval")]
 pub mod vertex;
 
+#[cfg(feature = "experiments")]
+pub mod experiments;
+
 // Re-exports
 pub use criteria::{
     EvaluationCriteria, ResponseMatchConfig, Rubric, RubricConfig, ToolTrajectoryConfig,
@@ -128,6 +132,9 @@ pub use junit_reporter::JunitReporter;
 
 #[cfg(feature = "statistics")]
 pub use ab_comparator::AbComparator;
+
+#[cfg(feature = "experiments")]
+pub use experiments::ExperimentAnalyzer;
 
 #[cfg(feature = "vertex-eval")]
 pub use vertex::{

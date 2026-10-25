@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+<url><loc>https://example.com/</loc><lastmod>2026-10-02T00:00:00Z</lastmod></url>
+<url><loc>https://example.com/about/</loc><xhtml:link rel="alternate" hreflang="en" href="https://example.com/about/"/><xhtml:link rel="alternate" hreflang="sw" href="https://example.com/sw/about/"/></url>
+<url><loc>https://example.com/consent/</loc></url>
+<url><loc>https://example.com/events/</loc></url>
+<url><loc>https://example.com/events/open-day/</loc></url>
+<url><loc>https://example.com/notices/</loc><lastmod>2026-10-02T00:00:00Z</lastmod></url>
+<url><loc>https://example.com/notices/water/</loc><lastmod>2026-10-02T00:00:00Z</lastmod></url>
+<url><loc>https://example.com/posts/</loc><lastmod>2026-10-01T09:00:00Z</lastmod></url>
+<url><loc>https://example.com/posts/hello/</loc><lastmod>2026-10-01T09:00:00Z</lastmod><xhtml:link rel="alternate" hreflang="en" href="https://example.com/posts/hello/"/><xhtml:link rel="alternate" hreflang="sw" href="https://example.com/sw/posts/hello/"/></url>
+<url><loc>https://example.com/privacy/</loc></url>
+<url><loc>https://example.com/products/</loc><lastmod>2026-10-20T08:00:00Z</lastmod></url>
+<url><loc>https://example.com/products/panel-400/</loc><lastmod>2026-10-20T08:00:00Z</lastmod></url>
+<url><loc>https://example.com/sw/</loc><lastmod>2026-10-01T09:00:00Z</lastmod></url>
+<url><loc>https://example.com/sw/about/</loc><xhtml:link rel="alternate" hreflang="en" href="https://example.com/about/"/><xhtml:link rel="alternate" hreflang="sw" href="https://example.com/sw/about/"/></url>
+<url><loc>https://example.com/sw/posts/</loc><lastmod>2026-10-01T09:00:00Z</lastmod></url>
+<url><loc>https://example.com/sw/posts/hello/</loc><lastmod>2026-10-01T09:00:00Z</lastmod><xhtml:link rel="alternate" hreflang="en" href="https://example.com/posts/hello/"/><xhtml:link rel="alternate" hreflang="sw" href="https://example.com/sw/posts/hello/"/></url>
+<url><loc>https://example.com/sw/tags/solar/</loc><lastmod>2026-10-01T09:00:00Z</lastmod></url>
+<url><loc>https://example.com/tags/news/</loc><lastmod>2026-10-01T09:00:00Z</lastmod></url>
+<url><loc>https://example.com/tags/solar/</loc><lastmod>2026-10-01T09:00:00Z</lastmod></url>
+<url><loc>https://example.com/terms/</loc></url>
+</urlset>

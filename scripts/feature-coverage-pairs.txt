@@ -43,6 +43,10 @@
 1 adk-harness hooks
 # The payments pack (spec 3.1 §7.16) links adk-payments, which no other harness feature does.
 1 adk-harness payments
+# The site wallet (spec 3.5 §7.14) on its own, and with the AP2 rail beside every protocol
+# feature (the AP2 test files import ACP and A2A helpers, so `ap2` alone leaves them unused).
+1 adk-payments wallet doc
+1 adk-payments acp,acp-experimental,ap2,ap2-a2a,ap2-mcp,wallet
 # The voice surface (spec 3.1 §7.17): the harness over adk-realtime's integrated runner.
 1 adk-harness voice
 # The harness's ACP standing permissions (spec 3.3 §10 A1): adk-acp's server enters only here.
@@ -127,6 +131,11 @@
 # The managed form (spec 3.2 §7.13, §10 M1): `KernelDef`, `TenantKernel` and partitions on a
 # tenant's kernel, which no workspace member enables.
 2 adk-kernel managed
+# The charter store, KPI tracker, autonomy ladder and signals (spec 3.5 §7.10, §7.11): the
+# in-memory and SQLite suites, the invariant, property and scenario tests and the doctests;
+# then the library alone with no default features, as a consumer builds it.
+2 adk-kernel charter doc
+2 adk-kernel charter no-default,lib
 # The terminal surface (spec 3.3 §5.2): full screen, inline and JSON lines; with `web`, the
 # scripted scenario on a kernel-hosted harness drawn by `TerminalSurface::screen`.
 2 adk-surface tui doc
@@ -217,6 +226,9 @@
 # The graph memory backend over sqlx: default workspace builds never compile it.
 5 adk-memory graph-memory
 5 adk-eval vertex-eval
+# Web experiment analysis (spec 3.5 §7.12): the simulation, S11 and property tests and the
+# doctests that state the method's numbers need it.
+5 adk-eval experiments doc
 # The tau2-bench and BFCL adapters: nothing in the workspace enables either feature.
 5 adk-bench tau2,bfcl
 # Agent Engine deployment client: golden DTO and mock contract tests.
@@ -252,6 +264,8 @@
 6 adk-sandbox workspace-docker
 # AWP 2.0 JSON Schemas (spec 3.5 §7.2): the drift test against awp-types/schemas/2.0/ runs only here.
 6 awp-types json-schema
+# adk-awp without `awp-v1`: the 2.0 edge alone, with the 1.x routes compiled out.
+6 adk-awp - no-default
 
 # Shard 7 — adk-rag's SurrealDB backend on its own: it and lancedb each compile for about
 # fifteen minutes, and together they made shard 0 the longest job in the tier.

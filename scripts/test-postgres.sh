@@ -72,7 +72,7 @@ suite "adk-harness" -p adk-harness --features memory,postgres,redis \
 suite "adk-graph" -p adk-graph --features postgres --test checkpointer_conformance_postgres
 
 # The feature set matches the kernel's Redis step of CI's postgres job, so both reuse one build.
-suite "adk-kernel" -p adk-kernel --features postgres,redis,channels --test process_store_postgres \
+suite "adk-kernel" -p adk-kernel --features postgres,redis,channels,charter --test process_store_postgres \
     --test agenda_store_postgres \
     --test driver_store_postgres \
     --test ledger_store_postgres \
@@ -80,7 +80,8 @@ suite "adk-kernel" -p adk-kernel --features postgres,redis,channels --test proce
     --test control_store_postgres \
     --test channel_store_postgres \
     --test partition_store_postgres \
-    --test cron_watermark_store_postgres
+    --test cron_watermark_store_postgres \
+    --test charter_store_postgres
 
 suite "adk-auth" -p adk-auth --features postgres-audit --test audit_postgres_tests
 

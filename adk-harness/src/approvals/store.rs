@@ -31,6 +31,21 @@ pub trait StandingRuleStore: fmt::Debug + Send + Sync {
     async fn revoke(&self, app: &str, id: &str) -> Result<bool>;
     /// Every rule of `user` in `app`, of either scope.
     async fn list(&self, app: &str, user: &str) -> Result<Vec<StandingRule>>;
+
+    /// Replaces the stored rule with `rule`'s id in `rule`'s app by `rule` while it is still
+    /// stored, and returns whether it was, so a rule revoked meanwhile stays revoked (spec 3.3
+    /// §8.1 "Extend").
+    ///
+    /// The default reads the owner's rules, then grants `rule` when its id is among them; a
+    /// revocation between the two is undone. Every store of this crate replaces in one step.
+    async fn replace(&self, rule: StandingRule) -> Result<bool> {
+        let held = self.list(rule.scope.app_name(), rule.scope.user_id()).await?;
+        if !held.iter().any(|existing| existing.id == rule.id) {
+            return Ok(false);
+        }
+        self.grant(rule).await?;
+        Ok(true)
+    }
 }
 
 fn validate(rule: &StandingRule) -> Result<()> {
@@ -97,6 +112,15 @@ impl StandingRuleStore for InMemoryStandingRuleStore {
         let before = rules.len();
         rules.retain(|rule| !(rule.scope.app_name() == app && rule.id == id));
         Ok(rules.len() != before)
+    }
+
+    async fn replace(&self, rule: StandingRule) -> Result<bool> {
+        validate(&rule)?;
+        let mut rules = self.rules.write().await;
+        let held = rules.iter_mut().find(|existing| {
+            existing.scope.app_name() == rule.scope.app_name() && existing.id == rule.id
+        });
+        Ok(held.map(|existing| *existing = rule).is_some())
     }
 
     async fn list(&self, app: &str, user: &str) -> Result<Vec<StandingRule>> {
@@ -249,6 +273,22 @@ impl StandingRuleStore for FileStandingRuleStore {
             }
         }
         Ok(removed)
+    }
+
+    async fn replace(&self, rule: StandingRule) -> Result<bool> {
+        validate(&rule)?;
+        let _guard = self.write.lock().await;
+        let path = self.user_file(rule.scope.app_name(), rule.scope.user_id());
+        let mut entries = Self::read_entries(&path).await?;
+        let Some(entry) =
+            entries.iter_mut().find(|entry| entry_id(entry) == Some(rule.id.as_str()))
+        else {
+            return Ok(false);
+        };
+        *entry = serde_json::to_value(&rule)
+            .map_err(|error| crate::fsutil::serialize_error("standing rule", &error))?;
+        Self::write_entries(&path, &entries).await?;
+        Ok(true)
     }
 
     async fn list(&self, app: &str, user: &str) -> Result<Vec<StandingRule>> {
@@ -432,6 +472,26 @@ impl StandingRuleStore for SqliteStandingRuleStore {
             .execute(&self.pool)
             .await
             .map_err(crate::fsutil::db_error)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn replace(&self, rule: StandingRule) -> Result<bool> {
+        validate(&rule)?;
+        let text = serde_json::to_string(&rule)
+            .map_err(|error| crate::fsutil::serialize_error("standing rule", &error))?;
+        let text = self.encode(&[rule.scope.app_name(), &rule.id], text)?;
+        let result = sqlx::query(
+            "UPDATE adk_harness_rules SET user_id = ?, session_id = ?, rule = ? \
+             WHERE app_name = ? AND id = ?",
+        )
+        .bind(rule.scope.user_id())
+        .bind(rule.scope.session_id())
+        .bind(text)
+        .bind(rule.scope.app_name())
+        .bind(&rule.id)
+        .execute(&self.pool)
+        .await
+        .map_err(crate::fsutil::db_error)?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -690,6 +750,39 @@ impl StandingRuleStore for PostgresStandingRuleStore {
         Ok(true)
     }
 
+    async fn replace(&self, rule: StandingRule) -> Result<bool> {
+        validate(&rule)?;
+        let text = serde_json::to_string(&rule)
+            .map_err(|error| crate::fsutil::serialize_error("standing rule", &error))?;
+        let app = rule.scope.app_name().to_string();
+        let mut tx = self.pool.begin().await.map_err(crate::fsutil::db_error)?;
+        sqlx::query(BUMP_RULE_VERSION)
+            .bind(&app)
+            .execute(&mut *tx)
+            .await
+            .map_err(crate::fsutil::db_error)?;
+        let updated = sqlx::query(
+            "UPDATE adk_harness_rules SET user_id = $1, session_id = $2, rule = $3 \
+             WHERE app_name = $4 AND id = $5",
+        )
+        .bind(rule.scope.user_id())
+        .bind(rule.scope.session_id())
+        .bind(text)
+        .bind(&app)
+        .bind(&rule.id)
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::fsutil::db_error)?
+        .rows_affected();
+        if updated == 0 {
+            tx.rollback().await.map_err(crate::fsutil::db_error)?;
+            return Ok(false);
+        }
+        tx.commit().await.map_err(crate::fsutil::db_error)?;
+        self.cache.forget(|(cached, _)| *cached == app).await;
+        Ok(true)
+    }
+
     async fn list(&self, app: &str, user: &str) -> Result<Vec<StandingRule>> {
         Ok(self
             .user_rules(app, user)
@@ -718,6 +811,16 @@ return 1
 const REVOKE_SCRIPT: &str = r#"
 if redis.call('HDEL', KEYS[2], ARGV[1]) == 0 then return 0 end
 redis.call('ZREM', KEYS[3], ARGV[1])
+redis.call('INCR', KEYS[1])
+return 1
+"#;
+
+/// KEYS: version, rules. ARGV: rule id, rule JSON. Replaces a stored rule and increments the
+/// app's version; returns 0, changing nothing, when the rule is not stored.
+#[cfg(feature = "redis")]
+const REPLACE_SCRIPT: &str = r#"
+if redis.call('HEXISTS', KEYS[2], ARGV[1]) == 0 then return 0 end
+redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
 redis.call('INCR', KEYS[1])
 return 1
 "#;
@@ -809,7 +912,7 @@ impl RedisStandingRuleStore {
     /// Returns `harness.store.database` when the server rejects a script.
     pub async fn migrate(&self) -> Result<()> {
         use fred::prelude::LuaInterface as _;
-        for script in [GRANT_SCRIPT, REVOKE_SCRIPT, READ_RULES_SCRIPT] {
+        for script in [GRANT_SCRIPT, REVOKE_SCRIPT, REPLACE_SCRIPT, READ_RULES_SCRIPT] {
             let _: String = self
                 .client
                 .script_load(script)
@@ -893,6 +996,22 @@ impl StandingRuleStore for RedisStandingRuleStore {
             .map_err(|error| crate::fsutil::redis_error("revoke a standing rule", &error))?;
         self.cache.forget(|cached| cached == app).await;
         Ok(removed == 1)
+    }
+
+    async fn replace(&self, rule: StandingRule) -> Result<bool> {
+        use fred::prelude::LuaInterface as _;
+        validate(&rule)?;
+        let text = serde_json::to_string(&rule)
+            .map_err(|error| crate::fsutil::serialize_error("standing rule", &error))?;
+        let app = rule.scope.app_name();
+        let [version_key, rules_key, _, _] = self.keys(app);
+        let replaced: i64 = self
+            .client
+            .eval(REPLACE_SCRIPT, vec![version_key, rules_key], vec![rule.id.clone(), text])
+            .await
+            .map_err(|error| crate::fsutil::redis_error("replace a standing rule", &error))?;
+        self.cache.forget(|cached| cached == app).await;
+        Ok(replaced == 1)
     }
 
     async fn list(&self, app: &str, user: &str) -> Result<Vec<StandingRule>> {
