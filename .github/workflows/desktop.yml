@@ -1,0 +1,201 @@
+name: Desktop
+
+# The desktop tray (spec 3.3 §5.5, Experimental): its own unpublished workspace under
+# adk-surface/desktop/. Not part of pr-gate. Linux runs the shell on WebKitGTK through
+# tauri-driver under Xvfb; macOS and Windows compile it.
+# Pull requests run it for their branch, and a push to main once more after the merge; a branch
+# push alone would only queue a second run of the same commit beside the pull request's.
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'adk-surface/desktop/**'
+      - 'adk-surface/web/**'
+      - 'adk-surface/src/web/**'
+      - '.github/workflows/desktop.yml'
+  pull_request:
+    paths:
+      - 'adk-surface/desktop/**'
+      - 'adk-surface/web/**'
+      - 'adk-surface/src/web/**'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  # Both workspaces build into one target, which the Rust cache keeps.
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+  PROTOC: protoc
+  DESKTOP: adk-surface/desktop/Cargo.toml
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux (WebKitGTK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DESKTOP_E2E_OUT: ${{ github.workspace }}/desktop-e2e
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Install Tauri's prerequisites, WebKitWebDriver and Xvfb
+      timeout-minutes: 10
+      uses: ./.github/actions/apt-install
+      with:
+        packages: >-
+          libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev
+          libayatana-appindicator3-dev librsvg2-dev webkit2gtk-driver xvfb dbus-x11
+          protobuf-compiler
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        components: clippy,rustfmt
+        cache-key: desktop
+        cache-save: ${{ github.event_name == 'push' }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: adk-surface/desktop/probe/package-lock.json
+
+    - name: WebKitGTK version
+      run: |
+        version="$(pkg-config --modversion webkit2gtk-4.1)"
+        echo "WebKitGTK $version"
+        echo "WebKitGTK \`$version\` on \`$(lsb_release -ds)\`" >> "$GITHUB_STEP_SUMMARY"
+
+    # `generate_context!` embeds dist/, so the pages are built before any cargo step.
+    - name: Build the bundled pages
+      working-directory: adk-surface/desktop/probe
+      run: |
+        npm ci
+        npm run build
+
+    - name: Format
+      run: cargo fmt --manifest-path "$DESKTOP" --all -- --check
+
+    - name: Clippy
+      run: cargo clippy --manifest-path "$DESKTOP" --workspace --all-targets --locked -- -D warnings
+
+    - name: Test (adk-desktop-core and the capabilities check)
+      run: cargo test --manifest-path "$DESKTOP" --workspace --locked
+
+    - name: Install tauri-driver
+      run: cargo install tauri-driver --locked
+
+    - name: Build the shell, its WebDriver test and the kernels
+      run: |
+        cargo build --manifest-path "$DESKTOP" -p adk-desktop --locked
+        cargo test --manifest-path "$DESKTOP" -p adk-desktop --test webkitgtk --locked --no-run
+        cargo build -p adk-surface --features web --example scripted_home --example scripted_tray --locked
+        cargo build -p adk-cli --bin adk-rust --features scripted-model,postgres --locked
+
+    # Step 1, go or no-go: the home, a decision allowed once from it, and the probe.
+    - name: WebKitGTK spike (home, allow once, probe)
+      timeout-minutes: 15
+      run: |
+        adk-surface/desktop/e2e.sh spike_home_and_probe http://127.0.0.1:8791/ \
+          "$CARGO_TARGET_DIR/debug/examples/scripted_home 8791 {workspace}"
+        { echo '### WebKitGTK spike'; echo '```json'; cat "$DESKTOP_E2E_OUT/spike_home_and_probe/spike.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Tray end to end (scripted_tray --code-turn)
+      timeout-minutes: 15
+      run: |
+        adk-surface/desktop/e2e.sh tray_end_to_end http://127.0.0.1:8792/ \
+          "$CARGO_TARGET_DIR/debug/examples/scripted_tray 8792 {workspace} --code-turn"
+        log="$DESKTOP_E2E_OUT/tray_end_to_end/shell.log"
+        two=$(grep -n 'badge.count=2' "$log" | head -1 | cut -d: -f1)
+        one=$(grep -n 'badge.count=1' "$log" | awk -F: -v after="$two" '$1 > after { print $1; exit }')
+        test -n "$two" && test -n "$one"
+        { echo '### Tray end to end'; echo '```json'; cat "$DESKTOP_E2E_OUT/tray_end_to_end/tray.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+    # The §12 store gate: the one-agent steps against `adk-rust up` on SQLite and PostgreSQL,
+    # with the shell started with the kernel's token.
+    - name: Store gate (adk-rust up, SQLite and PostgreSQL)
+      timeout-minutes: 20
+      run: |
+        script="$RUNNER_TEMP/model-script.json"
+        cat > "$script" <<'JSON'
+        [
+          { "call": { "name": "write_file", "args": { "path": "invoice.txt", "content": "INV-1" } } },
+          { "text": "The invoice is written." },
+          { "text": "Done." },
+          { "text": "Done." }
+        ]
+        JSON
+        token="$(openssl rand -hex 16)"
+        up="$CARGO_TARGET_DIR/debug/adk-rust --model-script $script up --home {workspace}/home --dir {workspace} --mode ask --no-memory --no-consolidation --auth-token $token"
+        DESKTOP_E2E_STORE=sqlite adk-surface/desktop/e2e.sh store_gate http://127.0.0.1:8793/ \
+          "$up --bind 127.0.0.1:8793" "$token"
+        mv "$DESKTOP_E2E_OUT/store_gate" "$DESKTOP_E2E_OUT/store_gate-sqlite"
+        DESKTOP_E2E_STORE=postgres adk-surface/desktop/e2e.sh store_gate http://127.0.0.1:8794/ \
+          "$up --bind 127.0.0.1:8794 --store postgres://postgres:postgres@127.0.0.1:5432/postgres" "$token"
+        mv "$DESKTOP_E2E_OUT/store_gate" "$DESKTOP_E2E_OUT/store_gate-postgres"
+
+    - name: Keep screenshots and logs
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: desktop-linux
+        path: ${{ github.workspace }}/desktop-e2e
+        retention-days: 14
+
+  compile:
+    name: Compile (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: desktop-${{ matrix.os }}
+        cache-save: ${{ github.event_name == 'push' }}
+        neutralize-wild: 'false'
+
+    - name: Setup Node.js
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: adk-surface/desktop/probe/package-lock.json
+
+    - name: Build the bundled pages
+      working-directory: adk-surface/desktop/probe
+      shell: bash
+      run: |
+        npm ci
+        npm run build
+
+    # Compile-only by choice: no WebDriver runs here (WebdriverIO's Tauri service could drive
+    # macOS later).
+    - name: Build the shell
+      shell: bash
+      run: cargo build --manifest-path "$DESKTOP" --workspace --all-targets --locked

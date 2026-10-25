@@ -1,0 +1,26 @@
+[package]
+name = "adk-desktop-core"
+description = "The desktop tray's logic without Tauri (spec 3.3 §5.5): which kernel to reach, its status as a badge, where links go and where the panel opens"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+dirs.workspace = true
+futures-util.workspace = true
+# Loopback HTTP only: no TLS stack.
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "macros"] }
+toml.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }

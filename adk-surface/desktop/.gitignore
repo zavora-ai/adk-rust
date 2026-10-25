@@ -1,0 +1,6 @@
+# Built by `npm run build` in probe/ before cargo, and embedded by `generate_context!`.
+dist/
+probe/node_modules/
+target/
+# Written by tauri-build.
+app/gen/
