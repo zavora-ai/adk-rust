@@ -104,7 +104,9 @@ async fn the_sandbox_is_active_and_declares_the_open_network() {
     assert_eq!(status, IsolationStatus::OsSandbox { enforcer: "restricted-token".into() });
     assert!(status.to_string().contains("network not restricted"), "{status}");
     assert!(status.to_string().contains("reads not confined"), "{status}");
+    assert!(status.to_string().contains("MSYS2 installations off PATH not isolated"), "{status}");
     assert!(!status.confines_reads());
+    assert!(!status.isolates_msys2());
 
     let ws = adk_devtools::Workspace::new(".").allow_bash(true);
     let bash = HarnessBashTool::new(ws, status, true, Arc::new(InMemoryShellLedger::new()))
@@ -113,6 +115,7 @@ async fn the_sandbox_is_active_and_declares_the_open_network() {
     assert_eq!(annotations["enforcer"], "restricted-token");
     assert_eq!(annotations["network"], true, "the restricted token leaves the network open");
     assert_eq!(annotations["reads"], "unconfined", "the token reads what the user may read");
+    assert_eq!(annotations["msys2Isolated"], false, "installations off PATH are not held");
     assert!(bash.description().contains("network access"), "{}", bash.description());
 
     let dir = tempfile::tempdir().unwrap();
@@ -138,6 +141,7 @@ async fn the_sandbox_is_active_and_declares_the_open_network() {
     assert_eq!(refused.code, AUTO_ALLOW_UNAVAILABLE_CODE);
     assert!(refused.message.contains("network"), "{}", refused.message);
     assert!(refused.message.contains("does not confine reads"), "{}", refused.message);
+    assert!(refused.message.contains("MSYS2 installations off its PATH"), "{}", refused.message);
 }
 
 #[tokio::test]
@@ -197,7 +201,58 @@ async fn sandboxed_bash_writes_the_workspace_but_not_outside_it() {
     assert_eq!(begin[0].ext["enforcer"], "restricted-token");
     assert_eq!(begin[0].ext["network"], true);
     assert_eq!(begin[0].ext["reads"], "unconfined");
+    assert_eq!(begin[0].ext["msys2Isolated"], false);
     assert_eq!(begin[0].ext["workspaceAccess"], "read_write");
+}
+
+/// A Git Bash of the user's own holds the user's MSYS2 namespace, which the Low-integrity
+/// token cannot write; a sandboxed command and the processes it starts run beside it, in the
+/// namespace of the call's private runtime.
+#[tokio::test(flavor = "multi_thread")]
+async fn sandboxed_bash_runs_beside_the_users_own_git_bash() {
+    use std::io::Read as _;
+    use std::os::windows::process::CommandExt as _;
+
+    let bash = Path::new(r"C:\Program Files\Git\usr\bin\bash.exe");
+    if !bash.is_file() {
+        assert!(std::env::var_os("CI").is_none(), "Git for Windows is on every CI runner");
+        eprintln!("skipped: Git for Windows is not installed");
+        return;
+    }
+    let mut users = std::process::Command::new(bash)
+        .args(["-c", "echo up; exec sleep 120"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(adk_sandbox::process_tree::CREATE_SUSPENDED)
+        .spawn()
+        .expect("the user's bash starts");
+    let users_job =
+        adk_sandbox::process_tree::JobObject::contain_suspended(users.id()).expect("job");
+    let mut up = [0u8; 2];
+    users.stdout.take().expect("piped").read_exact(&mut up).expect("the user's bash is up");
+    let f = fixture_in(
+        tempfile::tempdir().unwrap(),
+        vec![call("sleep 1; ls -d / >/dev/null; echo child > child.txt; echo ran"), done()],
+        |b| {
+            b.shell(ShellIsolation::OsSandbox(sandbox()))
+                .mode(HarnessMode::Auto)
+                .confirmation_handler(Arc::new(ApproveAll))
+        },
+    )
+    .await;
+
+    let events = f.send("go").await;
+    drop(users_job);
+    let _ = users.wait();
+
+    let response = response_of(&events, "bash");
+    assert!(response["stdout"].as_str().unwrap_or_default().contains("ran"), "{response}");
+    assert_eq!(
+        std::fs::read_to_string(f.path("child.txt")).unwrap_or_default().trim(),
+        "child",
+        "{response}"
+    );
 }
 
 #[tokio::test]

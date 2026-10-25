@@ -163,6 +163,272 @@ async fn git_bash_starts_under_the_token_and_writes_only_the_workspace() {
     assert!(!outside.join("escaped.txt").exists(), "a write landed outside the workspace");
 }
 
+/// Git for Windows' installation on the CI runners.
+const GIT: &str = r"C:\Program Files\Git";
+
+/// Serialises the tests that start unconfined MSYS2 programs or read the user's MSYS2
+/// namespace, so one cannot hold the namespace the other checks.
+static USER_NAMESPACE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Whether Git for Windows is installed; on CI it must be.
+fn git_installed() -> bool {
+    let installed = Path::new(GIT).join(r"usr\bin\bash.exe").is_file();
+    assert!(installed || std::env::var_os("CI").is_none(), "Git for Windows is on every CI runner");
+    installed
+}
+
+/// An unconfined Git `bash` of the user, up and holding the user's MSYS2 namespace, ended
+/// with its job when dropped.
+struct UsersBash {
+    _job: adk_sandbox::process_tree::JobObject,
+    _child: std::process::Child,
+}
+
+fn users_bash() -> UsersBash {
+    use std::os::windows::process::CommandExt as _;
+    let mut child = std::process::Command::new(Path::new(GIT).join(r"usr\bin\bash.exe"))
+        .args(["-c", "echo up; exec sleep 120"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(adk_sandbox::process_tree::CREATE_SUSPENDED)
+        .spawn()
+        .expect("the user's bash starts");
+    let job = adk_sandbox::process_tree::JobObject::contain_suspended(child.id()).expect("job");
+    let mut up = [0u8; 2];
+    child.stdout.take().expect("piped").read_exact(&mut up).expect("the user's bash is up");
+    assert_eq!(&up, b"up");
+    UsersBash { _job: job, _child: child }
+}
+
+/// Runs `program` with `args` contained, under `policy`, and returns its exit code, standard
+/// output and standard error.
+fn contained(
+    policy: &adk_sandbox::sandbox::SandboxPolicy,
+    program: &Path,
+    args: &[&str],
+    cwd: &Path,
+) -> (i32, String, String) {
+    let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+    let mut child = WindowsEnforcer::new()
+        .spawn_contained(policy, program.as_os_str(), &args, cwd)
+        .expect("the contained program starts");
+    drop(child.stdin.take());
+    let (mut stdout, mut stderr) = (String::new(), String::new());
+    child.stdout.take().expect("piped").read_to_string(&mut stdout).expect("stdout");
+    child.stderr.take().expect("piped").read_to_string(&mut stderr).expect("stderr");
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let code = runtime.block_on(child.process.wait()).expect("waited");
+    (code, stdout, stderr)
+}
+
+/// A Git `bash` of the user's own holds the user's MSYS2 namespace, which the Low token
+/// cannot write: the confined `bash` runs from a private copy of the runtime, in a namespace
+/// of its own, and the programs it starts run there too.
+#[test]
+fn git_bash_starts_beside_the_users_own_git_bash() {
+    if !git_installed() {
+        return;
+    }
+    let _serial = USER_NAMESPACE.lock().unwrap_or_else(|e| e.into_inner());
+    let _users = users_bash();
+    let (_root, _base, workspace) = layout();
+    let policy = SandboxPolicyBuilder::new().allow_read_write(&workspace).build();
+
+    for shell in [r"usr\bin\bash.exe", r"bin\sh.exe"] {
+        let (code, stdout, stderr) = contained(
+            &policy,
+            &Path::new(GIT).join(shell),
+            &["-c", "sleep 1; ls -d / >/dev/null; echo child > child.txt; echo ran"],
+            &workspace,
+        );
+        assert_eq!(stdout.trim(), "ran", "{shell}: exit {code:#x}, stderr {stderr}");
+        let written = std::fs::read_to_string(workspace.join("child.txt")).expect("child.txt");
+        assert_eq!(written.trim(), "child", "{shell}");
+    }
+}
+
+/// The MSYS2 runtime's name for the user's namespace of the installation whose runtime is
+/// `dll`: its `hash_path_name` of the `\??\` path, as `init_installation_root` computes it.
+fn users_namespace(dll: &Path) -> String {
+    let mut hash: u64 = 0;
+    for unit in format!(r"\??\{}", dll.display()).encode_utf16() {
+        let upper = char::from_u32(u32::from(unit))
+            .map(char::to_uppercase)
+            .and_then(|mut upper| match (upper.next(), upper.next()) {
+                (Some(single), None) => Some(u64::from(u32::from(single))),
+                _ => None,
+            })
+            .unwrap_or(u64::from(unit));
+        hash = upper.wrapping_add(hash << 6).wrapping_add(hash << 16).wrapping_sub(hash);
+    }
+    format!("msys-2.0S5-{hash:x}")
+}
+
+#[test]
+fn the_users_namespace_name_is_the_one_the_runtime_reports() {
+    // `NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0S5-1888ae32e00d56aa)` in the runner's
+    // error before this fix.
+    assert_eq!(
+        users_namespace(&Path::new(GIT).join(r"usr\bin\msys-2.0.dll")),
+        "msys-2.0S5-1888ae32e00d56aa"
+    );
+}
+
+/// The mandatory label of the NT object directory `name`: `Ok(None)` for none (Medium), the
+/// level's RID otherwise, and the `NTSTATUS` when it cannot be opened.
+fn directory_label(name: &str) -> Result<Option<u32>, i32> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_KERNEL_OBJECT};
+    use windows_sys::Win32::Security::{
+        ACE_HEADER, ACL, GetAce, GetSidSubAuthority, GetSidSubAuthorityCount,
+        LABEL_SECURITY_INFORMATION, PSID, SYSTEM_MANDATORY_LABEL_ACE,
+    };
+
+    #[repr(C)]
+    struct UnicodeString {
+        length: u16,
+        maximum_length: u16,
+        buffer: *const u16,
+    }
+    #[repr(C)]
+    struct ObjectAttributes {
+        length: u32,
+        root_directory: HANDLE,
+        object_name: *const UnicodeString,
+        attributes: u32,
+        security_descriptor: *const std::ffi::c_void,
+        security_quality_of_service: *const std::ffi::c_void,
+    }
+    #[link(name = "ntdll", kind = "raw-dylib")]
+    unsafe extern "system" {
+        fn NtOpenDirectoryObject(
+            handle: *mut HANDLE,
+            access: u32,
+            attributes: *const ObjectAttributes,
+        ) -> i32;
+    }
+    const READ_CONTROL: u32 = 0x0002_0000;
+    const OBJ_CASE_INSENSITIVE: u32 = 0x40;
+    const SYSTEM_MANDATORY_LABEL_ACE_TYPE: u8 = 0x11;
+
+    let wide: Vec<u16> = name.encode_utf16().collect();
+    let unicode = UnicodeString {
+        length: (wide.len() * 2) as u16,
+        maximum_length: (wide.len() * 2) as u16,
+        buffer: wide.as_ptr(),
+    };
+    let attributes = ObjectAttributes {
+        length: size_of::<ObjectAttributes>() as u32,
+        root_directory: std::ptr::null_mut(),
+        object_name: &unicode,
+        attributes: OBJ_CASE_INSENSITIVE,
+        security_descriptor: std::ptr::null(),
+        security_quality_of_service: std::ptr::null(),
+    };
+    let mut handle: HANDLE = std::ptr::null_mut();
+    // SAFETY: the attributes and the name they point to outlive the call; `handle` is writable.
+    let status = unsafe { NtOpenDirectoryObject(&mut handle, READ_CONTROL, &attributes) };
+    if status < 0 {
+        return Err(status);
+    }
+    let mut sacl: *mut ACL = std::ptr::null_mut();
+    let mut descriptor: *mut std::ffi::c_void = std::ptr::null_mut();
+    // SAFETY: `handle` is open with READ_CONTROL; the out-pointers are writable.
+    let error = unsafe {
+        GetSecurityInfo(
+            handle,
+            SE_KERNEL_OBJECT,
+            LABEL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut sacl,
+            &mut descriptor,
+        )
+    };
+    // SAFETY: `handle` is open and owned here.
+    unsafe { CloseHandle(handle) };
+    assert_eq!(error, 0, "GetSecurityInfo({name})");
+    let mut label = None;
+    if !sacl.is_null() {
+        // SAFETY: `sacl` points into `descriptor`, which is freed below.
+        for index in 0..u32::from(unsafe { (*sacl).AceCount }) {
+            let mut ace: *mut std::ffi::c_void = std::ptr::null_mut();
+            // SAFETY: `index` is below the ACL's entry count.
+            if unsafe { GetAce(sacl, index, &mut ace) } == 0 {
+                continue;
+            }
+            // SAFETY: every entry starts with an ACE header.
+            if unsafe { (*ace.cast::<ACE_HEADER>()).AceType } != SYSTEM_MANDATORY_LABEL_ACE_TYPE {
+                continue;
+            }
+            // SAFETY: a mandatory label entry's SID starts at its `SidStart`.
+            let sid: PSID =
+                unsafe { (&raw mut (*ace.cast::<SYSTEM_MANDATORY_LABEL_ACE>()).SidStart).cast() };
+            // SAFETY: `sid` is a valid SID with at least one sub-authority.
+            let count = unsafe { *GetSidSubAuthorityCount(sid) };
+            // SAFETY: the last sub-authority is within the SID.
+            label = Some(unsafe { *GetSidSubAuthority(sid, u32::from(count) - 1) });
+        }
+    }
+    // SAFETY: `descriptor` was allocated by `GetSecurityInfo`.
+    unsafe { LocalFree(descriptor) };
+    Ok(label)
+}
+
+/// A program outside MSYS2 that starts Git's `bash` by its installation's path, as `git.exe`
+/// starts a hook's shell, loads the installation's own runtime. The call holds the user's
+/// namespace of that installation at the user's integrity level, so the `bash` cannot create
+/// it at Low integrity for the user's next Git Bash to join, and does not start.
+#[test]
+fn a_contained_call_never_creates_the_users_msys2_namespace_at_low() {
+    if !git_installed() {
+        return;
+    }
+    let _serial = USER_NAMESPACE.lock().unwrap_or_else(|e| e.into_inner());
+    let (_root, _base, workspace) = layout();
+    std::fs::write(
+        workspace.join("fresh.cmd"),
+        "@\"C:\\Program Files\\Git\\usr\\bin\\bash.exe\" -c \"echo fresh; exec sleep 8\"\r\n\
+         @echo after\r\n\
+         @ping -n 7 127.0.0.1 >nul\r\n",
+    )
+    .unwrap();
+    let system = std::env::var("SystemRoot").expect("SystemRoot");
+    let policy = SandboxPolicyBuilder::new()
+        .allow_read_write(&workspace)
+        .env("PATH", format!(r"{system}\System32;{GIT}\cmd"))
+        .build();
+    // The runtime opens this directory first and stops at once when it cannot write it, so
+    // it is where a Low-integrity namespace would begin.
+    let directories = vec![format!(
+        r"\BaseNamedObjects\{}",
+        users_namespace(&Path::new(GIT).join(r"usr\bin\msys-2.0.dll"))
+    )];
+
+    let checker = {
+        let directories = directories.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(3));
+            directories.iter().map(|dir| (dir.clone(), directory_label(dir))).collect::<Vec<_>>()
+        })
+    };
+    let cmd = Path::new(&system).join(r"System32\cmd.exe");
+    let (code, stdout, stderr) = contained(&policy, &cmd, &["/d", "/c", "fresh.cmd"], &workspace);
+    let labels = checker.join().expect("the check ran");
+
+    for (dir, label) in labels {
+        match label {
+            Ok(Some(level)) => assert!(level >= 0x2000, "{dir} is labelled {level:#x}"),
+            Ok(None) => {}
+            Err(status) => panic!("{dir} is held while the call runs, but: {status:#x}"),
+        }
+    }
+    assert!(!stdout.contains("fresh"), "bash started in the user's namespace: {stdout}");
+    assert!(stdout.contains("after"), "exit {code:#x}, stdout {stdout}, stderr {stderr}");
+}
+
 /// A sandboxed shell starts child processes, which inherit the restricted token: the token's
 /// default DACL must let the shell open the processes it creates.
 #[test]

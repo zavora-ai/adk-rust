@@ -37,6 +37,9 @@
 //! | Read of a path the policy does not grant | Allowed where the user may read it, the user's profile included, since the user is a restricting SID; denied where only groups the token holds deny-only (`Administrators`) or no SID it holds are granted |
 //! | System binaries and DLLs (`System32` grants `Users`) | Readable, so the shell can start programs |
 //! | Named objects and pipes | Created in the logon session's namespace, which grants the logon SID and admits Low integrity; MSYS2's objects that name the user are opened again |
+//! | MSYS2 programs (Git for Windows' `sh`) | Started from a private copy of their runtime, made for the call in an owner-only, Medium-integrity directory and compared with the installation's files, so the call's MSYS2 processes share an object namespace with no other process |
+//! | The user's MSYS2 namespace of the program's installation and of each installation on `PATH` | Held at the user's integrity level by an unconfined `cat` of that installation for the call's life, so the Low token can neither create nor write it; an MSYS2 program that a program outside MSYS2 starts itself, such as a hook's `sh` that `git` starts, therefore cannot start |
+//! | The MSYS2 or Cygwin namespace of any other installation | **Not protected** — a command that starts such an installation's program by its path while none of the user's runs creates that namespace at Low integrity, and a program of it the user starts before the command ends shares it |
 //! | Descendant processes | Killed with the call's Job Object |
 //! | Inherited handles | `spawn_contained`'s three standard handles only; `run_confined` inherits none |
 //! | Network | **Not enforced** — Windows offers no per-process network filter without AppContainer |
@@ -94,10 +97,15 @@ impl WindowsEnforcer {
     /// Runs `program` with `args` under a restricted token, with ACL grants on the policy's
     /// paths and a Job Object that kills every descendant with the call, starting in `cwd`.
     ///
-    /// The environment is `policy.env` (plus `SystemRoot`, injected from the parent when the
-    /// policy omits it, so the shell can start). Standard streams are not captured; the
-    /// outcome carries the exit code and whether the call timed out. On a timeout the job is
-    /// terminated and [`ConfinedOutcome::timed_out`] is `true`.
+    /// The environment is `policy.env`, or this process's environment when the policy sets
+    /// none, plus `SystemRoot` from this process when it is absent, so the shell can start.
+    /// An MSYS2 program — one beside `msys-2.0.dll`, such as Git for Windows' `usr\bin\sh.exe`,
+    /// or a Git for Windows launcher of one, such as `bin\sh.exe` — runs from a private copy of
+    /// its runtime, which comes first on `PATH`, and the call holds the user's MSYS2 namespace
+    /// of its installation and of each installation on `PATH` (see the module documentation).
+    /// Standard streams are not captured; the outcome carries the exit code and whether the
+    /// call timed out. On a timeout the job is terminated and [`ConfinedOutcome::timed_out`]
+    /// is `true`.
     ///
     /// # Errors
     ///
@@ -138,7 +146,7 @@ impl WindowsEnforcer {
     /// The process is held, with every process it starts, by the returned child's Job Object
     /// from before it runs (spec 3.2 §10 W1); dropping the child ends them all. Its standard
     /// input, output and error are pipes, and it inherits those three handles and no other.
-    /// The environment is `policy.env` as for `run_confined`. `program` should be a full
+    /// The environment is built as for `run_confined`. `program` should be a full
     /// path: a bare name is searched for as `CreateProcessAsUserW` does, from the directory
     /// of this process and its working directory before the system directories and `PATH`.
     ///
@@ -387,6 +395,31 @@ fn strip_unc_prefix(path: &std::path::Path) -> PathBuf {
     }
 }
 
+mod msys2;
+
+/// The confined command's environment: `policy.env`, or `inherited` when the policy sets
+/// nothing, and `SystemRoot` from `inherited` when absent, so the shell and its DLLs can start.
+#[cfg_attr(not(all(target_os = "windows", feature = "sandbox-windows")), allow(dead_code))]
+fn confined_environment(
+    policy: &SandboxPolicy,
+    inherited: &[(OsString, OsString)],
+) -> Vec<(OsString, OsString)> {
+    let mut pairs: Vec<(OsString, OsString)> = if policy.env.is_empty() {
+        inherited.to_vec()
+    } else {
+        policy.env.iter().map(|(k, v)| (k.into(), v.into())).collect()
+    };
+    let has = |pairs: &[(OsString, OsString)], name: &str| {
+        pairs.iter().any(|(k, _)| k.eq_ignore_ascii_case(name))
+    };
+    if !has(&pairs, "SystemRoot")
+        && let Some(root) = inherited.iter().find(|(k, _)| k.eq_ignore_ascii_case("SystemRoot"))
+    {
+        pairs.push(root.clone());
+    }
+    pairs
+}
+
 /// The restricted token's group plan, in binary SIDs so it is computed and tested on every
 /// host (spec 3.2 §10 W5).
 mod token {
@@ -462,6 +495,11 @@ mod token {
         /// The Low mandatory integrity level, S-1-16-4096.
         pub(super) fn low_integrity() -> Self {
             Self::well_known(16, &[0x1000])
+        }
+
+        /// The Medium mandatory integrity level, S-1-16-8192.
+        pub(super) fn medium_integrity() -> Self {
+            Self::well_known(16, &[0x2000])
         }
 
         /// `BUILTIN\Users`, S-1-5-32-545.
@@ -540,7 +578,7 @@ mod imp {
     use std::ffi::{OsStr, OsString, c_void};
     use std::os::windows::ffi::OsStrExt as _;
     use std::os::windows::io::{BorrowedHandle, FromRawHandle as _, OwnedHandle};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     use windows_sys::Win32::Foundation::{
@@ -555,11 +593,12 @@ mod imp {
     use windows_sys::Win32::Security::{
         ACL, ACL_REVISION, AddMandatoryAce, CONTAINER_INHERIT_ACE, CreateRestrictedToken,
         DACL_SECURITY_INFORMATION, DISABLE_MAX_PRIVILEGE, GetLengthSid, GetTokenInformation,
-        InitializeAcl, LABEL_SECURITY_INFORMATION, NO_INHERITANCE, OBJECT_INHERIT_ACE, PSID,
-        SID_AND_ATTRIBUTES, SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetTokenInformation,
-        TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE,
-        TOKEN_GROUPS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER, TokenDefaultDacl,
-        TokenGroups, TokenIntegrityLevel, TokenUser,
+        InitializeAcl, LABEL_SECURITY_INFORMATION, NO_INHERITANCE, OBJECT_INHERIT_ACE,
+        PROTECTED_DACL_SECURITY_INFORMATION, PSID, SID_AND_ATTRIBUTES,
+        SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetTokenInformation, TOKEN_ADJUST_DEFAULT,
+        TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_GROUPS,
+        TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER, TokenDefaultDacl, TokenGroups,
+        TokenIntegrityLevel, TokenUser,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
@@ -575,7 +614,7 @@ mod imp {
     };
 
     use super::token::{self, Sid, TokenGroup, TokenPlan};
-    use super::{ConfinedOutcome, ENFORCER_NAME, strip_unc_prefix};
+    use super::{ConfinedOutcome, ENFORCER_NAME, confined_environment, msys2, strip_unc_prefix};
     use crate::error::SandboxError;
     use crate::process_tree::{ContainedChild, ContainedProcess, JobObject};
     use crate::sandbox::{AccessMode, AllowedPath, SandboxPolicy};
@@ -786,7 +825,68 @@ mod imp {
     /// Labels the file or directory `wide` (NUL-terminated) Low integrity with no-write-up,
     /// inherited by what lies beneath it, so a Low token may write there.
     fn label_low(wide: &mut [u16]) -> Result<(), SandboxError> {
-        let low = Sid::low_integrity();
+        label(wide, &Sid::low_integrity())
+    }
+
+    /// Gives `path` an owner-only DACL, protected from inheritance, and an explicit Medium
+    /// integrity label inherited by what is created beneath it, so the Low token cannot
+    /// write there whatever a grant of an enclosing path left behind. The token still reads
+    /// it: the user is one of its restricting SIDs.
+    pub(super) fn protect_owner_only(path: &Path) -> Result<(), SandboxError> {
+        let process_token = open_process_token()?;
+        let user = token_user(process_token.0)?;
+        let mut wide: Vec<u16> =
+            strip_unc_prefix(path).as_os_str().encode_wide().chain(Some(0)).collect();
+        let explicit = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FILE_ALL_ACCESS,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: std::ptr::null_mut(),
+                MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_UNKNOWN,
+                ptstrName: psid(&user).cast(),
+            },
+        };
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        // SAFETY: one explicit entry is passed, no old ACL is merged, and `dacl` is writable.
+        // The ACL the call allocates is freed below.
+        let status = unsafe { SetEntriesInAclW(1, &explicit, std::ptr::null(), &mut dacl) };
+        if status != 0 {
+            return Err(SandboxError::EnforcerFailed {
+                enforcer: ENFORCER_NAME.to_string(),
+                message: format!("SetEntriesInAclW(owner only) failed (os error {status})"),
+            });
+        }
+        let _dacl = LocalGuard(dacl.cast());
+        // SAFETY: `wide` is NUL-terminated and `dacl` is a valid ACL for the call.
+        let status = unsafe {
+            SetNamedSecurityInfoW(
+                wide.as_mut_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                dacl,
+                std::ptr::null(),
+            )
+        };
+        if status != 0 {
+            return Err(SandboxError::EnforcerFailed {
+                enforcer: ENFORCER_NAME.to_string(),
+                message: format!(
+                    "SetNamedSecurityInfoW(owner only) on {} failed (os error {status})",
+                    path.display()
+                ),
+            });
+        }
+        label(&mut wide, &Sid::medium_integrity())
+    }
+
+    /// Labels the file or directory `wide` (NUL-terminated) at the integrity `level` with
+    /// no-write-up, inherited by what lies beneath it.
+    fn label(wide: &mut [u16], level: &Sid) -> Result<(), SandboxError> {
         // An ACL header and one mandatory label entry with its SID fit in 64 bytes.
         let mut acl = [0u64; 8];
         let acl_ptr: *mut ACL = acl.as_mut_ptr().cast();
@@ -794,14 +894,14 @@ mod imp {
         if unsafe { InitializeAcl(acl_ptr, size_of_val(&acl) as u32, ACL_REVISION) } == 0 {
             return Err(last_error("InitializeAcl"));
         }
-        // SAFETY: the ACL was initialised above with room for the entry; `low` is valid.
+        // SAFETY: the ACL was initialised above with room for the entry; `level` is valid.
         let added = unsafe {
             AddMandatoryAce(
                 acl_ptr,
                 ACL_REVISION,
                 OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
                 NO_WRITE_UP,
-                psid(&low),
+                psid(level),
             )
         };
         if added == 0 {
@@ -969,30 +1069,19 @@ mod imp {
         line
     }
 
-    /// The UTF-16 environment block for `policy.env`, with `SystemRoot` injected from the
-    /// parent when absent so the shell and its DLLs can start. Returns `None` to inherit the
-    /// parent environment when the policy sets nothing.
-    fn environment_block(policy: &SandboxPolicy) -> Option<Vec<u16>> {
-        if policy.env.is_empty() {
-            return None;
-        }
-        let mut pairs: Vec<(String, String)> =
-            policy.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        let has = |name: &str| pairs.iter().any(|(k, _)| k.eq_ignore_ascii_case(name));
-        if !has("SystemRoot")
-            && let Ok(value) = std::env::var("SystemRoot")
-        {
-            pairs.push(("SystemRoot".to_string(), value));
-        }
-        // Windows requires the block sorted by name, case-insensitively.
-        pairs.sort_by_key(|(key, _)| key.to_ascii_uppercase());
+    /// The UTF-16 environment block of `pairs`, sorted by name without regard to case as
+    /// Windows expects.
+    fn environment_block(mut pairs: Vec<(OsString, OsString)>) -> Vec<u16> {
+        pairs.sort_by_key(|(k, _)| k.to_string_lossy().to_uppercase());
         let mut block: Vec<u16> = Vec::new();
         for (k, v) in pairs {
-            block.extend(OsString::from(format!("{k}={v}")).encode_wide());
+            block.extend(k.encode_wide());
+            block.push(u16::from(b'='));
+            block.extend(v.encode_wide());
             block.push(0);
         }
         block.push(0);
-        Some(block)
+        block
     }
 
     /// An enforcer error for the Job Object step `call` that failed with `error`.
@@ -1020,6 +1109,10 @@ mod imp {
     /// Builds the restricted token, grants the policy's paths, and starts `program` with
     /// `args` in `cwd` under the token, suspended; places it in a new Job Object and only
     /// then resumes it. With `stdio`, the child inherits those three handles and no other.
+    ///
+    /// An MSYS2 program starts from a private copy of its runtime, and the user's MSYS2
+    /// namespaces the call can reach are held first; both live as long as the job's
+    /// processes (see `msys2`).
     fn launch(
         policy: &SandboxPolicy,
         grants: &[AllowedPath],
@@ -1037,6 +1130,45 @@ mod imp {
         })?;
         let token = restricted_token(process_token.0, &plan)?;
 
+        let inherited: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+        let mut env = confined_environment(policy, &inherited);
+        let msys2_program = msys2::program(Path::new(program));
+        let mut installations = msys2::installations_on_path(&env);
+        if let Some(found) = &msys2_program
+            && !installations
+                .iter()
+                .any(|known| msys2::same_path(&known.bin, &found.installation.bin))
+        {
+            installations.push(found.installation.clone());
+        }
+        let runtime = match &msys2_program {
+            Some(found) => {
+                let granted: Vec<PathBuf> = policy
+                    .allowed_paths
+                    .iter()
+                    .filter(|entry| entry.mode == AccessMode::ReadWrite)
+                    .map(|entry| {
+                        strip_unc_prefix(
+                            &std::fs::canonicalize(&entry.path)
+                                .unwrap_or_else(|_| entry.path.clone()),
+                        )
+                    })
+                    .collect();
+                Some(msys2::PrivateRuntime::create(found, &granted)?)
+            }
+            None => None,
+        };
+        let program: OsString = match (&msys2_program, &runtime) {
+            (Some(found), Some(runtime)) => {
+                msys2::environment(&mut env, &runtime.bin, found);
+                runtime.bin.join(&found.name).into_os_string()
+            }
+            _ => program.to_owned(),
+        };
+        // Held before the process exists, so it never finds a namespace it could create.
+        let keepers =
+            installations.iter().map(msys2::Keeper::start).collect::<Result<Vec<_>, _>>()?;
+
         // Grant the restricting RESTRICTED SID access to each allowed path, so the restricted
         // token's second access check passes there and nowhere else.
         let restricted = Sid::restricted();
@@ -1044,26 +1176,21 @@ mod imp {
             grant_path(&entry.path, entry.mode, psid(&restricted))?;
         }
 
-        let job = JobObject::new().map_err(|error| job_error("CreateJobObjectW", error))?;
+        let mut job = JobObject::new().map_err(|error| job_error("CreateJobObjectW", error))?;
+        job.attach(Box::new(msys2::Held { _runtime: runtime, _keepers: keepers }));
 
-        let mut command = command_line(program, args);
+        let mut command = command_line(&program, args);
         let cwd_wide: Vec<u16> =
             strip_unc_prefix(cwd).as_os_str().encode_wide().chain(Some(0)).collect();
-        let env = environment_block(policy);
+        let env = environment_block(env);
         // SAFETY: `STARTUPINFOEXW` and `PROCESS_INFORMATION` are plain C structs that an
         // all-zero bit pattern initialises validly.
         let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
         startup.StartupInfo.cb = size_of::<STARTUPINFOW>() as u32;
         let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
 
-        let mut flags = CREATE_SUSPENDED;
-        let env_ptr: *const c_void = match env.as_ref() {
-            Some(block) => {
-                flags |= CREATE_UNICODE_ENVIRONMENT;
-                block.as_ptr().cast()
-            }
-            None => std::ptr::null(),
-        };
+        let mut flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT;
+        let env_ptr: *const c_void = env.as_ptr().cast();
 
         // The child inherits exactly its three standard handles: a handle list keeps every
         // other inheritable handle of this process, which the restricted token's access
@@ -1409,5 +1536,23 @@ mod tests {
             PathBuf::from(r"\\server\share")
         );
         assert_eq!(strip_unc_prefix(Path::new(r"C:\plain")), PathBuf::from(r"C:\plain"));
+    }
+
+    fn pairs(entries: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        entries.iter().map(|(k, v)| (OsString::from(k), OsString::from(v))).collect()
+    }
+
+    #[test]
+    fn the_environment_is_the_policys_or_this_processs_with_system_root() {
+        let inherited = pairs(&[("Path", r"C:\bin"), ("SystemRoot", r"C:\Windows"), ("A", "1")]);
+
+        let empty = SandboxPolicyBuilder::new().build();
+        assert_eq!(confined_environment(&empty, &inherited), inherited);
+
+        let set = SandboxPolicyBuilder::new().env("PATH", r"C:\tools").build();
+        assert_eq!(
+            confined_environment(&set, &inherited),
+            pairs(&[("PATH", r"C:\tools"), ("SystemRoot", r"C:\Windows")]),
+        );
     }
 }

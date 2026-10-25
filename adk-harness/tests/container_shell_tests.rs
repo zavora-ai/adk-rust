@@ -284,6 +284,7 @@ async fn the_container_shell_declares_itself_and_binds_rules_to_its_configuratio
             "profileDigest": ContainerConfig::default().profile_digest(),
             "network": false,
             "reads": "confined",
+            "msys2Isolated": true,
         })
     );
     assert_eq!(open.annotations().unwrap()["network"], true);

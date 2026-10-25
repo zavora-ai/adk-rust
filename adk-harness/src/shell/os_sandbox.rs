@@ -242,6 +242,13 @@ impl SandboxLauncher {
         !self.contained
     }
 
+    /// Whether the sandbox keeps every MSYS2 installation a command can start apart from the
+    /// user's own programs; the Windows restricted-token sandbox keeps the shell's and those on
+    /// its `PATH` apart (spec 3.2 §10 W5).
+    pub(crate) fn isolates_msys2(&self) -> bool {
+        !self.contained
+    }
+
     /// Whether the launcher starts each shell itself (spec 3.2 §10 W5), so a caller that can
     /// only spawn a command cannot use it.
     #[cfg(all(windows, feature = "hooks"))]

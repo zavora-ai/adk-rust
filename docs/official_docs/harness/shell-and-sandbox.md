@@ -119,17 +119,21 @@ three standard handles and no other handle of the agent.
 | Your profile and anything else you may read | **readable**: MSYS2, the runtime of Git for Windows' `sh`, opens its own signal pipe and shared memory through an ACL that names only you, so you are one of the token's restricting SIDs |
 | Anything else you may write, including paths that grant `Everyone` or `Users` write access | none: an unlabelled path is Medium integrity, which the Low token cannot write; paths already labelled Low, such as `%USERPROFILE%\AppData\LocalLow`, stay writable |
 | Network | **not restricted**, whatever `network` says |
-| Environment | as on the other platforms, with `TEMP` and `TMP` also set to the scratch directory |
+| Environment | as on the other platforms, with `TEMP` and `TMP` also set to the scratch directory; Git for Windows' launcher settings (`MSYSTEM`, its `bin` directories first on `PATH`) when `sh` is Git's `bin\sh.exe` |
+| MSYS2, the runtime of `sh` and of the programs it starts | a private copy for each command: `msys-2.0.dll`, `sh.exe`, `bash.exe` and `env.exe`, copied into an owner-only, Medium-integrity directory under `%LOCALAPPDATA%\adk-sandbox\msys2`, compared with Git's files before use, first on `PATH`, and removed when the command's processes end; the command's MSYS2 processes share their object namespace, the mount table among it, with no other process |
+| Your own Git Bash and other MSYS2 programs of an installation on `PATH` or of `sh`'s | **kept apart**: the command holds your MSYS2 namespace of each such installation at your integrity level with an unconfined `cat` of it, started before the command, so the command can neither write it nor create it for your next Git Bash to join. An MSYS2 program that a program outside MSYS2 starts itself cannot start: `git` starts a hook's `sh` from its own installation, so a commit with a hook fails, with a hint that suggests an approved unsandboxed retry |
+| MSYS2 or Cygwin installations neither on `PATH` nor `sh`'s | **not isolated**: a command that starts such an installation's program by its path, while none of yours runs, creates that installation's namespace at Low integrity, and a program of it you start before the command ends joins it |
 
 What follows from that:
 
 | Behaviour | Windows | macOS, Linux |
 |---|---|---|
 | The `bash` declaration's `network` annotation and description | network access | `network` |
-| The `bash` declaration's `reads` annotation, `IsolationStatus::confines_reads` and the status line | `unconfined`, `false`, `OS sandbox (restricted-token, network not restricted, reads not confined)`; the declaration digest differs from a confining sandbox's, so a standing rule granted under Seatbelt or bubblewrap does not match it | `confined`, `true` |
+| The `bash` declaration's `reads` annotation, `IsolationStatus::confines_reads` and the status line | `unconfined`, `false`, `OS sandbox (restricted-token, network not restricted, reads not confined, MSYS2 installations off PATH not isolated)`; the declaration digest differs from a confining sandbox's, so a standing rule granted under Seatbelt or bubblewrap does not match it | `confined`, `true` |
+| The `bash` declaration's `msys2Isolated` annotation, `harness.bash.begin`'s `msys2Isolated` and `IsolationStatus::isolates_msys2` | `false`: MSYS2 installations neither on `PATH` nor `sh`'s are not isolated | `true` |
 | Plan mode | `bash` is denied: a read-write grant from an earlier command stays in the workspace's ACL, so the sandbox cannot promise a read-only workspace | sandboxed commands run read-only without a prompt |
 | Ask and Auto mode | every sandboxed command is asked | as the mode table says |
-| `auto_allow_sandboxed` | `build()` fails: the sandbox does not restrict the network and does not confine reads to the workspace | needs every protected path |
+| `auto_allow_sandboxed` | `build()` fails: the sandbox does not restrict the network, does not confine reads to the workspace and does not isolate the MSYS2 installations off its `PATH` | needs every protected path |
 | Hooks with `isolation = "inherit"` | `build()` fails: a hook needs a command it can spawn and feed; give it `isolation = "host"` | run in the sandbox |
 
 The first command of a process grants the workspace, and with `read_toolchains` the

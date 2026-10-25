@@ -27,9 +27,16 @@ use crate::shell::{
 /// ```
 pub const GOVERNANCE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
+/// The MSYS2 runtime's fatal error when it cannot write its namespace: under the Windows
+/// sandbox, a program outside MSYS2 that starts an installation's MSYS2 program itself, as
+/// `git` starts a hook's `sh`, meets the namespace the call holds (spec 3.2 §10 W5).
+const MSYS2_NAMESPACE_HELD: &str = "NtCreateDirectoryObject(";
+
 /// Output that suggests the sandbox refused a command (spec 3.1 §7.9): permission and
-/// read-only errors, Seatbelt's `deny(1)` log line, and an unreachable network.
+/// read-only errors, Seatbelt's `deny(1)` log line, an unreachable network, and an MSYS2
+/// program the Windows sandbox kept from the user's MSYS2 namespace.
 const DENIAL_MARKERS: &[&str] = &[
+    MSYS2_NAMESPACE_HELD,
     "Operation not permitted",
     "Read-only file system",
     "deny(1)",
@@ -235,6 +242,7 @@ impl HarnessBashTool {
             "profileDigest": profile_digest,
             "network": network,
             "reads": if self.status.confines_reads() { "confined" } else { "unconfined" },
+            "msys2Isolated": self.status.isolates_msys2(),
         });
         self.description = if host {
             "Run a shell command in the workspace root and return stdout, stderr and the exit \
@@ -503,6 +511,7 @@ impl Tool for HarnessBashTool {
                         "profileDigest": if selected.sandboxed { self.annotations["profileDigest"].clone() } else { Value::Null },
                         "network": if selected.sandboxed { self.annotations["network"].clone() } else { Value::Bool(true) },
                         "reads": if selected.sandboxed { self.annotations["reads"].clone() } else { json!("unconfined") },
+                        "msys2Isolated": if selected.sandboxed { self.annotations["msys2Isolated"].clone() } else { Value::Bool(false) },
                         "workspaceAccess": if !selected.sandboxed { Value::Null } else if selected.read_only { json!("read_only") } else { json!("read_write") },
                         "envKeys": selected.env_keys,
                         "retryOf": retry_of,
@@ -559,17 +568,22 @@ impl Tool for HarnessBashTool {
                 value.get("stdout").and_then(Value::as_str).unwrap_or_default()
             );
             suspected = denial_suspected(&output);
+            let refused = if output.contains(MSYS2_NAMESPACE_HELD) {
+                "an MSYS2 program that a program outside MSYS2 starts itself, such as a hook's \
+                 `sh` that git starts, cannot start in the sandbox"
+            } else {
+                "writes outside the workspace or to protected paths, and network access, are \
+                 denied"
+            };
             let hint = match (suspected, self.allow_unsandboxed_retry) {
                 (true, true) => format!(
-                    "The sandbox ({enforcer}) may have refused this: writes outside the workspace \
-                     or to protected paths, and network access, are denied. If the command needs \
-                     them, retry it once with unsandboxed: true, retry_of: \"{call_id}\" and a \
-                     reason; the user must approve the retry."
+                    "The sandbox ({enforcer}) may have refused this: {refused}. If the command \
+                     needs that, retry it once with unsandboxed: true, retry_of: \"{call_id}\" \
+                     and a reason; the user must approve the retry."
                 ),
                 (true, false) => format!(
-                    "The sandbox ({enforcer}) may have refused this: writes outside the workspace \
-                     or to protected paths, and network access, are denied. Unsandboxed retries \
-                     are turned off; ask the user to run it."
+                    "The sandbox ({enforcer}) may have refused this: {refused}. Unsandboxed \
+                     retries are turned off; ask the user to run it."
                 ),
                 (false, _) => "The command failed inside the sandbox; nothing in its output \
                                suggests the sandbox refused it."
@@ -650,6 +664,9 @@ mod tests {
         assert_eq!(confining.annotations().unwrap()["reads"], "confined");
         assert_eq!(windows.annotations().unwrap()["reads"], "unconfined");
         assert_eq!(host.annotations().unwrap()["reads"], "unconfined");
+        assert_eq!(confining.annotations().unwrap()["msys2Isolated"], true);
+        assert_eq!(windows.annotations().unwrap()["msys2Isolated"], false);
+        assert_eq!(host.annotations().unwrap()["msys2Isolated"], false);
         let windows_only_reads = {
             let mut annotations = windows.annotations().unwrap().clone();
             annotations["enforcer"] = "seatbelt".into();
@@ -690,6 +707,8 @@ mod tests {
             "curl: (6) Could not resolve host: example.com",
             "Sandbox: sh(123) deny(1) file-write-create /Users/x",
             "connect: Network is unreachable",
+            "0 [main] sh (5448) C:\\Program Files\\Git\\usr\\bin\\sh.exe: *** fatal error - \
+             NtCreateDirectoryObject(\\BaseNamedObjects\\msys-2.0S5-1888ae32e00d56aa): 0xC0000022",
         ] {
             assert!(denial_suspected(output), "{output}");
         }

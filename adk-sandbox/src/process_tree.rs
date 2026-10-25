@@ -77,8 +77,40 @@ pub const CREATE_SUSPENDED: u32 = windows_sys::Win32::System::Threading::CREATE_
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug)]
-pub struct JobObject(OwnedHandle);
+pub struct JobObject {
+    handle: OwnedHandle,
+    /// Dropped after `handle`, so they outlive every process the job's close ends.
+    companions: Companions,
+}
+
+impl std::fmt::Debug for JobObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JobObject")
+            .field("handle", &self.handle)
+            .field("companions", &self.companions.items.len())
+            .finish()
+    }
+}
+
+/// What must live as long as a job's processes, such as the restricted-token enforcer's
+/// keepers of MSYS2 namespaces (spec 3.2 §10 W5).
+#[derive(Default)]
+struct Companions {
+    items: Vec<Box<dyn std::any::Any + Send + Sync>>,
+    /// Set by `kill_on_close(false)`: the processes may outlive the job's handle, so the
+    /// companions are kept for the life of this process instead of dropped.
+    released: std::sync::atomic::AtomicBool,
+}
+
+impl Drop for Companions {
+    fn drop(&mut self) {
+        if *self.released.get_mut() {
+            for item in self.items.drain(..) {
+                std::mem::forget(item);
+            }
+        }
+    }
+}
 
 impl JobObject {
     /// Creates an empty job that kills its processes when its last handle closes.
@@ -93,7 +125,8 @@ impl JobObject {
             return Err(io::Error::last_os_error());
         }
         // SAFETY: `handle` was just created and nothing else owns it.
-        let job = Self(unsafe { OwnedHandle::from_raw_handle(handle) });
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+        let job = Self { handle, companions: Companions::default() };
         job.kill_on_close(true)?;
         Ok(job)
     }
@@ -131,18 +164,27 @@ impl JobObject {
     /// or the handle lacks `PROCESS_SET_QUOTA` and `PROCESS_TERMINATE`.
     pub fn assign(&self, process: BorrowedHandle<'_>) -> io::Result<()> {
         // SAFETY: both handles are open for the call.
-        if unsafe { AssignProcessToJobObject(self.0.as_raw_handle(), process.as_raw_handle()) } == 0
+        if unsafe { AssignProcessToJobObject(self.handle.as_raw_handle(), process.as_raw_handle()) }
+            == 0
         {
             return Err(io::Error::last_os_error());
         }
         Ok(())
     }
 
+    /// Keeps `companion` until the job's processes end: it is dropped after the job's handle
+    /// closes, or kept for the life of this process once `kill_on_close(false)` let them
+    /// outlive the job.
+    #[cfg(feature = "sandbox-windows")]
+    pub(crate) fn attach(&mut self, companion: Box<dyn std::any::Any + Send + Sync>) {
+        self.companions.items.push(companion);
+    }
+
     /// Kills every process in the job. A job with no process left is unaffected.
     pub fn terminate(&self) {
         // SAFETY: the handle is open. A failure means the job has no process left.
         unsafe {
-            TerminateJobObject(self.0.as_raw_handle(), 1);
+            TerminateJobObject(self.handle.as_raw_handle(), 1);
         }
     }
 
@@ -152,6 +194,7 @@ impl JobObject {
     ///
     /// Returns the OS error when the job's limits cannot be set.
     pub fn kill_on_close(&self, kill: bool) -> io::Result<()> {
+        self.companions.released.store(!kill, std::sync::atomic::Ordering::SeqCst);
         // SAFETY: the structure is plain data for which all zeroes is valid: no limits.
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
         if kill {
@@ -160,7 +203,7 @@ impl JobObject {
         // SAFETY: `limits` is readable and the size passed is its own; the handle is open.
         let set = unsafe {
             SetInformationJobObject(
-                self.0.as_raw_handle(),
+                self.handle.as_raw_handle(),
                 JobObjectExtendedLimitInformation,
                 (&raw const limits).cast(),
                 size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
@@ -172,7 +215,7 @@ impl JobObject {
 
 impl AsHandle for JobObject {
     fn as_handle(&self) -> BorrowedHandle<'_> {
-        self.0.as_handle()
+        self.handle.as_handle()
     }
 }
 

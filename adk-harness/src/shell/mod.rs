@@ -191,6 +191,25 @@ impl IsolationStatus {
         }
     }
 
+    /// Whether the isolation keeps every MSYS2 or Cygwin installation the command can start
+    /// apart from the user's own programs of it. The Windows restricted-token sandbox keeps
+    /// the shell's installation and those on its `PATH` apart, but a command that starts
+    /// another installation's program by its path can create that installation's namespace
+    /// for the user's next program of it to join (spec 3.2 §10 W5); the host shares them all.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_harness::IsolationStatus;
+    ///
+    /// assert!(IsolationStatus::OsSandbox { enforcer: "seatbelt".into() }.isolates_msys2());
+    /// assert!(!IsolationStatus::OsSandbox { enforcer: "restricted-token".into() }.isolates_msys2());
+    /// assert!(!IsolationStatus::Host.isolates_msys2());
+    /// ```
+    pub fn isolates_msys2(&self) -> bool {
+        self.confines_reads()
+    }
+
     /// The policy's isolation class for this status.
     pub fn isolation(&self) -> Isolation {
         match self {
@@ -201,8 +220,9 @@ impl IsolationStatus {
     }
 }
 
-/// The Windows restricted-token enforcer, which leaves the network open and does not confine
-/// reads (spec 3.2 §10 W5).
+/// The Windows restricted-token enforcer, which leaves the network open, does not confine
+/// reads and keeps only the MSYS2 installations of the shell and its `PATH` apart (spec 3.2
+/// §10 W5).
 const RESTRICTED_TOKEN: &str = "restricted-token";
 
 impl fmt::Display for IsolationStatus {
@@ -210,7 +230,11 @@ impl fmt::Display for IsolationStatus {
         match self {
             Self::Host => f.write_str("host (full user permissions, network)"),
             Self::OsSandbox { enforcer } if enforcer == RESTRICTED_TOKEN => {
-                write!(f, "OS sandbox ({enforcer}, network not restricted, reads not confined)")
+                write!(
+                    f,
+                    "OS sandbox ({enforcer}, network not restricted, reads not confined, MSYS2 \
+                     installations off PATH not isolated)"
+                )
             }
             Self::OsSandbox { enforcer } => write!(f, "OS sandbox ({enforcer}, no network)"),
             Self::Container { image } => write!(f, "container ({image})"),
@@ -374,6 +398,9 @@ fn auto_allow_refusal(launcher: &SandboxLauncher, root: &std::path::Path) -> Opt
     }
     if !launcher.confines_reads() {
         open.push("does not confine reads to the workspace");
+    }
+    if !launcher.isolates_msys2() {
+        open.push("does not isolate the MSYS2 installations off its PATH");
     }
     if !open.is_empty() {
         return Some(format!(
