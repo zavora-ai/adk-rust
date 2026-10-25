@@ -245,7 +245,10 @@ impl Snapshots {
             snapshot_error(
                 "harness.snapshot.io",
                 ErrorCategory::InvalidInput,
-                format!("the workspace {} cannot be snapshotted: {error}", workspace.root().display()),
+                format!(
+                    "the workspace {} cannot be snapshotted: {error}",
+                    workspace.root().display()
+                ),
             )
         })?;
         if let Some(location) = objects.location() {
@@ -341,10 +344,12 @@ impl Snapshots {
         let files_object = object_id(&manifest);
         let objects = self.objects.clone();
         let (id_for_put, manifest_bytes) = (files_object.clone(), manifest);
-        let manifest_new = tokio::task::spawn_blocking(move || objects.put(&id_for_put, &manifest_bytes))
-            .await
-            .map_err(walk_error)??;
-        let listed: Vec<NotCovered> = not_covered.iter().take(NOT_COVERED_LISTED).cloned().collect();
+        let manifest_new =
+            tokio::task::spawn_blocking(move || objects.put(&id_for_put, &manifest_bytes))
+                .await
+                .map_err(walk_error)??;
+        let listed: Vec<NotCovered> =
+            not_covered.iter().take(NOT_COVERED_LISTED).cloned().collect();
         let record = SnapshotRecord {
             id: format!("snap-{}", uuid::Uuid::new_v4().simple()),
             app_name: request.app_name,
@@ -364,6 +369,7 @@ impl Snapshots {
             not_covered: listed,
             plan: request.plan,
             transcript: request.transcript,
+            rewound: None,
         };
         self.store.put(&record).await?;
         let info = SnapshotInfo {
@@ -407,7 +413,8 @@ impl Snapshots {
     pub async fn files(&self, record: &SnapshotRecord) -> Result<Vec<FileEntry>> {
         let objects = self.objects.clone();
         let id = record.files_object.clone();
-        let bytes = tokio::task::spawn_blocking(move || objects.get(&id)).await.map_err(walk_error)??;
+        let bytes =
+            tokio::task::spawn_blocking(move || objects.get(&id)).await.map_err(walk_error)??;
         serde_json::from_slice(&bytes).map_err(|error| {
             snapshot_error(
                 "harness.snapshot.corrupt_object",
@@ -481,7 +488,10 @@ impl Snapshots {
                 if file.link.is_none() && file.mtime_ns < walked_at {
                     seeded.insert(
                         file.path.clone(),
-                        (Stat { len: file.len, mtime_ns: file.mtime_ns, inode: file.inode }, file.sha256),
+                        (
+                            Stat { len: file.len, mtime_ns: file.mtime_ns, inode: file.inode },
+                            file.sha256,
+                        ),
                     );
                 }
             }
@@ -533,9 +543,7 @@ impl Snapshots {
     /// and what came after the oldest of them; the workspace keeps at most `max_bytes` of
     /// objects, oldest snapshots dropped first; then unreferenced objects are collected.
     async fn retain(&self, latest: &SnapshotRecord) -> Result<()> {
-        let session = self
-            .list(&latest.app_name, &latest.user_id, &latest.session_id)
-            .await?;
+        let session = self.list(&latest.app_name, &latest.user_id, &latest.session_id).await?;
         let turns: Vec<&SnapshotRecord> =
             session.iter().filter(|record| record.kind == SnapshotKind::Turn).collect();
         let keep = self.config.keep_turns.max(1) as usize;
@@ -550,7 +558,8 @@ impl Snapshots {
             );
         }
         let objects = self.objects.clone();
-        let listed = tokio::task::spawn_blocking(move || objects.list()).await.map_err(walk_error)??;
+        let listed =
+            tokio::task::spawn_blocking(move || objects.list()).await.map_err(walk_error)??;
         let total: u64 = listed.iter().map(|info| info.bytes).sum();
         if total > self.config.max_bytes {
             let sizes: HashMap<&str, u64> =
@@ -570,8 +579,12 @@ impl Snapshots {
                     let files = self.files(record).await.unwrap_or_default();
                     lists.insert(record.files_object.clone(), files);
                 }
-                let ids = std::iter::once(record.files_object.as_str())
-                    .chain(lists[&record.files_object].iter().filter(|f| f.link.is_none()).map(|f| f.sha256.as_str()));
+                let ids = std::iter::once(record.files_object.as_str()).chain(
+                    lists[&record.files_object]
+                        .iter()
+                        .filter(|f| f.link.is_none())
+                        .map(|f| f.sha256.as_str()),
+                );
                 for id in ids {
                     if counted.insert(id.to_string()) {
                         used += sizes.get(id).copied().unwrap_or(0);
@@ -662,7 +675,11 @@ fn hash_file(
     let stat = Stat { len: file.len, mtime_ns: file.mtime_ns, inode: file.inode };
     let cached = {
         let cache = cache.lock().unwrap_or_else(|e| e.into_inner());
-        cache.entries.get(&file.path).filter(|(known, _)| *known == stat).map(|(_, sha)| sha.clone())
+        cache
+            .entries
+            .get(&file.path)
+            .filter(|(known, _)| *known == stat)
+            .map(|(_, sha)| sha.clone())
     };
     let mut written = 0;
     let sha256 = match cached {

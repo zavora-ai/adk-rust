@@ -422,6 +422,8 @@ pub(crate) struct ManifestInputs<'a> {
     pub(crate) memory: MemoryEntry,
     pub(crate) ledger_durable: bool,
     pub(crate) plan_rewind: bool,
+    /// The snapshot configuration, when the harness takes snapshots (spec 3.1 §7.27).
+    pub(crate) snapshots: Option<crate::snapshot::SnapshotConfig>,
 }
 
 /// Every pack and whether this build compiles it.
@@ -536,15 +538,23 @@ impl HarnessManifest {
         if let Some(shell) = inputs.shell {
             safety.push(sandbox_entry(shell));
         }
-        safety.push(SafetyEntry::new(
-            "rewind",
-            if inputs.plan_rewind {
-                "the plan graph's position only"
-            } else {
-                "nothing: no rewind in this build"
-            },
-            "files: no file is restored; nor pushes, payments, sent messages or webhooks",
-        ));
+        safety.push(match &inputs.snapshots {
+            // What a snapshot covers, and when it is partial (spec 3.1 §7.27, §13 Q11).
+            Some(config) => {
+                let (covers, does_not_cover) =
+                    crate::snapshot::safety_covers(config, inputs.plan_rewind);
+                SafetyEntry::new("rewind", &covers, &does_not_cover)
+            }
+            None => SafetyEntry::new(
+                "rewind",
+                if inputs.plan_rewind {
+                    "the plan graph's position only"
+                } else {
+                    "nothing: no rewind in this build"
+                },
+                "files: no file is restored; nor pushes, payments, sent messages or webhooks",
+            ),
+        });
         let mut help_topics: Vec<String> =
             ["commands", "cli <subcommand>", "manifest"].into_iter().map(String::from).collect();
         help_topics.sort();
@@ -823,6 +833,13 @@ mod tests {
     use super::*;
 
     fn manifest(commands: usize) -> HarnessManifest {
+        manifest_with(commands, None)
+    }
+
+    fn manifest_with(
+        commands: usize,
+        snapshots: Option<crate::snapshot::SnapshotConfig>,
+    ) -> HarnessManifest {
         let surface =
             SurfaceManifest::new("adk-rust", "3.0.0")
                 .commands((0..commands).map(|n| {
@@ -846,7 +863,22 @@ mod tests {
             memory: MemoryEntry::default(),
             ledger_durable: true,
             plan_rewind: false,
+            snapshots,
         })
+    }
+
+    /// The block says what a rewind restores only when snapshots are on, and when a
+    /// snapshot is partial (spec 3.1 §7.27, §13 Q11).
+    #[test]
+    fn the_rewind_entry_follows_the_snapshot_configuration() {
+        let off = manifest(0).render();
+        assert!(off.contains("rewind: covers nothing: no rewind in this build"), "{off}");
+        assert!(off.contains("no file is restored"), "{off}");
+        let on = manifest_with(0, Some(crate::snapshot::SnapshotConfig::default())).render();
+        assert!(on.contains("shell writes included"), "{on}");
+        assert!(on.contains("/rewind restores those files"), "{on}");
+        assert!(on.contains("reaches 50000 files is partial"), "{on}");
+        assert!(!on.contains("no file is restored"), "{on}");
     }
 
     #[test]

@@ -154,6 +154,10 @@ pub struct SnapshotRecord {
     /// For kind `rewind`: the events the rewind removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript: Option<TranscriptTail>,
+    /// For kind `rewind`: what the rewind then wrote, path to hash (`None` removed), so its
+    /// own writes are never a conflict for the next rewind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rewound: Option<std::collections::BTreeMap<String, Option<String>>>,
 }
 
 /// Where snapshot records are kept (spec 3.1 §7.27): [`InMemorySnapshotStore`], or
@@ -169,8 +173,12 @@ pub trait SnapshotStore: Send + Sync {
     async fn get(&self, id: &str) -> Result<Option<SnapshotRecord>>;
 
     /// The records of a session, oldest first.
-    async fn list_session(&self, app: &str, user: &str, session: &str)
-    -> Result<Vec<SnapshotRecord>>;
+    async fn list_session(
+        &self,
+        app: &str,
+        user: &str,
+        session: &str,
+    ) -> Result<Vec<SnapshotRecord>>;
 
     /// The records of a workspace (by root digest), oldest first.
     async fn list_root(&self, root: &str) -> Result<Vec<SnapshotRecord>>;
@@ -351,10 +359,7 @@ impl SqliteSnapshotStore {
             "CREATE INDEX IF NOT EXISTS adk_harness_snapshots_root \
                 ON adk_harness_snapshots (root)",
         ] {
-            sqlx::query(statement)
-                .execute(&self.pool)
-                .await
-                .map_err(crate::fsutil::db_error)?;
+            sqlx::query(statement).execute(&self.pool).await.map_err(crate::fsutil::db_error)?;
         }
         Ok(())
     }
@@ -385,11 +390,8 @@ impl SqliteSnapshotStore {
         Ok(serde_json::from_str(&text).ok())
     }
 
-    async fn select(&self, filter: &str, binds: &[&str]) -> Result<Vec<SnapshotRecord>> {
-        let sql = format!(
-            "SELECT id, record FROM adk_harness_snapshots WHERE {filter} ORDER BY created_at, id"
-        );
-        let mut query = sqlx::query_as::<_, (String, String)>(&sql);
+    async fn select(&self, sql: &'static str, binds: &[&str]) -> Result<Vec<SnapshotRecord>> {
+        let mut query = sqlx::query_as::<_, (String, String)>(sql);
         for bind in binds {
             query = query.bind(*bind);
         }
@@ -433,7 +435,11 @@ impl SnapshotStore for SqliteSnapshotStore {
     }
 
     async fn get(&self, id: &str) -> Result<Option<SnapshotRecord>> {
-        Ok(self.select("id = ?", &[id]).await?.into_iter().next())
+        Ok(self
+            .select("SELECT id, record FROM adk_harness_snapshots WHERE id = ?", &[id])
+            .await?
+            .into_iter()
+            .next())
     }
 
     async fn list_session(
@@ -442,11 +448,16 @@ impl SnapshotStore for SqliteSnapshotStore {
         user: &str,
         session: &str,
     ) -> Result<Vec<SnapshotRecord>> {
-        self.select("app_name = ? AND user_id = ? AND session_id = ?", &[app, user, session]).await
+        self.select(
+            "SELECT id, record FROM adk_harness_snapshots \
+             WHERE app_name = ? AND user_id = ? AND session_id = ?",
+            &[app, user, session],
+        )
+        .await
     }
 
     async fn list_root(&self, root: &str) -> Result<Vec<SnapshotRecord>> {
-        self.select("root = ?", &[root]).await
+        self.select("SELECT id, record FROM adk_harness_snapshots WHERE root = ?", &[root]).await
     }
 
     async fn delete(&self, ids: &[String]) -> Result<()> {

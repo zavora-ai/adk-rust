@@ -168,7 +168,9 @@ pub fn walk(root: &Path, options: &WalkOptions) -> TreeWalk {
             !prefix.is_empty()
                 && (prefix == relative
                     || prefix.strip_prefix(relative).is_some_and(|rest| rest.starts_with('/'))
-                    || relative.strip_prefix(prefix.as_str()).is_some_and(|rest| rest.starts_with('/')))
+                    || relative
+                        .strip_prefix(prefix.as_str())
+                        .is_some_and(|rest| rest.starts_with('/')))
         })
     };
     let mut tree = TreeWalk::default();
@@ -189,9 +191,7 @@ pub fn walk(root: &Path, options: &WalkOptions) -> TreeWalk {
         entries.sort_by_key(std::fs::DirEntry::file_name);
         for entry in entries {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if git
-                && !options.git_entries.as_ref().is_some_and(|names| names.iter().any(|n| *n == name))
-            {
+            if git && !options.git_entries.as_ref().is_some_and(|names| names.contains(&name)) {
                 continue;
             }
             // A `.git` file is a worktree's or submodule's pointer: as private as the directory.
@@ -212,8 +212,7 @@ pub fn walk(root: &Path, options: &WalkOptions) -> TreeWalk {
             if is_dir {
                 if name == ".git" {
                     pending.push_back((path, true));
-                } else if !options.skip_dirs.iter().any(|skip| *skip == name) || reached(&relative)
-                {
+                } else if !options.skip_dirs.contains(&name) || reached(&relative) {
                     pending.push_back((path, false));
                 }
                 continue;
@@ -229,8 +228,10 @@ pub fn walk(root: &Path, options: &WalkOptions) -> TreeWalk {
                 && let Some(max) = options.max_file_bytes
                 && metadata.len() > max
             {
-                tree.not_covered
-                    .push(NotCovered { path: relative, reason: SkipReason::TooLarge { len: metadata.len() } });
+                tree.not_covered.push(NotCovered {
+                    path: relative,
+                    reason: SkipReason::TooLarge { len: metadata.len() },
+                });
                 continue;
             }
             if tree.files.len() >= options.max_files {
@@ -343,7 +344,10 @@ impl IgnoreRule {
         }
         let (negate, line) = match line.strip_prefix('!') {
             Some(rest) => (true, rest),
-            None => (false, line.strip_prefix('\\').filter(|rest| rest.starts_with(['#', '!'])).unwrap_or(line)),
+            None => (
+                false,
+                line.strip_prefix('\\').filter(|rest| rest.starts_with(['#', '!'])).unwrap_or(line),
+            ),
         };
         let (dir_only, line) = match line.strip_suffix('/') {
             Some(rest) => (true, rest),
@@ -369,7 +373,8 @@ impl IgnoreRule {
         let below = if self.base.is_empty() {
             relative
         } else {
-            match relative.strip_prefix(self.base.as_str()).and_then(|rest| rest.strip_prefix('/')) {
+            match relative.strip_prefix(self.base.as_str()).and_then(|rest| rest.strip_prefix('/'))
+            {
                 Some(rest) => rest,
                 None => return false,
             }
@@ -557,6 +562,9 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
         let tree = walk(dir.path(), &WalkOptions::default());
         assert_eq!(tree.files.len(), 1);
-        assert_eq!((tree.files[0].path.as_str(), &tree.files[0].kind), ("link", &EntryKind::Symlink));
+        assert_eq!(
+            (tree.files[0].path.as_str(), &tree.files[0].kind),
+            ("link", &EntryKind::Symlink)
+        );
     }
 }

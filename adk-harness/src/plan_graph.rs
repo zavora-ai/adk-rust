@@ -296,6 +296,8 @@ pub struct PlanGraphs {
     checkpointer: Arc<dyn Checkpointer>,
     harness: String,
     reviewer: OnceLock<Arc<dyn Agent>>,
+    /// Snapshots taken before each step (spec 3.1 §7.27).
+    snapshots: OnceLock<Arc<crate::snapshot::Snapshots>>,
 }
 
 impl std::fmt::Debug for PlanGraphs {
@@ -420,7 +422,97 @@ pub(crate) async fn run_agent_node_counted(
 
 impl PlanGraphs {
     pub(crate) fn new(checkpointer: Arc<dyn Checkpointer>, harness: &str) -> Self {
-        Self { checkpointer, harness: harness.to_string(), reviewer: OnceLock::new() }
+        Self {
+            checkpointer,
+            harness: harness.to_string(),
+            reviewer: OnceLock::new(),
+            snapshots: OnceLock::new(),
+        }
+    }
+
+    /// Snapshots the workspace before each step (spec 3.1 §7.27).
+    pub(crate) fn set_snapshots(&self, snapshots: Arc<crate::snapshot::Snapshots>) {
+        let _ = self.snapshots.set(snapshots);
+    }
+
+    /// Where the session's plan stands: its hash, thread and the steps completed on it, in
+    /// plan order (spec 3.1 §7.27).
+    pub(crate) async fn mark(
+        &self,
+        app: &str,
+        user: &str,
+        session: &str,
+    ) -> Result<Option<crate::snapshot::PlanMark>> {
+        let Some(plan) = self.active(app, user, session).await? else {
+            return Ok(None);
+        };
+        let done: Vec<String> = match self.checkpointer.load(&plan.thread_id).await? {
+            Some(checkpoint) => plan
+                .steps
+                .iter()
+                .filter(|step| checkpoint.state.contains_key(&done_key(&step.id)))
+                .map(|step| step.id.clone())
+                .collect(),
+            None => Vec::new(),
+        };
+        Ok(Some(crate::snapshot::PlanMark {
+            plan_hash: plan.plan_hash,
+            thread_id: plan.thread_id,
+            completed: done,
+            running: plan.status == PlanRunStatus::Running,
+        }))
+    }
+
+    /// Starts the session's plan over on a new thread, so every step runs again on the
+    /// next turn, its `Approve` gates asking again (a rewind to before the first step,
+    /// spec 3.1 §7.27). Returns the new thread's id.
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.plan.invalid` when the session has no plan, or the checkpointer's
+    /// error.
+    pub(crate) async fn restart(&self, app: &str, user: &str, session: &str) -> Result<String> {
+        let mut plan = self
+            .active(app, user, session)
+            .await?
+            .ok_or_else(|| invalid("the session has no plan to rewind"))?;
+        let base = plan.thread_id.split(":rewind:").next().unwrap_or(&plan.thread_id).to_string();
+        plan.rewinds += 1;
+        plan.thread_id = format!("{base}:rewind:{}", plan.rewinds);
+        plan.status = PlanRunStatus::Running;
+        self.save(app, user, session, &plan).await?;
+        Ok(plan.thread_id)
+    }
+
+    /// Puts the session's plan back on `thread_id`, the thread it ran on before a rewind
+    /// (`/redo`, spec 3.1 §7.27). Gates ask again: the rewind count still grows.
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.plan.invalid` when the session has no plan, or the checkpointer's
+    /// error.
+    pub(crate) async fn restore_thread(
+        &self,
+        app: &str,
+        user: &str,
+        session: &str,
+        thread_id: &str,
+    ) -> Result<String> {
+        let mut plan = self
+            .active(app, user, session)
+            .await?
+            .ok_or_else(|| invalid("the session has no plan to restore"))?;
+        plan.rewinds += 1;
+        plan.thread_id = thread_id.to_string();
+        let done = match self.checkpointer.load(thread_id).await? {
+            Some(checkpoint) => {
+                plan.steps.iter().all(|step| checkpoint.state.contains_key(&done_key(&step.id)))
+            }
+            None => false,
+        };
+        plan.status = if done { PlanRunStatus::Done } else { PlanRunStatus::Running };
+        self.save(app, user, session, &plan).await?;
+        Ok(plan.thread_id)
     }
 
     #[cfg(feature = "team")]
@@ -615,6 +707,8 @@ impl PlanGraphs {
             rewinds: plan.rewinds,
         });
         let mut graph = StateGraph::new(StateSchema::simple(&["input"]));
+        let order: Arc<Vec<String>> =
+            Arc::new(plan.steps.iter().map(|step| step.id.clone()).collect());
         for step in &plan.steps {
             graph = graph.add_node(StepNode {
                 node: plan_step_node(&step.id),
@@ -623,6 +717,8 @@ impl PlanGraphs {
                 root: root.clone(),
                 gates: gates.clone(),
                 sink: sink.clone(),
+                snapshots: self.snapshots.get().cloned(),
+                order: order.clone(),
             });
             if step.gate == PlanGate::Review {
                 let reviewer = self.reviewer.get().cloned().ok_or_else(|| {
@@ -929,6 +1025,9 @@ struct StepNode {
     root: Arc<dyn Agent>,
     gates: Arc<GateBook>,
     sink: Sink,
+    snapshots: Option<Arc<crate::snapshot::Snapshots>>,
+    /// Every step id, in plan order, for the snapshot's plan mark.
+    order: Arc<Vec<String>>,
 }
 
 impl StepNode {
@@ -1019,6 +1118,21 @@ impl Node for StepNode {
         let instruction = self.instruction();
         let content = Content::new("user").with_text(instruction.clone());
         if !self.started(parent.as_ref(), &instruction) {
+            // The workspace as it was before this step (spec 3.1 §7.27).
+            if let Some(snapshots) = &self.snapshots {
+                let mark = crate::snapshot::PlanMark {
+                    plan_hash: self.gates.plan_hash.clone(),
+                    thread_id: ctx.config.thread_id.clone(),
+                    completed: self
+                        .order
+                        .iter()
+                        .filter(|id| ctx.state.contains_key(&done_key(id)))
+                        .cloned()
+                        .collect(),
+                    running: true,
+                };
+                crate::snapshot::before_step(snapshots, parent.as_ref(), &self.step.id, mark).await;
+            }
             let mut event = Event::new(parent.invocation_id());
             event.author = "user".to_string();
             event.branch = parent.branch().to_string();

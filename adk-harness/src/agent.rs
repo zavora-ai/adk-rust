@@ -160,6 +160,8 @@ pub struct HarnessRuntime {
     pub(crate) team: Option<Arc<crate::team::HarnessTeam>>,
     #[cfg(feature = "graph")]
     pub(crate) plan_graph: Option<Arc<crate::plan_graph::PlanGraphs>>,
+    /// Snapshots and rewind (spec 3.1 §7.27).
+    pub(crate) snapshots: Option<Arc<crate::snapshot::Snapshots>>,
     pub(crate) goals: crate::goal::GoalRuntime,
     /// Reports approval outcomes to the kernel built by `Harness::kernel` (spec 3.2 §7.4).
     #[cfg(feature = "kernel")]
@@ -373,6 +375,13 @@ impl HarnessRuntime {
     #[cfg(feature = "graph")]
     pub fn plan_graph(&self) -> Option<&Arc<crate::plan_graph::PlanGraphs>> {
         self.plan_graph.as_ref()
+    }
+
+    /// The workspace's snapshots, when the harness takes them (spec 3.1 §7.27):
+    /// [`Snapshots::take`](crate::snapshot::Snapshots::take) is "snapshot now" for a governed
+    /// path that is about to do something a file restore must be able to undo (§7.30).
+    pub fn snapshots(&self) -> Option<&Arc<crate::snapshot::Snapshots>> {
+        self.snapshots.as_ref()
     }
 
     /// The hooks the harness runs, when any are configured (spec 3.1 §7.22).
@@ -853,6 +862,21 @@ impl Agent for HarnessAgent {
         #[cfg(feature = "mcp")]
         if let Some(mcp) = &self.runtime.mcp {
             mcp.ensure_started(self.runtime.workspace_trusted()).await;
+        }
+        // The workspace as it was before this turn, so /rewind can restore it (spec 3.1 §7.27).
+        if let Some(snapshots) = &self.runtime.snapshots {
+            #[cfg(feature = "graph")]
+            let plan = match &self.runtime.plan_graph {
+                Some(graphs) => graphs
+                    .mark(ctx.app_name(), ctx.user_id(), ctx.session_id())
+                    .await
+                    .ok()
+                    .flatten(),
+                None => None,
+            };
+            #[cfg(not(feature = "graph"))]
+            let plan = None;
+            crate::snapshot::before_turn(snapshots, ctx.as_ref(), plan).await;
         }
         let events = self.run_governed(ctx.clone()).await?;
         // What a provider-executed search ran is recorded after each response

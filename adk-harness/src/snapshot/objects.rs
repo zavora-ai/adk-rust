@@ -191,7 +191,11 @@ impl SnapshotObjects for InMemorySnapshotObjects {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .map(|(id, bytes)| ObjectInfo { id: id.clone(), bytes: bytes.len() as u64, modified: None })
+            .map(|(id, bytes)| ObjectInfo {
+                id: id.clone(),
+                bytes: bytes.len() as u64,
+                modified: None,
+            })
             .collect())
     }
 
@@ -270,7 +274,8 @@ impl FileSnapshotObjects {
             let path = self.path(&info.id);
             let bytes = std::fs::read(&path).map_err(|error| io_error(&path, "read", &error))?;
             let address = [info.id.as_str()];
-            let text = std::str::from_utf8(&bytes).ok().filter(|t| adk_session::envelope::is_envelope(t));
+            let text =
+                std::str::from_utf8(&bytes).ok().filter(|t| adk_session::envelope::is_envelope(t));
             let resealed = match text {
                 Some(text) => envelope.reseal(&address, text)?,
                 None => Some(envelope.seal(&address, &bytes)?),
@@ -307,7 +312,8 @@ impl FileSnapshotObjects {
 
     #[cfg(feature = "encrypted")]
     fn decode(&self, id: &str, stored: Vec<u8>) -> Result<Vec<u8>> {
-        let text = std::str::from_utf8(&stored).ok().filter(|t| adk_session::envelope::is_envelope(t));
+        let text =
+            std::str::from_utf8(&stored).ok().filter(|t| adk_session::envelope::is_envelope(t));
         match (&self.envelope, text) {
             (Some(envelope), Some(text)) => Ok(envelope.open(&[id], text)?.0),
             (Some(envelope), None) => Err(snapshot_error(
@@ -399,7 +405,11 @@ impl SnapshotObjects for FileSnapshotObjects {
                 let Ok(metadata) = entry.metadata() else {
                     continue;
                 };
-                out.push(ObjectInfo { id, bytes: metadata.len(), modified: metadata.modified().ok() });
+                out.push(ObjectInfo {
+                    id,
+                    bytes: metadata.len(),
+                    modified: metadata.modified().ok(),
+                });
             }
         }
         Ok(out)
@@ -430,7 +440,8 @@ pub fn rewrap_all(snapshots_dir: &Path, keyring: &crate::encrypted::StoreKeyring
     let mut changed = 0;
     for root in roots.flatten() {
         if root.path().is_dir() {
-            changed += FileSnapshotObjects::new(root.path()).with_keyring(keyring.clone()).rewrap()?;
+            changed +=
+                FileSnapshotObjects::new(root.path()).with_keyring(keyring.clone()).rewrap()?;
         }
     }
     Ok(changed)
