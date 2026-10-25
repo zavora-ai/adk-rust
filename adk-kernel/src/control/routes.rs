@@ -523,7 +523,7 @@ async fn events(
     // A paired device's stream ends when the device is revoked or its pairing ends (spec 3.3
     // S-I7): its access ends at once, not at its next request.
     let device_ends = match (backend.pairing(), caller.device()) {
-        (Some(pairing), Some(device)) => pairing.device_ends(device.to_string()).boxed(),
+        (Some(pairing), Some(device)) => pairing.until_device_ends(device.to_string()).boxed(),
         _ => futures::future::pending().boxed(),
     };
     let stream = subscriber.into_stream().take_until(device_ends).map(|record| {

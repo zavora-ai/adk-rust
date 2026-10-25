@@ -18,9 +18,9 @@ opens it ([control plane](control-plane.md), S-I7).
 1. At the kernel, issue a code:
 
    ```bash
-   adk-rust pair --name "Ana's phone"                # every scope, paired for 90 days
-   adk-rust pair --name "Tray" --scope read,stop     # a narrower device
-   adk-rust pair --name "Laptop" --days 30           # 1 to 365 days
+   adk-rust pair --name "Ana's phone" --kind phone   # every scope, paired for 90 days
+   adk-rust pair --name "Tray" --kind tray --scope read,stop   # a narrower device
+   adk-rust pair --name "Laptop" --days 30           # a remote terminal, 1 to 365 days
    ```
 
    ```text
@@ -84,6 +84,70 @@ does: the routes behind a `DeviceTokenExtractor` that wraps its other extractor,
 `control::claim_router` merged with `ServerBuilder::add_root_routes`, and
 `control::guard_devices` around the built app.
 
+### Device kinds and the server's routes
+
+Every device has a kind, set by whoever issues its code (`--kind`, or `kind` in the issue
+route's body) and never by the claim: the code carries it to the device it pairs.
+
+| Kind | What it is | Its answers (spec 3.3 §7.2) |
+|---|---|---|
+| `phone` | The web home installed on a phone | The phone's row: high risk after confirming it is the person |
+| `terminal` | A terminal on another machine; also every device paired without a kind | The terminal's row, never a paired local terminal: high risk waits for the home |
+| `tray` | The desktop tray | The tray's row |
+
+A device's requests carry its kind in the `adk.device.kind` request-context metadata
+(`DEVICE_KIND_METADATA`), beside its id, name and scopes, and `GET /kernel/devices` lists it.
+
+The kernel names only its own routes. A server that serves more — the surfaces' routes under
+`/api/surface` — opens them to devices with `Pairing::with_device_routes`, a map from a method
+and a path to the scope it needs, consulted after the kernel's own (`device_scope_for`).
+`DeviceTokenExtractor` and `guard_devices` read it from the pairing:
+
+```rust
+use std::sync::Arc;
+
+use adk_kernel::pairing::{DeviceScope, InMemoryDeviceStore, Pairing};
+use axum::http::Method;
+
+fn pairing() -> Pairing {
+    Pairing::new(Arc::new(InMemoryDeviceStore::new())).with_device_routes(Arc::new(
+        |method: &Method, path: &str| match (method.as_str(), path) {
+            ("GET", path) if path.starts_with("/api/surface/") => Some(DeviceScope::Read),
+            _ => None,
+        },
+    ))
+}
+```
+
+The guard checks a decision's risk and records `approvals.decide` on the kernel's own decide
+route, `POST /approvals/{id}/decide`, only. A decide route of the server's map is admitted for
+the server's engine, which applies what each surface may decide and records the answer
+itself (the surfaces' `surface.decide`).
+
+### Attachments
+
+Surfaces keep what belongs to a device or a person beside it in the device store: a phone's
+push subscription, a passkey, the claim that sends one wake-up once across replicas
+(spec 3.3 §5.4, §8.2). A `DeviceAttachment` is a holder — `AttachmentHolder::Device(id)` or
+`AttachmentHolder::User(id)` — a kind, a key and a JSON record the store never reads.
+
+| `DeviceStore` method | What it does |
+|---|---|
+| `put_attachment` | Keeps an attachment, replacing the one with its holder, kind and key |
+| `put_attachment_if_absent` | Keeps it unless one exists; of concurrent puts from any replica, exactly one writes |
+| `attachments(holder, kind)` | The holder's attachments of a kind, in key order |
+| `remove_attachment(holder, kind, key)` | Removes one |
+| `remove_attachments(holder)` | Removes every attachment of a holder |
+
+Revoking a device removes its attachments. The in-memory, SQLite, PostgreSQL and Redis stores
+keep attachments (SQL in `adk_kernel_device_attachments`, migration step 3); a third-party
+store answers the methods `kernel.unsupported` until it implements them, and the conformance
+suite covers them.
+
+`Pairing::until_device_ends(id)` resolves when a device stops working: at once when it is
+revoked on this kernel, when a re-read finds it revoked on another replica (every five seconds
+by default), or when its pairing ends. A server ends a device's open streams with it.
+
 ### Listing and removing
 
 ```bash
@@ -93,9 +157,9 @@ adk-rust pair revoke ch-77f0       # a chat account, paired or waiting to be pai
 ```
 
 ```text
-ID                 NAME                     MAY                  STATE      SINCE
-0a1b2c3d4e5f6071   Ana's phone              decide, read, stop   paired     2026-10-24 14:43
-ch-5c1e09a2d4b7f3e Ana (telegram)           chat, decide, stop   paired     2026-10-24 14:50
+ID                 NAME                     KIND      MAY                  STATE      SINCE
+0a1b2c3d4e5f6071   Ana's phone              phone     decide, read, stop   paired     2026-10-24 14:43
+ch-5c1e09a2d4b7f3e Ana (telegram)           chat      decide, stop         paired     2026-10-24 14:50
 ```
 
 A revoked device's token stops working at once: its next request is refused, and an event
@@ -106,7 +170,7 @@ list its chat accounts as the error it is, not as having none.
 
 | Route | Purpose | `operator` | Recorded |
 |---|---|---|---|
-| `POST /kernel/pairing` | Issues a code; body `{"name": "...", "scopes": ["read"], "expiresInDays": 30}`, 1 to 365 days | Yes | `pairing.issue`, with the scopes the code grants and the name as stored; a request refused for its length records nothing |
+| `POST /kernel/pairing` | Issues a code; body `{"name": "...", "scopes": ["read"], "expiresInDays": 30, "kind": "phone"}`, 1 to 365 days | Yes | `pairing.issue`, with the scopes the code grants, the name as stored and the kind; a request refused for its length records nothing |
 | `POST /kernel/pairing/claim` | Claims a code; body `{"code": "...", "name": "..."}` | — (the code) | `pairing.claim`, as the device's owner |
 | `GET /kernel/devices` | Every device, revoked and expired ones included | Yes | — |
 | `POST /kernel/devices/{id}/revoke` | Removes a device | Yes | `devices.revoke` |

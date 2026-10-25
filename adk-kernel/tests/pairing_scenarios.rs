@@ -130,6 +130,7 @@ impl Plane {
             name: Some("Ana's phone".into()),
             scopes: scopes.to_vec(),
             expires_in_days: None,
+            ..IssueRequest::default()
         };
         let issued = self.operator().issue_pairing_code(&request).await.unwrap();
         assert_eq!(
@@ -353,6 +354,7 @@ async fn the_issue_record_names_what_the_code_grants() {
         name: Some("Ana's\u{1b}[2J phone".into()),
         scopes: Vec::new(),
         expires_in_days: None,
+        ..IssueRequest::default()
     };
     plane.operator().issue_pairing_code(&request).await.unwrap();
     let (_, record) = plane

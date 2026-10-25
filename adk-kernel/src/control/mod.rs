@@ -559,8 +559,11 @@ pub fn claim_router(kernel: Kernel) -> Router {
 
 /// `app` with every request that carries a device token checked against `kernel`'s pairing
 /// first (spec 3.3 §10 K2, S-I7): `401` for an unknown, expired or revoked token, `403` for
-/// a route its scopes do not open, a decision it answers limited to low and medium risk and
-/// recorded. Layer it on the whole app that serves the kernel's routes, so no route outside
+/// a route its scopes do not open, a decision it answers on `POST /approvals/{id}/decide`
+/// limited to low and medium risk and recorded. The server's own routes are those of
+/// [`Pairing::with_device_routes`](crate::pairing::Pairing::with_device_routes); a decision
+/// on one of them is admitted for the server's engine, which applies what each surface may
+/// decide. Layer it on the whole app that serves the kernel's routes, so no route outside
 /// them admits a device either; requests without a device token pass untouched.
 ///
 /// # Example

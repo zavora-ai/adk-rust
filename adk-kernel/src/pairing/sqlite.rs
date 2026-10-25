@@ -30,14 +30,28 @@ CREATE TABLE IF NOT EXISTS adk_kernel_pairing_attempts (\
     attempts INTEGER NOT NULL\
 );",
     ),
+    (
+        3,
+        "create device attachments",
+        "\
+CREATE TABLE IF NOT EXISTS adk_kernel_device_attachments (\
+    holder TEXT NOT NULL, \
+    kind TEXT NOT NULL, \
+    key TEXT NOT NULL, \
+    updated_us INTEGER NOT NULL, \
+    record TEXT NOT NULL, \
+    PRIMARY KEY (holder, kind, key)\
+);",
+    ),
 ];
 
 /// A [`DeviceStore`](super::DeviceStore) in SQLite (spec 3.3 §10 K2, feature `sqlite`).
 ///
 /// In the CLI it lives in `harness.db` on the same pool as the harness and process stores:
-/// its tables are `adk_kernel_devices`, `adk_kernel_pairing_codes` and
-/// `adk_kernel_pairing_attempts`, and [`migrate`](Self::migrate) records its steps in
-/// `_adk_kernel_device_migrations`. Call `migrate` once before use.
+/// its tables are `adk_kernel_devices`, `adk_kernel_pairing_codes`,
+/// `adk_kernel_pairing_attempts` and `adk_kernel_device_attachments`, and
+/// [`migrate`](Self::migrate) records its steps in `_adk_kernel_device_migrations`. Call
+/// `migrate` once before use.
 ///
 /// # Example
 ///

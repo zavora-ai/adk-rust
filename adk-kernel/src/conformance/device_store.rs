@@ -14,6 +14,12 @@
 //! | [`concurrent_takes_take_once`] | Eight concurrent takes of one code from two handles take it once |
 //! | [`concurrent_writers`] | Concurrent puts from two handles over distinct devices and codes lose none |
 //! | [`claim_attempts_are_counted_once_and_shared`] | Concurrent claim counts from two handles each get a distinct count, a reset starts again at one, and the count survives a restart |
+//! | [`attachments_round_trip_per_kind`] | An attachment reads back exactly as put, listed under its holder and kind only, in key order |
+//! | [`put_attachment_replaces`] | A second put of one holder, kind and key replaces it |
+//! | [`put_attachment_if_absent_writes_once`] | Eight concurrent puts-if-absent of one attachment from two handles write it once |
+//! | [`remove_attachment_removes_one`] | Removing one attachment says whether it was there and leaves the rest |
+//! | [`remove_attachments_removes_the_holders`] | Removing a holder's attachments removes every kind of it and nothing of another holder |
+//! | [`attachments_survive_a_restart`] | Attachments read back through a new handle (durable backends only) |
 //!
 //! Every case writes under fresh ids and hashes, so a harness may point every case at one
 //! shared database, except [`clear_removes_every_code`], which removes every code, and
@@ -26,7 +32,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 
-use crate::pairing::{DeviceRecord, DeviceScope, DeviceStore, PairingCode};
+use crate::pairing::{
+    AttachmentHolder, DeviceAttachment, DeviceKind, DeviceRecord, DeviceScope, DeviceStore,
+    PairingCode,
+};
 
 /// Opens a [`DeviceStore`] backend for the conformance suite.
 ///
@@ -93,6 +102,7 @@ fn code(owner: &str, expires: i64) -> PairingCode {
     code.groups = vec!["operator".into(), "on-call/日本".into()];
     code.scopes = vec![DeviceScope::Decide, DeviceScope::Stop];
     code.name = Some("Ana's phone \u{1F4F1}".into());
+    code.kind = Some(DeviceKind::Tray);
     code
 }
 
@@ -107,6 +117,116 @@ fn device(created: i64) -> DeviceRecord {
     )
     .with_scopes([DeviceScope::Read, DeviceScope::Decide])
     .with_groups(["operator"])
+    .with_kind(DeviceKind::Phone)
+}
+
+/// An attachment of `holder` with a record that has nested JSON and text outside ASCII.
+fn attachment(holder: &AttachmentHolder, kind: &str, key: &str, at: i64) -> DeviceAttachment {
+    DeviceAttachment::new(
+        holder.clone(),
+        kind,
+        key,
+        serde_json::json!({ "endpoint": format!("https://web.push.apple.com/{key}"), "keys": { "auth": "日本" }, "at": at }),
+        instant(at),
+    )
+}
+
+/// An attachment reads back exactly as put, listed under its holder and kind only, in key
+/// order.
+pub async fn attachments_round_trip_per_kind(harness: &dyn DeviceStoreHarness) {
+    let store = harness.open().await;
+    let phone = AttachmentHolder::Device(fresh());
+    let person = AttachmentHolder::User(format!("user/ü {}", fresh()));
+    let push = attachment(&phone, "push", "subscription", 1);
+    let b = attachment(&phone, "wake", "b:1", 2);
+    let a = attachment(&phone, "wake", "a:1", 3);
+    let theirs = attachment(&person, "push", "subscription", 4);
+    for row in [&push, &b, &a, &theirs] {
+        store.put_attachment(row.clone()).await.expect("put");
+    }
+    assert_eq!(store.attachments(&phone, "push").await.expect("list"), vec![push]);
+    assert_eq!(store.attachments(&phone, "wake").await.expect("list"), vec![a, b]);
+    assert_eq!(store.attachments(&person, "push").await.expect("list"), vec![theirs]);
+    assert_eq!(store.attachments(&phone, "passkey").await.expect("list"), vec![]);
+}
+
+/// A second put of one holder, kind and key replaces it.
+pub async fn put_attachment_replaces(harness: &dyn DeviceStoreHarness) {
+    let store = harness.open().await;
+    let phone = AttachmentHolder::Device(fresh());
+    store.put_attachment(attachment(&phone, "passkey", "only", 1)).await.expect("put");
+    let replaced = attachment(&phone, "passkey", "only", 2);
+    store.put_attachment(replaced.clone()).await.expect("put again");
+    assert_eq!(store.attachments(&phone, "passkey").await.expect("list"), vec![replaced]);
+}
+
+/// Eight concurrent puts-if-absent of one attachment from two handles write it once.
+pub async fn put_attachment_if_absent_writes_once(harness: &dyn DeviceStoreHarness) {
+    let [first, second] = two(harness).await;
+    let phone = AttachmentHolder::Device(fresh());
+    let tasks: Vec<_> = (0..8)
+        .map(|index| {
+            let store = if index % 2 == 0 { first.clone() } else { second.clone() };
+            let row = attachment(&phone, "wake", "apr-1:3", index);
+            tokio::spawn(async move { store.put_attachment_if_absent(row).await.expect("put") })
+        })
+        .collect();
+    let mut wrote = 0;
+    for task in tasks {
+        if task.await.expect("join") {
+            wrote += 1;
+        }
+    }
+    assert_eq!(wrote, 1, "one of eight puts wrote");
+    assert_eq!(first.attachments(&phone, "wake").await.expect("list").len(), 1);
+    assert!(
+        !second
+            .put_attachment_if_absent(attachment(&phone, "wake", "apr-1:3", 9))
+            .await
+            .expect("put")
+    );
+}
+
+/// Removing one attachment says whether it was there and leaves the rest.
+pub async fn remove_attachment_removes_one(harness: &dyn DeviceStoreHarness) {
+    let store = harness.open().await;
+    let phone = AttachmentHolder::Device(fresh());
+    let kept = attachment(&phone, "push", "kept", 1);
+    store.put_attachment(attachment(&phone, "push", "gone", 0)).await.expect("put");
+    store.put_attachment(kept.clone()).await.expect("put");
+    assert!(store.remove_attachment(&phone, "push", "gone").await.expect("remove"));
+    assert!(!store.remove_attachment(&phone, "push", "gone").await.expect("remove again"));
+    assert_eq!(store.attachments(&phone, "push").await.expect("list"), vec![kept]);
+}
+
+/// Removing a holder's attachments removes every kind of it and nothing of another holder.
+pub async fn remove_attachments_removes_the_holders(harness: &dyn DeviceStoreHarness) {
+    let store = harness.open().await;
+    let phone = AttachmentHolder::Device(fresh());
+    let other = AttachmentHolder::Device(fresh());
+    for (kind, key) in [("push", "subscription"), ("passkey", "only"), ("wake", "a:1")] {
+        store.put_attachment(attachment(&phone, kind, key, 1)).await.expect("put");
+    }
+    let theirs = attachment(&other, "push", "subscription", 1);
+    store.put_attachment(theirs.clone()).await.expect("put");
+    assert_eq!(store.remove_attachments(&phone).await.expect("remove"), 3);
+    for kind in ["push", "passkey", "wake"] {
+        assert_eq!(store.attachments(&phone, kind).await.expect("list"), vec![], "{kind}");
+    }
+    assert_eq!(store.attachments(&other, "push").await.expect("list"), vec![theirs]);
+    assert_eq!(store.remove_attachments(&phone).await.expect("remove again"), 0);
+}
+
+/// Attachments read back through a new handle (durable backends only).
+pub async fn attachments_survive_a_restart(harness: &dyn DeviceStoreHarness) {
+    if !harness.is_durable() {
+        return;
+    }
+    let phone = AttachmentHolder::Device(fresh());
+    let row = attachment(&phone, "passkey", "only", 5);
+    harness.open().await.put_attachment(row.clone()).await.expect("put");
+    let reopened = harness.open().await;
+    assert_eq!(reopened.attachments(&phone, "passkey").await.expect("list"), vec![row]);
 }
 
 /// A code reads back exactly as put, once.
@@ -369,6 +489,36 @@ macro_rules! device_store_conformance_tests {
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn device_store_claim_attempts_are_counted_once_and_shared() {
             $crate::conformance::device_store::claim_attempts_are_counted_once_and_shared(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn device_store_attachments_round_trip_per_kind() {
+            $crate::conformance::device_store::attachments_round_trip_per_kind(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn device_store_put_attachment_replaces() {
+            $crate::conformance::device_store::put_attachment_replaces(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn device_store_put_attachment_if_absent_writes_once() {
+            $crate::conformance::device_store::put_attachment_if_absent_writes_once(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn device_store_remove_attachment_removes_one() {
+            $crate::conformance::device_store::remove_attachment_removes_one(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn device_store_remove_attachments_removes_the_holders() {
+            $crate::conformance::device_store::remove_attachments_removes_the_holders(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn device_store_attachments_survive_a_restart() {
+            $crate::conformance::device_store::attachments_survive_a_restart(&$harness).await;
         }
     };
 }

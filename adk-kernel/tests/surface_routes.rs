@@ -341,6 +341,7 @@ impl Plane {
             name: Some("phone".into()),
             scopes: scopes.to_vec(),
             expires_in_days: None,
+            ..IssueRequest::default()
         };
         let issued = self.operator().issue_pairing_code(&request).await.unwrap();
         let claimed =

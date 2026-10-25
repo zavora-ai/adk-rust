@@ -6,6 +6,8 @@
 //! store orders and prunes by, and the shared count of claims in the one row of
 //! `adk_kernel_pairing_attempts`, counted with one `INSERT … ON CONFLICT … RETURNING`. A
 //! code is taken with one `DELETE … RETURNING`, so two claims of one code take it once.
+//! Attachments are rows of `adk_kernel_device_attachments` keyed by holder, kind and key; a
+//! put-if-absent is one `INSERT … ON CONFLICT DO NOTHING`, so replicas write it once.
 
 use crate::error::KernelError;
 
@@ -39,6 +41,24 @@ RETURNING attempts";
 
 pub(crate) const RESET_ATTEMPTS: &str =
     "UPDATE adk_kernel_pairing_attempts SET attempts = 0 WHERE id = 1";
+
+pub(crate) const PUT_ATTACHMENT: &str = "\
+INSERT INTO adk_kernel_device_attachments (holder, kind, key, updated_us, record) \
+VALUES ($1, $2, $3, $4, $5) \
+ON CONFLICT (holder, kind, key) DO UPDATE SET updated_us = excluded.updated_us, record = excluded.record";
+
+pub(crate) const PUT_ATTACHMENT_IF_ABSENT: &str = "\
+INSERT INTO adk_kernel_device_attachments (holder, kind, key, updated_us, record) \
+VALUES ($1, $2, $3, $4, $5) ON CONFLICT (holder, kind, key) DO NOTHING";
+
+pub(crate) const LIST_ATTACHMENTS: &str =
+    "SELECT record FROM adk_kernel_device_attachments WHERE holder = $1 AND kind = $2 ORDER BY key";
+
+pub(crate) const REMOVE_ATTACHMENT: &str =
+    "DELETE FROM adk_kernel_device_attachments WHERE holder = $1 AND kind = $2 AND key = $3";
+
+pub(crate) const REMOVE_ATTACHMENTS: &str =
+    "DELETE FROM adk_kernel_device_attachments WHERE holder = $1";
 
 /// Maps a database error.
 pub(crate) fn db_error(backend: &'static str, action: &str, error: &sqlx::Error) -> KernelError {
@@ -163,6 +183,92 @@ macro_rules! sql_device_store {
                     .await
                     .map_err(|e| $crate::pairing::sql::db_error($backend, "reset", &e))?;
                 Ok(())
+            }
+
+            async fn put_attachment(
+                &self,
+                attachment: $crate::pairing::DeviceAttachment,
+            ) -> $crate::error::Result<()> {
+                sqlx::query($crate::pairing::sql::PUT_ATTACHMENT)
+                    .bind(attachment.holder.key())
+                    .bind(&attachment.kind)
+                    .bind(&attachment.key)
+                    .bind(attachment.updated_at.timestamp_micros())
+                    .bind(serde_json::to_string(&attachment)?)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| {
+                        $crate::pairing::sql::db_error($backend, "write an attachment to", &e)
+                    })?;
+                Ok(())
+            }
+
+            async fn put_attachment_if_absent(
+                &self,
+                attachment: $crate::pairing::DeviceAttachment,
+            ) -> $crate::error::Result<bool> {
+                let done = sqlx::query($crate::pairing::sql::PUT_ATTACHMENT_IF_ABSENT)
+                    .bind(attachment.holder.key())
+                    .bind(&attachment.kind)
+                    .bind(&attachment.key)
+                    .bind(attachment.updated_at.timestamp_micros())
+                    .bind(serde_json::to_string(&attachment)?)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| {
+                        $crate::pairing::sql::db_error($backend, "write an attachment to", &e)
+                    })?;
+                Ok(done.rows_affected() == 1)
+            }
+
+            async fn attachments(
+                &self,
+                holder: &$crate::pairing::AttachmentHolder,
+                kind: &str,
+            ) -> $crate::error::Result<Vec<$crate::pairing::DeviceAttachment>> {
+                let rows: Vec<(String,)> = sqlx::query_as($crate::pairing::sql::LIST_ATTACHMENTS)
+                    .bind(holder.key())
+                    .bind(kind)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| {
+                        $crate::pairing::sql::db_error($backend, "list the attachments of", &e)
+                    })?;
+                rows.iter()
+                    .map(|(text,)| $crate::pairing::sql::decode($backend, "attachment", text))
+                    .collect()
+            }
+
+            async fn remove_attachment(
+                &self,
+                holder: &$crate::pairing::AttachmentHolder,
+                kind: &str,
+                key: &str,
+            ) -> $crate::error::Result<bool> {
+                let done = sqlx::query($crate::pairing::sql::REMOVE_ATTACHMENT)
+                    .bind(holder.key())
+                    .bind(kind)
+                    .bind(key)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| {
+                        $crate::pairing::sql::db_error($backend, "remove an attachment from", &e)
+                    })?;
+                Ok(done.rows_affected() > 0)
+            }
+
+            async fn remove_attachments(
+                &self,
+                holder: &$crate::pairing::AttachmentHolder,
+            ) -> $crate::error::Result<usize> {
+                let done = sqlx::query($crate::pairing::sql::REMOVE_ATTACHMENTS)
+                    .bind(holder.key())
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| {
+                        $crate::pairing::sql::db_error($backend, "remove attachments from", &e)
+                    })?;
+                Ok(usize::try_from(done.rows_affected()).unwrap_or(usize::MAX))
             }
         }
     };

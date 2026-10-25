@@ -7,7 +7,7 @@ use fred::prelude::{
 };
 use fred::types::Value;
 
-use super::{DeviceRecord, DeviceStore, PairingCode};
+use super::{AttachmentHolder, DeviceAttachment, DeviceRecord, DeviceStore, PairingCode};
 use crate::error::{KernelError, Result};
 
 /// The layout version this release writes.
@@ -50,6 +50,39 @@ end
 return #members
 ";
 
+/// Writes an attachment into its holder's hash of its kind, and notes the kind: `ARGV[4]` is
+/// `1` to write only when absent. Returns whether it wrote.
+const PUT_ATTACHMENT_SCRIPT: &str = r"
+local wrote = 1
+if ARGV[4] == '1' then
+  wrote = redis.call('HSETNX', KEYS[1], ARGV[1], ARGV[2])
+else
+  redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+end
+if wrote == 1 then redis.call('SADD', KEYS[2], ARGV[3]) end
+return wrote
+";
+
+const LIST_ATTACHMENTS_SCRIPT: &str = r"
+return redis.call('HVALS', KEYS[1])
+";
+
+const REMOVE_ATTACHMENT_SCRIPT: &str = r"
+return redis.call('HDEL', KEYS[1], ARGV[1])
+";
+
+/// Removes every hash of a holder's kinds, and the kinds; returns how many attachments went.
+const REMOVE_ATTACHMENTS_SCRIPT: &str = r"
+local removed = 0
+for _, kind in ipairs(redis.call('SMEMBERS', KEYS[1])) do
+  local hash = ARGV[1] .. kind
+  removed = removed + redis.call('HLEN', hash)
+  redis.call('DEL', hash)
+end
+redis.call('DEL', KEYS[1])
+return removed
+";
+
 /// KEYS: index. ARGV: record key prefix. Returns every record's JSON in index order.
 pub(crate) const LIST_SCRIPT: &str = r"
 local out = {}
@@ -75,6 +108,8 @@ return out
 /// | `{<ns>}:pairing-codes` | Sorted set | Every waiting code's hash, scored by its expiry in microseconds |
 /// | `{<ns>}:pairing-attempts` | String | The count of claims since the last code was issued or claimed |
 /// | `{<ns>}:devices-layout` | String | The layout version [`migrate`](Self::migrate) recorded |
+/// | `{<ns>}:attachments:<holder hex>:<kind>` | Hash | One holder's attachments of one kind, each key's record as JSON |
+/// | `{<ns>}:attachment-kinds:<holder hex>` | Set | The kinds a holder has attachments of, so a revocation removes every one |
 ///
 /// Device ids are hex and code hashes are SHA-256 hex, so no identifier can spill into
 /// another key. Every change runs as one Lua script, which Redis executes atomically, so
@@ -239,6 +274,38 @@ impl RedisDeviceStore {
     fn key(&self, suffix: &str) -> String {
         namespaced(&self.namespace, suffix)
     }
+
+    /// The prefix of `holder`'s attachment hashes, one per kind; the holder is hex-encoded, so
+    /// no holder's prefix is another's.
+    fn attachments_prefix(&self, holder: &AttachmentHolder) -> String {
+        self.key(&format!("attachments:{}:", hex_of(&holder.key())))
+    }
+
+    fn attachment_kinds(&self, holder: &AttachmentHolder) -> String {
+        self.key(&format!("attachment-kinds:{}", hex_of(&holder.key())))
+    }
+
+    async fn write_attachment(
+        &self,
+        attachment: DeviceAttachment,
+        only_if_absent: bool,
+    ) -> Result<bool> {
+        let keys = vec![
+            format!("{}{}", self.attachments_prefix(&attachment.holder), attachment.kind),
+            self.attachment_kinds(&attachment.holder),
+        ];
+        let args = vec![
+            attachment.key.clone(),
+            serde_json::to_string(&attachment)?,
+            attachment.kind.clone(),
+            if only_if_absent { "1" } else { "0" }.to_string(),
+        ];
+        Ok(eval_count(&self.client, PUT_ATTACHMENT_SCRIPT, keys, args).await? == 1)
+    }
+}
+
+fn hex_of(text: &str) -> String {
+    text.bytes().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[async_trait]
@@ -318,5 +385,50 @@ impl DeviceStore for RedisDeviceStore {
             .await
             .map_err(|error| store_error("reset the count of pairing claims", &error))?;
         Ok(())
+    }
+
+    async fn put_attachment(&self, attachment: DeviceAttachment) -> Result<()> {
+        self.write_attachment(attachment, false).await?;
+        Ok(())
+    }
+
+    async fn put_attachment_if_absent(&self, attachment: DeviceAttachment) -> Result<bool> {
+        self.write_attachment(attachment, true).await
+    }
+
+    async fn attachments(
+        &self,
+        holder: &AttachmentHolder,
+        kind: &str,
+    ) -> Result<Vec<DeviceAttachment>> {
+        let hash = format!("{}{kind}", self.attachments_prefix(holder));
+        let rows = eval_list(&self.client, LIST_ATTACHMENTS_SCRIPT, vec![hash], Vec::new()).await?;
+        let mut attachments: Vec<DeviceAttachment> =
+            rows.iter().map(|text| decode("attachment", text)).collect::<Result<_>>()?;
+        attachments.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(attachments)
+    }
+
+    async fn remove_attachment(
+        &self,
+        holder: &AttachmentHolder,
+        kind: &str,
+        key: &str,
+    ) -> Result<bool> {
+        let hash = format!("{}{kind}", self.attachments_prefix(holder));
+        let removed =
+            eval_count(&self.client, REMOVE_ATTACHMENT_SCRIPT, vec![hash], vec![key.to_string()])
+                .await?;
+        Ok(removed > 0)
+    }
+
+    async fn remove_attachments(&self, holder: &AttachmentHolder) -> Result<usize> {
+        eval_count(
+            &self.client,
+            REMOVE_ATTACHMENTS_SCRIPT,
+            vec![self.attachment_kinds(holder)],
+            vec![self.attachments_prefix(holder)],
+        )
+        .await
     }
 }

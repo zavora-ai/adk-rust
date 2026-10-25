@@ -46,21 +46,26 @@ use super::{ControlTransport, paths};
 use crate::audit;
 use crate::error::{KernelError, Result};
 use crate::pairing::{
-    ClaimedDevice, DEVICE_ID_METADATA, DEVICE_NAME_METADATA, DeviceAdmission, DeviceScope,
-    DeviceView, IssueCode, IssuedCode, Pairing, device_scope_for, device_token,
+    ClaimedDevice, DEVICE_ID_METADATA, DEVICE_NAME_METADATA, DeviceAdmission, DeviceKind,
+    DeviceScope, DeviceView, IssueCode, IssuedCode, Pairing, device_scope_for, device_token,
 };
 
-/// `POST /kernel/pairing` body: `adk-rust pair [--name] [--scope] [--expires]` (spec 3.3 §10
-/// K2).
+/// `POST /kernel/pairing` body: `adk-rust pair [--name] [--scope] [--days] [--kind]` (spec
+/// 3.3 §10 K2).
 ///
 /// # Example
 ///
 /// ```rust
 /// use adk_kernel::control::api::IssueRequest;
-/// use adk_kernel::pairing::DeviceScope;
+/// use adk_kernel::pairing::{DeviceKind, DeviceScope};
 ///
-/// let body = IssueRequest { name: Some("Ana's phone".into()), scopes: vec![DeviceScope::Decide], expires_in_days: Some(30) };
-/// assert_eq!(serde_json::to_value(&body).unwrap()["expiresInDays"], 30);
+/// let body = IssueRequest {
+///     name: Some("Ana's phone".into()),
+///     scopes: vec![DeviceScope::Decide],
+///     expires_in_days: Some(30),
+///     kind: Some(DeviceKind::Phone),
+/// };
+/// assert_eq!(serde_json::to_value(&body).unwrap()["kind"], "phone");
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +80,10 @@ pub struct IssueRequest {
     /// 365.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_in_days: Option<u32>,
+    /// What the device is (spec 3.3 §7.2): a phone, a remote terminal or a tray; a terminal
+    /// when absent. The claim never changes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<DeviceKind>,
 }
 
 /// `POST /kernel/pairing/claim` body (spec 3.3 §10 K2).
@@ -241,6 +250,9 @@ async fn issue(
     if let Some(days) = request.expires_in_days {
         code = code.with_device_ttl(std::time::Duration::from_secs(u64::from(days) * 86_400));
     }
+    if let Some(kind) = request.kind {
+        code = code.with_kind(kind);
+    }
     // The record names what the code grants: every scope when none was named, and the
     // name as it is stored; a request the pairing refuses records nothing.
     let code = code.normalized();
@@ -249,6 +261,7 @@ async fn issue(
         ("scopes", json!(code.scopes)),
         ("name", json!(code.name)),
         ("expiresInDays", json!(request.expires_in_days)),
+        ("kind", json!(code.kind.unwrap_or(DeviceKind::Terminal))),
     ];
     record(backend.as_ref(), &caller, "pairing.issue", None, &extra).await?;
     Ok(Json(pairing.issue(code).await?))
@@ -361,9 +374,11 @@ pub(crate) fn rated_high(
 }
 
 /// Admits a request carrying device `token` (spec 3.3 §10 K2): the device's context when
-/// its scopes open the route, a decision it answers (`answer`, the body's `action`)
-/// recorded and limited to low and medium risk, never a yes to a take-over, or the refusal
-/// as a response.
+/// its scopes open the route, the kernel's own and the server's
+/// ([`Pairing::with_device_routes`]); a decision it answers on the kernel's decide route
+/// (`answer`, the body's `action`) recorded and limited to low and medium risk, never a yes to
+/// a take-over; or the refusal as a response. A decide route of the server's map is admitted
+/// as it is: the server's engine applies what each surface may decide and records it.
 pub(super) async fn admit_device(
     backend: &dyn ControlBackend,
     pairing: &Pairing,

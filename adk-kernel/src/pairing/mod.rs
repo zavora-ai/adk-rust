@@ -35,6 +35,18 @@
 //! loopback default and the rule that a non-loopback bind needs a token or SSO stay as they
 //! are (K-I18, S-I7).
 //!
+//! A server opens its own routes to devices with [`Pairing::with_device_routes`], a
+//! [`DeviceRoutes`] map consulted after [`device_scope_for`], so the kernel never names a
+//! surface's paths. The guard checks the risk of, and records, the kernel's own decide route
+//! only; a decide route of the server's map is admitted for the server's engine, which
+//! enforces what each surface may decide (spec 3.3 §7.2) and records the answer.
+//!
+//! Every device has a [`DeviceKind`] — phone, terminal or tray — set by whoever issued its
+//! code, never by the claim: a request carries it in [`DEVICE_KIND_METADATA`]. A device
+//! paired without one is a remote terminal. Surfaces keep what belongs to a device or a person
+//! beside it as [`DeviceAttachment`]s (a phone's push subscription, a passkey); revoking a
+//! device removes its attachments.
+//!
 //! | Backend | Type | Feature |
 //! |---|---|---|
 //! | In-memory | [`InMemoryDeviceStore`] | — |
@@ -78,6 +90,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{KernelError, Result, UNAUTHORIZED_CODE};
 
+mod attachments;
+mod kinds;
 mod memory;
 #[cfg(feature = "postgres")]
 pub(crate) mod postgres;
@@ -89,6 +103,8 @@ pub(crate) mod sql;
 #[cfg(feature = "sqlite")]
 mod sqlite;
 
+pub use attachments::{AttachmentHolder, DeviceAttachment};
+pub use kinds::{DeviceKind, DeviceRoutes};
 pub use memory::InMemoryDeviceStore;
 #[cfg(feature = "postgres")]
 pub use postgres::PostgresDeviceStore;
@@ -103,6 +119,9 @@ pub const DEVICE_ID_METADATA: &str = "adk.device.id";
 pub const DEVICE_NAME_METADATA: &str = "adk.device.name";
 /// The request-context metadata key with the device's scopes, comma-separated.
 pub const DEVICE_SCOPES_METADATA: &str = "adk.device.scopes";
+/// The request-context metadata key with the device's kind: `phone`, `terminal` or `tray`
+/// (spec 3.3 §7.2, §10 K2).
+pub const DEVICE_KIND_METADATA: &str = "adk.device.kind";
 
 /// Claims without a success after which the next one cancels every waiting code.
 const MAX_FAILED_CLAIMS: u64 = 20;
@@ -209,6 +228,9 @@ pub struct DeviceRecord {
     /// When it was removed, if it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revoked_at: Option<DateTime<Utc>>,
+    /// What it is, as its code's issuer said; none for a remote terminal paired before kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<DeviceKind>,
 }
 
 impl DeviceRecord {
@@ -231,7 +253,20 @@ impl DeviceRecord {
             created_at,
             expires_at,
             revoked_at: None,
+            kind: None,
         }
+    }
+
+    /// Sets what the device is.
+    #[must_use]
+    pub fn with_kind(mut self, kind: DeviceKind) -> Self {
+        self.kind = Some(kind);
+        self
+    }
+
+    /// What the device is: a device paired without a kind is a remote terminal.
+    pub fn kind(&self) -> DeviceKind {
+        self.kind.unwrap_or(DeviceKind::Terminal)
     }
 
     /// Sets the scopes, sorted and without repeats.
@@ -274,6 +309,7 @@ impl DeviceRecord {
             expires_at: self.expires_at,
             revoked_at: self.revoked_at,
             state,
+            kind: self.kind(),
         }
     }
 }
@@ -321,6 +357,13 @@ pub struct DeviceView {
     pub revoked_at: Option<DateTime<Utc>>,
     /// Whether its token works now.
     pub state: DeviceState,
+    /// What it is.
+    #[serde(default = "terminal")]
+    pub kind: DeviceKind,
+}
+
+fn terminal() -> DeviceKind {
+    DeviceKind::Terminal
 }
 
 /// An issued pairing code as the store keeps it (spec 3.3 §10 K2): its hash, never the code.
@@ -346,6 +389,9 @@ pub struct PairingCode {
     pub issued_at: DateTime<Utc>,
     /// When it stops working.
     pub expires_at: DateTime<Utc>,
+    /// What the claimed device is, as the issuer said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<DeviceKind>,
 }
 
 impl PairingCode {
@@ -366,6 +412,7 @@ impl PairingCode {
             device_ttl_secs: device_ttl.as_secs(),
             issued_at,
             expires_at,
+            kind: None,
         }
     }
 }
@@ -407,6 +454,59 @@ pub trait DeviceStore: Send + Sync {
 
     /// Starts the count of claim attempts again.
     async fn reset_claim_attempts(&self) -> Result<()>;
+
+    /// Keeps `attachment`, replacing the one with its holder, kind and key (spec 3.3 §5.4).
+    ///
+    /// The default refuses: a backend that keeps no attachments says so.
+    async fn put_attachment(&self, attachment: DeviceAttachment) -> Result<()> {
+        let _ = attachment;
+        Err(no_attachments())
+    }
+
+    /// Keeps `attachment` unless one with its holder, kind and key exists; whether it wrote.
+    /// Of concurrent puts of one attachment, from any replica, exactly one writes.
+    async fn put_attachment_if_absent(&self, attachment: DeviceAttachment) -> Result<bool> {
+        let _ = attachment;
+        Err(no_attachments())
+    }
+
+    /// `holder`'s attachments of `kind`, by key.
+    async fn attachments(
+        &self,
+        holder: &AttachmentHolder,
+        kind: &str,
+    ) -> Result<Vec<DeviceAttachment>> {
+        let _ = (holder, kind);
+        Err(no_attachments())
+    }
+
+    /// Removes `holder`'s attachment of `kind` under `key`; whether there was one.
+    async fn remove_attachment(
+        &self,
+        holder: &AttachmentHolder,
+        kind: &str,
+        key: &str,
+    ) -> Result<bool> {
+        let _ = (holder, kind, key);
+        Err(no_attachments())
+    }
+
+    /// Removes every attachment of `holder`; returns how many.
+    async fn remove_attachments(&self, holder: &AttachmentHolder) -> Result<usize> {
+        let _ = holder;
+        Err(no_attachments())
+    }
+}
+
+/// The error of a [`DeviceStore`] that keeps no attachments.
+fn no_attachments() -> KernelError {
+    KernelError::Core(AdkError::new(
+        ErrorComponent::Server,
+        ErrorCategory::Unsupported,
+        "kernel.unsupported",
+        "this device store keeps no attachments: use the in-memory, SQLite, PostgreSQL or Redis \
+         device store",
+    ))
 }
 
 /// What `adk-rust pair` asks for (spec 3.3 §10 K2): a code for a device acting for `owner`.
@@ -435,6 +535,8 @@ pub struct IssueCode {
     pub name: Option<String>,
     /// How long the pairing lasts; the service's default when `None`.
     pub device_ttl: Option<Duration>,
+    /// What the device is; a remote terminal when `None`. Only the issuer sets it.
+    pub kind: Option<DeviceKind>,
 }
 
 impl IssueCode {
@@ -450,7 +552,15 @@ impl IssueCode {
             scopes: Vec::new(),
             name: None,
             device_ttl: None,
+            kind: None,
         }
+    }
+
+    /// Says what the device is (spec 3.3 §7.2): a phone, a remote terminal or a tray.
+    #[must_use]
+    pub fn with_kind(mut self, kind: DeviceKind) -> Self {
+        self.kind = Some(kind);
+        self
     }
 
     /// Grants `scopes` only.
@@ -580,6 +690,7 @@ struct Inner {
     clock: Arc<dyn Clock>,
     recheck: Duration,
     revoked: tokio::sync::broadcast::Sender<String>,
+    routes: Option<DeviceRoutes>,
 }
 
 impl fmt::Debug for Pairing {
@@ -611,6 +722,7 @@ impl Pairing {
                 clock: Arc::new(SystemClock),
                 recheck: DEFAULT_RECHECK,
                 revoked: tokio::sync::broadcast::channel(64).0,
+                routes: None,
             }),
         }
     }
@@ -626,10 +738,42 @@ impl Pairing {
             clock: shared.clock.clone(),
             recheck: shared.recheck,
             revoked: shared.revoked.clone(),
+            routes: shared.routes.clone(),
         });
         let mut inner = inner;
         change(&mut inner);
         Self { inner: Arc::new(inner) }
+    }
+
+    /// Opens the server's own routes to devices (spec 3.3 §10 K2): `routes` names the scope
+    /// each needs, after the kernel's [`device_scope_for`]. The device token extractor and
+    /// the device guard read it from here.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use axum::http::Method;
+    /// use adk_kernel::pairing::{DeviceScope, InMemoryDeviceStore, Pairing};
+    ///
+    /// let pairing = Pairing::new(Arc::new(InMemoryDeviceStore::new())).with_device_routes(Arc::new(
+    ///     |method: &Method, path: &str| {
+    ///         (method == Method::GET && path.starts_with("/api/surface/")).then_some(DeviceScope::Read)
+    ///     },
+    /// ));
+    /// assert_eq!(pairing.scope_for(&Method::GET, "/api/surface/status"), Some(DeviceScope::Read));
+    /// assert_eq!(pairing.scope_for(&Method::POST, "/api/kernel/freeze"), Some(DeviceScope::Stop));
+    /// ```
+    #[must_use]
+    pub fn with_device_routes(self, routes: DeviceRoutes) -> Self {
+        self.rebuild(|inner| inner.routes = Some(routes))
+    }
+
+    /// The scope a device needs for `method` on `path`: the kernel's routes, then the
+    /// server's ([`with_device_routes`](Self::with_device_routes)); `None` when closed.
+    pub fn scope_for(&self, method: &Method, path: &str) -> Option<DeviceScope> {
+        device_scope_for(method, path)
+            .or_else(|| self.inner.routes.as_ref().and_then(|routes| routes(method, path)))
     }
 
     /// Codes work for `ttl`.
@@ -716,6 +860,7 @@ impl Pairing {
         stored.groups = request.groups;
         stored.scopes = request.scopes.clone();
         stored.name = request.name;
+        stored.kind = request.kind;
         self.inner.store.put_code(stored).await?;
         // A new code starts the count of claims again, after a lockout too.
         self.inner.store.reset_claim_attempts().await?;
@@ -828,6 +973,8 @@ impl Pairing {
         )
         .with_scopes(code.scopes.clone())
         .with_groups(code.groups.clone());
+        // The issuer's kind; nothing the claim sends sets it.
+        let device = DeviceRecord { kind: code.kind, ..device };
         Ok(PendingClaim { code, device, token })
     }
 
@@ -848,9 +995,29 @@ impl Pairing {
         }
     }
 
-    /// Resolves when device `id` stops working: when it is revoked here, when a re-read finds
-    /// it revoked elsewhere or gone, or when its pairing ends.
-    pub(crate) fn device_ends(&self, id: String) -> impl Future<Output = ()> + Send + 'static {
+    /// Resolves when device `id` stops working: when it is revoked here, at once; when a
+    /// re-read finds it revoked on another replica or gone, each open stream re-reading the
+    /// store every five seconds by default; or when its pairing ends. A server ends a
+    /// device's open streams with it (spec 3.3 §10 K2, S-I7).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use adk_kernel::pairing::{InMemoryDeviceStore, IssueCode, Pairing};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> adk_kernel::Result<()> {
+    /// let pairing = Pairing::new(Arc::new(InMemoryDeviceStore::new()));
+    /// let issued = pairing.issue(IssueCode::new("ana", ["operator"])).await?;
+    /// let device = pairing.claim(&issued.code, None).await?.device;
+    /// let ends = pairing.until_device_ends(device.id.clone());
+    /// pairing.revoke(&device.id).await?;
+    /// ends.await;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn until_device_ends(&self, id: String) -> impl Future<Output = ()> + Send + 'static {
         let pairing = self.clone();
         let mut revoked = self.inner.revoked.subscribe();
         async move {
@@ -940,7 +1107,7 @@ impl Pairing {
         path: &str,
     ) -> Result<RequestContext> {
         let device = self.authenticate(token).await?;
-        match device_scope_for(method, path) {
+        match self.scope_for(method, path) {
             Some(scope) if device.has_scope(scope) => Ok(device_context(&device)),
             Some(scope) => Err(forbidden(format!(
                 "{} was paired without the `{scope}` scope, which {method} {path} needs; pair it \
@@ -964,9 +1131,10 @@ impl Pairing {
         self.inner.store.list_devices().await
     }
 
-    /// Removes device `id`: its token stops working at once, and an event stream it holds
-    /// open ends, at once on this kernel and at its next re-read on another replica (five
-    /// seconds by default). Revoking a revoked device changes nothing.
+    /// Removes device `id`: its token stops working at once, its attachments are removed, and
+    /// an event stream it holds open ends, at once on this kernel and at its next re-read on
+    /// another replica (five seconds by default). Revoking a revoked device changes nothing
+    /// but removes what is still attached.
     ///
     /// # Errors
     ///
@@ -984,6 +1152,17 @@ impl Pairing {
         if device.revoked_at.is_none() {
             device.revoked_at = Some(self.now());
             self.inner.store.put_device(device.clone()).await?;
+        }
+        // Its push subscription and passkey go with it; a store that keeps none has none.
+        match self
+            .inner
+            .store
+            .remove_attachments(&AttachmentHolder::Device(device.id.clone()))
+            .await
+        {
+            Ok(_) => {}
+            Err(KernelError::Core(error)) if error.category == ErrorCategory::Unsupported => {}
+            Err(error) => return Err(error),
         }
         // Event streams the device holds open here end now; elsewhere, at their next re-read.
         let _ = self.inner.revoked.send(device.id.clone());
@@ -1011,6 +1190,7 @@ fn device_context(device: &DeviceRecord) -> RequestContext {
             (DEVICE_ID_METADATA.to_string(), device.id.clone()),
             (DEVICE_NAME_METADATA.to_string(), device.name.clone()),
             (DEVICE_SCOPES_METADATA.to_string(), scopes),
+            (DEVICE_KIND_METADATA.to_string(), device.kind().as_str().to_string()),
         ]),
     }
 }
@@ -1135,7 +1315,7 @@ impl RequestContextExtractor for DeviceTokenExtractor {
             // A device's decision is admitted only behind the guard, which checks its risk
             // and records it (spec 3.3 §7.2, §11).
             Ok(context)
-                if device_scope_for(&parts.method, path) == Some(DeviceScope::Decide)
+                if self.pairing.scope_for(&parts.method, path) == Some(DeviceScope::Decide)
                     && parts.extensions.get::<DeviceAdmission>().map(|admitted| &admitted.device)
                         != context.metadata.get(DEVICE_ID_METADATA) =>
             {

@@ -99,7 +99,7 @@ async fn migrations_share_harness_db_and_pairings_survive_a_restart() {
     store.migrate().await.expect("migrate");
     store.migrate().await.expect("migrate again");
     assert_eq!(count(&pool, "_adk_kernel_channel_migrations").await, 1);
-    assert_eq!(count(&pool, "_adk_kernel_device_migrations").await, 2);
+    assert_eq!(count(&pool, "_adk_kernel_device_migrations").await, 3);
 
     let now = chrono::Utc::now();
     let request = ChannelPairingRequest::new(

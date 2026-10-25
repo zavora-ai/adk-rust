@@ -6,7 +6,7 @@ use adk_kernel::control::api::{
     ChannelAccountState, ChannelAccountView, ChannelAccountsResponse, ChannelPairingView,
     IssueRequest,
 };
-use adk_kernel::pairing::{DeviceScope, DeviceState, DeviceView};
+use adk_kernel::pairing::{DeviceKind, DeviceScope, DeviceState, DeviceView};
 use anyhow::{Result, bail};
 use chrono::{DateTime, Local, Utc};
 
@@ -45,9 +45,17 @@ pub struct IssueArgs {
     /// How many days the device stays paired, 1 to 365 (default: 90)
     #[arg(long, value_name = "DAYS", value_parser = clap::value_parser!(u32).range(1..=365))]
     pub days: Option<u32>,
+    /// What the device is: phone, terminal or tray (default: terminal). Only a phone may
+    /// confirm it's you and approve high-risk calls
+    #[arg(long, value_parser = parse_kind)]
+    pub kind: Option<DeviceKind>,
 }
 
 fn parse_scope(value: &str) -> Result<DeviceScope, String> {
+    value.parse().map_err(|error: adk_kernel::KernelError| error.to_string())
+}
+
+fn parse_kind(value: &str) -> Result<DeviceKind, String> {
     value.parse().map_err(|error: adk_kernel::KernelError| error.to_string())
 }
 
@@ -82,7 +90,12 @@ fn paired(account: &ChannelAccountView) -> String {
 }
 
 async fn issue_code(client: &ControlClient, args: IssueArgs) -> Result<()> {
-    let request = IssueRequest { name: args.name, scopes: args.scope, expires_in_days: args.days };
+    let request = IssueRequest {
+        name: args.name,
+        scopes: args.scope,
+        expires_in_days: args.days,
+        kind: args.kind,
+    };
     let issued = client.issue_pairing_code(&request).await?;
     let scopes: Vec<&str> = issued.scopes.iter().map(|scope| scope.as_str()).collect();
     println!("Pairing code  {}", issued.code);
@@ -116,7 +129,8 @@ fn listing(devices: &[DeviceView], channels: &ChannelAccountsResponse) -> String
     if devices.is_empty() && accounts.is_empty() && waiting.is_empty() {
         return "Nothing is paired. Pair a phone or a terminal with `adk-rust pair`.\n".into();
     }
-    let mut out = format!("{:<18} {:<24} {:<20} {:<10} SINCE\n", "ID", "NAME", "MAY", "STATE");
+    let mut out =
+        format!("{:<18} {:<24} {:<9} {:<20} {:<10} SINCE\n", "ID", "NAME", "KIND", "MAY", "STATE");
     for device in devices {
         let _ = writeln!(out, "{}", device_line(device));
     }
@@ -128,10 +142,11 @@ fn listing(devices: &[DeviceView], channels: &ChannelAccountsResponse) -> String
         let name = format!("{} ({})", terminal_safe(account_name(account)), account.channel);
         let _ = writeln!(
             out,
-            "{:<18} {:<24} {:<20} {:<10} {}",
+            "{:<18} {:<24} {:<9} {:<20} {:<10} {}",
             short(&account.id),
             clip(&name, 24),
-            "chat, decide, stop",
+            "chat",
+            "decide, stop",
             state,
             local(account.paired_at)
         );
@@ -163,9 +178,10 @@ fn device_line(device: &DeviceView) -> String {
         _ => "removed",
     };
     format!(
-        "{:<18} {:<24} {:<20} {:<10} {}",
+        "{:<18} {:<24} {:<9} {:<20} {:<10} {}",
         device.id,
         clip(&terminal_safe(&device.name), 24),
+        device.kind.as_str(),
         scopes.join(", "),
         state,
         local(device.created_at)

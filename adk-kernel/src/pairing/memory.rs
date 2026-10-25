@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
 
-use super::{DeviceRecord, DeviceStore, PairingCode};
+use super::{AttachmentHolder, DeviceAttachment, DeviceRecord, DeviceStore, PairingCode};
 use crate::error::Result;
 
 /// A [`DeviceStore`] in process memory, for tests and a kernel with no durable store (spec
@@ -33,6 +33,7 @@ pub struct InMemoryDeviceStore {
     codes: RwLock<BTreeMap<String, PairingCode>>,
     devices: RwLock<BTreeMap<String, DeviceRecord>>,
     attempts: AtomicU64,
+    attachments: RwLock<BTreeMap<(AttachmentHolder, String, String), DeviceAttachment>>,
 }
 
 impl InMemoryDeviceStore {
@@ -89,5 +90,53 @@ impl DeviceStore for InMemoryDeviceStore {
     async fn reset_claim_attempts(&self) -> Result<()> {
         self.attempts.store(0, Ordering::SeqCst);
         Ok(())
+    }
+
+    async fn put_attachment(&self, attachment: DeviceAttachment) -> Result<()> {
+        let key = (attachment.holder.clone(), attachment.kind.clone(), attachment.key.clone());
+        self.attachments.write().await.insert(key, attachment);
+        Ok(())
+    }
+
+    async fn put_attachment_if_absent(&self, attachment: DeviceAttachment) -> Result<bool> {
+        let key = (attachment.holder.clone(), attachment.kind.clone(), attachment.key.clone());
+        let mut attachments = self.attachments.write().await;
+        if attachments.contains_key(&key) {
+            return Ok(false);
+        }
+        attachments.insert(key, attachment);
+        Ok(true)
+    }
+
+    async fn attachments(
+        &self,
+        holder: &AttachmentHolder,
+        kind: &str,
+    ) -> Result<Vec<DeviceAttachment>> {
+        Ok(self
+            .attachments
+            .read()
+            .await
+            .values()
+            .filter(|attachment| &attachment.holder == holder && attachment.kind == kind)
+            .cloned()
+            .collect())
+    }
+
+    async fn remove_attachment(
+        &self,
+        holder: &AttachmentHolder,
+        kind: &str,
+        key: &str,
+    ) -> Result<bool> {
+        let key = (holder.clone(), kind.to_string(), key.to_string());
+        Ok(self.attachments.write().await.remove(&key).is_some())
+    }
+
+    async fn remove_attachments(&self, holder: &AttachmentHolder) -> Result<usize> {
+        let mut attachments = self.attachments.write().await;
+        let count = attachments.len();
+        attachments.retain(|(owner, _, _), _| owner != holder);
+        Ok(count - attachments.len())
     }
 }

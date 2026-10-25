@@ -926,6 +926,45 @@ impl Kernel {
         &self.inner.sup
     }
 
+    /// The end of the quiet time that holds `at` in `partition`, followed through windows
+    /// that touch; `None` when `at` is not quiet (spec 3.3 §5.4, §10 K3). It reads the
+    /// windows in force now: the kernel's, the proactivity policy's and the partition's own,
+    /// with a quiet time the person changed while the kernel runs in place of the kernel's and
+    /// the partition's. A phone's wake-up waits for it.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # async fn example(kernel: adk_kernel::Kernel) {
+    /// use adk_kernel::PartitionId;
+    ///
+    /// if let Some(until) = kernel.quiet_until(&PartitionId::default(), chrono::Utc::now()).await {
+    ///     println!("quiet until {until}");
+    /// }
+    /// # }
+    /// ```
+    pub async fn quiet_until(
+        &self,
+        partition: &PartitionId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        let windows = self.inner.sup.quiet_windows(partition).await;
+        let mut until = at;
+        // Two windows release into each other at most once each.
+        for _ in 0..=windows.len() {
+            match windows
+                .iter()
+                .filter(|quiet| quiet.contains(until))
+                .map(|quiet| quiet.release_at(until))
+                .max()
+            {
+                Some(next) if next > until => until = next,
+                _ => break,
+            }
+        }
+        (until > at).then_some(until)
+    }
+
     /// Subscribes to the event bus from now on.
     pub fn events(&self) -> EventSubscriber {
         self.inner.sup.bus.subscribe()

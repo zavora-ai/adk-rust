@@ -34,14 +34,28 @@ CREATE TABLE IF NOT EXISTS adk_kernel_pairing_attempts (\
     attempts BIGINT NOT NULL\
 );",
     ),
+    (
+        3,
+        "create device attachments",
+        "\
+CREATE TABLE IF NOT EXISTS adk_kernel_device_attachments (\
+    holder TEXT COLLATE \"C\" NOT NULL, \
+    kind TEXT COLLATE \"C\" NOT NULL, \
+    key TEXT COLLATE \"C\" NOT NULL, \
+    updated_us BIGINT NOT NULL, \
+    record TEXT NOT NULL, \
+    PRIMARY KEY (holder, kind, key)\
+);",
+    ),
 ];
 
 /// A [`DeviceStore`](super::DeviceStore) in PostgreSQL, shared by every replica (spec 3.3
 /// §10 K2, feature `postgres`).
 ///
 /// It opens from the URL of `adk-rust serve --store`. Its tables are `adk_kernel_devices`,
-/// `adk_kernel_pairing_codes` and `adk_kernel_pairing_attempts`, the count of claims every
-/// replica shares; [`migrate`](Self::migrate) records its steps in
+/// `adk_kernel_pairing_codes`, `adk_kernel_pairing_attempts`, the count of claims every
+/// replica shares, and `adk_kernel_device_attachments`; [`migrate`](Self::migrate) records
+/// its steps in
 /// `_adk_kernel_device_migrations` under an advisory lock, so replicas starting together
 /// migrate one at a time.
 ///
