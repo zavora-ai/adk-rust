@@ -1038,17 +1038,11 @@ mod propose {
             let uses = self.limits.get().cloned().unwrap_or_default();
             let ceiling = AgentCeiling::new(partition_mode(own_mode), uses);
             let over = over_limits(&definition, &ceiling, &self.area);
-            if !over.is_empty() {
-                return Ok(json!({
-                    "error": format!(
-                        "Not suggested: {name} would have {}, which is more than you can give it. \
-                         Suggest it without those, or the person can set it up themselves.",
-                        join(&over)
-                    ),
-                }));
-            }
             let proposer = ctx.acting_context().agent.id;
             let run = config.durable_run_id.clone();
+            // The kernel checks every suggestion against the suggester's limits and records
+            // the ones it refuses (`kernel.agent.refused`), so an over-limit one still goes to
+            // it; the answer names what was over in this harness's words.
             match self
                 .proposer
                 .propose(definition, proposer, ctx.user_id(), ctx.session_id(), run)
@@ -1058,6 +1052,16 @@ mod propose {
                     "error": "no agent kernel hosts this harness, so no agent can be suggested; \
                               the person can start one with `adk-rust up`"
                 })),
+                Some(outcome) if outcome.get("refused").is_some() && !over.is_empty() => {
+                    Ok(json!({
+                        "error": format!(
+                            "Not suggested: {name} would have {}, which is more than you can \
+                             give it. Suggest it without those, or the person can set it up \
+                             themselves.",
+                            join(&over)
+                        ),
+                    }))
+                }
                 Some(outcome) if outcome.get("refused").is_some() => Ok(json!({
                     "error": format!(
                         "Not suggested: {}",
