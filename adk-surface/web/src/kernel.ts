@@ -31,10 +31,16 @@ export interface KernelProcess {
   };
   meta: {
     pid: string;
+    /** The area it runs in (`PartitionId`). */
+    partition?: string;
     kind?: unknown;
     wake?: WakeSet;
     agendaItem?: string;
     labels?: Record<string, string>;
+  };
+  /** Live aggregates (`ProcessView`): spend in micro-USD from the kernel's daily totals. */
+  view?: {
+    spendToday?: number;
   };
 }
 
@@ -53,6 +59,11 @@ export interface AgendaItem {
 export interface StandingRule {
   id: string;
   tool: string;
+  /** The acting agents it covers, as a glob of their ids; absent is every agent. */
+  agent?: string | null;
+  /** A session-scoped rule names its session. */
+  scope?: { sessionId?: string };
+  /** What `harness.rule.*` listings show: "bash: cargo test …", "write_file: within src/ (this session)". */
   label: string;
   decision: { kind?: string } | string;
   createdAt: string;
@@ -75,9 +86,38 @@ export function allows(rule: StandingRule): boolean {
   return kind === undefined || kind === "allow";
 }
 
+const WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
 /**
- * The next time a wake fires after `now`, for a time wake or a daily cron (`M H * * *`, in
- * UTC as the kernel reads it); `undefined` for any other wake.
+ * The days of the week a cron weekday field names (0 is Sunday, as is 7): `*`, a day, a
+ * range such as `1-5` or `MON-FRI`, or a list of them; `undefined` for a field it cannot read.
+ */
+export function cronWeekdays(field: string): Set<number> | undefined {
+  if (field === "*" || field === "?") return new Set([0, 1, 2, 3, 4, 5, 6]);
+  const day = (text: string) => {
+    const named = WEEKDAYS.indexOf(text.toUpperCase());
+    if (named >= 0) return named;
+    return /^\d$/.test(text) && Number(text) <= 7 ? Number(text) % 7 : undefined;
+  };
+  const days = new Set<number>();
+  for (const part of field.split(",")) {
+    const [from, to, extra] = part.split("-");
+    const start = day(from ?? "");
+    const end = to === undefined ? start : day(to);
+    if (start === undefined || end === undefined || extra !== undefined) return undefined;
+    // `5-7` runs Friday to Sunday; 7 is read as Sunday after the range.
+    const last = to !== undefined && Number(to) === 7 ? 7 : end;
+    if (last < start) return undefined;
+    for (let value = start; value <= last; value++) days.add(value % 7);
+  }
+  return days;
+}
+
+/**
+ * The next time a wake fires after `now`, for a time wake or a cron that runs at one time of
+ * day on every day or on some days of the week (`M H * * *`, `M H * * 1-5`, in UTC as the
+ * kernel reads it), so a weekday routine on a Saturday names Monday; `undefined` for any other
+ * wake.
  */
 export function nextFire(wake: Wake, now: Date): Date | undefined {
   if (typeof wake !== "object" || wake === null) return undefined;
@@ -92,10 +132,15 @@ export function nextFire(wake: Wake, now: Date): Date | undefined {
     // Six fields carry seconds first.
     const [minute, hour, day, month, weekday] = fields.length === 6 ? fields.slice(1) : fields;
     if (!/^\d+$/.test(minute ?? "") || !/^\d+$/.test(hour ?? "")) return undefined;
-    if (day !== "*" || month !== "*" || weekday !== "*") return undefined;
-    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), Number(hour), Number(minute)));
-    if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
-    return next;
+    if (day !== "*" || month !== "*") return undefined;
+    const days = cronWeekdays(weekday ?? "*");
+    if (!days || days.size === 0) return undefined;
+    for (let ahead = 0; ahead <= 7; ahead++) {
+      const next = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + ahead, Number(hour), Number(minute)),
+      );
+      if (next.getTime() > now.getTime() && days.has(next.getUTCDay())) return next;
+    }
   }
   return undefined;
 }
@@ -262,11 +307,16 @@ export interface AwayRecord {
   entry: LedgerRow;
 }
 
-/** A quiet window (`adk_kernel::QuietHours`): local `HH:MM`, at `utcOffsetMinutes` east of UTC when set. */
+/**
+ * A quiet window (`adk_kernel::QuietHours`): local `HH:MM` in the IANA `timeZone` when set,
+ * following its daylight saving time; else at `utcOffsetMinutes` east of UTC when set; else in
+ * the server's time zone.
+ */
 export interface QuietWindow {
   start: string;
   end: string;
   utcOffsetMinutes?: number;
+  timeZone?: string;
 }
 
 /** How much an area's agents act alone, as the kernel names it (`PartitionMode`). */
@@ -295,5 +345,97 @@ export interface AreaSettings {
     quietTime?: SettingChange<QuietWindow | null>;
     dailySpendingLimit?: SettingChange<number | null>;
     mode?: SettingChange<AreaMode>;
+  };
+}
+
+/** Where a remembered fact came from (`adk_kernel::control::FactOrigin`, spec 3.3 §8.1). */
+export type FactOrigin = "youSaidThis" | "youConfirmedThis" | "guess";
+
+/** A fact the agents remember (`RememberedFact`, spec 3.3 §10 K5). */
+export interface RememberedFact {
+  id: string;
+  /** Escaped on display, as every string from a model or a tool is (S-I9). */
+  text: string;
+  origin: FactOrigin | string;
+  kind?: string;
+  /** The area whose agents remember it. */
+  area?: string;
+  /** What noticed a guess: an agent, or an area. */
+  noticedBy?: string;
+  learnedAt: string;
+  /** The tidy-up that wrote it. */
+  tidyUp?: string;
+}
+
+/** An overnight tidy-up of the memory (`adk_kernel::control::TidyUp`). */
+export interface KernelTidyUp {
+  id: string;
+  area: string;
+  at: string;
+  finishedAt?: string;
+  undoneAt?: string;
+  merged: number;
+  superseded: number;
+  forgotten: number;
+  distilled: number;
+}
+
+/** `GET /kernel/memory` (`MemoryResponse`). */
+export interface MemoryResponse {
+  facts: RememberedFact[];
+  tidyUps: KernelTidyUp[];
+}
+
+/** What undoing a tidy-up did (`TidyUpUndo`): the ids of the facts it restored, forgot and kept. */
+export interface TidyUpUndo {
+  id: string;
+  restored: string[];
+  forgotten: string[];
+  kept: string[];
+}
+
+/** Whether "Undo" applies to a tidy-up (`TidyUp::undoable`): finished, changed something, not undone. */
+export function undoable(tidyUp: KernelTidyUp): boolean {
+  return (
+    tidyUp.finishedAt !== undefined &&
+    tidyUp.finishedAt !== null &&
+    (tidyUp.undoneAt === undefined || tidyUp.undoneAt === null) &&
+    tidyUp.merged + tidyUp.superseded + tidyUp.forgotten + tidyUp.distilled > 0
+  );
+}
+
+/** One action on the kernel's signed record (`adk_kernel::control::RecordLine`, spec 3.3 §10 K5). */
+export interface KernelRecordLine {
+  seq: number;
+  at: string;
+  /** The record's action: `surface.decide`, `kernel.control`, `harness.rule.created`, a tool's name. */
+  action: string;
+  /** What a kernel record did: `memory.forget`, `settings.mode`, `freeze`. */
+  kernelAction?: string;
+  subject?: string;
+  agent?: string;
+  tool?: string;
+  /** `approved`, `rejected`, `denied`, `allowed`. */
+  decision?: string;
+  /** `succeeded`, `failed`, `decided`. */
+  outcome?: string;
+  /** `keyboard`, `pointer`, `touch`, `voice`, `chat`. */
+  how?: string;
+  /** The chat channel or device. */
+  channel?: string;
+  target?: string;
+}
+
+/** `GET /kernel/record/check` (`RecordCheck`): the check `adk-rust audit verify` makes. */
+export interface KernelRecordCheck {
+  valid: boolean;
+  entries: number;
+  checkedAt: string;
+  problem?: string;
+  /** The verifier's report, as `adk-rust audit verify --json` prints it. */
+  report?: {
+    /** Records no signed checkpoint covers yet. */
+    unsignedTail?: number;
+    failures?: Array<{ kind?: string; message?: string }>;
   };
 }

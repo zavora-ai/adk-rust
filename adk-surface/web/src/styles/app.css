@@ -1469,6 +1469,12 @@ button.segment {
   color: var(--pill-failed);
 }
 
+/* Records the log has not signed yet: on record, not yet checkable. */
+.check-pending {
+  background: var(--raised);
+  color: var(--text-2);
+}
+
 .record-title {
   font-size: 16px;
   font-weight: 700;
@@ -1499,6 +1505,50 @@ button.segment {
 
 .pairing-code {
   font-size: 22px;
+}
+
+/* An area's roster: each agent with what it spent today (spec 3.3 §12 phase 4). */
+.area-roster {
+  display: grid;
+  gap: 8px;
+}
+
+.area-roster .bordered > li {
+  padding: 10px 14px;
+}
+
+.area-agent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.area-agent-text {
+  display: grid;
+  min-width: 0;
+  font-size: 13.5px;
+}
+
+.area-agent-name {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.area-agent-spent {
+  margin-left: auto;
+  color: var(--text-2);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rule .setting-form {
+  margin-top: 4px;
+}
+
+.record-check details summary {
+  cursor: pointer;
 }
 
 /* ── Developer panel ────────────────────────────────────────── */
