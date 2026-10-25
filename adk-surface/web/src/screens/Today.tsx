@@ -214,7 +214,9 @@ export function Today({
             </button>
           </div>
         )}
-        {(problem || loadProblem) && (
+        {/* The engine's briefing is read only without the kernel's page: once that page shows,
+            a failed read of the briefing is no problem of this screen. */}
+        {(problem || (!kernel && loadProblem)) && (
           <p className="decision-problem" role="alert">
             {problem || loadProblem}
           </p>

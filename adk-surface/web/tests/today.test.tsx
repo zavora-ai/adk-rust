@@ -5,6 +5,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
+import { Today } from "../src/screens/Today";
 import { agentOf, briefingDue, deviceOffset, insideQuiet, lineWords, mergeAway, onThisDevice, quietEnded } from "../src/away";
 import { ApiError, HttpClient } from "../src/client";
 import { FixtureClient, awayPage, fixtureSeams } from "../src/fixture/fixture";
@@ -185,6 +186,28 @@ describe("Today", () => {
     });
     expect(agentOf("urn:adk:agent:home/finance_bot", [])).toBe("Finance bot");
     expect(agentOf("kernel", agents)).toBeUndefined();
+  });
+
+  it("drops a failed read of the engine's briefing once the kernel's page shows", async () => {
+    const client = new FixtureClient();
+    client.briefing = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    const props = {
+      client,
+      agents: [],
+      routinesToday: [],
+      canAddRoutine: false,
+      seams: fixtureSeams(),
+      onOpenAgent: () => {},
+      onChanged: () => {},
+      onAwayChanged: () => {},
+    };
+    const { rerender } = render(<Today {...props} />);
+    expect((await screen.findByRole("alert")).textContent).toBe("Can't reach your agents right now. Trying again.");
+    rerender(<Today {...props} away={awayPage()} />);
+    await screen.findByText("Household failed.");
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("reads the engine's briefing where the kernel keeps no ledger", async () => {
