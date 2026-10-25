@@ -168,7 +168,7 @@ impl MemoryBook for HarnessMemoryBook {
                 }
             }
         }
-        facts.sort_by(|a, b| b.learned_at.cmp(&a.learned_at));
+        facts.sort_by_key(|fact| std::cmp::Reverse(fact.learned_at));
         Ok(facts)
     }
 
@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(tidy_ups.len(), 1);
         assert!(tidy_ups[0].undoable());
         let undone = book.undo_tidy_up("ana", "01JTICK", &SubjectRef::human("ana")).await.unwrap();
-        assert_eq!(undone.forgotten, [merged.id.clone()]);
+        assert_eq!(undone.forgotten, std::slice::from_ref(&merged.id));
         assert!(!book.tidy_ups("ana").await.unwrap()[0].undoable(), "a tidy-up is undone once");
     }
 
