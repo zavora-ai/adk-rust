@@ -141,6 +141,8 @@ pub struct HarnessAgentBuilder {
     /// The personal preset offers `bash` only in the OS sandbox or a container (spec 3.3
     /// §10 H1).
     isolated_shell_only: bool,
+    /// The website preset leaves `bash` out (spec 3.5 §10 X10).
+    preset_without_shell: bool,
     /// `allow_unsandboxed_retry` was set explicitly, so a container shell keeps it.
     retry_explicit: bool,
     trust_mcp_read_only_hints: bool,
@@ -187,6 +189,9 @@ pub struct HarnessAgentBuilder {
     unimplemented: Vec<String>,
     last_todos: Option<Arc<Mutex<TodoList>>>,
     web: Option<crate::web::WebConfig>,
+    /// Signs `web_fetch` requests (spec 3.5 §7.3 "Outbound").
+    #[cfg(feature = "web")]
+    web_signer: Option<Arc<dyn crate::web::RequestSigner>>,
     search_provider: Option<Arc<dyn crate::web::SearchProvider>>,
     /// `None`: the model provider's search when `web` is set (spec 3.1 §7.20).
     provider_web_tools: Option<crate::web::ProviderWebTools>,
@@ -249,6 +254,7 @@ impl HarnessAgentBuilder {
             shell: ShellConfig::default(),
             shell_enabled: true,
             isolated_shell_only: false,
+            preset_without_shell: false,
             retry_explicit: false,
             trust_mcp_read_only_hints: false,
             todos: true,
@@ -292,6 +298,8 @@ impl HarnessAgentBuilder {
             unimplemented: Vec::new(),
             last_todos: None,
             web: None,
+            #[cfg(feature = "web")]
+            web_signer: None,
             search_provider: None,
             provider_web_tools: None,
             mcp_interaction: crate::mcp::McpInteractionConfig::default(),
@@ -335,6 +343,14 @@ impl HarnessAgentBuilder {
     /// ```
     pub fn web(mut self, config: crate::web::WebConfig) -> Self {
         self.web = Some(config);
+        self
+    }
+
+    /// Signs every `web_fetch` request, each redirect hop included, with `signer`: the
+    /// site's Web Bot Auth key, opt-in for general fetches (spec 3.5 §7.3 "Outbound").
+    #[cfg(feature = "web")]
+    pub fn web_signer(mut self, signer: Arc<dyn crate::web::RequestSigner>) -> Self {
+        self.web_signer = Some(signer);
         self
     }
 
@@ -898,11 +914,23 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// Leaves `bash` out for as long as the preset that asked holds (spec 3.5 §10 X10).
+    #[cfg(feature = "website")]
+    pub(crate) fn preset_without_shell(mut self) -> Self {
+        self.preset_without_shell = true;
+        self
+    }
+
     /// Undoes what a preset set that another preset leaves alone (spec 3.3 §10 H1).
     pub(crate) fn clear_preset(mut self) -> Self {
         if self.description.as_deref() == Some(crate::personal::PERSONAL_DESCRIPTION) {
             self.description = None;
         }
+        #[cfg(feature = "website")]
+        if self.description.as_deref() == Some(crate::website::WEBSITE_DESCRIPTION) {
+            self.description = None;
+        }
+        self.preset_without_shell = false;
         self.isolated_shell_only(false)
     }
 
@@ -1383,6 +1411,8 @@ impl HarnessAgentBuilder {
     /// feature not yet implemented is requested, and `harness.sandbox_unavailable` when
     /// the requested sandbox is unavailable under `fail_if_unavailable`.
     pub fn build(mut self) -> Result<HarnessAgent> {
+        // The website preset runs without a shell, whatever the workspace allows (X10).
+        self.shell_enabled &= !self.preset_without_shell;
         let model = self.model.ok_or_else(|| AdkError::config("HarnessAgent requires a model"))?;
         let workspace =
             self.workspace.ok_or_else(|| AdkError::config("HarnessAgent requires a workspace"))?;
@@ -1802,7 +1832,7 @@ impl HarnessAgentBuilder {
         // Governed web tools (spec 3.1 §7.20): `web_search` only with a provider.
         #[cfg(feature = "web")]
         if let Some(config) = self.web.clone() {
-            let runtime = crate::web::WebRuntime::new(config);
+            let runtime = crate::web::WebRuntime::new(config, self.web_signer.clone());
             tools.push(Arc::new(crate::tools::WebFetchTool::new(runtime.clone())));
             if let Some(provider) = &self.search_provider {
                 tools.push(Arc::new(crate::tools::WebSearchTool::new(runtime, provider.clone())));

@@ -1,0 +1,11 @@
+name = "Juniper Bakery"
+domain = "bakery.example"
+description = "Bread baked every morning in Nakuru."
+languages = ["en"]
+jurisdictions = ["KE"]
+site_capabilities = ["search_site"]
+charter_version = 1
+
+[security]
+contact = ["mailto:security@bakery.example"]
+expires = "2027-06-30T00:00:00Z"

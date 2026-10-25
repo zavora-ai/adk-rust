@@ -205,6 +205,23 @@ async fn host(harness: &adk_harness::Harness) -> Result<(), Box<dyn std::error::
 }
 ```
 
+## Website (feature `website`)
+
+The runtime half of an AWP 2.0 website (spec 3.5 §7.1, §7.10, §7.11, §7.18). A product builds
+its team from it; the product's agents, site kinds and onboarding questions are its own.
+
+| Part | What it does |
+|---|---|
+| `Preset::Website` | The website prompt, plan mode until the charter compiles to more, no shell, website tools classed by their catalogue |
+| `website_back_office(&BackOfficeKit)` | Content drafts, edits, schedules, corrections, withdrawals and reverts; translations; media; preview, publish and rollback over `adk-site`; host reads; the launch gate; `awp verify`; charter drafts; charter-commit and promotion requests as decision cards. The launch and every DNS change are held for the owner in every mode (A-I21) |
+| `website_public(PublicKit)` | `search_site` over the release's Markdown twins, `emit_signal` with screened bounded fields, `adk-drivers`' `reply_in_thread`, the declared capabilities, and nothing else (A-I2, A-I3) |
+| `LadderCompiler`, `promote_job`, `apply_demotion` | Each job's level compiled to a mode, a policy read at every call, within-budget rules and owner-created standing rules; only an owner's decision raises a level (A-I13) |
+| `AuthoringRouter` | Paired devices author through the Steward; everyone else reaches the public partition (A-I24) |
+| `SiteSigning`, `ReleaseLogVerifier` | Web Bot Auth on crawls, `awp verify` and opted-in `web_fetch`; the release-log half of `awp verify` before a site publishes its contract |
+| `OnboardingStage`, `InterviewForm` | Plan-graph steps for discovery, interview, charter, build, gate, connections and launch; facts `Known` only from the owner's words (A-I18) |
+
+See `docs/official_docs/harness/website.md`.
+
 ## Features
 
 | Feature | Default | Pulls in |
@@ -237,6 +254,7 @@ async fn host(harness: &adk_harness::Harness) -> Result<(), Box<dyn std::error::
 | `browser` | off | the browser pack (spec 3.1 §7.24): `adk-browser`'s tools as `Read`, `Web` and `External` classes under the web rules, `BrowserPack`, `harness.browser.*` |
 | `computer-use` | off | the computer-use pack (spec 3.1 §7.24): `computer_use_observe`, `computer_use_preview` and the never-waivable `computer_use_execute` through `adk-computer-use`'s reference graph, `ComputerUsePack` |
 | `voice` | off | the voice surface (spec 3.1 §7.17): `VoiceSurface` runs a harness marked `Pack::Voice` over `adk-realtime`'s `IntegratedRealtimeRunner`, with spoken or inbox approvals and `harness.voice.*` audit records; with `kernel` it also answers kernel processes parked on a held call (spec 3.2 §7.11) |
+| `website` | off | the website runtime (spec 3.5 §7.1): `Preset::Website`, the back-office and public toolsets over `adk-site`, the site's two partitions and their signals, the autonomy ladder compiled to policy, the authoring router, Web Bot Auth signing of crawls, `awp verify` and opted-in `web_fetch`, and the onboarding plan's steps |
 
 ## Status
 
@@ -258,6 +276,7 @@ The managed form (feature `managed`) is Experimental, as `adk-managed` is.
 | Serving over HTTP and on the managed runtime | [serving](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/serving.md) |
 | Identity, permissions and credentials | [identity](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/identity.md) |
 | Spans, spend, loop guard and evaluation | [observability](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/observability.md) |
+| The website runtime | [website](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/website.md) |
 | Hooks | [hooks](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/hooks.md) |
 | Web tools and MCP servers | [web and MCP](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/web-and-mcp.md) |
 | Browser and computer-use packs | [packs](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/harness/packs.md) |

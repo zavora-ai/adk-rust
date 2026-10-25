@@ -4,6 +4,7 @@
 
 use std::fmt;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use futures::StreamExt as _;
 use sha2::{Digest, Sha256};
@@ -208,6 +209,34 @@ pub struct Fetched {
     pub body: FetchBody,
 }
 
+/// Signs each request of the governed fetch before it is sent, again at every redirect hop,
+/// since the authority and path change: the site's Web Bot Auth key under feature `website`
+/// (spec 3.5 §7.3 "Outbound").
+///
+/// # Example
+///
+/// ```rust
+/// use adk_harness::web::RequestSigner;
+///
+/// #[derive(Debug)]
+/// struct Tag;
+///
+/// impl RequestSigner for Tag {
+///     fn sign(&self, request: &mut reqwest::Request) -> Result<(), String> {
+///         request.headers_mut().insert("x-signed", "1".parse().unwrap());
+///         Ok(())
+///     }
+/// }
+/// ```
+pub trait RequestSigner: fmt::Debug + Send + Sync {
+    /// Adds the signature fields to `request`.
+    ///
+    /// # Errors
+    ///
+    /// Returns why `request` cannot be signed; the fetch is then refused, never sent unsigned.
+    fn sign(&self, request: &mut reqwest::Request) -> Result<(), String>;
+}
+
 /// The harness's fetch client (spec 3.1 §7.20).
 ///
 /// # Example
@@ -229,12 +258,21 @@ pub struct Fetched {
 #[derive(Clone, Debug)]
 pub struct Fetcher {
     config: WebConfig,
+    signer: Option<Arc<dyn RequestSigner>>,
 }
 
 impl Fetcher {
     /// A fetcher under `config`.
     pub fn new(config: WebConfig) -> Self {
-        Self { config }
+        Self { config, signer: None }
+    }
+
+    /// Signs every request, every redirect hop included, with `signer` (spec 3.5 §7.3
+    /// "Outbound").
+    #[must_use]
+    pub fn with_signer(mut self, signer: Arc<dyn RequestSigner>) -> Self {
+        self.signer = Some(signer);
+        self
     }
 
     /// The configuration.
@@ -423,22 +461,27 @@ impl Fetcher {
             builder = builder.resolve_to_addrs(&url.host, addresses);
         }
         let client = builder.build().map_err(|error| FetchRefusal::Transport(error.to_string()))?;
-        client
+        let mut request = client
             .get(url.as_string())
             .header(
                 reqwest::header::ACCEPT,
                 "text/html, application/xhtml+xml, text/*;q=0.9, application/json;q=0.8, \
                  application/pdf;q=0.5, */*;q=0.1",
             )
-            .send()
-            .await
-            .map_err(|error| {
-                if error.is_timeout() {
-                    FetchRefusal::Timeout { secs: self.config.timeout.as_secs() }
-                } else {
-                    FetchRefusal::Transport(error.without_url().to_string())
-                }
-            })
+            .build()
+            .map_err(|error| FetchRefusal::Transport(error.without_url().to_string()))?;
+        if let Some(signer) = &self.signer {
+            signer.sign(&mut request).map_err(|reason| {
+                FetchRefusal::Transport(format!("the request could not be signed: {reason}"))
+            })?;
+        }
+        client.execute(request).await.map_err(|error| {
+            if error.is_timeout() {
+                FetchRefusal::Timeout { secs: self.config.timeout.as_secs() }
+            } else {
+                FetchRefusal::Transport(error.without_url().to_string())
+            }
+        })
     }
 
     async fn read_body(

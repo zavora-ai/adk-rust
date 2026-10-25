@@ -75,6 +75,7 @@ turn runs it once (see [Modes and approvals](modes-and-approvals.md)).
 | Memory | Working notes outside the workspace, written behind approval; long-term facts with provenance, recalled into each turn | [Memory](memory.md) |
 | Personal preset | A workspace of notes and files under the home instead of a repository, no host shell, quiet time and a daily spending limit asked at first run | [The personal preset and take over](personal.md) |
 | Take over | A tool asks for a password or one-time code; the person types it on the phone or the web home and it reaches that one call | [The personal preset and take over](personal.md#take-over) |
+| Website runtime | The preset, back-office and public toolsets, partitions and signals, the autonomy ladder, authoring, outbound Web Bot Auth and onboarding of an AWP 2.0 website (feature `website`) | [The website runtime](website.md) |
 
 ## Pages
 
@@ -95,6 +96,7 @@ turn runs it once (see [Modes and approvals](modes-and-approvals.md)).
 | [Browser and computer use](packs.md) | The browser pack under the web rules; desktop actions through the governed reference graph, approved once each |
 | [Voice](voice.md) | The voice surface: the same harness over a realtime session, spoken approvals, one audit trail |
 | [The personal preset and take over](personal.md) | `--preset personal`, its first run, and secrets typed by the person for one tool call |
+| [The website runtime](website.md) | `Preset::Website`, the site's two partitions, the autonomy ladder compiled to policy, authoring and onboarding |
 | [Migrating from `CodingAgent`](../migration/coding-agent-to-harness.md) | Moving from `adk_agent::coding` to the harness |
 
 ## Status

@@ -40,6 +40,7 @@
 //! | `packs::browser::BrowserPack` (feature `browser`) | §7.24 |
 //! | `packs::computer_use::ComputerUsePack` (feature `computer-use`) | §7.24 |
 //! | `packs::voice::{VoiceSurface, VoiceConfig, VoiceEvent, SpokenDecision}` (feature `voice`) | §7.17 |
+//! | `website::*`, `Preset::Website` (feature `website`) | spec 3.5 §7.1, §7.3, §7.10, §7.11, §7.18 |
 //! | `VoiceSurface::with_parked_processes`, `ParkedProcess` (features `voice` and `kernel`) | spec 3.2 §7.11 |
 //!
 //! # Example
@@ -108,6 +109,8 @@ mod team;
 mod tools;
 mod toolset;
 pub mod web;
+#[cfg(feature = "website")]
+pub mod website;
 
 pub mod approvals;
 #[path = "presets/coding.rs"]

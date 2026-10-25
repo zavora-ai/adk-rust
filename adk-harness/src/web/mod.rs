@@ -36,7 +36,7 @@ pub use domain::{
 };
 #[cfg(feature = "web")]
 pub use fetch::{
-    DELIVERED_TEXT_MAX, FetchBody, FetchRefusal, Fetched, Fetcher, NON_PATH_BUDGET,
+    DELIVERED_TEXT_MAX, FetchBody, FetchRefusal, Fetched, Fetcher, NON_PATH_BUDGET, RequestSigner,
     TRUNCATION_MARKER, hex_sha256,
 };
 #[cfg(feature = "web")]
@@ -361,9 +361,13 @@ pub(crate) struct WebRuntime {
 impl WebRuntime {
     const TURNS_CAP: usize = 1024;
 
-    pub(crate) fn new(config: WebConfig) -> Arc<Self> {
+    pub(crate) fn new(config: WebConfig, signer: Option<Arc<dyn RequestSigner>>) -> Arc<Self> {
+        let fetcher = Fetcher::new(config.clone());
         Arc::new(Self {
-            fetcher: Fetcher::new(config.clone()),
+            fetcher: match signer {
+                Some(signer) => fetcher.with_signer(signer),
+                None => fetcher,
+            },
             config,
             turns: std::sync::Mutex::new(std::collections::VecDeque::new()),
         })
@@ -404,7 +408,7 @@ mod tests {
     #[test]
     fn fetches_are_counted_per_turn_and_capped() {
         let runtime =
-            WebRuntime::new(WebConfig { max_fetches_per_turn: 2, ..WebConfig::default() });
+            WebRuntime::new(WebConfig { max_fetches_per_turn: 2, ..WebConfig::default() }, None);
         assert_eq!(runtime.count_fetch("s1", "inv-1"), Ok(1));
         assert_eq!(runtime.count_fetch("s1", "inv-1"), Ok(2));
         assert_eq!(runtime.count_fetch("s1", "inv-1"), Err(2));
