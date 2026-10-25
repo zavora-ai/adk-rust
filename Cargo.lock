@@ -575,6 +575,7 @@ dependencies = [
  "chrono",
  "futures",
  "google-cloud-auth 1.15.0",
+ "libm",
  "proptest",
  "quick-xml 0.41.0",
  "reqwest 0.12.28",

@@ -217,6 +217,9 @@
 # The graph memory backend over sqlx: default workspace builds never compile it.
 5 adk-memory graph-memory
 5 adk-eval vertex-eval
+# Web experiment analysis (spec 3.5 §7.12): the simulation, S11 and property tests and the
+# doctests that state the method's numbers need it.
+5 adk-eval experiments doc
 # The tau2-bench and BFCL adapters: nothing in the workspace enables either feature.
 5 adk-bench tau2,bfcl
 # Agent Engine deployment client: golden DTO and mock contract tests.
