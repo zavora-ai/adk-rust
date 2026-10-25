@@ -152,10 +152,12 @@ calls, and a caller lists and revokes only their own rules.
 | `GET /api/rules/suggestions/{approvalId}` | The rules a call held in one of the caller's sessions offers, as a prompt would |
 | `POST /api/rules` | `{"approvalId": "apr_…", "suggestion": 1}` remembers an offered rule; `{"tool": "bash", "prefix": "cargo test"}` creates an explicit rule pinned to the served harness's declaration of the tool. Optional: `"decision": {"kind": "deny", "reason": "…"}`, `"expiresInHours": 8`; explicit rules also take `"pathWithin": "src"` and `"sessionId": "s1"`. Answers `201` with the rule |
 | `DELETE /api/rules/{id}` | Revokes one of the caller's rules; it stops applying from the next call |
+| `POST /api/rules/{id}/extend` | `{"expiresAt": "2026-12-24T23:59:00Z"}` moves the end of one of the caller's rules that has one to a later time ("Extend", spec 3.3 §8.1). A rule without an end date, or an end not after both its end and now, is `400`; another person's rule, or one revoked meanwhile, is `404` — an extension never brings a revoked rule back. Answers with the rule |
 
-Every grant and revocation is recorded as `harness.rule.created` or `harness.rule.revoked`
-with `surface: rest` before the store write. Creating a rule from a held call does not
-decide that call: decide it through `/api/approvals`.
+Every grant, extension and revocation is recorded as `harness.rule.created`,
+`harness.rule.extended` (with the old end as `from` and the new one as `to`) or
+`harness.rule.revoked` with `surface: rest` before the store write. Creating a rule from a
+held call does not decide that call: decide it through `/api/approvals`.
 
 ```bash
 # The held call's offers, then "always allow `cargo test …`" (offer 0) for every session.
@@ -163,9 +165,11 @@ curl -s localhost:8080/api/rules/suggestions/apr_…
 curl -s localhost:8080/api/rules -H 'content-type: application/json' \
   -d '{"approvalId": "apr_…", "suggestion": 0}'
 
-# An explicit rule, and its revocation.
+# An explicit rule, extended to the end of 24 December, and its revocation.
 curl -s localhost:8080/api/rules -H 'content-type: application/json' \
   -d '{"tool": "bash", "prefix": "cargo test", "expiresInHours": 8}'
+curl -s localhost:8080/api/rules/<rule id>/extend -H 'content-type: application/json' \
+  -d '{"expiresAt": "2026-12-24T23:59:00Z"}'
 curl -s -X DELETE localhost:8080/api/rules/<rule id>
 ```
 

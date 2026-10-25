@@ -75,8 +75,15 @@ test("the morning briefing and Today read the kernel's page, and only Mark as se
   await canDo.getByRole("button", { name: "Save" }).click();
   await expect(canDo.getByText(/^Was \d\d:\d\d–\d\d:\d\d\. Now 23:00–06:00\.$/)).toBeVisible();
   const settings = await (await request.get("/api/kernel/settings")).json();
-  // Saved with the browser's offset, so the kernel keeps the hours typed (spec 3.3 §5.1).
-  expect(settings.areas[0].quietTime).toEqual([
-    { start: "23:00", end: "06:00", utcOffsetMinutes: await page.evaluate(() => -new Date().getTimezoneOffset()) },
-  ]);
+  // Saved with the browser's zone and offset, so the kernel keeps the hours typed (spec 3.3
+  // §5.1); a kernel that reads offsets only keeps the offset.
+  const [window] = settings.areas[0].quietTime;
+  expect(window).toMatchObject({
+    start: "23:00",
+    end: "06:00",
+    utcOffsetMinutes: await page.evaluate(() => -new Date().getTimezoneOffset()),
+  });
+  if (window.timeZone !== undefined) {
+    expect(window.timeZone).toBe(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone));
+  }
 });
