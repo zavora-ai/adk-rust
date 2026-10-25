@@ -10,9 +10,23 @@
 //! [`plan`] writes what a shape needs into the site project and estimates its monthly
 //! running cost before deployment; [`serve`] is what the `adk-website` binary runs: the
 //! kernel's control plane and the agent edge for one site, or many in [`agency`] mode.
+//!
+//! | Module | Contents |
+//! |---|---|
+//! | [`project`] | The project layout `adk-rust site` uses, delegated key files, released documents, the owner's feeds, slots and payment links |
+//! | [`kernel`] | The kernel's durable SQLite stores in `data/kernel.db` |
+//! | [`site`] | [`RunningSite`]: one site's runtime, edge, updates, experiments, measurement, review and alarms |
+//! | [`updates`] | The update engine's driver, journal, decision cards and alarms |
+//! | [`checks`] | The release-delegation gate check, payment links, the log recorder |
+//! | [`serve`](mod@serve) | The kernel and the edge's listener for one site or an agency |
 
 pub mod agency;
+pub mod checks;
+pub mod kernel;
+pub mod project;
 pub mod serve;
+pub mod site;
+pub mod updates;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -27,7 +41,11 @@ use crate::onboarding::cost::{CostInputs, RunningCostEstimate, estimate};
 use crate::team::SiteTeam;
 
 pub use agency::{Agency, AgencyRouter};
+pub use kernel::KernelStores;
+pub use project::ProjectPaths;
 pub use serve::{AgencyFile, AgencySite, ServeOptions, Served, serve, serve_agency};
+pub use site::{RunningSite, ServedWorkflows, SiteOptions};
+pub use updates::{UpdateCards, UpdateDriver, UpdateJournal};
 
 /// A deployment shape (spec 3.5 §7.22).
 ///

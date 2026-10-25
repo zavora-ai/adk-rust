@@ -1538,6 +1538,8 @@ dependencies = [
  "async-trait",
  "awp-types",
  "axum",
+ "base64 0.22.1",
+ "bytes",
  "chrono",
  "chrono-tz 0.10.4",
  "dotenvy",
@@ -1557,6 +1559,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid 1.25.0",
+ "zeroize",
 ]
 
 [[package]]

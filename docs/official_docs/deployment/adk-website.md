@@ -158,6 +158,28 @@ many sites from one harness:
 | Kernel | Each site's partitions carry the site as tenant and deny crossings; a request from one site's back office into another's — the agency coordinator's too — is denied and recorded as a crossing |
 | Edge | `AgencyRouter` sends each request only to the edge of the site its host names; any other host is refused with `404` and recorded as `awp.request.refused` |
 
+### A served site
+
+`deploy::serve` opens the project in the layout `adk-rust site` uses and starts one
+`deploy::RunningSite` over the kernel's durable stores in `data/kernel.db`:
+
+| Part | Wiring |
+|------|--------|
+| Keys | `data/keys/release.jwk` signs the site log; `card.jwk` (and `receipt.jwk`) sign the Agent Card, the status, consent receipts and stream entries. No root key is kept in the project |
+| Publishing | Refused until `well-known/awp/keys.json` delegates the release key: the gate's `release-delegation` finding names `adk-rust awp keys rotate` and `adk-rust awp keys delegate` |
+| Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and a stream lane signed by the receipt key; feeds from `feeds.json`; `UpdateDriver` ticks it when due and journals to `data/updates/`; held deliveries and items become approval requests (decision cards); `GET /awp/v2/stream` serves `stream_since` |
+| Experiments | `ExperimentGenerator` around the built-in generator; `ExperimentRunner` with `BeaconKpi`, the job pauses, the ladder, the alarms and `RepublishOnStop`; its trigger fires through a watermarked cron source |
+| Measurement | `MeteredActionLedger` and `EdgeMeter` on the edge, `MeteredSpendLedger` for agents' spend, and the tracker's sources |
+| Channels | Inbox threads with `SiteOptions::repliers`; the calendar and payment links from `calendar.json` and `payments.json`, or `SiteOptions`; refused without them |
+| Public agent | With `SiteOptions::model`, `edge::concierge` mounts the Concierge through `AwpEdge::public_agent`: the website preset in the public partition over the edge's own tools — the declared capabilities (a declared `search_site` among them), `reply_in_thread` and the edge's `emit_signal` — so the edge's public policy admits every call |
+
+| Store | Survives a restart |
+|-------|--------------------|
+| Charters, KPIs, autonomy levels, signals | `adk_kernel::charter::Sqlite*Store` |
+| Agenda, partitions, devices, cron watermarks | `adk_kernel` SQLite stores |
+| Runs (weekly reviews among them), approvals, action and spend ledgers | `adk_session` SQLite stores |
+| Leads, consent, held calls, idempotency | `adk_server::awp::stores::SqliteEdgeStores` in `data/edge.db` |
+
 ## Audit records
 
 | Record | Written by |

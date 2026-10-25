@@ -307,7 +307,7 @@ pub struct SiteRuntime {
     pub(crate) store: Arc<dyn ContentStore>,
     pub(crate) generator: Arc<dyn SiteGenerator>,
     pub(crate) host: Arc<dyn SiteHost>,
-    pub(crate) pipeline: PublishingPipeline,
+    pub(crate) pipeline: Arc<PublishingPipeline>,
     pub(crate) gate: LaunchGate,
     pub(crate) quarantine: Quarantine,
     pub(crate) media: MediaPipeline,
@@ -488,7 +488,7 @@ impl SiteRuntimeBuilder {
             store: self.store,
             generator: self.generator,
             host: self.host,
-            pipeline: pipeline.build(),
+            pipeline: Arc::new(pipeline.build()),
             gate,
             quarantine: self.quarantine,
             media: self.media,
@@ -561,6 +561,12 @@ impl SiteRuntime {
     /// The publishing pipeline.
     pub fn pipeline(&self) -> &PublishingPipeline {
         &self.pipeline
+    }
+
+    /// The publishing pipeline, shared: an `adk-site` `UpdateEngine` publishes through it,
+    /// so its batches and the back office's releases follow one another (spec 3.5 §7.8.3).
+    pub fn shared_pipeline(&self) -> Arc<PublishingPipeline> {
+        Arc::clone(&self.pipeline)
     }
 
     /// The content store.

@@ -59,6 +59,15 @@ pub fn site_keys(domain: &str) -> SiteKeys {
 
 /// The edge of `site`, served at the site's own origin.
 pub async fn edge(site: &Site, domain: &str) -> EdgeSite {
+    edge_with(site, domain, None).await
+}
+
+/// The edge of `site` with `public_agent` answering conversations.
+pub async fn edge_with(
+    site: &Site,
+    domain: &str,
+    public_agent: Option<adk_website::edge::PublicAgentFactory>,
+) -> EdgeSite {
     let keys = site_keys(domain);
     let buyer_key = Arc::new(Ed25519SigningKey::generate().unwrap());
     let directories = Arc::new(InMemoryKeyDirectorySource::new());
@@ -94,6 +103,11 @@ pub async fn edge(site: &Site, domain: &str) -> EdgeSite {
         consent: Some(consent_config(&site.template, policy, vec![9u8; 32])),
         threads: None,
         quote_validity: chrono::Duration::days(7),
+        action_ledger: None,
+        audit: None,
+        beacon: None,
+        limits: None,
+        public_agent,
     })
     .unwrap();
     let router = site_router(&edge.edge, site.host.clone(), &site.base.config.name);

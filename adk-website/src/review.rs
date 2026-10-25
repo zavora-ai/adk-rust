@@ -20,6 +20,7 @@ use adk_kernel::charter::{
     PromotionEligibility, ladder_rank,
 };
 use adk_payments::wallet::CommerceOutcomes;
+use adk_site::updates::{UpdateEngine, UpdateReview};
 use awp_types::Budget;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -135,6 +136,9 @@ pub struct WeeklyReview {
     pub alarms: Vec<Alarm>,
     /// Questions for the owner.
     pub questions: Vec<String>,
+    /// The constant-update engine's counts and costs (spec 3.5 §7.8.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updates: Option<UpdateReview>,
 }
 
 /// The ISO 4217 minor-unit exponent of `currency`.
@@ -217,6 +221,23 @@ impl WeeklyReview {
                 }
             }
         };
+        if let Some(u) = &self.updates {
+            let _ = write!(
+                out,
+                "\n## Updates\n\n- {} updates ({} live, {} released) in {} releases; {} with a model\n\
+                 - {} feed deliveries, {} held whole; {} items held alone\n\
+                 - Cost {:.2} per thousand updates\n",
+                u.updates,
+                u.live_updates,
+                u.release_updates,
+                u.releases,
+                u.updates_with_model,
+                u.deliveries,
+                u.held_deliveries,
+                u.held_items,
+                u.cost_per_thousand_updates_micros / 1_000_000.0
+            );
+        }
         list(&mut out, "Experiments", self.experiments.clone());
         list(
             &mut out,
@@ -297,6 +318,7 @@ pub struct ReviewComposer {
     alarms: Option<Arc<AlarmRouter>>,
     audit: Option<AuditTrail>,
     experiments: Option<Arc<ExperimentRunner>>,
+    updates: Option<Arc<UpdateEngine>>,
 }
 
 impl ReviewComposer {
@@ -318,6 +340,7 @@ impl ReviewComposer {
             alarms: None,
             audit: None,
             experiments: None,
+            updates: None,
         }
     }
 
@@ -361,6 +384,13 @@ impl ReviewComposer {
     #[must_use]
     pub fn with_experiments(mut self, runner: Arc<ExperimentRunner>) -> Self {
         self.experiments = Some(runner);
+        self
+    }
+
+    /// Reports the constant-update engine's counts and costs (spec 3.5 §7.8.3).
+    #[must_use]
+    pub fn with_updates(mut self, engine: Arc<UpdateEngine>) -> Self {
+        self.updates = Some(engine);
         self
     }
 
@@ -507,6 +537,10 @@ impl ReviewComposer {
             demotions,
             alarms,
             questions: inputs.questions,
+            updates: match &self.updates {
+                Some(engine) => Some(engine.review().await),
+                None => None,
+            },
         })
     }
 

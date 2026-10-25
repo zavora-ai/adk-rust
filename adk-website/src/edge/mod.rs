@@ -21,11 +21,16 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use adk_awp::v2::capability::{CapabilityHandler, CapabilityRegistry};
-use adk_core::{AdkError, ApprovalService, Result, Tool, ToolContext, ToolEffect, Url};
+use adk_core::audit_log::AuditTrail;
+use adk_core::{
+    ActionLedger, AdkError, Agent, ApprovalService, Llm, Result, Tool, ToolContext, ToolEffect, Url,
+};
+use adk_harness::website::SitePartitions;
 use adk_harness::website::SiteRuntime;
+use adk_kernel::Partitions;
 use adk_server::awp::{
-    AwpEdge, ConsentConfig, ConsentPolicy, EdgeKeys, EdgeStatusControl, EdgeStores, EdgeTiers,
-    SignalEmitter, SiteSearch, ThreadSink,
+    AwpEdge, BeaconStore, ConsentConfig, ConsentPolicy, EdgeKeys, EdgeLimits, EdgeStatusControl,
+    EdgeStores, EdgeTiers, PublicTools, SignalEmitter, SiteSearch, ThreadSink,
 };
 use adk_site::host::SiteHost;
 use async_trait::async_trait;
@@ -41,7 +46,7 @@ use self::handlers::{
 };
 use crate::incident::{InMemoryStatusBoard, StatusRecord, StatusSink};
 use crate::kinds::KindTemplate;
-use crate::team::AgentRole;
+use crate::team::{AgentRole, SiteTeam};
 
 /// The capabilities whose handler is a form (spec 3.5 §7.16 `contact`).
 const FORMS: &[&str] = &[
@@ -86,6 +91,92 @@ pub struct SiteEdgeParts {
     pub threads: Option<Arc<dyn ThreadSink>>,
     /// How long a quote keeps its price (A-I25).
     pub quote_validity: Duration,
+    /// The action ledger non-idempotent calls run exactly once through (A-I7), such as
+    /// `measurement::MeteredActionLedger`.
+    pub action_ledger: Option<Arc<dyn ActionLedger>>,
+    /// Where the edge's audit records go, such as through `measurement::EdgeMeter`.
+    pub audit: Option<AuditTrail>,
+    /// Where the beacon counts; in memory without one.
+    pub beacon: Option<Arc<dyn BeaconStore>>,
+    /// The edge's rate limits; the edge's defaults without them.
+    pub limits: Option<EdgeLimits>,
+    /// The public agent the chat and A2A conversation run, such as [`concierge`]; none
+    /// without one.
+    pub public_agent: Option<PublicAgentFactory>,
+}
+
+/// Builds the public agent over the edge's own tools.
+pub type PublicAgentFactory = Box<dyn FnOnce(&PublicTools) -> Arc<dyn Agent> + Send>;
+
+/// The Concierge over the edge's public tools (spec 3.5 §7.10, §7.19, A-I2, A-I3): the
+/// website preset in the site's public partition with the kind's instruction, and exactly the
+/// tools the edge's public policy admits — the declared capabilities, `reply_in_thread` and
+/// the edge's `emit_signal`, which files signals through the kernel's sink. A declared
+/// `search_site` capability is the site's search; the edge's own one is left out so no two
+/// tools share the name.
+///
+/// The harness's `website_public` kit is not used: its own `search_site` and `emit_signal`
+/// are not the edge's, so the edge's public policy would refuse them. The edge's tools are
+/// classed as the website preset classes the kit's, so the manifest decides them: the
+/// harness's `PublicPolicy` admits only the public tools, and the edge's governed path holds
+/// the calls its manifest holds.
+pub fn concierge(
+    team: &SiteTeam,
+    partitions: &SitePartitions,
+    table: Partitions,
+    model: Arc<dyn Llm>,
+    workspace: impl Into<std::path::PathBuf>,
+) -> PublicAgentFactory {
+    let instruction = match team.public_instruction() {
+        "" => AgentRole::Concierge.prompt().to_string(),
+        kind => format!("{}\n\n{kind}", AgentRole::Concierge.prompt()),
+    };
+    let partition = partitions.public().clone();
+    let workspace = workspace.into();
+    Box::new(move |tools: &PublicTools| {
+        let declared_search = tools.capabilities.iter().any(|tool| tool.name() == "search_site");
+        let mut chosen: Vec<Arc<dyn Tool>> = tools.capabilities.clone();
+        if !declared_search {
+            chosen.push(tools.search_site.clone());
+        }
+        chosen.push(tools.reply_in_thread.clone());
+        chosen.push(tools.emit_signal.clone());
+        // The manifest decides (spec 3.5 §7.19 "Manifest policy"): the public policy admits
+        // only these tools, and the edge's governed path holds what the manifest holds.
+        let policy = tools
+            .capabilities
+            .iter()
+            .fold(adk_harness::website::PublicPolicy::new(), |policy, tool| {
+                policy.with_capability(tool.name(), false)
+            });
+        let mut builder = adk_harness::HarnessAgent::builder(AgentRole::Concierge.as_str())
+            .model(model.clone())
+            .workspace(adk_devtools::Workspace::new(&workspace))
+            .preset(adk_harness::Preset::Website)
+            .partition(partition, table)
+            .tool_classes(Arc::new(EdgeToolClasses {
+                origins: chosen.iter().map(|tool| tool.origin().to_string()).collect(),
+            }))
+            .add_operator_policy(Arc::new(policy))
+            .without_todos()
+            .instruction(instruction.clone());
+        for tool in &chosen {
+            builder = builder.tool(tool.clone());
+        }
+        match builder.build() {
+            Ok(agent) => Arc::new(agent) as Arc<dyn Agent>,
+            Err(error) => {
+                tracing::error!(error = %error, "the Concierge did not build; a plain agent answers");
+                let mut fallback = adk_agent::LlmAgentBuilder::new(AgentRole::Concierge.as_str())
+                    .model(model)
+                    .instruction(instruction);
+                for tool in chosen {
+                    fallback = fallback.tool(tool);
+                }
+                Arc::new(fallback.build().expect("an LlmAgent with a model builds"))
+            }
+        }
+    })
 }
 
 /// A site's edge and its handles (spec 3.5 §7.9).
@@ -208,6 +299,21 @@ impl SiteEdge {
         if let Some(threads) = parts.threads {
             builder = builder.threads(threads);
         }
+        if let Some(ledger) = parts.action_ledger {
+            builder = builder.action_ledger(ledger);
+        }
+        if let Some(audit) = parts.audit {
+            builder = builder.audit(audit);
+        }
+        if let Some(beacon) = parts.beacon {
+            builder = builder.beacon_store(beacon);
+        }
+        if let Some(limits) = parts.limits {
+            builder = builder.limits(limits);
+        }
+        if let Some(agent) = parts.public_agent {
+            builder = builder.public_agent(agent);
+        }
         Ok(Self {
             edge: builder.build()?,
             quotes,
@@ -304,6 +410,20 @@ pub fn site_router(edge: &AwpEdge, host: Arc<dyn SiteHost>, name: &str) -> axum:
         let (host, name) = (host.clone(), name.clone());
         async move { content(host.as_ref(), &name, uri.path()).await }
     })
+}
+
+/// Classes the edge's public tools as `adk-harness`' `WebsiteClasses` classes the public
+/// kit's: the public partition's manifest policy is the one policy that decides them (spec
+/// 3.5 §7.10 "Mode").
+#[derive(Debug)]
+struct EdgeToolClasses {
+    origins: std::collections::BTreeSet<String>,
+}
+
+impl adk_harness::OriginClasses for EdgeToolClasses {
+    fn class_of(&self, source: &str, _tool: &str) -> Option<adk_harness::ToolKind> {
+        self.origins.contains(source).then_some(adk_harness::ToolKind::Todo)
+    }
 }
 
 /// The site's status on the edge (spec 3.5 §7.5, §7.20, A-I11): an incident or a read-only

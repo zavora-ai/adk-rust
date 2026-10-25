@@ -78,9 +78,14 @@ async fn new(args: &[String]) -> Result<(), String> {
     for file in written {
         println!("  {file}");
     }
+    let site = dir.display();
     println!(
-        "Next: start the kernel and the edge, enter the setup code from the logs on your phone, \
-         and onboarding begins."
+        "Next, at a terminal, with the root key kept off the server (spec 3.5 D-11):\n\
+         1. adk-rust awp keys rotate --site {site} --new-root-key <root key file>\n\
+         2. adk-rust awp keys delegate --site {site} --root-key <root key file> --scope release\n\
+         3. adk-rust awp keys delegate --site {site} --root-key <root key file> --scope card,receipt\n\
+         4. adk-website start {site}, then enter the setup code from the logs on your phone; \
+         onboarding begins. The site publishes nothing until step 2 is done."
     );
     Ok(())
 }
@@ -128,51 +133,49 @@ fn address(text: &str) -> Result<SocketAddr, String> {
 /// Waits for Ctrl-C, then stops the kernel and the edge.
 async fn run_until_stopped(served: Served) -> Result<(), String> {
     eprintln!(
-        "Serving {} site(s): edge on http://{}, kernel on http://{}.\nSetup code: {} (expires {}). \
-         Enter it on the device that will own the site.",
+        "Serving {} site(s): edge on http://{}, kernel on http://{}.",
         served.sites.len(),
         served.edge_addr,
         served.kernel_addr,
-        served.setup_code.code,
-        served.setup_code.expires_at,
     );
+    match &served.setup_code {
+        Some(code) => eprintln!(
+            "Setup code: {} (expires {}). Enter it on the device that will own the site.",
+            code.code, code.expires_at
+        ),
+        None => eprintln!("The owner's device is paired; no setup code is offered."),
+    }
     tokio::signal::ctrl_c().await.map_err(|e| e.to_string())?;
     served.shutdown().await.map_err(|e| e.to_string())
 }
 
-async fn start(args: &[String]) -> Result<(), String> {
-    let dir = PathBuf::from(args.first().ok_or("start needs a site directory")?);
-    let mut options = ServeOptions {
-        dir,
-        edge: address(EDGE)?,
-        kernel: address(KERNEL)?,
-        edge_url: None,
-        owner: "owner".into(),
-    };
-    for (flag, value) in flags(&args[1..])? {
+/// The options `args` set after the positional argument.
+fn serve_options(dir: PathBuf, args: &[String]) -> Result<ServeOptions, String> {
+    let mut options = ServeOptions::new(dir, "owner");
+    options.edge = address(EDGE)?;
+    options.kernel = address(KERNEL)?;
+    for (flag, value) in flags(args)? {
         match flag {
             "--edge" => options.edge = address(value)?,
             "--kernel" => options.kernel = address(value)?,
-            "--edge-url" => options.edge_url = Some(value.to_string()),
-            "--owner" => options.owner = value.to_string(),
+            "--edge-url" => options.site.edge_url = Some(value.to_string()),
+            "--owner" => options.site.owner = value.to_string(),
             other => return Err(format!("unknown option {other}\n{USAGE}")),
         }
     }
+    Ok(options)
+}
+
+async fn start(args: &[String]) -> Result<(), String> {
+    let dir = PathBuf::from(args.first().ok_or("start needs a site directory")?);
+    let options = serve_options(dir, &args[1..])?;
     run_until_stopped(serve(options).await.map_err(|e| e.to_string())?).await
 }
 
 async fn agency(args: &[String]) -> Result<(), String> {
     let file = PathBuf::from(args.first().ok_or("agency needs an agency file")?);
-    let (mut edge, mut kernel, mut owner) = (address(EDGE)?, address(KERNEL)?, "owner".to_string());
-    for (flag, value) in flags(&args[1..])? {
-        match flag {
-            "--edge" => edge = address(value)?,
-            "--kernel" => kernel = address(value)?,
-            "--owner" => owner = value.to_string(),
-            other => return Err(format!("unknown option {other}\n{USAGE}")),
-        }
-    }
-    let served = serve_agency(&file, edge, kernel, &owner).await.map_err(|e| e.to_string())?;
+    let options = serve_options(PathBuf::from("."), &args[1..])?;
+    let served = serve_agency(&file, options).await.map_err(|e| e.to_string())?;
     run_until_stopped(served).await
 }
 
