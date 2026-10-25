@@ -1,0 +1,31 @@
+{
+  "path": "/",
+  "releaseSeq": 1,
+  "kind": "page",
+  "language": "en",
+  "title": "Example Solar",
+  "resource": {
+    "id": "pages/index/en",
+    "summary": "Solar panels for homes and small businesses.",
+    "title": "Example Solar",
+    "url": "https://example.com/"
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "description": "Solar panels and installation in Nairobi.",
+    "inLanguage": "en",
+    "mainEntityOfPage": {
+      "@type": "WebPage",
+      "inLanguage": "en",
+      "name": "Example Solar",
+      "url": "https://example.com/"
+    },
+    "name": "Example Solar",
+    "url": "https://example.com/"
+  },
+  "markdown": "https://example.com/index.md"
+}

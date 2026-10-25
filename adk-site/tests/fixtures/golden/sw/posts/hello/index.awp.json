@@ -1,0 +1,29 @@
+{
+  "path": "/sw/posts/hello/",
+  "releaseSeq": 1,
+  "kind": "post",
+  "language": "sw",
+  "title": "Habari, jua",
+  "resource": {
+    "id": "posts/hello/sw",
+    "publishedAt": "2026-10-01T09:00:00Z",
+    "tags": [
+      "solar"
+    ],
+    "title": "Habari, jua",
+    "url": "https://example.com/sw/posts/hello/"
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    "datePublished": "2026-10-01T09:00:00Z",
+    "headline": "Habari, jua",
+    "inLanguage": "sw",
+    "name": "Habari, jua",
+    "url": "https://example.com/sw/posts/hello/"
+  },
+  "markdown": "https://example.com/sw/posts/hello/index.md"
+}

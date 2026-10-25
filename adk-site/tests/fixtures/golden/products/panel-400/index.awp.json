@@ -1,0 +1,44 @@
+{
+  "path": "/products/panel-400/",
+  "releaseSeq": 1,
+  "kind": "product",
+  "language": "en",
+  "title": "Panel 400 W",
+  "resource": {
+    "currency": "KES",
+    "id": "products/panel-400/en",
+    "price": 25000,
+    "sku": "P-400",
+    "stock": {
+      "asOf": "2026-10-20T08:00:00Z",
+      "capability": "check_availability",
+      "value": 12
+    },
+    "summary": "A 400 W monocrystalline panel.",
+    "title": "Panel 400 W",
+    "updatedAt": "2026-10-20T08:00:00Z",
+    "url": "https://example.com/products/panel-400/"
+  },
+  "capabilities": [
+    "check_availability",
+    "get_quote",
+    "place_order",
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    "description": "A 400 W monocrystalline panel.",
+    "inLanguage": "en",
+    "name": "Panel 400 W",
+    "offers": {
+      "@type": "Offer",
+      "price": "25000",
+      "priceCurrency": "KES",
+      "url": "https://example.com/products/panel-400/"
+    },
+    "sku": "P-400",
+    "url": "https://example.com/products/panel-400/"
+  },
+  "markdown": "https://example.com/products/panel-400/index.md"
+}

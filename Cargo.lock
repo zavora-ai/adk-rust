@@ -1259,6 +1259,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-site"
+version = "3.0.0"
+dependencies = [
+ "adk-auth",
+ "adk-core",
+ "async-trait",
+ "awp-types",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "hex",
+ "image",
+ "minijinja",
+ "proptest",
+ "pulldown-cmark",
+ "scraper",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+]
+
+[[package]]
 name = "adk-skill"
 version = "3.0.0"
 dependencies = [
@@ -14672,8 +14700,15 @@ checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
 dependencies = [
  "bitflags 2.13.1",
  "memchr",
+ "pulldown-cmark-escape",
  "unicase",
 ]
+
+[[package]]
+name = "pulldown-cmark-escape"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "pulldown-cmark-to-cmark"

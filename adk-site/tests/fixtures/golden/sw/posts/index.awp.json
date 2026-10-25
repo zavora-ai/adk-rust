@@ -1,0 +1,30 @@
+{
+  "path": "/sw/posts/",
+  "releaseSeq": 1,
+  "kind": "collection",
+  "language": "sw",
+  "title": "Machapisho",
+  "resource": {
+    "items": [
+      {
+        "date": "2026-10-01",
+        "summary": null,
+        "title": "Habari, jua",
+        "url": "/sw/posts/hello/"
+      }
+    ],
+    "page": 1,
+    "pages": 1
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    "inLanguage": "sw",
+    "name": "Machapisho",
+    "url": "https://example.com/sw/posts/"
+  },
+  "markdown": "https://example.com/sw/posts/index.md"
+}

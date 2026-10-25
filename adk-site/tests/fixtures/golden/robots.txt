@@ -1,0 +1,5 @@
+User-agent: *
+Content-Usage: train-ai=n, search=y
+Allow: /
+
+Sitemap: https://example.com/sitemap.xml

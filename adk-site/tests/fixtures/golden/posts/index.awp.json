@@ -1,0 +1,30 @@
+{
+  "path": "/posts/",
+  "releaseSeq": 1,
+  "kind": "collection",
+  "language": "en",
+  "title": "Posts",
+  "resource": {
+    "items": [
+      {
+        "date": "2026-10-01",
+        "summary": "Why we started.",
+        "title": "Hello, sun",
+        "url": "/posts/hello/"
+      }
+    ],
+    "page": 1,
+    "pages": 1
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    "inLanguage": "en",
+    "name": "Posts",
+    "url": "https://example.com/posts/"
+  },
+  "markdown": "https://example.com/posts/index.md"
+}
