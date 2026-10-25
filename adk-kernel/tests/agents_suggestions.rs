@@ -210,7 +210,7 @@ async fn the_ceiling_is_checked_when_made_and_again_when_approved() {
         .filter_map(|content| {
             content.parts.first().and_then(|part| part.text().map(str::to_string))
         })
-        .last()
+        .next_back()
         .unwrap();
     assert!(
         notice.contains(

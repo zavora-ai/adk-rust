@@ -419,9 +419,9 @@ async fn removing_ends_work_routines_decisions_and_follow_ups() {
     let remove = AgentAction::Remove { id: "finance".into(), expected_version: finance.version };
     let preview = kernel.agents().preview(&local(), &remove).await.unwrap();
     let named = preview.ended.clone().unwrap();
-    assert_eq!(named.work, [work.clone()]);
-    assert_eq!(named.routines, [routine.clone()]);
-    assert_eq!(named.decisions, [waiting.clone()]);
+    assert_eq!(named.work, std::slice::from_ref(&work));
+    assert_eq!(named.routines, std::slice::from_ref(&routine));
+    assert_eq!(named.decisions, std::slice::from_ref(&waiting));
     assert_eq!(named.follow_ups, ["follow-up-1"]);
 
     let Ok(AgentOutcome::Removed { agent, ended }) =
