@@ -6,6 +6,8 @@ import { labels, words } from "../labels";
 import { enterNeverDecides, originOf } from "../origin";
 import { visible, visibleJson } from "../safe";
 import { TAKE_OVER_TOOL } from "../takeOver";
+import { AgentCard } from "../agents/AgentCard";
+import type { AgentCardView } from "../agents/types";
 import { Avatar } from "./Avatar";
 import { CallView } from "./CallView";
 import { DECIDED_CLASS, DecidedLine } from "./DecidedLine";
@@ -150,7 +152,13 @@ export function DecisionCard({
     </header>
   );
   const summary = card.summary ? <p className="decision-note">{visible(card.summary)}</p> : null;
-  const call = <CallView call={card.call} expanded={expanded} onExpand={() => setExpanded(true)} />;
+  // A suggested agent shows its definition in place of the call (spec 3.3 §5.7).
+  const addsAgent = (card as Card & { addsAgent?: AgentCardView | null }).addsAgent;
+  const call = addsAgent ? (
+    <AgentCard view={addsAgent} decisionId={card.id} expanded={expanded} onExpand={() => setExpanded(true)} decided={decided} />
+  ) : (
+    <CallView call={card.call} expanded={expanded} onExpand={() => setExpanded(true)} />
+  );
   const timeline = (
     <ol className="timeline" aria-label={labels.howItGotHere}>
       {card.timeline.map((step, index) => (

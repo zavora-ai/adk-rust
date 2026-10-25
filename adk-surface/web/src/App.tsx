@@ -3,6 +3,8 @@ import type { Command, DecisionCard, Origin } from "./generated/api";
 import type { HomeClient } from "./client";
 import { ApiError, problemText } from "./client";
 import type { TakeOverSeam } from "./components/DecisionCard";
+import { AgentsScreen } from "./agents/AgentsScreen";
+import { agentsPlaceOf } from "./agents/route";
 import { Header } from "./components/Header";
 import { Developer } from "./developer/Developer";
 import { labels } from "./labels";
@@ -54,8 +56,13 @@ export function App({
   useEffect(() => writeStored(FOLLOWED_KEY, followed), [followed]);
 
   useEffect(() => applyTheme(theme), [theme]);
+  // The agents screen the address names: New agent or one agent's settings (spec 3.3 §5.7).
+  const [agentsPlace, setAgentsPlace] = useState(() => agentsPlaceOf(window.location));
   useEffect(() => {
-    const back = () => setSection(sectionOf(window.location.pathname));
+    const back = () => {
+      setSection(sectionOf(window.location.pathname));
+      setAgentsPlace(agentsPlaceOf(window.location));
+    };
     window.addEventListener("popstate", back);
     return () => window.removeEventListener("popstate", back);
   }, []);
@@ -66,6 +73,9 @@ export function App({
   const status = usePoll(() => client.status(conversation.current));
   const agents = usePoll(() => client.agents());
   const decisions = usePoll(() => client.decisions());
+  // Whether the roster ends with New agent, and the primary agent a description goes to.
+  const roster = usePoll(async () => (client.agentsWithPrimary ? await client.agentsWithPrimary() : undefined), 10_000);
+  const agentsSeam = useMemo(() => client.agentsSeam?.(), [client]);
   // "While you were away" and each area's settings, read once for every section that shows
   // them, so Today, the morning briefing and the status line never disagree (spec 3.3 §5.1).
   const away = usePoll(async () => (seams.whileAway ? await seams.whileAway.read() : undefined), 10_000);
@@ -262,6 +272,7 @@ export function App({
             }}
             focusDecision={focusDecision}
             onOpenDecision={openDecision}
+            canAddAgents={roster.value?.canAdd ?? false}
           />
         )}
         {section === "today" && (
@@ -301,6 +312,34 @@ export function App({
           />
         )}
         {section === "developer" && <Developer client={client} sessionId={session} />}
+        {section === "agents" && agentsSeam && agentsPlace && (
+          <AgentsScreen
+            place={agentsPlace}
+            seam={agentsSeam}
+            rows={rows}
+            primary={
+              roster.value?.primary
+                ? { name: roster.value.primary.name, mode: status.value?.mode ?? undefined }
+                : undefined
+            }
+            decision={(id) => client.decision(id)}
+            onDescribe={async (text, origin) => {
+              // Describe it: a new thread with the primary agent, holding the request (§5.7).
+              const primary = roster.value?.primary?.name ?? rows.find((row) => !row.added)?.agent.name ?? "adk-rust";
+              const thread = crypto.randomUUID();
+              await client.command({ type: "newThread", agent: primary, sessionId: thread, text }, origin);
+              follow(primary, thread);
+              select(primary);
+              navigate("threads");
+            }}
+            onAddRoutine={() => navigate("today")}
+            onChanged={refresh}
+            onDone={(note) => {
+              if (note) setProblem(note);
+              navigate("threads");
+            }}
+          />
+        )}
       </div>
     </div>
   );

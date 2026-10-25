@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { AnswerOption, CommandOutcome, DecisionCard } from "../generated/api";
+import { AgentCard } from "../agents/AgentCard";
 import { Avatar } from "../components/Avatar";
 import { DECIDED_CLASS, DecidedLine } from "../components/DecidedLine";
 import { PhoneIcon as Icon } from "./PhoneIcon";
@@ -133,6 +134,8 @@ export function Decide({
 
   const decided = card.status === "decided";
   const shownInFull = !card.call.truncated || expanded;
+  // A suggested agent shows its definition in place of the command (spec 3.3 §5.7).
+  const addsAgent = card.addsAgent;
 
   function settle(outcome: CommandOutcome) {
     if (outcome.type === "answered" || outcome.type === "alreadyDecided") {
@@ -183,12 +186,14 @@ export function Decide({
       </Pill>
     </header>
   );
-  const lede = (
+  const lede = addsAgent ? null : (
     <p className="phone-lede">
       {phoneLabels.wantsToRun(visible(card.agent.displayName))} {card.reversibilityText}.
     </p>
   );
-  const command = (
+  const command = addsAgent ? (
+    <AgentCard view={addsAgent} decisionId={card.id} expanded={expanded} onExpand={() => setExpanded(true)} decided={decided} changeable={false} />
+  ) : (
     <figure className="phone-command">
       <figcaption>
         <i aria-hidden="true" className="phone-lights" /> {phoneLabels.theExactCommand}

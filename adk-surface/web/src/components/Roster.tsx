@@ -1,4 +1,5 @@
 import type { AgentRow } from "../generated/api";
+import { RosterFoot, RowSettings } from "../agents/RosterFoot";
 import { labels } from "../labels";
 import { Avatar } from "./Avatar";
 
@@ -7,10 +8,13 @@ export function Roster({
   agents,
   selected,
   onSelect,
+  canAdd = false,
 }: {
   agents: AgentRow[];
   selected?: string;
   onSelect: (name: string) => void;
+  /** The kernel keeps agents a person adds: **New agent** ends the list (spec 3.3 §5.7). */
+  canAdd?: boolean;
 }) {
   return (
     <nav className="roster" aria-label={labels.agents}>
@@ -31,8 +35,10 @@ export function Roster({
                 <span className={`status status-${row.status}`}>{row.statusText}</span>
               </span>
             </button>
+            {canAdd && <RowSettings row={row} />}
           </li>
         ))}
+        <RosterFoot rows={agents} canAdd={canAdd} />
       </ul>
     </nav>
   );

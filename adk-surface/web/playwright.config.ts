@@ -107,6 +107,17 @@ const surfaces: Surface[] = [
       },
     },
   },
+  {
+    // Agents a person adds over `adk-rust up` with a scripted model (`e2e/agents-kernel.sh`),
+    // whose first turn suggests one (spec 3.3 §5.7).
+    name: "agents",
+    prefix: "AGENTS",
+    command: "bash adk-surface/web/e2e/agents-kernel.sh",
+    // 8792, 8796, 8797, 8799 and 8800 are taken.
+    port: 8801,
+    testMatch: ["agents.spec.ts"],
+    ready: "/ui/",
+  },
 ];
 
 /** One second of a 440 Hz tone, 16 kHz mono PCM16, for Chromium's fake microphone. */

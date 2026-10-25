@@ -1,0 +1,372 @@
+/*
+ * Agents a person adds (spec 3.3 §5.7): the New agent screen, an agent's settings, the
+ * definition on a decision card and the roster's foot. Colours come from the §9 tokens only,
+ * so every screen exists in light and dark.
+ */
+@import "../styles/tokens.css";
+
+.agents-screen,
+.agent-settings-screen {
+  display: grid;
+  gap: 18px;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 28px 24px 48px;
+}
+
+.agents-title {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.agent-tabs {
+  justify-self: start;
+}
+
+.agent-tabs .tab {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.agent-tabs .tab[aria-selected="true"] {
+  background: var(--tab-active);
+  box-shadow: var(--tab-shadow);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.agent-describe {
+  display: grid;
+  gap: 10px;
+  max-width: 720px;
+}
+
+.agent-set-up {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr);
+  align-items: start;
+  gap: 20px;
+}
+
+@media (max-width: 860px) {
+  .agent-set-up {
+    grid-template-columns: 1fr;
+  }
+}
+
+.agent-side {
+  display: grid;
+  gap: 14px;
+  position: sticky;
+  top: 16px;
+}
+
+.agent-form {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.agent-field {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-label {
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.agent-subhead {
+  margin: 6px 0 0;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.agent-hint {
+  margin: 0;
+  color: var(--label);
+  font-size: 13.5px;
+}
+
+.agent-input {
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+}
+
+.agent-input:focus-visible,
+.agent-colour:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.agent-input-short {
+  max-width: 160px;
+}
+
+.agent-textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.agent-segmented {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  justify-self: start;
+  width: 100%;
+  max-width: 560px;
+}
+
+.agent-segmented .segment {
+  cursor: pointer;
+}
+
+.agent-segmented .segment:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.agent-colours {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.agent-colour {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--card);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--border);
+  cursor: pointer;
+}
+
+.agent-colour[aria-checked="true"] {
+  box-shadow: 0 0 0 2px var(--text);
+}
+
+.agent-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.agent-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+.agent-can-do {
+  display: grid;
+  gap: 10px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+}
+
+.agent-can-do-heading {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.agent-abilities {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+}
+
+.agent-risk {
+  margin: 0;
+}
+
+.agent-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-danger {
+  justify-content: flex-end;
+}
+
+.agent-section {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-copy-rule {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-routine {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-was-now {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.agent-was-now-row {
+  display: grid;
+  gap: 2px;
+}
+
+.agent-was-now dt {
+  color: var(--text-2);
+  font-size: 13.5px;
+}
+
+.agent-was-now dd {
+  margin: 0;
+}
+
+.agent-remove {
+  display: grid;
+  gap: 10px;
+  border-color: var(--decision-border);
+  background: var(--decision);
+}
+
+.agent-settings-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.agent-settings-head p {
+  margin: 4px 0 0;
+}
+
+.agents-back {
+  justify-self: start;
+  margin: 20px 24px 0;
+  color: var(--text-2);
+}
+
+/* The definition on a decision card, in place of the call. */
+.agent-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--decision-border);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+}
+
+.agent-card-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-card-lines {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 0;
+}
+
+.agent-card-line {
+  display: contents;
+}
+
+.agent-card-line dt {
+  color: var(--text-2);
+}
+
+.agent-card-line dd {
+  margin: 0;
+}
+
+.agent-card-instructions {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.agent-card-instructions blockquote {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--border);
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.agent-change-first {
+  justify-self: start;
+}
+
+/* The roster's foot. */
+.roster-foot {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.roster-new-mark {
+  --agent: var(--label);
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-2);
+}
+
+/* Over the row's right edge, so a hidden link takes no room in the list; the row's text makes
+   way for it while it shows. */
+li:has(> .roster-settings) {
+  position: relative;
+}
+
+.roster .roster-settings {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  color: var(--text-2);
+  font-size: 13px;
+  text-decoration: none;
+  transform: translateY(-50%);
+  visibility: hidden;
+}
+
+li:is(:hover, :focus-within) > .roster-settings {
+  visibility: visible;
+}
+
+li:is(:hover, :focus-within):has(> .roster-settings) > .roster-row {
+  padding-right: 68px;
+}
+
+li:has(> .roster-settings) .roster-text {
+  min-width: 0;
+}
+
+li:has(> .roster-settings) .roster-text > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
