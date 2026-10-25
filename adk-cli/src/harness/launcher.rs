@@ -684,6 +684,9 @@ impl HarnessLauncher {
             shared.sessions.clone(),
             shared.console.clone(),
         );
+        // Sessions that ended without saving are distilled in the background (spec 3.1 §7.33
+        // fix 9).
+        let mut catch_up = super::catch_up::CatchUp::start(&shared);
         if shared.has_held_calls().await? {
             shared.console.print("Resuming calls held in this session…\n");
             report(&shared.turn(None, true).await?);
@@ -691,6 +694,7 @@ impl HarnessLauncher {
 
         let console = shared.console.clone();
         loop {
+            catch_up.print_if_done(&console).await;
             let line = match console.read_line("\x1b[36mYou >\x1b[0m ").await {
                 ConsoleInput::Line(line) => line,
                 ConsoleInput::Interrupted => {
@@ -738,6 +742,7 @@ impl HarnessLauncher {
             // Workspace servers start with the first run, so their resources appear now.
             shared.refresh_mentions().await;
         }
+        catch_up.finish(&console).await;
         if memory_on(&shared.harness()) {
             println!("Saving what this session taught to long-term memory…");
         }

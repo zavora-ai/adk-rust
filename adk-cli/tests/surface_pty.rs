@@ -1074,6 +1074,63 @@ fn the_terminal_in_process_keeps_long_term_memory() {
     assert!(text(&listed).contains("Use pnpm, not npm"), "{}", text(&listed));
 }
 
+/// §7.33 fix 9 in the terminal in process: a session killed mid-run is distilled at the next
+/// start in the background, and the terminal says so when the catch-up finishes, with the
+/// fact `Assumed`; a session the person leaves is distilled as the terminal ends, with the
+/// quoted fact `Known`, as the REPL does. On `main` neither session is distilled.
+#[cfg(feature = "persist")]
+#[test]
+fn the_terminal_in_process_catches_up_on_a_killed_session_and_saves_on_leaving() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let dir = ws.path().display().to_string();
+    let inline = |script: &str| {
+        let args = ["--ui", "inline", "--dir", &dir, "--mode", "ask", "--model-script", script];
+        Terminal::spawn_sized(&args, home.path(), ws.path(), ROWS, COLS)
+    };
+    let mut killed = inline(r#"[{"text": "Noted."}]"#);
+    expect_screen(&killed, "Type a message");
+    killed.send("From now on use pnpm, not npm, here.\r");
+    expect_screen(&killed, "Noted.");
+    // Dropping the terminal kills the process: nothing distils the session.
+    drop(killed);
+    common::backdate_sessions(home.path(), chrono::Duration::hours(1));
+
+    let facts = |text: &str, quote: &str| {
+        serde_json::json!({ "facts": [{ "text": text, "kind": "preference",
+            "source": "user_stated", "quote": quote, "confidence": 0.9, "supersedes": "" }] })
+        .to_string()
+    };
+    // The catch-up's answer, the reply, then the answer of the distillation on leaving.
+    let script = serde_json::json!([
+        { "text": facts("Use pnpm, not npm, to add dependencies", "use pnpm, not npm") },
+        { "text": "Will do." },
+        { "text": facts("Keep commits small", "keep commits small") },
+    ])
+    .to_string();
+    let mut next = inline(&script);
+    expect_screen(
+        &next,
+        "1 fact from 1 earlier session that ended without saving was added as assumed",
+    );
+    next.send("Please keep commits small.\r");
+    expect_screen(&next, "Will do.");
+    next.send("\x03");
+    let (code, output) = wait_exit(next);
+    assert_eq!(code, Some(0), "{output}");
+    assert!(output.contains("Saving what this session taught to long-term memory"), "{output}");
+
+    // Each fact is listed as a line of its id and status, then its text.
+    let listed = text(&run(&["memory", "list", "--dir", &dir], home.path(), ws.path()));
+    let lines: Vec<&str> = listed.lines().collect();
+    let status_of = |needle: &str| {
+        let at = lines.iter().position(|line| line.contains(needle));
+        lines[at.unwrap_or_else(|| panic!("{needle} in {listed}")) - 1]
+    };
+    assert!(status_of("Use pnpm, not npm").contains("assumed · preference"), "{listed}");
+    assert!(status_of("Keep commits small").contains("known · preference"), "{listed}");
+}
+
 /// `--yes` approves held calls in the terminal as it does in the REPL.
 #[test]
 fn yes_approves_held_calls() {

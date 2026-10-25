@@ -1266,6 +1266,23 @@ fn notices_pass_and_a_problem_stays_until_a_key() {
     assert!(shown(&app, now + ms(300)).is_empty());
 }
 
+/// A line the application sends while the terminal runs (`notices_from`) stays, as the
+/// start's notices do, until the next key.
+#[test]
+fn a_notice_sent_while_the_terminal_runs_stays_until_a_key() {
+    use super::app::NOTICE_TTL;
+
+    let now = Instant::now();
+    let mut app = App::new("adk-rust", SESSION.into());
+    app.update(Update::Notice("2 facts were added".into()), now);
+    let shown = |app: &App, at| {
+        app.visible_notices(at).map(|notice| notice.text.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(shown(&app, now + NOTICE_TTL * 3), ["2 facts were added"]);
+    app.key(key(KeyCode::Char('x')), now + NOTICE_TTL * 3);
+    assert!(shown(&app, now + NOTICE_TTL * 3).is_empty());
+}
+
 /// Tab during an edit or a reason does nothing: the call's arguments or the reason never
 /// become a message to another agent's thread.
 #[test]
