@@ -19,7 +19,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use adk_core::audit_log::{AuditTrail, InMemoryAuditRecorder};
+use adk_core::audit_log::{
+    AuditDecision, AuditRecordDraft, AuditRecordKind, AuditTrail, InMemoryAuditRecorder,
+};
 use adk_core::principal::SubjectRef;
 use adk_core::{
     AdkError, ApprovalPolicy, ApproverSelector, ErrorCategory, GovernanceControl,
@@ -34,7 +36,7 @@ use adk_kernel::control::{
 use adk_kernel::pairing::{DeviceScope, InMemoryDeviceStore, Pairing};
 use adk_kernel::proc::{
     Activity, InMemoryLedgerStore, Ledger, LedgerKey, LedgerKind, LedgerSink, LedgerStore,
-    SqliteLedgerStore,
+    SqliteLedgerStore, activity_for_audit,
 };
 use adk_kernel::{
     Kernel, KernelConfig, PartitionId, PartitionMode, ProcessKind, QueueClass, QuietHours, Quotas,
@@ -578,7 +580,11 @@ async fn one_night(plane: &Plane) {
     plane.row(agent(LedgerKind::Process).with_effect("failed")).await;
     plane.row(Activity::new(LedgerKind::Process, "kernel").with_effect("completed")).await;
     plane.row(Activity::new(LedgerKind::Proposal, "kernel").with_effect("proposed")).await;
-    plane.row(Activity::new(LedgerKind::Decided, "code").with_effect("approve")).await;
+    // A person's answer reaches the ledger as its audit record's row, as the harness's
+    // `LedgerAuditTap` writes it.
+    let answer = AuditRecordDraft::new(AuditRecordKind::Approval, "send_email")
+        .decision(AuditDecision::Approved);
+    plane.row(activity_for_audit(&answer).unwrap()).await;
     plane.row(Activity::new(LedgerKind::Observation, "kernel")).await;
     plane.row(agent(LedgerKind::Spend).with_count("micro_usd", 400_000)).await;
     plane.row(agent(LedgerKind::Spend).with_count("micro_usd", 220_000)).await;
@@ -605,6 +611,7 @@ async fn away_counts_spends_links_and_moves_on_once_seen() {
             AwayKind::Question
         ]
     );
+    assert_eq!(page.lines[4].effect.as_deref(), Some("approve"), "the answer says which it was");
     assert_eq!(
         (
             page.counts.done,
