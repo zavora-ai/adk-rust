@@ -165,6 +165,19 @@ export interface ChannelAccount {
   state: "active" | "revoked";
 }
 
+/**
+ * A chat account as the person tells it from another: the name it shows and its account on the
+ * channel, since the name is the account's own choice — "Ana (4242)".
+ */
+export function accountName(account: { account: string; displayName?: string }): string {
+  return account.displayName ? `${account.displayName} (${account.account})` : account.account;
+}
+
+/** A chat channel's name as the person knows it: `telegram` is Telegram. */
+export function channelName(channel: string): string {
+  return channel.charAt(0).toUpperCase() + channel.slice(1);
+}
+
 /** What a device may do, in plain words (spec 3.3 §8): "yes or no, and stop all". */
 export function devicePowers(scopes: DeviceScope[]): string {
   const decide = scopes.includes("decide");

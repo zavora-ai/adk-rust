@@ -194,7 +194,10 @@ Nairobi.
 A stranger who writes to the agents from a chat app gets a code and starts nothing (spec 3.3
 §5.3). **Where you can say yes from** lists who asked and has a field for that code: **Pair**
 claims it as `adk-rust pair accept <code>` does (`POST /kernel/channels/pair`, `operator`
-scope), and the account is listed with **Remove** from then on.
+scope), and the account is listed with **Remove** from then on. Every account, waiting or
+paired, reads as its name and its account on the channel — "Telegram: Ana (4242)" — since the
+name is the account's own choice, and **Pair** confirms the account the kernel answers it
+paired, never the one that asked when the section opened.
 
 ### What is read-only until the kernel serves it
 

@@ -91,7 +91,13 @@ describe("the HTTP client", () => {
                 ],
               }
             : url === "/api/kernel/channels"
-              ? { accounts: [{ id: "c1", channel: "telegram", account: "42", state: "active" }], waiting: [] }
+              ? {
+                  accounts: [
+                    { id: "c1", channel: "telegram", account: "42", state: "active" },
+                    { id: "c2", channel: "telegram", account: "77", displayName: "Ana", state: "active" },
+                  ],
+                  waiting: [],
+                }
               : url === "/api/kernel/pairing"
                 ? { code: "ABCD-2345", expiresAt: "", scopes: ["decide", "read", "stop"] }
                 : {};
@@ -101,7 +107,9 @@ describe("the HTTP client", () => {
     const devices = new HttpClient().devices();
     expect(await devices.list()).toEqual([
       { id: "device:d1", name: "Ana's phone", may: "yes or no, and stop all" },
-      { id: "channel:c1", name: "Telegram", may: "yes once, or no" },
+      // Each paired account by its name and its account, so two on one channel differ.
+      { id: "channel:c1", name: "Telegram: 42", may: "yes once, or no" },
+      { id: "channel:c2", name: "Telegram: Ana (77)", may: "yes once, or no" },
     ]);
     await devices.remove("device:d1");
     await devices.remove("channel:c1");

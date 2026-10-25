@@ -7,7 +7,7 @@ import { Icon } from "../components/Icon";
 import { Pill } from "../components/Pill";
 import { dayMonth, dollars, hhmm, sameDay } from "../format";
 import type { AreaSettings, ChannelWaiting, QuietWindow, StandingRule } from "../kernel";
-import { allows } from "../kernel";
+import { accountName, allows, channelName } from "../kernel";
 import { labels, modes, words } from "../labels";
 import type { Device, MemoryFact, RecordCheck, RecordLine, Seams, TidyUp } from "../seams";
 import { deviceOffset, onThisDevice } from "../away";
@@ -698,16 +698,14 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
             event.preventDefault();
             const entered = chatCode.trim();
             if (!entered || !pairing.accept) return;
-            const asked = waiting.length === 1 ? waiting[0] : undefined;
             setProblem("");
             setPaired("");
             void pairing
               .accept(entered)
-              .then(async () => {
+              .then(async (account) => {
                 setChatCode("");
-                setPaired(
-                  asked ? labels.paired(channelName(asked.channel), asked.displayName ?? asked.account) : labels.chatPaired,
-                );
+                // The account the kernel paired, never a guess from who asked.
+                setPaired(account ? labels.paired(channelName(account.channel), accountName(account)) : labels.chatPaired);
                 setDevices(await pairing.list());
                 setWaiting((await pairing.waiting?.()) ?? []);
               })
@@ -720,7 +718,7 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
           <p className="setting-sub">{labels.pairChatHint}</p>
           {waiting.map((asked) => (
             <p key={asked.id} className="setting-sub">
-              {labels.waitingToPair(channelName(asked.channel), asked.displayName ?? asked.account)}
+              {labels.waitingToPair(channelName(asked.channel), accountName(asked))}
             </p>
           ))}
           <label htmlFor={chatField} className="setting-label">
@@ -750,7 +748,3 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
   );
 }
 
-/** A chat channel's name as the person knows it: `telegram` is Telegram. */
-function channelName(channel: string): string {
-  return channel.charAt(0).toUpperCase() + channel.slice(1);
-}

@@ -33,7 +33,7 @@ import type {
   StandingRule,
   WakeSet,
 } from "./kernel";
-import { devicePowers } from "./kernel";
+import { accountName, channelName, devicePowers } from "./kernel";
 import { labels } from "./labels";
 import type { DevicesSeam, LimitsSeam, WhileAwaySeam } from "./seams";
 import { parseSse } from "./sse";
@@ -333,7 +333,7 @@ export class HttpClient implements HomeClient {
             .filter((account) => account.state === "active")
             .map((account) => ({
               id: `channel:${account.id}`,
-              name: account.channel.charAt(0).toUpperCase() + account.channel.slice(1),
+              name: `${channelName(account.channel)}: ${accountName(account)}`,
               may: labels.yesOnceOrNo,
             })),
         ];
@@ -345,9 +345,8 @@ export class HttpClient implements HomeClient {
       },
       pair: async () => (await this.request<{ code: string }>("/kernel/pairing", { method: "POST", body: "{}" })).code,
       waiting: async () => (await this.optional<{ waiting?: ChannelWaiting[] }>("/kernel/channels"))?.waiting ?? [],
-      accept: async (code: string) => {
-        await this.post("/kernel/channels/pair", { code: code.trim() });
-      },
+      accept: async (code: string) =>
+        (await this.post<{ account?: ChannelAccount } | undefined>("/kernel/channels/pair", { code: code.trim() }))?.account,
     };
   }
 

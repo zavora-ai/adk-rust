@@ -362,16 +362,30 @@ describe("Where you can say yes from", () => {
     const seen = calls();
     render(<App client={new FixtureClient()} seams={fixtureSeams(seen)} initialSection="memory" />);
     const form = await screen.findByRole("form", { name: "Pair a chat account" });
-    expect(within(form).getByText("Telegram: Sam asked to pair.")).toBeTruthy();
+    expect(within(form).getByText("Telegram: Sam (4242) asked to pair.")).toBeTruthy();
     const field = within(form).getByLabelText("The code it was sent");
     await userEvent.type(field, "WRONG-CODE{Enter}");
     expect((await screen.findByRole("alert")).textContent).toContain("that code is wrong");
     await userEvent.clear(field);
     await userEvent.type(field, "ABCD-EFGH-2345");
     await userEvent.click(within(form).getByRole("button", { name: "Pair" }));
-    expect(await within(form).findByText("Telegram: Sam is paired.")).toBeTruthy();
+    expect(await within(form).findByText("Telegram: Sam (4242) is paired.")).toBeTruthy();
     expect(seen.accepted).toEqual(["ABCD-EFGH-2345"]);
-    await waitFor(() => expect(within(form).queryByText("Telegram: Sam asked to pair.")).toBeNull());
+    await waitFor(() => expect(within(form).queryByText("Telegram: Sam (4242) asked to pair.")).toBeNull());
+  });
+
+  // S-I6: the confirmation names the account the kernel paired, never the one that asked when
+  // the section opened, so a stranger's code is not taken for a known person's.
+  it("names the account the kernel paired, whoever was waiting", async () => {
+    const seams = fixtureSeams();
+    seams.devices!.accept = async () => ({ id: "c-carol", channel: "telegram", account: "7777", displayName: "Carol", state: "active" });
+    render(<App client={new FixtureClient()} seams={seams} initialSection="memory" />);
+    const form = await screen.findByRole("form", { name: "Pair a chat account" });
+    expect(within(form).getByText("Telegram: Sam (4242) asked to pair.")).toBeTruthy();
+    await userEvent.type(within(form).getByLabelText("The code it was sent"), "CAROL-CODE");
+    await userEvent.click(within(form).getByRole("button", { name: "Pair" }));
+    expect(await within(form).findByText("Telegram: Carol (7777) is paired.")).toBeTruthy();
+    expect(within(form).queryByText(/Sam \(4242\) is paired/)).toBeNull();
   });
 });
 

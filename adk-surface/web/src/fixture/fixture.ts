@@ -564,6 +564,7 @@ export function fixtureSeams(calls: SeamCalls = { seen: [], records: [], accepte
       accept: async (code) => {
         if (code !== "ABCD-EFGH-2345") throw new ApiError(401, "that code is wrong, used or expired", "kernel.unauthorized");
         calls.accepted.push(code);
+        return { id: "c-sam", channel: "telegram", account: "4242", displayName: "Sam", state: "active" };
       },
     },
     limits: {
