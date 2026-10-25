@@ -726,7 +726,8 @@ impl Workspace {
     /// # Example
     ///
     /// ```rust
-    /// let ws = adk_devtools::Workspace::new("./my-repo");
+    /// let dir = tempfile::tempdir().unwrap();
+    /// let ws = adk_devtools::Workspace::new(dir.path());
     /// assert_eq!(ws.record_key("./src/../src/lib.rs").unwrap(), "src/lib.rs");
     /// assert!(ws.record_key("../outside").is_err());
     /// ```
