@@ -59,6 +59,9 @@ pub struct BusinessContext {
 }
 
 /// A business capability with access level requirements.
+///
+/// `input_schema` and `output_schema` are optional in `business.toml` and carried into the
+/// capability manifest (spec 3.5 §10 X1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BusinessCapability {
     pub name: String,
@@ -66,6 +69,12 @@ pub struct BusinessCapability {
     pub endpoint: String,
     pub method: String,
     pub access_level: TrustLevel,
+    /// Input schema: a schema name or inline JSON Schema text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<String>,
+    /// Output schema: a schema name or inline JSON Schema text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<String>,
 }
 
 /// A business policy describing operational rules.
@@ -255,6 +264,8 @@ mod tests {
             endpoint: "/api/data".to_string(),
             method: "GET".to_string(),
             access_level: TrustLevel::Anonymous,
+            input_schema: None,
+            output_schema: Some("DataResponse".to_string()),
         }];
         ctx.policies = vec![BusinessPolicy {
             name: "privacy".to_string(),
@@ -287,6 +298,30 @@ mod tests {
         ctx.contact = None;
         let json = serde_json::to_string(&ctx).unwrap();
         assert!(!json.contains("contact"));
+    }
+
+    #[test]
+    fn test_capability_schemas_in_toml() {
+        let toml_str = r#"
+site_name = "Shop"
+site_description = "A shop"
+domain = "shop.example.com"
+policies = []
+
+[[capabilities]]
+name = "order"
+description = "Place an order"
+endpoint = "/api/orders"
+method = "POST"
+access_level = "known"
+input_schema = "OrderInput"
+output_schema = "OrderReceipt"
+"#;
+        let ctx: BusinessContext = toml::from_str(toml_str).unwrap();
+        assert_eq!(ctx.capabilities[0].input_schema.as_deref(), Some("OrderInput"));
+        assert_eq!(ctx.capabilities[0].output_schema.as_deref(), Some("OrderReceipt"));
+        let round_trip: BusinessContext = toml::from_str(&toml::to_string(&ctx).unwrap()).unwrap();
+        assert_eq!(round_trip, ctx);
     }
 
     #[test]
