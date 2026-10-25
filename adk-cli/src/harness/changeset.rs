@@ -202,7 +202,7 @@ impl ConsolePrompter {
                 None => format!("[denied] {} {files}", call.tool),
             };
             self.console().print_decision(
-                Some(&call.function_call_id),
+                Some(call.function_call_id.as_str()),
                 &format!("{}\n", terminal_safe(&label)),
             );
         }
