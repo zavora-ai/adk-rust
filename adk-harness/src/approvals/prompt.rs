@@ -38,6 +38,9 @@ pub struct RuleHit {
     pub tool: String,
     /// What the rule matches.
     pub label: String,
+    /// The function call id of the call the rule allowed, so a surface can show the hit
+    /// after the call's own line.
+    pub function_call_id: Option<String>,
 }
 
 impl RuleHit {
@@ -48,7 +51,27 @@ impl RuleHit {
         tool: impl Into<String>,
         label: impl Into<String>,
     ) -> Self {
-        Self { rule_id: rule_id.into(), number, tool: tool.into(), label: label.into() }
+        Self {
+            rule_id: rule_id.into(),
+            number,
+            tool: tool.into(),
+            label: label.into(),
+            function_call_id: None,
+        }
+    }
+
+    /// The hit for the call with function call id `id`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let hit = adk_harness::RuleHit::new("r1", Some(3), "bash", "bash: cargo test …")
+    ///     .with_function_call_id("call-1");
+    /// assert_eq!(hit.function_call_id.as_deref(), Some("call-1"));
+    /// ```
+    pub fn with_function_call_id(mut self, id: impl Into<String>) -> Self {
+        self.function_call_id = Some(id.into());
+        self
     }
 }
 

@@ -1412,12 +1412,14 @@ impl HarnessPolicy {
                     }
                     Err(_) => None,
                 };
-                rule_hit = Some(crate::approvals::RuleHit::new(
+                let mut hit = crate::approvals::RuleHit::new(
                     rule.id.clone(),
                     number,
                     request.tool_name.clone(),
                     rule.label.clone(),
-                ));
+                );
+                hit.function_call_id = call_id.map(str::to_string);
+                rule_hit = Some(hit);
             }
             tracing::info!(
                 tool.name = %request.tool_name,

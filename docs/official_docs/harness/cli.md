@@ -157,6 +157,24 @@ In ask mode every edit and every host command waits for you:
 | `?` | Shows the full call; a call cut for display can be approved only after `?` |
 | Ctrl+C | Denies this call and the rest of the turn, and cancels the run |
 
+Your answer is shown at once, before the call runs, and the call's output follows under a
+header naming the tool and the end of its call id:
+
+```text
+  [y] allow once  [a] always allow…  [n] deny (reason)  [e] edit args  [?] details > y
+
+[approved] bash
+
+[bash 01ab9f]
+running 12 tests
+…
+[tool-response] bash {"command":"cargo test","exit_code":0,…}
+```
+
+A call a standing rule allows shows `[allowed by rule N] …` in the same place. A decision
+taken elsewhere — through `adk-rust approvals` or the server's inbox, for a call the next run
+resumes — is shown when the call's response arrives.
+
 `[a]` appears only when a rule can cover the call. `bash` rules match plain command prefixes
 (`cargo test …`), never a command with `;`, `&&`, pipes, redirections or substitutions, and
 never one starting with `sh`, `bash`, `env`, `sudo` and similar. A rule belongs to you,

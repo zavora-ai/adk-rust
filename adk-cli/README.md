@@ -499,8 +499,10 @@ in `adk_cli::console`, re-exported at the crate root.
 
 The `StreamPrinter` type handles rendering of streamed response parts including
 text, thinking blocks, function calls/responses, inline data, and file data, a held call as
-`[approval needed] <tool> <args> — <reason>`, and an applied decision as `[approved] <tool>`
-or `[denied] <tool>`. It prints
+`[approval needed] <tool> <args> — <reason>`, an applied decision as `[approved] <tool>`
+or `[denied] <tool>` unless a prompter printed it when you answered
+(`StreamPrinter::decision_printed`), and a tool's streamed output under a
+`[<tool> <short call id>]` header. It prints
 terminal control characters other than newline and tab as `\u{..}` escapes, so model or
 tool output cannot inject escape sequences into the terminal; stream errors are printed the
 same way. `StreamPrinter::with_writer` renders to any `std::io::Write` instead of stdout.

@@ -1033,7 +1033,7 @@ pub(crate) async fn drive_turn(
     thinking_mode: ThinkingDisplayMode,
     echo: bool,
 ) -> TurnEnd {
-    let mut printer = StreamPrinter::new(thinking_mode);
+    let mut printer = StreamPrinter::with_writer(thinking_mode, console.writer());
     let mut text_deltas = adk_core::EventTextDeltas::default();
     let mut current_agent = String::new();
     let mut printed_header = false;
@@ -1093,6 +1093,9 @@ pub(crate) async fn drive_turn(
                         let (calls, responses) = call_ids(&evt);
                         for id in &responses {
                             console.call_shown(id);
+                            if console.take_printed_decision(id) {
+                                printer.decision_printed(id);
+                            }
                         }
                         if echo {
                             printer.handle_event(&evt);
@@ -1310,7 +1313,10 @@ pub(crate) fn terminal_safe(text: &str) -> std::borrow::Cow<'_, str> {
 ///
 /// A call held for confirmation is shown as `[approval needed] <tool> <args> — <reason>`,
 /// and the decision applied to a call as `[approved] <tool>` or `[denied] <tool>`
-/// (spec 3.1 §8.1).
+/// (spec 3.1 §8.1), unless a prompter already printed it
+/// ([`decision_printed`](Self::decision_printed)). A tool's streamed output starts with a
+/// `[<tool> <short call id>]` line, so output from calls that run side by side can be told
+/// apart (spec 3.1 §7.33 fix 2a).
 pub struct StreamPrinter<W: Write = io::Stdout> {
     thinking_mode: ThinkingDisplayMode,
     in_think_block: bool,
@@ -1322,6 +1328,12 @@ pub struct StreamPrinter<W: Write = io::Stdout> {
     /// Provider-executed calls and results already shown, by id, so the copy a complete
     /// response repeats is not shown again.
     shown_server_items: HashSet<String>,
+    /// Calls whose decision a prompter printed when the person answered.
+    decisions_printed: HashSet<String>,
+    /// Tool names by function call id, from the call lines shown.
+    call_names: HashMap<String, String>,
+    /// Calls whose streamed output has started.
+    progress_started: HashSet<String>,
     out: W,
 }
 
@@ -1353,8 +1365,38 @@ impl<W: Write> StreamPrinter<W> {
             think_buffer: String::new(),
             hold_reasons: HashMap::new(),
             shown_server_items: HashSet::new(),
+            decisions_printed: HashSet::new(),
+            call_names: HashMap::new(),
+            progress_started: HashSet::new(),
             out,
         }
+    }
+
+    /// Records that a prompter printed the decision for the call `call_id` when the person
+    /// answered, so the call's response does not print it again after the call's output.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_cli::launcher::{StreamPrinter, ThinkingDisplayMode};
+    /// use adk_core::{Content, Event, Part, ToolConfirmationDecision};
+    ///
+    /// let mut printer = StreamPrinter::with_writer(ThinkingDisplayMode::Auto, Vec::new());
+    /// printer.decision_printed("call-1");
+    /// let mut response = Event::new("invocation");
+    /// response.actions.tool_confirmation_decision = Some(ToolConfirmationDecision::Approve);
+    /// response.set_content(Content {
+    ///     role: "function".into(),
+    ///     parts: vec![Part::FunctionResponse {
+    ///         function_response: adk_core::FunctionResponseData::new("bash", serde_json::json!({})),
+    ///         id: Some("call-1".into()),
+    ///         annotations: None,
+    ///     }],
+    /// });
+    /// printer.handle_event(&response);
+    /// ```
+    pub fn decision_printed(&mut self, call_id: &str) {
+        self.decisions_printed.insert(call_id.to_string());
     }
 
     /// Writes `text` with terminal control characters escaped, then flushes.
@@ -1394,6 +1436,20 @@ impl<W: Write> StreamPrinter<W> {
             let text = text.replace('\n', "\n  ");
             self.emit(&format!("\n[hook:{source}] {text}\n"));
         }
+        if event.tool_progress_stream().is_some()
+            && let Some(call_id) = event.provider_metadata.get(adk_core::TOOL_PROGRESS_CALL_ID_KEY)
+            && self.progress_started.insert(call_id.clone())
+        {
+            self.flush_pending_thinking();
+            let tool = self.call_names.get(call_id).map_or("tool", String::as_str);
+            let short = call_id
+                .char_indices()
+                .rev()
+                .nth(5)
+                .map_or(call_id.as_str(), |(i, _)| &call_id[i..]);
+            let header = format!("\n[{tool} {short}]\n");
+            self.emit(&header);
+        }
         let held = event.actions.tool_confirmation.as_ref();
         let decision = event.actions.tool_confirmation_decision;
         let parts = event.llm_response.content.as_ref().map_or(&[][..], |c| c.parts.as_slice());
@@ -1429,7 +1485,10 @@ impl<W: Write> StreamPrinter<W> {
                 // The held call's line below says what the text says, with the call.
                 Part::Text { .. } if held.is_some() => continue,
                 Part::FunctionResponse { function_response, id, .. } => {
-                    if let Some(decision) = decision {
+                    let printed = id.as_ref().is_some_and(|id| self.decisions_printed.remove(id));
+                    if let Some(decision) = decision
+                        && !printed
+                    {
                         self.flush_pending_thinking();
                         let label = match decision {
                             ToolConfirmationDecision::Approve => "approved",
@@ -1489,8 +1548,11 @@ impl<W: Write> StreamPrinter<W> {
                 self.think_buffer.push_str(thinking);
                 self.emit(thinking);
             }
-            Part::FunctionCall { name, args, .. } => {
+            Part::FunctionCall { name, args, id, .. } => {
                 self.flush_pending_thinking();
+                if let Some(id) = id {
+                    self.call_names.insert(id.clone(), name.clone());
+                }
                 self.emit(&format!("\n[tool-call] {name} {args}\n"));
             }
             Part::FunctionResponse { function_response, .. } => {
