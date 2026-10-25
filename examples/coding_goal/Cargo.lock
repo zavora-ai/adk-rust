@@ -61,6 +61,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "tracing",
