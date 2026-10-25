@@ -45,6 +45,8 @@ pub use args::{
 };
 pub use commands::slash_command_entries;
 pub use kernel::KernelSettings;
-pub use launcher::{HarnessEffortRebuild, HarnessLauncher, HarnessRebuild, TurnOutcome};
+pub use launcher::{
+    HarnessCommands, HarnessEffortRebuild, HarnessLauncher, HarnessRebuild, TurnOutcome,
+};
 pub use prompter::ConsolePrompter;
 pub use serve::{BearerTokenExtractor, LoopbackOperatorExtractor, OPERATOR_SCOPE};

@@ -9,15 +9,17 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use adk_cli::harness::{HarnessArgs, OPERATOR_SCOPE};
+use adk_cli::harness::{HarnessArgs, HarnessCommands, OPERATOR_SCOPE};
 use adk_core::{ApprovalPolicy, ApprovalService, ApproverSelector, StoreApprovalService, UserId};
 use adk_harness::{
     ApprovalPrompt, ApprovalPrompter, Harness, HarnessMode, PromptAnswer, ToolKind, TrustDecision,
 };
-use adk_kernel::control::ControlClient;
 use adk_kernel::control::api::AreaView;
+use adk_kernel::control::{CommandInfo, ControlClient};
 use adk_session::{CreateRequest, GetRequest, SessionService};
-use adk_surface::tui::{OutputFormat, TerminalSurface, UiMode, terminal_safe};
+use adk_surface::tui::{
+    CommandContext, OutputFormat, TerminalCommand, TerminalSurface, UiMode, terminal_safe,
+};
 use adk_surface::{Caller, ControlSource, LocalSource, Origin, SurfaceEngine, SurfaceKind};
 use anyhow::{Context, Result};
 
@@ -143,7 +145,7 @@ pub async fn run(
 ) -> Result<i32> {
     let session = harness.session.clone();
     let user = crate::setup::os_user();
-    let ui = match (surface.output, surface.ui) {
+    let ui = match (surface.output, surface.ui.and_then(crate::cli::UiChoice::surface)) {
         (OutputFormat::Json, _) => None,
         (OutputFormat::Text, Some(ui)) => Some(ui),
         (OutputFormat::Text, None) if TerminalSurface::capable_terminal() => {
@@ -167,7 +169,7 @@ pub async fn run(
     // Logs would draw over the terminal: they go to a file beside harness.db.
     let log = if drawn { log_to_file() } else { None };
     let text_ui = surface.output == OutputFormat::Text;
-    let (engine, place, model_id, local, session, notices, binding) = match reach {
+    let (engine, place, model_id, local, session, notices, binding, commands) = match reach {
         Reach::Kernel { client, token, local } => {
             let place = if local { "kernel".to_string() } else { client.endpoint().to_string() };
             // How each answer was given comes from the kernel's record, so a decision answered
@@ -189,7 +191,8 @@ pub async fn run(
                 .agent_name(APP_NAME, APP_NAME)
                 .answers(answers)
                 .build();
-            (engine, place, None, local, session, Vec::new(), None)
+            let (commands, notices) = kernel_commands(&source_client).await;
+            (engine, place, None, local, session, notices, None, commands)
         }
         Reach::InProcess => {
             let model = model.context("the harness in this process needs a model")?;
@@ -202,6 +205,7 @@ pub async fn run(
                 Some(here.session),
                 here.notices,
                 Some(here.binding),
+                here.commands,
             )
         }
     };
@@ -226,6 +230,9 @@ pub async fn run(
             )
         });
     }
+    for command in commands {
+        terminal = terminal.command(command);
+    }
     if surface.output == OutputFormat::Json {
         let message = match surface.message {
             Some(message) => Some(message),
@@ -249,6 +256,59 @@ pub async fn run(
     #[cfg(unix)]
     drop(stderr);
     Ok(code?)
+}
+
+/// The REPL's slash commands the kernel serves, each run there in the thread the terminal
+/// shows (spec 3.3 §5.2), and what the terminal says when it has none: a paired device's
+/// token reaches none of them.
+async fn kernel_commands(client: &ControlClient) -> (Vec<Arc<dyn TerminalCommand>>, Vec<String>) {
+    match client.commands().await {
+        Ok(listed) => {
+            let commands = listed
+                .into_iter()
+                .map(|info| {
+                    Arc::new(KernelCommand { client: client.clone(), info })
+                        as Arc<dyn TerminalCommand>
+                })
+                .collect();
+            (commands, Vec::new())
+        }
+        Err(error)
+            if matches!(
+                error.category(),
+                adk_core::ErrorCategory::Forbidden | adk_core::ErrorCategory::Unauthorized
+            ) =>
+        {
+            let notice = "The REPL's commands (/todos, /rules, /memory, ...) run only on the                           kernel's own machine or with its operator token; this paired terminal                           has the terminal's own."
+                .to_string();
+            (Vec::new(), vec![notice])
+        }
+        Err(error) => {
+            tracing::debug!(error = %error, "the kernel offers no commands");
+            (Vec::new(), Vec::new())
+        }
+    }
+}
+
+/// One of the REPL's commands, run on the kernel the terminal is attached to.
+struct KernelCommand {
+    client: ControlClient,
+    info: CommandInfo,
+}
+
+#[async_trait::async_trait]
+impl TerminalCommand for KernelCommand {
+    fn name(&self) -> &str {
+        &self.info.name
+    }
+
+    fn description(&self) -> &str {
+        &self.info.description
+    }
+
+    async fn run(&self, args: &str, context: &CommandContext) -> adk_core::Result<String> {
+        Ok(self.client.run_command(&self.info.name, args, &context.session_id).await?)
+    }
 }
 
 /// The person at this terminal. The kernel's own socket, or the harness in this process: a
@@ -344,6 +404,8 @@ struct InProcess {
     notices: Vec<String>,
     /// How a session is bound to the workspace, for `/session` too.
     binding: Binding,
+    /// The REPL's slash commands, on this harness and session (spec 3.3 §5.2).
+    commands: Vec<Arc<dyn TerminalCommand>>,
 }
 
 /// The harness in this process, held calls going to its approvals inbox, and the engine over
@@ -396,7 +458,7 @@ async fn in_process(
         .approval_store(agent.runtime().approval_store().clone())
         .build()?;
     let decisions = agent.runtime().approval_service().cloned().unwrap_or(service);
-    let harness = Arc::new(Harness::with_runner(agent, runner)?.with_run_store(run_store));
+    let harness = Arc::new(Harness::with_runner(agent, runner)?.with_run_store(run_store.clone()));
     let binding = Binding {
         sessions: setup.sessions(),
         user: setup.user.clone(),
@@ -412,6 +474,12 @@ async fn in_process(
         None => None,
     };
     let session = binding.open(requested).await?;
+    // The REPL's slash commands, each run in the thread the terminal shows (spec 3.3 §5.2).
+    let commands = HarnessCommands::new(harness.clone(), APP_NAME, setup.sessions())
+        .run_store(run_store)
+        .effort(setup.args.effort)
+        .hooks_disabled(!setup.resolved.hooks)
+        .terminal(UserId::new(setup.user.clone())?);
     let mut notices = Vec::new();
     // Instruction files and hooks load only in a trusted workspace (spec 3.1 §7.7, §7.22).
     let runtime = harness.agent().runtime();
@@ -429,12 +497,12 @@ async fn in_process(
     }
     let source = LocalSource::builder(APP_NAME).approvals(decisions).harness(harness).build()?;
     let engine = SurfaceEngine::builder(Arc::new(source)).agent_name(APP_NAME, APP_NAME).build();
-    Ok(InProcess { engine, model_id: setup.model_id.clone(), session, notices, binding })
+    Ok(InProcess { engine, model_id: setup.model_id.clone(), session, notices, binding, commands })
 }
 
-/// Where the terminal's memory notice points: the commands, as the terminal has no `/memory`.
-const MEMORY_COMMANDS: &str =
-    "`adk-rust memory list` lists them, `adk-rust memory forget ID` removes one";
+/// Where the terminal's memory notice points: the REPL's commands, which it has too (spec 3.3
+/// §5.2).
+const MEMORY_COMMANDS: &str = "/memory lists them, /memory forget ID removes one";
 
 /// The state key a session's workspace is recorded under (spec 3.1 §8.1).
 const WORKSPACE: &str = "harness:workspace";

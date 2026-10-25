@@ -144,10 +144,10 @@ pub struct Cli {
 #[cfg(feature = "tui")]
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct SurfaceArgs {
-    /// `full` (the default on a terminal of at least 60 by 16) or `inline`, which keeps the
-    /// output in the scrollback
-    #[arg(long, value_name = "UI", value_parser = parse_from_str::<adk_surface::tui::UiMode>)]
-    pub ui: Option<adk_surface::tui::UiMode>,
+    /// `full` (the default on a terminal of at least 60 by 16), `inline`, which keeps the
+    /// output in the scrollback, or `repl`, the line-by-line console
+    #[arg(long, value_name = "UI", value_parser = parse_from_str::<UiChoice>)]
+    pub ui: Option<UiChoice>,
     /// `text`, or `json`: one engine event per line and an exit code — 0 done, 1 error, 3
     /// waiting for a decision, 4 the daily spending limit reached
     #[arg(long, value_name = "FORMAT", default_value = "text", value_parser = parse_from_str::<adk_surface::tui::OutputFormat>)]
@@ -180,6 +180,43 @@ impl SurfaceArgs {
             || self.kernel.home.is_some()
             || self.kernel.server.is_some()
             || self.kernel.token.is_some()
+    }
+}
+
+/// What `--ui` opens: the terminal surface, full screen or inline, or the REPL (spec 3.3
+/// §5.2).
+#[cfg(feature = "tui")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiChoice {
+    /// The terminal surface in this mode.
+    Surface(adk_surface::tui::UiMode),
+    /// The line-by-line console the full screen replaced as the default.
+    Repl,
+}
+
+#[cfg(feature = "tui")]
+impl UiChoice {
+    /// The terminal surface's mode, unless the REPL was chosen.
+    pub fn surface(self) -> Option<adk_surface::tui::UiMode> {
+        match self {
+            Self::Surface(mode) => Some(mode),
+            Self::Repl => None,
+        }
+    }
+}
+
+#[cfg(feature = "tui")]
+impl std::str::FromStr for UiChoice {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.trim().eq_ignore_ascii_case("repl") {
+            return Ok(Self::Repl);
+        }
+        value
+            .parse()
+            .map(Self::Surface)
+            .map_err(|_| format!("unknown UI '{}': use full, inline or repl", value.trim()))
     }
 }
 

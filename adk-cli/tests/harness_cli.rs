@@ -7,7 +7,7 @@ mod common;
 
 use std::path::Path;
 
-use common::{Terminal, run, text};
+use common::{Terminal, repl, run, text};
 
 fn workspace() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -451,7 +451,6 @@ fn the_repl_refuses_the_home_directory_without_dir() {
 }
 
 #[test]
-#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn always_allow_remembers_a_rule_and_the_next_call_runs_without_asking() {
     let home = tempfile::tempdir().unwrap();
     let ws = workspace();
@@ -462,7 +461,7 @@ fn always_allow_remembers_a_rule_and_the_next_call_runs_without_asking() {
         {"text": "Second done."}
     ]"#;
     let mut terminal = Terminal::spawn_in(
-        &["--dir", &dir_arg(ws.path()), "--model-script", script],
+        &repl(&["--dir", &dir_arg(ws.path()), "--model-script", script]),
         home.path(),
         ws.path(),
     );
@@ -490,7 +489,6 @@ fn always_allow_remembers_a_rule_and_the_next_call_runs_without_asking() {
 }
 
 #[test]
-#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn a_denial_ends_the_turn() {
     let home = tempfile::tempdir().unwrap();
     let ws = workspace();
@@ -499,7 +497,7 @@ fn a_denial_ends_the_turn() {
         {"text": "The model kept going."}
     ]"#;
     let mut terminal = Terminal::spawn_in(
-        &["--ephemeral", "--dir", &dir_arg(ws.path()), "--model-script", script],
+        &repl(&["--ephemeral", "--dir", &dir_arg(ws.path()), "--model-script", script]),
         home.path(),
         ws.path(),
     );
@@ -517,7 +515,6 @@ fn a_denial_ends_the_turn() {
 }
 
 #[test]
-#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn slash_commands_show_and_change_the_session() {
     let home = tempfile::tempdir().unwrap();
     let ws = workspace();
@@ -526,7 +523,7 @@ fn slash_commands_show_and_change_the_session() {
         {"text": "Planned."}
     ]"#;
     let mut terminal = Terminal::spawn_in(
-        &["--dir", &dir_arg(ws.path()), "--session", "slash", "--model-script", script],
+        &repl(&["--dir", &dir_arg(ws.path()), "--session", "slash", "--model-script", script]),
         home.path(),
         ws.path(),
     );

@@ -83,6 +83,8 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 | `GET /kernel/memory?area=` | What the agents remember, with provenance, and the overnight tidy-ups ([memory](today-and-memory.md#what-your-agents-remember)) | Yes, or a device with `read` | — |
 | `POST /kernel/memory/facts/{id}/{confirm,fix,forget}`, `POST /kernel/memory/undo` | "That's right", "Fix it", "Forget it", "Undo"; never from a device token | Yes, no device | `memory.confirm`, `memory.fix`, `memory.forget`, `memory.undo` |
 | `GET /kernel/record?limit=`, `GET /kernel/record/check` | The latest actions on record; the check `adk-rust audit verify` makes ([record](today-and-memory.md#what-your-agents-did)) | Yes, or a device with `read` | — |
+| `GET /kernel/commands`, `POST /kernel/commands/run` | The REPL's slash commands, run on the kernel's harness in the caller's session; body `{"name": "rules", "args": "rm 2", "sessionId": "..."}`, answer `{"text": "..."}`. A command that changes something answers `409 kernel.frozen` while everything is stopped. The host gets how the caller reached the kernel (`CommandReach`: transport, device, calling process), and the record names it ([the terminal](../surfaces/terminal.md#commands)) | Yes, no device | `commands.run` |
+| `GET /kernel/rules/always-allow/{id}`, `POST /kernel/rules/always-allow/{id}/{prepare,grant}` | What "Always allow" makes for the caller's waiting decision; make it while the decision waits; grant it once the decision was allowed (`409` before) | Yes, no device | `rules.always_allow` |
 | `/approvals…` | The approvals inbox, unchanged; the socket and the pipe serve it too | Per inbox rules | Inbox records |
 
 On HTTP the server's own routes stay beside them: `/api/runs` (submissions land on the

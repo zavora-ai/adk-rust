@@ -564,8 +564,12 @@ fn the_terminal_attaches_to_a_kernel_locally_and_paired_over_http() {
         COLS,
         &[("COLORTERM", "truecolor")],
     );
-    // The status line names the kernel.
-    let parser = expect_all(&remote, &["Waiting for you · Write file invoice.txt", &server]);
+    // The status line names the kernel; the REPL's commands are the kernel operator's, so a
+    // paired device says it has none (spec 3.3 §5.2).
+    let parser = expect_all(
+        &remote,
+        &["Waiting for you · Write file invoice.txt", &server, "The REPL's commands"],
+    );
     dump("kernel-paired-full-screen-dark", &parser);
     std::thread::sleep(Duration::from_millis(900));
     remote.send("y");
@@ -656,6 +660,20 @@ fn every_screen_in_light_and_dark() {
         full.send("/help\r");
         expect_screen(&full, "Never decides: switch");
         shot("7-help", &full);
+        full.send("\x1b");
+        std::thread::sleep(Duration::from_millis(200));
+        // The REPL's commands: the command line with its completion, then two outputs.
+        full.send("/m");
+        full.send("\x1b[B");
+        expect_screen(&full, "› /memory");
+        shot("11-command-line", &full);
+        full.send("\r");
+        expect_screen(&full, "Working notes:");
+        shot("12-memory-output", &full);
+        full.send("\x1b");
+        full.send("/session\r");
+        expect_screen(&full, "events");
+        shot("13-session-output", &full);
         full.send("\x1b");
         std::thread::sleep(Duration::from_millis(200));
         // Back to answering by key.
@@ -1391,4 +1409,241 @@ fn a_signal_while_the_background_is_asked_for_restores_the_terminal() {
     assert_eq!(code, Some(143), "{output}");
     assert_ne!(restored.c_lflag & libc::ICANON, 0, "cooked mode again");
     assert_ne!(restored.c_lflag & libc::ECHO, 0, "echo again");
+}
+
+// ---------------------------------------------------------------------------
+// E2: the REPL's commands in the full screen, in process and on a kernel (spec 3.3 §5.2).
+// ---------------------------------------------------------------------------
+
+/// Runs `line` from the message box, waits for its output pane to show the line and every
+/// one of `needles`, then goes back to the thread with Esc; returns the pane.
+fn command(terminal: &mut Terminal, line: &str, needles: &[&str]) -> vt100::Parser {
+    terminal.send(&format!("{line}\r"));
+    let mut wanted = vec![line, "esc to go back"];
+    wanted.extend_from_slice(needles);
+    let parser = expect_all(terminal, &wanted);
+    terminal.send("\x1b");
+    expect_screen(terminal, "Type a message");
+    parser
+}
+
+/// The commands that read the shown thread's state: its todos, plan, waiting calls and the
+/// session itself, by the REPL's code.
+#[test]
+fn the_session_commands_run_in_the_full_screen() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let mut terminal = surface(home.path(), ws.path(), "[]", &["--theme", "light"]);
+    expect_screen(&terminal, "Type a message");
+    command(&mut terminal, "/todos", &["No todos in this session."]);
+    command(&mut terminal, "/plan", &["No plan approved in this session."]);
+    command(&mut terminal, "/approvals", &["No calls are waiting for a decision"]);
+    let workspace = ws.path().canonicalize().unwrap().display().to_string();
+    let shown = command(&mut terminal, "/session", &["user ", "mode      ask", "events"]);
+    let shown = shown.screen().contents();
+    assert!(shown.contains(&workspace) || shown.contains("workspace "), "{shown}");
+    terminal.send("\x03");
+    assert_eq!(wait_exit(terminal).0, Some(0));
+}
+
+/// The commands that show and change what the agents may do: standing rules, the web
+/// allowlist and the mode — the REPL's words, and the mode set through the engine.
+#[test]
+fn the_permission_commands_run_in_the_full_screen() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let script = r#"[{"text": "Hello."}]"#;
+    let mut terminal = surface(home.path(), ws.path(), script, &["--theme", "dark"]);
+    expect_screen(&terminal, "Type a message");
+    command(&mut terminal, "/rules", &["No standing rules."]);
+    command(&mut terminal, "/web allow docs.rs", &["web_fetch on docs.rs no longer asks"]);
+    command(&mut terminal, "/rules", &["web_fetch: any page on docs.rs"]);
+    command(&mut terminal, "/mode", &["mode: ask"]);
+    // A mode set from the message box goes through the engine, as Permissions does, on a
+    // session the person has written in.
+    terminal.send("hi\r");
+    expect_screen(&terminal, "Hello.");
+    terminal.send("/mode plan\r");
+    expect_screen(&terminal, "Suggest");
+    terminal.send("\x03");
+    assert_eq!(wait_exit(terminal).0, Some(0));
+}
+
+/// The memory commands, with long-term memory off in an ephemeral session.
+#[test]
+fn the_memory_commands_run_in_the_full_screen() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let mut terminal = surface(home.path(), ws.path(), "[]", &["--theme", "light"]);
+    expect_screen(&terminal, "Type a message");
+    command(&mut terminal, "/memory", &["Working notes:", "off (--no-memory or --ephemeral)"]);
+    command(&mut terminal, "/memory forget 01AB", &["Long-term memory is off"]);
+    terminal.send("\x03");
+    assert_eq!(wait_exit(terminal).0, Some(0));
+}
+
+/// The commands that describe the harness: hooks, the shell, the effort, MCP servers, skills,
+/// the team and the spend; a shell or effort change says it takes a restart here.
+#[test]
+fn the_harness_commands_run_in_the_full_screen() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let mut terminal = surface(home.path(), ws.path(), "[]", &["--theme", "light"]);
+    expect_screen(&terminal, "Type a message");
+    command(&mut terminal, "/hooks", &["No hooks."]);
+    command(&mut terminal, "/sandbox", &["shell:"]);
+    command(&mut terminal, "/sandbox on", &["cannot switch the shell; restart with --sandbox"]);
+    command(&mut terminal, "/effort", &["effort: per mode", "policy:"]);
+    command(&mut terminal, "/mcp", &["No MCP servers"]);
+    command(&mut terminal, "/team", &["explore", "general"]);
+    command(&mut terminal, "/skills", &[]);
+    command(&mut terminal, "/cost", &[]);
+    terminal.send("\x03");
+    assert_eq!(wait_exit(terminal).0, Some(0));
+}
+
+/// `/` lists the commands it may be above the message box; the arrows choose, Tab completes
+/// and Enter runs; `/help` lists the REPL's commands beside the terminal's own.
+#[test]
+fn tab_and_the_arrows_complete_a_command_in_the_full_screen() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let mut terminal = surface(home.path(), ws.path(), "[]", &["--theme", "light"]);
+    expect_screen(&terminal, "Type a message");
+    terminal.send("/m");
+    expect_all(&terminal, &["› /mode", "/memory", "/mcp", "Tab completes · Enter runs"]);
+    terminal.send("\x1b[B");
+    expect_screen(&terminal, "› /memory");
+    terminal.send("\t");
+    expect_screen(&terminal, "│› /memory ");
+    terminal.send("\r");
+    expect_all(&terminal, &["Working notes:", "esc to go back"]);
+    terminal.send("\x1b");
+    terminal.send("/to\t");
+    expect_screen(&terminal, "│› /tod");
+    terminal.send("\x15/help\r");
+    expect_all(&terminal, &["Commands", "/today", "/todos", "Show the session's todo list"]);
+    terminal.send("\x1b\x03");
+    assert_eq!(wait_exit(terminal).0, Some(0));
+}
+
+/// Inline prints a command's output into the scrollback once it returns.
+#[test]
+fn inline_runs_the_repls_commands() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let mut terminal =
+        surface(home.path(), ws.path(), "[]", &["--ui", "inline", "--theme", "light"]);
+    expect_screen(&terminal, "Type a message");
+    terminal.send("/todos\r");
+    expect_all(&terminal, &["/todos", "No todos in this session."]);
+    terminal.send("\x1b\x03");
+    assert_eq!(wait_exit(terminal).0, Some(0));
+}
+
+/// On a kernel the terminal runs the REPL's commands there, over the kernel's harness, and
+/// `a` makes the standing rule the harness makes in process: the next call like it runs
+/// without asking (spec 3.3 §5.2, §7.2).
+#[test]
+fn the_repls_commands_and_always_allow_run_on_the_kernel() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let kernel = home.path().join("kernel");
+    let script = r#"[
+        {"call": {"name": "write_file", "args": {"path": "a.txt", "content": "A"}}},
+        {"text": "Wrote a."},
+        {"call": {"name": "write_file", "args": {"path": "b.txt", "content": "B"}}},
+        {"text": "Wrote b."}
+    ]"#;
+    let mut up = kernel_up(home.path(), &kernel, ws.path(), free_port(), script);
+    let kernel_arg = kernel.display().to_string();
+    let mut terminal = Terminal::spawn_sized_env(
+        &["--home", &kernel_arg, "--theme", "light"],
+        home.path(),
+        ws.path(),
+        ROWS,
+        COLS,
+        &[("COLORTERM", "truecolor")],
+    );
+    expect_all(&terminal, &["Type a message", "kernel"]);
+    // The command ran in the kernel, which says how this terminal reached it.
+    command(&mut terminal, "/session", &["reached   the kernel's socket, from process"]);
+    command(&mut terminal, "/todos", &["No todos in this session."]);
+    command(&mut terminal, "/rules", &["No standing rules."]);
+    command(&mut terminal, "/memory", &["Working notes:", "Long-term facts"]);
+    command(&mut terminal, "/hooks", &["No hooks."]);
+
+    terminal.send("Write a\r");
+    let parser = expect_all(&terminal, &["Waiting for you · Write file a.txt", "Always allow"]);
+    dump("kernel-always-allow-light", &parser);
+    std::thread::sleep(Duration::from_millis(900));
+    terminal.send("a");
+    expect_screen(&terminal, "Wrote a.");
+    assert_eq!(std::fs::read_to_string(ws.path().join("a.txt")).unwrap(), "A");
+    command(&mut terminal, "/rules", &["allow write_file"]);
+
+    // In ask mode a write waits for a key; the rule lets this one run.
+    terminal.send("Write b\r");
+    expect_screen(&terminal, "Wrote b.");
+    assert_eq!(std::fs::read_to_string(ws.path().join("b.txt")).unwrap(), "B");
+
+    // Stopped, the kernel runs no command that changes something; one that reads still runs.
+    terminal.send("\x0b");
+    expect_screen(&terminal, "stopped");
+    command(&mut terminal, "/web allow docs.rs", &["everything is stopped"]);
+    command(&mut terminal, "/rules", &["allow write_file"]);
+    terminal.send("\x03");
+    assert_eq!(terminal.wait().0, Some(0));
+    up.send("\x03");
+    assert!(up.wait().0.is_some(), "the kernel stopped");
+}
+
+/// One live turn on a real model in the full screen: `a` answers its write with the standing
+/// rule, and `/rules` lists it. Needs `ANTHROPIC_API_KEY`; two or three model calls.
+#[test]
+#[ignore = "needs ANTHROPIC_API_KEY and calls the model"]
+fn live_model_always_allow_and_rules_in_the_full_screen() {
+    if std::env::var("ANTHROPIC_API_KEY").is_err() {
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let dir = ws.path().display().to_string();
+    let args = [
+        "--provider",
+        "anthropic",
+        "--model",
+        "claude-sonnet-5-5",
+        "--ephemeral",
+        "--dir",
+        &dir,
+        "--mode",
+        "ask",
+        "--theme",
+        "dark",
+    ];
+    let mut terminal = Terminal::spawn_sized_env(
+        &args,
+        home.path(),
+        ws.path(),
+        ROWS,
+        COLS,
+        &[("COLORTERM", "truecolor")],
+    );
+    expect_screen(&terminal, "Type a message");
+    terminal.send("Create the file notes.txt containing exactly the word hello. Nothing else.\r");
+    let parser = expect_all(&terminal, &["Waiting for you ·", "Always allow"]);
+    dump("live-always-allow-dark", &parser);
+    std::thread::sleep(Duration::from_millis(900));
+    terminal.send("a");
+    let started = Instant::now();
+    while !ws.path().join("notes.txt").exists() {
+        assert!(started.elapsed() < TIMEOUT, "the allowed write did not run");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    let parser = command(&mut terminal, "/rules", &["allow write_file"]);
+    dump("live-rules-dark", &parser);
+    terminal.send("\x03");
+    assert_eq!(terminal.wait().0, Some(0));
 }

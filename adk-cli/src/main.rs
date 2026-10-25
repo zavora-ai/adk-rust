@@ -87,8 +87,15 @@ async fn run() -> Result<()> {
             let in_process = false;
             // The terminal surface: full screen, inline or JSON, on the kernel or in process
             // (spec 3.3 §5.2).
+            // `--ui repl` keeps the line-by-line console the full screen replaced (spec 3.3 §5.2).
             #[cfg(feature = "tui")]
-            if !in_process {
+            let repl = surface.ui == Some(cli::UiChoice::Repl);
+            #[cfg(feature = "tui")]
+            if repl && surface.output == adk_surface::tui::OutputFormat::Json {
+                anyhow::bail!("--ui repl has no JSON output; use --output json without --ui");
+            }
+            #[cfg(feature = "tui")]
+            if !in_process && !repl {
                 let reach = harness_cli::surface::reach(&surface, &harness).await?;
                 let model = match reach {
                     harness_cli::surface::Reach::InProcess => Some(resolve_model(&options).await?),

@@ -1,9 +1,10 @@
-//! The harness REPL's slash commands (spec 3.1 §8.1).
+//! The harness REPL's slash commands (spec 3.1 §8.1), and the same commands for the
+//! full-screen terminal and a kernel's control routes (spec 3.3 §5.2).
 
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use adk_core::{Effort, Result};
+use adk_core::{Effort, Result, SessionId, UserId};
 use adk_harness::hooks::HookSource;
 use adk_harness::{
     FactStatus, FileMemory, HarnessMode, MemoryConfig, MemoryFact, MemoryLimits, ModeChange,
@@ -13,7 +14,7 @@ use adk_harness::{
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::launcher::{Shared, WORKSPACE_STATE_KEY};
+use super::launcher::{HarnessCommands, Shared, WORKSPACE_STATE_KEY};
 use crate::console::{ConsoleCommand, ConsoleCommandContext};
 
 /// The commands the harness REPL offers, in `/help` order.
@@ -103,6 +104,104 @@ pub(crate) fn harness_commands(shared: Arc<Shared>) -> Vec<Arc<dyn ConsoleComman
         .collect()
 }
 
+impl Kind {
+    /// Whether the command with `args` changes something — the mode, a rule, the memory, the
+    /// shell, the effort — rather than reads (spec 3.3 §5.2).
+    fn changes(self, args: &str) -> bool {
+        let first = args.split_whitespace().next();
+        match self {
+            Self::Mode | Self::Effort => first.is_some(),
+            Self::Sandbox => matches!(first, Some("on" | "off")),
+            Self::Rules => first == Some("rm"),
+            Self::Memory => matches!(first, Some("forget" | "accept")),
+            Self::Web => first == Some("allow"),
+            Self::Todos
+            | Self::Approvals
+            | Self::Plan
+            | Self::Cost
+            | Self::Team
+            | Self::Session
+            | Self::Skills
+            | Self::Mcp
+            | Self::Hooks => false,
+        }
+    }
+}
+
+impl HarnessCommands {
+    /// The REPL's commands, in `/help` order: each name and what it does (spec 3.3 §5.2).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_cli::harness::HarnessCommands;
+    ///
+    /// assert!(HarnessCommands::list().iter().any(|(name, _)| *name == "todos"));
+    /// ```
+    pub fn list() -> Vec<(&'static str, &'static str)> {
+        COMMANDS.iter().map(|(_, name, description)| (*name, *description)).collect()
+    }
+
+    /// Whether `/name args` changes something — the mode, a rule, the memory, the shell, the
+    /// effort — rather than reads: a kernel refuses it while everything is stopped.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_cli::harness::HarnessCommands;
+    ///
+    /// assert!(HarnessCommands::changes("rules", "rm 2"));
+    /// assert!(!HarnessCommands::changes("rules", ""));
+    /// ```
+    pub fn changes(name: &str, args: &str) -> bool {
+        COMMANDS
+            .iter()
+            .find(|(_, known, _)| *known == name)
+            .is_some_and(|(kind, _, _)| kind.changes(args))
+    }
+
+    /// Runs `/name args` for `user` in `session` by the REPL's code; returns what it shows,
+    /// or `None` when no command has that name. `reach` is how the caller reached a kernel
+    /// serving the command, which `/session` names; `None` in process.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-input error for an empty user or session, or the command's error.
+    pub async fn run(
+        &self,
+        name: &str,
+        args: &str,
+        user: &str,
+        session: &str,
+        reach: Option<adk_kernel::control::CommandReach>,
+    ) -> Result<Option<String>> {
+        let Some((kind, _, _)) = COMMANDS.iter().find(|(_, known, _)| *known == name) else {
+            return Ok(None);
+        };
+        let shared = self.shared(UserId::new(user)?, SessionId::new(session)?, reach);
+        execute(*kind, &shared, args.trim()).await.map(Some)
+    }
+
+    /// Every command, in `/help` order, for the full-screen terminal of `user`: each runs in
+    /// the session the terminal shows (spec 3.3 §5.2).
+    #[cfg(feature = "tui")]
+    pub fn terminal(&self, user: UserId) -> Vec<Arc<dyn adk_surface::tui::TerminalCommand>> {
+        let commands = Arc::new(self.clone());
+        COMMANDS
+            .iter()
+            .map(|(kind, name, description)| {
+                Arc::new(TerminalHarnessCommand {
+                    kind: *kind,
+                    name,
+                    description,
+                    commands: commands.clone(),
+                    user: user.clone(),
+                }) as Arc<dyn adk_surface::tui::TerminalCommand>
+            })
+            .collect()
+    }
+}
+
 #[async_trait]
 impl ConsoleCommand for HarnessCommand {
     fn name(&self) -> &str {
@@ -114,41 +213,74 @@ impl ConsoleCommand for HarnessCommand {
     }
 
     async fn run(&self, args: &str, _ctx: &ConsoleCommandContext) -> Result<String> {
-        let shared = &self.shared;
-        match self.kind {
-            Kind::Mode => mode(shared, args).await,
-            Kind::Sandbox => sandbox(shared, args),
-            Kind::Todos => Ok(render_todos(shared.state(TODOS_STATE_KEY).await?.as_ref())),
-            Kind::Rules => rules(shared, args).await,
-            Kind::Approvals => approvals(shared).await,
-            Kind::Plan => Ok(match shared.state(PLAN_STATE_KEY).await? {
-                Some(Value::String(plan)) => plan,
-                Some(Value::Object(plan)) => plan
-                    .get("plan")
-                    .and_then(Value::as_str)
-                    .map_or_else(|| Value::Object(plan.clone()).to_string(), str::to_string),
-                Some(other) => other.to_string(),
-                None => "No plan approved in this session. /mode plan, then ask for one.".into(),
-            }),
-            // Spend per acting agent and vendor for this user (spec 3.1 §7.13).
-            Kind::Cost => Ok(shared.harness().spend(Some(&shared.user)).render()),
-            Kind::Team => {
-                let harness = shared.harness();
-                let members = &harness.agent().info().members;
-                Ok(if members.is_empty() {
-                    "No team members. Add one with --member NAME=explore|general.".into()
-                } else {
-                    members.iter().map(|name| format!("  {name}")).collect::<Vec<_>>().join("\n")
-                })
-            }
-            Kind::Session => session(shared).await,
-            Kind::Skills => skills(shared),
-            Kind::Memory => memory(shared, args).await,
-            Kind::Web => web(shared, args).await,
-            Kind::Mcp => mcp(shared, args).await,
-            Kind::Effort => effort(shared, args).await,
-            Kind::Hooks => Ok(hooks(shared)),
+        execute(self.kind, &self.shared, args).await
+    }
+}
+
+/// A REPL command in the full-screen terminal: run in the session the terminal shows.
+#[cfg(feature = "tui")]
+struct TerminalHarnessCommand {
+    kind: Kind,
+    name: &'static str,
+    description: &'static str,
+    commands: Arc<HarnessCommands>,
+    user: UserId,
+}
+
+#[cfg(feature = "tui")]
+#[async_trait]
+impl adk_surface::tui::TerminalCommand for TerminalHarnessCommand {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn description(&self) -> &str {
+        self.description
+    }
+
+    async fn run(&self, args: &str, context: &adk_surface::tui::CommandContext) -> Result<String> {
+        let session = SessionId::new(context.session_id.clone())?;
+        let shared = self.commands.shared(self.user.clone(), session, None);
+        execute(self.kind, &shared, args).await
+    }
+}
+
+/// Runs the command `kind` with `args` over `shared`: the one code path of the REPL, the
+/// full-screen terminal and a kernel's control routes.
+async fn execute(kind: Kind, shared: &Shared, args: &str) -> Result<String> {
+    match kind {
+        Kind::Mode => mode(shared, args).await,
+        Kind::Sandbox => sandbox(shared, args),
+        Kind::Todos => Ok(render_todos(shared.state(TODOS_STATE_KEY).await?.as_ref())),
+        Kind::Rules => rules(shared, args).await,
+        Kind::Approvals => approvals(shared).await,
+        Kind::Plan => Ok(match shared.state(PLAN_STATE_KEY).await? {
+            Some(Value::String(plan)) => plan,
+            Some(Value::Object(plan)) => plan
+                .get("plan")
+                .and_then(Value::as_str)
+                .map_or_else(|| Value::Object(plan.clone()).to_string(), str::to_string),
+            Some(other) => other.to_string(),
+            None => "No plan approved in this session. /mode plan, then ask for one.".into(),
+        }),
+        // Spend per acting agent and vendor for this user (spec 3.1 §7.13).
+        Kind::Cost => Ok(shared.harness().spend(Some(&shared.user)).render()),
+        Kind::Team => {
+            let harness = shared.harness();
+            let members = &harness.agent().info().members;
+            Ok(if members.is_empty() {
+                "No team members. Add one with --member NAME=explore|general.".into()
+            } else {
+                members.iter().map(|name| format!("  {name}")).collect::<Vec<_>>().join("\n")
+            })
         }
+        Kind::Session => session(shared).await,
+        Kind::Skills => skills(shared),
+        Kind::Memory => memory(shared, args).await,
+        Kind::Web => web(shared, args).await,
+        Kind::Mcp => mcp(shared, args).await,
+        Kind::Effort => effort(shared, args).await,
+        Kind::Hooks => Ok(hooks(shared)),
     }
 }
 
@@ -478,13 +610,33 @@ async fn session(shared: &Shared) -> Result<String> {
         .unwrap_or_else(|| shared.workspace.display().to_string());
     let harness = shared.harness();
     let mode = harness.mode(&shared.user, &shared.session).await?;
-    Ok(format!(
+    let mut out = format!(
         "session   {}\nuser      {}\napp       {}\nworkspace {workspace}\nmode      {mode}\nevents    {}",
         shared.session.as_ref(),
         shared.user.as_ref(),
         shared.app_name,
         events.len()
-    ))
+    );
+    // On a kernel, how this terminal reached it (spec 3.3 §5.2).
+    if let Some(reach) = &shared.reach {
+        let _ = write!(out, "\nreached   {}", describe_reach(reach));
+    }
+    Ok(out)
+}
+
+/// How a caller reached the kernel, in the words `/session` shows.
+fn describe_reach(reach: &adk_kernel::control::CommandReach) -> String {
+    use adk_kernel::control::ControlTransport;
+    let how = match (reach.transport, &reach.device) {
+        (ControlTransport::Socket, _) => "the kernel's socket".to_string(),
+        (ControlTransport::Pipe, _) => "the kernel's named pipe".to_string(),
+        (_, Some(device)) => format!("HTTP, as the paired device {device}"),
+        _ => "HTTP, as the operator".to_string(),
+    };
+    match reach.peer_pid {
+        Some(pid) => format!("{how}, from process {pid}"),
+        None => how,
+    }
 }
 
 fn skills(shared: &Shared) -> Result<String> {
@@ -658,6 +810,39 @@ mod tests {
         ] });
         assert_eq!(render_todos(Some(&coding)), "  ✓ Read the code\n  · Change it\n");
         assert_eq!(render_todos(None), "No todos in this session.");
+    }
+
+    /// A kernel refuses a command that changes something while everything is stopped, so each
+    /// one says which of its forms change and which read (spec 3.3 §5.2).
+    #[test]
+    fn each_command_says_whether_it_changes_something() {
+        for (name, args) in [
+            ("mode", "plan"),
+            ("sandbox", "on"),
+            ("rules", "rm 2"),
+            ("memory", "forget 01AB"),
+            ("memory", "accept 01AB"),
+            ("web", "allow docs.rs"),
+            ("effort", "high"),
+        ] {
+            assert!(HarnessCommands::changes(name, args), "/{name} {args}");
+        }
+        for (name, args) in [
+            ("mode", ""),
+            ("sandbox", "status"),
+            ("rules", ""),
+            ("memory", ""),
+            ("web", ""),
+            ("mcp", "resources docs"),
+            ("todos", ""),
+            ("session", ""),
+            ("nonesuch", "rm 2"),
+        ] {
+            assert!(!HarnessCommands::changes(name, args), "/{name} {args}");
+        }
+        let listed: Vec<&str> = HarnessCommands::list().into_iter().map(|(name, _)| name).collect();
+        assert_eq!(listed.len(), COMMANDS.len());
+        assert_eq!(listed.first(), Some(&"mode"));
     }
 
     #[test]

@@ -8,7 +8,7 @@ mod common;
 
 use std::path::Path;
 
-use common::Terminal;
+use common::{Terminal, repl};
 
 /// Writes the user config where `adk-rust` reads it on Linux and on macOS.
 fn user_config(home: &Path, text: &str) {
@@ -22,13 +22,12 @@ fn banner_search(home: &Path, ws: &Path, flags: &[&str]) -> Terminal {
     let dir = ws.display().to_string();
     let mut args = vec!["--dir", dir.as_str(), "--ephemeral", "--model-script", "[]"];
     args.extend_from_slice(flags);
-    let mut terminal = Terminal::spawn_in(&args, home, ws);
+    let mut terminal = Terminal::spawn_in(&repl(&args), home, ws);
     terminal.expect("Search    : ");
     terminal
 }
 
 #[test]
-#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn the_banner_and_web_name_where_search_runs() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
@@ -69,7 +68,6 @@ fn the_banner_and_web_name_where_search_runs() {
 }
 
 #[test]
-#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn an_openai_session_searches_with_openai_by_default() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
@@ -86,7 +84,7 @@ fn an_openai_session_searches_with_openai_by_default() {
         "--api-key",
         "sk-test-not-sent",
     ];
-    let mut terminal = Terminal::spawn_in(&args, home.path(), ws.path());
+    let mut terminal = Terminal::spawn_in(&repl(&args), home.path(), ws.path());
     terminal.expect("Search    : ");
     terminal.expect("openai openai_web_search, run by the provider: every domain");
     terminal.expect("You >");

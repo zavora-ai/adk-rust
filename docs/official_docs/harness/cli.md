@@ -8,7 +8,8 @@ workspace's `AGENTS.md` once you trust it, and remembers the decisions you ask i
 ```bash
 cargo install adk-cli          # default features include `harness` and `persist`
 cd my-project
-adk-rust                       # the harness REPL, ask mode
+adk-rust                       # the harness in the full-screen terminal, ask mode
+adk-rust --ui repl             # the harness REPL
 ```
 
 > **Note:** the harness refuses to start in your home directory or `/` unless `--dir` names
@@ -18,7 +19,7 @@ adk-rust                       # the harness REPL, ask mode
 
 | Invocation | Behaviour |
 |---|---|
-| `adk-rust` | Harness REPL in `--dir` (default `.`), ask mode, approvals in the terminal |
+| `adk-rust` | The harness in `--dir` (default `.`), ask mode, in the [full-screen terminal](../surfaces/terminal.md) on a capable terminal; `--ui repl` for the REPL, approvals in the terminal |
 | `adk-rust chat` | The plain chat agent, without workspace tools |
 | `adk-rust code "task"` | One harness turn; exit code `3` means calls are held for a decision (the session id is printed) |
 | `adk-rust goal "goal" --until CMD` | Runs the harness goal engine until `CMD` exits 0, as a durable run in `harness.db`; `--resume` continues the goal in its session |

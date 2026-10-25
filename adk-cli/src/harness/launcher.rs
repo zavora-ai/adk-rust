@@ -609,6 +609,7 @@ impl HarnessLauncher {
             status_lines: self.status_lines.clone(),
             run_store: self.run_store.clone(),
             hooks_disabled: self.hooks_disabled,
+            reach: None,
         });
         shared.decide_trust(self.trust).await?;
         self.opened = Some(shared.clone());
@@ -1136,6 +1137,113 @@ pub(crate) struct Shared {
     pub(crate) run_store: Option<Arc<dyn DurableRunStore>>,
     /// `--no-hooks` turned hooks off.
     pub(crate) hooks_disabled: bool,
+    /// How a command's caller reached the kernel, when a kernel's control route runs it;
+    /// `None` in the REPL and the terminal in process (spec 3.3 §5.2).
+    pub(crate) reach: Option<adk_kernel::control::CommandReach>,
+}
+
+/// The harness REPL's slash commands over a harness, for the surfaces that are not the REPL:
+/// the full-screen terminal in process, and the control routes `adk-rust up` serves to a
+/// terminal attached to the kernel (spec 3.3 §5.2). Each command runs the REPL's own code, so
+/// `/todos` or `/rules` reads the same everywhere, for the user and in the session each run
+/// names.
+///
+/// Switching the shell (`/sandbox on`) or the effort (`/effort high`) takes a restart there,
+/// as the commands say: the harness is not rebuilt under the surfaces using it.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use adk_cli::harness::HarnessCommands;
+///
+/// let commands = HarnessCommands::new(harness, "adk-rust", sessions).effort(Some(Effort::High));
+/// let todos = commands.run("todos", "", "ana", "session-1", None).await?;
+/// ```
+#[derive(Clone)]
+pub struct HarnessCommands {
+    pub(crate) harness: Arc<Harness>,
+    pub(crate) app_name: String,
+    pub(crate) workspace: PathBuf,
+    pub(crate) sessions: Arc<dyn SessionService>,
+    pub(crate) run_store: Option<Arc<dyn DurableRunStore>>,
+    pub(crate) effort: Option<Effort>,
+    pub(crate) hooks_disabled: bool,
+}
+
+impl std::fmt::Debug for HarnessCommands {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HarnessCommands").field("app_name", &self.app_name).finish_non_exhaustive()
+    }
+}
+
+impl HarnessCommands {
+    /// The commands over `harness`, for the sessions of `app_name` that `sessions` holds; the
+    /// workspace is the harness's.
+    pub fn new(
+        harness: Arc<Harness>,
+        app_name: impl Into<String>,
+        sessions: Arc<dyn SessionService>,
+    ) -> Self {
+        let workspace = canonical_root(harness.agent());
+        Self {
+            harness,
+            app_name: app_name.into(),
+            workspace,
+            sessions,
+            run_store: None,
+            effort: None,
+            hooks_disabled: false,
+        }
+    }
+
+    /// The durable run store the harness runs on.
+    #[must_use]
+    pub fn run_store(mut self, run_store: Arc<dyn DurableRunStore>) -> Self {
+        self.run_store = Some(run_store);
+        self
+    }
+
+    /// The reasoning effort the harness was built with, which `/effort` shows.
+    #[must_use]
+    pub fn effort(mut self, effort: Option<Effort>) -> Self {
+        self.effort = effort;
+        self
+    }
+
+    /// Whether hooks were turned off (`--no-hooks`), which `/hooks` says.
+    #[must_use]
+    pub fn hooks_disabled(mut self, disabled: bool) -> Self {
+        self.hooks_disabled = disabled;
+        self
+    }
+
+    /// The REPL's shared state for one run, by `user` in `session`, reached as `reach`: the
+    /// console prints nowhere, and with no rebuild the shell and the effort are changed by a
+    /// restart, as the REPL's commands say.
+    pub(crate) fn shared(
+        &self,
+        user: UserId,
+        session: SessionId,
+        reach: Option<adk_kernel::control::CommandReach>,
+    ) -> Shared {
+        Shared {
+            harness: RwLock::new(self.harness.clone()),
+            app_name: self.app_name.clone(),
+            user,
+            session,
+            workspace: self.workspace.clone(),
+            sessions: self.sessions.clone(),
+            console: ConsoleIo::scripted(Vec::new(), false),
+            thinking_mode: ThinkingDisplayMode::Auto,
+            rebuild: None,
+            effort_rebuild: None,
+            effort: Mutex::new(self.effort),
+            status_lines: Vec::new(),
+            run_store: self.run_store.clone(),
+            hooks_disabled: self.hooks_disabled,
+            reach,
+        }
+    }
 }
 
 impl Shared {
@@ -1249,7 +1357,8 @@ impl Shared {
         *self.effort.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The session's state value at `key`.
+    /// The session's state value at `key`; none in a session not started yet, such as a
+    /// terminal's new thread (spec 3.3 §5.2).
     pub(crate) async fn state(&self, key: &str) -> Result<Option<Value>> {
         let session = self
             .sessions
@@ -1260,13 +1369,17 @@ impl Shared {
                 num_recent_events: Some(1),
                 after: None,
             })
-            .await?;
-        Ok(session.state().get(key))
+            .await;
+        match session {
+            Ok(session) => Ok(session.state().get(key)),
+            Err(error) if error.is_not_found() => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
-    /// Every event of the session.
+    /// Every event of the session; none in a session not started yet.
     pub(crate) async fn events(&self) -> Result<Vec<Event>> {
-        Ok(self
+        let session = self
             .sessions
             .get(GetRequest {
                 app_name: self.app_name.clone(),
@@ -1275,9 +1388,12 @@ impl Shared {
                 num_recent_events: None,
                 after: None,
             })
-            .await?
-            .events()
-            .all())
+            .await;
+        match session {
+            Ok(session) => Ok(session.events().all()),
+            Err(error) if error.is_not_found() => Ok(Vec::new()),
+            Err(error) => Err(error),
+        }
     }
 
     async fn has_held_calls(&self) -> Result<bool> {

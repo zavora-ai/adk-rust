@@ -14,6 +14,17 @@ use std::time::{Duration, Instant};
 
 pub const TIMEOUT: Duration = Duration::from_secs(60);
 
+/// `args` for the REPL: with `tui`, a plain `adk-rust` opens the terminal surface, so the
+/// REPL is chosen with `--ui repl` (spec 3.3 §5.2).
+pub fn repl<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut all = Vec::new();
+    if cfg!(feature = "tui") {
+        all.extend(["--ui", "repl"]);
+    }
+    all.extend_from_slice(args);
+    all
+}
+
 /// Points `command` at a private home and config directory, with logging off.
 pub fn isolate(command: &mut Command, home: &Path) {
     command

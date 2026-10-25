@@ -25,8 +25,10 @@ Command-line launcher for Rust Agent Development Kit (ADK-Rust) agents.
 ```bash
 cargo install adk-cli
 
-# The harness REPL in the current project — interactive setup picks your provider on first run.
-# File tools are confined to the directory; edits and `bash` (on the host) wait for approval.
+# The harness in the current project, in the full-screen terminal — interactive setup picks your
+# provider on first run. File tools are confined to the directory; edits and `bash` (on the
+# host) wait for approval, answered by key. `--ui inline` keeps it in the scrollback, and
+# `--ui repl` is the line-by-line REPL.
 cd my-project && adk-rust
 
 # Or pre-configure a provider (the default build compiles Gemini, OpenAI and Anthropic;
@@ -77,7 +79,7 @@ See [The harness in your terminal](../docs/official_docs/harness/cli.md),
 | `vertex-skill-registry` | no | Skill Registry lookups in `adk-rust skills` |
 | `telemetry-otlp` | no | OTLP export for `TelemetryConfig::Otlp` |
 | `optimize` | no | The `Launcher` CLI's `optimize` subcommand, which parses its arguments and logs that optimization is wired through `adk-eval`'s `PromptOptimizer`; it optimizes nothing itself |
-| `tui` | no | `adk-rust` with no subcommand as the terminal surface (spec 3.3 §5.2, `adk-surface`'s `tui`): full screen on a capable terminal, `--ui inline`, `--output json` with exit codes, `--theme`, and `--server` with `--pair` for a kernel on another machine; see [the terminal](../docs/official_docs/surfaces/terminal.md) |
+| `tui` | yes | `adk-rust` with no subcommand as the terminal surface (spec 3.3 §5.2, `adk-surface`'s `tui`): full screen on a capable terminal, `--ui inline`, `--output json` with exit codes, `--theme`, the REPL's slash commands with completion, and `--server` with `--pair` for a kernel on another machine; `--ui repl` keeps the REPL; see [the terminal](../docs/official_docs/surfaces/terminal.md) |
 | `channels` | yes | `adk-rust up` starts the Telegram chat thread when `TELEGRAM_BOT_TOKEN` is set (spec 3.3 §5.3, `adk-surface`'s `channels`), with `harness` and `surface`; see [chat](../docs/official_docs/surfaces/chat.md) |
 | `scripted-model` | no | Hidden `--model-script` and `--approval-fixture` flags for end-to-end tests: a scripted model and a `record_note` tool that needs approval |
 
@@ -115,7 +117,7 @@ saved or `--provider` choice that this build does not compile in fails with the
 ## Binary Commands
 
 ```text
-adk-rust              The harness REPL in the current directory (default)
+adk-rust              The harness in the current directory: the full-screen terminal (default), `--ui repl` for the REPL
 adk-rust chat         Interactive REPL with the plain chat agent
 adk-rust serve        Serve the harness (plan mode, approval inbox, the web home at /ui/); `--agent chat` serves chat
 adk-rust code         One harness turn on a task; exit 3 when calls are held

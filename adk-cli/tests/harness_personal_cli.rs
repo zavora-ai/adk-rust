@@ -10,7 +10,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use common::{Terminal, run, text};
+use common::{Terminal, repl, run, text};
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
@@ -212,7 +212,6 @@ fn the_current_directorys_kernel_config_does_not_stop_the_personal_preset() {
 /// Review findings 11, 13 and 15: the REPL shows no shell, in its banner and in `/sandbox`,
 /// and shows the limits `adk-rust up` keeps — the user config's `[kernel]` table winning.
 #[test]
-#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn the_repl_shows_no_shell_and_the_limits_in_force() {
     let home = tempfile::tempdir().unwrap();
     let repo = repository();
@@ -222,7 +221,7 @@ fn the_repl_shows_no_shell_and_the_limits_in_force() {
             .unwrap();
     }
     let mut terminal = Terminal::spawn_in(
-        &["--preset", "personal", "--model-script", "[]"],
+        &repl(&["--preset", "personal", "--model-script", "[]"]),
         home.path(),
         repo.path(),
     );
@@ -262,7 +261,6 @@ fn serve_with_the_personal_preset_shows_both_limits() {
 /// Review of #1045, finding 3: a `[kernel]` error stops only `adk-rust up`, which runs the
 /// kernel; the REPL notes it and starts with the first-run answers.
 #[test]
-#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn a_kernel_config_error_does_not_stop_the_repl() {
     let home = tempfile::tempdir().unwrap();
     let repo = repository();
@@ -271,7 +269,7 @@ fn a_kernel_config_error_does_not_stop_the_repl() {
         std::fs::write(config.join("harness.toml"), "[kernel]\nmax_concurrent_runs = 0\n").unwrap();
     }
     let mut terminal = Terminal::spawn_in(
-        &["--preset", "personal", "--model-script", "[]"],
+        &repl(&["--preset", "personal", "--model-script", "[]"]),
         home.path(),
         repo.path(),
     );
@@ -284,7 +282,6 @@ fn a_kernel_config_error_does_not_stop_the_repl() {
 /// Review of #1045, finding 4: the REPL reads the `personal.toml` `adk-rust up` keeps, in the
 /// user config's `[kernel] home`, rather than asking again elsewhere.
 #[test]
-#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn the_repl_reads_the_answers_up_keeps() {
     let home = tempfile::tempdir().unwrap();
     let repo = repository();
@@ -304,7 +301,7 @@ fn the_repl_reads_the_answers_up_keeps() {
         .unwrap();
     }
     let mut terminal = Terminal::spawn_in(
-        &["--preset", "personal", "--model-script", "[]"],
+        &repl(&["--preset", "personal", "--model-script", "[]"]),
         home.path(),
         repo.path(),
     );

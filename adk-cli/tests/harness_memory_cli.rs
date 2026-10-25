@@ -8,7 +8,7 @@ mod common;
 
 use std::path::Path;
 
-use common::{Terminal, run, text};
+use common::{Terminal, repl, run, text};
 
 fn workspace() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -144,7 +144,6 @@ fn no_memory_learns_nothing() {
 }
 
 #[test]
-#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn the_repl_lists_and_forgets_facts() {
     let home = tempfile::tempdir().unwrap();
     let ws = workspace();
@@ -163,7 +162,12 @@ fn the_repl_lists_and_forgets_facts() {
     let listed = memory(&["list", "--dir", &dir_arg(ws.path())], home.path(), ws.path());
     let known = id_of(&listed, "known · preference");
     let mut terminal = Terminal::spawn_in(
-        &["--dir", &dir_arg(ws.path()), "--model-script", r#"[{"text": "{\"facts\": []}"}]"#],
+        &repl(&[
+            "--dir",
+            &dir_arg(ws.path()),
+            "--model-script",
+            r#"[{"text": "{\"facts\": []}"}]"#,
+        ]),
         home.path(),
         ws.path(),
     );

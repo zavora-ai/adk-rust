@@ -29,6 +29,7 @@ use super::{APP_NAME, AgentExtras, Setup, user_config};
 use crate::ResolvedModel;
 use crate::cli::UpArgs;
 
+mod commands;
 #[cfg(feature = "channels")]
 mod telegram;
 
@@ -291,6 +292,19 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     if let Some(record) = record {
         control = control.with_record(record);
     }
+    // The REPL's commands and "Always allow" for a terminal attached to this kernel, over the
+    // primary harness the web home answers decisions over (spec 3.3 §5.2).
+    let commands =
+        adk_cli::harness::HarnessCommands::new(primary.harness.clone(), APP_NAME, setup.sessions())
+            .run_store(run_store.clone())
+            .effort(setup.args.effort)
+            .hooks_disabled(!setup.resolved.hooks);
+    let host = commands::HarnessCommandHost::new(commands);
+    #[cfg(feature = "surface")]
+    let host = host.with_rules(
+        adk_surface::LocalSource::builder(APP_NAME).harness(primary.harness.clone()).build()?,
+    );
+    control = control.with_commands(Arc::new(host));
     // The run store reads the system clock too, so leases, `not_before` and wake times agree.
     let config = settings.apply(
         KernelConfig::default()
