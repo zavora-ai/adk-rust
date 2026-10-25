@@ -424,6 +424,8 @@ struct KernelInner {
     approvals: Option<Arc<dyn ApprovalService>>,
     sessions: Option<Arc<dyn SessionService>>,
     agents: BTreeMap<String, Arc<Runner>>,
+    /// The agents a person adds (spec 3.3 §5.7, §10 K7).
+    agent_table: crate::agents::Agents,
     workflows: Option<Arc<dyn WorkflowExecutor>>,
     wake_sources: Vec<Arc<dyn WakeSource>>,
     queue_ingresses: Vec<QueueIngress>,
@@ -587,6 +589,10 @@ impl Kernel {
             Ok(_) => {}
             Err(error) => tracing::warn!(error = %error, "could not reconcile missed wakes"),
         }
+        // Every active added agent is built before the first claim (spec 3.3 §5.7).
+        if let Err(error) = self.inner.agent_table.reconcile().await {
+            tracing::warn!(error = %error, "could not host the added agents yet; the next tick retries");
+        }
         self.spawn_workers();
         if let Some(schedules) = &self.inner.schedules {
             let scheduler = DurableScheduler::new(Arc::clone(schedules), Arc::clone(&sup.runs))
@@ -627,8 +633,11 @@ impl Kernel {
         tasks.push(spawn_maintenance(
             Arc::clone(&sup),
             self.inner.router.clone(),
-            self.inner.agenda.clone(),
-            self.inner.consolidation.clone(),
+            Ticks {
+                agenda: self.inner.agenda.clone(),
+                agents: self.inner.agent_table.clone(),
+                consolidation: self.inner.consolidation.clone(),
+            },
             Arc::clone(&self.inner.status),
             config.scheduler_tick,
             stop.clone(),
@@ -900,7 +909,13 @@ impl Kernel {
 
     /// The partition the target `target` is bound to, when it is a partition agent's.
     pub fn partition_of_target(&self, target: &str) -> Option<&PartitionId> {
-        self.inner.sup.partition_targets.get(target)
+        self.inner.sup.targets.statics().get(target)
+    }
+
+    /// The agents a person adds, by asking or by hand (spec 3.3 §5.7, §10 K7): every
+    /// change to one goes through this table.
+    pub fn agents(&self) -> &crate::agents::Agents {
+        &self.inner.agent_table
     }
 
     /// The event bus.
@@ -1022,7 +1037,10 @@ impl Kernel {
     /// The registered agent target names, sorted; workflow ids cannot be listed
     /// (spec 3.2 §7.11, `POST /api/kernel/processes`).
     pub(crate) fn targets(&self) -> Vec<String> {
-        self.inner.agents.keys().cloned().collect()
+        let mut targets: std::collections::BTreeSet<String> =
+            self.inner.agents.keys().cloned().collect();
+        targets.extend(self.inner.sup.targets.table.targets());
+        targets.into_iter().collect()
     }
 
     /// The driver supervisor, when the kernel was built with one (spec 3.2 §7.7).
@@ -1033,7 +1051,10 @@ impl Kernel {
 
     /// Whether `target` is a registered agent target or a workflow the executor has.
     pub(crate) fn has_target(&self, target: &str) -> bool {
+        let table = &self.inner.sup.targets.table;
         self.inner.agents.contains_key(target)
+            || table.contains(target)
+            || table.is_expected(target)
             || self.inner.workflows.as_ref().is_some_and(|workflows| workflows.has_workflow(target))
     }
 }
@@ -1262,6 +1283,14 @@ fn spawn_mirror(sup: Arc<Supervision>, stop: CancellationToken) -> JoinHandle<()
     })
 }
 
+/// What the maintenance tick moves forward besides the supervision state: the agenda, the
+/// agent table (spec 3.3 §5.7) and the consolidation tick.
+struct Ticks {
+    agenda: Agenda,
+    agents: crate::agents::Agents,
+    consolidation: Option<ConsolidationTicker>,
+}
+
 /// Every scheduler tick: expires wake sets and fires time wakes, claims wake runs enqueued
 /// from outside the kernel, attributes spend, applies the agenda's decisions, makes the
 /// daily review, runs the admission sweep (preempted processes whose preemptor finished,
@@ -1269,8 +1298,7 @@ fn spawn_mirror(sup: Arc<Supervision>, stop: CancellationToken) -> JoinHandle<()
 fn spawn_maintenance(
     sup: Arc<Supervision>,
     router: WakeRouter,
-    agenda: Agenda,
-    consolidation: Option<ConsolidationTicker>,
+    ticks: Ticks,
     status: Arc<RwLock<Status>>,
     tick: Duration,
     stop: CancellationToken,
@@ -1301,9 +1329,10 @@ fn spawn_maintenance(
                 sup.nudge();
             }
             sup.attribute_all().await;
-            agenda.tick().await;
+            ticks.agenda.tick().await;
+            ticks.agents.tick().await;
             sup.review().await;
-            if let Some(consolidation) = &consolidation {
+            if let Some(consolidation) = &ticks.consolidation {
                 consolidation.tick().await;
             }
             // A preemptor that finished on another replica, a slot freed there, a new day.
@@ -1492,6 +1521,9 @@ pub struct KernelBuilder {
     queue_ingresses: Vec<QueueIngress>,
     agenda: Option<Arc<dyn AgendaStore>>,
     agenda_handles: Vec<AgendaHandle>,
+    agent_store: Option<Arc<dyn crate::agents::AgentStore>>,
+    agent_factory: Option<Arc<dyn crate::agents::AgentFactory>>,
+    agents_handles: Vec<crate::agents::AgentsHandle>,
     rule_source: Option<Arc<dyn crate::review::StandingRuleSource>>,
     consolidators: BTreeMap<PartitionId, Arc<dyn Consolidator>>,
     #[cfg(feature = "drivers")]
@@ -1697,6 +1729,32 @@ impl KernelBuilder {
     #[must_use]
     pub fn agenda_handle(mut self, handle: AgendaHandle) -> Self {
         self.agenda_handles.push(handle);
+        self
+    }
+
+    /// Sets where the agents a person adds are kept (spec 3.3 §5.7, §10 K7). Defaults to
+    /// [`InMemoryAgentStore`](crate::stores::InMemoryAgentStore), which keeps nothing across
+    /// a restart.
+    #[must_use]
+    pub fn agent_store(mut self, store: Arc<dyn crate::agents::AgentStore>) -> Self {
+        self.agent_store = Some(store);
+        self
+    }
+
+    /// Sets how the agents a person adds are built (spec 3.3 §5.7, §10 K7). Without one the
+    /// kernel lists and removes agents but adds none.
+    #[must_use]
+    pub fn agent_factory(mut self, factory: Arc<dyn crate::agents::AgentFactory>) -> Self {
+        self.agent_factory = Some(factory);
+        self
+    }
+
+    /// Binds `handle` to the built kernel's agent table, so a tool created before the kernel
+    /// — the harness's `propose_agent` — reaches it (spec 3.3 §10 K7), as
+    /// [`agenda_handle`](Self::agenda_handle) does for `propose_followup`.
+    #[must_use]
+    pub fn agents_handle(mut self, handle: crate::agents::AgentsHandle) -> Self {
+        self.agents_handles.push(handle);
         self
     }
 
@@ -1919,6 +1977,14 @@ impl KernelBuilder {
             .fold(WakeRouter::new(runs.clone(), processes.clone()), WakeRouter::with_trigger)
             .with_bus(bus.clone())
             .with_clock(Arc::clone(&config.clock));
+        // The agents a person adds share one live target table with every worker (spec 3.3
+        // §10 S4).
+        let agent_store: Arc<dyn crate::agents::AgentStore> =
+            self.agent_store.unwrap_or_else(|| Arc::new(crate::stores::InMemoryAgentStore::new()));
+        let targets = Arc::new(crate::agents::Targets::new(
+            self.partition_targets,
+            Some(Arc::clone(&agent_store)),
+        ));
         let sup = Arc::new(Supervision {
             app_name: config.app_name.clone(),
             kernel_id,
@@ -1953,7 +2019,7 @@ impl KernelBuilder {
             triggers: trigger_names,
             #[cfg(feature = "proc-baselines")]
             proc: proc.clone(),
-            partition_targets: self.partition_targets,
+            targets: Arc::clone(&targets),
             partitions: partitions.clone(),
             control: Arc::new(crate::control::LastRead::new(config.control.control_store.clone())),
         });
@@ -1993,6 +2059,8 @@ impl KernelBuilder {
                 for (target, runner) in &self.agents {
                     worker = worker.with_agent(target.clone(), runner.clone());
                 }
+                // The agents a person adds, hosted while the kernel runs (spec 3.3 §10 S4).
+                worker = worker.with_agent_table(targets.table.clone());
                 (queue.clone(), worker)
             })
             .collect();
@@ -2011,6 +2079,24 @@ impl KernelBuilder {
         }
         let consolidation = (!consolidators.is_empty())
             .then(|| ConsolidationTicker::new(Arc::clone(&sup), processes.clone(), consolidators));
+        let agent_table = crate::agents::Agents::new(crate::agents::AgentsParts {
+            sup: Arc::clone(&sup),
+            processes: processes.clone(),
+            agenda: agenda.clone(),
+            targets,
+            store: agent_store,
+            factory: self.agent_factory,
+            approvals: self.approvals.clone(),
+            statics: self.agents.keys().cloned().collect(),
+            workflows: self.workflows.clone(),
+            #[cfg(feature = "drivers")]
+            drivers: self.drivers.clone(),
+            #[cfg(feature = "proc")]
+            ledger: ledger.clone(),
+        });
+        for handle in &self.agents_handles {
+            handle.bind(&agent_table);
+        }
         Ok(Kernel {
             inner: Arc::new(KernelInner {
                 config,
@@ -2023,6 +2109,7 @@ impl KernelBuilder {
                 approvals: self.approvals,
                 sessions: self.sessions,
                 agents: self.agents,
+                agent_table,
                 workflows: self.workflows,
                 wake_sources,
                 queue_ingresses: self.queue_ingresses,

@@ -10,6 +10,7 @@
 //! | [`AgentCaller`], [`Presence`] | §5.7, §7.2, S-I18 |
 //! | [`AGENT_CREATE_TOOL_NAME`] | §5.7 "The decision that adds an agent" |
 //! | [`AgentAction`], [`AgentPreview`], [`EndedWork`], [`AgentChange`], [`AgentView`] | §5.7 "Changing an agent", "Pausing and removing" |
+//! | [`Agents`], [`AgentsHandle`], [`AgentProposer`], [`AgentProposal`], [`AgentOutcome`], [`suggestion_request_id`] | §5.7, K7 |
 //! | [`kernel_assessment`], [`area_limits`], [`over_ceiling`], [`changed_fields`], [`widened`] | §5.7 "Risk", S-I12 |
 //!
 //! The kernel keeps every agent in its [`AgentStore`] and changes it only through its agent
@@ -22,6 +23,8 @@ mod check;
 mod factory;
 mod record;
 mod store;
+mod table;
+mod targets;
 
 pub use caller::{AgentCaller, Presence};
 pub use change::{AgentAction, AgentChange, AgentPreview, AgentView, EndedWork};
@@ -36,6 +39,12 @@ pub use record::{
     RESERVED_AGENT_NAME, ShellAccess, WebAccess, agent_id_for, check_agent_id,
 };
 pub use store::AgentStore;
+pub(crate) use table::AgentsParts;
+pub use table::{
+    AgentOutcome, AgentProposal, AgentProposer, Agents, AgentsHandle, MAX_OPEN_SUGGESTIONS,
+    suggestion_request_id,
+};
+pub(crate) use targets::Targets;
 
 /// The tool name of the inbox request that suggests an agent (spec 3.3 §5.7): a person
 /// approves it as "Add this agent" or refuses it as "Don't add"; no standing rule, mode,

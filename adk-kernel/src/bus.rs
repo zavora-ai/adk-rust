@@ -163,6 +163,17 @@ pub enum KernelEvent {
         /// Its partition.
         partition: PartitionId,
     },
+    /// An agent a person adds was suggested, added, changed, paused, resumed, removed,
+    /// refused, built or could not be built (spec 3.3 §5.7, §10 K7).
+    Agent {
+        /// The agent's id.
+        id: String,
+        /// What happened.
+        change: crate::agents::AgentChange,
+        /// Why, such as the fields a change touched or the reason it cannot start.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     /// The kill switch changed.
     Governance {
         /// Whether execution is frozen.
@@ -203,6 +214,7 @@ impl KernelEvent {
             Self::Review(_) => EventKind::Review,
             Self::Driver { .. } => EventKind::Driver,
             Self::Observation { .. } => EventKind::Observation,
+            Self::Agent { .. } => EventKind::Agent,
             Self::Governance { .. } => EventKind::Governance,
             Self::Health(_) => EventKind::Health,
         }
@@ -245,6 +257,8 @@ pub enum EventKind {
     Driver,
     /// [`KernelEvent::Observation`].
     Observation,
+    /// [`KernelEvent::Agent`].
+    Agent,
     /// [`KernelEvent::Governance`].
     Governance,
     /// [`KernelEvent::Health`].
@@ -253,7 +267,7 @@ pub enum EventKind {
 
 impl EventKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EventKind; 12] = [
+    pub const ALL: [EventKind; 13] = [
         Self::Process,
         Self::Wake,
         Self::Held,
@@ -264,6 +278,7 @@ impl EventKind {
         Self::Review,
         Self::Driver,
         Self::Observation,
+        Self::Agent,
         Self::Governance,
         Self::Health,
     ];
@@ -281,6 +296,7 @@ impl EventKind {
             Self::Review => "review",
             Self::Driver => "driver",
             Self::Observation => "observation",
+            Self::Agent => "agent",
             Self::Governance => "governance",
             Self::Health => "health",
         }

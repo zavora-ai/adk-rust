@@ -1463,7 +1463,8 @@ impl Agenda {
             Some(run) => run.target.clone(),
             None => {
                 let own: Vec<&String> = sup
-                    .partition_targets
+                    .targets
+                    .statics()
                     .iter()
                     .filter(|(_, bound)| **bound == item.partition)
                     .map(|(target, _)| target)

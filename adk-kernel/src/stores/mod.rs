@@ -417,6 +417,9 @@ pub struct ProcessFilter {
     /// Only processes whose [`ProcessMeta::suspend_requested`] is this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suspend_requested: Option<bool>,
+    /// Only processes whose run's target is this: an agent's id (spec 3.3 §5.7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     /// At most this many processes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
@@ -458,6 +461,15 @@ impl ProcessFilter {
         self
     }
 
+    /// Only processes whose run's target is `target`, such as an added agent's id (spec 3.3
+    /// §5.7). Like `states`, it is a run-record field, applied by
+    /// [`ProcessTable::ps`](crate::ProcessTable::ps) rather than by the store.
+    #[must_use]
+    pub fn target(mut self, target: impl Into<String>) -> Self {
+        self.target = Some(target.into());
+        self
+    }
+
     /// At most `limit` processes.
     #[must_use]
     pub fn limit(mut self, limit: usize) -> Self {
@@ -466,7 +478,7 @@ impl ProcessFilter {
     }
 
     /// Whether `meta` passes the side-table fields: partition, queue, parent and the
-    /// pending suspension request. `states` and `limit` are not checked here.
+    /// pending suspension request. `states`, `target` and `limit` are not checked here.
     pub fn matches(&self, meta: &ProcessMeta) -> bool {
         self.partition.as_ref().is_none_or(|partition| *partition == meta.partition)
             && self.queue.as_ref().is_none_or(|queue| *queue == meta.queue)

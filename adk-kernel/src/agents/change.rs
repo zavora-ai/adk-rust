@@ -16,7 +16,7 @@ use crate::agents::record::{AgentDefinition, AgentRecord};
 /// ```rust
 /// use adk_kernel::agents::{AgentAction, AgentDefinition};
 ///
-/// let add = AgentAction::Create { definition: AgentDefinition::new("Finance", "default") };
+/// let add = AgentAction::Create { definition: AgentDefinition::new("Finance", "default"), replaces: None };
 /// let pause = AgentAction::Pause { id: "finance".into() };
 /// assert_ne!(add.digest(), pause.digest());
 /// assert_eq!(serde_json::to_value(&pause).unwrap()["action"], "pause");
@@ -29,6 +29,11 @@ pub enum AgentAction {
     Create {
         /// What it is.
         definition: AgentDefinition,
+        /// The waiting suggestion this replaces, by its agent id, when the person changed a
+        /// suggestion before adding it ("Change it first"); the suggestion then ends as
+        /// "You changed it and added it".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replaces: Option<String>,
     },
     /// Change an agent's definition; its area stays.
     Change {
@@ -88,9 +93,10 @@ impl AgentAction {
         use sha2::Digest as _;
 
         let canonical = match self {
-            Self::Create { definition } => {
-                Self::Create { definition: definition.clone().normalized() }
-            }
+            Self::Create { definition, replaces } => Self::Create {
+                definition: definition.clone().normalized(),
+                replaces: replaces.clone(),
+            },
             Self::Change { id, expected_version, definition } => Self::Change {
                 id: id.clone(),
                 expected_version: *expected_version,
