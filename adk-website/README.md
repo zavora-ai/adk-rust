@@ -36,6 +36,8 @@ is for each kind of site.
 | `alarms` | P1, P2 and P3 routing to the owner's channels | §7.21 |
 | `review` | The weekly review | §7.21 |
 | `wallet` | The wallet as a KPI source and the site's commerce outcomes | §7.14 |
+| `experiments` | Charter KPIs and guardrails as `adk-eval` experiments; variants as their own static files; stable assignment of an anonymous bucket; exposures and goals through the beacon; a daily look; a guardrail breach pauses the job and keeps the control; the decision and evidence in the weekly review | §7.12, A-I15 |
+| `measurement` | KPI sources that are not drivers: the beacon, host logs, the commerce, action and spend ledgers, agent search at the edge, AEO | §7.12, §7.11 |
 | `workflows` | The probe and the weekly review as kernel runs | §7.20 |
 | `observability` | Spans, metrics and the site view | §7.24 |
 
@@ -156,4 +158,21 @@ and the delegations and never enters an agent's context (A-I5).
 | P2 | On the owner's chosen channel outside quiet hours; the weekly review on a volunteer-run site |
 | P3 | The weekly review |
 
-See [the docs page](../docs/official_docs/deployment/adk-website.md).
+## Experiments and measurement
+
+| Step | What happens |
+|------|--------------|
+| Start | `ExperimentRunner::start` maps the plan onto the charter: the primary KPI's metric and direction, each guardrail with a tolerance from its KPI baseline; the analysis is fixed |
+| Build | `ExperimentGenerator` wraps the site's generator: the variant is `/_exp/{id}/…`, `noindex`, its canonical link naming the control; the pages load `/_awp/experiments.js` |
+| Count | The script assigns a tab by a stable hash of a random bucket kept in `sessionStorage`, and sends one exposure and one event per goal to the edge's beacon; no cookie, no identifier |
+| Look | Each day the runner adds the new whole days to the totals and analyses them with `ExperimentAnalyzer` |
+| Stop | A guardrail breach pauses the job before its next action, lowers it one level and keeps the control (A-I15); `RepublishOnStop` serves the control alone at once |
+| Review | `ReviewComposer::with_experiments` puts each experiment's decision and evidence in the weekly review |
+
+`measurement` gives the KPI tracker its non-driver sources: `BeaconKpi` (`beacon`),
+`HostLogs` (`host_logs`), `CommerceKpi` over `MeteredActionLedger` (`commerce`),
+`SpendLedgerKpi` over `MeteredSpendLedger` (`spend`), `AgentSearchKpi` over `EdgeMeter`
+(`agents`) and `AeoKpi` over `AeoTracker` (`aeo`).
+
+See [the docs page](../docs/official_docs/deployment/adk-website.md) and
+[experiments and measurement](../docs/official_docs/deployment/website-experiments.md).

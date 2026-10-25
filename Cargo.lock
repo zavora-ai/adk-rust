@@ -1523,6 +1523,7 @@ dependencies = [
  "adk-deploy",
  "adk-devtools",
  "adk-drivers",
+ "adk-eval",
  "adk-harness",
  "adk-kernel",
  "adk-model",

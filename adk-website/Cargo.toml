@@ -34,12 +34,14 @@ adk-deploy.workspace = true
 # The inbox drivers' in-thread replies (spec 3.5 §7.10, §7.13).
 adk-drivers.workspace = true
 adk-devtools.workspace = true
+# The sequential analysis of the site's experiments (spec 3.5 §7.12).
+adk-eval = { workspace = true, features = ["experiments"] }
 # The website runtime: preset, toolsets, partitions, ladder, onboarding machinery (WP I).
 adk-harness = { workspace = true, features = ["website"] }
 adk-kernel = { workspace = true, features = ["charter", "channels"] }
 adk-payments = { workspace = true, features = ["wallet"] }
 # `WorkflowExecutor` for the site's deterministic jobs (spec 3.5 §7.20); the agent edge and
-# its SQLite stores (spec 3.5 §7.9).
+# its SQLite stores (spec 3.5 §7.9), whose beacon counts experiments and KPIs read (§7.12).
 adk-server = { workspace = true, features = ["background", "awp", "awp-sqlite"] }
 adk-session = { workspace = true, features = ["sqlite"] }
 # Migration sources, freeze, quarantine and probes for onboarding and the Guardian (§7.8).

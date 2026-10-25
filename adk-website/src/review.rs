@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 use crate::alarms::{Alarm, AlarmRouter};
 use crate::audit;
+use crate::experiments::ExperimentRunner;
 use crate::incident::{Incident, IncidentPath};
 use crate::team::AgentRole;
 use crate::wallet::WalletKpi;
@@ -295,6 +296,7 @@ pub struct ReviewComposer {
     incidents: Option<Arc<IncidentPath>>,
     alarms: Option<Arc<AlarmRouter>>,
     audit: Option<AuditTrail>,
+    experiments: Option<Arc<ExperimentRunner>>,
 }
 
 impl ReviewComposer {
@@ -315,6 +317,7 @@ impl ReviewComposer {
             incidents: None,
             alarms: None,
             audit: None,
+            experiments: None,
         }
     }
 
@@ -350,6 +353,14 @@ impl ReviewComposer {
     #[must_use]
     pub fn with_audit(mut self, trail: AuditTrail) -> Self {
         self.audit = Some(trail);
+        self
+    }
+
+    /// Reports every experiment that ran in the week with its decision and evidence (spec
+    /// 3.5 §7.12), after the jobs' own entries.
+    #[must_use]
+    pub fn with_experiments(mut self, runner: Arc<ExperimentRunner>) -> Self {
+        self.experiments = Some(runner);
         self
     }
 
@@ -477,6 +488,10 @@ impl ReviewComposer {
             Some(router) => router.take_review_items().await,
             None => Vec::new(),
         };
+        let mut experiments = inputs.experiments;
+        if let Some(runner) = &self.experiments {
+            experiments.extend(runner.review(from, to).await?);
+        }
         Ok(WeeklyReview {
             site: self.site,
             week_start,
@@ -484,7 +499,7 @@ impl ReviewComposer {
             kpis,
             work: inputs.work,
             money,
-            experiments: inputs.experiments,
+            experiments,
             incidents,
             leads,
             handed_off: inputs.handed_off,

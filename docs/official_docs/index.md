@@ -211,6 +211,7 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Site Hosts](deployment/site-hosts.md) - Publishing signed releases to S3, GCS, Azure, Cloudflare, Netlify, GitHub Pages or any server over SSH
 - [Site Generators](deployment/site-generators.md) - Building a site with Zola, Hugo, Astro or Build Awesome in a sandbox with no network
 - [The AWP Website Product](deployment/adk-website.md) - `adk-website`: site kinds, the team of eight agents, onboarding from nothing, a presence or an existing site, incidents, alarms and the weekly review
+- [Website Experiments and Measurement](deployment/website-experiments.md) - Experiments on the charter's KPIs with guardrails that stop them, variants as static files, and the KPI sources that are not drivers
 - [Agent Engine](deployment/agent-engine.md) - Deploying on the Gemini Enterprise Agent Platform
 - [Agent Registry](deployment/agent-registry.md) - Discovery, registration, and remote invocation on the Agent Platform
 

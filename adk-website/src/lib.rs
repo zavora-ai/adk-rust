@@ -23,6 +23,8 @@
 //! | [`alarms`] | P1, P2 and P3 routing to the owner's channels | §7.21 |
 //! | [`review`] | The weekly review | §7.21 |
 //! | [`wallet`] | The wallet as a KPI source and the site's commerce outcomes | §7.14 |
+//! | [`experiments`] | Charter KPIs and guardrails as experiments, variants as static files, daily looks, pauses on a breach, the review's evidence | §7.12, A-I15 |
+//! | [`measurement`] | KPI sources that are not drivers: the beacon, host logs, the commerce, action and spend ledgers, agent search at the edge, AEO | §7.12, §7.11 |
 //! | [`workflows`] | The probe and the weekly review as kernel runs | §7.20 |
 //! | [`contract`] | The signed contract, key set and charter terms released with the site | §7.2, §7.7, D-11 |
 //! | [`deploy`] | The four deployment shapes, agency mode and serving the kernel and the edge | §7.22, A-I22 |
@@ -54,9 +56,11 @@ pub mod audit;
 pub mod contract;
 pub mod deploy;
 pub mod edge;
+pub mod experiments;
 pub mod incident;
 pub mod jobs;
 pub mod kinds;
+pub mod measurement;
 pub mod observability;
 pub mod onboarding;
 pub mod packs;
