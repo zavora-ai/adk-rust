@@ -538,7 +538,7 @@ impl RuleSuggestion {
 }
 
 /// Names of the harness edit tools.
-pub(crate) const EDIT_TOOLS: &[&str] = &["write_file", "edit_file"];
+pub(crate) const EDIT_TOOLS: &[&str] = &["write_file", "edit_file", "apply_patch"];
 
 /// Tools no standing rule ever covers (spec 3.1 §7.5).
 pub(crate) const NEVER_ELIGIBLE_TOOLS: &[&str] =
@@ -679,26 +679,39 @@ impl StandingRule {
             }];
         }
         if EDIT_TOOLS.contains(&name) && static_tool {
-            let Some(path) = request.args.get("path").and_then(Value::as_str) else {
+            let Some(paths) = crate::edits::edit_paths(name, &request.args) else {
                 return Vec::new();
             };
-            if is_protected_path(path) || path.split(['/', '\\']).any(|part| part == "..") {
+            if paths.is_empty()
+                || paths.iter().any(|path| {
+                    is_protected_path(path) || path.split(['/', '\\']).any(|part| part == "..")
+                })
+            {
                 return Vec::new();
             }
+            // `apply_patch` reads its paths from the patch; the others from `/path`.
+            let pointer = if name == crate::edits::APPLY_PATCH { "/patch" } else { "/path" };
             let mut out = vec![RuleSuggestion {
                 label: format!("{name}: anywhere in the workspace"),
                 scope: SuggestedScope::Session,
                 tool: name.to_string(),
                 origin: pin.clone(),
                 predicates: vec![RulePredicate::PathWithin {
-                    pointer: "/path".into(),
+                    pointer: pointer.into(),
                     dir: ".".into(),
                 }],
                 runs_scripts: false,
             }];
-            let dir = std::path::Path::new(path.trim_start_matches("./"))
-                .parent()
-                .map(|parent| parent.to_string_lossy().into_owned())
+            // The directory every path shares.
+            let dir = paths
+                .iter()
+                .map(|path| {
+                    std::path::Path::new(path.trim_start_matches("./"))
+                        .parent()
+                        .map(|parent| parent.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                })
+                .reduce(|shared, next| common_dir(&shared, &next))
                 .filter(|parent| !parent.is_empty() && !parent.starts_with('/'));
             if let Some(dir) = dir {
                 out.push(RuleSuggestion {
@@ -706,7 +719,7 @@ impl StandingRule {
                     scope: SuggestedScope::Session,
                     tool: name.to_string(),
                     origin: pin,
-                    predicates: vec![RulePredicate::PathWithin { pointer: "/path".into(), dir }],
+                    predicates: vec![RulePredicate::PathWithin { pointer: pointer.into(), dir }],
                     runs_scripts: false,
                 });
             }
@@ -736,6 +749,16 @@ impl StandingRule {
     pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
         self.expires_at.is_some_and(|at| now >= at)
     }
+}
+
+/// The longest directory both `a` and `b` lie within, by whole components.
+fn common_dir(a: &str, b: &str) -> String {
+    a.split('/')
+        .zip(b.split('/'))
+        .take_while(|(left, right)| left == right)
+        .map(|(part, _)| part)
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[cfg(test)]

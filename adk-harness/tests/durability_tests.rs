@@ -118,6 +118,8 @@ async fn open(
     let runs = SqliteRunStore::from_pool(pool.clone());
     runs.migrate().await.unwrap();
     let checkpointer = adk_graph::SqliteCheckpointer::from_pool(pool.clone()).await.unwrap();
+    let reads = adk_harness::SqliteReadRecords::new(pool.clone());
+    reads.migrate().await.unwrap();
     let model = Arc::new(ScriptedLlm::new("scripted", script));
     let builder = HarnessAgent::builder("harness")
         .model(model.clone())
@@ -130,7 +132,8 @@ async fn open(
         .goal_store(Arc::new(goals))
         .goal_engine(adk_harness::GoalEngine::Loop)
         .approval_store(Arc::new(approvals) as Arc<dyn ApprovalStore>)
-        .plan_checkpointer(Arc::new(checkpointer));
+        .plan_checkpointer(Arc::new(checkpointer))
+        .read_records(Arc::new(reads));
     let agent = Arc::new(configure(builder).build().unwrap());
     let runner = agent
         .configure_runner(
@@ -408,4 +411,68 @@ async fn a_durable_goal_survives_killing_the_process() {
     // The same goal on the same session is the same durable run.
     let again = p.harness.start_goal(&user, &session, spec).await.err().unwrap();
     assert_eq!(again.code, "harness.goal.duplicate");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_edit_parked_by_a_goal_runs_once_when_approved_from_a_new_process() {
+    // spec 3.1 §7.33 fix 5: the goal reads a file and parks on the held edit; the process
+    // dies; a new process approves it. The read record persisted with the session, so the
+    // edit runs, once, instead of failing as never read.
+    let dir = workspace();
+    std::fs::write(dir.path().join("ws/notes.txt"), "status: draft\n").unwrap();
+    let (user, session) = (user("alice"), session_id("s1"));
+    let spec = GoalSpec {
+        goal: "mark the notes done".into(),
+        until: "grep -q 'status: done' notes.txt".into(),
+        max_iterations: 3,
+        check_timeout: Duration::from_secs(30),
+    };
+    let run_id = {
+        let p = open(
+            dir.path(),
+            vec![
+                call("read_file", json!({ "path": "notes.txt" })),
+                call(
+                    "edit_file",
+                    json!({ "path": "notes.txt", "old_string": "draft", "new_string": "done" }),
+                ),
+                text("held"),
+            ],
+            HarnessMode::Ask,
+            false,
+            |b| b,
+        )
+        .await;
+        p.harness.open_session(&user, Some(&session)).await.unwrap();
+        let events =
+            collect(p.harness.start_goal(&user, &session, spec.clone()).await.unwrap()).await;
+        let run_id = events[0].provider_metadata["harness.goal.run_id"].clone();
+        let handle = worker(&p, "first");
+        wait_for_state(&p.runs, &run_id, RunState::Waiting).await;
+        handle.abort();
+        run_id
+    };
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("ws/notes.txt")).unwrap(),
+        "status: draft\n"
+    );
+
+    let p = open(dir.path(), vec![text("edited")], HarnessMode::Ask, false, |b| b).await;
+    let second = worker(&p, "second");
+    let pending = p.harness.pending_approvals(&user, &session).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].request.tool_name, "edit_file");
+    p.harness
+        .decide(&user, &session, &pending[0].fingerprint, HarnessDecision::Approve)
+        .await
+        .unwrap();
+    wait_for_state(&p.runs, &run_id, RunState::Completed).await;
+    second.shutdown().await;
+
+    assert_eq!(std::fs::read_to_string(dir.path().join("ws/notes.txt")).unwrap(), "status: done\n");
+    let seen = serde_json::to_string(&p.model.requests()[0].contents).unwrap();
+    assert!(seen.contains("Replaced 1 occurrence(s) in notes.txt"), "the edit ran: {seen}");
+    assert!(!seen.contains("devtools.not_read"), "{seen}");
+    let state = p.harness.goal(&user, &session).await.unwrap().unwrap();
+    assert_eq!((state.status, state.iteration), (GoalStatus::Done, 1));
 }

@@ -25,7 +25,8 @@ const DIFF_INPUT_MAX_BYTES: usize = 256 * 1024;
 const DIFF_MAX_BYTES: usize = 32 * 1024;
 
 /// A tool whose executions run the `PostTool` hooks, and the `PostEdit` hooks when it is
-/// `write_file` or `edit_file` (spec 3.1 §7.22).
+/// `write_file`, `edit_file` or `apply_patch` — once per file a patch changed (spec 3.1
+/// §7.22, §7.26).
 pub(crate) struct HookedTool {
     inner: Arc<dyn Tool>,
     hooks: Arc<HookRunner>,
@@ -57,7 +58,7 @@ impl HookedTool {
                     isolation,
                     false,
                 );
-                let edit = matches!(tool.name(), "write_file" | "edit_file");
+                let edit = matches!(tool.name(), "write_file" | "edit_file" | "apply_patch");
                 Arc::new(Self {
                     inner: tool,
                     hooks: hooks.clone(),
@@ -81,13 +82,16 @@ impl HookedTool {
         }
     }
 
-    /// The file an edit targets, as the workspace resolves it.
-    fn edit_target(&self, args: &Value) -> Option<std::path::PathBuf> {
+    /// The files an edit targets, as the workspace resolves them: every path of a patch.
+    fn edit_targets(&self, args: &Value) -> Vec<std::path::PathBuf> {
         if !self.edit {
-            return None;
+            return Vec::new();
         }
-        let path = args.get("path").and_then(Value::as_str)?;
-        self.hooks.workspace().resolve(path).ok()
+        crate::edits::edit_paths(self.inner.name(), args)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|path| self.hooks.workspace().resolve(path).ok())
+            .collect()
     }
 }
 
@@ -232,15 +236,15 @@ impl Tool for HookedTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let target = self.edit_target(&args);
-        let before = match &target {
-            Some(path) => tokio::fs::read(path).await.ok(),
-            None => None,
-        };
+        let targets = self.edit_targets(&args);
+        let mut befores = Vec::with_capacity(targets.len());
+        for path in &targets {
+            befores.push(tokio::fs::read(path).await.ok());
+        }
         let started = Instant::now();
         let result = self.inner.execute(ctx.clone(), args.clone()).await;
         let duration = started.elapsed();
-        let edited = target.is_some() && result.is_ok();
+        let edited = !targets.is_empty() && result.is_ok();
 
         let mode = self.mode(ctx.as_ref()).await;
         let audit = HarnessAudit::for_tool(ctx.as_ref());
@@ -275,10 +279,15 @@ impl Tool for HookedTool {
             Err(error) => Err(error),
         };
 
-        if edited && let Some(path) = &target {
-            let after = tokio::fs::read(path).await.ok();
-            let changed = before != after;
-            if changed || before.is_none() {
+        if edited {
+            for (path, before) in targets.iter().zip(befores) {
+                let after = tokio::fs::read(path).await.ok();
+                if before == after && before.is_some() {
+                    continue;
+                }
+                if before.is_none() && after.is_none() {
+                    continue;
+                }
                 let before_sha = before.as_deref().map(crate::fsutil::hex_digest);
                 let after_sha = after.as_deref().map(crate::fsutil::hex_digest).unwrap_or_default();
                 let diff = match (&before, &after) {

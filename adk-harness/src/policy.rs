@@ -45,6 +45,7 @@ pub(crate) const HARNESS_TOOL_NAMES: &[&str] = &[
     "harness_help",
     "write_file",
     "edit_file",
+    "apply_patch",
     "bash",
     "write_todos",
     "update_todo",
@@ -312,6 +313,7 @@ impl ToolClassRegistry {
         registry.register("exit_plan_mode", ToolKind::PlanExit);
         registry.register("write_file", ToolKind::Edit);
         registry.register("edit_file", ToolKind::Edit);
+        registry.register("apply_patch", ToolKind::Edit);
         registry.register("bash", ToolKind::Shell(Isolation::Host));
         registry.register("memory_read", ToolKind::Read);
         registry.register("memory_write", ToolKind::MemoryWrite);
@@ -1132,8 +1134,9 @@ impl HarnessPolicy {
             ));
         }
         if matches!(kind, ToolKind::Read | ToolKind::Edit)
-            && let Some(path) = request.args.get("path").and_then(Value::as_str)
-            && self.inner.workspace.resolve(path).is_err()
+            && let Some(paths) = crate::edits::edit_paths(&request.tool_name, &request.args)
+            && let Some(path) =
+                paths.iter().find(|path| self.inner.workspace.resolve(path).is_err())
         {
             return Some(format!("path '{path}' is outside the workspace"));
         }
@@ -1304,9 +1307,14 @@ impl HarnessPolicy {
             if identity_inert && mode == HarnessMode::Auto { HarnessMode::Ask } else { mode };
         // Decided on the target the write reaches, so a symlink inside the workspace does not
         // turn a protected file into an ordinary edit (I11, I29).
-        let path = request.args.get("path").and_then(Value::as_str);
-        let protected = kind == ToolKind::Edit
-            && path.is_some_and(|path| is_protected_target(self.inner.workspace.root(), path));
+        // Every path the call writes: an `apply_patch` with a protected path anywhere is the
+        // protected row (spec 3.1 §7.26, I67).
+        let paths = crate::edits::edit_paths(&request.tool_name, &request.args).unwrap_or_default();
+        let protected_path = paths
+            .iter()
+            .find(|path| is_protected_target(self.inner.workspace.root(), path))
+            .filter(|_| kind == ToolKind::Edit);
+        let protected = protected_path.is_some();
         let row = TableRow::of(&kind, protected);
         let mut switches = self.inner.switches;
         // Unapproved sandboxed commands need every protected path in place at this call (I26).
@@ -1318,8 +1326,15 @@ impl HarnessPolicy {
         }
         let base = decision_cell(mode, row).resolve(&switches);
         let mut reason = describe(&request.tool_name, row, mode, base);
-        if protected && path.is_some_and(|path| !is_protected_path(path)) {
-            reason.push_str(" (the path resolves through a symlink to a protected path)");
+        if let Some(path) = protected_path {
+            if is_protected_path(path) {
+                if paths.len() > 1 {
+                    reason.push_str(&format!(" ({path} is protected)"));
+                }
+            } else {
+                reason
+                    .push_str(&format!(" ({path} resolves through a symlink to a protected path)"));
+            }
         }
         if base == TableDecision::Deny {
             return deny(PolicyDecision::deny(reason), mode);

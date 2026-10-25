@@ -98,6 +98,61 @@ pub mod shared_mode_store {
     }
 }
 
+/// [`ReadLedger`](adk_devtools::ReadLedger) cases for the harness's read-record stores
+/// (spec 3.1 §7.26, §10 D7).
+pub mod read_records {
+    use adk_devtools::{ReadLedger, ReadScope};
+
+    fn scope(user: &str, session: &str, agent: &str) -> ReadScope {
+        ReadScope::new("app", user, session, agent)
+    }
+
+    /// A recorded digest reads back, and a later record of the path replaces it.
+    pub async fn round_trip(store: &dyn ReadLedger) {
+        let coder = scope("alice", "s1", "coder");
+        assert_eq!(store.digest(&coder, "src/lib.rs").await.unwrap(), None);
+        store.record(&coder, "src/lib.rs", "d1").await.unwrap();
+        assert_eq!(store.digest(&coder, "src/lib.rs").await.unwrap().as_deref(), Some("d1"));
+        store.record(&coder, "src/lib.rs", "d2").await.unwrap();
+        assert_eq!(store.digest(&coder, "src/lib.rs").await.unwrap().as_deref(), Some("d2"));
+    }
+
+    /// Another user, session or agent never sees a scope's records.
+    pub async fn scopes_are_isolated(store: &dyn ReadLedger) {
+        store.record(&scope("alice", "s1", "coder"), "a.rs", "d1").await.unwrap();
+        for other in [
+            scope("bob", "s1", "coder"),
+            scope("alice", "s2", "coder"),
+            scope("alice", "s1", "reviewer"),
+        ] {
+            assert_eq!(store.digest(&other, "a.rs").await.unwrap(), None, "{other:?}");
+        }
+        let other_app = ReadScope::new("other", "alice", "s1", "coder");
+        assert_eq!(store.digest(&other_app, "a.rs").await.unwrap(), None);
+    }
+
+    /// Forgetting a path removes it and keeps the scope's other paths.
+    pub async fn forget_removes_one_path(store: &dyn ReadLedger) {
+        let coder = scope("alice", "s1", "coder");
+        store.record(&coder, "a.rs", "d1").await.unwrap();
+        store.record(&coder, "b.rs", "d2").await.unwrap();
+        store.forget(&coder, "a.rs").await.unwrap();
+        store.forget(&coder, "never-recorded.rs").await.unwrap();
+        assert_eq!(store.digest(&coder, "a.rs").await.unwrap(), None);
+        assert_eq!(store.digest(&coder, "b.rs").await.unwrap().as_deref(), Some("d2"));
+    }
+
+    /// A record written through one instance is read through the other, as a held edit
+    /// approved on another replica needs (spec 3.1 §7.33 fix 5).
+    pub async fn records_reach_every_instance(first: &dyn ReadLedger, second: &dyn ReadLedger) {
+        let coder = scope("alice", "s1", "coder");
+        first.record(&coder, "a.rs", "d1").await.unwrap();
+        assert_eq!(second.digest(&coder, "a.rs").await.unwrap().as_deref(), Some("d1"));
+        second.forget(&coder, "a.rs").await.unwrap();
+        assert_eq!(first.digest(&coder, "a.rs").await.unwrap(), None);
+    }
+}
+
 /// [`StandingRuleStore`](crate::StandingRuleStore) cases.
 pub mod standing_rule_store {
     use adk_core::principal::{SubjectKind, SubjectRef};
