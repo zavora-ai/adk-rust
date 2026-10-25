@@ -93,7 +93,8 @@ impl BotApi {
         }
     }
 
-    async fn call_once(
+    /// Calls `method` with `body` once, never waiting out a rate limit.
+    pub(crate) async fn call_once(
         &self,
         method: &str,
         body: &Value,

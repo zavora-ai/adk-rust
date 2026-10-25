@@ -35,6 +35,13 @@
 //! web home and the phone need) and [`PAIRED_LOCAL_METADATA_KEY`] (a paired local terminal),
 //! read from the `RequestContext` metadata the server's extractor builds. Errors are problem
 //! documents with the engine's `surface.*` code.
+//!
+//! A paired device's context (a device token, spec 3.3 §10 K2) is never the web home and never
+//! a paired local terminal, whatever it declares: it reads as the terminal row, typed, and
+//! carries its device to every audit record. `POST /surface/commands` answers it
+//! `403 surface.not_here`. A `decide` declaring the voice surface or origin answers
+//! `400 surface.invalid`, because a spoken answer reaches the engine through the voice
+//! surface; `cancelAnswer` stays open (§5.6, §7.2).
 
 mod home;
 mod openapi;
@@ -236,8 +243,18 @@ fn unauthenticated() -> Response {
     ))
 }
 
+/// The paired device a context authenticated as, when it carries a device token's metadata
+/// (spec 3.3 §10 K2).
+fn device_of(context: &RequestContext) -> Option<&String> {
+    context.metadata.get(adk_kernel::pairing::DEVICE_ID_METADATA)
+}
+
 /// The caller from the server's authentication; the client chooses only the surface and the
 /// origin, which can narrow what it may decide and never widen it.
+///
+/// A device token's context is never the web home and never a paired local terminal, whatever
+/// the query or body declares: it is the terminal row, typed, with its device (spec 3.3 §7.2,
+/// §11 S-I10). Its presence comes only from a route that checked it, never from metadata.
 fn caller(
     context: Context,
     surface: SurfaceKind,
@@ -246,6 +263,11 @@ fn caller(
     let Some(Extension(Some(context))) = context else {
         return Err(Unauthenticated);
     };
+    if let Some(device) = device_of(&context) {
+        return Ok(Caller::human(context.user_id.clone(), SurfaceKind::Terminal, Origin::Keyboard)
+            .with_groups(context.scopes.clone())
+            .with_device(device.clone()));
+    }
     let origin = origin.unwrap_or(match surface {
         SurfaceKind::Web | SurfaceKind::Tray => Origin::Pointer,
         SurfaceKind::Phone => Origin::Touch,
@@ -418,6 +440,15 @@ async fn command(
     context: Context,
     Json(request): Json<CommandRequest>,
 ) -> Response {
+    // A device has its own routes, each opened by its token's scopes; commands would let it
+    // send, change the mode or resume (spec 3.3 §10 K2, §11 S-I10).
+    if let Some(Extension(Some(context))) = &context
+        && device_of(context).is_some()
+    {
+        return failed(SurfaceError::NotHere(
+            "a paired device answers and stops through its own routes, not commands".into(),
+        ));
+    }
     // Chat and agent input reach the engine in process, from their adapters; over HTTP a
     // client could otherwise put a channel it never used on the record (spec 3.3 §11).
     if matches!(request.origin, Origin::Chat { .. } | Origin::Agent { .. })
@@ -425,6 +456,15 @@ async fn command(
     {
         return failed(SurfaceError::Invalid(
             "chat and agent input reach the engine through their adapters, not this API".into(),
+        ));
+    }
+    // A spoken answer comes from the voice surface's own transcript, never a declared one;
+    // cancelling a spoken answer stays open to every surface (spec 3.3 §5.6, §7.2).
+    if matches!(request.command, Command::Decide { .. })
+        && (request.surface == SurfaceKind::Voice || request.origin == Origin::Voice)
+    {
+        return failed(SurfaceError::Invalid(
+            "a spoken answer reaches the engine through the voice surface, not this API".into(),
         ));
     }
     let caller = try_or_respond!(caller(context, request.surface, Some(request.origin)));

@@ -166,6 +166,21 @@ path a symlink resolves to as well, so a link named `settings.txt` pointing at
 `exclude_globs([])` turns exclusion off; `Workspace::is_excluded` answers the same
 question for a path, so a harness can require approval before reading one.
 
+### Errors the model sees
+
+Each `DevToolError` maps to an `AdkError` with a code. The ones a model can act on are
+rejections, so `LlmAgent` passes their message to the model (spec 3.1 §7.33 fix 6):
+
+| Error | Category | Code | The model sees |
+|---|---|---|---|
+| `NotRead` | `Conflict` | `devtools.not_read` | `file 'src/lib.rs' must be read with read_file before it can be edited` |
+| `NoMatch`, `Ambiguous` | `InvalidInput` | `devtools.no_match`, `devtools.ambiguous` | The string was not found, or how many times it occurs |
+| `PathEscape`, `ReadOnly`, `BashDisabled`, `Excluded` | `Forbidden` | `devtools.path_escape`, `devtools.read_only`, `devtools.bash_disabled`, `devtools.path_excluded` | Why the call is refused |
+| `Io` of a missing file | `NotFound` | `devtools.not_found` | The I/O message |
+| `Other` (bad arguments, a bad pattern) | `InvalidInput` | `devtools.invalid_argument` | The message |
+| `Timeout` | `Timeout` | `devtools.timeout` | The category and code only |
+| Any other `Io` | `Internal` | `devtools.io` | The category and code only |
+
 ## Using it directly
 
 Attach the toolset to any agent:

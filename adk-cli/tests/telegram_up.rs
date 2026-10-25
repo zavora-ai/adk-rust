@@ -1,8 +1,9 @@
 //! `adk-rust up` with `TELEGRAM_BOT_TOKEN` (spec 3.3 §5.3): the bot starts with the kernel,
 //! a stranger gets a pairing code, `adk-rust pair accept` pairs the account, the kernel's
 //! routes list it for the home's "Where you can say yes from", a held write reaches Telegram
-//! headed in plain words, and Allow once lets it run. Without the token nothing of it starts
-//! and nothing mentions Telegram.
+//! headed in plain words, and Allow once lets it run, the home saying it was given in
+//! Telegram, with or without a signed audit log. Without the token nothing of it starts and
+//! nothing mentions Telegram.
 //!
 //! The binary runs as a process with a scripted model, against a fake Telegram Bot API on
 //! loopback (`TELEGRAM_API_BASE`).
@@ -137,20 +138,54 @@ async fn fake_api() -> (Fake, SocketAddr) {
     (fake, addr)
 }
 
-/// `adk-rust up` at `kernel` on `port`, with `env`; returns once it listens.
-fn up(home: &Path, kernel: &Path, ws: &Path, port: u16, env: &[(&str, &str)]) -> Child {
+/// `adk-rust up` as a child process, stopped when dropped, so a failing test leaves nothing
+/// running.
+struct Up(Option<Child>);
+
+impl Up {
+    /// Stops `up` and returns what it printed.
+    fn finish(mut self) -> String {
+        let mut child = self.0.take().expect("up runs");
+        let _ = child.kill();
+        common::text(&child.wait_with_output().unwrap())
+    }
+}
+
+impl Drop for Up {
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.0 {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// `adk-rust up` at `kernel` on `port`, with `extra` arguments and `env`; returns once it
+/// listens.
+fn up(
+    home: &Path,
+    kernel: &Path,
+    ws: &Path,
+    port: u16,
+    extra: &[&str],
+    env: &[(&str, &str)],
+) -> Up {
     let (kernel, dir, bind) =
         (kernel.display().to_string(), ws.display().to_string(), format!("127.0.0.1:{port}"));
     let mut command = Command::new(env!("CARGO_BIN_EXE_adk-rust"));
     command
         .args(["up", "--home", &kernel, "--bind", &bind, "--dir", &dir])
         .args(["--model-script", WRITE_THEN_REPLY, "--mode", "ask"])
+        .args(extra)
         .current_dir(ws)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     common::isolate(&mut command, home);
-    command.env_remove("TELEGRAM_BOT_TOKEN").env_remove("TELEGRAM_API_BASE");
+    command
+        .env_remove("TELEGRAM_BOT_TOKEN")
+        .env_remove("TELEGRAM_API_BASE")
+        .env_remove("TELEGRAM_HOME_URL");
     for (name, value) in env {
         command.env(name, value);
     }
@@ -163,7 +198,7 @@ fn up(home: &Path, kernel: &Path, ws: &Path, port: u16, env: &[(&str, &str)]) ->
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    child
+    Up(Some(child))
 }
 
 /// Waits up to a minute for `probe`.
@@ -190,6 +225,19 @@ fn workspace() -> tempfile::TempDir {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn up_starts_the_telegram_bot_and_a_paired_account_allows_a_write_once() {
+    allows_a_write_once(&[]).await;
+}
+
+/// Spec 3.3 §8.1: with `--ephemeral`, which keeps no audit log, the home still says the
+/// answer was given in Telegram (on main it said "You said yes at 07:31").
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_ephemeral_the_home_says_the_answer_was_given_in_telegram() {
+    allows_a_write_once(&["--ephemeral"]).await;
+}
+
+/// The scenario on `up` with `extra` arguments: the bot starts, a stranger gets a code, Ana
+/// pairs and allows a held write once from Telegram, and the home says so.
+async fn allows_a_write_once(extra: &[&str]) {
     let (fake, addr) = fake_api().await;
     let home = tempfile::tempdir().unwrap();
     let ws = workspace();
@@ -201,6 +249,7 @@ async fn up_starts_the_telegram_bot_and_a_paired_account_allows_a_write_once() {
         &kernel,
         ws.path(),
         port,
+        extra,
         &[("TELEGRAM_BOT_TOKEN", TOKEN), ("TELEGRAM_API_BASE", &base)],
     );
     let kernel_arg = kernel.display().to_string();
@@ -256,20 +305,56 @@ async fn up_starts_the_telegram_bot_and_a_paired_account_allows_a_write_once() {
     assert!(!ws.path().join("invoice.txt").exists(), "held, not written");
 
     // Allow once: the write runs once and the reply comes back.
+    let decision = fake
+        .calls()
+        .into_iter()
+        .rev()
+        .find_map(|(_, body)| {
+            let data = body["reply_markup"]["inline_keyboard"][0][0]["callback_data"].as_str()?;
+            data.splitn(3, ':').nth(2).map(str::to_string)
+        })
+        .expect("the card's decision");
     assert!(fake.press(ANA, "Allow once"));
     eventually("the reply", || {
         fake.texts(ANA).into_iter().find(|text| text == "The invoice is written.")
     })
     .await;
     assert_eq!(std::fs::read_to_string(ws.path().join("invoice.txt")).unwrap(), "INV-1");
+    // The home says where the answer was given (§8.1).
+    let card: Value = reqwest::get(format!(
+        "http://127.0.0.1:{port}/api/surface/decisions/{decision}?surface=web"
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let decided = card["decided"]["text"].as_str().unwrap_or_default();
+    assert!(decided.starts_with("You said yes in Telegram at "), "{card}");
+    // A terminal attached to the kernel reads how it was given from the kernel's record,
+    // which a kernel with a signed audit log keeps.
+    if !extra.contains(&"--ephemeral") {
+        let record: Value =
+            reqwest::get(format!("http://127.0.0.1:{port}/api/kernel/record?limit=500"))
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+        let line = record["lines"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|line| line["action"] == "surface.decide" && line["target"] == decision.as_str())
+            .unwrap_or_else(|| panic!("no answer on the record: {record}"));
+        assert_eq!((&line["how"], &line["channel"]), (&json!("chat"), &json!("Telegram")));
+    }
     for (method, body) in fake.calls() {
         assert!(!body.to_string().contains("INV-1"), "an argument reached Telegram in {method}");
     }
 
-    let mut child = child;
-    let _ = child.kill();
-    let output = child.wait_with_output().unwrap();
-    assert!(common::text(&output).contains("chat  Telegram"), "{}", common::text(&output));
+    let output = child.finish();
+    assert!(output.contains("chat  Telegram"), "{output}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -280,16 +365,53 @@ async fn without_a_token_up_starts_nothing_of_telegram() {
     let kernel = home.path().join("kernel");
     let port = free_port();
     let base = format!("http://{addr}");
-    let mut child = up(
+    let child = up(
         home.path(),
         &kernel,
         ws.path(),
         port,
+        &[],
         &[("TELEGRAM_API_BASE", &base), ("RUST_LOG", "debug")],
     );
     tokio::time::sleep(Duration::from_secs(2)).await;
-    let _ = child.kill();
-    let output = common::text(&child.wait_with_output().unwrap());
+    let output = child.finish();
     assert!(fake.calls().is_empty(), "{:?}", fake.calls());
     assert!(!output.to_lowercase().contains("telegram"), "{output}");
+}
+
+/// Spec 3.3 S-I6: a paired account's messages come from outside the machine, so `up` refuses
+/// Go ahead without a sandbox when the chat thread runs, as it does beyond loopback (on main
+/// it started).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn go_ahead_with_a_chat_thread_needs_a_sandbox() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let (kernel, dir) =
+        (home.path().join("kernel").display().to_string(), ws.path().display().to_string());
+    let bind = format!("127.0.0.1:{}", free_port());
+    let mut command = Command::new(env!("CARGO_BIN_EXE_adk-rust"));
+    command
+        .args(["up", "--home", &kernel, "--bind", &bind, "--dir", &dir])
+        .args(["--model-script", WRITE_THEN_REPLY, "--mode", "auto"])
+        .current_dir(ws.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    common::isolate(&mut command, home.path());
+    command
+        .env("TELEGRAM_BOT_TOKEN", TOKEN)
+        .env("TELEGRAM_API_BASE", "http://127.0.0.1:9")
+        .env_remove("TELEGRAM_HOME_URL");
+    let mut up = Up(Some(command.spawn().expect("adk-rust starts")));
+    let started = Instant::now();
+    while up.0.as_mut().is_some_and(|child| child.try_wait().unwrap().is_none()) {
+        if started.elapsed() > common::TIMEOUT {
+            panic!("up started:\n{}", up.finish());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let output = up.0.take().expect("up ran").wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let text = common::text(&output);
+    assert!(text.contains("--mode auto with TELEGRAM_BOT_TOKEN needs --sandbox"), "{text}");
 }

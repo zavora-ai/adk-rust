@@ -1,8 +1,10 @@
-//! AWP payment intent types.
+//! AWP 1.x payment intent types.
 //!
 //! The AWP `PaymentIntent` is a simpler, owner-policy-driven lifecycle
 //! distinct from the ACP/AP2 transaction model in `adk-payments`.
-//! It represents the business owner's view of a payment flow.
+//! It represents the business owner's view of a payment flow. No crate in this
+//! workspace executes payment intents; AWP 2.0 settles payments through
+//! `adk-payments` rail adapters and signed receipts (spec 3.5 §7.5).
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -57,8 +59,9 @@ impl std::fmt::Display for PaymentIntentState {
 
 /// An AWP payment intent representing a business owner's view of a payment.
 ///
-/// This is the protocol-level type shared between `adk-awp` and `adk-gateway`.
-/// The policy engine in `adk-awp` bridges this to `adk-payments` for execution.
+/// This is the AWP 1.x protocol-level type. `adk-gateway`, a separate repository
+/// (`zavora-ai/adk-gateway`), uses it; nothing in this workspace converts it into an
+/// `adk-payments` transaction (spec 3.5 §10 X2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaymentIntent {
@@ -77,7 +80,8 @@ pub struct PaymentIntent {
     pub state: PaymentIntentState,
     /// Trust level of the requester who initiated this intent.
     pub trust_level: TrustLevel,
-    /// HMAC-SHA256 signature for integrity verification.
+    /// HMAC-SHA256 signature for integrity verification. No crate in this workspace computes
+    /// or verifies it.
     pub signature: String,
     /// When this intent was created.
     pub created_at: DateTime<Utc>,
@@ -86,12 +90,18 @@ pub struct PaymentIntent {
 }
 
 /// Owner-configurable policy for auto-approving or requiring approval.
+///
+/// [`PaymentPolicy::evaluate`] auto-approves an amount at or below
+/// `auto_approve_threshold` from a caller at or above `min_trust_for_auto_approve` and
+/// requires approval for everything else; `require_approval_threshold` does not change the
+/// decision.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaymentPolicy {
     /// Auto-approve if amount is at or below this threshold (in smallest currency unit).
     pub auto_approve_threshold: u64,
-    /// Require explicit owner approval above this threshold.
+    /// Amounts above this threshold require approval. Every amount above
+    /// `auto_approve_threshold` already does, so `evaluate` does not read it.
     pub require_approval_threshold: u64,
     /// Minimum trust level for auto-approval.
     pub min_trust_for_auto_approve: TrustLevel,
@@ -112,19 +122,24 @@ impl Default for PaymentPolicy {
 }
 
 impl PaymentPolicy {
-    /// Evaluate whether a payment intent should be auto-approved, require
-    /// owner approval, or be auto-rejected.
+    /// Evaluate whether a payment intent is auto-approved or requires owner approval.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use awp_types::{PaymentPolicy, PaymentPolicyDecision, TrustLevel};
+    ///
+    /// let policy = PaymentPolicy::default();
+    /// assert_eq!(policy.evaluate(5_000, TrustLevel::Known), PaymentPolicyDecision::AutoApprove);
+    /// assert_eq!(policy.evaluate(5_001, TrustLevel::Known), PaymentPolicyDecision::RequireApproval);
+    /// assert_eq!(policy.evaluate(100, TrustLevel::Anonymous), PaymentPolicyDecision::RequireApproval);
+    /// ```
     pub fn evaluate(&self, amount: u64, trust_level: TrustLevel) -> PaymentPolicyDecision {
-        if trust_level < self.min_trust_for_auto_approve {
-            return PaymentPolicyDecision::RequireApproval;
+        if trust_level >= self.min_trust_for_auto_approve && amount <= self.auto_approve_threshold {
+            PaymentPolicyDecision::AutoApprove
+        } else {
+            PaymentPolicyDecision::RequireApproval
         }
-        if amount <= self.auto_approve_threshold {
-            return PaymentPolicyDecision::AutoApprove;
-        }
-        if amount > self.require_approval_threshold {
-            return PaymentPolicyDecision::RequireApproval;
-        }
-        PaymentPolicyDecision::RequireApproval
     }
 }
 
@@ -244,6 +259,57 @@ mod tests {
             policy.evaluate(1000, TrustLevel::Anonymous),
             PaymentPolicyDecision::RequireApproval
         );
+    }
+
+    /// The decision matches the three-branch evaluation it replaced, whose fourth branch
+    /// returned what the default did (spec 3.5 §10 X2).
+    #[test]
+    fn test_payment_policy_decision_unchanged() {
+        fn previous(
+            policy: &PaymentPolicy,
+            amount: u64,
+            trust: TrustLevel,
+        ) -> PaymentPolicyDecision {
+            if trust < policy.min_trust_for_auto_approve {
+                return PaymentPolicyDecision::RequireApproval;
+            }
+            if amount <= policy.auto_approve_threshold {
+                return PaymentPolicyDecision::AutoApprove;
+            }
+            if amount > policy.require_approval_threshold {
+                return PaymentPolicyDecision::RequireApproval;
+            }
+            PaymentPolicyDecision::RequireApproval
+        }
+        let trusts =
+            [TrustLevel::Anonymous, TrustLevel::Known, TrustLevel::Partner, TrustLevel::Internal];
+        let amounts = [0, 1, 4_999, 5_000, 5_001, 49_999, 50_000, 50_001, u64::MAX];
+        let policies = [
+            PaymentPolicy::default(),
+            PaymentPolicy {
+                auto_approve_threshold: 50_000,
+                require_approval_threshold: 5_000,
+                min_trust_for_auto_approve: TrustLevel::Anonymous,
+                notification_channels: vec![],
+            },
+            PaymentPolicy {
+                auto_approve_threshold: 0,
+                require_approval_threshold: 0,
+                min_trust_for_auto_approve: TrustLevel::Internal,
+                notification_channels: vec![],
+            },
+        ];
+        for policy in &policies {
+            for trust in trusts {
+                for amount in amounts {
+                    assert_eq!(
+                        policy.evaluate(amount, trust),
+                        previous(policy, amount, trust),
+                        "{amount} at {trust} under {policy:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
