@@ -327,3 +327,77 @@ fn walk_bytes(dir: &std::path::Path) -> Vec<u8> {
     }
     out
 }
+
+/// A snapshot is taken before each plan step, and a rewind to a step restores its files
+/// and rewinds the plan with them, so only that step and the ones after it run again
+/// (spec 3.1 §7.27 "Plan").
+#[cfg(feature = "graph")]
+#[tokio::test]
+async fn a_plan_step_rewind_restores_its_files_and_the_plan_together() {
+    use adk_harness::snapshot::PlanRewind;
+    use adk_harness::{PlanGate, PlanStep};
+
+    let step = |id: &str, deps: &[&str]| PlanStep {
+        id: id.into(),
+        title: format!("Step {id}"),
+        instruction: format!("Write {id}.txt"),
+        depends_on: deps.iter().map(|dep| (*dep).to_string()).collect(),
+        gate: PlanGate::None,
+    };
+    let steps = vec![step("1", &[]), step("2", &["1"]), step("3", &["2"])];
+    let write = |path: &str| {
+        ScriptedResponse::function_call("write_file", json!({ "path": path, "content": path }))
+    };
+    let prompter = ScriptedPrompter::new();
+    prompter.approve_once();
+    let f = fixture(
+        vec![
+            ScriptedResponse::function_call(
+                "exit_plan_mode",
+                json!({ "plan": "Write three files.", "next_mode": "auto", "steps": steps }),
+            ),
+            write("1.txt"),
+            ScriptedResponse::text("1"),
+            write("2.txt"),
+            ScriptedResponse::text("2"),
+            write("3.txt"),
+            ScriptedResponse::text("3"),
+        ],
+        move |b| {
+            b.mode(HarnessMode::Plan)
+                .without_default_members()
+                .prompter(prompter)
+                .snapshots(SnapshotConfig::default())
+        },
+    )
+    .await;
+    f.send("plan the change").await;
+    f.send("go").await;
+    assert!(f.path("1.txt").exists() && f.path("2.txt").exists() && f.path("3.txt").exists());
+    let steps_taken: Vec<String> = f
+        .records("harness.snapshot.taken")
+        .iter()
+        .filter(|record| record.ext["kind"] == "step")
+        .map(|record| record.ext["snapshotId"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(steps_taken.len(), 3, "one snapshot before each step");
+
+    let plan = f
+        .harness
+        .rewind_plan(&f.user, &f.session, RewindTarget::PlanStep("3".into()))
+        .await
+        .unwrap();
+    assert_eq!(plan.paths(ChangeKind::Delete), ["3.txt"], "{}", plan.render());
+    assert_eq!(plan.plan, Some(PlanRewind::AfterStep { step_id: "2".into() }));
+    assert!(!plan.transcript.unchanged);
+    f.harness.rewind(&f.user, &f.session, &plan).await.unwrap();
+    assert!(!f.path("3.txt").exists());
+    assert!(f.path("1.txt").exists() && f.path("2.txt").exists());
+
+    std::fs::remove_file(f.path("1.txt")).unwrap();
+    f.model.push(write("3.txt"));
+    f.model.push(ScriptedResponse::text("3 again"));
+    f.send("again").await;
+    assert!(f.path("3.txt").exists(), "step 3 ran again");
+    assert!(!f.path("1.txt").exists(), "step 1 did not run again");
+}
