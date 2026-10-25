@@ -83,20 +83,20 @@ fn script() -> Vec<ScriptedStep> {
 /// `adk-rust up --pack voice` on `store` (default: `harness.db` in the kernel home); returns
 /// once it listens.
 fn up(home: &Path, ws: &Path, port: u16, store: Option<&str>) -> Up {
-    let script = ws.join("voice-script.json");
-    std::fs::write(&script, serde_json::to_string(&script()).unwrap()).unwrap();
+    let script_path = ws.join("voice-script.json");
+    std::fs::write(&script_path, serde_json::to_string(&script()).unwrap()).unwrap();
     let kernel = home.join("kernel");
-    let (kernel, dir, bind, script) = (
+    let (kernel, dir, bind, script_path) = (
         kernel.display().to_string(),
         ws.display().to_string(),
         format!("127.0.0.1:{port}"),
-        script.display().to_string(),
+        script_path.display().to_string(),
     );
     let mut command = Command::new(env!("CARGO_BIN_EXE_adk-rust"));
     command
         .args(["up", "--home", &kernel, "--bind", &bind, "--dir", &dir])
         .args(["--model-script", REPLY, "--mode", "ask", "--pack", "voice"])
-        .args(["--voice-script", &script])
+        .args(["--voice-script", &script_path])
         .current_dir(ws)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

@@ -207,14 +207,15 @@ pub(crate) fn offer(
     launcher
 }
 
+/// What the microphone records and what the speaker plays, as PCM16 mono chunks.
+#[cfg(all(feature = "tui", feature = "voice-desktop"))]
+type AudioChannels = (tokio::sync::mpsc::Receiver<Vec<u8>>, tokio::sync::mpsc::Sender<Vec<u8>>);
+
 /// The microphone and the speaker as the terminal's voice mode takes them (spec 3.3 §5.6):
 /// PCM16 mono from the default input device at `input_rate`, and to the default output device
 /// at `output_rate`. Each device is released once its channel's other end is dropped.
 #[cfg(all(feature = "tui", feature = "voice-desktop"))]
-pub(crate) fn desktop_channels(
-    input_rate: u32,
-    output_rate: u32,
-) -> Result<(tokio::sync::mpsc::Receiver<Vec<u8>>, tokio::sync::mpsc::Sender<Vec<u8>>)> {
+pub(crate) fn desktop_channels(input_rate: u32, output_rate: u32) -> Result<AudioChannels> {
     use adk_audio::{AudioCapture, AudioFrame, AudioPlayback, CaptureConfig};
 
     let input = AudioCapture::list_input_devices()?
