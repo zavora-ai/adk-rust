@@ -107,7 +107,8 @@ pub(crate) async fn list(harness: &Harness, user: &UserId, session: &SessionId) 
 /// Shows `plan`, asks once (or not, with `yes`), and applies it.
 ///
 /// With conflicts the question offers to keep them or restore them too; the one answer is
-/// also the confirmation of every protected path the plan lists (I29).
+/// also the confirmation of every protected path the plan lists (I29). With `yes` nothing is
+/// asked: conflicts and protected paths are kept and reported.
 pub(crate) async fn confirm_and_apply(
     harness: &Harness,
     user: &UserId,
@@ -148,7 +149,10 @@ pub(crate) async fn confirm_and_apply(
         Choice::KeepConflicts => plan.choose_conflicts(false),
         Choice::RestoreConflicts => plan.choose_conflicts(true),
     }
-    plan.confirm_protected();
+    // A protected path needs the person's answer: `--yes` is not one (I29), so they stay.
+    if !yes {
+        plan.confirm_protected();
+    }
     let report = harness.rewind(user, session, &plan).await?;
     let mut out = String::new();
     if yes {

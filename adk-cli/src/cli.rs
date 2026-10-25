@@ -1106,7 +1106,7 @@ pub enum SessionsCommands {
         #[arg(long)]
         redo: bool,
         /// Apply without asking, keeping files a command or you changed since the latest
-        /// snapshot
+        /// snapshot and protected paths
         #[arg(long)]
         yes: bool,
     },

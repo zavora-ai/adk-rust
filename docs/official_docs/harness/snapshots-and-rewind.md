@@ -37,7 +37,7 @@ Rewound: 1 restored, 0 recreated, 2 deleted; transcript: 7 events removed, 0 eve
 | `/rewind` | The session's turns with the files each changed |
 | `/rewind N` | Shows the plan for going back to before turn N and asks once |
 | `/redo` | Restores the snapshot taken before the last rewind: files, transcript and plan |
-| `adk-rust sessions rewind ID [N]` | The same outside the REPL; `--redo` undoes the last rewind, `--yes` applies without asking and keeps conflicting files |
+| `adk-rust sessions rewind ID [N]` | The same outside the REPL; `--redo` undoes the last rewind, `--yes` applies without asking and keeps conflicting files and protected paths |
 | `--no-snapshots`, `[snapshots] enabled = false` | Takes no snapshots; `/rewind` then says there is nothing to rewind to |
 
 The `[snapshots]` table of the user config sets the limits; `.adk/harness.toml` cannot turn
