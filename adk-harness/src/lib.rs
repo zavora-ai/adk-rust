@@ -258,6 +258,7 @@ pub use shell::{
     InMemoryShellLedger, IsolationStatus, SANDBOX_UNAVAILABLE_CODE, ShellConfig, ShellIsolation,
     ShellLedger, ShellLedgerEntry,
 };
+pub use shell::{SHELL_OUTPUT, ShellOutputTool, ShellOutputs};
 #[cfg(feature = "sandbox")]
 pub use shell::{OsSandboxConfig, SandboxAccess, SandboxLauncher};
 #[cfg(feature = "skills")]

@@ -10,6 +10,7 @@ mod gate;
 mod ledger;
 #[cfg(feature = "sandbox")]
 mod os_sandbox;
+mod output;
 mod protect;
 
 use std::fmt;
@@ -25,6 +26,7 @@ pub(crate) use gate::FileToolGate;
 #[cfg(feature = "sqlite")]
 pub use ledger::SqliteShellLedger;
 pub use ledger::{InMemoryShellLedger, ShellLedger, ShellLedgerEntry};
+pub use output::{SHELL_OUTPUT, ShellOutputTool, ShellOutputs};
 #[cfg(feature = "sandbox")]
 pub use os_sandbox::{OsSandboxConfig, SandboxAccess, SandboxLauncher};
 pub use protect::SANDBOX_PROTECTED_PATHS;

@@ -15,7 +15,8 @@ use crate::policy::has_harness_layer;
 #[cfg(feature = "sandbox")]
 use crate::shell::SandboxLauncher;
 use crate::shell::{
-    FileToolGate, IsolationStatus, ShellLedger, ShellLedgerEntry, sandbox_unavailable,
+    FileToolGate, IsolationStatus, ShellLedger, ShellLedgerEntry, ShellOutputs,
+    sandbox_unavailable,
 };
 
 /// How often a running command checks the run's kill switch (spec 3.1 §7.9).
@@ -120,6 +121,8 @@ pub struct HarnessBashTool {
     description: String,
     /// Held exclusive while a sandboxed command runs unapproved (spec 3.1 §9.2 I26).
     file_gate: Option<FileToolGate>,
+    /// Keeps the whole output of a call whose result is cut (spec 3.1 §7.33 fix 8).
+    outputs: Option<Arc<ShellOutputs>>,
 }
 
 impl HarnessBashTool {
@@ -148,9 +151,47 @@ impl HarnessBashTool {
             annotations: Value::Null,
             description: String::new(),
             file_gate: None,
+            outputs: None,
         };
         tool.declare();
         tool
+    }
+
+    /// Keeps the whole output of a call whose result is cut in `outputs`, which
+    /// `shell_output` reads (spec 3.1 §7.33 fix 8).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use adk_harness::{HarnessBashTool, InMemoryShellLedger, IsolationStatus, ShellOutputs};
+    ///
+    /// let ws = adk_devtools::Workspace::new(".").allow_bash(true);
+    /// let bash = HarnessBashTool::new(ws, IsolationStatus::Host, false, Arc::new(InMemoryShellLedger::new()))
+    ///     .with_outputs(Arc::new(ShellOutputs::default()));
+    /// # let _ = bash;
+    /// ```
+    #[must_use]
+    pub fn with_outputs(mut self, outputs: Arc<ShellOutputs>) -> Self {
+        self.outputs = Some(outputs);
+        let host = std::mem::replace(&mut self.host, BashTool::new(self.workspace.clone()));
+        self.host = self.stored(host);
+        #[cfg(feature = "sandbox")]
+        if let Some(mut sandbox) = self.sandbox.take() {
+            sandbox.read_write = self.stored(sandbox.read_write);
+            sandbox.read_only = self.stored(sandbox.read_only);
+            self.sandbox = Some(sandbox);
+        }
+        self
+    }
+
+    /// `bash` keeping its cut output in this tool's output store, if it has one.
+    fn stored(&self, bash: BashTool) -> BashTool {
+        match &self.outputs {
+            Some(outputs) => bash.with_output_store(outputs.clone()),
+            None => bash,
+        }
     }
 
     /// Runs each sandboxed command while no host file tool runs (spec 3.1 §9.2 I26).
@@ -182,10 +223,12 @@ impl HarnessBashTool {
     #[must_use]
     pub fn with_sandbox(mut self, launcher: SandboxLauncher) -> Self {
         self.sandbox = Some(SandboxedBash {
-            read_write: BashTool::new(self.workspace.clone())
-                .with_launcher(Arc::new(launcher.clone())),
-            read_only: BashTool::new(self.workspace.clone())
-                .with_launcher(Arc::new(launcher.read_only())),
+            read_write: self.stored(
+                BashTool::new(self.workspace.clone()).with_launcher(Arc::new(launcher.clone())),
+            ),
+            read_only: self.stored(
+                BashTool::new(self.workspace.clone()).with_launcher(Arc::new(launcher.read_only())),
+            ),
             launcher,
         });
         self.declare();
@@ -331,14 +374,20 @@ impl HarnessBashTool {
         mut self,
         layer: impl Fn(Arc<dyn adk_devtools::CommandLauncher>) -> Arc<dyn adk_devtools::CommandLauncher>,
     ) -> Self {
-        self.host =
-            BashTool::new(self.workspace.clone()).with_launcher(layer(Arc::new(HostLauncher)));
+        self.host = self.stored(
+            BashTool::new(self.workspace.clone()).with_launcher(layer(Arc::new(HostLauncher))),
+        );
         #[cfg(feature = "sandbox")]
-        if let Some(sandbox) = self.sandbox.as_mut() {
-            sandbox.read_write = BashTool::new(self.workspace.clone())
-                .with_launcher(layer(Arc::new(sandbox.launcher.clone())));
-            sandbox.read_only = BashTool::new(self.workspace.clone())
-                .with_launcher(layer(Arc::new(sandbox.launcher.read_only())));
+        if let Some(mut sandbox) = self.sandbox.take() {
+            sandbox.read_write = self.stored(
+                BashTool::new(self.workspace.clone())
+                    .with_launcher(layer(Arc::new(sandbox.launcher.clone()))),
+            );
+            sandbox.read_only = self.stored(
+                BashTool::new(self.workspace.clone())
+                    .with_launcher(layer(Arc::new(sandbox.launcher.read_only()))),
+            );
+            self.sandbox = Some(sandbox);
         }
         self
     }
@@ -593,6 +642,12 @@ impl Tool for HarnessBashTool {
                 json!({ "enforcer": enforcer, "denialSuspected": suspected, "hint": hint });
         }
 
+        // A kept output records how its command ended, for `shell_output`.
+        if let (Some(outputs), Ok(Ok(value))) = (&self.outputs, &outcome)
+            && let Some(id) = value.get("output_id").and_then(Value::as_str)
+        {
+            outputs.finish((&app, &user, &session), id, exit_code, started.elapsed());
+        }
         let mut entry = ShellLedgerEntry::new(&call_id, &command, selected.sandboxed, exit_code);
         if selected.sandboxed {
             entry.enforcer = Some(enforcer.to_string());

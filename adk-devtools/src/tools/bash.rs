@@ -11,6 +11,10 @@
 //! timeout and when the call is cancelled. On Windows the command runs in a Job Object,
 //! and the job's processes are killed at the same points (spec 3.2 §10 W1).
 //!
+//! A result carries at most [`INLINE_OUTPUT_CHARS`](crate::INLINE_OUTPUT_CHARS) of output; an [`OutputStore`] keeps
+//! the whole of a longer one (spec 3.1 §7.33 fix 8). [`BashTool::spawn`] starts a command
+//! and returns a [`RunningCommand`] at once (spec 3.1 §10 D10).
+//!
 //! **Not** strongly isolated with the default [`HostLauncher`]; production
 //! deployments should run behind a sandboxing launcher or a containerized
 //! `CodeExecutor` (see the coding-agent design, §9).
@@ -18,7 +22,7 @@
 
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use adk_core::{Result, Tool, ToolContext};
 #[cfg(windows)]
@@ -26,18 +30,32 @@ use adk_sandbox::process_tree::{ContainedChild, ContainedProcess, JobObject};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 
 use crate::error::DevToolError;
 use crate::launcher::{CommandLauncher, HostLauncher};
+use crate::tools::output::{Collector, OutputStore, Stream};
 use crate::tools::read::require_str;
 use crate::workspace::Workspace;
+
+/// How long a killed command's output is still read: a process that left the group can
+/// hold a pipe open, and its output is not waited for.
+const KILL_GRACE: Duration = Duration::from_secs(1);
+
+/// The longest partial line held back from progress before it is forwarded anyway.
+const PROGRESS_LINE_MAX: usize = 8192;
 
 /// Runs a shell command in the workspace root with a timeout.
 ///
 /// Streams stdout and stderr line-by-line via [`ToolContext::emit_progress`]
-/// so UI layers can display live terminal output. The final result contains
-/// stdout and stderr, each capped at [`Workspace::max_output`] bytes; output
-/// past the cap is read and discarded, so memory stays bounded.
+/// so UI layers can display live terminal output. The result carries at most
+/// [`INLINE_OUTPUT_CHARS`](crate::INLINE_OUTPUT_CHARS) of output, stdout and stderr together: a longer stream keeps
+/// its first third and last two thirds of its share around a marker naming the bytes left
+/// out (spec 3.1 §7.33 fix 8). With an [`OutputStore`]
+/// ([`with_output_store`](Self::with_output_store)) the whole output, up to
+/// [`Workspace::max_output`] bytes, goes to a file the marker and the result's `output_id`
+/// name. Memory stays bounded either way.
 ///
 /// The command reads end of file from standard input and starts in a new session,
 /// so it has no controlling terminal and leads its own process group. When the
@@ -56,12 +74,13 @@ use crate::workspace::Workspace;
 pub struct BashTool {
     workspace: Workspace,
     launcher: Arc<dyn CommandLauncher>,
+    output_store: Option<Arc<dyn OutputStore>>,
 }
 
 impl BashTool {
     /// Create a `bash` tool bound to `workspace`, running commands with [`HostLauncher`].
     pub fn new(workspace: Workspace) -> Self {
-        Self { workspace, launcher: Arc::new(HostLauncher) }
+        Self { workspace, launcher: Arc::new(HostLauncher), output_store: None }
     }
 
     /// Build each command with `launcher` instead of [`HostLauncher`].
@@ -84,6 +103,135 @@ impl BashTool {
     pub fn with_launcher(mut self, launcher: Arc<dyn CommandLauncher>) -> Self {
         self.launcher = launcher;
         self
+    }
+
+    /// Keep the whole output of a command whose result is cut in a file from `store`,
+    /// named by the result's `output_id` (spec 3.1 §7.33 fix 8). The file holds at most
+    /// [`Workspace::max_output`] bytes.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use adk_core::ToolContext;
+    /// use adk_devtools::{BashTool, OutputFile, OutputStore, Workspace};
+    ///
+    /// struct Temp;
+    ///
+    /// impl OutputStore for Temp {
+    ///     fn create(&self, ctx: &dyn ToolContext, _command: &str) -> std::io::Result<OutputFile> {
+    ///         let id = ctx.function_call_id().to_string();
+    ///         let path = std::env::temp_dir().join(format!("{id}.log"));
+    ///         let file = std::fs::File::create(&path)?;
+    ///         Ok(OutputFile { id, path, file })
+    ///     }
+    /// }
+    ///
+    /// let bash = BashTool::new(Workspace::new(".").allow_bash(true))
+    ///     .with_output_store(Arc::new(Temp));
+    /// # let _ = bash;
+    /// ```
+    #[must_use]
+    pub fn with_output_store(mut self, store: Arc<dyn OutputStore>) -> Self {
+        self.output_store = Some(store);
+        self
+    }
+
+    /// Starts `command` and returns at once (spec 3.1 §10 D10).
+    ///
+    /// The command runs as [`execute`](Tool::execute) runs it — the same launcher,
+    /// environment, standard input, session and process group — with no timeout: the
+    /// caller decides when to [`kill`](RunningCommand::kill) it. Its output streams
+    /// through `ctx` while `ctx` listens and is kept as `execute` keeps it;
+    /// [`RunningCommand::keep_output`] sends all of it to a file. Dropping the
+    /// [`RunningCommand`] kills the command's processes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BashDisabled` when the workspace does not allow `bash`, or the error that
+    /// kept the command from starting.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut running = bash.spawn(ctx, "cargo build").await?;
+    /// let exit_code = running.wait().await?;
+    /// let result = running.result(exit_code);
+    /// ```
+    pub async fn spawn(&self, ctx: Arc<dyn ToolContext>, command: &str) -> Result<RunningCommand> {
+        if !self.workspace.bash_allowed() {
+            return Err(DevToolError::BashDisabled.into());
+        }
+        let kill_group_on_exit = self.workspace.kills_bash_group_on_exit();
+        let (child, group, stdout, stderr) = self.start(&ctx, command, kill_group_on_exit).await?;
+        let pid = child.id();
+        tracing::debug!(
+            bash.isolation = self.launcher.isolation(),
+            process.pid = pid,
+            "started bash command"
+        );
+        let output = Arc::new(Collector::new(
+            self.output_store.clone(),
+            ctx.clone(),
+            command,
+            self.workspace.max_output(),
+        ));
+        let pumps = [(stdout, Stream::Stdout), (stderr, Stream::Stderr)]
+            .into_iter()
+            .filter_map(|(pipe, stream)| {
+                pipe.map(|pipe| tokio::spawn(pump(pipe, stream, output.clone(), ctx.clone())))
+            })
+            .collect();
+        let kill = Arc::new(Notify::new());
+        let done = tokio::spawn(supervise(child, group, kill_group_on_exit, pumps, kill.clone()));
+        Ok(RunningCommand {
+            command: command.to_string(),
+            pid,
+            output,
+            kill,
+            done,
+            exit: None,
+            started: Instant::now(),
+        })
+    }
+
+    /// Starts the process for `script`: the launcher's own on Windows when it contains one
+    /// (spec 3.2 §10 W5), else the one [`spawn_process`](Self::spawn_process) builds.
+    async fn start(
+        &self,
+        ctx: &Arc<dyn ToolContext>,
+        script: &str,
+        kill_group_on_exit: bool,
+    ) -> Result<(Running, ProcessGroupGuard, Option<Pipe>, Option<Pipe>)> {
+        // A launcher may start a confined process itself (spec 3.2 §10 W5); starting one
+        // can take long, so it runs on the blocking pool.
+        #[cfg(windows)]
+        {
+            let (launcher, ws, script, call) =
+                (self.launcher.clone(), self.workspace.clone(), script.to_string(), ctx.clone());
+            let contained = tokio::task::spawn_blocking(move || {
+                launcher.spawn_contained(&ws, &script, &[], call.as_ref())
+            })
+            .await
+            .map_err(|error| {
+                DevToolError::Other(format!("the command could not be started: {error}"))
+            })?;
+            if let Some(contained) = contained {
+                let ContainedChild { job, process, stdin, stdout, stderr, .. } = contained?;
+                // Standard input reads end of file, as `Stdio::null()` gives a spawned one.
+                drop(stdin);
+                let pipe =
+                    |file: std::fs::File| -> Pipe { Box::new(tokio::fs::File::from_std(file)) };
+                return Ok((
+                    Running::Contained(process),
+                    ProcessGroupGuard { job: Some(job), keep_on_exit: !kill_group_on_exit },
+                    stdout.map(pipe),
+                    stderr.map(pipe),
+                ));
+            }
+        }
+        self.spawn_process(script, ctx.as_ref(), kill_group_on_exit)
     }
 }
 
@@ -129,96 +277,12 @@ impl Tool for BashTool {
             .and_then(Value::as_u64)
             .map_or(limit, |requested| Duration::from_secs(requested).min(limit));
 
-        let kill_group_on_exit = self.workspace.kills_bash_group_on_exit();
-        // A launcher may start a confined process itself (spec 3.2 §10 W5); starting one
-        // can take long, so it runs on the blocking pool.
-        #[cfg(windows)]
-        let contained = {
-            let (launcher, ws, script, call) =
-                (self.launcher.clone(), self.workspace.clone(), command.clone(), ctx.clone());
-            tokio::task::spawn_blocking(move || {
-                launcher.spawn_contained(&ws, &script, &[], call.as_ref())
-            })
-            .await
-            .map_err(|error| {
-                DevToolError::Other(format!("the command could not be started: {error}"))
-            })?
-        };
-        #[cfg(windows)]
-        let (mut child, mut group, stdout_pipe, stderr_pipe) = match contained {
-            Some(contained) => {
-                let ContainedChild { job, process, stdin, stdout, stderr, .. } = contained?;
-                // Standard input reads end of file, as `Stdio::null()` gives a spawned one.
-                drop(stdin);
-                let pipe =
-                    |file: std::fs::File| -> Pipe { Box::new(tokio::fs::File::from_std(file)) };
-                (
-                    Running::Contained(process),
-                    ProcessGroupGuard { job: Some(job), keep_on_exit: !kill_group_on_exit },
-                    stdout.map(pipe),
-                    stderr.map(pipe),
-                )
-            }
-            None => self.spawn(&command, ctx.as_ref(), kill_group_on_exit)?,
-        };
-        #[cfg(not(windows))]
-        let (mut child, mut group, stdout_pipe, stderr_pipe) =
-            self.spawn(&command, ctx.as_ref(), kill_group_on_exit)?;
-        tracing::debug!(
-            bash.isolation = self.launcher.isolation(),
-            process.pid = child.id(),
-            "started bash command"
-        );
-
-        let cap = self.workspace.max_output();
-
-        let result = tokio::time::timeout(timeout, async {
-            let exited = async {
-                if kill_group_on_exit {
-                    // The shell has exited but is not reaped, so its pid, which is the group
-                    // id, cannot be reused while the rest of the group is killed. That also
-                    // closes the output pipes a background process holds open.
-                    #[cfg(unix)]
-                    let shell_exited = wait_for_exit(child.id()).await;
-                    // The job, not the pid, names the processes, so the shell can be reaped.
-                    #[cfg(windows)]
-                    let shell_exited = child.wait().await.is_ok();
-                    #[cfg(not(any(unix, windows)))]
-                    let shell_exited = false;
-                    if shell_exited {
-                        group.kill().await;
-                    }
-                }
-            };
-            let (stdout, stderr, ()) = tokio::join!(
-                capture(stdout_pipe, cap, ctx.as_ref(), "stdout"),
-                capture(stderr_pipe, cap, ctx.as_ref(), "stderr"),
-                exited,
-            );
-            let exit_code = child.wait().await?;
-            // The child is reaped, so its pid may be reused and must not be signalled.
-            group.disarm();
-            Ok::<_, std::io::Error>((exit_code, stdout, stderr))
-        })
-        .await;
-
-        match result {
-            Ok(Ok((exit_code, (stdout, out_exceeded), (stderr, err_exceeded)))) => {
-                let (stdout, out_trunc) = bound_output(&stdout, cap, out_exceeded);
-                let (stderr, err_trunc) = bound_output(&stderr, cap, err_exceeded);
-                Ok(json!({
-                    "command": command,
-                    "exit_code": exit_code,
-                    "stdout": stdout,
-                    "stderr": stderr,
-                    "truncated": out_trunc || err_trunc,
-                }))
-            }
-            Ok(Err(e)) => Err(DevToolError::from(e).into()),
+        let mut running = self.spawn(ctx.clone(), &command).await?;
+        match tokio::time::timeout(timeout, running.wait()).await {
+            Ok(Ok(exit_code)) => Ok(running.result(exit_code)),
+            Ok(Err(error)) => Err(error),
             Err(_) => {
-                group.kill().await;
-                // Also signal the child directly, which is all that is available elsewhere.
-                child.start_kill();
+                running.kill_and_wait().await;
                 ctx.emit_progress("stderr", &format!("\n[timeout after {}s]\n", timeout.as_secs()))
                     .await;
                 Err(DevToolError::Timeout(timeout).into())
@@ -227,10 +291,199 @@ impl Tool for BashTool {
     }
 }
 
+/// A command [`BashTool::spawn`] started (spec 3.1 §10 D10).
+///
+/// [`wait`](Self::wait) for it to exit, then read its [`result`](Self::result); or
+/// [`kill`](Self::kill) it. Dropping it kills the command's processes, so a caller that
+/// keeps a command running — a background shell — keeps this value.
+pub struct RunningCommand {
+    command: String,
+    pid: Option<u32>,
+    output: Arc<Collector>,
+    kill: Arc<Notify>,
+    done: JoinHandle<std::io::Result<Option<i32>>>,
+    /// The exit code once [`wait`](Self::wait) has seen it.
+    exit: Option<Option<i32>>,
+    started: Instant,
+}
+
+impl std::fmt::Debug for RunningCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunningCommand")
+            .field("command", &self.command)
+            .field("pid", &self.pid)
+            .field("exit", &self.exit)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RunningCommand {
+    /// The command as it was started.
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    /// The process id of the shell, which leads the command's process group on Unix; `None`
+    /// when the platform gave none.
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
+    }
+
+    /// How long the command has run.
+    pub fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+
+    /// Waits for the command to exit and its output to end; its exit code, `None` when a
+    /// signal ended it. Cancel-safe: a `wait` dropped before it returns can be called again.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from waiting on the process.
+    pub async fn wait(&mut self) -> Result<Option<i32>> {
+        if let Some(exit) = self.exit {
+            return Ok(exit);
+        }
+        let exit = match (&mut self.done).await {
+            Ok(Ok(exit)) => exit,
+            Ok(Err(error)) => return Err(DevToolError::from(error).into()),
+            Err(error) => {
+                return Err(DevToolError::Other(format!(
+                    "the command's supervision ended unexpectedly: {error}"
+                ))
+                .into());
+            }
+        };
+        self.exit = Some(exit);
+        Ok(exit)
+    }
+
+    /// Whether the command has exited and been waited for.
+    pub fn is_finished(&self) -> bool {
+        self.exit.is_some() || self.done.is_finished()
+    }
+
+    /// Kills the command's processes; [`wait`](Self::wait) returns soon after.
+    pub fn kill(&self) {
+        self.kill.notify_one();
+    }
+
+    /// Kills the command's processes and waits, briefly, for them to be reaped.
+    pub async fn kill_and_wait(&mut self) {
+        self.kill();
+        let _ = tokio::time::timeout(KILL_GRACE * 2, self.wait()).await;
+    }
+
+    /// Bytes the command has written to stdout and stderr so far.
+    pub fn output_bytes(&self) -> u64 {
+        self.output.total()
+    }
+
+    /// The last line the command has written, at most 200 characters.
+    pub fn last_line(&self) -> Option<String> {
+        self.output.last_line()
+    }
+
+    /// Sends the command's output to a file from the output store, from its first byte and
+    /// whatever the result needs, and returns the file's id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the tool has no output store or the store cannot create the
+    /// file.
+    pub fn keep_output(&self) -> std::io::Result<String> {
+        self.output.keep()
+    }
+
+    /// The result of the call: `{ command, exit_code, stdout, stderr, truncated }`, plus
+    /// `output_id` when the output was cut and an output store keeps the whole of it.
+    pub fn result(&self, exit_code: Option<i32>) -> Value {
+        let rendered = self.output.render();
+        let mut result = json!({
+            "command": self.command,
+            "exit_code": exit_code,
+            "stdout": rendered.stdout,
+            "stderr": rendered.stderr,
+            "truncated": rendered.truncated,
+        });
+        if let Some(id) = rendered.output_id {
+            result["output_id"] = Value::String(id);
+        }
+        result
+    }
+}
+
+impl Drop for RunningCommand {
+    fn drop(&mut self) {
+        if self.exit.is_none() {
+            self.kill.notify_one();
+        }
+    }
+}
+
+/// Supervises one command: kills the rest of its group once the shell exits, waits for
+/// its output to end, and reaps it; or kills it on request. Returns the exit code.
+async fn supervise(
+    mut child: Running,
+    mut group: ProcessGroupGuard,
+    kill_group_on_exit: bool,
+    pumps: Vec<JoinHandle<()>>,
+    kill: Arc<Notify>,
+) -> std::io::Result<Option<i32>> {
+    let mut killed = false;
+    if kill_group_on_exit {
+        // The shell has exited but is not reaped, so its pid, which is the group id,
+        // cannot be reused while the rest of the group is killed. That also closes the
+        // output pipes a background process holds open.
+        #[cfg(unix)]
+        let exited = wait_for_exit(child.id());
+        // The job, not the pid, names the processes, so the shell can be reaped.
+        #[cfg(windows)]
+        let exited = async { child.wait().await.is_ok() };
+        #[cfg(not(any(unix, windows)))]
+        let exited = async { false };
+        tokio::select! {
+            shell_exited = exited => {
+                if shell_exited {
+                    group.kill().await;
+                }
+            }
+            () = kill.notified() => killed = true,
+        }
+    }
+    let aborts: Vec<_> = pumps.iter().map(JoinHandle::abort_handle).collect();
+    let output_ended = async {
+        for pump in pumps {
+            let _ = pump.await;
+        }
+    };
+    tokio::pin!(output_ended);
+    if !killed {
+        tokio::select! {
+            () = &mut output_ended => {}
+            () = kill.notified() => killed = true,
+        }
+    }
+    if killed {
+        group.kill().await;
+        // Also signal the child directly, which is all that is available elsewhere.
+        child.start_kill();
+        if tokio::time::timeout(KILL_GRACE, &mut output_ended).await.is_err() {
+            for abort in aborts {
+                abort.abort();
+            }
+        }
+    }
+    let exit_code = child.wait().await?;
+    // The child is reaped, so its pid may be reused and must not be signalled.
+    group.disarm();
+    Ok(exit_code)
+}
+
 impl BashTool {
     /// Spawns the launcher's command for `script`: standard input at end of file, output
     /// piped, in a new session on Unix and in a Job Object on Windows.
-    fn spawn(
+    fn spawn_process(
         &self,
         script: &str,
         ctx: &dyn ToolContext,
@@ -463,91 +716,32 @@ async fn wait_for_exit(pid: Option<u32>) -> bool {
     })
 }
 
-/// Reads one output stream to EOF, keeping at most `cap` bytes.
+/// Reads one output stream to its end into `output`, forwarding complete lines as
+/// progress through `ctx` (spec 3.1 §10 D10).
 ///
-/// Returns the kept bytes and whether the stream exceeded the cap. Output past the
-/// cap is read and discarded rather than left in the pipe, because a writer blocked
-/// on a full pipe would hang until the timeout. Complete lines are forwarded as
-/// progress up to the cap.
-async fn capture(
-    pipe: Option<impl AsyncRead + Unpin>,
-    cap: usize,
-    ctx: &dyn ToolContext,
-    stream: &str,
-) -> (Vec<u8>, bool) {
-    let mut kept = Vec::new();
-    let mut exceeded = false;
-    let Some(mut pipe) = pipe else {
-        return (kept, exceeded);
-    };
+/// Every byte is read, so a writer never blocks on a full pipe; `output` keeps the start
+/// and end in memory and the rest in its file, if any.
+async fn pump(mut pipe: Pipe, stream: Stream, output: Arc<Collector>, ctx: Arc<dyn ToolContext>) {
     let mut chunk = [0u8; 8192];
-    // Bytes of `kept` already forwarded as progress.
-    let mut emitted = 0;
+    // Output read but not yet forwarded: the partial line after the last newline.
+    let mut line = Vec::new();
     loop {
         let read = match pipe.read(&mut chunk).await {
             Ok(0) | Err(_) => break,
             Ok(read) => read,
         };
-        let room = cap - kept.len();
-        if read > room && !exceeded {
-            exceeded = true;
-            tracing::debug!(
-                output.stream = stream,
-                output.cap = cap,
-                "discarding output past the cap"
-            );
-        }
-        kept.extend_from_slice(&chunk[..read.min(room)]);
-        if let Some(newline) = kept[emitted..].iter().rposition(|&byte| byte == b'\n') {
-            let end = emitted + newline + 1;
-            ctx.emit_progress(stream, &String::from_utf8_lossy(&kept[emitted..end])).await;
-            emitted = end;
-        }
+        output.push(stream, &chunk[..read]);
+        line.extend_from_slice(&chunk[..read]);
+        let end = match line.iter().rposition(|&byte| byte == b'\n') {
+            Some(newline) => newline + 1,
+            None if line.len() > PROGRESS_LINE_MAX => line.len(),
+            None => continue,
+        };
+        let rest = line.split_off(end);
+        ctx.emit_progress(stream.name(), &String::from_utf8_lossy(&line)).await;
+        line = rest;
     }
-    if emitted < kept.len() {
-        ctx.emit_progress(stream, &String::from_utf8_lossy(&kept[emitted..])).await;
-    }
-    (kept, exceeded)
-}
-
-/// Decodes captured output and bounds it to `cap` bytes on a character boundary.
-///
-/// The byte cap can split a multi-byte character, and lossy decoding can lengthen
-/// the text, so the cut is taken on the nearest boundary at or below `cap`.
-fn bound_output(bytes: &[u8], cap: usize, exceeded: bool) -> (String, bool) {
-    let mut text = String::from_utf8_lossy(bytes).into_owned();
-    let cut = text.len() > cap;
-    if cut {
-        text.truncate(text.floor_char_boundary(cap));
-    }
-    let truncated = exceeded || cut;
-    if truncated {
-        text.push_str("\n…[truncated]");
-    }
-    (text, truncated)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_cap_inside_a_multi_byte_character_does_not_panic() {
-        // `€` is three bytes, so a cap of 4 falls inside the second one.
-        let (text, truncated) = bound_output("€€€".as_bytes(), 4, false);
-        assert_eq!((text.as_str(), truncated), ("€\n…[truncated]", true));
-    }
-
-    #[test]
-    fn a_character_split_by_the_capture_cap_is_dropped() {
-        // The capture kept `a` and the first byte of `é` before the cap was hit.
-        let (text, truncated) = bound_output(&"aé".as_bytes()[..2], 2, true);
-        assert_eq!((text.as_str(), truncated), ("a\n…[truncated]", true));
-    }
-
-    #[test]
-    fn output_within_the_cap_is_unchanged() {
-        let (text, truncated) = bound_output("héllo\n".as_bytes(), 1024, false);
-        assert_eq!((text.as_str(), truncated), ("héllo\n", false));
+    if !line.is_empty() {
+        ctx.emit_progress(stream.name(), &String::from_utf8_lossy(&line)).await;
     }
 }
