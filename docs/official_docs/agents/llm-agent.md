@@ -570,6 +570,10 @@ use adk_rust::IncludeContents;
 .include_contents(IncludeContents::None)
 ```
 
+A stateless agent's run that resumes a held call begins its turn at the message that led to
+the call, so the model sees the call its result answers. A call still waiting for a decision
+does not widen the turn: every other run sends the current user turn alone.
+
 ### Output Key
 
 Save agent responses to session state:

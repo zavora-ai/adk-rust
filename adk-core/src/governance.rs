@@ -44,7 +44,8 @@
 //! withdrawn ([`ApprovalService::withdraw`](crate::ApprovalService::withdraw)), so neither
 //! can authorize a later call with the same fingerprint. A request an approver resolved at
 //! the same moment is waited for until its outcome is in the store, and that outcome is
-//! absorbed rather than left to authorize a later call.
+//! absorbed rather than left to authorize a later call, as is an outcome already applied or
+//! recorded while the handler was asked.
 //!
 //! A held call survives what happens to the session while it waits: compaction never
 //! covers it ([`held_call_compaction_limit`]), a workflow agent that it stopped resumes at
@@ -1785,7 +1786,9 @@ const SETTLE_WITHIN: Duration = Duration::from_secs(10);
 ///
 /// A request another decision resolved first writes its outcome to the store after its
 /// state changes; that outcome is waited for and absorbed, never overwritten, so it cannot
-/// land after the entry is cleared.
+/// land after the entry is cleared. So is an outcome already applied, and anything recorded
+/// for the call while the handler was asked: the store was read before it, so a decision
+/// there now was made for this call (spec 3.3 §7.3).
 async fn close_waiting_call(
     gate: &ToolGate<'_>,
     request: &ToolConfirmationRequest,
@@ -1794,22 +1797,25 @@ async fn close_waiting_call(
     let config = gate.run_config;
     let fingerprint = request.fingerprint();
     let note = format!("the call was decided another way ({source})");
-    // Whether a decision for the call may have reached the store through a request.
-    let mut absorb = false;
+    // Whether a decision for the call may have reached the store: the store was read
+    // without one before this decision, or through a request for the call.
+    let mut absorb = matches!(source, "handler" | "handler_timeout" | "withdrawn");
     if let Some(service) = &config.approval_service {
-        // Every request not yet applied: pending, or resolved with its outcome on the way.
+        // Every request not yet applied: pending, or resolved with its outcome on the way. A
+        // request already applied wrote its outcome, which may not have been taken yet.
         let mut query = crate::InboxQuery::default()
             .with_session(&gate.scope)
             .with_states(crate::ApprovalState::ALL);
         let mut open = Vec::new();
         loop {
             let page = service.inbox(query.clone()).await?;
-            open.extend(
-                page.items
-                    .into_iter()
-                    .filter(|item| item.fingerprint == fingerprint && item.is_open())
-                    .map(|item| item.id),
-            );
+            for item in page.items.into_iter().filter(|item| item.fingerprint == fingerprint) {
+                if item.is_open() {
+                    open.push(item.id);
+                } else {
+                    absorb = true;
+                }
+            }
             match page.next_cursor {
                 Some(cursor) => query = query.with_cursor(Some(cursor)),
                 None => break,
@@ -1859,7 +1865,7 @@ async fn settle_request(
                     || error.code == "approval.already_resolved" => {}
             Err(error) => return Err(error),
         }
-        match service.get(id).await? {
+        let still_pending = match service.get(id).await? {
             None => return Ok(false),
             Some(current) if current.outcome_applied => return Ok(true),
             // Still pending at a newer version: withdraw it again.
@@ -1868,20 +1874,24 @@ async fn settle_request(
             {
                 continue;
             }
-            // Resolved by another decision whose outcome is still being written.
-            Some(_) => {}
-        }
+            // Resolved by another decision whose outcome is still being written, or still
+            // pending at the deadline.
+            Some(current) => !current.state.is_terminal(),
+        };
         if tokio::time::Instant::now() >= deadline {
+            let why = if still_pending {
+                "it kept changing while it was being withdrawn and is still pending; the call \
+                 is not run, so retry it"
+            } else {
+                "another decision resolved it, but its outcome has not reached the approval \
+                 store; the call is not run, so retry it once the approval service has \
+                 recorded the outcome"
+            };
             return Err(AdkError::new(
                 ErrorComponent::Agent,
                 ErrorCategory::Unavailable,
                 "approval.outcome_unsettled",
-                format!(
-                    "approval request '{id}' did not settle within {SETTLE_WITHIN:?}: another \
-                     decision resolved it, but its outcome has not reached the approval store; \
-                     the call is not run, so retry it once the approval service has recorded \
-                     the outcome"
-                ),
+                format!("approval request '{id}' did not settle within {SETTLE_WITHIN:?}: {why}"),
             ));
         }
         tokio::time::sleep(pause).await;
@@ -3799,6 +3809,200 @@ mod tests {
             authorize_tool_call(&gate(&held), call()).await.unwrap(),
             ToolAuthorization::Pending { .. }
         ));
+    }
+
+    /// Approves the call in the inbox while it is being asked — the request is resolved and
+    /// its outcome applied before the handler answers — then answers with its own decision.
+    #[derive(Debug)]
+    struct AnsweredAfterTheInbox {
+        service: Arc<crate::StoreApprovalService>,
+        answer: ToolConfirmationDecision,
+    }
+
+    #[async_trait]
+    impl ToolConfirmationHandler for AnsweredAfterTheInbox {
+        async fn decide(
+            &self,
+            _request: &ToolConfirmationRequest,
+        ) -> Result<ToolConfirmationDecision> {
+            let open = self.service.inbox(crate::InboxQuery::for_group("ops")).await?.items;
+            let applied = self.service.decide(&open[0].id, open[0].version, ops_approval()).await?;
+            assert!(applied.outcome_applied, "the inbox outcome is in the store");
+            Ok(self.answer)
+        }
+    }
+
+    /// Wave 2 review findings 4–6 (spec 3.3 §7.3): an inbox outcome applied while the
+    /// handler is asked, or before a call-ID decision decides the call, is absorbed, so it
+    /// cannot authorize the next identical call without anyone being asked.
+    #[tokio::test]
+    async fn an_inbox_outcome_applied_before_another_decision_is_absorbed() {
+        let call = || GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
+        let scope = ApprovalScope::new("app", "user", "session");
+        let fingerprint = key("tool", &json!({}));
+        for answer in [ToolConfirmationDecision::Approve, ToolConfirmationDecision::Deny] {
+            let (store, service) = ops_inbox();
+            let held = RunConfig::builder().approval_service(service.clone()).build();
+            assert!(matches!(
+                authorize_tool_call(&gate(&held), call()).await.unwrap(),
+                ToolAuthorization::Pending { .. }
+            ));
+            let asked = RunConfig::builder()
+                .tool_confirmation_handler(Arc::new(AnsweredAfterTheInbox {
+                    service: service.clone(),
+                    answer,
+                }))
+                .approval_service(service.clone())
+                .build();
+            let decided = authorize_tool_call(&gate(&asked), call()).await.unwrap();
+            assert_eq!(
+                matches!(decided, ToolAuthorization::Execute { .. }),
+                answer == ToolConfirmationDecision::Approve,
+                "the handler's answer decides the call: {decided:?}"
+            );
+            assert!(!store.has_decision(&scope, &fingerprint).await.unwrap(), "{answer:?}");
+            assert!(store.pending(&scope).await.unwrap().is_empty());
+            assert!(
+                matches!(
+                    authorize_tool_call(&gate(&held), call()).await.unwrap(),
+                    ToolAuthorization::Pending { .. }
+                ),
+                "{answer:?}: the next identical call needs its own decision"
+            );
+        }
+
+        // A call-ID decision resumes the call after the inbox approved its request.
+        let (store, service) = ops_inbox();
+        let held = RunConfig::builder().approval_service(service.clone()).build();
+        assert!(matches!(
+            authorize_tool_call(&gate(&held), call()).await.unwrap(),
+            ToolAuthorization::Pending { .. }
+        ));
+        let open = service.inbox(crate::InboxQuery::for_group("ops")).await.unwrap().items;
+        service.decide(&open[0].id, open[0].version, ops_approval()).await.unwrap();
+        let by_id = RunConfig::builder()
+            .tool_confirmation_decisions(HashMap::from([(
+                "c1".to_string(),
+                ToolConfirmationDecision::Deny,
+            )]))
+            .approval_service(service.clone())
+            .build();
+        assert!(matches!(
+            authorize_tool_call(&gate(&by_id), call()).await.unwrap(),
+            ToolAuthorization::Refuse { .. }
+        ));
+        assert!(!store.has_decision(&scope, &fingerprint).await.unwrap(), "nothing left behind");
+        assert!(matches!(
+            authorize_tool_call(&gate(&held), call()).await.unwrap(),
+            ToolAuthorization::Pending { .. }
+        ));
+    }
+
+    /// Wave 2 review finding 15 (spec 3.3 §7.3): a request another decision resolved but
+    /// whose outcome never reaches the store fails the call with `approval.outcome_unsettled`
+    /// after ten seconds, and the store keeps the call waiting rather than cleared.
+    #[tokio::test(start_paused = true)]
+    async fn a_request_that_never_settles_fails_the_call() {
+        let (store, service) = ops_inbox();
+        let call = || GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
+        let held = RunConfig::builder().approval_service(service.clone()).build();
+        let ToolAuthorization::Pending { request, .. } =
+            authorize_tool_call(&gate(&held), call()).await.unwrap()
+        else {
+            panic!("the call waits");
+        };
+        let open = service.inbox(crate::InboxQuery::for_group("ops")).await.unwrap().items;
+        let mut resolved = open[0].clone();
+        resolved.decisions.push(ops_approval());
+        resolved.state = crate::ApprovalState::Approved;
+        resolved.resolved_at = Some(Utc::now());
+        resolved.version += 1;
+        assert!(store.replace_request(&resolved, open[0].version).await.unwrap());
+
+        let started = tokio::time::Instant::now();
+        let error = withdraw_held_call(&gate(&held), &request).await.unwrap_err();
+        assert_eq!(error.code, "approval.outcome_unsettled");
+        assert!(error.message.contains("has not reached the approval store"), "{error}");
+        assert!(started.elapsed() >= SETTLE_WITHIN, "it waited {:?}", started.elapsed());
+        let scope = ApprovalScope::new("app", "user", "session");
+        assert_eq!(store.pending(&scope).await.unwrap().len(), 1, "the call still waits");
+    }
+
+    /// The service under `ops_inbox`'s, except that every withdrawal loses to a change that
+    /// leaves the request pending, as an escalation step that keeps firing would.
+    #[derive(Debug)]
+    struct AlwaysMoved(Arc<crate::StoreApprovalService>);
+
+    #[async_trait]
+    impl crate::ApprovalService for AlwaysMoved {
+        async fn submit(&self, request: ApprovalRequest) -> Result<ApprovalRequest> {
+            self.0.submit(request).await
+        }
+        async fn submit_call(
+            &self,
+            call: crate::approval::ApprovalCall,
+        ) -> Result<Option<ApprovalRequest>> {
+            self.0.submit_call(call).await
+        }
+        async fn get(&self, id: &str) -> Result<Option<ApprovalRequest>> {
+            self.0.get(id).await
+        }
+        async fn inbox(&self, query: crate::InboxQuery) -> Result<crate::InboxPage> {
+            self.0.inbox(query).await
+        }
+        async fn decide(
+            &self,
+            id: &str,
+            expected_version: u64,
+            decision: crate::ApprovalDecision,
+        ) -> Result<ApprovalRequest> {
+            self.0.decide(id, expected_version, decision).await
+        }
+        async fn delegate(&self, delegation: ApprovalDelegation) -> Result<ApprovalDelegation> {
+            self.0.delegate(delegation).await
+        }
+        async fn revoke_delegation(&self, id: &str) -> Result<bool> {
+            self.0.revoke_delegation(id).await
+        }
+        async fn delegations_to(&self, to: &SubjectRef) -> Result<Vec<ApprovalDelegation>> {
+            self.0.delegations_to(to).await
+        }
+        async fn cancel(&self, id: &str, reason: Option<String>) -> Result<ApprovalRequest> {
+            self.0.cancel(id, reason).await
+        }
+        async fn withdraw(&self, _id: &str, _reason: Option<String>) -> Result<ApprovalRequest> {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Err(AdkError::new(
+                ErrorComponent::Agent,
+                ErrorCategory::Conflict,
+                "approval.version_conflict",
+                "another change landed first",
+            ))
+        }
+        async fn tick(&self, now: DateTime<Utc>) -> Result<crate::ApprovalTick> {
+            self.0.tick(now).await
+        }
+        fn approval_store(&self) -> Option<Arc<dyn ApprovalStore>> {
+            self.0.approval_store()
+        }
+    }
+
+    /// Wave 2 review finding 15: a request that is still pending at the deadline, because
+    /// every withdrawal lost to another change, fails the call and says it is still pending.
+    #[tokio::test(start_paused = true)]
+    async fn a_request_that_keeps_changing_fails_the_call_as_still_pending() {
+        let (_, inner) = ops_inbox();
+        let service = Arc::new(AlwaysMoved(inner));
+        let call = GovernedCall::new("tool", "c1", json!({})).requiring_confirmation(true);
+        let held = RunConfig::builder().approval_service(service).build();
+        let ToolAuthorization::Pending { request, .. } =
+            authorize_tool_call(&gate(&held), call).await.unwrap()
+        else {
+            panic!("the call waits");
+        };
+        let error = withdraw_held_call(&gate(&held), &request).await.unwrap_err();
+        assert_eq!(error.code, "approval.outcome_unsettled");
+        assert!(error.message.contains("still pending"), "{error}");
     }
 
     /// `deny_on_confirmation_timeout` restores the denial with a store, and records nothing.

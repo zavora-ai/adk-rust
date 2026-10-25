@@ -1689,7 +1689,10 @@ impl StoreApprovalService {
         self
     }
 
-    /// Wakes runs in `run_store` when their request resolves.
+    /// Wakes runs in `run_store` when their request resolves: the run the request names and
+    /// every run of its session parked on the call
+    /// ([`RunCheckpointRef::AwaitingApproval`](crate::RunCheckpointRef::AwaitingApproval)
+    /// naming its fingerprint; spec 3.3 §7.3).
     #[must_use]
     pub fn with_run_store(mut self, run_store: Arc<dyn DurableRunStore>) -> Self {
         self.run_store = Some(run_store);
@@ -1782,11 +1785,40 @@ impl StoreApprovalService {
         if write {
             self.store.decide(&request.scope, &request.fingerprint, outcome).await?;
         }
-        if let (Some(run_id), Some(runs)) = (&request.run_id, &self.run_store)
-            && let Err(error) = runs.wake(run_id).await
-        {
-            // The decision is in the store, so the run's next attempt still takes it.
-            tracing::warn!(approval.id = %request.id, run.id = %run_id, error = %error, "could not wake the run waiting for an approval");
+        if let Some(runs) = &self.run_store {
+            // The run the request names, and every run of the session parked on the call: a
+            // run that held the call again while the request was open got this request back
+            // under the earlier run's id (spec 3.3 §7.3).
+            let mut waiting: Vec<String> = request.run_id.iter().cloned().collect();
+            let parked = crate::RunFilter::default()
+                .app_name(request.scope.app_name.clone())
+                .user_id(request.scope.user_id.clone())
+                .session_id(request.scope.session_id.clone())
+                .states([crate::RunState::Waiting]);
+            match runs.list(parked).await {
+                Ok(parked) => waiting.extend(
+                    parked
+                        .into_iter()
+                        .filter(|run| {
+                            matches!(
+                                &run.checkpoint,
+                                Some(crate::RunCheckpointRef::AwaitingApproval { fingerprints, .. })
+                                    if fingerprints.contains(&request.fingerprint)
+                            )
+                        })
+                        .map(|run| run.run_id)
+                        .filter(|run_id| request.run_id.as_ref() != Some(run_id)),
+                ),
+                Err(error) => {
+                    tracing::warn!(approval.id = %request.id, error = %error, "could not list the runs parked on an approval");
+                }
+            }
+            for run_id in waiting {
+                if let Err(error) = runs.wake(&run_id).await {
+                    // The decision is in the store, so the run's next attempt still takes it.
+                    tracing::warn!(approval.id = %request.id, run.id = %run_id, error = %error, "could not wake the run waiting for an approval");
+                }
+            }
         }
         let mut applied = request.clone();
         applied.outcome_applied = true;
@@ -2543,6 +2575,127 @@ mod tests {
             woken.map(|claim| claim.record.run_id),
             Some(run_id),
             "the decision woke the run"
+        );
+    }
+
+    /// Wave 2 review finding 3 (spec 3.3 §7.3): a run that held the call again while its
+    /// request was still open — after the run the request names was cancelled — is woken
+    /// when the request resolves.
+    #[tokio::test]
+    async fn resolving_a_request_wakes_a_later_run_parked_on_the_call() {
+        use crate::{DurableRunStore, InMemoryApprovalStore, InMemoryRunStore, NewRun, RunState};
+
+        let runs = Arc::new(InMemoryRunStore::new());
+        let scope = ApprovalScope::new("app", "u", "s-1");
+        let call = ToolConfirmationRequest::new("pay", json!({ "cents": 500 }));
+        let park = |runs: Arc<InMemoryRunStore>| {
+            let fingerprint = call.fingerprint();
+            async move {
+                let new = NewRun::new("q", "app", "u", "agent", json!({})).with_session_id("s-1");
+                let run_id = runs.enqueue(new).await.unwrap().record().unwrap().run_id.clone();
+                let claim = runs.claim("q", "w", Duration::from_secs(60)).await.unwrap().unwrap();
+                let checkpoint = crate::RunCheckpointRef::AwaitingApproval {
+                    session_id: "s-1".into(),
+                    invocation_id: None,
+                    fingerprints: vec![fingerprint],
+                    expires_at: None,
+                };
+                runs.set_checkpoint(&run_id, claim.epoch, checkpoint).await.unwrap();
+                runs.wait(&run_id, claim.epoch, None).await.unwrap();
+                run_id
+            }
+        };
+        let service = StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new()))
+            .with_run_store(runs.clone())
+            .with_router(ApprovalPolicy::new([ApproverSelector::human("ana")]));
+        let held_by = |run_id: &str| ApprovalCall {
+            scope: scope.clone(),
+            request: call.clone(),
+            reason: "pay".into(),
+            agent_name: "agent".into(),
+            invocation_id: "inv".into(),
+            run_id: Some(run_id.to_string()),
+            acting: None,
+        };
+
+        let first = park(runs.clone()).await;
+        let request = service.submit_call(held_by(&first)).await.unwrap().unwrap();
+        runs.request_cancel(&first).await.unwrap();
+        let second = park(runs.clone()).await;
+        let again = service.submit_call(held_by(&second)).await.unwrap().unwrap();
+        assert_eq!(again.id, request.id, "the call held again keeps its request");
+
+        service
+            .decide(
+                &request.id,
+                request.version,
+                ApprovalDecision::approve(SubjectRef::human("ana")),
+            )
+            .await
+            .unwrap();
+        assert_eq!(runs.get(&first).await.unwrap().unwrap().state, RunState::Cancelled);
+        let woken = runs.claim("q", "w", Duration::from_secs(60)).await.unwrap();
+        assert_eq!(woken.map(|claim| claim.record.run_id), Some(second), "the later run wakes");
+    }
+
+    /// Wave 2 review finding 14 (spec 3.3 §7.3): the outcome of a decision is in the store
+    /// before any notifier hears of it, so a call decided another way meanwhile waits for it
+    /// no longer than the store write.
+    #[tokio::test]
+    async fn a_resolved_outcome_is_in_the_store_before_the_notifiers_run() {
+        use crate::{ApprovalStore, InMemoryApprovalStore};
+
+        #[derive(Debug)]
+        struct Witness {
+            store: Arc<InMemoryApprovalStore>,
+            seen: std::sync::Mutex<Vec<(ApprovalEventKind, bool, bool)>>,
+        }
+        #[async_trait::async_trait]
+        impl ApprovalNotifier for Witness {
+            async fn notify(&self, notification: &ApprovalNotification) -> Result<()> {
+                let request = &notification.request;
+                let decided = self.store.has_decision(&request.scope, &request.fingerprint).await?;
+                let waiting = self
+                    .store
+                    .pending(&request.scope)
+                    .await?
+                    .iter()
+                    .any(|entry| entry.fingerprint == request.fingerprint);
+                self.seen.lock().unwrap().push((notification.kind, decided, waiting));
+                Ok(())
+            }
+        }
+
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let witness = Arc::new(Witness { store: store.clone(), seen: Default::default() });
+        let service = StoreApprovalService::new(store.clone())
+            .with_notifier(witness.clone())
+            .with_router(ApprovalPolicy::new([ApproverSelector::human("ana")]));
+        let call = ApprovalCall {
+            scope: ApprovalScope::new("app", "u", "s"),
+            request: ToolConfirmationRequest::new("pay", json!({ "cents": 500 })),
+            reason: "pay".into(),
+            agent_name: "agent".into(),
+            invocation_id: "inv".into(),
+            run_id: None,
+            acting: None,
+        };
+        let request = service.submit_call(call).await.unwrap().unwrap();
+        service
+            .decide(
+                &request.id,
+                request.version,
+                ApprovalDecision::approve(SubjectRef::human("ana")),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            *witness.seen.lock().unwrap(),
+            vec![
+                (ApprovalEventKind::Submitted, false, true),
+                (ApprovalEventKind::Decided, true, false),
+                (ApprovalEventKind::Resolved, true, false),
+            ]
         );
     }
 
