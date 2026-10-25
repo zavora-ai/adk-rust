@@ -134,6 +134,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "http",
  "rustls",
  "serde",
  "serde_json",

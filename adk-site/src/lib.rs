@@ -7,17 +7,22 @@
 //!
 //! | Module | Contents | Spec 3.5 |
 //! |--------|----------|----------|
+//! | [`batch`] | [`batch::Batcher`]: windows per kind, flush triggers, size limits; [`batch::check_host`] | §7.8.3, Q15, Q16 |
 //! | [`content`] | `site.toml`, items as Markdown with front matter, [`content::ContentStore`] and [`content::ContentHistory`] with conformance suites | §7.8.2 |
 //! | [`theme`] | Templates and design tokens, WCAG contrast | §7.8, §7.16 |
 //! | [`generator`] | [`generator::SiteGenerator`] and the built-in renderer: pages per language, Markdown and structured twins, `llms.txt`, `robots.txt`, `security.txt`, sitemaps, feeds, JSON-LD, redirects, incremental builds | §7.4, §7.8 |
+//! | [`feed`] | [`feed::ContentSource`], model-free [`feed::FeedMapping`]s, feed bounds | §7.8.2, §7.8.3, A-I27 |
 //! | [`gate`] | [`gate::LaunchGate`] in fast and full tiers | §7.8.1, §7.8.3 |
 //! | [`scan`] | Server-code refusal | A-I1 |
 //! | [`release`] | [`release::ReleaseBuilder`]: manifests, snapshots and deltas | §7.7, §7.8.3 |
 //! | [`signer`] | [`signer::ReleaseSigner`]: the delegated key that signs checkpoints | §7.7, A-I5 |
+//! | [`live`] | [`live::LiveStore`]: the live lane the edge serves | §7.8.3, A-I26 |
 //! | [`log`] | [`log::SiteLog`]: `{seq, manifest}` entries, C2SP tiles and checkpoints, proofs | §7.7; AWP 2.0 §14.5 |
 //! | [`host`] | [`host::SiteHost`], [`host::DirectoryHost`] and the host conformance suite | §7.8, §7.8.3 |
+//! | [`lanes`] | Release, live and stream lanes per field; claims stay in releases | §7.8.3, A-I26 |
 //! | [`pipeline`] | Draft, check, preview, approve, release, publish, announce, measure; corrections, withdrawals, schedules, revert, rollback | §7.8.2 |
 //! | [`media`] | Uploads sniffed, executables and polyglots refused, location stripped, resized | §7.8.2 |
+//! | [`updates`] | [`updates::UpdateEngine`]: lanes, feed bounds, batches, exceptions, scheduled full checks, revert and replay | §7.8.3, A-I24–A-I27 |
 //! | [`translation`] | Translation policy as data | §7.8.2, §7.8.3 |
 //! | [`redirects`] | Redirects in each host's format | §7.8 |
 //! | `migrate` (feature `migrate`) | Sources, domain claim, sanitiser, feature mapping, freeze, parity, probes, archive | §7.8, §7.8.1, §7.18 |
@@ -66,11 +71,15 @@
 
 #![warn(missing_docs)]
 
+pub mod batch;
 pub mod content;
 mod error;
+pub mod feed;
 pub mod gate;
 pub mod generator;
 pub mod host;
+pub mod lanes;
+pub mod live;
 pub mod log;
 pub mod media;
 #[cfg(feature = "migrate")]
@@ -82,5 +91,6 @@ pub mod scan;
 pub mod signer;
 pub mod theme;
 pub mod translation;
+pub mod updates;
 
 pub use error::{Result, SiteError};

@@ -15,7 +15,7 @@ use futures::stream::{self, BoxStream, StreamExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::answers::{AnswerLog, AnswerRecord, InMemoryAnswerLog, SURFACE_AUDIT_DECIDE};
@@ -46,6 +46,21 @@ pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// when nothing wakes it sooner. It waits as long as the session has an open decision or a
 /// running turn, however long that is (spec 3.3 §7.3, S-I4).
 const DRAIN_BACKOFF_MAX: Duration = Duration::from_secs(5);
+
+tokio::task_local! {
+    /// The transcript digest of the spoken answer being recorded: every `surface.decide`
+    /// record written while it is in scope carries it, and none carries the words
+    /// (spec 3.3 §5.6).
+    static SPOKEN_DIGEST: String;
+}
+
+/// Runs `future` with the transcript digest `digest` in scope, when there is one.
+async fn with_digest<F: std::future::Future>(digest: Option<String>, future: F) -> F::Output {
+    match digest {
+        Some(digest) => SPOKEN_DIGEST.scope(digest, future).await,
+        None => future.await,
+    }
+}
 
 /// A command from a surface (spec 3.3 §6). Every command runs as an authenticated
 /// [`Caller`], whose subject, surface and [`Origin`] reach its audit record.
@@ -458,6 +473,8 @@ struct Spoken {
     user: String,
     /// The decision.
     request: ApprovalRequest,
+    /// The digest of what was said, for the record of its cancel (spec 3.3 §5.6).
+    digest: Option<String>,
 }
 
 impl fmt::Debug for SurfaceEngine {
@@ -921,13 +938,29 @@ impl SurfaceEngine {
     /// | `surface.call_not_expanded` | A truncated call approved before it was expanded |
     /// | `surface.not_here` | An agent answering, resuming outside the home, loosening the mode from chat or voice |
     /// | `surface.operator_only` | Stop all or Resume all from a caller outside the group [`stops_need`](SurfaceEngineBuilder::stops_need) names |
+    /// | `surface.invalid` | A spoken answer: it goes through [`decide_spoken`](Self::decide_spoken) with its transcript (feature `voice`) |
     /// | `surface.unsupported` | The source cannot do it |
     /// | the source's code | The source failed |
     pub async fn execute(&self, caller: &Caller, command: Command) -> Result<CommandOutcome> {
         match command {
+            // A spoken answer is recorded with its transcript's digest (spec 3.3 §5.6).
+            Command::Decide { .. } if rules::row(caller) == Row::Voice => {
+                Err(SurfaceError::Invalid(
+                    "a spoken answer goes through decide_spoken with its transcript".into(),
+                ))
+            }
             Command::Decide { decision_id, version, answer, edited_args, reason, expanded } => {
-                self.decide(caller, &decision_id, version, answer, edited_args, reason, expanded)
-                    .await
+                self.decide(
+                    caller,
+                    &decision_id,
+                    version,
+                    answer,
+                    edited_args,
+                    reason,
+                    expanded,
+                    None,
+                )
+                .await
             }
             Command::CancelAnswer { decision_id } => self.cancel_answer(caller, &decision_id).await,
             Command::Send { session_id, text } => self.send(caller, session_id, text, false).await,
@@ -944,6 +977,62 @@ impl SurfaceEngine {
         }
     }
 
+    /// Answers a decision by voice (spec 3.3 §5.6, §7.2): the one way a spoken answer is
+    /// recorded. `transcript` is what the person said; every `surface.decide` record of the
+    /// answer carries its SHA-256 as `transcriptDigest`, and none carries the words.
+    ///
+    /// The voice row of §7.2 applies: **Allow once** for an everyday call, which waits out
+    /// the cancel window ([`CommandOutcome::Pending`]; its end arrives on
+    /// [`SpokenAnswer::settled`](crate::voice::SpokenAnswer::settled)), and **Deny** for any
+    /// call. The call counts as not expanded, so a call shown truncated is decided on screen.
+    ///
+    /// # Errors
+    ///
+    /// `surface.invalid` when `caller` is not on the voice surface with origin voice; the
+    /// codes of [`execute`](Self::execute) otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_surface::{Answer, Caller, CommandOutcome, Origin, SurfaceEngine, SurfaceKind};
+    ///
+    /// # async fn example(engine: SurfaceEngine, id: &str, version: u64) -> adk_surface::Result<()> {
+    /// let ana = Caller::human("ana", SurfaceKind::Voice, Origin::Voice);
+    /// let spoken = engine.decide_spoken(&ana, id, version, Answer::AllowOnce, "allow once").await?;
+    /// if let CommandOutcome::Pending { text, .. } = &spoken.outcome {
+    ///     println!("{text}");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "voice")]
+    pub async fn decide_spoken(
+        &self,
+        caller: &Caller,
+        decision_id: &str,
+        version: u64,
+        answer: Answer,
+        transcript: &str,
+    ) -> Result<crate::voice::SpokenAnswer> {
+        use sha2::Digest as _;
+        if caller.origin != Origin::Voice || caller.surface != crate::origin::SurfaceKind::Voice {
+            return Err(SurfaceError::Invalid(
+                "decide_spoken records a spoken answer: the caller is on the voice surface and \
+                 its origin is voice"
+                    .into(),
+            ));
+        }
+        let digest = format!("{:x}", sha2::Sha256::digest(transcript.as_bytes()));
+        let (settle, settled) = oneshot::channel();
+        let outcome = with_digest(
+            Some(digest),
+            self.decide(caller, decision_id, version, answer, None, None, false, Some(settle)),
+        )
+        .await?;
+        let settled = matches!(outcome, CommandOutcome::Pending { .. }).then_some(settled);
+        Ok(crate::voice::SpokenAnswer { outcome, settled })
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn decide(
         &self,
@@ -954,6 +1043,7 @@ impl SurfaceEngine {
         edited_args: Option<Value>,
         reason: Option<String>,
         expanded: bool,
+        settle: Option<oneshot::Sender<Result<CommandOutcome>>>,
     ) -> Result<CommandOutcome> {
         let request = self.owned_request(caller, id).await?;
         if let Origin::Agent { agent } = &caller.origin {
@@ -991,7 +1081,7 @@ impl SurfaceEngine {
                 let card = self.card(caller, &request).await?;
                 return Ok(CommandOutcome::Changed { card });
             }
-            return self.speak_later(caller, request, version).await;
+            return self.speak_later(caller, request, version, settle).await;
         }
         self.commit(caller, &request, version, answer, edited_args, reason).await
     }
@@ -1135,25 +1225,47 @@ impl SurfaceEngine {
         Ok(CommandOutcome::AlreadyDecided { decided, card })
     }
 
-    /// A spoken "allow once" waits out its cancel window, then commits (spec 3.3 §5.6, §7.2).
+    /// A spoken "allow once" waits out its cancel window, then commits (spec 3.3 §5.6, §7.2);
+    /// how the window ended goes to `settle`.
     async fn speak_later(
         &self,
         caller: &Caller,
         request: ApprovalRequest,
         version: u64,
+        settle: Option<oneshot::Sender<Result<CommandOutcome>>>,
     ) -> Result<CommandOutcome> {
         let window = self.inner.voice_window;
         let cancel_until = self.now()
             + chrono::Duration::from_std(window).unwrap_or_else(|_| chrono::Duration::seconds(5));
+        self.audit_decide(caller, &request, Answer::AllowOnce, "pending", None).await?;
+        let digest = SPOKEN_DIGEST.try_with(Clone::clone).ok();
         let engine = self.clone();
         let speaker = caller.clone();
         let id = request.id.clone();
         let task_id = id.clone();
         let spoken = request.clone();
-        let handle = tokio::spawn(async move {
+        let handle = tokio::spawn(with_digest(digest.clone(), async move {
             tokio::time::sleep(window).await;
             engine.inner.spoken.lock().unwrap_or_else(|e| e.into_inner()).remove(&task_id);
-            match engine.commit(&speaker, &request, version, Answer::AllowOnce, None, None).await {
+            // Everything stopped meanwhile, here or on another surface: nothing runs.
+            let result = if engine.inner.source.stopped().await.unwrap_or(false) {
+                if let Err(error) = engine
+                    .audit_decide(
+                        &speaker,
+                        &request,
+                        Answer::AllowOnce,
+                        "cancelled",
+                        Some("surface.stopped"),
+                    )
+                    .await
+                {
+                    tracing::warn!(error = %error, decision.id = %task_id, "a spoken answer was cancelled; its audit record failed");
+                }
+                Err(SurfaceError::NotHere(words::ALL_AGENTS_STOPPED.to_string()))
+            } else {
+                engine.commit(&speaker, &request, version, Answer::AllowOnce, None, None).await
+            };
+            match &result {
                 Ok(CommandOutcome::Answered { .. }) => {}
                 Ok(outcome) => {
                     tracing::info!(decision.id = %task_id, outcome = ?outcome, "a spoken answer was not recorded: the decision changed in its cancel window");
@@ -1162,8 +1274,11 @@ impl SurfaceEngine {
                     tracing::warn!(error = %error, decision.id = %task_id, "a spoken answer could not be recorded");
                 }
             }
-        });
-        let entry = Spoken { handle, user: caller.user_id().to_string(), request: spoken };
+            if let Some(settle) = settle {
+                let _ = settle.send(result);
+            }
+        }));
+        let entry = Spoken { handle, user: caller.user_id().to_string(), request: spoken, digest };
         if let Some(previous) =
             self.inner.spoken.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), entry)
         {
@@ -1192,8 +1307,11 @@ impl SurfaceEngine {
             return Err(SurfaceError::not_found(format!("a spoken answer to '{id}' to cancel")));
         };
         spoken.handle.abort();
-        if let Err(error) =
-            self.audit_decide(caller, &spoken.request, Answer::AllowOnce, "cancelled", None).await
+        if let Err(error) = with_digest(
+            spoken.digest,
+            self.audit_decide(caller, &spoken.request, Answer::AllowOnce, "cancelled", None),
+        )
+        .await
         {
             tracing::warn!(error = %error, decision.id = %id, "the spoken answer was cancelled; its audit record failed");
         }
@@ -1525,6 +1643,9 @@ impl SurfaceEngine {
         }
         if let Some(code) = code {
             draft = draft.ext("code", json!(code));
+        }
+        if let Ok(digest) = SPOKEN_DIGEST.try_with(Clone::clone) {
+            draft = draft.ext("transcriptDigest", json!(digest));
         }
         trail.record(draft).await.map_err(SurfaceError::Source)
     }

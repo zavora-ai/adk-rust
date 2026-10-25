@@ -442,6 +442,9 @@ export type FeedFrame = {
   type: "reset";
 };
 
+/** One of the three switches of "What it can see" (spec 3.3 §5.6). */
+export type InputSource = "mic" | "camera" | "screen";
+
 /** How much agents act on their own (spec 3.3 §8.1). */
 export type Mode = "justLook" | "suggest" | "askFirst" | "goAhead";
 
@@ -752,3 +755,131 @@ export interface Via {
   /** The surface. */
   surface: SurfaceKind;
 }
+
+/** A text frame the view sends up the voice socket (spec 3.3 §5.6). */
+export type VoiceClientMessage = {
+  /** The ticket. */
+  ticket: string;
+  type: "hello";
+} | {
+  /** On or off. */
+  on: boolean;
+  /** Which. */
+  source: InputSource;
+  type: "switch";
+} | {
+  type: "playbackEnded";
+} | {
+  type: "end";
+};
+
+/** A realtime model the person can talk on (spec 3.3 §5.6). */
+export interface VoiceModel {
+  /** What a session asks for: `POST /surface/voice/sessions {model}`. */
+  id: string;
+  /** The sample rate of the PCM16 mono audio the model takes. */
+  inputRate: number;
+  /** The name the select shows, such as "Gemini Live". */
+  name: string;
+  /** The sample rate of the PCM16 mono audio the model speaks. */
+  outputRate: number;
+}
+
+/**
+ * `GET /surface/voice` answer: the models the person can talk on, first the default
+ * (spec 3.3 §5.6).
+ */
+export interface VoiceModels {
+  /** The agent the person talks with, by its display name: "Talking with Chief of staff". */
+  agent: string;
+  /** The models, the default first. */
+  models: VoiceModel[];
+}
+
+/**
+ * `POST /surface/voice/sessions` answer (spec 3.3 §5.6).
+ * 
+ * The ticket works once, within 30 seconds, for the caller it was issued to; the view sends
+ * it in its first message on the socket, never in a URL.
+ */
+export interface VoiceTicket {
+  /** The sample rate of the audio the view sends up. */
+  inputRate: number;
+  /** The sample rate of the audio the view plays. */
+  outputRate: number;
+  /** The voice conversation's session, listed in Threads under the agent. */
+  sessionId: string;
+  /** The socket's path: `/voice/socket`. */
+  socket: string;
+  /** The single-use ticket. */
+  ticket: string;
+}
+
+/** `POST /surface/voice/sessions` body: a ticket for the voice socket (spec 3.3 §5.6). */
+export interface VoiceTicketRequest {
+  /** The model's `id`. */
+  model: string;
+  /**
+   * Continue this voice conversation instead of starting one: only one of the caller's own
+   * voice sessions (§11 S-I8).
+   */
+  sessionId?: string | null;
+}
+
+/**
+ * A text frame the server sends down the voice socket: transient voice state only
+ * (spec 3.3 §5.6).
+ */
+export type VoiceUpdate = {
+  /** The sample rate of the audio the view sends up. */
+  inputRate: number;
+  /** The sample rate of the audio the view plays. */
+  outputRate: number;
+  /** The voice conversation's session. */
+  sessionId: string;
+  type: "ready";
+} | {
+  type: "listening";
+} | {
+  type: "speaking";
+} | {
+  /** The transcript. */
+  text: string;
+  type: "heard";
+} | {
+  /** The card's `id`. */
+  decisionId?: string | null;
+  type: "prompted";
+  /** The card's `version`. */
+  version?: number | null;
+} | {
+  /** When it takes effect. */
+  cancelUntil: string;
+  /** The decision. */
+  decisionId: string;
+  /** "Allowing once in 5 seconds". */
+  text: string;
+  type: "pending";
+} | {
+  /** The answer was recorded. */
+  decided: boolean;
+  /** The decision. */
+  decisionId: string;
+  /** What happened, in plain words, when it was not recorded. */
+  text?: string | null;
+  type: "outcome";
+} | {
+  /** The cards' `id`s, oldest first. */
+  decisionIds: string[];
+  type: "needsScreen";
+} | {
+  type: "bargeIn";
+} | {
+  type: "ended";
+} | {
+  /** The engine's `surface.*` code, or the source's. */
+  code: string;
+  /** What happened, in plain words. */
+  message: string;
+  type: "error";
+};

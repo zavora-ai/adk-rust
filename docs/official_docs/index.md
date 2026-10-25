@@ -107,6 +107,7 @@ The interface to an always-on agent (`adk-surface`, spec 3.3): every surface is 
 - [Chat](surfaces/chat.md) - The Telegram adapter over the kernel's channel contract: cards with Allow once and Deny and never the call's arguments, pairing by code, "stop all", long polling
 - [The Phone](surfaces/phone.md) - The web home installed on a phone: wake-ups from your own kernel that say nothing, answers by touch, "Confirm it's you" with a passkey on the phone or the computer, pairing by QR code, `adk-rust up --home-url` behind Tailscale Serve
 - [The Desktop Tray](surfaces/desktop.md) - Experimental: the web home in a desktop window and a tray icon with the decisions badge; its panel says yes once or no to everyday calls, opens the home for the rest, and stops everything; loopback only
+- [Voice and Video](surfaces/voice.md) - Spoken "allow once" and "deny" through the engine with a cancel window, bound to the decision on screen, a digest on record and never the recording; the camera and the screen while their switches are on; the voice view and the terminal's voice line
 - [Scenarios](surfaces/scenarios.md) - The phase scenarios as programs you can run: "Approve it tomorrow" (a decision that waits through quiet time and a `kill -9`, answered in Telegram) and "The morning after" (one exact briefing across a restart), on SQLite and PostgreSQL
 
 ## Realtime & Multimodal
@@ -203,7 +204,9 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [A2A Getting Started](a2a/getting-started.md) - Create and run an A2A agent
 - [A2A Protocol](deployment/a2a.md) - Agent-to-Agent communication
 - [Agentic Web Protocol](deployment/awp.md) - AWP protocol for agent-native web services
+- [The AWP Agent Edge](deployment/awp-edge.md) - A site's capabilities over A2A, MCP and HTTP: trust tiers, held and exactly-once calls, the public partition
 - [Site Migration](deployment/site-migration.md) - Moving an existing site onto a signed static AWP site
+- [Constantly Updated Sites](deployment/constant-updates.md) - Lanes, batching, feed bounds and delta releases for sites that change every minute
 - [Agent Engine](deployment/agent-engine.md) - Deploying on the Gemini Enterprise Agent Platform
 - [Agent Registry](deployment/agent-registry.md) - Discovery, registration, and remote invocation on the Agent Platform
 

@@ -1288,6 +1288,26 @@
           }
         ]
       },
+      "InputSource": {
+        "description": "One of the three switches of \"What it can see\" (spec 3.3 §5.6).",
+        "oneOf": [
+          {
+            "const": "mic",
+            "description": "The microphone.",
+            "type": "string"
+          },
+          {
+            "const": "camera",
+            "description": "The camera.",
+            "type": "string"
+          },
+          {
+            "const": "screen",
+            "description": "A shared screen or window.",
+            "type": "string"
+          }
+        ]
+      },
       "Mode": {
         "description": "How much agents act on their own (spec 3.3 §8.1).",
         "oneOf": [
@@ -2147,6 +2167,427 @@
           "origin"
         ],
         "type": "object"
+      },
+      "VoiceClientMessage": {
+        "description": "A text frame the view sends up the voice socket (spec 3.3 §5.6).",
+        "oneOf": [
+          {
+            "description": "The first message: the ticket `POST /surface/voice/sessions` issued.",
+            "properties": {
+              "ticket": {
+                "description": "The ticket.",
+                "type": "string"
+              },
+              "type": {
+                "const": "hello",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "ticket"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A switch of \"What it can see\" changed; sent before any later frame.",
+            "properties": {
+              "on": {
+                "description": "On or off.",
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/components/schemas/InputSource",
+                "description": "Which."
+              },
+              "type": {
+                "const": "switch",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "source",
+              "on"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The model's audio finished playing, or was flushed.",
+            "properties": {
+              "type": {
+                "const": "playbackEnded",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "End the conversation: a spoken answer in its cancel window is cancelled.",
+            "properties": {
+              "type": {
+                "const": "end",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "VoiceModel": {
+        "description": "A realtime model the person can talk on (spec 3.3 §5.6).",
+        "properties": {
+          "id": {
+            "description": "What a session asks for: `POST /surface/voice/sessions {model}`.",
+            "type": "string"
+          },
+          "inputRate": {
+            "description": "The sample rate of the PCM16 mono audio the model takes.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The name the select shows, such as \"Gemini Live\".",
+            "type": "string"
+          },
+          "outputRate": {
+            "description": "The sample rate of the PCM16 mono audio the model speaks.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "inputRate",
+          "outputRate"
+        ],
+        "type": "object"
+      },
+      "VoiceModels": {
+        "description": "`GET /surface/voice` answer: the models the person can talk on, first the default\n(spec 3.3 §5.6).",
+        "properties": {
+          "agent": {
+            "description": "The agent the person talks with, by its display name: \"Talking with Chief of staff\".",
+            "type": "string"
+          },
+          "models": {
+            "description": "The models, the default first.",
+            "items": {
+              "$ref": "#/components/schemas/VoiceModel"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "agent",
+          "models"
+        ],
+        "type": "object"
+      },
+      "VoiceTicket": {
+        "description": "`POST /surface/voice/sessions` answer (spec 3.3 §5.6).\n\nThe ticket works once, within 30 seconds, for the caller it was issued to; the view sends\nit in its first message on the socket, never in a URL.",
+        "properties": {
+          "inputRate": {
+            "description": "The sample rate of the audio the view sends up.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "outputRate": {
+            "description": "The sample rate of the audio the view plays.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sessionId": {
+            "description": "The voice conversation's session, listed in Threads under the agent.",
+            "type": "string"
+          },
+          "socket": {
+            "description": "The socket's path: `/voice/socket`.",
+            "type": "string"
+          },
+          "ticket": {
+            "description": "The single-use ticket.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket",
+          "socket",
+          "sessionId",
+          "inputRate",
+          "outputRate"
+        ],
+        "type": "object"
+      },
+      "VoiceTicketRequest": {
+        "description": "`POST /surface/voice/sessions` body: a ticket for the voice socket (spec 3.3 §5.6).",
+        "properties": {
+          "model": {
+            "description": "The model's `id`.",
+            "type": "string"
+          },
+          "sessionId": {
+            "description": "Continue this voice conversation instead of starting one: only one of the caller's own\nvoice sessions (§11 S-I8).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "model"
+        ],
+        "type": "object"
+      },
+      "VoiceUpdate": {
+        "description": "A text frame the server sends down the voice socket: transient voice state only\n(spec 3.3 §5.6).",
+        "oneOf": [
+          {
+            "description": "The provider session is open.",
+            "properties": {
+              "inputRate": {
+                "description": "The sample rate of the audio the view sends up.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "outputRate": {
+                "description": "The sample rate of the audio the view plays.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sessionId": {
+                "description": "The voice conversation's session.",
+                "type": "string"
+              },
+              "type": {
+                "const": "ready",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "sessionId",
+              "inputRate",
+              "outputRate"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The model waits for the person.",
+            "properties": {
+              "type": {
+                "const": "listening",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The model speaks.",
+            "properties": {
+              "type": {
+                "const": "speaking",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "What the person said, as transcribed.",
+            "properties": {
+              "text": {
+                "description": "The transcript.",
+                "type": "string"
+              },
+              "type": {
+                "const": "heard",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The decision a spoken answer would apply to now, or none.",
+            "properties": {
+              "decisionId": {
+                "description": "The card's `id`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "prompted",
+                "type": "string"
+              },
+              "version": {
+                "description": "The card's `version`.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A spoken \"allow once\" takes effect at `cancelUntil` unless cancelled.",
+            "properties": {
+              "cancelUntil": {
+                "description": "When it takes effect.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "decisionId": {
+                "description": "The decision.",
+                "type": "string"
+              },
+              "text": {
+                "description": "\"Allowing once in 5 seconds\".",
+                "type": "string"
+              },
+              "type": {
+                "const": "pending",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "decisionId",
+              "cancelUntil",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A spoken answer ended: read the card again for how.",
+            "properties": {
+              "decided": {
+                "description": "The answer was recorded.",
+                "type": "boolean"
+              },
+              "decisionId": {
+                "description": "The decision.",
+                "type": "string"
+              },
+              "text": {
+                "description": "What happened, in plain words, when it was not recorded.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "outcome",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "decisionId",
+              "decided"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The open decisions voice cannot approve: \"Decide on screen\".",
+            "properties": {
+              "decisionIds": {
+                "description": "The cards' `id`s, oldest first.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": {
+                "const": "needsScreen",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "decisionIds"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The person spoke over the model: flush the audio not yet played.",
+            "properties": {
+              "type": {
+                "const": "bargeIn",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The conversation ended.",
+            "properties": {
+              "type": {
+                "const": "ended",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Something failed or was refused.",
+            "properties": {
+              "code": {
+                "description": "The engine's `surface.*` code, or the source's.",
+                "type": "string"
+              },
+              "message": {
+                "description": "What happened, in plain words.",
+                "type": "string"
+              },
+              "type": {
+                "const": "error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "code",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
       }
     }
   },
@@ -3656,6 +4097,119 @@
           }
         },
         "summary": "Stop all from a paired device (spec 3.3 §11 S-I10); every other caller sends a stopAll command"
+      }
+    },
+    "/api/surface/voice": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceModels"
+                }
+              }
+            },
+            "description": "The voice models"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "The agent and the models voice can talk on, the default first (spec 3.3 §5.6); served with the `voice` feature"
+      }
+    },
+    "/api/surface/voice/sessions": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceTicketRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceTicket"
+                }
+              }
+            },
+            "description": "The ticket",
+            "x-socket": {
+              "down": {
+                "$ref": "#/components/schemas/VoiceUpdate"
+              },
+              "up": {
+                "$ref": "#/components/schemas/VoiceClientMessage"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A problem document with the engine's `surface.*` code, or the source's"
+          }
+        },
+        "summary": "A single-use ticket, good for 30 seconds, for the voice socket `GET /voice/socket` (spec 3.3 §5.6); served with the `voice` feature. The socket's first text message is `{\"type\":\"hello\",\"ticket\":…}`; then VoiceClientMessage up and VoiceUpdate down, and binary frames tagged 0x01 (PCM16 audio), 0x02 (camera JPEG) and 0x03 (screen JPEG)"
       }
     }
   }
