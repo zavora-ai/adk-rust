@@ -323,6 +323,15 @@ impl Tool for HookedTool {
                         verdict => verdict.apply(value),
                     });
                 }
+                // A hook that rewrote the file — a formatter — is part of the edit: the
+                // agent's read record follows it, so its next edit is not stale (§7.26).
+                if after.is_some() && tokio::fs::read(path).await.ok() != after {
+                    let workspace = self.hooks.workspace();
+                    let relative = workspace.record_path(path);
+                    if let Err(error) = workspace.record_current(ctx.as_ref(), &relative).await {
+                        tracing::debug!(error = %error, "read record not refreshed after a hook");
+                    }
+                }
             }
         }
 

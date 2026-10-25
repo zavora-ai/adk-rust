@@ -536,13 +536,15 @@ pub mod encrypted_store {
     use chrono::Utc;
     use serde_json::{Value, json};
 
+    use adk_devtools::{ReadLedger, ReadScope};
+
     use crate::encrypted::{SqliteStoreMarker, StoreKeyring};
     use crate::{
         FactKind, FactScope, FactSource, FactStatus, FactStore, GoalRecord, GoalSpec, GoalStore,
         HarnessMode, MemoryFact, ModeRecord, ModeSource, ModeStore, OriginPin, Provenance,
         RulePredicate, RuleScope, ShellLedger, ShellLedgerEntry, SqliteFactStore, SqliteGoalStore,
-        SqliteModeStore, SqliteShellLedger, SqliteStandingRuleStore, StandingDecision,
-        StandingRule, StandingRuleStore,
+        SqliteModeStore, SqliteReadRecords, SqliteShellLedger, SqliteStandingRuleStore,
+        StandingDecision, StandingRule, StandingRuleStore,
     };
 
     /// The app of every fixture row.
@@ -563,6 +565,7 @@ pub mod encrypted_store {
         "sentinel-goal-text",
         "sentinel-goal-until",
         "sentinel-fact-text",
+        "sentinel-read-path",
     ];
 
     /// Every store of a `harness.db` file behind one keyring.
@@ -587,6 +590,8 @@ pub mod encrypted_store {
         pub goals: SqliteGoalStore,
         /// Long-term facts.
         pub facts: SqliteFactStore,
+        /// The file tools' read records.
+        pub reads: SqliteReadRecords,
         /// The key marker.
         pub marker: SqliteStoreMarker,
     }
@@ -629,6 +634,8 @@ pub mod encrypted_store {
             goals.migrate().await.unwrap();
             let facts = SqliteFactStore::new(pool.clone()).with_keyring(keyring.clone());
             facts.migrate().await.unwrap();
+            let reads = SqliteReadRecords::new(pool.clone()).with_keyring(keyring.clone());
+            reads.migrate().await.unwrap();
             let marker = SqliteStoreMarker::new(pool.clone());
             marker.migrate().await.unwrap();
             SealedDb {
@@ -642,6 +649,7 @@ pub mod encrypted_store {
                 ledger,
                 goals,
                 facts,
+                reads,
                 marker,
             }
         }
@@ -657,6 +665,10 @@ pub mod encrypted_store {
 
     fn scope() -> ApprovalScope {
         ApprovalScope::new(APP, USER, SESSION)
+    }
+
+    fn read_scope() -> ReadScope {
+        ReadScope::new(APP, USER, SESSION, "harness")
     }
 
     /// The call the fixture holds for approval.
@@ -766,6 +778,7 @@ pub mod encrypted_store {
             .await
             .unwrap();
         db.goals.set(APP, USER, SESSION, goal()).await.unwrap();
+        db.reads.record(&read_scope(), "sentinel-read-path", "d1").await.unwrap();
         db.facts.put(fact()).await.unwrap().id
     }
 
@@ -812,6 +825,10 @@ pub mod encrypted_store {
         assert_eq!(goal.spec.goal, "sentinel-goal-text");
         let fact = db.facts.get(fact_id).await?.expect("the fact");
         assert_eq!(fact.text, "sentinel-fact-text");
+        assert_eq!(
+            db.reads.digest(&read_scope(), "sentinel-read-path").await?.as_deref(),
+            Some("d1")
+        );
         Ok(())
     }
 
@@ -829,6 +846,7 @@ pub mod encrypted_store {
         rows += db.ledger.rewrap().await?;
         rows += db.goals.rewrap().await?;
         rows += db.facts.rewrap().await?;
+        rows += db.reads.rewrap().await?;
         db.marker.set_key_id(&db.key_id).await?;
         crate::encrypted::compact(&db.pool).await?;
         Ok(rows)
@@ -860,6 +878,7 @@ pub mod encrypted_store {
             ("adk_harness_shell_ledger", "SELECT entry FROM adk_harness_shell_ledger"),
             ("adk_harness_goals", "SELECT record FROM adk_harness_goals"),
             ("adk_harness_facts", "SELECT record FROM adk_harness_facts"),
+            ("adk_harness_read_records", "SELECT records FROM adk_harness_read_records"),
             ("adk_approval_pending", "SELECT request FROM adk_approval_pending"),
             ("adk_approval_decisions", "SELECT approval FROM adk_approval_decisions"),
             ("events", "SELECT llm_response FROM events"),
@@ -907,8 +926,9 @@ pub mod encrypted_store {
         db.marker.check(Some(&rotated)).await.unwrap();
         let rows = rewrap_all(&db).await.unwrap();
         assert_eq!(
-            rows, 9,
-            "the session, its event, a held call, a decision, a mode, a rule, a ledger entry, a goal and a fact"
+            rows, 10,
+            "the session, its event, a held call, a decision, a mode, a rule, a ledger entry, a \
+             goal, a fact and a read record"
         );
         assert_eq!(rewrap_all(&db).await.unwrap(), 0, "nothing is left under the old key");
         assert_eq!(db.marker.key_id().await.unwrap(), Some(rotated.key_id()));
@@ -937,6 +957,7 @@ pub mod encrypted_store {
             db.ledger.get(APP, USER, SESSION, "c1").await.unwrap_err().code,
             db.goals.get(APP, USER, SESSION).await.unwrap_err().code,
             db.facts.get(&fact_id).await.unwrap_err().code,
+            db.reads.digest(&read_scope(), "sentinel-read-path").await.unwrap_err().code,
             db.approvals.pending(&scope()).await.unwrap_err().code,
         ] {
             assert!(code.ends_with("decrypt_failed"), "{code}");
@@ -1008,6 +1029,9 @@ pub mod encrypted_store {
         let facts = SqliteFactStore::new(pool.clone());
         facts.migrate().await.unwrap();
         let fact_id = facts.put(fact()).await.unwrap().id;
+        let reads = SqliteReadRecords::new(pool.clone());
+        reads.migrate().await.unwrap();
+        reads.record(&read_scope(), "sentinel-read-path", "d1").await.unwrap();
         pool.close().await;
         assert!(contains(&file_bytes(&path), "sentinel-fact-text"), "written in plaintext");
 
@@ -1017,7 +1041,7 @@ pub mod encrypted_store {
             "plaintext rows do not read through a key"
         );
         let rows = rewrap_all(&db).await.unwrap();
-        assert_eq!(rows, 9, "every plaintext row is sealed");
+        assert_eq!(rows, 10, "every plaintext row is sealed");
         assert_eq!(rewrap_all(&db).await.unwrap(), 0);
         read_fixture(&db, &fact_id).await.unwrap();
         assert_eq!(db.marker.key_id().await.unwrap(), Some(keyring.key_id()));
@@ -1057,6 +1081,11 @@ pub mod encrypted_store {
                 .code,
             SqliteGoalStore::new(pool.clone()).get(APP, USER, SESSION).await.unwrap_err().code,
             SqliteFactStore::new(pool.clone()).get(&fact_id).await.unwrap_err().code,
+            SqliteReadRecords::new(pool.clone())
+                .digest(&ReadScope::new(APP, USER, SESSION, "harness"), "sentinel-read-path")
+                .await
+                .unwrap_err()
+                .code,
         ] {
             assert_eq!(code, "harness.store.key_required");
         }

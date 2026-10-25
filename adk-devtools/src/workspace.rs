@@ -716,6 +716,33 @@ impl Workspace {
         })
     }
 
+    /// Records the current content of `path` as what the session and agent behind `ctx`
+    /// last saw, for a host step that changes a file right after the agent wrote it — a
+    /// formatter hook — so the agent's next edit is not refused as stale (spec 3.1 §7.22,
+    /// §7.26).
+    ///
+    /// # Errors
+    ///
+    /// Returns the containment or read error for `path`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # async fn example(ws: adk_devtools::Workspace, ctx: &dyn adk_core::ToolContext) {
+    /// ws.record_current(ctx, "src/lib.rs").await.unwrap();
+    /// # }
+    /// ```
+    pub async fn record_current(
+        &self,
+        ctx: &dyn ToolContext,
+        path: &str,
+    ) -> Result<(), DevToolError> {
+        let (resolved, target) = self.resolve_target(path)?;
+        let bytes = self.read_contained_bytes(&target).await?;
+        self.record_digest(ctx, &resolved, &crate::read_ledger::sha256_hex(&bytes)).await;
+        Ok(())
+    }
+
     /// Forgets the record of `resolved` for the session and agent behind `ctx`: the file
     /// was deleted or moved away.
     pub(crate) async fn forget_read(&self, ctx: &dyn ToolContext, resolved: &Path) {
