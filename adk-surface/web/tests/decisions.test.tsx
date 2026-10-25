@@ -48,6 +48,25 @@ describe("a decision card", () => {
     expect(container.textContent).not.toContain(card.id);
   });
 
+  // The owner's 07:03 demo: a routine an agent proposes reads as its title and the engine's
+  // plain summary of who suggests it and when it runs (spec 3.3 §7.1, §8.1).
+  it("says in plain words what a decision the kernel asks is about", () => {
+    const card: Card = {
+      ...invoiceCard(),
+      heading: "Check the news every 5 minutes",
+      summary: "Finance suggests this. Once you say yes, it runs every 5 minutes.",
+      call: {
+        tool: "kernel:agenda",
+        args: { title: "Check the news every 5 minutes" },
+        text: 'kernel:agenda(title: "Check the news every 5 minutes")',
+        truncated: false,
+      },
+    };
+    render(<DecisionCard card={card} send={vi.fn()} />);
+    const article = screen.getByRole("article", { name: card.heading });
+    expect(within(article).getByText(card.summary!)).toBeTruthy();
+  });
+
   // S-I9: a bidi override or a zero-width space from a tool's arguments would make the call read
   // differently from what runs; the card shows each as its escape, as the terminal does.
   it("shows bidi and zero-width characters from the call as escapes, and edits them unchanged", async () => {

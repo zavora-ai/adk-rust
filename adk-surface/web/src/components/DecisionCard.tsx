@@ -152,6 +152,7 @@ export function DecisionCard({
       <h3 id={heading} className="decision-heading">
         {visible(card.heading)}
       </h3>
+      {card.summary ? <p className="decision-note">{visible(card.summary)}</p> : null}
       <CallView call={card.call} expanded={expanded} onExpand={() => setExpanded(true)} />
       <ol className="timeline" aria-label={labels.howItGotHere}>
         {card.timeline.map((step, index) => (
