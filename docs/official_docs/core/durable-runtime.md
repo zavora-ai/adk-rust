@@ -246,6 +246,22 @@ as [Crash resume](#crash-resume) describes, and the action ledger keeps a comple
 running twice. `request_cancel` still finishes a parked run `Cancelled`, and the unfreeze does
 not revive it.
 
+The park and the resume each leave a system notice in the session, authored `system`
+(`adk_core::history::system_notice_event`), which every agent reading the session gets as a
+user-role turn:
+
+| When | Notice |
+|------|--------|
+| The run parks under the freeze | `FREEZE_PAUSED_NOTICE`: "[System notice] Execution paused by an operator freeze." |
+| The claim after the unfreeze, on any worker, finds the park's notice as the parked invocation's latest | `FREEZE_RESUMED_NOTICE`: "[System notice] Execution was paused by an operator freeze and has now resumed. The tool calls refused during the freeze did not run. Continue the task, and call again any refused call you still need." |
+
+The resume notice ends the model's next request, so the model continues the task instead of
+ending it at a refused call's `not run` answer. Before adding it, the claim writes a
+`governance.run_resumed` audit record (`FREEZE_RESUMED_ACTION`) with the run, session and
+parked invocation, on the worker's trail or else its runner's. A run no freeze parked —
+suspended, woken by an approval, or recovered after a crash — resumes without one. A notice
+authorizes nothing: a refused call made again goes through the governed path.
+
 Only a worker with a governance control (`with_governance`) parks this way, since its own control
 tells it the freeze is over. The list of parked runs lives in the worker's memory: a worker
 restarted while frozen does not wake the runs parked before the restart, so a supervisor that must

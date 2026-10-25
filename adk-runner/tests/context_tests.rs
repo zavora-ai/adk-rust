@@ -1361,3 +1361,35 @@ fn events_on_a_tool_branch_stay_out_of_the_callers_history() {
         assert_eq!(roles, ["user", "model", "function"]);
     }
 }
+
+#[test]
+fn a_system_notice_reaches_every_view_as_a_user_turn() {
+    let mutable = MutableSession::new(Arc::new(MockSessionWithState::new()));
+    mutable.append_event(event_with("user", "inv-1", "user", vec![text_part("pay 5")]));
+    mutable.append_event(event_with("ops", "inv-1", "model", vec![call_part("call-1")]));
+    mutable.append_event(event_with(
+        "ops",
+        "inv-1",
+        "function",
+        vec![response_part(serde_json::json!({"error": "not run"}), Some("call-1"))],
+    ));
+    mutable.append_event(adk_core::history::system_notice_event("inv-1", "Execution resumed."));
+    // An agent named like the notice's author still speaks in model turns.
+    mutable.append_event(event_with("system", "inv-2", "model", vec![text_part("done")]));
+
+    let notice = adk_core::history::system_notice("Execution resumed.");
+    for (view, history) in [
+        ("unscoped", adk_core::Session::conversation_history(&mutable)),
+        ("scoped", adk_core::Session::conversation_history_for_agent(&mutable, "report")),
+        ("with context", adk_core::Session::conversation_history_with_context(&mutable, "ops", "")),
+    ] {
+        let notices: Vec<(String, Vec<Part>)> = history
+            .into_iter()
+            .filter(adk_core::history::is_system_notice)
+            .map(|content| (content.role, content.parts))
+            .collect();
+        assert_eq!(notices, vec![(notice.role.clone(), notice.parts.clone())], "{view}");
+    }
+    let unscoped = adk_core::Session::conversation_history(&mutable);
+    assert_eq!(unscoped.last().map(|content| content.role.as_str()), Some("model"));
+}

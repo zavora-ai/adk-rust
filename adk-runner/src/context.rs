@@ -99,6 +99,9 @@ impl MutableSession {
     ///
     /// When `agent_name` is `None`, all events are included (backward-compatible).
     ///
+    /// A system notice ([`system_notice_event`](adk_core::history::system_notice_event)) is
+    /// kept as a user-role turn either way.
+    ///
     /// `branch` additionally scopes history to a conversation branch: an event is
     /// kept when its branch equals `branch` or is an ancestor of it, so
     /// concurrent `ParallelAgent` branches do not read each other's output. An
@@ -183,6 +186,15 @@ impl MutableSession {
             let Some(content) = &event.llm_response.content else {
                 continue;
             };
+            // The runtime's notice is addressed to every agent: not another agent's context to
+            // quote or leave out, and never a model turn.
+            if adk_core::history::is_system_notice_event(event) {
+                history.push(HistoryContent {
+                    content: content.clone(),
+                    invocation_id: Some(event.invocation_id.clone()),
+                });
+                continue;
+            }
             let other_agent =
                 agent_name.is_some_and(|name| event.author != "user" && event.author != name);
             let mapped_content = match others {

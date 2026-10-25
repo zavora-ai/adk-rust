@@ -334,7 +334,9 @@ pub trait Session: Send + Sync {
     /// called and got back becomes user-role context
     /// ([`other_agent_context`](crate::history::other_agent_context)), so a workflow
     /// sub-agent never replays an earlier agent's turns as its own, and a request that would
-    /// end on another agent's answer ends on a user turn. Branch scoping is that of
+    /// end on another agent's answer ends on a user turn. A system notice
+    /// ([`system_notice_event`](crate::history::system_notice_event)) keeps its user-role
+    /// turn. Branch scoping is that of
     /// [`conversation_history_scoped`](Self::conversation_history_scoped).
     ///
     /// The default cannot tell authors apart and returns

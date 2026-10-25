@@ -191,6 +191,7 @@ followed by the session's events in order, projected for the agent that asks:
 | The user's messages and the agent's own turns | Their own roles (`user`, `model`, function calls and responses) |
 | Another agent's text, calls and results, as in a workflow | User-role context: one message per event, opening with `adk_core::history::OTHER_AGENT_CONTEXT_PREAMBLE` and quoting the payload between `<<<BEGIN_QUOTED_AGENT_CONTENT>>>` and `<<<END_QUOTED_AGENT_CONTENT>>>`; the other agent's thinking is left out |
 | Another agent's turns, for an agent that received control by transfer | Left out |
+| A system notice: an event authored `system` whose user-role text starts with `[System notice] ` (`adk_core::history::system_notice_event`), such as the one a run resumed after a freeze gets | A user-role turn, for every agent |
 | Events of a sibling `ParallelAgent` branch | Left out (see `branch` above) |
 | Events a compaction summarized | The compaction summary |
 | A held call's confirmation-pending response, once the call is resumed | Replaced by the call's real response |

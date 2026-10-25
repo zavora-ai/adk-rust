@@ -127,6 +127,7 @@ drafts in memory for tests. The runner installs the trail on each run's `RunConf
 | Approval decision applied | Governed path, before the call's decision | `approval` | Tool name | `approved` or `rejected` | — |
 | Approver decision | `StoreApprovalService::with_audit`, before the decision is stored | `approval` | Tool name | `approved` (approve, edit) or `rejected` (reject, respond) | — |
 | Freeze, unfreeze | `GovernanceControl` | `governance` | `governance.freeze`, `governance.unfreeze` | — / `succeeded` | — |
+| Run resumed after a freeze | `DurableWorker`, before the claim adds the resume notice to a freeze-parked run's session | `governance` | `governance.run_resumed` | — / `succeeded` | — |
 | Payment decision | Payment tools (ACP checkout, AP2 mandate) | `payment` | `payment.create_checkout`, `payment.complete_checkout`, `payment.execute_payment` | `allowed`, `approved`, `denied`, `approval_required`, `rejected` | `payment_policy` |
 | Payment outcome | Payment tools, after the backend returns | `payment` | As above | `succeeded` or `failed` | `payment_policy` |
 | Outcome unknown | Agents (timeout, panic, replay of a begun call), runner (cancelled run) | `tool_call` | Tool name | `outcome_unknown` | — |

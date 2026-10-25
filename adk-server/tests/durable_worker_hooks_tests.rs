@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use adk_agent::LlmAgentBuilder;
+use adk_core::audit_log::{AuditTrail, InMemoryAuditRecorder};
 use adk_core::run_store::RunCheckpointRef;
 use adk_core::{
     ApprovalScope, ApprovalStore, DurableRunStore, GovernanceControl, InMemoryActionLedger,
@@ -24,8 +25,8 @@ use adk_core::{
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_runner::Runner;
 use adk_server::background::{
-    DurableWorker, DurableWorkerConfig, GovernanceRefusal, ParkReason, WorkerHooks,
-    WorkflowRegistry,
+    DurableWorker, DurableWorkerConfig, FREEZE_PAUSED_NOTICE, FREEZE_RESUMED_ACTION,
+    FREEZE_RESUMED_NOTICE, GovernanceRefusal, ParkReason, WorkerHooks, WorkflowRegistry,
 };
 use adk_session::{InMemorySessionService, SessionService};
 use async_trait::async_trait;
@@ -289,6 +290,23 @@ impl Payment {
         .await;
     }
 
+    /// The system notices each model request carried, request by request.
+    fn notices_sent(&self) -> Vec<Vec<String>> {
+        self.model
+            .requests()
+            .iter()
+            .map(|request| {
+                request
+                    .contents
+                    .iter()
+                    .filter(|content| adk_core::history::is_system_notice(content))
+                    .filter_map(|content| content.parts.first().and_then(Part::text))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .collect()
+    }
+
     /// The charge responses each model request carried, request by request.
     fn charge_responses_sent(&self) -> Vec<Vec<Value>> {
         self.model
@@ -360,7 +378,7 @@ async fn hooks_report_claim_park_and_finish_after_each_store_write() {
         ],
     ));
     let agent = LlmAgentBuilder::new("ops")
-        .model(model as Arc<dyn Llm>)
+        .model(Arc::clone(&model) as Arc<dyn Llm>)
         .tool(Arc::new(TransferTool(Arc::clone(&executions))))
         .require_tool_confirmation("transfer")
         .build()
@@ -403,6 +421,14 @@ async fn hooks_report_claim_park_and_finish_after_each_store_write() {
     assert_eq!((finished.state, finished.attempt), (RunState::Completed, 1), "{finished:?}");
     assert_eq!(hooks.take(), vec![Seen::claim(), Seen::finish(RunState::Completed)]);
     assert_eq!(executions.load(Ordering::SeqCst), 1);
+    assert!(
+        model
+            .requests()
+            .iter()
+            .flat_map(|request| &request.contents)
+            .all(|content| !adk_core::history::is_system_notice(content)),
+        "an approval that wakes a held call adds no notice"
+    );
 }
 
 /// Gate: a run the kill switch refuses after the claim, before the agent starts, is
@@ -667,6 +693,94 @@ async fn an_unfreeze_wakes_frozen_runs_but_not_a_manual_suspension() {
     assert_eq!(still.state, RunState::Waiting, "the suspension waits for its own wake");
     assert_eq!(suspended.model.requests().len(), 1);
     assert_eq!(hooks_a.take(), Vec::<Seen>::new());
+    worker_a.shutdown().await;
+    worker_b.shutdown().await;
+}
+
+/// Gate (spec 3.2 §7.2, K-I21): a freeze-parked run resumes with a system notice, and a
+/// manual suspension does not. The park leaves `FREEZE_PAUSED_NOTICE` in the session; the
+/// claim after the unfreeze writes one `governance.run_resumed` audit record and adds
+/// `FREEZE_RESUMED_NOTICE`, which ends the model's next request, both authored `system`. The
+/// suspended run, woken by hand, sends its next request with no notice and writes no record.
+#[tokio::test]
+async fn a_freeze_parked_run_resumes_with_the_notice_and_a_manual_suspension_without() {
+    let control = GovernanceControl::new();
+    let suspended = Payment::new().governed(&control);
+    let frozen = Payment::new().governed(&control);
+    let recorder = InMemoryAuditRecorder::new();
+    let trail = AuditTrail::new(Arc::new(recorder.clone()));
+    let hooks_a = Recorder::new(&suspended.runs);
+    let hooks_b = Recorder::new(&frozen.runs);
+    let worker_a = suspended.worker("a", &hooks_a).with_audit(trail.clone()).spawn();
+    let worker_b = frozen.worker("b", &hooks_b).with_audit(trail).spawn();
+
+    let run_a = suspended.enqueue().await;
+    suspended.charge_started().await;
+    assert!(worker_a.suspend(&run_a.run_id));
+    suspended.release.add_permits(1);
+    run_in_state(&suspended.runs, &run_a.run_id, RunState::Waiting).await;
+
+    let run_b = frozen.enqueue().await;
+    frozen.freeze_after_the_charge(&control, "incident 16").await;
+    let parked = run_in_state(&frozen.runs, &run_b.run_id, RunState::Waiting).await;
+    let (session_id, invocation_id) = session_checkpoint(&parked);
+
+    control.unfreeze();
+    run_in_state(&frozen.runs, &run_b.run_id, RunState::Completed).await;
+    let paused = format!("[System notice] {FREEZE_PAUSED_NOTICE}");
+    let resumed = format!("[System notice] {FREEZE_RESUMED_NOTICE}");
+    assert_eq!(frozen.notices_sent(), vec![vec![], vec![paused.clone(), resumed.clone()]]);
+    let last = frozen.model.requests()[1].contents.last().cloned().unwrap();
+    assert_eq!((last.role.as_str(), last.parts[0].text()), ("user", Some(resumed.as_str())));
+    let session = frozen
+        .sessions
+        .get(adk_session::GetRequest {
+            app_name: "billing".into(),
+            user_id: "customer-1".into(),
+            session_id: session_id.clone(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap();
+    let notices: Vec<(String, String)> = session
+        .events()
+        .all()
+        .iter()
+        .filter(|event| adk_core::history::is_system_notice_event(event))
+        .map(|event| (event.author.clone(), event.invocation_id.clone()))
+        .collect();
+    assert_eq!(
+        notices,
+        vec![("system".to_string(), invocation_id.clone()); 2],
+        "both notices are the system's, on the parked invocation"
+    );
+    let records: Vec<_> =
+        recorder.records().into_iter().filter(|r| r.action == FREEZE_RESUMED_ACTION).collect();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(
+        (
+            &records[0].kind,
+            records[0].ext["runId"].as_str(),
+            records[0].ext["invocationId"].as_str(),
+            records[0].ext["notice"].as_str(),
+        ),
+        (
+            &adk_core::audit_log::AuditRecordKind::Governance,
+            Some(run_b.run_id.as_str()),
+            Some(invocation_id.as_str()),
+            Some(FREEZE_RESUMED_NOTICE),
+        )
+    );
+
+    suspended.runs.wake(&run_a.run_id).await.unwrap();
+    run_in_state(&suspended.runs, &run_a.run_id, RunState::Completed).await;
+    assert_eq!(suspended.notices_sent(), vec![Vec::<String>::new(); 2], "no notice");
+    assert_eq!(
+        recorder.records().iter().filter(|r| r.action == FREEZE_RESUMED_ACTION).count(),
+        1,
+        "the manual resume writes no record"
+    );
     worker_a.shutdown().await;
     worker_b.shutdown().await;
 }
