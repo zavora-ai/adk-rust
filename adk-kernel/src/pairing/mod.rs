@@ -705,22 +705,8 @@ impl Pairing {
     /// last no time or more than 365 days, or the random number generator fails, and the
     /// store's error.
     pub async fn issue(&self, request: IssueCode) -> Result<IssuedCode> {
-        if request.owner.trim().is_empty() {
-            return Err(KernelError::Config {
-                reason: "a pairing code needs the person the device acts for".into(),
-            });
-        }
+        let device_ttl = self.check(&request)?;
         let request = request.normalized();
-        let device_ttl = request.device_ttl.unwrap_or(self.inner.device_ttl);
-        if device_ttl.is_zero() || device_ttl > MAX_DEVICE_TTL {
-            return Err(KernelError::Config {
-                reason: format!(
-                    "a device stays paired for at most 365 days and longer than none, not {} \
-                     days: pass `adk-rust pair --days` between 1 and 365",
-                    device_ttl.as_secs() / 86_400
-                ),
-            });
-        }
         let now = self.now();
         self.inner.store.prune_codes(now).await?;
         let code = secret::new_code()?;
@@ -741,6 +727,32 @@ impl Pairing {
             url,
             device_ttl_secs: device_ttl.as_secs(),
         })
+    }
+
+    /// Checks `request` as [`issue`](Self::issue) does, before anything is recorded of it,
+    /// and returns how long its device stays paired.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Config`] when the owner is empty or the device's pairing would
+    /// last no time or more than 365 days.
+    pub(crate) fn check(&self, request: &IssueCode) -> Result<Duration> {
+        if request.owner.trim().is_empty() {
+            return Err(KernelError::Config {
+                reason: "a pairing code needs the person the device acts for".into(),
+            });
+        }
+        let device_ttl = request.device_ttl.unwrap_or(self.inner.device_ttl);
+        if device_ttl.is_zero() || device_ttl > MAX_DEVICE_TTL {
+            return Err(KernelError::Config {
+                reason: format!(
+                    "a device stays paired for at most 365 days and longer than none, not {} \
+                     days: pass `adk-rust pair --days` between 1 and 365",
+                    device_ttl.as_secs() / 86_400
+                ),
+            });
+        }
+        Ok(device_ttl)
     }
 
     /// Claims `code` for a device called `name` (the name the code was issued with wins) and
@@ -1042,6 +1054,10 @@ pub fn device_scope_for(method: &Method, path: &str) -> Option<DeviceScope> {
         _ => None,
     }
 }
+
+/// The tool of a take-over, as `adk-harness` asks for one (spec 3.3 §10 H2): a secret the
+/// person types in the home or on the phone, never a yes.
+pub(crate) const TAKE_OVER_TOOL: &str = "harness:take-over";
 
 /// The device token of a request, when its `Authorization` header carries one.
 pub(crate) fn device_token(headers: &axum::http::HeaderMap) -> Option<&str> {

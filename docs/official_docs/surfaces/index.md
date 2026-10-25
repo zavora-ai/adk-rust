@@ -217,13 +217,19 @@ call's own arguments.
 | Answer | When |
 |---|---|
 | `401` | No authenticated caller |
-| `403` | A rule of §7.2 or §7.4 refuses the command; `surface.operator_only` for **Stop all** or **Resume all** from a caller outside the group `SurfaceEngineBuilder::stops_need` names (§11 S-I10) |
+| `403` | A rule of §7.2 or §7.4 refuses the command; `surface.operator_only` for **Stop all** or **Resume all** from a caller outside the group `SurfaceEngineBuilder::stops_need` names (§11 S-I10); `surface.not_here` for every command from a paired device's token |
 | `404` | Not the caller's session or decision |
-| `400` | A malformed command, or a chat or agent origin, which reach the engine in process from their adapters |
+| `400` | A malformed command; a chat or agent origin, which reach the engine in process from their adapters; a `decide` declaring the voice surface or origin, which reaches the engine through the voice surface (`cancelAnswer` stays open) |
 
 What widens a caller's answers comes from the server, never the request: the extractor sets
 `surface.presence = confirmed` in the `RequestContext` metadata when the person confirmed it
 is them, and `surface.pairedLocal = true` for a paired local terminal.
+
+A paired device's token (`adk.device.id` in the `RequestContext` metadata, spec 3.3 §10 K2)
+is never the web home and never a paired local terminal, whatever the request declares: it
+reads cards as the terminal row, its presence never comes from metadata, and every audit
+record of its caller carries `device`. A record of an answer given after confirming it is
+you carries `presence: "confirmed"`.
 
 ### Generated types
 

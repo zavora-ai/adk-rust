@@ -552,6 +552,48 @@ async fn a_current_turn_agent_resuming_a_call_with_a_new_message_sees_the_call_a
     assert_eq!(turns(&model.last_request().unwrap().contents), expected);
 }
 
+/// Wave 2 review findings 12 and 13 (spec 3.3 §7.3): while a call waits without a decision,
+/// a current-turn agent's later runs send their own message alone; only the run that resumes
+/// the call begins its turn at the message that led to it.
+#[tokio::test]
+async fn a_current_turn_agent_sends_its_own_turn_while_a_call_waits() {
+    for wait in [Wait::Held, Wait::TimedOut] {
+        let model = Arc::new(ScriptedLlm::new(
+            "scripted",
+            [
+                calls(&[("call-1".to_string(), 40)]),
+                ScriptedResponse::text("Sunny."),
+                ScriptedResponse::text("Sent 40 to Bob."),
+            ],
+        ));
+        let executions = Executions::default();
+        let store = Arc::new(InMemoryApprovalStore::new());
+        let conversation = Conversation::new(
+            current_turn_holder(model.clone(), &executions),
+            Some(wait.config(store.clone())),
+        )
+        .await;
+
+        conversation.say("send 40 to Bob").await;
+        conversation.say("what is the weather?").await;
+        assert_eq!(
+            turns(&model.last_request().unwrap().contents),
+            turns(&[Content::new("user").with_text("what is the weather?")]),
+            "{wait:?}: the waiting call stays out of the turn"
+        );
+
+        let held = conversation.held("ops").await;
+        store
+            .decide(&scope(), &held[0].request.fingerprint(), ToolApproval::approve())
+            .await
+            .unwrap();
+        conversation.send(Content::new("user"), None).await;
+        assert_eq!(*executions.lock().unwrap(), vec![json!({ "amount": 40 })], "{wait:?}");
+        let request = model.last_request().unwrap();
+        assert_eq!(person_turns(&request), ["send 40 to Bob", "what is the weather?"], "{wait:?}");
+    }
+}
+
 // --- Property ---
 
 /// A blank user turn of one of the shapes a resume run carries.

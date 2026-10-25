@@ -15,11 +15,11 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
-use super::app::{App, Input, OpenCard, Tone, View};
+use super::app::{App, BoxView, DecidedLine, Input, OpenCard, Tone, View, named_decisions};
 use super::markdown::{markdown, wrap, wrap_spans};
 use super::safe::{safe_line, safe_lines};
 use super::theme::Theme;
-use crate::model::{AgentStatus, FeedEntry, Mode, Pill, Speaker, ThreadItem};
+use crate::model::{AgentStatus, DecidedAnswer, FeedEntry, Mode, Pill, Speaker, ThreadItem};
 use crate::rules::Answer;
 use crate::words;
 
@@ -32,8 +32,18 @@ const COMPACT_CHARS: usize = 600;
 /// The widest a decision box is drawn.
 const BOX_WIDTH: usize = 110;
 
+/// The fewest rows a decision box is fitted to, whatever follows it.
+const MIN_BOX_ROWS: usize = 8;
+
 /// The words of the §7.1 "Details" part, on the `?` key.
 const DETAILS: &str = "Details";
+
+/// How many rendered agent messages the cache keeps before it starts again.
+const MARKDOWN_CACHE: usize = 512;
+
+/// What marks a line break inside a one-line view of model or tool text, so a multi-line
+/// value never reads as one line (§7.1 "the exact call").
+const NEWLINE_MARK: &str = "⏎";
 
 /// Whether a decision's call is too long for the box: it must be shown in full with `?`
 /// before it can be approved (spec 3.3 §7.1).
@@ -57,7 +67,41 @@ pub(crate) fn key_of(answer: Answer) -> char {
 /// Draws the terminal, caching what is costly to lay out.
 pub(crate) struct Renderer {
     pub theme: Theme,
-    markdown: HashMap<(u64, usize, usize), Vec<Line<'static>>>,
+    /// Rendered agent messages by entry, item and width, with the text each was rendered
+    /// from: an entry number is a place in one session's store, so another session's entry,
+    /// or a rewound one, under the same number is rendered again.
+    markdown: HashMap<(u64, usize, usize), (String, Vec<Line<'static>>)>,
+}
+
+/// One row of a decision box: its spans and its background.
+type Row = (Vec<Span<'static>>, Style);
+
+/// How a decision box is fitted to the screen (spec 3.3 §7.1).
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Fit {
+    /// The most rows the box may take, its keys included; `None` draws it whole.
+    pub rows: Option<usize>,
+    /// The first row of the call shown, when the call shows a window at a time.
+    pub scroll: usize,
+    /// PageUp and PageDown move the window (the full screen); otherwise `?` shows the rest.
+    pub scrolls: bool,
+}
+
+/// A decision box as drawn: its lines, and which rows of its call they show.
+pub(crate) struct DrawnBox {
+    pub lines: Vec<Line<'static>>,
+    /// How many rows the call has, or its details while `?` shows them.
+    pub body_len: usize,
+    /// The rows of the call drawn, counted from its first.
+    pub body_shown: Range<usize>,
+}
+
+/// The box the keys answer, as laid out in the thread: its rows, and which rows of its call
+/// they show.
+pub(crate) struct FocusedBox {
+    pub rows: Range<usize>,
+    pub body_len: usize,
+    pub body_shown: Range<usize>,
 }
 
 impl Renderer {
@@ -105,9 +149,14 @@ impl Renderer {
         let counted = app.status.as_ref().map_or(0, |status| status.decisions as usize);
         let decisions = counted.max(app.cards.len());
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(words::DECISIONS, t.accent().add_modifier(Modifier::BOLD)));
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(format!(" {decisions} "), t.badge()));
+        // The filled badge marks decisions that wait, and only those (§9).
+        if decisions > 0 {
+            spans.push(Span::styled(words::DECISIONS, t.accent().add_modifier(Modifier::BOLD)));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(format!(" {decisions} "), t.badge()));
+        } else {
+            spans.push(Span::styled(words::DECISIONS, t.label()));
+        }
         if let Some(stopped) = app.status.as_ref().and_then(|status| status.stopped_text.as_ref()) {
             part(
                 &mut spans,
@@ -289,12 +338,19 @@ impl Renderer {
                         }
                         Speaker::Agent => {
                             let key = (entry.seq, index, width);
-                            let rendered = self
-                                .markdown
-                                .entry(key)
-                                .or_insert_with(|| wrap(markdown(text, &t), width))
-                                .clone();
-                            lines.extend(rendered);
+                            match self.markdown.get(&key) {
+                                Some((source, rendered)) if source == text => {
+                                    lines.extend(rendered.iter().cloned());
+                                }
+                                _ => {
+                                    if self.markdown.len() >= MARKDOWN_CACHE {
+                                        self.markdown.clear();
+                                    }
+                                    let rendered = wrap(markdown(text, &t), width);
+                                    lines.extend(rendered.iter().cloned());
+                                    self.markdown.insert(key, (text.clone(), rendered));
+                                }
+                            }
                         }
                     }
                 }
@@ -342,25 +398,72 @@ impl Renderer {
     }
 
     /// The thread of the shown session with its open decisions and notices, and the lines of
-    /// the box the keys answer. Only that box is drawn whole; the other open decisions wait
-    /// below it as one line each, so the box the keys answer is the one on screen (§7.1).
+    /// the box the keys answer. Only that box is drawn, fitted to `height` rows with its keys;
+    /// the other open decisions wait below it as one line each, so the box the keys answer is
+    /// the one on screen (§7.1). A decision no longer open is a line at its place, as the web
+    /// home's decided card is (§8.1 "Decided"); notices pass.
     pub(crate) fn thread(
         &mut self,
         app: &App,
         width: usize,
+        height: usize,
         now: Instant,
-    ) -> (Vec<Line<'static>>, Option<Range<usize>>) {
+    ) -> (Vec<Line<'static>>, Option<FocusedBox>) {
         let mut results = HashMap::new();
+        let mut named = std::collections::HashSet::new();
         for entry in &app.entries {
+            named.extend(named_decisions(entry));
             for item in &entry.items {
                 if let ThreadItem::Result { call_id: Some(id), ok, text, .. } = item {
                     results.insert(id.clone(), (*ok, text.clone()));
                 }
             }
         }
+        let open = |id: &str| app.cards.iter().any(|open| open.card.id == id);
+        let decided = |id: &str| app.decided.iter().find(|line| line.id == id && !open(id));
+        let mut placed = std::collections::HashSet::new();
         let mut lines = Vec::new();
         for entry in &app.entries {
             lines.extend(self.entry_lines(entry, Some(&results), width));
+            for id in named_decisions(entry) {
+                if let Some(line) = decided(id)
+                    && placed.insert(line.id.as_str())
+                {
+                    lines.extend(self.decided_line(line, width));
+                }
+            }
+            // Decided where no line names it: after the entry it followed.
+            for line in &app.decided {
+                if line.after_seq == entry.seq
+                    && !named.contains(line.id.as_str())
+                    && !open(&line.id)
+                    && placed.insert(line.id.as_str())
+                {
+                    lines.extend(self.decided_line(line, width));
+                }
+            }
+        }
+        for line in &app.decided {
+            if !open(&line.id) && placed.insert(line.id.as_str()) {
+                lines.extend(self.decided_line(line, width));
+            }
+        }
+        // What follows the box: the notices first, so a refusal of a key is right under it,
+        // then where else it is shown and the decisions after it. The box leaves room for
+        // them where the screen allows.
+        let mut tail = Vec::new();
+        let notices: Vec<_> = app.visible_notices(now).collect();
+        if !notices.is_empty() && app.cards.is_empty() {
+            tail.push(Line::default());
+        }
+        for notice in notices {
+            tail.extend(self.notice(&notice.text, notice.tone, width));
+        }
+        if let Some(open) = app.cards.first() {
+            tail.extend(self.also_shown(open, width));
+        }
+        for open in app.cards.iter().skip(1) {
+            tail.extend(self.waiting_line(open, width));
         }
         let live = app.keys_answer(now);
         let mut focused = None;
@@ -368,26 +471,57 @@ impl Renderer {
             lines.push(Line::default());
             let hint = app.typing || !app.composer.is_empty();
             let start = lines.len();
-            lines.extend(self.decision_box(open, width, live, hint));
-            focused = Some(start..lines.len());
-            lines.extend(self.also_shown(open, width));
+            let rows = height.saturating_sub(tail.len()).max(MIN_BOX_ROWS.min(height));
+            let fit = Fit { rows: Some(rows), scroll: app.box_scroll, scrolls: true };
+            let drawn = self.decision_box(open, width, live, hint, fit);
+            lines.extend(drawn.lines);
+            focused = Some(FocusedBox {
+                rows: start..lines.len(),
+                body_len: drawn.body_len,
+                body_shown: drawn.body_shown,
+            });
         }
-        let t = self.theme;
-        for open in app.cards.iter().skip(1) {
-            let text = format!("{} · {}", open.card.status_text, safe_line(&open.card.heading));
-            lines.push(Line::from(vec![
-                Span::styled("◆ ", t.accent()),
-                Span::styled(fit(&text, width.saturating_sub(16)), t.secondary()),
-                Span::styled(" · after this one", t.label()),
-            ]));
-        }
-        if !app.notices.is_empty() {
-            lines.push(Line::default());
-        }
-        for notice in &app.notices {
-            lines.extend(self.notice(&notice.text, notice.tone, width));
-        }
+        lines.extend(tail);
         (lines, focused)
+    }
+
+    /// A decision no longer open, at its place in the thread: "✓ Decided · Send email to
+    /// [CLIENT] · You said yes in the terminal at 06:12" (spec 3.3 §8.1).
+    pub(crate) fn decided_line(&self, line: &DecidedLine, width: usize) -> Vec<Line<'static>> {
+        let t = &self.theme;
+        let (mark, mark_style) = match line.answer {
+            DecidedAnswer::Yes | DecidedAnswer::Edited => ("✓ ", t.fg(t.palette().working)),
+            DecidedAnswer::No => ("✗ ", t.fg(t.palette().failed)),
+            DecidedAnswer::Replied | DecidedAnswer::Ended | DecidedAnswer::Unknown => {
+                ("· ", t.label())
+            }
+        };
+        let mut out = vec![Line::default()];
+        out.extend(wrap_spans(
+            vec![
+                Span::styled(mark, mark_style),
+                Span::styled(line.status.clone(), t.text().add_modifier(Modifier::BOLD)),
+                Span::styled(" · ", t.label()),
+                Span::styled(marked_line(&line.heading), t.secondary()),
+                Span::styled(" · ", t.label()),
+                Span::styled(line.text.clone(), t.label()),
+            ],
+            width,
+            2,
+        ));
+        out
+    }
+
+    /// An open decision after the one the keys answer, as one line: it is drawn whole when it
+    /// takes the focus (§7.1).
+    pub(crate) fn waiting_line(&self, open: &OpenCard, width: usize) -> Vec<Line<'static>> {
+        let t = &self.theme;
+        let text = format!("{} · {}", open.card.status_text, marked_line(&open.card.heading));
+        vec![Line::from(vec![
+            Span::styled("◆ ", t.accent()),
+            Span::styled(fit(&text, width.saturating_sub(16)), t.secondary()),
+            Span::styled(" · after this one", t.label()),
+        ])]
     }
 
     pub(crate) fn also_shown(&self, open: &OpenCard, width: usize) -> Vec<Line<'static>> {
@@ -414,13 +548,16 @@ impl Renderer {
 
     /// A decision as a box answered by key (spec 3.3 §5.2, §7.1): who and when, what will
     /// happen, the exact call, how it got here, the answers this terminal may give, details.
+    /// The box fits `fit.rows` with its keys: when the whole call does not fit, the call shows
+    /// a window at a time, and a line under it says how much more there is.
     pub(crate) fn decision_box(
         &self,
         open: &OpenCard,
         width: usize,
         live: bool,
         typing_hint: bool,
-    ) -> Vec<Line<'static>> {
+        fit: Fit,
+    ) -> DrawnBox {
         let t = &self.theme;
         let p = t.palette();
         let card = &open.card;
@@ -429,17 +566,18 @@ impl Renderer {
         let border = t.fg(p.brand);
         let strong = Style::new().bg(t.color(p.decision_strong));
         let body = Style::new().bg(t.color(p.decision));
-        let mut rows: Vec<(Vec<Span<'static>>, Style)> = Vec::new();
+        let blank: Row = (Vec::new(), body);
 
         // Heading: the pill and what will happen; the risk and whether it can be taken back.
+        let mut heading: Vec<Row> = Vec::new();
         let right = format!("{} · {}", card.risk_text, card.reversibility_text);
-        let heading = format!("{} · {}", card.status_text, safe_line(&card.heading));
+        let title = format!("{} · {}", card.status_text, marked_line(&card.heading));
         let accent = t.accent().add_modifier(Modifier::BOLD);
-        if heading.width() + right.width() + 2 <= inner {
-            let gap = inner - heading.width() - right.width();
-            rows.push((
+        if title.width() + right.width() + 2 <= inner {
+            let gap = inner - title.width() - right.width();
+            heading.push((
                 vec![
-                    Span::styled(heading, accent),
+                    Span::styled(title, accent),
                     Span::raw(" ".repeat(gap)),
                     Span::styled(right, t.accent()),
                 ],
@@ -447,25 +585,25 @@ impl Renderer {
             ));
         } else {
             // A narrow box: what will happen is wrapped whole, never cut (§7.1).
-            for line in wrap_spans(vec![Span::styled(heading, accent)], inner, 0) {
-                rows.push((line.spans, strong));
+            for line in wrap_spans(vec![Span::styled(title, accent)], inner, 0) {
+                heading.push((line.spans, strong));
             }
-            rows.push((vec![Span::styled(right, t.accent())], strong));
+            heading.push((vec![Span::styled(right, t.accent())], strong));
         }
-        rows.push((Vec::new(), body));
-        rows.push((
+        let agent: Row = (
             vec![Span::styled(
                 format!("{} · {}", safe_line(&card.agent.display_name), card.since_text),
                 t.label(),
             )],
             body,
-        ));
-
-        // The exact call.
-        rows.push((
+        );
+        let tool: Row = (
             vec![Span::styled(safe_line(&card.call.tool), t.text().add_modifier(Modifier::BOLD))],
             body,
-        ));
+        );
+
+        // The exact call, or with `?` the whole call, how it got here and the details.
+        let mut call: Vec<Row> = Vec::new();
         let too_long = needs_details(open);
         if open.details {
             let pretty = serde_json::to_string_pretty(&card.call.args).unwrap_or_default();
@@ -473,8 +611,26 @@ impl Renderer {
                 for wrapped in wrap_spans(vec![Span::styled(line, t.text())], inner - 2, 0) {
                     let mut spans = vec![Span::raw("  ")];
                     spans.extend(wrapped.spans);
-                    rows.push((spans, body));
+                    call.push((spans, body));
                 }
+            }
+            call.push(blank.clone());
+            for step in &card.timeline {
+                let (mark, style) =
+                    if step.current { ("● ", t.accent()) } else { ("○ ", t.label()) };
+                call.push((
+                    vec![Span::styled(mark, style), Span::styled(step.text.clone(), t.secondary())],
+                    body,
+                ));
+            }
+            call.push(blank.clone());
+            let mut details = format!("{} · {}", card.risk_text, card.reversibility_text);
+            if let Some(also) = &card.also_shown {
+                details.push_str(" · ");
+                details.push_str(also);
+            }
+            for line in wrap_spans(vec![Span::styled(details, t.secondary())], inner, 0) {
+                call.push((line.spans, body));
             }
         } else {
             let arg_rows = self.compact_args(&card.call.args, inner - 2);
@@ -482,10 +638,10 @@ impl Renderer {
             for spans in arg_rows.iter().take(shown) {
                 let mut row = vec![Span::raw("  ")];
                 row.extend(spans.clone());
-                rows.push((row, body));
+                call.push((row, body));
             }
             if too_long {
-                rows.push((
+                call.push((
                     vec![Span::styled(
                         "  … press ? to see the whole call before you answer",
                         t.accent(),
@@ -494,40 +650,20 @@ impl Renderer {
                 ));
             }
         }
-        rows.push((Vec::new(), body));
 
-        // How it got here.
-        if open.details {
-            for step in &card.timeline {
-                let (mark, style) =
-                    if step.current { ("● ", t.accent()) } else { ("○ ", t.label()) };
-                rows.push((
-                    vec![Span::styled(mark, style), Span::styled(step.text.clone(), t.secondary())],
-                    body,
-                ));
-            }
-            rows.push((Vec::new(), body));
-            let mut details = format!("{} · {}", card.risk_text, card.reversibility_text);
-            if let Some(also) = &card.also_shown {
-                details.push_str(" · ");
-                details.push_str(also);
-            }
-            for line in wrap_spans(vec![Span::styled(details, t.secondary())], inner, 0) {
-                rows.push((line.spans, body));
-            }
-            rows.push((Vec::new(), body));
-        } else {
+        // How it got here, in one line (the details show each step).
+        let mut timeline: Vec<Row> = Vec::new();
+        if !open.details {
             let steps: Vec<&str> = card.timeline.iter().map(|step| step.text.as_str()).collect();
             for line in wrap_spans(vec![Span::styled(steps.join(" · "), t.label())], inner, 0) {
-                rows.push((line.spans, body));
+                timeline.push((line.spans, body));
             }
-            rows.push((Vec::new(), body));
         }
-        if let Some(note) = &card.allowed.note {
-            for line in wrap_spans(vec![Span::styled(note.clone(), t.accent())], inner, 0) {
-                rows.push((line.spans, body));
+        let mut note: Vec<Row> = Vec::new();
+        if let Some(text) = &card.allowed.note {
+            for line in wrap_spans(vec![Span::styled(text.clone(), t.accent())], inner, 0) {
+                note.push((line.spans, body));
             }
-            rows.push((Vec::new(), body));
         }
 
         // The answers, by key.
@@ -540,16 +676,104 @@ impl Renderer {
         }
         keys.push(Span::styled(" ? ", cap));
         keys.push(Span::styled(format!(" {DETAILS}"), words_style));
-        for line in wrap_keys(keys, inner) {
-            rows.push((line, body));
+        let key_rows: Vec<Row> =
+            wrap_keys(keys, inner).into_iter().map(|row| (row, body)).collect();
+        let hint: Option<Row> = typing_hint.then(|| {
+            (vec![Span::styled("Typing a message: Esc to answer by key.", t.label())], body)
+        });
+
+        // What may go when the box does not fit, first to last; the heading, the tool, the
+        // keys and a note on what this terminal may answer always stay.
+        let mut keep = [true; 7];
+        let [blank_end, blank_call, blank_head, steps, blank_note, typing, who] =
+            [0, 1, 2, 3, 4, 5, 6];
+        let others = |keep: &[bool; 7]| {
+            2 + heading.len()
+                + 1
+                + note.len()
+                + key_rows.len()
+                + usize::from(keep[blank_end])
+                + usize::from(keep[blank_call])
+                + usize::from(keep[blank_head])
+                + if keep[steps] && !timeline.is_empty() { timeline.len() + 1 } else { 0 }
+                + usize::from(keep[blank_note] && !note.is_empty())
+                + usize::from(keep[typing] && hint.is_some())
+                + usize::from(keep[who])
+        };
+        let mut window = call.len();
+        let mut more_line = false;
+        if let Some(rows) = fit.rows
+            && others(&keep) + call.len() > rows
+        {
+            more_line = true;
+            let wanted = call.len().min(3);
+            for drop in [blank_end, blank_call, blank_head, steps, blank_note, typing, who] {
+                if rows.saturating_sub(others(&keep) + 1) >= wanted {
+                    break;
+                }
+                keep[drop] = false;
+            }
+            window = rows.saturating_sub(others(&keep) + 1).clamp(1, call.len().max(1));
+            if window >= call.len() {
+                // Dropping what may go made room for the whole call.
+                window = call.len();
+                more_line = false;
+            }
         }
-        if typing_hint {
-            rows.push((
-                vec![Span::styled("Typing a message: Esc to answer by key.", t.label())],
-                body,
-            ));
+        let scroll = fit.scroll.min(call.len().saturating_sub(window));
+        let body_shown = scroll..scroll + window.min(call.len());
+
+        let mut rows: Vec<Row> = Vec::new();
+        rows.extend(heading);
+        if keep[blank_head] {
+            rows.push(blank.clone());
         }
-        rows.push((Vec::new(), body));
+        if keep[who] {
+            rows.push(agent);
+        }
+        rows.push(tool);
+        rows.extend(call[body_shown.clone()].iter().cloned());
+        if more_line {
+            let above = body_shown.start;
+            let below = call.len() - body_shown.end;
+            let noun = |n: usize| if n == 1 { "line" } else { "lines" };
+            let text = match (fit.scrolls, above, below) {
+                (false, _, _) => format!(
+                    "  … {below} more {}: press ? to see the whole call before you answer",
+                    noun(below)
+                ),
+                (true, 0, below) => {
+                    format!("  ↓ {below} more {} · PageDown to read on", noun(below))
+                }
+                (true, above, 0) => format!("  ↑ {above} {} above · PageUp", noun(above)),
+                (true, above, below) => {
+                    format!("  ↑ {above} above · ↓ {below} more · PageUp, PageDown")
+                }
+            };
+            rows.push((vec![Span::styled(text, t.accent())], body));
+        }
+        if keep[blank_call] {
+            rows.push(blank.clone());
+        }
+        if keep[steps] && !timeline.is_empty() {
+            rows.extend(timeline);
+            rows.push(blank.clone());
+        }
+        if !note.is_empty() {
+            rows.extend(note);
+            if keep[blank_note] {
+                rows.push(blank.clone());
+            }
+        }
+        rows.extend(key_rows);
+        if keep[typing]
+            && let Some(hint) = hint
+        {
+            rows.push(hint);
+        }
+        if keep[blank_end] {
+            rows.push(blank);
+        }
 
         let mut lines = Vec::with_capacity(rows.len() + 2);
         lines.push(Line::from(Span::styled(format!("┌{}┐", "─".repeat(outer - 2)), border)));
@@ -565,7 +789,7 @@ impl Renderer {
             lines.push(Line::from(line));
         }
         lines.push(Line::from(Span::styled(format!("└{}┘", "─".repeat(outer - 2)), border)));
-        lines
+        DrawnBox { lines, body_len: call.len(), body_shown }
     }
 
     /// The arguments as `key  value` rows, values wrapped under themselves.
@@ -590,13 +814,23 @@ impl Renderer {
             };
             let key = fit(&safe_line(key), key_width);
             let pad = key_width - key.width() + 2;
-            let spans = vec![
-                Span::styled(key, t.label()),
-                Span::raw(" ".repeat(pad)),
-                Span::styled(safe_line(&text), t.text()),
-            ];
-            for line in wrap_spans(spans, width, key_width + 2) {
-                rows.push(line.spans);
+            // Each line of a multi-line value is a row of its own, its break marked: a shell
+            // command's second line never reads as part of the first (§7.1).
+            let parts = safe_lines(&text);
+            let last = parts.len() - 1;
+            for (index, part) in parts.into_iter().enumerate() {
+                let label = if index == 0 { key.clone() } else { String::new() };
+                let pad = if index == 0 { pad } else { key_width + 2 };
+                let mark = if index < last { NEWLINE_MARK } else { "" };
+                let spans = vec![
+                    Span::styled(label, t.label()),
+                    Span::raw(" ".repeat(pad)),
+                    Span::styled(part, t.text()),
+                    Span::styled(mark, t.accent()),
+                ];
+                for line in wrap_spans(spans, width, key_width + 2) {
+                    rows.push(line.spans);
+                }
             }
         }
         rows
@@ -623,8 +857,12 @@ impl Renderer {
             summary.push(Span::styled("  ·  ", t.label()));
         }
         summary.push(Span::styled(words::DECISIONS, t.text()));
-        summary.push(Span::raw(" "));
-        summary.push(Span::styled(format!(" {} ", briefing.waiting), t.badge()));
+        if briefing.waiting > 0 {
+            summary.push(Span::raw(" "));
+            summary.push(Span::styled(format!(" {} ", briefing.waiting), t.badge()));
+        } else {
+            summary.push(Span::styled(" —", t.label()));
+        }
         lines.push(Line::from(summary));
         lines.push(Line::default());
         for line in &briefing.lines {
@@ -667,6 +905,10 @@ impl Renderer {
             modes.push(Span::raw("  "));
         }
         lines.extend(wrap_keys(modes, width).into_iter().map(Line::from));
+        lines.push(Line::from(Span::styled(
+            "Press a key twice to change it, so a message typed here changes nothing.",
+            t.label(),
+        )));
         let row = |label: &str, value: String| {
             Line::from(vec![
                 Span::styled(format!("{label:<24}"), t.label()),
@@ -693,7 +935,7 @@ impl Renderer {
                 Span::styled(stopped, t.fg(t.palette().failed)),
                 Span::raw("   "),
                 Span::styled(" r ", t.keycap()),
-                Span::styled(format!(" {}", words::RESUME_ALL), t.text()),
+                Span::styled(format!(" {} (press r twice)", words::RESUME_ALL), t.text()),
             ]));
         }
         lines.push(Line::default());
@@ -714,7 +956,8 @@ impl Renderer {
             ("ctrl-t", "Today: while you were away"),
             ("ctrl-r", "Permissions: what your agents can do"),
             ("ctrl-k", "Stop all"),
-            ("pgup pgdn", "Scroll the thread"),
+            ("pgup pgdn", "Scroll the thread, or the call in a decision box"),
+            ("↑", "Take back the newest queued message, into the empty message box"),
             ("ctrl-c", "Leave; a kernel's agents carry on"),
             ("/mode", "/mode just look | suggest | ask first | go ahead"),
             ("/stop /resume", "Stop all, Resume all"),
@@ -748,32 +991,51 @@ impl Renderer {
         (Span::styled(label, t.accent().add_modifier(Modifier::BOLD)), text)
     }
 
-    pub(crate) fn placeholder(&self, app: &App, now: Instant) -> Option<&'static str> {
+    pub(crate) fn placeholder(&self, app: &App, now: Instant) -> Option<String> {
         if !app.composer.is_empty() || app.input != Input::Message {
             return None;
         }
-        if app.keys_answer(now) {
-            Some("Answer with a key above, or Esc to type a message")
-        } else if app.box_hidden && !app.cards.is_empty() {
-            Some("Make the window taller, or PageDown, to answer the decision")
-        } else {
-            Some("Type a message · / for commands")
+        if app.view == View::Permissions {
+            if let Some(pending) = app.pending_permission(now) {
+                return Some(pending);
+            }
+            return Some("Press 1–4 twice to change the mode · Esc to go back".to_string());
         }
+        let box_shown = app.view == View::Thread && !app.cards.is_empty() && !app.typing;
+        let text = if box_shown && app.box_hidden {
+            "PageDown to the decision, then answer it"
+        } else if box_shown {
+            "Answer with a key above, or Esc to type a message"
+        } else {
+            "Type a message · / for commands"
+        };
+        Some(text.to_string())
     }
 
-    pub(crate) fn queued(&self, queued: &[String], width: usize) -> Vec<Line<'static>> {
+    /// Messages queued for the shown thread; with `take_back`, the newest says that ↑ takes it
+    /// back into the empty message box (§7.4 rule 2).
+    pub(crate) fn queued(
+        &self,
+        queued: &[String],
+        width: usize,
+        take_back: bool,
+    ) -> Vec<Line<'static>> {
         let t = &self.theme;
+        let newest = queued.len().saturating_sub(1);
         queued
             .iter()
-            .flat_map(|text| {
+            .enumerate()
+            .flat_map(|(index, text)| {
+                let mut note = format!("   ({}", words::SENT_AFTER_THIS_CARD_IS_ANSWERED);
+                if take_back && index == newest {
+                    note.push_str(" · ↑ takes it back");
+                }
+                note.push(')');
                 wrap_spans(
                     vec![
                         Span::styled("Queued › ", t.label()),
                         Span::styled(safe_line(text), t.secondary()),
-                        Span::styled(
-                            format!("   ({})", words::SENT_AFTER_THIS_CARD_IS_ANSWERED),
-                            t.label(),
-                        ),
+                        Span::styled(note, t.label()),
                     ],
                     width,
                     9,
@@ -786,9 +1048,14 @@ impl Renderer {
     // The whole screen
     // -----------------------------------------------------------------------
 
-    /// Draws the whole screen; returns whether the box the keys answer, if any, is wholly on
-    /// screen (§7.1).
-    pub(crate) fn draw(&mut self, frame: &mut Frame<'_>, app: &App, now: Instant) -> bool {
+    /// Draws the whole screen; returns what is on screen of the box the keys answer, when the
+    /// thread shows one (§7.1).
+    pub(crate) fn draw(
+        &mut self,
+        frame: &mut Frame<'_>,
+        app: &App,
+        now: Instant,
+    ) -> Option<BoxView> {
         let t = self.theme;
         let area = frame.area();
         frame.buffer_mut().set_style(area, t.base());
@@ -831,7 +1098,8 @@ impl Renderer {
         // The right pane: two cells of margin.
         let right = Rect { x: right.x + 2, width: right.width.saturating_sub(4).max(1), ..right };
         let width = usize::from(right.width);
-        let queued = self.queued(&app.queued, width);
+        let take_back = app.composer.is_empty() && app.input == Input::Message;
+        let queued = self.queued(&app.queued, width, take_back);
         let queued_height = u16::try_from(queued.len().min(3)).unwrap_or(3);
         let [main, queued_area, input] = Layout::vertical([
             Constraint::Min(1),
@@ -840,33 +1108,40 @@ impl Renderer {
         ])
         .areas(right);
 
+        let height = usize::from(main.height);
         let (lines, focused) = match app.view {
-            View::Thread => self.thread(app, width, now),
+            View::Thread => self.thread(app, width, height, now),
             View::Today => (self.today(app, width), None),
             View::Permissions => (self.permissions(app, width), None),
             View::Help => (self.help(), None),
         };
-        let height = usize::from(main.height);
         let scroll = if app.view == View::Thread {
             app.scroll.min(lines.len().saturating_sub(height))
         } else {
             0
         };
-        let mut box_shown = focused.is_none();
+        let mut box_view = None;
         let visible: Vec<Line<'static>> = if app.view == View::Thread {
             let mut end = lines.len().saturating_sub(scroll);
             let mut start = end.saturating_sub(height);
             // Unscrolled, the box the keys answer is kept in view from its top, before what
-            // follows it.
+            // follows it: it fits the pane, keys included.
             if let Some(focused) = &focused
                 && scroll == 0
-                && focused.start < start
+                && focused.rows.start < start
             {
-                start = focused.start;
+                start = focused.rows.start;
                 end = (start + height).min(lines.len());
             }
-            box_shown =
-                focused.as_ref().is_none_or(|focused| focused.start >= start && focused.end <= end);
+            box_view = focused.map(|focused| {
+                let on_screen = focused.rows.start >= start && focused.rows.end <= end;
+                BoxView {
+                    on_screen,
+                    body_len: focused.body_len,
+                    body_shown: if on_screen { focused.body_shown } else { 0..0 },
+                    scrolls: true,
+                }
+            });
             lines[start..end].to_vec()
         } else {
             lines.into_iter().take(height).collect()
@@ -895,8 +1170,13 @@ impl Renderer {
             cursor_x.min(inner.right().saturating_sub(1)),
             inner.y,
         ));
-        box_shown
+        box_view
     }
+}
+
+/// `text` escaped on one line, each line break shown as [`NEWLINE_MARK`].
+pub(crate) fn marked_line(text: &str) -> String {
+    safe_lines(text).join(&format!(" {NEWLINE_MARK} "))
 }
 
 /// `text` cut to `width` cells, with an ellipsis when cut.

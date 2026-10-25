@@ -24,20 +24,28 @@ An area is a [partition](partitions.md), or `default` on a kernel without partit
 
 | Setting | Route | Body | Started from |
 |---|---|---|---|
-| Quiet time | `POST /kernel/settings/{partition}/quiet-time` | `{"window": {"start": "22:00", "end": "07:00"}}`, or `{"window": null}` for none | `KernelConfig::quiet_hours` (`[kernel] quiet_hours`, the first-run answer) and the partition record's own |
+| Quiet time | `POST /kernel/settings/{partition}/quiet-time` | `{"window": {"start": "22:00", "end": "07:00", "timeZone": "Europe/London"}}`, or `{"window": null}` for none. The times are read in the IANA `timeZone`, across daylight saving time; else at `utcOffsetMinutes` east of UTC, a fixed offset that moves the window by an hour when the clocks change; else in the kernel host's time zone | `KernelConfig::quiet_hours` (`[kernel] quiet_hours`, the first-run answer) and the partition record's own |
 | Daily spending limit | `POST /kernel/settings/{partition}/spending-limit` | `{"microUsd": 5000000}`, or `{"microUsd": null}` for none | The lower of `KernelConfig::quotas` and the partition record's |
-| Mode | `POST /kernel/settings/{partition}/mode` | `{"mode": "ask"}`: `read_only`, `plan`, `ask` or `auto` | The partition record's mode, else the one the area's harness started in |
+| Mode | `POST /kernel/settings/{partition}/mode` | `{"mode": "ask"}`: `read_only`, `plan`, `ask` or `auto` | The mode the area's harness started in (`ControlPlaneConfig::with_start_mode`), else the partition record's |
 
-A change replaces, for its area, the value the kernel and the partition record started with.
-A quiet window a workspace sets (`[kernel] quiet_hours` in its `.adk/harness.toml`) still
-holds beside it; the answer lists it as `alsoQuiet`. Each change takes effect from the
-agents' next step:
+A change replaces, for its area, the value the kernel and the partition record started with,
+while the area still starts with that value: a different start value — `adk-rust up --mode`,
+`adk-rust partitions set-mode` followed by a restart, or quiet hours and a spend cap set at
+start — is newer, takes over, and the change is no longer listed. A quiet window a workspace
+sets (`[kernel] quiet_hours` in its `.adk/harness.toml`) still holds beside it; the answer
+lists it as `alsoQuiet`. Two changes of one area made at once both hold: the store changes
+the area's record by compare-and-swap. Each change takes effect from the agents' next step:
 
 | Setting | Takes effect |
 |---|---|
 | Quiet time | Admission reads it at every claim: no proactive process of the area starts inside it. Work held for quiet time is woken, so admission decides on it again: turning quiet time off releases it at once, and a new window holds it until its own end |
 | Daily spending limit | Admission reads it at every claim: no background process of the area starts once the day's spend reaches it. Work held for the budget is woken, so a raised or removed limit releases it at once |
-| Mode | `adk-rust up` gives each harness a mode store that reads the area's mode: a session takes it at its next step, unless the person set the session's own mode after the change |
+| Quiet time, for chat | A decision card for the area waits for the end of the changed quiet time ([chat channels](pairing.md#chat-channels)) |
+| Mode | `adk-rust up` gives each harness a mode store that reads the area's mode. A stricter mode tightens every session at its next step, and holds the overnight tidy-up and the kernel's questions back. A looser mode is refused (`409`) while an agent of the area is working, so no turn changes its rules midway (spec 3.1 I14); it reaches the sessions with no mode of their own, never one whose mode the person set or the harness tightened itself (the loop guard, a follow-up's pin) |
+| Go ahead | Refused (`400`) on a kernel that refuses it at start: `adk-rust up` beyond loopback without `--sandbox` (`ControlPlaneConfig::with_refused_mode`); a Go ahead stored before is not applied there |
+
+Admission keeps the quiet time and limit it read last when the control store cannot be read,
+rather than falling back to the start values.
 
 `GET /kernel/settings` answers every area:
 
@@ -84,9 +92,9 @@ what Today shows:
 | `more` | Rows after `through` wait for the next page |
 | `counts` | `done`, `failed`, `stopped`, `suggestions`, `questions`, `decided` |
 | `spentMicroUsd` | The spend rows of the page, summed |
-| `quietTime` | `respected` unless a suggestion's work started inside a quiet window of its area (`breaches` lists the rows) |
+| `quietTime` | `respected` unless a suggestion's work started inside a quiet window of its area, judged by the quiet time in force when it started (`breaches` lists the rows) |
 | `waiting` | Decisions waiting for the caller now |
-| `lines` | One line per event, each with its `record`: `GET /api/kernel/away/lines/{seq}` answers its ledger row |
+| `lines` | One line per event, each with its `record`: `GET /api/kernel/away/lines/{seq}` answers its ledger row; a row that makes no line is `404`. A line names its agent as the agent calls itself (`finance`, not `urn:adk:agent:adk-rust/finance`); the kernel's own rows say `kernel` |
 
 | Line | Ledger row |
 |---|---|
@@ -135,8 +143,9 @@ through the harness, which updates recall, its index and its own audit records.
 ## What your agents did
 
 `GET /kernel/record?limit=` lists the latest actions on the kernel's signed audit log, newest
-first, as structured fields (`action`, `subject`, `agent`, `tool`, `decision`, `outcome`,
-`how`, `channel`, `target`) a surface words as "You let Finance send one email, from
+first, as structured fields (`action`, `kernelAction` for the kernel's own records such as
+`approvals.decide` or `settings.mode`, `subject`, `agent`, `tool`, `decision`, `outcome`,
+`how`, `channel` — a paired device's name for its answers — and `target`) a surface words as "You let Finance send one email, from
 Telegram". `GET /kernel/record/check` verifies the whole log against its signed checkpoints:
 
 | Field | Meaning |

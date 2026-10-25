@@ -4,7 +4,8 @@
 //! One row per area in `adk_kernel_area_settings` and one per viewer in
 //! `adk_kernel_away_cursors`, each holding its record as JSON text beside the columns the
 //! store looks up and compares by. A cursor advances with one `INSERT … ON CONFLICT DO
-//! UPDATE … WHERE`, so two concurrent advances keep the higher.
+//! UPDATE … WHERE`, so two concurrent advances keep the higher. An area's record changes by
+//! compare-and-swap on the text that was read, so concurrent changes all hold.
 
 use crate::error::KernelError;
 
@@ -20,6 +21,18 @@ pub(crate) const LIST_SETTINGS: &str =
 pub(crate) const PUT_SETTINGS: &str = "\
 INSERT INTO adk_kernel_area_settings (partition_id, record) VALUES ($1, $2) \
 ON CONFLICT (partition_id) DO UPDATE SET record = excluded.record";
+
+/// Stores an area's first record unless another write stored one first.
+pub(crate) const INSERT_SETTINGS: &str = "\
+INSERT INTO adk_kernel_area_settings (partition_id, record) VALUES ($1, $2) \
+ON CONFLICT (partition_id) DO NOTHING";
+
+/// Replaces an area's record only while it is still the text that was read.
+pub(crate) const SWAP_SETTINGS: &str =
+    "UPDATE adk_kernel_area_settings SET record = $3 WHERE partition_id = $1 AND record = $2";
+
+/// How often a change is applied again to a record another write changed meanwhile.
+pub(crate) const SWAP_ATTEMPTS: usize = 32;
 
 pub(crate) const GET_CURSOR: &str =
     "SELECT record FROM adk_kernel_away_cursors WHERE user_id = $1 AND viewer = $2";
@@ -102,6 +115,50 @@ macro_rules! sql_control_store {
                     .await
                     .map_err(|e| $crate::control::store::sql::db_error($backend, "write", &e))?;
                 Ok(())
+            }
+
+            async fn update_area_settings(
+                &self,
+                partition: &$crate::partition::PartitionId,
+                change: &(dyn for<'a> Fn(&'a mut $crate::control::AreaSettings) + Send + Sync),
+            ) -> $crate::error::Result<$crate::control::AreaSettings> {
+                use $crate::control::store::sql;
+                for _ in 0..sql::SWAP_ATTEMPTS {
+                    let row: Option<(String,)> = sqlx::query_as(sql::GET_SETTINGS)
+                        .bind(partition.as_str())
+                        .fetch_optional(&self.pool)
+                        .await
+                        .map_err(|e| sql::db_error($backend, "read", &e))?;
+                    let mut settings = match &row {
+                        Some((text,)) => sql::decode($backend, "area's settings", text)?,
+                        None => $crate::control::AreaSettings::new(partition.clone()),
+                    };
+                    change(&mut settings);
+                    let text = serde_json::to_string(&settings)?;
+                    let query = match &row {
+                        Some((read,)) => sqlx::query(sql::SWAP_SETTINGS)
+                            .bind(partition.as_str())
+                            .bind(read.as_str())
+                            .bind(text.as_str()),
+                        None => sqlx::query(sql::INSERT_SETTINGS)
+                            .bind(partition.as_str())
+                            .bind(text.as_str()),
+                    };
+                    let stored = query
+                        .execute(&self.pool)
+                        .await
+                        .map_err(|e| sql::db_error($backend, "write", &e))?;
+                    if stored.rows_affected() == 1 {
+                        return Ok(settings);
+                    }
+                }
+                Err($crate::error::KernelError::Store {
+                    backend: $backend,
+                    reason: format!(
+                        "the settings of area {partition} kept changing while they were \
+                         changed; try again"
+                    ),
+                })
             }
 
             async fn cursor(

@@ -33,25 +33,32 @@ PostgreSQL, Redis, MongoDB, Neo4j, or Firestore.
 4. The decision that resolves the request is written to the store: an approval (with any
    edited arguments) or a denial carrying the reason. The request's `run_id` is woken with
    `DurableRunStore::wake` when the service has a run store
-   (`StoreApprovalService::with_run_store`). `adk-server`'s `DurableWorker` sets
-   `RunConfig::durable_run_id` to the claimed run's ID, so a run it parks on a held call is
-   the run its approval wakes.
+   (`StoreApprovalService::with_run_store`), and so is every run of the session parked on the
+   call (a `RunCheckpointRef::AwaitingApproval` naming its fingerprint), such as a later run
+   that held the call again while the request was still open. `adk-server`'s
+   `DurableWorker` sets `RunConfig::durable_run_id` to the claimed run's ID, so a run it parks
+   on a held call is the run its approval wakes.
 5. The next run resumes the held call under its original call ID, and the governed path takes
    the decision. An edited call passes the `ToolPolicy` and the agent's tool screen again before
    it executes; a policy denial of the edit refuses the call. A run without a decision for the
    call does not ask its confirmation handler about it again: the call keeps waiting and the
    run goes on to the model (spec 3.3 §7.3). `LlmAgent`, `CodeActAgent` and the realtime
    runners follow this rule; `CodeActAgent` answers the new message in a turn that cannot
-   suspend and keeps the waiting call's checkpoint.
+   suspend and keeps the waiting call's checkpoint, unless that turn decided an identical
+   call, which answers the waiting one. `CodeActAgent` checks the waiting call under the
+   arguments it was held with, after plugin and screen rewrites, and a run that resumes it on
+   a decision gives the message the run brought to the model.
 6. A call decided any other way — by the confirmation handler, a call-ID decision, a
    fingerprint approval, or `Harness::decide` — has its open request withdrawn
    (`ApprovalService::withdraw`: closed as cancelled, with no outcome written and no run
    woken) and its pending entry cleared, so the request cannot authorize a later call with the
    same fingerprint. A request an approver resolved at the same moment is waited for until its
-   outcome is in the store, and that outcome is absorbed; a request that does not settle
-   within ten seconds fails the call with `approval.outcome_unsettled`. `Harness::decide`
-   withdraws the request before it records the person's decision, and refuses the decision
-   when an approver resolved the request first.
+   outcome is in the store, and that outcome is absorbed, as is an outcome already applied or
+   recorded while the confirmation handler was asked; a request that does not settle within
+   ten seconds fails the call with `approval.outcome_unsettled`. `Harness::decide` refuses a
+   rule it cannot remember before it touches the request, withdraws the request before it
+   records the person's decision, and refuses the decision when an approver, an expiry or
+   another decision settled the call first.
 
 ```rust
 use std::sync::Arc;

@@ -799,6 +799,12 @@ impl ControlClient {
         if let Some(limit) = query.limit {
             pairs.push(format!("limit={limit}"));
         }
+        if query.newest_first {
+            pairs.push("newestFirst=true".to_string());
+        }
+        if let Some(after) = &query.after {
+            pairs.push(format!("after={}", encode(after)));
+        }
         let path = match pairs.is_empty() {
             true => paths::AGENDA.to_string(),
             false => format!("{}?{}", paths::AGENDA, pairs.join("&")),

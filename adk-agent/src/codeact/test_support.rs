@@ -190,7 +190,7 @@ impl MockInvocationContext {
 
     /// Seed the session state (e.g. a persisted checkpoint from a prior run).
     pub(crate) fn with_state(mut self, state: HashMap<String, Value>) -> Self {
-        self.session = MockSession::new(state);
+        self.session.state = MockState { map: state };
         self
     }
 
@@ -230,6 +230,12 @@ impl MockInvocationContext {
     /// Seed the session's conversation history.
     pub(crate) fn with_history(mut self, history: Vec<Content>) -> Self {
         self.session.history = history;
+        self
+    }
+
+    /// Seed the session's event log, which its held calls are read from.
+    pub(crate) fn with_events(mut self, events: Vec<Event>) -> Self {
+        self.session.events = events;
         self
     }
 }
@@ -289,11 +295,12 @@ impl InvocationContext for MockInvocationContext {
 struct MockSession {
     state: MockState,
     history: Vec<Content>,
+    events: Vec<Event>,
 }
 
 impl MockSession {
     fn new(map: HashMap<String, Value>) -> Self {
-        Self { state: MockState { map }, history: Vec::new() }
+        Self { state: MockState { map }, history: Vec::new(), events: Vec::new() }
     }
 }
 
@@ -312,6 +319,9 @@ impl Session for MockSession {
     }
     fn conversation_history(&self) -> Vec<Content> {
         self.history.clone()
+    }
+    fn held_tool_calls(&self, agent_name: &str, branch: &str) -> Vec<adk_core::HeldToolCall> {
+        adk_core::held_tool_calls(&self.events, agent_name, branch)
     }
 }
 

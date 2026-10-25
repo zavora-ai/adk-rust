@@ -11,14 +11,16 @@
 //! | Rule | What the gateway does |
 //! |---|---|
 //! | Only paired accounts reach an agent (S-I6) | An unpaired account's message, or answer, gets a pairing code ([`ChannelNotice::PairingCode`]) and starts nothing; the person accepts the code where the kernel runs (`adk-rust pair accept`, `POST /api/kernel/channels/pair`) |
-//! | One code per account, at most so many waiting | The gateway serializes unpaired accounts' messages, so concurrent messages from one account get one code and the waiting limit holds; the operator dismisses a waiting account (`adk-rust pair revoke`, `POST /api/kernel/channels/waiting/{id}/dismiss`) |
-//! | A paired account's message is a turn | It starts a turn as the paired person, a `Human` subject, in the thread's session, keyed by the platform's message id so a redelivery starts nothing; the turn's reply goes back to the same thread |
+//! | One code per account, at most so many waiting | The gateway serializes unpaired accounts' messages, so concurrent messages from one account get one code and the waiting limit holds; the operator dismisses a waiting account (`adk-rust pair revoke`, `POST /api/kernel/channels/waiting/{id}/dismiss`), which then gets no code for [`DISMISSED_FOR`] |
+//! | A paired account's message is a turn | It starts a turn as the paired person, a `Human` subject, in the thread's session, keyed by the platform's message id so a redelivery starts nothing; the turn's reply goes back to the same thread, from whichever replica ran it |
+//! | A removed account reaches no agent | Removing it stops its turns that have not finished, those queued behind the thread's session included |
 //! | Cards carry no arguments (S-I5) | A [`DecisionCard`] holds the agent, a short summary with every argument value masked, and the risk; never the call's arguments |
-//! | Chat says yes once or no, never money (§7.2, §7.4) | Answers are [`ChannelAnswer::AllowOnce`] and [`ChannelAnswer::Deny`] at low and medium risk only, through `ApprovalService::decide` with the version the card showed (S-I2); a call that moves money ([`ChannelHost::moves_money`], [`ChannelGatewayBuilder::money_tools`]) and high risk link to the home |
+//! | Chat says yes once or no, never money (§7.2, §7.4) | Answers are [`ChannelAnswer::AllowOnce`] and [`ChannelAnswer::Deny`] at low and medium risk only, through `ApprovalService::decide` with the version the card showed (S-I2); a call that moves money ([`ChannelHost::moves_money`], [`ChannelGatewayBuilder::money_tools`]) and high risk link to the home — high as the request rates it, or as the host does ([`ChannelHost::rates_high`]) — and a take-over, whose secret is typed in the home (§8.2), can only be denied |
 //! | Only who may answer gets buttons | A card goes to the decision's person when the policy lets that person answer it, and its answers only when chat may decide it |
 //! | A second answer is shown, never retried (S-I2) | A version conflict answers [`ChannelNotice::AlreadyDecided`], or a fresh card when the decision still waits; an answer that counts toward a quorum, or one from someone the policy does not ask, answers [`ChannelNotice::WaitingForOthers`] |
 //! | Stop all from anywhere; resume only at home (S-I10) | "stop all" freezes the kernel and answers [`StopNotice`]; "resume" is refused with [`ChannelNotice::ResumeRefused`] |
-//! | Nothing notifies during quiet time | A card for a decision asked during quiet time is delivered when quiet time ends, if it still waits |
+//! | Nothing notifies during quiet time | A card for a decision asked during quiet time is delivered when quiet time ends, if it still waits: the quiet time of the decision's area in force, a change made while the kernel runs included ([`ChannelHost::quiet_ends`]) |
+//! | Every waiting decision reaches the thread | Every minute the gateway rings the decisions still waiting, so a card that could not be sent is sent again, and one held on another replica is sent too |
 //!
 //! Every answer, pairing request, notification, stop and refusal writes a `kernel.channel`
 //! audit record with `surface: chat`, the channel and the account, before it acts.
@@ -62,6 +64,7 @@ mod sqlite;
 mod testing;
 
 pub use gateway::{ChannelDoorbell, ChannelGateway, ChannelGatewayBuilder};
+pub(crate) use host::stop_account_turns;
 pub use memory::InMemoryChannelBindingStore;
 #[cfg(feature = "postgres")]
 pub use postgres::PostgresChannelBindingStore;
@@ -73,6 +76,9 @@ pub use testing::{Delivered, InMemoryChannel};
 
 /// The longest summary a card carries, in characters.
 const MAX_SUMMARY_CHARS: usize = 160;
+/// How long an account the operator dismissed gets no pairing code (spec 3.3 §10 K1): a day.
+pub const DISMISSED_FOR: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+pub(crate) use crate::pairing::TAKE_OVER_TOOL;
 /// The longest display name kept for an account.
 const MAX_NAME_CHARS: usize = 64;
 
@@ -259,7 +265,7 @@ pub struct DecisionCard {
     /// The risk.
     pub risk: ApprovalRisk,
     /// The answers the thread may give: allow once and deny at low and medium risk, none at
-    /// high risk.
+    /// high risk, and deny alone for a take-over, whose secret is typed in the home.
     pub answers: Vec<ChannelAnswer>,
     /// Where the decision is answered in full: the web home, when the gateway knows it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -273,7 +279,10 @@ impl DecisionCard {
     pub fn from_request(request: &ApprovalRequest, home: Option<&str>) -> Self {
         let mut answers = Vec::new();
         if chat_may_decide(request.risk) {
-            if request.allowed_actions.contains(&adk_core::ApprovalAction::Approve) {
+            // A take-over is done by typing the secret in the home; a yes delivers nothing.
+            if request.allowed_actions.contains(&adk_core::ApprovalAction::Approve)
+                && request.tool_name != TAKE_OVER_TOOL
+            {
                 answers.push(ChannelAnswer::AllowOnce);
             }
             if request.allowed_actions.contains(&adk_core::ApprovalAction::Reject) {
@@ -300,7 +309,7 @@ impl DecisionCard {
             self.summary,
             risk_words(self.risk)
         );
-        if self.answers.is_empty() {
+        if !self.answers.contains(&ChannelAnswer::AllowOnce) {
             match &self.home {
                 Some(home) => text.push_str(&format!("\nDecide in the home: {home}")),
                 None => text.push_str("\nDecide in the home"),
@@ -818,6 +827,10 @@ pub struct ChannelPairingRequest {
     pub requested_at: DateTime<Utc>,
     /// When its code stops working.
     pub expires_at: DateTime<Utc>,
+    /// The operator dismissed the account: until [`expires_at`](Self::expires_at) it holds
+    /// no code and gets none, and it waits for nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dismissed: bool,
 }
 
 impl ChannelPairingRequest {
@@ -838,7 +851,26 @@ impl ChannelPairingRequest {
             thread: thread.into(),
             requested_at,
             expires_at,
+            dismissed: false,
         }
+    }
+
+    /// The dismissal of `waiting`'s account at `now`: no code for it until [`DISMISSED_FOR`]
+    /// has passed. Its code hash names the dismissal, so no code ever takes it.
+    pub(crate) fn dismissal(waiting: &ChannelPairingRequest, now: DateTime<Utc>) -> Self {
+        let until = now + chrono::Duration::from_std(DISMISSED_FOR).unwrap_or_default();
+        let id = ChannelBinding::id_for(&waiting.channel, &waiting.account);
+        let mut dismissal = Self::new(
+            format!("dismissed:{id}"),
+            waiting.channel.clone(),
+            waiting.account.clone(),
+            waiting.thread.clone(),
+            now,
+            until,
+        );
+        dismissal.display_name = waiting.display_name.clone();
+        dismissal.dismissed = true;
+        dismissal
     }
 
     /// The request as the control plane lists it.
@@ -973,11 +1005,24 @@ pub(crate) async fn waiting_request(
     store: &dyn ChannelBindingStore,
     id: &str,
 ) -> Result<Option<ChannelPairingRequest>> {
-    Ok(store
-        .list_requests()
-        .await?
-        .into_iter()
-        .find(|request| ChannelBinding::id_for(&request.channel, &request.account) == id))
+    Ok(store.list_requests().await?.into_iter().find(|request| {
+        !request.dismissed && ChannelBinding::id_for(&request.channel, &request.account) == id
+    }))
+}
+
+/// Dismisses the account of `waiting` at `now`: its code stops working, its place frees,
+/// and it gets no new code for [`DISMISSED_FOR`] (spec 3.3 §10 K1, S-I6).
+///
+/// # Errors
+///
+/// Returns the store's error.
+pub(crate) async fn dismiss_request(
+    store: &dyn ChannelBindingStore,
+    waiting: &ChannelPairingRequest,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    store.take_request(&waiting.code_hash).await?;
+    store.put_request(ChannelPairingRequest::dismissal(waiting, now)).await
 }
 
 /// Removes the chat account `id` (spec 3.3 §10 K1); removing a removed one changes nothing.
@@ -1026,6 +1071,28 @@ pub trait ChannelHost: Send + Sync + 'static {
     /// The approval service decisions go through; `None` when the host has none.
     fn approvals(&self) -> Option<Arc<dyn ApprovalService>>;
 
+    /// When quiet time that holds `at` ends for `request`, or `None` when `at` is not in
+    /// quiet time; no card of it is delivered before then. The kernel answers with the
+    /// quiet time of the decision's area in force now, a change made while it runs included
+    /// (spec 3.3 §10 K3); the default answers [`quiet_until`](Self::quiet_until).
+    async fn quiet_ends(
+        &self,
+        request: &ApprovalRequest,
+        at: DateTime<Utc>,
+    ) -> Option<DateTime<Utc>> {
+        let _ = request;
+        self.quiet_until(at)
+    }
+
+    /// Whether the host rates `request`'s call high risk whatever the request says, so chat
+    /// links it to the home (spec 3.3 §7.2, S-I6). The kernel rates so a tool a mounted
+    /// driver declares `publish_public` or `financial`, the classes nothing may allow without
+    /// a person (spec 3.2 K-I9). `false` by default.
+    fn rates_high(&self, request: &ApprovalRequest) -> bool {
+        let _ = request;
+        false
+    }
+
     /// Whether `request`'s call moves money, which chat never decides (spec 3.3 §7.4 rule
     /// 4). The kernel answers for the tools its mounted drivers declare `financial`; the
     /// gateway adds the tools [`ChannelGatewayBuilder::money_tools`] names. `false` by
@@ -1053,6 +1120,18 @@ pub trait ChannelHost: Send + Sync + 'static {
     /// Returns the host's error when it cannot follow its runs.
     async fn finished_turns(&self) -> Result<BoxStream<'static, RunRecord>>;
 
+    /// The run of turn `pid` as it stands, wherever it runs: the gateway asks after the
+    /// turns it started, so a turn another replica ran still gets its reply. `None` by
+    /// default, for a host whose turns all finish in [`finished_turns`](Self::finished_turns).
+    ///
+    /// # Errors
+    ///
+    /// Returns the host's error when it cannot read the run.
+    async fn turn(&self, pid: &str) -> Result<Option<RunRecord>> {
+        let _ = pid;
+        Ok(None)
+    }
+
     /// Stops everything, as `by`.
     ///
     /// # Errors
@@ -1071,6 +1150,8 @@ pub enum InboundOutcome {
     PairingWaiting,
     /// Too many accounts wait; the account was told to try later and nothing started.
     PairingBusy,
+    /// The operator dismissed the account lately: it got no code and nothing started.
+    PairingDismissed,
     /// A paired account's message started, or for a redelivery found, a turn.
     TurnStarted {
         /// The turn's process.

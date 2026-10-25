@@ -1916,7 +1916,7 @@ impl KernelBuilder {
             proc: proc.clone(),
             partition_targets: self.partition_targets,
             partitions: partitions.clone(),
-            control: config.control.control_store.clone(),
+            control: Arc::new(crate::control::LastRead::new(config.control.control_store.clone())),
         });
         let run_finished = Arc::new(RunFinishedWakeSource::new());
         let hooks =

@@ -32,23 +32,27 @@ pub(crate) struct End {
 }
 
 impl End {
-    fn done() -> Self {
+    pub(crate) fn done() -> Self {
         Self { outcome: "done", code: EXIT_DONE, text: words::DONE.to_string() }
     }
 
-    fn error(text: impl Into<String>) -> Self {
+    pub(crate) fn error(text: impl Into<String>) -> Self {
         Self { outcome: "error", code: EXIT_ERROR, text: text.into() }
     }
 
-    fn waiting(heading: &str) -> Self {
-        Self {
-            outcome: "waitingForYou",
-            code: EXIT_WAITING,
-            text: format!("{}: {heading}", words::WAITING_FOR_YOU),
+    /// A decision waits; `queued` messages of this run were queued behind it and, the run
+    /// ending, are not sent: input queued behind a decision waits in this process only.
+    pub(crate) fn waiting(heading: &str, queued: usize) -> Self {
+        let mut text = format!("{}: {heading}", words::WAITING_FOR_YOU);
+        if queued > 0 {
+            text.push_str(
+                ". Not sent: the message queued behind it; send it again once it is answered",
+            );
         }
+        Self { outcome: "waitingForYou", code: EXIT_WAITING, text }
     }
 
-    fn budget(spend: &str) -> Self {
+    pub(crate) fn budget(spend: &str) -> Self {
         Self {
             outcome: "budgetReached",
             code: EXIT_BUDGET,
@@ -63,6 +67,8 @@ impl End {
 pub(crate) struct Settler {
     baseline: u64,
     sent: bool,
+    /// What the agents last did in the turn was to say something: a turn whose last step is a
+    /// tool call or its result did not finish with a reply, whatever ended it.
     reply: bool,
     /// The session recorded something after the baseline: the turn began.
     began: bool,
@@ -96,16 +102,16 @@ impl Settler {
 
     /// An entry of the session's feed.
     pub(crate) fn observe(&mut self, entry: &FeedEntry) {
-        if entry.seq > self.baseline {
-            self.began = true;
+        if entry.seq <= self.baseline {
+            return;
         }
-        if entry.seq > self.baseline
-            && entry
-                .items
-                .iter()
-                .any(|item| !matches!(item, ThreadItem::Message { from: Speaker::You, .. }))
-        {
-            self.reply = true;
+        self.began = true;
+        for item in &entry.items {
+            match item {
+                ThreadItem::Message { from: Speaker::Agent, .. } => self.reply = true,
+                ThreadItem::Activity { .. } | ThreadItem::Result { .. } => self.reply = false,
+                ThreadItem::Message { from: Speaker::You, .. } | ThreadItem::Decision { .. } => {}
+            }
         }
     }
 
@@ -139,10 +145,16 @@ impl Settler {
         match engine.decisions(caller).await {
             Ok(cards) => {
                 if let Some(card) = cards.iter().find(|card| card.session_id == session) {
-                    return Some(End::waiting(&card.heading));
+                    let queued = engine.queued(caller, session).len();
+                    return Some(End::waiting(&card.heading, queued));
                 }
             }
             Err(error) => return Some(End::error(error.to_string())),
+        }
+        // Input queued behind a running turn goes once it ends: not settled until then.
+        if !engine.queued(caller, session).is_empty() {
+            self.quiet = 0;
+            return None;
         }
         let spend = status.as_ref().and_then(|status| status.spend.clone());
         let budget = spend.as_ref().filter(|spend| {
@@ -167,6 +179,12 @@ impl Settler {
         self.quiet += 1;
         if self.quiet < 2 {
             return None;
+        }
+        // How the turn ended is read from the session itself, not from a feed that may lag.
+        if let Ok(thread) = engine.thread(caller, session).await {
+            for entry in &thread {
+                self.observe(entry);
+            }
         }
         let failed = engine.agents(caller).await.ok().is_some_and(|rows| {
             rows.iter().any(|row| {
@@ -280,14 +298,20 @@ pub(crate) async fn run<W: Write + Send>(
 ) -> io::Result<i32> {
     let engine = &surface.engine;
     let caller = &surface.caller;
-    let session = surface.initial_session().await;
+    let message = message.filter(|text| !text.trim().is_empty());
+    // A message goes to a session of its own unless one is named: never into the thread of a
+    // decision this run did not cause. Without one, the run shows where things stand.
+    let session = match (&surface.session, &message) {
+        (Some(session), _) => session.clone(),
+        (None, Some(_)) => uuid::Uuid::new_v4().to_string(),
+        (None, None) => surface.initial_session().await,
+    };
     let baseline = match engine.thread(caller, &session).await {
         Ok(thread) => thread.len() as u64,
         Err(SurfaceError::NotFound { .. }) => 0,
         Err(error) => return end_line(&mut out, &End::error(error.to_string()), &session),
     };
     let mut settler = Settler::new(baseline);
-    let message = message.filter(|text| !text.trim().is_empty());
     // Attached without a message, the terminal says where the session stands: the decisions
     // answered before it came, then its open ones (spec 3.3 §5.2, §8.1 "Decided").
     let mut told = HashSet::new();

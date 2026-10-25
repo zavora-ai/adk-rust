@@ -1312,6 +1312,17 @@ impl SurfaceEngine {
         });
     }
 
+    /// Takes back the newest input queued for the session, before it is sent; `None` when
+    /// none waits (spec 3.3 §7.4 rule 2).
+    pub fn unqueue_last(&self, caller: &Caller, session: &str) -> Option<String> {
+        self.inner
+            .queues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(&(caller.user_id().to_string(), session.to_string()))
+            .and_then(VecDeque::pop_back)
+    }
+
     /// The input queued for the session, oldest first.
     pub fn queued(&self, caller: &Caller, session: &str) -> Vec<String> {
         self.inner
@@ -1409,10 +1420,17 @@ impl SurfaceEngine {
     // -----------------------------------------------------------------------
 
     fn draft(caller: &Caller, kind: AuditRecordKind, action: &str) -> AuditRecordDraft {
-        AuditRecordDraft::new(kind, action)
+        let mut draft = AuditRecordDraft::new(kind, action)
             .actor(AuditActor::subject(caller.subject.clone()))
             .ext("surface", serde_json::to_value(caller.surface).unwrap_or(Value::Null))
-            .ext("origin", serde_json::to_value(&caller.origin).unwrap_or(Value::Null))
+            .ext("origin", serde_json::to_value(&caller.origin).unwrap_or(Value::Null));
+        if let Some(device) = &caller.device {
+            draft = draft.ext("device", json!(device));
+        }
+        if caller.presence_confirmed {
+            draft = draft.ext("presence", json!("confirmed"));
+        }
+        draft
     }
 
     async fn audit_decide(

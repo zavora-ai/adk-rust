@@ -1053,7 +1053,9 @@ impl ConsolidationTicker {
         consolidator: &dyn Consolidator,
         now: DateTime<Utc>,
     ) -> Result<()> {
-        let material = consolidator.material(partition, now).await?;
+        let mut material = consolidator.material(partition, now).await?;
+        // A mode tightened while the kernel runs holds the tick back (spec 3.3 §10 K3).
+        material.mode = self.sup.area_mode(partition, material.mode).await;
         let daily = self.sup.proactivity.daily_budget.clone();
         let spent = if daily.max_cost_micro_usd.is_some() {
             self.sup.proactive_spent(partition).await
