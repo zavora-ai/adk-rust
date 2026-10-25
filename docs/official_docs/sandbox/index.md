@@ -337,6 +337,42 @@ async fn run() -> std::io::Result<()> {
 The devtools `bash` tool, each stdio server of `adk-tool`'s `McpServerManager` (and so each
 kernel driver), and `WindowsEnforcer::run_confined` hold their processes this way.
 
+### Process trees on macOS and Linux
+
+On Unix, `adk_sandbox::process_tree::ProcessGroup` (feature `process-tree`) holds a process
+tree in a session and process group of its own (spec 3.2 §7.7, K-I5). Start the command with
+`ProcessGroup::new_session`, which makes the process the leader of a new session with no
+controlling terminal, and hand the spawned child to `ProcessGroup::contain`. The group keeps
+the leader unreaped until it ends the group, so the group's id cannot name another group
+while it is signalled.
+
+| Call | Does |
+|------|------|
+| `ProcessGroup::new_session(&mut command)` | Starts the command's process as the leader of a new session and process group |
+| `ProcessGroup::contain(child)` | Holds the spawned leader; refuses, and kills, a child that leads no group of its own |
+| `wait_for_leader(limit)` | Waits for the leader to exit, without reaping it |
+| `terminate()` | Sends the group `SIGKILL` |
+| `terminate_and_wait(limit)`, `terminate_and_wait_async(limit)` | Sends the group `SIGTERM`, then `SIGKILL` once the leader has exited or half of `limit` has passed, reaps the leader, and returns whether every process of the group has exited within `limit` |
+| Dropping the group | Sends `SIGKILL` to whatever is left in it |
+
+```rust,ignore
+use adk_sandbox::process_tree::ProcessGroup;
+
+async fn run() -> std::io::Result<()> {
+    let mut command = tokio::process::Command::new("sh");
+    command.args(["-c", "sleep 100 & sleep 100"]);
+    ProcessGroup::new_session(&mut command);
+    let group = ProcessGroup::contain(command.spawn()?)?;
+    // The `sleep` the shell left in the background has exited too when this returns.
+    assert!(group.terminate_and_wait_async(ProcessGroup::TERMINATION_WAIT).await?);
+    Ok(())
+}
+```
+
+A process group is not a boundary the way a Job Object is: a process that calls `setsid` or
+`setpgid` leaves it, and nothing ends the group when its owner is killed outright. Each stdio
+server of `adk-tool`'s `McpServerManager`, and so each kernel driver, is held this way.
+
 ## Workspace Clients
 
 The `workspace` feature adds a `provision → session → exec → snapshot → resume` lifecycle.
