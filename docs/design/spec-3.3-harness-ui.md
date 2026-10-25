@@ -2,13 +2,13 @@
 
 | | |
 |---|---|
-| **Status** | Draft / RFC — rewritten 2026-10-24. Replaces the first draft ("one decision contract, five renderers", #936), which specified a contract-only crate and no surface a person could open |
+| **Status** | Draft / RFC — rewritten 2026-10-24. Replaces the first draft ("one decision contract, five renderers", #936), which specified a contract-only crate and no surface a person could open. Amended 2026-10-25: agents you create ([§5.7](#57-your-agents), K7) |
 | **Builds on** | [`spec-3.1-harness-agent.md`](spec-3.1-harness-agent.md) (the harness: modes, standing rules, approvals, memory, voice) and [`spec-3.2-agent-kernel.md`](spec-3.2-agent-kernel.md) (the always-on kernel: processes, wakes, agenda, quiet hours, event bus, control plane, `/proc`). Together they make an always-on personal agent; this spec is its interface |
 | **Target** | Design labels only: work from specs 3.1–3.4 ships in the unreleased 3.0.0 (owner, 2026-10-21) |
-| **Grounding commit** | `origin/main` @ `c5bdf4f1` for every file reference |
+| **Grounding commit** | `origin/main` @ `c5bdf4f1` for every file reference, except [§5.7](#57-your-agents) and its rows in §6–§14, which cite `origin/main` @ `c991dae3` |
 | **Evidence** | Three research reports (git-excluded, `reports/`): *Harness UI expectations 2026* (113 tracker issues, 2026-10-20), *Best agent surface design 2026* and *Personal agent interface 2026* (2026-10-24: Grok Bot, OpenAI dots, OpenClaw, the wider personal-agent field, terminal, web, mobile, generative UI, workflow tools, agent-OS interfaces) |
 | **Concepts** | Twenty screens in light and dark, rendered under [`images/spec-3.3/`](images/spec-3.3/) |
-| **Affected crates** | NEW `adk-surface`; `adk-kernel` (the `channels` contract and the read and write routes the surfaces need); `adk-server` (the bundled UI and UI-protocol code move out; AG-UI carries decisions); `adk-cli` (the terminal surface, `pair`); `adk-harness` (a personal preset); `adk-acp` ("always allow" as a rule); `adk-core` (park on timeout, inbox by session) |
+| **Affected crates** | NEW `adk-surface`; `adk-kernel` (the `channels` contract, the read and write routes the surfaces need, and agents a person adds); `adk-server` (the bundled UI and UI-protocol code move out; AG-UI carries decisions; a live target table); `adk-cli` (the terminal surface, `pair`, the agent factory and `/agent`); `adk-harness` (a personal preset; `propose_agent`); `adk-acp` ("always allow" as a rule); `adk-core` (park on timeout, inbox by session) |
 | **Stability** | `adk-surface` enters at **Beta**; the `verb-ui` and `desktop` features at **Experimental** |
 
 ---
@@ -94,7 +94,7 @@ The web home and the chat thread ship together because each covers the other's w
 
 The system of record. Three sections share one header with the status line and **Stop all**.
 
-**Threads.** The roster of agents on the left (avatar, name, status word), the selected agent's thread in the middle, and **Decisions** with a count badge and **Coming up** on the right. A decision appears inline in the thread, on its own background.
+**Threads.** The roster of agents on the left (avatar, name, status word), the selected agent's thread in the middle, and **Decisions** with a count badge and **Coming up** on the right. A decision appears inline in the thread, on its own background. The roster ends with **New agent**, which adds an agent of the person's own ([§5.7](#57-your-agents)).
 
 | Light | Dark |
 |---|---|
@@ -115,6 +115,8 @@ The system of record. Three sections share one header with the status line and *
 ### 5.2 Terminal
 
 The same home for command-line users: a status line, the roster and what is coming up on the left, the thread on the right, and the decision as a box answered by key (`y` allow once, `a` always allow, `e` edit, `n` deny, `?` details). Esc never decides; typing while a decision is open is queued as the next message. `--ui inline` keeps output in the terminal's scrollback, and `--output json` emits one event per line with documented exit codes for CI. The terminal attaches to a kernel on another machine with the same device pairing the phone uses.
+
+The roster on the left lists the primary agent and the person's own agents ([§5.7](#57-your-agents)). Ctrl-G or `/agents` opens the Agents view, where agents are added, changed, paused and removed; Tab moves to the next agent unless a `/` command is being typed.
 
 | Light | Dark |
 |---|---|
@@ -154,13 +156,145 @@ Voice through `adk-realtime` (Gemini Live or OpenAI Realtime). A spoken "allow o
 |---|---|
 | ![Voice and video](images/spec-3.3/voice-light.png) | ![Voice and video, dark](images/spec-3.3/voice-dark.png) |
 
+### 5.7 Your agents
+
+A person adds agents of their own beside the primary agent, by asking or by hand. Each one is kept by the kernel, appears in the roster on the left of the web home and the terminal, keeps working across restarts, and is changed, paused or removed from either surface. An agent may suggest a new agent; only a person adds one.
+
+**What `main` does today.** Every agent is fixed when the kernel is built:
+
+| On `main` | Consequence |
+|---|---|
+| `adk-rust up` registers its targets once — `adk-rust`, `harness.goal`, and `adk-rust@<area>` per area ([`up.rs:314-328`](../../adk-cli/src/harness_cli/up.rs)) — through `KernelBuilder::agent` and `partition_agent` ([`kernel.rs:1562, 1757`](../../adk-kernel/src/kernel.rs)); `build` copies them into each queue's worker ([`kernel.rs:1955`](../../adk-kernel/src/kernel.rs)) | An agent added later cannot run until a restart; a worker fails a run whose target it lacks, not retryable ([`worker.rs:1079`](../../adk-server/src/background/worker.rs)) |
+| Progress, usage and the ledger reach a kernel through sources attached at start and routed by area ([`process.rs:586`](../../adk-kernel/src/process.rs), [`supervise.rs:201`](../../adk-kernel/src/supervise.rs)) | An agent built later would spend without its spending reaching its processes |
+| The roster is the latest process per target ([`local.rs:483`](../../adk-surface/src/local.rs)); display names are set once, when the engine is built ([`engine.rs:287`](../../adk-surface/src/engine.rs)) | An agent that has never run is not listed |
+| A source starts every turn on its one target ([`local.rs:557`](../../adk-surface/src/local.rs)) | Every roster row messages the primary agent |
+| Agent definitions exist only in the managed form (`HarnessDef`, `KernelDef`), which `adk-rust up` does not build | Nothing a person defines persists |
+
+**Two ways in, one store.**
+
+| | By asking | By hand |
+|---|---|---|
+| Where | Any message to ADK-Rust; **Describe it** in the web home or in the terminal's Agents view, which opens a thread with ADK-Rust holding the request | **Set it up yourself** in the web home or in the terminal's Agents view; `/agent new` in the terminal; `adk-rust agents new` |
+| What happens | ADK-Rust calls `propose_agent`; the kernel checks the suggestion against ADK-Rust's own limits, keeps it as suggested, and puts one decision in **Decisions** | The kernel checks the definition and shows **Here is what Finance can do** with its risk; nothing is kept until the person confirms |
+| Who decides | A person, in the web home, on the phone or in the terminal ([§7.2](#72-what-each-surface-may-decide)) | The person filling in the form, in the web home or the terminal |
+| Limits | No more than ADK-Rust may do, in its own area (S-I12) | The area's limits |
+
+**The definition.**
+
+| On screen | Holds | Rules |
+|---|---|---|
+| Name | "Finance" | At most 40 characters, escaped everywhere (S-I9); unique among the kernel's active, paused and suggested agents, ignoring case; never the primary agent's name or "You"; can be changed |
+| Colour | One of the eight avatar colours ([`project.rs:763`](../../adk-surface/src/project.rs)) | A named colour, never a free value and never a decision background ([§9](#9-visual-language)); kept across a rename |
+| What it does | One line, shown in the roster and on its card | |
+| Instructions | How it works | Secrets redacted and injection patterns labelled before they are shown or kept, as fetched text is (spec 3.1 I47); a match is labelled, never dropped. Instructions shape what the agent says and tries, never what it may do: its mode, tools and rules are code (spec 3.1 I32) |
+| Area | Its partition (spec 3.2 §7.8) | Fixed: moving it is adding a new agent in the other area (K-I15) |
+| How much it asks first | Just look, Suggest, Ask first or Go ahead | The area's mode or stricter; the stricter of the two governs every step |
+| Runs on | A provider and a model | The primary agent's model by default; any provider whose key the kernel already has; keys stay in the kernel's environment, never in the definition |
+| What it can use | Files: none, read, or read and change, in the area's workspace or one folder inside it; a shell: none, in the sandbox, or on this computer; the web: none, listed sites, or any site; packs; drivers mounted for its area | Adding an agent never mounts a driver: mounting stays its own approval (K-I13) |
+| Daily spending limit | Optional | At most the area's; its own unattended work does not start once it is spent, as the area's limit works (K-I11) |
+| Allowed without asking | Its own standing rules | Made only by a person (spec 3.1 I2). A new agent starts with nothing; "Always allow" on its cards makes rules for it alone, and its settings can copy one of the person's rules to it (S-I19) |
+
+Its routines are its scheduled processes, added from its settings with the form Today uses; they are not part of the definition, and a suggestion carries none.
+
+The kernel also keeps, never on a person-facing screen: the agent's id, its state (suggested, active, paused, removing, removed), how it was added (by hand, or suggested by which agent in which session), who added it and when, a version per change, and a digest of the definition that a decision binds to.
+
+**Where it lives.** A kernel store, `AgentStore`, holds definitions beside the partition and driver stores, on every kernel backend — memory, SQLite in `harness.db`, PostgreSQL, Redis, MongoDB, Firestore and Neo4j — with one conformance suite. Every change goes through the kernel's audited agent table, recorded before it acts, with the fields that changed, as `Partitions::put` records an area ([`partition.rs:826`](../../adk-kernel/src/partition.rs)). No definition is read from a workspace file, a watched directory or `adk-server`'s agent registry (S-I17).
+
+**Its identity.** The kernel gives each agent an id once, from its first name: `finance`, or `finance-2` when `finance` was used before; a name with no letter or digit gets `agent`, `agent-2`, and so on. The id is its kernel target, its root agent name and its identity, `urn:adk:agent:adk-rust/finance` ([`acting.rs:88`](../../adk-core/src/acting.rs)), so the worker accepts its runs with no extra configuration ([`worker.rs:1134`](../../adk-server/src/background/worker.rs)) and every decision, rule and record names it. Renaming changes only the name on screen. A removed agent's id is never given again (S-I14), because approvals and standing rules bind to it. Reserved: `adk-rust`; any id containing `@` or `.` (`harness.goal`, `adk-rust@work`, `kernel.wake`); `self-improver`; every member name and every target or workflow the host registered.
+
+**How an added agent runs.**
+
+1. At start, the kernel builds every active definition through the agent factory its host registers. `adk-rust up`'s factory builds a harness agent with the composition the primary agent uses — the same sessions, approval inbox, standing-rule store, ledgers, audit trail and kill switch — in the agent's area, on its own model.
+2. The kernel hosts it in a live target table that every queue's worker reads, with the agent's progress source attached, so an agent added or changed while the kernel runs serves within one scheduler tick, with no restart, and its spending is counted to its own processes.
+3. A change is built first and then swapped in. A build that fails keeps the agent as it was and shows **Can't start** with the reason. A turn in progress finishes on the agent it started on.
+4. Every replica reconciles its table with the store on each tick. A replica that claims a run for an agent it has not built yet hands the run back for a later claim instead of failing it.
+5. The kernel refuses to host an agent whose kill switch is not its own ([`governance.rs:510`](../../adk-core/src/governance.rs)), so Stop all reaches every added agent (S-I15).
+6. An added agent's follow-ups run as itself. A follow-up without a proposing run goes to the area's primary agent, never to an added one.
+7. Not in this phase: goals (`adk-rust goal` stays with the primary agent), wakes from webhooks, files or chat (chat reaches the primary agent only), team members, and `propose_agent` on an added agent.
+
+**Threads.** A thread belongs to one agent. **New thread** on an agent's row sends the thread's first message to that agent; the agent's harness stamps the session on its first run, as areas stamp theirs ([`partition.rs:51`](../../adk-harness/src/partition.rs)), and every other agent, the primary included, refuses that session. No surface writes the stamp. A later message goes to the agent the stamp names; before the first run it goes to the agent of the session's latest run, otherwise to the primary agent.
+
+**The roster.** The primary agent comes first, then the person's agents by name, under their area when the kernel has areas. Each row keeps the §5.1 shape — avatar, name, status word — with three new words ([§8.1](#81-terms)): **Ready** for an agent that has not run yet, **Paused**, and **Can't start**. The kernel publishes each change on its event bus, so the terminal redraws within one event and the web home on its next refresh. Selecting an agent opens its latest thread.
+
+**In the web home.** Each screen exists in light and dark, from the §9 tokens.
+
+| Screen | What it shows |
+|---|---|
+| Roster | **New agent** at the foot of the agents list. With no agents of the person's own: "No agents of your own yet. Add one, or ask ADK-Rust to suggest one." Each row shows **Settings** on hover and on focus |
+| New agent (`/ui/agents/new`) | Heading "New agent" with two tabs. **Describe it**: one box, "What should it do?", and **Ask ADK-Rust to suggest one**, which starts a thread with ADK-Rust. **Set it up yourself**: the definition's fields in one column, in the order of the table above, with the control "How much it asks first" that "What your agents can do" uses; "Runs on" lists only providers whose key the kernel has. Beside the fields, **Here is what Finance can do**, kept current as the form changes, with the risk pill. **Add Finance** and **Cancel** at the foot |
+| Agent settings, from **Settings** on a roster row or in the thread head | The per-agent settings every agent has (how much it asks first, "Allowed without asking"), and for an added agent: "Added by you on 25 Oct" or "Suggested by ADK-Rust, added by you on 25 Oct"; the definition's fields; **Copy one of your rules**; its routines with **Add a routine**; **Pause** and **Remove** at the foot. Every change shows "Was … Now …" before it is saved, as quiet time does. The primary agent's settings show its mode and rules only; its name, instructions and model stay in `adk-rust up`'s configuration |
+| Memory & rules | "What your agents can do" lists every agent with its area, how much it asks first, and **Settings** |
+
+**In the terminal.**
+
+| Input | What it does |
+|---|---|
+| Ctrl-G or `/agents` | Opens or closes the Agents view on the right, as Ctrl-R does Permissions |
+| In the Agents view: ↑ ↓, Enter, `n`, `e`, `p`, `x`, Esc | Select; open its latest thread; new agent (**Describe it** or **Set it up yourself**); settings; pause or resume; remove; back. Decision keys answer only in the thread view ([`app.rs:253`](../../adk-surface/src/tui/app.rs)), so none of these answers a decision |
+| **Set it up yourself** | A form in the right pane: one field per line, Tab to the next, Enter shows **Here is what Finance can do**, a second Enter adds it, Esc leaves without saving |
+| `/agent` with `list`, `show`, `new`, `edit`, `pause`, `resume` or `remove` | The kernel's agent command: the same code in the REPL, in the full screen, and on a kernel through the control plane's command routes. A change prints its preview and the line that confirms it; the Agents view and its form take both steps for the person |
+| Tab, Shift-Tab | Complete a `/` command while one is typed; otherwise the next or previous agent in the roster, agents without a thread included |
+| `adk-rust agents` with the same verbs | The same command for scripts: it prints the preview and asks on the terminal; `--yes` is refused at high risk, and with no terminal to ask on, a change is refused |
+
+The footer lists "ctrl-g agents" and `/help` lists `/agents` and `/agent`. Names and instructions pass `terminal_safe` ([`safe.rs:38`](../../adk-surface/src/tui/safe.rs)). In `--ui inline` mode `/agents` lists the agents and changes use `/agent`; `--output json` emits one line per agent change.
+
+**The decision that adds an agent.** A suggestion is one inbox entry with the tool name `kernel:agent.create`, written by the kernel as agenda proposals and driver mounts are ([`agenda.rs:1263`](../../adk-kernel/src/agenda.rs), [`tenant.rs:856`](../../adk-kernel/src/managed/tenant.rs)): the definition as its arguments; a summary and a risk computed by code; the suggesting agent as its requester; Approve and Reject as its only actions; no expiry (S-I3). It follows the §7.1 anatomy:
+
+| Part | Content | Example |
+|---|---|---|
+| Who and when | The suggesting agent | A ADK-Rust · since 09:12 · *Waiting for you* |
+| Heading | Kernel text, never the model's | Add an agent called Finance |
+| The definition, in full | Every field above; the instructions as quoted text; instructions longer than a call may be shown ([`project.rs:29`](../../adk-surface/src/project.rs)) must be expanded before the agent can be added | Area Home · Asks first · Runs on `claude-sonnet-5-5` · Reads files in Invoices · No shell · Listed sites only |
+| What it can do | Plain words, and a line comparing it with the suggesting agent | It can do less than ADK-Rust: no shell, no web search |
+| Allowed without asking | What it would start with | Nothing yet |
+| How it got here | A short timeline, naming the sites and files read in that turn | You asked at 09:10 — ADK-Rust read 2 files — ADK-Rust suggested this agent — Waiting for you |
+| Actions | The verbs | Add this agent · Change it first · Don't add |
+| Details | Risk, reversibility, where else it is shown | Medium risk · You can remove it later · Also on your phone |
+
+Chat carries the summary and the risk with **Don't add** and "Open in home"; push carries a wake-up only (S-I5). **Change it first** opens **Set it up yourself** filled in with the suggestion. When the person saves it, the agent is added by hand and the suggestion ends as "You changed it and added it"; when the person leaves the form, the suggestion keeps waiting. The card never offers **Always allow**, and no standing rule, mode or routine answers it (S-I11). A suggestion is never applied with more than its card showed: the kernel adds the agent only when the definition's digest equals the one approved, and only after checking again that the suggesting agent may still do everything the new one may. If it may not, the suggestion ends refused, and the suggesting thread shows "Finance wasn't added: ADK-Rust can no longer use the web, so Finance can't either."
+
+**Risk** comes from the definition and is computed by code:
+
+| Risk | The agent would have any of |
+|---|---|
+| Low | Just look or Suggest; no shell; no web, or listed sites only; drivers that only read |
+| Medium | Ask first; changing files; the sandboxed shell; any site; drivers that write locally or schedule with others |
+| High | Go ahead; a shell on this computer; drivers that send or delete; or it was suggested during work the person did not start at a screen — anything but an interactive turn, or a turn that came from a chat message |
+| High, spends money | The payments or computer-use pack; drivers that spend or publish (K-I9) |
+
+**Changing an agent.** A change that makes an agent do less — a stricter mode, fewer tools, a lower limit — applies at its next step (spec 3.1 I14). A change that lets it do more is shown as "Was … Now …" with the risk of the result, needs what adding it at that risk needs, and first ends the agent's waiting decisions, as loosening a mode does ([`harness.rs:536`](../../adk-harness/src/harness.rs)). A change made against an older version is refused and shown as "Finance was changed in the terminal at 10:01", with the agent as it is now. In an added agent's own thread, the mode control and `/mode` can only make it ask more: "Finance asks first at most. Change it in Finance's settings."
+
+**Pausing and removing.**
+
+| Action | What happens | Where |
+|---|---|---|
+| **Pause** | Its work stops at the next step; its routines and follow-ups skip; a message to it gets "Finance is paused" | Web home, terminal |
+| **Resume** | The work its pause stopped continues, and its routines fire again | Web home, paired local terminal (S-I10) |
+| **Remove** | Asks first, naming what ends: "Removing Finance stops 1 piece of work, ends 2 decisions waiting for you and 1 routine. Its threads stay." Then its work and routines are cancelled, its waiting decisions show "Ended without an answer · You removed Finance at 10:02" (never a yes or a no), its follow-ups are withdrawn, its "allowed without asking" rules are removed, and its id is retired. The kernel records the removal before it starts; if it is interrupted, the next tick on any replica finishes it | Web home, terminal |
+
+**Stop all** stops added agents like any other; **Resume all** never resumes an agent paused by hand (K-I21). Pausing and removing work while everything is stopped, because they only make agents do less. Adding and changing work too, and nothing the agent does starts until Resume all.
+
+**What an agent may never do.**
+
+1. Add, change, pause or remove an agent, or answer a decision about one ([§7.4](#74-rules-on-every-surface) rule 6).
+2. Suggest an agent that can do more than itself: a looser mode than its own or its area's; tools, packs, sites, folders or drivers it lacks; another area; a shell on this computer; payments; computer use; members; or `propose_agent`.
+3. Suggest a change to any agent: changes are the person's.
+4. Give an agent anything allowed without asking (spec 3.1 I2).
+5. Suggest an agent from the consolidation tick or the self-improver (K-I12, spec 3.4 SI-I11).
+
+An added agent has no `propose_agent`: suggestions are one level deep, as delegation is for members (spec 3.1 I35).
+
+**Stated limit.** The kernel's socket and pipe admit any process of the person's account as the person (spec 3.2 §7.11), as they do when a high-risk call is decided on the local terminal ([§7.2](#72-what-each-surface-may-decide)). A shell on this computer that a person let an agent run can therefore reach them, and so can a process that writes the kernel's store files directly; the sandboxed shell cannot reach the socket. Every change records the transport it came through and, where the operating system reports it, the calling process ([§13](#13-open-decisions) decision 22).
+
 ## 6. Architecture
 
 | Layer | What it is | On main |
 |---|---|---|
 | **Kernel** | Processes running harness agents on any model; the approval inbox; the event bus; agenda, wakes and quiet time; memory; the activity ledger and the record | `adk-kernel`, `adk-harness`, `adk-core` |
-| **Engine** (private module of `adk-surface`) | **Feed**: per-session events with a sequence number, a snapshot then a live tail, reconnect with `Last-Event-ID`. **Projection**: events become messages, decision cards, agent rows, status and briefing lines once, in Rust. **Commands**: decide, send, queue, steer, stop, change mode — each stamped with who and how (keyboard, touch, voice, chat, agent) | New |
+| **Engine** (private module of `adk-surface`) | **Feed**: per-session events with a sequence number, a snapshot then a live tail, reconnect with `Last-Event-ID`. **Projection**: events become messages, decision cards, agent rows, status and briefing lines once, in Rust. **Commands**: decide, send, start a thread with an agent, queue, steer, stop, change mode, and add, change, pause and remove an agent — each stamped with who and how (keyboard, touch, voice, chat, agent) | New |
 | **Surfaces** | One feature each; they hold no state a reconnect cannot rebuild | New |
+
+The terminal changes agents through the kernel's `/agent` command, which `adk-rust up` serves with the REPL's other commands over the control plane; every change, from either surface, goes through the kernel's agent table, which holds the rules of [§5.7](#57-your-agents).
 
 Process events come from the kernel bus, which keeps a recent window in memory ([`bus.rs:270`](../../adk-kernel/src/bus.rs)) and can stay that way, because every state it reports can be re-read from its store. The per-session feed derives its sequence from the session store, so a reconnect after a restart loses at most an unfinished stream of tokens, never a decision.
 
@@ -205,14 +339,16 @@ Decisions sit on their own background (warm `#FFF8F3` in light, `#2A2432` in dar
 
 ### 7.2 What each surface may decide
 
-| Surface | Allow once | Always allow | Edit | Deny | High risk |
-|---|---|---|---|---|---|
-| Web home | Yes | Yes | Yes | Yes | Yes, after confirming it is you |
-| Terminal | Yes | Yes | Yes | Yes | Yes, on a paired local terminal |
-| Phone | Yes | Yes | Yes | Yes | Yes, after confirming it is you |
-| Desktop tray | Yes | No (opens the home) | No | Yes | No (opens the home) |
-| Chat | Yes, low and medium risk | No | No | Yes | No (links to the home) |
-| Voice | Yes, low and medium risk, with a cancel window | No | No | Yes | No |
+| Surface | Allow once | Always allow | Edit | Deny | High risk | Add an agent, or let one do more |
+|---|---|---|---|---|---|---|
+| Web home | Yes | Yes | Yes | Yes | Yes, after confirming it is you | Yes; high risk after confirming it is you |
+| Terminal | Yes | Yes | Yes | Yes | Yes, on a paired local terminal | Yes; high risk on a paired local terminal |
+| Phone | Yes | Yes | Yes | Yes | Yes, after confirming it is you | Adds a suggested agent; high risk after confirming it is you. Setting one up or changing it opens the home |
+| Desktop tray | Yes | No (opens the home) | No | Yes | No (opens the home) | No (opens the home) |
+| Chat | Yes, low and medium risk | No | No | Yes | No (links to the home) | No (links to the home) |
+| Voice | Yes, low and medium risk, with a cancel window | No | No | Yes | No | No |
+
+Adding an agent follows the "Always allow" column, because it is a standing change, as loosening a mode is ([§5.7](#57-your-agents)). **Don't add** is the Deny column: every surface can refuse a suggested agent. The chat gateway, which draws its own cards, offers **Don't add** only on a suggested agent.
 
 ### 7.3 Waiting, not expiring
 
@@ -268,6 +404,12 @@ Surfaces a person uses speak plainly. The terminal and developer panels may use 
 | The spending limit | **Daily spending limit** | run budget and spend ledger |
 | Separate parts of a life | **Areas** (Work, Home) | partitions (types only) |
 | Phones and apps allowed to decide | **Where you can say yes from** — Add a phone or app | not built |
+| An agent the person added that has not run yet | **Ready** | an active definition with no process |
+| An agent paused by hand | **Paused** | a paused definition; its processes suspended |
+| An agent the kernel cannot build | **Can't start** — "No key for Anthropic" | the agent factory's error |
+| An agent another agent suggested | **Suggested by ADK-Rust** | a suggested definition |
+| A decision that ended because its agent was removed | **Ended without an answer** — "You removed Finance at 10:02" | a cancelled inbox request (`DecidedAnswer::Ended`) |
+| The person's own agents | **Your agents** | definitions in `AgentStore` |
 
 ### 8.2 Actions
 
@@ -283,6 +425,16 @@ Surfaces a person uses speak plainly. The terminal and developer panels may use 
 | Restart after stopping | **Resume all** | web home only |
 | Undo an overnight memory change | **Undo** | web home |
 | Correct a guess | **That's right / Fix it / Forget it** | web home |
+| Start adding an agent | **New agent** | web, terminal |
+| Ask an agent to suggest one | **Describe it**, then **Ask ADK-Rust to suggest one** | web, terminal |
+| Fill in the definition | **Set it up yourself**, then **Add Finance** | web, terminal |
+| Approve a suggested agent | **Add this agent** (high risk: **Confirm it's you and add**) | web, terminal, phone |
+| Open the form with the suggestion | **Change it first** | web, terminal |
+| Refuse a suggested agent | **Don't add** | every surface |
+| Change an agent | **Settings**, then **Save changes** | web, terminal |
+| Give an agent one of your rules | **Copy one of your rules** | web home |
+| Stop or restart one agent | **Pause** / **Resume** | Pause: web home, terminal; Resume: web home, paired local terminal |
+| Remove an agent | **Remove**, then **Remove** or **Keep** | web, terminal |
 
 ## 9. Visual language
 
@@ -320,6 +472,12 @@ Text colours target WCAG AA contrast (4.5:1) against their background; the brigh
 | S2 | adk-server | AG-UI carries decisions as interrupts; today held calls are dropped ([`runtime.rs`](../../adk-server/src/rest/controllers/runtime.rs)) | Third-party front ends |
 | S3 | adk-server | The bundled client leaves the `adk_ui` profile before its sunset on 2026-12-31 ([`ui_protocol.rs:67`](../../adk-server/src/ui_protocol.rs)) | Phase 1 |
 | A1 | adk-acp | "Always allow" creates a standing rule; today only allow once and reject once exist ([`permission.rs:61-62`](../../adk-acp/src/server/permission.rs)) | IDEs |
+| K7 | adk-kernel | Agents a person adds: `AgentRecord` and `AgentStore` on memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore and Neo4j with a conformance suite; the audited agent table (`kernel.agent.*`); `KernelBuilder::agent_store`, `agent_factory` and `agents_handle`; an `AgentFactory` that assesses a definition, reports a suggester's limits and the models it can build, and builds a runner with its progress source; a live target table shared with every worker and reconciled with the store each tick, with progress routed by target before area; suggestions as `kernel:agent.create` inbox entries, applied on a tick only after a person approves the same digest; read routes `GET /kernel/agents` and `GET /kernel/agents/{id}` with `ControlClient` methods; `KernelEvent::Agent`; `ProcessFilter::target`; spawn refuses a paused or removed agent; a follow-up without a proposing run goes to the area's primary agent; the chat card of `kernel:agent.create` offers Deny only | Your agents ([§5.7](#57-your-agents)) |
+| S4 | adk-server | `DurableWorker` reads a shared target table, so a target hosted after start runs on every queue; a run for a target the table expects but has not built yet is handed back for a later claim, not failed ([`worker.rs:1079`](../../adk-server/src/background/worker.rs)) | Your agents |
+| H3 | adk-harness | `propose_agent` (class `Todo`, only on the primary agent) with the suggesting agent's own limits as its ceiling; a harness built from an `AgentRecord`; the session stamp `harness:agent` on every harness the kernel hosts; an added agent applies only standing rules pinned to its own id, and "Always allow" on its cards pins the rule to it; `assess_agent` (risk and plain-words abilities) | Your agents |
+| L1 | adk-cli | `adk-rust up` opens the `AgentStore` beside the kernel's other stores and registers an agent factory over the composition the primary agent uses ([`harness_cli.rs:375`](../../adk-cli/src/harness_cli.rs)), each agent's model built from the providers whose keys it has; the `/agent` command in the REPL's command set, which the full-screen terminal runs and `up` serves over `GET /control/commands` and `POST /control/commands/run`; `adk-rust agents` | Your agents |
+
+The control plane has no route that changes an agent: changes come through the engine in `up`'s process and through the `/agent` command. The read routes stay under `/api/kernel/agents`, because `adk-server`'s agent registry already serves `/api/agents` ([`registry/routes.rs:10`](../../adk-server/src/registry/routes.rs)).
 
 ## 11. Security invariants and audit records
 
@@ -335,8 +493,28 @@ Text colours target WCAG AA contrast (4.5:1) against their background; the brigh
 | S-I8 | Every surface checks the caller against the session owner |
 | S-I9 | Every string from a model, a tool or a file is escaped before display (`terminal_safe` in the terminal, HTML escaping on the web) |
 | S-I10 | Stopping is one action from any surface; resuming happens only in the web home or on a paired local terminal |
+| S-I11 | An agent is added, or made to do more, only by a person: by hand in the web home or the terminal, or by approving a suggestion in the web home, on the phone or in the terminal. The kernel applies a suggestion only after a person approves the definition digest it showed. No mode, standing rule, routine, chat, voice, tray or agent adds one, and none of these decisions is ever "Always allow" |
+| S-I12 | A suggested agent never exceeds the agent that suggested it or its area: its mode, tools, packs, sites, folders, drivers, shell and spending are each at most the suggester's; it never has a shell on this computer, payments, computer use, members, another area or `propose_agent`. Code checks this when the suggestion is made and again, against the suggester's limits then, when it is applied |
+| S-I13 | A card for an agent is drawn from the inbox entry the kernel wrote: the heading and abilities are kernel text, the definition is shown in full and escaped, and long instructions cannot be approved until expanded |
+| S-I14 | An agent id is given once: a removed agent's id is never given again, so its approvals, rules, held calls and record never apply to another agent. Names are unique among the kernel's agents and never a reserved name |
+| S-I15 | Every added agent runs under the kernel's kill switch: the kernel refuses to host a runner whose `GovernanceControl` is not its own; Stop all stops added agents; Resume all never resumes an agent paused by hand |
+| S-I16 | Removing an agent ends its work, routines, follow-ups and rules, and ends its waiting decisions without an answer, never as a yes or a no; its threads and its record stay. An interrupted removal is finished by the next tick |
+| S-I17 | Agent definitions come only from the kernel's store through its agent table and `propose_agent`, never from workspace files, a watched directory or `adk-server`'s agent registry |
+| S-I18 | Every change to an agent is recorded before it acts (K-I16): who, from which surface and how, through which transport, the fields before and after, the risk, and for a suggestion the suggesting agent and session |
+| S-I19 | An added agent applies only standing rules whose agent is exactly its own id; a rule made before it existed applies to it only when a person copies the rule to it |
 
-Every answer, pairing, notification and stop is written to the signed audit log with the surface and how it was given (keyboard, touch, voice, chat), so "What your agents did" can say "You let Finance send one email, from Telegram".
+Every answer, pairing, notification, stop and change to an agent is written to the signed audit log with the surface and how it was given (keyboard, touch, voice, chat), so "What your agents did" can say "You let Finance send one email, from Telegram".
+
+Records of agents a person adds ([§5.7](#57-your-agents)):
+
+| Record | Fields |
+|---|---|
+| `kernel.agent.proposed` | id, digest, risk, area, suggesting agent, session, run |
+| `kernel.agent.created` | id, version, digest, risk, origin (by hand or suggested), approval id, by, surface, how, device, presence, transport |
+| `kernel.agent.changed` | id, fields, from, to, risk, by, surface, how, transport |
+| `kernel.agent.paused`, `kernel.agent.resumed` | id, by, surface, transport |
+| `kernel.agent.removing`, `kernel.agent.removed` | id, by, surface, transport; what ended (processes, decisions, follow-ups, rules) |
+| `kernel.agent.refused` | id or name, reason: over the ceiling, a reserved or taken name, an approver who is not a person, a digest that changed |
 
 ## 12. Phased delivery
 
@@ -347,7 +525,7 @@ Each phase ships only when its scenario passes end to end on SQLite and on one s
 | **1. Decisions reach you** | Engine; `web` (threads, decisions, stop); `tui` (full-screen, inline, JSON); `mobile` push and pairing; one chat adapter; K1, K2, H1, C1, C2, S1–S3 | **Approve it tomorrow.** Quiet time 22:00–07:00. At 18:00 a routine prepares to email an invoice and waits for a decision. Nobody answers; the kernel is killed with `kill -9` and started again. At 07:30 the person taps Allow once in the chat thread. *Pass:* nothing runs before the tap and nothing notifies during quiet time; the email is sent exactly once; the phone's card shows "You said yes in Telegram"; the terminal shows the same; the record names the channel. **A stranger writes:** an unpaired account gets a pairing code and starts nothing |
 | **2. While you were away** | Today; morning briefing when quiet time ends; routines; K3, K4 | **The morning after.** Over one night two routines finish, one fails, an agent suggests a payment, the person allows a call from the phone, and the kernel restarts. *Pass:* one briefing at 07:00; its counts and spending match the ledger exactly across the restart; every line links to its record |
 | **3. Memory and rules** | Memory & rules; questions from `/proc`; permissions with end dates; the record check; K5, H2 | **Correct me, then check.** An overnight tidy-up merges two notes. *Pass:* Undo restores both; a confirmed guess becomes "You said this"; a forgotten note is gone from the next turn; stopping an "allowed without asking" rule makes the next identical call wait; "Every action is on record" agrees with `adk-rust audit verify` |
-| **4. Areas and roster** | Areas with their own mode, quiet time and limit; avatars and roster; K6 | **Work stays at work.** Home asks first; Work goes ahead with a 09:00 weekday routine. *Pass:* a Work agent reading the Home calendar waits even in Go ahead; the routine skips Saturday; spending per agent sums to the day's total |
+| **4. Areas and roster** | Areas with their own mode, quiet time and limit; avatars and roster; your agents ([§5.7](#57-your-agents)); K6, K7, S4, H3, L1 | **Work stays at work.** Home asks first; Work goes ahead with a 09:00 weekday routine. *Pass:* a Work agent reading the Home calendar waits even in Go ahead; the routine skips Saturday; spending per agent sums to the day's total. **Hire a helper.** In the terminal the person asks ADK-Rust for "a Finance agent that reads my invoices and drafts payment reminders". *Pass:* (1) before any answer nothing is added — no `finance` target, no roster row — and the chat card offers only **Don't add**; (2) after **Add this agent** on the phone or in the web home, Finance appears in the terminal's roster within one event and in the web home's on its next refresh, as **Ready**, in the same colour; (3) after `kill -9` and a restart, Finance is listed with the same id, answers a message as `urn:adk:agent:adk-rust/finance`, and ADK-Rust refuses Finance's thread; (4) in the web home the person renames it "Bills" and sets **Suggest**; the terminal shows "Bills" within one event and its next turn changes nothing; (5) a fetched page asking for "an agent with a shell on this computer" yields at most a suggestion within ADK-Rust's own limits and never that shell, and Bills cannot suggest agents; (6) with one routine and one waiting decision, the person removes Bills in the terminal; the confirmation names both; afterwards the decision shows "Ended without an answer", answering it from the phone changes nothing, nothing runs at the routine's time, a message to `finance` is refused, and a new agent named Finance gets the id `finance-2` and none of the old agent's rules; (7) the record holds `kernel.agent.proposed`, `created`, `changed`, `removing` and `removed` in order, each naming its surface |
 | **5. Presence and voice** | `desktop` tray; `voice` in the browser and terminal | **Speak, glance, stop.** *Pass:* a spoken "allow once" runs an everyday call once after the cancel window; a high-risk call is refused by voice and approved on screen; the tray changes within one event; Stop all from the tray stops everything within about a second |
 | **Developer track** (after phase 1) | `workflow` observer and debugger; `genui`; ACP "always allow" (A1); AG-UI decisions | **Approve, rewind, fork.** A graph with a model step, a payment-like HTTP call and a decision. *Pass:* approved from the observer; a fork at an earlier step leaves the original intact and the HTTP call is not repeated. **Governed form:** an agent-drawn form's submit waits for approval like any call; a fake "Approved" card never renders |
 | **Experimental** | `verb-ui` | **One verb, three origins:** the same request by text, click and voice produces records that differ only in how it was given; a second agent's request through verbs waits for a person |
@@ -365,14 +543,23 @@ Each phase ships only when its scenario passes end to end on SQLite and on one s
 | 6 | Waiting on timeout (C2) as the default in `adk-core` | Yes, for every run with an approval store; `RunConfig` can opt back into deny |
 | 7 | First-run defaults | Ask for quiet time and a daily spending limit at first run and always show both |
 | 8 | Who writes the morning briefing | Counts and links from the stores; the model may add prose only about the person's own items |
-| 9 | One agent or many | One primary agent, specialists in the roster, areas as partitions |
+| 9 | One agent or many | **Decided (owner, 2026-10-25):** one primary agent per kernel; the person adds more by asking or by hand ([§5.7](#57-your-agents)); each added agent is hosted by the kernel with its own id, lives in one area, persists, and is configured in the web home and the terminal; areas stay partitions |
 | 10 | Reaching the home from outside | Loopback by default; a documented private-network recipe; never an open tunnel without the app's own sign-in |
 | 11 | `adk-ui` retirement | Drop the AWP profile unless a user exists; publish the React package as `@zavora-ai/adk-surface-react`; deprecate, do not yank |
 | 12 | `adk-studio` and the enterprise line | Confirm both licences before reusing code; observer open, tenancy and release pipelines commercial |
 | 13 | Debug eval tab | Build it on `adk-eval` so results match `adk-rust eval` |
 | 14 | Mobile investment | Installable web app, with the triggers in [§5.4](#54-phone) written down |
+| 15 | Rules made before an agent existed | **Decided (owner, 2026-10-25):** a new agent starts with nothing allowed without asking; "Always allow" on its cards makes rules for it alone; its settings can copy one of the person's rules to it (S-I19) |
+| 16 | Agents from the phone | **Decided (owner, 2026-10-25):** the phone answers suggestions only — **Add this agent** or **Don't add**, with "Confirm it's you" at high risk; setting up and changing agents stay in the web home and the terminal |
+| 17 | The primary agent's settings | **Decided (owner, 2026-10-25):** its **Settings** show its mode and rules only; its name, instructions and model stay in `adk-rust up`'s configuration |
+| 18 | A removed agent's threads | **Decided (owner, 2026-10-25):** they stay readable from the record; deleting them is a separate, later action |
+| 19 | Handing work to an added agent | **Decided (owner, 2026-10-25):** not in this phase; each added agent works in its own threads. "Hand this to Finance" — one agent starting a run on another under a delegated identity — is a separate change |
+| 20 | Suggestions from work the person did not start at a screen | **Decided (owner, 2026-10-25):** allowed, always at high risk, so adding needs "Confirm it's you" or a paired local terminal |
+| 21 | Another provider or model for an added agent | **Decided (owner, 2026-10-25):** any provider whose key the kernel already has; keys are never stored in the definition; the default is the primary agent's model |
+| 22 | Agent changes on the kernel's own terminal | The kernel's socket admits any process of the person's account as the person ([§5.7](#57-your-agents), stated limit). Keep the §7.2 terminal rule — the paired local terminal is the person — as for high-risk decisions; record the transport and calling process of every change; test that the sandboxed shell cannot reach the socket. The alternative is "Confirm it's you" for every change that adds an agent or lets one do more, the local terminal included |
+| 23 | A suggestion made after reading untrusted text | Keep its risk as the definition gives it: "How it got here" names the sites, messages and files read in that turn, and the suggestion stays within the suggester's limits. Suggestions from chat-started or unattended work stay high (decision 20) |
 
-**Decided (owner, 2026-10-23 and 2026-10-24):** `adk-surface` is the agent UI, opt-in, one feature per surface; every surface drives the same kernel; the terminal ships in light and dark, full-screen by default; plain words and sentence case on every person-facing surface; decisions have their own background and a count badge; every screen exists in light and dark.
+**Decided (owner, 2026-10-23 to 2026-10-25):** `adk-surface` is the agent UI, opt-in, one feature per surface; every surface drives the same kernel; the terminal ships in light and dark, full-screen by default; plain words and sentence case on every person-facing surface; decisions have their own background and a count badge; every screen exists in light and dark. Agents are added by asking or by hand, persist, appear in the roster on the left, and are configured in the web home and the terminal (owner, 2026-10-25).
 
 ## 14. Appendix: grounding on `origin/main` @ `c5bdf4f1`
 
@@ -390,3 +577,27 @@ Each phase ships only when its scenario passes end to end on SQLite and on one s
 | Voice answers waiting decisions | [`adk-harness/src/packs/voice.rs`](../../adk-harness/src/packs/voice.rs), [`adk-realtime/src/events.rs:498`](../../adk-realtime/src/events.rs) |
 | ACP options | [`adk-acp/src/server/permission.rs:61-62`](../../adk-acp/src/server/permission.rs) |
 | Kernel commands | [`adk-cli/src/cli.rs:386-665`](../../adk-cli/src/cli.rs) |
+
+Grounding of [§5.7](#57-your-agents) and its rows, on `origin/main` @ `c991dae3`:
+
+| Area | Reference |
+|---|---|
+| Targets fixed at build | [`adk-kernel/src/kernel.rs:426, 985, 996, 1562, 1757, 1955`](../../adk-kernel/src/kernel.rs) |
+| Worker target lookup and refusal | [`adk-server/src/background/worker.rs:367, 553, 1051-1085, 1134`](../../adk-server/src/background/worker.rs) |
+| `adk-rust up` registrations and stores | [`adk-cli/src/harness_cli/up.rs:39, 314-328, 639, 698`](../../adk-cli/src/harness_cli/up.rs), [`adk-harness/src/kernel.rs:245`](../../adk-harness/src/kernel.rs) |
+| Progress and ledger attached at start, routed by area | [`adk-kernel/src/process.rs:553, 586`](../../adk-kernel/src/process.rs), [`adk-kernel/src/supervise.rs:201`](../../adk-kernel/src/supervise.rs) |
+| Store and audited-table templates | [`adk-kernel/src/partition.rs:612, 826`](../../adk-kernel/src/partition.rs), [`adk-kernel/src/drivers/store.rs:279`](../../adk-kernel/src/drivers/store.rs), [`adk-kernel/src/audit.rs:95`](../../adk-kernel/src/audit.rs) |
+| Proposals in the inbox, applied after a person | [`adk-kernel/src/agenda.rs:1263, 1342, 1704`](../../adk-kernel/src/agenda.rs), [`adk-kernel/src/managed/tenant.rs:238, 856`](../../adk-kernel/src/managed/tenant.rs) |
+| Follow-up target without a proposing run | [`adk-kernel/src/agenda.rs:1439`](../../adk-kernel/src/agenda.rs) |
+| Chat cards draw their own answers | [`adk-kernel/src/channels/mod.rs:273`](../../adk-kernel/src/channels/mod.rs) |
+| The person, no device | [`adk-kernel/src/control/settings.rs:205`](../../adk-kernel/src/control/settings.rs) (`require_owner`), [`adk-kernel/src/control/routes.rs:289`](../../adk-kernel/src/control/routes.rs) (caller and transport) |
+| Roster, names and avatars | [`adk-surface/src/local.rs:483, 557`](../../adk-surface/src/local.rs), [`adk-surface/src/engine.rs:287`](../../adk-surface/src/engine.rs), [`adk-surface/src/model.rs:44, 60`](../../adk-surface/src/model.rs), [`adk-surface/src/project.rs:763`](../../adk-surface/src/project.rs) |
+| Routines are scheduled processes | [`adk-surface/web/src/client.ts:298`](../../adk-surface/web/src/client.ts) |
+| Who may loosen and resume | [`adk-surface/src/rules.rs:139, 366, 387`](../../adk-surface/src/rules.rs) |
+| Decision keys only in the thread | [`adk-surface/src/tui/app.rs:253`](../../adk-surface/src/tui/app.rs) |
+| Ended without an answer | [`adk-surface/src/model.rs:203`](../../adk-surface/src/model.rs), [`adk-surface/src/words.rs:289`](../../adk-surface/src/words.rs) |
+| Identity and rules bound to an agent id | [`adk-core/src/acting.rs:88`](../../adk-core/src/acting.rs), [`adk-harness/src/approvals/rule.rs:368`](../../adk-harness/src/approvals/rule.rs), [`adk-harness/src/approvals/matcher.rs:223`](../../adk-harness/src/approvals/matcher.rs) |
+| Session stamp precedent | [`adk-harness/src/partition.rs:51, 267`](../../adk-harness/src/partition.rs) |
+| One kill switch | [`adk-core/src/governance.rs:510`](../../adk-core/src/governance.rs) |
+| A host shell in Go ahead | [`adk-harness/src/policy.rs:707`](../../adk-harness/src/policy.rs) |
+| `/api/agents` already taken | [`adk-server/src/registry/routes.rs:10`](../../adk-server/src/registry/routes.rs) |
