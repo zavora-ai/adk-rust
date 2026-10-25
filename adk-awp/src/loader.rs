@@ -230,6 +230,8 @@ access_level = "anonymous"
             endpoint: "/api/read".to_string(),
             method: "GET".to_string(),
             access_level: TrustLevel::Anonymous,
+            input_schema: None,
+            output_schema: None,
         }];
         assert!(validate_business_context(&ctx).is_ok());
     }

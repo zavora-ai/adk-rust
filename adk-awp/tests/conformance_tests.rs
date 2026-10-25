@@ -33,6 +33,8 @@ fn sample_context() -> BusinessContext {
             endpoint: "/api/data".to_string(),
             method: "GET".to_string(),
             access_level: TrustLevel::Anonymous,
+            input_schema: None,
+            output_schema: None,
         },
         BusinessCapability {
             name: "write_data".to_string(),
@@ -40,6 +42,8 @@ fn sample_context() -> BusinessContext {
             endpoint: "/api/data".to_string(),
             method: "POST".to_string(),
             access_level: TrustLevel::Known,
+            input_schema: None,
+            output_schema: None,
         },
     ];
     ctx.policies = vec![BusinessPolicy {
@@ -129,6 +133,9 @@ async fn test_manifest_json_ld_fields() {
     assert_eq!(manifest.context, "https://schema.org");
     assert_eq!(manifest.type_, "WebAPI");
     assert_eq!(manifest.capabilities.len(), 2);
+    // The served manifest carries each capability's access level (spec 3.5 §10 X1).
+    assert_eq!(manifest.capabilities[0].access_level, Some(TrustLevel::Anonymous));
+    assert_eq!(manifest.capabilities[1].access_level, Some(TrustLevel::Known));
 }
 
 // --- 3. Version negotiation ---
@@ -383,8 +390,10 @@ async fn test_safe_default_router_excludes_management_routes() {
 }
 
 // --- 8. HMAC signing ---
+// The deprecated legacy pair stays tested until it is removed (spec 3.5 §10 X5).
 
 #[test]
+#[allow(deprecated)]
 fn test_hmac_sign_and_verify() {
     let payload = b"test event payload";
     let secret = "webhook-secret";
@@ -393,6 +402,7 @@ fn test_hmac_sign_and_verify() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_hmac_verify_fails_with_wrong_secret() {
     let payload = b"test event payload";
     let sig = adk_awp::sign_payload(payload, "secret1");
