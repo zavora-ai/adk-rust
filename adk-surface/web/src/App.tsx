@@ -166,6 +166,7 @@ export function App({
         section={section}
         status={unreachable ? undefined : status.value}
         areas={unreachable ? undefined : areas.value}
+        conversationMode={section === "threads" && session ? status.value?.mode?.status : undefined}
         decisions={unreachable ? 0 : (decisions.value?.length ?? 0)}
         theme={theme}
         onNavigate={navigate}

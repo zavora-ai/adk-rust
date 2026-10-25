@@ -66,13 +66,13 @@ export function areaName(partition: string): string | undefined {
 }
 
 /**
- * The status line of one area (spec 3.3 §5.1): its mode, spend against its limit, quiet time,
- * read on this device's clock (`host`: the server's offset, where the kernel keeps a window
- * without one).
+ * The status line of one area (spec 3.3 §5.1): its mode — or `conversation`, the mode the
+ * conversation shown runs in — spend against its limit, quiet time, read on this device's clock
+ * (`host`: the server's offset, where the kernel keeps a window without one).
  */
-export function areaStatus(area: AreaSettings, now: Date, host?: number): string[] {
+export function areaStatus(area: AreaSettings, now: Date, host?: number, conversation?: string): string[] {
   const name = areaName(area.partition);
-  const mode = area.mode ? modeStatus(modeOf(area.mode)) : undefined;
+  const mode = conversation ?? (area.mode ? modeStatus(modeOf(area.mode)) : undefined);
   const window = area.quietTime[0] && onThisDevice(area.quietTime[0], host);
   return [
     mode && (name ? `${name} · ${mode.charAt(0).toLowerCase()}${mode.slice(1)}` : mode),

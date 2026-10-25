@@ -324,6 +324,21 @@ describe("quiet time and the morning briefing", () => {
     expect(within(header).queryByText("Quiet until 07:00")).toBeNull();
   });
 
+  it("reads the engine's quiet hours on this device's clock where the kernel serves no settings", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const night = new Date();
+    night.setHours(23, 30, 0, 0);
+    vi.setSystemTime(night);
+    // No areas: the header reads the engine's quiet hours, kept three hours behind this device.
+    const client = new FixtureClient();
+    const status = client.status.bind(client);
+    client.status = async (session) => ({ ...(await status(session)), hostUtcOffsetMinutes: deviceOffset(night) - 180 });
+    render(<App client={client} initialSection="threads" />);
+    const header = screen.getByRole("banner");
+    expect(await within(header).findByText("Quiet from 01:00")).toBeTruthy();
+    expect(within(header).queryByText("Quiet from 22:00")).toBeNull();
+  });
+
   it("does not show during quiet time", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const night = new Date();

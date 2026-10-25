@@ -126,9 +126,9 @@ section (`/ui/today`, `/ui/memory`, `/ui/developer`) serves the same page.
 ## The three sections
 
 One header carries the brand, **Threads**, **Today** and **Memory & rules**, the status line
-(the mode the conversation shown runs in, what was spent of the daily limit, quiet time) and
-**Stop all**. After a stop, **Resume
-all** appears; resuming happens only here or on a paired local terminal (§11 S-I10).
+(the mode — on **Threads**, the one the conversation shown runs in — what was spent of the
+daily limit, quiet time) and **Stop all**. After a stop, **Resume all** appears; resuming
+happens only here or on a paired local terminal (§11 S-I10).
 
 | Section | What it shows | Where it reads it |
 |---|---|---|
