@@ -646,7 +646,12 @@ fn the_box_the_keys_answer_is_on_screen() {
     let all = lines.join("\n");
     assert!(all.contains("[client email]"), "the first card's call:\n{all}");
     assert!(all.contains("Invoice INV-[NUMBER]"), "the first card's call:\n{all}");
-    assert!(all.contains("after this one"), "the second card is listed:\n{all}");
+    assert!(lines[0].contains("Decisions  2"), "both are counted: {}", lines[0]);
+
+    // With room, the second card is listed under the box, not drawn as a box of its own.
+    let all = screen_text(&app, Appearance::Light, 150, 40).join("\n");
+    assert!(all.contains("accountant@example.com · after this one"), "listed:\n{all}");
+    assert_eq!(all.matches("Always allow for this person").count(), 1, "one box:\n{all}");
 }
 
 /// Edit and Deny go at the version the person chose them at: a decision that changes while the

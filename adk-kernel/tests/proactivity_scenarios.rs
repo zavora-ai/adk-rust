@@ -715,7 +715,8 @@ async fn next_review(
 /// nothing is revoked, woken or killed; and the report repeats no more than daily.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_daily_review_reports_stale_rules_sleepers_and_freezes_once_a_day() {
-    let start = Utc::now();
+    // Noon, so "an hour later the same day" never crosses midnight in UTC.
+    let start = Utc::now().date_naive().and_hms_opt(12, 0, 0).unwrap().and_utc();
     let clock = ManualClock::new(start);
     let mut world = World::answer();
     world.runs = Arc::new(InMemoryRunStore::new().with_clock(Arc::new(clock.clone())));
