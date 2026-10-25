@@ -1104,6 +1104,17 @@ impl SurfaceEngine {
         });
     }
 
+    /// Takes back the newest input queued for the session, before it is sent; `None` when
+    /// none waits (spec 3.3 §7.4 rule 2).
+    pub fn unqueue_last(&self, caller: &Caller, session: &str) -> Option<String> {
+        self.inner
+            .queues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(&(caller.user_id().to_string(), session.to_string()))
+            .and_then(VecDeque::pop_back)
+    }
+
     /// The input queued for the session, oldest first.
     pub fn queued(&self, caller: &Caller, session: &str) -> Vec<String> {
         self.inner

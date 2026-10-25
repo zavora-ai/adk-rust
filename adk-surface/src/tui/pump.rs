@@ -2,27 +2,35 @@
 //! and the briefing on every change the source signals, and the shown session's feed,
 //! resumed after the last `seq` seen. The terminal keeps nothing a reconnect cannot rebuild.
 
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Local, Utc};
 use futures::StreamExt;
 use tokio::sync::{Notify, mpsc, watch};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use super::app::{Failure, Update};
 use crate::engine::Command;
 use crate::engine::{FeedFrame, SurfaceEngine};
 use crate::error::SurfaceError;
+use crate::model::ThreadItem;
 use crate::origin::Caller;
 use crate::words;
 
 /// How many status reads pass between two reads of the briefing.
 const BRIEFING_EVERY: u32 = 12;
 
+/// How long leaving waits for commands still on their way, such as a Stop all to a kernel
+/// over HTTP.
+pub(crate) const FINISH_WAIT: Duration = Duration::from_secs(5);
+
 /// The tasks reading the engine for one terminal; they stop when it is dropped.
 pub(crate) struct Pump {
-    session: watch::Sender<String>,
+    /// The session shown, and how many times it changed: frames carry the count, so the
+    /// terminal keeps none read for a session it showed before.
+    session: watch::Sender<(String, u64)>,
     briefing: Arc<Notify>,
     tasks: Vec<JoinHandle<()>>,
 }
@@ -44,7 +52,7 @@ impl Pump {
         poll: Duration,
         tx: mpsc::UnboundedSender<Update>,
     ) -> Self {
-        let (sender, receiver) = watch::channel(session);
+        let (sender, receiver) = watch::channel((session, 0));
         let briefing = Arc::new(Notify::new());
         let state = tokio::spawn(read_state(
             engine.clone(),
@@ -63,32 +71,106 @@ impl Pump {
         self.briefing.notify_one();
     }
 
-    /// Shows `session` instead.
+    /// Shows `session` instead: the terminal's [`App`](super::app::App) switched to it.
     pub(crate) fn switch(&self, session: String) {
-        self.session.send_replace(session);
+        self.session.send_modify(|(shown, generation)| {
+            *shown = session;
+            *generation += 1;
+        });
     }
 
     /// Carries out `command` in the background; its outcome comes back as an update.
+    #[cfg(test)]
     pub(crate) fn execute(
         engine: &SurfaceEngine,
         caller: &Caller,
         command: Command,
         tx: &mpsc::UnboundedSender<Update>,
     ) {
-        let engine = engine.clone();
-        let caller = caller.clone();
-        let tx = tx.clone();
-        let decision = match &command {
-            Command::Decide { decision_id, .. } => Some(decision_id.clone()),
-            _ => None,
+        tokio::spawn(run_command(engine.clone(), caller.clone(), command, tx.clone()));
+    }
+}
+
+async fn run_command(
+    engine: SurfaceEngine,
+    caller: Caller,
+    command: Command,
+    tx: mpsc::UnboundedSender<Update>,
+) {
+    let decision = match &command {
+        Command::Decide { decision_id, .. } => Some(decision_id.clone()),
+        _ => None,
+    };
+    let outcome = engine
+        .execute(&caller, command)
+        .await
+        .map_err(|error| failure(&error, decision.as_deref()));
+    let _ = tx.send(Update::Outcome(Box::new(outcome)));
+}
+
+/// The commands a terminal sent, so leaving waits for those still on their way instead of
+/// dropping them: a Stop all sent just before leaving still reaches the agents (S-I10).
+#[derive(Default)]
+pub(crate) struct Commands {
+    running: JoinSet<()>,
+    what: Arc<Mutex<HashMap<tokio::task::Id, &'static str>>>,
+}
+
+impl Commands {
+    /// Carries out `command` in the background; its outcome comes back as an update.
+    pub(crate) fn execute(
+        &mut self,
+        engine: &SurfaceEngine,
+        caller: &Caller,
+        command: Command,
+        tx: &mpsc::UnboundedSender<Update>,
+    ) {
+        let what = match &command {
+            Command::StopAll { .. } => words::STOP_ALL,
+            Command::ResumeAll => words::RESUME_ALL,
+            Command::Decide { .. } => "your answer",
+            Command::Send { .. } => "your message",
+            Command::SetMode { .. } => "the mode change",
+            _ => "a command",
         };
-        tokio::spawn(async move {
-            let outcome = engine
-                .execute(&caller, command)
-                .await
-                .map_err(|error| failure(&error, decision.as_deref()));
-            let _ = tx.send(Update::Outcome(Box::new(outcome)));
-        });
+        let handle =
+            self.running.spawn(run_command(engine.clone(), caller.clone(), command, tx.clone()));
+        self.what.lock().unwrap_or_else(|e| e.into_inner()).insert(handle.id(), what);
+        // Finished commands are reaped as new ones go, so the set holds only those running.
+        while let Some(done) = self.running.try_join_next_with_id() {
+            let id = match done {
+                Ok((id, ())) => id,
+                Err(error) => error.id(),
+            };
+            self.what.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+        }
+    }
+
+    /// Whether a command is still on its way.
+    pub(crate) fn running(&self) -> bool {
+        !self.running.is_empty()
+    }
+
+    /// Waits up to `wait` for the commands still on their way; returns what did not finish
+    /// in that time, which is then abandoned.
+    pub(crate) async fn finish(mut self, wait: Duration) -> Vec<&'static str> {
+        let what = Arc::clone(&self.what);
+        let drained = tokio::time::timeout(wait, async {
+            while let Some(done) = self.running.join_next_with_id().await {
+                let id = match done {
+                    Ok((id, ())) => id,
+                    Err(error) => error.id(),
+                };
+                what.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+            }
+        })
+        .await;
+        if drained.is_ok() {
+            return Vec::new();
+        }
+        let left = what.lock().unwrap_or_else(|e| e.into_inner()).values().copied().collect();
+        self.running.abort_all();
+        left
     }
 }
 
@@ -123,7 +205,7 @@ pub(crate) fn start_of_today() -> DateTime<Utc> {
 async fn read_state(
     engine: SurfaceEngine,
     caller: Caller,
-    session: watch::Receiver<String>,
+    session: watch::Receiver<(String, u64)>,
     poll: Duration,
     briefing: Arc<Notify>,
     tx: mpsc::UnboundedSender<Update>,
@@ -131,7 +213,7 @@ async fn read_state(
     let mut round = 0u32;
     let mut briefing_due = true;
     loop {
-        let shown = session.borrow().clone();
+        let shown = session.borrow().0.clone();
         let mut sent = true;
         match engine.status(&caller, Some(&shown)).await {
             Ok(status) => sent &= tx.send(Update::Status(status)).is_ok(),
@@ -166,35 +248,86 @@ async fn read_state(
     }
 }
 
+/// Reads the decisions of the shown session that are no longer open and sends how each was
+/// decided, once: the thread shows it at the decision's place (spec 3.3 §8.1 "Decided").
+async fn send_decided(
+    engine: &SurfaceEngine,
+    caller: &Caller,
+    ids: Vec<String>,
+    generation: u64,
+    known: &mut HashSet<String>,
+    tx: &mpsc::UnboundedSender<Update>,
+) -> bool {
+    for id in ids {
+        if known.contains(&id) {
+            continue;
+        }
+        if let Ok(card) = engine.decision(caller, &id).await
+            && card.decided.is_some()
+        {
+            known.insert(id);
+            if tx.send(Update::Decided { generation, card: Box::new(card) }).is_err() {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 async fn read_feed(
     engine: SurfaceEngine,
     caller: Caller,
-    mut session: watch::Receiver<String>,
+    mut session: watch::Receiver<(String, u64)>,
     poll: Duration,
     tx: mpsc::UnboundedSender<Update>,
 ) {
-    let mut shown = session.borrow_and_update().clone();
+    let (mut shown, mut generation) = session.borrow_and_update().clone();
     let mut after: Option<u64> = None;
+    let mut open: HashSet<String> = HashSet::new();
+    let mut known: HashSet<String> = HashSet::new();
     loop {
         let mut feed = engine.feed(caller.clone(), shown.clone(), after);
         loop {
             tokio::select! {
+                // A switch is taken before another frame of the session shown before.
+                biased;
                 changed = session.changed() => {
                     if changed.is_err() {
                         return;
                     }
-                    shown = session.borrow_and_update().clone();
+                    (shown, generation) = session.borrow_and_update().clone();
                     after = None;
+                    open.clear();
+                    known.clear();
                     break;
                 }
                 frame = feed.next() => match frame {
                     Some(Ok(frame)) => {
+                        let mut decided = Vec::new();
                         match &frame {
-                            FeedFrame::Entry { entry } => after = Some(entry.seq),
+                            FeedFrame::Entry { entry } => {
+                                after = Some(entry.seq);
+                                for item in &entry.items {
+                                    if let ThreadItem::Decision { decision_id: Some(id), .. } = item
+                                        && !open.contains(id)
+                                    {
+                                        decided.push(id.clone());
+                                    }
+                                }
+                            }
                             FeedFrame::Reset { .. } => after = None,
-                            FeedFrame::Decisions { .. } => {}
+                            FeedFrame::Decisions { cards } => {
+                                let now: HashSet<String> =
+                                    cards.iter().map(|card| card.id.clone()).collect();
+                                decided.extend(open.difference(&now).cloned());
+                                open = now;
+                            }
                         }
-                        if tx.send(Update::Frame { session: shown.clone(), frame }).is_err() {
+                        let update = Update::Frame { session: shown.clone(), generation, frame };
+                        if tx.send(update).is_err()
+                            || !send_decided(&engine, &caller, decided, generation, &mut known, &tx)
+                                .await
+                        {
                             return;
                         }
                     }

@@ -7,11 +7,12 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 
-use super::app::{App, Effect, Tone};
-use super::pump::Pump;
+use super::app::{App, Tone};
+use super::pump::{Commands, Pump};
 use super::term::{self, Guard, Signals};
 use super::theme::Theme;
 use super::view::Renderer;
@@ -24,15 +25,29 @@ pub(crate) async fn run(surface: TerminalSurface) -> io::Result<i32> {
     term::scoped(full_screen(surface)).await
 }
 
+/// Clears the whole screen and has the next frame draw every cell, without asking the
+/// terminal where its cursor is: a terminal that never answers that query (a hidden panel, an
+/// IDE console) still gets the full screen.
+pub(crate) fn clear<B: Backend>(terminal: &mut Terminal<B>) -> Result<(), B::Error> {
+    let size = terminal.size()?;
+    terminal.resize(Rect::new(0, 0, size.width, size.height))
+}
+
 async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
+    // Registered before anything changes the terminal, the background query's raw mode
+    // included, so a signal at any moment gives it back.
+    let mut signals = Signals::install(surface.signals);
     // The background is asked for before raw mode and the alternate screen.
     let theme = Theme::detect(surface.theme);
     let session = surface.initial_session().await;
     let mut app = App::new(surface.engine.source().app_name(), session.clone());
     app.model = surface.model.clone();
     app.place = surface.place.clone();
+    // Without bracketed paste a paste arrives as keys: a decision key with more keys right
+    // behind it is typing (§7.4 rule 2).
+    app.burst_guard = cfg!(windows);
     for notice in &surface.notices {
-        app.notice(notice.clone(), Tone::Info);
+        app.notice_until_key(notice.clone(), Tone::Info);
     }
     let mut renderer = Renderer::new(theme);
 
@@ -40,17 +55,17 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
     let pump = Pump::start(
         surface.engine.clone(),
         surface.caller.clone(),
-        session,
+        session.clone(),
         surface.poll,
         tx.clone(),
     );
+    let mut commands = Commands::default();
+    let mut shown = vec![session];
 
-    // Registered before the terminal changes, so a signal at any moment gives it back.
-    let mut signals = Signals::install(surface.signals);
     term::enter_full(&mut io::stdout())?;
-    let _guard = Guard;
+    let guard = Guard;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-    terminal.clear()?;
+    clear(&mut terminal)?;
     let mut events = EventStream::new();
     let mut tick = tokio::time::interval(TICK);
     let mut code = EXIT_DONE;
@@ -60,13 +75,14 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
         while let Ok(update) = rx.try_recv() {
             app.update(update, now);
         }
-        let mut box_shown = true;
-        terminal.draw(|frame| box_shown = renderer.draw(frame, &app, now))?;
-        app.set_box_shown(box_shown, now);
+        let mut box_view = None;
+        terminal.draw(|frame| box_view = renderer.draw(frame, &app, now))?;
+        app.set_box_view(box_view, now);
+        let held = app.held_until();
         let effects = tokio::select! {
             exit = signals.recv() => {
                 code = exit;
-                vec![Effect::Quit]
+                vec![super::app::Effect::Quit]
             }
             event = events.next() => match event {
                 Some(Ok(Event::Key(key))) => app.key(key, Instant::now()),
@@ -76,7 +92,7 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
                 }
                 Some(Ok(_)) => Vec::new(),
                 Some(Err(error)) => return Err(error),
-                None => vec![Effect::Quit],
+                None => vec![super::app::Effect::Quit],
             },
             update = rx.recv() => {
                 if let Some(update) = update {
@@ -84,18 +100,12 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
                 }
                 Vec::new()
             }
+            () = sleep_until(held), if held.is_some() => app.release_held(Instant::now()),
             _ = tick.tick() => Vec::new(),
         };
         let mut quit = false;
         for effect in effects {
-            match effect {
-                Effect::Execute(command) => {
-                    Pump::execute(&surface.engine, &surface.caller, command, &tx);
-                }
-                Effect::Session(session) => pump.switch(session),
-                Effect::Briefing => pump.refresh_briefing(),
-                Effect::Quit => quit = true,
-            }
+            quit |= surface.apply(effect, &mut app, &pump, &mut commands, &tx, &mut shown).await;
         }
         if quit {
             break;
@@ -103,6 +113,16 @@ async fn full_screen(surface: TerminalSurface) -> io::Result<i32> {
     }
     drop(terminal);
     drop(pump);
+    drop(guard);
     term::restore(&mut io::stdout());
+    surface.leave(commands, &shown, &mut io::stdout()).await;
     Ok(code)
+}
+
+/// Sleeps until `at`, or forever without one.
+pub(crate) async fn sleep_until(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at.into()).await,
+        None => std::future::pending().await,
+    }
 }
