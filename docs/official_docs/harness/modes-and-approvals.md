@@ -21,7 +21,7 @@ The mode decides each tool class:
 |---|---|---|---|---|
 | Read, todos, delegation to a member | Allow | Allow | Allow | Allow |
 | `exit_plan_mode` | Deny | Approval, non-waivable | Deny | Deny |
-| Edit (`write_file`, `edit_file`) | Deny | Deny | Approval | Allow |
+| Edit (`write_file`, `edit_file`, `apply_patch`) | Deny | Deny | Approval | Allow |
 | Edit of a protected path | Deny | Deny | Approval, non-waivable | Approval, non-waivable |
 | `bash` on the host | Deny | Deny | Approval | Approval (Allow with `allow_host_shell_in_auto`) |
 | `bash` in the OS sandbox | Deny | Allow, read-only workspace | Approval (Allow with `auto_allow_sandboxed`) | Allow when protected paths hold |
@@ -34,7 +34,9 @@ from an MCP server's `readOnlyHint` alone; `trust_mcp_read_only_hints(true)` tru
 hint for external tools. Protected paths are the files that steer the agent or the build:
 `.git`, `.adk`, `.skills`, `.claude`, `AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, `.envrc`,
 `lefthook.yml` and `.cargo/config*` at any depth, matched as written and at the target a
-symlink resolves to. The [`adk-harness` README](https://github.com/zavora-ai/adk-rust/blob/main/adk-harness/README.md#mode-table)
+symlink resolves to. An `apply_patch` call is judged on every path its patch names — a
+move's source and destination included — so one protected path anywhere makes the whole call
+non-waivable, and one path outside the workspace refuses it. The [`adk-harness` README](https://github.com/zavora-ai/adk-rust/blob/main/adk-harness/README.md#mode-table)
 lists the root-level ones.
 
 ### Choosing and changing the mode
@@ -203,6 +205,10 @@ No model-callable tool creates one. A rule never applies to a non-waivable call:
 `memory_delete` are decided every time. A suggestion for `bash` never starts with a command
 that runs arbitrary code (`sh`, `bash`, `env`, `sudo` and similar), and the harness re-reads
 the store on every call, so a revoked rule stops applying at once.
+
+A `PathWithin` rule covers an `apply_patch` call only when every path of the patch lies
+within its directory; the suggestion offered for a patch names the directory all its paths
+share (`apply_patch: within src/`).
 
 A suggestion's label states what the rule matches (`edit_file: within src/`); every surface
 shows its scope from `RuleSuggestion::scope`, once. A call a rule allows where the mode would

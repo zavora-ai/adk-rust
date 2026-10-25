@@ -10,8 +10,9 @@ to work on a codebase, scoped to a sandboxed workspace.
 | Tool | Purpose |
 |------|---------|
 | `read_file` | Read a text file with line numbers (optional offset/limit), or a PNG, JPEG, GIF, WebP or PDF as inline data the model can look at (sniffed from the bytes, capped at 4 MiB, with a text stub naming the type and size). Refuses excluded secret files. |
-| `write_file` | Create or overwrite a file (creates parent dirs). |
-| `edit_file` | Exact-string replacement; requires a prior `read_file` by the same session and agent. |
+| `write_file` | Create or overwrite a file (creates parent dirs); with `expect_sha256`, only a file with that digest (or `absent`). |
+| `edit_file` | Exact-string replacement, one pair or several as `edits` applied all or none; requires a prior `read_file` by the same session and agent and a file unchanged since (else `devtools.stale`). |
+| `apply_patch` | A `*** Begin Patch` multi-file patch: every hunk located before any write (exact, then ignoring trailing whitespace; never fuzzy), each file renamed into place from a temporary sibling, all files or none, line endings kept, per-file `beforeSha256`/`afterSha256`. |
 | `glob` | List files matching a pattern (e.g. `src/**/*.rs`). Skips excluded secret files. |
 | `grep` | Regex content search across the tree. Skips excluded secret files. |
 | `bash` | Run a shell command in the workspace root, with a timeout. Opt-in. Streams stdout/stderr line-by-line via `ToolContext::emit_progress`. |
@@ -60,7 +61,11 @@ fn coding_agent(model: Arc<dyn Llm>) -> adk_core::Result<LlmAgent> {
 ```
 
 The toolset only exposes tools the workspace permits: a read-only workspace hides
-`write_file`/`edit_file`/`bash`, and `bash` is hidden until `allow_bash(true)`.
+`write_file`/`edit_file`/`apply_patch`/`bash`, and `bash` is hidden until `allow_bash(true)`.
+
+Reads and writes record each file's sha256 per session and agent in a `ReadLedger`
+(`InMemoryReadLedger` by default); `Workspace::with_read_ledger` persists them, so a held
+edit approved in another process finds its read.
 
 ## Sandboxing
 
