@@ -60,12 +60,16 @@ adk-rust memory undo <tick-id>
 | Agenda | Where an agent's proposed follow-ups wait for your decision. Proposals from the consolidation tick, and the questions `/proc` asks about your routine, need a person in every mode, including `auto` |
 | Kill switch | `freeze` parks running processes on every replica sharing the store; `unfreeze` resumes exactly the ones it parked |
 | Control plane | How terminals and apps reach the kernel: an owner-only local socket, plus an HTTP API on loopback, or beyond it with authentication |
+| Events | What the kernel does — process changes, wakes, decisions, drivers, spend — as a stream you follow with `adk-rust events`; a webhook sink posts the ones you select, signed, to an endpoint of your own |
+| Drivers | MCP servers the kernel runs for your agents under a manifest you approved: mounted with `adk-rust drivers mount`, or listed under `[kernel] drivers` in `harness.toml` and approved when `up` starts. Each runs in the OS sandbox unless its manifest says otherwise, gets its secrets as files, and a tool whose declaration changes waits until you re-approve it |
+| Service | `adk-rust up --install` makes the kernel a service under your account that the system starts and restarts on failure: a launchd agent on macOS, a systemd user unit on Linux, a Windows service; `--uninstall` removes it |
 | Self-observation (`/proc`) | A content-free ledger of what your agents did — kinds, durations and hashed subjects, never what they read or wrote. Once a day the kernel compares your routine with its last four weeks and, when it changes for long enough, asks you about it in plain words (`adk-rust proc`) |
 | Partitions | Separate compartments, such as work and home, each run by an agent of its own with its own memory, drivers and mode. Nothing crosses between them except through the coordinator, and only with your approval |
 | Stores | Processes, schedules, the agenda and the ledger live in SQLite (`harness.db`) or a shared PostgreSQL or Redis backend, so a crash or restart resumes work instead of losing it |
 
 Every tool call a kernel process makes still goes through the harness's modes, standing rules
-and approvals. Channel wake sources are the remaining part of spec 3.2.
+and approvals. What spec 3.2 still lists as open is under its
+[Remaining work](https://github.com/zavora-ai/adk-rust/blob/main/docs/design/spec-3.2-agent-kernel.md#remaining-work).
 
 ## How it is built
 
@@ -341,8 +345,9 @@ contract the kernel relies on.
 
 ### Alpha backends: MongoDB, Firestore, Neo4j
 
-Every kernel store also runs on MongoDB, Firestore and Neo4j (spec 3.2 §13 Q8): the
-process, agenda, driver, ledger, partition and cron watermark stores. Each backend is **Alpha** until its
+The process, agenda, driver, ledger, partition and cron watermark stores also run on MongoDB,
+Firestore and Neo4j (spec 3.2 §13 Q8); the device, control and channel binding stores do not.
+Each backend is **Alpha** until its
 live conformance suites pass in CI, so its storage layout may still change without a
 migration. Each feature also turns on the same backend of
 `adk-session`'s run, schedule and governance stores, and every store takes the handle
@@ -409,7 +414,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 |---|---|---|
 | `sqlite` | on | `SqliteProcessStore`, `SqliteAgendaStore` |
 | `postgres`, `redis` | off | `PostgresProcessStore`, `PostgresAgendaStore`, `RedisProcessStore`, `RedisAgendaStore` |
-| `mongodb`, `firestore`, `neo4j` | off | **Alpha**: every kernel store on MongoDB, Firestore or Neo4j, with the same backend of `adk-session`'s stores |
+| `mongodb`, `firestore`, `neo4j` | off | **Alpha**: the process, agenda, driver, ledger, partition and cron watermark stores on MongoDB, Firestore or Neo4j, with the same backend of `adk-session`'s stores |
 | `webhooks` | on | `webhook_wake_hook` over `adk-server`'s `WebhookIngress`; `WebhookSink`, the outbound webhook sink over `adk-core`'s signed delivery |
 | `proc` | on | The activity ledger (`proc`), its stores and `/api/kernel/proc/*`; the OpenTelemetry GenAI histograms of the live process aggregates |
 | `proc-baselines` | off | The daily baseline pass and observations over `adk-eval`'s ledger statistics (implies `proc`; on in adk-cli and the umbrella's `full`) |
