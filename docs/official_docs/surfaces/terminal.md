@@ -112,6 +112,7 @@ engine events until the turn settles:
 |---|---|
 | `command` | The outcome of sending the message: `sent` or `queued` |
 | `entry`, `decisions`, `reset` | A feed frame of the session, as the engine projects it |
+| `decided` | A decision of the session that was answered, as `card` with `card.decided.text` such as "You said yes in Telegram at 07:31": without a message, each one answered before the terminal attached; then each one answered elsewhere while it runs |
 | `end` | `outcome`, `exitCode`, `sessionId` and `text` |
 
 | Exit code | `outcome` | Meaning |

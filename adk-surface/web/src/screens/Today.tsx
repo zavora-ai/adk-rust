@@ -2,14 +2,16 @@ import { useEffect, useId, useState } from "react";
 import type { AgentRow, Briefing, BriefingLine, Pill as PillKindApi, StatusLine } from "../generated/api";
 import type { HomeClient } from "../client";
 import { problemText } from "../client";
+import { endToday, inOrder, lineWords, quietWindows } from "../away";
+import type { LineWords } from "../away";
 import { Pill } from "../components/Pill";
 import type { PillKind } from "../components/Pill";
-import { dollars, hhmm, sameDay } from "../format";
-import type { AgendaItem } from "../kernel";
+import { dayAndTime, dayMonth, dollars, hhmm, sameDay } from "../format";
+import type { AgendaItem, AreaSettings, AwayLine, AwayPage, AwayRecord } from "../kernel";
 import { agendaState, dailyCron, isQuestion } from "../kernel";
 import { labels, words } from "../labels";
 import type { Planned } from "../plan";
-import type { Seams, WhileAway } from "../seams";
+import type { Seams, WhileAwaySeam } from "../seams";
 
 const pillKind: Record<PillKindApi, PillKind> = {
   done: "done",
@@ -20,31 +22,46 @@ const pillKind: Record<PillKindApi, PillKind> = {
   question: "question",
 };
 
-/** A line of the timeline: one from the ledger, or an open suggestion or question. */
-type Row =
-  | { kind: "line"; key: string; at: Date; line: BriefingLine }
-  | { kind: "ask"; key: string; at: Date; item: AgendaItem };
+/** How far apart a suggestion's ledger line and its agenda item may be stamped. */
+const SAME_EVENT_MS = 10_000;
 
 /**
- * Today — "While you were away" (spec 3.3 §5.1): what was spent, whether quiet time was
- * kept, how many decisions wait, then one line per event since the person left, each with a
- * status pill and what can be done about it, and today's routines.
+ * A line of the timeline: one of the kernel's "While you were away" (K4), one of the engine's
+ * briefing where the kernel keeps no ledger, or an open suggestion or question.
+ */
+type Row =
+  | { kind: "away"; key: string; at: Date; failed: boolean; line: AwayLine; said: LineWords; item?: AgendaItem }
+  | { kind: "line"; key: string; at: Date; failed: boolean; line: BriefingLine }
+  | { kind: "ask"; key: string; at: Date; failed: boolean; item: AgendaItem };
+
+/**
+ * Today — "While you were away" (spec 3.3 §5.1, §10 K4): what was spent, whether quiet time
+ * was kept, how many decisions wait, then one line per event since the person last marked it
+ * seen, each with a status pill, what can be done about it and its record, and today's
+ * routines. Opening the page reads; only **Mark as seen** moves on.
  */
 export function Today({
   client,
   agents,
   status,
   agenda,
+  away,
+  areas,
   routinesToday,
   canAddRoutine,
   seams,
   onOpenAgent,
   onChanged,
+  onAwayChanged,
 }: {
   client: HomeClient;
   agents: AgentRow[];
   status?: StatusLine;
   agenda?: AgendaItem[];
+  /** The kernel's "While you were away", as the home last read it; `undefined` without one. */
+  away?: AwayPage;
+  /** Each area's settings, for quiet time; `undefined` where the kernel serves none. */
+  areas?: AreaSettings[];
   /** Today's routines, past ones included. */
   routinesToday: Planned[];
   /** The kernel serves its process table, where a routine is a sleeping process. */
@@ -52,14 +69,20 @@ export function Today({
   seams: Seams;
   onOpenAgent: (agent: string) => void;
   onChanged: () => void;
+  /** Reads "While you were away" again, after it was marked seen. */
+  onAwayChanged: () => void;
 }) {
   const [briefing, setBriefing] = useState<Briefing>();
-  const [away, setAway] = useState<WhileAway>();
   const [problem, setProblem] = useState("");
   const [loadProblem, setLoadProblem] = useState("");
   const [adding, setAdding] = useState(false);
+  const [marked, setMarked] = useState(false);
+  const [opened, setOpened] = useState<number[]>([]);
+  const kernel = away !== undefined;
 
+  // Without the kernel's page, the engine's briefing of the last day (spec 3.3 §6).
   useEffect(() => {
+    if (kernel) return;
     let live = true;
     const load = () =>
       client
@@ -68,7 +91,6 @@ export function Today({
           if (!live) return;
           setBriefing(value);
           setLoadProblem("");
-          if (seams.whileAway) void seams.whileAway.read(value.since).then((read) => live && setAway(read));
         })
         .catch((error: unknown) => live && setLoadProblem(problemText(error)));
     void load();
@@ -77,17 +99,9 @@ export function Today({
       live = false;
       window.clearInterval(timer);
     };
-  }, [client, seams.whileAway]);
+  }, [client, kernel]);
 
-  // Open suggestions and questions are answered here (spec 3.3 §5.1); their ledger lines are
-  // the same events, so the agenda's own lines take their place.
-  const asks = (agenda ?? []).filter((item) => agendaState(item) === "proposed");
-  const rows: Row[] = [
-    ...(briefing?.lines ?? [])
-      .filter((line) => !(agenda && (line.pill === "suggestion" || line.pill === "question")))
-      .map((line): Row => ({ kind: "line", key: `l${line.seq}`, at: new Date(line.at), line })),
-    ...asks.map((item): Row => ({ kind: "ask", key: `a${item.id}`, at: new Date(item.createdAt), item })),
-  ].sort((a, b) => a.at.getTime() - b.at.getTime());
+  const rows = kernel ? kernelRows(away, agenda, agents) : engineRows(briefing, agenda);
 
   async function answer(item: AgendaItem, yes: boolean) {
     setProblem("");
@@ -99,10 +113,24 @@ export function Today({
     }
   }
 
+  async function markSeen(page: AwayPage, seam: WhileAwaySeam) {
+    if (page.through === undefined) return;
+    setProblem("");
+    try {
+      await seam.markSeen(page.through);
+      setMarked(true);
+      setOpened([]);
+      onAwayChanged();
+    } catch (error) {
+      setProblem(problemText(error));
+    }
+  }
+
   const agentOf = (display: string) => agents.find((row) => row.agent.displayName === display)?.agent.name;
   const now = new Date();
+  const windows = quietWindows(areas, status);
   const today = routinesToday.filter((item) => sameDay(item.at, now));
-  const quiet = status?.quiet;
+  const first = windows[0];
   const routines: Array<{ key: string; at: string; text: string; past: boolean }> = [
     ...today.map((item) => ({
       key: item.key,
@@ -110,15 +138,36 @@ export function Today({
       text: item.agent ? `${item.agent} · ${item.title}` : item.title,
       past: item.at < now,
     })),
-    ...(quiet ? [{ key: "quiet", at: quiet.start, text: labels.quietTimeStarts, past: false }] : []),
+    ...(first
+      ? [
+          { key: "briefing", at: first.end, text: labels.morningBriefing, past: endToday(first, now) < now },
+          { key: "quiet", at: first.start, text: labels.quietTimeStarts, past: false },
+        ]
+      : []),
   ].sort((a, b) => a.at.localeCompare(b.at));
+
+  const since = away ? labels.since(dayAndTime(new Date(away.since))) : briefing?.sinceText;
+  const quietValue = kernel
+    ? windows.length === 0
+      ? labels.notSet
+      : away.quietTime.respected
+        ? labels.quietRespected
+        : labels.quietNotKept
+    : status?.quiet
+      ? `${status.quiet.start}–${status.quiet.end}`
+      : labels.notSet;
+  const quietLarge = kernel && windows.length > 0;
+  const spent = away ? dollars(away.spentMicroUsd) : briefing?.spend ? dollars(briefing.spend.spentMicroUsd) : "—";
+  const waiting = away ? away.waiting : (briefing?.waiting ?? status?.decisions ?? 0);
+  const whileAway = seams.whileAway;
+  const loaded = kernel || briefing !== undefined;
 
   return (
     <main className="today glow">
       <div className="today-main">
-        {briefing && (
+        {since && (
           <Pill kind="since" dot>
-            {briefing.sinceText}
+            {since}
           </Pill>
         )}
         <h1 className="display">
@@ -128,83 +177,139 @@ export function Today({
         <div className="stats">
           <div className="stat">
             <span className="stat-label">{labels.spent}</span>
-            <span className="stat-value">{briefing?.spend ? dollars(briefing.spend.spentMicroUsd) : "—"}</span>
+            <span className="stat-value">{spent}</span>
           </div>
           <div className="stat">
             <span className="stat-label">{labels.quietTime}</span>
-            <span className={`stat-value${away ? "" : " stat-value-small"}`}>
-              {away
-                ? away.quietRespected
-                  ? labels.quietRespected
-                  : labels.quietNotKept
-                : quiet
-                  ? `${quiet.start}–${quiet.end}`
-                  : labels.notSet}
-            </span>
+            <span className={`stat-value${quietLarge ? "" : " stat-value-small"}`}>{quietValue}</span>
           </div>
           <div className="stat">
             <span className="stat-label">{labels.waitingForYou}</span>
-            <span className="stat-value stat-accent">{briefing?.waiting ?? status?.decisions ?? 0}</span>
+            <span className="stat-value stat-accent">{waiting}</span>
           </div>
         </div>
+        {away && whileAway && (
+          <div className="briefing-tools">
+            {marked && away.lines.length === 0 ? (
+              <p className="muted" role="status">
+                {labels.markedSeen}
+              </p>
+            ) : (
+              <span />
+            )}
+            <button
+              type="button"
+              className="button button-secondary"
+              disabled={away.through === undefined || away.lines.length === 0}
+              onClick={() => void markSeen(away, whileAway)}
+            >
+              {labels.markSeen}
+            </button>
+          </div>
+        )}
         {(problem || loadProblem) && (
           <p className="decision-problem" role="alert">
             {problem || loadProblem}
           </p>
         )}
         <ol className="briefing">
-          {briefing && rows.length === 0 && <li className="briefing-empty">{labels.nothingHappened}</li>}
-          {rows.map((row) =>
-            row.kind === "line" ? (
-              <li key={row.key} className="briefing-row">
-                <time className="mono briefing-time" dateTime={row.line.at}>
-                  {row.line.atText}
-                </time>
-                <div className="briefing-body">
-                  {row.line.pill && <Pill kind={pillKind[row.line.pill]}>{row.line.pillText}</Pill>}
-                  <p className="briefing-text">{row.line.text}</p>
-                  <p className="briefing-actions">
-                    {away?.records[row.line.seq] ? (
-                      <a className="link" href={away.records[row.line.seq]}>
-                        {labels.details}
-                      </a>
-                    ) : (
-                      agentOf(row.line.agent) && (
+          {loaded && rows.length === 0 && (
+            <li className="briefing-empty">
+              {away ? labels.nothingSince(dayAndTime(new Date(away.since))) : labels.nothingHappened}
+            </li>
+          )}
+          {rows.map((row) => {
+            const time = (
+              <time className="mono briefing-time" dateTime={row.at.toISOString()}>
+                {hhmm(row.at)}
+              </time>
+            );
+            if (row.kind === "away") {
+              const open = opened.includes(row.line.seq);
+              const item = row.item;
+              const ask = item && agendaState(item) === "proposed";
+              const question = row.line.kind === "question";
+              return (
+                <li key={row.key} id={`line-${row.line.seq}`} className="briefing-row">
+                  {time}
+                  <div className="briefing-body">
+                    {row.said.pill && <Pill kind={row.said.pill}>{row.said.pillText}</Pill>}
+                    <p className="briefing-text">
+                      {item
+                        ? `${item.title} ${question ? words.IS_THAT_RIGHT : labels.nothingHappensUntilYouSay}`
+                        : row.said.text}
+                    </p>
+                    <p className="briefing-actions">
+                      {ask && (
+                        <>
+                          <button type="button" className="link link-accent" onClick={() => void answer(item, true)}>
+                            {question ? labels.yesRememberIt : labels.doIt}
+                          </button>
+                          <button type="button" className="link" onClick={() => void answer(item, false)}>
+                            {question ? labels.no : labels.notNow}
+                          </button>
+                        </>
+                      )}
+                      {whileAway && (
+                        <button
+                          type="button"
+                          className="link"
+                          aria-expanded={open}
+                          aria-controls={`record-${row.line.seq}`}
+                          onClick={() =>
+                            setOpened((all) => (open ? all.filter((seq) => seq !== row.line.seq) : [...all, row.line.seq]))
+                          }
+                        >
+                          {labels.details}
+                        </button>
+                      )}
+                    </p>
+                    {open && whileAway && <RecordDetails id={`record-${row.line.seq}`} line={row.line} seam={whileAway} />}
+                  </div>
+                </li>
+              );
+            }
+            if (row.kind === "line") {
+              return (
+                <li key={row.key} className="briefing-row">
+                  {time}
+                  <div className="briefing-body">
+                    {row.line.pill && <Pill kind={pillKind[row.line.pill]}>{row.line.pillText}</Pill>}
+                    <p className="briefing-text">{row.line.text}</p>
+                    <p className="briefing-actions">
+                      {agentOf(row.line.agent) && (
                         <button type="button" className="link" onClick={() => onOpenAgent(agentOf(row.line.agent)!)}>
                           {row.line.pill === "waitingForYou" ? labels.open : labels.details}
                         </button>
-                      )
-                    )}
-                  </p>
-                </div>
-              </li>
-            ) : (
+                      )}
+                    </p>
+                  </div>
+                </li>
+              );
+            }
+            const question = isQuestion(row.item);
+            return (
               <li key={row.key} className="briefing-row">
-                <time className="mono briefing-time" dateTime={row.item.createdAt}>
-                  {hhmm(row.at)}
-                </time>
+                {time}
                 <div className="briefing-body">
-                  {isQuestion(row.item) ? (
-                    <Pill kind="question">{words.QUESTION}</Pill>
-                  ) : (
-                    <Pill kind="suggestion">{words.SUGGESTION}</Pill>
-                  )}
+                  {question ? <Pill kind="question">{words.QUESTION}</Pill> : <Pill kind="suggestion">{words.SUGGESTION}</Pill>}
                   <p className="briefing-text">
-                    {isQuestion(row.item) ? `${row.item.title} ${words.IS_THAT_RIGHT}` : `${row.item.title} ${labels.nothingHappensUntilYouSay}`}
+                    {question ? `${row.item.title} ${words.IS_THAT_RIGHT}` : `${row.item.title} ${labels.nothingHappensUntilYouSay}`}
                   </p>
                   <p className="briefing-actions">
                     <button type="button" className="link link-accent" onClick={() => void answer(row.item, true)}>
-                      {isQuestion(row.item) ? labels.yesRememberIt : labels.doIt}
+                      {question ? labels.yesRememberIt : labels.doIt}
                     </button>
                     <button type="button" className="link" onClick={() => void answer(row.item, false)}>
-                      {isQuestion(row.item) ? labels.no : labels.notNow}
+                      {question ? labels.no : labels.notNow}
                     </button>
                   </p>
                 </div>
               </li>
-            ),
-          )}
+            );
+          })}
         </ol>
+        {away?.more && <p className="muted briefing-more">{labels.moreToRead}</p>}
       </div>
       <aside className="today-side">
         <section className="card routines" aria-labelledby="routines-heading">
@@ -239,6 +344,95 @@ export function Today({
       </aside>
     </main>
   );
+}
+
+/**
+ * The kernel's lines, each with its words; a suggestion or question with the agenda item it
+ * made, which says what it is about and is answered here (spec 3.3 §5.1); and the open ones
+ * from before the person last looked, which still wait for an answer.
+ */
+function kernelRows(away: AwayPage, agenda: AgendaItem[] | undefined, agents: AgentRow[]): Row[] {
+  const used = new Set<string>();
+  const rows: Row[] = away.lines.map((line) => {
+    const at = new Date(line.at);
+    let item: AgendaItem | undefined;
+    if (line.kind === "suggestion" || line.kind === "question") {
+      item = (agenda ?? []).find(
+        (candidate) =>
+          !used.has(candidate.id) &&
+          isQuestion(candidate) === (line.kind === "question") &&
+          Math.abs(new Date(candidate.createdAt).getTime() - at.getTime()) <= SAME_EVENT_MS,
+      );
+      if (item) used.add(item.id);
+    }
+    const said = lineWords(line, agents);
+    return { kind: "away", key: `k${line.seq}`, at, failed: line.kind === "failed", line, said, item };
+  });
+  for (const item of agenda ?? []) {
+    if (used.has(item.id) || agendaState(item) !== "proposed") continue;
+    rows.push({ kind: "ask", key: `a${item.id}`, at: new Date(item.createdAt), failed: false, item });
+  }
+  return inOrder(rows);
+}
+
+/**
+ * The engine's briefing lines; where the kernel keeps an agenda, its open suggestions and
+ * questions take the place of their ledger lines, as they are the same events.
+ */
+function engineRows(briefing: Briefing | undefined, agenda: AgendaItem[] | undefined): Row[] {
+  const asks = (agenda ?? []).filter((item) => agendaState(item) === "proposed");
+  return [
+    ...(briefing?.lines ?? [])
+      .filter((line) => !(agenda && (line.pill === "suggestion" || line.pill === "question")))
+      .map((line): Row => ({ kind: "line", key: `l${line.seq}`, at: new Date(line.at), failed: false, line })),
+    ...asks.map((item): Row => ({ kind: "ask", key: `a${item.id}`, at: new Date(item.createdAt), failed: false, item })),
+  ].sort((a, b) => a.at.getTime() - b.at.getTime());
+}
+
+/** One line's record (`GET /kernel/away/lines/{seq}`), in plain words, with a link to it. */
+function RecordDetails({ id, line, seam }: { id: string; line: AwayLine; seam: WhileAwaySeam }) {
+  const [record, setRecord] = useState<AwayRecord>();
+  const [problem, setProblem] = useState("");
+  useEffect(() => {
+    let live = true;
+    seam
+      .record(line.seq)
+      .then((value) => live && setRecord(value))
+      .catch((error: unknown) => live && setProblem(problemText(error)));
+    return () => {
+      live = false;
+    };
+  }, [seam, line.seq]);
+  const entry = record?.entry;
+  const spend = entry?.meta?.micro_usd ?? entry?.meta?.cost_micro_usd;
+  const when = entry ? new Date(entry.ts) : undefined;
+  return (
+    <div id={id} className="record-details">
+      {problem && (
+        <p className="decision-problem" role="alert">
+          {problem}
+        </p>
+      )}
+      {when && entry && (
+        <ul>
+          <li>{labels.recordedAt(`${dayMonth(when)}, ${hhmm(when)}`)}</li>
+          {entry.partition !== "default" && <li>{labels.inAreaShort(entry.partition)}</li>}
+          {typeof spend === "number" && <li>{labels.recordSpent(dollars(spend))}</li>}
+          {typeof entry.durationMs === "number" && <li>{labels.recordTook(seconds(entry.durationMs))}</li>}
+        </ul>
+      )}
+      <a className="link" href={line.record}>
+        {labels.theRecord}
+      </a>
+    </div>
+  );
+}
+
+/** A duration in plain words: "3 seconds", "2 minutes". */
+function seconds(ms: number): string {
+  const s = Math.max(1, Math.round(ms / 1000));
+  if (s < 120) return s === 1 ? "1 second" : `${s} seconds`;
+  return `${Math.round(s / 60)} minutes`;
 }
 
 /** "Add a routine": what should happen, every day at a time, by which agent. */

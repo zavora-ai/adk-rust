@@ -149,6 +149,22 @@ let engine = SurfaceEngine::builder(source)
     .build();
 ```
 
+A surface attached to a kernel over its control plane, such as the terminal, reads the same
+answers from the kernel's record with `RecordAnswerLog`: the `surface.decide` lines among the
+latest 500 actions of `GET /api/kernel/record`, and the answers it gave itself. A record line
+says how an answer was given, not on which surface: `chat` names its channel, `touch` reads as
+the phone, `pointer` as the home, `keyboard` as the terminal.
+
+```rust,ignore
+use std::sync::Arc;
+use adk_surface::{ControlSource, RecordAnswerLog, SurfaceEngine};
+
+let answers = Arc::new(RecordAnswerLog::new(client.clone()));
+let engine = SurfaceEngine::builder(Arc::new(ControlSource::new(client, "adk-rust", "adk-rust")))
+    .answers(answers)
+    .build();
+```
+
 ## The web API
 
 `adk_surface::web::router(engine)` serves the engine under `/surface`, relative to `/api`.

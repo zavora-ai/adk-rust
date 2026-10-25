@@ -1,0 +1,24 @@
+[package]
+name = "surface-morning-after"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "The morning after: the phase 2 scenario of spec 3.3 (while you were away), run on the adk-rust up binary"
+
+[workspace]
+
+[dependencies]
+adk-core = { path = "../../adk-core" }
+# The control-plane client the scenario checks the kernel through, as `adk-rust ps` does.
+adk-kernel = { path = "../../adk-kernel" }
+anyhow = "1.0"
+chrono = "0.4"
+dotenvy = "0.15"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+# The mail driver, a stdio MCP server this binary serves.
+rmcp = { version = "3.1", features = ["server"] }
+serde_json = "1.0"
+# A fresh database per run with `--store postgres`.
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres"] }
+tempfile = "3"
+tokio = { version = "1.40", features = ["full"] }
