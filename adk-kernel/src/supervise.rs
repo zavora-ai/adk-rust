@@ -176,8 +176,9 @@ pub(crate) struct Supervision {
     #[cfg(feature = "proc-baselines")]
     pub(crate) proc: Option<Arc<crate::proc::baselines::ProcRuntime>>,
     /// The partition each partition agent's target runs (spec 3.2 §7.8,
-    /// [`KernelBuilder::partition_agent`](crate::KernelBuilder::partition_agent)).
-    pub(crate) partition_targets: BTreeMap<String, PartitionId>,
+    /// [`KernelBuilder::partition_agent`](crate::KernelBuilder::partition_agent)), and the
+    /// agents a person added, in their areas (spec 3.3 §5.7).
+    pub(crate) targets: Arc<crate::agents::Targets>,
     /// The partition table, whose run grants a finished run releases (spec 3.2 §13 Q3).
     pub(crate) partitions: crate::partition::Partitions,
     /// The settings a person changed while the kernel runs, which admission reads in place
@@ -196,10 +197,16 @@ impl std::fmt::Debug for Supervision {
 }
 
 impl Supervision {
-    /// The progress source of a process of `partition`: the partition's own, else the
-    /// main one (spec 3.2 §7.8).
-    pub(crate) fn progress_for(&self, partition: &PartitionId) -> Option<&Arc<dyn ProgressSource>> {
-        self.partition_progress.get(partition).or(self.progress.as_ref())
+    /// The progress source of a process of `target` in `partition`: an added agent's own
+    /// (spec 3.3 §5.7), else the partition's, else the main one (spec 3.2 §7.8).
+    pub(crate) fn progress_for(
+        &self,
+        target: &str,
+        partition: &PartitionId,
+    ) -> Option<Arc<dyn ProgressSource>> {
+        self.targets
+            .progress_of(target)
+            .or_else(|| self.partition_progress.get(partition).or(self.progress.as_ref()).cloned())
     }
 
     /// Every distinct progress source, the main one first.
@@ -242,8 +249,8 @@ impl Supervision {
     /// 3.2 §7.8).
     pub(crate) fn inferred_meta(&self, run: &RunRecord) -> ProcessMeta {
         let mut meta = Self::infer_meta(run);
-        if let Some(partition) = self.partition_targets.get(&run.target) {
-            meta.partition = partition.clone();
+        if let Some(partition) = self.targets.partition_of(&run.target) {
+            meta.partition = partition;
         }
         meta
     }
@@ -261,11 +268,9 @@ impl Supervision {
         target: &str,
         asked: PartitionId,
     ) -> crate::error::Result<PartitionId> {
-        match self.partition_targets.get(target) {
+        match self.targets.partition_of(target) {
             None => Ok(asked),
-            Some(bound) if *bound == asked || asked.as_str() == PartitionId::DEFAULT => {
-                Ok(bound.clone())
-            }
+            Some(bound) if bound == asked || asked.as_str() == PartitionId::DEFAULT => Ok(bound),
             Some(bound) => Err(crate::error::KernelError::Config {
                 reason: format!(
                     "target `{target}` runs the agent of partition `{bound}`, so a process of \
@@ -290,7 +295,7 @@ impl Supervision {
         partition: &PartitionId,
     ) -> crate::error::Result<()> {
         let Some(session) = &run.session_id else { return Ok(()) };
-        if self.partition_targets.is_empty() {
+        if !self.targets.binds_partitions() {
             return Ok(());
         }
         let filter = adk_core::RunFilter::default()
@@ -298,8 +303,8 @@ impl Supervision {
             .user_id(&run.user_id)
             .session_id(session);
         for earlier in self.runs.list(filter).await? {
-            if let Some(other) = self.partition_targets.get(&earlier.target)
-                && other != partition
+            if let Some(other) = self.targets.partition_of(&earlier.target)
+                && other != *partition
             {
                 return Err(crate::error::KernelError::Config {
                     reason: format!(
@@ -541,7 +546,9 @@ impl Supervision {
         else {
             return;
         };
-        let Some(progress) = self.progress_for(&local.partition) else { return };
+        let Some(progress) = self.progress_for(&local.run.target, &local.partition) else {
+            return;
+        };
         let usage = match progress.usage(&local.run).await {
             Ok(Some(usage)) => usage,
             Ok(None) => return,
@@ -636,6 +643,25 @@ impl Supervision {
             tracing::warn!(partition = %partition, error = %error, "could not read the partition's spend; treating it as spent");
             u64::MAX
         })
+    }
+
+    /// What the added agent `target` spent today, in micro-USD: the daily totals of its
+    /// processes in `partition` (spec 3.3 §5.7).
+    pub(crate) async fn agent_spent(&self, target: &str, partition: &PartitionId) -> u64 {
+        let today = self.clock.now().date_naive();
+        let filter = ProcessFilter::default().partition(partition.clone());
+        let Ok(metas) = self.processes.list(&filter).await else { return u64::MAX };
+        let mut spent: u64 = 0;
+        for meta in metas {
+            if !matches!(self.runs.get(&meta.pid).await, Ok(Some(run)) if run.target == target) {
+                continue;
+            }
+            let scope = crate::stores::SpendScope::Process(meta.pid.clone());
+            spent = spent.saturating_add(
+                self.processes.spend(&scope, today, today).await.unwrap_or(u64::MAX),
+            );
+        }
+        spent
     }
 
     /// The partition's proactive spend today: the daily totals of its agenda and maintenance
@@ -852,6 +878,21 @@ impl Supervision {
             return Admission::Admit;
         }
         let class = class_of(run, meta);
+        // An added agent's own daily limit holds its unattended work until the next UTC day
+        // (spec 3.3 §5.7, K-I11).
+        if class != ProcessClass::Interactive
+            && let Some(limit) = self.targets.daily_limit(&run.target)
+            && self.agent_spent(&run.target, &meta.partition).await >= limit
+        {
+            let next_day = self.clock.now().date_naive() + chrono::Days::new(1);
+            meta.wake = Some(WakeSet::any_of([Wake::At(
+                next_day.and_time(chrono::NaiveTime::MIN).and_utc(),
+            )]));
+            meta.labels.insert(ADMISSION_LABEL.to_string(), "the agent's daily limit".to_string());
+            self.put_meta(meta.clone()).await;
+            self.suspend_local(&run.run_id);
+            return Admission::Budget;
+        }
         let quiet = self.quiet_windows(&meta.partition).await;
         let quotas = self.quotas_of(&meta.partition).await;
         let _gate = self.admission.lock().await;
@@ -1785,6 +1826,13 @@ impl WorkerHooks for KernelHooks {
         // A run `spawn` enqueued or a trigger fired gets its row from the kernel, which may
         // still be writing it; an inferred row written here could replace it.
         let mut changed = !persisted && !writes_own_row(run, &sup.triggers);
+        // A paused agent's run parks at once and stays paused through an unfreeze, until the
+        // agent is resumed (spec 3.3 §5.7, K-I21).
+        if sup.targets.is_paused(&run.target) {
+            meta.suspended_by = Some(Suspension::Paused { agent: run.target.clone() });
+            meta.suspend_requested = true;
+            changed = true;
+        }
         let mut admitted = false;
         if asleep || meta.suspend_requested || sup.draining.load(Ordering::SeqCst) {
             // A sleeper, a suspension asked while it queued, or a drain: the attempt parks
@@ -1808,7 +1856,7 @@ impl WorkerHooks for KernelHooks {
         if admitted {
             sup.item_started(&meta).await;
         }
-        let baseline = match sup.progress_for(&meta.partition) {
+        let baseline = match sup.progress_for(&run.target, &meta.partition) {
             Some(progress) => progress.usage(run).await.ok().flatten(),
             None => None,
         };

@@ -378,6 +378,7 @@ jobs:
         --test channel_store_redis
         --test partition_store_redis
         --test cron_watermark_store_redis
+        --test agents_store_redis
         --test charter_store_redis
 
   # ── Docs: documentation coverage for Stable-tier crates ──────

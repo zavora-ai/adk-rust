@@ -192,3 +192,22 @@ async fn one_connection_serves_the_kernel_and_run_stores() {
     schedules.list().await.expect("list schedules");
     assert!(processes.delete(&pid).await.expect("delete"));
 }
+
+// The agent store (spec 3.3 §10 K7).
+#[async_trait::async_trait]
+impl adk_kernel::conformance::AgentStoreHarness for Neo4j {
+    async fn open(&self) -> Arc<dyn adk_kernel::agents::AgentStore> {
+        let store = adk_kernel::stores::Neo4jAgentStore::from_graph(graph().await);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+}
+
+mod agents {
+    use super::*;
+
+    adk_kernel::agent_store_conformance_tests! {
+        #[ignore = "needs NEO4J_URI and NEO4J_PASSWORD; CI's nightly durable-stores job runs it"]
+        harness = Neo4j
+    }
+}

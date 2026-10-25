@@ -278,6 +278,21 @@ itself.
 | `frozen_runs()` | The ids of the runs parked under a freeze and not woken yet |
 | `abort()` | Drops the loop and every in-flight attempt without writing, as a crash would; their leases expire and another worker recovers them |
 
+**Live targets** (spec 3.3 §10 S4). A worker reads its targets on every claim: first the agents
+registered with `with_agent`, then a shared `AgentTable` set with `with_agent_table`, then its
+workflows. A host that adds agents while its workers run — the kernel's agents a person adds —
+shares one table with every worker and changes it in place:
+
+| `AgentTable` method | Effect on the next claim |
+|---------------------|--------------------------|
+| `insert(target, runner)` | Runs `target` on `runner`; a runner swapped in serves the next claim, and a claim already running finishes on the runner it started on |
+| `remove(target)` | No runner serves `target`; a claim of it is handed back while it is expected, and fails without retry otherwise |
+| `expect(target)` | A claim of `target` before it is built is handed back unstarted, claimable again one `poll_interval` later, and reported as `ParkReason::HandedBack`; the hand-back counts no attempt |
+| `forget(target)` | Stops expecting `target` |
+
+An agent hosted from the table acts as `urn:adk:agent:{app}/{target}`, the target's derived id, so
+it needs no `allowed_principals` entry.
+
 ```rust
 use std::sync::Arc;
 

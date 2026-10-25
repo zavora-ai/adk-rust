@@ -202,3 +202,22 @@ async fn one_client_serves_the_kernel_and_run_stores() {
     schedules.list().await.expect("list schedules");
     assert!(processes.delete(&pid).await.expect("delete"));
 }
+
+// The agent store (spec 3.3 §10 K7).
+#[async_trait::async_trait]
+impl adk_kernel::conformance::AgentStoreHarness for Emulator {
+    async fn open(&self) -> Arc<dyn adk_kernel::agents::AgentStore> {
+        let store = adk_kernel::stores::FirestoreAgentStore::from_db(emulator_db().await);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+}
+
+mod agents {
+    use super::*;
+
+    adk_kernel::agent_store_conformance_tests! {
+        #[ignore = "needs FIRESTORE_EMULATOR_HOST; CI's nightly durable-stores job runs it"]
+        harness = Emulator
+    }
+}

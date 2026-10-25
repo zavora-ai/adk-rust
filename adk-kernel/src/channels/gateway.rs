@@ -652,7 +652,8 @@ impl ChannelGateway {
     fn card(&self, request: &ApprovalRequest) -> DecisionCard {
         let mut card = DecisionCard::from_request(request, self.inner.home.as_deref());
         card.risk = self.risk_of(request);
-        if !self.chat_may_answer(request) {
+        // A suggested agent keeps "Don't add" at any risk (spec 3.3 §7.2).
+        if !self.chat_may_answer(request) && !card.adds_agent {
             card.answers.clear();
         }
         card
@@ -972,16 +973,21 @@ impl ChannelGateway {
             ChannelAnswer::Deny => ApprovalAction::Reject,
         };
         let take_over = request.tool_name == TAKE_OVER_TOOL && answer == ChannelAnswer::AllowOnce;
-        if !self.chat_may_answer(&request)
-            || !request.allowed_actions.contains(&action)
-            || take_over
-        {
+        // Spec 3.3 §7.2, S-I11: chat refuses a suggested agent at any risk, never adds one.
+        let adds_agent = request.tool_name == crate::agents::AGENT_CREATE_TOOL_NAME;
+        let not_here = if adds_agent {
+            answer != ChannelAnswer::Deny
+        } else {
+            !self.chat_may_answer(&request) || take_over
+        };
+        if not_here || !request.allowed_actions.contains(&action) {
             // §7.2, §7.4 rule 4: chat says yes once or no, at low and medium risk only, and
             // never to money; a take-over's secret is typed in the home (§8.2).
-            let reason = match (self.moves_money(&request), take_over) {
-                (true, _) => "money",
-                (false, true) => "take_over",
-                (false, false) => "not_in_chat",
+            let reason = match (adds_agent, self.moves_money(&request), take_over) {
+                (true, _, _) => "adds_agent",
+                (false, true, _) => "money",
+                (false, false, true) => "take_over",
+                (false, false, false) => "not_in_chat",
             };
             let extra = [("reason", json!(reason)), ("risk", json!(self.risk_of(&request)))];
             self.record(binding, Some(&binding.user_id), "decide.refused", Some(decision), &extra)

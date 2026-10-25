@@ -234,6 +234,7 @@ impl MockInvocationContext {
     }
 
     /// Seed the session's event log, which its held calls are read from.
+    #[cfg(feature = "enhanced-plugins")]
     pub(crate) fn with_events(mut self, events: Vec<Event>) -> Self {
         self.session.events = events;
         self

@@ -81,6 +81,7 @@ suite "adk-kernel" -p adk-kernel --features postgres,redis,channels,charter --te
     --test channel_store_postgres \
     --test partition_store_postgres \
     --test cron_watermark_store_postgres \
+    --test agents_store_postgres \
     --test charter_store_postgres
 
 suite "adk-auth" -p adk-auth --features postgres-audit --test audit_postgres_tests

@@ -388,6 +388,12 @@ pub enum Suspension {
     Freeze,
     /// `Kernel::drain` parked it; resumes when the kernel starts again.
     Drain,
+    /// A person paused the agent it runs (spec 3.3 §5.7); resumes only when the agent is
+    /// resumed, never on `unfreeze` or a drain's end (K-I21).
+    Paused {
+        /// The paused agent's id.
+        agent: String,
+    },
 }
 
 impl fmt::Display for Suspension {
@@ -397,6 +403,7 @@ impl fmt::Display for Suspension {
             Self::Preempted { by } => write!(f, "preempted by {by}"),
             Self::Freeze => f.write_str("freeze"),
             Self::Drain => f.write_str("drain"),
+            Self::Paused { agent } => write!(f, "{agent} paused"),
         }
     }
 }
@@ -778,6 +785,7 @@ impl ProcessTable {
             .into_values()
             .filter(|(run, _)| run.target != crate::wake::KERNEL_WAKE_TARGET)
             .filter(|(run, _)| filter.states.is_empty() || filter.states.contains(&run.state))
+            .filter(|(run, _)| filter.target.as_ref().is_none_or(|target| *target == run.target))
             .collect();
         rows.sort_by(|(a, _), (b, _)| {
             a.created_at.cmp(&b.created_at).then(a.run_id.cmp(&b.run_id))
@@ -830,6 +838,24 @@ impl ProcessTable {
     pub async fn spawn(&self, mut run: NewRun, mut spec: ProcessSpec) -> Result<Process> {
         self.refuse_while_frozen()?;
         if let Some(sup) = &self.sup {
+            // A paused or removed agent takes no work; an added agent runs only in its area
+            // (spec 3.3 §5.7, K-I15).
+            if let Some(agent) = sup.targets.admit_spawn(&run.target).await? {
+                // A replica that has not built it yet hands its claim back rather than
+                // failing it (spec 3.3 §10 S4).
+                sup.targets.expect(&agent.id);
+                if spec.partition.as_str() == PartitionId::DEFAULT {
+                    spec.partition = agent.area;
+                } else if spec.partition != agent.area {
+                    return Err(KernelError::Config {
+                        reason: format!(
+                            "{} works in area `{}`, so a process of `{}` cannot run it \
+                             (spec 3.2 K-I15)",
+                            agent.display_name, agent.area, spec.partition
+                        ),
+                    });
+                }
+            }
             // A partition agent's target runs only its own partition (spec 3.2 §7.8, K-I15).
             spec.partition = sup.partition_for(&run.target, spec.partition)?;
             sup.check_session_partition(&run, &spec.partition).await?;
@@ -1065,6 +1091,29 @@ impl ProcessTable {
     /// Returns [`KernelError::NotFound`] for an unknown `pid`, [`KernelError::InvalidState`]
     /// for a finished one, or a store error.
     pub async fn suspend(&self, pid: &str) -> Result<()> {
+        self.suspend_marked(pid, |by| {
+            by.get_or_insert(Suspension::Manual);
+        })
+        .await
+    }
+
+    /// Suspends `pid` as [`suspend`](Self::suspend) does, marked as `suspension` unless a
+    /// person suspended it by hand: a paused agent's processes are marked
+    /// [`Suspension::Paused`], so only its resume wakes them (spec 3.3 §5.7, K-I21).
+    pub(crate) async fn suspend_as(&self, pid: &str, suspension: Suspension) -> Result<()> {
+        self.suspend_marked(pid, |by| {
+            if *by != Some(Suspension::Manual) {
+                *by = Some(suspension);
+            }
+        })
+        .await
+    }
+
+    async fn suspend_marked(
+        &self,
+        pid: &str,
+        mark: impl FnOnce(&mut Option<Suspension>),
+    ) -> Result<()> {
         let run = self.runs.get(pid).await?.ok_or_else(|| not_found(pid))?;
         if run.state.is_terminal() {
             return Err(KernelError::InvalidState {
@@ -1074,9 +1123,7 @@ impl ProcessTable {
             });
         }
         let mut meta = self.meta(&run).await?;
-        if meta.suspended_by.is_none() {
-            meta.suspended_by = Some(Suspension::Manual);
-        }
+        mark(&mut meta.suspended_by);
         // A running or queued process parks at its next model-call boundary; a waiting
         // one is already parked.
         meta.suspend_requested = run.state != RunState::Waiting;
@@ -1220,8 +1267,12 @@ impl ProcessTable {
         let progress = self
             .sup
             .as_ref()
-            .and_then(|sup| sup.partition_progress.get(&meta.partition))
-            .or(self.progress.as_ref());
+            .and_then(|sup| {
+                sup.targets
+                    .progress_of(&run.target)
+                    .or_else(|| sup.partition_progress.get(&meta.partition).cloned())
+            })
+            .or_else(|| self.progress.clone());
         if let Some(progress) = progress {
             match progress.loop_guard(run).await {
                 Ok(verdict) => view.loop_guard = verdict,

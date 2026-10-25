@@ -9,6 +9,7 @@
 //! |-------|---------|------------|-------|
 //! | [`ProcessStore`](crate::ProcessStore) | [`ProcessStoreHarness`] | [`process_store_conformance_tests!`](crate::process_store_conformance_tests) | [`process_store`] |
 //! | [`AgendaStore`](crate::AgendaStore) | [`AgendaStoreHarness`] | [`agenda_store_conformance_tests!`](crate::agenda_store_conformance_tests) | [`agenda_store`] |
+//! | [`AgentStore`](crate::agents::AgentStore) (spec 3.3 §10 K7) | [`AgentStoreHarness`] | [`agent_store_conformance_tests!`](crate::agent_store_conformance_tests) | [`agent_store`] |
 //! | `drivers::DriverStore` (feature `drivers`) | `DriverStoreHarness` | `driver_store_conformance_tests!` | `driver_store` |
 //! | `proc::LedgerStore` (feature `proc`) | `LedgerStoreHarness` | `ledger_store_conformance_tests!` | `ledger_store` |
 //! | [`DeviceStore`](crate::pairing::DeviceStore) (spec 3.3 §10 K2) | [`DeviceStoreHarness`] | [`device_store_conformance_tests!`](crate::device_store_conformance_tests) | [`device_store`] |
@@ -56,6 +57,7 @@
 //! ```
 
 pub mod agenda_store;
+pub mod agent_store;
 #[cfg(feature = "channels")]
 pub mod channel_binding_store;
 #[cfg(feature = "channels")]
@@ -73,6 +75,7 @@ pub mod partition_store;
 pub mod process_store;
 
 pub use agenda_store::AgendaStoreHarness;
+pub use agent_store::AgentStoreHarness;
 #[cfg(feature = "channels")]
 pub use channel_binding_store::ChannelBindingStoreHarness;
 #[cfg(feature = "channels")]

@@ -197,6 +197,31 @@ impl ControlClient {
         Ok(answer.partitions)
     }
 
+    /// `GET /kernel/agents`: the agents a person added, but tombstones and refused
+    /// suggestions (spec 3.3 §10 K7).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    pub async fn agents(&self) -> Result<Vec<crate::agents::AgentView>> {
+        let answer: super::api::AgentsResponse =
+            self.call(Method::GET, paths::AGENTS.to_string(), None::<&()>).await?;
+        Ok(answer.agents)
+    }
+
+    /// `GET /kernel/agents/{id}`: one agent a person added, tombstones included (spec 3.3
+    /// §10 K7).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `kernel.agent.not_found` for an unknown id.
+    pub async fn agent(&self, id: &str) -> Result<crate::agents::AgentView> {
+        let path = paths::AGENT.replace("{id}", &encode(id));
+        self.call(Method::GET, path, None::<&()>).await
+    }
+
     /// `POST /kernel/partitions`: creates or replaces `partition` (spec 3.2 §7.8).
     ///
     /// # Errors

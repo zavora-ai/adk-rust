@@ -48,6 +48,11 @@
 //! `RedisCronWatermarkStore`, suite `cron_watermark_store_conformance_tests!`), and on
 //! MongoDB, Firestore and Neo4j.
 //!
+//! The [`AgentStore`](crate::agents::AgentStore) — the agents a person adds (spec 3.3 §5.7,
+//! §10 K7) — runs on every backend: [`InMemoryAgentStore`], `SqliteAgentStore`,
+//! `PostgresAgentStore`, `RedisAgentStore`, `MongoAgentStore`, `FirestoreAgentStore` and
+//! `Neo4jAgentStore`, suite `agent_store_conformance_tests!`.
+//!
 //! There is no file backend and no Vertex AI backend (§13 Q8): no durable store on `main` is file-backed, and
 //! Vertex AI holds sessions only.
 
@@ -75,6 +80,17 @@ mod agenda_neo4j;
 mod agenda_redis;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 pub(crate) mod agenda_sql;
+#[cfg(feature = "firestore")]
+mod agent_firestore;
+mod agent_memory;
+#[cfg(feature = "mongodb")]
+mod agent_mongodb;
+#[cfg(feature = "neo4j")]
+mod agent_neo4j;
+#[cfg(feature = "redis")]
+mod agent_redis;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+pub(crate) mod agent_sql;
 #[cfg(feature = "charter")]
 pub(crate) mod charter_memory;
 #[cfg(all(feature = "charter", feature = "redis"))]
@@ -160,6 +176,19 @@ pub use agenda_redis::RedisAgendaStore;
 pub use agenda_sql::PostgresAgendaStore;
 #[cfg(feature = "sqlite")]
 pub use agenda_sql::SqliteAgendaStore;
+#[cfg(feature = "firestore")]
+pub use agent_firestore::FirestoreAgentStore;
+pub use agent_memory::InMemoryAgentStore;
+#[cfg(feature = "mongodb")]
+pub use agent_mongodb::MongoAgentStore;
+#[cfg(feature = "neo4j")]
+pub use agent_neo4j::Neo4jAgentStore;
+#[cfg(feature = "redis")]
+pub use agent_redis::RedisAgentStore;
+#[cfg(feature = "postgres")]
+pub use agent_sql::PostgresAgentStore;
+#[cfg(feature = "sqlite")]
+pub use agent_sql::SqliteAgentStore;
 #[cfg(all(feature = "drivers", feature = "firestore"))]
 pub use driver_firestore::FirestoreDriverStore;
 #[cfg(feature = "drivers")]
@@ -388,6 +417,9 @@ pub struct ProcessFilter {
     /// Only processes whose [`ProcessMeta::suspend_requested`] is this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suspend_requested: Option<bool>,
+    /// Only processes whose run's target is this: an agent's id (spec 3.3 §5.7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     /// At most this many processes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
@@ -429,6 +461,15 @@ impl ProcessFilter {
         self
     }
 
+    /// Only processes whose run's target is `target`, such as an added agent's id (spec 3.3
+    /// §5.7). Like `states`, it is a run-record field, applied by
+    /// [`ProcessTable::ps`](crate::ProcessTable::ps) rather than by the store.
+    #[must_use]
+    pub fn target(mut self, target: impl Into<String>) -> Self {
+        self.target = Some(target.into());
+        self
+    }
+
     /// At most `limit` processes.
     #[must_use]
     pub fn limit(mut self, limit: usize) -> Self {
@@ -437,7 +478,7 @@ impl ProcessFilter {
     }
 
     /// Whether `meta` passes the side-table fields: partition, queue, parent and the
-    /// pending suspension request. `states` and `limit` are not checked here.
+    /// pending suspension request. `states`, `target` and `limit` are not checked here.
     pub fn matches(&self, meta: &ProcessMeta) -> bool {
         self.partition.as_ref().is_none_or(|partition| *partition == meta.partition)
             && self.queue.as_ref().is_none_or(|queue| *queue == meta.queue)

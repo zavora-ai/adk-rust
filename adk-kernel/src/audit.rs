@@ -20,6 +20,12 @@
 //! | [`OBSERVATION`] | `id`, `partition`, `dimensions`, `windows` — no value that identifies content |
 //! | [`CHANNEL`] | `surface`, `origin`, `channel`, `account`, `action`, `target` (spec 3.3 §11) |
 //! | [`PARTITION_CREATED`], [`PARTITION_CHANGED`] | `partition`, `fields`, `from`, `to` |
+//! | [`AGENT_PROPOSED`] | `id`, `digest`, `risk`, `area`, `suggestingAgent`, `session`, `run` (spec 3.3 §5.7) |
+//! | [`AGENT_CREATED`] | `id`, `version`, `digest`, `risk`, `origin`, `approvalId`, `by`, `surface`, `how`, `device`, `presence`, `transport`, `peerPid` |
+//! | [`AGENT_CHANGED`] | `id`, `fields`, `from`, `to`, `risk`, `by`, `surface`, `how`, `transport` |
+//! | [`AGENT_PAUSED`], [`AGENT_RESUMED`] | `id`, `by`, `surface`, `transport` |
+//! | [`AGENT_REMOVING`], [`AGENT_REMOVED`] | `id`, `by`, `surface`, `transport`, `ended` (`work`, `routines`, `decisions`, `followUps`, `rules`) |
+//! | [`AGENT_REFUSED`] | `id` or `name`, `reason` |
 //! | [`PARTITION_CROSSING`] | `partition`, `to`, `resource`, `name`, `access`, `outcome`, `run`, `tool`, `fingerprintDigest`, `reason`, `by` |
 //!
 //! # Example
@@ -97,3 +103,20 @@ pub const PARTITION_CREATED: &str = "kernel.partition.created";
 pub const PARTITION_CHANGED: &str = "kernel.partition.changed";
 /// A request reached, or tried to reach, another partition (K-I15).
 pub const PARTITION_CROSSING: &str = "kernel.partition.crossing";
+/// Another agent suggested an agent; it waits for a person (spec 3.3 §5.7, S-I18).
+pub const AGENT_PROPOSED: &str = "kernel.agent.proposed";
+/// A person added an agent, by hand or by approving a suggestion.
+pub const AGENT_CREATED: &str = "kernel.agent.created";
+/// A person changed an agent's definition.
+pub const AGENT_CHANGED: &str = "kernel.agent.changed";
+/// A person paused an agent.
+pub const AGENT_PAUSED: &str = "kernel.agent.paused";
+/// A person resumed an agent they paused.
+pub const AGENT_RESUMED: &str = "kernel.agent.resumed";
+/// A person started removing an agent; written before anything ends (S-I16).
+pub const AGENT_REMOVING: &str = "kernel.agent.removing";
+/// An agent's removal finished, with what ended.
+pub const AGENT_REMOVED: &str = "kernel.agent.removed";
+/// A suggestion or change was refused: over a ceiling, a reserved or taken name, an
+/// approver who is not a person, a digest that changed.
+pub const AGENT_REFUSED: &str = "kernel.agent.refused";
