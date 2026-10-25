@@ -26,6 +26,10 @@ use super::{
 };
 use crate::engine::{CommandOutcome, FeedFrame};
 use crate::model::{Briefing, DecisionCard, FeedEntry, StatusLine};
+use crate::voice::{
+    VoiceClientMessage, VoiceModels, VoiceTicket, VoiceTicketRequest, VoiceUpdate,
+    paths as voice_paths,
+};
 
 fn generator(contract: Contract) -> SchemaGenerator {
     SchemaSettings::draft2020_12()
@@ -133,6 +137,9 @@ pub fn openapi() -> Value {
     let passkey_options = schema_ref::<PasskeyOptions>(&mut out);
     let confirm_options = schema_ref::<ConfirmOptions>(&mut out);
     let phone_devices = schema_ref::<PhoneDevicesResponse>(&mut out);
+    let voice_models = schema_ref::<VoiceModels>(&mut out);
+    let voice_ticket = schema_ref::<VoiceTicket>(&mut out);
+    let voice_update = schema_ref::<VoiceUpdate>(&mut out);
     let mut schemas = out.take_definitions(true);
 
     let mut input = generator(Contract::Deserialize);
@@ -146,6 +153,8 @@ pub fn openapi() -> Value {
     let received_body = schema_ref::<PushReceivedRequest>(&mut input);
     let registration_body = schema_ref::<PasskeyRegistration>(&mut input);
     let qr_body = schema_ref::<QrRequest>(&mut input);
+    let voice_request = schema_ref::<VoiceTicketRequest>(&mut input);
+    let voice_message = schema_ref::<VoiceClientMessage>(&mut input);
     let surface_query = input.subschema_for::<SurfaceQuery>().to_value();
     for (name, schema) in input.take_definitions(true) {
         schemas.entry(name).or_insert(schema);
@@ -400,6 +409,32 @@ pub fn openapi() -> Value {
             json!([]),
             answer("The devices", phone_devices),
         ),
+    );
+    // Voice (spec 3.3 §5.6): its types are in every build's document; the routes are served
+    // with the `voice` feature.
+    routes.insert(
+        with(voice_paths::VOICE),
+        read(
+            "The agent and the models voice can talk on, the default first (spec 3.3 §5.6); served with the `voice` feature",
+            json!([]),
+            answer("The voice models", voice_models),
+        ),
+    );
+    routes.insert(
+        with(voice_paths::SESSIONS),
+        json!({ "post": {
+            "summary": "A single-use ticket, good for 30 seconds, for the voice socket `GET /voice/socket` (spec 3.3 §5.6); served with the `voice` feature. The socket's first text message is `{\"type\":\"hello\",\"ticket\":…}`; then VoiceClientMessage up and VoiceUpdate down, and binary frames tagged 0x01 (PCM16 audio), 0x02 (camera JPEG) and 0x03 (screen JPEG)",
+            "requestBody": { "required": true, "content": { "application/json": { "schema": voice_request } } },
+            "responses": errors({
+                let mut ok = Map::new();
+                ok.insert("200".into(), json!({
+                    "description": "The ticket",
+                    "content": { "application/json": { "schema": voice_ticket } },
+                    "x-socket": { "up": voice_message, "down": voice_update },
+                }));
+                ok
+            }),
+        } }),
     );
     routes.insert(
         with(paths::OPENAPI),

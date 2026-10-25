@@ -225,6 +225,10 @@ struct Home {
     source: Arc<Recording>,
     service: Arc<dyn ApprovalService>,
     sessions: Arc<dyn SessionService>,
+    #[cfg_attr(
+        not(feature = "voice"),
+        expect(dead_code, reason = "read by the spoken-answer tests, which need `voice`")
+    )]
     audit: InMemoryAuditRecorder,
 }
 
@@ -347,6 +351,19 @@ fn web() -> Caller {
 
 fn voice() -> Caller {
     caller(SurfaceKind::Voice, Origin::Voice)
+}
+
+/// `answer`, spoken: recorded with its transcript (spec 3.3 §5.6).
+#[cfg(feature = "voice")]
+async fn spoken(
+    home: &Home,
+    request: &ApprovalRequest,
+    version: u64,
+    answer: Answer,
+) -> adk_surface::Result<CommandOutcome> {
+    let said = if answer == Answer::Deny { "deny" } else { "allow once" };
+    let spoken = home.engine.decide_spoken(&voice(), &request.id, version, answer, said).await?;
+    Ok(spoken.outcome)
 }
 
 fn send(text: &str) -> Command {
@@ -504,6 +521,7 @@ async fn a_message_whose_record_fails_is_not_queued() {
 
 /// Wave 2 review finding 19: a cancelled spoken answer stays cancelled, and says so, when its
 /// audit record fails.
+#[cfg(feature = "voice")]
 #[tokio::test]
 async fn a_spoken_answer_cancelled_while_the_record_fails_stays_cancelled() {
     let home = home_with(Setup {
@@ -514,11 +532,7 @@ async fn a_spoken_answer_cancelled_while_the_record_fails_stays_cancelled() {
     })
     .await;
     let request = hold(&home, "send_email", ApprovalRisk::Low).await;
-    let outcome = home
-        .engine
-        .execute(&voice(), decide(&request, request.version, Answer::AllowOnce))
-        .await
-        .unwrap();
+    let outcome = spoken(&home, &request, request.version, Answer::AllowOnce).await.unwrap();
     assert!(matches!(outcome, CommandOutcome::Pending { .. }), "{outcome:?}");
     let cancelled = home
         .engine
@@ -553,15 +567,12 @@ async fn a_recorded_answer_resumes_and_sends_queued_input_whatever_its_record() 
 
 /// Wave 2 review finding 18: Stop all withdraws a spoken "allow once" still in its cancel
 /// window.
+#[cfg(feature = "voice")]
 #[tokio::test]
 async fn stop_all_withdraws_a_spoken_allow_once() {
     let home = home().await;
     let request = hold(&home, "send_email", ApprovalRisk::Low).await;
-    let outcome = home
-        .engine
-        .execute(&voice(), decide(&request, request.version, Answer::AllowOnce))
-        .await
-        .unwrap();
+    let outcome = spoken(&home, &request, request.version, Answer::AllowOnce).await.unwrap();
     assert!(matches!(outcome, CommandOutcome::Pending { .. }), "{outcome:?}");
     home.engine.execute(&web(), Command::StopAll { reason: None }).await.unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -577,6 +588,7 @@ async fn stop_all_withdraws_a_spoken_allow_once() {
 
 /// Wave 2 review finding 21: a spoken "allow once" to a decision that changed since it was
 /// read is shown again at once, never promised and then dropped (S-I2).
+#[cfg(feature = "voice")]
 #[tokio::test]
 async fn a_spoken_answer_to_a_changed_decision_is_shown_again() {
     let home = home().await;
@@ -590,11 +602,7 @@ async fn a_spoken_answer_to_a_changed_decision_is_shown_again() {
     )
     .await;
     answer_elsewhere(&home, &request, "bo").await;
-    let outcome = home
-        .engine
-        .execute(&voice(), decide(&request, request.version, Answer::AllowOnce))
-        .await
-        .unwrap();
+    let outcome = spoken(&home, &request, request.version, Answer::AllowOnce).await.unwrap();
     let CommandOutcome::Changed { card } = outcome else {
         panic!("a stale spoken answer is shown again: {outcome:?}");
     };
@@ -723,6 +731,19 @@ async fn voice_and_the_tray_deny_a_high_risk_call() {
     for refuser in [voice(), caller(SurfaceKind::Tray, Origin::Pointer)] {
         let home = home().await;
         let request = hold(&home, "publish_release", ApprovalRisk::High).await;
+        if refuser.origin == Origin::Voice && cfg!(not(feature = "voice")) {
+            continue;
+        }
+        #[cfg(feature = "voice")]
+        let outcome = if refuser.origin == Origin::Voice {
+            spoken(&home, &request, request.version, Answer::Deny).await.unwrap()
+        } else {
+            home.engine
+                .execute(&refuser, decide(&request, request.version, Answer::Deny))
+                .await
+                .unwrap()
+        };
+        #[cfg(not(feature = "voice"))]
         let outcome = home
             .engine
             .execute(&refuser, decide(&request, request.version, Answer::Deny))

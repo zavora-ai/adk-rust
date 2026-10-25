@@ -85,6 +85,9 @@ pub(crate) enum Update {
         result: Result<String, String>,
     },
     Error(String),
+    /// The voice conversation's line (spec 3.3 §5.6).
+    #[cfg(feature = "voice")]
+    Voice(super::voice::VoiceLine),
 }
 
 /// What a key asks the runner to do.
@@ -383,6 +386,9 @@ pub(crate) struct App {
     /// Rows scrolled down in a view other than the thread.
     pub view_scroll: usize,
     pub quit: bool,
+    /// The voice conversation beside the thread, when there is one (spec 3.3 §5.6).
+    #[cfg(feature = "voice")]
+    pub voice: Option<super::voice::VoiceLine>,
 }
 
 impl App {
@@ -432,6 +438,8 @@ impl App {
             runs: 0,
             view_scroll: 0,
             quit: false,
+            #[cfg(feature = "voice")]
+            voice: None,
         }
     }
 
@@ -737,6 +745,8 @@ impl App {
                 }
             }
             Update::Error(error) => self.notice(error, Tone::Problem),
+            #[cfg(feature = "voice")]
+            Update::Voice(line) => self.voice = Some(line),
         }
     }
 
@@ -1036,6 +1046,19 @@ impl App {
             (KeyCode::End, _) => {
                 self.composer.cursor = self.composer.len();
                 Vec::new()
+            }
+            // `c` cancels a spoken "allow once" counting down, from an empty message box only
+            // (spec 3.3 §5.6, S-I4).
+            #[cfg(feature = "voice")]
+            (KeyCode::Char('c'), false)
+                if self.composer.is_empty()
+                    && self.input == Input::Message
+                    && self.voice.as_ref().is_some_and(|voice| voice.pending.is_some()) =>
+            {
+                let pending = self.voice.as_ref().and_then(|voice| voice.pending.clone());
+                pending.map_or_else(Vec::new, |(decision_id, _)| {
+                    vec![Effect::Execute(Command::CancelAnswer { decision_id })]
+                })
             }
             (KeyCode::Char(c), false) => self.char(c, key, now),
             _ => Vec::new(),

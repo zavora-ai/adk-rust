@@ -259,34 +259,29 @@ async fn a_spoken_decide_over_http_is_refused_and_its_cancel_is_not() {
     let entry = home.service.get(&request.id).await.unwrap().unwrap();
     assert_eq!(entry.state, ApprovalState::Pending, "nothing was answered");
 
-    // The voice surface gives its answer in process; the screen beside it cancels it.
-    let voice = Caller::human(OWNER, SurfaceKind::Voice, Origin::Voice).with_groups(["owner"]);
-    let spoken = home
-        .engine
-        .execute(
-            &voice,
-            Command::Decide {
-                decision_id: request.id.clone(),
-                version: request.version,
-                answer: Answer::AllowOnce,
-                edited_args: None,
-                reason: None,
-                expanded: true,
-            },
-        )
-        .await
-        .unwrap();
-    assert!(matches!(spoken, CommandOutcome::Pending { .. }), "{spoken:?}");
-    let body = json!({
-        "surface": "voice",
-        "origin": { "kind": "pointer" },
-        "command": { "type": "cancelAnswer", "decisionId": request.id },
-    });
-    let (status, outcome) = call(&web, "POST", "/api/surface/commands", Some(body)).await;
-    assert_eq!(status, StatusCode::OK, "{outcome}");
-    assert_eq!(outcome, json!({ "type": "answerCancelled", "decisionId": request.id }));
-    let entry = home.service.get(&request.id).await.unwrap().unwrap();
-    assert_eq!(entry.state, ApprovalState::Pending, "the spoken answer never landed");
+    // The voice surface gives its answer in process, with its transcript (spec 3.3 §5.6); the
+    // screen beside it cancels it.
+    #[cfg(feature = "voice")]
+    {
+        let voice = Caller::human(OWNER, SurfaceKind::Voice, Origin::Voice).with_groups(["owner"]);
+        let spoken = home
+            .engine
+            .decide_spoken(&voice, &request.id, request.version, Answer::AllowOnce, "allow once")
+            .await
+            .unwrap()
+            .outcome;
+        assert!(matches!(spoken, CommandOutcome::Pending { .. }), "{spoken:?}");
+        let body = json!({
+            "surface": "voice",
+            "origin": { "kind": "pointer" },
+            "command": { "type": "cancelAnswer", "decisionId": request.id },
+        });
+        let (status, outcome) = call(&web, "POST", "/api/surface/commands", Some(body)).await;
+        assert_eq!(status, StatusCode::OK, "{outcome}");
+        assert_eq!(outcome, json!({ "type": "answerCancelled", "decisionId": request.id }));
+        let entry = home.service.get(&request.id).await.unwrap().unwrap();
+        assert_eq!(entry.state, ApprovalState::Pending, "the spoken answer never landed");
+    }
 }
 
 /// Every audit record names the device a caller acts from and the presence it confirmed, so

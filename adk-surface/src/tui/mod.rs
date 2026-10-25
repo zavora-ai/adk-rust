@@ -58,6 +58,8 @@ mod term;
 mod tests;
 mod theme;
 mod view;
+#[cfg(feature = "voice")]
+mod voice;
 
 use std::io::{IsTerminal, Write};
 use std::str::FromStr;
@@ -69,6 +71,8 @@ use futures::future::BoxFuture;
 pub use commands::{CommandContext, TerminalCommand};
 pub use safe::terminal_safe;
 pub use theme::{Appearance, Theme, ThemeChoice};
+#[cfg(feature = "voice")]
+pub use voice::TerminalVoice;
 
 use crate::engine::SurfaceEngine;
 use crate::origin::Caller;
@@ -197,6 +201,8 @@ pub struct TerminalSurface {
     signals: bool,
     gate: SessionGate,
     commands: commands::Commands,
+    #[cfg(feature = "voice")]
+    voice: voice::VoiceSlot,
 }
 
 impl TerminalSurface {
@@ -214,7 +220,20 @@ impl TerminalSurface {
             signals: true,
             gate: SessionGate::default(),
             commands: commands::Commands::default(),
+            #[cfg(feature = "voice")]
+            voice: voice::VoiceSlot::default(),
         }
+    }
+
+    /// Talks with the agents by voice in the full-screen UI (spec 3.3 §5.6; feature `voice`):
+    /// the conversation's own session is the thread shown, its state is a line above the
+    /// message box, and `c` cancels a spoken "allow once" while it counts down. In process
+    /// only: the conversation runs on the hub's harness.
+    #[cfg(feature = "voice")]
+    #[must_use]
+    pub fn voice(self, voice: TerminalVoice) -> Self {
+        *self.voice.lock().unwrap_or_else(|e| e.into_inner()) = Some(voice);
+        self
     }
 
     /// Opens `session`. Without one, the terminal opens the session of the oldest decision

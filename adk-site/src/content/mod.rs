@@ -244,7 +244,7 @@ impl SiteProject {
     }
 
     /// Structural problems that stop a build: unknown languages, duplicate ids, invalid
-    /// slugs and missing media.
+    /// slugs, missing media, and claim fields an item serves live (spec 3.5 A-I26).
     pub fn issues(&self) -> Vec<ProjectIssue> {
         let mut issues = Vec::new();
         if let Err(error) = self.config.validate() {
@@ -284,6 +284,9 @@ impl SiteProject {
                 if self.media_bytes(&reference.path).is_err() {
                     issue(format!("media '{}' is missing", reference.path));
                 }
+            }
+            for violation in crate::lanes::item_violations(&self.config, item) {
+                issue(violation.to_string());
             }
         }
         issues

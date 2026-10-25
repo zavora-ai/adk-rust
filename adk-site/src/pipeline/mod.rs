@@ -14,6 +14,7 @@
 //! Corrections, withdrawals (a notice or 410 Gone), per-item reverts, whole-site rollback and
 //! scheduled actions run through the same steps. Releases are serialised per site.
 
+mod batch;
 mod schedule;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,8 +24,8 @@ use std::sync::Arc;
 use adk_core::{Clock, SystemClock};
 use async_trait::async_trait;
 use awp_types::{
-    CatalogChanged, ContentId, ContentItem, ContentState, Digest, ReleaseManifest,
-    ReleasePublished, ReleaseSource,
+    CatalogChanged, CatalogChangesPage, ContentId, ContentItem, ContentState, Digest,
+    ReleaseManifest, ReleasePublished, ReleaseSource,
 };
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -43,6 +44,7 @@ use crate::release::{
     manifest_path,
 };
 
+pub use batch::BatchRelease;
 pub use schedule::{
     ScheduledAction, ScheduledActionKind, due_actions, next_wake, schedule_actions,
 };
@@ -215,9 +217,13 @@ impl ApprovalGate for AutoApprove {
 pub struct Announcement {
     /// `site.release.published`.
     pub release: ReleasePublished,
-    /// `catalog.changed`, when items changed.
+    /// `catalog.changed`, when items changed: one per release, the first 1,000 ids.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog: Option<CatalogChanged>,
+    /// The further pages of changed ids that `catalog.next` links, in order; the edge serves
+    /// them at each page's URL (spec 3.5 §7.8.3 "Events and engines").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub catalog_pages: Vec<CatalogChangesPage>,
     /// The sitemap to ping engines with.
     pub sitemap: String,
     /// The changed page files.
@@ -328,6 +334,8 @@ struct State {
     previous: Option<PreviousRelease>,
     graph: Option<DependencyGraph>,
     preview_count: u64,
+    /// The build report of what `work/build` holds, for the scheduled full checks.
+    report: Option<BuildReport>,
 }
 
 /// The publishing pipeline of one site (spec 3.5 §7.8.2).
@@ -362,6 +370,7 @@ pub struct PublishingPipeline {
     quarantine: Quarantine,
     work: PathBuf,
     state: Mutex<State>,
+    changes_url: Option<String>,
 }
 
 /// Builds a [`PublishingPipeline`].
@@ -419,6 +428,14 @@ impl PublishingPipelineBuilder {
         self
     }
 
+    /// Where the edge serves the pages of changed ids a `catalog.changed` event links:
+    /// page `n` of release `seq` is `<url>/<seq>/<n>`. Defaults to
+    /// `<base_url>/awp/v2/events/changes`.
+    pub fn changes_url(mut self, url: impl Into<String>) -> Self {
+        self.pipeline.changes_url = Some(url.into().trim_end_matches('/').to_string());
+        self
+    }
+
     /// Continues after `previous`, the release the host serves.
     pub fn previous(mut self, previous: PreviousRelease) -> Self {
         self.pipeline.state.get_mut().previous = Some(previous);
@@ -429,6 +446,34 @@ impl PublishingPipelineBuilder {
     pub fn build(self) -> PublishingPipeline {
         self.pipeline
     }
+}
+
+/// One `catalog.changed` for a release's changed items: the first 1,000 ids, then pages of
+/// 1,000 linked by `next` at `<changes_url>/<seq>/<page>` (spec 3.5 §7.8.3 "Events and
+/// engines").
+fn catalog_changes(
+    changes_url: &str,
+    seq: u64,
+    items: &[ContentId],
+) -> (Option<CatalogChanged>, Vec<CatalogChangesPage>) {
+    if items.is_empty() {
+        return (None, Vec::new());
+    }
+    let chunks: Vec<&[ContentId]> = items.chunks(CatalogChanged::PAGE_SIZE).collect();
+    let next = |page: usize| (page <= chunks.len()).then(|| format!("{changes_url}/{seq}/{page}"));
+    let catalog = CatalogChanged {
+        release_seq: seq,
+        items: chunks[0].to_vec(),
+        total: items.len() as u64,
+        next: next(2),
+    };
+    let pages = chunks
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(index, chunk)| CatalogChangesPage { items: chunk.to_vec(), next: next(index + 2) })
+        .collect();
+    (Some(catalog), pages)
 }
 
 /// Approval chains are satisfied only by distinct principals, and the proposer of a release
@@ -478,7 +523,13 @@ impl PublishingPipeline {
                 clock: Arc::new(SystemClock),
                 quarantine: Quarantine::default(),
                 work: work.into(),
-                state: Mutex::new(State { previous: None, graph: None, preview_count: 0 }),
+                state: Mutex::new(State {
+                    previous: None,
+                    graph: None,
+                    preview_count: 0,
+                    report: None,
+                }),
+                changes_url: None,
             },
         }
     }
@@ -793,12 +844,14 @@ impl PublishingPipeline {
                 }
             }
             state.graph = None;
+            state.report = None;
             if gate.refuses_release() {
                 return Err(SiteError::GateFailed(gate.summary()));
             }
             return Ok(PipelineOutcome::Held(gate));
         }
         state.graph = Some(report.graph.clone());
+        state.report = Some(report.clone());
         let options = ReleaseOptions {
             source: source.clone(),
             generator: report.generator.clone(),
@@ -845,12 +898,9 @@ impl PublishingPipeline {
             "site.release.published"
         );
         let base_url = self.base.config.base_url();
-        let catalog = (!items.is_empty()).then(|| CatalogChanged {
-            release_seq: staged.manifest.seq,
-            items: items.iter().take(CatalogChanged::PAGE_SIZE).cloned().collect(),
-            total: items.len() as u64,
-            next: None,
-        });
+        let changes_url =
+            self.changes_url.clone().unwrap_or_else(|| format!("{base_url}/awp/v2/events/changes"));
+        let (catalog, catalog_pages) = catalog_changes(&changes_url, staged.manifest.seq, &items);
         let announcement = Announcement {
             release: ReleasePublished {
                 seq: staged.manifest.seq,
@@ -859,6 +909,7 @@ impl PublishingPipeline {
                 base: staged.manifest.base,
             },
             catalog,
+            catalog_pages,
             sitemap: format!("{base_url}/sitemap.xml"),
             pages: staged.changed.iter().filter(|p| p.ends_with(".html")).cloned().collect(),
         };
@@ -1039,6 +1090,7 @@ impl PublishingPipeline {
         state.previous = Some(PreviousRelease::from_staged(&staged));
         // The working copy did not roll back; the next release rebuilds from it in full.
         state.graph = None;
+        state.report = None;
         drop(state);
         self.publish_staged(staged, Vec::new(), source).await
     }
@@ -1091,6 +1143,24 @@ impl PublishingPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_changes_are_paginated_beyond_a_thousand() {
+        let ids: Vec<ContentId> = (0..2_500).map(|i| ContentId(format!("p{i}"))).collect();
+        let (catalog, pages) = catalog_changes("https://edge.example/changes", 7, &ids);
+        let catalog = catalog.unwrap();
+        assert_eq!((catalog.items.len(), catalog.total), (1_000, 2_500));
+        assert_eq!(catalog.next.as_deref(), Some("https://edge.example/changes/7/2"));
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].next.as_deref(), Some("https://edge.example/changes/7/3"));
+        assert_eq!((pages[1].items.len(), pages[1].next.as_deref()), (500, None));
+        let all: Vec<ContentId> =
+            catalog.items.into_iter().chain(pages.into_iter().flat_map(|p| p.items)).collect();
+        assert_eq!(all, ids);
+        let (small, none) = catalog_changes("u", 1, &ids[..3]);
+        assert_eq!((small.unwrap().next, none.len()), (None, 0));
+        assert_eq!(catalog_changes("u", 1, &[]).0, None);
+    }
 
     #[test]
     fn approvers_must_be_distinct_and_not_the_proposer() {

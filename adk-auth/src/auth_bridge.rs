@@ -17,8 +17,9 @@
 //! ```
 
 use crate::sso::{ClaimsMapper, TokenClaims, TokenValidator};
+use adk_core::RequestContext;
 use adk_core::UserId;
-use adk_server::auth_bridge::{RequestContext, RequestContextError, RequestContextExtractor};
+use adk_core::request_context::{RequestContextError, RequestContextExtractor};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;

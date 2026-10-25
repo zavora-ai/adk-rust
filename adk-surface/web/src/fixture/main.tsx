@@ -6,10 +6,12 @@ import { createRoot } from "react-dom/client";
 import { App } from "../App";
 import { PhoneApp } from "../phone/PhoneApp";
 import type { Section } from "../route";
+import { Voice } from "../screens/Voice";
 import { TrayPanel } from "../tray/TrayPanel";
 import { FixtureClient, fixtureSeams, takeOverCard } from "./fixture";
 import { FixturePhoneClient } from "./phone";
 import { TrayFixture } from "./tray";
+import { VoiceFixtureClient, fixtureDevices } from "./voice";
 import "../styles/fonts.css";
 import "../styles/tokens.css";
 import "../styles/app.css";
@@ -32,6 +34,7 @@ const phoneInitial =
 const screens: Record<string, () => ReactNode> = {
   tray: () => <TrayPanel client={new TrayFixture()} />,
   phone: () => <PhoneApp client={new FixturePhoneClient(phone !== "pair")} initial={phoneInitial} />,
+  voice: () => <Voice client={new VoiceFixtureClient()} devices={fixtureDevices()} onEnd={() => undefined} />,
 };
 const screen = screens[params.get("screen") ?? ""];
 const root = document.getElementById("root");
