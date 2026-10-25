@@ -14,6 +14,7 @@ macro_rules! listed {
 const WORDS: &[(&str, &str)] = listed![
     WORKING,
     WAITING_FOR_YOU,
+    WAITING_FOR_AN_ANSWER,
     ASLEEP,
     DONE,
     FAILED,
@@ -50,6 +51,7 @@ const WORDS: &[(&str, &str)] = listed![
     ALWAYS_ALLOW_FOR_THIS_PERSON,
     ALWAYS_ALLOW_FOR_THIS_FOLDER,
     ALWAYS_ALLOW_FOR_THIS_COMMAND,
+    ALWAYS_ALLOW_FOR_THIS_SITE,
     EDIT,
     DENY,
     CONFIRM_ITS_YOU_AND_APPROVE,
@@ -70,6 +72,7 @@ const WORDS: &[(&str, &str)] = listed![
     WAITED_THROUGH_QUIET_TIME,
     ANSWERED_ELSEWHERE_UPDATES,
     NEEDS_A_SCREEN,
+    APPROVE_IN_THE_HOME,
     ENDED_WITHOUT_AN_ANSWER,
     IN_THE_HOME_APP,
     ON_YOUR_PHONE,
@@ -79,7 +82,10 @@ const WORDS: &[(&str, &str)] = listed![
     ALL_AGENTS_STOPPED,
     ALL_AGENTS_STOPPED_RESUME_IN_HOME,
     SENT_AFTER_THIS_CARD_IS_ANSWERED,
+    SENT_WHEN_YOUR_AGENT_IS_FREE,
     YOU_DECIDED,
+    RIGHT_AWAY,
+    YOU_SUGGESTED_THIS,
 ];
 
 /// The words of [`words`](crate::words) as a TypeScript module, one exported constant each

@@ -369,7 +369,7 @@
         ]
       },
       "Command": {
-        "description": "A command from a surface (spec 3.3 §6). Every command runs as an authenticated\n`Caller`, whose subject, surface and `Origin` reach its audit record.",
+        "description": "A command from a surface (spec 3.3 §6). Every command runs as an authenticated\n`Caller`, whose subject, surface and `Origin` reach its audit record.\n\n§6 also names \"steer\", a message that reaches a turn while it runs. No runtime under the\nengine takes input in the middle of a turn, so there is no steer command: a message sent\nduring a turn is the session's next message (`Send`), and\n`StopAll` stops a turn that has gone wrong.",
         "oneOf": [
           {
             "description": "Answers a decision at the version the surface saw (S-I2).",
@@ -874,7 +874,7 @@
           },
           "call": {
             "$ref": "#/components/schemas/CallView",
-            "description": "The exact call."
+            "description": "The exact call: the details under the plain words."
           },
           "decided": {
             "anyOf": [
@@ -930,6 +930,13 @@
           "statusText": {
             "description": "The pill: \"Waiting for you\" or \"Decided\".",
             "type": "string"
+          },
+          "summary": {
+            "description": "What the heading alone does not say, in plain words, for a decision the kernel itself\nasks: who suggests the work and when it runs once allowed, such as \"Finance suggests\nthis. Once you say yes, it runs every 5 minutes.\" (spec 3.3 §7.1, §8.1). Never on a\nchat card (S-I5).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "timeline": {
             "description": "How it got here.",
@@ -1064,7 +1071,7 @@
             "type": "object"
           },
           {
-            "description": "The store's history of the session got shorter (it was rewound): drop what was shown;\nthe entries follow again from the start.",
+            "description": "The store's history of the session was replaced (rewound, or deleted and started\nagain): drop what was shown; the entries follow again from the start.",
             "properties": {
               "len": {
                 "description": "How many events the store holds now.",

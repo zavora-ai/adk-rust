@@ -10,10 +10,12 @@ use adk_core::audit_log::{
 };
 use adk_core::{ApprovalDecision, ApprovalRequest, ApprovalState, Clock, SystemClock};
 use chrono::{DateTime, FixedOffset, Local, Utc};
+use futures::future::BoxFuture;
 use futures::stream::{self, BoxStream, StreamExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::answers::{AnswerLog, AnswerRecord, InMemoryAnswerLog, SURFACE_AUDIT_DECIDE};
@@ -39,12 +41,18 @@ pub const SURFACE_AUDIT_SET_MODE: &str = "surface.set_mode";
 /// How often the feed reads the session store when the source has nothing faster.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-/// How long queued input waits for the session to become free before it is dropped from
-/// the delivery loop (it stays queued for the next decision to pick up).
-const DRAIN_PATIENCE: Duration = Duration::from_secs(600);
+/// The longest the delivery loop of queued input waits before it looks at the session again,
+/// when nothing wakes it sooner. It waits as long as the session has an open decision or a
+/// running turn, however long that is (spec 3.3 §7.3, S-I4).
+const DRAIN_BACKOFF_MAX: Duration = Duration::from_secs(5);
 
 /// A command from a surface (spec 3.3 §6). Every command runs as an authenticated
 /// [`Caller`], whose subject, surface and [`Origin`] reach its audit record.
+///
+/// §6 also names "steer", a message that reaches a turn while it runs. No runtime under the
+/// engine takes input in the middle of a turn, so there is no steer command: a message sent
+/// during a turn is the session's next message ([`Send`](Self::Send)), and
+/// [`StopAll`](Self::StopAll) stops a turn that has gone wrong.
 ///
 /// # Example
 ///
@@ -212,8 +220,8 @@ pub enum FeedFrame {
         /// The open decisions of the session.
         cards: Vec<DecisionCard>,
     },
-    /// The store's history of the session got shorter (it was rewound): drop what was shown;
-    /// the entries follow again from the start.
+    /// The store's history of the session was replaced (rewound, or deleted and started
+    /// again): drop what was shown; the entries follow again from the start.
     #[serde(rename_all = "camelCase")]
     Reset {
         /// How many events the store holds now.
@@ -369,6 +377,8 @@ impl SurfaceEngineBuilder {
         if !self.quiet_set {
             self.projector.quiet = self.source.quiet_hours();
         }
+        self.projector.voice_window_secs =
+            u32::try_from(self.voice_window.as_millis().div_ceil(1000)).unwrap_or(u32::MAX);
         SurfaceEngine {
             inner: Arc::new(Inner {
                 source: self.source,
@@ -381,6 +391,7 @@ impl SurfaceEngineBuilder {
                 stops_need: self.stops_need,
                 queues: Mutex::new(HashMap::new()),
                 draining: Mutex::new(HashSet::new()),
+                wake: Notify::new(),
                 spoken: Mutex::new(HashMap::new()),
             }),
         }
@@ -392,8 +403,9 @@ impl SurfaceEngineBuilder {
 /// out commands under the rules of §7.2 and §7.4.
 ///
 /// Surfaces hold no state a reconnect cannot rebuild: everything here is read from the
-/// source's stores, except input queued behind an open decision, which waits in this
-/// process.
+/// source's stores, except input queued behind an open decision or a running turn, which
+/// waits in this process and is sent, oldest first, once the session is free — whichever
+/// surface answered the decision.
 ///
 /// # Example
 ///
@@ -428,10 +440,23 @@ struct Inner {
     stops_need: Option<String>,
     /// Input queued behind an open decision, per (user, session), oldest first.
     queues: Mutex<HashMap<(String, String), VecDeque<String>>>,
-    /// Sessions with a delivery loop running.
+    /// Sessions with a delivery loop running. Changed only under the `queues` lock, so a
+    /// message queued while a loop ends always finds a loop.
     draining: Mutex<HashSet<(String, String)>>,
+    /// Wakes the delivery loops to look again: an answer or a message through this engine.
+    wake: Notify,
     /// Spoken "allow once" answers inside their cancel window, by decision.
-    spoken: Mutex<HashMap<String, JoinHandle<()>>>,
+    spoken: Mutex<HashMap<String, Spoken>>,
+}
+
+/// A spoken "allow once" waiting out its cancel window.
+struct Spoken {
+    /// The task that commits it.
+    handle: JoinHandle<()>,
+    /// Who said it: only they cancel it.
+    user: String,
+    /// The decision.
+    request: ApprovalRequest,
 }
 
 impl fmt::Debug for SurfaceEngine {
@@ -543,16 +568,28 @@ impl SurfaceEngine {
 
     async fn card(&self, caller: &Caller, request: &ApprovalRequest) -> Result<DecisionCard> {
         let always = match request.state {
-            ApprovalState::Pending => {
-                self.inner.source.always_allow_offer(request).await.map(|offer| offer.label)
-            }
+            ApprovalState::Pending => self.always_label(request).await,
             _ => None,
         };
         let answer = match request.state {
             ApprovalState::Pending => None,
-            _ => self.inner.answers.find(&request.id).await?,
+            // Where an answer was given only adds to the card; the card is shown without it.
+            _ => self.inner.answers.find_for(request).await.unwrap_or_else(|error| {
+                tracing::warn!(error = %error, decision.id = %request.id, "where a decision was answered could not be read");
+                None
+            }),
         };
         Ok(self.inner.projector.card(request, caller, always, answer.as_ref(), self.now()))
+    }
+
+    /// The label of "Always allow" for `request`, when the source can create its rule. A
+    /// request that needs more than one approver never offers it: the rule would let every
+    /// later call skip the other approvers (spec 3.3 §7.2, §8.2).
+    async fn always_label(&self, request: &ApprovalRequest) -> Option<String> {
+        if request.policy.quorum > 1 {
+            return None;
+        }
+        self.inner.source.always_allow_offer(request).await.map(|offer| offer.label)
     }
 
     /// The session's thread: every event of its store, numbered by position (spec 3.3 §6).
@@ -564,10 +601,13 @@ impl SurfaceEngine {
     pub async fn thread(&self, caller: &Caller, session: &str) -> Result<Vec<FeedEntry>> {
         let events = self.transcript(caller, session).await?;
         let links = self.links(caller, session, &events).await?;
+        let answered = project::answered_calls(&events);
         Ok(events
             .iter()
             .enumerate()
-            .map(|(index, event)| self.inner.projector.entry(index as u64 + 1, event, &links))
+            .map(|(index, event)| {
+                self.inner.projector.entry(index as u64 + 1, event, &links, &answered)
+            })
             .collect())
     }
 
@@ -586,7 +626,7 @@ impl SurfaceEngine {
         caller: &Caller,
         session: &str,
         events: &[adk_core::Event],
-    ) -> Result<HashMap<u64, String>> {
+    ) -> Result<HashMap<u64, project::Link>> {
         let requests: Vec<ApprovalRequest> = self
             .inner
             .source
@@ -603,6 +643,11 @@ impl SurfaceEngine {
     /// session's open decisions, then the live tail. Resuming with the last `seq` received
     /// never skips or repeats an event.
     ///
+    /// While the stream runs, a history the store replaced — rewound, or deleted and started
+    /// again — sends [`Reset`](FeedFrame::Reset) and the entries again from the start, whether
+    /// it got shorter or grew back past what was sent. A client that resumes after `after`
+    /// is trusted to hold the store's events up to it.
+    ///
     /// The stream ends with an error when the session cannot be read.
     pub fn feed(
         &self,
@@ -615,8 +660,13 @@ impl SurfaceEngine {
             caller: Caller,
             session: String,
             sent: u64,
+            /// The id of the event at `sent`, once this stream has read it.
+            last: Option<String>,
             cards: Option<Vec<(String, u64)>>,
             buffer: VecDeque<FeedFrame>,
+            /// The wait for the next change, begun before the last read so nothing that
+            /// changes during a read is missed; `None` when a change came during the read.
+            next: Option<BoxFuture<'static, ()>>,
             first: bool,
             done: bool,
         }
@@ -625,8 +675,10 @@ impl SurfaceEngine {
             caller,
             session,
             sent: after.unwrap_or(0),
+            last: None,
             cards: None,
             buffer: VecDeque::new(),
+            next: None,
             first: true,
             done: false,
         };
@@ -638,17 +690,28 @@ impl SurfaceEngine {
                 if state.done {
                     return None;
                 }
-                if !state.first {
-                    state.engine.inner.source.changed(state.engine.inner.poll).await;
+                if !state.first
+                    && let Some(next) = state.next.take()
+                {
+                    next.await;
                 }
                 state.first = false;
+                let source = Arc::clone(&state.engine.inner.source);
+                let poll = state.engine.inner.poll;
+                let mut next: BoxFuture<'static, ()> =
+                    Box::pin(async move { source.changed(poll).await });
+                state.next = match futures::poll!(next.as_mut()) {
+                    std::task::Poll::Ready(()) => None,
+                    std::task::Poll::Pending => Some(next),
+                };
                 match state
                     .engine
-                    .refresh(&state.caller, &state.session, state.sent, &state.cards)
+                    .refresh(&state.caller, &state.session, state.sent, &state.last, &state.cards)
                     .await
                 {
-                    Ok((frames, sent, cards)) => {
+                    Ok((frames, sent, last, cards)) => {
                         state.sent = sent;
+                        state.last = last;
                         state.cards = Some(cards);
                         state.buffer.extend(frames);
                     }
@@ -662,38 +725,54 @@ impl SurfaceEngine {
         .boxed()
     }
 
-    /// The frames since `sent`, and the new cursor and open-decision signature.
+    /// The frames since `sent`, and the new cursor, the id of the event at it, and the
+    /// open-decision signature.
     async fn refresh(
         &self,
         caller: &Caller,
         session: &str,
         mut sent: u64,
+        last: &Option<String>,
         cards: &Option<Vec<(String, u64)>>,
-    ) -> Result<(Vec<FeedFrame>, u64, Vec<(String, u64)>)> {
+    ) -> Result<(Vec<FeedFrame>, u64, Option<String>, Vec<(String, u64)>)> {
         let events = self.transcript(caller, session).await?;
         let len = events.len() as u64;
         let mut frames = Vec::new();
-        if sent > len {
+        let at_cursor = usize::try_from(sent)
+            .ok()
+            .and_then(|sent| sent.checked_sub(1))
+            .and_then(|index| events.get(index))
+            .map(|event| &event.id);
+        // Shorter than what was sent, or another event where the last one sent was: the
+        // store's history was replaced.
+        let replaced = last.as_ref().is_some_and(|last| at_cursor != Some(last));
+        if sent > len || replaced {
             frames.push(FeedFrame::Reset { len });
             sent = 0;
         }
         if sent < len {
             let links = self.links(caller, session, &events).await?;
+            let answered = project::answered_calls(&events);
             for (index, event) in
                 events.iter().enumerate().skip(usize::try_from(sent).unwrap_or(usize::MAX))
             {
-                let entry = self.inner.projector.entry(index as u64 + 1, event, &links);
+                let entry = self.inner.projector.entry(index as u64 + 1, event, &links, &answered);
                 frames.push(FeedFrame::Entry { entry });
             }
             sent = len;
         }
+        let last = usize::try_from(sent)
+            .ok()
+            .and_then(|sent| sent.checked_sub(1))
+            .and_then(|index| events.get(index))
+            .map(|event| event.id.clone());
         let open = self.session_decisions(caller, session).await?;
         let signature: Vec<(String, u64)> =
             open.iter().map(|card| (card.id.clone(), card.version)).collect();
         if cards.as_ref() != Some(&signature) {
             frames.push(FeedFrame::Decisions { cards: open });
         }
-        Ok((frames, sent, signature))
+        Ok((frames, sent, last, signature))
     }
 
     /// The caller's agents (spec 3.3 §8.1).
@@ -823,7 +902,7 @@ impl SurfaceEngine {
         if request.state != ApprovalState::Pending {
             return self.already_decided(caller, &request, answer).await;
         }
-        let always = self.inner.source.always_allow_offer(&request).await.map(|offer| offer.label);
+        let always = self.always_label(&request).await;
         let facts = self.inner.projector.facts(&request, always);
         if let Err(violation) = rules::check(caller, &facts, answer, expanded) {
             let error = SurfaceError::Rule(violation);
@@ -834,6 +913,20 @@ impl SurfaceEngine {
             return Err(SurfaceError::Invalid("an edit needs the changed arguments".into()));
         }
         if rules::row(caller) == Row::Voice && answer == Answer::AllowOnce {
+            // A spoken answer to a decision that changed since it was read is shown again at
+            // once, as on every other surface, never promised and then dropped (S-I2).
+            if request.version != version {
+                self.audit_decide(
+                    caller,
+                    &request,
+                    answer,
+                    "changed",
+                    Some("approval.version_conflict"),
+                )
+                .await?;
+                let card = self.card(caller, &request).await?;
+                return Ok(CommandOutcome::Changed { card });
+            }
             return self.speak_later(caller, request, version).await;
         }
         self.commit(caller, &request, version, answer, edited_args, reason).await
@@ -867,21 +960,34 @@ impl SurfaceEngine {
         }
         match self.inner.source.decide(&request.id, version, decision).await {
             Ok(updated) => {
-                if let Some(rule) = rule {
-                    rule.commit().await?;
+                // The decision is recorded and cannot be taken back: nothing after this point
+                // fails the command or keeps the decided call and the queued input waiting.
+                let resolved = updated.state != ApprovalState::Pending;
+                // The standing rule only once the request was approved: an approval that a
+                // quorum still waits on has not won (spec 3.3 §8.2).
+                if let Some(rule) = rule.filter(|_| updated.state == ApprovalState::Approved)
+                    && let Err(error) = rule.commit().await
+                {
+                    tracing::warn!(error = %error, decision.id = %updated.id, "the call was allowed once; its standing rule could not be created");
                 }
-                let record = AnswerRecord {
-                    approval_id: updated.id.clone(),
-                    by: caller.subject.clone(),
-                    via: caller.via(),
-                    answer,
-                    at: self.now(),
-                };
-                if updated.state != ApprovalState::Pending {
-                    self.inner.answers.record(&record).await?;
+                if resolved {
+                    let record = AnswerRecord {
+                        approval_id: updated.id.clone(),
+                        by: caller.subject.clone(),
+                        via: caller.via(),
+                        answer,
+                        at: self.now(),
+                    };
+                    if let Err(error) = self.inner.answers.record(&record).await {
+                        tracing::warn!(error = %error, decision.id = %updated.id, "where the answer was given could not be kept");
+                    }
                 }
-                self.audit_decide(caller, &updated, answer, "decided", None).await?;
-                if updated.state != ApprovalState::Pending {
+                if let Err(error) =
+                    self.audit_decide(caller, &updated, answer, "decided", None).await
+                {
+                    tracing::warn!(error = %error, decision.id = %updated.id, "the answer took effect; its audit record failed");
+                }
+                if resolved {
                     if let Err(error) = self.inner.source.resolved_by(caller, &updated).await {
                         tracing::warn!(error = %error, decision.id = %updated.id, "the decided call could not be resumed");
                     }
@@ -940,13 +1046,14 @@ impl SurfaceEngine {
     ) -> Result<CommandOutcome> {
         self.audit_decide(caller, request, answer, "already_decided", None).await?;
         let mut card = self.inner.projector.card(request, caller, None, None, self.now());
-        let at = self.now();
+        // When it was decided is not known either: `at` is when this surface found out, and
+        // no time is shown.
         let decided = Decided {
             by: String::new(),
             by_you: false,
             via: None,
-            at,
-            at_text: self.inner.projector.hh_mm(at),
+            at: self.now(),
+            at_text: String::new(),
             answer: crate::model::DecidedAnswer::Unknown,
             text: words::DECIDED.to_string(),
         };
@@ -954,6 +1061,11 @@ impl SurfaceEngine {
         card.status_text = words::DECIDED.to_string();
         card.allowed.options.clear();
         card.allowed.open_in_home = false;
+        card.allowed.cancel_window_secs = None;
+        card.allowed.note = None;
+        if let Some(step) = card.timeline.last_mut() {
+            step.text = words::DECIDED.to_string();
+        }
         card.decided = Some(decided.clone());
         Ok(CommandOutcome::AlreadyDecided { decided, card })
     }
@@ -972,19 +1084,25 @@ impl SurfaceEngine {
         let speaker = caller.clone();
         let id = request.id.clone();
         let task_id = id.clone();
+        let spoken = request.clone();
         let handle = tokio::spawn(async move {
             tokio::time::sleep(window).await;
             engine.inner.spoken.lock().unwrap_or_else(|e| e.into_inner()).remove(&task_id);
-            if let Err(error) =
-                engine.commit(&speaker, &request, version, Answer::AllowOnce, None, None).await
-            {
-                tracing::warn!(error = %error, decision.id = %task_id, "a spoken answer could not be recorded");
+            match engine.commit(&speaker, &request, version, Answer::AllowOnce, None, None).await {
+                Ok(CommandOutcome::Answered { .. }) => {}
+                Ok(outcome) => {
+                    tracing::info!(decision.id = %task_id, outcome = ?outcome, "a spoken answer was not recorded: the decision changed in its cancel window");
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, decision.id = %task_id, "a spoken answer could not be recorded");
+                }
             }
         });
+        let entry = Spoken { handle, user: caller.user_id().to_string(), request: spoken };
         if let Some(previous) =
-            self.inner.spoken.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), handle)
+            self.inner.spoken.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), entry)
         {
-            previous.abort();
+            previous.handle.abort();
         }
         Ok(CommandOutcome::Pending {
             decision_id: id,
@@ -995,17 +1113,26 @@ impl SurfaceEngine {
         })
     }
 
+    /// Cancels a spoken answer at once, without reading the source, so a cancel never waits
+    /// on a store; like a stop, it is recorded after, and a failed record does not undo it.
     async fn cancel_answer(&self, caller: &Caller, id: &str) -> Result<CommandOutcome> {
-        let request = self.owned_request(caller, id).await?;
-        let handle = self.inner.spoken.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
-        match handle {
-            Some(handle) => {
-                handle.abort();
-                self.audit_decide(caller, &request, Answer::AllowOnce, "cancelled", None).await?;
-                Ok(CommandOutcome::AnswerCancelled { decision_id: id.to_string() })
+        let spoken = {
+            let mut spoken = self.inner.spoken.lock().unwrap_or_else(|e| e.into_inner());
+            match spoken.get(id) {
+                Some(entry) if entry.user == caller.user_id() => spoken.remove(id),
+                _ => None,
             }
-            None => Err(SurfaceError::not_found(format!("a spoken answer to '{id}' to cancel"))),
+        };
+        let Some(spoken) = spoken else {
+            return Err(SurfaceError::not_found(format!("a spoken answer to '{id}' to cancel")));
+        };
+        spoken.handle.abort();
+        if let Err(error) =
+            self.audit_decide(caller, &spoken.request, Answer::AllowOnce, "cancelled", None).await
+        {
+            tracing::warn!(error = %error, decision.id = %id, "the spoken answer was cancelled; its audit record failed");
         }
+        Ok(CommandOutcome::AnswerCancelled { decision_id: id.to_string() })
     }
 
     async fn send(
@@ -1018,30 +1145,41 @@ impl SurfaceEngine {
         if text.trim().is_empty() {
             return Err(SurfaceError::Invalid("the message is empty".into()));
         }
-        let open = !self.session_decisions(caller, &session).await?.is_empty();
+        let key = (caller.user_id().to_string(), session.clone());
+        let open = self.session_open(caller, &session).await?;
+        // Earlier queued input goes first, including a message the delivery loop is starting
+        // a turn for right now: a new message never overtakes it (S-I4).
+        let earlier = {
+            let queues = self.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
+            queues.get(&key).is_some_and(|queued| !queued.is_empty())
+                || self.inner.draining.lock().unwrap_or_else(|e| e.into_inner()).contains(&key)
+        };
         // A running turn takes the message next, as an open decision does (S-I4).
-        let busy = !open && self.inner.source.busy(caller.user_id(), &session).await?;
-        if open || busy || queue {
-            let position = {
-                let mut queues = self.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
-                let entry =
-                    queues.entry((caller.user_id().to_string(), session.clone())).or_default();
-                entry.push_back(text);
-                u32::try_from(entry.len()).unwrap_or(u32::MAX)
-            };
+        let busy = !open && !earlier && self.inner.source.busy(caller.user_id(), &session).await?;
+        if open || earlier || busy || queue {
+            // Recorded before it is queued: a message whose record failed is never sent.
             self.audit_command(
                 caller,
                 SURFACE_AUDIT_SEND,
                 json!({ "sessionId": session, "queued": true }),
             )
             .await?;
-            if !open {
-                self.spawn_drain(caller.clone(), session.clone());
-            }
+            let position = {
+                let mut queues = self.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
+                let entry = queues.entry(key).or_default();
+                entry.push_back(text);
+                u32::try_from(entry.len()).unwrap_or(u32::MAX)
+            };
+            self.spawn_drain(caller.clone(), session.clone());
+            let text = if open {
+                words::SENT_AFTER_THIS_CARD_IS_ANSWERED
+            } else {
+                words::SENT_WHEN_YOUR_AGENT_IS_FREE
+            };
             return Ok(CommandOutcome::Queued {
                 session_id: session,
                 position,
-                text: words::SENT_AFTER_THIS_CARD_IS_ANSWERED.to_string(),
+                text: text.to_string(),
             });
         }
         self.audit_command(
@@ -1054,8 +1192,22 @@ impl SurfaceEngine {
         Ok(CommandOutcome::Sent { session_id: session })
     }
 
-    /// Delivers the session's queued input, one turn at a time, once it has no open decision
-    /// and no running turn (S-I4).
+    /// Whether the session has a decision open: one the caller may answer, or a call held for
+    /// someone else (§7.4 rule 2).
+    async fn session_open(&self, caller: &Caller, session: &str) -> Result<bool> {
+        let own =
+            self.inner.source.requests(caller, Some(session), true).await?.iter().any(|request| {
+                owns(caller, request)
+                    && request.state == ApprovalState::Pending
+                    && request.scope.session_id == session
+            });
+        Ok(own || self.inner.source.waiting_on_decision(caller.user_id(), session).await?)
+    }
+
+    /// Delivers the session's queued input, oldest first and one turn at a time, once it has
+    /// no open decision and no running turn (S-I4). The loop waits for as long as that takes,
+    /// whichever surface answers the decision, and keeps a message whose turn could not start
+    /// at the front of the queue.
     fn spawn_drain(&self, caller: Caller, session: String) {
         let key = (caller.user_id().to_string(), session.clone());
         {
@@ -1063,27 +1215,58 @@ impl SurfaceEngine {
             if queues.get(&key).is_none_or(VecDeque::is_empty) {
                 return;
             }
-        }
-        if !self.inner.draining.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone()) {
-            return;
+            if !self.inner.draining.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone()) {
+                // The loop already runs: have it look again now.
+                self.inner.wake.notify_waiters();
+                return;
+            }
         }
         let engine = self.clone();
         tokio::spawn(async move {
-            let started = tokio::time::Instant::now();
+            let poll = engine.inner.poll;
+            let mut wait = poll;
             loop {
-                if started.elapsed() > DRAIN_PATIENCE {
-                    break;
+                let woken = engine.inner.wake.notified();
+                tokio::pin!(woken);
+                woken.as_mut().enable();
+                {
+                    let queues = engine.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
+                    if queues.get(&key).is_none_or(VecDeque::is_empty) {
+                        engine
+                            .inner
+                            .draining
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .remove(&key);
+                        return;
+                    }
                 }
-                let open = match engine.session_decisions(&caller, &session).await {
-                    Ok(cards) => !cards.is_empty(),
-                    Err(_) => true,
+                let free = match engine.session_open(&caller, &session).await {
+                    Ok(true) => Ok(false),
+                    Ok(false) => {
+                        engine.inner.source.busy(caller.user_id(), &session).await.map(|busy| !busy)
+                    }
+                    Err(error) => Err(error),
                 };
-                if open {
-                    break;
-                }
-                if engine.inner.source.busy(caller.user_id(), &session).await.unwrap_or(true) {
-                    tokio::time::sleep(engine.inner.poll).await;
-                    continue;
+                match free {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        tokio::select! {
+                            () = engine.inner.source.changed(wait) => {}
+                            () = &mut woken => {}
+                        }
+                        wait = (wait * 2).min(DRAIN_BACKOFF_MAX);
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::debug!(error = %error, session.id = %session, "queued input waits: the session could not be read");
+                        tokio::select! {
+                            () = tokio::time::sleep(wait) => {}
+                            () = &mut woken => {}
+                        }
+                        wait = (wait * 2).min(DRAIN_BACKOFF_MAX);
+                        continue;
+                    }
                 }
                 let next = engine
                     .inner
@@ -1092,15 +1275,40 @@ impl SurfaceEngine {
                     .unwrap_or_else(|e| e.into_inner())
                     .get_mut(&key)
                     .and_then(VecDeque::pop_front);
-                let Some(text) = next else { break };
-                if let Err(error) = engine.inner.source.start_turn(&caller, &session, &text).await {
-                    tracing::warn!(error = %error, session.id = %session, "queued input could not be sent");
-                    break;
+                let Some(text) = next else { continue };
+                match engine.inner.source.start_turn(&caller, &session, &text).await {
+                    Ok(()) => {
+                        wait = poll;
+                        // Let the turn begin before looking again.
+                        tokio::time::sleep(poll).await;
+                    }
+                    Err(error) => {
+                        {
+                            let mut queues =
+                                engine.inner.queues.lock().unwrap_or_else(|e| e.into_inner());
+                            queues.entry(key.clone()).or_default().push_front(text);
+                            if !transient(&error) {
+                                // It stays queued and shown; the next message or answer tries
+                                // again.
+                                tracing::warn!(error = %error, session.id = %session, "queued input could not be sent; it stays queued");
+                                engine
+                                    .inner
+                                    .draining
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .remove(&key);
+                                return;
+                            }
+                        }
+                        tracing::warn!(error = %error, session.id = %session, "queued input could not be sent yet; trying again");
+                        tokio::select! {
+                            () = tokio::time::sleep(wait) => {}
+                            () = &mut woken => {}
+                        }
+                        wait = (wait * 2).min(DRAIN_BACKOFF_MAX);
+                    }
                 }
-                // Let the turn begin before looking again.
-                tokio::time::sleep(engine.inner.poll).await;
             }
-            engine.inner.draining.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
         });
     }
 
@@ -1115,8 +1323,9 @@ impl SurfaceEngine {
             .unwrap_or_default()
     }
 
-    /// Sends the session's queued input once its decisions are answered, after an answer
+    /// Looks at once whether the session's queued input can be sent, after an answer
     /// recorded outside [`execute`](Self::execute), such as a take over (spec 3.3 §7.4 rule 2).
+    /// Queued input is sent without it too, once the session is free.
     pub fn deliver_queued(&self, caller: &Caller, session: &str) {
         self.spawn_drain(caller.clone(), session.to_string());
     }
@@ -1134,11 +1343,25 @@ impl SurfaceEngine {
 
     async fn stop_all(&self, caller: &Caller, reason: Option<String>) -> Result<CommandOutcome> {
         let reason = reason.unwrap_or_else(|| words::STOP_ALL.to_string());
+        // A spoken "allow once" still in its cancel window is withdrawn first: Stop all is the
+        // strongest withdrawal (S-I10).
+        let cancelled: Vec<String> = {
+            let mut spoken = self.inner.spoken.lock().unwrap_or_else(|e| e.into_inner());
+            spoken
+                .drain()
+                .map(|(id, entry)| {
+                    entry.handle.abort();
+                    id
+                })
+                .collect()
+        };
         // Stopping never waits on the audit log (spec 3.2 K-I8): record after, warn on failure.
         self.inner.source.stop_all(caller, &reason).await?;
-        if let Err(error) =
-            self.audit_command(caller, SURFACE_AUDIT_STOP_ALL, json!({ "reason": reason })).await
-        {
+        let mut fields = json!({ "reason": reason });
+        if !cancelled.is_empty() {
+            fields["cancelledAnswers"] = json!(cancelled);
+        }
+        if let Err(error) = self.audit_command(caller, SURFACE_AUDIT_STOP_ALL, fields).await {
             tracing::warn!(error = %error, "stop all took effect; its audit record failed");
         }
         Ok(CommandOutcome::Stopped { text: words::ALL_AGENTS_STOPPED.to_string() })
@@ -1239,6 +1462,34 @@ impl SurfaceEngine {
             }
         }
         trail.record(draft).await.map_err(SurfaceError::Source)
+    }
+}
+
+/// Whether a turn that could not start may start later: the source was busy, unavailable or
+/// over a limit, not refusing the request itself.
+fn transient(error: &SurfaceError) -> bool {
+    use adk_core::ErrorCategory;
+    match error {
+        SurfaceError::Source(error) => match error.category {
+            ErrorCategory::RateLimited
+            | ErrorCategory::Timeout
+            | ErrorCategory::Unavailable
+            | ErrorCategory::Cancelled
+            | ErrorCategory::Internal
+            | ErrorCategory::ResourceExhausted
+            | ErrorCategory::Conflict => true,
+            ErrorCategory::InvalidInput
+            | ErrorCategory::Unauthorized
+            | ErrorCategory::Forbidden
+            | ErrorCategory::NotFound
+            | ErrorCategory::Unsupported => false,
+        },
+        SurfaceError::NotFound { .. }
+        | SurfaceError::Rule(_)
+        | SurfaceError::NotHere(_)
+        | SurfaceError::OperatorOnly { .. }
+        | SurfaceError::Unsupported { .. }
+        | SurfaceError::Invalid(_) => false,
     }
 }
 

@@ -1,7 +1,7 @@
 //! The control-plane source (spec 3.3 §6): a kernel in another process or on another
 //! machine, through `adk_kernel::control::ControlClient`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,6 +10,7 @@ use adk_core::{
     ApprovalAction, ApprovalDecision, ApprovalPolicy, ApprovalRequest, ApprovalRisk, ErrorCategory,
     Event, RunCheckpointRef, RunState,
 };
+use adk_kernel::KernelEvent;
 use adk_kernel::control::ControlClient;
 use adk_kernel::control::api::{ApprovalItem, AttachRequest, LedgerParams, SpawnRequest};
 use adk_kernel::proc::LedgerEntry;
@@ -24,8 +25,25 @@ use crate::inbox::Inbox;
 use crate::origin::Caller;
 use crate::source::{AgentState, Source, SpendToday};
 
-/// How long the feed waits for a bus event before it reads the session again anyway.
+/// How long the feed waits for a bus event before it reads the session again anyway, while a
+/// process runs (its turn writes the session between bus events) or the bus is unreachable.
 const QUIET_REREAD: Duration = Duration::from_secs(15);
+
+/// How long the feed waits for a bus event while no process runs and the bus is connected:
+/// nothing then changes a session without a bus event, and every session read is an attach
+/// the kernel records (spec 3.2 §9.3), so an idle surface reads only this often.
+const QUIET_IDLE: Duration = Duration::from_secs(300);
+
+/// What the one subscription to the kernel's bus knows, shared by every feed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Bus {
+    /// Moves on every bus event, and when the stream connects or drops.
+    events: u64,
+    /// The stream is connected.
+    live: bool,
+    /// Processes running or queued, as the bus last reported them.
+    running: usize,
+}
 
 /// The engine's source over a kernel's control plane (spec 3.3 §6, spec 3.2 §7.11): a
 /// terminal or a home attached to a kernel elsewhere, over its socket, named pipe or HTTP.
@@ -33,7 +51,8 @@ const QUIET_REREAD: Duration = Duration::from_secs(15);
 /// Sessions, processes, the ledger and the kill switch go through `ControlClient`, so the
 /// caller is whoever the client authenticates as (the OS user on the socket, a bearer token
 /// over HTTP), and the kernel records each session read as `kernel.control`. The feed re-reads
-/// a session when the kernel's event bus reports a change, not on a timer.
+/// a session when the kernel's event bus reports a change; with no event, every 15 seconds
+/// while a process runs or the bus is unreachable, and every 5 minutes otherwise.
 ///
 /// Decisions come from the approvals inbox beside the kernel routes, read in full —
 /// `GET /api/approvals?session=`, `GET /api/approvals/{id}`, `POST /api/approvals/{id}/decide`
@@ -65,7 +84,7 @@ pub struct ControlSource {
     app: String,
     target: String,
     daily_limit: Option<u64>,
-    changes: Arc<std::sync::OnceLock<watch::Receiver<u64>>>,
+    changes: Arc<std::sync::OnceLock<watch::Receiver<Bus>>>,
     inbox: Option<Inbox>,
 }
 
@@ -114,20 +133,57 @@ impl ControlSource {
         self
     }
 
-    /// A counter that moves on every bus event, from one subscription shared by every feed.
-    fn changes(&self) -> watch::Receiver<u64> {
+    /// What the kernel's bus reports, from one subscription shared by every feed.
+    fn changes(&self) -> watch::Receiver<Bus> {
         self.changes
             .get_or_init(|| {
-                let (sender, receiver) = watch::channel(0_u64);
+                let (sender, receiver) = watch::channel(Bus::default());
                 let client = self.client.clone();
+                let app = self.app.clone();
                 tokio::spawn(async move {
                     let mut cursor = None;
                     loop {
                         match client.events(cursor).await {
                             Ok(mut events) => {
+                                // The processes running now; the bus keeps the count from here.
+                                let mut running: Option<HashMap<String, RunState>> = client
+                                    .processes(&Default::default())
+                                    .await
+                                    .ok()
+                                    .map(|processes| {
+                                        processes
+                                            .into_iter()
+                                            .filter(|process| {
+                                                process.run.app_name == app && runs(process.run.state)
+                                            })
+                                            .map(|process| (process.meta.pid, process.run.state))
+                                            .collect()
+                                    });
+                                let count = |running: &Option<HashMap<String, RunState>>| {
+                                    // Unknown counts as running: the feed keeps re-reading.
+                                    running.as_ref().map_or(1, HashMap::len)
+                                };
+                                sender.send_modify(|bus| {
+                                    bus.events += 1;
+                                    bus.live = true;
+                                    bus.running = count(&running);
+                                });
                                 while let Some(Ok(record)) = events.next().await {
                                     cursor = Some(record.cursor);
-                                    if sender.send(record.cursor).is_err() {
+                                    if let (KernelEvent::Process { pid, to, .. }, Some(running)) =
+                                        (&record.event, running.as_mut())
+                                    {
+                                        if runs(*to) {
+                                            running.insert(pid.clone(), *to);
+                                        } else {
+                                            running.remove(pid);
+                                        }
+                                    }
+                                    sender.send_modify(|bus| {
+                                        bus.events += 1;
+                                        bus.running = count(&running);
+                                    });
+                                    if sender.is_closed() {
                                         return;
                                     }
                                 }
@@ -136,6 +192,10 @@ impl ControlSource {
                                 tracing::debug!(error = %error, "the kernel's event stream is unavailable");
                             }
                         }
+                        sender.send_modify(|bus| {
+                            bus.events += 1;
+                            bus.live = false;
+                        });
                         if sender.is_closed() {
                             return;
                         }
@@ -158,6 +218,11 @@ impl ControlSource {
         processes.sort_by_key(|process| std::cmp::Reverse(process.run.updated_at));
         Ok(processes)
     }
+}
+
+/// Whether a process in `state` is running or about to.
+fn runs(state: RunState) -> bool {
+    matches!(state, RunState::Running | RunState::Queued)
 }
 
 /// An inbox item, over a named pipe, as a request: risk high, as the item does not say.
@@ -209,10 +274,20 @@ impl Source for ControlSource {
 
     async fn changed(&self, max: Duration) {
         let mut changes = self.changes();
-        let wait = max.max(QUIET_REREAD);
+        // Only what happens from now on: a clone starts at the version the shared receiver
+        // saw first, which every event since has moved past.
+        changes.mark_unchanged();
+        let bus = *changes.borrow();
+        let wait =
+            if bus.live && bus.running == 0 { QUIET_IDLE.max(max) } else { max.max(QUIET_REREAD) };
+        let change = async {
+            if changes.changed().await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        };
         tokio::select! {
-            _ = tokio::time::sleep(wait) => {}
-            _ = changes.changed() => {}
+            () = tokio::time::sleep(wait) => {}
+            () = change => {}
         }
     }
 
@@ -299,8 +374,15 @@ impl Source for ControlSource {
 
     async fn busy(&self, user: &str, session: &str) -> Result<bool> {
         Ok(self.processes(user).await?.iter().any(|process| {
+            process.run.session_id.as_deref() == Some(session) && runs(process.run.state)
+        }))
+    }
+
+    async fn waiting_on_decision(&self, user: &str, session: &str) -> Result<bool> {
+        Ok(self.processes(user).await?.iter().any(|process| {
             process.run.session_id.as_deref() == Some(session)
-                && matches!(process.run.state, RunState::Running | RunState::Queued)
+                && process.run.state == RunState::Waiting
+                && matches!(process.run.checkpoint, Some(RunCheckpointRef::AwaitingApproval { .. }))
         }))
     }
 

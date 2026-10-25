@@ -314,3 +314,145 @@ async fn a_token_given_to_the_client_once_reaches_the_inbox() {
     assert_eq!(adk_core::AdkError::from(error).category, adk_core::ErrorCategory::Unauthorized);
     s.kernel.stop().await.unwrap();
 }
+
+/// Wave 2 review finding 1: over the control plane, a feed waits for the kernel's next event;
+/// after the bus has reported one, a quiet kernel is not read again and again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_feed_over_the_control_plane_waits_for_the_kernels_events() {
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let control = ControlPlaneConfig::default()
+        .without_socket()
+        .with_http(format!("127.0.0.1:{port}").parse().unwrap());
+    let (s, remote, _, source) =
+        remote(control, || ControlClient::http(format!("http://127.0.0.1:{port}")), "quiet.txt")
+            .await;
+    let terminal = Caller::human(os_user(), SurfaceKind::Terminal, Origin::Keyboard);
+    // Subscribed before anything happens, as a terminal's feed is.
+    let _ =
+        tokio::time::timeout(Duration::from_millis(200), source.changed(Duration::from_millis(10)))
+            .await;
+    remote
+        .execute(&terminal, Command::Send { session_id: "q1".into(), text: "write it".into() })
+        .await
+        .unwrap();
+    eventually("the process to park on its held write", WITHIN, || async {
+        let processes = s.kernel.processes().ps(Default::default()).await.unwrap();
+        processes.into_iter().find(|process| process.run.state == RunState::Waiting)
+    })
+    .await;
+    // The bus has reported the spawn and the park; now the kernel is quiet.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let quiet = Duration::from_secs(1);
+    let started = tokio::time::Instant::now();
+    let mut woke = 0;
+    while let Some(left) = quiet.checked_sub(started.elapsed()) {
+        if tokio::time::timeout(left, source.changed(Duration::from_millis(10))).await.is_ok() {
+            woke += 1;
+        }
+        if woke > 20 {
+            break;
+        }
+    }
+    assert!(woke <= 2, "a quiet kernel woke the feed {woke} times in a second");
+    s.kernel.stop().await.unwrap();
+}
+
+/// Wave 2 review finding 11: every session read over the control plane is an attach the
+/// kernel records, so a feed left open on a quiet kernel — no process running, the bus
+/// connected — does not read the session every 15 seconds; it waits for the kernel's next
+/// event.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_open_feed_on_a_quiet_kernel_is_not_read_again_and_again() {
+    use futures::StreamExt;
+
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let control = ControlPlaneConfig::default()
+        .without_socket()
+        .with_http(format!("127.0.0.1:{port}").parse().unwrap());
+    let (s, remote, _, _) =
+        remote(control, || ControlClient::http(format!("http://127.0.0.1:{port}")), "idle.txt")
+            .await;
+    let terminal = Caller::human(os_user(), SurfaceKind::Terminal, Origin::Keyboard);
+    remote
+        .execute(&terminal, Command::Send { session_id: "i1".into(), text: "write it".into() })
+        .await
+        .unwrap();
+    eventually("the process to park on its held write", WITHIN, || async {
+        let processes = s.kernel.processes().ps(Default::default()).await.unwrap();
+        processes.into_iter().find(|process| process.run.state == RunState::Waiting)
+    })
+    .await;
+    let attaches = || {
+        s.audit
+            .records()
+            .iter()
+            .filter(|record| {
+                record.action == adk_kernel::audit::CONTROL && record.ext["action"] == "attach"
+            })
+            .count()
+    };
+    let mut feed = remote.feed(terminal.clone(), "i1".into(), None);
+    // The snapshot, then the feed waits.
+    tokio::time::timeout(WITHIN, feed.next()).await.unwrap().unwrap().unwrap();
+    let reader = tokio::spawn(async move { while feed.next().await.is_some() {} });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let before = attaches();
+    // Past the 15 seconds a feed waits while a process runs.
+    tokio::time::sleep(Duration::from_secs(17)).await;
+    let after = attaches();
+    reader.abort();
+    assert_eq!(after, before, "an idle feed read the session {} times", after - before);
+    s.kernel.stop().await.unwrap();
+}
+
+/// Wave 2 review findings 8 and 9: "Always allow" from a surface says all its rule covers,
+/// and the rule is created through the harness, which records `harness.rule.created` with
+/// the surface before the rule is stored (spec 3.1 §7.5, §9.3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn always_allow_from_a_surface_says_what_it_covers_and_is_on_record() {
+    let s =
+        scenario_with(scripted("notes.txt"), ControlPlaneConfig::default().without_socket(), false)
+            .await;
+    s.engine
+        .execute(&web(), Command::Send { session_id: "r1".into(), text: "write it".into() })
+        .await
+        .unwrap();
+    let card = eventually("the held call's card", WITHIN, || async {
+        s.engine.decisions(&web()).await.unwrap().into_iter().next()
+    })
+    .await;
+    let always = card.allowed.option(Answer::AlwaysAllow).expect("always allow is offered");
+    assert!(
+        always.label.starts_with("Always allow for this folder (anywhere in the workspace, "),
+        "{}",
+        always.label
+    );
+    let outcome = s
+        .engine
+        .execute(
+            &web(),
+            Command::Decide {
+                decision_id: card.id.clone(),
+                version: card.version,
+                answer: Answer::AlwaysAllow,
+                edited_args: None,
+                reason: None,
+                expanded: true,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(outcome, CommandOutcome::Answered { .. }), "{outcome:?}");
+    let created: Vec<_> = s
+        .audit
+        .records()
+        .into_iter()
+        .filter(|record| record.action == "harness.rule.created")
+        .collect();
+    assert_eq!(created.len(), 1, "{created:?}");
+    assert_eq!(created[0].ext["surface"], "web");
+    eventually("the resumed call to write the file", WITHIN, || async {
+        std::fs::read_to_string(s.path.join("notes.txt")).ok()
+    })
+    .await;
+}

@@ -119,8 +119,10 @@ pub trait Source: Send + Sync {
         None
     }
 
-    /// Creates the standing rule "Always allow" offered for `request`, as `caller`, before the
-    /// decision is recorded. Returns a commit that grants it once the decision won.
+    /// Prepares the standing rule "Always allow" offered for `request`, as `caller`, before the
+    /// decision is recorded. Returns a commit the engine runs only once the decision approved
+    /// the request: never after a lost version, a denial, or an approval a quorum still waits
+    /// on.
     async fn prepare_always_allow(
         &self,
         caller: &Caller,
@@ -138,6 +140,15 @@ pub trait Source: Send + Sync {
 
     /// Whether a turn of the session is running now.
     async fn busy(&self, user: &str, session: &str) -> Result<bool> {
+        let _ = (user, session);
+        Ok(false)
+    }
+
+    /// Whether a call of the session waits on a decision, whoever may answer it: input typed
+    /// meanwhile is queued behind it (spec 3.3 §7.4 rule 2), even when the decision was routed
+    /// to approvers other than the session's owner. The default says no; the engine still
+    /// queues behind the decisions the caller may answer.
+    async fn waiting_on_decision(&self, user: &str, session: &str) -> Result<bool> {
         let _ = (user, session);
         Ok(false)
     }

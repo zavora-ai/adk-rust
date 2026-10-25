@@ -60,6 +60,7 @@ fn card(id: &str, tool: &str, args: Value) -> DecisionCard {
         status: CardStatus::Waiting,
         status_text: "Waiting for you".into(),
         heading: format!("Send email to {}", args["to"].as_str().unwrap_or("[client email]")),
+        summary: None,
         call: CallView { tool: tool.into(), text: format!("{tool}({args})"), args, truncated },
         timeline: vec![
             TimelineStep { text: "Asked at 18:00".into(), current: false },

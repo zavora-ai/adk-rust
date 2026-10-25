@@ -44,6 +44,9 @@
 pub const WORKING: &str = "Working";
 /// An agent stopped on a decision, and a decision waiting for an answer.
 pub const WAITING_FOR_YOU: &str = "Waiting for you";
+/// A held call waiting on an answer the person cannot give from here: it was routed to
+/// other approvers, or to no one.
+pub const WAITING_FOR_AN_ANSWER: &str = "Waiting for an answer";
 /// An agent idle with no wake time to show, such as one a stop parked.
 pub const ASLEEP: &str = "Asleep";
 /// An agent finished (`Completed`).
@@ -109,6 +112,96 @@ pub const AGENTS_SUGGEST: &str = "Your agents suggest something. Nothing happens
 pub const NOTICED_SOMETHING: &str = "Your agents noticed something. Is that right?";
 /// Everything resumed after a stop, in "While you were away".
 pub const ALL_AGENTS_RESUMED: &str = "All agents resumed.";
+/// When a suggestion with no wake of its own runs once allowed.
+pub const RIGHT_AWAY: &str = "right away";
+
+/// A suggestion the person added themselves (spec 3.3 §8.1 "Suggestion").
+pub const YOU_SUGGESTED_THIS: &str = "You suggested this.";
+
+/// Who suggests a piece of work on a suggestion's card (spec 3.3 §8.1 "Suggestion"): an
+/// agent by name, or `None` for the kernel's own work, which no one agent did.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::words;
+///
+/// assert_eq!(words::suggested_by(Some("Finance")), "Finance suggests this.");
+/// assert_eq!(words::suggested_by(None), "Your agents suggest this.");
+/// ```
+pub fn suggested_by(agent: Option<&str>) -> String {
+    match agent {
+        Some(agent) => format!("{agent} suggests this."),
+        None => format!("{YOUR_AGENTS} suggest this."),
+    }
+}
+
+/// When a suggestion runs once allowed: `when` is [`RIGHT_AWAY`], `"every 5 minutes"`,
+/// `"at 07:30"` and the like (spec 3.3 §8.1 "Suggestion").
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(
+///     adk_surface::words::once_you_say_yes("every 5 minutes"),
+///     "Once you say yes, it runs every 5 minutes."
+/// );
+/// ```
+pub fn once_you_say_yes(when: &str) -> String {
+    format!("Once you say yes, it runs {when}.")
+}
+
+/// How many steps a suggestion's plan has.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::plan_of(3), "Its plan has 3 steps.");
+/// assert_eq!(adk_surface::words::plan_of(1), "Its plan has 1 step.");
+/// ```
+pub fn plan_of(steps: usize) -> String {
+    if steps == 1 {
+        "Its plan has 1 step.".to_string()
+    } else {
+        format!("Its plan has {steps} steps.")
+    }
+}
+
+/// The most a suggestion may spend, in micro-USD.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::may_spend(500_000), "It may spend up to $0.50.");
+/// ```
+pub fn may_spend(micro_usd: u64) -> String {
+    format!("It may spend up to {}.", dollars(micro_usd))
+}
+
+/// The heading of a driver mount a hosted definition asks for: what it lets agents use.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::start_driver("email"), "Start email for your agents");
+/// ```
+pub fn start_driver(id: &str) -> String {
+    format!("Start {id} for your agents")
+}
+
+/// What a driver mount runs, on its card.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(
+///     adk_surface::words::driver_starts("mcp-email"),
+///     "It runs mcp-email on the computer your agents run on."
+/// );
+/// ```
+pub fn driver_starts(command: &str) -> String {
+    format!("It runs {command} on the computer your agents run on.")
+}
 
 /// An agent asleep until a local time, `"Asleep until 07:00"`.
 ///
@@ -154,6 +247,40 @@ pub const ALWAYS_ALLOW_FOR_THIS_PERSON: &str = "Always allow for this person";
 pub const ALWAYS_ALLOW_FOR_THIS_FOLDER: &str = "Always allow for this folder";
 /// Allows from now on, for this command.
 pub const ALWAYS_ALLOW_FOR_THIS_COMMAND: &str = "Always allow for this command";
+/// Allows from now on, for this site.
+pub const ALWAYS_ALLOW_FOR_THIS_SITE: &str = "Always allow for this site";
+
+/// "Always allow …" completed with what the standing rule covers, so the button never
+/// promises less than the rule allows (spec 3.3 §8.2, spec 3.1 §7.5): `label` is one of the
+/// `ALWAYS_ALLOW_FOR_THIS_*` words, `covers` what the rule matches, then whether it holds in
+/// every session or this one, and — for commands that run project scripts — that it allows
+/// whatever those scripts do.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_surface::words;
+///
+/// assert_eq!(
+///     words::always_allow_covering(words::ALWAYS_ALLOW_FOR_THIS_COMMAND, "git push …", true, false),
+///     "Always allow for this command (git push …, every session)"
+/// );
+/// assert_eq!(
+///     words::always_allow_covering(words::ALWAYS_ALLOW_FOR_THIS_COMMAND, "npm run …", true, true),
+///     "Always allow for this command (npm run …, every session; it runs project scripts, so it allows whatever they do)"
+/// );
+/// ```
+pub fn always_allow_covering(
+    label: &str,
+    covers: &str,
+    every_session: bool,
+    runs_scripts: bool,
+) -> String {
+    let scope = if every_session { "every session" } else { "this session" };
+    let scripts =
+        if runs_scripts { "; it runs project scripts, so it allows whatever they do" } else { "" };
+    format!("{label} ({covers}, {scope}{scripts})")
+}
 /// Changes the arguments, then allows.
 pub const EDIT: &str = "Edit";
 /// Refuses.
@@ -201,6 +328,10 @@ pub const ANSWERED_ELSEWHERE_UPDATES: &str =
 /// Why a surface shows no approval for a high-risk or money call.
 pub const NEEDS_A_SCREEN: &str =
     "This always needs you, on a screen. Voice, chat and standing permissions can't say yes to it.";
+/// Where a high-risk or money call is approved, on a screen that cannot approve it: the tray,
+/// or a terminal that is not on the kernel's own computer (spec 3.3 §7.2).
+pub const APPROVE_IN_THE_HOME: &str =
+    "Approve it in the home app, or in a terminal on the computer your agents run on.";
 
 /// How long a decision has waited, `"since 18:00"`.
 ///
@@ -383,6 +514,9 @@ pub fn quiet_until(hh_mm: &str) -> String {
 
 /// Input typed while a decision is open waits for it (spec 3.3 §5.2, §7.4 rule 2).
 pub const SENT_AFTER_THIS_CARD_IS_ANSWERED: &str = "Sent after this card is answered";
+/// Input typed while a turn runs, or behind earlier queued input, with no decision open: it
+/// is the session's next message (spec 3.3 §5.2, S-I4).
+pub const SENT_WHEN_YOUR_AGENT_IS_FREE: &str = "Sent when your agent is free";
 
 /// A spoken "allow once" inside its cancel window, `"Allowing once in 5 seconds"`
 /// (spec 3.3 §5.6).
@@ -461,6 +595,7 @@ mod tests {
     const ALL: &[&str] = &[
         WORKING,
         WAITING_FOR_YOU,
+        WAITING_FOR_AN_ANSWER,
         ASLEEP,
         DONE,
         FAILED,
@@ -497,6 +632,7 @@ mod tests {
         ALWAYS_ALLOW_FOR_THIS_PERSON,
         ALWAYS_ALLOW_FOR_THIS_FOLDER,
         ALWAYS_ALLOW_FOR_THIS_COMMAND,
+        ALWAYS_ALLOW_FOR_THIS_SITE,
         EDIT,
         DENY,
         CONFIRM_ITS_YOU_AND_APPROVE,
@@ -517,8 +653,11 @@ mod tests {
         WAITED_THROUGH_QUIET_TIME,
         ANSWERED_ELSEWHERE_UPDATES,
         NEEDS_A_SCREEN,
+        APPROVE_IN_THE_HOME,
         ENDED_WITHOUT_AN_ANSWER,
         SENT_AFTER_THIS_CARD_IS_ANSWERED,
+        SENT_WHEN_YOUR_AGENT_IS_FREE,
+        YOU_SUGGESTED_THIS,
         ALL_AGENTS_STOPPED,
         ALL_AGENTS_STOPPED_RESUME_IN_HOME,
         YOU_DECIDED,

@@ -126,6 +126,11 @@ export type CardStatus = "waiting" | "decided";
 /**
  * A command from a surface (spec 3.3 §6). Every command runs as an authenticated
  * `Caller`, whose subject, surface and `Origin` reach its audit record.
+ * 
+ * §6 also names "steer", a message that reaches a turn while it runs. No runtime under the
+ * engine takes input in the middle of a turn, so there is no steer command: a message sent
+ * during a turn is the session's next message (`Send`), and
+ * `StopAll` stops a turn that has gone wrong.
  */
 export type Command = {
   /** The answer. */
@@ -267,7 +272,7 @@ export interface DecisionCard {
   allowed: Allowed;
   /** "Also on your phone and in Telegram". */
   alsoShown?: string | null;
-  /** The exact call. */
+  /** The exact call: the details under the plain words. */
   call: CallView;
   /** The answer, once decided. */
   decided?: Decided | null;
@@ -293,6 +298,13 @@ export interface DecisionCard {
   status: CardStatus;
   /** The pill: "Waiting for you" or "Decided". */
   statusText: string;
+  /**
+   * What the heading alone does not say, in plain words, for a decision the kernel itself
+   * asks: who suggests the work and when it runs once allowed, such as "Finance suggests
+   * this. Once you say yes, it runs every 5 minutes." (spec 3.3 §7.1, §8.1). Never on a
+   * chat card (S-I5).
+   */
+  summary?: string | null;
   /** How it got here. */
   timeline: TimelineStep[];
   /** The version the surface saw, which its answer carries (S-I2). Never shown. */
