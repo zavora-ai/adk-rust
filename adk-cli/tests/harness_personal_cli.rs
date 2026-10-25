@@ -41,9 +41,12 @@ fn up_args(kernel: &Path, port: u16) -> Vec<String> {
     .collect()
 }
 
+/// Waits until `up` or `serve` listens and offers Ctrl+C, which then stops it.
 fn wait_listening(port: u16, terminal: &Terminal) {
     let started = Instant::now();
-    while TcpStream::connect(("127.0.0.1", port)).is_err() {
+    while TcpStream::connect(("127.0.0.1", port)).is_err()
+        || !terminal.text().contains("Press Ctrl+C to")
+    {
         assert!(started.elapsed() < common::TIMEOUT, "up did not listen:\n{}", terminal.text());
         std::thread::sleep(Duration::from_millis(100));
     }
