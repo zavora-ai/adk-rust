@@ -230,3 +230,69 @@ async fn an_added_agent_kept_from_search_declares_no_provider_search() {
         );
     }
 }
+
+fn gemini_search() -> adk_core::NativeWebSearch {
+    adk_core::NativeWebSearch::new("gemini", adk_core::NativeWebSearchTool::GoogleSearch, false)
+}
+
+/// An agent with no web, or with listed sites only, never gets the model provider's own
+/// search: the provider runs it outside the harness policy, and Gemini's takes no allowlist
+/// (spec 3.3 §5.7, wave 3 finding 1). An agent with any site has the primary agent's web.
+#[tokio::test]
+async fn no_web_and_listed_sites_never_declare_the_providers_search() {
+    let any = AgentUses::default().with_web(WebAccess::Any);
+    for (uses, declared) in [
+        (AgentUses::default().with_web(WebAccess::None), false),
+        (AgentUses::default().with_web(WebAccess::listed(["docs.rs"])), false),
+        (any, true),
+    ] {
+        let model = ScriptedLlm::new("scripted", vec![ScriptedResponse::text("done")])
+            .with_native_web_search(gemini_search());
+        let f = fixture_on(model, |b| {
+            b.mode(HarnessMode::Ask)
+                .web(adk_harness::web::WebConfig::default())
+                .added_agent(&record(PartitionMode::Ask, uses.clone()))
+        })
+        .await;
+        f.send("hello").await;
+        let request = f.model.requests().into_iter().next().unwrap();
+        assert_eq!(
+            request.tools.contains_key("google_search"),
+            declared,
+            "{uses:?}: {:?}",
+            request.tools.keys()
+        );
+    }
+}
+
+/// Listed sites narrow where an agent fetches; they are never an allowlist, so a fetch of a
+/// listed site still asks in Ask first and is refused in Just look, as its mode says (spec
+/// 3.3 §5.7, spec 3.1 I2; wave 3 finding 4).
+#[tokio::test]
+async fn listed_sites_are_never_fetched_without_asking() {
+    for (mode, asks) in [(PartitionMode::Ask, true), (PartitionMode::ReadOnly, false)] {
+        let listed = record(mode, AgentUses::default().with_web(WebAccess::listed(["docs.rs"])));
+        let f = fixture(vec![], |b| {
+            b.mode(HarnessMode::Ask)
+                .web(adk_harness::web::WebConfig::default())
+                .added_agent(&listed)
+        })
+        .await;
+        let policy = f.harness.agent().runtime().policy().clone();
+        let request = adk_core::ToolPolicyRequest::new(
+            "web_fetch",
+            json!({ "url": "https://docs.rs/serde" }),
+        )
+        .with_agent_name("finance")
+        .with_identity(APP, "alice", "s1");
+        let decision = adk_core::ToolPolicy::evaluate(&policy, &request).await;
+        if asks {
+            assert!(
+                matches!(decision, adk_core::PolicyDecision::RequireApproval { .. }),
+                "{mode:?}: {decision:?}"
+            );
+        } else {
+            assert!(matches!(decision, adk_core::PolicyDecision::Deny { .. }), "{decision:?}");
+        }
+    }
+}

@@ -728,6 +728,10 @@ impl HarnessAgentBuilder {
                     .inherit_env(workspace.inherits_env()),
             );
         }
+        // The provider runs its own search outside the harness policy, so an agent without
+        // any site never has it (spec 3.3 §5.7). Listed sites only narrow where it fetches,
+        // through the deny layer: they are never an allowlist, so each fetch asks as its mode
+        // says (spec 3.1 I2).
         match &added.uses.web {
             // Provider search runs outside the deny layer, so an agent kept from
             // `web_search` declares none (spec 3.1 §7.32).
@@ -736,9 +740,8 @@ impl HarnessAgentBuilder {
                 self.search_provider = None;
                 self.provider_web_tools = Some(crate::web::ProviderWebTools::off());
             }
-            adk_kernel::agents::WebAccess::Listed { hosts } => {
-                let web = self.web.take().unwrap_or_default();
-                self.web = Some(crate::web::WebConfig { allowed_domains: hosts.clone(), ..web });
+            adk_kernel::agents::WebAccess::Listed { .. } => {
+                self.search_provider = None;
                 self.provider_web_tools = Some(crate::web::ProviderWebTools::off());
             }
             adk_kernel::agents::WebAccess::Any => {}

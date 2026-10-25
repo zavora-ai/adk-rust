@@ -372,7 +372,7 @@ impl HarnessAgentBuilder {
 /// | `uses.files` | None: no file tools run; Read: no file changes; through a deny layer (`add_operator_policy`) |
 /// | `uses.folder` | The workspace narrowed to that folder |
 /// | `uses.shell` | None: no shell; Sandboxed: the shell only in the OS sandbox or a container; Host: the host shell |
-/// | `uses.web` | None: no web tools; Listed: fetches only of those sites, no search |
+/// | `uses.web` | None: no web tools and no provider search; Listed: fetches only of those sites, each asked as its mode says, no search; Any: the primary agent's web |
 ///
 /// An added agent never has `propose_agent`, members, goals or the partition coordinator's
 /// crossings, keeps `propose_followup`, and applies only standing rules pinned to its own
