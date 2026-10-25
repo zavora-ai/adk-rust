@@ -252,11 +252,13 @@ dependencies = [
 name = "adk-awp"
 version = "3.0.0"
 dependencies = [
+ "adk-auth",
  "adk-core",
  "arc-swap",
  "async-trait",
  "awp-types",
  "axum",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "dashmap",
@@ -265,6 +267,7 @@ dependencies = [
  "http 1.5.0",
  "jsonschema",
  "proptest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -275,6 +278,7 @@ dependencies = [
  "tower 0.5.3",
  "tracing",
  "uuid 1.25.0",
+ "zeroize",
 ]
 
 [[package]]

@@ -1,0 +1,109 @@
+{
+  "seq": 100,
+  "previous": "sha256:5d41402abc4b2a76b9719d911017c592ae7b2c3e1f6d8a9b0c4e2f1a3b5c7d9e",
+  "createdAt": "2026-10-24T00:00:12Z",
+  "files": {
+    "/.well-known/awp.json": {
+      "sha256": "sha256:bd2ce1745052a8d10c593ccd32a14650d3e971371c7ae55c9b08f222a237a81f",
+      "size": 1931,
+      "contentType": "application/awp+json"
+    },
+    "/.well-known/awp/charter.json": {
+      "sha256": "sha256:414ef8033c8eaed080544c0736efc58bf4b4ba9627f06014f6edd50c6ef1c4c0",
+      "size": 612,
+      "contentType": "application/awp+json"
+    },
+    "/.well-known/awp/keys.json": {
+      "sha256": "sha256:121722179c74c85df506fd36be05bb8a0665009b87c47bb924017785329db255",
+      "size": 1402,
+      "contentType": "application/awp+json"
+    },
+    "/.well-known/security.txt": {
+      "sha256": "sha256:e031977abec88f259d8349d0fd9438b8f72dd8b31c1cf784fd109da9812130ad",
+      "size": 214,
+      "contentType": "text/plain; charset=utf-8"
+    },
+    "/index.awp.json": {
+      "sha256": "sha256:d59f7cf7199e4fd21e66ae2f1cfdb453b8c141fc06a0faa43a73d06d0669f1e7",
+      "size": 2210,
+      "contentType": "application/awp+json"
+    },
+    "/index.html": {
+      "sha256": "sha256:4f142677891dcb4d01d473dd320e041b615ef1e4bdd2ff6c21dbb11bb3c96ce8",
+      "size": 18342,
+      "contentType": "text/html; charset=utf-8"
+    },
+    "/index.md": {
+      "sha256": "sha256:8999281a59ec05cc3513bc08a2fc0942ea41ccdde3b447e08deb838635f7180f",
+      "size": 3120,
+      "contentType": "text/markdown; charset=utf-8"
+    },
+    "/llms.txt": {
+      "sha256": "sha256:53a0806ce650ad50d96781b5a8b4aae2fa1edb3aefedd5f5baadd2453cdf590d",
+      "size": 1288,
+      "contentType": "text/plain; charset=utf-8"
+    },
+    "/offers/october/index.awp.json": {
+      "sha256": "sha256:4b5fe7a672eb2d4c157c40c419ddbe741ad4f1aa9e7fb1fc6d35cf93bb88856b",
+      "size": 1180,
+      "contentType": "application/awp+json"
+    },
+    "/offers/october/index.html": {
+      "sha256": "sha256:5c4ad9d8ccd3c390f808a47a576b91e050b3a30a17c7b332ff7e4068e9ca9297",
+      "size": 9120,
+      "contentType": "text/html; charset=utf-8"
+    },
+    "/offers/october/index.md": {
+      "sha256": "sha256:0c62d76435c2e9b12ef083237b3074d3aac6aee2c9190ff7e6ad1b774d47771d",
+      "size": 1460,
+      "contentType": "text/markdown; charset=utf-8"
+    },
+    "/products/panel-400/index.awp.json": {
+      "sha256": "sha256:371ed76ece9131f64e7a8edbd5e2e75be49e007e38f987486a1bc98649d4f7f0",
+      "size": 2048,
+      "contentType": "application/awp+json"
+    },
+    "/products/panel-400/index.html": {
+      "sha256": "sha256:975f9179318cd07af9a2ebfeebb56f9220699c499217edca32d5705720e9a8c7",
+      "size": 15873,
+      "contentType": "text/html; charset=utf-8"
+    },
+    "/products/panel-400/index.md": {
+      "sha256": "sha256:39fefb2b0dba91aa3f5d51fb227a5f696ccb8add07061d8efd2a52025fa33329",
+      "size": 2734,
+      "contentType": "text/markdown; charset=utf-8"
+    },
+    "/robots.txt": {
+      "sha256": "sha256:b3aed26670818dc341a2539643fcfb6379ddf216994cdc5d415c738e7008fba9",
+      "size": 188,
+      "contentType": "text/plain; charset=utf-8"
+    },
+    "/sitemap.xml": {
+      "sha256": "sha256:c39028497b2905cda075b822c2a2e17cf7b1eb6acbda7017367c5098a8ddd816",
+      "size": 4410,
+      "contentType": "application/xml"
+    }
+  },
+  "redirects": [
+    {
+      "from": "/shop/panel-400.php",
+      "to": "/products/panel-400/",
+      "status": 301
+    },
+    {
+      "from": "/wp-login.php",
+      "to": "/wp-login.php",
+      "status": 410
+    }
+  ],
+  "source": {
+    "kind": "edit",
+    "job": "steward.publishing",
+    "decision": "dec_01JB6X2V8N4M6K0J9H7G5F3D1S"
+  },
+  "generator": {
+    "name": "adk-site",
+    "version": "3.0.0"
+  },
+  "charterVersion": 3
+}

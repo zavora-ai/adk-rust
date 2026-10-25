@@ -1,0 +1,49 @@
+{
+  "root": {
+    "kid": "site-root-2026",
+    "publicKey": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "oC2wkhX6SIltq25ByQ_vNIas5nKUAA476NKj2oFDuWI"
+    }
+  },
+  "delegations": [
+    {
+      "kid": "release-2026-10",
+      "publicKey": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "tefzo5YcOlpsEcURyPkPZqpybbLnyAnXaiUosoufWCE"
+      },
+      "scopes": [
+        "release"
+      ],
+      "notBefore": "2026-10-01T00:00:00Z",
+      "notAfter": "2026-12-29T00:00:00Z",
+      "proof": {
+        "alg": "EdDSA",
+        "kid": "site-root-2026",
+        "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6InNpdGUtcm9vdC0yMDI2In0..II-Ec5Mjwz33j9LpvnHHlDsNoIKL8nEjteb7Yc6aQf0EFRUJySkq72ipxMnXevokPeT_SbVzsrwPIK2wQA1VAg"
+      }
+    },
+    {
+      "kid": "edge-2026-10",
+      "publicKey": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "D6myGgAGjrhScnEkP2CKOiB2LzsMNHAP1kH-uTnOgbM"
+      },
+      "scopes": [
+        "card",
+        "receipt"
+      ],
+      "notBefore": "2026-10-01T00:00:00Z",
+      "notAfter": "2026-12-29T00:00:00Z",
+      "proof": {
+        "alg": "EdDSA",
+        "kid": "site-root-2026",
+        "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6InNpdGUtcm9vdC0yMDI2In0..Myel_IGpMVIb_n16_C6yfZVDJQ9y0wpfkCeo_aXgz9fXMISdsCqom60TWqLpHs6yTErxl8IGK23fy2fOQZovDg"
+      }
+    }
+  ]
+}

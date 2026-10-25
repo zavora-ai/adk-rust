@@ -1,0 +1,63 @@
+{
+  "seq": 101,
+  "base": 100,
+  "createdAt": "2026-10-24T09:00:28Z",
+  "files": {
+    "/index.html": {
+      "sha256": "sha256:518a0d956aec68c4fe4ced2792e05c1d15d55420b8401265584db5d4fdaa4d89",
+      "size": 18355,
+      "contentType": "text/html; charset=utf-8"
+    },
+    "/products/panel-400/index.awp.json": {
+      "sha256": "sha256:3ac38aaa2c0c3b589bae1e0d96d75c0acec87808ffe41f2b0b9fb951523d0273",
+      "size": 2051,
+      "contentType": "application/awp+json"
+    },
+    "/products/panel-400/index.html": {
+      "sha256": "sha256:ba095a087b110024a27da5805200642c94b58588868dfcf5466cce5f59305c0c",
+      "size": 15880,
+      "contentType": "text/html; charset=utf-8"
+    },
+    "/products/panel-400/index.md": {
+      "sha256": "sha256:fe2e89ac7ee9ac13971e9eb060a72cc7faa766c2aa5dd96203830af9fb94e818",
+      "size": 2734,
+      "contentType": "text/markdown; charset=utf-8"
+    },
+    "/sitemap.xml": {
+      "sha256": "sha256:56bea65229ba71d2d0a268ad0a6c6f62df5d9521dc0c217de25cf5ea69baaf3a",
+      "size": 4398,
+      "contentType": "application/xml"
+    }
+  },
+  "removed": [
+    "/offers/october/index.awp.json",
+    "/offers/october/index.html",
+    "/offers/october/index.md"
+  ],
+  "redirects": [
+    {
+      "from": "/shop/panel-400.php",
+      "to": "/products/panel-400/",
+      "status": 301
+    },
+    {
+      "from": "/wp-login.php",
+      "to": "/wp-login.php",
+      "status": 410
+    },
+    {
+      "from": "/offers/october/",
+      "to": "/offers/october/",
+      "status": 410
+    }
+  ],
+  "source": {
+    "kind": "edit",
+    "job": "growth.freshness"
+  },
+  "generator": {
+    "name": "adk-site",
+    "version": "3.0.0"
+  },
+  "charterVersion": 3
+}

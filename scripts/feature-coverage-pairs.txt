@@ -269,6 +269,10 @@
 6 awp-types json-schema
 # adk-awp without `awp-v1`: the 2.0 edge alone, with the 1.x routes compiled out.
 6 adk-awp - no-default
+# AWP 2.0 signing (adk-auth signed-audit) and verify (reqwest): the verifier, the conformance
+# kit and the committed test vectors run only here.
+6 adk-awp signing
+6 adk-awp verify
 
 # Shard 7 — adk-rag's SurrealDB backend on its own: it and lancedb each compile for about
 # fifteen minutes, and together they made shard 0 the longest job in the tier.

@@ -47,6 +47,8 @@ adk-rust = { version = "3.0", features = ["awp"] }
 | Feature | Default | Enables |
 |---------|---------|---------|
 | `awp-v1` | yes | The AWP 1.x routes (`awp_routes`, `AwpState`), served beside 2.0 for one release line |
+| `signing` | no | Detached JWS (EdDSA) over JCS, keys and delegations, the `_awp-root` DNS anchor, signed Agent Cards, the site log's tiles and checkpoint, `StaticBundle`; adds `adk-auth` |
+| `verify` | no | `signing`, plus `Verifier` (the library behind `adk-rust awp verify`), the conformance kit and the test-vector generator; adds `reqwest` |
 
 ## AWP 2.0 edge
 
@@ -98,6 +100,24 @@ fn edge() -> axum::Router {
     // Install a TierAssigner that verifies credentials; the default makes every caller public.
     awp_v2_routes(EdgeState::builder(registry).build())
 }
+```
+
+## Signing and verification
+
+| Module | Contents | AWP 2.0 |
+|--------|----------|---------|
+| `signing::jws` | `sign` and `verify`: a detached JWS over the JCS form of a document without `proof`; `DocumentSigner`, `Ed25519DocumentSigner` (seed zeroed on drop, never printed); `document_digest`; RFC 7638 `jwk_thumbprint` | §5.1, §5.4 |
+| `signing::keys` | `delegate`, `revoke`, `endorse`; `verify_key_set`; `delegated_key` for a scope and a live or durable date | §5.2–§5.7 |
+| `signing::anchor` | `root_record` (`v=awp2; kid=…; jkt=…`), `check_root_anchor`, `DnsTxtResolver`, `FixedTxtResolver` | §5.6 |
+| `signing::card` | `sign_agent_card`, `verify_agent_card` by a `card` key | §7.4.2 |
+| `signing::log` | Log entries, C2SP tiles and entry bundles, the signed checkpoint | §14.5 |
+| `signing::bundle` | `StaticBundle`: the signed contract, `keys.json` and public terms, deterministic | §4, §13.2 |
+| `verify` | `Verifier`: the fourteen steps of §15.2, each failure by name; pins per domain (`InMemoryPinStore`, `FilePinStore`); posture and readiness; `HttpFetcher` (`GET` only, no redirects, optional `RequestSigner` for Web Bot Auth) and `RouterFetcher` | §15 |
+| `conformance` | `run`: S1–S9 and E1–E13 by profile, passive, with `GET`-only edge checks behind `active_edge_checks`; `rules::check_document`; `fixture::FixtureSite`; `vectors` | §16 |
+
+```toml
+[dependencies]
+adk-awp = { version = "3.0", features = ["verify"] }
 ```
 
 ## Quick Start

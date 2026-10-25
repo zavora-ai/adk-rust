@@ -1,0 +1,6 @@
+{
+  "state": "incident",
+  "since": "2026-10-24T10:15:00Z",
+  "reasonCode": "drift_detected",
+  "releaseSeq": 101
+}

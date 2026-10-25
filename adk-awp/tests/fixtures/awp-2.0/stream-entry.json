@@ -1,0 +1,11 @@
+{
+  "stream": "solar-fair-2026-live",
+  "n": 17,
+  "publishedAt": "2026-10-25T13:42:07Z",
+  "markdown": "The installers' panel opens in Hall B at 14:00; the community-solar session moves to 15:30.",
+  "proof": {
+    "alg": "EdDSA",
+    "kid": "edge-2026-10",
+    "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImVkZ2UtMjAyNi0xMCJ9..AMyPGVPabYZdx9_CFqKpjTGwerF8GhGPgvtmmYuImLuQSe4ucSUX6PycU5LRzWtAHPTHKnA_SclEq88lzYA6DQ"
+  }
+}

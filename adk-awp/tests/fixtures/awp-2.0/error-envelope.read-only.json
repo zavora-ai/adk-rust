@@ -1,0 +1,21 @@
+{
+  "awp": "2.0",
+  "error": {
+    "code": "read_only",
+    "message": "The site is read-only while an incident is handled; bookings resume when it ends.",
+    "retryable": true,
+    "retryAfter": 900,
+    "traceId": "4bf92f3577b34da6a3ce929d0e0e4736"
+  },
+  "status": {
+    "state": "read_only",
+    "since": "2026-10-24T10:15:05Z",
+    "reasonCode": "drift_detected",
+    "releaseSeq": 101,
+    "proof": {
+      "alg": "EdDSA",
+      "kid": "edge-2026-10",
+      "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImVkZ2UtMjAyNi0xMCJ9..Imi5wTYUXW-isSJ161TAGOV3MkwwEvOh68NZ6mB1kyhXOxtGqRLnj_eX2-44TldWl6-4808QPSEy2N66m7W_AQ"
+    }
+  }
+}
