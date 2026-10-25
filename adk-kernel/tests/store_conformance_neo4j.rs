@@ -1,6 +1,7 @@
-//! The kernel's Neo4j stores (spec 3.2 §7.1, §11, §13 Q8): the process, agenda, driver, ledger
-//! and partition conformance suites against a live server, replicas migrating together, and the
-//! stores sharing one connection with adk-session's run, schedule and governance stores.
+//! The kernel's Neo4j stores (spec 3.2 §7.1, §7.4, §11, §13 Q8): the process, agenda, driver,
+//! ledger, partition and cron watermark conformance suites against a live server, replicas
+//! migrating together, and the stores sharing one connection with adk-session's run, schedule
+//! and governance stores.
 //!
 //! The tests are `#[ignore]`d because they need a server; CI's nightly `durable-stores` job
 //! runs them. Run with a server at `NEO4J_URI` (default `bolt://localhost:7687`),
@@ -90,6 +91,15 @@ impl adk_kernel::conformance::PartitionStoreHarness for Neo4j {
     }
 }
 
+#[async_trait::async_trait]
+impl adk_kernel::conformance::CronWatermarkStoreHarness for Neo4j {
+    async fn open(&self) -> Arc<dyn adk_kernel::CronWatermarkStore> {
+        let store = adk_kernel::Neo4jCronWatermarkStore::from_graph(graph().await);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+}
+
 mod process {
     use super::*;
 
@@ -132,6 +142,15 @@ mod partition {
     use super::*;
 
     adk_kernel::partition_store_conformance_tests! {
+        #[ignore = "needs NEO4J_URI and NEO4J_PASSWORD; CI's nightly durable-stores job runs it"]
+        harness = Neo4j
+    }
+}
+
+mod watermark {
+    use super::*;
+
+    adk_kernel::cron_watermark_store_conformance_tests! {
         #[ignore = "needs NEO4J_URI and NEO4J_PASSWORD; CI's nightly durable-stores job runs it"]
         harness = Neo4j
     }

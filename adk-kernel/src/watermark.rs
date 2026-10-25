@@ -7,8 +7,10 @@
 //! | [`SourceWatermark`] | One source's cursor as an `adk_agent::ambient::TickWatermark` |
 //!
 //! The store runs on in-memory, SQLite, PostgreSQL and Redis ([`InMemoryCronWatermarkStore`],
-//! `SqliteCronWatermarkStore`, `PostgresCronWatermarkStore`, `RedisCronWatermarkStore`), with
-//! the conformance suite `cron_watermark_store_conformance_tests!` (feature `conformance`).
+//! `SqliteCronWatermarkStore`, `PostgresCronWatermarkStore`, `RedisCronWatermarkStore`), and,
+//! Alpha, on MongoDB, Firestore and Neo4j (`MongoCronWatermarkStore`,
+//! `FirestoreCronWatermarkStore`, `Neo4jCronWatermarkStore`), with the conformance suite
+//! `cron_watermark_store_conformance_tests!` (feature `conformance`).
 //! A tenant kernel (`managed::TenantKernel`, feature `managed`) keeps its watermarks in the
 //! tenant's own store, so a tick missed while no replica of the tenant ran is seen by the next
 //! replica that starts.

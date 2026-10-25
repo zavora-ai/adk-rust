@@ -40,12 +40,13 @@
 //! | `drivers::DriverStore` (with `drivers`) | `MongoDriverStore` | `FirestoreDriverStore` | `Neo4jDriverStore` |
 //! | `proc::LedgerStore` (with `proc`) | `MongoLedgerStore` | `FirestoreLedgerStore` | `Neo4jLedgerStore` |
 //! | [`PartitionStore`](crate::PartitionStore) | `MongoPartitionStore` | `FirestorePartitionStore` | `Neo4jPartitionStore` |
+//! | [`CronWatermarkStore`](crate::CronWatermarkStore) | `MongoCronWatermarkStore` | `FirestoreCronWatermarkStore` | `Neo4jCronWatermarkStore` |
 //!
 //! The [`CronWatermarkStore`](crate::CronWatermarkStore) — where each cron wake source left
 //! off (§7.4) — runs on in-memory, SQLite, PostgreSQL and Redis
 //! ([`InMemoryCronWatermarkStore`], `SqliteCronWatermarkStore`, `PostgresCronWatermarkStore`,
-//! `RedisCronWatermarkStore`, suite `cron_watermark_store_conformance_tests!`); it has no
-//! MongoDB, Firestore or Neo4j backend yet.
+//! `RedisCronWatermarkStore`, suite `cron_watermark_store_conformance_tests!`), and, Alpha, on
+//! MongoDB, Firestore and Neo4j.
 //!
 //! There is no file backend and no Vertex AI backend (§13 Q8): no durable store on `main` is file-backed, and
 //! Vertex AI holds sessions only.
@@ -128,7 +129,13 @@ mod redis;
 mod sql;
 #[cfg(feature = "sqlite")]
 mod sqlite;
+#[cfg(feature = "firestore")]
+mod watermark_firestore;
 mod watermark_memory;
+#[cfg(feature = "mongodb")]
+mod watermark_mongodb;
+#[cfg(feature = "neo4j")]
+mod watermark_neo4j;
 #[cfg(feature = "redis")]
 mod watermark_redis;
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
@@ -201,7 +208,13 @@ pub use postgres::PostgresProcessStore;
 pub use redis::RedisProcessStore;
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteProcessStore;
+#[cfg(feature = "firestore")]
+pub use watermark_firestore::FirestoreCronWatermarkStore;
 pub use watermark_memory::InMemoryCronWatermarkStore;
+#[cfg(feature = "mongodb")]
+pub use watermark_mongodb::MongoCronWatermarkStore;
+#[cfg(feature = "neo4j")]
+pub use watermark_neo4j::Neo4jCronWatermarkStore;
 #[cfg(feature = "redis")]
 pub use watermark_redis::RedisCronWatermarkStore;
 #[cfg(feature = "postgres")]

@@ -1,6 +1,7 @@
-//! The kernel's Firestore stores (spec 3.2 §7.1, §11, §13 Q8): the process, agenda, driver,
-//! ledger and partition conformance suites against the Firestore emulator, the identifier
-//! limit, and the stores sharing one client with adk-session's run and schedule stores.
+//! The kernel's Firestore stores (spec 3.2 §7.1, §7.4, §11, §13 Q8): the process, agenda,
+//! driver, ledger, partition and cron watermark conformance suites against the Firestore
+//! emulator, the identifier limit, and the stores sharing one client with adk-session's run and
+//! schedule stores.
 //!
 //! The tests are `#[ignore]`d because they need the emulator; CI's nightly `durable-stores`
 //! job runs them. Every case writes under fresh identifiers, so the cases share one
@@ -85,6 +86,15 @@ impl adk_kernel::conformance::PartitionStoreHarness for Emulator {
     }
 }
 
+#[async_trait::async_trait]
+impl adk_kernel::conformance::CronWatermarkStoreHarness for Emulator {
+    async fn open(&self) -> Arc<dyn adk_kernel::CronWatermarkStore> {
+        let store = adk_kernel::FirestoreCronWatermarkStore::from_db(emulator_db().await);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+}
+
 mod process {
     use super::*;
 
@@ -132,6 +142,15 @@ mod partition {
     }
 }
 
+mod watermark {
+    use super::*;
+
+    adk_kernel::cron_watermark_store_conformance_tests! {
+        #[ignore = "needs FIRESTORE_EMULATOR_HOST; CI's nightly durable-stores job runs it"]
+        harness = Emulator
+    }
+}
+
 /// A pid too long to name a document is refused on write and reads as absent.
 #[tokio::test]
 #[ignore = "needs FIRESTORE_EMULATOR_HOST; CI's nightly durable-stores job runs it"]
@@ -148,6 +167,23 @@ async fn an_id_too_long_for_a_document_name_is_refused() {
     );
     assert_eq!(store.get(&pid).await.expect("get"), None);
     assert!(!store.delete(&pid).await.expect("delete"));
+}
+
+/// A cron source name too long to name a document is refused on advance and reads as absent.
+#[tokio::test]
+#[ignore = "needs FIRESTORE_EMULATOR_HOST; CI's nightly durable-stores job runs it"]
+async fn a_source_too_long_for_a_document_name_is_refused() {
+    use adk_kernel::CronWatermarkStore as _;
+
+    let store = adk_kernel::FirestoreCronWatermarkStore::from_db(emulator_db().await);
+    let source = "s".repeat(701);
+    let error = store.advance(&source, chrono::Utc::now()).await.expect_err("too long");
+    assert!(
+        matches!(&error, KernelError::Store { backend: "firestore", reason } if reason.contains("700 bytes")),
+        "{error}"
+    );
+    assert_eq!(store.read(&source).await.expect("read"), None);
+    assert!(!store.delete(&source).await.expect("delete"));
 }
 
 /// One client serves the kernel's stores beside adk-session's run and schedule stores.
