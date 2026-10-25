@@ -159,6 +159,13 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             Arc::new(adk_surface::AuditAnswerLog::new(logs.clone()));
         (AuditTrail::new(recorder.clone()), answers)
     });
+    // Without a signed log, the chat thread and the home still share how each answer was
+    // given while the process runs (spec 3.3 §8.1).
+    #[cfg(feature = "channels")]
+    let surface_records = match &chat {
+        Some(_) if surface_records.is_none() => Some(telegram::answers_in_memory()),
+        _ => surface_records,
+    };
     let record = audit.as_ref().map(|(_, _, record)| record.clone());
     let audit = audit.map(|(recorder, _, _)| recorder);
     if let Some(recorder) = &audit {
@@ -366,8 +373,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         .context("the served harness has an approval service")?;
     #[cfg(feature = "channels")]
     if let Some(chat) = chat {
-        let trail = surface_records.as_ref().map(|(trail, _)| trail.clone());
-        chat.start(&kernel, decisions.clone(), trail, bind).await?;
+        let host: Arc<dyn adk_kernel::channels::ChannelHost> = Arc::new(kernel.clone());
+        chat.start(host, decisions.clone(), surface_records.clone(), bind).await?;
     }
 
     // `/api/runs` submissions land on the interactive queue, where the kernel's worker
