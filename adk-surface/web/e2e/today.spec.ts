@@ -1,7 +1,7 @@
 // Spec 3.3 §5.1, §10 K3, K4, §12 phase 2 end to end, on the scripted kernel with its `/proc`
 // ledger: after a turn with one decision allowed from the home, the morning briefing shows on
 // Threads once quiet time has ended; Today lists what happened in plain words, each line
-// linking to its record; opening the page moves nothing, and only Mark as seen does; and a
+// opening its record; opening the page moves nothing, and only Mark as seen does; and a
 // changed quiet time shows its old and new value.
 import { expect, test } from "@playwright/test";
 
@@ -38,16 +38,18 @@ test("the morning briefing and Today read the kernel's page, and only Mark as se
   expect(texts.length).toBeLessThanOrEqual(6);
   for (const text of texts) expect(text).not.toMatch(/urn:|Urn:|Kernel|changed what it is doing|woke up/);
 
-  // Every line links to its record.
+  // Every line opens its record, read through the page's client and told in plain words.
   const rows = list.locator("li.briefing-row");
   for (let index = 0; index < (await rows.count()); index++) {
     const row = rows.nth(index);
     await row.getByRole("button", { name: "Details" }).click();
-    const link = row.getByRole("link", { name: "The record" });
-    const href = await link.getAttribute("href");
-    expect(href).toMatch(/^\/api\/kernel\/away\/lines\/\d+$/);
-    const record = await (await request.get(href!)).json();
-    expect(String(record.entry.seq)).toBe(href!.split("/").pop());
+    const entry = row.getByText(/^On record as entry \d+$/);
+    await expect(entry).toBeVisible();
+    await expect(row.getByText(/^Recorded /)).toBeVisible();
+    await expect(row.getByRole("link")).toHaveCount(0);
+    const seq = (await entry.textContent())!.split(" ").pop();
+    const record = await (await request.get(`/api/kernel/away/lines/${seq}`)).json();
+    expect(String(record.entry.seq)).toBe(seq);
   }
 
   // Opening the page again moves nothing.
@@ -73,5 +75,8 @@ test("the morning briefing and Today read the kernel's page, and only Mark as se
   await canDo.getByRole("button", { name: "Save" }).click();
   await expect(canDo.getByText(/^Was \d\d:\d\d–\d\d:\d\d\. Now 23:00–06:00\.$/)).toBeVisible();
   const settings = await (await request.get("/api/kernel/settings")).json();
-  expect(settings.areas[0].quietTime).toEqual([{ start: "23:00", end: "06:00" }]);
+  // Saved with the browser's offset, so the kernel keeps the hours typed (spec 3.3 §5.1).
+  expect(settings.areas[0].quietTime).toEqual([
+    { start: "23:00", end: "06:00", utcOffsetMinutes: await page.evaluate(() => -new Date().getTimezoneOffset()) },
+  ]);
 });

@@ -59,9 +59,11 @@ describe("Today", () => {
     render(<App client={new FixtureClient()} seams={fixtureSeams(seen)} initialSection="today" />);
     const row = (await screen.findByText("Household failed.")).closest("li")!;
     await userEvent.click(within(row).getByRole("button", { name: "Details" }));
-    const link = await within(row).findByRole("link", { name: "The record" });
-    expect(link.getAttribute("href")).toBe("/api/kernel/away/lines/22");
+    // The record is read through the page's client, with its sign-in, and told in plain words;
+    // nothing links the tab away to the raw route.
+    expect(await within(row).findByText("On record as entry 22")).toBeTruthy();
     expect(within(row).getByText(/^Recorded /)).toBeTruthy();
+    expect(within(row).queryByRole("link")).toBeNull();
     expect(seen.records).toEqual([22]);
     expect(seen.seen).toEqual([]);
 

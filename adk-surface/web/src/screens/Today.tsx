@@ -397,7 +397,11 @@ function engineRows(briefing: Briefing | undefined, agenda: AgendaItem[] | undef
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
 }
 
-/** One line's record (`GET /kernel/away/lines/{seq}`), in plain words, with a link to it. */
+/**
+ * One line's record (`GET /kernel/away/lines/{seq}`), read with the page's own sign-in and told
+ * in plain words, with its entry on the record (spec 3.3 §5.1, G3). The route's raw row is no
+ * page of its own: a link to it would leave the home, without the token behind `--auth-token`.
+ */
 function RecordDetails({ id, line, seam }: { id: string; line: AwayLine; seam: WhileAwaySeam }) {
   const [record, setRecord] = useState<AwayRecord>();
   const [problem, setProblem] = useState("");
@@ -423,15 +427,13 @@ function RecordDetails({ id, line, seam }: { id: string; line: AwayLine; seam: W
       )}
       {when && entry && (
         <ul>
+          <li>{labels.onRecord(line.seq)}</li>
           <li>{labels.recordedAt(`${dayMonth(when)}, ${hhmm(when)}`)}</li>
           {entry.partition !== "default" && <li>{labels.inAreaShort(entry.partition)}</li>}
           {typeof spend === "number" && <li>{labels.recordSpent(dollars(spend))}</li>}
           {typeof entry.durationMs === "number" && <li>{labels.recordTook(seconds(entry.durationMs))}</li>}
         </ul>
       )}
-      <a className="link" href={line.record}>
-        {labels.theRecord}
-      </a>
     </div>
   );
 }

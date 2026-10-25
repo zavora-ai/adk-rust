@@ -93,7 +93,7 @@ export const labels = {
   markedSeen: "Marked as seen. New lines will show here.",
   nothingSince: (time: string) => `Nothing has happened since ${time}.`,
   moreToRead: "There is more than this page shows. Mark these lines seen to read on.",
-  theRecord: "The record",
+  onRecord: (seq: number) => `On record as entry ${seq}`,
   recordedAt: (when: string) => `Recorded ${when}`,
   recordSpent: (amount: string) => `Spent ${amount}`,
   recordTook: (seconds: string) => `Took ${seconds}`,

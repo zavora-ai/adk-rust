@@ -148,7 +148,7 @@ viewer `home`; a paired phone reads as itself, so each keeps its own place.
 |---|---|
 | The counts | **Spent** (the page's spend rows), **Quiet time** **Respected** or **Not kept** (or **Not set** without quiet time), **Waiting for you** |
 | The lines | One per event the kernel lists — finished, failed, stopped, a suggestion, a question, a decision, stopped or resumed all — failures first, then as they happened, each agent by the name the roster gives it. A suggestion or question shows its agenda item's words and is answered here |
-| **Details** | Opens the line's record (`GET /kernel/away/lines/{seq}`): when it was recorded, the area, what it cost and how long it took, and a link to the record itself |
+| **Details** | Opens the line's record (`GET /kernel/away/lines/{seq}`, read with the page's sign-in): its entry on the record, when it was recorded, the area, what it cost and how long it took. Nothing links the tab away to the raw route, which needs the token the page sends and shows internal identifiers |
 | **Mark as seen** | The only thing that moves the home's place (`POST /kernel/away/seen` with the page's `through`); opening or reloading Today reads and moves nothing |
 | The morning briefing | Once quiet time ends, Threads shows the start of the same page — spent, quiet time, what waits, how many things happened — with **See what happened** (to Today) and **Not now**. It shows once for each end of quiet time, and not again after the page was marked seen; putting it away marks nothing seen |
 | Routines today | Each routine's time today, the **Morning briefing** at the end of quiet time, and **Quiet time starts** |
@@ -281,7 +281,7 @@ in a new, empty workspace each run (`HOME_E2E_BIN` names an example already buil
 example's kernel keeps a `/proc` ledger, and its quiet time ended an hour before it started.
 The first test opens the home, sees the call the scripted agent's harness holds, allows it
 once and checks that it ran once; the second runs a turn with one decision, sees the morning
-briefing on Threads, checks every line of Today links to its record, that a reload moves
+briefing on Threads, checks every line of Today opens its record, that a reload moves
 nothing and **Mark as seen** does, and changes quiet time. Against a home already running, set
 `HOME_E2E_URL` and `HOME_E2E_WORKSPACE` to its address and its workspace.
 
