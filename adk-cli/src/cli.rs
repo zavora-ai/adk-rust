@@ -801,6 +801,24 @@ pub enum Commands {
         #[command(subcommand)]
         command: AuditCommands,
     },
+
+    /// An AWP 2.0 site's releases, content and migration: build, publish, roll back, draft,
+    /// schedule, correct, withdraw, revert, migrate and freeze (spec 3.5 §8.1)
+    #[cfg(feature = "website")]
+    Site {
+        #[command(subcommand)]
+        command: crate::site_cli::SiteCommands,
+        #[command(flatten)]
+        target: crate::site_cli::SiteTarget,
+    },
+
+    /// AWP 2.0: verify a domain, run the conformance kit, manage the root and delegated keys,
+    /// migrate a 1.x business.toml (spec 3.5 §8.1)
+    #[cfg(feature = "website")]
+    Awp {
+        #[command(subcommand)]
+        command: crate::awp_cli::AwpCommands,
+    },
 }
 
 /// Options for `adk-rust chat` (spec 3.1 §8.1).

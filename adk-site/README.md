@@ -26,6 +26,7 @@ adk-site = "3.0.0"
 | Publishing | `PublishingPipeline` | Draft, check, preview, approve, release, publish, announce, measure; corrections, withdrawals (notice or 410), schedules, per-item revert, whole-site rollback |
 | Media | `MediaPipeline` | Type sniffing, executables and polyglots refused, location metadata stripped by re-encoding, resizing, alt text that a person confirms |
 | Lanes | `lanes`, `LiveStore` | Release, live and stream lanes per field, declared per kind in `site.toml`; claims stay in releases (A-I26) |
+| Streams | `StreamLane`, `EntrySigner` | Live-blog entries signed by the edge key in the AWP 2.0 proof format, served at once, folded into signed releases every five minutes and at the close |
 | Constant updates | `UpdateEngine`, `Batcher`, `FeedMapping` | Model-free feed mappings, feed bounds that hold a delivery whole (A-I27), batch windows per kind, exceptions held alone, fast checks per item, one release and one `catalog.changed` per batch, scheduled full checks, per-item revert and replay |
 
 ## Content repository
@@ -98,6 +99,7 @@ A shop syncing its supplier every minute or a newsroom on election night stays s
 signed: `UpdateEngine` sorts each update into its lane, batches releases per kind (30 s by
 default, 10 s for articles, 60 s for products), holds a feed delivery that breaks its bounds
 whole with a P2 alarm, holds out-of-rule changes alone and publishes the rest without a model.
+Live blogs run as streams whose signed entries fold into releases every five minutes.
 `DirectoryHost::new(root).materialise(false).retain_releases(n)` publishes at the cost of
 what changed. See [Constantly updated sites](../docs/official_docs/deployment/constant-updates.md).
 
@@ -150,6 +152,60 @@ adk-site = { version = "3.0.0", features = ["migrate"] }
 | Archive | `LegacyArchive` | The legacy export encrypted through `adk-artifact`; never deleted (A-I10) |
 
 See [Site migration](../docs/official_docs/deployment/site-migration.md).
+
+## Host adapters (features `host-*`)
+
+Every adapter implements `SiteHost`, declares honest `HostLimits` and passes the host
+conformance suite. Credentials come from a `HostCredential`: a `CredentialBroker` mints a
+token for the acting agent at the provider's resource on every request (A-I19).
+
+| Feature | Host | Atomicity | Publishes per hour |
+|---------|------|-----------|--------------------|
+| `host-s3` | `S3Store` (any S3-compatible store, SigV4) under `ObjectStoreHost`; `CloudFrontInvalidation` | `PrefixPointer`, or `None` in place | Unlimited |
+| `host-gcs` | `GcsStore` (JSON API) under `ObjectStoreHost` | `PrefixPointer`, or `None` in place | Unlimited |
+| `host-azure` | `AzureBlobStore` (Shared Key, bearer or SAS), `$web` static website | `None` in place, or `PrefixPointer` | Unlimited |
+| `host-cloudflare` | R2 (`r2_store`, `r2_host`) behind a pointer-following Worker; `CloudflarePurge` | `PrefixPointer` | Unlimited |
+| `host-netlify` | `NetlifyHost`: file-digest deploys, drafts for previews | `Deploy` | 4 (100 deploys a day) |
+| `host-github-pages` | `GitPagesHost`: one commit per release pushed to a pages branch with `git` | `Deploy` | 10 |
+| `host-rsync` | `RsyncHost`: release directories over SSH, hard-linked, switched by a symlink | `Deploy` | Unlimited |
+
+`ObjectStoreHost::prefix_pointer` keeps each release under `releases/<seq>/` and writes the
+`current.pointer` object last; an edge that follows the pointer serves it atomically.
+`ObjectStoreHost::in_place` writes a website endpoint in place and keeps every release in a
+private archive store for exact rollback. A `CachePurge` hook purges the CDN after the switch.
+
+```toml
+[dependencies]
+adk-site = { version = "3.0.0", features = ["host-s3"] }
+```
+
+See [Site hosts](../docs/official_docs/deployment/site-hosts.md).
+
+## External generators (features `gen-*`)
+
+`ExternalGenerator` builds a site with Zola, Hugo, Astro or Build Awesome (Eleventy) and
+publishes the same twins, site files and redirects the built-in renderer does. The generator
+runs under `adk-sandbox`'s OS enforcer — Seatbelt on macOS, bubblewrap on Linux — with no
+network; without an enforcer the build fails.
+
+| Feature | Constructor | Needs |
+|---------|-------------|-------|
+| `gen-zola` | `ExternalGenerator::zola(binary)` | The `zola` binary |
+| `gen-hugo` | `ExternalGenerator::hugo(binary)` | The `hugo` binary |
+| `gen-astro` | `ExternalGenerator::astro(node, node_modules)` | Node.js and a `node_modules` holding `astro` |
+| `gen-build-awesome` | `ExternalGenerator::build_awesome(node, node_modules)` | Node.js and a `node_modules` holding `@11ty/eleventy` |
+
+The built-in renderer exports each page's template context — the data the built-in templates
+read — into the generator's own layout; the generator renders the page HTML from a starter
+template or your project (`with_project`); every other file is the built-in build's, byte for
+byte. Nothing is installed during a build.
+
+```toml
+[dependencies]
+adk-site = { version = "3.0.0", features = ["gen-zola"] }
+```
+
+See [Site generators](../docs/official_docs/deployment/site-generators.md).
 
 ## Writing a host
 

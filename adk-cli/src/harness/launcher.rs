@@ -143,6 +143,7 @@ pub struct HarnessLauncher {
     surface_records: Option<crate::surface::SurfaceRecords>,
     #[cfg(feature = "mobile")]
     phone: Option<super::PhoneSetup>,
+    webhook_ingress: Option<adk_server::webhooks::WebhookIngress>,
 }
 
 impl std::fmt::Debug for HarnessLauncher {
@@ -209,6 +210,7 @@ impl HarnessLauncher {
             surface_records: None,
             #[cfg(feature = "mobile")]
             phone: None,
+            webhook_ingress: None,
         }
     }
 
@@ -431,6 +433,22 @@ impl HarnessLauncher {
     /// ```
     pub fn with_kernel(mut self, kernel: adk_kernel::Kernel) -> Self {
         self.kernel = Some(kernel);
+        self
+    }
+
+    /// Serves `ingress` at `POST /hooks/{name}` beside the harness, checked against the
+    /// kill switch everything served shares, which replaces the ingress's own: signed deliveries that wake the kernel's
+    /// sleepers and triggers (spec 3.5 §8.2, §10 X11; spec 3.2 §7.4).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let hook = adk_kernel::webhook_wake_hook("github", WebhookVerifier::new(secret), "adk-rust");
+    /// let ingress = WebhookIngress::new(run_store.clone()).with_hook(hook);
+    /// launcher.with_kernel(kernel).with_webhook_ingress(ingress).run_serve_directly(8080).await?;
+    /// ```
+    pub fn with_webhook_ingress(mut self, ingress: adk_server::webhooks::WebhookIngress) -> Self {
+        self.webhook_ingress = Some(ingress);
         self
     }
 
@@ -685,6 +703,9 @@ impl HarnessLauncher {
             shared.sessions.clone(),
             shared.console.clone(),
         );
+        // Sessions that ended without saving are distilled in the background (spec 3.1 §7.33
+        // fix 9).
+        let mut catch_up = super::catch_up::CatchUp::start(&shared);
         if shared.has_held_calls().await? {
             shared.console.print("Resuming calls held in this session…\n");
             report(&shared.turn(None, true).await?);
@@ -692,6 +713,7 @@ impl HarnessLauncher {
 
         let console = shared.console.clone();
         loop {
+            catch_up.print_if_done(&console).await;
             let line = match console.read_line("\x1b[36mYou >\x1b[0m ").await {
                 ConsoleInput::Line(line) => line,
                 ConsoleInput::Interrupted => {
@@ -739,6 +761,7 @@ impl HarnessLauncher {
             // Workspace servers start with the first run, so their resources appear now.
             shared.refresh_mentions().await;
         }
+        catch_up.finish(&console).await;
         if memory_on(&shared.harness()) {
             println!("Saving what this session taught to long-term memory…");
         }
@@ -830,7 +853,7 @@ impl HarnessLauncher {
                     .with_api_routes(adk_kernel::control::router(kernel.clone()))
                     .with_kernel_governance(kernel.config().governance.clone(), Arc::new(kernel));
             }
-            None => launcher = launcher.with_governance(governance),
+            None => launcher = launcher.with_governance(governance.clone()),
         }
         #[cfg(feature = "surface")]
         {
@@ -917,6 +940,13 @@ impl HarnessLauncher {
                 )));
             }
         };
+        // Signed webhooks authenticate by their signature, not a caller, and keep the
+        // server's host and origin checks (spec 3.5 §10 X11).
+        if let Some(ingress) = self.webhook_ingress {
+            let ingress = ingress.with_governance(governance.clone());
+            launcher =
+                launcher.with_root_routes(adk_server::webhooks::webhook_ingress_router(ingress));
+        }
         // The claim route needs no caller but keeps the server's host and origin checks.
         if let (Some(kernel), Some(_)) = (&kernel, &pairing) {
             launcher = launcher.with_root_routes(adk_kernel::control::claim_router(kernel.clone()));

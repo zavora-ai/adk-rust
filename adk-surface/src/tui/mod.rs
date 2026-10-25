@@ -64,10 +64,11 @@ mod voice;
 
 use std::io::{IsTerminal, Write};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::future::BoxFuture;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 pub use commands::{CommandContext, TerminalCommand};
 pub use safe::terminal_safe;
@@ -182,6 +183,22 @@ impl std::fmt::Debug for SessionGate {
     }
 }
 
+/// Notices that arrive while the terminal runs; the first UI to run takes them.
+#[derive(Clone, Default)]
+struct LateNotices(Arc<Mutex<Option<UnboundedReceiver<String>>>>);
+
+impl LateNotices {
+    fn take(&self) -> Option<UnboundedReceiver<String>> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+    }
+}
+
+impl std::fmt::Debug for LateNotices {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LateNotices")
+    }
+}
+
 /// The terminal surface over an engine, for one caller (spec 3.3 §5.2).
 ///
 /// The caller is the person at the keyboard: [`SurfaceKind::Terminal`](crate::SurfaceKind)
@@ -199,6 +216,7 @@ pub struct TerminalSurface {
     place: Option<String>,
     poll: Duration,
     notices: Vec<String>,
+    late: LateNotices,
     signals: bool,
     gate: SessionGate,
     commands: commands::Commands,
@@ -218,6 +236,7 @@ impl TerminalSurface {
             place: None,
             poll: POLL,
             notices: Vec::new(),
+            late: LateNotices::default(),
             signals: true,
             gate: SessionGate::default(),
             commands: commands::Commands::default(),
@@ -291,6 +310,32 @@ impl TerminalSurface {
     #[must_use]
     pub fn notice(mut self, text: impl Into<String>) -> Self {
         self.notices.push(text.into());
+        self
+    }
+
+    /// Lines the full-screen and inline UIs show under the thread as they arrive on
+    /// `notices`, as [`notice`](Self::notice) shows one at the start: what work the
+    /// application runs beside the terminal found, such as long-term memory catching up on
+    /// earlier sessions. JSON mode writes none. Once the terminal has ended, a send fails and
+    /// hands the line back, so the application can print it.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use adk_surface::tui::TerminalSurface;
+    /// # use adk_surface::{Caller, Origin, SurfaceEngine, SurfaceKind};
+    /// # fn example(engine: SurfaceEngine) {
+    /// let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    /// let me = Caller::human("ana", SurfaceKind::Terminal, Origin::Keyboard);
+    /// let terminal = TerminalSurface::new(engine, me).notices_from(rx);
+    /// tokio::spawn(async move {
+    ///     let _ = tx.send("2 facts from an earlier session were added".to_string());
+    /// });
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn notices_from(mut self, notices: UnboundedReceiver<String>) -> Self {
+        self.late = LateNotices(Arc::new(Mutex::new(Some(notices))));
         self
     }
 

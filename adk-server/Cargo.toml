@@ -65,6 +65,9 @@ adk-awp = { workspace = true, optional = true, features = ["signing"] }
 awp-types = { workspace = true, optional = true }
 adk-auth = { workspace = true, optional = true, features = ["web-bot-auth", "sso"] }
 http = { version = "1", optional = true }
+# Optional: the edge's durable stores (`awp-sqlite`, `awp-postgres`, `awp-redis`)
+sqlx = { workspace = true, optional = true, features = ["runtime-tokio"] }
+fred = { version = "10", optional = true, features = ["i-scripts"] }
 
 [features]
 default = []
@@ -101,9 +104,15 @@ awp = [
     "dep:http",
     "dep:sha2",
     "dep:hex",
+    "dep:hmac",
+    "adk-core/webhook-delivery",
     "axum/ws",
     "tokio/net",
 ]
+# The edge stores of spec 3.5 §7.9 in SQLite, PostgreSQL or Redis.
+awp-sqlite = ["awp", "dep:sqlx", "sqlx/sqlite", "adk-session/sqlite"]
+awp-postgres = ["awp", "dep:sqlx", "sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs", "adk-session/postgres"]
+awp-redis = ["awp", "dep:fred"]
 vertex-remote-engine = [
     "agent-engine",
     "dep:adk-gcp",
@@ -132,3 +141,5 @@ tempfile = "3"
 tokio-test = "0.4"
 # The edge's chat socket tests (`awp`).
 tokio-tungstenite = "0.28"
+# The edge store conformance suite runs on a multi-threaded runtime.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -1336,6 +1336,31 @@ impl Harness {
             .await
     }
 
+    /// How far distillation has read each of `user`'s sessions: the session id and the time
+    /// of the last event read, by the per-session distiller or
+    /// [`distill_sessions`](Self::distill_sessions) (spec 3.2 §10 HK2). A session absent from
+    /// the list was never distilled. A host compares it with each session's last event to
+    /// find the sessions that ended without being distilled (spec 3.1 §7.33 fix 9).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let read: std::collections::HashMap<_, _> =
+    ///     harness.distilled_sessions(&user).await?.into_iter().collect();
+    /// let unsaved = read.get("s1").is_none_or(|upto| *upto < last_event_at);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when long-term memory is off, or the store's error.
+    #[cfg(feature = "memory")]
+    pub async fn distilled_sessions(
+        &self,
+        user: &UserId,
+    ) -> Result<Vec<(String, chrono::DateTime<chrono::Utc>)>> {
+        self.facts_runtime()?.store.distilled_sessions(&self.app_name, user.as_ref()).await
+    }
+
     /// Runs one consolidation tick over `user`'s facts in this harness's project and the
     /// user-wide ones (spec 3.2 §7.5, §10 HK2): the sessions in `request` the per-session
     /// distiller never reached are distilled as [`distill_sessions`](Self::distill_sessions)

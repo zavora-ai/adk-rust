@@ -474,13 +474,16 @@ fn start(
         app.notice_until_key(notice.clone(), Tone::Info);
     }
     let (tx, rx) = mpsc::unbounded_channel();
-    let pump = Pump::start(
+    let mut pump = Pump::start(
         surface.engine.clone(),
         surface.caller.clone(),
         session,
         surface.poll,
         tx.clone(),
     );
+    if let Some(notices) = surface.late.take() {
+        pump.forward_notices(notices, tx.clone());
+    }
     (app, pump, tx, rx)
 }
 

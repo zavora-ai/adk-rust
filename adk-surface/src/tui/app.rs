@@ -88,6 +88,8 @@ pub(crate) enum Update {
     /// The voice conversation's line (spec 3.3 §5.6).
     #[cfg(feature = "voice")]
     Voice(super::voice::VoiceLine),
+    /// A line the application sent while the terminal runs.
+    Notice(String),
 }
 
 /// What a key asks the runner to do.
@@ -782,6 +784,7 @@ impl App {
             Update::Error(error) => self.notice(error, Tone::Problem),
             #[cfg(feature = "voice")]
             Update::Voice(line) => self.voice = Some(line),
+            Update::Notice(text) => self.notice_until_key(text, Tone::Info),
         }
     }
 

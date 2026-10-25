@@ -321,10 +321,28 @@ adk-rust --provider ollama --model qwen3.5 --sandbox --store-key keychain:adk-ru
 
 The REPL, `code` and `goal` keep long-term facts in `harness.db` (spec 3.1 §7.15.2): the
 preferences you state, how a project builds and tests, what fixed a failure. When a session
-ends — `exit` in the REPL, the end of `code` or `goal` — the session's model distils it into
-facts; later sessions in the same project recall them on each turn. The first run with
-memory says once what is stored and where. `serve` and `--ephemeral` keep no facts, and
-`--no-memory` turns memory off.
+ends — leaving the terminal or `exit` in the REPL, the end of `code` or `goal` — the session's
+model distils it into facts; later sessions in the same project recall them on each turn. The
+first run with memory says once what is stored and where. `serve` and `--ephemeral` keep no
+facts, and `--no-memory` turns memory off.
+
+A session that ends without that — the process killed, the terminal window closed, a signal
+— is distilled at the next start in the same workspace (spec 3.1 §7.33 fix 9). In the
+background, the start distils the five most recent of your sessions there whose distillation
+stops short of their last event, each under the session-end distillation's budget, and says
+what they added:
+
+```text
+2 facts from 1 earlier session that ended without saving were added as assumed; /memory lists them
+```
+
+| Rule | Why |
+|---|---|
+| The facts are `assumed` | Distillation after the fact runs with verified-quote promotion off, as the kernel's consolidation tick does; `adk-rust memory accept ID` confirms one |
+| A session active in the last ten minutes waits for a later start | Another terminal may still be working in it, and distils it itself |
+| A session in `read-only` or `plan` mode teaches nothing | As at the end of any session |
+| The terminal shows the line when it arrives; `--ui repl` prints it at the next prompt | The line console cannot print over the line you are typing |
+| Attached to a running kernel, nothing is caught up at start | The kernel's [consolidation tick](memory.md#consolidation) distils the sessions it missed |
 
 | Status | Means |
 |---|---|

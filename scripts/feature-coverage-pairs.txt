@@ -103,6 +103,8 @@
 # The AWP 2.0 agent edge (spec 3.5 §7.9): tiers, the governed path over HTTP, A2A and MCP,
 # held calls and the public partition.
 2 adk-server awp
+# The edge's SQLite stores and their conformance suite; PostgreSQL and Redis run in the postgres job.
+2 adk-server awp-sqlite
 2 adk-cli vertex-agent-registry
 2 adk-cli vertex-skill-registry
 # The `deploy agent-engine` subcommand: arg-parse and mock create-contract tests.
@@ -115,6 +117,9 @@
 2 adk-cli scripted-model
 # `adk-rust --voice` (spec 3.1 §7.17) end to end on a scripted realtime provider.
 2 adk-cli voice,scripted-model
+# `adk-rust site …` and `awp …` (spec 3.5 §8.1) on adk-site and adk-awp's verifier, with the
+# freeze test's DNS fixture.
+2 adk-cli website,scripted-model
 # adk-cli without the harness: the chat agent and the legacy `code`, `goal` and `ultracode`.
 2 adk-cli gemini no-default
 # adk-cli with no provider at all: every `--provider` reports that it is not compiled.
@@ -299,6 +304,17 @@
 # Site migration (spec 3.5 §7.8): sources, sanitiser, detectors, freeze, parity, probes and the
 # archive, with the S3 and S4 scenario tests, compile and run only here.
 6 adk-site migrate doc
+# Site host adapters (spec 3.5 §7.8): every adapter under the host conformance suite against
+# provider fakes, a local git remote and local rsync, with the doctests; then the shared
+# object-store, HTTP and process code each without the others' features.
+6 adk-site host-s3,host-gcs,host-azure,host-cloudflare,host-netlify,host-github-pages,host-rsync doc
+6 adk-site host-gcs
+6 adk-site host-netlify
+6 adk-site host-github-pages,host-rsync
+# External generators (spec 3.5 §7.8): export, starter projects and assembly from recorded
+# generator output under the launch gate, with the doctests; then one generator alone.
+6 adk-site gen-zola,gen-hugo,gen-astro,gen-build-awesome doc
+6 adk-site gen-astro
 
 # Shard 7 — adk-rag's SurrealDB backend on its own: it and lancedb each compile for about
 # fifteen minutes, and together they made shard 0 the longest job in the tier.

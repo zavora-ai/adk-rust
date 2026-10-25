@@ -34,6 +34,7 @@ mod commands;
 mod phone;
 #[cfg(feature = "channels")]
 mod telegram;
+mod webhooks;
 
 /// Where `up` listens over HTTP when neither `--bind` nor `[kernel] bind` says.
 pub(super) const DEFAULT_BIND: &str = "127.0.0.1:8080";
@@ -145,6 +146,8 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     }
 
     let (approval_store, run_store) = run_and_approval_stores(&setup);
+    // Signed webhooks that wake the kernel's sleepers (spec 3.5 §10 X11).
+    let hooks = webhooks::ingress(user_config().as_deref(), run_store.clone(), APP_NAME)?;
     // The Telegram chat thread, only when `TELEGRAM_BOT_TOKEN` is set (spec 3.3 §5.3).
     #[cfg(feature = "channels")]
     let chat = telegram::Chat::from_env(&setup, store.as_deref()).await?;
@@ -565,6 +568,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         .with_kernel(kernel);
     if let Some(token) = token {
         launcher = launcher.with_auth_token(token);
+    }
+    if let Some(hooks) = hooks {
+        let paths: Vec<String> = hooks.names.iter().map(|name| format!("/hooks/{name}")).collect();
+        println!("  hooks {} (signed webhooks wake the kernel's sleepers)", paths.join(", "));
+        launcher = launcher.with_webhook_ingress(hooks.ingress);
     }
     #[cfg(feature = "surface")]
     if let Some((trail, answers)) = surface_records {

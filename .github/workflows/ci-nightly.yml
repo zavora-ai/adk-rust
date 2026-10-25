@@ -33,7 +33,7 @@ on:
         description: The job to run; `all` runs every job
         type: choice
         default: all
-        options: [all, feature-combinations, supply-chain, durable-stores, integration-tests, harness-eval-live]
+        options: [all, feature-combinations, supply-chain, durable-stores, integration-tests, harness-eval-live, site-soak]
 
 permissions:
   contents: read
@@ -389,6 +389,35 @@ jobs:
       if: always()
       shell: bash
       run: echo "### 🗄️ durable store conformance suites completed" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── S19 soak: a site that never stops changing (spec 3.5 §11) ──
+  # 50,000 products fed every minute for 24 simulated hours on a warped clock against
+  # `DirectoryHost`, with a corrupted delivery, a live blog, a revert and the Guardian
+  # probing throughout. Optimised build; the PR tier runs the scaled scenario.
+  site-soak:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'site-soak' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: site-soak
+        neutralize-wild: 'true'
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      with:
+        tool: cargo-nextest
+
+    - name: Run S19 for 24 simulated hours
+      env:
+        ADK_SITE_S19_FULL: '1'
+      run: >-
+        cargo nextest run -p adk-site --features migrate --cargo-profile ci
+        --run-ignored only -E 'test(s19_full_day)' --no-capture
 
   # ── Integration tests: #[ignore]d tests gated on secrets ───────
   # Requirement 2.3 (scheduled integration coverage). The workspace marks tests

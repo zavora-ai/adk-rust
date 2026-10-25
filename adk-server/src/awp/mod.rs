@@ -55,13 +55,18 @@
 //! ```
 
 pub mod a2a;
+pub mod beacon;
 pub mod chat;
+pub mod consent;
 pub mod control;
+pub mod events;
 pub mod executor;
 pub mod limits;
 pub mod mcp;
 pub mod policy;
 pub mod public;
+#[cfg(any(feature = "awp-sqlite", feature = "awp-postgres", feature = "awp-redis"))]
+pub mod stores;
 pub mod tiers;
 
 use std::sync::{Arc, Weak};
@@ -72,7 +77,8 @@ use adk_awp::v2::capability::CapabilityRegistry;
 use adk_awp::v2::response::envelope_response;
 use adk_awp::v2::routes::{EdgeState, awp_v2_routes};
 use adk_awp::v2::store::{
-    ConsentReceiptStore, HeldCallStore, IdempotencyStore, MemoryEdgeStores, StatusStore, StoreError,
+    ConsentReceiptStore, HeldCallStore, IdempotencyStore, LeadStore, MemoryEdgeStores, StatusStore,
+    StoreError, SubscriptionStore,
 };
 use adk_awp::v2::tier::TierAssigner;
 use adk_core::audit_log::AuditTrail;
@@ -95,7 +101,10 @@ use axum::routing::get;
 use tracing::Instrument as _;
 
 pub use a2a::AgentCardInfo;
+pub use beacon::{BeaconCounts, BeaconStore, InMemoryBeaconStore};
+pub use consent::{ConsentConfig, ConsentPolicy, LeadsData, SubjectData};
 pub use control::{EdgeMode, StatusError};
+pub use events::{EdgeEvents, EventLog, EventsConfig, InMemoryEventLog, RetainedEvent};
 pub use executor::{GovernedExecutor, KeySources};
 pub use limits::EdgeLimits;
 pub use policy::{CapabilityPolicy, PublicPartitionPolicy};
@@ -141,6 +150,10 @@ pub struct EdgeStores {
     pub idempotency: Arc<dyn IdempotencyStore>,
     /// Consent receipts.
     pub consent: Arc<dyn ConsentReceiptStore>,
+    /// Event subscriptions.
+    pub subscriptions: Arc<dyn SubscriptionStore>,
+    /// Leads captured at the edge.
+    pub leads: Arc<dyn LeadStore>,
 }
 
 impl EdgeStores {
@@ -151,7 +164,29 @@ impl EdgeStores {
         idempotency: Arc<dyn IdempotencyStore>,
         consent: Arc<dyn ConsentReceiptStore>,
     ) -> Self {
-        Self { status, held_calls, idempotency, consent }
+        let memory = MemoryEdgeStores::default();
+        Self {
+            status,
+            held_calls,
+            idempotency,
+            consent,
+            subscriptions: Arc::new(memory.subscriptions),
+            leads: Arc::new(memory.leads),
+        }
+    }
+
+    /// Keeps event subscriptions in `subscriptions`; in memory by default.
+    #[must_use]
+    pub fn with_subscriptions(mut self, subscriptions: Arc<dyn SubscriptionStore>) -> Self {
+        self.subscriptions = subscriptions;
+        self
+    }
+
+    /// Keeps leads in `leads`; in memory by default.
+    #[must_use]
+    pub fn with_leads(mut self, leads: Arc<dyn LeadStore>) -> Self {
+        self.leads = leads;
+        self
     }
 
     /// The in-memory `stores`, shared with the caller's handle.
@@ -162,6 +197,8 @@ impl EdgeStores {
             Arc::new(stores.idempotency.clone()),
             Arc::new(stores.consent.clone()),
         )
+        .with_subscriptions(Arc::new(stores.subscriptions.clone()))
+        .with_leads(Arc::new(stores.leads.clone()))
     }
 }
 
@@ -204,6 +241,11 @@ pub struct AwpEdgeBuilder {
     reply_policy: ReplyPolicy,
     sessions: Option<Arc<dyn SessionService>>,
     mcp_sessions: McpSessions,
+    events: EventsConfig,
+    event_log: Option<Arc<dyn EventLog>>,
+    consent: ConsentConfig,
+    subject_data: Option<Arc<dyn SubjectData>>,
+    beacon: Option<Arc<dyn BeaconStore>>,
 }
 
 impl AwpEdgeBuilder {
@@ -343,6 +385,42 @@ impl AwpEdgeBuilder {
         self
     }
 
+    /// Sets the event catalogue, retries, retention and egress policy (spec 3.5 §7.5).
+    #[must_use]
+    pub fn events(mut self, events: EventsConfig) -> Self {
+        self.events = events;
+        self
+    }
+
+    /// Sets where events are retained for replay; in memory by default.
+    #[must_use]
+    pub fn event_log(mut self, log: Arc<dyn EventLog>) -> Self {
+        self.event_log = Some(log);
+        self
+    }
+
+    /// Sets the consent scopes, policy versions and the subject session key (spec 3.5 §7.5).
+    #[must_use]
+    pub fn consent(mut self, consent: ConsentConfig) -> Self {
+        self.consent = consent;
+        self
+    }
+
+    /// Sets the data `GET /awp/v2/consent/export` and `POST /awp/v2/consent/erase` cover;
+    /// by default the leads referencing the subject's receipts ([`LeadsData`]).
+    #[must_use]
+    pub fn subject_data(mut self, data: Arc<dyn SubjectData>) -> Self {
+        self.subject_data = Some(data);
+        self
+    }
+
+    /// Sets where the beacon counts; in memory by default.
+    #[must_use]
+    pub fn beacon_store(mut self, store: Arc<dyn BeaconStore>) -> Self {
+        self.beacon = Some(store);
+        self
+    }
+
     /// Builds the edge.
     ///
     /// # Errors
@@ -368,6 +446,14 @@ impl AwpEdgeBuilder {
         if let Some(governance) = self.governance {
             control.attach_governance(governance);
         }
+        let events = EdgeEvents::new(
+            Arc::clone(&stores.subscriptions),
+            self.event_log.unwrap_or_else(|| Arc::new(InMemoryEventLog::new())),
+            self.events,
+            self.public_url.as_str(),
+        );
+        control.attach_events(events.clone());
+        let references = events::ConsentReferences::default();
         let principal = match self.principal {
             Some(principal) => principal,
             None => AgentPrincipal::new(
@@ -400,6 +486,7 @@ impl AwpEdgeBuilder {
             control: Arc::clone(&control),
             limits: Arc::clone(&limits),
             hold_expiry: self.hold_expiry,
+            references: references.clone(),
         });
         let card = self.card.unwrap_or_else(|| AgentCardInfo {
             name: domain.clone(),
@@ -467,7 +554,31 @@ impl AwpEdgeBuilder {
             &self.public_url,
             self.mcp_sessions,
         )?;
-        let mut router = Router::new().merge(v2).merge(a2a.router()).merge(mcp);
+        let consent = consent::ConsentState {
+            tokens: consent::SubjectTokens::for_config(&self.consent),
+            config: Arc::new(self.consent),
+            store: Arc::clone(&stores.consent),
+            held_calls: Arc::clone(&stores.held_calls),
+            references,
+            events: events.clone(),
+            signer: Arc::clone(&self.keys.receipt),
+            data: self
+                .subject_data
+                .unwrap_or_else(|| Arc::new(LeadsData::new(Arc::clone(&stores.leads)))),
+            audit: audit.clone(),
+        };
+        let beacon_store = self.beacon.unwrap_or_else(|| Arc::new(InMemoryBeaconStore::new()));
+        let beacon = beacon::BeaconState {
+            store: Arc::clone(&beacon_store),
+            consent: Arc::clone(&stores.consent),
+        };
+        let mut router = Router::new()
+            .merge(v2)
+            .merge(a2a.router())
+            .merge(mcp)
+            .merge(events.router())
+            .merge(consent.router())
+            .merge(beacon.router());
         if let Some(public) = &public {
             router = router.route(
                 chat::CHAT_PATH,
@@ -485,7 +596,16 @@ impl AwpEdgeBuilder {
             executor: executor.clone(),
         });
         let router = router.layer(from_fn_with_state(guard, edge_guard));
-        Ok(AwpEdge { inner: Arc::new(EdgeInner { executor, control, tiers, router }) })
+        Ok(AwpEdge {
+            inner: Arc::new(EdgeInner {
+                executor,
+                control,
+                tiers,
+                router,
+                events,
+                beacon: beacon_store,
+            }),
+        })
     }
 }
 
@@ -494,6 +614,8 @@ struct EdgeInner {
     control: Arc<EdgeControl>,
     tiers: Arc<EdgeTiers>,
     router: Router,
+    events: EdgeEvents,
+    beacon: Arc<dyn BeaconStore>,
 }
 
 /// The AWP 2.0 agent edge of one site (spec 3.5 §7.9).
@@ -543,6 +665,11 @@ impl AwpEdge {
             reply_policy: ReplyPolicy::default(),
             sessions: None,
             mcp_sessions: McpSessions::default(),
+            events: EventsConfig::default(),
+            event_log: None,
+            consent: ConsentConfig::default(),
+            subject_data: None,
+            beacon: None,
         }
     }
 
@@ -583,6 +710,16 @@ impl AwpEdge {
     /// Attaches the owner's kill switch unless one is attached; returns whether it was.
     pub fn attach_governance(&self, control: GovernanceControl) -> bool {
         self.inner.control.attach_governance(control)
+    }
+
+    /// The event publisher: releases, catalogue changes and order updates (spec 3.5 §7.5).
+    pub fn events(&self) -> &EdgeEvents {
+        &self.inner.events
+    }
+
+    /// The beacon's daily counts, for the KPI tracker's `beacon` source (spec 3.5 §7.12).
+    pub fn beacon(&self) -> BeaconCounts {
+        BeaconCounts::new(Arc::clone(&self.inner.beacon))
     }
 
     /// A handle that switches the edge to read-only and back, for the back office's incident

@@ -43,6 +43,7 @@ use crate::feed::{ContentSource, FeedChanges, FeedMapping, FeedRecord};
 use crate::gate::{Finding, GateReport};
 use crate::live::{LiveStore, LiveValue};
 use crate::pipeline::{EntryPoint, Published, PublishingPipeline};
+use crate::stream::{StreamLane, StreamStatus};
 
 /// Batch records kept for `site batches`.
 const RECORDS_KEPT: usize = 1_000;
@@ -407,9 +408,17 @@ pub struct UpdateEngineBuilder {
     audit: Option<(Arc<dyn AuditRecorder>, ActingContext)>,
     costs: CostRates,
     schedule: FullCheckSchedule,
+    streams: Option<Arc<StreamLane>>,
 }
 
 impl UpdateEngineBuilder {
+    /// The stream lane: live blogs, tickers and emergency updates, folded into releases
+    /// (spec 3.5 §7.8.3).
+    pub fn streams(mut self, streams: Arc<StreamLane>) -> Self {
+        self.streams = Some(streams);
+        self
+    }
+
     /// The batch policies; default 30 s, news 10 s, shops 60 s.
     pub fn policies(mut self, policies: BatchPolicies) -> Self {
         self.policies = policies;
@@ -477,6 +486,7 @@ impl UpdateEngineBuilder {
             alarms: self.alarms,
             audit: self.audit,
             costs: self.costs,
+            streams: self.streams,
             clock,
             inner: Mutex::new(Inner {
                 batcher: Batcher::new(self.policies),
@@ -531,6 +541,7 @@ pub struct UpdateEngine {
     alarms: Option<Arc<dyn AlarmSink>>,
     audit: Option<(Arc<dyn AuditRecorder>, ActingContext)>,
     costs: CostRates,
+    streams: Option<Arc<StreamLane>>,
     clock: Arc<dyn Clock>,
     inner: Mutex<Inner>,
 }
@@ -566,6 +577,7 @@ impl UpdateEngine {
             audit: None,
             costs: CostRates::default(),
             schedule: FullCheckSchedule::default(),
+            streams: None,
         }
     }
 
@@ -806,18 +818,120 @@ impl UpdateEngine {
         self.publish_all(closed).await
     }
 
-    /// Closes the windows that have elapsed, publishes them, and runs the full checks when
-    /// they are due.
+    /// Folds the streams that are due, closes the windows that have elapsed, publishes
+    /// them, and runs the full checks when they are due.
     ///
     /// # Errors
     ///
-    /// Store, alarm, gate and publishing errors.
+    /// Store, alarm, gate, signing and publishing errors.
     pub async fn tick(&self) -> Result<Vec<BatchRecord>> {
+        let mut records = self.fold_streams().await?;
         let now = self.clock.now();
         let closed = self.inner.lock().await.batcher.poll(now);
-        let records = self.publish_all(closed).await?;
+        records.extend(self.publish_all(closed).await?);
         self.full_checks_if_due().await?;
         Ok(records)
+    }
+
+    fn lane(&self) -> Result<&Arc<StreamLane>> {
+        self.streams
+            .as_ref()
+            .ok_or_else(|| SiteError::Pipeline("the engine has no stream lane".into()))
+    }
+
+    /// Opens a stream on a published story's stream field (spec 3.5 §7.8.3 "Stream").
+    ///
+    /// # Errors
+    ///
+    /// [`SiteError::NotFound`] for an unknown story; [`SiteError::InvalidConfig`] when
+    /// `field` is not a stream field of the story's kind; as [`StreamLane::open`].
+    pub async fn open_stream(&self, item: &ContentId, field: &str) -> Result<()> {
+        let story =
+            self.store.get(item).await?.ok_or_else(|| SiteError::NotFound(item.0.clone()))?;
+        let config = self.pipeline.site_config();
+        if !crate::lanes::stream_fields(config, story.kind).iter().any(|f| f == field) {
+            return Err(SiteError::InvalidConfig(format!(
+                "'{field}' is not a stream field of {} items; declare it under [lanes.{}] stream",
+                crate::content::kind_name(story.kind),
+                crate::content::kind_name(story.kind)
+            )));
+        }
+        self.lane()?.open(&story, field, self.clock.now()).await
+    }
+
+    /// Appends a reporter's entry to an open stream; the edge serves it at once.
+    ///
+    /// # Errors
+    ///
+    /// As [`StreamLane::append`].
+    pub async fn append_entry(
+        &self,
+        item: &ContentId,
+        markdown: &str,
+        corrects: Option<u64>,
+    ) -> Result<awp_types::StreamEntry> {
+        self.lane()?.append(item, markdown, corrects, self.clock.now()).await
+    }
+
+    /// The entries of a stream after number `after`: the edge feed the page polls.
+    ///
+    /// # Errors
+    ///
+    /// As [`StreamLane::since`].
+    pub async fn stream_since(
+        &self,
+        item: &ContentId,
+        after: u64,
+    ) -> Result<Vec<awp_types::StreamEntry>> {
+        self.lane()?.since(item, after).await
+    }
+
+    /// Closes a stream; its last entries fold at the next [`tick`](Self::tick).
+    ///
+    /// # Errors
+    ///
+    /// As [`StreamLane::close`].
+    pub async fn close_stream(&self, item: &ContentId) -> Result<()> {
+        self.lane()?.close(item, self.clock.now()).await
+    }
+
+    /// The streams and their folds.
+    pub async fn streams(&self) -> Vec<StreamStatus> {
+        match &self.streams {
+            Some(lane) => lane.status().await,
+            None => Vec::new(),
+        }
+    }
+
+    /// Folds every due stream into its story and queues the folded story for release.
+    async fn fold_streams(&self) -> Result<Vec<BatchRecord>> {
+        let Some(lane) = &self.streams else { return Ok(Vec::new()) };
+        let now = self.clock.now();
+        let mut updates = Vec::new();
+        for id in lane.due(now).await {
+            let Some(story) = self.store.get(&id).await? else { continue };
+            if let Some(folded) = lane.fold(&story, now).await? {
+                let entries =
+                    lane.status().await.into_iter().find(|s| s.item == id).map_or(0, |s| s.entries);
+                self.record(
+                    "site.stream.folded",
+                    serde_json::json!({ "item": id, "entries": entries }),
+                )
+                .await?;
+                updates.push(Update {
+                    item: folded,
+                    at: now,
+                    entry: EntryPoint::Schedule,
+                    proposer: format!("stream:{id}"),
+                    trigger: None,
+                    model_calls: 0,
+                });
+            }
+        }
+        if updates.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.queue(updates).await
     }
 
     /// Publishes everything pending now, as at shutdown.

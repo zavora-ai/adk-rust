@@ -113,6 +113,7 @@ pub(crate) struct Inner {
     pub(crate) control: Arc<EdgeControl>,
     pub(crate) limits: Arc<EdgeLimits>,
     pub(crate) hold_expiry: Option<chrono::Duration>,
+    pub(crate) references: super::events::ConsentReferences,
 }
 
 fn refused(code: ErrorCode, message: impl Into<String>) -> InvocationOutcome {
@@ -452,6 +453,12 @@ impl GovernedExecutor {
             }
         }
 
+        // Who referenced a receipt hears of its revocation (AWP 2.0 §9.2).
+        if let Some(requester) = &invocation.requester
+            && !invocation.consent.is_empty()
+        {
+            inner.references.note(&invocation.consent, requester);
+        }
         // At least 128 bits of entropy (AWP 2.0 §7.6).
         let call_id = format!("call_{}", Uuid::new_v4().simple());
         let outcome = self.govern(tool, &invocation, &call_id).await;

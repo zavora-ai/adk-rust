@@ -13,6 +13,13 @@
 //! render the changed items and their dependents only, from the [`DependencyGraph`] of the
 //! previous build, and give the same files a full build gives.
 
+#[cfg(any(
+    feature = "gen-zola",
+    feature = "gen-hugo",
+    feature = "gen-astro",
+    feature = "gen-build-awesome"
+))]
+pub mod external;
 mod files;
 mod plan;
 mod render;
