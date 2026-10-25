@@ -1,9 +1,9 @@
 // Spec 3.3 §5.1, §8.1, §10 K5, §12 phase 3 end to end, on `adk-rust up` with a scripted model
-// (`e2e/memory-kernel.sh`): the home corrects what the agents remember through the kernel; a
-// rule allowed without asking, with an end date, is extended, covers the next call, and once
-// stopped the next identical call waits; and "Every action is on record" agrees with
-// `adk-rust audit verify` on an export of the same record. Audit records carry ids, never a
-// fact's text.
+// (`e2e/memory-kernel.sh`): the home corrects what the agents remember through the kernel —
+// any fact fixed or forgotten, a guess confirmed; a rule allowed without asking, with an end
+// date, is extended, covers the next call, and once stopped the next identical call waits; and
+// "Every action is on record" agrees with `adk-rust audit verify` on an export of the same
+// record. Audit records carry ids, never a fact's text.
 import { execFileSync } from "node:child_process";
 import { createPrivateKey, createPublicKey } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -116,12 +116,21 @@ test("Memory and rules corrects the memory, extends and stops a rule, and agrees
   await fact("Your bank is [BANK]").getByRole("button", { name: "Forget it" }).click();
   await expect(remember.getByRole("status")).toHaveText("Forgotten. Your agents won't use it from their next step.");
   await expect(remember.getByText("Your bank is [BANK]")).toHaveCount(0);
+  // What the person said or confirmed is fixed and forgotten the same way; only a guess is
+  // confirmed.
+  await expect(fact("You bill [CLIENT] at [RATE] an hour").getByRole("button", { name: "That's right" })).toHaveCount(0);
+  await fact("You bill [CLIENT] at [RATE] an hour").getByRole("button", { name: "Fix it" }).click();
+  await words.fill("You bill [CLIENT] at [NEW RATE] an hour");
+  await words.press("Enter");
+  await expect(fact("You bill [CLIENT] at [NEW RATE] an hour").getByText("You confirmed this")).toBeVisible();
+  await expect(remember.getByText("You bill [CLIENT] at [RATE] an hour")).toHaveCount(0);
+  await fact("Your accountant is [NAME]").getByRole("button", { name: "Forget it" }).click();
+  await expect(remember.getByText("Your accountant is [NAME]")).toHaveCount(0);
   const facts = (await memory(request)).facts;
   expect(facts.map((entry) => [entry.text, entry.origin]).sort()).toEqual(
     [
-      ["You bill [CLIENT] at [RATE] an hour", "youSaidThis"],
+      ["You bill [CLIENT] at [NEW RATE] an hour", "youConfirmedThis"],
       ["You send invoices on the first working day", "youConfirmedThis"],
-      ["Your accountant is [NAME]", "youConfirmedThis"],
     ].sort(),
   );
 
@@ -198,7 +207,7 @@ test("Memory and rules corrects the memory, extends and stops a rule, and agrees
         await expect(shown).toContainText("signed yet");
       }
       // The record names facts by id, never by their text.
-      for (const text of ["Your bank is [BANK]", "You send invoices on the last working day", "[NAME]"]) {
+      for (const text of ["Your bank is [BANK]", "You send invoices on the last working day", "[NAME]", "[NEW RATE]", "[RATE]"]) {
         expect(verified.text).not.toContain(text);
       }
       return;

@@ -134,11 +134,14 @@ function Remember({ seams }: { seams: Seams }) {
                 <Pill kind={provenance[fact.provenance].kind}>{provenance[fact.provenance].text}</Pill>
                 {fact.provenance === "aGuess" && fact.noticedBy && <span>{labels.noticedThis(fact.noticedBy)}</span>}
               </p>
-              {fact.provenance === "aGuess" && memory && fixing !== fact.id && (
+              {/* Every fact can be fixed or forgotten; only a guess can be confirmed. */}
+              {memory && fixing !== fact.id && (
                 <p className="row-actions">
-                  <button type="button" className="link link-accent" onClick={() => void act(() => memory.confirm(fact.id))}>
-                    {labels.thatsRight}
-                  </button>
+                  {fact.provenance === "aGuess" && (
+                    <button type="button" className="link link-accent" onClick={() => void act(() => memory.confirm(fact.id))}>
+                      {labels.thatsRight}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="link"

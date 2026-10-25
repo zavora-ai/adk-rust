@@ -92,9 +92,34 @@ describe("What your agents remember", () => {
     await within(remember).findByText("You send invoices on the first working day.");
     expect(within(remember).getByRole("status").textContent).toBe("Fixed. Your agents use your words from now on.");
 
+    // A confirmed fact can still be fixed or forgotten; only a guess can be confirmed.
     const confirmed = within(remember).getByText("Your accountant is [NAME].").closest("li")!;
-    expect(within(confirmed).queryByRole("button", { name: "Forget it" })).toBeNull();
+    expect(within(confirmed).queryByRole("button", { name: "That's right" })).toBeNull();
+    expect(within(confirmed).getByRole("button", { name: "Fix it" })).toBeTruthy();
+    expect(within(confirmed).getByRole("button", { name: "Forget it" })).toBeTruthy();
     expect(calls).toEqual(["confirm f2", "fix f3 You send invoices on the first working day."]);
+  });
+
+  it("fixes and forgets what the person said or confirmed, and offers That's right on guesses only", async () => {
+    const { seam, calls } = memory();
+    const { remember } = await openMemory({ ...fixtureSeams(), memory: seam });
+    const said = (await within(remember).findByText("You bill [CLIENT] at [RATE] an hour.")).closest("li")!;
+    expect(within(said).queryByRole("button", { name: "That's right" })).toBeNull();
+    for (const guess of within(remember).getAllByText("A guess")) {
+      expect(within(guess.closest("li")!).getByRole("button", { name: "That's right" })).toBeTruthy();
+    }
+
+    await userEvent.click(within(said).getByRole("button", { name: "Fix it" }));
+    const field = within(remember).getByRole("textbox", { name: "Your words" });
+    await userEvent.clear(field);
+    await userEvent.type(field, "You bill ACME at 150 USD an hour.{Enter}");
+    const fixed = (await within(remember).findByText("You bill ACME at 150 USD an hour.")).closest("li")!;
+    expect(within(fixed).getByText("You confirmed this")).toBeTruthy();
+
+    await userEvent.click(within(fixed).getByRole("button", { name: "Forget it" }));
+    await waitFor(() => expect(within(remember).queryByText("You bill ACME at 150 USD an hour.")).toBeNull());
+    expect(within(remember).getByRole("status").textContent).toBe("Forgotten. Your agents won't use it from their next step.");
+    expect(calls).toEqual(["fix f1 You bill ACME at 150 USD an hour.", "forget f9"]);
   });
 
   it("forgets a guess, and it is gone from the list", async () => {
