@@ -292,7 +292,8 @@ approved
 | `exit`, Ctrl-D | Detaches; the session stays on the kernel |
 
 `adk-rust` with no subcommand attaches when a kernel answers on the default socket.
-`--ephemeral`, `--continue` and `--voice` keep the in-process REPL of the [harness](../harness/cli.md).
+`--ephemeral`, `--continue` and `--voice` keep the harness in this process, as the
+[harness](../harness/cli.md) REPL or, for `--voice` on a terminal, the terminal's voice mode.
 
 ## `adk-rust ps` and `top`
 

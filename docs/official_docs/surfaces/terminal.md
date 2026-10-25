@@ -17,7 +17,8 @@ commands.
 | Full screen | none (the default on a capable terminal), or `--ui full` | The alternate screen in raw mode: status line, roster, coming up, "While you were away", the thread, decision boxes, the message box and key hints |
 | Inline | `--ui inline` (the default unless standard input and output are both a terminal of at least 60 by 16) | The same thread and decision boxes printed into the scrollback, the message box on the last line. With standard input piped, or `TERM=dumb`, plain lines only: each line read is a message, sent once the turn before it has finished, and decisions wait in the inbox |
 | JSON | `--output json` | One engine event per line, then an `end` line, and an exit code — for CI |
-| REPL | `--ui repl`, or `--voice` | The line-by-line harness REPL the full screen replaced as the default |
+| REPL | `--ui repl` | The line-by-line harness REPL the full screen replaced as the default |
+| Voice | `--voice` (features `voice` and `voice-desktop`) | The terminal in process with a voice conversation beside the thread — see [Voice and Video](voice.md#in-the-terminal) |
 
 ```bash
 cargo install adk-cli
@@ -47,7 +48,8 @@ the session's workspace — `--continue` opens the latest session of the workspa
 session records the workspace, and a session that works in another workspace is refused.
 
 With the `tui` feature, `adk-rust` without a subcommand is the terminal in place of the
-REPL; `--ui repl` and `--voice` keep the REPL. `--server`, `--home` and `--token` go after a kernel subcommand (`adk-rust freeze
+REPL; `--ui repl` keeps the REPL, and `--voice` with a first turn, `--voice-input` or
+`--voice-output` keeps the console voice. `--server`, `--home` and `--token` go after a kernel subcommand (`adk-rust freeze
 --server URL`); before one they are refused.
 
 To pair a terminal on another machine, run `adk-rust pair` on the kernel's machine, then
