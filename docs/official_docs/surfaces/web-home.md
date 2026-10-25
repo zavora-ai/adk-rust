@@ -132,9 +132,9 @@ happens only here or on a paired local terminal (§11 S-I10).
 
 | Section | What it shows | Where it reads it |
 |---|---|---|
-| **Threads** | The roster (avatar, name, status word), the selected agent's thread with its decisions inline on their own background, **Decisions** with a filled count badge, **Coming up**. A thread follows one conversation: the session the agent's row names when it is first shown, or a new one, kept for the tab. A decision of another session, opened from **Decisions** or **Today**, shows in that session's thread with "A decision from another conversation" and **Back to your conversation**, and no message box; the thread still follows its own conversation | `GET /surface/agents`, the session feed, `GET /surface/decisions`, the kernel's processes and agenda |
+| **Threads** | The roster (avatar, name, status word), the selected agent's thread with its decisions inline on their own background, **Decisions** with a filled count badge, **Coming up** (today's times, and the day for what comes later in the week, so a weekday routine seen on a Saturday reads "Mon 09:00"). A thread follows one conversation: the session the agent's row names when it is first shown, or a new one, kept for the tab. A decision of another session, opened from **Decisions** or **Today**, shows in that session's thread with "A decision from another conversation" and **Back to your conversation**, and no message box; the thread still follows its own conversation | `GET /surface/agents`, the session feed, `GET /surface/decisions`, the kernel's processes and agenda |
 | **Today** | "While you were away": spent, quiet time, how many things wait, one line per event since you last marked it seen with a status pill, its actions and its record, **Mark as seen**, and today's routines with **Add a routine** | `GET /kernel/away`, `GET /kernel/away/lines/{seq}`, `POST /kernel/away/seen`, `GET /kernel/settings`, the kernel's agenda; **Do it** and **Not now** answer a suggestion through `POST /kernel/agenda/{id}/approve` or `reject`. Without a kernel ledger, `GET /surface/briefing` |
-| **Memory & rules** | "Agent Memory and Rules": **What your agents remember**, **What your agents can do** and **What your agents did**, as bordered lists | `GET /rules` (with **Stop allowing**), `GET /kernel/settings` and its changes, `GET /surface/briefing`; **Where you can say yes from** from `GET /kernel/devices` and `GET /kernel/channels`, with **Remove**, **Add a phone or app** (a pairing code from `POST /kernel/pairing`) and **Pair a chat account** (`POST /kernel/channels/pair`) when the kernel pairs devices |
+| **Memory & rules** | "Agent Memory and Rules": **What your agents remember**, **What your agents can do** and **What your agents did**, as bordered lists | `GET /kernel/memory` and its corrections; `GET /rules` with **Extend** (`POST /rules/{id}/extend`) and **Stop allowing**; `GET /kernel/settings` and its changes; each agent's spend from `GET /kernel/processes`; `GET /kernel/record` and `GET /kernel/record/check`, or `GET /surface/briefing` without a signed record; **Where you can say yes from** from `GET /kernel/devices` and `GET /kernel/channels`, with **Remove**, **Add a phone or app** (a pairing code from `POST /kernel/pairing`) and **Pair a chat account** (`POST /kernel/channels/pair`) when the kernel pairs devices |
 
 | Light | Dark |
 |---|---|
@@ -173,6 +173,22 @@ before, after one held write allowed from the home:
 |---|---|
 | ![The morning briefing on Threads](../images/surfaces/web-briefing-light.png) | ![The morning briefing, dark](../images/surfaces/web-briefing-dark.png) |
 
+### What your agents remember
+
+Each fact the agents remember is read from `GET /kernel/memory` (spec 3.3 §10 K5,
+[Settings, While You Were Away, Memory and Record](../kernel/today-and-memory.md#what-your-agents-remember))
+with where it came from: **You said this**, **You confirmed this**, or **A guess** with what
+noticed it. Every fact offers **Fix it** (the person's words replace it, in place, and it
+becomes **You confirmed this**; Esc closes it) and **Forget it**; a guess also offers
+**That's right**. Each goes through the kernel's route for it, which takes the person's answer
+only, never a paired device's. The page says what became of each:
+"Forgotten. Your agents won't use it from their next step." The latest overnight tidy-up
+that changed something and was not undone shows above the list in words — "Overnight, your
+agents merged two notes into one." — with **Undo**, which restores the notes it merged and
+says how many came back; a note the person changed since stays as they left it. The kernel
+records each correction with the fact's or the tidy-up's id, never its text. Where the agents
+keep no long-term memory (`adk-rust up --no-memory`), the list says so.
+
 ### What your agents can do
 
 Quiet time, the daily spending limit and the mode are read per area from
@@ -185,15 +201,69 @@ change's `from` and `to`. Only the person changes them: the kernel refuses a cal
 area, the header's status line follows its settings in force.
 
 Quiet time reads and saves on the clock of the device the page is open on. A window saved
-from the home carries that device's offset (`utcOffsetMinutes`), so the kernel keeps the hours
-the person typed. A window without one — from `--quiet-hours` or `harness.toml` — is kept in
-the server's time zone, which `GET /surface/status` names as `hostUtcOffsetMinutes`; the page
-moves its times to the device's clock, so 22:00–07:00 on a server in UTC reads 01:00–10:00 in
+from the home carries that device's IANA time zone (`timeZone`) and its offset now
+(`utcOffsetMinutes`), so the kernel keeps the hours the person typed, across daylight saving
+time where it reads zones. A window in a zone is read at that zone's offset; one with only an
+offset at it; one with neither — from `--quiet-hours` or `harness.toml` — is kept in the
+server's time zone, which `GET /surface/status` names as `hostUtcOffsetMinutes`. The page moves
+its times to the device's clock, so 22:00–07:00 on a server in UTC reads 01:00–10:00 in
 Nairobi.
 
 | Light | Dark |
 |---|---|
 | ![Changing quiet time](../images/surfaces/web-settings-light.png) | ![Changing quiet time, dark](../images/surfaces/web-settings-dark.png) |
+
+**Allowed without asking** lists the person's standing rules that allow a call, each as a
+sentence — "Your agents can use write_file within notes/." — with its end date, **Ended** once
+it has passed, or **No end date**. A rule with an end date offers **Extend**, a date in place
+(the day it lasts through; thirty days on by default; Esc closes it) that moves its end later
+through `POST /rules/{id}/extend` and shows "Was until 30 November. Now until 30 December.";
+**Stop allowing** revokes it, so the next call it covered waits for the person again (spec 3.3
+§12 phase 3). A rule without an end date applies until it is stopped, so it has nothing to
+extend.
+
+Below the settings, each area lists its agents, with their avatar, status word and what each
+spent today, from the same daily totals as the area's "spent today", so they add up to it
+(spec 3.3 §12 phase 4). The kernel's own upkeep — tidying notes, checking what agents do — is
+one line, shown when it spent something.
+
+### What your agents did
+
+**Every action is on record** is the check `adk-rust audit verify` makes, run by the kernel on
+its signed record (`GET /kernel/record/check`): with every action signed, "All 1,284 of them,
+and nothing has been changed or deleted." The log signs a checkpoint after 256 actions, or on
+its next action a minute after the last, so the newest actions can wait for their signature:
+the page then says how many are not signed yet, and that the check can't vouch for them until
+they are — as `adk-rust audit verify` reports them `unanchored` — never that anything was
+changed. Any other failure reads "Something on record was changed or deleted.", with the
+check's words under **Details**. **Check again** runs it again.
+
+The latest actions are sentences from the record's lines (`GET /kernel/record`): an answer
+and where it was given ("You said yes to send_email, from Telegram."), a rule allowed, extended
+or stopped, a stop or resume, an agent's tool call ("ADK-Rust used write_file."), and the
+person's corrections and settings, which the kernel's records name. Housekeeping and messages
+are left out of the list, though the check counts them. A server without a signed record shows
+the latest lines of the activity ledger instead.
+
+`adk-rust up --mode ask` on `claude-sonnet-5-5`, after a session that left three facts, a
+rule for `write_file` within `notes/` extended from the home, one write it covered, **Stop
+allowing**, and the next identical write held and denied; the record signed and checked, as
+`adk-rust audit verify` reports it VALID:
+
+| Memory and rules (light) | Memory and rules (dark) |
+|---|---|
+| ![Memory and rules on a live run](../images/surfaces/web-live-memory-light.png) | ![Memory and rules on a live run, dark](../images/surfaces/web-live-memory-dark.png) |
+
+| The next identical call waits once the rule is stopped |
+|---|
+| ![A held write after Stop allowing](../images/surfaces/web-live-rule-stopped-light.png) |
+
+Two areas, `work` (Go ahead, a quiet window of its own, a $5 limit) and `home` (Ask first, a
+$2 limit), from `[[kernel.partitions]]`:
+
+| Work (light) | Home (dark) |
+|---|---|
+| ![Work's settings and agents](../images/surfaces/web-areas-light.png) | ![Home's settings and agents, dark](../images/surfaces/web-areas-dark.png) |
 
 ### Pairing a chat account
 
@@ -214,9 +284,6 @@ the screens.
 
 | Control | Needs | Shown today |
 |---|---|---|
-| **What your agents remember**: **That's right**, **Fix it**, **Forget it**, **Undo** | K5 | "Nothing your agents remember is shown here yet." |
-| **Every action is on record** and **Check again** | K5 | The latest lines of the activity ledger |
-| **Extend** for what is allowed without asking | A route that extends a standing rule; `/rules` lists, creates and stops them only | Each rule's end date, with **Stop allowing** |
 | **Confirm it's you and approve** | The passkey route of the phone package | The answer, refused until the server confirms presence |
 
 ## Decisions

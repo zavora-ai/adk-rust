@@ -1,0 +1,32 @@
+# Example Solar
+
+> Solar panels and installation in Nairobi.
+
+Every page has a Markdown version at `<page>/index.md` and a structured version at `<page>/index.awp.json`.
+
+- [Home](https://example.com/index.md)
+
+## Pages
+
+- [About us](https://example.com/about/index.md)
+- [Kuhusu sisi (sw)](https://example.com/sw/about/index.md)
+- [Consent and cookies](https://example.com/consent/index.md)
+- [Privacy policy](https://example.com/privacy/index.md)
+- [Terms of use](https://example.com/terms/index.md)
+
+## Posts
+
+- [Hello, sun](https://example.com/posts/hello/index.md): Why we started.
+- [Habari, jua (sw)](https://example.com/sw/posts/hello/index.md)
+
+## Products
+
+- [Panel 400 W](https://example.com/products/panel-400/index.md): A 400 W monocrystalline panel.
+
+## Events
+
+- [Open day](https://example.com/events/open-day/index.md)
+
+## Notices
+
+- [Water outage at the showroom](https://example.com/notices/water/index.md)

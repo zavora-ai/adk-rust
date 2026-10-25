@@ -17,7 +17,16 @@ import type {
 } from "../generated/api";
 import type { FeedMessage, HomeClient } from "../client";
 import { ApiError } from "../client";
-import type { AgendaItem, AreaSettings, AwayLine, AwayPage, KernelProcess, StandingRule, WakeSet } from "../kernel";
+import type {
+  AgendaItem,
+  AreaSettings,
+  AwayLine,
+  AwayPage,
+  KernelProcess,
+  KernelRecordLine,
+  StandingRule,
+  WakeSet,
+} from "../kernel";
 import { agendaState } from "../kernel";
 import type { Seams } from "../seams";
 
@@ -211,12 +220,20 @@ export const rules: StandingRule[] = [
   {
     id: "rule_accountant",
     tool: "send_email",
-    label: "Finance can email your accountant.",
+    agent: "urn:adk:agent:home/finance",
+    label: "send_email: to [accountant email]",
     decision: { kind: "allow" },
     createdAt: at(9, 0, -20),
     expiresAt: new Date(new Date().getFullYear(), 10, 30, 12).toISOString(),
   },
-  { id: "rule_tests", tool: "bash", label: "Code can run the tests in [REPO].", decision: { kind: "allow" }, createdAt: at(9, 0, -10) },
+  {
+    id: "rule_tests",
+    tool: "bash",
+    agent: "urn:adk:agent:home/code",
+    label: "bash: cargo test …",
+    decision: { kind: "allow" },
+    createdAt: at(9, 0, -10),
+  },
 ];
 
 export function briefing(): Briefing {
@@ -456,6 +473,15 @@ export class FixtureClient implements HomeClient {
     this.ruleList = this.ruleList.filter((rule) => rule.id !== id);
   }
 
+  async extendRule(id: string, until: string) {
+    const rule = this.ruleList.find((candidate) => candidate.id === id);
+    if (!rule) throw new ApiError(404, `you have no rule '${id}'`, "harness.rule.not_found");
+    if (!rule.expiresAt) throw new ApiError(400, "this rule has no end date", "harness.rule.invalid");
+    const extended = { ...rule, expiresAt: until };
+    this.ruleList = this.ruleList.map((candidate) => (candidate.id === id ? extended : candidate));
+    return extended;
+  }
+
   async get<T>(): Promise<T> {
     throw new ApiError(404, "not in the fixture");
   }
@@ -480,6 +506,20 @@ function decidedCard(card: DecisionCard, said: string, byYou: boolean): Decision
       via: byYou ? { surface: "web", origin: { kind: "pointer" } } : { surface: "chat", origin: { kind: "chat", channel: "Telegram" } },
     },
   };
+}
+
+/**
+ * The example's latest actions on record (spec 3.3 §10 K5), newest first, as the kernel lists
+ * them: an answer from Telegram, one from the phone, a refused suggestion, and the kernel's
+ * housekeeping the list leaves out.
+ */
+export function recordLines(): KernelRecordLine[] {
+  return [
+    { seq: 1284, at: at(7, 31), action: "surface.decide", tool: "send_email", decision: "approved", outcome: "decided", how: "chat", channel: "telegram", subject: "ana" },
+    { seq: 1283, at: at(7, 30), action: "kernel.control", kernelAction: "spawn", subject: "ana" },
+    { seq: 1282, at: at(23, 30, -1), action: "surface.decide", tool: "run_tests", decision: "approved", outcome: "decided", how: "touch", subject: "ana" },
+    { seq: 1281, at: at(23, 5, -1), action: "kernel.control", kernelAction: "agenda.reject", subject: "ana" },
+  ];
 }
 
 /** What the example's seams were asked to do, for tests. */
@@ -536,10 +576,13 @@ export function fixtureSeams(calls: SeamCalls = { seen: [], records: [], accepte
     },
     record: {
       check: async () => ({ intact: true, count: 1284, checkedAt: new Date().toISOString() }),
-      recent: async () => [
-        { at: at(7, 31), atText: "07:31", text: "You let Finance send one email, from Telegram." },
-        { at: at(23, 30, -1), atText: "23:30", text: "You let Code run the tests once, from your phone." },
-        { at: at(23, 5, -1), atText: "23:05", text: "Finance suggested a payment. Nothing was paid." },
+      lines: async () => recordLines(),
+    },
+    roster: {
+      spending: async () => [
+        { agent: "finance", area: "default", spentToday: 1_120_000 },
+        { agent: "code", area: "default", spentToday: 420_000 },
+        { agent: "research", area: "default", spentToday: 300_000 },
       ],
     },
     devices: {

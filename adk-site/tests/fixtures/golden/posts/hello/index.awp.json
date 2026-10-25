@@ -1,0 +1,40 @@
+{
+  "path": "/posts/hello/",
+  "releaseSeq": 1,
+  "kind": "post",
+  "language": "en",
+  "title": "Hello, sun",
+  "resource": {
+    "byline": "Amina",
+    "id": "posts/hello/en",
+    "publishedAt": "2026-10-01T09:00:00Z",
+    "summary": "Why we started.",
+    "tags": [
+      "solar",
+      "news"
+    ],
+    "title": "Hello, sun",
+    "url": "https://example.com/posts/hello/"
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    "author": {
+      "@type": "Person",
+      "name": "Amina"
+    },
+    "datePublished": "2026-10-01T09:00:00Z",
+    "description": "Why we started.",
+    "headline": "Hello, sun",
+    "image": [
+      "https://example.com/posts/hello/panel.png"
+    ],
+    "inLanguage": "en",
+    "name": "Hello, sun",
+    "url": "https://example.com/posts/hello/"
+  },
+  "markdown": "https://example.com/posts/hello/index.md"
+}

@@ -3,6 +3,8 @@
 //! These tests spin up an in-process Axum server with all AWP routes and
 //! verify protocol compliance against the endpoints.
 
+#![cfg(feature = "awp-v1")]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

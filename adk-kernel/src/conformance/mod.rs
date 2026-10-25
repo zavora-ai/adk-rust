@@ -16,6 +16,7 @@
 //! | [`PartitionStore`](crate::PartitionStore) | [`PartitionStoreHarness`] | [`partition_store_conformance_tests!`](crate::partition_store_conformance_tests) | [`partition_store`] |
 //! | [`ControlStore`](crate::control::ControlStore) (spec 3.3 §10 K3, K4) | [`ControlStoreHarness`] | [`control_store_conformance_tests!`](crate::control_store_conformance_tests) | [`control_store`] |
 //! | [`CronWatermarkStore`](crate::CronWatermarkStore) | [`CronWatermarkStoreHarness`] | [`cron_watermark_store_conformance_tests!`](crate::cron_watermark_store_conformance_tests) | [`cron_watermark_store`] |
+//! | The charter, KPI, autonomy and signal stores (feature `charter`; spec 3.5 §7.10, §7.11) | `charter::*Harness` | `charter_store_conformance_tests!`, `kpi_store_conformance_tests!`, `autonomy_store_conformance_tests!`, `signal_store_conformance_tests!` | `charter` |
 //!
 //! Chat channel adapters pass `channel_contract` (feature `channels`; spec 3.3 §10 K1): a
 //! `ChannelAdapterHarness` makes a fresh adapter per case and `channel_contract_tests!`
@@ -59,6 +60,8 @@ pub mod agenda_store;
 pub mod channel_binding_store;
 #[cfg(feature = "channels")]
 pub mod channel_contract;
+#[cfg(feature = "charter")]
+pub mod charter;
 pub mod control_store;
 pub mod cron_watermark_store;
 pub mod device_store;

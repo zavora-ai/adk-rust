@@ -62,6 +62,7 @@
 //! | `proc-baselines` | off | The daily baseline pass and observations over `adk-eval`'s ledger statistics (implies `proc`; the only `adk-eval` edge) |
 //! | `channels` | off | The chat channel contract (spec 3.3 §10 K1): the `channels` module, its binding store on every backend, and the adapter contract suite with `conformance` |
 //! | `managed` | off | The managed form: `KernelDef` in a managed definition, one kernel per tenant (`adk-managed`) |
+//! | `charter` | off | `charter` (spec 3.5 §7.10, §7.11): the charter store, the KPI tracker, autonomy records, signals and the site process kinds, on every backend of the process store |
 //! | `conformance` | off | The `conformance` module |
 //!
 //! # Example
@@ -93,6 +94,8 @@ pub mod audit;
 pub mod bus;
 #[cfg(feature = "channels")]
 pub mod channels;
+#[cfg(feature = "charter")]
+pub mod charter;
 #[cfg(feature = "conformance")]
 pub mod conformance;
 pub mod consolidation;

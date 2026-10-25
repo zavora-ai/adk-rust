@@ -1,0 +1,52 @@
+[package]
+name = "adk-site"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Site pipeline for ADK-Rust: content model, static generator, launch gate, signed releases, site log and hosts for AWP 2.0 websites"
+homepage.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/adk-site"
+readme = "README.md"
+keywords = ["adk", "awp", "static-site", "release", "agent"]
+categories = ["web-programming", "asynchronous"]
+include = ["src/**/*", "tests/**/*", "Cargo.toml", "README.md"]
+
+# Spec 3.5 §7.1: the default build carries the content model, the built-in generator, the
+# launch gate, releases, the site log and `DirectoryHost`. External generators and host
+# adapters arrive later as their own features.
+[features]
+default = []
+
+[dependencies]
+adk-core.workspace = true
+# Release signatures and the site log are adk-auth signed notes over a Merkle log (D-11).
+adk-auth = { workspace = true, features = ["signed-audit"] }
+awp-types.workspace = true
+async-trait.workspace = true
+base64 = "0.22"
+bytes = "1"
+chrono.workspace = true
+hex.workspace = true
+# The media pipeline: decoding and re-encoding drops every metadata block, location
+# included (spec 3.5 §7.8.2 "Media").
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+minijinja = "2"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+# The launch gate parses generated HTML with an HTML5 parser, not patterns.
+scraper = "0.25"
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "sync", "rt", "time"] }
+toml.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest = "1.5"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

@@ -1,0 +1,6 @@
+{
+  "usage": "train-ai=n, search=y",
+  "policies": [{"name": "privacy", "url": "https://example.com/privacy/", "version": "1"}],
+  "consentScopes": ["newsletter"],
+  "contact": {"email": "hello@example.com", "page": "https://example.com/about/"}
+}

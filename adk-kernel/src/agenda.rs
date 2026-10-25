@@ -188,9 +188,10 @@ impl AgendaItem {
     pub fn proposer(&self) -> Option<&str> {
         match &self.origin {
             AgendaOrigin::Agent { pid, .. } => Some(pid),
-            AgendaOrigin::User | AgendaOrigin::Consolidation | AgendaOrigin::Observation { .. } => {
-                None
-            }
+            AgendaOrigin::User
+            | AgendaOrigin::Consolidation
+            | AgendaOrigin::Observation { .. }
+            | AgendaOrigin::Signal { .. } => None,
         }
     }
 }
@@ -232,14 +233,25 @@ pub enum AgendaOrigin {
         /// The observation.
         id: String,
     },
+    /// A typed signal from the public partition (spec 3.5 §7.10, §10 X10): the kernel's
+    /// `SignalSink` (feature `charter`) files it in the back office's agenda, and a repeat of
+    /// its kind and topic raises `count` instead of adding an item. Only a person turns one
+    /// into work.
+    Signal {
+        /// The signal's kind, such as `content_gap`.
+        kind: String,
+        /// How many signals of this kind and topic the item stands for.
+        count: u32,
+    },
 }
 
 impl AgendaOrigin {
     /// Whether only a person may approve items of this origin, whatever the partition's
-    /// mode and policy: true for [`Consolidation`](Self::Consolidation) (K-I23) and
-    /// [`Observation`](Self::Observation) (spec 3.2 §7.10).
+    /// mode and policy: true for [`Consolidation`](Self::Consolidation) (K-I23),
+    /// [`Observation`](Self::Observation) (spec 3.2 §7.10) and [`Signal`](Self::Signal)
+    /// (spec 3.5 §7.10).
     pub fn needs_a_person(&self) -> bool {
-        matches!(self, Self::Consolidation | Self::Observation { .. })
+        matches!(self, Self::Consolidation | Self::Observation { .. } | Self::Signal { .. })
     }
 
     /// Whether items of this origin are questions a person answers rather than work the
@@ -249,13 +261,14 @@ impl AgendaOrigin {
         matches!(self, Self::Observation { .. })
     }
 
-    /// The origin's name: `user`, `agent`, `consolidation` or `observation`.
+    /// The origin's name: `user`, `agent`, `consolidation`, `observation` or `signal`.
     pub fn kind(&self) -> &'static str {
         match self {
             Self::User => "user",
             Self::Agent { .. } => "agent",
             Self::Consolidation => "consolidation",
             Self::Observation { .. } => "observation",
+            Self::Signal { .. } => "signal",
         }
     }
 }
@@ -265,6 +278,7 @@ impl fmt::Display for AgendaOrigin {
         match self {
             Self::Agent { pid, .. } => write!(f, "agent:{pid}"),
             Self::Observation { id } => write!(f, "observation:{id}"),
+            Self::Signal { kind, .. } => write!(f, "signal:{kind}"),
             Self::User | Self::Consolidation => f.write_str(self.kind()),
         }
     }
@@ -1069,6 +1083,7 @@ const QUESTION_NOT_RUN: &str = "run: an observation is a question and never beco
 fn needs_a_person(item: &AgendaItem, verb: &str) -> KernelError {
     let why = match &item.origin {
         AgendaOrigin::Observation { .. } => "is an observation's question".to_string(),
+        AgendaOrigin::Signal { kind, .. } => format!("is a {kind} signal (spec 3.5 §7.10)"),
         other => format!("came from the {} tick", other.kind()),
     };
     KernelError::Unauthorized {
@@ -1231,7 +1246,10 @@ impl Agenda {
             .store()
             .list(&AgendaFilter::default().partition(item.partition.clone()).open())
             .await?
-            .len();
+            .iter()
+            // Signals are inputs with a rate limit of their own, not proposals (spec 3.5 §7.10).
+            .filter(|open| !matches!(open.origin, AgendaOrigin::Signal { .. }))
+            .count();
         if open >= policy.max_proposed_open {
             return Ok(Some(format!(
                 "partition {} already has {open} open agenda items, the most max_proposed_open ({}) allows",

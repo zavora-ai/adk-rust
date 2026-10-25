@@ -1,0 +1,24 @@
+{
+  "path": "/terms/",
+  "releaseSeq": 1,
+  "kind": "page",
+  "language": "en",
+  "title": "Terms of use",
+  "resource": {
+    "id": "pages/terms/en",
+    "legal": "terms",
+    "title": "Terms of use",
+    "url": "https://example.com/terms/"
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "inLanguage": "en",
+    "name": "Terms of use",
+    "url": "https://example.com/terms/"
+  },
+  "markdown": "https://example.com/terms/index.md"
+}

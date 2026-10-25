@@ -14,8 +14,15 @@ function shell(kind: Shell): ReactNode {
   switch (kind) {
     case "home": {
       const client = new HttpClient();
-      // The kernel routes the home reads and changes beside the engine's (spec 3.3 §10 K1–K4).
-      const seams = { devices: client.devices(), whileAway: client.whileAway(), limits: client.limits() };
+      // The kernel routes the home reads and changes beside the engine's (spec 3.3 §10 K1–K5).
+      const seams = {
+        devices: client.devices(),
+        whileAway: client.whileAway(),
+        limits: client.limits(),
+        memory: client.memory(),
+        record: client.record(),
+        roster: client.roster(),
+      };
       return <App client={client} seams={seams} takeOver={client.takeOver()} />;
     }
   }

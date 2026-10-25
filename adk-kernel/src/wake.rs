@@ -147,6 +147,15 @@ pub enum Wake {
     },
     /// Only `adk-rust resume`.
     Manual,
+    /// When the kernel's `SignalSink` (feature `charter`) files a signal of `kind` (spec 3.5
+    /// §7.10, §10 X10): in `partition` only, or in any partition when `None`.
+    Signal {
+        /// The signal's kind, such as `content_gap`.
+        kind: String,
+        /// The back-office partition whose signals wake the process.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        partition: Option<PartitionId>,
+    },
 }
 
 /// What happens when a [`WakeSet`] expires before any wake fires (spec 3.2 §7.4).
@@ -529,6 +538,11 @@ fn wake_matches(wake: &Wake, event: &WakeEvent) -> bool {
         }
         Wake::BudgetReplenished { partition } => {
             event.key.starts_with("budget:") && text("partition") == Some(partition.as_str())
+        }
+        Wake::Signal { kind, partition } => {
+            event.key.starts_with("signal:")
+                && text("kind") == Some(kind.as_str())
+                && partition.as_ref().is_none_or(|p| text("partition") == Some(p.as_str()))
         }
         Wake::At(_) | Wake::Manual => false,
     }
