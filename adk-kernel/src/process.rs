@@ -841,6 +841,9 @@ impl ProcessTable {
             // A paused or removed agent takes no work; an added agent runs only in its area
             // (spec 3.3 §5.7, K-I15).
             if let Some(agent) = sup.targets.admit_spawn(&run.target).await? {
+                // A replica that has not built it yet hands its claim back rather than
+                // failing it (spec 3.3 §10 S4).
+                sup.targets.expect(&agent.id);
                 if spec.partition.as_str() == PartitionId::DEFAULT {
                     spec.partition = agent.area;
                 } else if spec.partition != agent.area {
