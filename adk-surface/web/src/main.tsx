@@ -5,6 +5,7 @@ import { App } from "./App";
 import { HttpClient } from "./client";
 import type { Shell } from "./route";
 import { shellOf } from "./route";
+import { TrayPanel } from "./tray/TrayPanel";
 import "./styles/fonts.css";
 import "./styles/tokens.css";
 import "./styles/app.css";
@@ -25,6 +26,8 @@ function shell(kind: Shell): ReactNode {
       };
       return <App client={client} seams={seams} takeOver={client.takeOver()} />;
     }
+    case "tray":
+      return <TrayPanel client={new HttpClient("/api", "tray")} />;
   }
 }
 
