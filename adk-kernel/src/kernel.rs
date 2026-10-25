@@ -914,6 +914,12 @@ impl Kernel {
         self.inner.ledger.as_ref()
     }
 
+    /// What every kernel part shares, for the routes the surfaces need (spec 3.3 §10 K3,
+    /// K4).
+    pub(crate) fn supervision(&self) -> &Arc<Supervision> {
+        &self.inner.sup
+    }
+
     /// Subscribes to the event bus from now on.
     pub fn events(&self) -> EventSubscriber {
         self.inner.sup.bus.subscribe()
@@ -1870,6 +1876,7 @@ impl KernelBuilder {
             proc: proc.clone(),
             partition_targets: self.partition_targets,
             partitions: partitions.clone(),
+            control: config.control.control_store.clone(),
         });
         let run_finished = Arc::new(RunFinishedWakeSource::new());
         let hooks =

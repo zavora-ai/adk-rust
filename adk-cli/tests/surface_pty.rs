@@ -971,7 +971,9 @@ fn a_tool_servers_stderr_never_reaches_the_full_screen() {
         r#"{"mcpServers": {"noisy": {"command": "sh", "args": ["-c", "echo NOISY-SERVER-STDERR >&2; sleep 2"]}}}"#,
     )
     .unwrap();
-    // Trust the workspace, so its servers start.
+    // Trust the workspace, so its servers start: `--trust` records trust for a workspace
+    // with instruction files.
+    std::fs::write(ws.path().join("AGENTS.md"), "Answer briefly.\n").unwrap();
     run(
         &[
             "code",
@@ -990,14 +992,37 @@ fn a_tool_servers_stderr_never_reaches_the_full_screen() {
     expect_screen(&terminal, "Type a message");
     terminal.send("hello\r");
     expect_screen(&terminal, "Hello back.");
-    std::thread::sleep(Duration::from_millis(1500));
+    // `terminal.log` is in the platform's config directory under the test's home.
+    let started = Instant::now();
+    let log = loop {
+        let log = find_file(home.path(), "terminal.log")
+            .map(|path| std::fs::read_to_string(path).unwrap())
+            .unwrap_or_default();
+        if log.contains("NOISY-SERVER-STDERR") || started.elapsed() > Duration::from_secs(10) {
+            break log;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
     let shown = String::from_utf8_lossy(&terminal.bytes()).into_owned();
     terminal.send("\x03");
     let _ = wait_exit(terminal);
     assert!(!shown.contains("NOISY-SERVER-STDERR"), "a server wrote over the full screen");
-    let log = std::fs::read_to_string(home.path().join(".config/adk-rust/terminal.log"))
-        .unwrap_or_default();
-    assert!(log.contains("NOISY-SERVER-STDERR"), "the server's stderr is kept:\n{log}");
+    assert!(log.contains("NOISY-SERVER-STDERR"), "the server started and wrote:\n{log}");
+}
+
+/// The first file named `name` under `dir`.
+fn find_file(dir: &Path, name: &str) -> Option<std::path::PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_file(&path, name) {
+                return Some(found);
+            }
+        } else if path.file_name().is_some_and(|file| file == name) {
+            return Some(path);
+        }
+    }
+    None
 }
 
 /// The terminal in process keeps long-term memory, as the REPL it replaces does.

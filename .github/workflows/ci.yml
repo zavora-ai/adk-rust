@@ -366,6 +366,7 @@ jobs:
         --test driver_store_redis
         --test ledger_store_redis
         --test device_store_redis
+        --test control_store_redis
         --test channel_store_redis
         --test partition_store_redis
 

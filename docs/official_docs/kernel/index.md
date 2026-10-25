@@ -129,6 +129,9 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 - [The control plane](control-plane.md): transports, authentication, routes and audit records
 - [Pairing devices and chat channels](pairing.md): `adk-rust pair`, scoped device tokens, and
   the chat channel contract
+- [Settings, while you were away, memory and record](today-and-memory.md): quiet time, the
+  daily spending limit and the mode while the kernel runs, the digest with a cursor per device,
+  and the memory and record routes behind the home
 - [Running the kernel as a service](service.md): `up --install`, `--uninstall` and `--print`
   on macOS, Linux and Windows
 - [The managed form](managed.md): one kernel per tenant on the managed runtime

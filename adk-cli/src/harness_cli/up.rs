@@ -48,6 +48,9 @@ struct KernelStores {
     ledger: Arc<dyn LedgerStore>,
     /// Paired devices and their waiting codes, hashed (spec 3.3 §10 K2).
     devices: Arc<dyn adk_kernel::pairing::DeviceStore>,
+    /// Settings changed while the kernel runs and each device's place in "While you were
+    /// away" (spec 3.3 §10 K3, K4).
+    control: Arc<dyn adk_kernel::control::ControlStore>,
     /// Whether nothing outlives the kernel (`--ephemeral`).
     ephemeral: bool,
     /// The kill switch's shared state; `None` keeps it in this process.
@@ -149,12 +152,13 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     // The web home records its commands, and how each answer was given, on the same signed
     // log, so "You said yes in Telegram" survives a restart (spec 3.3 §11).
     #[cfg(feature = "surface")]
-    let surface_records = audit.as_ref().map(|(recorder, logs)| {
+    let surface_records = audit.as_ref().map(|(recorder, logs, _)| {
         let answers: Arc<dyn adk_surface::AnswerLog> =
             Arc::new(adk_surface::AuditAnswerLog::new(logs.clone()));
         (AuditTrail::new(recorder.clone()), answers)
     });
-    let audit = audit.map(|(recorder, _)| recorder);
+    let record = audit.as_ref().map(|(_, _, record)| record.clone());
+    let audit = audit.map(|(recorder, _, _)| recorder);
     if let Some(recorder) = &audit {
         governance.attach_audit(AuditTrail::new(recorder.clone()));
     }
@@ -193,6 +197,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                     memory_with_inbox: true,
                     drivers: Some(drivers.clone()),
                     partition: None,
+                    area_modes: Some((stores.control.clone(), adk_kernel::PartitionId::default())),
                     #[cfg(feature = "tui")]
                     local_console: false,
                 },
@@ -207,6 +212,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
                 audit: audit.clone(),
                 memory_with_inbox: true,
                 drivers: Some(drivers.clone()),
+                area_modes: Some((stores.control.clone(), partition.id.clone())),
                 partition: Some((partition, table.clone(), coordinator)),
                 #[cfg(feature = "tui")]
                 local_console: false,
@@ -239,6 +245,28 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         Some(chat) => pairing.with_channel_bindings(chat.bindings()),
         None => pairing,
     };
+    // The routes the home's Today and "Agent Memory and Rules" read and change (spec 3.3 §10
+    // K3–K5): settings and cursors beside the kernel's other stores, the mode each area's
+    // harness started in, its facts through the harness, the record through the signed log.
+    let mut control = ControlPlaneConfig::default()
+        .with_pairing(pairing)
+        .with_control_store(stores.control.clone());
+    for hosted in &hosted {
+        let mode = super::books::partition_mode(hosted.agent.info().default_mode);
+        control = control.with_start_mode(hosted.partition.clone().unwrap_or_default(), mode);
+    }
+    #[cfg(feature = "persist")]
+    if let Some(db) = setup.db.as_ref().filter(|_| setup.memory_on()) {
+        let areas = hosted
+            .iter()
+            .map(|hosted| (hosted.partition.clone().unwrap_or_default(), hosted.harness.clone()))
+            .collect();
+        control = control
+            .with_memory(Arc::new(super::books::HarnessMemoryBook::new(areas, db.facts.clone())));
+    }
+    if let Some(record) = record {
+        control = control.with_record(record);
+    }
     // The run store reads the system clock too, so leases, `not_before` and wake times agree.
     let config = settings.apply(
         KernelConfig::default()
@@ -248,7 +276,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             // The socket at the kernel home, or on Windows the named pipe named after it
             // (spec 3.2 §10 W2), pairing devices beside the kernel's other stores (spec 3.3
             // §10 K2).
-            .with_control(ControlPlaneConfig::default().with_pairing(pairing))
+            .with_control(control)
             .with_clock(Arc::new(adk_core::SystemClock)),
     );
     // The subject key stays in the home; an ephemeral kernel's ledger and key end with it.
@@ -430,7 +458,7 @@ fn tick_sessions(
 /// One harness `up` hosts: its agent, the harness over its runner, and its partition.
 struct Hosted {
     agent: Arc<adk_harness::HarnessAgent>,
-    harness: adk_harness::Harness,
+    harness: Arc<adk_harness::Harness>,
     partition: Option<adk_kernel::PartitionId>,
 }
 
@@ -457,6 +485,7 @@ fn host(
     let harness = adk_harness::Harness::with_runner(agent.clone(), runner.build()?)?
         .with_run_store(run_store.clone())
         .with_goal_queue(QueueClass::BACKGROUND);
+    let harness = Arc::new(harness);
     Ok(Hosted { agent, harness, partition: partition.map(|partition| partition.id.clone()) })
 }
 
@@ -606,6 +635,8 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
         ledger.migrate().await?;
         let devices = adk_kernel::pairing::SqliteDeviceStore::new(db.pool.clone());
         devices.migrate().await?;
+        let control = adk_kernel::control::SqliteControlStore::new(db.pool.clone());
+        control.migrate().await?;
         return Ok(KernelStores {
             processes: Arc::new(processes),
             agenda: Arc::new(agenda),
@@ -614,6 +645,7 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
             drivers: Arc::new(drivers),
             ledger: Arc::new(ledger),
             devices: Arc::new(devices),
+            control: Arc::new(control),
             ephemeral: false,
             governance: Some(Arc::new(governance)),
             label: "harness.db".into(),
@@ -628,6 +660,7 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
         drivers: Arc::new(adk_kernel::stores::InMemoryDriverStore::new()),
         ledger: Arc::new(adk_kernel::proc::InMemoryLedgerStore::new()),
         devices: Arc::new(adk_kernel::pairing::InMemoryDeviceStore::new()),
+        control: Arc::new(adk_kernel::control::InMemoryControlStore::new()),
         ephemeral: true,
         governance: None,
         label: "memory (--ephemeral): nothing outlives the kernel".into(),
@@ -656,6 +689,8 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             ledger.migrate().await?;
             let devices = adk_kernel::pairing::PostgresDeviceStore::new(processes.pool().clone());
             devices.migrate().await?;
+            let control = adk_kernel::control::PostgresControlStore::new(processes.pool().clone());
+            control.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
                 agenda: Arc::new(agenda),
@@ -664,6 +699,7 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
                 drivers: Arc::new(drivers),
                 ledger: Arc::new(ledger),
                 devices: Arc::new(devices),
+                control: Arc::new(control),
                 ephemeral: false,
                 governance: Some(Arc::new(governance)),
                 label,
@@ -690,6 +726,9 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
             let devices =
                 adk_kernel::pairing::RedisDeviceStore::from_client(processes.client().clone());
             devices.migrate().await?;
+            let control =
+                adk_kernel::control::RedisControlStore::from_client(processes.client().clone());
+            control.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
                 agenda: Arc::new(agenda),
@@ -698,6 +737,7 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
                 drivers: Arc::new(drivers),
                 ledger: Arc::new(ledger),
                 devices: Arc::new(devices),
+                control: Arc::new(control),
                 ephemeral: false,
                 governance: Some(Arc::new(governance)),
                 label,
@@ -708,6 +748,14 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
     }
 }
 
+/// The kernel replica's audit recorder, the log store under it, and the record book the
+/// control plane reads and checks it through (spec 3.3 §10 K5).
+type KernelAudit = (
+    Arc<dyn AuditRecorder>,
+    Arc<dyn adk_core::audit_log::AuditLogStore>,
+    Arc<dyn adk_kernel::control::RecordBook>,
+);
+
 /// The kernel replica's signed audit log (spec 3.2 §9.3, K-I16): one hash chain per
 /// replica in the store the harness's are in, signed with a key kept owner-only in the
 /// kernel home. The harness's tool-call records and the kernel's `kernel.*` records share
@@ -717,8 +765,8 @@ async fn kernel_audit(
     home: &Path,
     setup: &Setup,
     store: Option<&str>,
-) -> Result<Option<(Arc<dyn AuditRecorder>, Arc<dyn adk_core::audit_log::AuditLogStore>)>> {
-    use adk_auth::signed_audit::{AuditLog, Ed25519Signer};
+) -> Result<Option<KernelAudit>> {
+    use adk_auth::signed_audit::{AuditLog, AuditSigner as _, Ed25519Signer, NoteVerifier};
     use adk_core::audit_log::AuditLogStore;
 
     let logs: Arc<dyn AuditLogStore> = match store {
@@ -744,9 +792,17 @@ async fn kernel_audit(
             return Err(error).with_context(|| format!("failed to read {}", key_path.display()));
         }
     };
+    // The record routes check the log with the key `adk-rust audit verify` is given (spec 3.3
+    // §10 K5).
+    let verifier = signer
+        .verifier_key()
+        .parse::<NoteVerifier>()
+        .context("the kernel's audit key has no verifier key")?;
+    let record =
+        super::books::SignedRecordBook::new(logs.clone(), format!("kernel-{id}"), verifier);
     let log =
         AuditLog::builder(logs.clone(), format!("kernel-{id}"), Arc::new(signer)).open().await?;
-    Ok(Some((Arc::new(log), logs)))
+    Ok(Some((Arc::new(log), logs, Arc::new(record))))
 }
 
 #[cfg(not(feature = "audit"))]
@@ -754,7 +810,7 @@ async fn kernel_audit(
     _home: &Path,
     _setup: &Setup,
     _store: Option<&str>,
-) -> Result<Option<(Arc<dyn AuditRecorder>, Arc<dyn adk_core::audit_log::AuditLogStore>)>> {
+) -> Result<Option<KernelAudit>> {
     Ok(None)
 }
 
