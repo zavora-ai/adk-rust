@@ -1,0 +1,32 @@
+{
+  "$defs": {
+    "ContentId": {
+      "description": "A content item's id in the site's content repository (spec 3.5 §7.8.2).",
+      "type": "string"
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/catalog-changes-page.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The page of further item ids a `catalog.changed` event's `next` names (spec 3.5 §7.8.3).",
+  "properties": {
+    "items": {
+      "description": "Changed item ids, at most 1,000.",
+      "items": {
+        "$ref": "#/$defs/ContentId"
+      },
+      "type": "array"
+    },
+    "next": {
+      "description": "URL of the next page, when more ids follow.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "CatalogChangesPage",
+  "type": "object"
+}

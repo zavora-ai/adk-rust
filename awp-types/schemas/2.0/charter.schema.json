@@ -1,0 +1,1016 @@
+{
+  "$defs": {
+    "ActionClass": {
+      "examples": [
+        "publish",
+        "charter_change"
+      ],
+      "minLength": 1,
+      "type": "string"
+    },
+    "ApprovalChain": {
+      "description": "The roles that must approve an action class, each by a distinct principal\n(spec 3.5 §7.6, A-I23).\n\nA publication needing an editor's proposal and a publisher's approval is\n`roles: [editor, publisher]`; a charter change needing two owners is `[owner, owner]`.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ActionClass",
+          "description": "The action class."
+        },
+        "roles": {
+          "description": "The roles that must approve, one distinct principal each.",
+          "items": {
+            "$ref": "#/$defs/Role"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "roles"
+      ],
+      "type": "object"
+    },
+    "AutonomyLevel": {
+      "description": "A job's autonomy level (spec 3.5 §7.11).\n\nThe site may lower a job's level and never raise it; raising it is an owner decision\n(A-I13).",
+      "oneOf": [
+        {
+          "const": "observe",
+          "description": "Read-only; output goes to reports.",
+          "type": "string"
+        },
+        {
+          "const": "propose",
+          "description": "Writes become drafts and proposals.",
+          "type": "string"
+        },
+        {
+          "const": "act_with_approval",
+          "description": "Each non-read call is held for approval.",
+          "type": "string"
+        },
+        {
+          "const": "act_within_budget",
+          "description": "Acts within policy, run budget and spend cap; anything beyond is held.",
+          "type": "string"
+        },
+        {
+          "const": "act_reversible_only",
+          "description": "Acts only where the action is declared reversible.",
+          "type": "string"
+        }
+      ]
+    },
+    "Breach": {
+      "description": "Which side of a guardrail's threshold is a breach (spec 3.5 §7.6).",
+      "oneOf": [
+        {
+          "const": "above",
+          "description": "A value above the threshold breaches.",
+          "type": "string"
+        },
+        {
+          "const": "below",
+          "description": "A value below the threshold breaches.",
+          "type": "string"
+        }
+      ]
+    },
+    "Budget": {
+      "description": "The budget (spec 3.5 §7.6, §7.14).",
+      "properties": {
+        "caps": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default": {},
+          "description": "Cap per category per period, in minor units.",
+          "type": "object"
+        },
+        "currency": {
+          "description": "ISO 4217 currency code.",
+          "type": "string"
+        },
+        "period": {
+          "$ref": "#/$defs/Cadence",
+          "description": "The budget period."
+        }
+      },
+      "required": [
+        "currency",
+        "period"
+      ],
+      "type": "object"
+    },
+    "Cadence": {
+      "description": "How often something recurs (spec 3.5 §7.6, §7.11).",
+      "oneOf": [
+        {
+          "const": "daily",
+          "description": "Every day.",
+          "type": "string"
+        },
+        {
+          "const": "weekly",
+          "description": "Every week.",
+          "type": "string"
+        },
+        {
+          "const": "monthly",
+          "description": "Every month.",
+          "type": "string"
+        },
+        {
+          "const": "quarterly",
+          "description": "Every quarter.",
+          "type": "string"
+        }
+      ]
+    },
+    "Channel": {
+      "examples": [
+        "web",
+        "chat",
+        "email",
+        "sms",
+        "voice",
+        "whatsapp",
+        "telegram",
+        "slack",
+        "discord",
+        "matrix",
+        "social",
+        "a2a",
+        "mcp",
+        "http"
+      ],
+      "minLength": 1,
+      "type": "string"
+    },
+    "ConsentScope": {
+      "examples": [
+        "session_continuity",
+        "proactive_outreach",
+        "persistent_profile",
+        "payment_data",
+        "newsletter"
+      ],
+      "minLength": 1,
+      "type": "string"
+    },
+    "ContactLinks": {
+      "description": "Contact links published in the contract and the charter's public terms (spec 3.5 §7.2,\n§7.6).",
+      "properties": {
+        "email": {
+          "description": "Public contact email address.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page": {
+          "description": "URL of the contact page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "security": {
+          "description": "URL of `security.txt` (RFC 9116).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` and 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "Direction": {
+      "description": "Which way a KPI improves (spec 3.5 §7.6).",
+      "oneOf": [
+        {
+          "const": "up",
+          "description": "Higher is better.",
+          "type": "string"
+        },
+        {
+          "const": "down",
+          "description": "Lower is better.",
+          "type": "string"
+        }
+      ]
+    },
+    "Goal": {
+      "description": "A goal and the KPIs that measure it (spec 3.5 §7.6).",
+      "properties": {
+        "id": {
+          "description": "Goal id.",
+          "type": "string"
+        },
+        "kpis": {
+          "default": [],
+          "description": "Ids of the KPIs that measure it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "The goal in plain language.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "Governance": {
+      "description": "Who holds each role and which approval chains apply (spec 3.5 §7.6).",
+      "properties": {
+        "approvalChains": {
+          "default": [],
+          "description": "Approval chains per action class.",
+          "items": {
+            "$ref": "#/$defs/ApprovalChain"
+          },
+          "type": "array"
+        },
+        "roles": {
+          "default": [],
+          "description": "People and the roles they hold.",
+          "items": {
+            "$ref": "#/$defs/RoleHolder"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Guardrail": {
+      "description": "A guardrail: a metric limit whose breach pauses a job or alerts, overriding any growth\ntarget (spec 3.5 §7.6, A-I15).",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/GuardrailAction",
+          "description": "What a breach does."
+        },
+        "breach": {
+          "$ref": "#/$defs/Breach",
+          "description": "Which side of the threshold is a breach."
+        },
+        "id": {
+          "description": "Guardrail id.",
+          "type": "string"
+        },
+        "jobs": {
+          "description": "The jobs a breach pauses; empty means every job that moves the metric.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "metric": {
+          "$ref": "#/$defs/MetricRef",
+          "description": "The metric watched."
+        },
+        "threshold": {
+          "description": "The limit.",
+          "format": "double",
+          "type": "number"
+        },
+        "window": {
+          "description": "The window the metric is evaluated over, in seconds on the wire.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action",
+        "breach",
+        "id",
+        "metric",
+        "threshold",
+        "window"
+      ],
+      "type": "object"
+    },
+    "GuardrailAction": {
+      "description": "What a guardrail breach does (spec 3.5 §7.6).",
+      "oneOf": [
+        {
+          "const": "pause_job",
+          "description": "Pause the affected jobs before their next action.",
+          "type": "string"
+        },
+        {
+          "const": "alert",
+          "description": "Raise an alarm.",
+          "type": "string"
+        }
+      ]
+    },
+    "JobAuthority": {
+      "description": "A job's autonomy level and limits (spec 3.5 §7.6, §7.11).",
+      "properties": {
+        "job": {
+          "description": "Job id.",
+          "type": "string"
+        },
+        "level": {
+          "$ref": "#/$defs/AutonomyLevel",
+          "description": "Autonomy level."
+        },
+        "limits": {
+          "$ref": "#/$defs/JobLimits",
+          "description": "Limits within the level; omitted when there are none."
+        }
+      },
+      "required": [
+        "job",
+        "level"
+      ],
+      "type": "object"
+    },
+    "JobLimits": {
+      "description": "Limits on a job's actions (spec 3.5 §7.6, §7.11).",
+      "properties": {
+        "actionsPerDay": {
+          "description": "Most actions the job may take per day.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "spendCap": {
+          "description": "Most the job may spend per budget period, in the budget currency's minor units.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Kpi": {
+      "description": "A key performance indicator (spec 3.5 §7.6).\n\nA KPI has no target until it has a baseline, and targets are set by the owner (A-I14).",
+      "properties": {
+        "baseline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Measurement"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The baseline measurement."
+        },
+        "cadence": {
+          "$ref": "#/$defs/Cadence",
+          "description": "How often it is measured."
+        },
+        "direction": {
+          "$ref": "#/$defs/Direction",
+          "description": "Which way is better."
+        },
+        "id": {
+          "description": "KPI id.",
+          "type": "string"
+        },
+        "metric": {
+          "$ref": "#/$defs/MetricRef",
+          "description": "The metric, such as `leads.qualified`."
+        },
+        "name": {
+          "description": "Display name.",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceRef",
+          "description": "Where measurements come from."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Target"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The owner's target; `None` until a baseline exists (A-I14)."
+        }
+      },
+      "required": [
+        "cadence",
+        "direction",
+        "id",
+        "metric",
+        "name",
+        "source"
+      ],
+      "type": "object"
+    },
+    "LanguageTag": {
+      "description": "A BCP 47 language tag.",
+      "pattern": "^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$",
+      "type": "string"
+    },
+    "Measurement": {
+      "description": "A measured value over a window (spec 3.5 §7.6).",
+      "properties": {
+        "measuredAt": {
+          "description": "When it was measured.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "value": {
+          "description": "The value.",
+          "format": "double",
+          "type": "number"
+        },
+        "window": {
+          "description": "The window it covers, in seconds on the wire.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "measuredAt",
+        "value",
+        "window"
+      ],
+      "type": "object"
+    },
+    "MetricRef": {
+      "description": "A metric name, such as `leads.qualified` or `pages.answer_citations` (spec 3.5 §7.6).",
+      "type": "string"
+    },
+    "OwnerSignature": {
+      "description": "An owner's signature on a charter version (spec 3.5 §7.6).",
+      "properties": {
+        "decision": {
+          "description": "The decision that committed the version.",
+          "type": "string"
+        },
+        "note": {
+          "description": "The signed note sealing the commit in the audit log.",
+          "type": "string"
+        },
+        "principal": {
+          "description": "The owner's principal.",
+          "type": "string"
+        },
+        "signedAt": {
+          "description": "When it was signed.",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision",
+        "note",
+        "principal",
+        "signedAt"
+      ],
+      "type": "object"
+    },
+    "PolicyRef": {
+      "description": "A published policy (spec 3.5 §7.6).",
+      "properties": {
+        "digest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Digest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Digest of the policy text."
+        },
+        "name": {
+          "description": "Policy name, such as `privacy`, `terms` or `corrections`.",
+          "type": "string"
+        },
+        "url": {
+          "description": "URL.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Version, as consent receipts name it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url",
+        "version"
+      ],
+      "type": "object"
+    },
+    "PriceRule": {
+      "description": "Price changes that act within budget; larger ones are held (spec 3.5 §7.8.2, A-I25).",
+      "properties": {
+        "autoWithinPct": {
+          "description": "Largest change, in percent of the old price, that acts within budget.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "autoWithinPct"
+      ],
+      "type": "object"
+    },
+    "PublicTerms": {
+      "description": "The charter's published part, served at `/.well-known/awp/charter.json` (spec 3.5 §7.6).",
+      "properties": {
+        "consentScopes": {
+          "default": [],
+          "description": "Consent scopes the site asks for.",
+          "items": {
+            "$ref": "#/$defs/ConsentScope"
+          },
+          "type": "array"
+        },
+        "contact": {
+          "$ref": "#/$defs/ContactLinks",
+          "default": {},
+          "description": "How to reach the site."
+        },
+        "policies": {
+          "default": [],
+          "description": "Published policies.",
+          "items": {
+            "$ref": "#/$defs/PolicyRef"
+          },
+          "type": "array"
+        },
+        "usage": {
+          "description": "Usage terms in the IETF AI preferences vocabulary, as sent in `Content-Usage`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "QuietHours": {
+      "description": "Quiet hours in a time zone (spec 3.5 §7.21).",
+      "properties": {
+        "end": {
+          "description": "End, local time.",
+          "format": "partial-time",
+          "type": "string"
+        },
+        "start": {
+          "description": "Start, local time.",
+          "format": "partial-time",
+          "type": "string"
+        },
+        "timezone": {
+          "description": "IANA time zone, such as `Africa/Nairobi`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "end",
+        "start",
+        "timezone"
+      ],
+      "type": "object"
+    },
+    "RedLine": {
+      "description": "A claim, topic or action never allowed (spec 3.5 §7.6).",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/RedLineKind",
+          "description": "What kind of red line."
+        },
+        "text": {
+          "description": "The red line in plain language.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "type": "object"
+    },
+    "RedLineKind": {
+      "description": "What a red line forbids (spec 3.5 §7.6).",
+      "oneOf": [
+        {
+          "const": "claim",
+          "description": "A claim.",
+          "type": "string"
+        },
+        {
+          "const": "topic",
+          "description": "A topic.",
+          "type": "string"
+        },
+        {
+          "const": "action",
+          "description": "An action.",
+          "type": "string"
+        }
+      ]
+    },
+    "Reporting": {
+      "description": "Review cadence, urgency routing and quiet hours (spec 3.5 §7.6, §7.21).",
+      "properties": {
+        "quietHours": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QuietHours"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Quiet hours; P1 alarms ignore them."
+        },
+        "review": {
+          "$ref": "#/$defs/Cadence",
+          "description": "How often the review is sent."
+        },
+        "routes": {
+          "default": [],
+          "description": "Owner channels per urgency.",
+          "items": {
+            "$ref": "#/$defs/UrgencyRoute"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "review"
+      ],
+      "type": "object"
+    },
+    "Role": {
+      "description": "A governance role (spec 3.5 §7.6).",
+      "oneOf": [
+        {
+          "const": "owner",
+          "description": "Owns the site and its charter.",
+          "type": "string"
+        },
+        {
+          "const": "publisher",
+          "description": "Approves publication.",
+          "type": "string"
+        },
+        {
+          "const": "editor",
+          "description": "Drafts and proposes content.",
+          "type": "string"
+        },
+        {
+          "const": "approver",
+          "description": "Approves other actions.",
+          "type": "string"
+        },
+        {
+          "const": "auditor",
+          "description": "Reads everything, changes nothing.",
+          "type": "string"
+        }
+      ]
+    },
+    "RoleHolder": {
+      "description": "A person and the roles they hold (spec 3.5 §7.6).",
+      "properties": {
+        "principal": {
+          "description": "The person's principal.",
+          "type": "string"
+        },
+        "roles": {
+          "description": "Their roles.",
+          "items": {
+            "$ref": "#/$defs/Role"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "principal",
+        "roles"
+      ],
+      "type": "object"
+    },
+    "SiteKind": {
+      "description": "The kind of site; selects a charter template (spec 3.5 §7.16.1).",
+      "oneOf": [
+        {
+          "const": "personal",
+          "description": "Blogs, portfolios, CVs.",
+          "type": "string"
+        },
+        {
+          "const": "business",
+          "description": "Services, local firms, professionals.",
+          "type": "string"
+        },
+        {
+          "const": "ecommerce",
+          "description": "Shops.",
+          "type": "string"
+        },
+        {
+          "const": "government",
+          "description": "Government and public sector.",
+          "type": "string"
+        },
+        {
+          "const": "nonprofit",
+          "description": "Nonprofits and charities.",
+          "type": "string"
+        },
+        {
+          "const": "education",
+          "description": "Schools, colleges, training.",
+          "type": "string"
+        },
+        {
+          "const": "media",
+          "description": "News and media.",
+          "type": "string"
+        },
+        {
+          "const": "health",
+          "description": "Clinics and practitioners.",
+          "type": "string"
+        },
+        {
+          "const": "community",
+          "description": "Clubs, associations, places of worship.",
+          "type": "string"
+        },
+        {
+          "const": "events",
+          "description": "Conferences and festivals.",
+          "type": "string"
+        }
+      ]
+    },
+    "SourceRef": {
+      "examples": [
+        "beacon",
+        "host_logs",
+        "analytics:search_console",
+        "commerce",
+        "spend",
+        "email"
+      ],
+      "minLength": 1,
+      "type": "string"
+    },
+    "StrategyPillar": {
+      "description": "A strategy pillar (spec 3.5 §7.6).",
+      "properties": {
+        "description": {
+          "description": "What it means.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Short name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Target": {
+      "description": "An owner-set target (spec 3.5 §7.6).",
+      "properties": {
+        "horizon": {
+          "description": "When to reach it.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "value": {
+          "description": "The value to reach.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "horizon",
+        "value"
+      ],
+      "type": "object"
+    },
+    "Urgency": {
+      "description": "An alarm's urgency (spec 3.5 §7.21).",
+      "oneOf": [
+        {
+          "const": "p1",
+          "description": "Immediately, inside quiet hours, repeated until acknowledged.",
+          "type": "string"
+        },
+        {
+          "const": "p2",
+          "description": "Within the hour, outside quiet hours.",
+          "type": "string"
+        },
+        {
+          "const": "p3",
+          "description": "The weekly review.",
+          "type": "string"
+        }
+      ]
+    },
+    "UrgencyRoute": {
+      "description": "The owner channels for one urgency (spec 3.5 §7.21).",
+      "properties": {
+        "channels": {
+          "description": "The channels.",
+          "items": {
+            "$ref": "#/$defs/Channel"
+          },
+          "type": "array"
+        },
+        "urgency": {
+          "$ref": "#/$defs/Urgency",
+          "description": "The urgency."
+        }
+      },
+      "required": [
+        "channels",
+        "urgency"
+      ],
+      "type": "object"
+    },
+    "Voice": {
+      "description": "The site's voice (spec 3.5 §7.6).",
+      "properties": {
+        "disclosure": {
+          "description": "The disclosure line on agent-written messages (A-I17).",
+          "type": "string"
+        },
+        "languages": {
+          "default": [],
+          "description": "Languages.",
+          "items": {
+            "$ref": "#/$defs/LanguageTag"
+          },
+          "type": "array"
+        },
+        "tone": {
+          "description": "Tone.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "disclosure",
+        "tone"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/charter.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A site's charter (spec 3.5 §7.6).\n\nThe public part, `PublicTerms`, is published at `/.well-known/awp/charter.json` and its\ndigest appears in the contract; the rest stays in the charter store. A version takes\neffect only when an owner's decision commits it, and only when it satisfies the rules\nlisted on `validate`.\n\n`priceRule` is the charter's price rule that §7.8.2 refers to.",
+  "properties": {
+    "authority": {
+      "default": [],
+      "description": "Per-job autonomy and limits.",
+      "items": {
+        "$ref": "#/$defs/JobAuthority"
+      },
+      "type": "array"
+    },
+    "budget": {
+      "$ref": "#/$defs/Budget",
+      "description": "Budget."
+    },
+    "goals": {
+      "default": [],
+      "description": "Goals, each naming the KPIs that measure it.",
+      "items": {
+        "$ref": "#/$defs/Goal"
+      },
+      "type": "array"
+    },
+    "governance": {
+      "$ref": "#/$defs/Governance",
+      "description": "Roles and approval chains."
+    },
+    "guardrails": {
+      "default": [],
+      "description": "Guardrails that override growth targets (A-I15).",
+      "items": {
+        "$ref": "#/$defs/Guardrail"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "$ref": "#/$defs/SiteKind",
+      "description": "The kind of site; selects the charter template."
+    },
+    "kpis": {
+      "default": [],
+      "description": "KPIs.",
+      "items": {
+        "$ref": "#/$defs/Kpi"
+      },
+      "type": "array"
+    },
+    "mission": {
+      "description": "The mission.",
+      "type": "string"
+    },
+    "priceRule": {
+      "$ref": "#/$defs/PriceRule",
+      "default": {
+        "autoWithinPct": 10.0
+      },
+      "description": "Price changes that act within budget; larger ones are held (§7.8.2, A-I25)."
+    },
+    "public": {
+      "$ref": "#/$defs/PublicTerms",
+      "description": "The published part."
+    },
+    "redLines": {
+      "default": [],
+      "description": "Claims, topics and actions never allowed.",
+      "items": {
+        "$ref": "#/$defs/RedLine"
+      },
+      "type": "array"
+    },
+    "reporting": {
+      "$ref": "#/$defs/Reporting",
+      "description": "Reporting."
+    },
+    "signed": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OwnerSignature"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The owner's signature on this version."
+    },
+    "siteId": {
+      "description": "The site's id.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "strategy": {
+      "default": [],
+      "description": "Strategy pillars.",
+      "items": {
+        "$ref": "#/$defs/StrategyPillar"
+      },
+      "type": "array"
+    },
+    "version": {
+      "description": "Version; increments with every committed change.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "voice": {
+      "$ref": "#/$defs/Voice",
+      "description": "Voice."
+    }
+  },
+  "required": [
+    "budget",
+    "governance",
+    "kind",
+    "mission",
+    "public",
+    "reporting",
+    "siteId",
+    "version",
+    "voice"
+  ],
+  "title": "Charter",
+  "type": "object"
+}

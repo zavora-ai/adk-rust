@@ -2493,6 +2493,7 @@ version = "3.0.0"
 dependencies = [
  "chrono",
  "proptest",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -16580,6 +16581,7 @@ dependencies = [
  "schemars_derive",
  "serde",
  "serde_json",
+ "uuid 1.25.0",
 ]
 
 [[package]]

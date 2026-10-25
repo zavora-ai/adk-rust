@@ -1,0 +1,116 @@
+{
+  "$defs": {
+    "ConsentScope": {
+      "examples": [
+        "session_continuity",
+        "proactive_outreach",
+        "persistent_profile",
+        "payment_data",
+        "newsletter"
+      ],
+      "minLength": 1,
+      "type": "string"
+    },
+    "ContactLinks": {
+      "description": "Contact links published in the contract and the charter's public terms (spec 3.5 §7.2,\n§7.6).",
+      "properties": {
+        "email": {
+          "description": "Public contact email address.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page": {
+          "description": "URL of the contact page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "security": {
+          "description": "URL of `security.txt` (RFC 9116).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` and 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "PolicyRef": {
+      "description": "A published policy (spec 3.5 §7.6).",
+      "properties": {
+        "digest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Digest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Digest of the policy text."
+        },
+        "name": {
+          "description": "Policy name, such as `privacy`, `terms` or `corrections`.",
+          "type": "string"
+        },
+        "url": {
+          "description": "URL.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Version, as consent receipts name it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url",
+        "version"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/charter-public-terms.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The charter's published part, served at `/.well-known/awp/charter.json` (spec 3.5 §7.6).",
+  "properties": {
+    "consentScopes": {
+      "default": [],
+      "description": "Consent scopes the site asks for.",
+      "items": {
+        "$ref": "#/$defs/ConsentScope"
+      },
+      "type": "array"
+    },
+    "contact": {
+      "$ref": "#/$defs/ContactLinks",
+      "default": {},
+      "description": "How to reach the site."
+    },
+    "policies": {
+      "default": [],
+      "description": "Published policies.",
+      "items": {
+        "$ref": "#/$defs/PolicyRef"
+      },
+      "type": "array"
+    },
+    "usage": {
+      "description": "Usage terms in the IETF AI preferences vocabulary, as sent in `Content-Usage`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "PublicTerms",
+  "type": "object"
+}

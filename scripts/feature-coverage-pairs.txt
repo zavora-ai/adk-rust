@@ -246,6 +246,8 @@
 # `DockerClient` and its host-config and bind-mount tests: no workspace member enables
 # `workspace-docker`; the tests that need a Docker daemon are ignored.
 6 adk-sandbox workspace-docker
+# AWP 2.0 JSON Schemas (spec 3.5 §7.2): the drift test against awp-types/schemas/2.0/ runs only here.
+6 awp-types json-schema
 
 # Shard 7 — adk-rag's SurrealDB backend on its own: it and lancedb each compile for about
 # fifteen minutes, and together they made shard 0 the longest job in the tier.

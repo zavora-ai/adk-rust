@@ -1,0 +1,83 @@
+{
+  "$defs": {
+    "EventType": {
+      "examples": [
+        "site.release.published",
+        "site.status.changed",
+        "catalog.changed",
+        "order.updated",
+        "consent.revoked",
+        "subscription.suspended"
+      ],
+      "minLength": 1,
+      "type": "string"
+    },
+    "SubscriptionState": {
+      "description": "Whether a subscription receives deliveries (spec 3.5 §7.5).",
+      "oneOf": [
+        {
+          "const": "active",
+          "description": "Deliveries are made.",
+          "type": "string"
+        },
+        {
+          "const": "suspended",
+          "description": "Suspended after six consecutive failed deliveries.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/subscription.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "An event subscription, created by `POST /awp/v2/events` and owned by the requester that\ncreated it (spec 3.5 §7.5, §7.9).",
+  "properties": {
+    "createdAt": {
+      "description": "When it was created.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "failures": {
+      "default": 0,
+      "description": "Consecutive failed delivery attempts.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "id": {
+      "description": "Subscription id.",
+      "type": "string"
+    },
+    "secret": {
+      "description": "The Standard Webhooks signing secret, `whsec_` and base64; present only in the\nresponse that creates the subscription.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "state": {
+      "$ref": "#/$defs/SubscriptionState",
+      "description": "Whether deliveries are made."
+    },
+    "types": {
+      "description": "The event types delivered, from the site's catalogue.",
+      "items": {
+        "$ref": "#/$defs/EventType"
+      },
+      "type": "array"
+    },
+    "url": {
+      "description": "The `https` URL deliveries are posted to.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "createdAt",
+    "id",
+    "state",
+    "types",
+    "url"
+  ],
+  "title": "EventSubscription",
+  "type": "object"
+}

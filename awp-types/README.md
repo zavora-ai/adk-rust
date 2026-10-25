@@ -13,6 +13,7 @@ Shared protocol types for the [Agentic Web Protocol (AWP)](https://agenticwebpro
 
 Use `awp-types` when you need to:
 
+- parse or produce AWP 2.0 site contracts, release manifests, charters, capabilities, events and receipts
 - parse or produce AWP discovery documents, capability manifests, or A2A messages
 - work with AWP trust levels, requester types, or error codes
 - define payment intents with owner-policy-driven lifecycle
@@ -75,6 +76,78 @@ Use `awp-types` when you need to:
 | `PaymentPolicy` | Auto-approve/require-approval thresholds |
 | `PaymentPolicyDecision` | AutoApprove or RequireApproval |
 
+## AWP 2.0
+
+AWP 2.0 is the signed contract between a website and the people and agents who use it (spec 3.5 §7.2–§7.8.3, §7.10). Its types live in `awp_types::v2` and are re-exported at the crate root beside the 1.0 types, whose names are unchanged. Cryptography and canonicalisation live in `adk-awp` and `adk-auth`; these types only carry and validate the documents.
+
+| Area | Types | Spec |
+|------|-------|------|
+| Site contract (`/.well-known/awp.json`) | `SiteContract`, `SiteRef`, `Profile` (`static`, `static+edge`, `dynamic`), `SurfaceLinks`, `ContractRelease`, `ContractStatus`, `EventsLink`, `PaymentsLink`, `CharterLink`, `ContactLinks`, `VERSION_2_0` | §7.2 |
+| Keys and proofs (`keys.json`) | `Proof` (detached JWS), `KeySet`, `RootKey`, `RootEndorsement`, `RetiredRoot`, `Revocation`, `Delegation`, `KeyScope`, `PublicKeyJwk`, `without_proof` | §7.2 |
+| Identity | `IdentityPolicy`, `IdentityMethod`, `TrustTier` (`Public < Known < Verified < Partner`), `TrustRules`, `TrustRule`, `RateClass`, `RequesterId` | §7.3 |
+| Capabilities | `CapabilityV2`, `CapabilityEffect`, `ConsentRequirement`, `Price`, `ApprovalHint`, `IdempotencySource`, `Deprecation`, `CapabilityManifestV2`, `MachineView` | §7.4 |
+| Held calls | `HeldCall`, `HeldCallState` | §7.4 |
+| Events | `EventEnvelope` (Standard Webhooks), `EventType`, `EventCatalog`, `EventSubscription`, `SubscriptionState`, `ReleasePublished`, `StatusChanged`, `CatalogChanged`, `CatalogChangesPage`, `OrderUpdated`, `ConsentRevoked`, `SubscriptionSuspended` | §7.5, §7.8.3 |
+| Status | `SiteStatus`, `SiteState` | §7.5 |
+| Consent and commerce | `ConsentReceipt`, `ConsentScope`, `LegalBasis`, `Receipt`, `QuoteDocument`, `LineItem` | §7.5 |
+| Errors | `ErrorEnvelope` (with the status document on `read_only`), `ErrorBody`, `ErrorCode` | §7.5, §7.9 |
+| Releases and the site log | `ReleaseManifest` (snapshot or delta), `FileEntry`, `Redirect`, `ReleaseSource`, `GeneratorRef`, `Digest`, `LogEntry`, `HostLimits`, `Atomicity` | §7.7, §7.8.3 |
+| Charter | `Charter`, `SiteKind`, `Governance`, `Role`, `ApprovalChain`, `Goal`, `Kpi`, `Guardrail`, `JobAuthority`, `AutonomyLevel`, `Budget`, `Voice`, `RedLine`, `Reporting`, `Urgency`, `PublicTerms`, `OwnerSignature`, `PriceRule` | §7.6, §7.11, §7.16.1, §7.21 |
+| Signals | `Signal`, `SignalKind`, `Bounded` | §7.10 |
+| Content | `ContentItem`, `ContentKind`, `ContentState`, `Schedule`, `MediaRef`, `FactRef`, `LanguageTag`, `StreamEntry`, `BatchPolicy`, `FeedBounds`, `Bound`, `Rate`, `Trigger` | §7.8.2, §7.8.3 |
+
+Validation helpers are pure:
+
+| Helper | Rule |
+|--------|------|
+| `Charter::validate()` | No KPI target without a baseline (A-I14); at least one owner; no agent holds a role; every approval chain satisfiable by distinct principals (A-I23); unique KPI ids that goals reference |
+| `ApprovalChain::is_satisfied_by()` | Each role of the chain filled by a different person who holds it (A-I23) |
+| `CapabilityV2::requires_idempotency()` | `true` for `NonIdempotent` capabilities (A-I7) |
+| `CapabilityManifestV2::visible_to()` | Lists only the capabilities a tier may see |
+| `ReleaseManifest::is_snapshot()`, `apply_to()` | Snapshot or delta; a delta's full file set |
+| `Bounded::new()` | Length-limited, always untrusted text (A-I3) |
+| `PriceRule::allows()`, `QuoteDocument::is_open()` | Price changes within the rule; quote validity (A-I25) |
+| `ConsentReceipt::covers()` | A live receipt for a scope and policy version (A-I8) |
+| `KeySet::delegates_for()`, `is_revoked()` | Delegations valid for a scope and date, revocations applied |
+| `TrustRules::tier_for()` | The highest tier a verified requester's matching rules grant, else `known` |
+
+```rust
+use awp_types::{
+    CapabilityEffect, CapabilityManifestV2, CapabilityV2, Profile, SiteContract, SiteRef, TrustTier,
+};
+use uuid::Uuid;
+
+fn main() {
+    let mut contract = SiteContract::new(SiteRef {
+        id: Uuid::nil(),
+        name: "Example Solar".into(),
+        domain: "example.com".into(),
+        languages: vec!["en".parse().unwrap(), "sw".parse().unwrap()],
+    });
+    contract.profile = Some(Profile::StaticEdge);
+    let json = serde_json::to_value(&contract).unwrap();
+    assert_eq!(json["awp"], "2.0");
+    assert_eq!(json["profile"], "static+edge");
+
+    let manifest = CapabilityManifestV2::new(vec![
+        CapabilityV2::new("search_site", "Search the site", CapabilityEffect::ReadOnly),
+        CapabilityV2::new("place_order", "Place an order", CapabilityEffect::NonIdempotent)
+            .with_min_trust(TrustTier::Known),
+    ]);
+    assert_eq!(manifest.visible_to(TrustTier::Public).capabilities.len(), 1);
+    assert!(manifest.get("place_order").unwrap().requires_idempotency());
+}
+```
+
+### JSON Schemas
+
+The `json-schema` feature derives `schemars::JsonSchema` for every 2.0 type and adds `awp_types::v2::schema::wire_schemas()`, the JSON Schema (2020-12) of each wire document. The generated schemas are committed under [`schemas/2.0/`](schemas/2.0/): the site contract, `keys.json`, the trust rules, a capability, the capability manifest, a machine view, a held call, an event envelope, an event subscription, a `catalog.changed` page, the site status, a consent receipt, a quote, a receipt, the error envelope, a release manifest, a site log entry, a stream entry, the charter and its public terms. A test fails when they drift from the types.
+
+```toml
+[dependencies]
+awp-types = { version = "3.0", features = ["json-schema"] }
+```
+
 ## Quick Start
 
 ```toml
@@ -82,7 +155,7 @@ Use `awp-types` when you need to:
 awp-types = "3.0"
 ```
 
-The crate has no feature flags.
+The only feature is `json-schema` (off by default).
 
 ```rust
 use awp_types::{AwpError, AwpVersion, BusinessContext, CURRENT_VERSION, TrustLevel};
@@ -113,7 +186,7 @@ fn main() {
 
 ## Design Principles
 
-1. **Zero `adk-*` dependencies** — only `serde`, `serde_json`, `uuid`, `chrono`, `thiserror`
+1. **Zero `adk-*` dependencies** — only `serde`, `serde_json`, `uuid`, `chrono`, `thiserror`, and `schemars` behind `json-schema`
 2. **Backward-compatible** — all extended `BusinessContext` fields use `#[serde(default)]`
 3. **Type-safe** — ordered enums, exhaustive error variants, `Display` impls
 4. **Publishable** — suitable for crates.io (no git dependencies)

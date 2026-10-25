@@ -1,0 +1,167 @@
+{
+  "$defs": {
+    "Channel": {
+      "examples": [
+        "web",
+        "chat",
+        "email",
+        "sms",
+        "voice",
+        "whatsapp",
+        "telegram",
+        "slack",
+        "discord",
+        "matrix",
+        "social",
+        "a2a",
+        "mcp",
+        "http"
+      ],
+      "minLength": 1,
+      "type": "string"
+    },
+    "ConsentScope": {
+      "examples": [
+        "session_continuity",
+        "proactive_outreach",
+        "persistent_profile",
+        "payment_data",
+        "newsletter"
+      ],
+      "minLength": 1,
+      "type": "string"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` and 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "LegalBasis": {
+      "description": "Legal basis for processing under a consent receipt (spec 3.5 §7.5).\n\nThe first three are the AWP 1.0 draft's values; the rest complete the six bases of GDPR\nArticle 6(1), which public bodies rely on.",
+      "oneOf": [
+        {
+          "const": "explicit_consent",
+          "description": "Explicit consent; required for `proactive_outreach`.",
+          "type": "string"
+        },
+        {
+          "const": "legitimate_interest",
+          "description": "Legitimate interest.",
+          "type": "string"
+        },
+        {
+          "const": "contractual_necessity",
+          "description": "Necessary for a contract with the subject.",
+          "type": "string"
+        },
+        {
+          "const": "legal_obligation",
+          "description": "Required by law.",
+          "type": "string"
+        },
+        {
+          "const": "vital_interest",
+          "description": "Protects someone's vital interests.",
+          "type": "string"
+        },
+        {
+          "const": "public_task",
+          "description": "A task in the public interest or official authority.",
+          "type": "string"
+        }
+      ]
+    },
+    "Proof": {
+      "description": "A detached JWS (spec 3.5 §7.2).\n\n`jws` is the compact serialization with an empty payload; the signed payload is the JCS\nform of the enclosing document without its `proof`.",
+      "properties": {
+        "alg": {
+          "description": "JWS algorithm, `EdDSA` in AWP 2.0.",
+          "type": "string"
+        },
+        "jws": {
+          "description": "Detached compact JWS.",
+          "type": "string"
+        },
+        "kid": {
+          "description": "Key id of the signing key in `keys.json`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alg",
+        "jws",
+        "kid"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/consent-receipt.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A consent receipt, signed by the edge and returned to the subject (spec 3.5 §7.5).\n\nA consent-bound action refuses without a live receipt for its scope and policy version\n(A-I8).",
+  "properties": {
+    "channel": {
+      "$ref": "#/$defs/Channel",
+      "description": "The channel consent was given on."
+    },
+    "expiresAt": {
+      "description": "When consent lapses.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "grantedAt": {
+      "description": "When consent was given.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "id": {
+      "description": "Receipt id.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "jurisdiction": {
+      "description": "ISO 3166-1 alpha-2 code of the subject's jurisdiction.",
+      "type": "string"
+    },
+    "legalBasis": {
+      "$ref": "#/$defs/LegalBasis",
+      "description": "Legal basis for processing."
+    },
+    "policyDigest": {
+      "$ref": "#/$defs/Digest",
+      "description": "Digest of the policy text the subject agreed to."
+    },
+    "policyVersion": {
+      "description": "Version of the policy the subject agreed to.",
+      "type": "string"
+    },
+    "proof": {
+      "$ref": "#/$defs/Proof",
+      "description": "The edge's detached JWS, by a delegated `receipt` key, over the JCS form of the receipt\nwithout `proof`."
+    },
+    "scope": {
+      "$ref": "#/$defs/ConsentScope",
+      "description": "The consented scope."
+    },
+    "subjectRef": {
+      "description": "Pseudonymous reference to the subject; never personal data.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "channel",
+    "grantedAt",
+    "id",
+    "jurisdiction",
+    "legalBasis",
+    "policyDigest",
+    "policyVersion",
+    "proof",
+    "scope",
+    "subjectRef"
+  ],
+  "title": "ConsentReceipt",
+  "type": "object"
+}

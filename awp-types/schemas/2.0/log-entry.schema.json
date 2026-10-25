@@ -1,0 +1,31 @@
+{
+  "$defs": {
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` and 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/log-entry.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A site log entry: the leaf the log records for one release (spec 3.5 §7.7).\n\nThe leaf is the JCS form of `{\"seq\", \"manifest\"}`, at leaf index `seq − 1`, so the tree\nsize is the latest release number. Unknown members are refused, since they would change\nthe leaf.",
+  "properties": {
+    "manifest": {
+      "$ref": "#/$defs/Digest",
+      "description": "Digest of the release manifest's JCS form."
+    },
+    "seq": {
+      "description": "The release number.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "manifest",
+    "seq"
+  ],
+  "title": "LogEntry",
+  "type": "object"
+}

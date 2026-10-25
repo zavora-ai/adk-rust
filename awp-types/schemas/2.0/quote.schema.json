@@ -1,0 +1,146 @@
+{
+  "$defs": {
+    "LineItem": {
+      "description": "One priced line of a quote or receipt (spec 3.5 §7.5).",
+      "properties": {
+        "description": {
+          "description": "Line description.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quantity": {
+          "description": "Quantity.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sku": {
+          "description": "Product or service SKU.",
+          "type": "string"
+        },
+        "unitAmount": {
+          "description": "Unit price in the currency's minor units, from a signed release (A-I26).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "quantity",
+        "sku",
+        "unitAmount"
+      ],
+      "type": "object"
+    },
+    "Proof": {
+      "description": "A detached JWS (spec 3.5 §7.2).\n\n`jws` is the compact serialization with an empty payload; the signed payload is the JCS\nform of the enclosing document without its `proof`.",
+      "properties": {
+        "alg": {
+          "description": "JWS algorithm, `EdDSA` in AWP 2.0.",
+          "type": "string"
+        },
+        "jws": {
+          "description": "Detached compact JWS.",
+          "type": "string"
+        },
+        "kid": {
+          "description": "Key id of the signing key in `keys.json`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alg",
+        "jws",
+        "kid"
+      ],
+      "type": "object"
+    },
+    "RequesterId": {
+      "description": "A verified requester's identifier (spec 3.5 §7.3).\n\n| Method | Form |\n|---|---|\n| Web Bot Auth | `wba:{directory origin}#{key thumbprint}` |\n| OAuth client credentials | `oauth:{issuer}#{client id}` |\n| mTLS | `mtls:{base64url SHA-256 of the DER certificate}` |\n| DID | the DID itself, `did:{method}:{id}` |\n| API key | `key:{key id}` |",
+      "type": "string"
+    }
+  },
+  "$id": "https://agenticwebprotocol.com/schemas/2.0/quote.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A quote that keeps its price until `validUntil` (spec 3.5 §7.5, A-I25).",
+  "properties": {
+    "capability": {
+      "description": "Name of the capability that issued it.",
+      "type": "string"
+    },
+    "currency": {
+      "description": "ISO 4217 currency code.",
+      "type": "string"
+    },
+    "id": {
+      "description": "Quote id.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "issuedAt": {
+      "description": "When the quote was issued.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "lines": {
+      "description": "Priced lines.",
+      "items": {
+        "$ref": "#/$defs/LineItem"
+      },
+      "type": "array"
+    },
+    "proof": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Proof"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Detached JWS by a delegated `receipt` or `payments` key over the JCS form of the quote\nwithout `proof`; optional."
+    },
+    "releaseSeq": {
+      "description": "The signed release whose prices the quote uses (A-I26).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "requester": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RequesterId"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The verified requester it was issued to."
+    },
+    "total": {
+      "description": "Total in minor units.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "validUntil": {
+      "description": "The quote's price holds until this time (A-I25).",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "capability",
+    "currency",
+    "id",
+    "issuedAt",
+    "lines",
+    "releaseSeq",
+    "total",
+    "validUntil"
+  ],
+  "title": "QuoteDocument",
+  "type": "object"
+}
