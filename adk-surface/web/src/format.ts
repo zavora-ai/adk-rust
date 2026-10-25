@@ -6,6 +6,24 @@ export function dollars(microUsd: number): string {
   return `$${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
 }
 
+/**
+ * Dollars as a person types them, in micro-USD, or `undefined` for what is not an amount. A
+ * comma or a point followed by one or two digits at the end is the decimal mark, and one
+ * followed by three digits groups thousands, so `5,50` and `5.50` are $5.50 and `1.000,50` and
+ * `1,000.50` are $1,000.50. Anything else — `1,2,3`, two decimal marks — is refused rather
+ * than read as a hundred times the amount.
+ */
+export function parseDollars(text: string): number | undefined {
+  const amount = text.replace(/[$\s]/g, "");
+  const match = /^(\d{1,3}(?:([.,])\d{3}(?:\2\d{3})*)?|\d+)(?:([.,])(\d{1,2}))?$/.exec(amount);
+  if (!match) return undefined;
+  const [, whole, group, mark, cents] = match;
+  if (group && mark && group === mark) return undefined;
+  const dollars = Number(whole.replace(/[.,]/g, ""));
+  const fraction = cents ? Number(cents.padEnd(2, "0")) : 0;
+  return dollars * 1_000_000 + fraction * 10_000;
+}
+
 /** A time as local `HH:MM`. */
 export function hhmm(at: Date): string {
   return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;

@@ -5,7 +5,7 @@ import type { HomeClient } from "../client";
 import { problemText } from "../client";
 import { Icon } from "../components/Icon";
 import { Pill } from "../components/Pill";
-import { dayMonth, dollars, hhmm, sameDay } from "../format";
+import { dayMonth, dollars, hhmm, parseDollars, sameDay } from "../format";
 import type { AreaSettings, ChannelWaiting, QuietWindow, StandingRule } from "../kernel";
 import { accountName, allows, channelName } from "../kernel";
 import { labels, modes, words } from "../labels";
@@ -510,13 +510,13 @@ function LimitEditor({
       className="setting-form"
       onSubmit={(event) => {
         event.preventDefault();
-        const amount = Number(text.replace(/[$,\s]/g, ""));
-        if (!text.trim() || !Number.isFinite(amount) || amount < 0) {
+        const microUsd = parseDollars(text);
+        if (microUsd === undefined) {
           setInvalid(true);
           return;
         }
         setInvalid(false);
-        void onSave(Math.round(amount * 1_000_000));
+        void onSave(microUsd);
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape") onCancel();

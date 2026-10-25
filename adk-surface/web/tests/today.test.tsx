@@ -470,6 +470,31 @@ describe("the HTTP client's kernel routes", () => {
   });
 });
 
+describe("typed dollars", () => {
+  // A decimal comma is a decimal mark, never dropped: `5,50` is $5.50, not $550 (spec 3.3 §10 K3).
+  it("reads a decimal comma or point, groups of thousands, and refuses the rest", async () => {
+    const { parseDollars } = await import("../src/format");
+    expect(["5", "5.5", "5.50", "5,50", "$ 5,50", "1,000", "1.000", "1,000.50", "1.000,50", "1234,5", "0"].map(parseDollars)).toEqual([
+      5_000_000, 5_500_000, 5_500_000, 5_500_000, 5_500_000, 1_000_000_000, 1_000_000_000, 1_000_500_000, 1_000_500_000,
+      1_234_500_000, 0,
+    ]);
+    for (const text of ["", "-5", "5,500,5", "1,000,50", "1.000.50", "1,000.000", "1,2,3", "five", "5.5.5"]) {
+      expect(parseDollars(text), text).toBeUndefined();
+    }
+  });
+
+  it("sets the limit a person typed with a decimal comma", async () => {
+    render(<App client={new FixtureClient()} seams={fixtureSeams()} initialSection="memory" />);
+    const card = (await screen.findByRole("heading", { name: "What your agents can do" })).closest("section")!;
+    await userEvent.click((await within(card).findAllByRole("button", { name: "Change" }))[1]);
+    const amount = within(card).getByLabelText("Dollars a day");
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "5,50");
+    await userEvent.click(within(card).getByRole("button", { name: "Save" }));
+    expect(await within(card).findByText("Was $5.00. Now $5.50.")).toBeTruthy();
+  });
+});
+
 describe("since when", () => {
   it("gives the time within the last day and the date further back", async () => {
     const { dayAndTime } = await import("../src/format");
