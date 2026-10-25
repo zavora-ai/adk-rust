@@ -1,11 +1,13 @@
 import type { CallView as Call } from "../generated/api";
 import { labels } from "../labels";
+import { visible } from "../safe";
 import { takeOverOf } from "../takeOver";
 
 /**
  * The exact call, shown in full (spec 3.3 §7.1): the tool and every argument. A call the
  * engine marks truncated is shown cut short until the person expands it, and cannot be
- * approved before. Every value is rendered as text, never as markup (S-I9).
+ * approved before. Every value is rendered as text, never as markup, with control, bidi and
+ * zero-width characters escaped, so the call reads as it runs (S-I9).
  */
 export function CallView({
   call,
@@ -22,11 +24,11 @@ export function CallView({
     return (
       <div className="call call-take-over">
         <p>
-          <span className="mono">{ask.tool}</span> {labels.asksFor(what)}
+          <span className="mono">{visible(ask.tool)}</span> {labels.asksFor(what)}
         </p>
         {ask.resource && (
           <p>
-            {labels.forResource} <span className="mono">{ask.resource}</span>
+            {labels.forResource} <span className="mono">{visible(ask.resource)}</span>
           </p>
         )}
         <p className="call-note">{labels.secretGoesToTheCall}</p>
@@ -37,7 +39,7 @@ export function CallView({
     return (
       <div className="call">
         <pre className="call-code" aria-label={labels.exactCall}>
-          {call.text}
+          {visible(call.text)}
         </pre>
         <button type="button" className="link" onClick={onExpand}>
           {labels.showWholeCall}
@@ -53,12 +55,12 @@ export function CallView({
   return (
     <div className="call">
       <pre className="call-code" aria-label={labels.exactCall}>
-        <span className="code-tool">{call.tool}</span>(
+        <span className="code-tool">{visible(call.tool)}</span>(
         {fields
           ? fields.map(([key, value]) => (
               <span key={key}>
                 {"\n  "}
-                {key}: <Value value={value} />,
+                {visible(key)}: <Value value={value} />,
               </span>
             ))
           : args === null || args === undefined
@@ -72,7 +74,7 @@ export function CallView({
 }
 
 function Value({ value }: { value: unknown }) {
-  const text = JSON.stringify(value, null, typeof value === "object" && value !== null ? 2 : undefined) ?? "null";
+  const text = visible(JSON.stringify(value, null, typeof value === "object" && value !== null ? 2 : undefined) ?? "null");
   if (typeof value === "string") return <span className="code-string">{text}</span>;
   return <span className="code-value">{text.replace(/\n/g, "\n  ")}</span>;
 }

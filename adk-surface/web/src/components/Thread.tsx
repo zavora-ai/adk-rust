@@ -3,6 +3,7 @@ import type { DecisionCard as Card, FeedEntry, ThreadItem } from "../generated/a
 import type { HomeClient } from "../client";
 import { labels } from "../labels";
 import { MarkdownResponse } from "../MarkdownResponse";
+import { visible } from "../safe";
 import { DecisionCard } from "./DecisionCard";
 import type { Send, TakeOverSeam } from "./DecisionCard";
 import { Icon } from "./Icon";
@@ -115,7 +116,7 @@ export function Thread({
               />
             ) : (
               <p key={line.key} className="activity">
-                {line.text}
+                {visible(line.text)}
               </p>
             );
           }
@@ -140,8 +141,8 @@ function ActivityChip({ line }: { line: Extract<Line, { kind: "activity" }> }) {
   return (
     <p className={`activity${failed ? " activity-failed" : ""}`}>
       {line.result && <Icon name={line.result.ok ? "check" : "cross"} />}
-      <span>{line.text}</span>
-      {line.result && <span className="activity-result"> · {line.result.text}</span>}
+      <span>{visible(line.text)}</span>
+      {line.result && <span className="activity-result"> · {visible(line.result.text)}</span>}
     </p>
   );
 }
