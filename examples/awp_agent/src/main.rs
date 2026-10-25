@@ -227,7 +227,7 @@ async fn main() -> anyhow::Result<()> {
     let api_key =
         std::env::var("GOOGLE_API_KEY").expect("GOOGLE_API_KEY must be set — see .env.example");
 
-    let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
+    let model = GeminiModel::new(&api_key, "gemini-3.7-flash")?;
 
     let instruction = format!(
         "You are the AI assistant for {site}. {desc}\n\n\
@@ -272,7 +272,7 @@ async fn main() -> anyhow::Result<()> {
         .instruction(&instruction)
         .build()?;
 
-    println!("🤖 Created LLM agent: awp-assistant (gemini-2.5-flash)\n");
+    println!("🤖 Created LLM agent: awp-assistant (gemini-3.7-flash)\n");
 
     // --- Step 3: Set up session service and runner ---
     let session_service = Arc::new(InMemorySessionService::new());

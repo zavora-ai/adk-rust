@@ -238,7 +238,7 @@ These capabilities form the foundation and are stable:
 | `adk-audio` | STT/TTS, Deepgram, ONNX models, desktop audio | ✅ Stable |
 | `adk-rag` | Document chunking, embeddings, vector search | ✅ Stable |
 | `adk-payments` | ACP/AP2 commerce, transaction journals | ✅ Stable |
-| `adk-awp` | Agentic Web Protocol, discovery, consent, health | ✅ Stable |
+| `adk-awp` | Agentic Web Protocol, discovery, consent, health | 🚧 Beta |
 | `adk-acp` | Agent Client Protocol integration | ✅ Stable |
 | `adk-mistralrs` | Local inference, 50+ architectures, LoRA/X-LoRA | ✅ Stable |
 | `adk-plugin` | Lifecycle hooks, priority pipeline | ✅ Stable |
@@ -248,7 +248,7 @@ These capabilities form the foundation and are stable:
 | `adk-cli` | Interactive REPL, cargo adk deploy | ✅ Stable |
 | `adk-rust-macros` | #[tool] proc macro | ✅ Stable |
 | `cargo-adk` | Project scaffolding, templates, addons | ✅ Stable |
-| `awp-types` | AWP protocol types (zero adk deps) | ✅ Stable |
+| `awp-types` | AWP protocol types (zero adk deps) | 🚧 Beta |
 
 ---
 
