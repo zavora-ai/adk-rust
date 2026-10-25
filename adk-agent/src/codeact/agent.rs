@@ -220,7 +220,8 @@ impl ToolPolicy<'_> {
 /// confirmation handler again: it waits for a decision recorded for it, as in
 /// [`LlmAgent`](crate::LlmAgent) (spec 3.3 §7.3). A run that brings a new message
 /// answers it in a turn of its own while the call keeps waiting: that turn cannot
-/// suspend, and the checkpoint of the waiting call stays in session state (§7.4).
+/// suspend, and the checkpoint of the waiting call stays in session state (§7.4), unless
+/// the turn answered the call by deciding an identical one.
 fn run_codeact(mut input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>> {
     stream! {
         let mut hold = None;
@@ -230,9 +231,25 @@ fn run_codeact(mut input: LoopInputs) -> impl Stream<Item = adk_core::Result<Eve
             && let Some(tool) = input.tools.iter().find(|tool| tool.name() == cp.call.tool)
         {
             let gate = ToolGate::for_context(input.invocation_ctx.as_ref());
-            let request = ToolConfirmationRequest::for_tool(tool.as_ref(), cp.call.args.clone())
-                .with_function_call_id(cp.call.call_id.to_string())
-                .with_acting_context(gate.acting_context().clone());
+            // The call waits under the arguments it was held with, after plugin, callback and
+            // screen rewrites; its held event carries them, the checkpoint the script's own.
+            let call_id = cp.call.call_id.to_string();
+            let held = input
+                .invocation_ctx
+                .session()
+                .held_tool_calls(&input.agent_name, input.invocation_ctx.branch())
+                .into_iter()
+                .rev()
+                .map(|held| held.request)
+                .find(|request| {
+                    request.tool_name == cp.call.tool
+                        && request.function_call_id.as_deref() == Some(call_id.as_str())
+                });
+            let request = held.unwrap_or_else(|| {
+                ToolConfirmationRequest::for_tool(tool.as_ref(), cp.call.args.clone())
+                    .with_function_call_id(call_id)
+                    .with_acting_context(gate.acting_context().clone())
+            });
             match adk_core::confirmation_decision_available(&gate, &request).await {
                 Ok(true) => {}
                 Ok(false) if input.incoming.carries_user_input() => waiting = Some((cp, request)),
@@ -243,21 +260,58 @@ fn run_codeact(mut input: LoopInputs) -> impl Stream<Item = adk_core::Result<Eve
                 }
             }
         }
-        let kept = match &waiting {
-            Some((cp, _)) => {
-                input.pending = None;
-                input.supports_suspension = false;
-                Some(serde_json::to_value(cp).expect("CodeActCheckpoint serialization cannot fail"))
+        // The waiting call's fingerprint, with the store it waits in when it is pending there
+        // as the turn starts.
+        let mut beside = None;
+        if let Some((_, request)) = &waiting {
+            input.pending = None;
+            input.supports_suspension = false;
+            let fingerprint = request.fingerprint();
+            let gate = ToolGate::for_context(input.invocation_ctx.as_ref());
+            let mut watched = None;
+            if let Some(store) = &input.invocation_ctx.run_config().approval_store {
+                match store.pending(gate.scope()).await {
+                    Ok(entries) => {
+                        if entries.iter().any(|entry| entry.fingerprint == fingerprint) {
+                            watched = Some(store.clone());
+                        }
+                    }
+                    Err(error) => {
+                        yield Err(error);
+                        return;
+                    }
+                }
             }
-            None => None,
-        };
+            beside = Some((fingerprint, watched));
+        }
+        let ctx = input.invocation_ctx.clone();
         let mut inner = Box::pin(drive_codeact(input, hold, waiting.map(|(_, request)| request)));
         while let Some(mut item) = inner.next().await {
-            // The turn that answered the message ends; the waiting call's checkpoint stays.
-            if let (Ok(event), Some(kept)) = (&mut item, &kept)
+            // The turn that answered the message ends; the waiting call's checkpoint stays,
+            // unless an identical call this turn made was decided: that closed the call's
+            // pending entry and left no decision for it (spec 3.3 §7.3).
+            if let (Ok(event), Some((fingerprint, watched))) = (&mut item, &beside)
                 && event.actions.state_delta.get(PENDING_STATE_KEY).is_some_and(Value::is_null)
             {
-                event.actions.state_delta.insert(PENDING_STATE_KEY.to_string(), kept.clone());
+                let answered = match watched {
+                    Some(store) => {
+                        let gate = ToolGate::for_context(ctx.as_ref());
+                        let scope = gate.scope();
+                        match (store.pending(scope).await, store.has_decision(scope, fingerprint).await) {
+                            (Ok(entries), Ok(decided)) => {
+                                !decided && !entries.iter().any(|entry| entry.fingerprint == *fingerprint)
+                            }
+                            (Err(error), _) | (_, Err(error)) => {
+                                tracing::warn!(error = %error, "could not read the approval store; the waiting call keeps its checkpoint");
+                                false
+                            }
+                        }
+                    }
+                    None => false,
+                };
+                if !answered {
+                    event.actions.state_delta.remove(PENDING_STATE_KEY);
+                }
             }
             yield item;
         }
@@ -345,6 +399,9 @@ fn drive_codeact(
         // Count of output-schema correction retries used so far.
         let mut schema_retries: usize = 0;
 
+        // The message a resuming run brought, until a model request carries it.
+        let mut unanswered: Option<Content> = None;
+
         // ----- self-route: resume a pending checkpoint, or start fresh -----
         match pending {
             None => {
@@ -365,6 +422,20 @@ fn drive_codeact(
                         "tool roster changed since suspend; cannot resume continuation",
                     ));
                     return;
+                }
+                // A script resumed on a decision continues the earlier transcript, so a message
+                // this run brought joins it before the next model request (spec 3.3 §12). A run
+                // replayed with the message that started the script brings nothing new.
+                let started_by =
+                    cp.transcript.iter().take_while(|content| content.role != "model").last();
+                let replayed = started_by.is_some_and(|content| {
+                    serde_json::to_value(content).ok() == serde_json::to_value(&incoming).ok()
+                });
+                if cp.disposition == Disposition::AwaitingConfirmation
+                    && incoming.carries_user_input()
+                    && !replayed
+                {
+                    unanswered = Some(incoming.clone());
                 }
                 // Resolve the value/error to feed back. For the dispositions
                 // that execute (or decide) a tool now, capture a
@@ -496,6 +567,9 @@ fn drive_codeact(
                     if let Err(error) = invocation_ctx.run_config().check_governance() {
                         yield Err(error);
                         return;
+                    }
+                    if let Some(message) = unanswered.take() {
+                        transcript.push(message);
                     }
                     let script = match next_script(
                         model.as_ref(),
@@ -780,9 +854,18 @@ fn drive_codeact(
                                             waiting.tool_name
                                         ))
                                     }
-                                    None => Err(format!(
-                                        "tool '{name}' requires confirmation but this runtime cannot pause"
-                                    )),
+                                    // Nothing resumes the call, so a later decision on it must not
+                                    // authorize an identical call (spec 3.3 §7.3).
+                                    None => {
+                                        let gate = ToolGate::for_context(invocation_ctx.as_ref());
+                                        if let Err(error) = adk_core::withdraw_held_call(&gate, &request).await {
+                                            yield Err(error);
+                                            return;
+                                        }
+                                        Err(format!(
+                                            "tool '{name}' requires confirmation but this runtime cannot pause"
+                                        ))
+                                    }
                                 },
                                 ToolRun::Abort(error) => {
                                     yield Err(error);
@@ -820,6 +903,12 @@ fn drive_codeact(
                         }
                         ScriptOutput::Error { message } => {
                             transcript.push(error_content(&truncate_middle(&message, max_error_chars)));
+                            break 'script;
+                        }
+                        // The resumed script finished before any model request carried the
+                        // message this run brought; the model answers it with the result in view.
+                        ScriptOutput::FinalResult { value } if unanswered.is_some() => {
+                            transcript.push(observation_content(&value));
                             break 'script;
                         }
                         ScriptOutput::FinalResult { value } => {
@@ -2205,11 +2294,12 @@ fn run_with_agent_callbacks(
 
         // ----- main loop -----
         // Track how the loop ended. The last event that touched the pending
-        // checkpoint cleared it (Null) on a terminal turn, but set it on suspend.
+        // checkpoint cleared it (Null) on a terminal turn, but set it on suspend; a
+        // turn beside a waiting call leaves that call's checkpoint untouched.
         // A transfer/escalation/skip-summarization also clears it but must NOT
         // run after-agent callbacks (control is handed off / the run is told to
         // stop), matching LlmAgent's early return on those terminal actions.
-        let mut completed = false;
+        let mut completed = true;
         let mut errored = false;
         let mut handed_off = false;
         let mut inner = Box::pin(run_codeact(input));
@@ -4745,12 +4835,13 @@ mod tests {
         assert!(matches!(cp.disposition, Disposition::AwaitingConfirmation));
 
         let resumed_rt = Arc::new(ScriptedRuntime::with_suspension(vec![]));
-        let mut input = base_inputs(FakeLlm::new("noop"), resumed_rt.clone(), user("approved"));
+        let resume = Content::new("user");
+        let mut input = base_inputs(FakeLlm::new("noop"), resumed_rt.clone(), resume.clone());
         input.tools = vec![echo_tool()];
         input.policy = ToolConfirmationPolicy::Always;
         input.pending = Some(cp);
         input.invocation_ctx = Arc::new(
-            MockInvocationContext::new(user("approved")).with_run_config(
+            MockInvocationContext::new(resume).with_run_config(
                 adk_core::RunConfig::builder()
                     .tool_approval(request.fingerprint(), adk_core::ToolApproval::approve())
                     .build(),
@@ -5383,7 +5474,7 @@ mod tests {
         }
     }
 
-    /// The checkpoint `event` leaves in session state, as stored.
+    /// The checkpoint `event` writes to session state, as stored; `None` leaves state as it is.
     fn kept(event: &Event) -> Option<Value> {
         event.actions.state_delta.get(PENDING_STATE_KEY).cloned()
     }
@@ -5451,7 +5542,7 @@ mod tests {
         let events = collect(input).await;
         let last = events.last().unwrap();
         assert_eq!(final_text(last).as_deref(), Some("hello"));
-        assert_eq!(kept(last), Some(json!(cp)), "the waiting call keeps its checkpoint");
+        assert_eq!(kept(last), None, "the turn leaves the waiting call's checkpoint in state");
         assert_eq!(*model.calls.lock().unwrap(), 1);
         assert_eq!(rt.last_value(), None, "the waiting call has not run");
         assert_eq!(handler.0.load(std::sync::atomic::Ordering::SeqCst), 1, "not asked again");
@@ -5519,10 +5610,270 @@ mod tests {
         let events = collect(input).await;
         let raised = rt.last_raise().expect("the second call is refused in the script");
         assert!(raised.contains("already waiting"), "{raised}");
-        assert_eq!(kept(events.last().unwrap()), Some(json!(cp)));
+        assert_eq!(kept(events.last().unwrap()), None, "the waiting call keeps its checkpoint");
         let scope = adk_core::ApprovalScope::new("app", "user", "sess-test");
         let pending = store.pending(&scope).await.unwrap();
         assert_eq!(pending.len(), 1, "only the first call waits");
         assert_eq!(pending[0].request.args, json!({"msg": "x"}));
+    }
+
+    /// Adds a default `cc` field to every call's arguments.
+    #[cfg(feature = "enhanced-plugins")]
+    struct AddsDefault;
+    #[cfg(feature = "enhanced-plugins")]
+    #[async_trait]
+    impl EnhancedPlugin for AddsDefault {
+        fn name(&self) -> &str {
+            "adds-default"
+        }
+        async fn before_tool_call(
+            &self,
+            _tool: Arc<dyn Tool>,
+            mut args: Value,
+            _ctx: Arc<dyn CallbackContext>,
+            _pctx: &adk_plugin::PluginContext,
+        ) -> adk_core::Result<BeforeToolCallResult> {
+            args["cc"] = json!([]);
+            Ok(BeforeToolCallResult::Continue(args))
+        }
+    }
+
+    /// Wave 2 review findings 1, 2 and 7 (spec 3.3 §7.3): a plugin rewrote the call's
+    /// arguments before it was held, so its decision is recorded under the rewritten ones.
+    /// The waiting call is checked under those: an identical call in a turn beside it is the
+    /// waiting call, and its decision resumes it.
+    #[cfg(feature = "enhanced-plugins")]
+    #[tokio::test]
+    async fn a_waiting_call_whose_arguments_a_plugin_rewrote_resumes_on_its_decision() {
+        use adk_core::ApprovalStore as _;
+        let store = Arc::new(adk_core::InMemoryApprovalStore::new());
+        let plugins = Some(Arc::new(EnhancedPluginManager::new(vec![
+            Arc::new(AddsDefault) as Arc<dyn EnhancedPlugin>
+        ])));
+        let inputs = |rt: Arc<ScriptedRuntime>, incoming: Content, events: Vec<Event>| {
+            let mut input = base_inputs(FakeLlm::new("noop"), rt, incoming.clone());
+            input.tools = vec![echo_tool()];
+            input.policy = ToolConfirmationPolicy::Always;
+            input.enhanced_plugin_manager = plugins.clone();
+            input.invocation_ctx = Arc::new(
+                MockInvocationContext::new(incoming)
+                    .with_run_config(
+                        adk_core::RunConfig::builder().approval_store(store.clone()).build(),
+                    )
+                    .with_events(events),
+            );
+            input
+        };
+        let program = vec![
+            Planned::call("echo", json!({"msg": "x"}), 7),
+            Planned::Complete(json!({"type": "final_result", "value": "after"})),
+        ];
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![program]));
+        let held = collect(inputs(rt, user("go"), vec![])).await.pop().unwrap();
+        let request = held.actions.tool_confirmation.clone().expect("the call waits");
+        assert_eq!(request.args, json!({"msg": "x", "cc": []}), "held as the plugin rewrote it");
+        let cp = pending_in(&held).unwrap();
+        let scope = adk_core::ApprovalScope::new("app", "user", "sess-test");
+
+        // An identical call in a turn beside it is the waiting call, which keeps waiting.
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+            Planned::call("echo", json!({"msg": "x"}), 1),
+            Planned::Complete(json!({"type": "final_result", "value": "later"})),
+        ]]));
+        let mut input = inputs(rt.clone(), user("echo x again"), vec![held.clone()]);
+        input.pending = Some(cp.clone());
+        collect(input).await;
+        let raised = rt.last_raise().expect("the identical call is refused in the script");
+        assert!(raised.starts_with("this call to 'echo' is already waiting"), "{raised}");
+        assert_eq!(store.pending(&scope).await.unwrap().len(), 1, "the call still waits");
+
+        // Its decision, recorded under the rewritten arguments, resumes it.
+        store
+            .decide(&scope, &request.fingerprint(), adk_core::ToolApproval::approve())
+            .await
+            .unwrap();
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![]));
+        let mut input = inputs(rt.clone(), Content::new("user"), vec![held]);
+        input.pending = Some(cp);
+        let events = collect(input).await;
+        assert_eq!(rt.last_value(), Some(json!({"msg": "x", "cc": []})), "the approved call ran");
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("after"));
+    }
+
+    /// Approves every call at once.
+    #[derive(Debug)]
+    struct ApprovesAll;
+
+    #[async_trait]
+    impl adk_core::ToolConfirmationHandler for ApprovesAll {
+        async fn decide(
+            &self,
+            _request: &ToolConfirmationRequest,
+        ) -> adk_core::Result<ToolConfirmationDecision> {
+            Ok(ToolConfirmationDecision::Approve)
+        }
+    }
+
+    /// Wave 2 review finding 8 (spec 3.3 §7.3): a turn beside a waiting call that runs an
+    /// identical call on the handler's approval answers the waiting call, so the call's
+    /// checkpoint is cleared and no later run asks about it or runs it again.
+    #[tokio::test]
+    async fn a_turn_that_runs_the_waiting_call_answers_it() {
+        use adk_core::ApprovalStore as _;
+        let never = Arc::new(NeverAnswers::default());
+        let store = Arc::new(adk_core::InMemoryApprovalStore::new());
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+            Planned::call("echo", json!({"msg": "x"}), 7),
+            Planned::Complete(json!({"type": "final_result", "value": "after"})),
+        ]]));
+        let input = waiting_inputs(FakeLlm::new("noop"), rt, user("go"), never, store.clone());
+        let cp = pending_in(collect(input).await.last().unwrap()).unwrap();
+
+        let incoming = user("go ahead and echo it");
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+            Planned::call("echo", json!({"msg": "x"}), 1),
+            Planned::Complete(json!({"type": "final_result", "value": "done"})),
+        ]]));
+        let mut input = base_inputs(FakeLlm::new("noop"), rt.clone(), incoming.clone());
+        input.tools = vec![echo_tool()];
+        input.policy = ToolConfirmationPolicy::Always;
+        input.invocation_ctx = Arc::new(
+            MockInvocationContext::new(incoming).with_run_config(
+                adk_core::RunConfig::builder()
+                    .tool_confirmation_handler(Arc::new(ApprovesAll))
+                    .approval_store(store.clone())
+                    .build(),
+            ),
+        );
+        input.pending = Some(cp);
+        let events = collect(input).await;
+        let last = events.last().unwrap();
+        assert_eq!(final_text(last).as_deref(), Some("done"));
+        assert_eq!(rt.last_value(), Some(json!({"msg": "x"})), "the identical call ran");
+        assert_eq!(kept(last), Some(Value::Null), "the answered call's checkpoint is cleared");
+        let scope = adk_core::ApprovalScope::new("app", "user", "sess-test");
+        assert!(store.pending(&scope).await.unwrap().is_empty());
+    }
+
+    /// Wave 2 review finding 9 (spec 3.3 §7.4): a turn beside a waiting call that ends
+    /// with a result completes, so the after-agent callbacks run for it.
+    #[tokio::test]
+    async fn after_agent_callbacks_run_for_a_turn_beside_a_waiting_call() {
+        let handler = Arc::new(NeverAnswers::default());
+        let store = Arc::new(adk_core::InMemoryApprovalStore::new());
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+            Planned::call("echo", json!({"msg": "x"}), 7),
+            Planned::Complete(json!({"type": "final_result", "value": "after"})),
+        ]]));
+        let input =
+            waiting_inputs(FakeLlm::new("noop"), rt, user("go"), handler.clone(), store.clone());
+        let cp = pending_in(collect(input).await.last().unwrap()).unwrap();
+
+        let after: AfterAgentCallback = Box::new(|_ctx| {
+            Box::pin(async { Ok(Some(Content::new("model").with_text("after-done"))) })
+        });
+        let agent = CodeActAgent::builder()
+            .name("code-agent")
+            .model(FakeLlm::new("noop"))
+            .runtime(Arc::new(ScriptedRuntime::with_suspension(vec![vec![Planned::Complete(
+                json!({"type": "final_result", "value": "hello"}),
+            )]])))
+            .tool(echo_tool())
+            .require_tool_confirmation_for_all()
+            .after_callback(after)
+            .build()
+            .unwrap();
+        let ctx = MockInvocationContext::new(user("never mind, just say hello"))
+            .with_state(HashMap::from([(PENDING_STATE_KEY.to_string(), json!(cp))]))
+            .with_run_config(
+                adk_core::RunConfig::builder()
+                    .tool_confirmation_handler(handler.clone())
+                    .tool_confirmation_timeout(Duration::from_millis(20))
+                    .approval_store(store)
+                    .build(),
+            );
+        let events = run_collect(&agent, Arc::new(ctx)).await;
+        assert!(events.iter().any(|e| final_text(e).as_deref() == Some("hello")));
+        assert!(events.iter().all(|e| kept(e).is_none()), "the waiting call keeps its checkpoint");
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("after-done"));
+        assert_eq!(handler.0.load(std::sync::atomic::Ordering::SeqCst), 1, "not asked again");
+    }
+
+    /// Wave 2 review finding 10 (spec 3.3 §12): a run that resumes a decided call and brings
+    /// a message gives the message to the model, also when the resumed script finishes first.
+    #[tokio::test]
+    async fn a_resumed_call_keeps_the_message_its_run_brought() {
+        use adk_core::ApprovalStore as _;
+        let store = Arc::new(adk_core::InMemoryApprovalStore::new());
+        let inputs = |model: Arc<FakeLlm>, rt: Arc<ScriptedRuntime>, incoming: Content| {
+            let mut input = base_inputs(model, rt, incoming.clone());
+            input.tools = vec![echo_tool()];
+            input.policy = ToolConfirmationPolicy::Always;
+            input.invocation_ctx = Arc::new(MockInvocationContext::new(incoming).with_run_config(
+                adk_core::RunConfig::builder().approval_store(store.clone()).build(),
+            ));
+            input
+        };
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![
+            Planned::call("echo", json!({"msg": "x"}), 7),
+            Planned::Complete(json!({"type": "final_result", "value": "sent"})),
+        ]]));
+        let held = collect(inputs(FakeLlm::new("noop"), rt, user("go"))).await.pop().unwrap();
+        let request = held.actions.tool_confirmation.clone().expect("the call waits");
+        let cp = pending_in(&held).unwrap();
+        let scope = adk_core::ApprovalScope::new("app", "user", "sess-test");
+        store
+            .decide(&scope, &request.fingerprint(), adk_core::ToolApproval::approve())
+            .await
+            .unwrap();
+
+        let model = FakeLlm::new("noop");
+        let rt = Arc::new(ScriptedRuntime::with_suspension(vec![vec![Planned::Complete(
+            json!({"type": "final_result", "value": "sent, and the receipt is on its way"}),
+        )]]));
+        let mut input = inputs(model.clone(), rt.clone(), user("and email me the receipt"));
+        input.pending = Some(cp);
+        let events = collect(input).await;
+        assert_eq!(rt.last_value(), Some(json!({"msg": "x"})), "the approved call ran");
+        assert_eq!(model.calls(), 1, "the model answers the message");
+        let seen = model.seen.lock().unwrap().last().cloned().unwrap();
+        let texts: Vec<&str> =
+            seen.iter().flat_map(|c| c.parts.iter()).filter_map(|p| p.text()).collect();
+        assert!(
+            texts.iter().any(|t| t.contains("sent")),
+            "the resumed result is in view: {texts:?}"
+        );
+        assert_eq!(texts.last(), Some(&"and email me the receipt"));
+        assert_eq!(
+            final_text(events.last().unwrap()).as_deref(),
+            Some("sent, and the receipt is on its way")
+        );
+    }
+
+    /// Wave 2 review finding 11 (spec 3.3 §7.3): on a runtime that cannot pause, a call that
+    /// needs a decision is refused into the script and leaves nothing waiting that a later
+    /// decision could use to authorize an identical call.
+    #[tokio::test]
+    async fn a_runtime_that_cannot_pause_leaves_no_call_waiting() {
+        use adk_core::ApprovalStore as _;
+        let store = Arc::new(adk_core::InMemoryApprovalStore::new());
+        let rt = Arc::new(ScriptedRuntime::new(vec![vec![
+            Planned::call("echo", json!({"msg": "x"}), 1),
+            Planned::Complete(json!({"type": "final_result", "value": "could not"})),
+        ]]));
+        let mut input = base_inputs(FakeLlm::new("noop"), rt.clone(), user("go"));
+        input.tools = vec![echo_tool()];
+        input.policy = ToolConfirmationPolicy::Always;
+        input.supports_suspension = false;
+        input.invocation_ctx =
+            Arc::new(MockInvocationContext::new(user("go")).with_run_config(
+                adk_core::RunConfig::builder().approval_store(store.clone()).build(),
+            ));
+        let events = collect(input).await;
+        assert_eq!(final_text(events.last().unwrap()).as_deref(), Some("could not"));
+        let raised = rt.last_raise().expect("the call is refused in the script");
+        assert!(raised.contains("cannot pause"), "{raised}");
+        let scope = adk_core::ApprovalScope::new("app", "user", "sess-test");
+        assert!(store.pending(&scope).await.unwrap().is_empty(), "nothing waits");
     }
 }
