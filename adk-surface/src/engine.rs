@@ -580,7 +580,63 @@ impl SurfaceEngine {
                 None
             }),
         };
-        Ok(self.inner.projector.card(request, caller, always, answer.as_ref(), self.now()))
+        let mut card =
+            self.inner.projector.card(request, caller, always, answer.as_ref(), self.now());
+        // How far a surface's answer reaches: once, or by the standing rule it made (§5.4).
+        if let (Some(decided), Some(record)) = (card.decided.as_mut(), answer.as_ref())
+            && decided.via.is_some()
+        {
+            decided.scope_text = match record.answer {
+                Answer::AllowOnce => Some(words::DONE_ONCE.to_string()),
+                Answer::AlwaysAllow => self
+                    .inner
+                    .source
+                    .always_allow_offer(request)
+                    .await
+                    .map(|offer| lower_first(&offer.label)),
+                Answer::Edit | Answer::Deny => None,
+            };
+        }
+        Ok(card)
+    }
+
+    /// The caller's decisions answered or ended since `since`, newest first, for a surface
+    /// that opens again after a while, such as the phone (spec 3.3 §5.4).
+    ///
+    /// # Errors
+    ///
+    /// Returns the source's error.
+    pub async fn decided_since(
+        &self,
+        caller: &Caller,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<DecisionCard>> {
+        let decided_at = |request: &ApprovalRequest| {
+            request
+                .decisions
+                .last()
+                .map(|decision| decision.decided_at)
+                .or(request.resolved_at)
+                .unwrap_or(request.created_at)
+        };
+        let mut requests: Vec<ApprovalRequest> = self
+            .inner
+            .source
+            .requests(caller, None, false)
+            .await?
+            .into_iter()
+            .filter(|request| {
+                owns(caller, request)
+                    && request.state != ApprovalState::Pending
+                    && decided_at(request) >= since
+            })
+            .collect();
+        requests.sort_by(|a, b| decided_at(b).cmp(&decided_at(a)).then_with(|| a.id.cmp(&b.id)));
+        let mut cards = Vec::with_capacity(requests.len());
+        for request in &requests {
+            cards.push(self.card(caller, request).await?);
+        }
+        Ok(cards)
     }
 
     /// The label of "Always allow" for `request`, when the source can create its rule. A
@@ -1064,6 +1120,7 @@ impl SurfaceEngine {
             at_text: String::new(),
             answer: crate::model::DecidedAnswer::Unknown,
             text: words::DECIDED.to_string(),
+            scope_text: None,
         };
         card.status = crate::model::CardStatus::Decided;
         card.status_text = words::DECIDED.to_string();
@@ -1516,6 +1573,15 @@ fn transient(error: &SurfaceError) -> bool {
         | SurfaceError::OperatorOnly { .. }
         | SurfaceError::Unsupported { .. }
         | SurfaceError::Invalid(_) => false,
+    }
+}
+
+/// `label` with its first letter in lower case, to follow a "·" in a sentence.
+fn lower_first(label: &str) -> String {
+    let mut chars = label.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => String::new(),
     }
 }
 

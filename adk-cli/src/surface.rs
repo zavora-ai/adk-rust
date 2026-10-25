@@ -24,6 +24,7 @@ pub(crate) fn harness_engine(
     approvals: Option<Arc<dyn ApprovalService>>,
     kernel: Option<adk_kernel::Kernel>,
     records: Option<SurfaceRecords>,
+    phone: bool,
 ) -> Result<SurfaceEngine> {
     let mut source = LocalSource::builder(app_name).sessions(sessions).harness(harness);
     if let Some(approvals) = approvals {
@@ -36,7 +37,11 @@ pub(crate) fn harness_engine(
     // all freeze and unfreeze every run the server makes, as the kernel's own freeze route
     // does, which needs the operator too (spec 3.3 §11 S-I10).
     let mut engine = SurfaceEngine::builder(Arc::new(source.build()?))
-        .places([adk_surface::Place::terminal()])
+        .places(
+            [adk_surface::Place::terminal()]
+                .into_iter()
+                .chain(phone.then(adk_surface::Place::phone)),
+        )
         .agent_name(app_name, "ADK-Rust")
         .stops_need(crate::harness::OPERATOR_SCOPE);
     if let Some(records) = records {

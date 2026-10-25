@@ -143,6 +143,11 @@
 # Chat (spec 3.3 §5.3): the Telegram adapter, the kernel's channel contract suite against it
 # and the scripted scenario on a kernel-hosted harness, over a fake Bot API.
 2 adk-surface channels doc
+# The phone (spec 3.3 §5.4): Web Push, the phone's routes and "Confirm it's you", whose
+# webauthn-rs verifier links OpenSSL.
+2 adk-surface mobile doc
+# `adk-rust up --home-url` serving the phone on SQLite with a scripted model.
+2 adk-cli mobile,scripted-model
 # `adk-rust` as the terminal surface in a pseudo-terminal: full screen, inline, JSON, a
 # kernel on its socket and a paired one over HTTP (spec 3.3 §5.2, §10 K2).
 2 adk-cli tui,scripted-model

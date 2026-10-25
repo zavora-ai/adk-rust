@@ -19,6 +19,10 @@ interface Surface {
   example?: string;
   /** The command that serves it instead of an example, given the port and the workspace. */
   command?: string;
+  /** The adk-surface features the example needs; `web` unless named. */
+  features?: string;
+  /** The host the page is opened at: `127.0.0.1` unless named; `localhost` where WebAuthn needs a domain. */
+  host?: string;
   /** Its default port. */
   port: number;
   /** Its tests under `e2e/`. */
@@ -58,6 +62,19 @@ const surfaces: Surface[] = [
     testMatch: ["memory.spec.ts"],
     ready: "/ui/",
   },
+  {
+    // The phone pairs, sets up its passkey and confirms a high-risk call (spec 3.3 §5.4,
+    // §8.2): a passkey's relying party is the page's domain, so the page is opened at
+    // `localhost`, never an IP address.
+    name: "phone",
+    prefix: "PHONE",
+    example: "scripted_phone",
+    features: "mobile",
+    host: "localhost",
+    port: 8799,
+    testMatch: ["phone.spec.ts"],
+    ready: "/ui/",
+  },
 ];
 
 function env(surface: Surface, name: string): string | undefined {
@@ -75,8 +92,19 @@ const servers = surfaces.map((surface) => {
   process.env[`${surface.prefix}_E2E_WORKSPACE`] = workspace;
   const port = Number(env(surface, "PORT") ?? surface.port);
   const command =
-    env(surface, "BIN") ?? surface.command ?? `cargo run -p adk-surface --features web --example ${surface.example} --`;
-  return { surface, url: url ?? `http://127.0.0.1:${port}`, external: url !== undefined, port, workspace, command };
+    env(surface, "BIN") ??
+    surface.command ??
+    `cargo run -p adk-surface --features ${surface.features ?? "web"} --example ${surface.example} --`;
+  return {
+    surface,
+    url: url ?? `http://${surface.host ?? "127.0.0.1"}:${port}`,
+    // Readiness is checked on the address the server binds.
+    ready: url ?? `http://127.0.0.1:${port}`,
+    external: url !== undefined,
+    port,
+    workspace,
+    command,
+  };
 });
 
 const webServer: PlaywrightTestConfig["webServer"] = servers
@@ -84,7 +112,7 @@ const webServer: PlaywrightTestConfig["webServer"] = servers
   .map((server) => ({
     command: `${server.command} ${server.port} ${server.workspace} ${server.surface.args ?? ""}`.trim(),
     cwd: "../..",
-    url: `${server.url}${server.surface.ready}`,
+    url: `${server.ready}${server.surface.ready}`,
     reuseExistingServer: false,
     timeout: 20 * 60_000,
     stdout: "pipe" as const,

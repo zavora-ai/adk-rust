@@ -90,6 +90,18 @@ const WORDS: &[(&str, &str)] = listed![
     YOU_DECIDED,
     RIGHT_AWAY,
     YOU_SUGGESTED_THIS,
+    A_DECISION_IS_WAITING,
+    OPEN_THE_APP_TO_SEE_IT,
+    YOUR_PHONE,
+    ASKS_FOR_FACE_OR_FINGERPRINT,
+    NEEDS_FACE_OR_FINGERPRINT,
+    DONE_ONCE,
+    WANTS_TO_RUN_THIS_COMMAND,
+    USE_YOUR_FACE_OR_FINGERPRINT,
+    USE_YOUR_FACE_OR_FINGERPRINT_ON_THIS_COMPUTER,
+    ALLOW_NOTIFICATIONS,
+    ADD_TO_HOME_SCREEN_FIRST,
+    APPROVE_IT_IN_THE_HOME,
 ];
 
 /// The words of [`words`](crate::words) as a TypeScript module, one exported constant each

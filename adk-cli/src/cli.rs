@@ -838,6 +838,16 @@ pub struct UpArgs {
     /// postgres://… or redis://… (default: harness.db)
     #[arg(long, value_name = "URL", conflicts_with = "ephemeral")]
     pub store: Option<String>,
+    /// The https address people open the home at, such as https://home.example.ts.net behind
+    /// `tailscale serve`: serves the phone — pairing links into it, Web Push and "Confirm it's
+    /// you" for its host. Needs --auth-token
+    #[cfg(feature = "mobile")]
+    #[arg(long, value_name = "URL")]
+    pub home_url: Option<String>,
+    /// The push key replicas share (default: <home>/push.key)
+    #[cfg(feature = "mobile")]
+    #[arg(long, value_name = "FILE", requires = "home_url")]
+    pub push_key: Option<std::path::PathBuf>,
     #[command(flatten)]
     pub harness: adk_cli::harness::HarnessArgs,
 }

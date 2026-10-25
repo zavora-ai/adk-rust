@@ -35,6 +35,8 @@ mod commands;
 mod goal;
 mod kernel;
 mod launcher;
+#[cfg(feature = "mobile")]
+mod phone;
 mod prompter;
 mod rules;
 mod serve;
@@ -48,5 +50,7 @@ pub use kernel::KernelSettings;
 pub use launcher::{
     HarnessCommands, HarnessEffortRebuild, HarnessLauncher, HarnessRebuild, TurnOutcome,
 };
+#[cfg(feature = "mobile")]
+pub use phone::PhoneSetup;
 pub use prompter::ConsolePrompter;
 pub use serve::{BearerTokenExtractor, LoopbackOperatorExtractor, OPERATOR_SCOPE};

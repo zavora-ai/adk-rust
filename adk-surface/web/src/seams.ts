@@ -143,6 +143,16 @@ export interface Device {
   may: string;
 }
 
+/** A pairing code as the kernel issued it (spec 3.3 §10 K2). */
+export interface PairingIssued {
+  /** What the person types on the device. */
+  code: string;
+  /** The link that opens the pairing screen with the code, when the server has a home URL. */
+  url?: string;
+  /** When the code lapses. */
+  expiresAt?: string;
+}
+
 /**
  * K2: where the person can say yes from. `HttpClient.devices()` serves it over the kernel's
  * pairing routes; `list` answers `undefined` when the kernel pairs no devices.
@@ -150,8 +160,20 @@ export interface Device {
 export interface DevicesSeam {
   list(): Promise<Device[] | undefined>;
   remove(id: string): Promise<void>;
-  /** Starts pairing; resolves to the code the person enters on the device. */
-  pair(): Promise<string>;
+  /** Starts pairing a phone; resolves to the code, the link that opens it, and when it lapses. */
+  pair(): Promise<PairingIssued>;
+  /**
+   * The pairing link as a QR code, an `image/svg+xml` data URL (spec 3.3 §8.3); `undefined`
+   * when the server serves no phone.
+   */
+  qr?(url: string): Promise<string | undefined>;
+  /**
+   * Whether "Use your face or fingerprint on this computer" is offered (spec 3.3 §8.2): the
+   * server serves the phone, this browser has a platform passkey, and none is set up yet.
+   */
+  canAddPasskey?(): Promise<boolean>;
+  /** Sets up the person's passkey on this computer, for high-risk answers in the home. */
+  addPasskey?(): Promise<void>;
   /** Chat accounts that asked to pair and wait for their code to be entered (K1). */
   waiting?(): Promise<ChannelWaiting[]>;
   /**

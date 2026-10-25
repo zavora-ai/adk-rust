@@ -587,6 +587,48 @@ pub fn briefing_sentence(kind: &str, agent: &str) -> String {
     }
 }
 
+// The phone (spec 3.3 §5.4, §8.2).
+
+/// The only words a wake-up shows (spec 3.3 §5.4, S-I5): the notification's title.
+pub const A_DECISION_IS_WAITING: &str = "A decision is waiting";
+/// The notification's body.
+pub const OPEN_THE_APP_TO_SEE_IT: &str = "Open the app to see it";
+/// A phone's name in "Where you can say yes from".
+pub const YOUR_PHONE: &str = "Your phone";
+/// What a phone with a passkey asks before a high-risk approval, after "Your phone · ".
+pub const ASKS_FOR_FACE_OR_FINGERPRINT: &str = "asks for your face or fingerprint";
+/// What a high-risk card needs on the phone, after its reversibility: "Can't be undone · needs
+/// your face or fingerprint".
+pub const NEEDS_FACE_OR_FINGERPRINT: &str = "needs your face or fingerprint";
+/// How an "allow once" answer reads on a decided card: "You said yes in Telegram at 07:31 ·
+/// done once".
+pub const DONE_ONCE: &str = "done once";
+/// What the decide screen says after the agent's name.
+pub const WANTS_TO_RUN_THIS_COMMAND: &str = "wants to run this command.";
+/// Sets up the phone's or the computer's passkey.
+pub const USE_YOUR_FACE_OR_FINGERPRINT: &str = "Use your face or fingerprint";
+/// Sets up the computer's passkey for the web home.
+pub const USE_YOUR_FACE_OR_FINGERPRINT_ON_THIS_COMPUTER: &str =
+    "Use your face or fingerprint on this computer";
+/// Asks the phone for permission to wake it.
+pub const ALLOW_NOTIFICATIONS: &str = "Allow notifications";
+/// What Safari on iOS shows before the app is installed: notifications and the app's own
+/// storage need the Home Screen app.
+pub const ADD_TO_HOME_SCREEN_FIRST: &str = "Add to Home Screen first";
+/// Where a high-risk call goes when this phone cannot confirm it is you.
+pub const APPROVE_IT_IN_THE_HOME: &str = "Approve it in the home on your computer";
+
+/// What the decide screen says: "Code wants to run this command."
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(adk_surface::words::wants_to_run("Code"), "Code wants to run this command.");
+/// ```
+pub fn wants_to_run(agent: &str) -> String {
+    format!("{agent} {WANTS_TO_RUN_THIS_COMMAND}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,6 +703,14 @@ mod tests {
         ALL_AGENTS_STOPPED,
         ALL_AGENTS_STOPPED_RESUME_IN_HOME,
         YOU_DECIDED,
+        A_DECISION_IS_WAITING,
+        OPEN_THE_APP_TO_SEE_IT,
+        YOUR_PHONE,
+        USE_YOUR_FACE_OR_FINGERPRINT,
+        USE_YOUR_FACE_OR_FINGERPRINT_ON_THIS_COMPUTER,
+        ALLOW_NOTIFICATIONS,
+        ADD_TO_HOME_SCREEN_FIRST,
+        APPROVE_IT_IN_THE_HOME,
     ];
 
     #[test]

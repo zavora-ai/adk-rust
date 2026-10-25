@@ -26,6 +26,7 @@
 //! |---|---|---|
 //! | `web` | The web home: its HTTP API under `/api/surface`, mounted with `ServerBuilder::add_api_routes`, with its OpenAPI document, and its page at `/ui/`, mounted with `ServerBuilder::add_root_routes` | Beta |
 //! | `channels` | Chat: the Telegram adapter over the kernel's channel contract, `channels::TelegramAdapter` (spec 3.3 §5.3) | Beta |
+//! | `mobile` | The phone: the web home installed on a phone, Web Push from the person's own kernel, pairing QR codes and "Confirm it's you", `mobile::router` (spec 3.3 §5.4); implies `web` | Beta |
 //!
 //! ## Example
 //!
@@ -60,6 +61,8 @@ mod engine;
 pub mod error;
 mod inbox;
 mod local;
+#[cfg(feature = "mobile")]
+pub mod mobile;
 pub mod model;
 mod origin;
 mod project;

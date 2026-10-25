@@ -30,6 +30,8 @@ use crate::ResolvedModel;
 use crate::cli::UpArgs;
 
 mod commands;
+#[cfg(feature = "mobile")]
+mod phone;
 #[cfg(feature = "channels")]
 mod telegram;
 
@@ -66,6 +68,8 @@ struct KernelStores {
 
 /// `adk-rust up` (spec 3.2 §8.1): runs until Ctrl-C or `SIGTERM`, then drains and stops.
 pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -> Result<()> {
+    #[cfg(feature = "mobile")]
+    let (home_url, push_key) = (up.home_url.clone(), up.push_key.clone());
     let UpArgs { home, bind, auth_token, store, mut harness, .. } = up;
     // The baseline pass's observations are worded by the harness's model (spec 3.2 §7.10).
     let phraser = Arc::new(LlmPhraser::new(model.llm.clone()));
@@ -99,6 +103,12 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         None => DEFAULT_BIND.parse()?,
     };
     let token = auth_token.filter(|token| !token.trim().is_empty());
+    // The phone at the home's public address (spec 3.3 §5.4).
+    #[cfg(feature = "mobile")]
+    let phone = match &home_url {
+        Some(url) => Some(phone::Phone::open(url, push_key.as_deref(), &home, token.as_deref())?),
+        None => None,
+    };
     if !bind.ip().is_loopback() && token.is_none() {
         bail!(
             "serving the kernel on {bind} needs authentication: pass --auth-token or set \
@@ -141,6 +151,12 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     #[cfg(feature = "channels")]
     let service = match &chat {
         Some(chat) => service.with_notifier(chat.doorbell()),
+        None => service,
+    };
+    // The phone's doorbell beside the chat's: a wake-up when a decision waits.
+    #[cfg(feature = "mobile")]
+    let service = match &phone {
+        Some(phone) => service.with_notifier(phone.doorbell()),
         None => service,
     };
     let service: Arc<dyn ApprovalService> = Arc::new(service);
@@ -259,6 +275,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     let tick = !ticking.is_empty();
     settings.consolidation = tick;
     let pairing = adk_kernel::pairing::Pairing::new(stores.devices.clone());
+    #[cfg(feature = "mobile")]
+    let pairing = match &phone {
+        Some(phone) => phone.pairing(pairing),
+        None => pairing,
+    };
     #[cfg(feature = "channels")]
     let pairing = match &chat {
         Some(chat) => pairing.with_channel_bindings(chat.bindings()),
@@ -395,6 +416,12 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         .approval_service()
         .cloned()
         .context("the served harness has an approval service")?;
+    // Chat cards link to the phone's home when it has one.
+    #[cfg(all(feature = "channels", feature = "mobile"))]
+    let chat = match (chat, &phone) {
+        (Some(chat), Some(phone)) => Some(chat.linking_to(phone.home_link())),
+        (chat, _) => chat,
+    };
     #[cfg(feature = "channels")]
     if let Some(chat) = chat {
         let host: Arc<dyn adk_kernel::channels::ChannelHost> = Arc::new(kernel.clone());
@@ -443,6 +470,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     #[cfg(feature = "surface")]
     if let Some((trail, answers)) = surface_records {
         launcher = launcher.with_surface_records(trail, answers);
+    }
+    #[cfg(feature = "mobile")]
+    if let Some(phone) = phone {
+        println!("  phone {}/ (pairing, wake-ups, confirm it's you)", phone.setup.pairing_base());
+        launcher = launcher.with_phone(phone.setup);
     }
     println!(
         "  store {}: sessions, approvals, runs, processes, agenda, schedules, drivers, partitions, the activity ledger, paired devices",

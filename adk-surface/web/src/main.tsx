@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { HttpClient } from "./client";
+import { phoneShell } from "./phone/shell";
 import type { Shell } from "./route";
 import { shellOf } from "./route";
 import { TrayPanel } from "./tray/TrayPanel";
@@ -33,5 +34,7 @@ function shell(kind: Shell): ReactNode {
 
 const root = document.getElementById("root");
 if (root) {
-  createRoot(root).render(<StrictMode>{shell(shellOf(window.location))}</StrictMode>);
+  void phoneShell(window.location).then((phone) =>
+    createRoot(root).render(<StrictMode>{phone ?? shell(shellOf(window.location))}</StrictMode>),
+  );
 }
