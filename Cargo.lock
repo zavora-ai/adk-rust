@@ -1507,6 +1507,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-website"
+version = "3.0.0"
+dependencies = [
+ "adk-agent",
+ "adk-auth",
+ "adk-core",
+ "adk-devtools",
+ "adk-harness",
+ "adk-kernel",
+ "adk-model",
+ "adk-payments",
+ "adk-server",
+ "adk-session",
+ "adk-site",
+ "adk-skill",
+ "async-trait",
+ "awp-types",
+ "chrono",
+ "chrono-tz 0.10.4",
+ "dotenvy",
+ "futures",
+ "proptest",
+ "scraper",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid 1.25.0",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

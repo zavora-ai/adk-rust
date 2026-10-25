@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- WordPress eXtended RSS export of a writer's blog, for S17 (spec 3.5 §5). -->
+<rss version="2.0"
+	xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:wp="http://wordpress.org/export/1.2/"
+>
+<channel>
+	<title>Wanjiru Writes</title>
+	<link>https://wanjiru.blog</link>
+	<description>Essays on cities and the people who walk them</description>
+	<language>en-US</language>
+	<wp:wxr_version>1.2</wp:wxr_version>
+	<wp:base_site_url>https://wanjiru.blog</wp:base_site_url>
+	<wp:base_blog_url>https://wanjiru.blog</wp:base_blog_url>
+	<wp:category>
+		<wp:term_id>2</wp:term_id>
+		<wp:category_nicename><![CDATA[essays]]></wp:category_nicename>
+		<wp:category_parent><![CDATA[]]></wp:category_parent>
+		<wp:cat_name><![CDATA[Essays]]></wp:cat_name>
+	</wp:category>
+	<item>
+		<title>City walks</title>
+		<link>https://wanjiru.blog/2026/09/12/city-walks/</link>
+		<dc:creator><![CDATA[wanjiru]]></dc:creator>
+		<content:encoded><![CDATA[<p>Nairobi is best read on foot. This essay follows three walks from the river to the railway.</p>]]></content:encoded>
+		<excerpt:encoded><![CDATA[Three walks from the river to the railway.]]></excerpt:encoded>
+		<wp:post_id>11</wp:post_id>
+		<wp:post_date_gmt><![CDATA[2026-09-12 07:00:00]]></wp:post_date_gmt>
+		<wp:post_modified_gmt><![CDATA[2026-09-12 07:00:00]]></wp:post_modified_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:post_name><![CDATA[city-walks]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_type><![CDATA[post]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<category domain="category" nicename="essays"><![CDATA[Essays]]></category>
+	</item>
+	<item>
+		<title>Markets at dawn</title>
+		<link>https://wanjiru.blog/2026/10/03/markets-at-dawn/</link>
+		<dc:creator><![CDATA[wanjiru]]></dc:creator>
+		<content:encoded><![CDATA[<p>The market opens before the city wakes. These notes were written between four and six in the morning.</p>]]></content:encoded>
+		<excerpt:encoded><![CDATA[Notes from the market before the city wakes.]]></excerpt:encoded>
+		<wp:post_id>12</wp:post_id>
+		<wp:post_date_gmt><![CDATA[2026-10-03 07:00:00]]></wp:post_date_gmt>
+		<wp:post_modified_gmt><![CDATA[2026-10-03 07:00:00]]></wp:post_modified_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:post_name><![CDATA[markets-at-dawn]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_type><![CDATA[post]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<category domain="category" nicename="essays"><![CDATA[Essays]]></category>
+	</item>
+	<item>
+		<title>The last matatu</title>
+		<link>https://wanjiru.blog/2026/10/17/the-last-matatu/</link>
+		<dc:creator><![CDATA[wanjiru]]></dc:creator>
+		<content:encoded><![CDATA[<p>The last matatu home leaves at eleven. This is a story about the people who catch it.</p>]]></content:encoded>
+		<excerpt:encoded><![CDATA[The people who catch the last matatu home.]]></excerpt:encoded>
+		<wp:post_id>13</wp:post_id>
+		<wp:post_date_gmt><![CDATA[2026-10-17 07:00:00]]></wp:post_date_gmt>
+		<wp:post_modified_gmt><![CDATA[2026-10-17 07:00:00]]></wp:post_modified_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:post_name><![CDATA[the-last-matatu]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_type><![CDATA[post]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<category domain="category" nicename="essays"><![CDATA[Essays]]></category>
+	</item>
+	<item>
+		<title>Subscribe</title>
+		<link>https://wanjiru.blog/subscribe/</link>
+		<dc:creator><![CDATA[wanjiru]]></dc:creator>
+		<content:encoded><![CDATA[<p>New essays by email, about once a month.</p>
+[mc4wp_form id="7"]]]></content:encoded>
+		<excerpt:encoded><![CDATA[New essays by email.]]></excerpt:encoded>
+		<wp:post_id>5</wp:post_id>
+		<wp:post_date_gmt><![CDATA[2026-08-01 07:00:00]]></wp:post_date_gmt>
+		<wp:post_modified_gmt><![CDATA[2026-08-01 07:00:00]]></wp:post_modified_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:post_name><![CDATA[subscribe]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_type><![CDATA[page]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+	</item>
+	<item>
+		<title>About</title>
+		<link>https://wanjiru.blog/about/</link>
+		<dc:creator><![CDATA[wanjiru]]></dc:creator>
+		<content:encoded><![CDATA[<p>I write about cities and the people who walk them.</p>]]></content:encoded>
+		<excerpt:encoded><![CDATA[About the writer.]]></excerpt:encoded>
+		<wp:post_id>4</wp:post_id>
+		<wp:post_date_gmt><![CDATA[2026-08-01 07:00:00]]></wp:post_date_gmt>
+		<wp:post_modified_gmt><![CDATA[2026-08-01 07:00:00]]></wp:post_modified_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:post_name><![CDATA[about]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_type><![CDATA[page]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+	</item>
+</channel>
+</rss>

@@ -1,0 +1,70 @@
+[package]
+name = "adk-website"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "A prebuilt AWP 2.0 website for ADK-Rust: site kinds, a team of eight agents, agent-led onboarding, themes, capability packs, playbooks, jobs, alarms and the weekly review"
+homepage.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/adk-website"
+readme = "README.md"
+keywords = ["adk", "awp", "website", "agent", "cms"]
+categories = ["web-programming", "asynchronous"]
+include = ["src/**/*", "tests/**/*", "playbooks/**/*", "Cargo.toml", "README.md"]
+
+# Spec 3.5 §7.1, D-14: the product is the default build. It holds no framework code (D-1):
+# everything it runs comes from the harness, the kernel, the site pipeline and the wallet.
+[features]
+default = []
+
+[[bin]]
+name = "adk-website"
+path = "src/bin/adk-website.rs"
+
+[dependencies]
+adk-core.workspace = true
+# `TeamSpec` with delegate edges (spec 3.5 §7.19).
+adk-agent = { workspace = true, features = ["ambient", "team-tools"] }
+adk-auth = { workspace = true, features = ["web-bot-auth"] }
+adk-devtools.workspace = true
+# The website runtime: preset, toolsets, partitions, ladder, onboarding machinery (WP I).
+adk-harness = { workspace = true, features = ["website"] }
+adk-kernel = { workspace = true, features = ["charter", "channels"] }
+adk-payments = { workspace = true, features = ["wallet"] }
+# `WorkflowExecutor` for the site's deterministic jobs (spec 3.5 §7.20).
+adk-server = { workspace = true, features = ["background"] }
+adk-session.workspace = true
+# Migration sources, freeze, quarantine and probes for onboarding and the Guardian (§7.8).
+adk-site = { workspace = true, features = ["migrate"] }
+awp-types.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+# Quiet hours in the owner's IANA time zone (spec 3.5 §7.21).
+chrono-tz = "0.10"
+# The third-party script check parses generated HTML, as the launch gate does.
+scraper = "0.25"
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+url = "2.5"
+uuid.workspace = true
+
+[dev-dependencies]
+# Internal dev-deps are path-only (no version) so cargo strips them from the published
+# manifest. `anthropic` for the live onboarding interview.
+adk-model = { path = "../adk-model", default-features = false, features = ["anthropic"] }
+adk-skill = { path = "../adk-skill" }
+dotenvy = "0.15"
+futures.workspace = true
+proptest = "1.5"
+tempfile = "3"
+tokio = { workspace = true, features = ["full"] }
+
+[package.metadata.docs.rs]
+all-features = true
