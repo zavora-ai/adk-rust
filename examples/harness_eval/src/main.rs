@@ -9,7 +9,8 @@
 //! ```
 //!
 //! A live run is compared on the `passed` metric against `baseline.live.<provider>.json`;
-//! the process exits non-zero on a regression, which is what the nightly job checks.
+//! the process exits non-zero on a regression, which is what the nightly job checks. The
+//! capability questions (spec 3.1 §7.25) join the `passed` metric under their own ids.
 
 #[path = "../../../adk-harness/tests/eval/cases.rs"]
 mod cases;
@@ -79,10 +80,24 @@ async fn main() -> anyhow::Result<()> {
         );
         outcomes.push(outcome);
     }
-    let metrics: HashMap<String, HashMap<String, f64>> = cases::metrics(&scenarios, &outcomes)
+    let mut metrics: HashMap<String, HashMap<String, f64>> = cases::metrics(&scenarios, &outcomes)
         .into_iter()
         .filter(|(metric, _)| compared.contains(&metric.as_str()))
         .collect();
+    // The rubric case (spec 3.1 §7.25): questions about the harness itself, scored on
+    // whether the answer names the commands the `<harness>` block lists.
+    for question in cases::capability_questions() {
+        let model = match &live {
+            Some(provider) => live_model(provider)?,
+            None => cases::capability_model(&question),
+        };
+        let outcome = cases::ask(&question, model).await;
+        println!("{:<26} {}", outcome.id, if outcome.passed { "PASS" } else { "FAIL" });
+        metrics
+            .entry("passed".to_string())
+            .or_default()
+            .insert(outcome.id, if outcome.passed { 1.0 } else { 0.0 });
+    }
 
     let store = BaselineStore::new(&baseline);
     if flag("--save-baseline").is_some() {

@@ -314,6 +314,11 @@ pub struct ApprovalItem {
 ///
 /// let query = AgendaQuery { state: Some(AgendaStateKind::Proposed), ..AgendaQuery::default() };
 /// assert_eq!(query.to_filter().states, vec![AgendaStateKind::Proposed]);
+///
+/// // The newest twenty, then the twenty before them (spec 3.3 §5.1).
+/// let newest = AgendaQuery { newest_first: true, limit: Some(20), ..AgendaQuery::default() };
+/// let next = AgendaQuery { after: Some("item-41".into()), ..newest.clone() };
+/// assert_eq!(serde_json::to_value(&next).unwrap()["newestFirst"], true);
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -327,6 +332,13 @@ pub struct AgendaQuery {
     /// At most this many items.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
+    /// Newest first instead of oldest first, so a surface reads the newest items without
+    /// paging through every older one (spec 3.3 §5.1).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub newest_first: bool,
+    /// Only the items after this one in the order asked: the last item of the page before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
 }
 
 impl AgendaQuery {
@@ -350,7 +362,7 @@ impl AgendaQuery {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgendaResponse {
-    /// The items, oldest first.
+    /// The items, oldest first, or newest first when asked.
     pub items: Vec<AgendaItem>,
 }
 

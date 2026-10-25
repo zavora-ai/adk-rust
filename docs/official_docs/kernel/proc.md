@@ -52,7 +52,8 @@ a wake source — reaches the row only as an HMAC under a key kept in the kernel
 The ledger lives beside the kernel's other stores: in `harness.db`, or in the `--store`
 PostgreSQL or Redis backend replicas share; a kernel built in code can also keep it in
 MongoDB, Firestore or Neo4j ([backends](backends.md)). It never leaves the host
-unless you export it.
+unless you export it; "While you were away" ([`GET /kernel/away`](today-and-memory.md#while-you-were-away))
+serves only the rows that make its lines.
 
 ## Baselines and the daily pass
 
@@ -169,7 +170,8 @@ TIME                        PARTITION   KIND          EFFECT                  MS
 | `GET /api/kernel/proc/observations` | The observations, newest day first: `partition`, `since`, `limit` |
 
 All three need the `operator` scope, which the kernel's socket and a loopback bind grant. Each
-read of the ledger is recorded as `kernel.control` with action `proc.ledger`.
+read of the ledger is recorded as `kernel.control` with action `proc.ledger`; the ledger
+leaves the host only through it.
 
 ## Using it from code
 

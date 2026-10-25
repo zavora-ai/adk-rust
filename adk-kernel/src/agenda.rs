@@ -1204,6 +1204,8 @@ impl Agenda {
         let Some((person, mode)) = audience.audience(&observation.partition).await? else {
             return Ok(None);
         };
+        // A mode tightened while the kernel runs routes the question (spec 3.3 §10 K3).
+        let mode = self.inner.sup.area_mode(&observation.partition, mode).await;
         if self.get(&observation.id).await?.is_some() {
             return Ok(None);
         }

@@ -11,7 +11,7 @@ Two paths publish an MCP server:
 
 ```toml
 [dependencies]
-adk-tool = { version = "3.0", features = ["mcp-server"] }
+adk-tool = { version = "3.0.0", features = ["mcp-server"] }
 axum = "0.8"
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

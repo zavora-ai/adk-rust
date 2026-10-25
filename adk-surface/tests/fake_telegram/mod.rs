@@ -1,6 +1,7 @@
 //! A fake Telegram Bot API on loopback (spec 3.3 §5.3): it keeps every call the adapter
 //! makes — what left the machine — serves `getUpdates` from a queue the test fills, as a
-//! person typing and pressing buttons would, and can refuse the next calls of a method.
+//! person typing and pressing buttons would, can refuse the next calls of a method or every
+//! message to one chat, and can answer messages late.
 
 #![allow(dead_code)]
 
@@ -40,6 +41,10 @@ struct Shared {
     next_message: AtomicI64,
     next_callback: AtomicI64,
     refusals: Mutex<VecDeque<(String, StatusCode, Value)>>,
+    /// Chats every `sendMessage` to which is refused, as a chat that blocked the bot.
+    blocked: Mutex<Vec<(Value, StatusCode, Value)>>,
+    /// How long each `sendMessage` waits before it is answered.
+    send_delay: Mutex<Duration>,
 }
 
 /// The fake API, served until it is dropped.
@@ -72,6 +77,8 @@ impl FakeTelegram {
             next_message: AtomicI64::new(100),
             next_callback: AtomicI64::new(1),
             refusals: Mutex::default(),
+            blocked: Mutex::default(),
+            send_delay: Mutex::new(Duration::ZERO),
         });
         let app = Router::new().route("/{bot}/{method}", post(call)).with_state(shared.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -127,6 +134,18 @@ impl FakeTelegram {
         for _ in 0..times {
             refusals.push_back((method.to_string(), status, body.clone()));
         }
+    }
+
+    /// Refuses every `sendMessage` to `chat` from now on with `status` and `body`.
+    pub fn refuse_chat(&self, chat: impl Into<Value>, status: StatusCode, body: Value) {
+        let mut blocked = self.shared.blocked.lock().unwrap_or_else(PoisonError::into_inner);
+        blocked.push((chat.into(), status, body));
+    }
+
+    /// Answers every `sendMessage` from now on only after `delay`; the call is kept when it
+    /// arrives.
+    pub fn delay_sends(&self, delay: Duration) {
+        *self.shared.send_delay.lock().unwrap_or_else(PoisonError::into_inner) = delay;
     }
 
     fn next_update_id(&self) -> i64 {
@@ -227,11 +246,22 @@ async fn call(
         let index = refusals.iter().position(|(refused, ..)| *refused == method);
         index.and_then(|index| refusals.remove(index))
     };
+    let refusal = refusal.or_else(|| {
+        let blocked = shared.blocked.lock().unwrap_or_else(PoisonError::into_inner);
+        blocked
+            .iter()
+            .find(|(chat, ..)| method == "sendMessage" && body.get("chat_id") == Some(chat))
+            .map(|(_, status, refused)| (method.clone(), *status, refused.clone()))
+    });
     if method != "getUpdates" {
         let message_id = (method == "sendMessage" && refusal.is_none())
             .then(|| shared.next_message.fetch_add(1, Ordering::SeqCst));
         let record = Call { method: method.clone(), body: body.clone(), message_id };
         shared.calls.lock().unwrap_or_else(PoisonError::into_inner).push(record);
+        let delay = *shared.send_delay.lock().unwrap_or_else(PoisonError::into_inner);
+        if method == "sendMessage" && !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
         if let Some((_, status, refused)) = refusal {
             return (status, Json(refused)).into_response();
         }

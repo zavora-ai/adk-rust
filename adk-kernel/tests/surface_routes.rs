@@ -234,6 +234,7 @@ struct Plane {
     plane: ControlPlane,
     recorder: InMemoryAuditRecorder,
     ledger: Ledger,
+    approvals: Arc<dyn adk_core::ApprovalService>,
     _world: World,
 }
 
@@ -245,6 +246,10 @@ struct Setup {
     notebook: Option<Arc<Notebook>>,
     record_valid: bool,
     agent: bool,
+    runs: Option<Arc<dyn adk_core::DurableRunStore>>,
+    #[cfg(feature = "drivers")]
+    drivers: Option<adk_kernel::drivers::DriverSupervisor>,
+    consolidator: Option<Arc<dyn adk_kernel::Consolidator>>,
 }
 
 impl Default for Setup {
@@ -259,16 +264,23 @@ impl Default for Setup {
             notebook: Some(Notebook::with_facts()),
             record_valid: true,
             agent: false,
+            runs: None,
+            #[cfg(feature = "drivers")]
+            drivers: None,
+            consolidator: None,
         }
     }
 }
 
 impl Plane {
     async fn start(setup: Setup) -> Self {
-        let world = World::answer();
+        let mut world = World::answer();
+        if let Some(runs) = setup.runs {
+            world.runs = runs;
+        }
         let control = GovernanceControl::new();
         let recorder = InMemoryAuditRecorder::new();
-        let approvals = Arc::new(
+        let approvals: Arc<dyn adk_core::ApprovalService> = Arc::new(
             StoreApprovalService::new(Arc::new(InMemoryApprovalStore::new())).with_router(
                 ApprovalPolicy::new([ApproverSelector::group("operator")]).allow_self_approval(),
             ),
@@ -295,16 +307,23 @@ impl Plane {
             .run_store(world.runs.clone())
             .process_store(world.processes.clone())
             .session_service(world.sessions.clone())
-            .approval_service(approvals)
+            .approval_service(approvals.clone())
             .audit(AuditTrail::new(Arc::new(recorder.clone())))
             .ledger(ledger.clone());
         if setup.agent {
             builder = builder.agent(common::TARGET, world.runner(&control));
         }
+        #[cfg(feature = "drivers")]
+        if let Some(drivers) = setup.drivers {
+            builder = builder.drivers(drivers);
+        }
+        if let Some(consolidator) = setup.consolidator {
+            builder = builder.consolidator("default", consolidator);
+        }
         let kernel = builder.build().unwrap();
         let plane = ControlPlane::start(&kernel).await.unwrap();
         let ledger = kernel.ledger().cloned().unwrap();
-        Self { kernel, plane, recorder, ledger, _world: world }
+        Self { kernel, plane, recorder, ledger, approvals, _world: world }
     }
 
     fn base(&self) -> String {
@@ -485,6 +504,356 @@ async fn a_device_reads_the_settings_and_never_changes_them() {
     let owner = ControlClient::http(guarded.base()).with_bearer_token("owner");
     let area = owner.set_spending_limit("default", Some(1)).await.expect("the home's owner may");
     assert_eq!(area.changed.unwrap().daily_spending_limit.unwrap().by, "ana");
+}
+
+/// The SQLite control store at `url`, migrated.
+async fn sqlite_store(url: &str) -> Arc<dyn ControlStore> {
+    let pool = sqlx::SqlitePool::connect(url).await.unwrap();
+    let store = SqliteControlStore::new(pool);
+    store.migrate().await.unwrap();
+    Arc::new(store)
+}
+
+/// A change holds across a restart while the area starts with the value it replaced; a
+/// different start value — `adk-rust up --mode` or a cap set at start — takes over, and the
+/// change is no longer listed (spec 3.3 §10 K3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_change_gives_way_to_a_new_start_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}?mode=rwc", dir.path().join("harness.db").display());
+    let setup = |mode: PartitionMode, cap: u64| {
+        let url = url.clone();
+        async move {
+            Setup {
+                config: KernelConfig::default()
+                    .with_app_name(APP)
+                    .with_quotas(Quotas::new().with_daily_spend_cap(cap)),
+                control: Setup::default().control.with_start_mode("default", mode),
+                store: sqlite_store(&url).await,
+                ..Setup::default()
+            }
+        }
+    };
+    {
+        let plane = Plane::start(setup(PartitionMode::Ask, 5_000_000).await).await;
+        plane.operator().set_area_mode("default", PartitionMode::Auto).await.unwrap();
+        plane.operator().set_spending_limit("default", None).await.unwrap();
+        plane.plane.shutdown().await.unwrap();
+    }
+    {
+        // The same start: the person's changes hold.
+        let plane = Plane::start(setup(PartitionMode::Ask, 5_000_000).await).await;
+        let area = plane.operator().area_settings("default").await.unwrap();
+        assert_eq!((area.mode, area.daily_spending_limit), (Some(PartitionMode::Auto), None));
+        plane.plane.shutdown().await.unwrap();
+    }
+    // `adk-rust up --mode read-only` and a lower cap at start: both take over.
+    let plane = Plane::start(setup(PartitionMode::ReadOnly, 1_000_000).await).await;
+    let area = plane.operator().area_settings("default").await.unwrap();
+    assert_eq!(area.mode, Some(PartitionMode::ReadOnly), "the new start mode takes over");
+    assert_eq!(area.daily_spending_limit, Some(1_000_000), "the new start cap takes over");
+    assert_eq!(area.changed, None, "a change that gave way is not listed");
+    // The next change is made over the new start values.
+    let area = plane.operator().set_area_mode("default", PartitionMode::Plan).await.unwrap();
+    assert_eq!(area.mode, Some(PartitionMode::Plan));
+    assert_eq!(area.daily_spending_limit, Some(1_000_000));
+    let changed = area.changed.unwrap();
+    assert!(changed.daily_spending_limit.is_none(), "the old limit change is dropped");
+}
+
+/// The settings report the mode an area's agents started in, not a partition record changed
+/// since, which the running harness does not read until the next start (spec 3.3 §10 K3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_settings_report_the_mode_the_area_started_in() {
+    let setup = Setup {
+        control: Setup::default().control.with_start_mode("work", PartitionMode::Ask),
+        ..Setup::default()
+    };
+    let plane = Plane::start(setup).await;
+    let partitions = plane.kernel.partitions();
+    let by = adk_core::audit_log::AuditActor::subject(SubjectRef::human("ana"));
+    partitions
+        .put(adk_kernel::Partition::new("work", "work").with_mode(PartitionMode::Ask), by.clone())
+        .await
+        .unwrap();
+    partitions.set_mode("work", PartitionMode::ReadOnly, by).await.unwrap();
+    let area = plane.operator().area_settings("work").await.unwrap();
+    assert_eq!(area.mode, Some(PartitionMode::Ask), "the harness runs in Ask until it restarts");
+}
+
+/// Go ahead is refused where `adk-rust up` refuses `--mode auto` — beyond loopback without
+/// `--sandbox` — and a change to it stored before is not applied (spec 3.3 §10 K3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn go_ahead_is_refused_where_up_refuses_it() {
+    let store: Arc<dyn ControlStore> = Arc::new(InMemoryControlStore::new());
+    store
+        .put_area_settings(
+            adk_kernel::control::AreaSettings::new("default").with_mode(
+                adk_kernel::control::Change::new(PartitionMode::Auto, "ana", Utc::now()),
+            ),
+        )
+        .await
+        .unwrap();
+    let setup = Setup {
+        control: Setup::default()
+            .control
+            .with_start_mode("default", PartitionMode::Ask)
+            .with_refused_mode(PartitionMode::Auto, "Go ahead needs --sandbox beyond loopback"),
+        store,
+        ..Setup::default()
+    };
+    let plane = Plane::start(setup).await;
+    let operator = plane.operator();
+    let area = operator.area_settings("default").await.unwrap();
+    assert_eq!(area.mode, Some(PartitionMode::Ask), "the stored Go ahead is not applied");
+    let error = operator.set_area_mode("default", PartitionMode::Auto).await.unwrap_err();
+    assert_eq!(category(error), ErrorCategory::InvalidInput);
+    assert!(plane.controls("settings.mode").is_empty(), "a refused change is not recorded");
+    operator.set_area_mode("default", PartitionMode::ReadOnly).await.expect("a stricter mode");
+}
+
+/// A looser mode waits until no agent of the area is working, so no turn changes its rules
+/// midway (spec 3.1 I14); a stricter one applies at once (spec 3.3 §10 K3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_looser_mode_waits_until_no_agent_of_the_area_works() {
+    let setup = Setup {
+        control: Setup::default().control.with_start_mode("default", PartitionMode::Ask),
+        ..Setup::default()
+    };
+    let plane = Plane::start(setup).await;
+    let runs = plane._world.runs.clone();
+    let turn = adk_core::NewRun::new("held-turns", APP, "ana", common::TARGET, json!({}));
+    runs.enqueue(turn).await.unwrap();
+    let working = runs.claim("held-turns", "test", Duration::from_secs(60)).await.unwrap().unwrap();
+    let operator = plane.operator();
+    let error = operator.set_area_mode("default", PartitionMode::Auto).await.unwrap_err();
+    assert_eq!(category(error), ErrorCategory::Conflict, "Go ahead waits for the turn");
+    assert!(plane.controls("settings.mode").is_empty());
+    let area = operator.set_area_mode("default", PartitionMode::ReadOnly).await.unwrap();
+    assert_eq!(area.mode, Some(PartitionMode::ReadOnly), "a stricter mode applies at once");
+
+    let done = adk_core::RunOutcome::Completed(json!({}));
+    runs.finish(&working.record.run_id, working.epoch, done).await.unwrap();
+    let area = operator.set_area_mode("default", PartitionMode::Auto).await.unwrap();
+    assert_eq!(area.mode, Some(PartitionMode::Auto), "once the turn ends");
+}
+
+/// Two changes of different settings of one area made together both hold (spec 3.3 §10 K3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_changes_of_one_area_all_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}?mode=rwc", dir.path().join("harness.db").display());
+    let plane = Plane::start(Setup { store: sqlite_store(&url).await, ..Setup::default() }).await;
+    for _ in 0..8 {
+        let (quiet, limit) = (plane.operator(), plane.operator());
+        let (quiet, limit) = tokio::join!(
+            quiet.set_quiet_time("default", Some(window("22:00-07:00"))),
+            limit.set_spending_limit("default", Some(1_000_000)),
+        );
+        quiet.unwrap();
+        limit.unwrap();
+        let area = plane.operator().area_settings("default").await.unwrap();
+        assert_eq!(area.quiet_time, [window("22:00-07:00")]);
+        assert_eq!(area.daily_spending_limit, Some(1_000_000));
+        plane.operator().set_quiet_time("default", None).await.unwrap();
+        plane.operator().set_spending_limit("default", None).await.unwrap();
+    }
+}
+
+/// A run store whose `wake` fails while `fail` is set.
+struct FailingWake {
+    inner: Arc<dyn adk_core::DurableRunStore>,
+    fail: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl adk_core::DurableRunStore for FailingWake {
+    async fn enqueue(&self, run: adk_core::NewRun) -> adk_core::Result<adk_core::Enqueued> {
+        self.inner.enqueue(run).await
+    }
+    async fn claim(
+        &self,
+        queue: &str,
+        worker: &str,
+        ttl: Duration,
+    ) -> adk_core::Result<Option<adk_core::ClaimedRun>> {
+        self.inner.claim(queue, worker, ttl).await
+    }
+    async fn heartbeat(&self, run_id: &str, epoch: u64, ttl: Duration) -> adk_core::Result<bool> {
+        self.inner.heartbeat(run_id, epoch, ttl).await
+    }
+    async fn set_checkpoint(
+        &self,
+        run_id: &str,
+        epoch: u64,
+        checkpoint: adk_core::RunCheckpointRef,
+    ) -> adk_core::Result<()> {
+        self.inner.set_checkpoint(run_id, epoch, checkpoint).await
+    }
+    async fn wait(
+        &self,
+        run_id: &str,
+        epoch: u64,
+        until: Option<chrono::DateTime<Utc>>,
+    ) -> adk_core::Result<()> {
+        self.inner.wait(run_id, epoch, until).await
+    }
+    async fn wake(&self, run_id: &str) -> adk_core::Result<()> {
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AdkError::session("the run store is unavailable"));
+        }
+        self.inner.wake(run_id).await
+    }
+    async fn finish(
+        &self,
+        run_id: &str,
+        epoch: u64,
+        outcome: adk_core::RunOutcome,
+    ) -> adk_core::Result<adk_core::RunRecord> {
+        self.inner.finish(run_id, epoch, outcome).await
+    }
+    async fn request_cancel(&self, run_id: &str) -> adk_core::Result<()> {
+        self.inner.request_cancel(run_id).await
+    }
+    async fn get(&self, run_id: &str) -> adk_core::Result<Option<adk_core::RunRecord>> {
+        self.inner.get(run_id).await
+    }
+    async fn list(
+        &self,
+        filter: adk_core::RunFilter,
+    ) -> adk_core::Result<Vec<adk_core::RunRecord>> {
+        self.inner.list(filter).await
+    }
+    async fn prune(&self, finished_before: chrono::DateTime<Utc>) -> adk_core::Result<u64> {
+        self.inner.prune(finished_before).await
+    }
+}
+
+/// A process a changed setting releases keeps its wake time and admission label when its
+/// run cannot be woken, so its wake time or the next change still wakes it (spec 3.3 §10 K3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_wake_keeps_the_held_process_asleep_with_its_wake_time() {
+    let runs = Arc::new(FailingWake {
+        inner: Arc::new(adk_core::InMemoryRunStore::new()),
+        fail: std::sync::atomic::AtomicBool::new(false),
+    });
+    let setup = Setup {
+        config: KernelConfig::default().with_app_name(APP).with_quiet_hours(window_around_now()),
+        agent: true,
+        runs: Some(runs.clone()),
+        ..Setup::default()
+    };
+    let plane = Plane::start(setup).await;
+    plane.kernel.start().await.unwrap();
+    let suggestion = SpawnRequest::new(common::TARGET, json!({ "text": "pay the supplier" }))
+        .with_queue(QueueClass::Background)
+        .with_kind(ProcessKind::Proposed);
+    let (pid, labels) = admitted_labels(&plane, suggestion).await;
+    assert_eq!(labels.get("kernel.admission").map(String::as_str), Some("quiet_hours"));
+
+    runs.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    plane.operator().set_quiet_time("default", None).await.unwrap();
+    let process = plane.kernel.processes().get(&pid).await.unwrap().unwrap();
+    assert_eq!(
+        process.meta.labels.get("kernel.admission").map(String::as_str),
+        Some("quiet_hours"),
+        "the label stays, so the next change selects it again"
+    );
+    assert!(process.meta.wake.is_some(), "its wake time stays");
+    assert!(!process.run.state.is_terminal());
+
+    runs.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+    plane.operator().set_quiet_time("default", None).await.unwrap();
+    let started = tokio::time::Instant::now();
+    while !plane.kernel.processes().get(&pid).await.unwrap().unwrap().run.state.is_terminal() {
+        assert!(started.elapsed() < Duration::from_secs(10), "the next change wakes it");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    plane.kernel.stop().await.unwrap();
+}
+
+/// A consolidator whose area is ready for a tick, in the mode its harness started in.
+struct Ready {
+    reads: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl adk_kernel::Consolidator for Ready {
+    async fn material(
+        &self,
+        _: &PartitionId,
+        now: chrono::DateTime<Utc>,
+    ) -> adk_kernel::Result<adk_kernel::TickMaterial> {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(adk_kernel::TickMaterial::new("ana", PartitionMode::Ask)
+            .with_new_material(3, 0)
+            .with_last_tick(now - chrono::Duration::hours(7))
+            .with_last_activity(now - chrono::Duration::hours(1)))
+    }
+
+    async fn consolidate(
+        &self,
+        _: adk_kernel::TickRun,
+    ) -> adk_kernel::Result<adk_kernel::TickOutcome> {
+        Err(adk_kernel::KernelError::Config { reason: "not in this test".into() })
+    }
+}
+
+/// Whether the kernel of `plane` spawned a consolidation tick within two seconds of reading
+/// the area's material.
+async fn ticks(plane: &Plane, ready: &Ready) -> bool {
+    let started = tokio::time::Instant::now();
+    while ready.reads.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        assert!(started.elapsed() < Duration::from_secs(10), "the tick reads the material");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let started = tokio::time::Instant::now();
+    while started.elapsed() < Duration::from_secs(2) {
+        let processes = plane.kernel.processes().ps(adk_kernel::ProcessFilter::default()).await;
+        if processes
+            .unwrap()
+            .iter()
+            .any(|process| process.run.target == adk_kernel::CONSOLIDATION_TARGET)
+        {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    false
+}
+
+/// An area set to Just look in the home holds the overnight tidy-up back, though its harness
+/// started in Ask (spec 3.3 §10 K3, spec 3.1 I13).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mode_tightened_in_the_home_holds_the_tidy_up_back() {
+    let start = |store: Arc<dyn ControlStore>, ready: Arc<Ready>| Setup {
+        config: KernelConfig::default().with_app_name(APP).with_proactivity(
+            adk_kernel::ProactivityPolicy::default()
+                .with_consolidation(adk_kernel::ConsolidationTick::default()),
+        ),
+        control: Setup::default().control.with_start_mode("default", PartitionMode::Ask),
+        store,
+        consolidator: Some(ready),
+        ..Setup::default()
+    };
+
+    let ready = Arc::new(Ready { reads: 0.into() });
+    let plane = Plane::start(start(Arc::new(InMemoryControlStore::new()), ready.clone())).await;
+    plane.kernel.start().await.unwrap();
+    assert!(ticks(&plane, &ready).await, "in Ask the tick runs");
+    plane.kernel.stop().await.unwrap();
+
+    let store: Arc<dyn ControlStore> = Arc::new(InMemoryControlStore::new());
+    let change = adk_kernel::control::Change::new(PartitionMode::ReadOnly, "ana", Utc::now());
+    store
+        .put_area_settings(adk_kernel::control::AreaSettings::new("default").with_mode(change))
+        .await
+        .unwrap();
+    let ready = Arc::new(Ready { reads: 0.into() });
+    let plane = Plane::start(start(store, ready.clone())).await;
+    plane.kernel.start().await.unwrap();
+    assert!(!ticks(&plane, &ready).await, "set to Just look, it does not");
+    plane.kernel.stop().await.unwrap();
 }
 
 /// The process a spawn makes, once admission has decided on it: its labels.
@@ -746,6 +1115,174 @@ async fn away_is_exact_across_a_restart() {
         page.lines.iter().map(|line| line.kind).collect::<Vec<_>>(),
         [AwayKind::Done, AwayKind::Question]
     );
+}
+
+/// Quiet time is judged by the window in force when the work started: a window set or
+/// turned off later does not rewrite whether last night's quiet time was respected (spec
+/// 3.3 §5.1, §10 K4).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn quiet_time_is_judged_by_the_window_in_force_when_work_started() {
+    let three_hours_ago = Utc::now() - chrono::Duration::hours(3);
+    let hour = |offset: i64| (three_hours_ago + chrono::Duration::hours(offset)).hour();
+    let then = window(&format!("{:02}:00-{:02}:00", hour(-1), hour(1)));
+    let started =
+        || Activity::new(LedgerKind::Proposal, "kernel").with_effect("running").at(three_hours_ago);
+
+    // No quiet time then; the person sets one covering that hour now.
+    let plane = Plane::start(Setup::default()).await;
+    plane.row(started()).await;
+    plane.operator().set_quiet_time("default", Some(then)).await.unwrap();
+    let page = plane.operator().away(&AwayQuery::default()).await.unwrap();
+    assert!(page.quiet_time.respected, "no quiet time held when the work started");
+
+    // Quiet time held then; the person turns it off now.
+    let setup = Setup {
+        config: KernelConfig::default().with_app_name(APP).with_quiet_hours(then),
+        ..Setup::default()
+    };
+    let plane = Plane::start(setup).await;
+    plane.row(started()).await;
+    plane.operator().set_quiet_time("default", None).await.unwrap();
+    let page = plane.operator().away(&AwayQuery::default()).await.unwrap();
+    assert!(!page.quiet_time.respected, "the work started inside the quiet time then");
+    assert_eq!(page.quiet_time.breaches, [1]);
+}
+
+/// A line's route serves the row of a line only: a row that makes no line, such as spend,
+/// is not found, so the ledger leaves the host only through its recorded export (spec 3.3
+/// §10 K4, spec 3.2 §7.10).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_line_route_serves_only_the_rows_of_lines() {
+    let plane = Plane::start(Setup::default()).await;
+    one_night(&plane).await;
+    let (device, _) = plane.device(&[DeviceScope::Read]).await;
+    let line = device.away_line(1).await.expect("a finished routine is a line");
+    assert_eq!(line.entry.seq, 1);
+    for seq in [2, 10, 12] {
+        let error = device.away_line(seq).await.unwrap_err();
+        assert_eq!(category(error), ErrorCategory::NotFound, "row {seq} makes no line");
+    }
+}
+
+/// A line names its agent as the agent calls itself, never by its internal id (spec 3.3 §8).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn away_names_each_agent_as_it_calls_itself() {
+    let plane = Plane::start(Setup::default()).await;
+    let urn = "urn:adk:agent:adk-rust/finance";
+    plane.row(Activity::new(LedgerKind::Process, urn).with_effect("completed")).await;
+    plane.row(Activity::new(LedgerKind::Process, "finance").with_effect("failed")).await;
+    let page = plane.operator().away(&AwayQuery::default()).await.unwrap();
+    assert_eq!(
+        page.lines.iter().map(|line| line.agent.as_str()).collect::<Vec<_>>(),
+        ["finance", "finance"]
+    );
+}
+
+/// A page after the last sequence number there can be is empty, not a failed request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn away_after_the_largest_sequence_number_is_an_empty_page() {
+    let plane = Plane::start(Setup::default()).await;
+    one_night(&plane).await;
+    let (device, _) = plane.device(&[DeviceScope::Read]).await;
+    let page = device
+        .away(&AwayQuery { after: Some(u64::MAX), ..AwayQuery::default() })
+        .await
+        .expect("an empty page");
+    assert!(page.lines.is_empty());
+}
+
+// ---------------------------------------------------------------------------------------
+// K2: what a paired device may decide
+// ---------------------------------------------------------------------------------------
+
+/// Submits a decision of `ana` calling `tool` at medium risk, routed to the operator group.
+async fn held_call(plane: &Plane, tool: &str) -> adk_core::ApprovalRequest {
+    let call = adk_core::ToolConfirmationRequest::new(tool, json!({ "to": "client@example.com" }));
+    let request = adk_core::ApprovalRequest::new(
+        format!("decision-{tool}"),
+        adk_core::ApprovalScope::new(APP, "ana", "session-1"),
+        &call,
+        ApprovalPolicy::new([ApproverSelector::group("operator")]).allow_self_approval(),
+    )
+    .with_summary(format!("Call {tool}"));
+    plane.approvals.submit(request).await.unwrap()
+}
+
+/// A device's answer is recorded with the device, its name, the surface and the answer, so
+/// "What your agents did" can say where the person said yes from (spec 3.3 §11).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_devices_answer_is_recorded_with_the_device_and_the_answer() {
+    let plane = Plane::start(Setup::default()).await;
+    let (phone, phone_id) = plane.device(&[DeviceScope::Decide, DeviceScope::Read]).await;
+    let held = held_call(&plane, "send_email").await;
+    phone.decide(&held.id, held.version, adk_core::ApprovalAction::Approve, None).await.unwrap();
+    let records = plane.controls("approvals.decide");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["target"], held.id);
+    assert_eq!(records[0]["device"], phone_id);
+    assert_eq!(records[0]["deviceName"], "phone");
+    assert_eq!(records[0]["surface"], "device");
+    assert_eq!(records[0]["answer"], "approve");
+}
+
+/// A device never says yes to a take-over, whose secret is typed in the home; it may deny
+/// it (spec 3.3 §8.2).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_device_only_denies_a_take_over() {
+    let plane = Plane::start(Setup::default()).await;
+    let (phone, _) = plane.device(&[DeviceScope::Decide, DeviceScope::Read]).await;
+    let held = held_call(&plane, "harness:take-over").await;
+    let error = phone
+        .decide(&held.id, held.version, adk_core::ApprovalAction::Approve, None)
+        .await
+        .unwrap_err();
+    assert_eq!(category(error), ErrorCategory::Forbidden);
+    assert!(plane.controls("approvals.decide").is_empty(), "a refused answer is not recorded");
+    phone
+        .decide(&held.id, held.version, adk_core::ApprovalAction::Reject, None)
+        .await
+        .expect("a device may deny a take-over");
+}
+
+/// A device never decides a call of a class nothing may allow without a person — a public
+/// post or a payment a mounted driver declares — which is high risk (spec 3.3 §7.2, spec 3.2
+/// K-I9); an everyday call of the same driver it may.
+#[cfg(feature = "drivers")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_device_never_decides_what_nothing_may_allow_alone() {
+    use adk_kernel::drivers::{DriverManifest, DriverSupervisor};
+    use adk_kernel::stores::InMemoryDriverStore;
+
+    let drivers = DriverSupervisor::builder(Arc::new(InMemoryDriverStore::new())).build();
+    let manifest = DriverManifest::from_toml(
+        r#"
+        id        = "social"
+        command   = "mcp-social"
+        lifecycle = "lazy"
+
+        [tools]
+        post_update = "publish_public"
+        pay_invoice = "financial"
+        save_draft  = "write_local"
+        "#,
+    )
+    .unwrap();
+    drivers.mount(manifest, "ana").await.unwrap();
+    let plane = Plane::start(Setup { drivers: Some(drivers), ..Setup::default() }).await;
+    let (phone, _) = plane.device(&[DeviceScope::Decide, DeviceScope::Read]).await;
+    for tool in ["post_update", "pay_invoice"] {
+        let held = held_call(&plane, tool).await;
+        let error = phone
+            .decide(&held.id, held.version, adk_core::ApprovalAction::Approve, None)
+            .await
+            .unwrap_err();
+        assert_eq!(category(error), ErrorCategory::Forbidden, "{tool} is decided in the home");
+    }
+    let everyday = held_call(&plane, "save_draft").await;
+    phone
+        .decide(&everyday.id, everyday.version, adk_core::ApprovalAction::Approve, None)
+        .await
+        .expect("an everyday call");
 }
 
 // ---------------------------------------------------------------------------------------

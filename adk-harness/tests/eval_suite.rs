@@ -59,3 +59,48 @@ async fn a_baseline_is_produced_and_a_regression_is_reported() {
     assert_eq!(regressions[0].case_id, "goal_until");
     assert_eq!(regressions[0].metric_name, "passed");
 }
+
+#[tokio::test]
+async fn the_capability_questions_pass_on_the_scripted_model() {
+    for question in cases::capability_questions() {
+        let outcome = cases::ask(&question, cases::capability_model(&question)).await;
+        assert!(outcome.passed, "{outcome:#?}");
+    }
+}
+
+#[test]
+fn a_capability_answer_without_its_commands_fails() {
+    let questions = cases::capability_questions();
+    let deny = questions.iter().find(|q| q.id == "capability_deny_rule").unwrap();
+    assert!(!cases::capability_passes(deny, "Just ask me before each edit."));
+    assert!(
+        !cases::capability_passes(deny, "Run adk-rust rules add edit_file."),
+        "--deny is missing"
+    );
+    assert!(cases::capability_passes(
+        deny,
+        "adk-rust RULES ADD edit_file --path-within migrations --DENY \"review\""
+    ));
+}
+
+#[test]
+fn the_block_names_every_command_the_questions_ask_about() {
+    let dir = tempfile::tempdir().unwrap();
+    let harness = adk_harness::HarnessAgent::builder("harness")
+        .model(std::sync::Arc::new(adk_model::ScriptedLlm::new(
+            "scripted",
+            vec![adk_model::ScriptedResponse::text("ok")],
+        )))
+        .workspace(adk_devtools::Workspace::new(dir.path()))
+        .project_instructions(adk_harness::InstructionsConfig {
+            user_file: None,
+            ..adk_harness::InstructionsConfig::default()
+        })
+        .surface(cases::capability_surface())
+        .build()
+        .unwrap();
+    let block = harness.manifest().render();
+    for expected in ["/approvals", "adk-rust --continue", "adk-rust rules add --deny"] {
+        assert!(block.contains(expected), "{expected} is missing from {block}");
+    }
+}

@@ -76,6 +76,8 @@ async-trait.workspace = true
 # The control plane's router, served on the Unix socket and merged into `ServerBuilder`.
 axum = "0.8"
 chrono.workspace = true
+# Quiet hours in a named time zone, which follow its daylight saving time (spec 3.3 §10 K3).
+chrono-tz = "0.10"
 dirs = "7"
 # The MongoDB, Firestore and Neo4j backends (features `mongodb`, `firestore`, `neo4j`), at the
 # versions adk-session and adk-graph use.
@@ -134,7 +136,7 @@ proptest = "1.5"
 rmcp = { version = "3.1", features = ["client", "server", "elicitation"] }
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite"] }
 tempfile = "3"
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
 # Captures the webhook sink's logs to show they carry no secret.
 tracing-subscriber.workspace = true
 

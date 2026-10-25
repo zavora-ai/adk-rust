@@ -6,7 +6,7 @@ use fred::prelude::{Client, HashesInterface as _};
 use super::{AreaSettings, AwayCursor, ControlStore};
 use crate::error::Result;
 use crate::pairing::redis::{
-    connect_client, decode, eval_text, migrate_layout, namespaced, store_error,
+    connect_client, decode, eval_count, eval_text, migrate_layout, namespaced, store_error,
 };
 use crate::partition::PartitionId;
 
@@ -22,6 +22,20 @@ redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
 redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
 return ARGV[3]
 ";
+
+/// KEYS: settings hash. ARGV: field, the record read (empty when there was none), the new
+/// record. Stores the new record only while the stored one is still the one read.
+const SWAP_SCRIPT: &str = r"
+local stored = redis.call('HGET', KEYS[1], ARGV[1])
+if (stored == false and ARGV[2] == '') or stored == ARGV[2] then
+  redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+  return 1
+end
+return 0
+";
+
+/// How often a change is applied again to a record another write changed meanwhile.
+const SWAP_ATTEMPTS: usize = 32;
 
 /// A [`ControlStore`] in Redis, shared by every replica (spec 3.3 §10 K3, K4; feature
 /// `redis`).
@@ -39,7 +53,8 @@ return ARGV[3]
 /// | `{<ns>}:control-layout` | String | The layout version [`migrate`](Self::migrate) recorded |
 ///
 /// A cursor advances in one Lua script, which Redis executes atomically, so two concurrent
-/// advances keep the higher.
+/// advances keep the higher; an area's record changes by compare-and-swap in another, so
+/// concurrent changes all hold.
 ///
 /// # Example
 ///
@@ -144,6 +159,38 @@ impl ControlStore for RedisControlStore {
             .hset::<(), _, _>(self.key("area-settings"), (settings.partition.as_str(), json))
             .await
             .map_err(|error| store_error("write the area settings", &error))
+    }
+
+    async fn update_area_settings(
+        &self,
+        partition: &PartitionId,
+        change: &(dyn for<'a> Fn(&'a mut AreaSettings) + Send + Sync),
+    ) -> Result<AreaSettings> {
+        let key = self.key("area-settings");
+        for _ in 0..SWAP_ATTEMPTS {
+            let read: Option<String> = self
+                .client
+                .hget(&key, partition.as_str())
+                .await
+                .map_err(|error| store_error("read the area settings", &error))?;
+            let mut settings = match &read {
+                Some(text) => decode("area's settings", text)?,
+                None => AreaSettings::new(partition.clone()),
+            };
+            change(&mut settings);
+            let args = vec![
+                partition.as_str().to_string(),
+                read.unwrap_or_default(),
+                serde_json::to_string(&settings)?,
+            ];
+            if eval_count(&self.client, SWAP_SCRIPT, vec![key.clone()], args).await? == 1 {
+                return Ok(settings);
+            }
+        }
+        Err(store_error(
+            "change the area settings",
+            &format!("the settings of area {partition} kept changing; try again"),
+        ))
     }
 
     async fn cursor(&self, user: &str, viewer: &str) -> Result<Option<AwayCursor>> {

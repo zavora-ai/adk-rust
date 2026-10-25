@@ -2,7 +2,7 @@
 //!
 //! | Case | Contract |
 //! |------|----------|
-//! | [`settings_round_trip`] | An area's settings read back exactly as put: every change, off and on |
+//! | [`settings_round_trip`] | An area's settings read back exactly as put: every change, off and on, what the area started with and its earlier quiet times |
 //! | [`put_settings_replaces`] | A second put of one area replaces it |
 //! | [`list_settings_orders_by_partition`] | `list_area_settings` orders by partition id |
 //! | [`unknown_keys`] | An unknown area and an unknown viewer are `None` |
@@ -10,6 +10,8 @@
 //! | [`cursors_are_per_user_and_viewer`] | Each user's viewer has its own cursor |
 //! | [`records_survive_a_restart`] | Settings and cursors read back through a new handle (durable backends only) |
 //! | [`concurrent_advances_keep_the_highest`] | Sixteen concurrent advances of one cursor from two handles leave the highest |
+//! | [`update_changes_one_setting`] | `update_area_settings` creates an area's record, then changes one setting and keeps the others |
+//! | [`concurrent_updates_all_hold`] | Sixteen concurrent updates of one area from two handles all hold |
 //!
 //! Every case writes under fresh partitions, users and viewers, so a harness may point
 //! every case at one shared database.
@@ -19,7 +21,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 
-use crate::control::{AreaSettings, AwayCursor, Change, ControlStore};
+use crate::control::{AreaSettings, AreaStart, AwayCursor, Change, ControlStore};
 use crate::partition::{PartitionId, PartitionMode};
 use crate::sched::QuietHours;
 
@@ -79,10 +81,13 @@ fn instant(seconds: i64) -> DateTime<Utc> {
 
 fn settings(partition: &PartitionId) -> AreaSettings {
     let window = "22:00-07:00".parse::<QuietHours>().expect("window").with_utc_offset_minutes(180);
-    AreaSettings::new(partition.clone())
+    let mut settings = AreaSettings::new(partition.clone())
         .with_quiet_time(Change::new(Some(window), "ana \"home\"", instant(1)))
         .with_daily_spending_limit(Change::new(None, "ana", instant(2)))
         .with_mode(Change::new(PartitionMode::Ask, "ana", instant(3)))
+        .with_start(AreaStart::new(vec![window], Some(5_000_000), Some(PartitionMode::Auto)));
+    settings.earlier_quiet_time.push(Change::new(None, "ana", instant(0)));
+    settings
 }
 
 /// An area's settings read back exactly as put.
@@ -220,6 +225,66 @@ pub async fn concurrent_advances_keep_the_highest(harness: &dyn ControlStoreHarn
     assert_eq!(stored.seq, 16);
 }
 
+/// `update_area_settings` creates an area's record, then changes one setting and keeps the
+/// others.
+pub async fn update_changes_one_setting(harness: &dyn ControlStoreHarness) {
+    let store = harness.open().await;
+    let partition = PartitionId::new(fresh("area"));
+    let plan = Change::new(PartitionMode::Plan, "ana", instant(4));
+    let stored = store
+        .update_area_settings(&partition, &|settings: &mut AreaSettings| {
+            settings.mode = Some(plan.clone());
+        })
+        .await
+        .expect("update");
+    let created = AreaSettings::new(partition.clone()).with_mode(plan.clone());
+    assert_eq!(stored, created);
+    assert_eq!(store.area_settings(&partition).await.expect("get"), Some(created));
+
+    store.put_area_settings(settings(&partition)).await.expect("put");
+    let limit = Change::new(Some(7_000_000), "ana", instant(6));
+    let stored = store
+        .update_area_settings(&partition, &|settings: &mut AreaSettings| {
+            settings.daily_spending_limit = Some(limit.clone());
+        })
+        .await
+        .expect("update");
+    let changed = settings(&partition).with_daily_spending_limit(limit);
+    assert_eq!(stored, changed);
+    assert_eq!(store.area_settings(&partition).await.expect("get"), Some(changed));
+}
+
+/// Sixteen concurrent updates of one area from two handles all hold: none is lost to
+/// another written over it.
+pub async fn concurrent_updates_all_hold(harness: &dyn ControlStoreHarness) {
+    let stores = two(harness).await;
+    let partition = PartitionId::new(fresh("area"));
+    let mut updates = Vec::new();
+    for index in 0..16_i64 {
+        let store = stores[usize::try_from(index).expect("small") % 2].clone();
+        let partition = partition.clone();
+        updates.push(tokio::spawn(async move {
+            let change = Change::new(None, format!("person-{index}"), instant(index));
+            store
+                .update_area_settings(&partition, &|settings: &mut AreaSettings| {
+                    settings.earlier_quiet_time.push(change.clone());
+                })
+                .await
+                .expect("update")
+        }));
+    }
+    for update in updates {
+        update.await.expect("update completes");
+    }
+    let stored = stores[0].area_settings(&partition).await.expect("get").expect("a record");
+    let mut by: Vec<String> =
+        stored.earlier_quiet_time.iter().map(|change| change.by.clone()).collect();
+    by.sort();
+    let mut expected: Vec<String> = (0..16).map(|index| format!("person-{index}")).collect();
+    expected.sort();
+    assert_eq!(by, expected);
+}
+
 /// Generates one test per [`control_store`](self) case for a `ControlStoreHarness` (spec
 /// 3.3 §10 K3, K4).
 ///
@@ -268,6 +333,16 @@ macro_rules! control_store_conformance_tests {
         async fn control_store_concurrent_advances_keep_the_highest() {
             $crate::conformance::control_store::concurrent_advances_keep_the_highest(&$harness)
                 .await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn control_store_update_changes_one_setting() {
+            $crate::conformance::control_store::update_changes_one_setting(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn control_store_concurrent_updates_all_hold() {
+            $crate::conformance::control_store::concurrent_updates_all_hold(&$harness).await;
         }
     };
 }

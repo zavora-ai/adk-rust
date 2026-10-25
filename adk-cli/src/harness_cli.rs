@@ -146,8 +146,9 @@ struct AgentExtras {
     /// coordinator.
     partition: Option<(adk_kernel::Partition, adk_kernel::Partitions, bool)>,
     /// The control store whose area mode, changed while the kernel runs, governs the
-    /// harness's sessions from their next step, and the harness's area (spec 3.3 §10 K3).
-    area_modes: Option<(Arc<dyn adk_kernel::control::ControlStore>, adk_kernel::PartitionId)>,
+    /// harness's sessions from their next step, the harness's area, and whether Go ahead is
+    /// refused there (spec 3.3 §10 K3).
+    area_modes: Option<(Arc<dyn adk_kernel::control::ControlStore>, adk_kernel::PartitionId, bool)>,
     /// The person at this console runs the harness and answers its inbox (the terminal
     /// surface in process, spec 3.3 §5.2): its runs are theirs, so standing rules and Auto
     /// apply without a server's authentication.
@@ -442,7 +443,7 @@ impl Setup {
         }
         // An area's mode the person changes while the kernel runs governs the harness's
         // sessions from their next step (spec 3.3 §10 K3).
-        if let Some((control, area)) = &extras.area_modes {
+        if let Some((control, area, auto_refused)) = &extras.area_modes {
             let mut modes: Arc<dyn adk_harness::ModeStore> =
                 Arc::new(adk_harness::InMemoryModeStore::new());
             #[cfg(feature = "persist")]
@@ -456,6 +457,8 @@ impl Setup {
                 modes,
                 control.clone(),
                 area.clone(),
+                mode,
+                *auto_refused,
             )));
         }
         if let Some((checkpointer, _)) = &self.plans {

@@ -720,8 +720,9 @@ impl Supervision {
         quotas
     }
 
-    /// The settings the person changed for `partition` while the kernel runs; `None` when
-    /// the store fails, so the start settings apply (spec 3.3 §10 K3).
+    /// The settings the person changed for `partition` while the kernel runs: those read
+    /// last when the store fails, and `None` when it never answered, so the start settings
+    /// apply (spec 3.3 §10 K3).
     async fn changed_settings(
         &self,
         partition: &PartitionId,
@@ -732,6 +733,22 @@ impl Supervision {
                 tracing::warn!(partition = %partition, error = %error, "could not read the changed settings; the start settings apply");
                 None
             }
+        }
+    }
+
+    /// The mode the kernel's own work in `partition` runs in: `start`, the mode the area's
+    /// harness started in, or the person's changed mode when that is stricter, so a mode
+    /// tightened while the kernel runs holds the overnight tidy-up and the kernel's
+    /// questions back (spec 3.3 §10 K3).
+    pub(crate) async fn area_mode(
+        &self,
+        partition: &PartitionId,
+        start: crate::partition::PartitionMode,
+    ) -> crate::partition::PartitionMode {
+        let changed = self.changed_settings(partition).await;
+        match changed.as_ref().and_then(|settings| settings.mode_over(Some(start))) {
+            Some(change) => crate::control::settings::stricter(start, change.value),
+            None => start,
         }
     }
 

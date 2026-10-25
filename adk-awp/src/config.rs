@@ -20,16 +20,32 @@ pub enum AwpConfigError {
     /// An error from the file watcher subsystem.
     #[error("file watcher error: {0}")]
     WatcherError(String),
+
+    /// The business context could not be serialized to TOML (spec 3.5 §10 X4).
+    #[error(
+        "failed to serialize the business context to TOML: {0}; TOML integers stop at i64::MAX"
+    )]
+    Serialize(#[source] toml::ser::Error),
 }
 
 /// Serialize a [`BusinessContext`] to a pretty-printed TOML string.
 ///
 /// # Errors
 ///
-/// Returns [`AwpConfigError::WatcherError`] if serialization fails (reuses the
-/// variant as a generic serialization error for now).
+/// Returns [`AwpConfigError::Serialize`] if the context cannot be represented in TOML, such
+/// as a product price above `i64::MAX`.
+///
+/// # Example
+///
+/// ```
+/// use adk_awp::business_context_to_toml;
+/// use awp_types::BusinessContext;
+///
+/// let toml = business_context_to_toml(&BusinessContext::core("Shop", "A shop", "example.com")).unwrap();
+/// assert!(toml.contains("site_name = \"Shop\""));
+/// ```
 pub fn business_context_to_toml(ctx: &BusinessContext) -> Result<String, AwpConfigError> {
-    toml::to_string_pretty(ctx).map_err(|e| AwpConfigError::WatcherError(e.to_string()))
+    toml::to_string_pretty(ctx).map_err(AwpConfigError::Serialize)
 }
 
 #[cfg(test)]
@@ -46,6 +62,8 @@ mod tests {
             endpoint: "/api/read".to_string(),
             method: "GET".to_string(),
             access_level: TrustLevel::Anonymous,
+            input_schema: None,
+            output_schema: None,
         }];
         ctx.policies = vec![BusinessPolicy {
             name: "privacy".to_string(),
@@ -57,6 +75,24 @@ mod tests {
         let toml_str = business_context_to_toml(&ctx).unwrap();
         let parsed: BusinessContext = toml::from_str(&toml_str).unwrap();
         assert_eq!(ctx, parsed);
+    }
+
+    /// Serialization failures have their own variant, not `WatcherError` (spec 3.5 §10 X4).
+    #[test]
+    fn test_business_context_to_toml_reports_serialize_errors() {
+        let mut ctx = BusinessContext::core("Shop", "A shop", "example.com");
+        ctx.products = vec![awp_types::Product {
+            sku: "X".to_string(),
+            name: "Out of TOML range".to_string(),
+            price: u64::MAX,
+            inventory: 0,
+            tags: vec![],
+            description: None,
+        }];
+        let err = business_context_to_toml(&ctx).unwrap_err();
+        assert!(matches!(err, AwpConfigError::Serialize(_)), "{err:?}");
+        assert!(err.to_string().starts_with("failed to serialize the business context to TOML"));
+        assert!(std::error::Error::source(&err).is_some());
     }
 
     #[test]

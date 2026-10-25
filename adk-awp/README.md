@@ -131,7 +131,7 @@ buckets.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/.well-known/awp.json` | Discovery document |
-| GET | `/awp/manifest` | JSON-LD capability manifest |
+| GET | `/awp/manifest` | JSON-LD capability manifest, with each capability's `accessLevel` and schemas |
 | GET | `/awp/health` | Health state |
 | POST | `/awp/a2a` | Application-provided A2A dispatch |
 
@@ -223,7 +223,9 @@ Two implementations:
 
 - **`InMemoryConsentService`** — ephemeral, for development
 - **`FileConsentService`** — durable local JSON; the application controls file
-  permissions, encryption, retention, and regulatory policy
+  permissions, encryption, retention, and regulatory policy. Each write goes to a synced
+  temporary file that is renamed over the target on a blocking thread, so readers and
+  crashes never see a partial file
 
 ```rust
 use adk_awp::{ConsentService, FileConsentService};
@@ -252,16 +254,28 @@ Invalid transitions (e.g., Healthy → Degraded) return an error.
 `EventSubscription::validate`, and with it `create` and `POST /awp/events/subscribe`, refuses a
 callback URL that names a loopback, private, or link-local address; `validate_with` checks
 against a given `EgressPolicy`. `deliver` returns at once and `deliver_and_wait` returns each
-delivery report. `sign_payload` and `verify_signature` are HMAC-SHA256 helpers:
+delivery report. Deliveries carry [Standard Webhooks](https://www.standardwebhooks.com/)
+signatures; receivers verify them with `adk_core::webhook::WebhookVerifier`:
 
 ```rust
-use adk_awp::{sign_payload, verify_signature};
+use adk_core::webhook::{WebhookHeaders, WebhookSecret, WebhookVerifier};
 
-fn main() {
-    let sig = sign_payload(b"event payload", "webhook-secret");
-    assert!(verify_signature(b"event payload", "webhook-secret", &sig));
+fn verify(
+    secret: &str,
+    id: &str,
+    timestamp: &str,
+    signature: &str,
+    body: &[u8],
+) -> Result<(), adk_core::webhook::WebhookError> {
+    let verifier = WebhookVerifier::new(WebhookSecret::from_bytes(secret.as_bytes().to_vec())?);
+    let headers = WebhookHeaders { id, timestamp: timestamp.into(), signature };
+    verifier.verify(&headers, body)?;
+    Ok(())
 }
 ```
+
+`sign_payload` and `verify_signature`, the earlier `sha256=<hex_digest>` HMAC pair, are
+deprecated; the built-in service does not send that format.
 
 ### Requester Detection
 

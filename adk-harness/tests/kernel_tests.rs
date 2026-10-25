@@ -11,11 +11,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use adk_core::{
-    ApprovalDecision, ApprovalPolicy, ApprovalRequest, ApprovalScope, ApprovalService,
-    ApprovalStore, ApproverSelector, DurableRunStore, InMemoryApprovalStore, InMemoryRunStore,
-    NewRun, RunState, StoreApprovalService, SubjectRef, ToolConfirmationRequest,
+    ApprovalDecision, ApprovalDelegation, ApprovalPolicy, ApprovalRequest, ApprovalRequestQuery,
+    ApprovalScope, ApprovalService, ApprovalStore, ApproverSelector, DurableRunStore,
+    InMemoryApprovalStore, InMemoryRunStore, NewRun, PendingApproval, RunState,
+    StoreApprovalService, SubjectRef, ToolApproval, ToolConfirmationDecision,
+    ToolConfirmationRequest,
 };
-use adk_harness::{GOAL_STALL_WINDOW, GOAL_TARGET, GoalSpec, GoalStatus, HarnessMode};
+use adk_harness::{
+    GOAL_STALL_WINDOW, GOAL_TARGET, GoalSpec, GoalStatus, HarnessDecision, HarnessMode,
+};
 use adk_kernel::control::ControlPlaneConfig;
 use adk_kernel::{
     InMemoryProcessStore, Kernel, KernelConfig, ProcessFilter, ProcessKind, ProcessSpec,
@@ -277,6 +281,180 @@ async fn a_process_sleeping_on_an_approval_wakes_when_the_decision_lands() {
         .decide(&request.id, request.version, ApprovalDecision::approve(SubjectRef::human("bob")))
         .await
         .unwrap();
+    in_state(&runs, &pid, RunState::Completed).await;
+    assert_eq!(f.model.requests().len(), 1);
+    kernel.stop().await.unwrap();
+}
+
+/// An in-memory approval store that, when a decision is recorded, notes whether a watched
+/// process was still asleep — given time to wake first — so a test can tell whether anything
+/// woke it before the decision existed.
+#[derive(Default)]
+struct WatchedDecisions {
+    inner: InMemoryApprovalStore,
+    watch: std::sync::OnceLock<(Arc<dyn DurableRunStore>, String)>,
+    asleep_at_decision: std::sync::Mutex<Option<bool>>,
+}
+
+impl std::fmt::Debug for WatchedDecisions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WatchedDecisions").field("inner", &self.inner).finish_non_exhaustive()
+    }
+}
+
+#[async_trait::async_trait]
+impl ApprovalStore for WatchedDecisions {
+    async fn record_pending(
+        &self,
+        scope: &ApprovalScope,
+        request: &ToolConfirmationRequest,
+    ) -> adk_core::Result<()> {
+        self.inner.record_pending(scope, request).await
+    }
+    async fn record_pending_keyed(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+        request: &ToolConfirmationRequest,
+    ) -> adk_core::Result<()> {
+        self.inner.record_pending_keyed(scope, fingerprint, request).await
+    }
+    async fn pending(&self, scope: &ApprovalScope) -> adk_core::Result<Vec<PendingApproval>> {
+        self.inner.pending(scope).await
+    }
+    async fn decide(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+        approval: ToolApproval,
+    ) -> adk_core::Result<()> {
+        if let Some((runs, pid)) = self.watch.get() {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+            let mut asleep = true;
+            while asleep && tokio::time::Instant::now() < deadline {
+                asleep = runs.get(pid).await?.is_some_and(|run| run.state == RunState::Waiting);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            *self.asleep_at_decision.lock().unwrap() = Some(asleep);
+        }
+        self.inner.decide(scope, fingerprint, approval).await
+    }
+    async fn take_decision(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<Option<ToolConfirmationDecision>> {
+        self.inner.take_decision(scope, fingerprint).await
+    }
+    async fn take_approval(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<Option<ToolApproval>> {
+        self.inner.take_approval(scope, fingerprint).await
+    }
+    async fn has_decision(
+        &self,
+        scope: &ApprovalScope,
+        fingerprint: &str,
+    ) -> adk_core::Result<bool> {
+        self.inner.has_decision(scope, fingerprint).await
+    }
+    async fn create_request(&self, request: &ApprovalRequest) -> adk_core::Result<ApprovalRequest> {
+        self.inner.create_request(request).await
+    }
+    async fn get_request(&self, id: &str) -> adk_core::Result<Option<ApprovalRequest>> {
+        self.inner.get_request(id).await
+    }
+    async fn replace_request(
+        &self,
+        request: &ApprovalRequest,
+        expected_version: u64,
+    ) -> adk_core::Result<bool> {
+        self.inner.replace_request(request, expected_version).await
+    }
+    async fn list_requests(
+        &self,
+        query: &ApprovalRequestQuery,
+    ) -> adk_core::Result<Vec<ApprovalRequest>> {
+        self.inner.list_requests(query).await
+    }
+    async fn put_delegation(&self, delegation: &ApprovalDelegation) -> adk_core::Result<()> {
+        self.inner.put_delegation(delegation).await
+    }
+    async fn delegations_to(&self, to: &SubjectRef) -> adk_core::Result<Vec<ApprovalDelegation>> {
+        self.inner.delegations_to(to).await
+    }
+    async fn delete_delegation(&self, id: &str) -> adk_core::Result<bool> {
+        self.inner.delete_delegation(id).await
+    }
+}
+
+/// Wave 2 review finding 21 (spec 3.3 §7.3): `Harness::decide` withdraws the call's inbox
+/// request before it records the person's decision; under the kernel that withdrawal wakes no
+/// process sleeping on the call, which wakes once the decision is recorded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_harness_decision_wakes_a_sleeper_only_once_it_is_recorded() {
+    let approvals = Arc::new(WatchedDecisions::default());
+    let service: Arc<dyn ApprovalService> = Arc::new(StoreApprovalService::new(approvals.clone()));
+    let f = fixture(vec![text("the transfer was decided")], {
+        let service = service.clone();
+        move |b| b.mode(HarnessMode::Auto).without_default_members().approval_service(service)
+    })
+    .await;
+    let runs: Arc<dyn DurableRunStore> = Arc::new(InMemoryRunStore::new());
+    let (kernel, f, _) = kernel(f, &runs);
+    kernel.start().await.unwrap();
+
+    let scope = ApprovalScope::new(APP, f.user.as_ref(), f.session.as_ref());
+    let call = ToolConfirmationRequest {
+        tool_name: "transfer".into(),
+        function_call_id: Some("call-1".into()),
+        args: json!({ "amount": 10 }),
+        acting: None,
+        origin: None,
+    };
+    approvals.record_pending(&scope, &call).await.unwrap();
+    let harness_service = f.harness.agent().runtime().approval_service().unwrap().clone();
+    harness_service
+        .submit(ApprovalRequest::new(
+            "req-1",
+            scope,
+            &call,
+            ApprovalPolicy::new([ApproverSelector::human("bob")]),
+        ))
+        .await
+        .unwrap();
+    let wake = WakeSet::any_of([Wake::Approval { fingerprint: call.fingerprint() }]);
+    let pid = kernel
+        .processes()
+        .spawn(
+            NewRun::new(
+                "background",
+                APP,
+                f.user.as_ref(),
+                APP,
+                json!({ "text": "report the outcome" }),
+            )
+            .with_session_id("s-report"),
+            ProcessSpec::new(ProcessKind::Interactive).with_wake(wake),
+        )
+        .await
+        .unwrap()
+        .meta
+        .pid;
+    in_state(&runs, &pid, RunState::Waiting).await;
+    assert!(approvals.watch.set((Arc::clone(&runs), pid.clone())).is_ok());
+
+    f.harness
+        .decide(&f.user, &f.session, &call.fingerprint(), HarnessDecision::Approve)
+        .await
+        .unwrap();
+    assert_eq!(
+        *approvals.asleep_at_decision.lock().unwrap(),
+        Some(true),
+        "nothing woke the sleeper before the decision was recorded"
+    );
     in_state(&runs, &pid, RunState::Completed).await;
     assert_eq!(f.model.requests().len(), 1);
     kernel.stop().await.unwrap();

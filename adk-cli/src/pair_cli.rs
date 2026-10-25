@@ -19,8 +19,9 @@ pub enum PairCommand {
     /// The paired devices and chat accounts, and the chat accounts waiting for their code to
     /// be accepted
     List,
-    /// Remove a paired device or chat account: its access ends at once. A chat account
-    /// waiting to be paired is dismissed, and its code stops working
+    /// Remove a paired device or chat account: its access ends at once, and a chat account's
+    /// unfinished turns stop. A chat account waiting to be paired is dismissed: its code stops
+    /// working and it gets no new one for a day
     Revoke {
         /// The device or account id, a unique prefix of it, or its name
         device: String,
@@ -63,16 +64,21 @@ pub async fn run(
         Some(PairCommand::Revoke { device }) => revoke(&client, &device).await,
         Some(PairCommand::Accept { code }) => {
             let account = client.accept_channel(&code).await?;
-            println!(
-                "Paired {} on {}: its messages reach your agents, and it can say yes once or no \
-                 to everyday decisions. Remove it with `adk-rust pair revoke {}`.",
-                account.display_name.as_deref().unwrap_or(&account.account),
-                account.channel,
-                short(&account.id)
-            );
+            println!("{}", paired(&account));
             Ok(())
         }
     }
+}
+
+/// What `pair accept` says of the account it paired, its name escaped (spec 3.3 S-I9).
+fn paired(account: &ChannelAccountView) -> String {
+    format!(
+        "Paired {} on {}: its messages reach your agents, and it can say yes once or no to \
+         everyday decisions. Remove it with `adk-rust pair revoke {}`.",
+        terminal_safe(account_name(account)),
+        terminal_safe(&account.channel),
+        short(&account.id)
+    )
 }
 
 async fn issue_code(client: &ControlClient, args: IssueArgs) -> Result<()> {
@@ -229,17 +235,19 @@ async fn revoke(client: &ControlClient, wanted: &str) -> Result<()> {
         Target::Account(account) => {
             let removed = client.revoke_channel_account(&account.id).await?;
             println!(
-                "Removed {} on {}: its messages no longer reach your agents.",
+                "Removed {} on {}: its messages no longer reach your agents, and its turns \
+                 that had not finished were stopped.",
                 terminal_safe(account_name(&removed)),
-                removed.channel
+                terminal_safe(&removed.channel)
             );
         }
         Target::Waiting(request) => {
             let dismissed = client.dismiss_channel_request(&request.id).await?;
             println!(
-                "Dismissed {} on {}: its pairing code no longer works.",
+                "Dismissed {} on {}: its pairing code no longer works, and it gets no new one \
+                 for a day.",
                 terminal_safe(dismissed.display_name.as_deref().unwrap_or(&dismissed.account)),
-                dismissed.channel
+                terminal_safe(&dismissed.channel)
             );
         }
     }
@@ -294,6 +302,25 @@ mod tests {
     fn names_are_clipped_and_cannot_drive_the_terminal() {
         assert_eq!(clip("abcdef", 4), "abc…");
         assert!(!terminal_safe("phone\u{1b}[2J").contains('\u{1b}'));
+    }
+
+    /// A chat account's display name is the platform's, untrusted: `pair accept` escapes it
+    /// as `pair list` does, bidi controls included (spec 3.3 S-I6, S-I9).
+    #[test]
+    fn pair_accept_escapes_the_accounts_name() {
+        let account: ChannelAccountView = serde_json::from_value(serde_json::json!({
+            "id": "ch-77f0aa",
+            "channel": "telegram",
+            "account": "4217",
+            "displayName": "Ana\u{202e}gnp.exe",
+            "userId": "ana",
+            "pairedAt": "2026-10-25T07:00:00Z",
+            "state": "active"
+        }))
+        .unwrap();
+        let line = paired(&account);
+        assert!(!line.contains('\u{202e}'), "{line}");
+        assert!(line.starts_with("Paired Ana"), "{line}");
     }
 
     /// A pairing of no days, or of more than a year, is refused.

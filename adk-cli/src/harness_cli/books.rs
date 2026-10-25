@@ -28,14 +28,29 @@ pub(super) fn partition_mode(mode: HarnessMode) -> PartitionMode {
     }
 }
 
-/// A harness's [`ModeStore`] that reads, for a session, the mode its area was last set to:
-/// the session's own record, or the area's mode the person changed while the kernel runs
-/// when that change is newer (spec 3.3 §10 K3). Every part of the harness reads the mode
-/// through its store on every step, so the change governs the next one.
+/// A harness's [`ModeStore`] that reads, for a session, the mode its area was last set to
+/// while the kernel runs (spec 3.3 §10 K3). Every part of the harness reads the mode through
+/// its store on every step, so the change governs the next one.
+///
+/// | Session | Mode |
+/// |---|---|
+/// | Its own record is newer than the area's change | Its own |
+/// | Its own record is older, set by a person, an approved plan or the harness itself (the loop guard, a follow-up's pin, K-I7) | The stricter of the two: the area tightens it, never loosens it |
+/// | No record of its own | The area's |
+///
+/// The change holds while the area's harness still starts in the mode it replaced, so a later
+/// `adk-rust up --mode` or `adk-rust partitions set-mode` takes over; a change to Go ahead
+/// is not applied where `adk-rust up` refuses `--mode auto`. The kernel refuses a looser
+/// area mode while an agent of the area is working, so a loosening reaches a session from
+/// its next turn (spec 3.1 I14).
 pub(super) struct AreaModeStore {
     inner: Arc<dyn ModeStore>,
     control: Arc<dyn ControlStore>,
     area: PartitionId,
+    /// The mode the area's harness started in.
+    start: HarnessMode,
+    /// `adk-rust up` refuses Go ahead here: beyond loopback without `--sandbox`.
+    auto_refused: bool,
 }
 
 impl AreaModeStore {
@@ -43,8 +58,10 @@ impl AreaModeStore {
         inner: Arc<dyn ModeStore>,
         control: Arc<dyn ControlStore>,
         area: PartitionId,
+        start: HarnessMode,
+        auto_refused: bool,
     ) -> Self {
-        Self { inner, control, area }
+        Self { inner, control, area, start, auto_refused }
     }
 }
 
@@ -59,18 +76,25 @@ impl ModeStore for AreaModeStore {
         let record = self.inner.get(app, user, session).await?;
         // A store that cannot be read fails the read, which the policy takes as read-only.
         let settings = self.control.area_settings(&self.area).await.map_err(AdkError::from)?;
-        let Some(change) = settings.and_then(|settings| settings.mode) else {
+        let change = settings
+            .as_ref()
+            .and_then(|settings| settings.mode_over(Some(partition_mode(self.start))))
+            .filter(|change| !(self.auto_refused && change.value == PartitionMode::Auto));
+        let Some(change) = change else {
             return Ok(record);
         };
-        if let Some(record) = &record
-            && record.at >= change.at
-        {
-            return Ok(Some(record.clone()));
+        let mode = HarnessMode::from(change.value);
+        match record {
+            Some(record) if record.at >= change.at || !mode.is_stricter_than(record.mode) => {
+                Ok(Some(record))
+            }
+            record => {
+                let mut area = ModeRecord::new(mode, ModeSource::User);
+                area.at = change.at;
+                area.revision = record.map_or(0, |record| record.revision);
+                Ok(Some(area))
+            }
         }
-        let mut area = ModeRecord::new(HarnessMode::from(change.value), ModeSource::User);
-        area.at = change.at;
-        area.revision = record.map_or(0, |record| record.revision);
-        Ok(Some(area))
     }
 
     async fn set(
@@ -285,6 +309,12 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     let wire = |value: Value| value.as_str().map(str::to_string);
     let mut line =
         adk_kernel::control::RecordLine::new(record.seq, record.ts, record.action.clone());
+    // A kernel record names what it did in its `action` field.
+    if record.action.starts_with("kernel.")
+        && let Some(action) = text(record.ext.get("action"))
+    {
+        line = line.with_kernel_action(action);
+    }
     let subject = record
         .actor
         .on_behalf_of
@@ -304,8 +334,17 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     if let Some(tool) = tool {
         line = line.with_tool(tool);
     }
+    // A kernel record of an answer carries it as `answer`: a device's action, or a chat
+    // thread's `allowOnce` or `deny`.
+    let answered = text(record.ext.get("answer")).and_then(|answer| match answer.as_str() {
+        "approve" | "allowOnce" => Some("approved".to_string()),
+        "reject" | "deny" => Some("rejected".to_string()),
+        "edit" => Some("edited".to_string()),
+        "respond" => Some("responded".to_string()),
+        _ => None,
+    });
     if let Some(decision) =
-        record.decision.and_then(|d| serde_json::to_value(d).ok()).and_then(wire)
+        record.decision.and_then(|d| serde_json::to_value(d).ok()).and_then(wire).or(answered)
     {
         line = line.with_decision(decision);
     }
@@ -317,11 +356,18 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     if let Some(outcome) = outcome {
         line = line.with_outcome(outcome);
     }
-    if let Some(origin) = record.ext.get("origin")
-        && let Some(how) = text(origin.get("kind"))
-    {
-        let channel = text(origin.get("channel")).or_else(|| text(record.ext.get("device")));
-        line = line.with_how(how, channel.as_deref());
+    // The device's name, else its id, for an answer a paired device gave.
+    let device = text(record.ext.get("deviceName")).or_else(|| text(record.ext.get("device")));
+    match record.ext.get("origin").and_then(|origin| Some((origin, text(origin.get("kind"))?))) {
+        Some((origin, how)) => {
+            let channel = text(origin.get("channel")).or(device);
+            line = line.with_how(how, channel.as_deref());
+        }
+        None => {
+            if let Some(device) = device {
+                line = line.with_channel(device);
+            }
+        }
     }
     let target = text(record.ext.get("target")).or_else(|| text(record.ext.get("approvalId")));
     if let Some(target) = target {
@@ -515,38 +561,138 @@ mod tests {
         assert!(!book.tidy_ups("ana").await.unwrap()[0].undoable(), "a tidy-up is undone once");
     }
 
-    /// An area's mode changed after a session's own record governs the session; a session
-    /// set after the change keeps its own (spec 3.3 §10 K3).
+    /// An area's mode governs a session with no mode of its own, and tightens one whose own
+    /// mode is older, never loosens it, whoever set it; a session set after the change keeps
+    /// its own (spec 3.3 §10 K3).
     #[tokio::test]
-    async fn the_newest_of_the_area_mode_and_the_session_mode_governs() {
+    async fn the_area_mode_tightens_a_session_and_never_loosens_it() {
         let inner = Arc::new(InMemoryModeStore::new());
         let control = Arc::new(InMemoryControlStore::new());
-        let store = AreaModeStore::new(inner.clone(), control.clone(), PartitionId::default());
+        let store = AreaModeStore::new(
+            inner.clone(),
+            control.clone(),
+            PartitionId::default(),
+            HarnessMode::Ask,
+            false,
+        );
         assert!(
             store.get(APP_NAME, "ana", "s1").await.unwrap().is_none(),
             "no change: the default"
         );
-
+        let earlier = chrono::Utc::now() - chrono::Duration::minutes(5);
         let mut session = ModeRecord::new(HarnessMode::Auto, ModeSource::User);
-        session.revision = 3;
-        session.at = chrono::Utc::now() - chrono::Duration::minutes(5);
-        inner.set(APP_NAME, "ana", "s1", session.clone()).await.unwrap();
-        let change = Change::new(PartitionMode::ReadOnly, "ana", chrono::Utc::now());
-        control.put_area_settings(AreaSettings::new("default").with_mode(change)).await.unwrap();
+        (session.revision, session.at) = (3, earlier);
+        inner.set(APP_NAME, "ana", "s1", session).await.unwrap();
+        // The loop guard froze s2 before the area was changed (spec 3.1 §7.4).
+        let mut frozen = ModeRecord::new(HarnessMode::ReadOnly, ModeSource::SystemTighten);
+        frozen.at = earlier;
+        inner.set(APP_NAME, "ana", "s2", frozen).await.unwrap();
+
+        let set = |mode| {
+            let control = control.clone();
+            async move {
+                let change = Change::new(mode, "ana", chrono::Utc::now());
+                let settings = AreaSettings::new("default").with_mode(change);
+                control.put_area_settings(settings).await.unwrap();
+            }
+        };
+        set(PartitionMode::Plan).await;
         let read = store.get(APP_NAME, "ana", "s1").await.unwrap().unwrap();
-        assert_eq!((read.mode, read.revision), (HarnessMode::ReadOnly, 3));
+        assert_eq!((read.mode, read.revision), (HarnessMode::Plan, 3), "tightened");
+        let read = store.get(APP_NAME, "ana", "s2").await.unwrap().unwrap();
+        assert_eq!(
+            (read.mode, read.set_by),
+            (HarnessMode::ReadOnly, ModeSource::SystemTighten),
+            "the loop guard's tightening holds"
+        );
+        let fresh = store.get(APP_NAME, "ana", "s3").await.unwrap().unwrap();
+        assert_eq!(fresh.mode, HarnessMode::Plan, "a session without a mode takes the area's");
+
+        set(PartitionMode::Auto).await;
         assert_eq!(
             store.get(APP_NAME, "ana", "s2").await.unwrap().unwrap().mode,
-            HarnessMode::ReadOnly
+            HarnessMode::ReadOnly,
+            "an area set to Go ahead never loosens a frozen session"
+        );
+        assert_eq!(
+            store.get(APP_NAME, "ana", "s3").await.unwrap().unwrap().mode,
+            HarnessMode::Auto
         );
 
-        let mut later = ModeRecord::new(HarnessMode::Plan, ModeSource::User);
+        let mut later = ModeRecord::new(HarnessMode::Ask, ModeSource::User);
         later.at = chrono::Utc::now() + chrono::Duration::seconds(1);
-        store.set(APP_NAME, "ana", "s1", later).await.unwrap();
+        store.set(APP_NAME, "ana", "s2", later).await.unwrap();
         assert_eq!(
-            store.get(APP_NAME, "ana", "s1").await.unwrap().unwrap().mode,
-            HarnessMode::Plan
+            store.get(APP_NAME, "ana", "s2").await.unwrap().unwrap().mode,
+            HarnessMode::Ask,
+            "a session set after the change keeps its own"
         );
+    }
+
+    /// A change made while the area started in another mode gives way to the mode it starts
+    /// in now, and a change to Go ahead is not applied where `adk-rust up` refuses it (spec
+    /// 3.3 §10 K3).
+    #[tokio::test]
+    async fn a_new_start_mode_and_a_refused_go_ahead_take_no_change() {
+        let inner = Arc::new(InMemoryModeStore::new());
+        let control = Arc::new(InMemoryControlStore::new());
+        let started_in = |mode| adk_kernel::control::AreaStart::new(Vec::new(), None, Some(mode));
+        let change = |mode| Change::new(mode, "ana", chrono::Utc::now());
+        let settings = AreaSettings::new("default")
+            .with_mode(change(PartitionMode::Auto))
+            .with_start(started_in(PartitionMode::Ask));
+        control.put_area_settings(settings).await.unwrap();
+        let modes = |start, auto_refused| {
+            AreaModeStore::new(
+                inner.clone(),
+                control.clone(),
+                PartitionId::default(),
+                start,
+                auto_refused,
+            )
+        };
+        let same = modes(HarnessMode::Ask, false).get(APP_NAME, "ana", "s1").await.unwrap();
+        assert_eq!(same.map(|record| record.mode), Some(HarnessMode::Auto), "the change holds");
+        let restarted = modes(HarnessMode::ReadOnly, false).get(APP_NAME, "ana", "s1").await;
+        assert!(restarted.unwrap().is_none(), "`up --mode read-only` takes over");
+        let refused = modes(HarnessMode::Ask, true).get(APP_NAME, "ana", "s1").await;
+        assert!(refused.unwrap().is_none(), "Go ahead beyond loopback without a sandbox");
+    }
+
+    /// A device's answer reads as what it did, the answer and the device it came from, and a
+    /// kernel record names its own action (spec 3.3 §11).
+    #[cfg(feature = "audit")]
+    #[tokio::test]
+    async fn a_record_line_says_what_a_kernel_record_did_and_where_an_answer_came_from() {
+        use adk_auth::signed_audit::{AuditLog, AuditSigner as _, Ed25519Signer, NoteVerifier};
+        use adk_core::audit_log::{
+            AuditActor, AuditLogStore, AuditRecordDraft, AuditRecordKind, InMemoryAuditLogStore,
+        };
+        use adk_kernel::control::RecordBook;
+
+        let logs: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
+        let signer = Ed25519Signer::generate("kernel-test").unwrap();
+        let verifier: NoteVerifier = signer.verifier_key().parse().unwrap();
+        let log =
+            AuditLog::builder(logs.clone(), "kernel-test", Arc::new(signer)).open().await.unwrap();
+        log.append(
+            AuditRecordDraft::new(AuditRecordKind::Other("kernel".into()), "kernel.control")
+                .actor(AuditActor::subject(SubjectRef::human("ana")))
+                .ext("action", serde_json::json!("approvals.decide"))
+                .ext("target", serde_json::json!("apr_1"))
+                .ext("surface", serde_json::json!("device"))
+                .ext("device", serde_json::json!("e2a1"))
+                .ext("deviceName", serde_json::json!("Ana's phone"))
+                .ext("answer", serde_json::json!("approve")),
+        )
+        .await
+        .unwrap();
+        let book = SignedRecordBook::new(logs, "kernel-test".into(), verifier);
+        let line = book.recent(1).await.unwrap().remove(0);
+        assert_eq!(line.kernel_action.as_deref(), Some("approvals.decide"));
+        assert_eq!(line.decision.as_deref(), Some("approved"));
+        assert_eq!(line.channel.as_deref(), Some("Ana's phone"));
+        assert_eq!(line.target.as_deref(), Some("apr_1"));
     }
 
     /// The record book answers the check `adk-rust audit verify` gives an export of the same

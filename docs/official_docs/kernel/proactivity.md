@@ -168,7 +168,7 @@ the item's state, so two replicas approving one item move it once.
 
 | Route (under `/api`) | Effect |
 |---|---|
-| `GET /kernel/agenda?partition=&state=&limit=` | The items |
+| `GET /kernel/agenda?partition=&state=&limit=&newestFirst=&after=` | The items, oldest first, or newest first with `newestFirst=true`; `after` reads on from the last item of the page before |
 | `POST /kernel/agenda/{id}/approve` | `Agenda::approve` as the caller |
 | `POST /kernel/agenda/{id}/reject` | `Agenda::reject`, with an optional `reason` |
 | `POST /kernel/agenda/{id}/schedule` | `Agenda::schedule` with the body's `wake` set |

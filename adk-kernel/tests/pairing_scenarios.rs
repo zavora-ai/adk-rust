@@ -383,13 +383,18 @@ async fn a_claim_whose_record_fails_leaves_the_code_and_no_device() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_pairing_length_outside_one_to_365_days_is_refused() {
     let plane = Plane::start().await;
+    let issued = |plane: &Plane| {
+        plane.control_actions().iter().filter(|(action, _)| action == "pairing.issue").count()
+    };
     for days in [0, 366] {
         let request = IssueRequest { expires_in_days: Some(days), ..IssueRequest::default() };
         let error = plane.operator().issue_pairing_code(&request).await.unwrap_err();
         assert_eq!(category(error), ErrorCategory::InvalidInput, "{days} days");
     }
+    assert_eq!(issued(&plane), 0, "a refused pairing leaves no record of a code");
     let request = IssueRequest { expires_in_days: Some(365), ..IssueRequest::default() };
     plane.operator().issue_pairing_code(&request).await.expect("a year is allowed");
+    assert_eq!(issued(&plane), 1);
 }
 
 /// A kernel that pairs nothing answers the pairing commands with what to
@@ -510,6 +515,15 @@ async fn the_operator_dismisses_a_waiting_chat_account() {
     let actions: Vec<String> =
         plane.control_actions().into_iter().map(|(action, _)| action).collect();
     assert_eq!(actions.iter().filter(|action| *action == "channels.dismiss").count(), 2);
+
+    // A dismissed account writing again gets no new code, hears nothing and takes no place.
+    for stranger in ["s1", "s2"] {
+        let heard = chat.notices(stranger).len();
+        let again = chat.text(stranger, stranger, "hi again");
+        assert_eq!(gateway.receive(again).await.unwrap(), InboundOutcome::PairingDismissed);
+        assert_eq!(chat.notices(stranger).len(), heard, "{stranger} hears nothing");
+    }
+    assert!(plane.operator().channel_accounts().await.unwrap().waiting.is_empty());
 
     let owner = chat.text("ana-phone", "t-ana", "hi again");
     assert_eq!(gateway.receive(owner).await.unwrap(), InboundOutcome::PairingRequested);
