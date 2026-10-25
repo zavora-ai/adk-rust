@@ -228,6 +228,8 @@ dependencies = [
  "google-cloud-secretmanager-v1",
  "hex",
  "hmac 0.12.1",
+ "http 1.5.0",
+ "httpdate",
  "jsonwebtoken 11.0.0",
  "opentelemetry",
  "opentelemetry-otlp",
