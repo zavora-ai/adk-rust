@@ -200,8 +200,8 @@ from the kernel's own per-process daily totals, fed by a `ProgressSource`.
 A `Trigger` spawns a new process for an event no sleeper takes, keyed
 `<event key>#<trigger name>`. Changes to watched files while the kernel was down are
 reconciled on start. `CronWakeSource::watermarked` keeps where a cron source left off in a
-`CronWatermarkStore` (in-memory, SQLite, PostgreSQL, Redis;
-`cron_watermark_store_conformance_tests!`), so the ticks missed while no kernel watched fire
+`CronWatermarkStore` (in-memory, SQLite, PostgreSQL, Redis, and, Alpha, MongoDB, Firestore and
+Neo4j; `cron_watermark_store_conformance_tests!`), so the ticks missed while no kernel watched fire
 once each, as the wake's `MissedFirePolicy` picks them. A local event reaches `Running` in under 2 s: in-process sources
 enqueue and claim at once, and the tick claims wake runs an external ingress or another
 replica enqueued.
@@ -342,7 +342,7 @@ contract the kernel relies on.
 ### Alpha backends: MongoDB, Firestore, Neo4j
 
 Every kernel store also runs on MongoDB, Firestore and Neo4j (spec 3.2 §13 Q8): the
-process, agenda, driver, ledger and partition stores. Each backend is **Alpha** until its
+process, agenda, driver, ledger, partition and cron watermark stores. Each backend is **Alpha** until its
 live conformance suites pass in CI, so its storage layout may still change without a
 migration. Each feature also turns on the same backend of
 `adk-session`'s run, schedule and governance stores, and every store takes the handle
@@ -355,6 +355,7 @@ those stores use, so one client serves them all.
 | `DriverStore` (with `drivers`) | `stores::MongoDriverStore` | `stores::FirestoreDriverStore` | `stores::Neo4jDriverStore` |
 | `LedgerStore` (with `proc`) | `proc::MongoLedgerStore` | `proc::FirestoreLedgerStore` | `proc::Neo4jLedgerStore` |
 | `PartitionStore` | `MongoPartitionStore` | `FirestorePartitionStore` | `Neo4jPartitionStore` |
+| `CronWatermarkStore` | `MongoCronWatermarkStore` | `FirestoreCronWatermarkStore` | `Neo4jCronWatermarkStore` |
 | Opened with | `connect(url, database)` or `from_database(db)` | `connect(project)` or `from_db(db)` | `connect(uri, user, password)` or `from_graph(graph)` |
 
 ```rust,no_run
@@ -427,7 +428,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `tests/wake_*.rs` | Matching, keys, expiry, reconciliation and each wake source |
 | `tests/proactivity_scenarios.rs` | K4: in Ask a follow-up waits in the inbox and nothing runs until it is approved, edited or rejected; in Auto it runs after quiet hours within the daily budget, a proposal past `max_proposed_open` is rejected with a reason on the bus, and an over-budget process sleeps until the budget replenishes. K8: three background runs at a quota of three, a typed message runs at once, the youngest background run parks and is requeued, no tool runs twice and the quota is never exceeded. A consolidation item waits for a person in Auto |
 | `tests/process_store_*.rs`, `tests/agenda_store*.rs`, `tests/driver_store_*.rs`, `tests/ledger_store_*.rs` | The conformance suites on every backend; PostgreSQL and Redis run `#[ignore]`d against a server (`scripts/test-postgres.sh`) |
-| `tests/store_conformance_mongodb.rs`, `tests/store_conformance_firestore.rs`, `tests/store_conformance_neo4j.rs` | The four suites on each Alpha backend, `#[ignore]`d; CI's nightly `durable-stores` job runs them against MongoDB (a replica set and a standalone server), Neo4j and the Firestore emulator |
+| `tests/store_conformance_mongodb.rs`, `tests/store_conformance_firestore.rs`, `tests/store_conformance_neo4j.rs` | The process, agenda, driver, ledger, partition and cron watermark suites on each Alpha backend, `#[ignore]`d; CI's nightly `durable-stores` job runs them against MongoDB (a replica set and a standalone server), Neo4j and the Firestore emulator |
 | `tests/driver_scenarios.rs` | K6 on a real stdio MCP server: mount, crash and restart with backoff, a redeclared tool stale and `NeedsReapproval`, re-approval; a `secret://` value reaches the server as a file and never in its environment; what holds the driver's process tree is recorded, and on Windows unmounting ends a process the driver started |
 | `tests/driver_park_restart.rs` | An agent run's driver call parked on its server's question survives a kernel restart: answered in the inbox, it completes with the tool executed once; a call approved before its question is not asked about again |
 | `tests/driver_sandbox_tests.rs` | A driver under `sandbox = "os"` cannot write outside its allowed paths (Seatbelt, bubblewrap in the `sandbox-linux` job) |
@@ -436,7 +437,7 @@ remembered. See [Self-observation: `/proc`](../docs/official_docs/kernel/proc.md
 | `src/service/tests.rs` | The launchd plist, systemd unit and Windows service rendered for each platform on every platform; `plutil` accepts the plist; the log is created `0600`. Real installs run in `.github/workflows/kernel-service.yml` |
 | `tests/managed_def_fixtures.rs`, `tests/managed_tenants.rs`, `tests/managed_tenant_property_tests.rs` (feature `managed`) | The kernel block's golden fixtures and refusals; a definition round-trips through the managed state store; a cron wake for one tenant runs on its stores only; a held call runs once after the tenant's approval; no wake, process or approval crosses tenants |
 | `tests/managed_drivers.rs`, `tests/managed_cron_watermarks.rs` (feature `managed`) | A definition's driver mounts on its tenant only when a person approves, and another tenant never sees it; missed cron ticks fire once each as each wake set's policy picks them, across a restart and two replicas |
-| `tests/cron_watermark_store_sqlite.rs`, `tests/cron_watermark_store_postgres.rs`, `tests/cron_watermark_store_redis.rs` | The cron watermark store's suite in memory and on SQLite; PostgreSQL and Redis in CI's `postgres` job |
+| `tests/cron_watermark_store_sqlite.rs`, `tests/cron_watermark_store_postgres.rs`, `tests/cron_watermark_store_redis.rs` | The cron watermark store's suite in memory and on SQLite; PostgreSQL and Redis in CI's `postgres` job; MongoDB, Firestore and Neo4j in `tests/store_conformance_*.rs` |
 | `tests/k10_baselines.rs` | K10 on a manual clock: six weeks of a routine whose last two end late yield one observation on the tenth day of the change, none in the warm-up or the cooldown, and again after it; each an agenda question that stays open in Auto, starts no run, is remembered once when confirmed and not at all when rejected; none without `proc-baselines` |
 | `tests/proc_property_tests.rs` | K-I19: no ledger row carries a payload of the event or audit record that produced it |
 | `tests/pairing_scenarios.rs` | Spec 3.3 K2 on loopback HTTP: a `read` device reads but cannot decide, and once revoked is refused; a `stop` device freezes but cannot resume; a device token is never the loopback operator; a device decides medium risk but not high; a code pairs one device; every pairing action is recorded with what it grants; an open event stream ends on revocation and on expiry; a claim or a chat acceptance that cannot be recorded pairs nothing and keeps its code; a client holding a revoked token re-pairs; a waiting chat account is dismissed; a kernel without pairing says what it lacks |

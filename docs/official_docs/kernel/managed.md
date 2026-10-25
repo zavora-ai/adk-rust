@@ -216,7 +216,8 @@ each tick keeps its key (`cron:<source>:<time>`), so replicas that start togethe
 once (K-I3). A catch-up's processes follow the wake set's `overlap`: they queue behind each other
 (`queue`), or the later ones start nothing while one is unfinished (`skip`), so a long outage is
 never a burst. A source with no cursor yet starts at its first watch and replays nothing from
-before it existed. The store runs on in-memory, SQLite, PostgreSQL and Redis ([backends](backends.md));
+before it existed. The store runs on in-memory, SQLite, PostgreSQL and Redis, and, Alpha, on
+MongoDB, Firestore and Neo4j ([backends](backends.md));
 `ManagedKernels` refuses a tenant whose watermark store another tenant holds.
 
 ## What a tenant's definition cannot do

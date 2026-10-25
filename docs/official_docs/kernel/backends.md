@@ -14,12 +14,10 @@ passes the store's conformance suite.
 | `DriverStore` (`drivers`) | `InMemoryDriverStore` | `SqliteDriverStore` | `PostgresDriverStore` | `RedisDriverStore` | `MongoDriverStore` | `FirestoreDriverStore` | `Neo4jDriverStore` |
 | `LedgerStore` (`proc`) | `InMemoryLedgerStore` | `SqliteLedgerStore` | `PostgresLedgerStore` | `RedisLedgerStore` | `MongoLedgerStore` | `FirestoreLedgerStore` | `Neo4jLedgerStore` |
 | `PartitionStore` | `InMemoryPartitionStore` | `SqlitePartitionStore` | `PostgresPartitionStore` | `RedisPartitionStore` | `MongoPartitionStore` | `FirestorePartitionStore` | `Neo4jPartitionStore` |
-| `CronWatermarkStore` | `InMemoryCronWatermarkStore` | `SqliteCronWatermarkStore` | `PostgresCronWatermarkStore` | `RedisCronWatermarkStore` | — | — | — |
+| `CronWatermarkStore` | `InMemoryCronWatermarkStore` | `SqliteCronWatermarkStore` | `PostgresCronWatermarkStore` | `RedisCronWatermarkStore` | `MongoCronWatermarkStore` | `FirestoreCronWatermarkStore` | `Neo4jCronWatermarkStore` |
 
-The cron watermark store has no MongoDB, Firestore or Neo4j backend yet: a kernel built on
-those backends keeps its cron watermarks in memory, or on SQLite, PostgreSQL or Redis. A
-[tenant kernel](managed.md#cron-wakes-missed-while-a-tenant-was-down) keeps them in the
-tenant's own store (`TenantKernelBuilder::watermark_store`).
+A [tenant kernel](managed.md#cron-wakes-missed-while-a-tenant-was-down) keeps its cron
+watermarks in the tenant's own store (`TenantKernelBuilder::watermark_store`).
 
 There is no file backend: no durable store is file-backed, and the CLI keeps its state in
 `harness.db`. Vertex AI holds sessions only, so it has no kernel backend.
@@ -38,7 +36,7 @@ standing rules, which have no MongoDB, Firestore or Neo4j backend.
 ## Alpha backends
 
 MongoDB, Firestore and Neo4j are **Alpha**: each implements the whole contract of every
-kernel store — process, agenda, driver, ledger and partition — and carries their
+kernel store — process, agenda, driver, ledger, partition and cron watermark — and carries their
 conformance suites, but stays Alpha until those suites pass against a live server in CI, so
 its storage layout may still change in a minor release without a migration ([STABILITY.md](../../../STABILITY.md)). CI's nightly `durable-stores`
 job runs them against a MongoDB replica set and a standalone server, Neo4j 5 and the
@@ -112,6 +110,7 @@ bytes above only keep the example short.
 | Ledger rows take increasing numbers | A `$inc` counter, then the insert | A counter read and raised in the row's transaction | The counter raised and the row created in one statement |
 | A crossing is recorded once and never changed | `insertOne` on its id | Firestore's create, which fails when the document exists | `CREATE` under a uniqueness constraint on the id |
 | Granting twice keeps one grant | An upsert on `{run, fingerprint}` | One document named by the digest of run and fingerprint | `MERGE` on a key of run and fingerprint |
+| A cron watermark never moves back | One `findOneAndUpdate` upsert with `$max`, returning the document after the update | A read and a write of the later cursor in one serializable transaction | One `MERGE` whose `SET` keeps the later cursor, under Cypher's write lock |
 | Transactions needed | None: a standalone `mongod` serves every store | Transactions for compare-and-set, deletes and appends | Explicit transactions for agenda transitions |
 
 | Limit | Backend |
@@ -125,8 +124,9 @@ bytes above only keep the example short.
 ## Checking a backend
 
 The conformance suites — `process_store_conformance_tests!`, `agenda_store_conformance_tests!`,
-`driver_store_conformance_tests!`, `ledger_store_conformance_tests!` and
-`partition_store_conformance_tests!` (feature `conformance`) — check a backend against the contract the kernel relies on. The Alpha suites
+`driver_store_conformance_tests!`, `ledger_store_conformance_tests!`,
+`partition_store_conformance_tests!` and `cron_watermark_store_conformance_tests!` (feature
+`conformance`) — check a backend against the contract the kernel relies on. The Alpha suites
 are `#[ignore]`d and need a server:
 
 ```bash
