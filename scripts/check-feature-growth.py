@@ -146,6 +146,7 @@ AXES: dict[str, str] = {
     "mcp": "mcp",
     "harness": "harness",
     "surface": "surface",
+    "website": "website",
 }
 
 TIERS = {

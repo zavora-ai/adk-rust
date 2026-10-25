@@ -492,7 +492,7 @@ Four tiered presets control which crates are compiled:
 - `minimal` **(default)** — agents, models, gemini, runner, sessions. Fastest possible build for a single Gemini-powered agent.
 - `standard` — minimal + openai, anthropic, anthropic-client, tools, memory, telemetry, skills, graph, auth, server, eval, guardrail, plugin, artifacts, computer-use. Production deployment with server and auth.
 - `enterprise` — standard + realtime, browser, rag, payments, awp. Full-featured production.
-- `full` — enterprise + audio, code, sandbox, code-tools, graph-functional, graph-node-cache, graph-delta, graph-time-travel, harness. Everything that needs no external infrastructure.
+- `full` — enterprise + audio, code, sandbox, code-tools, graph-functional, graph-node-cache, graph-delta, graph-time-travel, harness, website. Everything that needs no external infrastructure.
 
 Domain add-ons are composable with any tier: `features = ["minimal", "audio"]`.
 

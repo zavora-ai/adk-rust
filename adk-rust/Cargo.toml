@@ -72,6 +72,8 @@ full = [
     "harness-kernel",
     # The kernel's daily baselines and observations (spec 3.2 §7.10, §13 Q4).
     "adk-kernel?/proc-baselines",
+    # The AWP 2.0 website product (spec 3.5 §7.1, D-14).
+    "website",
 ]
 
 # Gemini Enterprise Agent Platform — every Vertex/EAP integration except
@@ -176,6 +178,11 @@ harness-kernel = ["harness", "dep:adk-kernel", "adk-harness/kernel"]
 # the web home, its page and HTTP API; with `cli` and `harness`, the harness launcher
 # (`adk-rust serve`, `up`) mounts the home. Opt-in, in no tier.
 surface = ["dep:adk-surface", "adk-surface/web", "adk-cli?/surface"]
+# The AWP 2.0 website (spec 3.5 §7.1, D-14): `adk_rust::website` (adk-website: kinds, team,
+# onboarding, jobs, review) and `adk_rust::site` (adk-site: content, generator, launch gate,
+# releases, hosts), the AWP edge on the server and AWP signing; with `cli`, `adk-rust site`
+# and `adk-rust awp`. In `full`.
+website = ["dep:adk-website", "dep:adk-site", "harness-kernel", "awp", "adk-awp/signing", "server", "adk-server/awp", "adk-cli?/website"]
 
 # Managed agent runtime (feature-gated, experimental). The provider features below also
 # let its `DefaultModelResolver` construct that provider's models.
@@ -405,6 +412,8 @@ adk-enterprise = { workspace = true, optional = true }
 adk-harness = { workspace = true, optional = true }
 adk-kernel = { workspace = true, optional = true }
 adk-surface = { workspace = true, optional = true }
+adk-site = { workspace = true, optional = true }
+adk-website = { workspace = true, optional = true }
 adk-mistralrs = { workspace = true, optional = true }
 
 # Re-export common dependencies
