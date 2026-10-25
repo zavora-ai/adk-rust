@@ -35,6 +35,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tower = { version = "0.5", features = ["util"] }
 http = "1"
 bytes = "1"
+jsonschema = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
@@ -42,4 +43,7 @@ proptest = "1"
 tempfile = "3"
 
 [features]
-default = []
+default = ["awp-v1"]
+# The AWP 1.x routes (`awp_routes`, `AwpState`), served beside 2.0 for one release line
+# (spec 3.5 §4.1, §7.1).
+awp-v1 = []

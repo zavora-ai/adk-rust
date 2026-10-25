@@ -23,6 +23,7 @@ Use `adk-awp` when you need to:
 - monitor service health with a validated state machine (Healthy → Degrading → Degraded)
 - detect whether requests come from humans or AI agents
 - negotiate AWP protocol versions automatically
+- serve the AWP 2.0 edge: the `/awp/v2/` routes, typed capabilities as `adk_core::Tool`s, held and exactly-once calls, and edge stores
 
 ## Installation
 
@@ -43,7 +44,61 @@ Or use the meta-crate, where the `awp` feature (included in `enterprise`) re-exp
 adk-rust = { version = "3.0", features = ["awp"] }
 ```
 
-The crate has no feature flags of its own.
+| Feature | Default | Enables |
+|---------|---------|---------|
+| `awp-v1` | yes | The AWP 1.x routes (`awp_routes`, `AwpState`), served beside 2.0 for one release line |
+
+## AWP 2.0 edge
+
+`adk_awp::v2` is the AWP 2.0 edge runtime (spec 3.5 §7.2–§7.4, §7.9). The wire types are
+`awp_types::v2`.
+
+| Route | Answers |
+|-------|---------|
+| `GET /awp/v2/manifest` | The capability manifest, filtered to the caller's tier |
+| `GET /awp/v2/trust` | The published trust rules |
+| `GET /awp/v2/status` | The signed site status |
+| `POST /awp/v2/capabilities/{name}` | `200` with the output, `202` with a held call and `Location`, or an error envelope |
+| `GET /awp/v2/calls/{id}` | A held call; from `known` up only to the requester that made it |
+
+| Piece | Behaviour |
+|-------|-----------|
+| `TierAssigner` | Tiers come from verified credentials only; `PublicTierAssigner`, the default, makes every caller `public`. `claimed_agent` turns self-declared headers into an analytics label |
+| `CapabilityTool` | One capability as an `adk_core::Tool`: `effect()` is the declared effect, `origin()` is `awp:{domain}`, input is validated against the declared schema, MCP hints and the held-call output schema come from the declaration |
+| `CapabilityRegistry` | A site's capabilities and the manifest for a tier |
+| `DirectExecutor` | The governed path every binding enters: visibility, sunset, schema, idempotency key, consent receipts, the idempotency record, then a held call or the capability. `decide` approves or rejects a held call; `expire_due` expires undecided ones |
+| Edge stores | Subscriptions, consent receipts, status, held calls, leads and idempotency records, with in-memory implementations and `edge_store_conformance_tests!` |
+| `AWP-Version` | A list such as `2.0, 1.0`; each route group answers in the highest common major, or `406` |
+| `migrate_config` | `business.toml` to 2.0 site data, capabilities and a draft charter, with every inference listed |
+
+```rust
+use std::sync::Arc;
+
+use adk_awp::v2::capability::{CapabilityCall, CapabilityError, CapabilityHandler, CapabilityRegistry};
+use adk_awp::v2::routes::{EdgeState, awp_v2_routes};
+use awp_types::{ApprovalHint, CapabilityEffect, CapabilityV2, TrustTier};
+use serde_json::{Value, json};
+
+struct PlaceOrder;
+
+#[async_trait::async_trait]
+impl CapabilityHandler for PlaceOrder {
+    async fn handle(&self, call: CapabilityCall) -> Result<Value, CapabilityError> {
+        // `call.idempotency_key` is stable across retries of this call.
+        Ok(json!({ "orderId": call.idempotency_key, "sku": call.input["sku"] }))
+    }
+}
+
+fn edge() -> axum::Router {
+    let mut registry = CapabilityRegistry::new("example.com");
+    let order = CapabilityV2::new("place_order", "Place an order", CapabilityEffect::NonIdempotent)
+        .with_min_trust(TrustTier::Known)
+        .with_approval(ApprovalHint::AboveAmount(100_000));
+    registry.declare(order, Arc::new(PlaceOrder)).expect("a valid declaration");
+    // Install a TierAssigner that verifies credentials; the default makes every caller public.
+    awp_v2_routes(EdgeState::builder(registry).build())
+}
+```
 
 ## Quick Start
 

@@ -252,6 +252,8 @@
 6 adk-sandbox workspace-docker
 # AWP 2.0 JSON Schemas (spec 3.5 §7.2): the drift test against awp-types/schemas/2.0/ runs only here.
 6 awp-types json-schema
+# adk-awp without `awp-v1`: the 2.0 edge alone, with the 1.x routes compiled out.
+6 adk-awp - no-default
 
 # Shard 7 — adk-rag's SurrealDB backend on its own: it and lancedb each compile for about
 # fifteen minutes, and together they made shard 0 the longest job in the tier.
