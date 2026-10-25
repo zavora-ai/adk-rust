@@ -184,6 +184,35 @@ Gaps that remain open after the fixes in #848–#877: from the October 2026 revi
 | On Neo4j, a paused client keeps its transaction's locks indefinitely | A per-transaction timeout once the driver supports one; until then the server's `db.transaction.timeout` bounds it | #865 |
 | No run-level switch keeps a run out of the caller's trace | A `RunConfig` switch; the `NoSubscriber` recipe in the telemetry docs covers it today | #859 |
 
+### HarnessAgent addendum, in priority order
+
+The 2026-10-23 addendum to spec 3.1 ([§7.25–§7.33](docs/design/spec-3.1-harness-agent.md#725-harness-self-knowledge), designed in #1007) is not built yet. The owner set its order on 2026-10-25.
+
+| Priority | Work | Spec | Size (engineer-weeks) | Done when |
+|---|---|---|---|---|
+| 1 | **Self-knowledge.** The harness describes its own capabilities: the capability manifest and prompt block, the digest of the rules in force, the `harness_help` tool and the start-of-session notice. With it, the nine fixes from the 2026-10-23 session, and provider search scope and the fact embedder once §13 Q8 and Q9 are decided | [§7.25](docs/design/spec-3.1-harness-agent.md#725-harness-self-knowledge), [§7.33](docs/design/spec-3.1-harness-agent.md#733-fixes-from-the-2026-10-23-sessions), [§7.32](docs/design/spec-3.1-harness-agent.md#732-search-scope-and-fact-embedding-proposed-13-q8-q9) (phase 7) | 3–4 | Fixes 5, 6 and 9 fail on `main` and pass; the `capability_questions` scenario answers from the manifest |
+| 2 | **Change safety without stifling the user.** One review for a batch of edits instead of one per file, `apply_patch`, and the before-hash that refuses a stale write; snapshots with `/rewind` and `/redo`, so recovery takes the place of extra prompts | [§7.26](docs/design/spec-3.1-harness-agent.md#726-change-sets-one-review-per-batch-apply_patch-and-the-before-hash), [§7.27](docs/design/spec-3.1-harness-agent.md#727-snapshots-and-rewind-amends-spec-33-710) (phase 8) | 5–6 | One approval for a five-file change; a rewind restores a file `sed -i` changed |
+| 3 | **Shells and git.** Background shells (`shell_output`, `shell_kill`, `/shells`); git, PR and CI commands as class `Vcs` under the policy | [§7.29](docs/design/spec-3.1-harness-agent.md#729-background-shells), [§7.30](docs/design/spec-3.1-harness-agent.md#730-git-pr-and-ci-under-the-policy) (phase 9) | 4–5 | A dev server in the background; a held `git reset --hard`; a refused force-push to `main` |
+| 4 | **Language servers and worktrees.** `lsp` and `lsp_rename`, on by default only after their eval; a git worktree per `Full` team member | [§7.28](docs/design/spec-3.1-harness-agent.md#728-language-servers-feature-lsp), [§7.31](docs/design/spec-3.1-harness-agent.md#731-worktree-isolation-for-members) (phase 10) | 6–9 | Diagnostics measured against a `cargo check` hook; two `Full` members edit in parallel without an overwrite |
+
+> **Note:** §13 questions 8–14 are open: provider search scope (Q8), the fact embedder (Q9), the `lsp` default (Q10), snapshot defaults (Q11), edit tools per model (Q12), sandboxed `git` reads in Ask (Q13) and worktree build output (Q14). Priority 1 needs Q8 and Q9; the others are needed by the priority that builds their section.
+
+### Agent kernel follow-ups
+
+What spec 3.2 lists under [Remaining work](docs/design/spec-3.2-agent-kernel.md#remaining-work) after the 2026-10-25 merges.
+
+| Gap | Fix | Origin |
+|-----|-----|--------|
+| K1's reboot step and the 24-hour soak have not run | Installed and checked up to the reboot on the owner's machine on 2026-10-25; reboot, then verify the nightly run and the soak's samples | spec 3.2 §5 K1, §11 |
+| With long-term memory on, the distiller makes a model call while every kernel process sleeps, because creating a sleeper counts as a session turn | A session whose last activity made no model call is not distilled, and a distillation the kernel runs is charged where the process table sees it | spec 3.2 §11; found by the K1 soak |
+| A goal cannot be scheduled on the `DurableScheduler` from the CLI: `adk-rust wake --cron` fires a plain turn and `up` does not mount the cron endpoints | A CLI and HTTP surface on `up` for scheduled goals, governed and audited as one iteration chain | spec 3.2 §5 K1, §7.4, §8.1; found by the K1 preparation |
+| Stopping a driver on macOS or Linux ends its own process only | Start each stdio server in its own process group and end the group, waiting until it is gone, as the Windows Job Object does | spec 3.2 §7.7, K-I5, #1022 |
+| A sleeper's cron wake keeps its cursor in memory, so a restart can skip or repeat a tick | Keep the cursor in the `CronWatermarkStore`, and start a re-hosted definition from its hosting time | spec 3.2 §7.4, #1061 |
+| K1 and K5 run on Linux and macOS only | Run `examples/harness_kernel`'s scripted scenarios on Windows | spec 3.2 §11, #1084 |
+| No live run on OpenAI; live K9 has not run on `gemini-3.5-flash-lite` since #1076 | Run when the OpenAI account has credits and the Gemini key's quota allows | spec 3.2 §11 |
+| A contained Windows child's parent process ID is an exited broker's, which endpoint security tools may flag as parent-PID spoofing | Document it for operators, and revisit if `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` gains a way to pass handles that are not inheritable in the caller | spec 3.2 §10 W5, #1085 |
+| AX1 run lineage, AX2 A2A `input-required` continuity, and Agentrix OS adopting `adk-kernel` | Deferred to 3.2.x (owner decision 2026-10-25) | spec 3.2 §10, §13 Q5 |
+
 ### HarnessAgent follow-ups
 
 Items spec 3.1 lists after its delivery phases ([§12](docs/design/spec-3.1-harness-agent.md#12-phased-delivery) phase 6) and the open points its implementation recorded.
