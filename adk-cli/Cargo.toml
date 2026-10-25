@@ -57,6 +57,15 @@ adk-audio = { workspace = true, optional = true }
 # `adk-rust approvals --server` talks to a served harness's approval inbox
 reqwest = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
+# `adk-rust site …` and `adk-rust awp …` (spec 3.5 §7.1, §8.1): the site pipeline, migration
+# and freeze, the AWP 2.0 verifier, conformance kit and keys
+adk-site = { workspace = true, optional = true, features = ["migrate"] }
+adk-awp = { workspace = true, optional = true, features = ["verify"] }
+awp-types = { workspace = true, optional = true }
+# Private JWK key files for `awp keys` (spec 3.5 §7.2, A-I5)
+base64 = { version = "0.22", optional = true }
+zeroize = { version = "1.8.2", optional = true }
+url = { version = "2.5", optional = true }
 # `adk-rust store status|rotate-key` reads harness.db's tables directly
 sqlx = { workspace = true, optional = true, features = ["runtime-tokio", "sqlite"] }
 uuid = { workspace = true, optional = true }
@@ -142,7 +151,7 @@ firestore = ["adk-harness?/firestore"]
 # `up` runs it as the agent kernel, with its daily baselines and observations, and `attach`,
 # `ps`, `top`, `kill`, `suspend`, `resume`, `freeze`, `unfreeze`, `events` and `proc` reach
 # the running kernel (spec 3.2 §7.10, §8.1, §13 Q4, Q6)
-harness = ["dep:adk-harness", "dep:adk-kernel", "adk-kernel/proc-baselines", "adk-harness?/kernel", "adk-harness?/memory-embeddings", "adk-harness?/web", "adk-harness?/mcp", "adk-harness?/hooks", "dep:reqwest", "dep:sha2", "dep:uuid", "dep:chrono"]
+harness = ["dep:adk-harness", "dep:adk-kernel", "adk-kernel/proc-baselines", "adk-kernel/webhooks", "adk-harness?/kernel", "adk-harness?/memory-embeddings", "adk-harness?/web", "adk-harness?/mcp", "adk-harness?/hooks", "dep:reqwest", "dep:sha2", "dep:uuid", "dep:chrono"]
 # `--store-key`, `[store] key`, `adk-rust store status|rotate-key`: harness.db sealed under
 # one keyring from the OS keychain, a secret provider or the environment (spec 3.1 §7.12)
 encrypted = ["adk-harness?/encrypted", "adk-session/encrypted-session", "dep:sqlx"]
@@ -181,6 +190,12 @@ channels = ["harness", "surface", "adk-surface/channels", "adk-kernel?/channels"
 # home as an installable app with Web Push from the kernel and "Confirm it's you". Opt-in:
 # its passkey checks link the system's OpenSSL (webauthn-rs).
 mobile = ["surface", "harness", "adk-surface/mobile"]
+# AWP 2.0 websites (spec 3.5 §7.1, §8.1): `adk-rust site …` drafts, schedules, corrects,
+# withdraws, reverts, builds, publishes, rolls back, migrates and freezes a site on its
+# content repository; `adk-rust awp …` verifies a domain, runs the conformance kit, manages
+# the root and delegated keys, and migrates a 1.x `business.toml`. Opt-in: migration links
+# hickory, image comparison and X.509 parsing.
+website = ["dep:adk-site", "dep:adk-awp", "dep:awp-types", "dep:adk-auth", "adk-auth/web-bot-auth", "adk-session/sqlite", "audit", "dep:base64", "dep:zeroize", "dep:url", "dep:uuid", "dep:chrono"]
 
 # Standard error to terminal.log while the full screen is up (spec 3.3 §5.2, S-I9)
 [target.'cfg(unix)'.dependencies]

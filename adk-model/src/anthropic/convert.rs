@@ -296,6 +296,29 @@ pub fn convert_tools(
         .collect()
 }
 
+/// The part for a provider-executed block: a `server_tool_use` call or one of its results,
+/// `None` for any other block.
+pub(super) fn server_tool_part(block: &ContentBlock) -> Option<Part> {
+    match block {
+        ContentBlock::ServerToolUse(server_tool_use) => serde_json::to_value(server_tool_use)
+            .ok()
+            .map(|server_tool_call| Part::ServerToolCall { server_tool_call }),
+        ContentBlock::WebSearchToolResult(web_search_result) => {
+            serde_json::to_value(web_search_result)
+                .ok()
+                .map(|server_tool_response| Part::ServerToolResponse { server_tool_response })
+        }
+        // Serialized with their `type`, so consumers can tell the result kinds apart.
+        ContentBlock::WebFetchToolResult(_)
+        | ContentBlock::CodeExecutionToolResult(_)
+        | ContentBlock::BashCodeExecutionToolResult(_)
+        | ContentBlock::TextEditorCodeExecutionToolResult(_) => serde_json::to_value(block)
+            .ok()
+            .map(|server_tool_response| Part::ServerToolResponse { server_tool_response }),
+        _ => None,
+    }
+}
+
 /// Convert adk-anthropic Message to ADK LlmResponse.
 pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String, String>) {
     let mut parts = Vec::new();
@@ -327,24 +350,13 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
                     },
                 });
             }
-            ContentBlock::ServerToolUse(server_tool_use) => {
-                if let Ok(val) = serde_json::to_value(server_tool_use) {
-                    parts.push(Part::ServerToolCall { server_tool_call: val });
-                }
-            }
-            ContentBlock::WebSearchToolResult(web_search_result) => {
-                if let Ok(val) = serde_json::to_value(web_search_result) {
-                    parts.push(Part::ServerToolResponse { server_tool_response: val });
-                }
-            }
-            // Serialized with their `type`, so consumers can tell the result kinds apart.
-            ContentBlock::WebFetchToolResult(_)
+            ContentBlock::ServerToolUse(_)
+            | ContentBlock::WebSearchToolResult(_)
+            | ContentBlock::WebFetchToolResult(_)
             | ContentBlock::CodeExecutionToolResult(_)
             | ContentBlock::BashCodeExecutionToolResult(_)
             | ContentBlock::TextEditorCodeExecutionToolResult(_) => {
-                if let Ok(val) = serde_json::to_value(block) {
-                    parts.push(Part::ServerToolResponse { server_tool_response: val });
-                }
+                parts.extend(server_tool_part(block));
             }
             // No ADK part represents it; `history::preserve` keeps it for replay.
             ContentBlock::Unknown(raw) => {

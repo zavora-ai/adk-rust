@@ -124,6 +124,15 @@ pub enum SiteError {
     #[error("content item '{0}' not found")]
     NotFound(String),
 
+    /// An external generator could not run or failed (spec 3.5 §7.8 "Generator").
+    #[error("generator '{generator}' failed: {message}")]
+    Generator {
+        /// The generator's name.
+        generator: String,
+        /// What failed.
+        message: String,
+    },
+
     /// Serialising or parsing a document failed.
     #[error("serialisation failed for {what}: {message}")]
     Serde {
@@ -165,13 +174,16 @@ impl SiteError {
             Self::GateFailed(_) => "site.gate.failed",
             Self::Pipeline(_) => "site.pipeline",
             Self::NotFound(_) => "site.not_found",
+            Self::Generator { .. } => "site.generator",
             Self::Serde { .. } => "site.serde",
         }
     }
 
     fn category(&self) -> ErrorCategory {
         match self {
-            Self::Io { .. } | Self::Host { .. } | Self::Signing(_) => ErrorCategory::Unavailable,
+            Self::Io { .. } | Self::Host { .. } | Self::Signing(_) | Self::Generator { .. } => {
+                ErrorCategory::Unavailable
+            }
             Self::InvalidConfig(_)
             | Self::InvalidContent { .. }
             | Self::Template { .. }

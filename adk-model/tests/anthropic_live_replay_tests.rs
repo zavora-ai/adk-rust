@@ -123,3 +123,55 @@ async fn live_web_fetch_turn_replays() {
     let answer = complete(&client, request, false).await;
     assert!(answer.parts.iter().any(|part| matches!(part, Part::Text { .. })), "{answer:?}");
 }
+
+/// A streamed web search reaches the consumer before the answer it informs (spec 3.1 §7.33
+/// fix 2b): its `server_tool_use` block arrives as a partial response ahead of the answer's
+/// last text chunk, and matches the complete message's copy.
+#[tokio::test]
+#[ignore = "calls the Anthropic API; requires ANTHROPIC_API_KEY"]
+async fn live_web_search_streams_before_the_answer() {
+    let Some(client) = client() else { return };
+    let mut config = GenerateContentConfig::default();
+    config.extensions.insert(
+        "anthropic".to_string(),
+        json!({"built_in_tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}]}),
+    );
+    let mut request = LlmRequest::new(
+        "claude-sonnet-5-5",
+        vec![Content::new("user").with_text(
+            "Search the web once for the latest stable Rust release, then answer in one sentence.",
+        )],
+    );
+    request.config = Some(config);
+    let responses: Vec<LlmResponse> = client
+        .generate_content(request, true)
+        .await
+        .expect("request accepted")
+        .try_collect()
+        .await
+        .expect("response parsed");
+
+    let partial_parts: Vec<&Part> = responses
+        .iter()
+        .filter(|response| response.partial)
+        .flat_map(|response| response.content.iter().flat_map(|content| &content.parts))
+        .collect();
+    let search = partial_parts
+        .iter()
+        .position(|part| matches!(part, Part::ServerToolCall { .. }))
+        .expect("the search streamed as a partial response");
+    let last_text = partial_parts
+        .iter()
+        .rposition(|part| matches!(part, Part::Text { .. }))
+        .expect("the answer streamed");
+    assert!(search < last_text, "the search streamed after the answer: {partial_parts:?}");
+    let Part::ServerToolCall { server_tool_call: streamed } = partial_parts[search] else {
+        unreachable!()
+    };
+    let complete = responses.last().and_then(|response| response.content.as_ref()).unwrap();
+    assert!(
+        complete.parts.iter().any(|part| matches!(part, Part::ServerToolCall { server_tool_call }
+            if server_tool_call == streamed)),
+        "the complete message carries the same call: {complete:?}"
+    );
+}

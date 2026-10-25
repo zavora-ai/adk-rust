@@ -66,6 +66,7 @@ The table below assigns one stability tier to every public `adk-*` crate in the 
 | `adk-codeact-monty` | **Experimental** | Python CodeRuntime for the CodeActAgent via the Monty interpreter |
 | `adk-site` | **Experimental** | Site pipeline for AWP 2.0 websites: content, generator, launch gate, signed releases, site log, hosts (spec 3.5) |
 | `adk-drivers` | **Experimental** | Service drivers: DNS and registrar, email, analytics and search console, social and advertising, as kernel driver manifests with conformance suites (spec 3.5 §7.13) |
+| `adk-website` | **Experimental** | The prebuilt AWP 2.0 website: site kinds, the team of eight agents, onboarding, themes, capability packs, playbooks, incidents, alarms and the weekly review (spec 3.5 Part C) |
 
 ### Beta Crate Rationale
 

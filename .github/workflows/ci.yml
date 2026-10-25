@@ -361,6 +361,14 @@ jobs:
         cargo nextest run --profile ci -p adk-payments --features sqlite,postgres,redis
         --run-ignored only --no-fail-fast --test wallet_store_redis
 
+    # The feature set matches the adk-server suite of scripts/test-postgres.sh, so the
+    # build is reused.
+    - name: Run the AWP edge's Redis store suite
+      if: ${{ !cancelled() }}
+      run: >-
+        cargo nextest run --profile ci -p adk-server --features awp-sqlite,awp-postgres,awp-redis
+        --run-ignored only --no-fail-fast --test awp_store_redis
+
     # The feature set matches the adk-kernel suite of scripts/test-postgres.sh, so the
     # build is reused.
     - name: Run the kernel's Redis store suites

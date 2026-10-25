@@ -64,6 +64,7 @@ pub(crate) struct EdgeControl {
     receipt: Arc<dyn DocumentSigner>,
     release_seq: AtomicU64,
     frozen_seen: AtomicBool,
+    events: OnceLock<super::events::EdgeEvents>,
 }
 
 impl std::fmt::Debug for EdgeControl {
@@ -81,12 +82,18 @@ impl EdgeControl {
             receipt,
             release_seq: AtomicU64::new(0),
             frozen_seen: AtomicBool::new(false),
+            events: OnceLock::new(),
         }
     }
 
     /// Attaches the owner's kill switch unless one is attached; returns whether it was.
     pub(crate) fn attach_governance(&self, control: GovernanceControl) -> bool {
         self.governance.set(control).is_ok()
+    }
+
+    /// Publishes `site.status.changed` on every transition through `events`.
+    pub(crate) fn attach_events(&self, events: super::events::EdgeEvents) {
+        let _ = self.events.set(events);
     }
 
     pub(crate) fn governance(&self) -> Option<&GovernanceControl> {
@@ -128,7 +135,19 @@ impl EdgeControl {
         status.proof = sign(&status, self.receipt.as_ref())
             .await
             .map_err(|error| StatusError::Signing(error.to_string()))?;
-        self.status.set(status.clone()).await?;
+        let previous = self.status.set(status.clone()).await?;
+        let changed = previous.as_ref().is_none_or(|previous| {
+            previous.state != status.state || previous.reason_code != status.reason_code
+        });
+        if changed && let Some(events) = self.events.get() {
+            let change = awp_types::StatusChanged {
+                previous: previous.map(|previous| previous.state),
+                status: status.clone(),
+            };
+            if let Err(error) = events.status_changed(change).await {
+                tracing::warn!(error = %error, "awp site.status.changed not published");
+            }
+        }
         tracing::info!(
             awp.status = ?status.state,
             awp.reason = reason.unwrap_or(""),
