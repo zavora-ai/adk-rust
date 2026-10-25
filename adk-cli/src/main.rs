@@ -112,6 +112,16 @@ async fn run() -> Result<()> {
             if repl && surface.output == adk_surface::tui::OutputFormat::Json {
                 anyhow::bail!("--ui repl has no JSON output; use --output json without --ui");
             }
+            // `--voice` on a terminal opens the terminal's voice mode, in process (spec 3.3
+            // §5.6).
+            #[cfg(all(feature = "tui", feature = "voice"))]
+            if harness_cli::surface::voice_mode(&voice, &surface) {
+                let model = resolve_model(&options).await?;
+                let instruction = options.instruction.clone();
+                return exit_with(
+                    harness_cli::surface::voice(model, instruction, harness, surface).await?,
+                );
+            }
             #[cfg(feature = "tui")]
             if !in_process && !repl {
                 let reach = harness_cli::surface::reach(&surface, &harness).await?;

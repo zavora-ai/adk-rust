@@ -145,6 +145,13 @@ pub struct HarnessArgs {
     /// asked for at its first run (spec 3.3 §10 H1)
     #[arg(long, value_parser = parse_preset, value_name = "PRESET")]
     pub preset: Option<Preset>,
+
+    /// A scripted realtime provider instead of a live one, for `--voice` and the voice view
+    /// `serve` and `up` offer: a JSON array of scripted steps, inline or in the named file
+    /// (end-to-end tests).
+    #[cfg(all(feature = "voice", feature = "scripted-model"))]
+    #[arg(long, value_name = "JSON", hide = true)]
+    pub voice_script: Option<String>,
 }
 
 /// A `--member` flag value (spec 3.1 §8.1, §7.10).
@@ -566,6 +573,18 @@ pub struct ResolvedHarnessArgs {
 }
 
 impl HarnessArgs {
+    /// The scripted realtime provider `--voice-script` names (feature `scripted-model`).
+    #[cfg(all(feature = "voice", feature = "scripted-model"))]
+    pub fn voice_script(&self) -> Option<&str> {
+        self.voice_script.as_deref()
+    }
+
+    /// The scripted realtime provider `--voice-script` names: none without `scripted-model`.
+    #[cfg(all(feature = "voice", not(feature = "scripted-model")))]
+    pub fn voice_script(&self) -> Option<&str> {
+        None
+    }
+
     /// Resolves the flags against `.adk/harness.toml` in the workspace, the user's config
     /// file `user_config` (normally `<config dir>/adk-rust/harness.toml`), and
     /// `default_mode` (spec 3.1 §8.1).

@@ -35,6 +35,21 @@ pub(crate) struct RealtimeChoice {
     pub(crate) input_rate: Option<u32>,
 }
 
+/// The scripted realtime provider `script` plays: a `ScriptedRealtimeModel` script, inline
+/// JSON or a file (end-to-end tests).
+#[cfg(feature = "scripted-model")]
+fn scripted_model(script: &str) -> Result<adk_realtime::scripted::ScriptedRealtimeModel> {
+    let text = if script.trim_start().starts_with('[') {
+        script.to_string()
+    } else {
+        std::fs::read_to_string(script)
+            .with_context(|| format!("reading --voice-script {script}"))?
+    };
+    let steps: Vec<adk_realtime::scripted::ScriptedStep> = serde_json::from_str(&text)
+        .context("--voice-script must be a JSON array of scripted steps")?;
+    Ok(adk_realtime::scripted::ScriptedRealtimeModel::new(steps))
+}
+
 /// Picks the realtime provider from the resolved chat model's provider and key, or plays
 /// `script` (a `ScriptedRealtimeModel` script, inline JSON or a file) in tests.
 pub(crate) fn realtime_model(
@@ -43,15 +58,7 @@ pub(crate) fn realtime_model(
 ) -> Result<RealtimeChoice> {
     #[cfg(feature = "scripted-model")]
     if let Some(script) = script {
-        let text = if script.trim_start().starts_with('[') {
-            script.to_string()
-        } else {
-            std::fs::read_to_string(script)
-                .with_context(|| format!("reading --voice-script {script}"))?
-        };
-        let steps: Vec<adk_realtime::scripted::ScriptedStep> = serde_json::from_str(&text)
-            .context("--voice-script must be a JSON array of scripted steps")?;
-        let scripted = adk_realtime::scripted::ScriptedRealtimeModel::new(steps);
+        let scripted = scripted_model(script)?;
         return Ok(RealtimeChoice {
             id: scripted.model_id().to_string(),
             model: Arc::new(scripted),
@@ -90,6 +97,158 @@ pub(crate) fn realtime_model(
             model.id
         ),
     }
+}
+
+/// A realtime model the voice view and the terminal's voice mode offer (spec 3.3 §5.6).
+#[cfg(feature = "surface")]
+pub(crate) struct Offer {
+    pub(crate) info: adk_surface::voice::VoiceModel,
+    pub(crate) model: BoxedModel,
+    pub(crate) frames: adk_surface::voice::FramePolicy,
+    /// Gemini Live context window compression, which a conversation sending frames needs.
+    pub(crate) compress: bool,
+}
+
+/// Every realtime model whose key resolves, the resolved model's own provider first (spec
+/// 3.3 §5.6): Gemini Live on the Gemini key (the model's own, else `GOOGLE_API_KEY` or
+/// `GEMINI_API_KEY`) and the OpenAI Realtime API on the OpenAI key (the model's own, else
+/// `OPENAI_API_KEY`); under `scripted-model`, `script` alone.
+#[cfg(feature = "surface")]
+pub(crate) fn realtime_models(model: &ResolvedModel, script: Option<&str>) -> Result<Vec<Offer>> {
+    use adk_surface::voice::{FramePolicy, VoiceModel};
+
+    #[cfg(feature = "scripted-model")]
+    if let Some(script) = script {
+        let scripted = scripted_model(script)?;
+        let info = VoiceModel {
+            id: "scripted".into(),
+            name: "Scripted voice".into(),
+            input_rate: 16_000,
+            output_rate: OUTPUT_SAMPLE_RATE,
+        };
+        let model: BoxedModel = Arc::new(scripted);
+        return Ok(vec![Offer { info, model, frames: FramePolicy::GEMINI, compress: false }]);
+    }
+    #[cfg(not(feature = "scripted-model"))]
+    let _ = script;
+
+    let env = |names: &[&str]| {
+        names.iter().find_map(|name| std::env::var(name).ok().filter(|key| !key.trim().is_empty()))
+    };
+    let own = |provider: ModelProvider| match (model.provider, &model.api_key) {
+        (Some(Provider::Model(resolved)), Some(key)) if resolved == provider => Some(key.clone()),
+        _ => None,
+    };
+    let mut offers = Vec::new();
+    if let Some(key) =
+        own(ModelProvider::Gemini).or_else(|| env(&["GOOGLE_API_KEY", "GEMINI_API_KEY"]))
+    {
+        let live = adk_realtime::gemini::GeminiRealtimeModel::new(
+            adk_realtime::gemini::GeminiLiveBackend::studio(key),
+            adk_model::catalog::GEMINI_LIVE_DEFAULT,
+        );
+        let info = VoiceModel {
+            id: "gemini".into(),
+            name: "Gemini Live".into(),
+            input_rate: 16_000,
+            output_rate: OUTPUT_SAMPLE_RATE,
+        };
+        offers.push(Offer {
+            info,
+            model: Arc::new(live),
+            frames: FramePolicy::GEMINI,
+            compress: true,
+        });
+    }
+    if let Some(key) = own(ModelProvider::Openai).or_else(|| env(&["OPENAI_API_KEY"])) {
+        let live = adk_realtime::openai::OpenAIRealtimeModel::with_default_model(key);
+        let info = VoiceModel {
+            id: "openai".into(),
+            name: "OpenAI Realtime".into(),
+            input_rate: 24_000,
+            output_rate: OUTPUT_SAMPLE_RATE,
+        };
+        offers.push(Offer {
+            info,
+            model: Arc::new(live),
+            frames: FramePolicy::OPENAI,
+            compress: false,
+        });
+    }
+    if model.provider == Some(Provider::Model(ModelProvider::Openai)) {
+        offers.reverse();
+    }
+    Ok(offers)
+}
+
+/// Offers `offers` for voice on the served home and says so, when the harness is marked
+/// for voice (spec 3.3 §5.6).
+#[cfg(feature = "surface")]
+pub(crate) fn offer(
+    mut launcher: adk_cli::harness::HarnessLauncher,
+    offers: Vec<Offer>,
+    marked: bool,
+) -> adk_cli::harness::HarnessLauncher {
+    if !marked {
+        return launcher;
+    }
+    if offers.is_empty() {
+        println!(
+            "  voice off: no realtime model; set GOOGLE_API_KEY (Gemini Live) or OPENAI_API_KEY \
+             (OpenAI Realtime)"
+        );
+        return launcher;
+    }
+    let names = offers.iter().map(|offer| offer.info.name.as_str()).collect::<Vec<_>>();
+    println!("  voice {} · /ui/voice", names.join(", "));
+    for offer in offers {
+        launcher = launcher.with_voice_model(offer.info, offer.model, offer.frames, offer.compress);
+    }
+    launcher
+}
+
+/// The microphone and the speaker as the terminal's voice mode takes them (spec 3.3 §5.6):
+/// PCM16 mono from the default input device at `input_rate`, and to the default output device
+/// at `output_rate`. Each device is released once its channel's other end is dropped.
+#[cfg(all(feature = "tui", feature = "voice-desktop"))]
+pub(crate) fn desktop_channels(
+    input_rate: u32,
+    output_rate: u32,
+) -> Result<(tokio::sync::mpsc::Receiver<Vec<u8>>, tokio::sync::mpsc::Sender<Vec<u8>>)> {
+    use adk_audio::{AudioCapture, AudioFrame, AudioPlayback, CaptureConfig};
+
+    let input = AudioCapture::list_input_devices()?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("no audio input device"))?;
+    let output = AudioPlayback::list_output_devices()?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("no audio output device"))?;
+    let mut capture = AudioCapture::new();
+    let config = CaptureConfig { sample_rate: input_rate, ..CaptureConfig::default() };
+    let mut stream = capture.start_capture(input.id(), &config)?;
+    let (microphone, heard) = tokio::sync::mpsc::channel(64);
+    tokio::spawn(async move {
+        let _capture = capture;
+        while let Some(frame) = stream.recv().await {
+            if microphone.send(frame.data.to_vec()).await.is_err() {
+                break;
+            }
+        }
+    });
+    let (speaker, mut played) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+    let device = output.id().to_string();
+    tokio::spawn(async move {
+        let mut playback = AudioPlayback::new();
+        while let Some(pcm) = played.recv().await {
+            let frame = AudioFrame::new(pcm, output_rate, 1);
+            if let Err(error) = playback.play(&device, &frame).await {
+                tracing::debug!(error = %error, "playback failed");
+            }
+        }
+    });
+    Ok((heard, speaker))
 }
 
 /// Drives the surface until the session ends: prints what is said and held, answers the

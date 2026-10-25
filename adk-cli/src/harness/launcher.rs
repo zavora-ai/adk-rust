@@ -144,6 +144,8 @@ pub struct HarnessLauncher {
     #[cfg(feature = "mobile")]
     phone: Option<super::PhoneSetup>,
     webhook_ingress: Option<adk_server::webhooks::WebhookIngress>,
+    #[cfg(all(feature = "voice", feature = "surface"))]
+    voice: Vec<crate::surface::VoiceOffer>,
 }
 
 impl std::fmt::Debug for HarnessLauncher {
@@ -211,6 +213,8 @@ impl HarnessLauncher {
             #[cfg(feature = "mobile")]
             phone: None,
             webhook_ingress: None,
+            #[cfg(all(feature = "voice", feature = "surface"))]
+            voice: Vec::new(),
         }
     }
 
@@ -471,6 +475,43 @@ impl HarnessLauncher {
         answers: Arc<dyn adk_surface::AnswerLog>,
     ) -> Self {
         self.surface_records = Some(crate::surface::SurfaceRecords { trail, answers });
+        self
+    }
+
+    /// Offers `model`, described by `info`, for voice on the served home (spec 3.3 §5.6): a
+    /// harness marked `Pack::Voice` talks in the home's voice view on the models offered, the
+    /// first by default, and its camera and screen frames follow `frames`. `compress` turns on
+    /// Gemini Live context window compression, without which a Gemini Live conversation
+    /// sending frames ends after about two minutes. Without a model offered, or on a harness
+    /// not marked for voice, the home has no voice view.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_realtime::gemini::{GeminiLiveBackend, GeminiRealtimeModel};
+    /// use adk_surface::voice::{FramePolicy, VoiceModel};
+    ///
+    /// let live = GeminiRealtimeModel::new(GeminiLiveBackend::studio(key), "gemini-3.1-flash-live-preview");
+    /// let info = VoiceModel {
+    ///     id: "gemini".into(),
+    ///     name: "Gemini Live".into(),
+    ///     input_rate: 16_000,
+    ///     output_rate: 24_000,
+    /// };
+    /// HarnessLauncher::new(agent)
+    ///     .with_voice_model(info, Arc::new(live), FramePolicy::GEMINI, true)
+    ///     .run_serve_directly(8080)
+    ///     .await?;
+    /// ```
+    #[cfg(all(feature = "voice", feature = "surface"))]
+    pub fn with_voice_model(
+        mut self,
+        info: adk_surface::voice::VoiceModel,
+        model: adk_realtime::BoxedModel,
+        frames: adk_surface::voice::FramePolicy,
+        compress: bool,
+    ) -> Self {
+        self.voice.push(crate::surface::VoiceOffer { info, model, frames, compress });
         self
     }
 
@@ -811,6 +852,10 @@ impl HarnessLauncher {
         // The web home over this harness (spec 3.3 §5.1, §10 S1), on the sessions the server
         // serves, so both see one store. Its turns run as the caller who sent them, so the
         // session's mode and standing rules apply (spec 3.1 §8.2).
+        // A harness marked for voice talks in the home's voice view on the models offered
+        // (spec 3.3 §5.6): its hub's routes, the ticket under /api and the socket at the root.
+        #[cfg(all(feature = "voice", feature = "surface"))]
+        let mut voice_routes = None;
         #[cfg(feature = "surface")]
         let (surface, sessions, take_over) = {
             let app = self.resolved_app_name();
@@ -818,22 +863,43 @@ impl HarnessLauncher {
                 .session_service
                 .clone()
                 .unwrap_or_else(|| Arc::new(InMemorySessionService::new()));
-            let harness = harness_for(
+            let harness = Arc::new(harness_for(
                 self.agent.clone(),
                 &app,
                 sessions.clone(),
                 self.run_store.clone(),
                 Some(governance.clone()),
-            )?;
-            let engine = crate::surface::harness_engine(
+            )?);
+            #[cfg(feature = "voice")]
+            let voice_harness = harness.clone();
+            let source = crate::surface::harness_source(
                 &app,
-                Arc::new(harness),
+                harness,
                 sessions.clone(),
                 self.approval_service.clone(),
                 kernel.clone(),
+            )?;
+            #[cfg(feature = "voice")]
+            let (source, live) = crate::surface::voice_source(source, &voice_harness, &self.voice);
+            let engine = crate::surface::harness_engine(
+                &app,
+                source,
                 self.surface_records.clone(),
                 cfg!(feature = "mobile") && self.has_phone(),
-            )?;
+            );
+            #[cfg(feature = "voice")]
+            if let Some(live) = live {
+                let hub = crate::surface::voice_hub(
+                    engine.clone(),
+                    voice_harness,
+                    live,
+                    self.voice.clone(),
+                );
+                voice_routes = Some((
+                    adk_surface::voice::router(hub.clone()),
+                    adk_surface::voice::socket_routes(hub),
+                ));
+            }
             (engine, sessions, self.agent.runtime().take_over().cloned())
         };
         let rules = super::rules::rules_router(super::rules::RuleEndpoints {
@@ -896,6 +962,10 @@ impl HarnessLauncher {
                     phone.start_push().map_err(AdkError::from)?;
                 }
                 launcher = launcher.with_api_routes(adk_surface::mobile::router(phone));
+            }
+            #[cfg(feature = "voice")]
+            if let Some((api, socket)) = voice_routes {
+                launcher = launcher.with_api_routes(api).with_root_routes(socket);
             }
             launcher = launcher.with_session_service(sessions).with_surface(surface);
         }

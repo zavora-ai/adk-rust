@@ -76,6 +76,10 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     let UpArgs { home, bind, auth_token, store, mut harness, .. } = up;
     // The baseline pass's observations are worded by the harness's model (spec 3.2 §7.10).
     let phraser = Arc::new(LlmPhraser::new(model.llm.clone()));
+    // The realtime models the home's voice view offers a harness marked for voice (spec 3.3
+    // §5.6).
+    #[cfg(all(feature = "voice", feature = "surface"))]
+    let voice = crate::voice_cli::realtime_models(&model, harness.voice_script())?;
     // The personal preset's workspace is a folder under the home, so the current directory's
     // `.adk/harness.toml` plays no part (spec 3.3 §10 H1).
     let personal_home =
@@ -582,6 +586,11 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     if let Some(phone) = phone {
         println!("  phone {}/ (pairing, wake-ups, confirm it's you)", phone.setup.pairing_base());
         launcher = launcher.with_phone(phone.setup);
+    }
+    #[cfg(all(feature = "voice", feature = "surface"))]
+    {
+        let marked = setup.resolved.packs.contains(&adk_harness::Pack::Voice);
+        launcher = crate::voice_cli::offer(launcher, voice, marked);
     }
     println!(
         "  store {}: sessions, approvals, runs, processes, agenda, schedules, drivers, partitions, the activity ledger, paired devices",

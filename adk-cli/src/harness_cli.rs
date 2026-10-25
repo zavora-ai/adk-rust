@@ -1109,11 +1109,7 @@ pub async fn voice(
             })
             .await?;
     }
-    #[cfg(feature = "scripted-model")]
-    let script = voice.voice_script.as_deref();
-    #[cfg(not(feature = "scripted-model"))]
-    let script = None;
-    let realtime = crate::voice_cli::realtime_model(&model, script)?;
+    let realtime = crate::voice_cli::realtime_model(&model, setup.args.voice_script())?;
     println!(
         "harness ({}) voice on {} · mode {} · shell {} · realtime {}\n",
         setup.model_id,
@@ -2059,6 +2055,10 @@ pub async fn serve(
     auth_token: Option<String>,
     store: Option<String>,
 ) -> Result<()> {
+    // The realtime models the home's voice view offers a harness marked for voice (spec 3.3
+    // §5.6).
+    #[cfg(all(feature = "voice", feature = "surface"))]
+    let voice = crate::voice_cli::realtime_models(&model, args.voice_script())?;
     let setup =
         Setup::open(model, instruction, args, HarnessMode::Plan, store.as_deref(), None).await?;
     setup.print_notes();
@@ -2148,6 +2148,11 @@ pub async fn serve(
         .with_bind_address(host);
     if let Some(token) = token {
         launcher = launcher.with_auth_token(token);
+    }
+    #[cfg(all(feature = "voice", feature = "surface"))]
+    {
+        let marked = setup.resolved.packs.contains(&adk_harness::Pack::Voice);
+        launcher = crate::voice_cli::offer(launcher, voice, marked);
     }
     if let Some(shared) = &setup.shared {
         println!(
