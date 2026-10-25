@@ -199,6 +199,29 @@ pub mod standing_rule_store {
         assert_eq!(ids(&store.list("app", "alice").await.unwrap()), ["r2"]);
     }
 
+    /// Replacing changes a stored rule in place, and never brings back one that was revoked
+    /// (spec 3.3 §8.1 "Extend", spec 3.1 §9.2 I4).
+    pub async fn replace_keeps_a_revoked_rule_revoked(store: &dyn StandingRuleStore) {
+        let mut granted = rule("r1", "app", "alice", None);
+        granted.expires_at = Some(Utc::now() + chrono::Duration::days(1));
+        store.grant(granted.clone()).await.unwrap();
+        store.grant(rule("r2", "app", "alice", None)).await.unwrap();
+        let mut extended = granted;
+        extended.expires_at = Some(Utc::now() + chrono::Duration::days(30));
+        assert!(store.replace(extended.clone()).await.unwrap());
+        let listed = store.list("app", "alice").await.unwrap();
+        assert_eq!(listed.iter().find(|rule| rule.id == "r1"), Some(&extended));
+        assert_eq!(ids(&listed), ["r1", "r2"]);
+
+        assert!(store.revoke("app", "r1").await.unwrap());
+        assert!(!store.replace(extended.clone()).await.unwrap());
+        assert_eq!(ids(&store.list("app", "alice").await.unwrap()), ["r2"]);
+        let mut elsewhere = extended;
+        elsewhere.scope = rule("r1", "other", "alice", None).scope;
+        assert!(!store.replace(elsewhere).await.unwrap(), "a rule of another app is not replaced");
+        assert!(store.list("other", "alice").await.unwrap().is_empty());
+    }
+
     /// Rules read back from the store keep their decision and expiry, so the matcher
     /// lets a Deny beat an Allow and refuses an expired rule (spec 3.1 §7.5).
     pub async fn deny_beats_allow_and_expiry_hold(store: &dyn StandingRuleStore) {
@@ -380,6 +403,13 @@ macro_rules! standing_rule_store_conformance_tests {
         async fn rule_store_revoke_removes_one_rule() {
             let store = $store;
             $crate::conformance::standing_rule_store::revoke_removes_one_rule(&store).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test]
+        async fn rule_store_replace_keeps_a_revoked_rule_revoked() {
+            let store = $store;
+            $crate::conformance::standing_rule_store::replace_keeps_a_revoked_rule_revoked(&store)
+                .await;
         }
         $(#[$attr])*
         #[::tokio::test]
