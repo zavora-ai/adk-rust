@@ -55,6 +55,8 @@ pub const PAYMENT_TOOL_NAMES: &[&str] = &[
     "payments_status_lookup",
     "payments_intervention_continue",
     "payments_ap2_payment_submit",
+    // The owner-funded wallet's payment (spec 3.5 §7.14): a financial call.
+    "wallet_pay",
 ];
 
 /// Action of the audit record one payment attempt writes (spec 3.1 §9.3).

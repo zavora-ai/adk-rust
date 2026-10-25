@@ -76,6 +76,7 @@ The governed, durable harness agent (`adk-harness`, spec 3.1): modes, approvals,
 - [Harness Payments](harness/payments.md) - The payments pack: `adk-payments` tools as class `Payment`, one non-waivable approval per call, mandate guardrails, spend ledger, `harness.payment` with the journal receipt
 - [Harness Voice](harness/voice.md) - The voice surface: the harness as the agent of an `IntegratedRealtimeRunner`, held calls surfaced as realtime events, spoken or inbox approvals, `harness.voice.*` in one audit trail
 - [The Personal Preset and Take Over](harness/personal.md) - `--preset personal`: a workspace of notes and files under the home, no host shell, quiet time and a daily spending limit asked at first run; take over: a typed secret reaches one tool call only
+- [The Website Runtime](harness/website.md) - feature `website`: `Preset::Website`, the back-office and public toolsets of an AWP 2.0 website, its two partitions and signals, the autonomy ladder compiled to policy, authoring, outbound Web Bot Auth and onboarding
 
 ## Agent Kernel
 
@@ -203,7 +204,9 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [A2A Getting Started](a2a/getting-started.md) - Create and run an A2A agent
 - [A2A Protocol](deployment/a2a.md) - Agent-to-Agent communication
 - [Agentic Web Protocol](deployment/awp.md) - AWP protocol for agent-native web services
+- [The AWP Agent Edge](deployment/awp-edge.md) - A site's capabilities over A2A, MCP and HTTP: trust tiers, held and exactly-once calls, the public partition
 - [Site Migration](deployment/site-migration.md) - Moving an existing site onto a signed static AWP site
+- [Constantly Updated Sites](deployment/constant-updates.md) - Lanes, batching, feed bounds and delta releases for sites that change every minute
 - [Agent Engine](deployment/agent-engine.md) - Deploying on the Gemini Enterprise Agent Platform
 - [Agent Registry](deployment/agent-registry.md) - Discovery, registration, and remote invocation on the Agent Platform
 

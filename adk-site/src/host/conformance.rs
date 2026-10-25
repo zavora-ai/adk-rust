@@ -5,6 +5,7 @@
 //! |-------|-------------|
 //! | [`checkpoint_last`] | Files, then the manifest, then tiles, then the checkpoint; the published log verifies from the host alone |
 //! | [`atomic_under_concurrent_reads`] | Readers during a publish never miss a file both releases hold, never see a third version, and see the new release's files once its checkpoint is visible; on an atomic host they never see a mixture |
+//! | [`atomic_delta_under_concurrent_reads`] | The same while a delta changes part of the site, adds a file and removes one (spec 3.5 §7.8.3) |
 //! | [`exact_rollback`] | A rollback serves the earlier release's files with their exact digests, and the log stays as it was |
 //! | [`redirect_round_trip`] | Redirects written in the host's format read back unchanged |
 //! | [`delta_publication`] | A delta uploads only changed files and serves the full file set |
@@ -205,12 +206,49 @@ pub async fn checkpoint_last(host: &dyn SiteHost) {
 ///
 /// Panics with the failed expectation.
 pub async fn atomic_under_concurrent_reads(host: Arc<dyn SiteHost>) {
+    concurrent_reads(host, false).await;
+}
+
+/// Readers during a delta publish see whole releases (spec 3.5 §7.8.3 "Hosts at speed").
+///
+/// # Panics
+///
+/// Panics with the failed expectation.
+pub async fn atomic_delta_under_concurrent_reads(host: Arc<dyn SiteHost>) {
+    concurrent_reads(host, true).await;
+}
+
+async fn concurrent_reads(host: Arc<dyn SiteHost>, delta: bool) {
     let mut fixture = Fixture::new().await;
     let a_files = pages("a", 40, "only-a");
-    let b_files = pages("b", 40, "only-b");
+    let b_files = if delta {
+        // Half the pages change; the rest keep release a's bytes.
+        let mut files: Vec<(String, Vec<u8>)> = a_files
+            .iter()
+            .filter(|(p, _)| p != "/only-a.html")
+            .map(|(p, b)| {
+                let changed = p
+                    .trim_start_matches("/p")
+                    .split('/')
+                    .next()
+                    .and_then(|i| i.parse::<usize>().ok())
+                    .is_some_and(|i| i % 2 == 0);
+                if changed {
+                    (p.clone(), b.iter().map(|c| if *c == b'a' { b'b' } else { *c }).collect())
+                } else {
+                    (p.clone(), b.clone())
+                }
+            })
+            .collect();
+        files.push(("/only-b.html".into(), b"<p>only-b</p>".to_vec()));
+        files
+    } else {
+        pages("b", 40, "only-b")
+    };
     let a = fixture.release(&borrowed(&a_files), Vec::new(), false).await;
     host.publish(&a, HostTarget::Production).await.expect("publish a");
-    let b = fixture.release(&borrowed(&b_files), Vec::new(), false).await;
+    let b = fixture.release(&borrowed(&b_files), Vec::new(), delta).await;
+    assert_eq!(b.manifest.is_snapshot(), !delta);
     let checkpoint_of = |staged: &StagedRelease| {
         staged.log.as_ref().and_then(|l| l.checkpoint.clone()).expect("logged").1
     };
@@ -237,6 +275,9 @@ pub async fn atomic_under_concurrent_reads(host: Arc<dyn SiteHost>) {
                     reads.fetch_add(1, Ordering::Relaxed);
                     match body {
                         None => violations.push(format!("{path} missing during the publish")),
+                        Some(b)
+                            if b.as_ref() == a_map[&path].as_slice()
+                                && b.as_ref() == b_map[&path].as_slice() => {}
                         Some(b) if b.as_ref() == a_map[&path].as_slice() => seen.push('a'),
                         Some(b) if b.as_ref() == b_map[&path].as_slice() => seen.push('b'),
                         Some(_) => violations.push(format!("{path} is neither release")),
@@ -259,7 +300,12 @@ pub async fn atomic_under_concurrent_reads(host: Arc<dyn SiteHost>) {
         }));
     }
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    host.publish(&b, HostTarget::Production).await.expect("publish b");
+    if delta {
+        let staged = StagedDelta::new(b.clone()).expect("delta");
+        host.publish_delta(&staged, HostTarget::Production).await.expect("publish delta b");
+    } else {
+        host.publish(&b, HostTarget::Production).await.expect("publish b");
+    }
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     stop.store(true, Ordering::Relaxed);
     let mut violations = Vec::new();
@@ -368,6 +414,7 @@ pub async fn delta_publication(host: &dyn SiteHost) {
 pub async fn run_all(make_host: impl Fn() -> Arc<dyn SiteHost>) {
     checkpoint_last(make_host().as_ref()).await;
     atomic_under_concurrent_reads(make_host()).await;
+    atomic_delta_under_concurrent_reads(make_host()).await;
     exact_rollback(make_host().as_ref()).await;
     redirect_round_trip(make_host().as_ref()).await;
     delta_publication(make_host().as_ref()).await;

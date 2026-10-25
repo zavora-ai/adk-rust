@@ -78,6 +78,9 @@
 # The browser and computer-use packs (spec 3.1 §7.24): adk-browser and adk-computer-use enter
 # the harness only through them; `web-fixture` admits the loopback fixture page.
 1 adk-harness browser,computer-use,web-fixture doc
+# The website runtime (spec 3.5 §7.1): adk-site, adk-drivers and adk-awp's verifier enter the
+# harness only through it; `web-fixture` admits the loopback site its tests sign against.
+1 adk-harness website,web-fixture doc
 # Agent surfaces (spec 3.3 §6.1): `adk_rust::surface`, in no tier.
 1 adk-rust surface
 
@@ -97,6 +100,9 @@
 2 adk-server a2a-v1
 # Signed inbound webhooks: `POST /hooks/{name}` and its idempotent run-store enqueue.
 2 adk-server webhook-ingress,background
+# The AWP 2.0 agent edge (spec 3.5 §7.9): tiers, the governed path over HTTP, A2A and MCP,
+# held calls and the public partition.
+2 adk-server awp
 2 adk-cli vertex-agent-registry
 2 adk-cli vertex-skill-registry
 # The `deploy agent-engine` subcommand: arg-parse and mock create-contract tests.

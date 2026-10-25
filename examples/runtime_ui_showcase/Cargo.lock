@@ -41,6 +41,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "http",
  "serde",
  "serde_json",
  "sha2",

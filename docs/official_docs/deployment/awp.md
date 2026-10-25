@@ -112,6 +112,10 @@ error envelope.
 | `DirectExecutor` | Refuses a capability above the caller's tier as `capability_not_found`, validates input, requires an idempotency key for `non_idempotent` capabilities, checks consent receipts, answers a repeated key from its record, and holds a call above its approval threshold with `202` |
 | Edge stores | Subscriptions, consent receipts, status, held calls, leads and idempotency records; backends run `edge_store_conformance_tests!` |
 
+`adk-server`'s `awp` feature builds the full edge on these pieces — Web Bot Auth, OAuth, mTLS
+and API-key tiers, the A2A and MCP bindings, held calls decided through the approval service,
+and the public partition; see [The AWP Agent Edge](awp-edge.md).
+
 `AWP-Version` takes a list, highest first. A 1.x route answers `2.0, 1.0` in 1.0 and a 2.0
 route answers it in 2.0; a request naming no common major gets `406`. The 1.x routes sit
 behind the default `awp-v1` feature.
