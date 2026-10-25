@@ -1117,11 +1117,16 @@ proptest! {
         code in "[a-z]{2}[0-9]{3}[A-Z]{2}[!@#%^&*()_+=~-]{1,3}[a-zA-Z0-9 ]{0,12}",
     ) {
         let (kept, bank, logs) = run_capturing(&code);
-        prop_assert_eq!(bank, vec![code.clone()]);
-        prop_assert!(!kept.contains(&code), "a store, an event or the model holds it");
+        // A one-time code reaches the tool without whitespace or dashes, as typed "731-905"
+        // becomes "731905", so neither form may be kept or logged.
+        let delivered: String = code.chars().filter(|ch| !ch.is_whitespace() && *ch != '-').collect();
+        prop_assert_eq!(bank, vec![delivered.clone()]);
+        for form in [&code, &delivered] {
+            prop_assert!(!kept.contains(form.as_str()), "a store, an event or the model holds it");
+            prop_assert!(!logs.contains(form.as_str()), "a log line holds it");
+        }
         prop_assert!(kept.contains(TAKE_OVER_PLACEHOLDER));
         prop_assert!(!logs.is_empty());
-        prop_assert!(!logs.contains(&code), "a log line holds it");
     }
 }
 

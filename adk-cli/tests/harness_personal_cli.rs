@@ -41,9 +41,12 @@ fn up_args(kernel: &Path, port: u16) -> Vec<String> {
     .collect()
 }
 
+/// Waits until `up` or `serve` listens and offers Ctrl+C, which then stops it.
 fn wait_listening(port: u16, terminal: &Terminal) {
     let started = Instant::now();
-    while TcpStream::connect(("127.0.0.1", port)).is_err() {
+    while TcpStream::connect(("127.0.0.1", port)).is_err()
+        || !terminal.text().contains("Press Ctrl+C to")
+    {
         assert!(started.elapsed() < common::TIMEOUT, "up did not listen:\n{}", terminal.text());
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -209,6 +212,7 @@ fn the_current_directorys_kernel_config_does_not_stop_the_personal_preset() {
 /// Review findings 11, 13 and 15: the REPL shows no shell, in its banner and in `/sandbox`,
 /// and shows the limits `adk-rust up` keeps — the user config's `[kernel]` table winning.
 #[test]
+#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn the_repl_shows_no_shell_and_the_limits_in_force() {
     let home = tempfile::tempdir().unwrap();
     let repo = repository();
@@ -258,6 +262,7 @@ fn serve_with_the_personal_preset_shows_both_limits() {
 /// Review of #1045, finding 3: a `[kernel]` error stops only `adk-rust up`, which runs the
 /// kernel; the REPL notes it and starts with the first-run answers.
 #[test]
+#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn a_kernel_config_error_does_not_stop_the_repl() {
     let home = tempfile::tempdir().unwrap();
     let repo = repository();
@@ -279,6 +284,7 @@ fn a_kernel_config_error_does_not_stop_the_repl() {
 /// Review of #1045, finding 4: the REPL reads the `personal.toml` `adk-rust up` keeps, in the
 /// user config's `[kernel] home`, rather than asking again elsewhere.
 #[test]
+#[cfg_attr(feature = "tui", ignore = "`tui` replaces the REPL with the terminal surface")]
 fn the_repl_reads_the_answers_up_keeps() {
     let home = tempfile::tempdir().unwrap();
     let repo = repository();

@@ -230,6 +230,232 @@ impl ControlClient {
         Ok(answer.partition)
     }
 
+    /// `GET /kernel/settings`: every area's quiet time, daily spending limit and mode in
+    /// force (spec 3.3 §10 K3).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `403` without the `operator` scope or a device's `read`.
+    pub async fn settings(&self) -> Result<Vec<super::api::AreaView>> {
+        let answer: super::api::SettingsResponse =
+            self.call(Method::GET, paths::SETTINGS.to_string(), None::<&()>).await?;
+        Ok(answer.areas)
+    }
+
+    /// `GET /kernel/settings/{partition}`: one area's settings in force (spec 3.3 §10 K3).
+    ///
+    /// # Errors
+    ///
+    /// As [`settings`](Self::settings), and `404` for an unknown area.
+    pub async fn area_settings(&self, partition: &str) -> Result<super::api::AreaView> {
+        let path = paths::AREA_SETTINGS.replace("{partition}", &encode(partition));
+        let answer: super::api::AreaResponse = self.call(Method::GET, path, None::<&()>).await?;
+        Ok(answer.area)
+    }
+
+    /// `POST /kernel/settings/{partition}/quiet-time`: sets the area's quiet time, or turns
+    /// it off with `None` (spec 3.3 §10 K3).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `403` for a device token or without the `operator` scope,
+    /// `404` for an unknown area.
+    pub async fn set_quiet_time(
+        &self,
+        partition: &str,
+        window: Option<crate::sched::QuietHours>,
+    ) -> Result<super::api::AreaView> {
+        let path = paths::QUIET_TIME.replace("{partition}", &encode(partition));
+        let body = super::api::QuietTimeRequest { window };
+        let answer: super::api::AreaResponse = self.call(Method::POST, path, Some(&body)).await?;
+        Ok(answer.area)
+    }
+
+    /// `POST /kernel/settings/{partition}/spending-limit`: sets the area's daily spending
+    /// limit in micro-USD, or removes it with `None` (spec 3.3 §10 K3).
+    ///
+    /// # Errors
+    ///
+    /// As [`set_quiet_time`](Self::set_quiet_time).
+    pub async fn set_spending_limit(
+        &self,
+        partition: &str,
+        micro_usd: Option<u64>,
+    ) -> Result<super::api::AreaView> {
+        let path = paths::SPENDING_LIMIT.replace("{partition}", &encode(partition));
+        let body = super::api::SpendingLimitRequest { micro_usd };
+        let answer: super::api::AreaResponse = self.call(Method::POST, path, Some(&body)).await?;
+        Ok(answer.area)
+    }
+
+    /// `POST /kernel/settings/{partition}/mode`: sets how much the area's agents act alone
+    /// (spec 3.3 §10 K3).
+    ///
+    /// # Errors
+    ///
+    /// As [`set_quiet_time`](Self::set_quiet_time).
+    pub async fn set_area_mode(
+        &self,
+        partition: &str,
+        mode: crate::partition::PartitionMode,
+    ) -> Result<super::api::AreaView> {
+        let path = paths::AREA_MODE.replace("{partition}", &encode(partition));
+        let body = super::api::PartitionModeRequest { mode };
+        let answer: super::api::AreaResponse = self.call(Method::POST, path, Some(&body)).await?;
+        Ok(answer.area)
+    }
+
+    /// `GET /kernel/away`: "While you were away" after the viewer's cursor (spec 3.3 §10
+    /// K4). A paired device reads as itself; `query.viewer` names any other surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    #[cfg(feature = "proc")]
+    pub async fn away(&self, query: &super::api::AwayQuery) -> Result<super::api::AwayResponse> {
+        let mut pairs = Vec::new();
+        if let Some(viewer) = &query.viewer {
+            pairs.push(format!("viewer={}", encode(viewer)));
+        }
+        if let Some(after) = query.after {
+            pairs.push(format!("after={after}"));
+        }
+        if let Some(limit) = query.limit {
+            pairs.push(format!("limit={limit}"));
+        }
+        let path = match pairs.is_empty() {
+            true => paths::AWAY.to_string(),
+            false => format!("{}?{}", paths::AWAY, pairs.join("&")),
+        };
+        self.call(Method::GET, path, None::<&()>).await
+    }
+
+    /// `POST /kernel/away/seen`: marks "While you were away" seen through row `through`, a
+    /// page's `through` (spec 3.3 §10 K4); returns the cursor, which never moves back.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `400` for a row the ledger does not hold yet.
+    #[cfg(feature = "proc")]
+    pub async fn mark_away_seen(
+        &self,
+        viewer: Option<&str>,
+        through: u64,
+    ) -> Result<super::AwayCursor> {
+        let body = super::api::SeenRequest { viewer: viewer.map(str::to_string), through };
+        let answer: super::api::SeenResponse =
+            self.call(Method::POST, paths::AWAY_SEEN.to_string(), Some(&body)).await?;
+        Ok(answer.cursor)
+    }
+
+    /// `GET /kernel/away/lines/{seq}`: one line of "While you were away" with its ledger
+    /// row, the line's record (spec 3.3 §10 K4).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `404` for a row the ledger does not hold.
+    #[cfg(feature = "proc")]
+    pub async fn away_line(&self, seq: u64) -> Result<super::api::AwayLineResponse> {
+        let path = paths::AWAY_LINE.replace("{seq}", &seq.to_string());
+        self.call(Method::GET, path, None::<&()>).await
+    }
+
+    /// `GET /kernel/memory`: what the agents remember about the caller, with provenance, and
+    /// the overnight tidy-ups (spec 3.3 §10 K5).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `400` when the kernel shows no memory.
+    pub async fn memory(&self, area: Option<&str>) -> Result<super::api::MemoryResponse> {
+        let path = match area {
+            Some(area) => format!("{}?area={}", paths::MEMORY, encode(area)),
+            None => paths::MEMORY.to_string(),
+        };
+        self.call(Method::GET, path, None::<&()>).await
+    }
+
+    /// `POST /kernel/memory/facts/{id}/confirm`: "That's right" (spec 3.3 §8.2, §10 K5).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `403` for a device token, `404` for a fact that is not
+    /// the caller's.
+    pub async fn confirm_fact(&self, id: &str) -> Result<super::RememberedFact> {
+        let path = paths::FACT_CONFIRM.replace("{id}", &encode(id));
+        let answer: super::api::FactResponse = self.call(Method::POST, path, Some(&())).await?;
+        Ok(answer.fact)
+    }
+
+    /// `POST /kernel/memory/facts/{id}/fix`: "Fix it" with the person's `text` (spec 3.3
+    /// §8.2, §10 K5).
+    ///
+    /// # Errors
+    ///
+    /// As [`confirm_fact`](Self::confirm_fact), and `400` for a text the harness refuses.
+    pub async fn fix_fact(&self, id: &str, text: &str) -> Result<super::RememberedFact> {
+        let path = paths::FACT_FIX.replace("{id}", &encode(id));
+        let body = super::api::FixRequest { text: text.to_string() };
+        let answer: super::api::FactResponse = self.call(Method::POST, path, Some(&body)).await?;
+        Ok(answer.fact)
+    }
+
+    /// `POST /kernel/memory/facts/{id}/forget`: "Forget it" (spec 3.3 §8.2, §10 K5).
+    ///
+    /// # Errors
+    ///
+    /// As [`confirm_fact`](Self::confirm_fact).
+    pub async fn forget_fact(&self, id: &str) -> Result<()> {
+        let path = paths::FACT_FORGET.replace("{id}", &encode(id));
+        let _: super::api::ForgetResponse = self.call(Method::POST, path, Some(&())).await?;
+        Ok(())
+    }
+
+    /// `POST /kernel/memory/undo`: "Undo" the tidy-up `id`, or the latest one that can be
+    /// undone (spec 3.3 §8.2, §10 K5).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `403` for a device token, `404` when nothing is left to
+    /// undo, `409` for a tidy-up unfinished or undone.
+    pub async fn undo_tidy_up(&self, id: Option<&str>) -> Result<super::TidyUpUndo> {
+        let body = super::api::UndoRequest { tidy_up: id.map(str::to_string) };
+        self.call(Method::POST, paths::MEMORY_UNDO.to_string(), Some(&body)).await
+    }
+
+    /// `GET /kernel/record`: the latest `limit` actions on record, newest first (spec 3.3
+    /// §10 K5).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered: `400` when the kernel shows no record.
+    pub async fn record(&self, limit: Option<usize>) -> Result<Vec<super::RecordLine>> {
+        let path = match limit {
+            Some(limit) => format!("{}?limit={limit}", paths::RECORD),
+            None => paths::RECORD.to_string(),
+        };
+        let answer: super::api::RecordResponse = self.call(Method::GET, path, None::<&()>).await?;
+        Ok(answer.lines)
+    }
+
+    /// `GET /kernel/record/check`: whether every action is on record and nothing was
+    /// changed or deleted, as `adk-rust audit verify` answers (spec 3.3 §10 K5).
+    ///
+    /// # Errors
+    ///
+    /// As [`record`](Self::record).
+    pub async fn check_record(&self) -> Result<super::RecordCheck> {
+        self.call(Method::GET, paths::RECORD_CHECK.to_string(), None::<&()>).await
+    }
+
     /// `GET /kernel/processes`.
     ///
     /// # Errors

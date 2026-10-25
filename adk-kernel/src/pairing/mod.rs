@@ -26,7 +26,7 @@
 //!
 //! | Scope | Routes (under `/api`) |
 //! |---|---|
-//! | [`DeviceScope::Read`] | `GET /kernel/health`, `GET /kernel/processes`, `GET /kernel/events`, `POST /kernel/attach/{session}`, `GET /kernel/agenda`, `GET /approvals`, `GET /approvals/{id}` |
+//! | [`DeviceScope::Read`] | `GET /kernel/health`, `GET /kernel/processes`, `GET /kernel/events`, `POST /kernel/attach/{session}`, `GET /kernel/agenda`, `GET /approvals`, `GET /approvals/{id}`; `GET /kernel/settings[/{partition}]`, `GET /kernel/away`, `POST /kernel/away/seen`, `GET /kernel/away/lines/{seq}`, `GET /kernel/memory`, `GET /kernel/record`, `GET /kernel/record/check` (spec 3.3 §10 K3–K5) |
 //! | [`DeviceScope::Decide`] | `POST /approvals/{id}/decide`, low and medium risk; high risk waits for confirming it is the person (spec 3.3 §7.2) |
 //! | [`DeviceScope::Stop`] | `POST /kernel/freeze` |
 //!
@@ -1025,6 +1025,17 @@ pub fn device_scope_for(method: &Method, path: &str) -> Option<DeviceScope> {
     match (method.as_str(), segments.as_slice()) {
         ("GET", ["kernel", "health" | "processes" | "events" | "agenda"])
         | ("POST", ["kernel", "attach", _])
+        // What Today and "Agent Memory and Rules" read, and the device's own place in
+        // "While you were away" (spec 3.3 §10 K3–K5); changing a setting or a memory stays
+        // closed to devices.
+        | (
+            "GET",
+            ["kernel", "settings" | "away" | "memory" | "record"]
+            | ["kernel", "settings", _]
+            | ["kernel", "away", "lines", _]
+            | ["kernel", "record", "check"],
+        )
+        | ("POST", ["kernel", "away", "seen"])
         | ("GET", ["approvals"] | ["approvals", _]) => Some(DeviceScope::Read),
         ("POST", ["approvals", id, "decide"]) if *id != "delegations" => Some(DeviceScope::Decide),
         ("POST", ["kernel", "freeze"]) => Some(DeviceScope::Stop),

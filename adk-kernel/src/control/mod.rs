@@ -29,6 +29,10 @@
 //! | `POST /kernel/channels/pair`, `GET /kernel/channels`, `POST /kernel/channels/{id}/revoke` (feature `channels`) | chat accounts' pairings (spec 3.3 §10 K1) |
 //! | `GET /kernel/partitions` | the partition table ([`api::PartitionsResponse`], spec 3.2 §7.8) |
 //! | `POST /kernel/partitions`, `POST /kernel/partitions/{id}/mode` | create or replace a partition; set its mode ([`api::PartitionModeRequest`]) |
+//! | `GET /kernel/settings[/{partition}]`, `POST /kernel/settings/{partition}/{quiet-time,spending-limit,mode}` | quiet time, the daily spending limit and the mode while the kernel runs (spec 3.3 §10 K3); see [the routes the surfaces need](self#the-routes-the-surfaces-need) |
+//! | `GET /kernel/away`, `POST /kernel/away/seen`, `GET /kernel/away/lines/{seq}` (feature `proc`) | "While you were away" over the `/proc` ledger with a cursor per device (spec 3.3 §10 K4) |
+//! | `GET /kernel/memory`, `POST /kernel/memory/facts/{id}/{confirm,fix,forget}`, `POST /kernel/memory/undo` | what the agents remember, with provenance, and its corrections (spec 3.3 §10 K5) |
+//! | `GET /kernel/record`, `GET /kernel/record/check` | the latest actions on record, and the check that the record is complete (spec 3.3 §10 K5) |
 //!
 //! The approvals inbox, `/api/runs`, `/api/cron`, `/api/admin/freeze` and `/hooks/{name}`
 //! are the existing server routes, unchanged; `POST /api/admin/freeze` delegates to
@@ -71,7 +75,28 @@
 //! `AuditFailureMode::Block`, except `freeze`, which takes effect regardless. Reads of the
 //! process table, the partition table, the health and the event stream are authenticated
 //! and not recorded.
+//!
+//! # The routes the surfaces need
+//!
+//! Spec 3.3 §10 K3–K5 adds the routes behind the home's Today and "Agent Memory and Rules"
+//! screens. Reading them needs the `operator` scope, which a paired device with `read`
+//! has; changing a setting or a memory needs the `operator` scope and no device token: the
+//! person at the kernel's socket, pipe or loopback, or signed in to the home. A chat
+//! channel reaches no kernel route.
+//!
+//! | Route | Read | Change | Recorded as `kernel.control` |
+//! |---|---|---|---|
+//! | Settings (K3) | `operator` or device `read` | the person, no device | `settings.quiet_time`, `settings.spending_limit`, `settings.mode`, with `from` and `to` |
+//! | While you were away (K4) | `operator` or device `read` | its own cursor: `operator` or device `read` | no |
+//! | Memory (K5) | `operator` or device `read` | the person, no device | `memory.confirm`, `memory.fix`, `memory.forget`, `memory.undo` |
+//! | Record (K5) | `operator` or device `read` | — | no |
+//!
+//! The settings and cursors live in the [`ControlStore`] of
+//! [`ControlPlaneConfig::control_store`]; the memory and the record are what a
+//! [`MemoryBook`] and a [`RecordBook`] give the kernel, which `adk-rust up` builds over the
+//! harness's facts and the kernel's signed audit log.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -89,17 +114,32 @@ use crate::error::{KernelError, Result};
 use crate::kernel::Kernel;
 
 pub mod api;
+#[cfg(feature = "proc")]
+mod away;
 mod client;
+mod memory;
 mod pairing;
 #[cfg(windows)]
 mod pipe;
+mod record;
 mod routes;
 mod server;
+pub(crate) mod settings;
+mod store;
 #[cfg(test)]
 mod tests;
 
 pub use client::ControlClient;
+pub use memory::{FactOrigin, MemoryBook, RememberedFact, TidyUp, TidyUpUndo};
+pub use record::{RecordBook, RecordCheck, RecordLine};
 pub use server::ControlPlane;
+#[cfg(feature = "postgres")]
+pub use store::PostgresControlStore;
+#[cfg(feature = "redis")]
+pub use store::RedisControlStore;
+#[cfg(feature = "sqlite")]
+pub use store::SqliteControlStore;
+pub use store::{AreaSettings, AwayCursor, Change, ControlStore, InMemoryControlStore};
 
 /// The control plane's route paths, relative to the `/api` prefix they are served under
 /// (spec 3.2 §7.11).
@@ -171,6 +211,37 @@ pub mod paths {
     pub const PARTITIONS: &str = "/kernel/partitions";
     /// `POST`: set a partition's mode (spec 3.2 §7.8, §8.1 `partitions set-mode`).
     pub const PARTITION_MODE: &str = "/kernel/partitions/{id}/mode";
+    /// `GET`: every area's settings in force (spec 3.3 §10 K3).
+    pub const SETTINGS: &str = "/kernel/settings";
+    /// `GET`: one area's settings in force (spec 3.3 §10 K3).
+    pub const AREA_SETTINGS: &str = "/kernel/settings/{partition}";
+    /// `POST`: set or turn off an area's quiet time (spec 3.3 §10 K3).
+    pub const QUIET_TIME: &str = "/kernel/settings/{partition}/quiet-time";
+    /// `POST`: set or remove an area's daily spending limit (spec 3.3 §10 K3).
+    pub const SPENDING_LIMIT: &str = "/kernel/settings/{partition}/spending-limit";
+    /// `POST`: set how much an area's agents act alone (spec 3.3 §10 K3).
+    pub const AREA_MODE: &str = "/kernel/settings/{partition}/mode";
+    /// `GET`: "While you were away" from the viewer's cursor (spec 3.3 §10 K4).
+    pub const AWAY: &str = "/kernel/away";
+    /// `POST`: mark "While you were away" seen through a ledger row (spec 3.3 §10 K4).
+    pub const AWAY_SEEN: &str = "/kernel/away/seen";
+    /// `GET`: one line of "While you were away" with its ledger row (spec 3.3 §10 K4).
+    pub const AWAY_LINE: &str = "/kernel/away/lines/{seq}";
+    /// `GET`: what the agents remember, with provenance (spec 3.3 §10 K5).
+    pub const MEMORY: &str = "/kernel/memory";
+    /// `POST`: confirm a remembered fact: "That's right" (spec 3.3 §10 K5).
+    pub const FACT_CONFIRM: &str = "/kernel/memory/facts/{id}/confirm";
+    /// `POST`: correct a remembered fact: "Fix it" (spec 3.3 §10 K5).
+    pub const FACT_FIX: &str = "/kernel/memory/facts/{id}/fix";
+    /// `POST`: forget a remembered fact: "Forget it" (spec 3.3 §10 K5).
+    pub const FACT_FORGET: &str = "/kernel/memory/facts/{id}/forget";
+    /// `POST`: undo an overnight tidy-up of the memory (spec 3.3 §10 K5).
+    pub const MEMORY_UNDO: &str = "/kernel/memory/undo";
+    /// `GET`: the latest actions on record (spec 3.3 §10 K5).
+    pub const RECORD: &str = "/kernel/record";
+    /// `GET`: check that every action is on record and nothing was changed or deleted (spec
+    /// 3.3 §10 K5).
+    pub const RECORD_CHECK: &str = "/kernel/record/check";
 }
 
 /// Where the control plane listens and how it authenticates HTTP callers (spec 3.2 §7.11).
@@ -206,6 +277,20 @@ pub struct ControlPlaneConfig {
     pub extractor: Option<Arc<dyn RequestContextExtractor>>,
     /// Pairs devices and admits their tokens (spec 3.3 §10 K2); `None` pairs none.
     pub pairing: Option<crate::pairing::Pairing>,
+    /// Keeps the settings a person changes while the kernel runs and each device's place in
+    /// "While you were away" (spec 3.3 §10 K3, K4). Defaults to an
+    /// [`InMemoryControlStore`], so a restart brings back the start settings; `adk-rust up`
+    /// keeps them beside its other stores.
+    pub control_store: Arc<dyn ControlStore>,
+    /// What the agents remember, for the memory routes (spec 3.3 §10 K5); `None` serves
+    /// none.
+    pub memory: Option<Arc<dyn MemoryBook>>,
+    /// The record of actions and its check, for the record routes (spec 3.3 §10 K5); `None`
+    /// serves none.
+    pub record: Option<Arc<dyn RecordBook>>,
+    /// The mode each area's agents started in, which the settings routes report until the
+    /// person changes it (spec 3.3 §10 K3). A partition's record gives its own.
+    pub start_modes: BTreeMap<crate::partition::PartitionId, crate::partition::PartitionMode>,
 }
 
 impl ControlPlaneConfig {
@@ -246,6 +331,38 @@ impl ControlPlaneConfig {
     #[must_use]
     pub fn with_pairing(mut self, pairing: crate::pairing::Pairing) -> Self {
         self.pairing = Some(pairing);
+        self
+    }
+
+    /// Keeps changed settings and away cursors in `store` (spec 3.3 §10 K3, K4).
+    #[must_use]
+    pub fn with_control_store(mut self, store: Arc<dyn ControlStore>) -> Self {
+        self.control_store = store;
+        self
+    }
+
+    /// Serves the memory routes over `book` (spec 3.3 §10 K5).
+    #[must_use]
+    pub fn with_memory(mut self, book: Arc<dyn MemoryBook>) -> Self {
+        self.memory = Some(book);
+        self
+    }
+
+    /// Serves the record routes over `book` (spec 3.3 §10 K5).
+    #[must_use]
+    pub fn with_record(mut self, book: Arc<dyn RecordBook>) -> Self {
+        self.record = Some(book);
+        self
+    }
+
+    /// Reports `mode` as the mode `partition`'s agents started in (spec 3.3 §10 K3).
+    #[must_use]
+    pub fn with_start_mode(
+        mut self,
+        partition: impl Into<crate::partition::PartitionId>,
+        mode: crate::partition::PartitionMode,
+    ) -> Self {
+        self.start_modes.insert(partition.into(), mode);
         self
     }
 
@@ -303,6 +420,10 @@ impl Default for ControlPlaneConfig {
             http: None,
             extractor: None,
             pairing: None,
+            control_store: Arc::new(InMemoryControlStore::new()),
+            memory: None,
+            record: None,
+            start_modes: BTreeMap::new(),
         }
     }
 }
@@ -314,6 +435,9 @@ impl fmt::Debug for ControlPlaneConfig {
             .field("http", &self.http)
             .field("extractor", &self.extractor.is_some())
             .field("pairing", &self.pairing)
+            .field("memory", &self.memory.is_some())
+            .field("record", &self.record.is_some())
+            .field("start_modes", &self.start_modes)
             .finish()
     }
 }

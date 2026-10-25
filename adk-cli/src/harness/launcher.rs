@@ -941,21 +941,50 @@ async fn serve_resident(
     #[cfg(feature = "surface")]
     println!("  web home  http://{addr}/ui/");
     println!("  approvals: GET /api/approvals, POST /api/approvals/{{id}}/decide");
+    // One stop for the server and the kernel, registered before Ctrl+C is offered: a signal
+    // that comes at once stops both, never the kernel alone with the server left waiting.
+    let signal_error = |e: std::io::Error| AdkError::config(format!("signal handler: {e}"));
+    #[cfg(unix)]
+    let (mut interrupt, mut terminate) = {
+        use tokio::signal::unix::{SignalKind, signal};
+        (
+            signal(SignalKind::interrupt()).map_err(signal_error)?,
+            signal(SignalKind::terminate()).map_err(signal_error)?,
+        )
+    };
+    #[cfg(windows)]
+    let mut interrupt = tokio::signal::windows::ctrl_c().map_err(signal_error)?;
+    let (stop, mut stopping) = tokio::sync::watch::channel(false);
     println!("Press Ctrl+C to drain and stop\n");
     let server = tokio::spawn(async move {
         axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-            .with_graceful_shutdown(async {
-                // A Windows service is stopped by its manager, not by a signal (spec 3.2
-                // §10 W3); elsewhere `stop_requested` never resolves.
-                tokio::select! {
-                    () = shutdown_signal() => {}
-                    () = adk_kernel::service::stop_requested() => {}
-                }
+            .with_graceful_shutdown(async move {
+                let _ = stopping.wait_for(|stop| *stop).await;
             })
             .await
     });
-    // Both wait for the same stop: the server stops accepting, the kernel drains.
-    let stopped = kernel.shutdown_on_signal().await.map_err(AdkError::from);
+    // A Windows service is stopped by its manager, not by a signal (spec 3.2 §10 W3);
+    // elsewhere `stop_requested` never resolves.
+    #[cfg(unix)]
+    tokio::select! {
+        _ = interrupt.recv() => {}
+        _ = terminate.recv() => {}
+        () = adk_kernel::service::stop_requested() => {}
+    }
+    #[cfg(windows)]
+    tokio::select! {
+        _ = interrupt.recv() => {}
+        () = adk_kernel::service::stop_requested() => {}
+    }
+    #[cfg(not(any(unix, windows)))]
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        () = adk_kernel::service::stop_requested() => {}
+    }
+    tracing::info!("shutdown signal received; draining the kernel");
+    // The server stops accepting while the kernel drains, then stops.
+    let _ = stop.send(true);
+    let stopped = kernel.stop().await.map_err(AdkError::from);
     let served = server.await.map_err(|e| AdkError::config(format!("server task failed: {e}")))?;
     served.map_err(|e| AdkError::config(format!("server error: {e}")))?;
     stopped
