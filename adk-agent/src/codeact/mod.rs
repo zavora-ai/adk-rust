@@ -57,12 +57,16 @@
 //! A held call without a decision is not put to the run's
 //! [`ToolConfirmationHandler`](adk_core::ToolConfirmationHandler) again once it waits
 //! in the run's approval store, for example after the handler timed out: it resumes
-//! only on a decision recorded for it (spec 3.3 §7.3). A run that brings a new
+//! only on a decision recorded for it (spec 3.3 §7.3), checked under the arguments it
+//! was held with, after plugin and screen rewrites. A run that brings a new
 //! message while the call waits answers it in a turn of its own, which cannot
 //! suspend and keeps the waiting call's checkpoint in session state; a call in that
 //! turn that needs a decision is refused into the script and withdrawn
 //! ([`withdraw_held_call`](adk_core::withdraw_held_call)), since only one call waits
-//! at a time (§7.4).
+//! at a time (§7.4). An identical call that turn decides answers the waiting call,
+//! whose checkpoint is then cleared. A run that resumes the call on its decision gives
+//! the message it brought to the model once the resumed script hands back, and a
+//! runtime that cannot pause leaves no call waiting.
 //!
 //! # Tool side effects
 //!
