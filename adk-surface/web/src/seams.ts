@@ -4,26 +4,36 @@
  * shows what exists read-only. The routes arrive with the kernel work packages named below;
  * wiring one is a client implementing the interface, with no change to the screens.
  */
-import type { Mode } from "./generated/api";
+import type { AreaMode, AreaSettings, AwayPage, AwayRecord, ChannelWaiting, QuietWindow } from "./kernel";
 
-/** K3: quiet time, the daily spending limit and the mode, changed while the kernel runs. */
+/**
+ * K3: each area's quiet time, daily spending limit and mode, read and changed while the kernel
+ * runs (spec 3.3 §10 K3). Only the person changes them: the kernel refuses a caller without the
+ * `operator` scope and any paired device's token, and the page shows its answer.
+ */
 export interface LimitsSeam {
-  setQuietTime(start: string, end: string): Promise<void>;
-  setDailyLimit(microUsd: number | null): Promise<void>;
-  setMode(mode: Mode): Promise<void>;
+  /** Every area's settings in force; `undefined` when the server serves no kernel settings. */
+  areas(): Promise<AreaSettings[] | undefined>;
+  /** One area's settings in force, read just before a change so its old value is the kernel's. */
+  area(partition: string): Promise<AreaSettings>;
+  /** Sets the area's quiet time; `null` turns it off. Resolves to the area after the change. */
+  setQuietTime(partition: string, window: QuietWindow | null): Promise<AreaSettings>;
+  /** Sets the area's daily spending limit in micro-USD; `null` removes it. */
+  setSpendingLimit(partition: string, microUsd: number | null): Promise<AreaSettings>;
+  setMode(partition: string, mode: AreaMode): Promise<AreaSettings>;
 }
 
-/** K4: "While you were away" over the `/proc` ledger, with a cursor per device. */
+/**
+ * K4: "While you were away" over the `/proc` ledger, with a cursor per device (spec 3.3 §10 K4).
+ * Reading never moves the cursor; only `markSeen` does.
+ */
 export interface WhileAwaySeam {
-  read(since: string): Promise<WhileAway>;
-}
-
-/** What K4 adds to the engine's briefing. */
-export interface WhileAway {
-  /** Nothing proactive ran and nothing notified during quiet time. */
-  quietRespected: boolean;
-  /** Where each line's record opens, by the line's place in the ledger. */
-  records: Record<number, string>;
+  /** Everything after this viewer's cursor; `undefined` when the server keeps no ledger. */
+  read(): Promise<AwayPage | undefined>;
+  /** Marks every line through ledger row `through` seen. */
+  markSeen(through: number): Promise<void>;
+  /** One line's record. */
+  record(seq: number): Promise<AwayRecord>;
 }
 
 /** How a remembered fact came to be (spec 3.3 §8.1 Memory). */
@@ -90,6 +100,13 @@ export interface DevicesSeam {
   remove(id: string): Promise<void>;
   /** Starts pairing; resolves to the code the person enters on the device. */
   pair(): Promise<string>;
+  /** Chat accounts that asked to pair and wait for their code to be entered (K1). */
+  waiting?(): Promise<ChannelWaiting[]>;
+  /**
+   * Pairs the chat account that was sent `code`, as `adk-rust pair accept <code>` does (K1):
+   * the kernel takes it from the person only, with the `operator` scope.
+   */
+  accept?(code: string): Promise<void>;
 }
 
 /** Every seam the page renders through when given. */

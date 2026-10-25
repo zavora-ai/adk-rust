@@ -1103,6 +1103,79 @@ pre {
   font-size: 15px;
 }
 
+/* Mark as seen sits under the counts, apart from the lines it marks. */
+.briefing-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  margin-top: 22px;
+  font-size: 14.5px;
+}
+
+.briefing-more {
+  margin-top: 14px;
+  font-size: 14.5px;
+}
+
+/* A line's record, opened in place under it. */
+.record-details {
+  display: grid;
+  gap: 6px;
+  padding: 10px 14px;
+  border-left: 2px solid var(--border);
+  color: var(--text-2);
+  font-size: 14.5px;
+}
+
+/* The morning briefing on Threads: the start of "While you were away", once quiet time ends. */
+.briefing-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.briefing-card-since {
+  color: var(--accent);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.briefing-facts {
+  display: grid;
+  gap: 4px;
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.briefing-facts strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.briefing-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.briefing-card-actions .button {
+  min-height: 38px;
+  padding: 0 14px;
+  font-size: 15px;
+}
+
+.briefing-counts {
+  font-size: 14px;
+}
+
 .card {
   padding: 22px;
   border: 1px solid var(--border);
@@ -1301,9 +1374,73 @@ button.segment {
   gap: 12px;
 }
 
+.setting-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
 .setting-label {
   color: var(--text-2);
   font-size: 13.5px;
+}
+
+.setting-sub {
+  color: var(--text-2);
+  font-size: 13.5px;
+}
+
+.setting-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.setting-fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px 10px;
+  font-size: 14px;
+}
+
+.setting-fields label {
+  color: var(--text-2);
+}
+
+.setting-fields input {
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+}
+
+.setting-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* A change shows what the setting was and what it is now, as the kernel recorded it. */
+.change-note {
+  margin-top: 4px;
+  text-wrap: balance;
+  color: var(--pill-decided);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.segmented-areas {
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+}
+
+.pair-chat {
+  display: grid;
+  gap: 6px;
 }
 
 .setting-value {

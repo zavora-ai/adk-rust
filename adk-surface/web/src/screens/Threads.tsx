@@ -10,7 +10,9 @@ import { Roster } from "../components/Roster";
 import { Thread } from "../components/Thread";
 import { emptyThread, followFeed, wakeable } from "../feed";
 import type { ThreadState } from "../feed";
-import { hhmm } from "../format";
+import { briefingDue, briefingShown, quietWindows, rememberBriefing } from "../away";
+import { dayAndTime, dollars, hhmm } from "../format";
+import type { AreaSettings, AwayPage } from "../kernel";
 import { labels } from "../labels";
 import type { Planned } from "../plan";
 
@@ -38,6 +40,8 @@ export function Threads({
   send,
   onChanged,
   onToday,
+  awayPage,
+  areas,
   onDeveloper,
   takeOver,
   selected,
@@ -57,6 +61,10 @@ export function Threads({
   send: Send;
   onChanged: () => void;
   onToday: () => void;
+  /** The kernel's "While you were away", which the morning briefing shows the start of. */
+  awayPage?: AwayPage;
+  /** Each area's settings, for when quiet time ends. */
+  areas?: AreaSettings[];
   onDeveloper: () => void;
   takeOver?: TakeOverSeam;
   /** The agent shown, once one is. */
@@ -207,6 +215,7 @@ export function Threads({
         )}
       </main>
       <aside className="side">
+        <MorningBriefing away={awayPage} areas={areas} status={status} onToday={onToday} />
         <DecisionList decisions={decisions} onOpen={onOpenDecision} />
         <section className="side-section" aria-labelledby="coming-up-heading">
           <h2 id="coming-up-heading" className="side-heading">
@@ -236,5 +245,63 @@ export function Threads({
         </section>
       </aside>
     </div>
+  );
+}
+
+/**
+ * The morning briefing (spec 3.3 §5.1, §12 phase 2): once quiet time ends, the start of "While
+ * you were away" — what was spent, whether quiet time was kept, what waits and what happened —
+ * from the same page Today reads. It shows once for each end of quiet time: **See what
+ * happened** opens Today and **Not now** puts it away; neither marks anything seen.
+ */
+function MorningBriefing({
+  away,
+  areas,
+  status,
+  onToday,
+}: {
+  away?: AwayPage;
+  areas?: AreaSettings[];
+  status?: StatusLine;
+  onToday: () => void;
+}) {
+  const [shown, setShown] = useState(briefingShown);
+  const end = briefingDue(away, quietWindows(areas, status), new Date(), shown);
+  if (!away || !end) return null;
+  const putAway = () => {
+    rememberBriefing(end);
+    setShown(end.toISOString());
+  };
+  const counts = labels.countsLine(away.counts);
+  return (
+    <section className="briefing-card" aria-labelledby="morning-heading">
+      <p className="briefing-card-since">{labels.since(dayAndTime(new Date(away.since)))}</p>
+      <h2 id="morning-heading" className="side-heading">
+        {labels.whileYouWereAway}
+      </h2>
+      <ul className="briefing-facts">
+        <li>
+          <strong>{dollars(away.spentMicroUsd)}</strong> {labels.spentWord}
+        </li>
+        <li>{away.quietTime.respected ? labels.quietRespectedLine : labels.quietNotKeptLine}</li>
+        <li>{labels.waitingLine(away.waiting)}</li>
+        {counts && <li className="briefing-counts">{counts}</li>}
+      </ul>
+      <div className="briefing-card-actions">
+        <button
+          type="button"
+          className="button button-primary"
+          onClick={() => {
+            putAway();
+            onToday();
+          }}
+        >
+          {labels.seeWhatHappened}
+        </button>
+        <button type="button" className="button button-quiet" onClick={putAway}>
+          {labels.notNow}
+        </button>
+      </div>
+    </section>
   );
 }

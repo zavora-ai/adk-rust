@@ -60,6 +60,10 @@ export function App({
   const status = usePoll(() => client.status());
   const agents = usePoll(() => client.agents());
   const decisions = usePoll(() => client.decisions());
+  // "While you were away" and each area's settings, read once for every section that shows
+  // them, so Today, the morning briefing and the status line never disagree (spec 3.3 §5.1).
+  const away = usePoll(async () => (seams.whileAway ? await seams.whileAway.read() : undefined), 10_000);
+  const areas = usePoll(async () => (seams.limits ? await seams.limits.areas() : undefined), 10_000);
   const kernel = usePoll(async () => {
     const [processes, agenda] = await Promise.all([
       client.processes().catch(() => undefined),
@@ -72,12 +76,16 @@ export function App({
   const { refresh: refreshAgents } = agents;
   const { refresh: refreshDecisions } = decisions;
   const { refresh: refreshKernel } = kernel;
+  const { refresh: refreshAway } = away;
+  const { refresh: refreshAreas } = areas;
   const refresh = useCallback(() => {
     void refreshStatus();
     void refreshAgents();
     void refreshDecisions();
     void refreshKernel();
-  }, [refreshStatus, refreshAgents, refreshDecisions, refreshKernel]);
+    void refreshAway();
+    void refreshAreas();
+  }, [refreshStatus, refreshAgents, refreshDecisions, refreshKernel, refreshAway, refreshAreas]);
 
   const send = useCallback(
     async (command: Command, origin: Origin) => {
@@ -150,6 +158,7 @@ export function App({
       <Header
         section={section}
         status={unreachable ? undefined : status.value}
+        areas={unreachable ? undefined : areas.value}
         decisions={unreachable ? 0 : (decisions.value?.length ?? 0)}
         theme={theme}
         onNavigate={navigate}
@@ -182,6 +191,8 @@ export function App({
             send={send}
             onChanged={refresh}
             onToday={() => navigate("today")}
+            awayPage={away.value}
+            areas={areas.value}
             onDeveloper={() => navigate("developer")}
             takeOver={takeOver}
             selected={selected}
@@ -203,6 +214,9 @@ export function App({
             agents={rows}
             status={status.value}
             agenda={kernel.value?.agenda}
+            away={away.value}
+            areas={areas.value}
+            onAwayChanged={() => void refreshAway()}
             routinesToday={routinesToday}
             canAddRoutine={kernel.value?.processes !== undefined}
             seams={seams}
@@ -220,7 +234,9 @@ export function App({
             }}
           />
         )}
-        {section === "memory" && <MemoryRules client={client} status={status.value} seams={seams} onChanged={refresh} />}
+        {section === "memory" && (
+          <MemoryRules client={client} status={status.value} areas={areas.value} seams={seams} onChanged={refresh} />
+        )}
         {section === "developer" && <Developer client={client} sessionId={session} />}
       </div>
     </div>

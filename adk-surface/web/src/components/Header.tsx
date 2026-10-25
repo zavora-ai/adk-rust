@@ -1,5 +1,7 @@
 import type { MouseEvent } from "react";
 import type { Origin, StatusLine } from "../generated/api";
+import type { AreaSettings } from "../kernel";
+import { areaStatus } from "../settings";
 import { labels } from "../labels";
 import { originOf } from "../origin";
 import type { Section } from "../route";
@@ -20,6 +22,7 @@ const tabs: Array<{ section: Section; label: string }> = [
 export function Header({
   section,
   status,
+  areas,
   decisions,
   theme,
   onNavigate,
@@ -29,6 +32,8 @@ export function Header({
 }: {
   section: Section;
   status?: StatusLine;
+  /** Each area's settings in force (spec 3.3 §10 K3): with one area, the status line reads them. */
+  areas?: AreaSettings[];
   decisions: number;
   theme: Theme;
   onNavigate: (section: Section) => void;
@@ -36,10 +41,14 @@ export function Header({
   onStop: (origin: Origin) => void;
   onResume: (origin: Origin) => void;
 }) {
+  // One area's settings change while the kernel runs; the engine's line holds the ones it
+  // started with, so the kernel's are shown once read.
   const line =
     section === "memory"
       ? [labels.keptOnYourComputer]
-      : [status?.mode?.status, status?.spend?.text, status?.quiet?.text].filter((part): part is string => !!part);
+      : areas?.length === 1
+        ? areaStatus(areas[0], new Date())
+        : [status?.mode?.status, status?.spend?.text, status?.quiet?.text].filter((part): part is string => !!part);
   const themeLabel =
     theme === "system" ? labels.themeSystem : theme === "light" ? labels.themeLight : labels.themeDark;
   const go = (target: Section) => (event: MouseEvent<HTMLAnchorElement>) => {

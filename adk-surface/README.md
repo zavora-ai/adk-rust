@@ -104,7 +104,7 @@ A chat card carries the agent, the risk and a short summary, never the call's ar
 | `GET /surface/sessions/{session}/queued` | What the caller typed while a decision of the session was open |
 | `GET /surface/agents` | The roster |
 | `GET /surface/status` | The status line |
-| `GET /surface/briefing` | "While you were away" |
+| `GET /surface/briefing` | "While you were away": the events the kernel's `GET /kernel/away` lists, from the `/proc` ledger |
 | `POST /surface/commands` | A command with its surface and origin |
 | `GET /surface/openapi.json` | The OpenAPI 3.1 document |
 | `POST /surface/decisions/{id}/take-over` | The secret a person typed, for a take-over card (`web::take_over_router`, beside a harness that takes over) |
@@ -119,9 +119,13 @@ The page is a React, Vite and TypeScript app in `web/`, built into `assets/web` 
 by the `web` feature (§6.1, §10 S1). It reads and acts only through the routes above and the
 kernel and harness routes beside them, and holds no state a reload cannot rebuild. `adk-rust serve` and `adk-rust up` mount it. Every answer carries the version the card
 showed, a conflict renders as "already decided", Enter and Esc never decide, and typing while
-a decision is open is queued (§7.4). Controls whose kernel routes do not exist yet (quiet time,
-the spending limit and the mode; memory; the record check) render read-only through typed
-seams in `web/src/seams.ts`.
+a decision is open is queued (§7.4). **Today** and the **morning briefing** read the kernel's
+"While you were away" (`GET /api/kernel/away`, §10 K4): one line per event with its record,
+moved on only by **Mark as seen**. **What your agents can do** reads and changes each area's
+quiet time, daily spending limit and mode (`/api/kernel/settings`, §10 K3), and **Where you
+can say yes from** pairs a chat account from its code (§10 K1). Controls whose kernel routes
+the page does not read yet (memory; the record check) render read-only through typed seams in
+`web/src/seams.ts`.
 
 ```bash
 cd adk-surface/web

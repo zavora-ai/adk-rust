@@ -20,3 +20,11 @@ export function dayMonth(at: Date): string {
 export function sameDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
+
+/**
+ * When something started: "22:04" within the last day, as the spec's "Since 22:04" reads the
+ * evening before; "23 October, 22:04" further back, so an older time never reads as today's.
+ */
+export function dayAndTime(at: Date, now: Date = new Date()): string {
+  return now.getTime() - at.getTime() < 24 * 3_600_000 ? hhmm(at) : `${dayMonth(at)}, ${hhmm(at)}`;
+}
