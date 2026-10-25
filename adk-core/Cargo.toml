@@ -34,6 +34,7 @@ hmac = { version = "0.12", optional = true }
 sha2 = { workspace = true }
 base64 = { version = "0.22", optional = true }
 reqwest = { workspace = true, optional = true }
+http = { version = "1", optional = true }
 
 [features]
 default = []
@@ -46,6 +47,9 @@ cron = ["dep:cron", "dep:chrono-tz"]
 webhooks = ["dep:hmac", "dep:base64"]
 # Signed outbound webhook delivery with retries and an egress guard (`adk_core::webhook_delivery`).
 webhook-delivery = ["webhooks", "dep:reqwest", "tokio/net"]
+# The `RequestContextExtractor` trait an HTTP server authenticates requests through
+# (`adk_core::request_context`); here so `adk-auth` implements it without depending on `adk-server`.
+auth-bridge = ["dep:http"]
 
 [dev-dependencies]
 # Path-only self dependency, so the crate's own tests run the conformance suites.

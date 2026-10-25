@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, SiteError};
+use crate::lanes::KindLanes;
 use crate::translation::TranslationPolicy;
 
 /// The `security.txt` fields (RFC 9116).
@@ -109,6 +110,9 @@ pub struct SiteConfig {
     /// The charter version releases are built under.
     #[serde(default)]
     pub charter_version: u32,
+    /// The lane of each field per content kind: live, stream, or released (spec 3.5 §7.8.3).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lanes: BTreeMap<ContentKind, KindLanes>,
 }
 
 fn default_home_sections() -> Vec<ContentKind> {
@@ -148,6 +152,7 @@ impl SiteConfig {
             strings: BTreeMap::new(),
             translation: TranslationPolicy::default(),
             charter_version: 0,
+            lanes: BTreeMap::new(),
         }
     }
 
@@ -169,7 +174,8 @@ impl SiteConfig {
     /// # Errors
     ///
     /// [`SiteError::InvalidConfig`] for an empty name, domain or language list, a duplicate
-    /// language, a domain with a scheme or path, or a page size of zero.
+    /// language, a domain with a scheme or path, a page size of zero, or a lane declaration
+    /// that serves a claim outside the release lane (A-I26) or names a field in two lanes.
     pub fn validate(&self) -> Result<()> {
         let fail = |m: &str| Err(SiteError::InvalidConfig(m.to_string()));
         if self.name.trim().is_empty() {
@@ -187,6 +193,15 @@ impl SiteConfig {
         }
         if self.page_size == 0 {
             return fail("page_size must be at least 1");
+        }
+        if let Some(violation) = crate::lanes::config_violations(self).into_iter().next() {
+            return fail(&violation.to_string());
+        }
+        if let Some((kind, field)) = crate::lanes::overlapping(self).into_iter().next() {
+            return fail(&format!(
+                "[lanes.{}] declares '{field}' both volatile and stream; give it one lane",
+                crate::content::kind_name(kind)
+            ));
         }
         Ok(())
     }

@@ -73,6 +73,9 @@ pub mod approvals;
 #[cfg(feature = "agent-engine")]
 pub mod agent_engine;
 
+#[cfg(feature = "awp")]
+pub mod awp;
+
 #[cfg(feature = "agent-engine")]
 pub use agent_engine::{
     AgentEngineOptions, AgentEngineState, agent_engine_router, build_agent_engine_app,
