@@ -12,6 +12,7 @@
 //! | `GET /api/rules/suggestions/{approvalId}` | The rules a call held in the caller's session offers |
 //! | `POST /api/rules` | `{"approvalId": "apr_…", "suggestion": 0}` remembers a suggestion; `{"tool": "bash", "prefix": "cargo test"}` creates an explicit rule. Optional: `"decision": {"kind": "deny", "reason": "…"}`, `"expiresInHours"`; explicit rules also take `"pathWithin"` and `"sessionId"` |
 //! | `DELETE /api/rules/{id}` | Revokes one of the caller's rules |
+//! | `POST /api/rules/{id}/extend` | `{"expiresAt": "2026-11-30T00:00:00Z"}` moves the end of one of the caller's rules later ("Extend", spec 3.3 §8.1), recorded as `harness.rule.extended` |
 
 use std::sync::Arc;
 
@@ -28,7 +29,7 @@ use adk_harness::{
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get};
+use axum::routing::{delete, get, post};
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -51,6 +52,7 @@ pub(crate) fn rules_router(endpoints: RuleEndpoints) -> Router {
     Router::new()
         .route("/rules", get(list).post(create))
         .route("/rules/{id}", delete(revoke))
+        .route("/rules/{id}/extend", post(extend))
         .route("/rules/suggestions/{approval_id}", get(suggestions))
         .with_state(endpoints)
 }
@@ -372,6 +374,42 @@ async fn revoke(
     };
     match endpoints.agent.revoke_rule(&endpoints.app_name, &user, &id, SURFACE).await {
         Ok(Some(rule)) => Json(json!({ "revoked": rule })).into_response(),
+        Ok(None) => problem(
+            ErrorCategory::NotFound,
+            "harness.rule.not_found",
+            format!("you have no rule '{id}'"),
+        ),
+        Err(error) => failed(&error),
+    }
+}
+
+/// `POST /api/rules/{id}/extend` body. The rule's subject is the caller, never a body field.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExtendRule {
+    /// The rule's new end: later than its current end and than now.
+    expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// `POST /api/rules/{id}/extend`: moves the end of one of the caller's rules later (spec 3.3
+/// §8.1 "Allowed without asking — Extend"); another user's rule, or one revoked meanwhile,
+/// is `404`.
+async fn extend(
+    State(endpoints): State<RuleEndpoints>,
+    Extension(caller): Extension<Option<RequestContext>>,
+    Path(id): Path<String>,
+    Json(body): Json<ExtendRule>,
+) -> Response {
+    let user = match operator(caller) {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    match endpoints
+        .agent
+        .extend_rule(&endpoints.app_name, &user, &id, body.expires_at, SURFACE)
+        .await
+    {
+        Ok(Some(rule)) => Json(json!({ "rule": rule })).into_response(),
         Ok(None) => problem(
             ErrorCategory::NotFound,
             "harness.rule.not_found",

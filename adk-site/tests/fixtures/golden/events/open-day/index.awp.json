@@ -1,0 +1,30 @@
+{
+  "path": "/events/open-day/",
+  "releaseSeq": 1,
+  "kind": "event",
+  "language": "en",
+  "title": "Open day",
+  "resource": {
+    "id": "events/open-day/en",
+    "location": "Nairobi showroom",
+    "startsAt": "2026-11-14T09:00:00Z",
+    "title": "Open day",
+    "url": "https://example.com/events/open-day/"
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "Event",
+    "inLanguage": "en",
+    "location": {
+      "@type": "Place",
+      "name": "Nairobi showroom"
+    },
+    "name": "Open day",
+    "startDate": "2026-11-14T09:00:00Z",
+    "url": "https://example.com/events/open-day/"
+  },
+  "markdown": "https://example.com/events/open-day/index.md"
+}

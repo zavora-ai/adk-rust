@@ -1,16 +1,20 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { Briefing, StatusLine } from "../generated/api";
+import type { AgentRow, Briefing, StatusLine } from "../generated/api";
 import type { HomeClient } from "../client";
 import { problemText } from "../client";
+import { AreaRoster, areaAgents } from "../components/AreaRoster";
 import { Icon } from "../components/Icon";
 import { Pill } from "../components/Pill";
 import { dayMonth, dollars, hhmm, parseDollars, sameDay } from "../format";
-import type { AreaSettings, ChannelWaiting, QuietWindow, StandingRule } from "../kernel";
+import type { AreaSettings, ChannelWaiting, KernelRecordLine, QuietWindow, StandingRule } from "../kernel";
 import { accountName, allows, channelName } from "../kernel";
 import { labels, modes, words } from "../labels";
-import type { Device, MemoryFact, RecordCheck, RecordLine, Seams, TidyUp } from "../seams";
-import { deviceOffset, onThisDevice } from "../away";
+import { undoText } from "../memory";
+import { RECORD_READ, recentLines } from "../record";
+import { dateValue, earliestExtension, endOfDay, ended, ruleSentence, suggestedExtension } from "../rules";
+import type { AgentSpend, Device, MemoryFact, RecordCheck, RecordLine, Seams, TidyUp } from "../seams";
+import { onThisDevice, typedWindow } from "../away";
 import { areaName, kernelMode, limitValue, modeOf, modeValue, quietValue, windowText } from "../settings";
 
 const provenance = {
@@ -28,6 +32,7 @@ export function MemoryRules({
   client,
   status,
   areas,
+  agents = [],
   seams,
   onChanged,
 }: {
@@ -35,6 +40,8 @@ export function MemoryRules({
   status?: StatusLine;
   /** Each area's settings in force (spec 3.3 §10 K3), when the kernel serves them. */
   areas?: AreaSettings[];
+  /** The roster, to name agents and draw their avatars as Threads does. */
+  agents?: AgentRow[];
   seams: Seams;
   onChanged: () => void;
 }) {
@@ -46,8 +53,8 @@ export function MemoryRules({
       <p className="subhead subhead-memory">{labels.memorySubhead}</p>
       <div className="memory-grid">
         <Remember seams={seams} />
-        <CanDo client={client} status={status} areas={areas} seams={seams} onChanged={onChanged} />
-        <Did client={client} seams={seams} />
+        <CanDo client={client} status={status} areas={areas} agents={agents} seams={seams} onChanged={onChanged} />
+        <Did client={client} agents={agents} seams={seams} />
       </div>
     </main>
   );
@@ -55,8 +62,11 @@ export function MemoryRules({
 
 function Remember({ seams }: { seams: Seams }) {
   const [facts, setFacts] = useState<MemoryFact[]>([]);
+  // The agents keep long-term memory: the kernel's memory route has a book to read.
+  const [kept, setKept] = useState(true);
   const [tidyUp, setTidyUp] = useState<TidyUp>();
   const [problem, setProblem] = useState("");
+  const [note, setNote] = useState("");
   const [fixing, setFixing] = useState<string>();
   const [fixText, setFixText] = useState("");
   const fixField = useId();
@@ -66,21 +76,27 @@ function Remember({ seams }: { seams: Seams }) {
     memory
       ?.facts()
       .then((read) => {
-        setFacts(read.facts);
-        setTidyUp(read.tidyUp);
+        setKept(read !== undefined);
+        setFacts(read?.facts ?? []);
+        setTidyUp(read?.tidyUp);
       })
       .catch((error: unknown) => setProblem(problemText(error)));
   useEffect(() => {
     void load();
   }, [memory]);
 
-  async function act(action: () => Promise<void>) {
+  /** Runs one correction, reads the memory again, and says what became of it (spec 3.3 §8 "Name the outcome"). */
+  async function act<T>(action: () => Promise<T>, said?: (result: T) => string): Promise<boolean> {
     setProblem("");
+    setNote("");
     try {
-      await action();
+      const result = await action();
       await load();
+      if (said) setNote(said(result));
+      return true;
     } catch (error) {
       setProblem(problemText(error));
+      return false;
     }
   }
 
@@ -92,7 +108,7 @@ function Remember({ seams }: { seams: Seams }) {
       {tidyUp && memory && (
         <div className="tidy-up">
           <p>{tidyUp.text}</p>
-          <button type="button" className="button button-secondary" onClick={() => void act(() => memory.undo(tidyUp.id))}>
+          <button type="button" className="button button-secondary" onClick={() => void act(() => memory.undo(tidyUp.id), undoText)}>
             {labels.undo}
           </button>
         </div>
@@ -102,8 +118,13 @@ function Remember({ seams }: { seams: Seams }) {
           {problem}
         </p>
       )}
+      {note && (
+        <p className="change-note" role="status">
+          {note}
+        </p>
+      )}
       {facts.length === 0 ? (
-        <p className="card-empty">{labels.rememberEmpty}</p>
+        <p className="card-empty">{kept ? labels.rememberEmpty : labels.memoryOff}</p>
       ) : (
         <ul className="bordered">
           {facts.map((fact) => (
@@ -113,11 +134,14 @@ function Remember({ seams }: { seams: Seams }) {
                 <Pill kind={provenance[fact.provenance].kind}>{provenance[fact.provenance].text}</Pill>
                 {fact.provenance === "aGuess" && fact.noticedBy && <span>{labels.noticedThis(fact.noticedBy)}</span>}
               </p>
-              {fact.provenance === "aGuess" && memory && fixing !== fact.id && (
+              {/* Every fact can be fixed or forgotten; only a guess can be confirmed. */}
+              {memory && fixing !== fact.id && (
                 <p className="row-actions">
-                  <button type="button" className="link link-accent" onClick={() => void act(() => memory.confirm(fact.id))}>
-                    {labels.thatsRight}
-                  </button>
+                  {fact.provenance === "aGuess" && (
+                    <button type="button" className="link link-accent" onClick={() => void act(() => memory.confirm(fact.id))}>
+                      {labels.thatsRight}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="link"
@@ -128,7 +152,11 @@ function Remember({ seams }: { seams: Seams }) {
                   >
                     {labels.fixIt}
                   </button>
-                  <button type="button" className="link" onClick={() => void act(() => memory.forget(fact.id))}>
+                  <button
+                    type="button"
+                    className="link"
+                    onClick={() => void act(() => memory.forget(fact.id), () => labels.forgotten)}
+                  >
                     {labels.forgetIt}
                   </button>
                 </p>
@@ -138,17 +166,21 @@ function Remember({ seams }: { seams: Seams }) {
                   className="inline-form"
                   onSubmit={(event) => {
                     event.preventDefault();
-                    void act(() => memory.fix(fact.id, fixText)).then(() => setFixing(undefined));
+                    const text = fixText.trim();
+                    if (!text) return;
+                    void act(() => memory.fix(fact.id, text), () => labels.fixed).then((done) => {
+                      if (done) setFixing(undefined);
+                    });
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Escape") setFixing(undefined);
                   }}
                 >
                   <label htmlFor={fixField} className="visually-hidden">
-                    {labels.fixIt}
+                    {labels.fixedText}
                   </label>
                   <input id={fixField} value={fixText} onChange={(event) => setFixText(event.target.value)} autoFocus />
-                  <button type="submit" className="button button-secondary">
+                  <button type="submit" className="button button-secondary" disabled={!fixText.trim()}>
                     {labels.fixIt}
                   </button>
                 </form>
@@ -165,12 +197,14 @@ function CanDo({
   client,
   status,
   areas,
+  agents,
   seams,
   onChanged,
 }: {
   client: HomeClient;
   status?: StatusLine;
   areas?: AreaSettings[];
+  agents: AgentRow[];
   seams: Seams;
   onChanged: () => void;
 }) {
@@ -179,7 +213,12 @@ function CanDo({
   const [chosen, setChosen] = useState<string>();
   // What each change was and became, by area and setting, as the kernel recorded it.
   const [notes, setNotes] = useState<Record<string, string>>({});
+  // The rule whose end is being moved, and what each extension changed.
+  const [extending, setExtending] = useState<string>();
+  const [extended, setExtended] = useState<Record<string, string>>({});
+  const [spending, setSpending] = useState<AgentSpend[]>();
   const limits = seams.limits;
+  const roster = seams.roster;
   const kernelAreas = limits && areas && areas.length > 0 ? areas : undefined;
   const area = kernelAreas?.find((candidate) => candidate.partition === chosen) ?? kernelAreas?.[0];
 
@@ -187,6 +226,35 @@ function CanDo({
   useEffect(() => {
     void load();
   }, [client]);
+  // Spending is read with the areas' settings, so an agent's spend and its area's "spent
+  // today" come from the same moment of the kernel's daily totals.
+  useEffect(() => {
+    let live = true;
+    void roster
+      ?.spending()
+      .then((value) => live && setSpending(value))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [roster, areas]);
+
+  /** "Extend": moves a rule's end later, then shows what it was and is (spec 3.3 §8.1). */
+  async function extend(rule: StandingRule, until: Date): Promise<boolean> {
+    if (!client.extendRule) return false;
+    setProblem("");
+    try {
+      const after = await client.extendRule(rule.id, until.toISOString());
+      const was = rule.expiresAt ? labels.untilWords(dayMonth(new Date(rule.expiresAt))) : labels.noEndDate;
+      const now = after.expiresAt ? labels.untilWords(dayMonth(new Date(after.expiresAt))) : labels.noEndDate;
+      setExtended((all) => ({ ...all, [rule.id]: labels.wasNow(was, now) }));
+      await load();
+      return true;
+    } catch (error) {
+      setProblem(problemText(error));
+      return false;
+    }
+  }
 
   async function act(action: () => Promise<void>) {
     setProblem("");
@@ -302,17 +370,20 @@ function CanDo({
           ) : (
             <ul className="bordered">
               {allowed.map((rule) => (
-                <li key={rule.id} className="rule">
-                  <p className="rule-text">{rule.label}</p>
-                  <p className="row-actions">
-                    <span className="muted">
-                      {rule.expiresAt ? labels.until(dayMonth(new Date(rule.expiresAt))) : labels.noEndDate}
-                    </span>
-                    <button type="button" className="link" onClick={() => void act(() => client.revokeRule(rule.id))}>
-                      {labels.stopAllowing}
-                    </button>
-                  </p>
-                </li>
+                <RuleRow
+                  key={rule.id}
+                  rule={rule}
+                  text={ruleSentence(rule, agents)}
+                  note={extended[rule.id]}
+                  editing={extending === rule.id}
+                  canExtend={!!client.extendRule}
+                  onExtend={() => setExtending(rule.id)}
+                  onCancel={() => setExtending(undefined)}
+                  onSave={async (until) => {
+                    if (await extend(rule, until)) setExtending(undefined);
+                  }}
+                  onStop={() => void act(() => client.revokeRule(rule.id))}
+                />
               ))}
             </ul>
           )}
@@ -378,7 +449,110 @@ function CanDo({
           />
         </ul>
       )}
+      {spending && (
+        <AreaRoster
+          agents={areaAgents(area?.partition ?? "default", spending, agents, !kernelAreas || kernelAreas.length < 2)}
+          label={area && areaName(area.partition) ? labels.agentsTodayIn(areaName(area.partition)!) : labels.agentsToday}
+        />
+      )}
     </section>
+  );
+}
+
+/**
+ * One rule allowed without asking: what it lets agents do, its end date, **Extend** for a rule
+ * with one, and **Stop allowing** (spec 3.3 §8.1). An ended rule says so and can be extended
+ * again; Extend opens a date in place, and Esc closes it without changing anything.
+ */
+function RuleRow({
+  rule,
+  text,
+  note,
+  editing,
+  canExtend,
+  onExtend,
+  onCancel,
+  onSave,
+  onStop,
+}: {
+  rule: StandingRule;
+  text: string;
+  note?: string;
+  editing: boolean;
+  canExtend: boolean;
+  onExtend: () => void;
+  onCancel: () => void;
+  onSave: (until: Date) => Promise<void>;
+  onStop: () => void;
+}) {
+  const textId = useId();
+  const field = useId();
+  const now = new Date();
+  const [value, setValue] = useState(() => dateValue(suggestedExtension(rule, now)));
+  const min = dateValue(earliestExtension(rule, now));
+  const until = endOfDay(value);
+  const valid = until !== undefined && value >= min;
+  const end = rule.expiresAt ? new Date(rule.expiresAt) : undefined;
+  return (
+    <li className="rule">
+      <p className="rule-text" id={textId}>
+        {text}
+      </p>
+      {editing ? (
+        <form
+          className="setting-form"
+          aria-describedby={textId}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (valid) void onSave(until);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") onCancel();
+          }}
+        >
+          <div className="setting-fields">
+            <label htmlFor={field}>{labels.extendUntil}</label>
+            <input
+              id={field}
+              type="date"
+              min={min}
+              value={value}
+              aria-invalid={!valid}
+              onChange={(event) => setValue(event.target.value)}
+              autoFocus
+            />
+          </div>
+          <p className="setting-sub">{labels.extendHint}</p>
+          <div className="setting-buttons">
+            <button type="submit" className="button button-secondary" disabled={!valid}>
+              {labels.extend}
+            </button>
+            <button type="button" className="button button-quiet" onClick={onCancel}>
+              {labels.cancel}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <p className="row-actions">
+          <span className="muted">
+            {end ? (ended(rule, now) ? labels.endedOn(dayMonth(end)) : labels.until(dayMonth(end))) : labels.noEndDate}
+          </span>
+          {end && canExtend && (
+            <button type="button" className="link link-accent" aria-describedby={textId} onClick={onExtend}>
+              {labels.extend}
+            </button>
+          )}
+          <button type="button" className="link" aria-describedby={textId} onClick={onStop}>
+            {labels.stopAllowing}
+          </button>
+        </p>
+      )}
+      {note && (
+        <p className="change-note" role="status">
+          {note}
+        </p>
+      )}
+    </li>
   );
 }
 
@@ -467,7 +641,7 @@ function QuietEditor({
       className="setting-form"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!same) void onSave({ start, end, utcOffsetMinutes: deviceOffset() });
+        if (!same) void onSave(typedWindow(start, end));
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape") onCancel();
@@ -566,9 +740,13 @@ function checkedWhen(at: string): string {
   return Date.now() - when.getTime() < 60_000 ? labels.justNow : labels.atTime(hhmm(when));
 }
 
-function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
+function Did({ client, agents, seams }: { client: HomeClient; agents: AgentRow[]; seams: Seams }) {
   const [check, setCheck] = useState<RecordCheck>();
-  const [recent, setRecent] = useState<RecordLine[]>([]);
+  // The record's latest lines as the kernel lists them, worded with the roster's names; the
+  // lines of the activity ledger where there is no signed record.
+  const [lines, setLines] = useState<KernelRecordLine[]>();
+  const [ledger, setLedger] = useState<RecordLine[]>([]);
+  const recent = useMemo(() => (lines ? recentLines(lines, agents) : ledger), [lines, ledger, agents]);
   const [recorded, setRecorded] = useState(true);
   const [devices, setDevices] = useState<Device[]>();
   const [waiting, setWaiting] = useState<ChannelWaiting[]>([]);
@@ -606,17 +784,14 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
 
   useEffect(() => {
     let live = true;
-    if (record) {
-      void record.check().then((value) => live && setCheck(value)).catch((error: unknown) => live && setProblem(problemText(error)));
-      void record.recent().then((value) => live && setRecent(value)).catch(() => undefined);
-    } else {
-      // What exists: the latest lines of the activity ledger, as sentences.
-      void client
+    // Without a signed record, what exists: the latest lines of the activity ledger.
+    const fromBriefing = () =>
+      client
         .briefing()
         .then((briefing: Briefing) => {
           if (!live) return;
           setRecorded(briefing.recorded !== false);
-          setRecent(
+          setLedger(
             briefing.lines
               .slice(-3)
               .reverse()
@@ -624,11 +799,36 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
           );
         })
         .catch(() => undefined);
+    if (record) {
+      void record
+        .check()
+        .then((value) => {
+          if (!live) return;
+          if (!value) return fromBriefing();
+          setCheck(value);
+          return record.lines(RECORD_READ).then((read) => live && setLines(read));
+        })
+        .catch((error: unknown) => live && setProblem(problemText(error)));
+    } else {
+      void fromBriefing();
     }
     return () => {
       live = false;
     };
   }, [client, record]);
+
+  /** "Check again": the whole record verified now, and its latest lines read again. */
+  async function checkAgain() {
+    if (!record) return;
+    setProblem("");
+    try {
+      const value = await record.check();
+      if (value) setCheck(value);
+      setLines(await record.lines(RECORD_READ));
+    } catch (error) {
+      setProblem(problemText(error));
+    }
+  }
 
   return (
     <section className="card memory-card" aria-labelledby="did-heading">
@@ -637,17 +837,28 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
       </h2>
       {check && record && (
         <div className="record-check">
-          <span className={`check-mark${check.intact ? "" : " check-broken"}`} aria-hidden="true">
-            <Icon name={check.intact ? "check" : "cross"} />
+          <span
+            className={`check-mark${check.intact ? "" : check.unsigned !== undefined ? " check-pending" : " check-broken"}`}
+            aria-hidden="true"
+          >
+            <Icon name={check.intact ? "check" : check.unsigned !== undefined ? "dots" : "cross"} />
           </span>
           <div>
-            <p className="record-title">{check.intact ? labels.everyActionOnRecord : labels.recordBroken}</p>
+            <p className="record-title">
+              {check.intact || check.unsigned !== undefined ? labels.everyActionOnRecord : labels.recordBroken}
+            </p>
             {check.intact && <p className="record-sub">{labels.recordSummary(check.count, checkedWhen(check.checkedAt))}</p>}
-            <button
-              type="button"
-              className="link link-accent"
-              onClick={() => void record.check().then(setCheck).catch((error: unknown) => setProblem(problemText(error)))}
-            >
+            {!check.intact && check.unsigned !== undefined && (
+              <p className="record-sub">{labels.recordUnsigned(check.count, check.unsigned, checkedWhen(check.checkedAt))}</p>
+            )}
+            {!check.intact && check.unsigned === undefined && check.problem && (
+              <details className="record-sub">
+                <summary>{labels.details}</summary>
+                <p>{labels.recordBrokenHint}</p>
+                <p className="mono">{check.problem}</p>
+              </details>
+            )}
+            <button type="button" className="link link-accent" onClick={() => void checkAgain()}>
               {labels.checkAgain}
             </button>
           </div>
@@ -663,7 +874,7 @@ function Did({ client, seams }: { client: HomeClient; seams: Seams }) {
       ) : (
         <ul className="bordered">
           {recent.map((line, index) => (
-            <li key={index} className="record-line">
+            <li key={line.seq ?? index} className="record-line">
               <time className="mono" dateTime={line.at}>
                 {line.atText}
               </time>

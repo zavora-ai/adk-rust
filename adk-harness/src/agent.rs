@@ -1341,6 +1341,77 @@ impl HarnessAgent {
         }
         Ok(standing.revoke(app, id).await?.then_some(rule))
     }
+
+    /// Moves the end of the rule `id` of `user` in `app` to `until`, recording
+    /// `harness.rule.extended` with `surface`, the old end and the new one before the store
+    /// write (spec 3.3 §8.1 "Allowed without asking — Extend", spec 3.1 §9.3). Returns the
+    /// rule after it, or `None` when `user` has no rule `id` or it was revoked meanwhile: an
+    /// extension never brings a revoked rule back.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let until = chrono::Utc::now() + chrono::Duration::days(30);
+    /// let extended = harness.extend_rule("adk-rust", "ana", &rule.id, until, "rest").await?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `harness.rule.invalid` when the rule has no end date, or `until` is not later
+    /// than both its end and now; the audit log's error, and then changes nothing; or the
+    /// store's error.
+    pub async fn extend_rule(
+        &self,
+        app: &str,
+        user: &str,
+        id: &str,
+        until: chrono::DateTime<chrono::Utc>,
+        surface: &str,
+    ) -> Result<Option<crate::StandingRule>> {
+        let standing = &self.runtime.standing_rules;
+        let Some(rule) = standing.list(app, user).await?.into_iter().find(|rule| rule.id == id)
+        else {
+            return Ok(None);
+        };
+        let invalid = |message: String| {
+            AdkError::new(
+                ErrorComponent::Agent,
+                ErrorCategory::InvalidInput,
+                "harness.rule.invalid",
+                message,
+            )
+        };
+        let Some(end) = rule.expires_at else {
+            return Err(invalid(
+                "this rule has no end date: it applies until it is stopped, so there is \
+                 nothing to extend"
+                    .into(),
+            ));
+        };
+        let earliest = end.max(chrono::Utc::now());
+        if until <= earliest {
+            return Err(invalid(format!(
+                "a rule is extended to a later end than {}; stop allowing it to end it sooner",
+                earliest.to_rfc3339()
+            )));
+        }
+        if let Some(trail) = self.runtime.audit_trail() {
+            let mut fields = crate::approvals::rule_audit_fields(&rule, None);
+            fields["by"] = json!(user);
+            fields["surface"] = json!(surface);
+            fields["from"] = json!(end);
+            fields["to"] = json!(until);
+            HarnessAudit::new(
+                trail.clone(),
+                AuditActor::subject(adk_core::principal::SubjectRef::human(user)),
+                rule.scope.session_id().unwrap_or_default(),
+            )
+            .record("harness.rule.extended", fields)
+            .await?;
+        }
+        let extended = crate::StandingRule { expires_at: Some(until), ..rule };
+        Ok(standing.replace(extended.clone()).await?.then_some(extended))
+    }
 }
 
 #[cfg(test)]

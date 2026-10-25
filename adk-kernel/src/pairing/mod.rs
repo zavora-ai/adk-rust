@@ -88,7 +88,7 @@ use axum::http::request::Parts;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::error::{KernelError, Result, UNAUTHORIZED_CODE};
+use crate::error::{KernelError, Result, UNAUTHORIZED_CODE, UNSUPPORTED_CODE};
 
 mod attachments;
 mod kinds;
@@ -503,7 +503,7 @@ fn no_attachments() -> KernelError {
     KernelError::Core(AdkError::new(
         ErrorComponent::Server,
         ErrorCategory::Unsupported,
-        "kernel.unsupported",
+        UNSUPPORTED_CODE,
         "this device store keeps no attachments: use the in-memory, SQLite, PostgreSQL or Redis \
          device store",
     ))

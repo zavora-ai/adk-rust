@@ -1,0 +1,30 @@
+{
+  "path": "/notices/",
+  "releaseSeq": 1,
+  "kind": "collection",
+  "language": "en",
+  "title": "Notices",
+  "resource": {
+    "items": [
+      {
+        "date": "2026-10-02",
+        "summary": null,
+        "title": "Water outage at the showroom",
+        "url": "/notices/water/"
+      }
+    ],
+    "page": 1,
+    "pages": 1
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    "inLanguage": "en",
+    "name": "Notices",
+    "url": "https://example.com/notices/"
+  },
+  "markdown": "https://example.com/notices/index.md"
+}

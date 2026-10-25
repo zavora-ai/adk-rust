@@ -1,0 +1,27 @@
+name = "Example Solar"
+domain = "example.com"
+description = "Solar panels and installation in Nairobi."
+languages = ["en", "sw"]
+jurisdictions = ["KE"]
+site_capabilities = ["search_site"]
+charter_version = 1
+
+[security]
+contact = ["mailto:security@example.com"]
+expires = "2027-06-30T00:00:00Z"
+
+[kind_capabilities]
+product = ["check_availability", "get_quote", "place_order"]
+
+[live_capabilities]
+stock = "check_availability"
+
+[[redirects]]
+from = "/2019/05/hello-world/"
+to = "/posts/hello/"
+status = 301
+
+[strings.sw]
+skip_to_content = "Ruka hadi maudhui"
+main_navigation = "Kuu"
+kind_post = "Machapisho"

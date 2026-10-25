@@ -127,6 +127,11 @@
 # The managed form (spec 3.2 §7.13, §10 M1): `KernelDef`, `TenantKernel` and partitions on a
 # tenant's kernel, which no workspace member enables.
 2 adk-kernel managed
+# The charter store, KPI tracker, autonomy ladder and signals (spec 3.5 §7.10, §7.11): the
+# in-memory and SQLite suites, the invariant, property and scenario tests and the doctests;
+# then the library alone with no default features, as a consumer builds it.
+2 adk-kernel charter doc
+2 adk-kernel charter no-default,lib
 # The terminal surface (spec 3.3 §5.2): full screen, inline and JSON lines; with `web`, the
 # scripted scenario on a kernel-hosted harness drawn by `TerminalSurface::screen`.
 2 adk-surface tui doc

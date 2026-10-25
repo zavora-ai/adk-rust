@@ -1,0 +1,24 @@
+{
+  "path": "/articles/recall/",
+  "releaseSeq": 1,
+  "kind": "article",
+  "language": "en",
+  "title": "Panel recall",
+  "resource": {
+    "id": "articles/recall/en",
+    "url": "https://example.com/articles/recall/",
+    "withdrawn": true
+  },
+  "capabilities": [
+    "search_site"
+  ],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "NewsArticle",
+    "headline": "Panel recall",
+    "inLanguage": "en",
+    "name": "Panel recall",
+    "url": "https://example.com/articles/recall/"
+  },
+  "markdown": "https://example.com/articles/recall/index.md"
+}

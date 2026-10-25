@@ -60,6 +60,9 @@ channels = []
 managed = ["dep:adk-managed", "drivers"]
 # The `conformance` module: suites for kernel store backends (spec 3.2 §11).
 conformance = ["tokio/rt"]
+# The charter store, the KPI tracker, autonomy records, signals and the site process kinds
+# over the AWP 2.0 types (spec 3.5 §7.1, §7.10, §7.11).
+charter = ["dep:awp-types"]
 
 [dependencies]
 adk-core.workspace = true
@@ -73,6 +76,7 @@ adk-tool = { workspace = true, optional = true }
 adk-sandbox = { workspace = true, optional = true }
 adk-managed = { workspace = true, optional = true }
 async-trait.workspace = true
+awp-types = { workspace = true, optional = true }
 # The control plane's router, served on the Unix socket and merged into `ServerBuilder`.
 axum = "0.8"
 chrono.workspace = true
