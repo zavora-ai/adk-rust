@@ -80,10 +80,25 @@ pub fn markdown_to_html(markdown: &str) -> String {
     out
 }
 
+/// `value` with every object's keys in sorted order, so a page's bytes are the same whether
+/// or not `serde_json` keeps insertion order: another crate in a build can turn on its
+/// `preserve_order` feature, and a release's digests must not depend on that.
+fn sorted(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<(String, Value)> = map.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(entries.into_iter().map(|(key, value)| (key, sorted(value))).collect())
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(sorted).collect()),
+        other => other,
+    }
+}
+
 /// JSON for a `<script type="application/ld+json">` block: `<`, `>` and `&` escaped so the
 /// data cannot close the element.
 fn script_json(value: &Value) -> String {
-    serde_json::to_string(value)
+    serde_json::to_string(&sorted(value.clone()))
         .unwrap_or_default()
         .replace('<', "\\u003c")
         .replace('>', "\\u003e")
@@ -652,6 +667,10 @@ impl<'a> Renderer<'a> {
                 markdown.push('\n');
             }
             files.push((md_path, markdown.into_bytes()));
+            let mut view = view;
+            view.json_ld = view.json_ld.map(sorted);
+            view.resource =
+                view.resource.into_iter().map(|(key, value)| (key, sorted(value))).collect();
             let mut json = serde_json::to_vec_pretty(&view)
                 .map_err(|e| SiteError::serde("machine view", e))?;
             json.push(b'\n');
@@ -768,6 +787,15 @@ impl<'a> Renderer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_keys_are_sorted_whatever_serde_json_keeps() {
+        let value = json!({ "url": "u", "@type": "WebPage", "a": [{ "z": 1, "b": 2 }] });
+        assert_eq!(
+            serde_json::to_string(&sorted(value)).unwrap(),
+            r#"{"@type":"WebPage","a":[{"b":2,"z":1}],"url":"u"}"#
+        );
+    }
 
     #[test]
     fn markdown_is_safe_and_demoted() {
