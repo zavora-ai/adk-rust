@@ -459,6 +459,7 @@ impl TerminalSurface {
     /// |---|---|
     /// | `command` | The outcome of sending the message: `sent` or `queued` |
     /// | `entry`, `decisions`, `reset` | A [`FeedFrame`](crate::FeedFrame) of the session, as the engine projects it |
+    /// | `agent` | An agent a person added changed while the run lasted (spec 3.3 §5.7): `change` is `added`, `changed`, `paused`, `resumed` or `removed`, `agent` its roster row |
     /// | `end` | `outcome` (`done`, `error`, `waitingForYou`, `budgetReached`), `exitCode`, `sessionId`, `text` |
     ///
     /// # Errors

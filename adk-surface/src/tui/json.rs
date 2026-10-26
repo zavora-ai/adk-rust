@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::{EXIT_BUDGET, EXIT_DONE, EXIT_ERROR, EXIT_WAITING, TerminalSurface};
 use crate::engine::{Command, FeedFrame, SurfaceEngine};
 use crate::error::SurfaceError;
-use crate::model::{AgentStatus, DecisionCard, FeedEntry, Speaker, ThreadItem};
+use crate::model::{AgentRow, AgentStatus, DecisionCard, FeedEntry, Speaker, ThreadItem};
 use crate::origin::Caller;
 use crate::words;
 
@@ -220,6 +220,42 @@ fn frame_line(out: &mut impl Write, frame: &FeedFrame) -> io::Result<()> {
     line(out, &serde_json::to_value(frame).map_err(io::Error::other)?)
 }
 
+/// The `agent` lines between two rosters (spec 3.3 §5.2, §5.7: "one line per agent change"):
+/// for each agent a person added, `added`, `changed` (its name, colour, area or mode),
+/// `paused`, `resumed` or `removed`, with its roster row as the terminal shows it.
+pub(crate) fn agent_changes(was: &[AgentRow], now: &[AgentRow]) -> Vec<Value> {
+    let added = |rows: &[AgentRow]| -> Vec<AgentRow> {
+        rows.iter().filter(|row| row.added).cloned().collect()
+    };
+    let (was, now) = (added(was), added(now));
+    let paused = |row: &AgentRow| row.status == AgentStatus::Paused;
+    let mut lines = Vec::new();
+    for row in &now {
+        let change = match was.iter().find(|before| before.agent.name == row.agent.name) {
+            None => Some("added"),
+            Some(before) if paused(row) && !paused(before) => Some("paused"),
+            Some(before) if paused(before) && !paused(row) => Some("resumed"),
+            Some(before)
+                if before.agent != row.agent
+                    || before.area != row.area
+                    || before.mode != row.mode =>
+            {
+                Some("changed")
+            }
+            Some(_) => None,
+        };
+        if let Some(change) = change {
+            lines.push(json!({ "type": "agent", "change": change, "agent": row }));
+        }
+    }
+    for row in
+        was.iter().filter(|before| !now.iter().any(|row| row.agent.name == before.agent.name))
+    {
+        lines.push(json!({ "type": "agent", "change": "removed", "agent": row }));
+    }
+    lines
+}
+
 /// A `decided` line: a decision of the session answered, with who answered, where and when,
 /// as every other surface shows it ("You said yes in Telegram at 07:31", spec 3.3 §8.1).
 fn decided_line(out: &mut impl Write, card: &DecisionCard) -> io::Result<()> {
@@ -331,6 +367,8 @@ pub(crate) async fn run<W: Write + Send>(
             Err(error) => return end_line(&mut out, &End::error(error.to_string()), &session),
         }
     }
+    // The roster as the run began; each later change of an added agent is one `agent` line.
+    let mut roster = engine.agents(caller).await.unwrap_or_default();
     let mut last = baseline;
     let mut cards: Option<Vec<(String, u64)>> = None;
     let mut feed = engine.feed(caller.clone(), session.clone(), Some(last));
@@ -364,6 +402,12 @@ pub(crate) async fn run<W: Write + Send>(
                 }
             },
             _ = tick.tick() => {
+                if let Ok(now) = engine.agents(caller).await {
+                    for change in agent_changes(&roster, &now) {
+                        line(&mut out, &change)?;
+                    }
+                    roster = now;
+                }
                 if let Some(end) = settler.check(engine, caller, &session).await {
                     // What the feed has not shown yet, so the lines are complete.
                     if let Ok(thread) = engine.thread(caller, &session).await {
@@ -386,5 +430,65 @@ pub(crate) async fn run<W: Write + Send>(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::agent_changes;
+    use crate::model::{AgentRef, AgentRow, AgentStatus, Avatar};
+
+    fn row(name: &str, display: &str, status: AgentStatus, added: bool) -> AgentRow {
+        AgentRow {
+            agent: AgentRef {
+                name: name.into(),
+                display_name: display.into(),
+                avatar: Avatar { monogram: display[..1].into(), color: "#15803D".into() },
+            },
+            status,
+            status_text: String::new(),
+            wake_at: None,
+            session_id: None,
+            area: None,
+            mode: None,
+            added,
+            can_change: added,
+        }
+    }
+
+    fn changes(was: &[AgentRow], now: &[AgentRow]) -> Vec<(String, String)> {
+        agent_changes(was, now)
+            .into_iter()
+            .map(|line| {
+                assert_eq!(line["type"], "agent");
+                (
+                    line["change"].as_str().unwrap().to_string(),
+                    line["agent"]["agent"]["name"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    /// One line per change of an agent a person added; the primary agent's work is not one
+    /// (spec 3.3 §5.7 "In the terminal").
+    #[test]
+    fn each_change_of_an_added_agent_is_one_line() {
+        let primary = row("adk-rust", "ADK-Rust", AgentStatus::Working, false);
+        let ready = row("finance", "Finance", AgentStatus::Ready, true);
+        let idle = row("adk-rust", "ADK-Rust", AgentStatus::Done, false);
+        assert!(changes(std::slice::from_ref(&primary), std::slice::from_ref(&idle)).is_empty());
+        let added = [idle.clone(), ready];
+        assert_eq!(
+            changes(std::slice::from_ref(&idle), &added),
+            [("added".into(), "finance".into())]
+        );
+        let paused = [idle.clone(), row("finance", "Finance", AgentStatus::Paused, true)];
+        assert_eq!(changes(&added, &paused), [("paused".into(), "finance".into())]);
+        assert_eq!(changes(&paused, &added), [("resumed".into(), "finance".into())]);
+        let renamed = [idle.clone(), row("finance", "Bills", AgentStatus::Ready, true)];
+        assert_eq!(changes(&added, &renamed), [("changed".into(), "finance".into())]);
+        let working = [idle.clone(), row("finance", "Finance", AgentStatus::Working, true)];
+        assert!(changes(&added, &working).is_empty(), "work is not a change of the agent");
+        assert_eq!(changes(&added, &[idle]), [("removed".into(), "finance".into())]);
     }
 }
