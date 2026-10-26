@@ -1,0 +1,1006 @@
+/*
+ * The website's views on the web home (spec 3.5 §8.2) over the spec 3.3 §9 tokens: the web
+ * home's cards, pills, buttons and display headings, and its decision background for
+ * everything that waits on the owner (§7.1). Every dark screen is the light screen with the
+ * dark tokens.
+ */
+
+.w-shell {
+  min-height: 100%;
+}
+
+.w-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 28px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.w-site-name {
+  font-weight: 700;
+}
+
+.w-segmented-2 {
+  grid-template-columns: repeat(2, auto);
+}
+
+.w-segmented-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.w-segmented-4 {
+  grid-template-columns: repeat(4, auto);
+}
+
+a.segment {
+  color: var(--text-2);
+  text-decoration: none;
+}
+
+.w-page {
+  max-width: 1268px;
+  margin: 0 auto;
+  padding: 40px 28px 72px;
+}
+
+.w-display .display {
+  margin-top: 0;
+  font-size: 48px;
+}
+
+.w-display .subhead {
+  max-width: 760px;
+}
+
+.w-origin {
+  color: var(--accent);
+  font-size: 15px;
+}
+
+.w-note {
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.w-hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--label);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.w-required {
+  color: var(--accent);
+}
+
+.w-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.w-form {
+  display: grid;
+  gap: 14px;
+}
+
+.w-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.w-field label {
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.w-field input,
+.w-field select,
+.w-field textarea,
+.w-shell .inline-form input,
+.w-shell select {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 15px;
+}
+
+.w-field textarea {
+  min-height: 80px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.w-field-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.w-field-row-4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.w-fieldset {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.w-lines {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.w-line {
+  display: grid;
+  grid-template-columns: minmax(120px, 38%) 1fr;
+  gap: 12px;
+}
+
+.w-line dt {
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.w-line dd {
+  margin: 0;
+  font-size: 15px;
+}
+
+.w-lines-inline {
+  grid-template-columns: repeat(auto-fit, minmax(160px, auto));
+  justify-content: start;
+}
+
+.w-bullets {
+  display: grid;
+  gap: 6px;
+  padding-left: 18px;
+  list-style: disc;
+}
+
+.w-problems {
+  display: grid;
+  gap: 4px;
+  padding-left: 18px;
+  color: var(--failed);
+  list-style: disc;
+}
+
+.w-markdown {
+  display: grid;
+  gap: 10px;
+  font-size: 15px;
+}
+
+.w-markdown h1 {
+  font-size: 22px;
+}
+
+.w-markdown h2 {
+  font-size: 18px;
+}
+
+.w-markdown blockquote {
+  margin: 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border);
+  color: var(--text-2);
+}
+
+.w-markdown ul {
+  padding-left: 18px;
+  list-style: disc;
+}
+
+.w-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.w-section-title {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+/* ── Setup ─────────────────────────────────────────────────── */
+
+.w-setup-card {
+  display: grid;
+  gap: 16px;
+  max-width: 520px;
+  margin-top: 32px;
+}
+
+.w-code-input {
+  font-size: 22px !important;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.w-holding {
+  margin-top: 24px;
+  font-size: 14px;
+}
+
+/* ── Onboarding ────────────────────────────────────────────── */
+
+.w-onboarding-grid {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 36px;
+  margin-top: 32px;
+}
+
+.w-stages ol {
+  position: sticky;
+  top: 80px;
+  display: grid;
+  gap: 4px;
+}
+
+.w-stage-item {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 10px;
+}
+
+.w-stage-item[aria-current="step"] {
+  background: var(--raised);
+}
+
+.w-stage-number {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.w-stage-done .w-stage-number {
+  border-color: transparent;
+  background: var(--pill-decided-bg);
+  color: var(--pill-decided);
+}
+
+.w-stage-current .w-stage-number {
+  border-color: transparent;
+  background: var(--button);
+  color: var(--on-button);
+}
+
+.w-stage-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 15px;
+  text-align: left;
+}
+
+button.w-stage-link {
+  cursor: pointer;
+}
+
+.w-stage-later .w-stage-link {
+  color: var(--label);
+}
+
+.w-stage {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  min-width: 0;
+}
+
+.w-step {
+  display: grid;
+  gap: 14px;
+}
+
+.w-step-stack {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+
+.decision.w-decision {
+  gap: 10px;
+}
+
+.w-evidence {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.w-question {
+  display: grid;
+  gap: 12px;
+}
+
+.card.w-question-answered {
+  box-shadow: none;
+}
+
+.w-interview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+  gap: 24px;
+  align-items: start;
+}
+
+.w-preview {
+  position: sticky;
+  top: 80px;
+  display: grid;
+  gap: 8px;
+}
+
+.w-browser {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.w-browser-bar {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--raised);
+}
+
+.w-browser-bar i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.w-browser-page {
+  display: grid;
+  gap: 12px;
+  max-height: 520px;
+  overflow-y: auto;
+  padding: 18px;
+}
+
+.w-browser-name {
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.w-browser-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 14px;
+}
+
+.w-browser-foot {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+/* Charter cards (spec 3.5 §7.18 stage 5). */
+.w-charter {
+  display: grid;
+  gap: 18px;
+}
+
+.w-charter-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.w-charter-sub {
+  margin-top: 0;
+  font-size: 16px;
+}
+
+.decision.w-signers {
+  gap: 12px;
+}
+
+.w-signer-list {
+  display: grid;
+  gap: 8px;
+}
+
+.w-signer {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.w-signer-role {
+  font-weight: 700;
+}
+
+.w-section-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.w-section {
+  display: grid;
+  gap: 12px;
+}
+
+.card.w-section-open {
+  border-color: var(--decision-border);
+}
+
+.w-section-summary {
+  margin-top: -6px;
+  font-size: 14px;
+}
+
+/* Design directions (spec 3.5 §7.18 stage 6). */
+.w-design-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.w-design {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.card.w-design-chosen {
+  border-color: var(--accent);
+}
+
+.w-swatches {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.w-swatches-current {
+  display: grid;
+  place-items: center;
+  height: 72px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.w-swatch {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 72px;
+  padding: 10px;
+  border: 1px solid;
+  border-radius: 10px;
+}
+
+.w-swatch span {
+  margin-right: auto;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.w-swatch i {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+}
+
+/* Launch check and page diffs (spec 3.5 §7.8.1; spec 3.3 §7.5). */
+.w-check-line,
+.w-page-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.w-check-line span:first-child {
+  margin-right: auto;
+}
+
+.w-page-title {
+  font-weight: 600;
+}
+
+.w-page-row .w-markdown,
+.bordered .w-markdown {
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--raised);
+}
+
+/* Connections and going live (spec 3.5 §7.18 stage 8). */
+.w-connection {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px 16px;
+}
+
+.w-connection .w-actions {
+  grid-column: 1 / -1;
+}
+
+.w-connection-kind {
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.w-approvals {
+  display: grid;
+  gap: 10px;
+}
+
+.w-phases {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.w-phases .card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+/* ── The site view (spec 3.5 §7.24) ───────────────────────── */
+
+.stats.w-stats {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.w-stat-sub {
+  font-size: 13px;
+}
+
+.w-band {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.decision.w-alarm {
+  display: flex;
+  flex-flow: row wrap;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 14px 18px;
+}
+
+.decision.w-alarm .button {
+  margin-left: auto;
+  min-height: 36px;
+}
+
+.w-site-grid,
+.w-review-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 22px;
+  align-items: start;
+  margin-top: 26px;
+}
+
+.w-site-main,
+.w-site-side {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  min-width: 0;
+}
+
+.w-site-main .card,
+.w-site-side .card {
+  display: grid;
+  gap: 12px;
+}
+
+.w-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14.5px;
+}
+
+.w-table th,
+.w-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.w-table thead th {
+  color: var(--label);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.w-table tbody th {
+  font-weight: 600;
+}
+
+.w-table tr:last-child th,
+.w-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.w-jobs > li {
+  padding: 10px 14px;
+}
+
+.w-job {
+  display: grid;
+  gap: 2px;
+}
+
+.w-job .row-actions {
+  margin-top: 8px;
+}
+
+.w-small-link {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.w-more {
+  justify-self: start;
+}
+
+.w-job-offered {
+  background: var(--decision);
+}
+
+.w-job-line {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.w-job-title {
+  font-weight: 600;
+}
+
+.w-release-line {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.w-release-seq {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--raised);
+  font-weight: 700;
+}
+
+.w-release-pages {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0 52px;
+  font-size: 14px;
+}
+
+.decision.w-held {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  font-size: 14.5px;
+}
+
+.w-money {
+  display: grid;
+  gap: 4px;
+}
+
+.w-bars {
+  display: grid;
+  gap: 10px;
+}
+
+.w-bar-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.w-bar {
+  height: 8px;
+  margin-top: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--raised);
+}
+
+.w-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+/* ── The weekly review (spec 3.5 §7.21) ───────────────────── */
+
+.w-summary {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.w-document-toggle {
+  justify-self: start;
+}
+
+.w-review-grid .stats {
+  margin-top: 0;
+}
+
+.w-review-grid .decision {
+  gap: 12px;
+}
+
+/* ── The web editor (spec 3.5 §7.8.2) ─────────────────────── */
+
+.w-editor-grid {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+  margin-top: 26px;
+}
+
+.w-editor-side {
+  display: grid;
+  gap: 16px;
+}
+
+.w-editor-side .card {
+  display: grid;
+  gap: 10px;
+}
+
+.w-item-list {
+  display: grid;
+  gap: 2px;
+}
+
+.w-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.w-item[aria-current="true"],
+.w-item:hover {
+  background: var(--raised);
+}
+
+.w-item .pill {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+}
+
+.w-item-row {
+  display: grid;
+  gap: 4px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.w-item-row:first-child {
+  border-top: 0;
+}
+
+.w-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.w-item-title {
+  font-weight: 600;
+}
+
+.w-draft {
+  gap: 18px;
+}
+
+.w-body-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.w-toolbar {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: var(--raised);
+}
+
+.w-toolbar + .w-body {
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+  font-family: var(--mono);
+  font-size: 14px !important;
+}
+
+.w-body-preview {
+  min-height: 200px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.w-subsection {
+  display: grid;
+  gap: 10px;
+}
+
+.w-media {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.w-media .inline-form {
+  flex: 1;
+  min-width: 260px;
+}
+
+.w-draft-actions {
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Narrow windows ────────────────────────────────────────── */
+
+@media (max-width: 1180px) {
+  .w-site-grid,
+  .w-review-grid,
+  .w-interview,
+  .w-editor-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .w-preview {
+    position: static;
+  }
+
+  .w-section-grid,
+  .w-phases {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .w-onboarding-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .w-stages ol {
+    position: static;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+
+  .stats.w-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .w-tabs {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 10px 16px;
+  }
+
+  .w-page {
+    padding: 24px 16px 56px;
+  }
+
+  .w-display .display {
+    font-size: 36px;
+  }
+
+  .w-field-row,
+  .w-field-row-4,
+  .w-segmented-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .w-segmented-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .w-signer {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .w-signer .muted {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .w-release-line {
+    grid-template-columns: 40px minmax(0, 1fr);
+  }
+}
+
+/* Pills and links keep their own width inside a decision. */
+.w-shell .decision > .pill,
+.w-shell .decision > .link,
+.w-shell .w-held > .pill {
+  align-self: flex-start;
+  justify-self: start;
+}

@@ -3,7 +3,7 @@
 //! The conversation endpoints — A2A messages without a capability, and `GET /awp/v2/chat` —
 //! host an agent the caller supplies (the Concierge and Agent desk of `adk-website`). The edge
 //! hands it a fixed set of tools, [`PublicTools`], and runs it under
-//! [`PublicPartitionPolicy`](super::policy::PublicPartitionPolicy), which denies every other
+//! [`PublicPartitionPolicy`], which denies every other
 //! tool by name and origin:
 //!
 //! | Tool | Effect | Does |

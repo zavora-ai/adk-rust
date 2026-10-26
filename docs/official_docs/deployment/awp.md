@@ -1,163 +1,261 @@
-# Agentic Web Protocol (AWP)
+# Agentic Web Protocol (AWP) 2.0
 
-ADK-Rust provides [Agentic Web Protocol (AWP)](https://agenticwebprotocol.com) types and Axum integration for making websites and services accessible to AI agents. The implementation spans two crates: `awp-types` (pure protocol types) and `adk-awp` (routes, middleware, and service interfaces). Applications supply agent dispatch, authentication, authorization, and durable subscription storage.
+AWP 2.0 is the signed contract between a website and the people and agents that use it
+(spec 3.5 Part A). A site publishes a root-signed contract at `/.well-known/awp.json` that
+links every surface it offers — the A2A Agent Card, the MCP server, the capability manifest,
+Markdown and machine views — with its keys, its release log, its status and the public part of
+its charter. AWP 2.0 uses Web Bot Auth for identity, A2A for conversation, MCP for tools and
+IETF AI preferences for usage, and defines signed releases, a site status, typed capabilities
+under owner policy, held and exactly-once calls, consent receipts and the charter. Payment
+rails come through `adk-payments`; on `main` no rail reaches the edge yet
+([Remaining work](../../design/spec-3.5-agentic-web.md#remaining-work)).
 
-## Overview
+> **Note:** `awp-types` and `adk-awp` are **Beta**, and AWP 2.0 stays Beta until its normative
+> text is published (spec 3.5 §13 Q1). The site pipeline (`adk-site`) and the product
+> (`adk-website`) are **Experimental**.
 
-AWP enables any website to declare its capabilities, policies, and business context in a machine-readable format. AI agents can discover these capabilities, negotiate protocol versions, subscribe to events, and interact through typed A2A messages. `adk-awp` enforces body and rate limits at its HTTP boundary; application handlers enforce identity and capability authorization.
+| You want to | Read |
+|-------------|------|
+| Run a site that builds and runs itself | [Spin up an AWP website](website-quickstart.md) |
+| Move an existing WordPress site | [Move a WordPress site to AWP](wordpress-to-awp.md) |
+| Serve capabilities to agents | [The AWP agent edge](awp-edge.md), [Writing capability packs](capability-packs.md) |
+| Write the site's goals, authority and budget | [The charter](charter.md) |
+| Check any site from the command line | [`adk-rust awp verify`](site-cli.md#adk-rust-awp) |
+| Keep an AWP 1.x deployment running, or convert it | [Migrating from AWP 1.x to 2.0](../migration/awp-1-to-2.md) |
 
-Use AWP when:
-- You want AI agents to discover and interact with your service programmatically
-- You need trust-level metadata and a hook for application-enforced access control
-- You want to serve both human visitors and AI agents from the same endpoints
-- You need event subscriptions with signed webhook delivery
-- You want a health state machine for service monitoring
+## Profiles
 
-## Architecture
+The contract's `profile` says what runs behind the site.
 
-### AWP Request Flow
+| Profile | What runs | What a client finds |
+|---------|-----------|---------------------|
+| `static` | Nothing: the site is files on a static host | The contract, `keys.json`, the release log, the charter's public terms, and every page with its Markdown and machine-view twins |
+| `static+edge` | The agent edge beside the static content | All of `static`, plus capabilities over A2A, MCP and HTTP, held and exactly-once calls, the signed status, events, consent and the beacon. `adk-website`'s default |
+| `dynamic` | An application that serves AWP itself | Whatever the application serves; the verifier reports it as server code |
 
-```mermaid
-sequenceDiagram
-    participant ExtAgent as External Agent
-    participant Discovery as /.well-known/awp.json
-    participant Manifest as /awp/manifest
-    participant Health as /awp/health
-    participant A2A as /awp/a2a
-    participant Events as /awp/events/subscribe
+No code runs when a page is requested on the first two profiles. If the edge stops, the content
+keeps serving its last signed release.
 
-    ExtAgent->>Discovery: GET /.well-known/awp.json
-    Discovery-->>ExtAgent: {version, siteName, capabilityManifestUrl, ...}
-    
-    ExtAgent->>Manifest: GET /awp/manifest
-    Manifest-->>ExtAgent: JSON-LD capability manifest
-    
-    ExtAgent->>Health: GET /awp/health
-    Health-->>ExtAgent: {state: "healthy", message, timestamp}
-    
-    ExtAgent->>A2A: POST /awp/a2a (agent message)
-    A2A-->>ExtAgent: Agent response
-    
-    ExtAgent->>Events: POST /awp/events/subscribe
-    Events-->>ExtAgent: {id}
-    Note over Events,ExtAgent: The subscription service sends<br/>Standard Webhooks-signed deliveries
-```
+## What a site publishes
 
-### Application Layout
-
-```
-┌─────────────────────────────────────────────────┐
-│                  Your Application                │
-│                                                  │
-│  ┌──────────────┐  ┌──────────────────────────┐ │
-│  │  LLM Agent   │  │  awp_routes(state)       │ │
-│  │  (adk-agent) │  │  ├ /.well-known/awp.json │ │
-│  │              │  │  ├ /awp/manifest          │ │
-│  │  Instructions│  │  ├ /awp/health            │ │
-│  │  derived from│  │  └ /awp/a2a              │ │
-│  │  business.   │  │  auth + management routes│ │
-│  │  toml        │  │                           │ │
-│  └──────────────┘  └──────────────────────────┘ │
-│         ▲                      ▲                 │
-│         │                      │                 │
-│    ┌────┴──────────────────────┴────┐            │
-│    │     BusinessContextLoader      │            │
-│    │     (business.toml + ArcSwap)  │            │
-│    └────────────────────────────────┘            │
-└─────────────────────────────────────────────────┘
-```
-
-## Crates
-
-| Crate | Purpose | Dependencies |
-|-------|---------|-------------|
-| `awp-types` | Protocol types (enums, structs, errors), AWP 1.0 and 2.0 | Zero `adk-*` deps — `serde`, `uuid`, `chrono`, `thiserror`; `schemars` behind `json-schema` |
-| `adk-awp` | Routes, middleware, service interfaces, and in-memory implementations | `awp-types`, `adk-core` (`webhook-delivery`), `axum` 0.8, `tokio`, `dashmap` |
-
-The split means any Rust project can depend on `awp-types` without pulling in the ADK tree.
-
-## AWP 2.0 wire types
-
-`awp-types` also carries the AWP 2.0 wire types (spec 3.5 §7.2–§7.8.3, §7.10) in `awp_types::v2`, re-exported at the crate root beside the 1.0 types. They are plain data with pure validation helpers; signing, canonicalisation and the 2.0 routes arrive in `adk-awp` separately.
+`awp-types` holds every AWP 2.0 document in `awp_types::v2`, re-exported at the crate root
+beside the 1.0 types. They are plain data with pure validation helpers and no `adk-*`
+dependency.
 
 | Document | Type | Served at |
 |----------|------|-----------|
 | Site contract | `SiteContract` | `/.well-known/awp.json` (`application/awp+json`) |
 | Keys, delegations and revocations | `KeySet` | `/.well-known/awp/keys.json` |
-| Trust rules | `TrustRules` | The contract's `identity.trustRules` |
-| Capability manifest | `CapabilityManifestV2` of `CapabilityV2` | `GET /awp/v2/manifest` |
-| Machine view of a page | `MachineView` | `<path>/index.awp.json` |
-| Held call | `HeldCall` | `GET /awp/v2/calls/{id}` |
-| Site status | `SiteStatus` | `GET /awp/v2/status` |
-| Event | `EventEnvelope` | Standard Webhooks delivery |
-| Event subscription | `EventSubscription` | `POST /awp/v2/events`, `GET /awp/v2/events/{id}` |
-| Consent receipt, receipt, quote | `ConsentReceipt`, `Receipt`, `QuoteDocument` | Capability results |
-| Error | `ErrorEnvelope` | Every 2.0 error response; `read_only` carries the status document |
+| Charter public terms | `PublicTerms` (part of `Charter`) | `/.well-known/awp/charter.json` |
 | Release manifest | `ReleaseManifest` | `/.well-known/awp/releases/{seq}.json` |
 | Site log entry | `LogEntry` | Leaf `seq − 1` of the log under `/.well-known/awp/log/` |
+| Machine view of a page | `MachineView` | `<path>/index.awp.json`, beside the Markdown twin `<path>/index.md` |
+| Trust rules | `TrustRules` | The contract's `identity.trustRules` |
+| Capability manifest | `CapabilityManifestV2` of `CapabilityV2` | `GET /awp/v2/manifest` |
+| Held call | `HeldCall` | `GET /awp/v2/calls/{id}` |
+| Site status | `SiteStatus` | `GET /awp/v2/status` |
+| Event, subscription | `EventEnvelope`, `EventSubscription` | Standard Webhooks delivery; `POST /awp/v2/events` |
+| Consent receipt, receipt, quote | `ConsentReceipt`, `Receipt`, `QuoteDocument` | Capability results |
 | Stream entry | `StreamEntry` | The edge's stream feed for a live page |
-| Charter public terms | `PublicTerms` (part of `Charter`) | `/.well-known/awp/charter.json` |
+| Error | `ErrorEnvelope` | Every 2.0 error response; `read_only` carries the status document |
 
-### The 2.0 edge runtime
-
-`adk_awp::v2` serves the AWP 2.0 edge. `awp_v2_routes` mounts `GET /awp/v2/manifest`,
-`GET /awp/v2/trust`, `GET /awp/v2/status`, `POST /awp/v2/capabilities/{name}` and
-`GET /awp/v2/calls/{id}`; every response names `AWP-Version: 2.0` and every failure is the 2.0
-error envelope.
-
-| Piece | Behaviour |
-|-------|-----------|
-| `TierAssigner` | Assigns `public`, `known`, `verified` or `partner` from a verified credential; the default makes every caller `public`, and self-declared headers never change a tier |
-| `CapabilityTool` | One capability as an `adk_core::Tool` with origin `awp:{domain}`; the same tool serves the HTTP, A2A and MCP bindings |
-| `DirectExecutor` | Refuses a capability above the caller's tier as `capability_not_found`, validates input, requires an idempotency key for `non_idempotent` capabilities, checks consent receipts, answers a repeated key from its record, and holds a call above its approval threshold with `202` |
-| Edge stores | Subscriptions, consent receipts, status, held calls, leads and idempotency records; backends run `edge_store_conformance_tests!` |
-
-`adk-server`'s `awp` feature builds the full edge on these pieces — Web Bot Auth, OAuth, mTLS
-and API-key tiers, the A2A and MCP bindings, held calls decided through the approval service,
-and the public partition; see [The AWP Agent Edge](awp-edge.md).
-
-`AWP-Version` takes a list, highest first. A 1.x route answers `2.0, 1.0` in 1.0 and a 2.0
-route answers it in 2.0; a request naming no common major gets `406`. The 1.x routes sit
-behind the default `awp-v1` feature.
-
-### Signing, verification and conformance
-
-The `signing` feature signs AWP 2.0 documents: a detached JWS (EdDSA) over the JCS form of a
-document without its `proof`, root-signed delegations with scopes and validity windows,
-revocations, root rotation, the `_awp-root.{domain}` DNS record, signed A2A Agent Cards, the site
-log's tiles and checkpoint, and `StaticBundle` for the contract, `keys.json` and public terms. The
-`verify` feature adds `Verifier`, which runs the protocol's verification procedure with `GET`
-requests only and names the step that fails, the conformance kit (`adk_awp::conformance::run`)
-and the test-vector generator.
-
-```toml
-[dependencies]
-adk-awp = { version = "3.0.0", features = ["verify"] }
-```
-
-| Failure | Meaning |
-|---------|---------|
-| `contract.signature` | The contract's proof does not verify with the root key |
-| `root.unanchored` | No `_awp-root` DNS record names the key set's root |
-| `card.signature` | The A2A Agent Card is not signed by a valid `card` key |
-| `log.consistency` | The log's tiles do not hash to the checkpoint, or it does not extend the pinned one |
-| `release.inclusion`, `release.manifest` | A release manifest is not the log's entry, or the delta chain breaks |
-| `page.digest` | A served file does not match its release digest |
-| `charter.digest` | The public terms do not match the contract's digest |
-
-`adk-rust awp verify <domain>`, `awp conformance <url>`, `awp keys rotate|delegate` and
-`awp migrate-config business.toml` run these from the command line
-([Sites and AWP from the command line](site-cli.md#adk-rust-awp)).
-
-`Charter::validate()` refuses a KPI target without a baseline, a charter without an owner, an agent holding a role, and an approval chain that distinct principals cannot satisfy. The `json-schema` feature derives JSON Schema (2020-12) for every 2.0 type; the generated schemas are committed in `awp-types/schemas/2.0/`.
+The `json-schema` feature derives JSON Schema (2020-12) for every 2.0 type; the generated
+schemas are committed in `awp-types/schemas/2.0/`.
 
 ```toml
 [dependencies]
 awp-types = { version = "3.0.0", features = ["json-schema"] }
 ```
 
+## Crates and features
+
+| Crate | Feature | Provides |
+|-------|---------|----------|
+| `awp-types` | — | The AWP 1.0 and 2.0 wire types; `json-schema` adds the schemas |
+| `adk-awp` | — | `adk_awp::v2`: the `/awp/v2/` routes, `AWP-Version` negotiation, `TierAssigner`, `CapabilityTool`, `CapabilityRegistry`, `DirectExecutor`, the edge store traits with `edge_store_conformance_tests!`, and `business.toml` migration |
+| `adk-awp` | `signing` | Detached JWS (EdDSA) over JCS, `KeySet` delegations, revocations and root rotation, the `_awp-root` DNS record, signed A2A Agent Cards, the site log's tiles and checkpoint, `StaticBundle` |
+| `adk-awp` | `verify` | `Verifier`, the conformance kit (`adk_awp::conformance::run`) and the test-vector generator |
+| `adk-awp` | `awp-v1` (default) | The AWP 1.x routes, for one release line |
+| `adk-auth` | `web-bot-auth` | HTTP Message Signatures: signer, verifier and key directory ([Web Bot Auth](../security/web-bot-auth.md)) |
+| `adk-tool` | `mcp-server` | An MCP server over Streamable HTTP with a Server Card ([MCP Server](../mcp/server.md)) |
+| `adk-server` | `awp`, `awp-sqlite`, `awp-postgres`, `awp-redis` | The agent edge and its durable stores ([The AWP agent edge](awp-edge.md)) |
+| `adk-site` | — | Content, the built-in generator, the launch gate, signed releases, the site log and hosts |
+| `adk-website` | — | The prebuilt website ([The AWP website product](adk-website.md)) |
+| `adk-rust` | `website` | The umbrella over `adk-website`, `adk-site`, the edge and AWP signing; in `full` |
+
+## The static profile
+
+Every published state of a site is a signed release. `adk-site`'s `ReleaseBuilder` hashes a
+build into a `ReleaseManifest`, refuses server-executable files, writes the manifest under
+`/.well-known/awp/releases/`, and appends its digest to the site log. The host receives the
+files, then the log's tiles, then a checkpoint signed by a delegated `release` key, so a reader
+never sees a checkpoint for files that are not there. The built-in generator writes each page's
+`index.md` and `index.awp.json` twins, `llms.txt`, `robots.txt` with `Content-Usage` from the
+charter's public terms, `/.well-known/security.txt`, sitemaps and feeds ([`adk-site`](../../../adk-site/README.md)).
+
+### Keys
+
+| Key | Signs | Held by |
+|-----|-------|---------|
+| Root | The contract and the delegations | The owner, off the server; anchored by the `_awp-root.<domain>` TXT record |
+| `release` | The site log's checkpoints | The site's release builder |
+| `card` | The A2A Agent Card | The edge |
+| `receipt` | The site status, consent receipts and stream entries | The edge |
+| `payments` | Quotes and payment mandates | No component on `main` yet; delegated with `adk-rust awp keys delegate --scope payments` |
+
+Verification walks root, delegation, signature. A new root is endorsed by the old one; when the
+old root is lost, a person publishes the new root in DNS, so a stolen host account alone cannot
+rotate it. No key appears in a model context, tool result, log or audit record (A-I5). Root
+operations run only at a terminal: `adk-rust awp keys rotate` and `adk-rust awp keys delegate`
+([Sites and AWP from the command line](site-cli.md#making-a-site-anyone-can-verify)).
+
+### The contract, keys and public terms
+
+`StaticBundle` (feature `signing`) builds the three static-profile documents: it links the
+contract to `keys.json` and to the public terms with their digest, signs the contract with the
+root, and serialises all three. The output is deterministic, so a release that changes nothing
+here uploads nothing.
+
+```toml
+[dependencies]
+adk-awp = { version = "3.0.0", features = ["signing"] }
+awp-types = "3.0.0"
+uuid = "1"
+```
+
 ```rust
-use awp_types::{Charter, CharterViolation, TrustTier, CapabilityEffect, CapabilityManifestV2, CapabilityV2};
+use adk_awp::signing::bundle::StaticBundle;
+use adk_awp::signing::jws::{DocumentSigner, Ed25519DocumentSigner};
+use awp_types::{KeySet, Profile, PublicTerms, RootKey, SiteContract, SiteRef};
+
+async fn bundle() -> Result<(), Box<dyn std::error::Error>> {
+    let root = Ed25519DocumentSigner::generate("site-root-2026")?;
+    let keys = KeySet {
+        root: RootKey { kid: "site-root-2026".into(), public_key: root.public_key(), endorsement: None },
+        delegations: vec![],
+        retired_roots: vec![],
+        revocations: vec![],
+    };
+    let mut contract = SiteContract::new(SiteRef {
+        id: uuid::Uuid::nil(),
+        name: "Example".into(),
+        domain: "example.com".into(),
+        languages: vec![],
+    });
+    contract.profile = Some(Profile::Static);
+    let bundle = StaticBundle::build(contract, &keys, &PublicTerms::default(), &root).await?;
+    // /.well-known/awp.json, /.well-known/awp/keys.json, /.well-known/awp/charter.json
+    bundle.write_to(std::path::Path::new("well-known-root"))?;
+    Ok(())
+}
+```
+
+## The edge
+
+The `static+edge` profile adds the agent edge, `adk-server`'s `awp` feature: one site's
+capabilities to people and agents, with no owner route on its listener.
+
+| Element | Behaviour |
+|---------|-----------|
+| Trust tiers | `public` by default; `known` from a valid Web Bot Auth signature, an OAuth client-credentials token, a client certificate or an owner-issued API key; `verified` from a directory or issuer on the owner's verified list; `partner` from an owner rule. `User-Agent`, `X-AWP-Channel` and every other self-declared header are claims and never change a tier (A-I6) |
+| One declaration, three bindings | Each `CapabilityV2` is one `adk_core::Tool` with origin `awp:{domain}`, served as an A2A skill, an MCP tool and `POST /awp/v2/capabilities/{name}`, all through one governed path |
+| Visibility | The manifest, the Agent Card and `tools/list` show only what the caller's tier may call; a capability above the tier answers `404 capability_not_found` |
+| Held calls | A call the owner must decide answers `202` with `Location: /awp/v2/calls/{id}` and waits in the approval store |
+| Exactly once | A `non_idempotent` capability requires an idempotency key; a repeat returns the first outcome without executing (A-I7) |
+| Status, events, consent, beacon | The signed status, Standard Webhooks subscriptions, consent receipts with export and erasure, cookieless measurement |
+
+See [The AWP agent edge](awp-edge.md) for the full edge and [Writing capability
+packs](capability-packs.md) for capabilities.
+
+An application not built on `adk-server` mounts the core routes from `adk-awp` itself:
+`awp_v2_routes` serves `GET /awp/v2/manifest`, `GET /awp/v2/trust`, `GET /awp/v2/status`,
+`POST /awp/v2/capabilities/{name}` and `GET /awp/v2/calls/{id}`, with `AWP-Version: 2.0` on
+every response and the error envelope on every failure.
+
+| Piece | Behaviour |
+|-------|-----------|
+| `TierAssigner` | Assigns `public`, `known`, `verified` or `partner` from a verified credential; the default makes every caller `public` |
+| `CapabilityRegistry` | The site's capabilities and the manifest for a tier |
+| `DirectExecutor` | Refuses a capability above the caller's tier as `capability_not_found`, validates input, requires an idempotency key for `non_idempotent` capabilities, checks consent receipts, answers a repeated key from its record, and holds a call above its approval threshold with `202` |
+| Edge stores | Subscriptions, consent receipts, status, held calls, leads and idempotency records; backends run `edge_store_conformance_tests!` |
+
+```rust
+use adk_awp::v2::capability::CapabilityRegistry;
+use adk_awp::v2::routes::{EdgeState, awp_v2_routes};
+
+fn routes() -> axum::Router {
+    let state = EdgeState::builder(CapabilityRegistry::new("example.com")).build();
+    awp_v2_routes(state)
+}
+```
+
+## Verify
+
+Anyone can check a site from what it publishes. `Verifier` (feature `verify`) sends only `GET`
+requests and names the step that fails:
+
+| Step | Check | Failure |
+|------|-------|---------|
+| 1–2 | The contract and the key set are served and valid | `contract.unavailable`, `contract.invalid`, `keys.unavailable`, `keys.invalid` |
+| 3 | The `_awp-root` DNS record names the root; a root other than the pinned one passes only when DNS anchors it, and is reported as a recovery unless the pinned root endorsed it | `root.unanchored` |
+| 4–5 | The contract's proof by the root; every delegation, revocation and endorsement | `contract.signature`, `delegation.signature` |
+| 6 | The A2A Agent Card's signature by a `card` key | `card.signature` |
+| 7–8 | The checkpoint's signature by a `release` key; the log's tiles match it and extend the pinned one | `checkpoint.signature`, `log.consistency` |
+| 9–12 | The release sequence, the latest manifest's inclusion, the delta chain, no server-executable path | `contract.release_ahead`, `release.inclusion`, `release.manifest`, `release.executable` |
+| 13 | Sampled files (default 20) match their release digests | `page.digest` |
+| 14 | The public terms match the contract's digest | `charter.digest` |
+
+A pass pins the root and the checkpoint, so the next run fails when the log is rewritten. The
+report ends with a posture and readiness summary: the profile, signs of server code, the
+identity methods, A2A and MCP, usage preferences, `security.txt`, HSTS and a Content Security
+Policy.
+
+```toml
+[dependencies]
+adk-awp = { version = "3.0.0", features = ["verify"] }
+```
+
+```rust
+use std::sync::Arc;
+
+use adk_awp::signing::anchor::FixedTxtResolver;
+use adk_awp::verify::Verifier;
+use adk_awp::verify::fetch::HttpFetcher;
+use adk_awp::verify::pins::FilePinStore;
+
+async fn verify() -> Result<(), Box<dyn std::error::Error>> {
+    let verifier = Verifier::new(
+        Arc::new(HttpFetcher::new()?),
+        Arc::new(FixedTxtResolver::default()),
+        Arc::new(FilePinStore::new("awp-pins.json")),
+    );
+    let report = verifier.verify("example.com").await;
+    println!("{}", report.failure.map_or("pass".to_owned(), |f| f.to_string()));
+    Ok(())
+}
+```
+
+`adk-awp` has no network DNS resolver of its own: pass a `DnsTxtResolver`, as
+`adk-rust awp verify` does, or `FixedTxtResolver` with the record you expect. The conformance
+kit, `adk_awp::conformance::run`, checks any AWP 2.0 implementation; `adk-rust awp verify
+<domain>` and `adk-rust awp conformance <url>` run both from the command line
+([Sites and AWP from the command line](site-cli.md#adk-rust-awp)).
+
+## Version negotiation
+
+`AWP-Version` takes a list, highest first. A 2.0 route answers in 2.0, and a 1.x route answers
+`2.0, 1.0` in 1.0; a request naming no common major gets `406`. Every 2.0 response carries
+`AWP-Version: 2.0`.
+
+## The charter
+
+The charter is part of the protocol: a site's kind, governance, mission, goals, KPIs,
+guardrails, authority, budget, voice, red lines and reporting, signed by its owners. Its public
+terms are published at `/.well-known/awp/charter.json` with their digest in the contract; the
+rest stays in the charter store. See [The charter](charter.md).
+
+```rust
+use awp_types::{CapabilityEffect, CapabilityManifestV2, CapabilityV2, Charter, CharterViolation, TrustTier};
 
 fn check(mut charter: Charter) {
     charter.kpis[0].baseline = None; // a target with no baseline
@@ -174,558 +272,22 @@ fn check(mut charter: Charter) {
 }
 ```
 
-## Quick Start
-
-### 1. Create a `business.toml`
-
-```toml
-site_name = "My Shop"
-site_description = "An online store powered by AWP"
-domain = "myshop.example.com"
-contact = "hello@myshop.example.com"
-
-[business]
-country = "US"
-currency = "USD"
-languages = ["en"]
-
-[brand_voice]
-tone = "friendly and helpful"
-greeting = "Welcome! How can I help?"
-
-[[capabilities]]
-name = "browse_products"
-description = "Browse the product catalog"
-endpoint = "/api/products"
-method = "GET"
-access_level = "anonymous"
-
-[[capabilities]]
-name = "place_order"
-description = "Place an order"
-endpoint = "/api/orders"
-method = "POST"
-access_level = "known"
-input_schema = "OrderInput"
-output_schema = "OrderReceipt"
-
-[[products]]
-sku = "WIDGET-001"
-name = "Standard Widget"
-price = 1999
-inventory = 500
-tags = ["widget"]
-
-[[policies]]
-name = "privacy"
-description = "Minimal data collection, no tracking."
-policy_type = "privacy"
-
-[payments]
-providers = ["stripe"]
-auto_approve_threshold = 5000
-
-[support]
-escalation_contacts = ["support@myshop.example.com"]
-hours = "Mon-Fri 9-5 EST"
-```
-
-### 2. Load and serve AWP routes
-
-```rust
-use std::sync::Arc;
-
-use adk_awp::{AwpA2aHandler, AwpState, BusinessContextLoader, awp_routes};
-use async_trait::async_trait;
-use awp_types::AwpError;
-use axum::http::{HeaderMap, header};
-use serde_json::{Value, json};
-
-struct ApplicationA2a {
-    bearer_token: Arc<str>,
-}
-
-#[async_trait]
-impl AwpA2aHandler for ApplicationA2a {
-    async fn handle(&self, headers: HeaderMap, message: Value) -> Result<Value, AwpError> {
-        let expected = format!("Bearer {}", self.bearer_token);
-        let authorized = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value == expected);
-        if !authorized {
-            return Err(AwpError::Unauthorized("invalid A2A credential".to_string()));
-        }
-        // Authorize the requested capability and dispatch to the application agent.
-        Ok(json!({ "status": "processed", "messageId": message["id"] }))
-    }
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let loader = BusinessContextLoader::from_file("business.toml".as_ref())?;
-    let a2a_token: Arc<str> = std::env::var("AWP_A2A_TOKEN")?.into();
-    let state = AwpState::builder(loader.context_ref())
-        .a2a_handler(Arc::new(ApplicationA2a { bearer_token: a2a_token }))
-        .build();
-
-    let app = axum::Router::new().merge(awp_routes(state));
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3456").await?;
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .await?;
-    Ok(())
-}
-```
-
-This registers the four public AWP endpoints with version negotiation, rate
-limiting, and a 64 KiB A2A body limit. Without an `AwpA2aHandler`,
-`POST /awp/a2a` returns `503` and never acknowledges work that was not
-dispatched. `ConnectInfo` supplies the peer address used to isolate anonymous
-rate-limit buckets; without it, unknown callers intentionally share one bucket.
-
-## Public AWP endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/.well-known/awp.json` | Discovery document — entry point for agents |
-| GET | `/awp/manifest` | JSON-LD capability manifest |
-| GET | `/awp/health` | Health state (Healthy/Degrading/Degraded) |
-| POST | `/awp/a2a` | Application-provided A2A dispatch |
-
-## Authenticated management endpoints
-
-`awp_management_routes()` returns subscription management separately and
-without an authentication layer. Apply the application's auth middleware
-before merging it:
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/awp/events/subscribe` | Create a webhook subscription |
-| GET | `/awp/events/subscriptions` | List all subscriptions |
-| DELETE | `/awp/events/subscriptions/{id}` | Delete a subscription |
-
-## Discovery Document
-
-The discovery document at `/.well-known/awp.json` is auto-generated from your `business.toml`:
-
-```json
-{
-  "version": { "major": 1, "minor": 0 },
-  "siteName": "My Shop",
-  "siteDescription": "An online store powered by AWP",
-  "capabilityManifestUrl": "https://myshop.example.com/awp/manifest",
-  "a2aEndpointUrl": "https://myshop.example.com/awp/a2a",
-  "eventsEndpointUrl": "https://myshop.example.com/awp/events/subscribe",
-  "healthEndpointUrl": "https://myshop.example.com/awp/health",
-  "supportedTrustLevels": ["anonymous"]
-}
-```
-
-## Capability Manifest
-
-The manifest at `/awp/manifest` uses JSON-LD format:
-
-```json
-{
-  "@context": "https://schema.org",
-  "@type": "WebAPI",
-  "name": "My Shop",
-  "description": "An online store powered by AWP",
-  "capabilities": [
-    {
-      "name": "browse_products",
-      "description": "Browse the product catalog",
-      "endpoint": "/api/products",
-      "method": "GET",
-      "accessLevel": "anonymous"
-    },
-    {
-      "name": "place_order",
-      "description": "Place an order",
-      "endpoint": "/api/orders",
-      "method": "POST",
-      "accessLevel": "known",
-      "inputSchema": "OrderInput",
-      "outputSchema": "OrderReceipt"
-    }
-  ]
-}
-```
-
-Each entry carries the capability's `access_level` from `business.toml` as `accessLevel`, and its
-optional `input_schema` and `output_schema`. The access level is metadata; the application
-handler enforces it.
-
-## Trust Levels
-
-AWP uses four trust levels with increasing access:
-
-| Level | Discriminant | How Assigned |
-|-------|-------------|-------------|
-| `Anonymous` | 0 | No credentials |
-| `Known` | 1 | Valid API key or JWT |
-| `Partner` | 2 | JWT with `partner` scope |
-| `Internal` | 3 | JWT with `internal` scope |
-
-Trust levels are ordered: `Anonymous < Known < Partner < Internal`. Each capability in `business.toml` declares its minimum `access_level`.
-
-`DefaultTrustAssigner` classifies every request as `Anonymous`. A bearer or API
-key header is not trusted until an application verifier validates it. Higher
-trust levels therefore require a custom assigner.
-
-Configure `.supported_trust_levels(...)` alongside that assigner so discovery
-advertises only levels the deployment can verify.
-
-### Custom Trust Assignment
-
-Implement the `TrustLevelAssigner` trait for custom logic:
-
-```rust
-use std::sync::Arc;
-
-use adk_awp::TrustLevelAssigner;
-use async_trait::async_trait;
-use awp_types::TrustLevel;
-use axum::http::{HeaderMap, header};
-
-struct MyTrustAssigner {
-    bearer_token: Arc<str>,
-}
-
-#[async_trait]
-impl TrustLevelAssigner for MyTrustAssigner {
-    async fn assign(&self, headers: &HeaderMap) -> TrustLevel {
-        let expected = format!("Bearer {}", self.bearer_token);
-        if headers
-            .get(header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value == expected)
-        {
-            TrustLevel::Known
-        } else {
-            TrustLevel::Anonymous
-        }
-    }
-}
-```
-
-Use the same verified identity and scope source as the rest of the application
-when assigning `Partner` or `Internal`.
-
-## Rate Limiting
-
-The built-in `InMemoryRateLimiter` uses a sliding window algorithm with per-trust-level limits:
-
-| Trust Level | Default Limit |
-|-------------|--------------|
-| Anonymous | 30 requests/minute |
-| Known | 120 requests/minute |
-| Partner | 600 requests/minute |
-| Internal | Unlimited |
-
-Rejected requests receive HTTP 429 with a `Retry-After` header.
-
-### Custom Limits
-
-```rust
-use std::collections::HashMap;
-use awp_types::TrustLevel;
-use adk_awp::{InMemoryRateLimiter, RateLimitConfig};
-
-let mut limits = HashMap::new();
-limits.insert(TrustLevel::Anonymous, RateLimitConfig {
-    max_requests: 10,
-    window_secs: 60,
-});
-limits.insert(TrustLevel::Known, RateLimitConfig {
-    max_requests: 100,
-    window_secs: 60,
-});
-
-let limiter = InMemoryRateLimiter::with_config(limits);
-```
-
-## Version Negotiation
-
-All AWP routes include version negotiation middleware:
-
-- Clients send `AWP-Version: 1.1` header (optional — defaults to current version)
-- Server checks major version compatibility
-- Compatible requests proceed; incompatible requests get HTTP 406
-- Malformed version values get HTTP 400
-- Response includes `AWP-Version: 1.0` header
-
-## Event Subscriptions
-
-Subscription management is a privileged surface. Mount
-`awp_management_routes()` behind authentication before accepting these
-requests. Callback URLs must be absolute HTTPS URLs that do not name a
-loopback, private, or link-local address, and signing secrets must contain 32
-to 4096 bytes:
-
-```bash
-# Subscribe — answers 201 with {"id": "..."}
-curl -X POST http://localhost:3456/awp/events/subscribe \
-  -H "Authorization: Bearer $AWP_ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "subscriber": "my-agent",
-    "callbackUrl": "https://my-agent.example/webhook",
-    "eventTypes": ["health.changed"],
-    "secret": "replace-with-at-least-32-random-bytes"
-  }'
-
-# List subscriptions (the secret is never returned)
-curl -H "Authorization: Bearer $AWP_ADMIN_TOKEN" \
-  http://localhost:3456/awp/events/subscriptions
-```
-
-`InMemoryEventSubscriptionService`, the default, keeps subscriptions in memory
-and delivers each matching event over HTTP through
-`adk_core::webhook_delivery::WebhookDelivery`:
-
-- Each delivery carries [Standard Webhooks](https://www.standardwebhooks.com/)
-  headers (`webhook-id`, `webhook-timestamp`, `webhook-signature`), signed with
-  the subscription secret's bytes as the key; the event ID is the `webhook-id`.
-- Failed deliveries are retried with exponential backoff and jitter, and
-  dead-lettered after the last attempt. Redirects are not followed.
-- The egress policy refuses plain-HTTP, loopback, private, and link-local
-  destinations at subscription time and again when the host name resolves.
-- `deliver` starts the deliveries and returns at once; `deliver_and_wait`
-  returns a `DeliveryReport` per subscription. `with_delivery` sets the retry
-  policy, dead-letter sink, or egress policy.
-
-Implement `EventSubscriptionService` for durable subscription storage.
-
-Receivers verify a delivery with `adk_core::webhook::WebhookVerifier` (feature
-`webhooks`):
-
-```rust
-use adk_core::webhook::{WebhookHeaders, WebhookSecret, WebhookVerifier};
-
-fn verify(
-    secret: &str,
-    id: &str,
-    timestamp: &str,
-    signature: &str,
-    body: &[u8],
-) -> Result<(), adk_core::webhook::WebhookError> {
-    let verifier = WebhookVerifier::new(WebhookSecret::from_bytes(secret.as_bytes().to_vec())?);
-    let headers = WebhookHeaders { id, timestamp: timestamp.into(), signature };
-    verifier.verify(&headers, body)?;
-    Ok(())
-}
-```
-
-`adk_awp::sign_payload` and `verify_signature`, the earlier `sha256=<hex_digest>` HMAC pair,
-are deprecated; the built-in service no longer sends that format.
-
-## Health State Machine
-
-The health endpoint tracks service state with strictly validated transitions:
-
-```
-Healthy → Degrading → Degraded
-    ↑         │           │
-    └─────────┘           │
-    └─────────────────────┘
-```
-
-State changes emit `health.changed` events to all matching subscribers.
-
-```rust
-use adk_awp::{HealthStateMachine, InMemoryEventSubscriptionService};
-use std::sync::Arc;
-
-let health = HealthStateMachine::new(Arc::new(InMemoryEventSubscriptionService::new()));
-
-// Transition to degrading
-health.report_degrading("database latency high").await?;
-
-// Transition to degraded
-health.report_degraded("database unreachable").await?;
-
-// Recover
-health.report_healthy().await?;
-```
-
-Valid transitions are Healthy → Degrading, Degrading → Degraded, and Degrading or Degraded →
-Healthy. Any other (e.g., Healthy → Degraded) returns `AwpError::InvalidRequest`.
-
-## Consent Storage
-
-AWP includes a consent storage interface, `ConsentService`, with in-memory and file-backed
-(`FileConsentService`) implementations. Regulatory compliance also requires
-application-specific notice, lawful basis, retention, access controls, and
-deletion policy; selecting a storage implementation does not establish
-compliance. `FileConsentService` writes each change to a synced temporary file and renames it
-over the target on a blocking thread, so a reader or a crash never sees a partial file:
-
-```rust
-use adk_awp::{ConsentService, InMemoryConsentService};
-
-let consent = InMemoryConsentService::new();
-
-// Capture consent
-consent.capture_consent("visitor-123", "analytics").await?;
-
-// Check consent
-let has_consent = consent.check_consent("visitor-123", "analytics").await?;
-
-// Revoke consent
-consent.revoke_consent("visitor-123", "analytics").await?;
-```
-
-## Requester Type Detection
-
-AWP detects whether a request comes from a human or an AI agent:
-
-1. `X-AWP-Channel: agent` header → Agent (explicit override)
-2. `Accept` containing `application/json`, `application/ld+json`, or `application/awp+json`, plus an agent User-Agent pattern → Agent
-3. Otherwise → Human
-
-Agent User-Agent patterns: `bot`, `crawler`, `spider`, `agent`, `gpt`, `claude`, `gemini`, `perplexity`, `anthropic`, `openai`.
-
-```rust
-use adk_awp::detect_requester_type;
-use axum::http::HeaderMap;
-
-let mut headers = HeaderMap::new();
-headers.insert("X-AWP-Channel", "agent".parse().unwrap());
-let requester = detect_requester_type(&headers);
-// RequesterType::Agent
-```
-
-## AWP Message Types
-
-Beyond generic A2A messages, AWP defines typed message categories for agent routing:
-
-| Type | Description |
-|------|-------------|
-| `VisitorIntentSignal` | Purchase or service intent |
-| `ContentGapSignal` | Missing or outdated content detected |
-| `PaymentIntent` | Payment lifecycle message |
-| `SupportEscalation` | Escalation to human support |
-| `ReviewSignal` | Review or feedback from a platform |
-| `OperationsProposal` | Inventory, scheduling proposal |
-| `InvokeCapability` | Invoke a declared capability |
-| `RenderUi` | Request UI rendering |
-| `OutboundTrigger` | Proactive outbound message |
-
-```rust
-use awp_types::{AwpMessageType, AwpTypedMessage};
-
-let msg = AwpTypedMessage {
-    id: uuid::Uuid::now_v7(),
-    sender: "visitor-agent".to_string(),
-    recipient: "payment-agent".to_string(),
-    awp_type: AwpMessageType::PaymentIntent,
-    timestamp: chrono::Utc::now(),
-    payload: serde_json::json!({"sku": "WIDGET-001", "amount": 2500}),
-};
-```
-
-## Payment Intents
-
-AWP defines a simplified payment lifecycle for owner-policy-driven payments:
-
-```
-Draft → PendingApproval → Approved → Executing → Settled
-                                                → Rejected
-                                                → Cancelled
-```
-
-The `PaymentPolicy` evaluates whether to auto-approve or require owner approval:
-
-```rust
-use awp_types::{PaymentPolicy, TrustLevel};
-
-let policy = PaymentPolicy::default(); // auto-approve up to $50 for Known callers and above
-
-let decision = policy.evaluate(2500, TrustLevel::Known);
-// PaymentPolicyDecision::AutoApprove (amount $25 <= $50 threshold)
-
-let decision = policy.evaluate(60_000, TrustLevel::Partner);
-// PaymentPolicyDecision::RequireApproval (amount $600 > $50 threshold)
-```
-
-`PaymentIntent` is the AWP 1.x payment type; no crate in this workspace executes one, and
-`adk-gateway`, a separate repository, uses it. AWP 2.0 settles payments through `adk-payments`
-rails and signed receipts.
-
-`evaluate` auto-approves an amount at or below `auto_approve_threshold` (default 5000 cents)
-from a caller at or above `min_trust_for_auto_approve` (default `Known`), and requires approval
-for everything else. `require_approval_threshold` (default 50,000) does not change the decision.
-
-## business.toml Schema
-
-The full schema supports rich business configuration:
-
-| Section | Fields | Required |
-|---------|--------|----------|
-| (root) | `site_name`, `site_description`, `domain`, `contact` | Yes (except contact) |
-| `[business]` | `name`, `country`, `languages`, `currency`, `timezone` | No |
-| `[brand_voice]` | `tone`, `greeting`, `escalation_message` | No |
-| `[[products]]` | `sku`, `name`, `price`, `inventory`, `tags`, `description` | No |
-| `[[capabilities]]` | `name`, `description`, `endpoint`, `method`, `access_level`; optional `input_schema`, `output_schema` | Yes |
-| `[[policies]]` | `name`, `description`, `policy_type` | Yes |
-| `[channels]` | `whatsapp`, `email`, `website`, `sms` | No |
-| `[payments]` | `providers`, `auto_approve_threshold`, `require_approval_threshold` | No |
-| `[support]` | `escalation_contacts`, `hours`, `sla` | No |
-| `[content]` | `topics`, `auto_draft`, `publish_delay` | No |
-| `[reviews]` | `platforms`, `auto_respond_threshold` | No |
-| `[outreach]` | `follow_up_delay`, `require_consent` | No |
-
-All extended sections are optional — existing minimal `business.toml` files continue to work.
-
-### Hot Reload
-
-The `BusinessContextLoader` supports hot-reload via `ArcSwap`:
-
-```rust
-let loader = BusinessContextLoader::from_file("business.toml".as_ref())?;
-loader.watch("business.toml".into()).await?;
-// Changes to business.toml are picked up automatically every 5 seconds
-```
-
-## Running the Example
-
-A complete AWP agent example is included:
-
-```bash
-cd examples/awp_agent
-cp .env.example .env   # add your GOOGLE_API_KEY
-cargo run
-```
-
-The example:
-1. Loads `business.toml` with products, policies, and brand voice
-2. Creates an LLM agent with instructions derived from the business context
-3. Installs authenticated A2A dispatch to that agent
-4. Mounts management routes behind a separate demo credential
-5. Exercises every endpoint and prints protocol verification
-
-## Best Practices
-
-1. **Start with a minimal `business.toml`** — only `site_name`, `site_description`, `domain`, capabilities, and policies are required
-2. **Enforce capability authorization** — `access_level` is manifest metadata; the application handler must enforce it
-3. **Enable hot-reload** in production — call `loader.watch()` for zero-downtime config updates
-4. **Implement custom `TrustLevelAssigner`** — the default intentionally assigns only `Anonymous`
-5. **Authenticate management routes** — never expose subscription CRUD from an unprotected router
-6. **Install real A2A dispatch** — the fail-closed default returns `503`
-7. **Store subscriptions durably** — the in-memory service loses them on restart; implement `EventSubscriptionService` over your database
-8. **Verify webhook signatures** — check the Standard Webhooks headers with `WebhookVerifier` on incoming deliveries
+## Migrating from AWP 1.x
+
+AWP 1.x — `business.toml`, the unsigned discovery document, `/awp/manifest`, `/awp/a2a` and
+trust levels assigned by the application — keeps working behind the default `awp-v1` feature
+for one release line. `adk-rust awp migrate-config business.toml` converts its configuration
+into 2.0 site data and a draft charter. [Migrating from AWP 1.x to 2.0](../migration/awp-1-to-2.md)
+maps every 1.x element to its 2.0 counterpart and keeps the 1.x reference.
 
 ## Related
 
-- [A2A Protocol](a2a.md) — Agent-to-Agent communication (complementary to AWP)
-- [Server Deployment](server.md) — Running agents as HTTP servers
-- [Access Control](../security/access-control.md) — Role-based permissions
+- [The AWP agent edge](awp-edge.md)
+- [Sites and AWP from the command line](site-cli.md)
+- [The AWP website product](adk-website.md)
+- [Web Bot Auth](../security/web-bot-auth.md)
+- [A2A Protocol](a2a.md)
 
 ---
 
-**Previous**: [← A2A Protocol](a2a.md) | **Next**: [Evaluation →](../evaluation/evaluation.md)
+**Previous**: [← A2A Protocol](a2a.md) | **Next**: [The AWP Agent Edge →](awp-edge.md)

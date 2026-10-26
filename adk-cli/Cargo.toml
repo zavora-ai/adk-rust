@@ -62,6 +62,8 @@ sha2 = { workspace = true, optional = true }
 adk-site = { workspace = true, optional = true, features = ["migrate"] }
 adk-awp = { workspace = true, optional = true, features = ["verify"] }
 awp-types = { workspace = true, optional = true }
+# `adk-rust website …` (spec 3.5 §8.1, D-14): the product, served beside the web home
+adk-website = { workspace = true, optional = true }
 # Private JWK key files for `awp keys` (spec 3.5 §7.2, A-I5)
 base64 = { version = "0.22", optional = true }
 zeroize = { version = "1.8.2", optional = true }
@@ -195,7 +197,7 @@ mobile = ["surface", "harness", "adk-surface/mobile"]
 # content repository; `adk-rust awp …` verifies a domain, runs the conformance kit, manages
 # the root and delegated keys, and migrates a 1.x `business.toml`. Opt-in: migration links
 # hickory, image comparison and X.509 parsing.
-website = ["dep:adk-site", "dep:adk-awp", "dep:awp-types", "dep:adk-auth", "adk-auth/web-bot-auth", "adk-session/sqlite", "audit", "dep:base64", "dep:zeroize", "dep:url", "dep:uuid", "dep:chrono"]
+website = ["harness", "persist", "surface", "adk-surface?/website", "dep:adk-website", "dep:adk-site", "dep:adk-awp", "dep:awp-types", "dep:adk-auth", "adk-auth/web-bot-auth", "adk-session/sqlite", "audit", "dep:base64", "dep:zeroize", "dep:url", "dep:uuid", "dep:chrono"]
 
 # Standard error to terminal.log while the full screen is up (spec 3.3 §5.2, S-I9)
 [target.'cfg(unix)'.dependencies]

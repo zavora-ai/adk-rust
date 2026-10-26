@@ -965,6 +965,7 @@ impl HarnessLauncher {
         })
     }
 
+    #[cfg(feature = "surface")]
     fn has_phone(&self) -> bool {
         #[cfg(feature = "mobile")]
         return self.phone.is_some();

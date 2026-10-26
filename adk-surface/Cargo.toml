@@ -41,6 +41,10 @@ mobile = ["web", "dep:web-push-native", "dep:p256", "dep:qrcode", "dep:base64ct"
 # runtime drives the harness's realtime session (`adk-realtime`); hosts pass the provider
 # models, so no provider is compiled in here. With `web`, the voice view's socket.
 voice = ["adk-harness/voice", "dep:adk-realtime", "adk-realtime/integration", "dep:sha2", "dep:base64", "axum?/ws"]
+# The website's views on the web home (spec 3.5 §7.1, §8.2): the web editor, onboarding, the
+# charter cards, the site view and the weekly review over `adk-website`'s desk, with their own
+# OpenAPI document and generated TypeScript. Implies `web`.
+website = ["web", "dep:adk-website", "dep:base64"]
 # Gemini Live and the OpenAI Realtime API, for the live voice test and the `voice_home`
 # example only: a host builds its own provider models.
 voice-live = ["voice", "adk-realtime/gemini", "adk-realtime/openai"]
@@ -56,6 +60,8 @@ adk-kernel.workspace = true
 adk-harness = { workspace = true, features = ["kernel"] }
 # The realtime session a voice conversation runs on (`voice`).
 adk-realtime = { workspace = true, optional = true }
+# The website's desk: its views and the decisions people make on them (`website`).
+adk-website = { workspace = true, optional = true }
 async-trait.workspace = true
 axum = { version = "0.8", optional = true }
 # Camera and screen frames go to the realtime provider base64-encoded (`voice`).
@@ -113,6 +119,10 @@ adk-model = { path = "../adk-model", default-features = false, features = ["anth
 adk-realtime = { path = "../adk-realtime", features = ["scripted"] }
 adk-server = { path = "../adk-server", features = ["approvals"] }
 adk-session = { path = "../adk-session" }
+# The website's scripted site: its pipeline, wallet and wire types (feature `website`).
+adk-site = { path = "../adk-site" }
+adk-payments = { path = "../adk-payments" }
+awp-types = { path = "../awp-types" }
 # The fake Telegram Bot API the chat adapter's tests run against.
 axum = "0.8"
 dotenvy = "0.15"
@@ -149,6 +159,13 @@ required-features = ["mobile"]
 [[example]]
 name = "scripted_voice_home"
 required-features = ["web", "voice"]
+
+# The website's views over a bakery's site, fresh or a week after launch, which the website
+# end-to-end tests in `web/e2e` open (spec 3.5 §8.2).
+[[example]]
+name = "scripted_website"
+path = "examples/scripted_website/main.rs"
+required-features = ["website"]
 
 # The voice view on Gemini Live or the OpenAI Realtime API, with keys from the repo's `.env`.
 [[example]]

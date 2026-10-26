@@ -1,6 +1,8 @@
 //! The harness describes itself to the model (spec 3.1 §7.25): the `<harness>` block in
 //! the system instruction, the standing-rules digest in the reminder and `harness_help`.
 
+#![cfg(feature = "runner")]
+
 mod common;
 
 use adk_core::{Part, SubjectKind, SubjectRef, ToolOrigin};

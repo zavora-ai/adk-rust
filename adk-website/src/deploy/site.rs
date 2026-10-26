@@ -4,7 +4,7 @@
 //!
 //! | Part | Built from |
 //! |---|---|
-//! | Runtime | The content repository, `ExperimentGenerator` around the built-in generator, the SQLite site log signed with `data/keys/release.jwk`, the `DirectoryHost`, the history, the charter store, the kind's launch gate with [`ReleaseDelegation`](super::checks::ReleaseDelegation) |
+//! | Runtime | The content repository, `ExperimentGenerator` around the built-in generator, the SQLite site log signed with `data/keys/release.jwk`, the `DirectoryHost`, the history, the charter store, the kind's launch gate with [`ReleaseDelegation`] |
 //! | Edge | The kind's capabilities with the packs' handlers; SQLite edge stores; the kernel's approvals and signals; the consent policy; `MeteredActionLedger` and `EdgeMeter`; inbox threads, the calendar and payment links when configured; `card.jwk` and `receipt.jwk` |
 //! | Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and the stream lane signed with the receipt key; the feeds in `feeds.json`; [`UpdateDriver`] with its journal and cards |
 //! | Experiments | `ExperimentRunner` with `BeaconKpi`, the job pauses, the ladder, the alarms and `RepublishOnStop`; its daily trigger |

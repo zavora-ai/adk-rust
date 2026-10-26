@@ -1,0 +1,49 @@
+[package]
+name = "website-scenarios"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Spec 3.5 scenarios S1–S19 for adk-website: scripted and live product-level runs, fixtures and the S19 soak"
+
+[workspace]
+
+[features]
+default = ["cdn"]
+# S18's reference CDN host: `adk-site`'s object-store host behind a pointer.
+cdn = ["adk-site/host-gcs"]
+
+[dependencies]
+adk-auth = { path = "../../adk-auth", features = ["web-bot-auth", "signed-audit"] }
+adk-awp = { path = "../../adk-awp", features = ["signing", "verify"] }
+adk-core = { path = "../../adk-core" }
+adk-devtools = { path = "../../adk-devtools" }
+adk-drivers = { path = "../../adk-drivers" }
+# The experiment analysis S11 reads (spec 3.5 §7.12).
+adk-eval = { path = "../../adk-eval", features = ["experiments"] }
+adk-harness = { path = "../../adk-harness", features = ["website"] }
+adk-kernel = { path = "../../adk-kernel", features = ["charter", "channels"] }
+# ScriptedLlm for the scripted runs; the live runs use claude-sonnet-5-5 or gemini-3.7-flash.
+adk-model = { path = "../../adk-model", default-features = false, features = ["anthropic", "gemini"] }
+adk-payments = { path = "../../adk-payments", features = ["wallet"] }
+adk-server = { path = "../../adk-server", features = ["background", "awp", "awp-sqlite"] }
+adk-session = { path = "../../adk-session" }
+adk-site = { path = "../../adk-site", features = ["migrate"] }
+adk-tool = { path = "../../adk-tool" }
+adk-website = { path = "../../adk-website" }
+awp-types = { path = "../../awp-types" }
+anyhow = "1.0"
+async-trait = "0.1"
+axum = "0.8"
+base64 = "0.22"
+chrono = { version = "0.4.44", features = ["serde"] }
+dotenvy = "0.15"
+# The photos S18 sends.
+image = { version = "0.25", default-features = false, features = ["png"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3"
+tokio = { version = "1.40", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+url = "2.5"
+uuid = { version = "1.23", features = ["v4", "serde"] }

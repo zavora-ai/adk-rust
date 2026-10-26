@@ -379,5 +379,6 @@ To keep a page on a server you build with `adk-server`, mount the web home as sh
 ## Related
 
 - [The Engine](index.md) — the feed, projection, commands and the web API the home reads
+- [The Website's Views](website.md) — the **Website** section, where the server serves a website
 - [The Control Plane](../kernel/control-plane.md) — the kernel routes beside the engine
 - [Serving the Harness](../harness/serving.md) — `adk-rust serve`, its authentication and the inbox

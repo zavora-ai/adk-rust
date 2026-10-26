@@ -315,6 +315,7 @@ fn feeds_lists_the_configured_feeds() {
 }
 
 /// A legacy site on loopback: a home page linking an about page and a contact form.
+#[cfg(feature = "scripted-model")]
 async fn legacy() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let requests = std::sync::Arc::new(AtomicUsize::new(0));
