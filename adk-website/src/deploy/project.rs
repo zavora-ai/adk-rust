@@ -103,6 +103,35 @@ impl ProjectPaths {
         format!("sqlite://{}?mode=rwc", self.data().join(format!("{name}.db")).display())
     }
 
+    /// The kernel database the site runs on (spec 3.5 §7.22, A-I22): the agency's
+    /// `data/kernel.db` when an `agency.toml` beside the project lists it, as
+    /// `serve_agency` serves it, else the project's own.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_website::deploy::ProjectPaths;
+    ///
+    /// let dir = tempfile::tempdir().unwrap();
+    /// std::fs::write(dir.path().join("agency.toml"), "[[site]]\ndomain = \"bakery.example\"\ndir = \"bakery\"\n").unwrap();
+    /// let site = ProjectPaths::new(dir.path().join("bakery"));
+    /// assert_eq!(site.kernel_database(), ProjectPaths::new(dir.path()).database("kernel"));
+    /// let alone = ProjectPaths::new(dir.path().join("notes"));
+    /// assert_eq!(alone.kernel_database(), alone.database("kernel"));
+    /// ```
+    pub fn kernel_database(&self) -> String {
+        let listed = self.root.parent().and_then(|agency| {
+            let text = std::fs::read_to_string(agency.join("agency.toml")).ok()?;
+            let file: super::serve::AgencyFile = toml::from_str(&text).ok()?;
+            let name = self.root.file_name()?;
+            file.sites
+                .iter()
+                .any(|site| site.dir.as_os_str() == name || agency.join(&site.dir) == self.root)
+                .then(|| ProjectPaths::new(agency))
+        });
+        listed.map_or_else(|| self.database("kernel"), |agency| agency.database("kernel"))
+    }
+
     /// Files released under `/.well-known/`.
     pub fn well_known(&self) -> PathBuf {
         self.root.join("well-known")

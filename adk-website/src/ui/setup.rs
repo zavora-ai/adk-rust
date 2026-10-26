@@ -94,6 +94,9 @@ impl WebsiteDesk {
             device.map(str::trim).filter(|name| !name.is_empty()).unwrap_or("Owner's device");
         let claimed = gate.claim(code, name).await?;
         *paired = Some(claimed.device.id.clone());
+        drop(paired);
+        // The paired device is the only one onboarding admits, after a restart too (A-I20).
+        self.persist().await;
         tracing::info!(website.site = %self.inner.site.id, device = %claimed.device.id, "website.setup.paired");
         Ok(ClaimedView {
             token: claimed.token,

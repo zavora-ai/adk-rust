@@ -1558,6 +1558,7 @@ dependencies = [
  "proptest",
  "schemars 1.2.2",
  "scraper",
+ "semver",
  "serde",
  "serde_json",
  "sqlx",

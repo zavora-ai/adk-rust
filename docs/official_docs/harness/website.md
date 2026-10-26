@@ -46,6 +46,11 @@ this mode". A Propose agent drafts without asking to leave plan mode.
 | Tools | Declared capabilities, `search_site`, `reply_in_thread` (`adk-drivers`), `emit_signal` | The back-office toolset |
 | Policy | `PublicPolicy`: the manifest's fixed list, no standing rules | The partition policy, `WebsitePolicy`, the ladder with job pauses, `adk-drivers`' `DriverCapPolicy` |
 
+A back-office team built as an `adk-agent` `TeamSpec` with the Steward as coordinator runs
+under each member's harness: `HarnessAgentBuilder::team_delegates` names the members the
+coordinator delegates to, so their delegation tools are classed `Delegate` and the mode table
+lets the coordinator hand work over, and each member's own policy decides its calls.
+
 A public agent cannot publish, deploy, change DNS, spend, send in bulk, fetch the web or read
 owner memory, whatever a model asks: `PublicPolicy` denies every tool outside its list, even
 one attached by mistake (A-I2). The harness offers a public agent none of its own tools — no

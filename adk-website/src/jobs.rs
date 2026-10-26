@@ -10,7 +10,7 @@
 //! | Process (§7.11) | Job | Agent | Default wake |
 //! |---|---|---|---|
 //! | `site.probe` | `protect` | Guardian | every 5 minutes |
-//! | `site.watch` | `hosting` | Guardian | daily at 06:00 UTC |
+//! | `site.watch` | `hosting` (the upkeep check, [`WATCH_WORKFLOW`]) | Guardian | daily at 06:00 UTC |
 //! | `site.content` | `freshness` | Growth | a `content_gap` signal |
 //! | `site.reviews` | `social` (playbook `review-replies`) | Growth | a `review_seen` signal |
 //! | `site.outreach` | `nurture` | Revenue | daily at 09:00 UTC |
@@ -662,10 +662,13 @@ pub struct SiteProcess {
 pub const PROBE_WORKFLOW: &str = "website.guardian.probe";
 /// The workflow that composes and sends the weekly review (spec 3.5 §7.21).
 pub const DIGEST_WORKFLOW: &str = "website.steward.digest";
+/// The workflow the hosting job's daily watch runs without a model: advisories against the
+/// edge's lockfile and the certificate's expiry, proposed to the owner (spec 3.5 §7.20).
+pub const WATCH_WORKFLOW: &str = "website.guardian.watch";
 
 /// The processes of `jobs` for `team`, in the back office `partition` of app `app` (spec 3.5
-/// §7.11, §7.20): the probe and the digest run as workflows; the other kinds run their job's
-/// agent with the playbook as its turn.
+/// §7.11, §7.20): the probe, the watch and the digest run as workflows; the other kinds run
+/// their job's agent with the playbook as its turn.
 ///
 /// # Example
 ///
@@ -696,6 +699,7 @@ pub fn processes(
             let target = match kind {
                 SiteProcessKind::Probe => PROBE_WORKFLOW.to_string(),
                 SiteProcessKind::Digest => DIGEST_WORKFLOW.to_string(),
+                SiteProcessKind::Watch => WATCH_WORKFLOW.to_string(),
                 _ => agent.as_str().to_string(),
             };
             let input = json!({

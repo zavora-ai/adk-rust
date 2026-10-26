@@ -26,13 +26,15 @@
 //! an agent principal is refused every role.
 //!
 //! **What it keeps.** The views are rebuilt from the stores on every read. The desk holds the
-//! state of the person's own work in progress — the onboarding answers, the charter under
-//! review, the editor's drafts — in memory, as the site runtime holds its drafts.
+//! state of the person's own work in progress — the paired device, the onboarding answers, the
+//! charter under review, the editor's drafts — and, with a [`DeskStore`], saves it after every
+//! command and reads it back with [`WebsiteDesk::restore`], so a restart loses none of it.
 
 pub mod charter;
 pub mod editor;
 pub mod onboarding;
 pub mod review;
+mod saved;
 pub mod setup;
 pub mod site;
 mod words;
@@ -69,6 +71,7 @@ pub use charter::{CharterReview, SectionCard, SignerLine};
 pub use editor::{DraftView, EditorCommand, EditorHome, EditorOutcome, KindForm};
 pub use onboarding::{OnboardingCommand, OnboardingOutcome, OnboardingView};
 pub use review::{ReviewCommand, ReviewPage, ReviewView};
+pub use saved::{DeskStore, FileDeskStore, InMemoryDeskStore, SavedDesk};
 pub use setup::{ClaimedView, SetupView};
 pub use site::{SiteCommand, SiteOutcome, SiteViewModel};
 
@@ -357,6 +360,8 @@ pub(crate) struct Desk {
     pub(crate) incidents: Option<Arc<IncidentPath>>,
     pub(crate) composer: Option<ReviewComposer>,
     pub(crate) notes: Option<Arc<dyn ReviewNotes>>,
+    pub(crate) store: Option<saved::SharedDeskStore>,
+    pub(crate) quotes: Option<Arc<crate::quotes::ReviewQuotes>>,
     pub(crate) channel: Option<(Arc<dyn ChannelSink>, String)>,
     pub(crate) discovery: Option<(SourceContext, Option<Arc<dyn SiteSource>>)>,
     pub(crate) connectors: Vec<Arc<dyn Connector>>,
@@ -522,6 +527,22 @@ impl WebsiteDeskBuilder {
         notes, notes: Arc<dyn ReviewNotes>
     );
 
+    /// Where the desk saves the person's work in progress, so a restart keeps it (spec 3.5
+    /// §8.2); restore it with [`WebsiteDesk::restore`].
+    #[must_use]
+    pub fn store(mut self, store: Arc<dyn DeskStore>) -> Self {
+        self.desk.store = Some(store);
+        self
+    }
+
+    /// The reviews the site may quote: discovery adds what it found, and the owner decides
+    /// each from its card (spec 3.5 S2).
+    #[must_use]
+    pub fn quotes(mut self, quotes: Arc<crate::quotes::ReviewQuotes>) -> Self {
+        self.desk.quotes = Some(quotes);
+        self
+    }
+
     /// The owner's channel and thread the review's summary goes to (spec 3.5 §7.21).
     #[must_use]
     pub fn channel(mut self, sink: Arc<dyn ChannelSink>, thread: impl Into<String>) -> Self {
@@ -618,6 +639,8 @@ impl WebsiteDesk {
                 incidents: None,
                 composer: None,
                 notes: None,
+                store: None,
+                quotes: None,
                 channel: None,
                 discovery: None,
                 connectors: Vec::new(),
@@ -648,6 +671,10 @@ impl WebsiteDesk {
     /// The site runtime as it stands: the owner's chosen design replaces it during onboarding.
     pub async fn runtime(&self) -> Arc<SiteRuntime> {
         self.inner.runtime.read().await.clone()
+    }
+
+    pub(crate) fn bump_next(&self, at_least: u64) {
+        self.inner.next.fetch_max(at_least, Ordering::Relaxed);
     }
 
     pub(crate) fn next_id(&self, prefix: &str) -> String {

@@ -283,8 +283,13 @@ async fn new(args: NewArgs) -> Result<()> {
     let desk = home::desk(site, &served.stores, &owner).await?;
     let home_url = home::serve(desk, args.home, &owner).await?;
     let onboarding = format!("{home_url}/ui/website");
+    // The name the owner gave the site, as the home shows it.
+    let display = std::fs::read_to_string(site.paths.root().join("site.toml"))
+        .ok()
+        .and_then(|text| adk_site::content::SiteConfig::from_toml(&text).ok())
+        .map_or_else(|| site.site.name.clone(), |config| config.name);
     println!();
-    println!("{} ({}) is running:", site.site.name, site.domain);
+    println!("{display} ({}) is running:", site.domain);
     println!("  edge    http://{}  the site and its agent edge", served.edge_addr);
     println!("  kernel  http://{}  the control plane", served.kernel_addr);
     println!("  home    {onboarding}  onboarding, the charter, the site and the review");
@@ -377,7 +382,8 @@ async fn open(target: &Target) -> Result<Opened> {
         .with_context(|| format!("{} holds no charter draft", target.site.display()))?;
     let owner = target.owner.clone().unwrap_or_else(person);
     std::fs::create_dir_all(paths.data())?;
-    let stores = KernelStores::open(&paths.database("kernel"), &owner).await?;
+    // An agency's sites run on the agency's kernel database (A-I22).
+    let stores = KernelStores::open(&paths.kernel_database(), &owner).await?;
     let site = adk_harness::website::SiteRef::new(
         drafted.site_id,
         config.domain.replace('.', "-"),
@@ -617,16 +623,6 @@ async fn charter(target: &Target, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// The standing rules the site's back office runs under, in `data/kernel.db`.
-async fn rules(paths: &ProjectPaths) -> Result<adk_harness::SqliteStandingRuleStore> {
-    let pool = sqlx::SqlitePool::connect(&paths.database("kernel"))
-        .await
-        .context("cannot open the site's kernel database")?;
-    let store = adk_harness::SqliteStandingRuleStore::new(pool);
-    store.migrate().await?;
-    Ok(store)
-}
-
 /// `adk-rust website jobs` (spec 3.5 §7.11, A-I13).
 async fn jobs(target: &Target, command: Option<JobsCommand>, json: bool) -> Result<()> {
     let opened = open(target).await?;
@@ -673,9 +669,15 @@ async fn jobs(target: &Target, command: Option<JobsCommand>, json: bool) -> Resu
                 SubjectRef::human(owner.clone()),
                 Utc::now(),
             );
-            let store = rules(&opened.paths).await?;
-            let promotion =
-                promote_job(&ladder(&opened), &compiler, &store, &job, &decision, &owner).await?;
+            let promotion = promote_job(
+                &ladder(&opened),
+                &compiler,
+                opened.stores.rules.as_ref(),
+                &job,
+                &decision,
+                &owner,
+            )
+            .await?;
             println!(
                 "Promoted `{job}` to {} by your decision {}; {} standing rule(s) granted.",
                 level_name(promotion.job.level),
@@ -696,8 +698,8 @@ async fn jobs(target: &Target, command: Option<JobsCommand>, json: bool) -> Resu
                 println!("`{job}` is at observe already.");
                 return Ok(());
             };
-            let store = rules(&opened.paths).await?;
-            let revoked = apply_demotion(&compiler, &store, &job, record.level).await?;
+            let revoked =
+                apply_demotion(&compiler, opened.stores.rules.as_ref(), &job, record.level).await?;
             println!(
                 "Demoted `{job}` to {}; {} standing rule(s) revoked.",
                 level_name(record.level),
@@ -721,7 +723,7 @@ mod home {
     use adk_session::{InMemorySessionService, SessionService};
     use adk_website::deploy::{KernelStores, RunningSite};
     use adk_website::onboarding::SetupGate;
-    use adk_website::ui::WebsiteDesk;
+    use adk_website::ui::{FileDeskStore, WebsiteDesk};
     use anyhow::{Context, Result};
     use async_trait::async_trait;
 
@@ -775,12 +777,11 @@ mod home {
         owner: &str,
     ) -> Result<WebsiteDesk> {
         let gate = SetupGate::new(adk_kernel::pairing::Pairing::new(stores.devices.clone()), owner);
-        let rules: Arc<dyn adk_harness::StandingRuleStore> =
-            Arc::new(super::rules(&site.paths).await?);
+        let rules: Arc<dyn adk_harness::StandingRuleStore> = stores.rules.clone();
         let config = adk_site::content::SiteConfig::from_toml(&std::fs::read_to_string(
             site.paths.root().join("site.toml"),
         )?)?;
-        Ok(WebsiteDesk::builder(
+        let desk = WebsiteDesk::builder(
             site.site.clone(),
             config.name.clone(),
             owner,
@@ -793,8 +794,18 @@ mod home {
         .signals(stores.signals.clone(), site.partitions.back_office().id.clone())
         .updates(site.updates.clone())
         .alarms(site.alarms.clone())
+        .tracker(site.tracker().clone())
+        // The home's review view composes from the same stores as the weekly digest.
+        .composer(site.review.as_ref().clone())
+        // Discovery's reviews, quoted only as the owner decides on their cards (S2).
+        .quotes(site.quotes.clone())
+        // The paired device, onboarding answers, charter under review and drafts survive a
+        // restart (spec 3.5 §8.2).
+        .store(Arc::new(FileDeskStore::new(site.paths.data().join("desk.json"))))
         .shape("Local")
-        .build())
+        .build();
+        desk.restore().await?;
+        Ok(desk)
     }
 
     /// Serves `desk` on `addr`; returns the home's origin.

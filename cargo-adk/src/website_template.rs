@@ -86,6 +86,7 @@ use adk_rust::site::content::SiteProject;
 use adk_rust::site::gate::{GateInput, GateMode, LaunchGate, Quarantine};
 use adk_rust::site::generator::{BuiltinGenerator, SiteGenerator};
 use adk_rust::site::host::{DirectoryHost, SiteHost};
+use adk_rust::website::deploy::project::KeyFile;
 use awp_types::{CapabilityEffect, CapabilityV2, ContentState};
 use axum::http::{HeaderValue, StatusCode, Uri, header};
 use axum::response::{Html, IntoResponse, Response};
@@ -167,11 +168,18 @@ async fn serve() -> anyhow::Result<()> {
     });
     let mut registry = CapabilityRegistry::new(&project.config.domain);
     registry.declare(search, Arc::new(SearchSite { items }))?;
-    // Keys for this process only: delegate card and receipt keys with `adk-rust awp keys
-    // delegate --scope card,receipt` before the edge faces the public.
+    // The card and receipt keys `adk-rust awp keys delegate --scope card,receipt` delegates:
+    // made in data/keys/ on the first start and read from there after, so the delegation the
+    // root signs covers the key this edge signs with (spec 3.5 D-11).
+    let card = KeyFile::load_or_create(
+        Path::new("data/keys/card.jwk"),
+        &format!("card-{}", chrono::Utc::now().format("%Y-%m")),
+    )?;
+    let receipt_path = Path::new("data/keys/receipt.jwk");
+    let receipt = if receipt_path.exists() { KeyFile::read(receipt_path)? } else { KeyFile::read(Path::new("data/keys/card.jwk"))? };
     let keys = EdgeKeys {
-        card: Arc::new(Ed25519DocumentSigner::generate("edge-card-local")?),
-        receipt: Arc::new(Ed25519DocumentSigner::generate("edge-receipt-local")?),
+        card: Arc::new(Ed25519DocumentSigner::from_seed(card.kid.clone(), card.seed())?),
+        receipt: Arc::new(Ed25519DocumentSigner::from_seed(receipt.kid.clone(), receipt.seed())?),
     };
     let edge_url = adk_rust::Url::parse(&format!("http://127.0.0.1:{port}"))?;
     let edge = AwpEdge::builder(registry, keys, edge_url).build()?;
@@ -296,7 +304,11 @@ adk-rust site publish --yes            # release the working copy into data/host
 cargo run                              # serve it with the edge on 127.0.0.1:8080
 adk-rust awp keys rotate --new-root-key ~/keys/{name}-root.jwk
 adk-rust awp keys delegate --root-key ~/keys/{name}-root.jwk --scope release --key data/keys/release.jwk
+adk-rust awp keys delegate --root-key ~/keys/{name}-root.jwk --scope card,receipt --key data/keys/card.jwk
 ```
+
+The edge signs its Agent Card and receipts with `data/keys/card.jwk`, which it makes on its
+first start and reads after; delegate it as above before the edge faces the public.
 
 `adk-rust` comes from `cargo install adk-cli --features website`. The launch gate fails
 until the privacy, consent and terms pages are written and published. Root key operations
@@ -1014,7 +1026,12 @@ mod tests {
         let cargo = file(&files, "Cargo.toml");
         assert!(cargo.contains(r#""minimal", "website"]"#), "{cargo}");
         assert!(cargo.contains("awp-types = "), "{cargo}");
-        assert!(file(&files, "src/main.rs").contains("AwpEdge::builder"));
+        let edge = file(&files, "src/main.rs");
+        assert!(edge.contains("AwpEdge::builder"));
+        assert!(
+            edge.contains("data/keys/card.jwk") && !edge.contains("::generate("),
+            "the edge signs with the delegated key file, never a key of its own (D-11)"
+        );
         let site: toml::Value = file(&files, "site.toml").parse().unwrap();
         assert_eq!(site["name"].as_str(), Some("juniper-bakery"));
         let charter: serde_json::Value =

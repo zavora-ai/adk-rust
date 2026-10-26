@@ -441,3 +441,48 @@ async fn anonymous_callers_are_limited_by_their_own_address() {
     assert_eq!(http(v6, "GET", "/awp/v2/manifest", None).await.0, 200, "another visitor's own");
     served.shutdown().await.unwrap();
 }
+
+/// With a model, the served kernel hosts the back office (spec 3.5 §7.19, §7.20, §7.22): a
+/// `content_gap` signal wakes the freshness job's process, which runs the Growth agent in the
+/// back-office partition under its harness, and the run completes.
+#[tokio::test]
+async fn a_signal_wakes_the_back_office_the_kernel_hosts() {
+    use adk_model::{ScriptedLlm, ScriptedResponse};
+    let dir = project(SiteKind::Business).await;
+    owner_signs(dir.path()).await;
+    let model = Arc::new(ScriptedLlm::new(
+        "scripted",
+        (0..4).map(|_| ScriptedResponse::text("Nothing to draft today.")).collect::<Vec<_>>(),
+    ));
+    let served = start(dir.path(), |options| options.site.model = Some(model.clone())).await;
+    commit(&served, dir.path()).await;
+    let site = &served.sites[0];
+    use adk_server::awp::SignalEmitter as _;
+    site.signals()
+        .emit(awp_types::Signal {
+            id: uuid::Uuid::new_v4(),
+            kind: awp_types::SignalKind::ContentGap {
+                topic: awp_types::Bounded::new("delivery", 120).unwrap(),
+                question_count: 3,
+                samples: vec![awp_types::Bounded::truncated("Do you deliver to Naivasha?", 200)],
+            },
+            emitted_by: AgentRole::Concierge.principal(&site.site),
+            emitted_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    let mut done = None;
+    for _ in 0..120 {
+        let runs = served.stores.runs.list(RunFilter::default()).await.unwrap();
+        done = runs.into_iter().find(|run| run.target == "growth" && run.state.is_terminal());
+        if done.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let all = served.stores.runs.list(RunFilter::default()).await.unwrap();
+    let run = done.unwrap_or_else(|| panic!("the freshness job ran Growth: {all:#?}"));
+    assert_eq!(run.state, RunState::Completed, "{run:#?}");
+    assert_eq!(run.input["job"], "freshness");
+    served.shutdown().await.unwrap();
+}

@@ -356,6 +356,45 @@ impl BuiltTeam {
         })
     }
 
+    /// The back office as one runner (spec 3.5 §7.19): the compiled team as its root, run
+    /// under the Steward's harness — its policy, approvals and audit trail — so the Steward
+    /// leads, and each member it delegates to runs under its own harness. Each agent acts as
+    /// its partition's principal for `app`, `urn:adk:agent:{app}/{agent}`.
+    ///
+    /// # Errors
+    ///
+    /// When the kind runs no Steward, the team does not compile, or the runner refuses its
+    /// configuration.
+    pub fn team_runner(
+        &self,
+        app: &str,
+        sessions: Arc<dyn adk_session::SessionService>,
+    ) -> Result<adk_runner::Runner> {
+        let steward = self.agent(AgentRole::Steward).ok_or_else(|| {
+            AdkError::config("the kind runs no Steward to lead the back office (spec 3.5 §7.19)")
+        })?;
+        let root: Arc<dyn Agent> = Arc::new(self.compile()?);
+        runner(steward, root, app, sessions)
+    }
+
+    /// One back-office agent as a runner, for the kernel's process of one of its jobs (spec
+    /// 3.5 §7.20).
+    ///
+    /// # Errors
+    ///
+    /// When the kind does not run `role`, or the runner refuses its configuration.
+    pub fn agent_runner(
+        &self,
+        role: AgentRole,
+        app: &str,
+        sessions: Arc<dyn adk_session::SessionService>,
+    ) -> Result<adk_runner::Runner> {
+        let agent = self
+            .agent(role)
+            .ok_or_else(|| AdkError::config(format!("the kind does not run the {role} agent")))?;
+        runner(agent, agent.clone(), app, sessions)
+    }
+
     /// The agent of `role`, when the kind runs it.
     pub fn agent(&self, role: AgentRole) -> Option<&Arc<HarnessAgent>> {
         self.agents.get(&role)
@@ -365,6 +404,26 @@ impl BuiltTeam {
     pub fn roles(&self) -> Vec<AgentRole> {
         self.agents.keys().copied().collect()
     }
+}
+
+/// A runner over `root`, configured by `harness`, its agents acting as the harness's
+/// partition's principals for `app`.
+fn runner(
+    harness: &Arc<HarnessAgent>,
+    root: Arc<dyn Agent>,
+    app: &str,
+    sessions: Arc<dyn adk_session::SessionService>,
+) -> Result<adk_runner::Runner> {
+    let builder = adk_runner::Runner::builder()
+        .app_name(app.to_string())
+        .agent(root)
+        .session_service(sessions);
+    let builder = harness.configure_runner(builder);
+    let builder = match harness.partition() {
+        Some(partition) => builder.identity_source(partition.identity_source(app, harness.name())),
+        None => builder,
+    };
+    builder.build()
 }
 
 /// The team of one site (spec 3.5 §7.19).
@@ -532,6 +591,19 @@ impl SiteTeam {
                         for tool in crate::wallet::finance_tools(wallet.clone()) {
                             builder = builder.tool(tool);
                         }
+                    }
+                    if *role == AgentRole::Steward {
+                        // The Steward hands work to the back office over the team's
+                        // delegate edges; each member's own harness decides its calls.
+                        builder = builder.team_delegates(
+                            self.members
+                                .iter()
+                                .filter(|m| {
+                                    m.partition() == WebsitePartition::BackOffice
+                                        && **m != AgentRole::Steward
+                                })
+                                .map(|m| m.as_str()),
+                        );
                     }
                     builder
                 }

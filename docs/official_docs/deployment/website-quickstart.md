@@ -157,9 +157,10 @@ until you publish them. `delegate` without `--key` writes a new `data/keys/relea
 never overwrites one. `cargo run` serves the release `adk-rust site publish` put in
 `data/host`, or the holding page before the first one, and the capabilities declared in
 `capabilities.json` that `src/main.rs` registers a handler for — `search_site` in the template.
-It generates its card and receipt keys at every start and reads no key file: before the edge
-faces the public, delegate a key with `adk-rust awp keys delegate --scope card,receipt` and
-change `src/main.rs` to sign with that key file instead. To add
+It signs its Agent Card and receipts with `data/keys/card.jwk` (and `receipt.jwk` when there
+is one), which it makes on its first start and reads after: before the edge faces the public,
+delegate that key with `adk-rust awp keys delegate --root-key ~/keys/my-site-root.jwk --scope
+card,receipt --key data/keys/card.jwk`. To add
 capabilities, see [Writing capability packs](capability-packs.md).
 
 ## Check the result

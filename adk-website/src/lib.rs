@@ -20,8 +20,13 @@
 //! | [`packs`] | Capability declarations: contact, quote, booking, order, search, components | §7.16, §7.4 |
 //! | [`playbooks`] | A skill file for every job | §7.16, §7.15 |
 //! | [`incident`] | Drift, incident status, rollback by standing rule or proposal, the person's exit | §7.20, A-I11 |
+//! | [`leads`] | Lead scores and the handoff threshold, consent for nurture, the durable contact book, nurture sends inside quiet hours | §7.20, §7.21, S8, A-I8 |
 //! | [`alarms`] | P1, P2 and P3 routing to the owner's channels | §7.21 |
+//! | [`channel`] | The owner's chat channel: photos into the Steward's draft, alt text confirmed from the thread | §7.8.2, S18, A-I24 |
+//! | [`publish_delay`] | The delay a page the site drafts on its own waits before it can go live | §7.20, S10 |
+//! | [`quotes`] | The reviews discovery found, the owner's approvals to quote them, and the launch gate's check over them | §7.18, S2 |
 //! | [`review`] | The weekly review | §7.21 |
+//! | [`upkeep`] | Upgrade proposals for advisories against the edge's lockfile, certificate renewal proposals | §7.20, S10 |
 //! | [`wallet`] | The wallet as a KPI source and the site's commerce outcomes | §7.14 |
 //! | [`experiments`] | Charter KPIs and guardrails as experiments, variants as static files, daily looks, pauses on a breach, the review's evidence | §7.12, A-I15 |
 //! | [`measurement`] | KPI sources that are not drivers: the beacon, host logs, the commerce, action and spend ledgers, agent search at the edge, AEO | §7.12, §7.11 |
@@ -54,6 +59,7 @@
 
 pub mod alarms;
 pub mod audit;
+pub mod channel;
 pub mod contract;
 pub mod deploy;
 pub mod edge;
@@ -61,14 +67,18 @@ pub mod experiments;
 pub mod incident;
 pub mod jobs;
 pub mod kinds;
+pub mod leads;
 pub mod measurement;
 pub mod observability;
 pub mod onboarding;
 pub mod packs;
 pub mod playbooks;
+pub mod publish_delay;
+pub mod quotes;
 pub mod review;
 pub mod team;
 pub mod themes;
 pub mod ui;
+pub mod upkeep;
 pub mod wallet;
 pub mod workflows;

@@ -408,6 +408,12 @@ impl AlarmRouter {
         std::mem::take(&mut self.state.lock().await.review)
     }
 
+    /// Clears the alarms `ids` from those waiting for the weekly review: a review that
+    /// carried them reached the owner (spec 3.5 §7.21).
+    pub async fn clear_review_items(&self, ids: &[String]) {
+        self.state.lock().await.review.retain(|alarm| !ids.contains(&alarm.id));
+    }
+
     /// Every alarm raised since `since`, for the weekly review's incidents.
     pub async fn raised_since(&self, since: DateTime<Utc>) -> Vec<Alarm> {
         self.state.lock().await.raised.iter().filter(|a| a.raised_at >= since).cloned().collect()
@@ -507,12 +513,23 @@ const HANDOFF_SUMMARY_MAX: usize = 600;
 /// # }
 /// ```
 pub fn handoff_tool(router: Arc<AlarmRouter>) -> Arc<dyn adk_core::Tool> {
-    Arc::new(HandoffTool { router })
+    Arc::new(HandoffTool { router, leads: None })
+}
+
+/// `lead_handoff` over `router` that hands a lead off only once its score has reached the
+/// kind's threshold, and only once (spec 3.5 §5 S8, §7.20): the card carries the score the
+/// site computed, not one the agent states.
+pub fn handoff_tool_for(
+    router: Arc<AlarmRouter>,
+    leads: Arc<crate::leads::Leads>,
+) -> Arc<dyn adk_core::Tool> {
+    Arc::new(HandoffTool { router, leads: Some(leads) })
 }
 
 /// `lead_handoff`: one card to the owner per qualified lead.
 struct HandoffTool {
     router: Arc<AlarmRouter>,
+    leads: Option<Arc<crate::leads::Leads>>,
 }
 
 #[async_trait]
@@ -568,8 +585,16 @@ impl adk_core::Tool for HandoffTool {
             .chars()
             .take(HANDOFF_SUMMARY_MAX)
             .collect();
-        let score =
-            args["score"].as_f64().map(|score| format!(" (score {score:.0})")).unwrap_or_default();
+        let score = match &self.leads {
+            Some(leads) => {
+                let scored = leads.hand_off(&awp_types::LeadRef(lead.to_string())).await?;
+                format!(" (score {:.0} of {:.0})", scored.value, scored.threshold)
+            }
+            None => args["score"]
+                .as_f64()
+                .map(|score| format!(" (score {score:.0})"))
+                .unwrap_or_default(),
+        };
         let routed = self
             .router
             .raise(Alarm::new(

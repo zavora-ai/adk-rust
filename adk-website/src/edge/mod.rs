@@ -346,8 +346,8 @@ impl SiteEdge {
     }
 }
 
-/// The consent the kind's capabilities ask for (spec 3.5 §7.5, A-I8): every scope a
-/// declaration names, under the packs' [`POLICY_VERSION`](crate::packs::POLICY_VERSION) with
+/// The consent the kind asks for (spec 3.5 §7.5, A-I8): every scope a declaration names, and
+/// `nurture` when the kind nurtures its leads ([`crate::leads::consent_scopes`]), under the packs' [`POLICY_VERSION`](crate::packs::POLICY_VERSION) with
 /// `policy` as its text, and subject sessions keyed by `subject_key` (at least 32 bytes).
 ///
 /// # Example
@@ -361,18 +361,14 @@ impl SiteEdge {
 /// let policy = ConsentPolicy { digest: Digest::from_sha256_bytes([1; 32]), ttl: None };
 /// let consent = consent_config(&template(SiteKind::Business), policy, vec![7u8; 32]);
 /// assert!(consent.scopes.contains(&ConsentScope::from("contact")));
+/// assert!(consent.scopes.contains(&ConsentScope::from("nurture")), "a business nurtures its leads");
 /// ```
 pub fn consent_config(
     template: &KindTemplate,
     policy: ConsentPolicy,
     subject_key: impl Into<Arc<[u8]>>,
 ) -> ConsentConfig {
-    let mut scopes: Vec<ConsentScope> = Vec::new();
-    for requirement in template.capabilities().into_iter().filter_map(|c| c.consent) {
-        if !scopes.contains(&requirement.scope) {
-            scopes.push(requirement.scope);
-        }
-    }
+    let scopes: Vec<ConsentScope> = crate::leads::consent_scopes(template);
     let policies = BTreeMap::from([(crate::packs::POLICY_VERSION.to_string(), policy)]);
     ConsentConfig::new(scopes, policies, subject_key)
 }

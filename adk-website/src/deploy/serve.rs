@@ -9,6 +9,12 @@
 //! Each site is a [`RunningSite`] over its project ([`ProjectPaths`]); the kernel's stores are
 //! durable in `data/kernel.db` ([`KernelStores`]). The setup code is issued while no device
 //! is paired, so a restarted site does not offer a second one.
+//!
+//! The kernel runs each site's processes (spec 3.5 §7.20): the weekly digest when the owner
+//! has a channel, the hosting job's upkeep check when the site has an advisory or certificate
+//! source, and — with a model — the back office ([`super::back_office`]): the Steward leading
+//! the team, and each agent's jobs on their signals and schedules, under the owner's
+//! standing rules in `data/kernel.db`. Agent sessions are kept in `data/kernel/sessions.db`.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -138,6 +144,16 @@ async fn start(
         .with_pairing(pairing);
     let mut site_workflows = SiteWorkflows::new();
     let mut triggers = Vec::new();
+    let sessions: Option<Arc<dyn adk_session::SessionService>> = match &options.site.model {
+        Some(_) => {
+            std::fs::create_dir_all(&home).map_err(config)?;
+            let url = format!("sqlite://{}?mode=rwc", home.join("sessions.db").display());
+            let sessions = adk_session::SqliteSessionService::new(&url).await?;
+            sessions.migrate().await?;
+            Some(Arc::new(sessions))
+        }
+        None => None,
+    };
     let mut builder = Kernel::builder()
         .config(KernelConfig::default().with_app_name(name).with_home(home).with_control(control))
         .run_store(stores.runs.clone())
@@ -146,15 +162,38 @@ async fn start(
         .agenda_store(stores.agenda.clone())
         .watermark_store(stores.watermarks.clone());
     for site in &sites {
+        use adk_kernel::charter::SiteProcessKind;
         triggers.extend(site.triggers().iter().cloned());
+        let team = SiteTeam::new(site.site.clone(), &site.template);
+        let partition = site.partitions.back_office().id.clone();
+        // The runs of a site's processes are its own app's, so its agents act as
+        // `urn:adk:agent:{site}/{agent}`, an agency's sites included.
+        let app = site.site.name.as_str();
+        let mut runs: Vec<SiteProcessKind> = Vec::new();
         if let Some(target) = site.digest_target(&options.site) {
             site_workflows = site_workflows.digest(site.site.id, target);
-            let team = SiteTeam::new(site.site.clone(), &site.template);
-            let partition = site.partitions.back_office().id.clone();
-            for process in crate::jobs::processes(&team, &site.template.jobs(), name, &partition) {
-                if process.kind == adk_kernel::charter::SiteProcessKind::Digest {
-                    triggers.push(process.trigger);
-                }
+            runs.push(SiteProcessKind::Digest);
+        }
+        if let Some(check) = site.upkeep(&stores, &options.site) {
+            site_workflows = site_workflows.watch(site.site.id, check);
+            runs.push(SiteProcessKind::Watch);
+        }
+        if let (Some(model), Some(sessions)) = (&options.site.model, &sessions) {
+            let team = site.back_office(&stores, model.clone()).await?;
+            let hosted;
+            (builder, hosted) =
+                super::back_office::host(builder, &team, &partition, app, sessions.clone())?;
+            tracing::info!(site = app, agents = ?hosted, "the back office is hosted");
+            runs.extend([
+                SiteProcessKind::Content,
+                SiteProcessKind::Reviews,
+                SiteProcessKind::Outreach,
+                SiteProcessKind::Support,
+            ]);
+        }
+        for process in crate::jobs::processes(&team, &site.template.jobs(), app, &partition) {
+            if runs.contains(&process.kind) {
+                triggers.push(process.trigger);
             }
         }
     }
@@ -166,6 +205,10 @@ async fn start(
     let workflows =
         ServedWorkflows::new(site_workflows, sites.iter().map(|site| site.experiments.clone()));
     let kernel = builder.workflows(Arc::new(workflows)).build().map_err(config)?;
+    // The edge's signals wake the back office's processes (spec 3.5 §7.10, §7.20).
+    for site in &sites {
+        site.signals.wake(kernel.wake_router().clone(), kernel.config().app_name.clone());
+    }
     kernel.start().await.map_err(config)?;
     let kernel_addr = kernel
         .control_addr()
