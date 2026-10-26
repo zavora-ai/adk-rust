@@ -310,7 +310,11 @@ async fn the_weekly_review_holds_kpis_work_leads_incidents_autonomy_alarms_and_q
         review.demotions.iter().find(|d| d.job == "seo").expect("the demotion and its reason");
     assert!(!seo.reason.describe().is_empty());
     assert_eq!(review.alarms.len(), 1, "the P3 alarm waited for the review");
-    assert!(alarms.review_items().await.is_empty(), "the review carried it");
+    assert_eq!(
+        alarms.review_items().await.len(),
+        1,
+        "composing reads the alarm; a second composition carries it too"
+    );
     assert_eq!(review.questions, ["Should we deliver on Saturdays?"]);
     assert_eq!(review.charter_version, Some(1));
 
@@ -331,6 +335,18 @@ async fn the_weekly_review_holds_kpis_work_leads_incidents_autonomy_alarms_and_q
         assert!(document.contains(part), "{part} in\n{document}");
     }
     assert_eq!(phone.messages().len(), 1);
-    assert!(phone.messages()[0].contains("promotion offer"), "{:?}", phone.messages());
+    assert!(alarms.review_items().await.is_empty(), "the sent review carried it");
+    // The channel gets plain sentences, not a tally (spec 3.5 §7.21).
+    let summary = &phone.messages()[0];
+    for part in [
+        "Your week from",
+        "earned more freedom",
+        "your decision",
+        "One incident",
+        "One question is waiting for you.",
+    ] {
+        assert!(summary.contains(part), "{part} in {summary}");
+    }
+    assert!(!summary.contains("(s)"), "{summary}");
     assert!(site.actions().iter().any(|a| a == "website.review.sent"));
 }

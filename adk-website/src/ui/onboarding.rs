@@ -94,6 +94,68 @@ struct Built {
     summary: String,
 }
 
+impl WebsiteDesk {
+    pub(crate) async fn save_onboarding(&self) -> super::saved::SavedOnboarding {
+        let state = self.inner.onboarding.lock().await;
+        super::saved::SavedOnboarding {
+            name: state.name.clone(),
+            start: state.started.as_ref().map(|started| started.start.clone()),
+            phone: state.started.as_ref().and_then(|started| started.phone.clone()),
+            done: state.done.clone(),
+            found: state.found.as_ref().map(|found| super::saved::SavedFound {
+                source: found.source.clone(),
+                facts: found.facts,
+                pages: found.pages,
+                items: found.items,
+                legacy: found.legacy,
+                proposal: found.proposal.clone(),
+                cards: found.cards.clone(),
+            }),
+            kind: state.kind,
+            protect: state.protect,
+            decisions: state.decisions.clone(),
+            answers: state.answers.clone(),
+            answer_facts: state.answer_facts.clone(),
+            design: state.design,
+            built: state.built.as_ref().map(|built| (built.held.clone(), built.summary.clone())),
+            skipped: state.skipped.clone(),
+            live: state.live,
+        }
+    }
+
+    pub(crate) async fn restore_onboarding(&self, saved: super::saved::SavedOnboarding) {
+        let mut state = self.inner.onboarding.lock().await;
+        state.progress = saved.start.as_ref().map(|_| {
+            Arc::new(OnboardingProgress::resumed(
+                self.inner.site.clone(),
+                self.inner.audit.clone(),
+                saved.done.iter().copied(),
+            ))
+        });
+        state.started = saved.start.map(|start| Started { start, phone: saved.phone });
+        state.name = saved.name;
+        state.done = saved.done;
+        state.found = saved.found.map(|found| Found {
+            source: found.source,
+            facts: found.facts,
+            pages: found.pages,
+            items: found.items,
+            legacy: found.legacy,
+            proposal: found.proposal,
+            cards: found.cards,
+        });
+        state.kind = saved.kind;
+        state.protect = saved.protect;
+        state.decisions = saved.decisions;
+        state.answers = saved.answers;
+        state.answer_facts = saved.answer_facts;
+        state.design = saved.design;
+        state.built = saved.built.map(|(held, summary)| Built { held, summary });
+        state.skipped = saved.skipped;
+        state.live = saved.live;
+    }
+}
+
 /// Where onboarding starts (spec 3.5 §7.18 "Starting point").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1297,6 +1359,37 @@ impl WebsiteDesk {
                 }
             }
         }
+        // A found review is quoted only with its reviewer's public name and the owner's
+        // approval (S2); an anonymous one has no card, since it is never quoted.
+        if let Some(quotes) = &self.inner.quotes {
+            for (index, review) in quotes.list().await.into_iter().enumerate() {
+                let Some(author) = review.author.clone().filter(|a| !a.trim().is_empty()) else {
+                    continue;
+                };
+                let id = format!("review:{index}");
+                let excerpt: String = review.text.chars().take(160).collect();
+                decisions.push(DecisionView {
+                    title: format!("Quote {author}'s review on the site?"),
+                    detail: format!(
+                        "\"{excerpt}\" — a page quotes it with {author}'s name only if you say yes"
+                    ),
+                    evidence: review.source.clone().into_iter().collect(),
+                    options: vec![
+                        FieldOption {
+                            value: "quote".into(),
+                            label: "Yes, quote it with their name".into(),
+                        },
+                        FieldOption {
+                            value: "do_not_quote".into(),
+                            label: "Do not quote it".into(),
+                        },
+                    ],
+                    default: Some("do_not_quote".into()),
+                    chosen: state.decisions.get(&id).cloned(),
+                    id,
+                });
+            }
+        }
         Ok(DiscoveryView {
             ran: state.found.is_some(),
             source: state.found.as_ref().and_then(|f| f.source.clone()),
@@ -1330,6 +1423,19 @@ impl WebsiteDesk {
     /// of order or a bad value; `Forbidden` for a step the owner's role is needed for; the
     /// stores' and the pipeline's errors.
     pub async fn onboarding_command(
+        &self,
+        person: &str,
+        token: Option<&str>,
+        command: OnboardingCommand,
+    ) -> Result<OnboardingOutcome> {
+        let result = self.onboarding_command_unsaved(person, token, command).await;
+        if result.is_ok() {
+            self.persist().await;
+        }
+        result
+    }
+
+    async fn onboarding_command_unsaved(
         &self,
         person: &str,
         token: Option<&str>,
@@ -1423,6 +1529,13 @@ impl WebsiteDesk {
                         "website.onboarding.choice",
                         format!("'{choice}' is not a choice of this card"),
                     ));
+                }
+                if let (Some(quotes), Some(index)) = (
+                    &self.inner.quotes,
+                    card.strip_prefix("review:").and_then(|n| n.parse::<usize>().ok()),
+                ) {
+                    let decision = format!("quote-review-{index}-{actor}");
+                    quotes.approve(index, (choice == "quote").then_some(decision.as_str())).await?;
                 }
                 state.decisions.insert(card, choice);
             }
@@ -1566,6 +1679,10 @@ impl WebsiteDesk {
             let recorded =
                 record_facts(discovered.facts(), store.as_ref(), &scope, DESK_SESSION).await?;
             let inventory = discovered.inventory.as_ref();
+            // The reviews it found, none approved, for the owner to decide (S2).
+            if let (Some(quotes), Some(inventory)) = (&self.inner.quotes, inventory) {
+                quotes.add_discovered(&inventory.reviews).await?;
+            }
             note = Some(format!(
                 "Found {} fact{} to check. Each is a guess until you confirm it.",
                 recorded.len(),
@@ -1800,6 +1917,22 @@ impl WebsiteDesk {
                 "website.onboarding.order",
                 "the site is live; a new design is a release",
             ));
+        }
+        if matches!(
+            state.started.as_ref().map(|s| &s.start),
+            Some(StartingPoint::ExistingSite { .. })
+        ) {
+            // The owner's design choice for a migration is recorded in the migration audit.
+            crate::audit::record(
+                self.inner.audit.as_ref(),
+                "site.migration.decided",
+                adk_core::audit_log::AuditActor::default(),
+                serde_json::json!({
+                    "site": self.inner.site.id,
+                    "migration": adk_site::migrate::parity::design_choice_fields(&choice.parity()),
+                }),
+            )
+            .await;
         }
         if let Some(assembly) = &self.inner.assembly {
             let theme = match choice {

@@ -69,9 +69,54 @@ impl Route {
     }
 }
 
+/// What a link to the home does to the home window (spec 3.3 §5.5: "the home window, shown
+/// and focused"): `None` shows the window as it is, `Some` loads that page first.
+///
+/// The home itself (`/ui/`) never reloads the window, which would lose what the person had
+/// open or typed there; a page inside it, such as a decision at `/ui/decisions/<id>`, is loaded.
+/// While the kernel is away (`away`) nothing is loaded: the window keeps the bundled "Can't
+/// reach your agents" page until the kernel answers.
+///
+/// # Example
+///
+/// ```
+/// use adk_desktop_core::home_navigation;
+/// use url::Url;
+///
+/// let home = Url::parse("http://127.0.0.1:8792/ui/").unwrap();
+/// let decision = Url::parse("http://127.0.0.1:8792/ui/decisions/apr_1").unwrap();
+/// assert_eq!(home_navigation(&home, false), None);
+/// assert_eq!(home_navigation(&decision, false), Some(decision.clone()));
+/// assert_eq!(home_navigation(&decision, true), None);
+/// ```
+pub fn home_navigation(link: &Url, away: bool) -> Option<Url> {
+    let root = matches!(link.path(), "/ui" | HOME_PATH)
+        && link.query().is_none()
+        && link.fragment().is_none();
+    (!away && !root).then(|| link.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_page_inside_the_home_reloads_the_home_window() {
+        let at = |path: &str| Url::parse(&format!("http://127.0.0.1:8792{path}")).unwrap();
+        for (path, away, loads) in [
+            ("/ui/", false, false),
+            ("/ui", false, false),
+            ("/ui/decisions/apr_1", false, true),
+            ("/ui/today", false, true),
+            ("/ui/?section=memory", false, true),
+            ("/ui/#top", false, true),
+            ("/ui/", true, false),
+            ("/ui/decisions/apr_1", true, false),
+        ] {
+            let link = at(path);
+            assert_eq!(home_navigation(&link, away), loads.then(|| link.clone()), "{path} {away}");
+        }
+    }
 
     #[test]
     fn the_kernel_s_pages_its_api_and_other_schemes() {

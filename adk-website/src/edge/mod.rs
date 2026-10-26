@@ -15,6 +15,7 @@
 //! | [`consent_config`] | The consent scopes the kind's capabilities ask for |
 
 pub mod adapters;
+pub mod ap2;
 pub mod handlers;
 
 use std::collections::BTreeMap;
@@ -79,8 +80,12 @@ pub struct SiteEdgeParts {
     pub contacts: Arc<dyn ContactBook>,
     /// The bookable slots; none open without one.
     pub calendar: Option<Arc<dyn Calendar>>,
-    /// The owner's payment rail; payments are refused without one.
+    /// The owner's payment rail, such as an [`ap2::Ap2Desk`]; payments are refused without
+    /// one.
     pub payments: Option<Arc<dyn PaymentDesk>>,
+    /// The owner's amount thresholds: orders, bookings and payments above them wait for the
+    /// owner's decision (spec 3.5 §7.4, S9).
+    pub thresholds: crate::packs::ApprovalThresholds,
     /// The kernel's approval service, where held calls wait for the owner.
     pub approvals: Option<Arc<dyn ApprovalService>>,
     /// Trust tiers; every caller is `public` without them.
@@ -188,11 +193,13 @@ pub struct SiteEdge {
 }
 
 impl SiteEdge {
-    /// The kind's capability declarations with the packs' handlers (spec 3.5 §7.16 `packs`).
+    /// The kind's capability declarations with the packs' handlers (spec 3.5 §7.16 `packs`),
+    /// each under the owner's amount threshold (§7.4).
     ///
     /// # Errors
     ///
-    /// A declaration the registry refuses.
+    /// A threshold on a capability whose calls carry no amount, or a declaration the
+    /// registry refuses.
     pub fn registry(
         parts: &SiteEdgeParts,
         quotes: &Arc<QuoteBook>,
@@ -216,12 +223,17 @@ impl SiteEdge {
             .unwrap_or_else(|| Arc::new(InMemoryCalendar::default()) as Arc<dyn Calendar>);
         let booking: Arc<dyn CapabilityHandler> =
             Arc::new(BookingHandler::new(calendar, forms.clone()));
-        let order: Arc<dyn CapabilityHandler> =
-            Arc::new(OrderHandler::new(quotes.clone(), orders.clone()));
+        parts.thresholds.validate()?;
+        let mut order = OrderHandler::new(quotes.clone(), orders.clone());
+        if let Some(desk) = &parts.payments {
+            order = order.with_payments(desk.clone());
+        }
+        let order: Arc<dyn CapabilityHandler> = Arc::new(order);
         let payment: Arc<dyn CapabilityHandler> =
-            Arc::new(PaymentHandler::new(parts.payments.clone()));
+            Arc::new(PaymentHandler::new(parts.payments.clone()).with_orders(orders.clone()));
         let mut registry = CapabilityRegistry::new(domain);
         for declaration in parts.template.capabilities() {
+            let declaration = parts.thresholds.apply(declaration);
             let handler: Arc<dyn CapabilityHandler> = match declaration.name.as_str() {
                 name if FORMS.contains(&name) => forms.clone(),
                 "get_quote" => Arc::new(QuoteHandler::new(
@@ -334,8 +346,8 @@ impl SiteEdge {
     }
 }
 
-/// The consent the kind's capabilities ask for (spec 3.5 §7.5, A-I8): every scope a
-/// declaration names, under the packs' [`POLICY_VERSION`](crate::packs::POLICY_VERSION) with
+/// The consent the kind asks for (spec 3.5 §7.5, A-I8): every scope a declaration names, and
+/// `nurture` when the kind nurtures its leads ([`crate::leads::consent_scopes`]), under the packs' [`POLICY_VERSION`](crate::packs::POLICY_VERSION) with
 /// `policy` as its text, and subject sessions keyed by `subject_key` (at least 32 bytes).
 ///
 /// # Example
@@ -349,18 +361,14 @@ impl SiteEdge {
 /// let policy = ConsentPolicy { digest: Digest::from_sha256_bytes([1; 32]), ttl: None };
 /// let consent = consent_config(&template(SiteKind::Business), policy, vec![7u8; 32]);
 /// assert!(consent.scopes.contains(&ConsentScope::from("contact")));
+/// assert!(consent.scopes.contains(&ConsentScope::from("nurture")), "a business nurtures its leads");
 /// ```
 pub fn consent_config(
     template: &KindTemplate,
     policy: ConsentPolicy,
     subject_key: impl Into<Arc<[u8]>>,
 ) -> ConsentConfig {
-    let mut scopes: Vec<ConsentScope> = Vec::new();
-    for requirement in template.capabilities().into_iter().filter_map(|c| c.consent) {
-        if !scopes.contains(&requirement.scope) {
-            scopes.push(requirement.scope);
-        }
-    }
+    let scopes: Vec<ConsentScope> = crate::leads::consent_scopes(template);
     let policies = BTreeMap::from([(crate::packs::POLICY_VERSION.to_string(), policy)]);
     ConsentConfig::new(scopes, policies, subject_key)
 }

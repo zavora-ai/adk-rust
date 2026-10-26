@@ -30,17 +30,22 @@ is for each kind of site.
 | `packs` | Capability declarations: contact, quote, booking, order, search, components | §7.16, §7.4 |
 | `edge` | The site on `adk-server`'s agent edge: the packs' handlers, the adapters to the back office and the pipeline, the read-only step, the public router with the release behind the edge | §7.9, §7.10, §7.16, A-I11 |
 | `contract` | The site's keys and signed documents: the contract, the key set with its delegations, the public terms, the `_awp-root` record | §7.2, §7.3, §7.7 |
-| `deploy` | The four deployment shapes, `serve` for one site and `serve_agency` for many, agency isolation at the kernel and the edge | §7.22, §7.17, A-I22 |
+| `deploy` | The four deployment shapes, `serve` for one site and `serve_agency` for many, agency isolation at the kernel and the edge; with a model, the back office hosted on the kernel under the owner's standing rules | §7.22, §7.17, §7.19, A-I22 |
 | `playbooks` | A skill file for every job, installed into each agent's workspace | §7.16, §7.15 |
 | `incident` | Drift, incident status, rollback to the last good release by standing rule or proposal, a person's exit | §7.20, A-I11 |
-| `alarms` | P1, P2 and P3 routing to the owner's channels | §7.21 |
-| `review` | The weekly review | §7.21 |
+| `alarms` | P1, P2 and P3 routing to the owner's channels; the lead handoff card | §7.21 |
+| `leads` | Lead scores and the handoff threshold, consent for nurture from the edge's receipts, the durable contact book, nurture sends outside quiet hours | §7.20, S8 |
+| `upkeep` | Upgrade proposals for advisories against the edge's lockfile, certificate renewal proposals | §7.20, S10 |
+| `publish_delay` | The delay a page the site drafts on its own waits before it can go live | §7.20, S10 |
+| `channel` | The owner's chat channel: a paired person's photos into the Steward's draft, alt text confirmed from the thread | §7.8.2, S18, A-I24 |
+| `quotes` | The reviews discovery found, the owner's approvals to quote them, and the launch gate's check | §7.18, S2 |
+| `review` | The weekly review, summarised in plain words on the owner's channel | §7.21 |
 | `wallet` | The wallet as a KPI source and the site's commerce outcomes | §7.14 |
 | `experiments` | Charter KPIs and guardrails as `adk-eval` experiments; variants as their own static files; stable assignment of an anonymous bucket; exposures and goals through the beacon; a daily look; a guardrail breach pauses the job and keeps the control; the decision and evidence in the weekly review | §7.12, A-I15 |
 | `measurement` | KPI sources that are not drivers: the beacon, host logs, the commerce, action and spend ledgers, agent search at the edge, AEO | §7.12, §7.11 |
-| `workflows` | The probe and the weekly review as kernel runs | §7.20 |
+| `workflows` | The probe, the upkeep watch and the weekly review as kernel runs | §7.20 |
 | `observability` | Spans, metrics and the site view | §7.24 |
-| `ui` | `WebsiteDesk`: the setup code, onboarding, the charter cards, the site view, the weekly review and the web editor as views in plain words, and the decisions people make on them; `adk-surface`'s `website` feature serves them on the web home | §7.8.2, §7.16, §7.18, §7.21, §7.24, §8.2 |
+| `ui` | `WebsiteDesk`: the setup code, onboarding, the charter cards, the site view, the weekly review and the web editor as views in plain words, and the decisions people make on them, saved across restarts with a `DeskStore`; `adk-surface`'s `website` feature serves them on the web home | §7.8.2, §7.16, §7.18, §7.21, §7.24, §8.2 |
 
 ## Site kinds
 
@@ -123,10 +128,16 @@ consent receipts, holds — before a handler sees a call.
 | Handler | Capabilities |
 |---------|--------------|
 | `FormHandler` | `submit_inquiry`, `subscribe_newsletter`, `request_prospectus`, `licensing_enquiry`, `volunteer`, `register`, `submit_service_form`: a lead, a contact, one `lead_captured` signal |
-| `QuoteHandler`, `OrderHandler` | `get_quote`, `place_order`, `order_status`, `request_return`: the quote keeps the signed release's price into the order (A-I25) |
-| `PaymentHandler` | `pay_order`, `donate`, `subscribe`, `buy_ticket`: through the owner's `PaymentDesk`, refused without one |
+| `QuoteHandler`, `OrderHandler` | `get_quote`, `place_order`, `order_status`, `request_return`: the quote keeps the signed release's price into the order (A-I25); an order is its buyer's |
+| `PaymentHandler` | `pay_order`, `donate`, `subscribe`, `buy_ticket`: through the owner's `PaymentDesk`, refused without one; `pay_order` takes the buyer's AP2 mandate or a rail credential, and pays an order once |
 | `BookingHandler` | `check_availability`, `book`, `book_appointment` |
 | `SearchHandler`, `ListingHandler`, `StatusHandler` | `search_site`, the listings of published items, `lookup_status` |
+
+`edge::ap2::Ap2Desk` takes payments under AP2 with the site as the merchant, over
+`adk-payments`' `Ap2Adapter` and the owner's payment processor. `packs::ApprovalThresholds`
+(`approvals.json` in a served site) holds orders, bookings and payments above the owner's
+amounts for a decision. `TeamKit::wallet` gives the Finance agent `wallet_pay` and
+`wallet_status` over the owner's wallet.
 
 `SiteEdge::status` is the incident path's `StatusSink`: drift puts the edge in read-only mode,
 so every non-read capability answers `503 read_only` with the signed status while pages and
@@ -151,6 +162,7 @@ CLI and the running site share one log, host and journal:
 | `site.toml`, `content/`, `theme/`, `public-terms.json`, `capabilities.json` | The content repository |
 | `well-known/`, `static/` | Released under `/.well-known/` (the owner's signed contract and `keys.json`) and at their own paths |
 | `feeds.json`, `calendar.json`, `payments.json` | Feeds with their bounds, bookable slots, payment links; each optional |
+| `approvals.json` | The owner's amount thresholds, such as `{"place_order": 20000}`; optional |
 | `data/site-log.db`, `data/host/`, `data/history/` | The site log, the `DirectoryHost`, every saved version |
 | `data/keys/` | `release.jwk`, `card.jwk` (and `receipt.jwk`) as private JWKs, made on first start, owner-only; never the root |
 | `data/kernel.db`, `data/edge.db` | The kernel's stores (charters, KPIs, ladder, signals, agenda, approvals, devices, runs) and the edge's |
@@ -163,7 +175,7 @@ site made. Until the release key is delegated, every build fails the gate's
 
 | Part | Runs |
 |------|------|
-| `UpdateEngine` | On the runtime's pipeline, driven when `next_due` says; each held delivery or item is an approval request in the owner's inbox — a decision card on the phone — and the answer releases or discards it (A-I23, A-I27) |
+| `UpdateEngine` | On the runtime's pipeline, driven when `next_due` says; each held delivery or item is an approval request in the owner's inbox — a decision card on the phone — and the answer releases or discards it (A-I23, A-I27); what it holds is kept in `data/updates/held.json`, so a card answered after a restart still decides its change |
 | `ExperimentRunner` | Its daily look as the kernel run `website.experiments`, on a cron trigger |
 | `KpiTracker` | With the beacon, commerce, spend and agent-search sources; AEO with search providers |
 | `ReviewComposer` | With the alarms, the experiments and the updates; the weekly review when the owner has a channel |

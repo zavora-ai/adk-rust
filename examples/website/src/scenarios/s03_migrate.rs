@@ -17,8 +17,11 @@ use std::sync::Arc;
 use adk_core::audit_log::AuditRecorder;
 use adk_site::gate::{CheckStatus, GateCheck};
 use adk_site::host::SiteHost;
-use adk_site::migrate::detect::{Detectors, FindingKind, Subject};
-use adk_site::migrate::parity::{ChromeScreenshotter, MigrationParity, ParityConfig};
+use adk_site::migrate::convert::legacy_runtime_path;
+use adk_site::migrate::detect::{FindingKind, Subject};
+use adk_site::migrate::parity::{
+    ChromeScreenshotter, MigrationParity, ParityConfig, record_design_choice,
+};
 use adk_site::migrate::quarantine::QuarantineState;
 use adk_site::migrate::sources::{IsolatedReplay, ReplaySpec};
 use adk_site::migrate::{SiteInventory, SourceKind};
@@ -29,7 +32,6 @@ use adk_website::onboarding::discovery::{DesignChoice, Discovery, OwnerCard};
 use adk_website::themes::ThemeId;
 use anyhow::{Result, anyhow};
 use awp_types::{CapabilityEffect, ContentId, ReleaseManifest, Role, SiteKind};
-use url::Url;
 
 use crate::checks::Checks;
 use crate::fixture::legacy::{
@@ -138,29 +140,26 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
         held(FindingKind::Executable, &planted) && held(FindingKind::MimeMismatch, &fake),
         "cache.php (server code), photo.jpg (not an image)",
     );
-    // The crawler-only script shows only to a crawler: a dual fetch finds it.
-    let cloaked =
-        entries.iter().any(|e| e.findings.iter().any(|f| f.kind == FindingKind::Cloaking));
-    if !cloaked {
-        checks.gap(
-            "onboarding's `Discovery::run` scans the inventory but never runs the cloaking \
-             check (`Detectors::check_cloaking`), so a crawler-only script is found only when \
-             the scenario runs the dual fetch itself",
-        );
-    }
-    let home = Url::parse(&format!("{ORIGIN}/"))?;
-    let cloaking = Detectors::new().check_cloaking(&ctx, &Subject::Url("/".into()), &home).await?;
+    // The crawler-only script shows only to a crawler: discovery's dual fetch of the live
+    // site finds it, since the owner proved the domain (A-I9).
+    let cloaked = entries.iter().find(|e| {
+        e.findings.iter().any(|f| {
+            f.kind == FindingKind::Cloaking
+                && f.evidence
+                    .iter()
+                    .any(|ev| ev.detail.contains("scripts served only to the crawler"))
+        })
+    });
     checks.check(
-        "crawler-only scripts are found with evidence",
-        cloaking.as_ref().is_some_and(|f| {
-            f.evidence.iter().any(|e| e.detail.contains("scripts served only to the crawler"))
-        }),
-        cloaking
-            .as_ref()
+        "crawler-only scripts are quarantined with evidence",
+        cloaked.is_some_and(|e| e.subject == Subject::Item("crawl:/".into())),
+        cloaked
+            .and_then(|e| e.findings.first())
             .and_then(|f| f.evidence.first())
             .map(|e| e.detail.clone())
-            .unwrap_or_default(),
+            .unwrap_or_else(|| "no cloaking finding".into()),
     );
+    let cloaked_id = cloaked.map(|e| e.content_id.clone());
     let audit: Arc<dyn AuditRecorder> = recorder.clone();
     migration.quarantine.record_findings(&audit, &ctx.acting).await?;
 
@@ -186,11 +185,14 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
     // The owner decides the held pages: each is released from the sanitised conversion; the
     // planted executable is never put to a decision (A-I1).
     let owner = OwnerDecides::default();
-    for id in ["posts/hello-sun/en", "pages/about/en"] {
+    let mut decided: Vec<ContentId> =
+        ["posts/hello-sun/en", "pages/about/en"].map(|id| ContentId(id.into())).to_vec();
+    decided.extend(cloaked_id);
+    for id in &decided {
         migration
             .quarantine
             .decide(
-                &ContentId(id.into()),
+                id,
                 &owner,
                 "migrator",
                 EntryPoint::SiteAgent { agent: "steward".into() },
@@ -210,7 +212,8 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
         .await?;
     checks.check(
         "an executable is refused without a decision; held pages are the owner's",
-        executable == QuarantineState::Refused && owner.asked.lock().unwrap().len() == 2,
+        executable == QuarantineState::Refused
+            && owner.asked.lock().unwrap().len() == decided.len(),
         format!("{} decisions asked", owner.asked.lock().unwrap().len()),
     );
     let excluded = migration.quarantine.excluded();
@@ -222,6 +225,10 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
     // 6 Build with the owner's new theme: the business site, the migrated content, the
     // uploads at their URLs, the legacy redirects, the parity check on the launch gate.
     let design = DesignChoice::NewTheme(ThemeId::Harbour);
+    // The owner's design choice is recorded in the migration audit (owner decision of
+    // 2026-10-25): a new theme gates URL coverage, text and metadata; its look is approved
+    // from the preview.
+    record_design_choice(&audit, &ctx.acting, &design.parity()).await?;
     let mut site =
         Site::with(SiteKind::Business, "Example Solar", DOMAIN, &["en"], None, |config| {
             config.redirects = converted.redirects.clone();
@@ -241,40 +248,28 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
     site.runtime = site.assemble(Some(ThemeId::Harbour));
     let charter = site.charter("Example Solar", "Rooftop solar for homes in Nairobi.", "KES");
     site.commit(&charter, &[(Role::Owner, OWNER)]).await?;
-    let first = site
+    // A link to the page the crawl could not read (robots-disallowed /private/) became text
+    // in conversion, so release 1 publishes as converted.
+    checks.check(
+        "links to pages the crawl could not read become text",
+        converted.notes.iter().any(|n| n.contains("/private/"))
+            && converted
+                .items
+                .iter()
+                .all(|i| i.body.as_ref().is_none_or(|b| !b.0.contains("](/private/)"))),
+        converted
+            .notes
+            .iter()
+            .filter(|n| n.contains("could not read"))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; "),
+    );
+    let outcome = site
         .runtime
         .pipeline()
         .run(site.steward_change(converted.items.clone(), "migration"))
         .await?;
-    let broken = match &first {
-        adk_site::pipeline::PipelineOutcome::Held(report) => report
-            .check(GateCheck::Links)
-            .map(|c| c.findings.iter().map(|f| f.message.clone()).collect::<Vec<_>>())
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    };
-    if !broken.is_empty() {
-        checks.gap(format!(
-            "the converter keeps links to pages the crawl could not read (robots-disallowed \
-             /private/), so the gate holds release 1 with a broken link until the Steward edits \
-             the page; adk-site's crate-level S3 passes only because its cloaking finding \
-             quarantines the home page: {}",
-            broken.join("; ")
-        ));
-    }
-    // The Steward's fix: the link to the page that was never migrated goes.
-    let items: Vec<_> = converted
-        .items
-        .iter()
-        .cloned()
-        .map(|mut item| {
-            if let Some(body) = &mut item.body {
-                body.0 = body.0.replace("[Staff notes](/private/)", "Staff notes");
-            }
-            item
-        })
-        .collect();
-    let outcome = site.runtime.pipeline().run(site.steward_change(items, "migration")).await?;
     let published = match outcome {
         adk_site::pipeline::PipelineOutcome::Published(published) => published,
         other => {
@@ -290,10 +285,11 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
     );
     let parity_check = gate.check(GateCheck::MigrationParity);
     checks.check(
-        "visual and text parity within thresholds on the top 20 pages",
+        "text parity within thresholds on the top 20 pages; the new theme's looks reported, not gated",
         parity_check.is_some_and(|c| {
-            c.findings.is_empty()
+            c.findings.iter().all(|f| !f.blocking && f.rule == "perceptual-difference")
                 && matches!(c.status, CheckStatus::Passed | CheckStatus::NotMeasured)
+                && c.note.as_deref().is_some_and(|n| n.starts_with("new theme"))
         }),
         parity_check
             .map(|c| format!("{:?}: {}", c.status, c.note.clone().unwrap_or_default()))
@@ -330,41 +326,38 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
         .filter_map(|e| e.path.clone())
         .map(|p| format!("/{}", p.trim_start_matches('/')))
         .collect();
+    let gone: BTreeSet<String> =
+        converted.redirects.iter().filter(|r| r.status == 410).map(|r| r.from.clone()).collect();
     let mut missing = Vec::new();
-    let mut scripts = Vec::new();
+    let mut legacy = Vec::new();
     for url in &inventory.urls {
         let path = url.path.split('?').next().unwrap_or_default().to_string();
-        if path.ends_with(".php") || url.status >= 400 || held.contains(&path) {
-            continue;
-        }
-        if path.ends_with(".js") {
-            scripts.push(path);
+        if url.status >= 400 || held.contains(&path) {
             continue;
         }
         let file = if path.ends_with('/') { format!("{path}index.html") } else { path.clone() };
         let served = manifest.files.contains_key(&file);
         let redirected = redirects.contains(&path) || url.status == 301;
-        if !served && !redirected {
+        if legacy_runtime_path(&path) {
+            // The legacy runtime's files and endpoints: redirected or answered 410 Gone.
+            legacy.push(path.clone());
+            if !redirected && !gone.contains(&path) {
+                missing.push(path);
+            }
+        } else if !served && !redirected {
             missing.push(path);
         }
     }
-    if !scripts.is_empty() {
-        checks.gap(format!(
-            "the legacy theme's scripts are neither released nor redirected nor answered 410: \
-             {scripts:?}"
-        ));
-    }
     checks.check(
-        "every inventoried URL is served or 301-redirected",
-        missing.is_empty(),
+        "every inventoried URL is served or 301-redirected; legacy runtime paths answer 410",
+        missing.is_empty() && !legacy.is_empty(),
         if missing.is_empty() {
             format!(
-                "{} URLs: served or redirected ({} redirects); {} held in quarantine, {} server \
-                 endpoints refused",
+                "{} URLs: served or redirected ({} redirects); legacy runtime paths {legacy:?} \
+                 redirected or gone; {} held in quarantine",
                 inventory.urls.len(),
                 redirects.len(),
                 held.len(),
-                inventory.urls.iter().filter(|u| u.path.ends_with(".php")).count()
             )
         } else {
             format!("missing: {missing:?}")
@@ -374,11 +367,20 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
     // One record per quarantined subject, its findings and evidence digest inside.
     let expected = migration.quarantine.entries.len();
     let findings = records.iter().filter(|r| r.action == "site.migration.finding").count();
-    let decided = records.iter().filter(|r| r.action == "site.migration.decided").count();
+    let decisions: Vec<&serde_json::Value> = records
+        .iter()
+        .filter(|r| r.action == "site.migration.decided")
+        .filter_map(|r| r.ext.get("site"))
+        .collect();
+    let quarantine_decisions = decisions.iter().filter(|v| v.get("subject").is_some()).count();
+    let design_recorded =
+        decisions.iter().any(|v| v["decision"] == "design" && v["design"] == "new_theme");
     checks.check(
-        "findings and decisions are audited",
-        findings == expected && findings >= 4 && decided == 2,
-        format!("{findings} subjects recorded with their findings, {decided} decisions"),
+        "findings and decisions are audited, the design choice among them",
+        findings == expected && findings >= 4 && quarantine_decisions == decided.len() && design_recorded,
+        format!(
+            "{findings} subjects recorded with their findings, {quarantine_decisions} quarantine decisions, design recorded: {design_recorded}"
+        ),
     );
     verify_served(&site.host, DOMAIN, &site.release_key).await?;
     Ok(checks)

@@ -23,9 +23,9 @@ use hmac::{Hmac, Mac};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sha2::Sha256;
-use support::commerce_harness::{
-    HarnessActorKind, MultiActorHarness, MultiActorHarnessActors, MultiActorHarnessConfig,
-};
+#[cfg(feature = "acp")]
+use support::commerce_harness::MultiActorHarnessActors;
+use support::commerce_harness::{HarnessActorKind, MultiActorHarness, MultiActorHarnessConfig};
 
 fn future_expiry() -> String {
     (Utc::now() + Duration::hours(1)).to_rfc3339()

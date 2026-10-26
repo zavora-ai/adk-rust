@@ -41,3 +41,8 @@ cargo test --manifest-path adk-surface/desktop/Cargo.toml --workspace
 `.github/workflows/desktop.yml` runs these, then drives the shell on WebKitGTK through
 `tauri-driver` under Xvfb, and compiles it on macOS and Windows. It is not part of the
 merge gate.
+
+The WebKitGTK tests (`app/tests/webkitgtk.rs`, run through `e2e.sh`) also need
+`tauri-driver` (`cargo install tauri-driver --locked`), `xvfb`, `dbus-x11` and
+`WebKitWebDriver`: the `webkitgtk-webdriver` package on Ubuntu 26.04 and later,
+`webkit2gtk-driver` on earlier releases.

@@ -60,21 +60,31 @@
   stroke-width: 3;
 }
 
-/* The heading and the answer read as one sentence: one line where it fits, two at most on a
-   narrow panel, never cut mid-answer before that. */
+/* The heading and the answer read as one sentence, on one line where both fit. Where they do
+   not, the answer wraps under the heading and is never cut: only the heading stops, at two
+   lines, and the line's title holds all of it. */
 .decided-words {
-  display: -webkit-box;
+  display: flex;
   flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.3em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.decided-heading {
+  display: -webkit-box;
   min-width: 0;
   overflow: hidden;
-  overflow-wrap: anywhere;
+  font-weight: 650;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
 }
 
-.decided-heading {
-  font-weight: 650;
+.decided-answer {
+  min-width: 0;
 }
 
 .decided-dot {

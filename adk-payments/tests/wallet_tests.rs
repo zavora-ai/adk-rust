@@ -18,17 +18,17 @@ use adk_payments::wallet::conformance::{
     payment_rail_conformance, wallet_provider_conformance, wallet_store_conformance,
 };
 use adk_payments::wallet::{
-    AWP_ERROR_DETAIL, AnomalyRule, Discrepancy, HoldReason, InMemoryBillingAccount,
+    AWP_ERROR_DETAIL, AnomalyRule, CategoryPause, Discrepancy, HoldReason, InMemoryBillingAccount,
     InMemoryCardIssuer, InMemoryCommerceOutcomes, InMemoryUseBasedScheme, InMemoryWalletProvider,
-    InMemoryWalletStore, Mandate, Payee, PayeeRule, PaymentOutcome, PaymentRail, PaymentRequest,
-    PaymentState, PrepaidCardProvider, ProviderBillingRail, RailPayment, RailRef, RailSettlement,
-    ReceiptDetails, ReceiptSigner, ReceiptVerifier, SpendCategory, StatementEntry, StatementKind,
-    UseBasedRail, UseBasedScheme, WALLET_CATEGORY_PAUSED_CODE, WALLET_CURRENCY_MISMATCH_CODE,
-    WALLET_KEY_REUSED_CODE, WALLET_NO_MANDATE_CODE, WALLET_NOT_HELD_CODE,
-    WALLET_OWNER_DECISION_REQUIRED_CODE, WALLET_PAYEE_OUTSIDE_MANDATE_CODE,
-    WALLET_PAYMENT_FAILED_CODE, WALLET_PAYMENT_REJECTED_CODE, WALLET_RAIL_DATA_MISMATCH_CODE,
-    WALLET_WRONG_SITE_CODE, Wallet, WalletKpiSource, WalletPolicy, category_scope, issue_receipt,
-    owner_approved_scope, verify_receipt,
+    InMemoryWalletStore, Mandate, Payee, PayeeRule, PaymentOutcome, PaymentQuery, PaymentRail,
+    PaymentRecord, PaymentRequest, PaymentState, PrepaidCardProvider, ProviderBillingRail,
+    RailPayment, RailRef, RailSettlement, ReceiptDetails, ReceiptSigner, ReceiptVerifier,
+    SpendCategory, StatementEntry, StatementKind, UseBasedRail, UseBasedScheme,
+    WALLET_CATEGORY_PAUSED_CODE, WALLET_CURRENCY_MISMATCH_CODE, WALLET_KEY_REUSED_CODE,
+    WALLET_NO_MANDATE_CODE, WALLET_NOT_HELD_CODE, WALLET_OWNER_DECISION_REQUIRED_CODE,
+    WALLET_PAYEE_OUTSIDE_MANDATE_CODE, WALLET_PAYMENT_FAILED_CODE, WALLET_PAYMENT_REJECTED_CODE,
+    WALLET_RAIL_DATA_MISMATCH_CODE, WALLET_WRONG_SITE_CODE, Wallet, WalletKpiSource, WalletPolicy,
+    WalletStore, category_scope, issue_receipt, owner_approved_scope, verify_receipt,
 };
 use async_trait::async_trait;
 use awp_types::{Proof, Urgency};
@@ -297,6 +297,145 @@ async fn the_spend_ledger_checks_the_cap_across_wallet_instances() {
     }
     assert_eq!(settled, 12, "12 x 4 USD fit under the 50 USD cap");
     assert_eq!(f.hostco.lines().iter().map(|line| line.amount).sum::<u64>(), 4_800);
+}
+
+/// A store whose reads are slow, as a shared database under load: two decisions on one
+/// payment both read it held before either writes.
+struct SlowReads(InMemoryWalletStore);
+
+#[async_trait]
+impl WalletStore for SlowReads {
+    async fn insert(&self, record: PaymentRecord) -> Result<(PaymentRecord, bool)> {
+        self.0.insert(record).await
+    }
+    async fn update(&self, record: &PaymentRecord) -> Result<()> {
+        self.0.update(record).await
+    }
+    async fn update_if(&self, record: &PaymentRecord, expected: PaymentState) -> Result<bool> {
+        self.0.update_if(record, expected).await
+    }
+    async fn get(&self, wallet: &str, id: &str) -> Result<Option<PaymentRecord>> {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        self.0.get(wallet, id).await
+    }
+    async fn by_key(&self, wallet: &str, key: &str) -> Result<Option<PaymentRecord>> {
+        self.0.by_key(wallet, key).await
+    }
+    async fn list(&self, query: &PaymentQuery) -> Result<Vec<PaymentRecord>> {
+        self.0.list(query).await
+    }
+    async fn pause(&self, pause: CategoryPause) -> Result<()> {
+        self.0.pause(pause).await
+    }
+    async fn resume(&self, wallet: &str, category: SpendCategory) -> Result<Option<CategoryPause>> {
+        self.0.resume(wallet, category).await
+    }
+    async fn pauses(&self, wallet: &str) -> Result<Vec<CategoryPause>> {
+        self.0.pauses(wallet).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_decisions_on_one_held_payment_pay_it_once_across_instances() {
+    // Two processes over one store and ledger: the owner approves on the phone while a
+    // second approval, or a rejection, races it. Exactly one decision proceeds.
+    for second_approves in [true, false] {
+        let f = Fixture::new(s12_policy(), start());
+        let slow: Arc<dyn WalletStore> = Arc::new(SlowReads(f.store.clone()));
+        let instance = |builder: adk_payments::wallet::WalletBuilder| {
+            builder
+                .rail(Arc::new(ProviderBillingRail::new(Arc::new(f.hostco.clone()))))
+                .rail(Arc::new(ProviderBillingRail::new(Arc::new(f.registrar.clone()))))
+                .rail(Arc::new(ProviderBillingRail::new(Arc::new(f.adsco.clone()))))
+                .rail(Arc::new(UseBasedRail::new(Arc::new(f.scheme.clone()))))
+                .spend_ledger(f.ledger.clone() as Arc<dyn SpendLedger>)
+                .store(slow.clone())
+                .owner(SubjectRef::human(OWNER))
+                .clock(Arc::new(f.clock.clone()))
+                .build()
+                .unwrap()
+        };
+        let first = instance(Wallet::builder(SITE, s12_policy(), Arc::new(f.provider.clone())));
+        let second = instance(Wallet::builder(SITE, s12_policy(), Arc::new(f.provider.clone())));
+        let PaymentOutcome::Held(top_up) =
+            first.pay(ads("a-race", 30_000), &finance()).await.unwrap()
+        else {
+            panic!("over the category cap is held")
+        };
+
+        let id = top_up.id.clone();
+        let approve = tokio::spawn({
+            let id = id.clone();
+            async move { first.decide(&id, &owner_approves()).await }
+        });
+        let other = tokio::spawn({
+            let id = id.clone();
+            let decision = if second_approves { owner_approves() } else { owner_rejects() };
+            async move { second.decide(&id, &decision).await }
+        });
+        let outcomes = [approve.await.unwrap(), other.await.unwrap()];
+        let proceeded: Vec<&PaymentRecord> =
+            outcomes.iter().filter_map(|o| o.as_ref().ok()).collect();
+        assert_eq!(proceeded.len(), 1, "exactly one decision proceeds: {outcomes:?}");
+        let refused = outcomes.iter().find_map(|o| o.as_ref().err()).expect("one is refused");
+        assert_eq!(refused.code, WALLET_NOT_HELD_CODE);
+
+        let stored = f.store.get(SITE, &id).await.unwrap().unwrap();
+        assert_eq!(&stored, proceeded[0], "the journal keeps the decision that proceeded");
+        let approved_units = f
+            .ledger
+            .spent(
+                &SpendKey::org(owner_approved_scope(SITE, SpendCategory::Advertising)),
+                SpendPeriod::Month,
+            )
+            .await
+            .unwrap();
+        let charged = f.adsco.lines().iter().map(|line| line.amount).sum::<u64>();
+        match stored.state {
+            PaymentState::Settled => {
+                assert_eq!(approved_units, 300_000_000, "the ledger records the approval once");
+                assert_eq!(charged, 30_000, "the provider charges once");
+            }
+            PaymentState::Rejected => {
+                assert_eq!((approved_units, charged), (0, 0), "a rejection pays nothing");
+            }
+            other => panic!("the payment ends settled or rejected, not {other:?}"),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_in_cap_payments_are_never_held() {
+    // Twenty payments that together fill the hosting cap exactly, paid at once, round after
+    // round: each settles, because a settled payment is never counted both as spent and as
+    // in flight.
+    for round in 0..25 {
+        let f = Fixture::new(s12_policy(), start());
+        let tasks: Vec<_> = (0..20)
+            .map(|i| {
+                let wallet = f.wallet.clone();
+                tokio::spawn(async move {
+                    wallet.pay(hosting(&format!("r{round}-{i}"), 250), &finance()).await
+                })
+            })
+            .collect();
+        let mut held = Vec::new();
+        for task in tasks {
+            if let PaymentOutcome::Held(record) = task.await.unwrap().unwrap() {
+                held.push(record.hold);
+            }
+        }
+        assert!(held.is_empty(), "round {round}: in-cap payments were held: {held:?}");
+        assert_eq!(f.hostco.lines().iter().map(|line| line.amount).sum::<u64>(), 5_000);
+        assert!(
+            f.wallet
+                .pay(hosting(&format!("r{round}-over"), 1), &finance())
+                .await
+                .unwrap()
+                .is_held(),
+            "round {round}: the cap is reached exactly"
+        );
+    }
 }
 
 /// A rail that fails every payment, as a payee that refuses.

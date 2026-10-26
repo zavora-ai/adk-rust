@@ -154,6 +154,7 @@ export const labels = {
   noAgentSpent: "No agent has worked here today.",
   spentTodayShort: (amount: string) => `${amount} today`,
   upkeep: "Upkeep: tidying notes and checking work",
+  outsideAreas: "Spent outside your areas today",
   alwaysAsks:
     "Anything that spends money or publishes always asks you first. This can't be switched off.",
   change: "Change",

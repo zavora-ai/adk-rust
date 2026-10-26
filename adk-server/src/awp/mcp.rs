@@ -7,7 +7,7 @@
 //!
 //! | AWP element | MCP |
 //! |---|---|
-//! | Idempotency key | `params._meta["agenticwebprotocol.com/idempotency-key"]`, else the JSON-RPC id within its session |
+//! | Idempotency key | `params._meta["agenticwebprotocol.com/idempotency-key"]`, else the JSON-RPC id within its session; a stateless endpoint has no session, so only the `_meta` key |
 //! | Consent | `params._meta["agenticwebprotocol.com/consent"]`, an array of receipt ids |
 //! | Output | `structuredContent`, with a text block holding its JSON |
 //! | Held call | `structuredContent` is the held-call document; `isError` is false |
@@ -167,12 +167,11 @@ impl McpCallExecutor for EdgeMcpExecutor {
             .get(&name)
             .map(|tool| tool.declaration().idempotency)
             .unwrap_or_default();
-        // A JSON-RPC id is unique only within its session (AWP 2.0 §7.7, C8).
-        let binding_id = match &call.session_id {
-            Some(session) => format!("{session}:{}", call.request_id),
-            None => call.request_id.clone(),
-        };
-        let keys = KeySources { explicit, binding_id: Some(binding_id) };
+        // A JSON-RPC id is unique only within its session (AWP 2.0 §7.7, C8): without one, as
+        // on a stateless endpoint, only the `_meta` key identifies a call.
+        let binding_id =
+            call.session_id.as_ref().map(|session| format!("{session}:{}", call.request_id));
+        let keys = KeySources { explicit, binding_id };
         let invocation = Invocation {
             capability: name,
             input: call.arguments,

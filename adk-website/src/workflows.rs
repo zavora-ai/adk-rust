@@ -1,5 +1,6 @@
 //! The site's model-free jobs as kernel runs (spec 3.5 §7.20, §7.11, §7.21): the Guardian's
-//! probe ([`PROBE_WORKFLOW`]) and the weekly review's composition ([`DIGEST_WORKFLOW`]).
+//! probe ([`PROBE_WORKFLOW`]), the hosting job's upkeep check ([`WATCH_WORKFLOW`]) and the
+//! weekly review's composition ([`DIGEST_WORKFLOW`]).
 //! Register [`SiteWorkflows`] with `KernelBuilder::workflows` and each process's trigger from
 //! [`crate::jobs::processes`]; the other site processes run their job's agent.
 
@@ -15,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::incident::GuardianProbe;
-pub use crate::jobs::{DIGEST_WORKFLOW, PROBE_WORKFLOW};
+pub use crate::jobs::{DIGEST_WORKFLOW, PROBE_WORKFLOW, WATCH_WORKFLOW};
 use crate::review::{ReviewComposer, ReviewInputs};
 
 /// Where a site's weekly review goes.
@@ -33,6 +34,7 @@ pub struct DigestTarget {
 #[derive(Default)]
 pub struct SiteWorkflows {
     probes: BTreeMap<Uuid, Arc<GuardianProbe>>,
+    watches: BTreeMap<Uuid, Arc<crate::upkeep::UpkeepCheck>>,
     digests: BTreeMap<Uuid, DigestTarget>,
 }
 
@@ -49,6 +51,13 @@ impl SiteWorkflows {
         self
     }
 
+    /// Runs `site`'s daily upkeep check (spec 3.5 §7.20).
+    #[must_use]
+    pub fn watch(mut self, site: Uuid, check: Arc<crate::upkeep::UpkeepCheck>) -> Self {
+        self.watches.insert(site, check);
+        self
+    }
+
     /// Sends `site`'s weekly review to `target`.
     #[must_use]
     pub fn digest(mut self, site: Uuid, target: DigestTarget) -> Self {
@@ -60,7 +69,7 @@ impl SiteWorkflows {
 #[async_trait]
 impl WorkflowExecutor for SiteWorkflows {
     fn has_workflow(&self, workflow_id: &str) -> bool {
-        matches!(workflow_id, PROBE_WORKFLOW | DIGEST_WORKFLOW)
+        matches!(workflow_id, PROBE_WORKFLOW | WATCH_WORKFLOW | DIGEST_WORKFLOW)
     }
 
     async fn execute(
@@ -76,39 +85,46 @@ impl WorkflowExecutor for SiteWorkflows {
             .ok_or_else(|| {
                 format!("a `{workflow_id}` run names its site as {{\"site\": <uuid>}}")
             })?;
-        let work = async {
-            match workflow_id {
-                PROBE_WORKFLOW => {
-                    let probe = self
-                        .probes
-                        .get(&site)
-                        .ok_or_else(|| format!("no probe is registered for site {site}"))?;
-                    let outcome = probe.run().await.map_err(|e| e.to_string())?;
-                    serde_json::to_value(outcome).map_err(|e| e.to_string())
+        let work =
+            async {
+                match workflow_id {
+                    PROBE_WORKFLOW => {
+                        let probe = self
+                            .probes
+                            .get(&site)
+                            .ok_or_else(|| format!("no probe is registered for site {site}"))?;
+                        let outcome = probe.run().await.map_err(|e| e.to_string())?;
+                        serde_json::to_value(outcome).map_err(|e| e.to_string())
+                    }
+                    WATCH_WORKFLOW => {
+                        let check = self.watches.get(&site).ok_or_else(|| {
+                            format!("no upkeep check is registered for site {site}")
+                        })?;
+                        let report = check.run().await.map_err(|e| e.to_string())?;
+                        serde_json::to_value(report).map_err(|e| e.to_string())
+                    }
+                    DIGEST_WORKFLOW => {
+                        let target = self.digests.get(&site).ok_or_else(|| {
+                            format!("no weekly review is registered for site {site}")
+                        })?;
+                        let today = Utc::now().date_naive();
+                        let this_monday = today
+                            - Duration::days(i64::from(today.weekday().num_days_from_monday()));
+                        let review = target
+                            .composer
+                            .compose(this_monday - Duration::days(7), ReviewInputs::default())
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let document = target
+                            .composer
+                            .send(&review, target.sink.as_ref(), &target.thread)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        Ok(json!({ "summary": review.summary(), "document": document }))
+                    }
+                    other => Err(format!("{other} is not a website workflow")),
                 }
-                DIGEST_WORKFLOW => {
-                    let target = self
-                        .digests
-                        .get(&site)
-                        .ok_or_else(|| format!("no weekly review is registered for site {site}"))?;
-                    let today = Utc::now().date_naive();
-                    let this_monday =
-                        today - Duration::days(i64::from(today.weekday().num_days_from_monday()));
-                    let review = target
-                        .composer
-                        .compose(this_monday - Duration::days(7), ReviewInputs::default())
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    let document = target
-                        .composer
-                        .send(&review, target.sink.as_ref(), &target.thread)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    Ok(json!({ "summary": review.summary(), "document": document }))
-                }
-                other => Err(format!("{other} is not a website workflow")),
-            }
-        };
+            };
         tokio::select! {
             () = cancel_token.cancelled() => Err("cancelled".to_string()),
             result = work => result,

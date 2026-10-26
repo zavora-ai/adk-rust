@@ -66,6 +66,18 @@ words make a fact `Known`. Keeping the current design gates a migration's launch
 parity under 0.05; a new theme gates on URL coverage, text and metadata, and the owner
 approves the look from the preview.
 
+Reviews discovery finds join `quotes::ReviewQuotes` (`data/reviews.json` in a served site),
+none approved; the onboarding view asks the owner about each one with a public reviewer's
+name, and `quotes::QuotedReviews` — a launch-gate extension over them — fails a release that
+quotes an anonymous review, one the owner has not approved, or one without its reviewer's
+name on the page.
+
+`ui::WebsiteDesk` saves the paired device, the onboarding answers, the charter under review
+and the editor's drafts to its `ui::DeskStore` after every command (`FileDeskStore` at
+`data/desk.json` under `adk-rust website new`) and reads them back with
+`WebsiteDesk::restore`, so the owner resumes onboarding after a restart from the device the
+setup code paired.
+
 ## The team
 
 The Steward leads the back office (Steward, Growth, Revenue, Guardian, Finance) as one
@@ -74,7 +86,10 @@ and reach the back office only through typed signals. `SiteTeam::build` makes ea
 `HarnessAgent` with its partition's kit, the ladder's mode and run budget for its jobs, and
 its jobs' playbooks under `.skills/` in its workspace, and compiles the back office:
 `BuiltTeam::compile` returns it as one runner root over the built agents, the Steward's
-delegate edges included.
+delegate edges included. `BuiltTeam::team_runner` runs that root under the Steward's
+harness; each member it delegates to runs under its own harness's policy.
+`BuiltTeam::agent_runner` runs one agent alone, for the kernel's process of one of its
+jobs.
 
 Each job binds the tools it acts with, so the owner's promotion grants their standing rules:
 
@@ -82,13 +97,47 @@ Each job binds the tools it acts with, so the owner's promotion grants their sta
 |-----|---------------------------------|
 | `protect` | `site_rollback`, `edge_read_only` (A-I11) |
 | `social` (review replies) | `site_publish`, `social_post` |
-| `nurture` | `adk-drivers`' `email_send_sequence_step` |
-| `handoff` | `lead_handoff`: `alarms::handoff_tool` sends the owner one P2 card |
+| `nurture` | `adk-drivers`' `email_send_sequence_step`, through `leads::nurture_tools` |
+| `handoff` | `lead_handoff`: `alarms::handoff_tool_for` sends the owner one P2 card per lead, once its score reaches the threshold |
 | `experiments` | `experiment_start`, `experiment_report`: `experiments::experiment_tools` over the runner |
 
-`jobs::processes` turns the jobs into kernel triggers: `site.probe` every five minutes and
-`site.digest` on Mondays run without a model through `workflows::SiteWorkflows`; the other
-site processes run their job's agent with its playbook.
+With `TeamKit::wallet`, the Finance agent pays from the owner's wallet: `wallet::finance_tools`
+gives it `wallet_pay` and `wallet_status` with the payment scope, and no other agent holds
+them; the wallet's mandates and the governed path decide each payment (spec 3.5 §7.14,
+A-I16).
+
+`jobs::processes` turns the jobs into kernel triggers: `site.probe` every five minutes,
+`site.watch` daily and `site.digest` on Mondays run without a model through
+`workflows::SiteWorkflows`; the other site processes run their job's agent with its playbook.
+
+### Leads and nurture
+
+| Part | Does |
+|------|------|
+| Consent | The charter's public terms and the edge ask for `contact` and, where the kind nurtures its leads, `nurture`; an enquiry carries every receipt the visitor granted (`AWP-Consent` lists them) |
+| `leads::SqliteLeadRecords` | The contact book beside the edge's leads in `data/edge.db`: who wrote, with which receipts, how much nurture they received, which leads were handed off; erasure reaches it |
+| `leads::Leads` | The email outbox's `ConsentCheck` from the edge's receipts, so a revocation stops the next send; scores and the one handoff per lead |
+| `leads::LeadScorer` | 20 for `contact`, 10 for `nurture`, 15 per qualifying answer (when, how many, budget), 5 per nurture step up to three; a lead at 70 is ready for the owner |
+| `leads::nurture_tools` | The outbox's sequence and newsletter sends, refused inside the owner's quiet hours, each send returning the recipient's lead scores |
+
+### Upkeep and the publish delay
+
+`upkeep::UpkeepCheck` is the hosting job's daily watch (`jobs::WATCH_WORKFLOW`): it reads
+the edge's `Cargo.lock` against an `AdvisorySource` — `AdvisoryDatabase` over a local clone
+of the RustSec advisory database — and the certificate from a `CertificateSource`, and files
+each upgrade or renewal once as a decision card for the owner, with a P2 alarm (P1 for a
+certificate within three days). `publish_delay::PublishDelay` keeps a page the site drafts on
+its own under `freshness`, `seo` or `aeo` off the site for 24 hours by default: the draft
+must be scheduled at least that far ahead, and it goes live at that time once the owner has
+approved it.
+
+### The owner's channel
+
+`channel::OwnerChannel` is what a chat adapter hands the photos of a paired person's message
+to: it runs them through the back office's media intake into the Steward's draft, drafts each
+alt text from its caption, and asks the owner on the thread to confirm. `yes` confirms them
+all; `2: text` rewrites the second; the confirmation reaches the item once it is scheduled or
+published. A message from an account no one paired adds nothing (A-I24).
 
 ## Incidents, alarms and the weekly review
 
@@ -108,8 +157,9 @@ site processes run their job's agent with its playbook.
 `review::ReviewComposer` composes the weekly review from the stores: KPIs against baselines
 and targets with trends, each agent's work, cost, revenue and profit and loss from the wallet,
 experiments, incidents, leads, the promotions the jobs earned and the demotions with their
-reasons, the alarms that waited, and the owner's questions. It sends a one-line summary to
-the owner's channel and returns the document for the web home.
+reasons, the alarms that waited, and the owner's questions. It sends a summary in a few plain
+sentences to the owner's channel and returns the document for the web home; the composer is
+`Clone`, so the home's review view and the weekly digest compose from the same stores.
 
 ## The agent edge
 
@@ -126,6 +176,11 @@ office's agenda through the kernel's `SignalSink`, each text field screened (A-I
 | `SiteSubjectData` | Consent export and erasure to the leads and the contact book |
 | `EdgeAnnouncer`, `DeferredAnnouncer` | Each release to `site.release.published` and `catalog.changed` on the edge's events |
 | `ReceiptEntrySigner` | Stream entries to the edge's delegated `receipt` key |
+| `ReceiptKey` | Commerce receipts to the edge's delegated `receipt` key, for `adk-payments`' receipt hook |
+
+`SiteEdgeParts::payments` takes the owner's payment desk, such as `edge::ap2::Ap2Desk`, and
+`SiteEdgeParts::thresholds` the owner's amount thresholds, which hold large orders, bookings
+and payments for the owner ([Writing capability packs](capability-packs.md#amount-thresholds)).
 
 `edge::concierge` builds the Concierge over the edge's own public tools with `adk-harness`'
 `website_public_served`; it is offered those tools and nothing of the harness's own.
@@ -181,11 +236,13 @@ many sites from one harness:
 |------|--------|
 | Keys | `data/keys/release.jwk` signs the site log; `card.jwk` (and `receipt.jwk`) sign the Agent Card, the status, consent receipts and stream entries. No root key is kept in the project |
 | Publishing | Refused until `well-known/awp/keys.json` delegates the release key: the gate's `release-delegation` finding names `adk-rust awp keys rotate` and `adk-rust awp keys delegate` |
-| Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and a stream lane signed by the receipt key; feeds from `feeds.json`; `UpdateDriver` ticks it when due and journals to `data/updates/`; held deliveries and items become approval requests (decision cards); `GET /awp/v2/stream` serves `stream_since` |
+| Updates | `UpdateEngine` over the runtime's pipeline, the edge's live store and a stream lane signed by the receipt key; feeds from `feeds.json`; `UpdateDriver` ticks it when due and journals to `data/updates/`; held deliveries and items become approval requests (decision cards) and survive a restart in `data/updates/held.json`; `GET /awp/v2/stream` serves `stream_since` |
 | Experiments | `ExperimentGenerator` around the built-in generator; `ExperimentRunner` with `BeaconKpi`, the job pauses, the ladder, the alarms and `RepublishOnStop`; its trigger fires through the kernel's watermarked cron source for the expression |
 | Measurement | `MeteredActionLedger` and `EdgeMeter` on the edge, `MeteredSpendLedger` for agents' spend, and the tracker's sources |
-| Channels | Inbox threads with `SiteOptions::repliers`; the calendar and payment links from `calendar.json` and `payments.json`, or `SiteOptions`; refused without them |
+| Channels | Inbox threads with `SiteOptions::repliers`; the calendar and payment links from `calendar.json` and `payments.json`, or `SiteOptions` (an `Ap2Desk` as `SiteOptions::payments`); refused without them; the owner's amount thresholds from `approvals.json` |
 | Public agent | With `SiteOptions::model`, `edge::concierge` mounts the Concierge through `AwpEdge::public_agent`: the website preset in the public partition over the edge's own tools — the declared capabilities (a declared `search_site` among them), `reply_in_thread` and the edge's `emit_signal` — so the edge's public policy admits every call |
+| Back office | With `SiteOptions::model`, the kernel hosts the back office (`deploy::back_office`): the Steward's target runs the team, every agent its jobs' processes on their signals and schedules, under the owner's standing rules in `data/kernel.db` — what `adk-rust website jobs promote` grants takes effect while the site serves — with held calls in the owner's approval inbox; the edge's signals wake them. Revenue gets the nurture sends (`SiteOptions::email`) and the handoff, Growth the experiment tools, Guardian `edge_read_only`, Finance the wallet (`SiteOptions::wallet`); agent sessions are kept in `data/kernel/sessions.db` |
+| Upkeep | With `SiteOptions::advisories` or `SiteOptions::certificate`, the daily `site.watch` runs `UpkeepCheck` |
 
 | Store | Survives a restart |
 |-------|--------------------|
@@ -193,6 +250,12 @@ many sites from one harness:
 | Agenda, partitions, devices, cron watermarks | `adk_kernel` SQLite stores |
 | Runs (weekly reviews among them), approvals, action and spend ledgers | `adk_session` SQLite stores |
 | Leads, consent, held calls, idempotency | `adk_server::awp::stores::SqliteEdgeStores` in `data/edge.db` |
+| The contact book, nurture counts and handoffs | `leads::SqliteLeadRecords` in `data/edge.db` |
+| The owner's standing rules | `adk_harness::SqliteStandingRuleStore` in `data/kernel.db` (`KernelStores::rules`) |
+| Reviews the site may quote | `data/reviews.json` |
+| The desk's work in progress | `data/desk.json`, under `adk-rust website new` |
+| Retained events, catalogue pages, consent references, pending deliveries, beacon counts | The same `SqliteEdgeStores`, as the edge's event log and beacon store; the deliveries a stopped process left resume once their lease passes |
+| Measurement counts (`MeteredActionLedger`, `EdgeMeter`, `MeteredSpendLedger`, host logs, AEO) | `SqliteEdgeStores` in `data/edge.db`, under the namespace `{site}#measurement` |
 
 ## Audit records
 

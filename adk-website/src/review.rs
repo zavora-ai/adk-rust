@@ -285,28 +285,130 @@ impl WeeklyReview {
         out
     }
 
-    /// One line for the owner's channel.
+    /// The review in a few plain sentences for the owner's channel (spec 3.5 §7.21): how the
+    /// measures moved, the spend, incidents, leads handed off, promotions to decide and
+    /// questions waiting.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_website::review::WeeklyReview;
+    /// use chrono::NaiveDate;
+    ///
+    /// let mut review = WeeklyReview::empty(uuid::Uuid::nil(), NaiveDate::from_ymd_opt(2026, 10, 19).unwrap());
+    /// review.questions = vec!["Deliver on Saturdays?".into(), "Open on Sundays?".into()];
+    /// assert_eq!(
+    ///     review.summary(),
+    ///     "Your week from 19 October: nothing is measured yet. Two questions are waiting for you."
+    /// );
+    /// ```
     pub fn summary(&self) -> String {
-        let moved = self.kpis.iter().filter(|k| k.trend == Trend::Up).count();
-        let mut parts =
-            vec![format!("Week of {}: {moved} of {} KPIs up", self.week_start, self.kpis.len())];
+        let mut sentences = Vec::new();
+        let measured = self.kpis.iter().filter(|k| k.trend != Trend::Unknown).count();
+        let better = self.kpis.iter().filter(|k| k.trend == Trend::Up).count();
+        let opening = match (self.kpis.len(), measured) {
+            (0, _) => "nothing is measured yet".to_string(),
+            (_, 0) => format!(
+                "{} measured for the first time, so there is no trend yet",
+                count(self.kpis.len(), "measure was", "measures were")
+            ),
+            (_, measured) => {
+                format!("{better} of {measured} measures went the way you want")
+            }
+        };
+        sentences.push(format!("Your week from {}: {opening}", self.week_start.format("%-d %B")));
         if let Some(money) = &self.money {
-            parts.push(format!("spend {:.2}", money.spend));
+            let budget = if money.within_budget { "within" } else { "over" };
+            sentences.push(format!(
+                "You spent {:.2} this week and {:.2} this month, {budget} the budget of {:.2}",
+                money.spend, money.month_to_date, money.monthly_budget
+            ));
         }
         if !self.incidents.is_empty() {
-            parts.push(format!("{} incident(s)", self.incidents.len()));
+            let open = self.incidents.iter().filter(|i| i.closed.is_none()).count();
+            sentences.push(match open {
+                0 => format!(
+                    "{}, now closed",
+                    capital(&count(self.incidents.len(), "incident", "incidents"))
+                ),
+                _ => {
+                    format!("{} still open", capital(&count(open, "incident is", "incidents are")))
+                }
+            });
         }
-        if !self.promotions.is_empty() {
-            parts.push(format!("{} promotion offer(s)", self.promotions.len()));
+        if !self.handed_off.is_empty() {
+            sentences.push(format!(
+                "{} handed to you",
+                capital(&count(self.handed_off.len(), "lead was", "leads were"))
+            ));
+        }
+        match self.promotions.as_slice() {
+            [] => {}
+            [one] => sentences.push(format!(
+                "The {} job earned more freedom; it is your decision whether to give it",
+                one.job
+            )),
+            many => sentences.push(format!(
+                "{} earned more freedom; it is your decision whether to give it",
+                capital(&count(many.len(), "job", "jobs"))
+            )),
+        }
+        if !self.demotions.is_empty() {
+            sentences.push(format!(
+                "{} lowered on its own after a problem",
+                capital(&count(self.demotions.len(), "job was", "jobs were"))
+            ));
         }
         if !self.questions.is_empty() {
-            parts.push(format!("{} question(s) for you", self.questions.len()));
+            sentences.push(format!(
+                "{} waiting for you",
+                capital(&count(self.questions.len(), "question is", "questions are"))
+            ));
         }
-        parts.join("; ")
+        let mut text = sentences.join(". ");
+        text.push('.');
+        text
+    }
+
+    /// A review of the week starting `week_start` with nothing in it yet.
+    pub fn empty(site: Uuid, week_start: NaiveDate) -> Self {
+        Self {
+            site,
+            week_start,
+            charter_version: None,
+            kpis: Vec::new(),
+            work: BTreeMap::new(),
+            money: None,
+            experiments: Vec::new(),
+            incidents: Vec::new(),
+            leads: None,
+            handed_off: Vec::new(),
+            promotions: Vec::new(),
+            demotions: Vec::new(),
+            alarms: Vec::new(),
+            questions: Vec::new(),
+            updates: None,
+        }
     }
 }
 
-/// Composes and sends the weekly review (spec 3.5 §7.21).
+/// `n` things in words: "one question is", "two questions are", "12 questions are".
+fn count(n: usize, one: &str, many: &str) -> String {
+    const WORDS: [&str; 10] =
+        ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+    let number = WORDS.get(n).map_or_else(|| n.to_string(), |word| (*word).to_string());
+    format!("{number} {}", if n == 1 { one } else { many })
+}
+
+/// `text` with its first letter in upper case.
+fn capital(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| first.to_uppercase().chain(chars).collect())
+}
+
+/// Composes and sends the weekly review (spec 3.5 §7.21). Cheap to clone: every clone reads
+/// the same stores, so the web home's review view and the weekly digest compose alike.
+#[derive(Clone)]
 pub struct ReviewComposer {
     site: Uuid,
     tracker: KpiTracker,
@@ -515,7 +617,9 @@ impl ReviewComposer {
             None => Vec::new(),
         };
         let alarms = match &self.alarms {
-            Some(router) => router.take_review_items().await,
+            // Composing reads them; only sending the review clears them, so composing a
+            // review on the web home does not take them from the weekly digest.
+            Some(router) => router.review_items().await,
             None => Vec::new(),
         };
         let mut experiments = inputs.experiments;
@@ -544,8 +648,9 @@ impl ReviewComposer {
         })
     }
 
-    /// Sends `review`'s summary to the owner's `thread` on `sink` and records
-    /// `website.review.sent`; returns the document for the web home.
+    /// Sends `review`'s summary to the owner's `thread` on `sink`, clears the alarms it
+    /// carried from those waiting for the review, and records `website.review.sent`; returns
+    /// the document for the web home.
     ///
     /// # Errors
     ///
@@ -559,6 +664,10 @@ impl ReviewComposer {
         sink.send_message(thread, &review.summary())
             .await
             .map_err(|error| AdkError::config(error.to_string()))?;
+        if let Some(router) = &self.alarms {
+            let carried: Vec<String> = review.alarms.iter().map(|alarm| alarm.id.clone()).collect();
+            router.clear_review_items(&carried).await;
+        }
         audit::record(
             self.audit.as_ref(),
             audit::REVIEW_SENT,

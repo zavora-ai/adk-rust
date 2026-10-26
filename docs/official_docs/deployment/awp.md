@@ -91,7 +91,10 @@ build into a `ReleaseManifest`, refuses server-executable files, writes the mani
 files, then the log's tiles, then a checkpoint signed by a delegated `release` key, so a reader
 never sees a checkpoint for files that are not there. The built-in generator writes each page's
 `index.md` and `index.awp.json` twins, `llms.txt`, `robots.txt` with `Content-Usage` from the
-charter's public terms, `/.well-known/security.txt`, sitemaps and feeds ([`adk-site`](../../../adk-site/README.md)).
+charter's public terms, `/.well-known/security.txt`, sitemaps, feeds and, for a site with
+products, a product feed at `/products/feed.xml` ([`adk-site`](../../../adk-site/README.md)).
+`adk-awp`'s `signing::log` is the one C2SP tile writer: `adk-site`'s site log publishes the
+tiles each release changes with it.
 
 ### Keys
 

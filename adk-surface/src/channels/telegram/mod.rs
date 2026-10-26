@@ -12,7 +12,7 @@ use adk_core::audit_log::{
     AuditActor, AuditDecision, AuditRecordDraft, AuditRecordKind, AuditTrail,
 };
 use adk_core::principal::SubjectRef;
-use adk_core::{AdkError, ApprovalService, ErrorCategory, ErrorComponent};
+use adk_core::{AdkError, ApprovalRequest, ApprovalService, ErrorCategory, ErrorComponent};
 use adk_kernel::KernelError;
 use adk_kernel::channels::{
     ChannelAnswer, ChannelBinding, ChannelBindingStore, ChannelGateway, ChannelInbound,
@@ -709,8 +709,13 @@ impl TelegramAdapter {
         {
             tracing::warn!(error = %error, "a telegram answer could not be kept in the answer log");
         }
+        // The call it answered, so the record names its tool and whose call it was (§11).
+        let request = match (&self.inner.audit, &self.inner.approvals) {
+            (Some(_), Some(approvals)) => approvals.get(decision).await.ok().flatten(),
+            _ => None,
+        };
         if let Some(trail) = &self.inner.audit
-            && let Err(error) = trail.record(answer_record(&record)).await
+            && let Err(error) = trail.record(answer_record(&record, request.as_ref())).await
         {
             tracing::warn!(error = %error, "a telegram answer's audit record could not be written");
         }
@@ -758,19 +763,26 @@ fn chat_id(thread: &str) -> Value {
 
 /// The `surface.decide` record of an answer given in Telegram, as the engine writes its own
 /// answers' (spec 3.3 §11).
-fn answer_record(record: &AnswerRecord) -> AuditRecordDraft {
+fn answer_record(record: &AnswerRecord, request: Option<&ApprovalRequest>) -> AuditRecordDraft {
     let decision = match record.answer {
         Answer::Deny => AuditDecision::Rejected,
         Answer::AllowOnce | Answer::AlwaysAllow | Answer::Edit => AuditDecision::Approved,
     };
-    AuditRecordDraft::new(AuditRecordKind::Approval, SURFACE_AUDIT_DECIDE)
+    let mut draft = AuditRecordDraft::new(AuditRecordKind::Approval, SURFACE_AUDIT_DECIDE)
         .actor(AuditActor::subject(record.by.clone()))
         .ext("surface", serde_json::to_value(record.via.surface).unwrap_or(Value::Null))
         .ext("origin", serde_json::to_value(&record.via.origin).unwrap_or(Value::Null))
         .ext("approvalId", json!(record.approval_id))
         .ext("answer", serde_json::to_value(record.answer).unwrap_or(Value::Null))
         .ext("outcome", json!("decided"))
-        .decision(decision)
+        .decision(decision);
+    if let Some(request) = request {
+        draft = draft.ext("tool", json!(request.tool_name));
+        if let Some(acting) = &request.acting {
+            draft = draft.ext("actingAgent", json!(acting.agent.id.to_string()));
+        }
+    }
+    draft
 }
 
 #[async_trait]
@@ -896,7 +908,7 @@ mod tests {
                 answer,
                 at: Utc::now(),
             };
-            let draft: AuditRecordDraft = answer_record(&given);
+            let draft: AuditRecordDraft = answer_record(&given, None);
             let record = draft.into_record("replica-1", 0, given.at, None);
             let read = answer_of(&record, "apr_1").expect("the record is an answer");
             assert_eq!(read, given);

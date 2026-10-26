@@ -229,8 +229,10 @@ fn parse_from_str<T: std::str::FromStr<Err = String>>(value: &str) -> Result<T, 
 #[cfg(feature = "voice")]
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct VoiceArgs {
-    /// Talk to the harness: voice in and out, spoken approvals, the same policy. TEXT is
-    /// the first turn. Needs --provider gemini or openai.
+    /// Talk to the harness: voice in and out, spoken approvals, the same policy. On a
+    /// terminal with a microphone, a voice conversation beside the thread on the Gemini or
+    /// OpenAI key; TEXT (the first turn), --voice-input or --voice-output keep the console
+    /// voice, which needs --provider gemini or openai.
     #[arg(long, value_name = "TEXT", num_args = 0..=1, default_missing_value = "")]
     pub voice: Option<String>,
 
@@ -243,12 +245,6 @@ pub struct VoiceArgs {
     /// Write the model's audio to this WAV file instead of playing it.
     #[arg(long, value_name = "WAV", requires = "voice")]
     pub voice_output: Option<std::path::PathBuf>,
-
-    /// A scripted realtime provider instead of a live one: a JSON array of scripted steps,
-    /// inline or in the named file (end-to-end tests).
-    #[cfg(feature = "scripted-model")]
-    #[arg(long, value_name = "JSON", hide = true, requires = "voice")]
-    pub voice_script: Option<String>,
 }
 
 /// Model and rendering options shared by every agent command.

@@ -11,6 +11,7 @@
 //! | Agenda, partitions, cron watermarks | `adk_kernel::SqliteAgendaStore`, `SqlitePartitionStore`, `SqliteCronWatermarkStore` |
 //! | Devices | `adk_kernel::pairing::SqliteDeviceStore` |
 //! | Charters, KPIs, autonomy, signals | `adk_kernel::charter::{SqliteCharterStore, SqliteKpiStore, SqliteAutonomyStore, SqliteSignalStore}` |
+//! | The owner's standing rules | `adk_harness::SqliteStandingRuleStore`: what `adk-rust website jobs promote` grants and the served back office reads |
 
 use std::sync::Arc;
 
@@ -55,6 +56,9 @@ pub struct KernelStores {
     pub spend: Arc<SqliteSpendLedger>,
     /// Where each cron trigger left off, so a restart fires the ticks it missed once.
     pub watermarks: Arc<SqliteCronWatermarkStore>,
+    /// The owner's standing rules: a promotion grants them, and the back office's harnesses
+    /// read them at every call (spec 3.5 §7.11, A-I13).
+    pub rules: Arc<adk_harness::SqliteStandingRuleStore>,
 }
 
 impl std::fmt::Debug for KernelStores {
@@ -102,8 +106,10 @@ impl KernelStores {
         actions.migrate().await?;
         let spend = Arc::new(SqliteSpendLedger::from_pool(pool.clone()));
         spend.migrate().await?;
-        let watermarks = Arc::new(SqliteCronWatermarkStore::new(pool));
+        let watermarks = Arc::new(SqliteCronWatermarkStore::new(pool.clone()));
         watermarks.migrate().await.map_err(store)?;
+        let rules = Arc::new(adk_harness::SqliteStandingRuleStore::new(pool));
+        rules.migrate().await?;
         Ok(Self {
             runs,
             approvals,
@@ -117,6 +123,7 @@ impl KernelStores {
             actions,
             spend,
             watermarks,
+            rules,
         })
     }
 }

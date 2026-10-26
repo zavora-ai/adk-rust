@@ -158,12 +158,19 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
     let feeds: Vec<&String> =
         manifest.files.keys().filter(|p| p.ends_with(".xml") && p.contains("feed")).collect();
     let archives = migration.converted.redirects.iter().filter(|r| r.status == 301).count();
+    let gone = migration.converted.redirects.iter().filter(|r| r.status == 410).count();
     checks.check(
         "posts, archive and feeds keep their URLs",
         kept.iter().all(|(_, served)| *served)
             && !feeds.is_empty()
-            && migration.converted.redirects.iter().all(|r| r.status == 301),
-        format!("{kept:?}; feeds {feeds:?}; {archives} archive and legacy URLs redirected 301"),
+            && migration.converted.redirects.iter().all(|r| {
+                r.status == 301
+                    || (r.status == 410 && adk_site::migrate::convert::legacy_runtime_path(&r.from))
+            }),
+        format!(
+            "{kept:?}; feeds {feeds:?}; {archives} archive and legacy URLs redirected 301; \
+             {gone} legacy runtime paths answer 410"
+        ),
     );
     verify_served(&site.host, DOMAIN, &site.release_key).await?;
 
@@ -207,6 +214,7 @@ pub async fn run(_mode: Mode) -> Result<Checks> {
         configure: Arc::new(|_, builder| {
             builder.project_instructions(no_user_file()).without_compaction()
         }),
+        wallet: None,
     };
     let built = site.team.build(&kit).await?;
     checks.check(

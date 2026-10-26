@@ -176,7 +176,8 @@ test("Memory and rules corrects the memory, extends and stops a rule, and agrees
   // What your agents did: the latest actions as sentences, and each agent's spending adds up.
   await page.getByRole("link", { name: "Memory & rules" }).click();
   const did = section(page, "What your agents did");
-  await expect(did.getByText("You said no to write_file, in the home.")).toBeVisible({ timeout: 20_000 });
+  // The answer names whose call it was (§11).
+  await expect(did.getByText("You didn't let ADK-Rust use write_file, in the home.")).toBeVisible({ timeout: 20_000 });
   await expect(did.getByText("ADK-Rust used write_file.")).toBeVisible();
   const roster = canDo.getByRole("region", { name: "What each agent spent today" });
   await expect(roster.getByText("ADK-Rust")).toBeVisible();
@@ -187,11 +188,16 @@ test("Memory and rules corrects the memory, extends and stops a rule, and agrees
   // The record's check is the one `adk-rust audit verify` makes on an export of it: the same
   // count, valid or not alike. Records the log has not signed yet read as such, never as
   // changed; once the log signs a checkpoint (a minute after the last, on its next record), the
-  // home reads "nothing has been changed or deleted" exactly when the command says VALID.
+  // home reads "nothing has been changed or deleted" exactly when the command says VALID with
+  // no unsigned tail, and otherwise names the records signed since.
   const agree = async (signed: boolean) => {
     for (let attempt = 0; attempt < 5; attempt++) {
       await did.getByRole("button", { name: "Check again" }).click();
-      const check = (await (await request.get("/api/kernel/record/check")).json()) as { valid: boolean; entries: number };
+      const check = (await (await request.get("/api/kernel/record/check")).json()) as {
+        valid: boolean;
+        entries: number;
+        report: { unsignedTail: number };
+      };
       const verified = auditVerify();
       if (verified.records !== check.entries) continue;
       expect(verified.valid).toBe(check.valid);
@@ -200,8 +206,10 @@ test("Memory and rules corrects the memory, extends and stops a rule, and agrees
       await expect(shown).toContainText(`All ${check.entries.toLocaleString("en-US")} of them`);
       await expect(did.getByText("Every action is on record")).toBeVisible();
       await expect(did.getByText("Something on record was changed or deleted.")).toHaveCount(0);
-      if (signed) {
+      if (signed && check.report.unsignedTail === 0) {
         await expect(shown).toContainText("nothing has been changed or deleted");
+      } else if (signed) {
+        await expect(shown).toContainText(`the latest ${check.report.unsignedTail.toLocaleString("en-US")} are not signed yet`);
       } else {
         expect(verified.failures.every((failure) => failure.kind === "unanchored")).toBe(true);
         await expect(shown).toContainText("signed yet");

@@ -15,9 +15,10 @@
 //! | `<ns>:{<wallet>}:pauses` | Hash | Each paused category's [`CategoryPause`] as JSON |
 //! | `<ns>:layout` | String | The layout version `migrate` recorded |
 //!
-//! Insert, update, resume and every listing are one Lua script each, which Redis runs
-//! atomically: a key is taken by one payment, an update moves the payment's index entries
-//! with its record, and a pause is lifted once.
+//! Insert, update, compare-and-set, resume and every listing are one Lua script each, which
+//! Redis runs atomically: a key is taken by one payment, an update moves the payment's index
+//! entries with its record, a compare-and-set checks the payment's state index first, and a
+//! pause is lifted once.
 
 use adk_core::Result;
 use fred::prelude::{
@@ -74,6 +75,20 @@ return {1}
 /// state's position among the indexes. Returns 0 when the payment is not stored.
 const UPDATE_SCRIPT: &str = r"
 if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 0 then return 0 end
+local seq = redis.call('ZSCORE', KEYS[2], ARGV[1]) or '0'
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+redis.call('ZADD', KEYS[3], ARGV[3], ARGV[1])
+for i = 4, 8 do redis.call('ZREM', KEYS[i], ARGV[1]) end
+redis.call('ZADD', KEYS[3 + tonumber(ARGV[4])], seq, ARGV[1])
+return 1
+";
+
+/// KEYS: payments, order, at, then the five state indexes. ARGV: id, record, instant, the
+/// new state's position among the indexes, the expected state's position. Returns 0 when the
+/// payment is not stored, -1 when it is in another state than expected, else 1.
+const UPDATE_IF_SCRIPT: &str = r"
+if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 0 then return 0 end
+if not redis.call('ZSCORE', KEYS[3 + tonumber(ARGV[5])], ARGV[1]) then return -1 end
 local seq = redis.call('ZSCORE', KEYS[2], ARGV[1]) or '0'
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
 redis.call('ZADD', KEYS[3], ARGV[3], ARGV[1])
@@ -302,6 +317,30 @@ impl WalletStore for RedisWalletStore {
             return Err(payment_not_found(record));
         }
         Ok(())
+    }
+
+    async fn update_if(&self, record: &PaymentRecord, expected: PaymentState) -> Result<bool> {
+        let wallet = &record.wallet;
+        let mut keys =
+            vec![self.key(wallet, "payments"), self.key(wallet, "order"), self.key(wallet, "at")];
+        keys.extend(self.state_keys(wallet));
+        let args = vec![
+            record.id.clone(),
+            encode(BACKEND, record)?,
+            instant_micros(record).to_string(),
+            state_position(record.state).to_string(),
+            state_position(expected).to_string(),
+        ];
+        let updated: i64 = self
+            .client
+            .eval(UPDATE_IF_SCRIPT, keys, args)
+            .await
+            .map_err(|error| unavailable(BACKEND, "update a payment", &error))?;
+        match updated {
+            0 => Err(payment_not_found(record)),
+            1 => Ok(true),
+            _ => Ok(false),
+        }
     }
 
     async fn get(&self, wallet: &str, id: &str) -> Result<Option<PaymentRecord>> {

@@ -301,3 +301,41 @@ describe("the panel", () => {
     expect(screen.getByText("09:00")).toBeTruthy();
   });
 });
+
+describe("what else the panel says", () => {
+  it("says in plain words what an agenda suggestion means, above its call", async () => {
+    const client = new TrayFixture();
+    const base = trayInvoiceCard();
+    const [allow, deny] = base.allowed.options;
+    client.cards.set("apr_agenda", {
+      ...base,
+      id: "apr_agenda",
+      heading: "Tidy the notes",
+      summary: "Your agents suggest this. Once you say yes, it runs right away.",
+      call: { tool: "kernel:agenda", args: { title: "Tidy the notes" }, text: 'kernel:agenda(title: "Tidy the notes")', truncated: false },
+      allowed: { options: [{ ...allow, label: "Do it" }, { ...deny, label: "Not now" }], openInHome: true },
+    });
+    render(<TrayPanel client={client} />);
+    const card = await screen.findByRole("article", { name: "Tidy the notes" });
+    const summary = within(card).getByText("Your agents suggest this. Once you say yes, it runs right away.");
+    const call = within(card).getByText('kernel:agenda(title: "Tidy the notes")');
+    expect(summary.compareDocumentPosition(call) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(buttons(card)).toEqual(["Do it", "Not now"]);
+  });
+
+  it("shows a Stop all from the icon's menu that did not go through in its banner", async () => {
+    render(<TrayPanel client={new TrayFixture()} />);
+    await screen.findByRole("article", { name: "Send the October invoice" });
+    // What the shell hands the panel (adk-desktop-core `TrayProblem::script`).
+    for (const [detail, text] of [
+      [{ kind: "refused", message: "Stopping every agent needs the operator" }, "Stopping every agent needs the operator"],
+      [{ kind: "signIn" }, "Start the tray with --token"],
+      [{ kind: "unreachable" }, "Can't reach your agents right now. Trying again."],
+    ] as const) {
+      act(() => {
+        window.dispatchEvent(new CustomEvent("adk:tray-problem", { detail }));
+      });
+      expect((await screen.findByRole("alert")).textContent).toBe(text);
+    }
+  });
+});

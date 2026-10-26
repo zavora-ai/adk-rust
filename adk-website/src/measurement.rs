@@ -7,7 +7,7 @@
 //! | [`HostLogs`] | `host_logs` | `requests`, `bytes`, `status:{2xx…5xx}`, `not_found`, `pageviews`, `pageviews:{path}`, `crawlers`, `agents`, `agents:{name}`, `machine_views`, `agents.machine_views` | Host access logs in the Common, Combined or W3C extended format; no address is kept |
 //! | [`CommerceKpi`] | `commerce` | `actions`, `actions:{capability}`, `actions:{capability}:{outcome}`, `leads`, `sales` | The edge's action ledger through [`MeteredActionLedger`]; leads and sales from the site's `CommerceOutcomes` |
 //! | [`SpendLedgerKpi`] | `spend` | `spend`, `spend.vendor:{vendor}`, `spend.agent:{agent}`, in USD | The runtime's spend ledger through [`MeteredSpendLedger`] |
-//! | [`AgentSearchKpi`] | `agents` | `calls`, `calls:{capability}`, `agent_calls`, `agent_calls:{binding}`, `agent_calls:{capability}`, `held` | The edge's capability-call audit records through [`EdgeMeter`]: agent calls are those of a verified requester, a trust tier above `public` (A-I6) |
+//! | [`AgentSearchKpi`] | `agents` | `calls`, `calls:{capability}`, `agent_calls`, `agent_calls:{binding}`, `agent_calls:{capability}`, `held`, `agent_discovery`, `agent_discovery:{surface}` | The edge's capability-call and verified-discovery audit records through [`EdgeMeter`]: agent calls and discovery are those of a verified requester, a trust tier above `public` (A-I6) |
 //! | [`AeoKpi`] | `aeo` | `aeo.queries`, `aeo.citations`, `aeo.citations:{provider}`, `aeo.top3`, `aeo.citation_rate`, `pages.answer_citations` | [`AeoTracker`]'s questions through `web_search` providers, at Observe |
 //!
 //! Search-console performance is `adk-drivers`' `SearchMetrics` (`search`), and the wallet's

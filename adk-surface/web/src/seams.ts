@@ -53,7 +53,7 @@ export interface MemoryFact {
   id: string;
   text: string;
   provenance: Provenance;
-  /** What noticed a guess: an agent, or an area. */
+  /** The agent that noticed a guess: its id, or its name, as the roster knows it. */
   noticedBy?: string;
 }
 

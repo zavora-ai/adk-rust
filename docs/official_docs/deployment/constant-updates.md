@@ -51,6 +51,7 @@ its own `volatile`.
 | Fast checks | Run on the batch's items and their dependents; a failing item is held on its own, and server code refuses the whole release (A-I1) |
 | Release | One release per batch — a delta, or a snapshot every 100 releases or daily — with one site log entry, one checkpoint and one `catalog.changed` whose item ids are paginated beyond 1,000 |
 | Full checks | The launch gate's full tier every six hours or 500 releases, with a P2 alarm when it fails |
+| Held state | Held items and held deliveries live in a `HeldStore` (`UpdateEngineBuilder::held_store`): `FileHeldStore` keeps them across a restart, so the owner's decision on a card raised before it still finds the change, and delivery numbers are not reused; `InMemoryHeldStore` is the default; `held_store_conformance` checks an implementation |
 
 ```rust
 use std::collections::BTreeMap;
@@ -161,7 +162,7 @@ The story must already be published, and the field must be one its kind declares
 | `UpdateEngine::batches` | `adk-rust site batches` | Recent batches: release, items, superseded versions, held items and why, approval-to-live |
 | `UpdateEngine::feeds` | `adk-rust site feeds` | Feeds with their mappings, bounds, rates and held deliveries; model calls are always zero |
 | `UpdateEngine::revert` | `adk-rust site revert <item> [--to <seq>]` | Publishes one item's earlier version at once and keeps every other change |
-| `UpdateEngine::rollback`, `replay` | `adk-rust site rollback <seq>` | Whole-site rollback for an incident; the changes since are listed and replayed one by one |
+| `UpdateEngine::rollback`, `replay` | `adk-rust site rollback <seq>` | Whole-site rollback for an incident; the changes since are listed and replayed one by one. The rollback reads only manifests the site log recorded, and when the host cannot roll back it republishes the signed files from a copy with the signed digest — the host's current files, the last build, or a rebuild of the content history at that release |
 | `UpdateEngine::decide_delivery`, `decide_item` | — | The owner's decision on a held delivery or a held item |
 | `UpdateEngine::review` | — | For the weekly review: updates, the share that needed a model, cost per thousand updates |
 
@@ -178,7 +179,11 @@ object storage behind a CDN.
 `DirectoryHost` stores every file version once under its digest and switches a pointer last
 (`Atomicity::PrefixPointer`). By default it also writes a full directory per release for a static
 file server; `materialise(false)` drops those, so a publish costs what changed rather than the size
-of the site, and `retain_releases(n)` keeps the files of the latest `n` releases only. Every host
+of the site, and `retain_releases(n)` keeps the files of the latest `n` releases only. Stored
+files are read-only: on Unix a release directory hard-links them, so a write through a served
+file is refused rather than changing every release that shares it (elsewhere a release
+directory holds copies), and a stored file whose bytes no longer match its digest is replaced
+the next time a release carries it. Every host
 runs `adk_site::host::conformance::run_all`, which checks atomicity under concurrent readers for
 snapshots and for deltas.
 

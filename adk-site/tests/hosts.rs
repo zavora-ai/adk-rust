@@ -1,7 +1,8 @@
 //! `DirectoryHost` under the host conformance suite (spec 3.5 §7.8 "Hosts", §7.8.3), with
 //! and without a directory per release, plus what only a directory host can show: deltas
-//! store only what changed and retention bounds storage, a tampered stored release cannot be
-//! rolled back to, previews are separate, and a release cannot be published twice.
+//! store only what changed and retention bounds storage, a write through a served file changes
+//! no other release, a tampered stored release cannot be rolled back to, previews are separate,
+//! and a release cannot be published twice.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -98,8 +99,24 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files
 }
 
+/// Whether this process writes read-only files anyway, as root does.
+fn writes_read_only_files() -> bool {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("probe");
+    std::fs::write(&file, b"x").unwrap();
+    let mut permissions = std::fs::metadata(&file).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&file, permissions).unwrap();
+    std::fs::OpenOptions::new().write(true).open(&file).is_ok()
+}
+
+/// A write through a served file must not change the object every release shares: release
+/// directories hard-link read-only objects (spec 3.5 §7.8 "Hosts", A-I4, A-I11).
+#[cfg(unix)]
 #[tokio::test]
-async fn a_tampered_release_is_not_rolled_back_to() -> Result<()> {
+async fn a_write_through_a_release_file_changes_no_other_release() -> Result<()> {
+    use std::io::Write as _;
+
     let root = tempfile::tempdir().unwrap();
     let host = DirectoryHost::new(root.path());
     let mut fixture = Fixture::new().await;
@@ -108,7 +125,59 @@ async fn a_tampered_release_is_not_rolled_back_to() -> Result<()> {
     let b = fixture.release(&page("b"), Vec::new(), false).await;
     host.publish(&b, HostTarget::Production).await?;
 
-    std::fs::write(root.path().join("releases/1/index.html"), "<p>defaced</p>").unwrap();
+    // `/about/` is the same in both releases: one object, linked into both directories.
+    let shared = root.path().join("releases/2/about/index.html");
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&shared)
+        .and_then(|mut file| file.write_all(b"<p>defaced</p>"));
+    if writes_read_only_files() {
+        eprintln!("running with privileges that write read-only files; the refusal is not checked");
+        return Ok(());
+    }
+    assert!(written.is_err(), "a write through a release file is refused");
+    assert_eq!(std::fs::read(&shared).unwrap(), b"<p>about</p>");
+    assert_eq!(
+        std::fs::read(root.path().join("releases/1/about/index.html")).unwrap(),
+        b"<p>about</p>",
+        "the other release's copy is intact"
+    );
+
+    // A file replaced by a rename changes that directory only; release 1 still rolls back.
+    let replacement = root.path().join("releases/2/about/index.tmp");
+    std::fs::write(&replacement, "<p>defaced</p>").unwrap();
+    std::fs::rename(&replacement, &shared).unwrap();
+    assert_eq!(host.fetch("/about/").await?.as_deref(), Some(b"<p>defaced</p>".as_slice()));
+    host.rollback(&a.manifest).await?;
+    assert_eq!(host.fetch("/about/").await?.as_deref(), Some(b"<p>about</p>".as_slice()));
+    assert_eq!(host.fetch("/").await?.as_deref(), Some(b"<p>a</p>".as_slice()));
+    Ok(())
+}
+
+/// An intruder who can change the store itself: rollback checks every object's digest and
+/// refuses a release whose stored files changed.
+#[tokio::test]
+async fn a_tampered_stored_release_is_not_rolled_back_to() -> Result<()> {
+    let root = tempfile::tempdir().unwrap();
+    let host = DirectoryHost::new(root.path());
+    let mut fixture = Fixture::new().await;
+    let a = fixture.release(&page("a"), Vec::new(), false).await;
+    host.publish(&a, HostTarget::Production).await?;
+    let b = fixture.release(&page("b"), Vec::new(), false).await;
+    host.publish(&b, HostTarget::Production).await?;
+
+    let digest = adk_site::release::file_digest(b"<p>a</p>");
+    let hex = digest.hex();
+    let object = root.path().join("objects").join(&hex[..2]).join(&hex[2..]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&object).unwrap().permissions().mode();
+        assert_eq!(mode & 0o222, 0, "stored objects are read-only");
+        std::fs::set_permissions(&object, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    std::fs::write(&object, "<p>defaced</p>").unwrap();
     let error = host.rollback(&a.manifest).await.unwrap_err();
     assert!(
         matches!(error, SiteError::DigestMismatch { ref path, .. } if path == "/index.html"),

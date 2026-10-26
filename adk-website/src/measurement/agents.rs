@@ -1,6 +1,6 @@
 //! Agent search at the edge as the `agents` KPI source (spec 3.5 §7.12 "Discoverability
-//! metrics"): capability calls counted from the edge's own audit records, verified agents
-//! apart.
+//! metrics"): verified agent discovery and capability calls counted from the edge's own audit
+//! records, verified agents apart.
 
 use std::sync::Arc;
 
@@ -17,8 +17,10 @@ use super::{check_site, total};
 
 /// The edge's audit recorder with a meter (spec 3.5 §7.12): every record goes to the
 /// recorder it wraps first, then each `awp.capability.called` and `awp.capability.held`
-/// record adds to the day's call counts by capability, binding and trust tier. Give it to
-/// the edge as its audit trail (`AwpEdge::builder(..).audit(AuditTrail::new(meter))`).
+/// record adds to the day's call counts by capability, binding and trust tier, and each
+/// `awp.request.verified` record — a verified agent fetching the Agent Card, the manifest or
+/// the MCP Server Card — to the day's discovery counts by surface. Give it to the edge as its
+/// audit trail (`AwpEdge::builder(..).audit(AuditTrail::new(meter))`).
 ///
 /// A call is an agent call when its requester holds a trust tier above `public`, which takes
 /// a verified credential (A-I6): claimed identities do not count.
@@ -53,6 +55,13 @@ impl EdgeMeter {
         let held = match draft.action.as_str() {
             "awp.capability.called" => false,
             "awp.capability.held" => true,
+            "awp.request.verified" => {
+                let surface = field("awp.surface");
+                if surface.is_empty() {
+                    return Vec::new();
+                }
+                return vec!["agent_discovery".to_string(), format!("agent_discovery:{surface}")];
+            }
             _ => return Vec::new(),
         };
         let (capability, binding, tier) =
@@ -97,6 +106,7 @@ impl AuditRecorder for EdgeMeter {
 /// | `calls`, `calls:{capability}` | Capability calls over A2A, MCP and HTTP, held ones included |
 /// | `held` | Calls held for the owner |
 /// | `agent_calls`, `agent_calls:{binding}`, `agent_calls:{capability}` | Calls by verified requesters (trust above `public`), all, by binding (`a2a`, `mcp`, `http`) and by capability |
+/// | `agent_discovery`, `agent_discovery:{surface}` | Verified agents' fetches of the Agent Card (`agent_card`), the capability manifest (`manifest`) and the MCP Server Card (`mcp_server_card`) |
 ///
 /// Requests for machine views by self-declared AI agents are in
 /// [`HostLogs`](super::HostLogs)' `agents.machine_views`.

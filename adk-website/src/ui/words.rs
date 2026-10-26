@@ -47,6 +47,8 @@ pub(crate) fn check(check: GateCheck) -> &'static str {
         GateCheck::RequiredLanguages => "Every language the site needs",
         GateCheck::RedLines => "Nothing on your never list",
         GateCheck::StructuredData => "Search engines can read it",
+        GateCheck::ThirdPartyResources => "Nothing loads from other sites",
+        GateCheck::Signing => "Signed with the key you delegated",
         _ => "Another check",
     }
 }

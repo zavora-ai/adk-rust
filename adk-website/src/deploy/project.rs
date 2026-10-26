@@ -6,6 +6,7 @@
 //! | `site.toml`, `content/`, `theme/`, `public-terms.json`, `capabilities.json` | The content repository |
 //! | `well-known/`, `static/` | Files released under `/.well-known/` (the root-signed contract and `keys.json`) and at their own paths |
 //! | `feeds.json`, `calendar.json`, `payments.json` | The owner's feeds with their bounds, bookable slots, and payment links |
+//! | `approvals.json` | The owner's amount thresholds: orders, bookings and payments above them wait for the owner (spec 3.5 §7.4) |
 //! | `data/site-log.db`, `data/host/`, `data/history/`, `data/work/` | The site log, the `DirectoryHost`, every saved version, builds |
 //! | `data/keys/` | Delegated keys as private JWK files: `release.jwk` signs the log, `edge.jwk` the card and receipts, `web-bot-auth.jwk` crawls; `subject.key` keys consent sessions |
 //! | `data/kernel.db`, `data/edge.db` | The kernel's durable stores and the edge's |
@@ -100,6 +101,35 @@ impl ProjectPaths {
     /// The SQLite database `data/{name}.db`.
     pub fn database(&self, name: &str) -> String {
         format!("sqlite://{}?mode=rwc", self.data().join(format!("{name}.db")).display())
+    }
+
+    /// The kernel database the site runs on (spec 3.5 §7.22, A-I22): the agency's
+    /// `data/kernel.db` when an `agency.toml` beside the project lists it, as
+    /// `serve_agency` serves it, else the project's own.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_website::deploy::ProjectPaths;
+    ///
+    /// let dir = tempfile::tempdir().unwrap();
+    /// std::fs::write(dir.path().join("agency.toml"), "[[site]]\ndomain = \"bakery.example\"\ndir = \"bakery\"\n").unwrap();
+    /// let site = ProjectPaths::new(dir.path().join("bakery"));
+    /// assert_eq!(site.kernel_database(), ProjectPaths::new(dir.path()).database("kernel"));
+    /// let alone = ProjectPaths::new(dir.path().join("notes"));
+    /// assert_eq!(alone.kernel_database(), alone.database("kernel"));
+    /// ```
+    pub fn kernel_database(&self) -> String {
+        let listed = self.root.parent().and_then(|agency| {
+            let text = std::fs::read_to_string(agency.join("agency.toml")).ok()?;
+            let file: super::serve::AgencyFile = toml::from_str(&text).ok()?;
+            let name = self.root.file_name()?;
+            file.sites
+                .iter()
+                .any(|site| site.dir.as_os_str() == name || agency.join(&site.dir) == self.root)
+                .then(|| ProjectPaths::new(agency))
+        });
+        listed.map_or_else(|| self.database("kernel"), |agency| agency.database("kernel"))
     }
 
     /// Files released under `/.well-known/`.
@@ -338,4 +368,19 @@ pub struct PaymentLink {
 /// A file that is not a list of payment links.
 pub fn payment_links(paths: &ProjectPaths) -> Result<Option<Vec<PaymentLink>>> {
     read_json(&paths.root().join("payments.json"))
+}
+
+/// The owner's amount thresholds in `approvals.json`, such as
+/// `{"place_order": 20000, "book": 15000}` in minor units of the site's currency: calls above
+/// them answer `202` and wait for the owner (spec 3.5 §7.4, S9). None without the file.
+///
+/// # Errors
+///
+/// A file that is not a map of capability names to amounts, or a threshold on a capability
+/// whose calls carry no amount.
+pub fn approval_thresholds(paths: &ProjectPaths) -> Result<crate::packs::ApprovalThresholds> {
+    let thresholds: crate::packs::ApprovalThresholds =
+        read_json(&paths.root().join("approvals.json"))?.unwrap_or_default();
+    thresholds.validate()?;
+    Ok(thresholds)
 }

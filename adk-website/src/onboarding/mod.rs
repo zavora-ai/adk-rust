@@ -414,6 +414,16 @@ impl OnboardingProgress {
         }
     }
 
+    /// Onboarding of `site` resumed after a restart, with `done` completed before it; records
+    /// nothing, since each stage was recorded when it completed (spec 3.5 §7.18).
+    pub fn resumed(
+        site: SiteRef,
+        audit: Option<AuditTrail>,
+        done: impl IntoIterator<Item = Stage>,
+    ) -> Self {
+        Self { site, audit, done: Mutex::new(done.into_iter().collect()) }
+    }
+
     /// The stages completed, in the order they completed.
     pub async fn completed(&self) -> Vec<Stage> {
         self.done.lock().await.clone()

@@ -145,6 +145,48 @@ pub async fn run(
     harness: HarnessArgs,
     surface: SurfaceArgs,
 ) -> Result<i32> {
+    run_with(reach, model, instruction, harness, surface, false).await
+}
+
+/// Whether `--voice` opens the terminal's voice mode (spec 3.3 §5.6): on a terminal, with the
+/// microphone (`voice-desktop`), and without a first turn, `--voice-input`, `--voice-output`
+/// or `--ui repl`, which the console voice keeps.
+#[cfg(feature = "voice")]
+pub fn voice_mode(voice: &crate::cli::VoiceArgs, surface: &SurfaceArgs) -> bool {
+    cfg!(feature = "voice-desktop")
+        && voice.voice.as_deref().is_some_and(|text| text.trim().is_empty())
+        && voice.voice_input.is_none()
+        && voice.voice_output.is_none()
+        && surface.output == OutputFormat::Text
+        && surface.ui != Some(crate::cli::UiChoice::Repl)
+        && std::io::IsTerminal::is_terminal(&std::io::stdin())
+        && std::io::IsTerminal::is_terminal(&std::io::stdout())
+}
+
+/// The terminal in process with a voice conversation beside the thread, on the first
+/// realtime model whose key resolves, through the default microphone and speaker (spec 3.3
+/// §5.6). Returns the exit code.
+#[cfg(feature = "voice")]
+pub async fn voice(
+    model: ResolvedModel,
+    instruction: Option<String>,
+    mut harness: HarnessArgs,
+    surface: SurfaceArgs,
+) -> Result<i32> {
+    if !harness.packs.contains(&adk_harness::Pack::Voice) {
+        harness.packs.push(adk_harness::Pack::Voice);
+    }
+    run_with(Reach::InProcess, Some(model), instruction, harness, surface, true).await
+}
+
+async fn run_with(
+    reach: Reach,
+    model: Option<ResolvedModel>,
+    instruction: Option<String>,
+    harness: HarnessArgs,
+    surface: SurfaceArgs,
+    voice: bool,
+) -> Result<i32> {
     let session = harness.session.clone();
     let user = crate::setup::os_user();
     let ui = match (surface.output, surface.ui.and_then(crate::cli::UiChoice::surface)) {
@@ -172,6 +214,8 @@ pub async fn run(
     let log = if drawn { log_to_file() } else { None };
     let text_ui = surface.output == OutputFormat::Text;
     let mut ending = None;
+    #[cfg(feature = "voice")]
+    let mut conversation = None;
     let (engine, place, model_id, local, session, notices, binding, commands) = match reach {
         Reach::Kernel { client, token, local } => {
             let place = if local { "kernel".to_string() } else { client.endpoint().to_string() };
@@ -204,8 +248,12 @@ pub async fn run(
         }
         Reach::InProcess => {
             let model = model.context("the harness in this process needs a model")?;
-            let here = in_process(model, instruction, harness, text_ui).await?;
+            let here = in_process(model, instruction, harness, text_ui, voice).await?;
             ending = Some(here.ending);
+            #[cfg(feature = "voice")]
+            {
+                conversation = here.voice;
+            }
             (
                 here.engine,
                 "in process".to_string(),
@@ -246,6 +294,10 @@ pub async fn run(
     // fix 9).
     if let Some(late) = ending.as_mut().and_then(|ending| ending.late.take()) {
         terminal = terminal.notices_from(late);
+    }
+    #[cfg(feature = "voice")]
+    if let Some(conversation) = conversation {
+        terminal = terminal.voice(conversation);
     }
     let code = if surface.output == OutputFormat::Json {
         let message = match surface.message {
@@ -476,18 +528,38 @@ struct InProcess {
     /// The REPL's slash commands, on this harness and session (spec 3.3 §5.2).
     commands: Vec<Arc<dyn TerminalCommand>>,
     ending: Ending,
+    /// The voice conversation `--voice` opens beside the thread (spec 3.3 §5.6).
+    #[cfg(feature = "voice")]
+    voice: Option<adk_surface::tui::TerminalVoice>,
 }
 
 /// The harness in this process, held calls going to its approvals inbox, and the engine over
 /// it (spec 3.3 §6): the same decisions, the same words, as on a kernel. It keeps what the REPL
 /// it replaces keeps: long-term memory, `--yes`, `--trust`, `--continue` and the session's
-/// workspace.
+/// workspace. With `voice`, the harness is marked for voice and a conversation opens beside
+/// the thread (spec 3.3 §5.6).
 async fn in_process(
     model: ResolvedModel,
     instruction: Option<String>,
     args: HarnessArgs,
     text_ui: bool,
+    voice: bool,
 ) -> Result<InProcess> {
+    #[cfg(feature = "voice")]
+    let offers = if voice {
+        crate::voice_cli::realtime_models(&model, args.voice_script())?
+    } else {
+        Vec::new()
+    };
+    #[cfg(feature = "voice")]
+    if voice && offers.is_empty() {
+        anyhow::bail!(
+            "--voice needs a realtime model: set GOOGLE_API_KEY (Gemini Live) or \
+             OPENAI_API_KEY (OpenAI Realtime), or pass --provider gemini or openai"
+        );
+    }
+    #[cfg(not(feature = "voice"))]
+    let _ = voice;
     let setup = Setup::new(model, instruction, args, HarnessMode::Ask).await?;
     let (approval_store, run_store) = super::up::run_and_approval_stores(&setup);
     let routing =
@@ -589,8 +661,25 @@ async fn in_process(
             }
         }));
     }
-    let source = LocalSource::builder(APP_NAME).approvals(decisions).harness(harness).build()?;
-    let engine = SurfaceEngine::builder(Arc::new(source)).agent_name(APP_NAME, APP_NAME).build();
+    #[cfg(feature = "voice")]
+    let voice_harness = harness.clone();
+    let source: Arc<dyn adk_surface::Source> =
+        Arc::new(LocalSource::builder(APP_NAME).approvals(decisions).harness(harness).build()?);
+    // A decision on a call the conversation holds resumes it there (spec 3.3 §5.6).
+    #[cfg(feature = "voice")]
+    let (source, live) = if voice {
+        let wrapped = adk_surface::voice::VoiceSource::new(source);
+        let live = wrapped.live();
+        (Arc::new(wrapped) as Arc<dyn adk_surface::Source>, Some(live))
+    } else {
+        (source, None)
+    };
+    let engine = SurfaceEngine::builder(source).agent_name(APP_NAME, APP_NAME).build();
+    #[cfg(feature = "voice")]
+    let voice = match live {
+        Some(live) => Some(terminal_voice(engine.clone(), voice_harness, live, offers)?),
+        None => None,
+    };
     Ok(InProcess {
         engine,
         model_id: setup.model_id.clone(),
@@ -599,7 +688,43 @@ async fn in_process(
         binding,
         commands,
         ending,
+        #[cfg(feature = "voice")]
+        voice,
     })
+}
+
+/// The terminal's voice conversation (spec 3.3 §5.6): the hub over `engine` on `offers`,
+/// talking on the first, through the default microphone and speaker.
+#[cfg(feature = "voice")]
+fn terminal_voice(
+    engine: SurfaceEngine,
+    harness: Arc<Harness>,
+    live: adk_surface::voice::LiveVoice,
+    offers: Vec<crate::voice_cli::Offer>,
+) -> Result<adk_surface::tui::TerminalVoice> {
+    let first = offers.first().context("no realtime model to talk on")?.info.clone();
+    let mut hub = adk_surface::voice::VoiceHub::builder(engine, harness, live).agent_name(APP_NAME);
+    for offer in offers {
+        let id = offer.info.id.clone();
+        hub = hub.model(offer.info, offer.model, offer.frames);
+        if offer.compress {
+            hub = hub.context_window_compression(&id);
+        }
+    }
+    #[cfg(feature = "voice-desktop")]
+    {
+        let (microphone, speaker) =
+            crate::voice_cli::desktop_channels(first.input_rate, first.output_rate)?;
+        Ok(adk_surface::tui::TerminalVoice::new(hub.build(), first.id, microphone, speaker))
+    }
+    #[cfg(not(feature = "voice-desktop"))]
+    {
+        let _ = (first, hub);
+        anyhow::bail!(
+            "the terminal's voice mode needs the microphone: build adk-rust with the \
+             voice-desktop feature, or pass --voice-input WAV for the console voice"
+        )
+    }
 }
 
 /// Where the terminal's memory notice points: the REPL's commands, which it has too (spec 3.3

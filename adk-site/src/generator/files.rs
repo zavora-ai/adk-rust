@@ -1,5 +1,6 @@
-//! Site-wide files: sitemaps, feeds, `llms.txt`, `robots.txt`, `security.txt`, the public
-//! charter terms, the stylesheet and redirects (spec 3.5 §4.4, §7.6, §7.8 "Generator").
+//! Site-wide files: sitemaps, feeds, the product feed, `llms.txt`, `robots.txt`,
+//! `security.txt`, the public charter terms, the stylesheet and redirects (spec 3.5 §4.4,
+//! §7.6, §7.8 "Generator", §7.8.2 "New product").
 
 use std::collections::BTreeSet;
 
@@ -10,7 +11,7 @@ use super::plan::{
     DepKey, PageKind, Plan, field_str, lang_key, modified_at, page_files, published_at, string,
     title,
 };
-use crate::content::{SiteProject, kind_name};
+use crate::content::{SiteProject, kind_directory, kind_name};
 use crate::error::{Result, SiteError};
 
 /// URLs per sitemap file (sitemaps.org).
@@ -76,6 +77,16 @@ pub(crate) fn site_file_paths(
             ]),
         ));
     }
+    for language in &project.config.languages {
+        let key = lang_key(language);
+        if product_members(project, plan, &key).is_empty() {
+            continue;
+        }
+        out.push((
+            product_feed_path(project, language),
+            deps(&[DepKey::Kind { kind: ContentKind::Product, language: key }, DepKey::Site]),
+        ));
+    }
     for (path, _) in project.redirects_format.render(&redirects(project, plan)) {
         out.push((path, deps(&[DepKey::All, DepKey::Site])));
     }
@@ -118,6 +129,106 @@ fn feed_members(project: &SiteProject, plan: &Plan, language: &str) -> Vec<usize
     });
     members.truncate(50);
     members
+}
+
+/// The product feed of `language`: `<prefix>/products/feed.xml` (spec 3.5 §7.8.2 "New
+/// product": "the agent product feed rebuilt").
+pub(crate) fn product_feed_path(
+    project: &SiteProject,
+    language: &awp_types::LanguageTag,
+) -> String {
+    let prefix = project.config.language_prefix(language).trim_matches('/').to_string();
+    let directory = kind_directory(ContentKind::Product);
+    if prefix.is_empty() {
+        format!("{directory}/feed.xml")
+    } else {
+        format!("{prefix}/{directory}/feed.xml")
+    }
+}
+
+/// The live products of a language, by id.
+fn product_members(project: &SiteProject, plan: &Plan, language: &str) -> Vec<usize> {
+    let mut members: Vec<usize> = plan
+        .live
+        .iter()
+        .copied()
+        .filter(|&i| {
+            let item = &project.items[i];
+            item.kind == ContentKind::Product && lang_key(&item.language) == language
+        })
+        .collect();
+    members.sort_by(|&a, &b| project.items[a].id.cmp(&project.items[b].id));
+    members
+}
+
+/// A released field's text: live fields are never in a feed (spec 3.5 A-I26).
+fn released_text(
+    project: &SiteProject,
+    item: &awp_types::ContentItem,
+    key: &str,
+) -> Option<String> {
+    if crate::lanes::item_lane(&project.config, item, key) == crate::lanes::Lane::Live {
+        return None;
+    }
+    match item.fields.get(key)? {
+        serde_json::Value::String(text) if !text.trim().is_empty() => Some(text.clone()),
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    }
+}
+
+/// An RSS 2.0 product feed with the `g:` product attributes merchant and agent catalogues
+/// read: id, title, description, link, image, price and availability when released.
+fn product_feed(project: &SiteProject, plan: &Plan, language: &awp_types::LanguageTag) -> String {
+    let config = &project.config;
+    let base = config.base_url();
+    let prefix = config.language_prefix(language);
+    let directory = kind_directory(ContentKind::Product);
+    let mut text = format!(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<rss version=\"2.0\" xmlns:g=\"http://base.google.com/ns/1.0\">\n\
+         <channel>\n<title>{}</title>\n<link>{base}{prefix}/{directory}/</link>\n\
+         <description>{}</description>\n<language>{}</language>\n",
+        xml(&config.name),
+        xml(config.description.as_deref().unwrap_or(&config.name)),
+        xml(language.as_str()),
+    );
+    for index in product_members(project, plan, &lang_key(language)) {
+        let item = &project.items[index];
+        let Some(path) = plan.paths.get(&index) else { continue };
+        let url = format!("{base}{path}");
+        let id = released_text(project, item, "sku").unwrap_or_else(|| item.id.0.clone());
+        text.push_str(&format!(
+            "<item>\n<g:id>{}</g:id>\n<title>{}</title>\n<link>{}</link>\n",
+            xml(&id),
+            xml(&title(item)),
+            xml(&url)
+        ));
+        if let Some(summary) = field_str(item, "summary").or_else(|| field_str(item, "description"))
+        {
+            text.push_str(&format!("<description>{}</description>\n", xml(summary)));
+        }
+        if let Some(image) = item.media.iter().find(|m| m.content_type.starts_with("image/")) {
+            let file = image.path.rsplit('/').next().unwrap_or(&image.path);
+            text.push_str(&format!(
+                "<g:image_link>{}</g:image_link>\n",
+                xml(&format!("{url}{file}"))
+            ));
+        }
+        if let (Some(price), Some(currency)) =
+            (released_text(project, item, "price"), released_text(project, item, "currency"))
+        {
+            text.push_str(&format!("<g:price>{} {}</g:price>\n", xml(&price), xml(&currency)));
+        }
+        if let Some(availability) = released_text(project, item, "availability") {
+            text.push_str(&format!("<g:availability>{}</g:availability>\n", xml(&availability)));
+        }
+        if let Some(updated) = modified_at(item) {
+            text.push_str(&format!("<pubDate>{}</pubDate>\n", updated.to_rfc2822()));
+        }
+        text.push_str("</item>\n");
+    }
+    text.push_str("</channel>\n</rss>\n");
+    text
 }
 
 struct SitemapEntry {
@@ -216,6 +327,14 @@ pub(crate) fn render(project: &SiteProject, plan: &Plan, path: &str) -> Result<V
                 "Every page has a Markdown version at `<page>/index.md` and a structured version at \
                  `<page>/index.awp.json`.\n\n- [Home]({base}/index.md)\n"
             ));
+            for language in &config.languages {
+                if !product_members(project, plan, &lang_key(language)).is_empty() {
+                    text.push_str(&format!(
+                        "- [Product feed]({base}/{})\n",
+                        product_feed_path(project, language)
+                    ));
+                }
+            }
             let default_language = lang_key(config.default_language());
             let mut kinds: Vec<ContentKind> =
                 plan.live.iter().map(|&i| project.items[i].kind).collect();
@@ -303,6 +422,16 @@ pub(crate) fn render(project: &SiteProject, plan: &Plan, path: &str) -> Result<V
                     .map_err(|_| SiteError::Pipeline(format!("unknown sitemap '{path}'")))?;
                 urlset(entries.chunks(SITEMAP_LIMIT).nth(n - 1).unwrap_or_default())
             }
+        }
+        _ if path.ends_with(&format!("{}/feed.xml", kind_directory(ContentKind::Product)))
+            && config.languages.iter().any(|l| product_feed_path(project, l) == path) =>
+        {
+            let language = config
+                .languages
+                .iter()
+                .find(|l| product_feed_path(project, l) == path)
+                .ok_or_else(|| SiteError::Pipeline(format!("unknown product feed '{path}'")))?;
+            product_feed(project, plan, language)
         }
         _ if path.ends_with("feed.xml") => {
             let language = config

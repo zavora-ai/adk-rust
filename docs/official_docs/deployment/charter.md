@@ -250,7 +250,7 @@ and `quietHours` gives a start, an end and an IANA time zone.
 
 | Member | Published as |
 |--------|--------------|
-| `usage` | The `Content-Usage` line of `robots.txt` (IETF AI preferences) |
+| `usage` | The `Content-Usage` line of `robots.txt` (IETF AI preferences); every kind's charter drafts one for the owner to review — `search=y`, and `train-ai=n, search=y` for news and media |
 | `policies` | Name, URL, version and optional digest of each policy page |
 | `consentScopes` | The consent scopes the site asks for: `session_continuity`, `proactive_outreach`, `persistent_profile`, `payment_data`, `newsletter`, or a scope a capability names, such as `contact` |
 | `contact` | The security contact, an email and a contact page |

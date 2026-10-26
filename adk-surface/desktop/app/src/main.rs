@@ -20,18 +20,22 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Instant;
 
 use adk_desktop_core::{
-    Badge, Point, Reach, Rect, Route, ServerTarget, Size, StatusWatcher, place_panel, stop_all,
-    user_config_file,
+    Badge, CommandLine, PanelToggle, Point, Reach, Rect, Route, ServerTarget, Size, StatusWatcher,
+    Toggle, TrayProblem, home_navigation, place_panel, stop_all, user_config_file,
+    window_background,
 };
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::NewWindowResponse;
+use tauri::window::Color;
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, RunEvent, WebviewUrl, WebviewWindow,
+    AppHandle, Manager, PhysicalPosition, RunEvent, Theme, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
 };
 use url::Url;
@@ -41,8 +45,6 @@ const PANEL: &str = "panel";
 const TRAY: &str = "adk";
 /// The panel's logical size, as the concept screens draw it.
 const PANEL_SIZE: (f64, f64) = (420.0, 700.0);
-/// Where the web home keeps the server's token (`adk-surface/web/src/client.ts`).
-const TOKEN_KEY: &str = "adk.home.token";
 
 const USAGE: &str = "adk-desktop: the ADK-Rust desktop tray (experimental)
 
@@ -63,31 +65,20 @@ struct Options {
 
 fn options() -> Result<Options, String> {
     let env = |name: &str| std::env::var(name).ok().filter(|value| !value.trim().is_empty());
-    let mut options = Options {
-        server: env("ADK_DESKTOP_SERVER"),
-        token: env("ADK_SERVE_TOKEN"),
-        probe: env("ADK_DESKTOP_PROBE").is_some_and(|value| value == "1"),
-    };
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--server" => options.server = Some(args.next().ok_or("--server needs an address")?),
-            "--token" => options.token = Some(args.next().ok_or("--token needs a value")?),
-            "--probe" => options.probe = true,
-            "-h" | "--help" => return Err(USAGE.to_owned()),
-            other => {
-                if let Some(server) = other.strip_prefix("--server=") {
-                    options.server = Some(server.to_owned());
-                } else if let Some(token) = other.strip_prefix("--token=") {
-                    options.token = Some(token.to_owned());
-                } else {
-                    // A WebDriver host may add its own arguments; they are not ours.
-                    tracing::warn!(argument = other, "ignoring an unknown argument");
-                }
-            }
-        }
+    let line = CommandLine::parse(std::env::args().skip(1))?;
+    if line.help {
+        return Err(USAGE.to_owned());
     }
-    Ok(options)
+    // A WebDriver host may add its own arguments; they are not ours. Only their names are
+    // logged, since a value may be a token given under a mistaken flag.
+    for argument in &line.ignored {
+        tracing::warn!(argument = %argument, "ignoring an unknown argument");
+    }
+    Ok(Options {
+        server: line.server.or_else(|| env("ADK_DESKTOP_SERVER")),
+        token: line.token.or_else(|| env("ADK_SERVE_TOKEN")),
+        probe: line.probe || env("ADK_DESKTOP_PROBE").is_some_and(|value| value == "1"),
+    })
 }
 
 fn logging() {
@@ -128,15 +119,22 @@ fn main() {
     };
     tracing::info!(server = %target.origin(), token = target.token().is_some(), probe = options.probe, "starting the tray");
 
-    let shell = Arc::new(Shell { target, probe: options.probe, away: Mutex::new(false) });
+    let shell = Arc::new(Shell {
+        target,
+        probe: options.probe,
+        away: Mutex::new(false),
+        tray_built: AtomicBool::new(false),
+        toggle: Mutex::new(PanelToggle::default()),
+    });
     let app = tauri::Builder::default()
         .setup({
             let shell = Arc::clone(&shell);
             move |app| {
                 shell.windows(app.handle())?;
                 // Without a tray (no status notifier host on this desktop) the windows still work.
-                if let Err(error) = shell.tray(app.handle()) {
-                    tracing::warn!(error = %error, "no tray icon on this desktop");
+                match shell.tray(app.handle()) {
+                    Ok(()) => shell.tray_built.store(true, Ordering::Relaxed),
+                    Err(error) => tracing::warn!(error = %error, "no tray icon on this desktop"),
                 }
                 shell.watch(app.handle().clone());
                 Ok(())
@@ -166,36 +164,46 @@ fn on_event(app: &AppHandle, event: RunEvent) {
     let _ = app;
 }
 
-/// What the shell knows: the kernel, whether the home shows the probe, and whether the windows
-/// show the "Can't reach your agents" page.
+/// What the shell knows: the kernel, whether the home shows the probe, whether the windows
+/// show the "Can't reach your agents" page, whether it has a tray icon, and what a click on
+/// the icon does to the panel.
 struct Shell {
     target: ServerTarget,
     probe: bool,
     away: Mutex<bool>,
+    tray_built: AtomicBool,
+    toggle: Mutex<PanelToggle>,
 }
 
 impl Shell {
-    fn windows(&self, app: &AppHandle) -> tauri::Result<()> {
+    fn windows(self: &Arc<Self>, app: &AppHandle) -> tauri::Result<()> {
         // The home first: a WebDriver session drives the first webview the shell creates.
         let home_url = if self.probe {
             WebviewUrl::App("probe.html".into())
         } else {
             WebviewUrl::External(self.target.home_url())
         };
+        // Shown once it has its background, so a dark desktop never sees it white.
         let home = WebviewWindowBuilder::new(app, HOME, home_url)
             .title("ADK-Rust")
             .inner_size(1280.0, 860.0)
-            .initialization_script(self.token_script())
-            .on_navigation(navigation(&self.target, app, HOME))
-            .on_new_window(new_window(&self.target, app))
+            .visible(false)
+            .initialization_script(self.target.token_script())
+            .on_navigation(navigation(self, app, HOME))
+            .on_new_window(new_window(self, app))
             .build()?;
+        paint(&home, None);
+        home.show()?;
         home.on_window_event({
-            let home = home.clone();
-            move |event| {
-                if let WindowEvent::CloseRequested { api, .. } = event {
+            let (home, shell, app) = (home.clone(), Arc::clone(self), app.clone());
+            move |event| match event {
+                WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
                     let _ = home.hide();
+                    shell.closed_home(&app);
                 }
+                WindowEvent::ThemeChanged(theme) => paint(&home, Some(*theme)),
+                _ => {}
             }
         });
 
@@ -207,40 +215,60 @@ impl Shell {
                 .always_on_top(true)
                 .visible(false)
                 .resizable(false)
-                .initialization_script(self.token_script())
-                .on_navigation(navigation(&self.target, app, PANEL))
-                .on_new_window(new_window(&self.target, app));
+                .initialization_script(self.target.token_script())
+                .on_navigation(navigation(self, app, PANEL))
+                .on_new_window(new_window(self, app));
         #[cfg(not(target_os = "macos"))]
         let builder = builder.skip_taskbar(true);
         let panel = builder.build()?;
+        paint(&panel, None);
         panel.on_window_event({
-            let panel = panel.clone();
+            let (panel, shell) = (panel.clone(), Arc::clone(self));
             move |event| match event {
                 // Hiding never decides anything (spec 3.3 §7.4 rule 1): it only hides.
                 WindowEvent::Focused(false) => {
+                    if panel.is_visible().unwrap_or(false) {
+                        shell
+                            .toggle
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .blurred(Instant::now());
+                    }
                     let _ = panel.hide();
                 }
                 WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
                     let _ = panel.hide();
                 }
+                WindowEvent::ThemeChanged(theme) => paint(&panel, Some(*theme)),
                 _ => {}
             }
         });
         Ok(())
     }
 
-    /// Puts the token in the web home's tab storage before the page's own scripts run, on the
-    /// kernel's origin only (spec 3.3 §5.5; the home keeps one token per window).
-    fn token_script(&self) -> String {
-        let Some(token) = self.target.token() else { return String::new() };
-        let origin = serde_json::to_string(&self.target.page_origin()).unwrap_or_default();
-        let token = serde_json::to_string(token.expose()).unwrap_or_default();
-        let key = serde_json::to_string(TOKEN_KEY).unwrap_or_default();
-        format!(
-            "(function () {{ if (window.location.origin !== {origin}) return; \
-             try {{ window.sessionStorage.setItem({key}, JSON.stringify({token})); }} catch (e) {{}} }})();"
-        )
+    /// The home window was closed, and hidden. The tray icon brings it back, and macOS's dock
+    /// icon does. Without either — no tray, or a Linux desktop with no StatusNotifier host to
+    /// draw it — nothing could show it again or quit, so the shell quits.
+    fn closed_home(self: &Arc<Self>, app: &AppHandle) {
+        #[cfg(target_os = "macos")]
+        let _ = (self, app);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let (shell, app) = (Arc::clone(self), app.clone());
+            tauri::async_runtime::spawn(async move {
+                let drawn = shell.tray_built.load(Ordering::Relaxed)
+                    && tauri::async_runtime::spawn_blocking(tray_host).await.unwrap_or(false);
+                if !drawn {
+                    tracing::info!("no tray icon brings the home back; quitting");
+                    app.exit(0);
+                }
+            });
+        }
+    }
+
+    fn is_away(&self) -> bool {
+        *self.away.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn tray(self: &Arc<Self>, app: &AppHandle) -> tauri::Result<()> {
@@ -251,6 +279,7 @@ impl Shell {
         let line = PredefinedMenuItem::separator(app)?;
         let menu = Menu::with_items(app, &[&show, &home, &stop, &line, &quit])?;
         let shell = Arc::clone(self);
+        let clicks = Arc::clone(self);
         TrayIconBuilder::with_id(TRAY)
             .icon(icon(Badge::Unreachable))
             .tooltip(Badge::Unreachable.tooltip())
@@ -259,12 +288,18 @@ impl Shell {
             .on_menu_event(move |app, event| match event.id().as_ref() {
                 // Linux emits no tray clicks, so the panel opens from here (spec 3.3 §5.5).
                 "show" => show_panel(app, None),
-                "home" => show_home(app, Some(shell.target.home_url())),
+                // Shown and focused as it is: what the person had open or typed stays.
+                "home" => show_home(app, None),
                 "stop" => {
-                    let target = shell.target.clone();
+                    let (target, app) = (shell.target.clone(), app.clone());
                     tauri::async_runtime::spawn(async move {
                         if let Err(error) = stop_all(&target).await {
                             tracing::warn!(error = %error, "stop all from the tray failed");
+                            // The menu cannot say so; the panel does, in its banner (S-I10).
+                            show_panel(&app, None);
+                            if let Some(panel) = app.get_webview_window(PANEL) {
+                                let _ = panel.eval(TrayProblem::of(&error).script());
+                            }
                         }
                     });
                 }
@@ -272,7 +307,7 @@ impl Shell {
                 "quit" => app.exit(0),
                 _ => {}
             })
-            .on_tray_icon_event(|tray, event| {
+            .on_tray_icon_event(move |tray, event| {
                 if let TrayIconEvent::Click {
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
@@ -281,21 +316,28 @@ impl Shell {
                 } = event
                 {
                     let app = tray.app_handle();
-                    let visible = app
-                        .get_webview_window(PANEL)
-                        .is_some_and(|panel| panel.is_visible().unwrap_or(false));
-                    if visible {
-                        if let Some(panel) = app.get_webview_window(PANEL) {
+                    let Some(panel) = app.get_webview_window(PANEL) else { return };
+                    let visible = panel.is_visible().unwrap_or(false);
+                    // The lock is released before the panel hides, which may report its blur.
+                    let toggle = clicks
+                        .toggle
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .click(Instant::now(), visible);
+                    match toggle {
+                        Toggle::Hide => {
                             let _ = panel.hide();
                         }
-                    } else {
-                        let position = rect.position.to_physical::<i32>(1.0);
-                        let size = rect.size.to_physical::<u32>(1.0);
-                        let icon = Rect {
-                            origin: Point { x: position.x, y: position.y },
-                            size: Size { width: size.width, height: size.height },
-                        };
-                        show_panel(app, Some(icon));
+                        Toggle::Show => {
+                            let position = rect.position.to_physical::<i32>(1.0);
+                            let size = rect.size.to_physical::<u32>(1.0);
+                            let icon = Rect {
+                                origin: Point { x: position.x, y: position.y },
+                                size: Size { width: size.width, height: size.height },
+                            };
+                            show_panel(app, Some(icon));
+                        }
+                        Toggle::Nothing => {}
                     }
                 }
             })
@@ -329,20 +371,23 @@ impl Shell {
             let _ = tray.set_tooltip(Some(badge.tooltip()));
         }
         if let Some(home) = app.get_webview_window(HOME) {
+            // The exact count: the icon stops at 9+, the dock and the launcher need not.
             #[cfg(not(target_os = "windows"))]
             {
-                let count = badge.count().map(i64::from);
+                let count = reach.count().map(i64::from);
                 match home.set_badge_count(count) {
                     Ok(()) => tracing::info!(badge.launcher = ?count, "launcher badge set"),
                     Err(error) => tracing::info!(error = %error, "launcher badge not set"),
                 }
             }
             #[cfg(target_os = "windows")]
-            let _ = home.set_overlay_icon(badge.count().map(|_| icon(badge)));
+            let _ = home.set_overlay_icon(reach.count().map(|_| icon(badge)));
         }
 
+        // Only a kernel that does not answer at all is away; one whose status read failed
+        // keeps its pages (`Reach::Unread`).
         let away = *reach == Reach::Unreachable;
-        let mut shown = self.away.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut shown = self.away.lock().unwrap_or_else(PoisonError::into_inner);
         if away == *shown {
             return;
         }
@@ -362,6 +407,37 @@ impl Shell {
             }
         }
     }
+}
+
+/// Whether this desktop draws tray icons: a StatusNotifier host registered with the watcher.
+/// Building the icon succeeds without one (stock GNOME), but it is never shown.
+#[cfg(target_os = "linux")]
+fn tray_host() -> bool {
+    let registered = || -> zbus::Result<bool> {
+        let bus = zbus::blocking::Connection::session()?;
+        let watcher = zbus::blocking::Proxy::new(
+            &bus,
+            "org.kde.StatusNotifierWatcher",
+            "/StatusNotifierWatcher",
+            "org.kde.StatusNotifierWatcher",
+        )?;
+        watcher.get_property("IsStatusNotifierHostRegistered")
+    };
+    registered().unwrap_or(false)
+}
+
+/// Windows always draws the notification area's icons.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn tray_host() -> bool {
+    true
+}
+
+/// Gives `window` the page's own background for `theme`, else the desktop's appearance, so
+/// nothing white shows before a page paints (spec 3.3 §9).
+fn paint(window: &WebviewWindow, theme: Option<Theme>) {
+    let theme = theme.or_else(|| window.theme().ok());
+    let [red, green, blue] = window_background(theme == Some(Theme::Dark));
+    let _ = window.set_background_color(Some(Color(red, green, blue, 255)));
 }
 
 /// The badge's icon, prerendered for light and dark menu bars (`icons/tray/`).
@@ -396,21 +472,21 @@ fn bundled(page: &str) -> Url {
 /// `/ui/tray`, both the bundled ones. A home page linked from the panel opens in the home
 /// window; any other web page in the system browser; anything else nowhere.
 fn navigation(
-    target: &ServerTarget,
+    shell: &Arc<Shell>,
     app: &AppHandle,
     window: &'static str,
 ) -> impl Fn(&Url) -> bool + Send + 'static {
-    let (target, app) = (target.clone(), app.clone());
-    move |url| match Route::classify(url, &target) {
+    let (shell, app) = (Arc::clone(shell), app.clone());
+    move |url| match Route::classify(url, &shell.target) {
         Route::Bundled => true,
         Route::Home | Route::Panel if window == HOME => true,
         Route::Panel => true,
         Route::Home => {
-            later(&app, url.clone(), Route::Home);
+            later(&shell, &app, url.clone(), Route::Home);
             false
         }
         Route::External => {
-            later(&app, url.clone(), Route::External);
+            later(&shell, &app, url.clone(), Route::External);
             false
         }
         Route::Drop => {
@@ -423,15 +499,15 @@ fn navigation(
 /// `window.open` and `target="_blank"`: never a new window. A home page opens in the home
 /// window, another web page in the system browser.
 fn new_window(
-    target: &ServerTarget,
+    shell: &Arc<Shell>,
     app: &AppHandle,
 ) -> impl Fn(Url, tauri::webview::NewWindowFeatures) -> NewWindowResponse<tauri::Wry> + Send + 'static
 {
-    let (target, app) = (target.clone(), app.clone());
+    let (shell, app) = (Arc::clone(shell), app.clone());
     move |url, _features| {
-        match Route::classify(&url, &target) {
-            Route::Home | Route::Panel => later(&app, url, Route::Home),
-            Route::External => later(&app, url, Route::External),
+        match Route::classify(&url, &shell.target) {
+            Route::Home | Route::Panel => later(&shell, &app, url, Route::Home),
+            Route::External => later(&shell, &app, url, Route::External),
             Route::Bundled | Route::Drop => {
                 tracing::warn!(scheme = url.scheme(), "dropped a new window")
             }
@@ -440,12 +516,13 @@ fn new_window(
     }
 }
 
-/// Acts on a link after the webview's callback returns, off the event loop.
-fn later(app: &AppHandle, url: Url, route: Route) {
-    let app = app.clone();
+/// Acts on a link after the webview's callback returns, off the event loop. A link to the
+/// home itself only shows the home window; a page inside it is loaded there.
+fn later(shell: &Arc<Shell>, app: &AppHandle, url: Url, route: Route) {
+    let (shell, app) = (Arc::clone(shell), app.clone());
     tauri::async_runtime::spawn(async move {
         match route {
-            Route::Home => show_home(&app, Some(url)),
+            Route::Home => show_home(&app, home_navigation(&url, shell.is_away())),
             _ => {
                 if let Err(error) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
                     tracing::warn!(error = %error, "could not open the browser");

@@ -161,7 +161,7 @@ adk-rust --voice --voice-output reply.wav "status?"    # the model's audio to a 
 
 | Flag | Behaviour |
 |---|---|
-| `--voice [TEXT]` | The voice surface in the workspace, mode Ask by default; `TEXT` is the first turn |
+| `--voice [TEXT]` | The voice surface in the workspace, mode Ask by default; `TEXT` is the first turn. Without `TEXT`, `--voice-input` or `--voice-output`, a build with `tui` and `voice-desktop` opens the [terminal's voice mode](../surfaces/voice.md#in-the-terminal) instead |
 | `--voice-input <WAV>` | Without a microphone: the mono PCM16 recording, at the provider's rate (16 kHz for Gemini Live, 24 kHz for OpenAI), is the user's answer to the first held call, sent once the model has asked about it (its first spoken response after the hold), at speaking pace and followed by 1.5 s of silence; the run ends after the decided call's response. Exit code 3 when a call is still held |
 | `--voice-output <WAV>` | Appends the model's audio to the file instead of playing it |
 | `--provider gemini\|openai` | The realtime provider: Gemini Live (`gemini-3.1-flash-live-preview`) or the OpenAI Realtime API |

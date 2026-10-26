@@ -329,7 +329,10 @@ impl A2aBinding {
             });
         }
         let owner = caller.requester.as_ref().map(|requester| requester.as_str().to_owned());
-        let message_key = (owner.clone(), message.id.0.clone());
+        // A retried message returns its task; an anonymous caller's message id is its own,
+        // never another visitor's (A2A message ids are the client's choice).
+        let sender = owner.clone().unwrap_or_else(|| format!("anon:{}", caller.limit_key));
+        let message_key = (Some(sender), message.id.0.clone());
         let existing = {
             let book = self.book.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             book.by_message.get(&message_key).cloned()

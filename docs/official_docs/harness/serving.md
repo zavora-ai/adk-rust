@@ -152,7 +152,7 @@ calls, and a caller lists and revokes only their own rules.
 | `GET /api/rules/suggestions/{approvalId}` | The rules a call held in one of the caller's sessions offers, as a prompt would |
 | `POST /api/rules` | `{"approvalId": "apr_…", "suggestion": 1}` remembers an offered rule; `{"tool": "bash", "prefix": "cargo test"}` creates an explicit rule pinned to the served harness's declaration of the tool. Optional: `"decision": {"kind": "deny", "reason": "…"}`, `"expiresInHours": 8`; explicit rules also take `"pathWithin": "src"` and `"sessionId": "s1"`. Answers `201` with the rule |
 | `DELETE /api/rules/{id}` | Revokes one of the caller's rules; it stops applying from the next call |
-| `POST /api/rules/{id}/extend` | `{"expiresAt": "2026-12-24T23:59:00Z"}` moves the end of one of the caller's rules that has one to a later time ("Extend", spec 3.3 §8.1). A rule without an end date, or an end not after both its end and now, is `400`; another person's rule, or one revoked meanwhile, is `404` — an extension never brings a revoked rule back. Answers with the rule |
+| `POST /api/rules/{id}/extend` | `{"expiresAt": "2026-12-24T23:59:00Z"}` moves the end of one of the caller's rules that has one to a later time ("Extend", spec 3.3 §8.1). A rule without an end date, or an end not after both its end and now, is `400`; another person's rule, or one revoked meanwhile, is `404` — an extension never brings a revoked rule back. A custom `StandingRuleStore` that does not implement `replace` in one step answers `harness.rule.replace_unsupported` (`501`). Answers with the rule |
 
 Every grant, extension and revocation is recorded as `harness.rule.created`,
 `harness.rule.extended` (with the old end as `from` and the new one as `to`) or

@@ -220,9 +220,17 @@ pub fn detect(evidence: &KindEvidence) -> Option<KindProposal> {
         add(kind, weight, format!("the site has a {feature:?} feature"));
     }
     for found in &evidence.types {
-        let key = found.to_ascii_lowercase().replace([' ', '_', '-'], "");
-        let key = key.trim_start_matches("schema:").trim_start_matches("https://schema.org/");
-        if let Some((_, kind, weight)) = TYPES.iter().find(|(name, _, _)| *name == key) {
+        let lookup = |name: &str| {
+            let key = name.to_ascii_lowercase().replace([' ', '_', '-'], "");
+            let key = key.trim_start_matches("schema:").trim_start_matches("https://schema.org/");
+            TYPES.iter().find(|(known, _, _)| *known == key)
+        };
+        // A schema.org subtype counts as its nearest listed ancestor: a `Bakery` is a
+        // `LocalBusiness`.
+        let entry = lookup(found).or_else(|| {
+            adk_site::migrate::sources::schema_org_ancestry(found).into_iter().find_map(lookup)
+        });
+        if let Some((_, kind, weight)) = entry {
             add(*kind, *weight, format!("its pages describe it as {found}"));
         }
     }
@@ -268,6 +276,15 @@ mod tests {
             types: types.iter().map(|t| (*t).to_string()).collect(),
             ..KindEvidence::default()
         }
+    }
+
+    #[test]
+    fn a_schema_org_subtype_counts_as_its_listed_ancestor() {
+        assert_eq!(detect(&evidence(None, &[], &["Bakery"])).unwrap().kind, SiteKind::Business);
+        assert_eq!(detect(&evidence(None, &[], &["HairSalon"])).unwrap().kind, SiteKind::Business);
+        assert_eq!(detect(&evidence(None, &[], &["Pharmacy"])).unwrap().kind, SiteKind::Health);
+        assert_eq!(detect(&evidence(None, &[], &["Synagogue"])).unwrap().kind, SiteKind::Community);
+        assert!(detect(&evidence(None, &[], &["Recipe"])).is_none());
     }
 
     #[test]

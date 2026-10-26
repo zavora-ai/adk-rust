@@ -86,38 +86,47 @@ export function allows(rule: StandingRule): boolean {
   return kind === undefined || kind === "allow";
 }
 
-const WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+/** The day names the kernel's `cron` crate reads, by `Date.getUTCDay()` (0 is Sunday). */
+const WEEKDAYS = [
+  ["SUN", "SUNDAY"],
+  ["MON", "MONDAY"],
+  ["TUE", "TUES", "TUESDAY"],
+  ["WED", "WEDNESDAY"],
+  ["THU", "THURS", "THURSDAY"],
+  ["FRI", "FRIDAY"],
+  ["SAT", "SATURDAY"],
+];
 
 /**
- * The days of the week a cron weekday field names (0 is Sunday, as is 7): `*`, a day, a
- * range such as `1-5` or `MON-FRI`, or a list of them; `undefined` for a field it cannot read.
+ * The days of the week a cron weekday field names, as the kernel reads it: its `cron` crate
+ * counts 1 as Sunday and 7 as Saturday, unlike Unix cron's 0 or 7 for Sunday, so `1-5` runs
+ * Sunday to Thursday and `MON-FRI` Monday to Friday. The field is `*`, a day, a range or a list
+ * of them; the set holds `Date.getUTCDay()` numbers (0 is Sunday); `undefined` for a field it
+ * cannot read, `0` included, which the kernel refuses.
  */
 export function cronWeekdays(field: string): Set<number> | undefined {
   if (field === "*" || field === "?") return new Set([0, 1, 2, 3, 4, 5, 6]);
   const day = (text: string) => {
-    const named = WEEKDAYS.indexOf(text.toUpperCase());
+    const named = WEEKDAYS.findIndex((names) => names.includes(text.toUpperCase()));
     if (named >= 0) return named;
-    return /^\d$/.test(text) && Number(text) <= 7 ? Number(text) % 7 : undefined;
+    return /^[1-7]$/.test(text) ? Number(text) - 1 : undefined;
   };
   const days = new Set<number>();
   for (const part of field.split(",")) {
     const [from, to, extra] = part.split("-");
     const start = day(from ?? "");
     const end = to === undefined ? start : day(to);
-    if (start === undefined || end === undefined || extra !== undefined) return undefined;
-    // `5-7` runs Friday to Sunday; 7 is read as Sunday after the range.
-    const last = to !== undefined && Number(to) === 7 ? 7 : end;
-    if (last < start) return undefined;
-    for (let value = start; value <= last; value++) days.add(value % 7);
+    if (start === undefined || end === undefined || extra !== undefined || end < start) return undefined;
+    for (let value = start; value <= end; value++) days.add(value);
   }
   return days;
 }
 
 /**
  * The next time a wake fires after `now`, for a time wake or a cron that runs at one time of
- * day on every day or on some days of the week (`M H * * *`, `M H * * 1-5`, in UTC as the
- * kernel reads it), so a weekday routine on a Saturday names Monday; `undefined` for any other
- * wake.
+ * day on every day or on some days of the week (`M H * * *`, `M H * * MON-FRI`, in UTC as the
+ * kernel reads it, as `cronWeekdays` says), so a weekday routine on a Saturday names Monday;
+ * `undefined` for any other wake.
  */
 export function nextFire(wake: Wake, now: Date): Date | undefined {
   if (typeof wake !== "object" || wake === null) return undefined;
@@ -423,6 +432,8 @@ export interface KernelRecordLine {
   how?: string;
   /** The chat channel or device. */
   channel?: string;
+  /** The surface it was given on: `web`, `tray`, `phone`, `terminal`, `voice`, `chat`, `device`. */
+  surface?: string;
   target?: string;
 }
 

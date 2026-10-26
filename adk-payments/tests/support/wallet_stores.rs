@@ -1,6 +1,7 @@
 //! Scenarios every durable wallet store runs (spec 3.5 §7.14, A-I16, S12): the conformance
 //! suite, a held payment and a paused category surviving a restart, a cap two instances share
-//! under concurrent payments, and a key paid once across instances.
+//! under concurrent payments, a key paid once across instances, and a held payment decided
+//! once when two instances decide it at the same time.
 //!
 //! A [`Backend`] opens one instance's view of a shared database: a new store and a new spend
 //! ledger over new connections, as a restarted or second process would. The provider, the
@@ -17,11 +18,12 @@ use adk_core::{
 };
 use adk_payments::wallet::conformance::wallet_store_conformance;
 use adk_payments::wallet::{
-    AnomalyRule, HoldReason, InMemoryBillingAccount, InMemoryUseBasedScheme,
+    AnomalyRule, CategoryPause, HoldReason, InMemoryBillingAccount, InMemoryUseBasedScheme,
     InMemoryWalletProvider, Mandate, Payee, PayeeRule, PaymentChallenge, PaymentOutcome,
-    PaymentQuery, PaymentRequest, PaymentState, ProviderBillingRail, RailRef, SpendCategory,
-    UseBasedRail, WALLET_CATEGORY_PAUSED_CODE, WALLET_PAYMENT_IN_PROGRESS_CODE, Wallet,
-    WalletCaller, WalletPolicy, WalletProvider, WalletStore, category_scope,
+    PaymentQuery, PaymentRecord, PaymentRequest, PaymentState, ProviderBillingRail, RailRef,
+    SpendCategory, UseBasedRail, WALLET_CATEGORY_PAUSED_CODE, WALLET_NOT_HELD_CODE,
+    WALLET_PAYMENT_IN_PROGRESS_CODE, Wallet, WalletCaller, WalletPolicy, WalletProvider,
+    WalletStore, category_scope, owner_approved_scope,
 };
 use chrono::{TimeZone, Utc};
 
@@ -362,4 +364,118 @@ pub async fn a_key_pays_once_across_instances(backend: &dyn Backend, attempts: u
         balance - 120,
         "the provider is debited once"
     );
+}
+
+/// A store whose reads are slow, as a database under load, so two decisions on one payment
+/// both read it held before either writes.
+struct SlowReads(Arc<dyn WalletStore>);
+
+#[async_trait::async_trait]
+impl WalletStore for SlowReads {
+    async fn insert(&self, record: PaymentRecord) -> adk_core::Result<(PaymentRecord, bool)> {
+        self.0.insert(record).await
+    }
+    async fn update(&self, record: &PaymentRecord) -> adk_core::Result<()> {
+        self.0.update(record).await
+    }
+    async fn update_if(
+        &self,
+        record: &PaymentRecord,
+        expected: PaymentState,
+    ) -> adk_core::Result<bool> {
+        self.0.update_if(record, expected).await
+    }
+    async fn get(&self, wallet: &str, id: &str) -> adk_core::Result<Option<PaymentRecord>> {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        self.0.get(wallet, id).await
+    }
+    async fn by_key(&self, wallet: &str, key: &str) -> adk_core::Result<Option<PaymentRecord>> {
+        self.0.by_key(wallet, key).await
+    }
+    async fn list(&self, query: &PaymentQuery) -> adk_core::Result<Vec<PaymentRecord>> {
+        self.0.list(query).await
+    }
+    async fn pause(&self, pause: CategoryPause) -> adk_core::Result<()> {
+        self.0.pause(pause).await
+    }
+    async fn resume(
+        &self,
+        wallet: &str,
+        category: SpendCategory,
+    ) -> adk_core::Result<Option<CategoryPause>> {
+        self.0.resume(wallet, category).await
+    }
+    async fn pauses(&self, wallet: &str) -> adk_core::Result<Vec<CategoryPause>> {
+        self.0.pauses(wallet).await
+    }
+}
+
+/// Two instances decide one held payment at the same time — an approval on each, then an
+/// approval racing a rejection: exactly one decision proceeds, the other is refused as not
+/// held, and the provider and the ledger count the payment once (A-I16).
+pub async fn a_held_payment_is_decided_once_across_instances(backend: &dyn Backend) {
+    for second_approves in [true, false] {
+        let id = wallet_id("decide");
+        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+        let services = Services::new(clock.clone());
+        let limits = policy().spend_limits(&id).unwrap();
+        let open = |instance: Instance| Instance {
+            store: Arc::new(SlowReads(instance.store)),
+            ledger: instance.ledger,
+        };
+        let a = open(backend.open(limits.clone(), clock.clone()).await);
+        let b = open(backend.open(limits, clock.clone()).await);
+        let first = wallet(&id, &services, &a, clock.clone());
+        let second = wallet(&id, &services, &b, clock);
+        let upgrade = PaymentRequest::new(
+            "hosting-upgrade",
+            SpendCategory::Hosting,
+            Payee::new("hostco"),
+            1_500,
+            "USD",
+        );
+        let PaymentOutcome::Held(held) = first.pay(upgrade, &growth()).await.expect("held") else {
+            panic!("a payment over the per-payment limit is held")
+        };
+
+        let approve = tokio::spawn({
+            let id = held.id.clone();
+            async move { first.decide(&id, &owner()).await }
+        });
+        let other = tokio::spawn({
+            let id = held.id.clone();
+            let decision = if second_approves {
+                owner()
+            } else {
+                ApprovalDecision::reject(SubjectRef::human(OWNER), "not this month")
+            };
+            async move { second.decide(&id, &decision).await }
+        });
+        let outcomes = [approve.await.unwrap(), other.await.unwrap()];
+        let proceeded: Vec<&PaymentRecord> =
+            outcomes.iter().filter_map(|outcome| outcome.as_ref().ok()).collect();
+        assert_eq!(proceeded.len(), 1, "exactly one decision proceeds: {outcomes:?}");
+        let refused = outcomes.iter().find_map(|outcome| outcome.as_ref().err()).expect("refused");
+        assert_eq!(refused.code, WALLET_NOT_HELD_CODE, "{refused}");
+
+        let stored = b.store.get(&id, &held.id).await.unwrap().expect("the payment is stored");
+        assert_eq!(&stored, proceeded[0], "the journal keeps the decision that proceeded");
+        let approved = a
+            .ledger
+            .spent(
+                &SpendKey::org(owner_approved_scope(&id, SpendCategory::Hosting)),
+                SpendPeriod::Month,
+            )
+            .await
+            .expect("the ledger reports spend");
+        let charged: u64 = services.hostco.lines().iter().map(|line| line.amount).sum();
+        match stored.state {
+            PaymentState::Settled => {
+                assert_eq!(approved, 1_500 * UNITS_PER_CENT, "the ledger records it once");
+                assert_eq!(charged, 1_500, "the provider charges it once");
+            }
+            PaymentState::Rejected => assert_eq!((approved, charged), (0, 0), "nothing is paid"),
+            state => panic!("the payment ends settled or rejected, not {state:?}"),
+        }
+    }
 }

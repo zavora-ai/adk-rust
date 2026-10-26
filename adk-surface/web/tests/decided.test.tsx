@@ -50,6 +50,29 @@ describe("a decided card in the home", () => {
     expect(within(article).queryAllByRole("button")).toEqual([line]);
   });
 
+  it("decided elsewhere while the person types, leaves the focus where it is", async () => {
+    const decided = await decidedInvoice();
+    // Opened from a deep link (focusOnMount), then the person writes in the thread's box.
+    const view = (card: Card) => (
+      <>
+        <DecisionCard card={card} send={vi.fn()} focusOnMount />
+        <textarea aria-label="Message" />
+      </>
+    );
+    const { rerender } = render(view(invoiceCard()));
+    const message = screen.getByRole("textbox", { name: "Message" });
+    message.focus();
+    rerender(view(decided));
+    await waitFor(() => lineOf(screen.getByRole("article", { name: decided.heading })));
+    expect(document.activeElement).toBe(message);
+  });
+
+  it("opened at a decision already decided, its line takes the focus", async () => {
+    const decided = await decidedInvoice();
+    render(<DecisionCard card={decided} send={vi.fn()} focusOnMount />);
+    expect(document.activeElement).toBe(lineOf(screen.getByRole("article", { name: decided.heading })));
+  });
+
   it("collapses once answered here, and the line takes the focus", async () => {
     const client = new FixtureClient();
     render(<DecisionCard card={invoiceCard()} send={sendThrough(client)} />);
@@ -168,6 +191,48 @@ describe("an answered card on the tray", () => {
     expect(line.getAttribute("aria-expanded")).toBe("true");
     expect(within(article).queryAllByRole("button")).toEqual([line]);
     expect(client.taken.commands).toHaveLength(1);
+  });
+
+  it("collapses a card answered elsewhere to one line saying who answered and where", async () => {
+    const client = new TrayFixture();
+    render(<TrayPanel client={client} />);
+    await screen.findByRole("article", { name: "Send the October invoice" });
+    // Answered in Telegram: the tray's next read no longer lists it as waiting.
+    client.cards.set("apr_invoice", { ...(await decidedInvoice()), heading: "Send the October invoice" });
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    const line = await waitFor(() => lineOf(screen.getByRole("article", { name: "Send the October invoice" })));
+    expect(within(line).getByText("You said yes in Telegram at 07:31")).toBeTruthy();
+    // Answered elsewhere, so the focus stays where it was.
+    expect(document.activeElement).not.toBe(line);
+    expect(client.taken.commands).toHaveLength(0);
+  });
+
+  it("keeps a card a quorum still waits on as a decision, and shows its line once decided", async () => {
+    const client = new TrayFixture();
+    const waiting = client.cards.get("apr_invoice")!;
+    // One approval of two: the engine answers with the card, still waiting for the other.
+    client.nextDecide = { type: "answered", card: { ...waiting, version: waiting.version + 1 } };
+    render(<TrayPanel client={client} />);
+    const invoice = await screen.findByRole("article", { name: "Send the October invoice" });
+    await userEvent.click(within(invoice).getByRole("button", { name: "Allow once" }));
+    await waitFor(() => expect(client.taken.commands).toHaveLength(1));
+    const still = screen.getByRole("article", { name: "Send the October invoice" });
+    expect(still.getAttribute("data-decision")).toBe("waiting");
+
+    // The other approver says yes on the phone: the card leaves the open list, decided.
+    const decided = { ...(await decidedInvoice()), heading: "Send the October invoice" };
+    client.cards.set("apr_invoice", {
+      ...decided,
+      decided: { ...decided.decided!, by: "Ana", byYou: false, text: "Ana said yes on her phone at 07:45" },
+    });
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    const line = await waitFor(() => lineOf(screen.getByRole("article", { name: "Send the October invoice" })));
+    expect(within(line).getByText("Ana said yes on her phone at 07:45")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
   });
 
   it("drops off five minutes after the answer", async () => {

@@ -6,12 +6,13 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
+import { MemoryRules } from "../src/screens/MemoryRules";
 import { HttpClient } from "../src/client";
 import { areaAgents } from "../src/components/AreaRoster";
 import { onThisDevice, zoneOffset } from "../src/away";
 import { FixtureClient, agents, fixtureSeams, recordLines } from "../src/fixture/fixture";
 import type { AgentRow } from "../src/generated/api";
-import type { KernelRecordLine, KernelTidyUp, StandingRule } from "../src/kernel";
+import type { AreaSettings, KernelRecordLine, KernelTidyUp, StandingRule } from "../src/kernel";
 import { cronWeekdays, nextFire } from "../src/kernel";
 import { factOf, memoryOf, tidyUpText, undoText } from "../src/memory";
 import { recentLines, recordSentence } from "../src/record";
@@ -206,7 +207,7 @@ describe("the memory in the home's words", () => {
     expect(read.tidyUp?.id).toBe("this");
     expect(read.facts.map((fact) => [fact.provenance, fact.noticedBy])).toEqual([
       ["youSaidThis", undefined],
-      ["aGuess", "Work"],
+      ["aGuess", "work"],
       ["youConfirmedThis", undefined],
     ]);
     expect(factOf({ id: "g", text: "x", origin: "somethingNew", learnedAt: "" }).provenance).toBe("aGuess");
@@ -251,6 +252,23 @@ describe("Allowed without asking", () => {
     const rules = (await client.rules()) as StandingRule[];
     const extended = new Date(rules.find((rule) => rule.id === "rule_accountant")!.expiresAt!);
     expect([extended.getMonth(), extended.getDate(), extended.getHours(), extended.getMinutes()]).toEqual([11, 24, 23, 59]);
+  });
+
+  it("offers thirty days past the new end when Extend opens again after an extension", async () => {
+    const client = new FixtureClient();
+    const { canDo } = await openMemory(fixtureSeams(), client);
+    const accountant = () => within(canDo).getByText("Finance can use send_email to [accountant email].").closest("li")!;
+    await within(canDo).findByText("Until 30 November");
+    // The default the first time: thirty days after 30 November.
+    await userEvent.click(within(accountant()).getByRole("button", { name: "Extend" }));
+    await userEvent.click(within(accountant()).getByRole("button", { name: "Extend" }));
+    await within(canDo).findByText("Until 30 December");
+    // Opened again, it offers thirty days after the new end, and can be saved as it is.
+    await userEvent.click(within(accountant()).getByRole("button", { name: "Extend" }));
+    const date = within(accountant()).getByLabelText("Until the end of") as HTMLInputElement;
+    expect(date.value).toMatch(/^\d{4}-01-29$/);
+    expect(date.getAttribute("aria-invalid")).toBe("false");
+    expect((within(accountant()).getByRole("button", { name: "Extend" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("says a rule has ended, and Stop allowing removes it", async () => {
@@ -393,6 +411,86 @@ describe("What your agents did", () => {
   });
 });
 
+describe("what noticed a guess", () => {
+  it("names the agent by the roster's name, from the id the kernel gives", async () => {
+    const seams = fixtureSeams();
+    const guess = (noticedBy: string) => ({ id: noticedBy, text: `Noticed by ${noticedBy}.`, origin: "guess" as const, noticedBy, learnedAt: "" });
+    seams.memory = {
+      ...seams.memory!,
+      facts: async () => memoryOf({ facts: [guess("finance"), guess("adk-rust")], tidyUps: [] }),
+    };
+    // The primary agent's id is `adk-rust`; the roster calls it ADK-Rust.
+    class WithPrimary extends FixtureClient {
+      override async agents() {
+        const primary: AgentRow = {
+          agent: { name: "adk-rust", displayName: "ADK-Rust", avatar: { monogram: "A", color: "#C03A00" } },
+          status: "ready",
+          statusText: "Ready",
+        };
+        return [...(await super.agents()), primary];
+      }
+    }
+    const { remember } = await openMemory(seams, new WithPrimary());
+    expect(await within(remember).findByText("Finance noticed this")).toBeTruthy();
+    expect(await within(remember).findByText("ADK-Rust noticed this")).toBeTruthy();
+  });
+});
+
+describe("answers on the record", () => {
+  const line = (fields: Partial<KernelRecordLine>): KernelRecordLine => ({ seq: 1, at: "", action: "", ...fields });
+  const finance = "urn:adk:agent:home/finance";
+
+  it("names whose call was answered and the surface it was answered on, never a device's id", () => {
+    const said = (fields: Partial<KernelRecordLine>) => recordSentence(line(fields), rows);
+    // A paired phone's answer, as the engine records it: the device's id is not a channel.
+    expect(
+      said({ action: "surface.decide", outcome: "decided", decision: "approved", tool: "send_email", how: "touch", surface: "phone", agent: finance }),
+    ).toBe("You let Finance use send_email, from your phone.");
+    // The tray answers with a pointer too, and is not the home.
+    expect(said({ action: "surface.decide", outcome: "decided", decision: "rejected", tool: "write_file", how: "pointer", surface: "tray" })).toBe(
+      "You said no to write_file, from the tray.",
+    );
+    expect(
+      said({ action: "surface.decide", outcome: "decided", decision: "rejected", tool: "pay", how: "pointer", surface: "web", agent: finance }),
+    ).toBe("You didn't let Finance use pay, in the home.");
+  });
+
+  it("lists one answer once, and never an answer that lost to an earlier one", () => {
+    // Newest first. One tap in Telegram: the gateway's record before the answer is applied,
+    // then the adapter's once it decided.
+    const telegram = [
+      line({ seq: 9, action: "surface.decide", outcome: "decided", decision: "approved", tool: "send_email", how: "chat", channel: "Telegram", surface: "chat", agent: finance, target: "apr_1" }),
+      line({ seq: 8, action: "kernel.channel", kernelAction: "decide", decision: "approved", how: "chat", channel: "telegram", target: "apr_1" }),
+    ];
+    expect(recentLines(telegram, rows).map((entry) => entry.text)).toEqual(["You let Finance use send_email, from Telegram."]);
+    // A device answered after the home had decided: its record is written before the
+    // decision refuses it, and the home's answer stands.
+    const conflict = [
+      line({ seq: 12, action: "kernel.control", kernelAction: "approvals.decide", decision: "approved", channel: "Ana's laptop", target: "apr_2" }),
+      line({ seq: 11, action: "surface.decide", outcome: "decided", decision: "rejected", tool: "pay", how: "pointer", surface: "web", target: "apr_2" }),
+    ];
+    expect(recentLines(conflict, rows).map((entry) => entry.text)).toEqual(["You said no to pay, in the home."]);
+    // Two devices raced: the first answer decided.
+    const raced = [
+      line({ seq: 14, action: "kernel.control", kernelAction: "approvals.decide", decision: "rejected", channel: "Ana's laptop", target: "apr_3" }),
+      line({ seq: 13, action: "kernel.control", kernelAction: "approvals.decide", decision: "approved", channel: "Ana's desktop", target: "apr_3" }),
+    ];
+    expect(recentLines(raced, rows).map((entry) => entry.text)).toEqual(["You said yes to a call, from Ana's desktop."]);
+  });
+
+  it("words a rule that refuses as a refusal, not as an allow", () => {
+    const said = (fields: Partial<KernelRecordLine>) => recordSentence(line(fields), rows);
+    expect(said({ action: "harness.rule.created", tool: "web_fetch", decision: "denied" })).toBe("You refused web_fetch without asking.");
+    expect(said({ action: "harness.rule.revoked", tool: "web_fetch", decision: "denied" })).toBe(
+      "You stopped refusing web_fetch without asking.",
+    );
+    expect(said({ action: "harness.rule.extended", tool: "web_fetch", decision: "denied" })).toBe(
+      "You extended how long web_fetch is refused without asking.",
+    );
+    expect(said({ action: "harness.rule.created", tool: "bash", decision: "allowed" })).toBe("You allowed bash without asking.");
+  });
+});
+
 describe("each area's agents and what they spent", () => {
   it("lists every agent with what it spent today, adding up to the area's spent today", async () => {
     const { canDo } = await openMemory(fixtureSeams());
@@ -401,6 +499,27 @@ describe("each area's agents and what they spent", () => {
     expect(entries.slice(0, 3)).toEqual(["FFinanceWaiting for you$1.12 today", "{ }CodeWaiting for you$0.42 today", "RResearchDone$0.30 today"]);
     // $1.12 + $0.42 + $0.30 is the $1.84 the area spent today.
     expect(within(canDo).getByText("$1.84 spent today")).toBeTruthy();
+  });
+
+  it("lists what the kernel spent outside the areas it shows, such as its upkeep in default", async () => {
+    const seams = fixtureSeams();
+    const work: AreaSettings = { partition: "work", quietTime: [], spentToday: 500_000 };
+    const home: AreaSettings = { partition: "home", quietTime: [], spentToday: 0 };
+    seams.limits = { ...seams.limits!, areas: async () => [work, home], area: async (partition) => (partition === "home" ? home : work) };
+    seams.roster = {
+      spending: async () => [
+        { agent: "finance", area: "work", spentToday: 500_000 },
+        // `kernel.proc` runs in `default`, which a partition table without it does not list.
+        { agent: "kernel.proc", area: "default", spentToday: 10_000 },
+      ],
+    };
+    const { canDo } = await openMemory(seams);
+    const outside = await within(canDo).findByRole("region", { name: "Spent outside your areas today" });
+    expect(within(outside).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "KUpkeep: tidying notes and checking work$0.01 today",
+    ]);
+    const atWork = within(canDo).getByRole("region", { name: "What each agent at work spent today" });
+    expect(within(atWork).queryByText("Upkeep: tidying notes and checking work")).toBeNull();
   });
 
   it("keeps each area's agents to that area and names a per-area target as the roster's agent", () => {
@@ -431,17 +550,53 @@ describe("each area's agents and what they spent", () => {
   });
 });
 
+describe("each agent's spending, read again only when it moved", () => {
+  it("does not list the kernel's processes again for an areas poll that brings the same totals", async () => {
+    const seams = fixtureSeams();
+    const spending = vi.fn(async () => [{ agent: "finance", area: "default", spentToday: 1_000 }]);
+    seams.roster = { spending };
+    const client = new FixtureClient();
+    const areas = (spentToday: number): AreaSettings[] => [{ partition: "default", quietTime: [], spentToday }];
+    const page = (list: AreaSettings[]) => (
+      <MemoryRules client={client} areas={list} agents={rows} seams={seams} onChanged={() => undefined} />
+    );
+    const { rerender } = render(page(areas(1_000)));
+    await waitFor(() => expect(spending).toHaveBeenCalledTimes(1));
+    // The areas are polled every ten seconds, each poll a new list with the same totals.
+    rerender(page(areas(1_000)));
+    rerender(page(areas(1_000)));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(spending).toHaveBeenCalledTimes(1);
+    // An area spent more: its agents are read again, so they add up to the new total.
+    rerender(page(areas(2_000)));
+    await waitFor(() => expect(spending).toHaveBeenCalledTimes(2));
+  });
+});
+
 describe("routines on some days of the week", () => {
   it("names the next day a weekday routine runs, so Saturday's next is Monday", () => {
-    const weekdays = { cron: { expr: "0 9 * * 1-5" } };
+    const weekdays = { cron: { expr: "0 9 * * MON-FRI" } };
     const saturday = new Date(Date.UTC(2026, 9, 24, 10, 0));
     expect(nextFire(weekdays, saturday)?.toISOString()).toBe("2026-10-26T09:00:00.000Z");
     const friday = new Date(Date.UTC(2026, 9, 23, 8, 0));
     expect(nextFire(weekdays, friday)?.toISOString()).toBe("2026-10-23T09:00:00.000Z");
     expect(nextFire({ cron: { expr: "30 7 * * SAT,SUN" } }, friday)?.toISOString()).toBe("2026-10-24T07:30:00.000Z");
     expect(nextFire({ cron: { expr: "0 9 1 * *" } }, friday)).toBeUndefined();
-    expect([...cronWeekdays("5-7")!].sort()).toEqual([0, 5, 6]);
     expect(cronWeekdays("*/2")).toBeUndefined();
+  });
+
+  it("reads numbered weekdays as the kernel's cron crate does: 1 is Sunday, 7 Saturday", () => {
+    // `adk-rust wake --cron "0 9 * * 1-5"` runs Sunday to Thursday on the kernel, so on
+    // Saturday 24 October its next run is Sunday, and on Friday it does not run.
+    const numbered = { cron: { expr: "0 0 9 * * 1-5" } };
+    expect(nextFire(numbered, new Date(Date.UTC(2026, 9, 24, 10, 0)))?.toISOString()).toBe("2026-10-25T09:00:00.000Z");
+    expect(nextFire(numbered, new Date(Date.UTC(2026, 9, 23, 8, 0)))?.toISOString()).toBe("2026-10-25T09:00:00.000Z");
+    expect([...cronWeekdays("1-5")!].sort()).toEqual([0, 1, 2, 3, 4]);
+    expect([...cronWeekdays("5-7")!].sort()).toEqual([4, 5, 6]);
+    expect([...cronWeekdays("2,Fri,saturday")!].sort()).toEqual([1, 5, 6]);
+    // The crate refuses 0, so a field naming it never fires.
+    expect(cronWeekdays("0")).toBeUndefined();
+    expect(cronWeekdays("0-4")).toBeUndefined();
   });
 });
 
@@ -491,7 +646,7 @@ describe("the HTTP client's memory, record, rule and spending routes", () => {
     const client = new HttpClient();
     const memory = client.memory();
     const read = await memory.facts();
-    expect(read?.facts).toEqual([{ id: "f1", text: "A", provenance: "aGuess", noticedBy: "Work" }]);
+    expect(read?.facts).toEqual([{ id: "f1", text: "A", provenance: "aGuess", noticedBy: "work" }]);
     expect(read?.tidyUp?.id).toBe("t1");
     await memory.confirm("f 1");
     await memory.fix("f1", "B");
@@ -535,6 +690,24 @@ describe("the HTTP client's memory, record, rule and spending routes", () => {
 });
 
 describe("Coming up", () => {
+  it("reads every waiting process, so a routine added after two hundred others is listed", async () => {
+    // The kernel sorts processes oldest first and then cuts the list at `limit`.
+    const waiting = Array.from({ length: 231 }, (_, index) => ({
+      run: { runId: `r${index}`, target: "adk-rust", state: "waiting" },
+      meta: { pid: `r${index}` },
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const limit = new URL(url, "http://kernel").searchParams.get("limit");
+        const processes = limit === null ? waiting : waiting.slice(0, Number(limit));
+        return new Response(JSON.stringify({ processes }), { status: 200 });
+      }),
+    );
+    const listed = await new HttpClient().processes();
+    expect(listed?.map((process) => process.meta.pid)).toContain("r230");
+  });
+
   it("names the day of what is planned beyond today", async () => {
     const { whenAhead } = await import("../src/format");
     const saturday = new Date(2026, 9, 24, 10, 0);
@@ -552,5 +725,43 @@ describe("the record check's unsigned tail", () => {
     expect((await new HttpClient().record().check())?.unsigned).toBe(8);
     vi.stubGlobal("fetch", answer({ unsignedTail: 8, failures: [{ kind: "unanchored" }, { kind: "hash_mismatch" }] }));
     expect((await new HttpClient().record().check())?.unsigned).toBeUndefined();
+  });
+
+  it("names the records after the last signed checkpoint, which the verifier passes as valid", async () => {
+    // Once one checkpoint verified, the newest records are the report's unsigned tail and fail
+    // nothing: the check is valid, yet nothing vouches for them until the next checkpoint.
+    const answer = (unsignedTail: number) =>
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ valid: true, entries: 340, checkedAt: "", report: { unsignedTail, failures: [] } }), {
+            status: 200,
+          }),
+      );
+    vi.stubGlobal("fetch", answer(40));
+    expect(await new HttpClient().record().check()).toEqual({
+      intact: false,
+      count: 340,
+      checkedAt: "",
+      problem: undefined,
+      unsigned: 40,
+    });
+    vi.stubGlobal("fetch", answer(0));
+    expect((await new HttpClient().record().check())?.intact).toBe(true);
+  });
+
+  it("shows the green check only when every record is signed", async () => {
+    const seams = fixtureSeams();
+    seams.record = {
+      ...seams.record!,
+      check: async () => ({ intact: false, count: 340, checkedAt: new Date().toISOString(), unsigned: 40 }),
+    };
+    const { did } = await openMemory(seams);
+    await within(did).findByText("Every action is on record");
+    expect(within(did).queryByText(/nothing has been changed or deleted/)).toBeNull();
+    expect(
+      within(did).getByText(
+        "All 340 of them. The first 300 are signed and unchanged; the latest 40 are not signed yet, so the check can't vouch for them until the record is next signed. Checked just now.",
+      ),
+    ).toBeTruthy();
   });
 });

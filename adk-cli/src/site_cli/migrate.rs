@@ -20,6 +20,7 @@ use adk_site::migrate::detect::Detectors;
 use adk_site::migrate::freeze::{Freeze, FreezeConfig};
 use adk_site::migrate::http::{CrawlSigner, HttpClient};
 use adk_site::migrate::mapping::map_features;
+use adk_site::migrate::parity::{ParityConfig, SiteDesign, design_choice_fields};
 use adk_site::migrate::quarantine::QuarantineBook;
 use adk_site::migrate::sources::{
     Crawl, DockerCliDriver, IsolatedReplay, ReplaySpec, WordPressRest, Wxr,
@@ -60,6 +61,11 @@ pub struct MigrateArgs {
     /// Replace items and files the project holds already
     #[arg(long)]
     pub replace: bool,
+    /// The owner's design choice (spec 3.5 §7.8.1): `keep` gates the launch on looking the
+    /// same (perceptual difference under 0.05); `new-theme` gates URL coverage, text and
+    /// metadata only, and you approve the new look from the preview
+    #[arg(long, value_name = "CHOICE", default_value = "keep", value_parser = ["keep", "new-theme"])]
+    pub design: String,
     /// Test fixtures only: TXT records for domain claims, as JSON `{"name": ["value"]}`
     #[cfg(feature = "scripted-model")]
     #[arg(long, hide = true, value_name = "FILE")]
@@ -178,6 +184,7 @@ fn host_of(url: &Url) -> Result<String> {
 /// `adk-rust site migrate`.
 pub(super) async fn migrate(paths: &SitePaths, args: MigrateArgs) -> Result<()> {
     let config = paths.config()?;
+    let design: SiteDesign = args.design.parse()?;
     #[cfg(feature = "scripted-model")]
     let fixture = args.dns_fixture.as_deref();
     #[cfg(not(feature = "scripted-model"))]
@@ -242,7 +249,11 @@ pub(super) async fn migrate(paths: &SitePaths, args: MigrateArgs) -> Result<()> 
         (None, None, None) => bail!("give the legacy site's URL, --wxr FILE or --backup DIR"),
     };
 
-    let findings = Detectors::new().scan_inventory(&inventory).await;
+    let detectors = Detectors::new();
+    let mut findings = detectors.scan_inventory(&inventory).await;
+    // The dual fetch reads the live site, so it runs for a proven domain only (A-I9).
+    let cloaking = detectors.scan_cloaking(&context, &inventory, 20).await;
+    findings.extend(cloaking.findings);
     let options = ConvertOptions::new(config.default_language().clone());
     let first = to_content(&inventory, &options)?;
     let book = QuarantineBook::new(findings, &first);
@@ -284,6 +295,7 @@ pub(super) async fn migrate(paths: &SitePaths, args: MigrateArgs) -> Result<()> 
     std::fs::create_dir_all(paths.migration())?;
     let report = json!({
         "migratedAt": Utc::now(),
+        "design": design_choice_fields(&ParityConfig::for_design(design)),
         "source": inventory.source,
         "origin": inventory.origin,
         "items": converted.items.len(),
@@ -293,6 +305,7 @@ pub(super) async fn migrate(paths: &SitePaths, args: MigrateArgs) -> Result<()> 
         "dropped": converted.dropped,
         "notes": converted.notes,
         "inventoryNotes": inventory.notes,
+        "cloaking": { "checked": cloaking.checked, "notes": cloaking.notes },
     });
     let report_path = paths.migration().join("report.json");
     std::fs::write(&report_path, serde_json::to_vec_pretty(&report)?)?;
@@ -337,6 +350,14 @@ pub(super) async fn migrate(paths: &SitePaths, args: MigrateArgs) -> Result<()> 
             );
         }
     }
+    println!(
+        "Design: {}.",
+        if design.gates_looks() {
+            "kept; the launch is gated on looking the same (perceptual difference under 0.05)"
+        } else {
+            "a new theme; the launch is gated on URL coverage, text and metadata, and you approve the look from the preview"
+        }
+    );
     println!(
         "Report: {}. Next: `adk-rust site build`, then `adk-rust site publish`.",
         report_path.display()

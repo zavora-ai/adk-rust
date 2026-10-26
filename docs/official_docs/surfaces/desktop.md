@@ -24,14 +24,15 @@ opens the home at the decision (spec 3.3 §7.2).
 
 | Card | What the tray shows | What it offers |
 |---|---|---|
-| Low or medium risk, shown in full | "Finance · since 18:00 · Medium risk", the exact call in mono, whether it can be taken back | **Allow once** and **Deny** |
+| Low or medium risk, shown in full | "Finance · since 18:00 · Medium risk", the engine's plain words when it has them ("Your agents suggest this. Once you say yes, it runs right away."), the exact call in mono, whether it can be taken back | **Allow once** and **Deny**, in the engine's words ("Do it", "Not now" on a suggestion) |
 | High risk, money, a call shown cut short, or an answer that needs you to confirm it is you | "Code · High risk · open to decide" | **Deny** when the engine offers it, since saying no is always safe; approving opens the home at `/ui/decisions/<id>` from the heading or the chevron |
-| Answered here or elsewhere | One line: a check, the heading, then "You said yes from the tray at 07:40". A click, Enter or Space opens it to show the exact call again | Nothing: opening the line answers nothing |
+| Answered here or elsewhere | One line: a check, the heading, then "You said yes from the tray at 07:40" or "You said yes in Telegram at 07:31". A long heading stops at two lines; who answered is never cut. A click, Enter or Space opens it to show the exact call again | Nothing: opening the line answers nothing |
 
 Every card's heading opens the home at that decision, where **Always allow**, **Edit** and
 **Confirm it's you and approve** are answered. Ids and versions are never shown. An answered
 card's line leaves the panel five minutes after the answer, or as soon as a new decision
-arrives; at most three stay.
+arrives; at most three stay. A call that needs more than one approver stays a decision after
+your answer, and becomes a line once it is decided.
 
 The panel fills its window and never scrolls as a page: its header, **Open home** and
 **Stop all** stay put, and the decisions and what comes next scroll between them. The home
@@ -42,7 +43,7 @@ stays put and each pane scrolls inside itself.
 |---|---|
 | Esc never decides (§7.4 rule 1) | Enter and Esc on a focused answer, hiding the panel by clicking away, and **Quit** decide nothing |
 | Typing while a decision is open is queued (§7.4 rule 2) | A message to an agent whose card is open shows "Sent after this card is answered" and runs once the card is answered |
-| Stopping is one action; resuming happens only in the home (S-I10) | **Stop all** in the panel and the icon's menu; no **Resume all** |
+| Stopping is one action; resuming happens only in the home (S-I10) | **Stop all** in the panel and the icon's menu; no **Resume all**. When **Stop all** from the menu does not go through, the panel opens and says why |
 | Every answer is recorded with where it came from (§11) | The record and every other surface say "from the tray" |
 
 ## Running it
@@ -75,11 +76,15 @@ token to disk or to its log. Without the token, the panel says "Start the tray w
 
 | Platform | Opening the panel |
 |---|---|
-| macOS, Windows | A click on the tray icon; the panel opens at the icon, inside the screen's work area |
-| Linux | **Show decisions** in the icon's menu: Linux tray icons report no clicks. The panel opens at the top right of the screen |
+| macOS, Windows | A click on the tray icon; the panel opens at the icon, inside the screen's work area. Another click on the icon closes it |
+| Linux | **Show decisions** in the icon's menu: Linux tray icons report no clicks. The panel opens at the top right of the screen. The icon needs a StatusNotifier host: KDE Plasma, or GNOME with its AppIndicator extension |
 
-The icon's menu has **Show decisions**, **Open home**, **Stop all** and **Quit**. Closing the
-home window hides it; the tray keeps running until **Quit**.
+The icon's menu has **Show decisions**, **Open home**, **Stop all** and **Quit**. **Open home**
+shows the home window as you left it. Closing the home window hides it; the tray keeps
+running until **Quit**. Where no tray icon can bring the home back — the icon could not be
+built, or a Linux desktop has no StatusNotifier host to draw it — closing the home quits the
+shell. Both windows take the page's light or dark background before it paints, so a dark
+desktop never flashes white.
 
 ## The badge
 
@@ -87,9 +92,9 @@ home window hides it; the tray keeps running until **Quit**.
 |---|---|---|
 | Running, nothing waits | The brand dot | |
 | One to nine decisions | A filled badge with the count | The count beside the icon on macOS; the dock badge on macOS; the launcher badge on Linux; a taskbar overlay on Windows |
-| More than nine | `9+` | As above |
+| More than nine | `9+` | The exact count on the dock and launcher badge; `9+` beside the icon on macOS; a taskbar overlay on Windows |
 | All agents stopped | A stop square | |
-| The kernel cannot be reached | A dash | Both windows show "Can't reach your agents" and `adk-rust up`, and come back by themselves once the kernel answers |
+| The kernel cannot be reached | A dash | Both windows show "Can't reach your agents" and `adk-rust up`, and come back by themselves once the kernel answers. A status read that fails or is slow while the kernel answers changes nothing: the last badge and the kernel's pages stay |
 | The kernel needs its token | A padlock | |
 
 The shell reads `GET /api/surface/status?surface=tray` when it starts, on every frame of
@@ -104,7 +109,7 @@ serves can call into the shell: no capability names a remote page.
 | Link | Goes to |
 |---|---|
 | The kernel's `/ui/tray` | The panel |
-| The kernel's other `/ui/` pages | The home window, shown and focused |
+| The kernel's other `/ui/` pages | The home window, shown and focused: `/ui/` itself as you left it, a page inside it (a decision) loaded there. While the kernel is away, the window keeps "Can't reach your agents" |
 | Any other `http` or `https` page | The system browser |
 | Anything else (`file:`, `javascript:`, `data:`) | Nowhere |
 
@@ -137,9 +142,10 @@ by default:
 
 | Test | What it checks | Where |
 |---|---|---|
-| Component tests | Answers per card, keys and hiding never decide, the badge, Stop all without Resume all, the Ask box, the spend bar, theme and refresh | `adk-surface/web/tests/tray.test.tsx` |
+| Component tests | Answers per card, keys and hiding never decide, the badge, Stop all without Resume all, the Ask box, the spend bar, theme and refresh; lines for cards answered here, elsewhere and by a quorum | `adk-surface/web/tests/tray.test.tsx`, `adk-surface/web/tests/decided.test.tsx` |
+| Playwright, the app shell | The panel fills its window; a decided line never cuts off who answered | `adk-surface/web/e2e/shell.spec.ts` (`npx playwright test --project shell`) |
 | Playwright, Chromium | The panel end to end over `scripted_tray --code-turn`: the badge, yes once from the tray, the home at a high-risk decision, a queued message, Stop all | `adk-surface/web/e2e/tray.spec.ts` (`npx playwright test --project tray`) |
-| `adk-desktop-core` | Which kernel, the badge, where links go, where the panel opens; property tests | `cargo test --manifest-path adk-surface/desktop/Cargo.toml -p adk-desktop-core` |
+| `adk-desktop-core` | Which kernel, the badge, where links go, where the panel opens and when a click closes it, the command line, the token script, a failed Stop all for the panel; property tests | `cargo test --manifest-path adk-surface/desktop/Cargo.toml -p adk-desktop-core` |
 | WebKitGTK | The shell itself through `tauri-driver` | `adk-surface/desktop/app/tests/webkitgtk.rs`, run by `.github/workflows/desktop.yml` |
 
 ```bash

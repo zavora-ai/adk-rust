@@ -169,7 +169,9 @@ async fn probes_find_drift_and_tolerate_one_release_of_lag() {
 
     // A file on the host is replaced.
     let served = site.host.inner.serving_dir(HostTarget::Production).unwrap().unwrap();
-    std::fs::write(served.join("about/index.html"), "<p>defaced</p>").unwrap();
+    // Replaced as an intruder replaces a file: a new file renamed over the served one.
+    std::fs::write(served.join("about/index.tmp"), "<p>defaced</p>").unwrap();
+    std::fs::rename(served.join("about/index.tmp"), served.join("about/index.html")).unwrap();
     let tampered = prober.probe().await.unwrap();
     let drift: BTreeSet<(DriftLocation, DriftKind, String)> =
         tampered.drift.iter().map(|d| (d.location, d.kind, d.path.clone())).collect();

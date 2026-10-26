@@ -18,16 +18,16 @@ adk-site = "3.0.0"
 | Stage | Type | Behaviour |
 |-------|------|-----------|
 | Content | `SiteProject`, `ContentStore`, `ContentHistory` | Items are Markdown files with front matter; drafts stay apart until released; every version is recorded |
-| Generator | `SiteGenerator`, `BuiltinGenerator` | Pages per language, `index.md` and `index.awp.json` twins linked with `<link rel="alternate">`, `llms.txt`, `robots.txt` with `Content-Usage`, `security.txt`, sitemaps with `lastmod`, Atom feeds, schema.org JSON-LD per kind, redirects in the host's format; identical inputs give identical files; incremental builds rebuild an item and its dependents only |
-| Launch gate | `LaunchGate` | Server code (A-I1), claims from `Known` facts (A-I18), links, WCAG 2.2 AA rules and theme contrast, performance budget, legal pages, machine views, quarantine, required languages, red lines, structured data; fast and full tiers |
+| Generator | `SiteGenerator`, `BuiltinGenerator` | Pages per language, `index.md` and `index.awp.json` twins linked with `<link rel="alternate">`, `llms.txt`, `robots.txt` with `Content-Usage`, `security.txt`, sitemaps with `lastmod`, Atom feeds, a product feed (`products/feed.xml`, RSS 2.0 with `g:` product attributes), schema.org JSON-LD per kind, redirects in the host's format; identical inputs give identical files; incremental builds rebuild an item and its dependents only |
+| Launch gate | `LaunchGate` | Server code (A-I1), claims from `Known` facts (A-I18) and review quotes only with the reviewer's name and the owner's approval (`with_reviews`), links, WCAG 2.2 AA rules and theme contrast, performance budget, legal pages, machine views, quarantine, required languages, red lines, structured data; fast and full tiers; extensions `ThirdPartyResources` (no resource from another origin) and `ReleaseDelegation` (the release key delegated by the owner's root) |
 | Releases | `ReleaseBuilder` | Hashes a build into a `ReleaseManifest`, snapshot or delta; refuses executables, server configuration files and server-side include directives, sniffed by content |
-| Site log | `SiteLog`, `ReleaseSigner` | `{seq, manifest}` entries in JCS at leaf `seq − 1`, C2SP tiles, a checkpoint signed by a delegated release key with origin `{domain}/.well-known/awp/log` |
-| Hosts | `SiteHost`, `DirectoryHost` | Files, manifest, tiles, checkpoint, then the pointer; a prefix per release with every file version stored once (`Atomicity::PrefixPointer`); exact rollback; a conformance suite every host runs |
+| Site log | `SiteLog`, `ReleaseSigner` | `{seq, manifest}` entries in JCS at leaf `seq − 1`, C2SP tiles written with `adk-awp`'s `signing::log`, a checkpoint signed by a delegated release key with origin `{domain}/.well-known/awp/log` |
+| Hosts | `SiteHost`, `DirectoryHost` | Files, manifest, tiles, checkpoint, then the pointer; a prefix per release with every file version stored once and read-only (`Atomicity::PrefixPointer`); exact rollback; a conformance suite every host runs |
 | Publishing | `PublishingPipeline` | Draft, check, preview, approve, release, publish, announce, measure; corrections, withdrawals (notice or 410), schedules, per-item revert, whole-site rollback |
 | Media | `MediaPipeline` | Type sniffing, executables and polyglots refused, location metadata stripped by re-encoding, resizing, alt text that a person confirms |
 | Lanes | `lanes`, `LiveStore` | Release, live and stream lanes per field, declared per kind in `site.toml`; claims stay in releases (A-I26) |
 | Streams | `StreamLane`, `EntrySigner` | Live-blog entries signed by the edge key in the AWP 2.0 proof format, served at once, folded into signed releases every five minutes and at the close |
-| Constant updates | `UpdateEngine`, `Batcher`, `FeedMapping` | Model-free feed mappings, feed bounds that hold a delivery whole (A-I27), batch windows per kind, exceptions held alone, fast checks per item, one release and one `catalog.changed` per batch, scheduled full checks, per-item revert and replay |
+| Constant updates | `UpdateEngine`, `Batcher`, `FeedMapping` | Model-free feed mappings, feed bounds that hold a delivery whole (A-I27), batch windows per kind, exceptions held alone, fast checks per item, one release and one `catalog.changed` per batch, scheduled full checks, per-item revert and replay; held items and deliveries in a `HeldStore` (`FileHeldStore` survives restarts); rollback from logged manifests only, republishing the signed files when the host cannot roll back |
 
 ## Content repository
 
@@ -142,12 +142,13 @@ adk-site = { version = "3.0.0", features = ["migrate"] }
 | Stage | Type | Behaviour |
 |-------|------|-----------|
 | Domain claim | `DomainClaim`, `ProvenDomain` | DNS TXT or well-known token; until proven only polite public reads run (A-I9) |
-| Sources | `WordPressRest`, `Wxr`, `Crawl`, `Presence`, `IsolatedReplay` | A `SiteInventory`; requests signed with the site's Web Bot Auth key, robots-respecting, rate-limited, recorded |
-| Detectors and quarantine | `Detectors`, `QuarantineBook` | Hidden-link spam, cloaking, executables and MIME mismatches, obfuscated scripts; released per item through an `ApprovalGate`, executables never |
+| Sources | `WordPressRest`, `Wxr`, `Crawl`, `Presence`, `IsolatedReplay` | A `SiteInventory`; requests signed with the site's Web Bot Auth key, robots-respecting, rate-limited, recorded; `Presence` reads any schema.org subtype (`schema_org_ancestry`) and records the `@type` fact |
+| Detectors and quarantine | `Detectors`, `QuarantineBook` | Hidden-link spam, cloaking (`scan_cloaking` over the top pages, for a proven domain), executables and MIME mismatches, obfuscated scripts; released per item through an `ApprovalGate`, executables never |
 | Sanitiser | `Sanitiser` | HTML to Markdown through an allowlist |
 | Feature mapping | `map_features` | `submit_inquiry`, `search_site`, `get_quote`, `place_order`, `check_availability`, `book`; owner decisions for comments and accounts |
 | Freeze | `Freeze` | A private-vantage crawl published as a signed release; no upstream request at serve time |
-| Parity | `MigrationParity` | URL coverage, perceptual difference, main-text similarity, metadata |
+| Content | `convert::to_content` | Items at their URLs, uploads at their paths, 301s for archives and feeds; links to pages a crawl could not read become text; legacy runtime paths answer 410 Gone |
+| Parity | `MigrationParity` | URL coverage, main-text similarity, metadata, and the perceptual difference when the owner keeps the design (`SiteDesign`); the choice recorded in the migration audit |
 | Probes | `Prober` | Drift on the host and at the origin against the release window; certificate, DNS, headers |
 | Archive | `LegacyArchive` | The legacy export encrypted through `adk-artifact`; never deleted (A-I10) |
 

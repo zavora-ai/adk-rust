@@ -28,8 +28,8 @@ pub use types::{
     AP2_PAYMENT_RECEIPT_DATA_KEY, Ap2Role, Ap2RoleMetadata, AuthorizationArtifact, CartContents,
     CartMandate, ContactAddress, IntentMandate, PaymentCurrencyAmount, PaymentDetailsInit,
     PaymentDetailsModifier, PaymentErrorStatus, PaymentFailureStatus, PaymentItem, PaymentMandate,
-    PaymentMandateContents, PaymentMethodData, PaymentOptions, PaymentReceipt, PaymentResponse,
-    PaymentShippingOption, PaymentStatusEnvelope, PaymentSuccessStatus,
+    PaymentMandateContents, PaymentMethodData, PaymentOptions, PaymentReceipt, PaymentRequest,
+    PaymentResponse, PaymentShippingOption, PaymentStatusEnvelope, PaymentSuccessStatus,
 };
 pub use verification::{
     CRYPTOGRAPHICALLY_VERIFIED_CLAIM, MerchantAuthorizationVerifier, RequireMerchantAuthorization,

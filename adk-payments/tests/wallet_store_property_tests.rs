@@ -1,6 +1,7 @@
 //! The SQLite wallet store answers as the in-memory reference store does (spec 3.5 §7.14):
-//! for any sequence of inserts, updates, pauses and resumes over two wallets, every insert,
-//! update, lookup and listing — windows at nanosecond boundaries included — is the same.
+//! for any sequence of inserts, updates, compare-and-sets, pauses and resumes over two
+//! wallets, every insert, update, compare-and-set, lookup and listing — windows at nanosecond
+//! boundaries included — is the same.
 //!
 //! ```bash
 //! cargo nextest run -p adk-payments --features sqlite --test wallet_store_property_tests
@@ -51,6 +52,8 @@ struct Update {
     payment: usize,
     state: usize,
     settled: Option<i64>,
+    /// A compare-and-set from this state, else a plain update.
+    expected: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,8 +92,9 @@ fn inserts() -> impl Strategy<Value = Vec<Insert>> {
 
 fn updates() -> impl Strategy<Value = Vec<Update>> {
     prop::collection::vec(
-        (0..12usize, 0..5usize, prop::option::of(nanos()))
-            .prop_map(|(payment, state, settled)| Update { payment, state, settled }),
+        (0..12usize, 0..5usize, prop::option::of(nanos()), prop::option::of(0..5usize)).prop_map(
+            |(payment, state, settled, expected)| Update { payment, state, settled, expected },
+        ),
         0..8,
     )
 }
@@ -177,11 +181,30 @@ async fn check(
         let mut changed = record.clone();
         changed.state = STATES[update.state];
         changed.settled_at = update.settled.map(instant);
-        let expected = reference.update(&changed).await;
-        let actual = durable.update(&changed).await;
-        prop_assert_eq!(actual.is_ok(), expected.is_ok(), "update of {}", changed.id);
-        if let Err(error) = actual {
-            prop_assert_eq!(error.code, expected.unwrap_err().code);
+        match update.expected.map(|index| STATES[index]) {
+            Some(from) => {
+                let expected = reference.update_if(&changed, from).await;
+                let actual = durable.update_if(&changed, from).await;
+                match (actual, expected) {
+                    (Ok(actual), Ok(expected)) => {
+                        prop_assert_eq!(actual, expected, "compare-and-set of {}", changed.id);
+                    }
+                    (Err(actual), Err(expected)) => prop_assert_eq!(actual.code, expected.code),
+                    (actual, expected) => prop_assert!(
+                        false,
+                        "compare-and-set of {}: {actual:?} against {expected:?}",
+                        changed.id
+                    ),
+                }
+            }
+            None => {
+                let expected = reference.update(&changed).await;
+                let actual = durable.update(&changed).await;
+                prop_assert_eq!(actual.is_ok(), expected.is_ok(), "update of {}", changed.id);
+                if let Err(error) = actual {
+                    prop_assert_eq!(error.code, expected.unwrap_err().code);
+                }
+            }
         }
     }
     for record in &records {

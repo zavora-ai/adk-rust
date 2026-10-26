@@ -18,7 +18,8 @@
 //! ```
 //!
 //! [`UpdateEngine::tick`] closes elapsed windows and runs the scheduled full checks every six
-//! hours or 500 releases. [`UpdateEngine::batches`] and [`UpdateEngine::feeds`] are the
+//! hours or 500 releases. What the engine holds for the owner lives in a [`HeldStore`]
+//! ([`FileHeldStore`] keeps it across restarts). [`UpdateEngine::batches`] and [`UpdateEngine::feeds`] are the
 //! library side of `adk-rust site batches` and `site feeds`; [`UpdateEngine::revert`] of
 //! `site revert <item> [--to <seq>]`.
 
@@ -44,6 +45,10 @@ use crate::gate::{Finding, GateReport};
 use crate::live::{LiveStore, LiveValue};
 use crate::pipeline::{EntryPoint, Published, PublishingPipeline};
 use crate::stream::{StreamLane, StreamStatus};
+
+mod held;
+
+pub use held::{FileHeldStore, HeldState, HeldStore, InMemoryHeldStore, held_store_conformance};
 
 /// Batch records kept for `site batches`.
 const RECORDS_KEPT: usize = 1_000;
@@ -395,6 +400,18 @@ struct Inner {
     review: UpdateReview,
     schedule: FullCheckSchedule,
     next_delivery: u64,
+    /// Whether the held state was read from the store.
+    restored: bool,
+}
+
+impl Inner {
+    fn held_state(&self) -> HeldState {
+        HeldState {
+            items: self.held_items.values().cloned().collect(),
+            deliveries: self.held_deliveries.values().cloned().collect(),
+            next_delivery: self.next_delivery,
+        }
+    }
 }
 
 /// Builds an [`UpdateEngine`].
@@ -409,9 +426,17 @@ pub struct UpdateEngineBuilder {
     costs: CostRates,
     schedule: FullCheckSchedule,
     streams: Option<Arc<StreamLane>>,
+    held: Option<Arc<dyn HeldStore>>,
 }
 
 impl UpdateEngineBuilder {
+    /// Keeps held items and held deliveries in `store`, so they survive a restart; in memory
+    /// by default.
+    pub fn held_store(mut self, store: Arc<dyn HeldStore>) -> Self {
+        self.held = Some(store);
+        self
+    }
+
     /// The stream lane: live blogs, tickers and emergency updates, folded into releases
     /// (spec 3.5 §7.8.3).
     pub fn streams(mut self, streams: Arc<StreamLane>) -> Self {
@@ -487,6 +512,7 @@ impl UpdateEngineBuilder {
             audit: self.audit,
             costs: self.costs,
             streams: self.streams,
+            held: self.held.unwrap_or_else(|| Arc::new(InMemoryHeldStore::default())),
             clock,
             inner: Mutex::new(Inner {
                 batcher: Batcher::new(self.policies),
@@ -497,6 +523,7 @@ impl UpdateEngineBuilder {
                 review: UpdateReview::default(),
                 schedule,
                 next_delivery: 1,
+                restored: false,
             }),
         })
     }
@@ -542,6 +569,7 @@ pub struct UpdateEngine {
     audit: Option<(Arc<dyn AuditRecorder>, ActingContext)>,
     costs: CostRates,
     streams: Option<Arc<StreamLane>>,
+    held: Arc<dyn HeldStore>,
     clock: Arc<dyn Clock>,
     inner: Mutex<Inner>,
 }
@@ -578,7 +606,40 @@ impl UpdateEngine {
             costs: CostRates::default(),
             schedule: FullCheckSchedule::default(),
             streams: None,
+            held: None,
         }
+    }
+
+    /// The engine's state, with what it holds read from its [`HeldStore`] on first use.
+    async fn lock_held(&self) -> Result<tokio::sync::MutexGuard<'_, Inner>> {
+        let mut inner = self.inner.lock().await;
+        if !inner.restored {
+            let state = self.held.load().await?;
+            let restored = (state.items.len(), state.deliveries.len());
+            for item in state.items {
+                inner.held_items.entry(item.update.id().clone()).or_insert(item);
+            }
+            let mut next = inner.next_delivery.max(state.next_delivery);
+            for delivery in state.deliveries {
+                next = next.max(delivery.delivery + 1);
+                inner.held_deliveries.entry(delivery.delivery).or_insert(delivery);
+            }
+            inner.next_delivery = next;
+            inner.restored = true;
+            if restored != (0, 0) {
+                tracing::info!(
+                    site.held.items = restored.0,
+                    site.held.deliveries = restored.1,
+                    "held updates restored"
+                );
+            }
+        }
+        Ok(inner)
+    }
+
+    /// Writes what the engine holds to its [`HeldStore`].
+    async fn save_held(&self, inner: &Inner) -> Result<()> {
+        self.held.save(&inner.held_state()).await
     }
 
     /// The pipeline releases go through.
@@ -642,7 +703,7 @@ impl UpdateEngine {
     pub async fn ingest(&self, feed: &str, records: Vec<FeedRecord>) -> Result<DeliveryOutcome> {
         let now = self.clock.now();
         let (mapping, bounds_config, last_minute, delivery) = {
-            let mut inner = self.inner.lock().await;
+            let mut inner = self.lock_held().await?;
             let delivery = inner.next_delivery;
             inner.next_delivery += 1;
             let state = inner
@@ -702,12 +763,13 @@ impl UpdateEngine {
                 changes,
             };
             {
-                let mut inner = self.inner.lock().await;
+                let mut inner = self.lock_held().await?;
                 inner.review.held_deliveries += 1;
                 if let Some(state) = inner.feeds.get_mut(feed) {
                     state.held += 1;
                 }
                 inner.held_deliveries.insert(delivery, held);
+                self.save_held(&inner).await?;
             }
             tracing::warn!(
                 feed,
@@ -1091,13 +1153,17 @@ impl UpdateEngine {
         }
         record.held = held;
         {
-            let mut inner = self.inner.lock().await;
+            let mut inner = self.lock_held().await?;
             inner.review.held_items += new_holds.len() as u64;
             if record.release_seq.is_some() {
                 inner.review.releases += 1;
             }
+            let holds = !new_holds.is_empty();
             for hold in new_holds {
                 inner.held_items.insert(hold.update.id().clone(), hold);
+            }
+            if holds {
+                self.save_held(&inner).await?;
             }
             inner.records.push_back(record.clone());
             while inner.records.len() > RECORDS_KEPT {
@@ -1191,21 +1257,34 @@ impl UpdateEngine {
         decision: Decision,
         by: &str,
     ) -> Result<DeliveryOutcome> {
-        let held = self
-            .inner
-            .lock()
-            .await
-            .held_deliveries
-            .remove(&delivery)
-            .ok_or_else(|| SiteError::NotFound(format!("held delivery {delivery}")))?;
+        let held = {
+            let mut inner = self.lock_held().await?;
+            let held = inner
+                .held_deliveries
+                .remove(&delivery)
+                .ok_or_else(|| SiteError::NotFound(format!("held delivery {delivery}")))?;
+            self.save_held(&inner).await?;
+            held
+        };
         let detail = serde_json::json!({ "delivery": delivery, "feed": held.feed, "decision": decision, "by": by });
         self.record("site.batch.decided", detail).await?;
         match decision {
             Decision::Discard => Ok(DeliveryOutcome { delivery, ..DeliveryOutcome::default() }),
             Decision::Release => {
-                let mut outcome = self.apply(&held.feed, held.changes, self.clock.now()).await?;
-                outcome.delivery = delivery;
-                Ok(outcome)
+                let kept = held.clone();
+                match self.apply(&held.feed, held.changes, self.clock.now()).await {
+                    Ok(mut outcome) => {
+                        outcome.delivery = delivery;
+                        Ok(outcome)
+                    }
+                    Err(error) => {
+                        // Still held: the owner's decision did not take effect.
+                        let mut inner = self.lock_held().await?;
+                        inner.held_deliveries.insert(delivery, kept);
+                        self.save_held(&inner).await?;
+                        Err(error)
+                    }
+                }
             }
         }
     }
@@ -1224,24 +1303,36 @@ impl UpdateEngine {
         by: &str,
     ) -> Result<Vec<BatchRecord>> {
         let held = {
-            let mut inner = self.inner.lock().await;
+            let mut inner = self.lock_held().await?;
             let held = inner.held_items.get(id).ok_or_else(|| SiteError::NotFound(id.0.clone()))?;
             if decision == Decision::Release && held.update.proposer == by {
                 return Err(SiteError::Pipeline(format!(
                     "'{by}' proposed the change and cannot approve it (A-I23)"
                 )));
             }
-            inner.held_items.remove(id).ok_or_else(|| SiteError::NotFound(id.0.clone()))?
+            let held =
+                inner.held_items.remove(id).ok_or_else(|| SiteError::NotFound(id.0.clone()))?;
+            self.save_held(&inner).await?;
+            held
         };
         let detail = serde_json::json!({ "item": id, "decision": decision, "by": by });
         self.record("site.content.decided", detail).await?;
         match decision {
             Decision::Discard => Ok(Vec::new()),
             Decision::Release => {
-                let mut update = held.update;
+                let mut update = held.update.clone();
                 update.at = self.clock.now();
                 update.trigger = Some(Trigger::OwnerRequest);
-                self.submit(update).await
+                match self.submit(update).await {
+                    Ok(records) => Ok(records),
+                    Err(error) => {
+                        // Still held: the owner's decision did not take effect.
+                        let mut inner = self.lock_held().await?;
+                        inner.held_items.insert(id.clone(), held);
+                        self.save_held(&inner).await?;
+                        Err(error)
+                    }
+                }
             }
         }
     }
@@ -1384,14 +1475,26 @@ impl UpdateEngine {
         self.inner.lock().await.records.iter().cloned().collect()
     }
 
-    /// Items held alone, waiting for a decision.
+    /// Items held alone, waiting for a decision, including those held before a restart.
     pub async fn held_items(&self) -> Vec<HeldItem> {
-        self.inner.lock().await.held_items.values().cloned().collect()
+        match self.lock_held().await {
+            Ok(inner) => inner.held_items.values().cloned().collect(),
+            Err(error) => {
+                tracing::warn!(error = %error, "held updates could not be read");
+                self.inner.lock().await.held_items.values().cloned().collect()
+            }
+        }
     }
 
-    /// Deliveries held whole, waiting for the owner.
+    /// Deliveries held whole, waiting for the owner, including those held before a restart.
     pub async fn held_deliveries(&self) -> Vec<HeldDelivery> {
-        self.inner.lock().await.held_deliveries.values().cloned().collect()
+        match self.lock_held().await {
+            Ok(inner) => inner.held_deliveries.values().cloned().collect(),
+            Err(error) => {
+                tracing::warn!(error = %error, "held updates could not be read");
+                self.inner.lock().await.held_deliveries.values().cloned().collect()
+            }
+        }
     }
 
     /// Feeds with their bounds and rates (`site feeds`).

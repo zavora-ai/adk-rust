@@ -29,4 +29,7 @@ pub enum SigningError {
     /// The key is invalid or could not sign.
     #[error("the signing key failed: {0}")]
     Key(String),
+    /// A log tile or entry bundle is malformed.
+    #[error("a log tile is malformed: {0}")]
+    Tile(String),
 }

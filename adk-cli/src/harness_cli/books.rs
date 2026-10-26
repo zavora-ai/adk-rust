@@ -163,9 +163,9 @@ fn not_held(error: &AdkError) -> bool {
     error.code == "harness.memory.fact_not_found"
 }
 
-/// A fact as the home shows it.
+/// A fact as the home shows it; a guess names `noticed_by`, the agent that noticed it.
 #[cfg(feature = "persist")]
-fn remembered(fact: MemoryFact, area: &PartitionId) -> RememberedFact {
+fn remembered(fact: MemoryFact, area: &PartitionId, noticed_by: Option<String>) -> RememberedFact {
     let origin = match (&fact.status, fact.provenance.source) {
         (FactStatus::Known, FactSource::UserStated) => FactOrigin::YouSaidThis,
         (FactStatus::Known, _) => FactOrigin::YouConfirmedThis,
@@ -176,13 +176,39 @@ fn remembered(fact: MemoryFact, area: &PartitionId) -> RememberedFact {
     if fact.scope.project.is_some() {
         remembered = remembered.with_area(area.clone());
     }
-    if origin == FactOrigin::Guess && area.as_str() != PartitionId::DEFAULT {
-        remembered = remembered.with_noticed_by(area.as_str());
+    if origin == FactOrigin::Guess
+        && let Some(agent) = noticed_by
+    {
+        remembered = remembered.with_noticed_by(agent);
     }
     match fact.provenance.tick {
         Some(tick) => remembered.with_tidy_up(tick),
         None => remembered,
     }
+}
+
+/// The agent whose session `session` of `user` is: the stamp its harness writes on the
+/// session's first run (spec 3.3 §5.7 "Threads"), or `None` for a session no agent stamped,
+/// such as an overnight tidy-up's own.
+#[cfg(feature = "persist")]
+async fn session_agent(
+    harness: &adk_harness::Harness,
+    user: &str,
+    session: &str,
+) -> Option<String> {
+    let session = harness
+        .runner()
+        .session_service()
+        .get(adk_session::GetRequest {
+            app_name: harness.app_name().to_string(),
+            user_id: user.to_string(),
+            session_id: session.to_string(),
+            num_recent_events: Some(0),
+            after: None,
+        })
+        .await
+        .ok()?;
+    session.state().get(adk_harness::AGENT_STATE_KEY)?.as_str().map(str::to_string)
 }
 
 #[cfg(feature = "persist")]
@@ -199,9 +225,22 @@ impl MemoryBook for HarnessMemoryBook {
             if area.is_some_and(|area| area != partition) {
                 continue;
             }
+            // The agent each session belongs to, read once per session.
+            let mut agents: std::collections::HashMap<String, Option<String>> =
+                std::collections::HashMap::new();
             for fact in harness.facts(&id).await.map_err(KernelError::Core)? {
                 if fact.status.is_live() && !facts.iter().any(|known| known.id == fact.id) {
-                    facts.push(remembered(fact, partition));
+                    let session = &fact.provenance.session_id;
+                    let noticed_by = if fact.status == FactStatus::Known {
+                        None
+                    } else if let Some(agent) = agents.get(session) {
+                        agent.clone()
+                    } else {
+                        let agent = session_agent(harness, user, session).await;
+                        agents.insert(session.clone(), agent.clone());
+                        agent
+                    };
+                    facts.push(remembered(fact, partition, noticed_by));
                 }
             }
         }
@@ -220,7 +259,9 @@ impl MemoryBook for HarnessMemoryBook {
             match harness.accept_fact(&user, id).await {
                 Err(error) if not_held(&error) => continue,
                 result => {
-                    return result.map(|fact| remembered(fact, area)).map_err(KernelError::Core);
+                    return result
+                        .map(|fact| remembered(fact, area, None))
+                        .map_err(KernelError::Core);
                 }
             }
         }
@@ -239,7 +280,9 @@ impl MemoryBook for HarnessMemoryBook {
             match harness.correct_fact(&user, id, text).await {
                 Err(error) if not_held(&error) => continue,
                 result => {
-                    return result.map(|fact| remembered(fact, area)).map_err(KernelError::Core);
+                    return result
+                        .map(|fact| remembered(fact, area, None))
+                        .map_err(KernelError::Core);
                 }
             }
         }
@@ -337,8 +380,15 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     if let Some(subject) = subject {
         line = line.with_subject(subject);
     }
-    if let Some(agent) = &record.actor.agent {
-        line = line.with_agent(agent.to_string());
+    // The agent that acted, or for a person's answer the agent whose call it decided.
+    let agent = record
+        .actor
+        .agent
+        .as_ref()
+        .map(ToString::to_string)
+        .or_else(|| text(record.ext.get("actingAgent")));
+    if let Some(agent) = agent {
+        line = line.with_agent(agent);
     }
     let tool = text(record.ext.get("tool")).or_else(|| {
         matches!(record.kind, adk_core::audit_log::AuditRecordKind::ToolCall)
@@ -356,8 +406,21 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
         "respond" => Some("responded".to_string()),
         _ => None,
     });
-    if let Some(decision) =
-        record.decision.and_then(|d| serde_json::to_value(d).ok()).and_then(wire).or(answered)
+    // A standing rule's record carries the rule's own decision, to allow or to refuse.
+    let ruled =
+        record.ext.get("decision").and_then(|decision| text(decision.get("kind"))).and_then(
+            |kind| match kind.as_str() {
+                "allow" => Some("allowed".to_string()),
+                "deny" => Some("denied".to_string()),
+                _ => None,
+            },
+        );
+    if let Some(decision) = record
+        .decision
+        .and_then(|d| serde_json::to_value(d).ok())
+        .and_then(wire)
+        .or(answered)
+        .or(ruled)
     {
         line = line.with_decision(decision);
     }
@@ -369,8 +432,12 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     if let Some(outcome) = outcome {
         line = line.with_outcome(outcome);
     }
-    // The device's name, else its id, for an answer a paired device gave.
-    let device = text(record.ext.get("deviceName")).or_else(|| text(record.ext.get("device")));
+    if let Some(surface) = text(record.ext.get("surface")) {
+        line = line.with_surface(surface);
+    }
+    // The device's name for an answer a paired device gave; its id names nothing a person
+    // reads (spec 3.3 §8).
+    let device = text(record.ext.get("deviceName"));
     match record.ext.get("origin").and_then(|origin| Some((origin, text(origin.get("kind"))?))) {
         Some((origin, how)) => {
             let channel = text(origin.get("channel")).or(device);
@@ -515,6 +582,28 @@ mod tests {
             ))
             .await
             .unwrap();
+        // The session the guesses were learned in is Finance's thread, stamped on its first run.
+        harness
+            .runner()
+            .session_service()
+            .create(adk_session::CreateRequest {
+                app_name: APP_NAME.into(),
+                user_id: "ana".into(),
+                session_id: Some("s1".into()),
+                state: [(adk_harness::AGENT_STATE_KEY.to_string(), serde_json::json!("finance"))]
+                    .into_iter()
+                    .collect(),
+            })
+            .await
+            .unwrap();
+        // On a kernel without areas too: the noticer is the agent, not the area.
+        let single =
+            HarnessMemoryBook::new(vec![(PartitionId::default(), harness.clone())], store.clone());
+        let listed = single.facts("ana", None).await.unwrap();
+        assert_eq!(
+            listed.iter().find(|fact| fact.id == guess.id).unwrap().noticed_by.as_deref(),
+            Some("finance")
+        );
         let book = HarnessMemoryBook::new(vec![(PartitionId::new("work"), harness)], store.clone());
         let by = SubjectRef::human("ana");
 
@@ -522,10 +611,11 @@ mod tests {
         let origin = |id: &str| facts.iter().find(|fact| fact.id == id).map(|fact| fact.origin);
         assert_eq!(origin(&said.id), Some(FactOrigin::YouSaidThis));
         assert_eq!(origin(&guess.id), Some(FactOrigin::Guess));
-        assert_eq!(
-            facts.iter().find(|fact| fact.id == guess.id).unwrap().noticed_by.as_deref(),
-            Some("work")
-        );
+        // A guess names the agent that noticed it, never the area it was noticed in.
+        let noticed =
+            |id: &str| facts.iter().find(|fact| fact.id == id).unwrap().noticed_by.clone();
+        assert_eq!(noticed(&guess.id).as_deref(), Some("finance"));
+        assert_eq!(noticed(&said.id), None, "what the person said names no noticer");
         assert!(book.facts("bo", None).await.unwrap().is_empty(), "facts are the caller's own");
 
         assert_eq!(
@@ -713,6 +803,71 @@ mod tests {
         assert_eq!(line.decision.as_deref(), Some("approved"));
         assert_eq!(line.channel.as_deref(), Some("Ana's phone"));
         assert_eq!(line.target.as_deref(), Some("apr_1"));
+    }
+
+    /// An answer names the agent whose call it decided and the surface it came from, never a
+    /// device's id, and a rule's record says whether the rule allows or refuses (spec 3.3 §8,
+    /// §11).
+    #[cfg(feature = "audit")]
+    #[tokio::test]
+    async fn a_record_line_names_the_agent_the_surface_and_a_rules_decision() {
+        use adk_auth::signed_audit::{AuditLog, AuditSigner as _, Ed25519Signer, NoteVerifier};
+        use adk_core::audit_log::{
+            AuditActor, AuditDecision, AuditLogStore, AuditRecordDraft, AuditRecordKind,
+            InMemoryAuditLogStore,
+        };
+        use adk_kernel::control::RecordBook;
+        use serde_json::json;
+
+        let logs: Arc<dyn AuditLogStore> = Arc::new(InMemoryAuditLogStore::new());
+        let signer = Ed25519Signer::generate("kernel-test").unwrap();
+        let verifier: NoteVerifier = signer.verifier_key().parse().unwrap();
+        let log =
+            AuditLog::builder(logs.clone(), "kernel-test", Arc::new(signer)).open().await.unwrap();
+        // The engine's record of a paired phone's answer and of the tray's (`audit_decide`).
+        let answer = |surface: &str, how: &str, decision: AuditDecision| {
+            AuditRecordDraft::new(AuditRecordKind::Approval, "surface.decide")
+                .actor(AuditActor::subject(SubjectRef::human("ana")))
+                .decision(decision)
+                .ext("surface", json!(surface))
+                .ext("origin", json!({ "kind": how }))
+                .ext("approvalId", json!("apr_1"))
+                .ext("tool", json!("send_email"))
+                .ext("outcome", json!("decided"))
+                .ext("actingAgent", json!("urn:adk:agent:adk-rust/finance"))
+        };
+        log.append(
+            answer("phone", "touch", AuditDecision::Approved)
+                .ext("device", json!("9f3a2b1c0d4e5f67")),
+        )
+        .await
+        .unwrap();
+        log.append(answer("tray", "pointer", AuditDecision::Rejected)).await.unwrap();
+        log.append(
+            AuditRecordDraft::new(AuditRecordKind::Other("harness".into()), "harness.rule.created")
+                .actor(AuditActor::subject(SubjectRef::human("ana")))
+                .ext("tool", json!("web_fetch"))
+                .ext("decision", json!({ "kind": "deny", "reason": "no browsing" })),
+        )
+        .await
+        .unwrap();
+        let book = SignedRecordBook::new(logs, "kernel-test".into(), verifier);
+        let lines = book.recent(3).await.unwrap();
+        let (rule, tray, phone) = (&lines[0], &lines[1], &lines[2]);
+        assert_eq!(
+            (phone.how.as_deref(), phone.surface.as_deref(), phone.channel.as_deref()),
+            (Some("touch"), Some("phone"), None),
+            "a phone's answer names no device id"
+        );
+        assert_eq!(phone.agent.as_deref(), Some("urn:adk:agent:adk-rust/finance"));
+        assert_eq!(
+            (tray.how.as_deref(), tray.surface.as_deref(), tray.decision.as_deref()),
+            (Some("pointer"), Some("tray"), Some("rejected"))
+        );
+        assert_eq!(
+            (rule.tool.as_deref(), rule.decision.as_deref()),
+            (Some("web_fetch"), Some("denied"))
+        );
     }
 
     /// The record book answers the check `adk-rust audit verify` gives an export of the same
