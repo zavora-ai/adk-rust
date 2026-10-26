@@ -1,6 +1,6 @@
 //! The back office the served kernel runs (spec 3.5 §7.19, §7.20, §7.11, §7.22, A-I13).
 //!
-//! With a model, [`serve`](super::serve) builds the site's back-office agents — each a
+//! With a model, [`serve`](fn@super::serve) builds the site's back-office agents — each a
 //! `HarnessAgent` in the back-office partition with its jobs' tools — and hosts them on the
 //! kernel: the Steward's target runs the whole back office as one team, delegating to the
 //! others; every other agent also runs alone for its jobs' processes (`site.content`,
